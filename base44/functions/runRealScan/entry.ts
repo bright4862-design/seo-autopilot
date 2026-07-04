@@ -220,7 +220,7 @@ Deno.serve(async (req) => {
       summary: {
         we_can_fix: finalIssues.filter(f => f.status === 'auto_fixed').length,
         needs_approval: finalIssues.filter(f => f.status === 'needs_approval').length,
-        needs_developer: finalIssues.filter(f => f.status === 'needs_developer').length,
+        needs_developer: finalIssues.filter(f => f.requires_developer === true).length,
       },
     });
   } catch (error) {

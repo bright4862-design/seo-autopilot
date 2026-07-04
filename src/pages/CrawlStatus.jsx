@@ -100,6 +100,7 @@ export default function CrawlStatus() {
   const [loading, setLoading] = useState(true);
   const [simulating, setSimulating] = useState(false);
   const [error, setError] = useState(null);
+  const [scanResult, setScanResult] = useState(null);
   const didAutoStart = useRef(false);
 
   useEffect(() => {
@@ -170,6 +171,9 @@ export default function CrawlStatus() {
       // Turn the findings into simple fixes on the Fix List (real crawl + AI)
       let realFixes = [];
       let healthScore = 62;
+      let pagesCrawled = 47;
+      let issuesFound = 0;
+      let summary = '';
       try {
         const res = await base44.functions.invoke('runRealScan', {
           website_url: project.website_url,
@@ -181,6 +185,10 @@ export default function CrawlStatus() {
         });
         realFixes = res.data?.fixes || [];
         if (typeof res.data?.health_score === 'number') healthScore = res.data.health_score;
+        if (typeof res.data?.pages_crawled === 'number') pagesCrawled = res.data.pages_crawled;
+        if (typeof res.data?.issues_found === 'number') issuesFound = res.data.issues_found;
+        if (typeof res.data?.summary === 'string') summary = res.data.summary;
+        setScanResult({ fixes: realFixes, health_score: healthScore, pages_crawled: pagesCrawled, issues_found: issuesFound, summary });
       } catch (e) {
         console.error('runRealScan failed, using demo fixes', e);
       }
@@ -198,6 +206,12 @@ export default function CrawlStatus() {
           SCAN_ISSUES.map(i => ({ ...i, project_id: project.id, crawl_job_id: job.id }))
         );
       }
+
+      const finalJob = await base44.entities.CrawlJob.update(job.id, {
+        pages_found: pagesCrawled,
+        pages_crawled: pagesCrawled,
+      });
+      setCrawlJob(finalJob);
 
       await base44.entities.BusinessProject.update(project.id, {
         last_crawl_at: new Date().toISOString(),
@@ -300,7 +314,23 @@ export default function CrawlStatus() {
         <div className="bg-green-50 border border-green-100 rounded-xl p-5 text-center">
           <CheckCircle2 className="w-10 h-10 text-green-500 mx-auto mb-3" />
           <h3 className="font-bold text-green-900 text-lg mb-1">Scan Complete!</h3>
-          <p className="text-sm text-green-700 mb-4">We found {crawlJob.pages_found} pages and rendered {crawlJob.js_pages_rendered} JavaScript pages.</p>
+          <p className="text-sm text-green-700 mb-4">
+            We crawled {scanResult?.pages_crawled ?? crawlJob.pages_found ?? 0} pages
+            and found {scanResult?.issues_found ?? 0} SEO {(scanResult?.issues_found ?? 0) === 1 ? 'issue' : 'issues'}.
+          </p>
+          {scanResult?.summary && (
+            <p className="text-sm text-green-800 bg-white/60 rounded-lg p-3 mb-4 text-left">{scanResult.summary}</p>
+          )}
+          <div className="grid grid-cols-2 gap-3 max-w-xs mx-auto mb-4">
+            <div className="bg-white rounded-lg p-3">
+              <p className="text-2xl font-bold text-green-700">{scanResult?.health_score ?? 0}</p>
+              <p className="text-xs text-gray-500">SEO Score</p>
+            </div>
+            <div className="bg-white rounded-lg p-3">
+              <p className="text-2xl font-bold text-green-700">{scanResult?.fixes?.length ?? 0}</p>
+              <p className="text-xs text-gray-500">Fixes Ready</p>
+            </div>
+          </div>
           <div className="flex justify-center gap-3">
             <a href="/dashboard"><Button size="sm" className="gradient-primary text-white border-0">View Fix List</Button></a>
           </div>

@@ -13,6 +13,7 @@ Deno.serve(async (req) => {
     if (!/^https?:\/\//i.test(baseUrl)) baseUrl = 'https://' + baseUrl;
     const urlObj = new URL(baseUrl);
     const origin = urlObj.origin;
+    const domain = urlObj.hostname.replace(/^www\./, '');
 
     // --- crawler.py: fetch homepage + a few internal pages ---
     const fetchPage = async (url) => {
@@ -81,7 +82,7 @@ Deno.serve(async (req) => {
         for (const href of page.links) {
           try {
             const abs = new URL(href, baseUrl).href.split('#')[0];
-            if (new URL(abs).origin === origin && !visited.has(abs) && !toVisit.includes(abs) && !/\.(jpg|png|gif|pdf|zip|css|js)$/i.test(abs)) {
+            if (new URL(abs).hostname.replace(/^www\./, '') === domain && !visited.has(abs) && !toVisit.includes(abs) && !/\.(jpg|png|gif|pdf|zip|css|js)$/i.test(abs)) {
               toVisit.push(abs);
             }
           } catch {}
@@ -96,15 +97,23 @@ Deno.serve(async (req) => {
       return `${business_name} | Official Website`;
     };
 
+    const generateBasicDescription = () => {
+      const name = business_name || 'us';
+      const type = (business_type || '').toLowerCase();
+      if (business_type && city) return `Visit ${name} for trusted ${type} services in ${city}. Learn more, contact us, or request help today.`;
+      if (business_type) return `Visit ${name} for trusted ${type} services. Learn more, contact us, or request help today.`;
+      return `Visit ${name} to learn more about our services, contact our team, and get the help you need.`;
+    };
+
     const issues = [];
     for (const p of crawledPages) {
       const pageUrl = p.url === baseUrl ? '/' : (() => { try { return new URL(p.url).pathname; } catch { return p.url; } })();
 
-      if (p.status === 404) {
+      if (p.status === 404 || p.status === 0) {
         issues.push({
           page_url: pageUrl, category: '404_error', customer_category: 'Broken page',
           issue_title: 'This page is broken',
-          plain_english_explanation: 'Visitors and search engines are being sent to a page that does not exist.',
+          plain_english_explanation: 'Visitors and search engines may be landing on a page that does not work.',
           why_it_matters: 'Broken pages can hurt trust and make it harder for search engines to understand your website.',
           ai_recommendation: 'Redirect this broken page to the closest working page.',
           current_value: `Status: ${p.status}`, recommended_value: 'Redirect to closest working page',
@@ -138,13 +147,13 @@ Deno.serve(async (req) => {
       }
 
       if (!p.metaDesc) {
+        const desc = generateBasicDescription();
         issues.push({
           page_url: pageUrl, category: 'meta_description', customer_category: 'Search description',
           issue_title: 'This page needs a better search description',
           plain_english_explanation: 'This page does not have a description for search results.',
           why_it_matters: 'A good description can help more people click your website from Google.',
-          ai_recommendation: 'Write a short description that explains the page and encourages customers to visit.',
-          current_value: '(empty)', recommended_value: 'A 150–160 character summary',
+          ai_recommendation: desc, current_value: '(empty)', recommended_value: desc,
           priority: 'medium', difficulty: 'easy', group: 'we_can_fix',
           can_auto_fix: true, requires_approval: false, requires_developer: false,
         });

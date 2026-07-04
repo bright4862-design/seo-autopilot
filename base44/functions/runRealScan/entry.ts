@@ -51,25 +51,43 @@ Deno.serve(async (req) => {
       return { url, title, metaDesc, h1, canonical, wordCount, links };
     };
 
-    const home = await fetchPage(baseUrl);
-    if (!home.html) {
-      return Response.json({ error: "We couldn't reach that website. Please check the URL and try again." }, { status: 400 });
-    }
-    const homePage = extractPage(baseUrl, home.html);
+    // BFS crawl following internal links, up to MAX_PAGES
+    const MAX_PAGES = 25;
+    const BATCH = 8;
+    const visited = new Set();
+    const toVisit = [baseUrl];
+    const crawledPages = [];
 
-    const internalLinks = new Set();
-    for (const href of homePage.links) {
-      try {
-        const abs = new URL(href, baseUrl).href;
-        if (abs.startsWith(origin) && !abs.includes('#') && !/\.(jpg|png|gif|pdf|zip)$/i.test(abs)) internalLinks.add(abs);
-      } catch {}
+    while (toVisit.length > 0 && visited.size < MAX_PAGES) {
+      const batch = [];
+      while (toVisit.length > 0 && batch.length < BATCH && visited.size + batch.length < MAX_PAGES) {
+        const url = toVisit.shift();
+        if (visited.has(url)) continue;
+        visited.add(url);
+        batch.push(url);
+      }
+      const results = await Promise.all(batch.map(fetchPage));
+      for (const r of results) {
+        if (!r.html) {
+          if (r.url === baseUrl) {
+            return Response.json({ error: "We couldn't reach that website. Please check the URL and try again." }, { status: 400 });
+          }
+          crawledPages.push({ url: r.url, status: r.status || 0, title: '', metaDesc: '', h1: '', canonical: '', wordCount: 0, links: [] });
+          continue;
+        }
+        const page = extractPage(r.url, r.html);
+        page.status = r.status;
+        crawledPages.push(page);
+        for (const href of page.links) {
+          try {
+            const abs = new URL(href, baseUrl).href.split('#')[0];
+            if (new URL(abs).origin === origin && !visited.has(abs) && !toVisit.includes(abs) && !/\.(jpg|png|gif|pdf|zip|css|js)$/i.test(abs)) {
+              toVisit.push(abs);
+            }
+          } catch {}
+        }
+      }
     }
-    const pagesToCrawl = Array.from(internalLinks).slice(0, 4);
-    const otherPages = (await Promise.all(pagesToCrawl.map(fetchPage)))
-      .filter(p => p.html)
-      .map(p => ({ ...extractPage(p.url, p.html), status: p.status }));
-
-    const crawledPages = [homePage, ...otherPages];
 
     // --- analyzer.py: detect real SEO issues ---
     const detected = [];

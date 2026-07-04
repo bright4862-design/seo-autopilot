@@ -12,7 +12,10 @@ export default function Issues() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [filterCategory, setFilterCategory] = useState("all");
-  const [filterStatus, setFilterStatus] = useState("all");
+  const [filterStatus, setFilterStatus] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("status") || "all";
+  });
   const [filterPriority, setFilterPriority] = useState("all");
   const [selectedIssue, setSelectedIssue] = useState(null);
 

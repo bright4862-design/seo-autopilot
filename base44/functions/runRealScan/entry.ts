@@ -6,7 +6,7 @@ Deno.serve(async (req) => {
     const user = await base44.auth.me();
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const { website_url, business_name, business_type, city } = await req.json();
+    const { website_url, business_name, business_type, city, project_id, crawl_job_id } = await req.json();
     if (!website_url) return Response.json({ error: 'website_url is required' }, { status: 400 });
 
     let baseUrl = website_url;
@@ -88,6 +88,23 @@ Deno.serve(async (req) => {
           } catch {}
         }
       }
+    }
+
+    // --- persist crawled pages ---
+    if (project_id && crawl_job_id) {
+      await base44.entities.CrawledPage.bulkCreate(
+        crawledPages.map(p => ({
+          project_id,
+          crawl_job_id,
+          url: p.url,
+          status_code: p.status || 0,
+          title: p.title || '',
+          meta_description: p.metaDesc || '',
+          h1: p.h1 || '',
+          canonical_url: p.canonical || '',
+          word_count: p.wordCount || 0,
+        }))
+      );
     }
 
     // --- analyzer.py: deterministic SEO issue detection ---

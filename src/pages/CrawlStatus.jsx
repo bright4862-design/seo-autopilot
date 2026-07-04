@@ -176,6 +176,8 @@ export default function CrawlStatus() {
           business_name: project.business_name,
           business_type: project.business_type,
           city: project.city,
+          project_id: project.id,
+          crawl_job_id: job.id,
         });
         realFixes = res.data?.fixes || [];
         if (typeof res.data?.health_score === 'number') healthScore = res.data.health_score;

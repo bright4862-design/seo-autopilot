@@ -2,24 +2,13 @@ import React, { useState } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import {
-  LayoutDashboard, Search, AlertTriangle, ArrowRightLeft, FileText,
-  Code, BarChart3, Settings, LogOut, Menu, X, Zap, Globe,
-  FileCheck, ChevronDown, User, Shield, Sparkles
+  ListChecks, Search, Settings, LogOut, Menu, Zap, User, Shield
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const navItems = [
-  { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
-  { label: "Crawl Status", path: "/crawl-status", icon: Search },
-  { label: "Issues", path: "/issues", icon: AlertTriangle },
-  { label: "AI Metadata", path: "/metadata", icon: Zap },
-  { label: "Redirects", path: "/redirects", icon: ArrowRightLeft },
-  { label: "Canonicals & Sitemap", path: "/canonicals", icon: Globe },
-  { label: "JS Rendering", path: "/js-rendering", icon: Code },
-  { label: "Competitors", path: "/competitors", icon: BarChart3 },
-  { label: "Developer Work", path: "/developer", icon: FileCheck },
-  { label: "Reports", path: "/reports", icon: FileText },
-  { label: "AI Assistant", path: "/assistant", icon: Sparkles },
+  { label: "Fix List", path: "/dashboard", icon: ListChecks },
+  { label: "New Scan", path: "/crawl-status", icon: Search },
 ];
 
 export default function DashboardLayout() {

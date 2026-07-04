@@ -19,7 +19,7 @@ import Landing from '@/pages/Landing';
 
 // App pages
 import Onboarding from '@/pages/Onboarding';
-import Dashboard from '@/pages/Dashboard';
+import FixList from '@/pages/FixList';
 import CrawlStatus from '@/pages/CrawlStatus';
 import Issues from '@/pages/Issues';
 import Metadata from '@/pages/Metadata';
@@ -68,7 +68,7 @@ const AuthenticatedApp = () => {
       <Route element={<ProtectedRoute unauthenticatedElement={<Navigate to="/login" replace />} />}>
         <Route path="/onboarding" element={<Onboarding />} />
         <Route element={<DashboardLayout />}>
-          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/dashboard" element={<FixList />} />
           <Route path="/crawl-status" element={<CrawlStatus />} />
           <Route path="/issues" element={<Issues />} />
           <Route path="/metadata" element={<Metadata />} />

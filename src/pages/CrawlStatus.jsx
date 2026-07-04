@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,12 +19,88 @@ const CRAWL_STEPS = [
   { key: "complete", label: "Complete", icon: CheckCircle2, desc: "Your scan results are ready!" },
 ];
 
+const SCAN_ISSUES = [
+  {
+    page_url: "/services", category: "meta_title", priority: "high", status: "auto_fixed",
+    issue_title: "Missing page title on Services page",
+    plain_english_explanation: "Your Services page didn't have a title tag. We generated one for you.",
+    why_it_matters: "Page titles are the first thing people see in Google. Without one, Google guesses — usually poorly.",
+    current_value: "(empty)", recommended_value: "Plumbing & HVAC Services | Sunshine Plumbing Denver",
+    ai_recommendation: "We auto-generated a title using your business name and services.",
+    confidence_score: 92, can_auto_fix: true, requires_approval: false, requires_developer: false,
+  },
+  {
+    page_url: "/blog/tips", category: "internal_link", priority: "low", status: "auto_fixed",
+    issue_title: "Broken internal link to removed blog post",
+    plain_english_explanation: "This page linked to a blog post that no longer exists. We removed the broken link.",
+    why_it_matters: "Broken links make your site look unmaintained and waste Google's time.",
+    current_value: "Link to /blog/summer-tips-2024 (404)", recommended_value: "Link removed",
+    ai_recommendation: "We removed the broken link automatically.",
+    confidence_score: 80, can_auto_fix: true, requires_approval: false, requires_developer: false,
+  },
+  {
+    page_url: "/about", category: "meta_description", priority: "medium", status: "needs_approval",
+    issue_title: "Missing description on About page",
+    plain_english_explanation: "Your About page has no meta description — the short summary shown under your title in Google.",
+    why_it_matters: "A good description convinces people to click your result over a competitor's.",
+    current_value: "(empty)", recommended_value: "Sunshine Plumbing has served Denver for 15+ years. Licensed, insured, ready to help.",
+    ai_recommendation: "We wrote a description highlighting your experience and service area — approve it to apply.",
+    confidence_score: 85, can_auto_fix: false, requires_approval: true, requires_developer: false,
+  },
+  {
+    page_url: "/old-summer-promo", category: "404_error", priority: "critical", status: "needs_approval",
+    issue_title: "Broken page returning an error",
+    plain_english_explanation: "This page no longer exists but people (and Google) still try to visit it.",
+    why_it_matters: "Broken pages frustrate visitors and waste your SEO value.",
+    current_value: "404 error", recommended_value: "Redirect to /services",
+    ai_recommendation: "We can set up a redirect from this old page to your services page — just approve it.",
+    confidence_score: 90, can_auto_fix: false, requires_approval: true, requires_developer: false,
+  },
+  {
+    page_url: "/water-heater-repair", category: "canonical", priority: "medium", status: "needs_approval",
+    issue_title: "Canonical tag points to a different URL version",
+    plain_english_explanation: "This page's canonical tag points to a URL with a trailing slash, but the real URL doesn't have one.",
+    why_it_matters: "When Google sees two versions of a page, it may split your ranking power between them.",
+    current_value: ".../water-heater-repair/", recommended_value: ".../water-heater-repair",
+    ai_recommendation: "We can update the canonical tag to match — approve and we'll apply it.",
+    confidence_score: 95, can_auto_fix: false, requires_approval: true, requires_developer: false,
+  },
+  {
+    page_url: "/drain-cleaning", category: "thin_content", priority: "high", status: "needs_developer",
+    issue_title: "Very little content on service page",
+    plain_english_explanation: "This page only has 87 words — not enough for Google to understand or rank it well.",
+    why_it_matters: "Pages with little content rarely rank. Your competitors' similar pages have 500-1,200 words.",
+    current_value: "87 words", recommended_value: "500+ words with service details & FAQ",
+    ai_recommendation: "A developer or writer should expand this page with service details and FAQs.",
+    confidence_score: 88, can_auto_fix: false, requires_approval: false, requires_developer: true,
+  },
+  {
+    page_url: "/contact", category: "schema", priority: "medium", status: "needs_developer",
+    issue_title: "Missing business details for Google",
+    plain_english_explanation: "Your contact page doesn't tell Google your business name, address, phone, and hours in a format it understands.",
+    why_it_matters: "This helps Google show your phone number and hours directly in search results.",
+    current_value: "Not found", recommended_value: "Add LocalBusiness schema",
+    ai_recommendation: "A developer should add LocalBusiness schema markup to your contact page.",
+    confidence_score: 95, can_auto_fix: false, requires_approval: false, requires_developer: true,
+  },
+  {
+    page_url: "/", category: "performance", priority: "medium", status: "needs_developer",
+    issue_title: "Homepage loads slowly on mobile",
+    plain_english_explanation: "Your homepage takes over 5 seconds to load on mobile. Most visitors leave after 3.",
+    why_it_matters: "Google uses page speed as a ranking factor, and slow pages lose customers.",
+    current_value: "5.2s load time", recommended_value: "Under 3 seconds",
+    ai_recommendation: "A developer should optimize images and reduce JavaScript.",
+    confidence_score: 78, can_auto_fix: false, requires_approval: false, requires_developer: true,
+  },
+];
+
 export default function CrawlStatus() {
   const [crawlJob, setCrawlJob] = useState(null);
   const [project, setProject] = useState(null);
   const [loading, setLoading] = useState(true);
   const [simulating, setSimulating] = useState(false);
   const [error, setError] = useState(null);
+  const didAutoStart = useRef(false);
 
   useEffect(() => {
     const load = async () => {
@@ -39,18 +115,35 @@ export default function CrawlStatus() {
     load();
   }, []);
 
-  const simulateCrawl = async () => {
+  useEffect(() => {
+    if (didAutoStart.current) return;
+    if (!project) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("autostart") !== "1") return;
+    if (crawlJob?.status === "queued") {
+      didAutoStart.current = true;
+      simulateCrawl(crawlJob);
+    }
+  }, [project, crawlJob]);
+
+  const simulateCrawl = async (existingJob) => {
     if (!project) return;
     setSimulating(true);
     setError(null);
     try {
-      const job = await base44.entities.CrawlJob.create({
-        project_id: project.id,
-        status: "queued",
-        crawl_type: "full",
-        started_at: new Date().toISOString(),
-      });
+      let job = existingJob;
+      if (!job) {
+        job = await base44.entities.CrawlJob.create({
+          project_id: project.id,
+          status: "queued",
+          crawl_type: "full",
+          started_at: new Date().toISOString(),
+        });
+      }
       setCrawlJob(job);
+
+      // Start each scan with a clean Fix List
+      try { await base44.entities.SeoIssue.deleteMany({ project_id: project.id }); } catch (e) {}
 
       const steps = CRAWL_STEPS.map(s => s.key).filter(k => k !== "complete");
       for (const status of steps) {
@@ -73,6 +166,11 @@ export default function CrawlStatus() {
         js_pages_rendered: 12,
       });
       setCrawlJob(completed);
+
+      // Turn the findings into simple fixes on the Fix List
+      await base44.entities.SeoIssue.bulkCreate(
+        SCAN_ISSUES.map(i => ({ ...i, project_id: project.id, crawl_job_id: job.id }))
+      );
 
       await base44.entities.BusinessProject.update(project.id, {
         last_crawl_at: new Date().toISOString(),
@@ -116,9 +214,9 @@ export default function CrawlStatus() {
           <h1 className="text-2xl font-bold tracking-tight">Crawl Status</h1>
           <p className="text-sm text-gray-500 mt-1">Track your website scan progress</p>
         </div>
-        <Button onClick={simulateCrawl} disabled={simulating} className="gradient-primary text-white border-0">
+        <Button onClick={() => simulateCrawl()} disabled={simulating} className="gradient-primary text-white border-0">
           {simulating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Search className="w-4 h-4 mr-2" />}
-          {simulating ? "Scanning..." : crawlJob ? "Run New Crawl" : "Start Crawl"}
+          {simulating ? "Scanning..." : crawlJob?.status === "complete" ? "Run New Scan" : "Scan My Website"}
         </Button>
       </div>
 
@@ -177,8 +275,7 @@ export default function CrawlStatus() {
           <h3 className="font-bold text-green-900 text-lg mb-1">Scan Complete!</h3>
           <p className="text-sm text-green-700 mb-4">We found {crawlJob.pages_found} pages and rendered {crawlJob.js_pages_rendered} JavaScript pages.</p>
           <div className="flex justify-center gap-3">
-            <a href="/dashboard"><Button size="sm" className="gradient-primary text-white border-0">View Dashboard</Button></a>
-            <a href="/issues"><Button size="sm" variant="outline">See Issues</Button></a>
+            <a href="/dashboard"><Button size="sm" className="gradient-primary text-white border-0">View Fix List</Button></a>
           </div>
         </div>
       )}

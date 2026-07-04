@@ -4,6 +4,8 @@ import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import ScoreRing from "@/components/dashboard/ScoreRing";
 import StatCard from "@/components/dashboard/StatCard";
+import UrlSubmissionPanel from "@/components/dashboard/UrlSubmissionPanel";
+import CrawlHistory from "@/components/dashboard/CrawlHistory";
 import {
   CheckCircle2, Clock, AlertTriangle, Code, ArrowRightLeft,
   Globe, FileText, BarChart3, Search, Wrench, ExternalLink,
@@ -13,20 +15,30 @@ import {
 export default function Dashboard() {
   const [project, setProject] = useState(null);
   const [issues, setIssues] = useState([]);
+  const [crawls, setCrawls] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const loadData = async () => {
+    const projects = await base44.entities.BusinessProject.list("-created_date", 1);
+    if (projects.length > 0) {
+      setProject(projects[0]);
+      const [iss, jobs] = await Promise.all([
+        base44.entities.SeoIssue.filter({ project_id: projects[0].id }),
+        base44.entities.CrawlJob.filter({ project_id: projects[0].id }, "-started_at"),
+      ]);
+      setIssues(iss);
+      setCrawls(jobs);
+    }
+    setLoading(false);
+  };
+
   useEffect(() => {
-    const load = async () => {
-      const projects = await base44.entities.BusinessProject.list("-created_date", 1);
-      if (projects.length > 0) {
-        setProject(projects[0]);
-        const iss = await base44.entities.SeoIssue.filter({ project_id: projects[0].id });
-        setIssues(iss);
-      }
-      setLoading(false);
-    };
-    load();
+    loadData();
   }, []);
+
+  const handleCrawlDeleted = (id) => {
+    setCrawls((prev) => prev.filter((c) => c.id !== id));
+  };
 
   if (loading) {
     return (
@@ -125,6 +137,16 @@ export default function Dashboard() {
           <p className="text-sm text-gray-500">Get expert implementation starting at $500.</p>
         </Link>
       </div>
+
+      {/* Submit URLs */}
+      <UrlSubmissionPanel
+        project={project}
+        onCompetitorAdded={() => {}}
+        onWebsiteAdded={() => {}}
+      />
+
+      {/* Crawl history */}
+      <CrawlHistory crawls={crawls} onDelete={handleCrawlDeleted} />
 
       {/* Recent issues needing attention */}
       {needsApproval > 0 && (

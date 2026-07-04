@@ -173,7 +173,7 @@ export default function CrawlStatus() {
       let healthScore = 62;
       let pagesCrawled = 47;
       let issuesFound = 0;
-      let summary = '';
+      let summary = null;
       try {
         const res = await base44.functions.invoke('runRealScan', {
           website_url: project.website_url,
@@ -187,7 +187,7 @@ export default function CrawlStatus() {
         if (typeof res.data?.health_score === 'number') healthScore = res.data.health_score;
         if (typeof res.data?.pages_crawled === 'number') pagesCrawled = res.data.pages_crawled;
         if (typeof res.data?.issues_found === 'number') issuesFound = res.data.issues_found;
-        if (typeof res.data?.summary === 'string') summary = res.data.summary;
+        if (res.data?.summary && typeof res.data.summary === 'object') summary = res.data.summary;
         setScanResult({ fixes: realFixes, health_score: healthScore, pages_crawled: pagesCrawled, issues_found: issuesFound, summary });
       } catch (e) {
         console.error('runRealScan failed, using demo fixes', e);
@@ -319,7 +319,22 @@ export default function CrawlStatus() {
             and found {scanResult?.issues_found ?? 0} SEO {(scanResult?.issues_found ?? 0) === 1 ? 'issue' : 'issues'}.
           </p>
           {scanResult?.summary && (
-            <p className="text-sm text-green-800 bg-white/60 rounded-lg p-3 mb-4 text-left">{scanResult.summary}</p>
+            <div className="bg-white/60 rounded-lg p-3 mb-4">
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div>
+                  <p className="text-lg font-bold text-green-700">{scanResult.summary.we_can_fix ?? 0}</p>
+                  <p className="text-xs text-gray-500">We fixed this</p>
+                </div>
+                <div>
+                  <p className="text-lg font-bold text-amber-600">{scanResult.summary.needs_approval ?? 0}</p>
+                  <p className="text-xs text-gray-500">Needs approval</p>
+                </div>
+                <div>
+                  <p className="text-lg font-bold text-blue-600">{scanResult.summary.needs_developer ?? 0}</p>
+                  <p className="text-xs text-gray-500">Needs developer</p>
+                </div>
+              </div>
+            </div>
           )}
           <div className="grid grid-cols-2 gap-3 max-w-xs mx-auto mb-4">
             <div className="bg-white rounded-lg p-3">

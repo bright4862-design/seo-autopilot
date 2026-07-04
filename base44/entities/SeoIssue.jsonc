@@ -30,6 +30,9 @@
         "web_dev"
       ]
     },
+    "customer_category": {
+      "type": "string"
+    },
     "priority": {
       "type": "string",
       "enum": [
@@ -53,6 +56,14 @@
         "completed"
       ],
       "default": "open"
+    },
+    "difficulty": {
+      "type": "string",
+      "enum": [
+        "easy",
+        "moderate",
+        "developer"
+      ]
     },
     "issue_title": {
       "type": "string"

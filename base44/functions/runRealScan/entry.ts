@@ -89,89 +89,100 @@ Deno.serve(async (req) => {
       }
     }
 
-    // --- analyzer.py: detect real SEO issues ---
-    const detected = [];
-    const push = (p, fields) => detected.push({ page_url: p.url === baseUrl ? '/' : new URL(p.url).pathname, ...fields });
+    // --- analyzer.py: deterministic SEO issue detection ---
+    const generateBasicTitle = () => {
+      if (business_type && city) return `${business_name} | ${business_type} in ${city}`;
+      if (business_type) return `${business_name} | ${business_type}`;
+      return `${business_name} | Official Website`;
+    };
 
+    const issues = [];
     for (const p of crawledPages) {
-      if (!p.title) push(p, { category: 'meta_title', priority: 'high', issue_title: 'Missing page title', current_value: '(empty)', recommended_value: 'A clear 30–60 character title', detail: 'This page has no <title> tag.' });
-      else if (p.title.length < 10 || p.title.length > 65) push(p, { category: 'meta_title', priority: 'medium', issue_title: 'Page title length is not ideal', current_value: p.title, recommended_value: 'A clear 30–60 character title', detail: `Title is ${p.title.length} characters.` });
+      const pageUrl = p.url === baseUrl ? '/' : (() => { try { return new URL(p.url).pathname; } catch { return p.url; } })();
 
-      if (!p.metaDesc) push(p, { category: 'meta_description', priority: 'medium', issue_title: 'Missing meta description', current_value: '(empty)', recommended_value: 'A 150–160 character summary', detail: 'This page has no meta description.' });
-      else if (p.metaDesc.length > 160) push(p, { category: 'meta_description', priority: 'low', issue_title: 'Meta description is too long', current_value: p.metaDesc, recommended_value: 'Shorten to under 160 characters', detail: `Description is ${p.metaDesc.length} characters.` });
-
-      if (!p.h1) push(p, { category: 'meta_title', priority: 'medium', issue_title: 'Missing main heading (H1)', current_value: '(none)', recommended_value: 'A descriptive H1 heading', detail: 'This page has no H1.' });
-
-      if (p.wordCount < 300) push(p, { category: 'thin_content', priority: 'high', issue_title: 'Very little content on this page', current_value: `${p.wordCount} words`, recommended_value: '300+ words with service details & FAQ', detail: 'This page has thin content.' });
-
-      if (!p.canonical) push(p, { category: 'canonical', priority: 'medium', issue_title: 'No canonical tag', current_value: '(none)', recommended_value: 'Add a canonical tag', detail: 'This page has no canonical tag.' });
-
-      if (p.status === 404) push(p, { category: '404_error', priority: 'high', issue_title: 'Broken page returning an error', current_value: '404 error', recommended_value: 'Fix or redirect the page', detail: 'This page returned a 404.' });
-    }
-
-    // --- ai_recommendations.py: generate plain-English fixes + grouping ---
-    let fixes = [];
-    if (detected.length > 0) {
-      try {
-        const llmRes = await base44.asServiceRole.integrations.Core.InvokeLLM({
-          prompt:
-            'You are an SEO advisor for non-technical small business owners. For each detected SEO issue, write a plain-English explanation, why it matters, an AI recommendation, and assign it to exactly ONE group: "we_can_fix" (simple, auto-fixable now), "needs_approval" (a fix is prepared, owner just approves), or "needs_developer" (requires a developer).\n\n' +
-            `Business: ${business_name || 'This business'}\nType: ${business_type || 'N/A'}\nCity: ${city || 'N/A'}\n\n` +
-            'Detected issues (the "issue_index" in your output must match the order below):\n' +
-            JSON.stringify(detected, null, 2) +
-            '\n\nReturn a JSON object with a "fixes" array. Each item: issue_index (number), plain_english_explanation (string), why_it_matters (string), ai_recommendation (string), group (one of we_can_fix|needs_approval|needs_developer), impact (high|medium|low).',
-          response_json_schema: {
-            type: 'object',
-            properties: {
-              fixes: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  properties: {
-                    issue_index: { type: 'number' },
-                    plain_english_explanation: { type: 'string' },
-                    why_it_matters: { type: 'string' },
-                    ai_recommendation: { type: 'string' },
-                    group: { type: 'string', enum: ['we_can_fix', 'needs_approval', 'needs_developer'] },
-                    impact: { type: 'string', enum: ['high', 'medium', 'low'] },
-                  },
-                  required: ['issue_index', 'plain_english_explanation', 'why_it_matters', 'ai_recommendation', 'group', 'impact'],
-                },
-              },
-            },
-            required: ['fixes'],
-          },
+      if (p.status === 404) {
+        issues.push({
+          page_url: pageUrl, category: '404_error', customer_category: 'Broken page',
+          issue_title: 'This page is broken',
+          plain_english_explanation: 'Visitors and search engines are being sent to a page that does not exist.',
+          why_it_matters: 'Broken pages can hurt trust and make it harder for search engines to understand your website.',
+          ai_recommendation: 'Redirect this broken page to the closest working page.',
+          current_value: `Status: ${p.status}`, recommended_value: 'Redirect to closest working page',
+          priority: 'high', difficulty: 'moderate', group: 'needs_approval',
+          can_auto_fix: false, requires_approval: true, requires_developer: false,
         });
-        fixes = llmRes.fixes || [];
-      } catch (e) {
-        console.error('LLM recommendations failed', e.message);
+      }
+
+      if (!p.title) {
+        const title = generateBasicTitle();
+        issues.push({
+          page_url: pageUrl, category: 'meta_title', customer_category: 'Search title',
+          issue_title: 'This page needs a search title',
+          plain_english_explanation: 'This page does not have a clear title for search engines.',
+          why_it_matters: 'The search title helps people and Google understand what the page is about.',
+          ai_recommendation: title, current_value: '(empty)', recommended_value: title,
+          priority: 'high', difficulty: 'easy', group: 'we_can_fix',
+          can_auto_fix: true, requires_approval: false, requires_developer: false,
+        });
+      } else if (p.title.length < 15) {
+        const title = generateBasicTitle();
+        issues.push({
+          page_url: pageUrl, category: 'meta_title', customer_category: 'Search title',
+          issue_title: 'This page has a weak search title',
+          plain_english_explanation: 'The current page title is too short or unclear.',
+          why_it_matters: 'A better title can help customers understand the page before they click.',
+          ai_recommendation: title, current_value: p.title, recommended_value: title,
+          priority: 'medium', difficulty: 'easy', group: 'we_can_fix',
+          can_auto_fix: true, requires_approval: false, requires_developer: false,
+        });
+      }
+
+      if (!p.metaDesc) {
+        issues.push({
+          page_url: pageUrl, category: 'meta_description', customer_category: 'Search description',
+          issue_title: 'This page needs a better search description',
+          plain_english_explanation: 'This page does not have a description for search results.',
+          why_it_matters: 'A good description can help more people click your website from Google.',
+          ai_recommendation: 'Write a short description that explains the page and encourages customers to visit.',
+          current_value: '(empty)', recommended_value: 'A 150–160 character summary',
+          priority: 'medium', difficulty: 'easy', group: 'we_can_fix',
+          can_auto_fix: true, requires_approval: false, requires_developer: false,
+        });
+      }
+
+      if (!p.canonical) {
+        issues.push({
+          page_url: pageUrl, category: 'canonical', customer_category: 'Duplicate page signal',
+          issue_title: 'Google may be confused by duplicate page versions',
+          plain_english_explanation: 'This page does not clearly tell Google which version is the main version.',
+          why_it_matters: 'If Google finds multiple versions of the same page, it may not know which one to show.',
+          ai_recommendation: 'Set this page as the preferred version of itself.',
+          current_value: '(none)', recommended_value: 'Add a canonical tag',
+          priority: 'medium', difficulty: 'moderate', group: 'needs_approval',
+          can_auto_fix: false, requires_approval: true, requires_developer: false,
+        });
+      }
+
+      if (p.wordCount < 150) {
+        issues.push({
+          page_url: pageUrl, category: 'thin_content', customer_category: 'Page content',
+          issue_title: 'This page may not have enough helpful content',
+          plain_english_explanation: 'This page is very short and may not answer enough customer questions.',
+          why_it_matters: 'Helpful pages usually explain the service, location, benefits, and common questions.',
+          ai_recommendation: 'Add more useful information, customer questions, service details, and a clear call to action.',
+          current_value: `${p.wordCount} words`, recommended_value: '300+ words with service details & FAQ',
+          priority: 'high', difficulty: 'developer', group: 'needs_developer',
+          can_auto_fix: false, requires_approval: false, requires_developer: true,
+        });
       }
     }
 
-    // --- calculate_health_score + assemble fixes ---
+    // --- calculate_health_score + map to final fixes ---
     let score = 100;
-    const finalIssues = detected.map((d, i) => {
-      const fix = fixes.find(f => f.issue_index === i) || {};
-      const group = fix.group || 'needs_approval';
-      const impact = fix.impact || d.priority;
-      if (impact === 'high') score -= 8; else if (impact === 'medium') score -= 5; else score -= 2;
-      const status = group === 'we_can_fix' ? 'auto_fixed' : group === 'needs_developer' ? 'needs_developer' : 'needs_approval';
-      return {
-        page_url: d.page_url,
-        category: d.category,
-        priority: d.priority,
-        issue_title: d.issue_title,
-        plain_english_explanation: fix.plain_english_explanation || d.detail,
-        why_it_matters: fix.why_it_matters || '',
-        current_value: d.current_value,
-        recommended_value: d.recommended_value,
-        ai_recommendation: fix.ai_recommendation || '',
-        confidence_score: 85,
-        can_auto_fix: group === 'we_can_fix',
-        requires_approval: group === 'needs_approval',
-        requires_developer: group === 'needs_developer',
-        status,
-      };
+    const finalIssues = issues.map(issue => {
+      if (issue.priority === 'high') score -= 8; else if (issue.priority === 'medium') score -= 5; else score -= 2;
+      const status = issue.group === 'we_can_fix' ? 'auto_fixed' : issue.group === 'needs_developer' ? 'needs_developer' : 'needs_approval';
+      return { ...issue, confidence_score: 90, status };
     });
     score = Math.max(score, 0);
 

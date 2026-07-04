@@ -1,0 +1,98 @@
+{
+  "name": "SeoIssue",
+  "type": "object",
+  "properties": {
+    "project_id": {
+      "type": "string"
+    },
+    "crawl_job_id": {
+      "type": "string"
+    },
+    "page_url": {
+      "type": "string"
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "meta_title",
+        "meta_description",
+        "404_error",
+        "redirect",
+        "canonical",
+        "sitemap",
+        "robots_txt",
+        "js_rendering",
+        "internal_link",
+        "thin_content",
+        "duplicate_content",
+        "schema",
+        "performance",
+        "web_dev"
+      ]
+    },
+    "priority": {
+      "type": "string",
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+      ],
+      "default": "medium"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "open",
+        "auto_fixed",
+        "needs_approval",
+        "approved",
+        "rejected",
+        "needs_developer",
+        "in_progress",
+        "completed"
+      ],
+      "default": "open"
+    },
+    "issue_title": {
+      "type": "string"
+    },
+    "plain_english_explanation": {
+      "type": "string"
+    },
+    "why_it_matters": {
+      "type": "string"
+    },
+    "current_value": {
+      "type": "string"
+    },
+    "recommended_value": {
+      "type": "string"
+    },
+    "ai_recommendation": {
+      "type": "string"
+    },
+    "confidence_score": {
+      "type": "number",
+      "default": 0
+    },
+    "can_auto_fix": {
+      "type": "boolean",
+      "default": false
+    },
+    "requires_approval": {
+      "type": "boolean",
+      "default": false
+    },
+    "requires_developer": {
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "project_id",
+    "page_url",
+    "category",
+    "issue_title"
+  ]
+}

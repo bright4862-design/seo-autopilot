@@ -1,0 +1,60 @@
+{
+  "name": "CrawledPage",
+  "type": "object",
+  "properties": {
+    "project_id": {
+      "type": "string"
+    },
+    "crawl_job_id": {
+      "type": "string"
+    },
+    "url": {
+      "type": "string"
+    },
+    "status_code": {
+      "type": "number"
+    },
+    "title": {
+      "type": "string"
+    },
+    "meta_description": {
+      "type": "string"
+    },
+    "h1": {
+      "type": "string"
+    },
+    "canonical_url": {
+      "type": "string"
+    },
+    "word_count": {
+      "type": "number",
+      "default": 0
+    },
+    "indexable": {
+      "type": "boolean",
+      "default": true
+    },
+    "in_sitemap": {
+      "type": "boolean",
+      "default": false
+    },
+    "rendered_title": {
+      "type": "string"
+    },
+    "rendered_meta_description": {
+      "type": "string"
+    },
+    "rendered_canonical": {
+      "type": "string"
+    },
+    "js_difference_detected": {
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "project_id",
+    "crawl_job_id",
+    "url"
+  ]
+}

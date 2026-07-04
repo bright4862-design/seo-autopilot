@@ -1,0 +1,38 @@
+{
+  "name": "RedirectRecommendation",
+  "type": "object",
+  "properties": {
+    "project_id": {
+      "type": "string"
+    },
+    "broken_url": {
+      "type": "string"
+    },
+    "status_code": {
+      "type": "number"
+    },
+    "recommended_destination": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "confidence_score": {
+      "type": "number",
+      "default": 0
+    },
+    "approval_status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "approved",
+        "rejected"
+      ],
+      "default": "pending"
+    }
+  },
+  "required": [
+    "project_id",
+    "broken_url"
+  ]
+}

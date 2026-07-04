@@ -1,0 +1,50 @@
+{
+  "name": "Competitor",
+  "type": "object",
+  "properties": {
+    "project_id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "website_url": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "service_pages_count": {
+      "type": "number",
+      "default": 0
+    },
+    "title_quality_score": {
+      "type": "number",
+      "default": 0
+    },
+    "meta_coverage_pct": {
+      "type": "number",
+      "default": 0
+    },
+    "content_depth_score": {
+      "type": "number",
+      "default": 0
+    },
+    "faq_usage": {
+      "type": "boolean",
+      "default": false
+    },
+    "schema_usage": {
+      "type": "boolean",
+      "default": false
+    },
+    "broken_links_count": {
+      "type": "number",
+      "default": 0
+    }
+  },
+  "required": [
+    "project_id",
+    "website_url"
+  ]
+}

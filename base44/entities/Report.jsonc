@@ -1,0 +1,40 @@
+{
+  "name": "Report",
+  "type": "object",
+  "properties": {
+    "project_id": {
+      "type": "string"
+    },
+    "crawl_job_id": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "fixed_count": {
+      "type": "number",
+      "default": 0
+    },
+    "approval_count": {
+      "type": "number",
+      "default": 0
+    },
+    "developer_count": {
+      "type": "number",
+      "default": 0
+    },
+    "competitor_summary": {
+      "type": "string"
+    },
+    "next_steps": {
+      "type": "string"
+    },
+    "seo_score": {
+      "type": "number",
+      "default": 0
+    }
+  },
+  "required": [
+    "project_id"
+  ]
+}

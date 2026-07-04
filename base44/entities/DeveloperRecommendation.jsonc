@@ -1,0 +1,71 @@
+{
+  "name": "DeveloperRecommendation",
+  "type": "object",
+  "properties": {
+    "project_id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "quick_fix",
+        "cms_seo_setup",
+        "technical_seo",
+        "website_structure",
+        "content_pages",
+        "speed_mobile",
+        "rebuild_migration"
+      ]
+    },
+    "priority": {
+      "type": "string",
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+      ],
+      "default": "medium"
+    },
+    "business_impact": {
+      "type": "string"
+    },
+    "estimated_complexity": {
+      "type": "string",
+      "enum": [
+        "simple",
+        "moderate",
+        "complex"
+      ]
+    },
+    "recommended_package": {
+      "type": "string",
+      "enum": [
+        "diy",
+        "500_cleanup",
+        "custom_rebuild"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "open",
+        "in_progress",
+        "completed",
+        "deferred"
+      ],
+      "default": "open"
+    }
+  },
+  "required": [
+    "project_id",
+    "title",
+    "category"
+  ]
+}

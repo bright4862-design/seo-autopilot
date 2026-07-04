@@ -1,0 +1,60 @@
+{
+  "name": "CrawlJob",
+  "type": "object",
+  "properties": {
+    "project_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "crawling_html",
+        "rendering_js",
+        "checking_metadata",
+        "checking_canonicals",
+        "checking_sitemap",
+        "checking_redirects",
+        "benchmarking_competitors",
+        "generating_recommendations",
+        "complete",
+        "failed"
+      ],
+      "default": "queued"
+    },
+    "crawl_type": {
+      "type": "string",
+      "enum": [
+        "full",
+        "monthly",
+        "competitor",
+        "js_render"
+      ],
+      "default": "full"
+    },
+    "pages_found": {
+      "type": "number",
+      "default": 0
+    },
+    "pages_crawled": {
+      "type": "number",
+      "default": 0
+    },
+    "js_pages_rendered": {
+      "type": "number",
+      "default": 0
+    },
+    "started_at": {
+      "type": "string"
+    },
+    "completed_at": {
+      "type": "string"
+    },
+    "error_message": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id"
+  ]
+}

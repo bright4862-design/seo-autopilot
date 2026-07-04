@@ -1,0 +1,58 @@
+{
+  "name": "MetadataRecommendation",
+  "type": "object",
+  "properties": {
+    "project_id": {
+      "type": "string"
+    },
+    "page_url": {
+      "type": "string"
+    },
+    "current_title": {
+      "type": "string"
+    },
+    "recommended_title_1": {
+      "type": "string"
+    },
+    "recommended_title_2": {
+      "type": "string"
+    },
+    "recommended_title_3": {
+      "type": "string"
+    },
+    "current_meta_description": {
+      "type": "string"
+    },
+    "recommended_description_1": {
+      "type": "string"
+    },
+    "recommended_description_2": {
+      "type": "string"
+    },
+    "recommended_description_3": {
+      "type": "string"
+    },
+    "suggested_h1": {
+      "type": "string"
+    },
+    "suggested_slug": {
+      "type": "string"
+    },
+    "suggested_faq_ideas": {
+      "type": "string"
+    },
+    "approval_status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "approved",
+        "rejected"
+      ],
+      "default": "pending"
+    }
+  },
+  "required": [
+    "project_id",
+    "page_url"
+  ]
+}

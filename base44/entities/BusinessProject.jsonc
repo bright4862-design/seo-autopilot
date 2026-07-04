@@ -1,0 +1,71 @@
+{
+  "name": "BusinessProject",
+  "type": "object",
+  "properties": {
+    "business_name": {
+      "type": "string"
+    },
+    "website_url": {
+      "type": "string"
+    },
+    "business_type": {
+      "type": "string"
+    },
+    "city": {
+      "type": "string"
+    },
+    "service_area": {
+      "type": "string"
+    },
+    "main_services": {
+      "type": "string"
+    },
+    "cms_platform": {
+      "type": "string",
+      "enum": [
+        "WordPress",
+        "Shopify",
+        "Wix",
+        "Webflow",
+        "Squarespace",
+        "Custom",
+        "Unknown"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "setup",
+        "active",
+        "paused",
+        "archived"
+      ],
+      "default": "setup"
+    },
+    "seo_score": {
+      "type": "number",
+      "default": 0
+    },
+    "last_crawl_at": {
+      "type": "string"
+    },
+    "next_crawl_at": {
+      "type": "string"
+    },
+    "subscription_plan": {
+      "type": "string",
+      "enum": [
+        "free",
+        "diy",
+        "growth",
+        "done_for_you",
+        "rebuild"
+      ],
+      "default": "free"
+    }
+  },
+  "required": [
+    "business_name",
+    "website_url"
+  ]
+}

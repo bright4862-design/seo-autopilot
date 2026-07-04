@@ -3,7 +3,7 @@ import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import {
   Search, FileText, Code, Globe, ArrowRightLeft, BarChart3,
-  Zap, CheckCircle2, Loader2, Circle, Clock
+  Zap, CheckCircle2, Loader2, Circle, Clock, AlertTriangle
 } from "lucide-react";
 
 const CRAWL_STEPS = [
@@ -24,6 +24,7 @@ export default function CrawlStatus() {
   const [project, setProject] = useState(null);
   const [loading, setLoading] = useState(true);
   const [simulating, setSimulating] = useState(false);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     const load = async () => {
@@ -41,42 +42,48 @@ export default function CrawlStatus() {
   const simulateCrawl = async () => {
     if (!project) return;
     setSimulating(true);
-
-    const job = await base44.entities.CrawlJob.create({
-      project_id: project.id,
-      status: "queued",
-      crawl_type: "full",
-      started_at: new Date().toISOString(),
-    });
-    setCrawlJob(job);
-
-    const steps = CRAWL_STEPS.map(s => s.key).filter(k => k !== "complete");
-    for (const status of steps) {
-      await new Promise(r => setTimeout(r, 1500));
-      const updated = await base44.entities.CrawlJob.update(job.id, {
-        status,
-        pages_found: status === "crawling_html" ? 47 : undefined,
-        pages_crawled: status === "checking_metadata" ? 47 : undefined,
-        js_pages_rendered: status === "checking_canonicals" ? 12 : undefined,
+    setError(null);
+    try {
+      const job = await base44.entities.CrawlJob.create({
+        project_id: project.id,
+        status: "queued",
+        crawl_type: "full",
+        started_at: new Date().toISOString(),
       });
-      setCrawlJob(updated);
+      setCrawlJob(job);
+
+      const steps = CRAWL_STEPS.map(s => s.key).filter(k => k !== "complete");
+      for (const status of steps) {
+        await new Promise(r => setTimeout(r, 1500));
+        const updated = await base44.entities.CrawlJob.update(job.id, {
+          status,
+          pages_found: status === "crawling_html" ? 47 : undefined,
+          pages_crawled: status === "checking_metadata" ? 47 : undefined,
+          js_pages_rendered: status === "checking_canonicals" ? 12 : undefined,
+        });
+        setCrawlJob(updated);
+      }
+
+      await new Promise(r => setTimeout(r, 1000));
+      const completed = await base44.entities.CrawlJob.update(job.id, {
+        status: "complete",
+        completed_at: new Date().toISOString(),
+        pages_found: 47,
+        pages_crawled: 47,
+        js_pages_rendered: 12,
+      });
+      setCrawlJob(completed);
+
+      await base44.entities.BusinessProject.update(project.id, {
+        last_crawl_at: new Date().toISOString(),
+        seo_score: 62,
+      });
+    } catch (err) {
+      console.error("Crawl simulation failed", err);
+      setError(err.message || "Something went wrong during the crawl. Please try again.");
+    } finally {
+      setSimulating(false);
     }
-
-    await new Promise(r => setTimeout(r, 1000));
-    const completed = await base44.entities.CrawlJob.update(job.id, {
-      status: "complete",
-      completed_at: new Date().toISOString(),
-      pages_found: 47,
-      pages_crawled: 47,
-      js_pages_rendered: 12,
-    });
-    setCrawlJob(completed);
-
-    await base44.entities.BusinessProject.update(project.id, {
-      last_crawl_at: new Date().toISOString(),
-      seo_score: 62,
-    });
-    setSimulating(false);
   };
 
   const currentIdx = crawlJob ? CRAWL_STEPS.findIndex(s => s.key === crawlJob.status) : -1;
@@ -89,6 +96,19 @@ export default function CrawlStatus() {
     );
   }
 
+  if (!project) {
+    return (
+      <div className="max-w-2xl mx-auto">
+        <div className="bg-white rounded-2xl border border-gray-100 p-10 text-center">
+          <Search className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+          <h3 className="font-semibold text-gray-800 mb-1">No project set up yet</h3>
+          <p className="text-sm text-gray-500 mb-5">Add your business website first to start an SEO scan.</p>
+          <a href="/onboarding"><Button className="gradient-primary text-white border-0">Set Up Project</Button></a>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
@@ -96,12 +116,21 @@ export default function CrawlStatus() {
           <h1 className="text-2xl font-bold tracking-tight">Crawl Status</h1>
           <p className="text-sm text-gray-500 mt-1">Track your website scan progress</p>
         </div>
-        {!simulating && (
-          <Button onClick={simulateCrawl} className="gradient-primary text-white border-0">
-            <Search className="w-4 h-4 mr-2" /> {crawlJob ? "Run New Crawl" : "Start Crawl"}
-          </Button>
-        )}
+        <Button onClick={simulateCrawl} disabled={simulating} className="gradient-primary text-white border-0">
+          {simulating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Search className="w-4 h-4 mr-2" />}
+          {simulating ? "Scanning..." : crawlJob ? "Run New Crawl" : "Start Crawl"}
+        </Button>
       </div>
+
+      {error && (
+        <div className="bg-red-50 border border-red-100 rounded-xl p-4 flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-red-800">Crawl failed</p>
+            <p className="text-xs text-red-600 mt-0.5">{error}</p>
+          </div>
+        </div>
+      )}
 
       {/* Progress */}
       <div className="bg-white rounded-2xl border border-gray-100 p-6">

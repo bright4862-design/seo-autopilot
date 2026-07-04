@@ -167,14 +167,39 @@ export default function CrawlStatus() {
       });
       setCrawlJob(completed);
 
-      // Turn the findings into simple fixes on the Fix List
-      await base44.entities.SeoIssue.bulkCreate(
-        SCAN_ISSUES.map(i => ({ ...i, project_id: project.id, crawl_job_id: job.id }))
-      );
+      // Turn the findings into simple fixes on the Fix List (real crawl + AI)
+      let realFixes = [];
+      let healthScore = 62;
+      try {
+        const res = await base44.functions.invoke('runRealScan', {
+          website_url: project.website_url,
+          business_name: project.business_name,
+          business_type: project.business_type,
+          city: project.city,
+        });
+        realFixes = res.data?.fixes || [];
+        if (typeof res.data?.health_score === 'number') healthScore = res.data.health_score;
+      } catch (e) {
+        console.error('runRealScan failed, using demo fixes', e);
+      }
+
+      if (realFixes.length > 0) {
+        await base44.entities.SeoIssue.bulkCreate(
+          realFixes.map(f => ({
+            ...f,
+            project_id: project.id,
+            crawl_job_id: job.id,
+          }))
+        );
+      } else {
+        await base44.entities.SeoIssue.bulkCreate(
+          SCAN_ISSUES.map(i => ({ ...i, project_id: project.id, crawl_job_id: job.id }))
+        );
+      }
 
       await base44.entities.BusinessProject.update(project.id, {
         last_crawl_at: new Date().toISOString(),
-        seo_score: 62,
+        seo_score: healthScore,
       });
     } catch (err) {
       console.error("Crawl simulation failed", err);

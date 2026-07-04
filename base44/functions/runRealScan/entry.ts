@@ -90,23 +90,6 @@ Deno.serve(async (req) => {
       }
     }
 
-    // --- persist crawled pages ---
-    if (project_id && crawl_job_id) {
-      await base44.entities.CrawledPage.bulkCreate(
-        crawledPages.map(p => ({
-          project_id,
-          crawl_job_id,
-          url: p.url,
-          status_code: p.status || 0,
-          title: p.title || '',
-          meta_description: p.metaDesc || '',
-          h1: p.h1 || '',
-          canonical_url: p.canonical || '',
-          word_count: p.wordCount || 0,
-        }))
-      );
-    }
-
     // --- analyzer.py: deterministic SEO issue detection ---
     const generateBasicTitle = () => {
       if (business_type && city) return `${business_name} | ${business_type} in ${city}`;
@@ -218,6 +201,21 @@ Deno.serve(async (req) => {
       health_score: score,
       pages_crawled: crawledPages.length,
       issues_found: finalIssues.length,
+      crawled_pages: crawledPages.map(p => ({
+        url: p.url,
+        status_code: p.status || 0,
+        title: p.title || "",
+        meta_description: p.metaDesc || "",
+        h1: p.h1 || "",
+        canonical_url: p.canonical || "",
+        word_count: p.wordCount || 0,
+        indexable: true,
+        in_sitemap: false,
+        rendered_title: "",
+        rendered_meta_description: "",
+        rendered_canonical: "",
+        js_difference_detected: false
+      })),
       fixes: finalIssues,
       summary: {
         we_can_fix: finalIssues.filter(f => f.status === 'auto_fixed').length,

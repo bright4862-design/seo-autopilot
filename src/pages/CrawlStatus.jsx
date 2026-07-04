@@ -174,6 +174,7 @@ export default function CrawlStatus() {
       let pagesCrawled = 47;
       let issuesFound = 0;
       let summary = null;
+      let crawledPagesData = [];
       try {
         const res = await base44.functions.invoke('runRealScan', {
           website_url: project.website_url,
@@ -183,14 +184,26 @@ export default function CrawlStatus() {
           project_id: project.id,
           crawl_job_id: job.id,
         });
-        realFixes = res.data?.fixes || [];
-        if (typeof res.data?.health_score === 'number') healthScore = res.data.health_score;
-        if (typeof res.data?.pages_crawled === 'number') pagesCrawled = res.data.pages_crawled;
-        if (typeof res.data?.issues_found === 'number') issuesFound = res.data.issues_found;
-        if (res.data?.summary && typeof res.data.summary === 'object') summary = res.data.summary;
+        const scanData = res.data || {};
+        realFixes = scanData.fixes || [];
+        crawledPagesData = scanData.crawled_pages || [];
+        if (typeof scanData.health_score === 'number') healthScore = scanData.health_score;
+        if (typeof scanData.pages_crawled === 'number') pagesCrawled = scanData.pages_crawled;
+        if (typeof scanData.issues_found === 'number') issuesFound = scanData.issues_found;
+        if (scanData.summary && typeof scanData.summary === 'object') summary = scanData.summary;
         setScanResult({ fixes: realFixes, health_score: healthScore, pages_crawled: pagesCrawled, issues_found: issuesFound, summary });
       } catch (e) {
         console.error('runRealScan failed, using demo fixes', e);
+      }
+
+      if (crawledPagesData.length) {
+        await base44.entities.CrawledPage.bulkCreate(
+          crawledPagesData.map(page => ({
+            ...page,
+            project_id: project.id,
+            crawl_job_id: job.id,
+          }))
+        );
       }
 
       if (realFixes.length > 0) {

@@ -31,6 +31,7 @@ import Developer from '@/pages/Developer';
 import Reports from '@/pages/Reports';
 import Billing from '@/pages/Billing';
 import Admin from '@/pages/Admin';
+import Assistant from '@/pages/Assistant';
 
 import DashboardLayout from '@/components/layout/DashboardLayout';
 
@@ -77,6 +78,7 @@ const AuthenticatedApp = () => {
           <Route path="/competitors" element={<Competitors />} />
           <Route path="/developer" element={<Developer />} />
           <Route path="/reports" element={<Reports />} />
+          <Route path="/assistant" element={<Assistant />} />
           <Route path="/billing" element={<Billing />} />
           <Route path="/admin" element={<Admin />} />
         </Route>

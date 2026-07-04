@@ -4,7 +4,7 @@ import { base44 } from "@/api/base44Client";
 import {
   LayoutDashboard, Search, AlertTriangle, ArrowRightLeft, FileText,
   Code, BarChart3, Settings, LogOut, Menu, X, Zap, Globe,
-  FileCheck, ChevronDown, User, Shield
+  FileCheck, ChevronDown, User, Shield, Sparkles
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -19,6 +19,7 @@ const navItems = [
   { label: "Competitors", path: "/competitors", icon: BarChart3 },
   { label: "Developer Work", path: "/developer", icon: FileCheck },
   { label: "Reports", path: "/reports", icon: FileText },
+  { label: "AI Assistant", path: "/assistant", icon: Sparkles },
 ];
 
 export default function DashboardLayout() {

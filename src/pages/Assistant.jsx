@@ -3,7 +3,7 @@ import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import MessageBubble from "@/components/agent/MessageBubble";
-import { Send, Plus, MessageSquare, Loader2, Sparkles, Bot } from "lucide-react";
+import { Send, Plus, MessageSquare, Loader2, Sparkles, Bot, MessageCircle, Send as TelegramIcon } from "lucide-react";
 
 const AGENT_NAME = "seo_assistant";
 
@@ -96,6 +96,24 @@ export default function Assistant() {
           <p className="text-sm text-gray-500 mt-1">
             Plain-English explanations of your issues and step-by-step action plans
           </p>
+        </div>
+        <div className="hidden sm:flex items-center gap-2">
+          <a
+            href={base44.agents.getWhatsAppConnectURL(AGENT_NAME)}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 transition-colors"
+          >
+            <MessageCircle className="w-3.5 h-3.5" /> WhatsApp
+          </a>
+          <a
+            href={base44.agents.getTelegramConnectURL(AGENT_NAME)}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition-colors"
+          >
+            <TelegramIcon className="w-3.5 h-3.5" /> Telegram
+          </a>
         </div>
       </div>
 

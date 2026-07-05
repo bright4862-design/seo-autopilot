@@ -206,18 +206,47 @@ export default function CrawlStatus() {
         );
       }
 
-      if (realFixes.length > 0) {
-        await base44.entities.SeoIssue.bulkCreate(
-          realFixes.map(f => ({
-            ...f,
+      const sourceFixes = realFixes.length > 0 ? realFixes : SCAN_ISSUES;
+
+      await base44.entities.SeoIssue.bulkCreate(
+        sourceFixes.map(f => ({
+          ...f,
+          project_id: project.id,
+          crawl_job_id: job.id,
+        }))
+      );
+
+      // Clear old developer recommendations so they match the latest scan
+      try { await base44.entities.DeveloperRecommendation.deleteMany({ project_id: project.id }); } catch (e) {}
+
+      // Build developer recommendations from fixes that require a developer
+      const devFixes = sourceFixes.filter(f => f.requires_developer === true);
+      if (devFixes.length > 0) {
+        const devRecs = devFixes.map(f => {
+          const category =
+            f.category === 'thin_content' ? 'content_pages' :
+            f.category === 'js_rendering' ? 'technical_seo' :
+            f.category === 'performance' ? 'speed_mobile' :
+            f.category === 'web_dev' ? 'website_structure' :
+            'technical_seo';
+          const estimated_complexity = f.difficulty === 'developer' ? 'moderate' : 'simple';
+          const recommended_package =
+            estimated_complexity === 'moderate' ? '500_cleanup' :
+            estimated_complexity === 'complex' ? 'custom_rebuild' :
+            'diy';
+          return {
             project_id: project.id,
-            crawl_job_id: job.id,
-          }))
-        );
-      } else {
-        await base44.entities.SeoIssue.bulkCreate(
-          SCAN_ISSUES.map(i => ({ ...i, project_id: project.id, crawl_job_id: job.id }))
-        );
+            title: f.issue_title,
+            description: f.plain_english_explanation,
+            category,
+            priority: f.priority,
+            business_impact: f.why_it_matters,
+            estimated_complexity,
+            recommended_package,
+            status: 'open',
+          };
+        });
+        await base44.entities.DeveloperRecommendation.bulkCreate(devRecs);
       }
 
       const finalJob = await base44.entities.CrawlJob.update(job.id, {

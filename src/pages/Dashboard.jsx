@@ -1,40 +1,133 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
+import { trackEvent } from "@/lib/analytics";
 import { Button } from "@/components/ui/button";
+import { Globe, Calendar, ExternalLink } from "lucide-react";
 import ScoreRing from "@/components/dashboard/ScoreRing";
-import StatCard from "@/components/dashboard/StatCard";
 import UrlSubmissionPanel from "@/components/dashboard/UrlSubmissionPanel";
 import CrawlHistory from "@/components/dashboard/CrawlHistory";
 import {
-  CheckCircle2, Clock, AlertTriangle, Code, ArrowRightLeft,
-  Globe, FileText, BarChart3, Search, Wrench, ExternalLink,
-  Calendar, Zap
-} from "lucide-react";
+  ACTIVE_STATUSES,
+  DONE_STATUSES,
+  BUCKETS,
+  countBuckets,
+  getFirstStep,
+  resolveActiveProject,
+  getScoreBand,
+  getScoreTrend,
+} from "@/lib/appModel";
+import { getTopCategory } from "@/lib/categoryLabels";
+
+function plural(count, singular, pluralForm) {
+  return count === 1 ? singular : pluralForm;
+}
+
+// Same visual as the Fix List's counter strip — each cell links to the
+// Fix List, because the count IS the invitation to act.
+function CounterRow({ counts }) {
+  return (
+    <div className="grid divide-y divide-slate-100 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+      {BUCKETS.map((bucket) => (
+        <Link
+          key={bucket.key}
+          to="/issues"
+          className="flex items-center justify-between px-5 py-4 transition-colors hover:bg-slate-50 sm:block sm:px-6"
+        >
+          <p className="text-sm text-slate-500">{bucket.title}</p>
+          <p className="text-xl font-semibold text-slate-950 sm:mt-1">
+            {counts[bucket.key]}
+          </p>
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+function QuickAction({ to, title, description }) {
+  return (
+    <Link
+      to={to}
+      className="group rounded-3xl border border-slate-200/80 bg-white p-5 shadow-sm transition-all hover:border-slate-300 hover:shadow-md sm:p-6"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-slate-950">{title}</h3>
+        <ExternalLink className="h-4 w-4 shrink-0 text-slate-300 transition-colors group-hover:text-blue-600" />
+      </div>
+      <p className="mt-2 text-sm leading-6 text-slate-500">{description}</p>
+    </Link>
+  );
+}
+
+function EmptyProjectState() {
+  return (
+    <div className="rounded-3xl border border-slate-200/80 bg-white p-10 text-center shadow-sm">
+      <h2 className="text-lg font-semibold text-slate-950">
+        Welcome to SEO Autopilot
+      </h2>
+      <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-600">
+        Add your website and we&rsquo;ll prepare a simple Fix List — no SEO
+        knowledge needed.
+      </p>
+      <Button
+        asChild
+        className="mt-6 rounded-full bg-blue-600 px-5 text-sm font-medium text-white shadow-none hover:bg-blue-700"
+      >
+        <Link to="/onboarding">Set Up Your Website</Link>
+      </Button>
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const [project, setProject] = useState(null);
-  const [issues, setIssues] = useState([]);
+  const [issues, setIssues] = useState([]); // active issues only
+  const [doneCount, setDoneCount] = useState(0);
   const [crawls, setCrawls] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const loadData = async () => {
-    const projects = await base44.entities.BusinessProject.list("-created_date", 1);
-    if (projects.length > 0) {
-      setProject(projects[0]);
-      const [iss, jobs] = await Promise.all([
-        base44.entities.SeoIssue.filter({ project_id: projects[0].id }),
-        base44.entities.CrawlJob.filter({ project_id: projects[0].id }, "-started_at"),
-      ]);
-      setIssues(iss);
-      setCrawls(jobs);
-    }
-    setLoading(false);
-  };
-
   useEffect(() => {
-    loadData();
+    trackEvent("dashboard_viewed");
+
+    const load = async () => {
+      try {
+        const { user, project: activeProject } =
+          await resolveActiveProject(base44);
+
+        if (!activeProject) return;
+
+        setProject(activeProject);
+
+        const [issueData, jobs] = await Promise.all([
+          base44.entities.SeoIssue.filter({
+            project_id: activeProject.id,
+            owner_user_id: user.id,
+          }),
+          base44.entities.CrawlJob.filter(
+            { project_id: activeProject.id },
+            "-started_at"
+          ),
+        ]);
+
+        const all = issueData || [];
+        setIssues(all.filter((issue) => ACTIVE_STATUSES.has(issue.status)));
+        setDoneCount(
+          all.filter((issue) => DONE_STATUSES.has(issue.status)).length
+        );
+        setCrawls(jobs || []);
+      } catch (err) {
+        console.warn("Could not load the dashboard.", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    load();
   }, []);
+
+  const counts = useMemo(() => countBuckets(issues), [issues]);
+  const topOpportunity = useMemo(() => getTopCategory(issues), [issues]);
+  const scoreTrend = useMemo(() => getScoreTrend(crawls), [crawls]);
 
   const handleCrawlDeleted = (id) => {
     setCrawls((prev) => prev.filter((c) => c.id !== id));
@@ -42,126 +135,187 @@ export default function Dashboard() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+      <div className="flex h-64 items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-blue-600" />
       </div>
     );
   }
 
   if (!project) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-center">
-        <Zap className="w-12 h-12 text-blue-600 mb-4" />
-        <h2 className="text-xl font-bold mb-2">Welcome to SEO Autopilot</h2>
-        <p className="text-gray-500 mb-6">Let's get started by setting up your first project.</p>
-        <Link to="/onboarding">
-          <Button className="gradient-primary text-white border-0">Set Up Your Website</Button>
-        </Link>
+      <div className="min-h-screen bg-[#F7F8FA]">
+        <div className="mx-auto w-full max-w-4xl px-5 py-16 sm:px-6">
+          <EmptyProjectState />
+        </div>
       </div>
     );
   }
 
-  const autoFixed = issues.filter(i => i.status === "auto_fixed").length;
-  const needsApproval = issues.filter(i => i.status === "needs_approval").length;
-  const needsDev = issues.filter(i => i.status === "needs_developer").length;
-  const errors404 = issues.filter(i => i.category === "404_error").length;
-  const metaIssues = issues.filter(i => i.category === "meta_title" || i.category === "meta_description").length;
-  const canonicalIssues = issues.filter(i => i.category === "canonical").length;
-  const sitemapIssues = issues.filter(i => i.category === "sitemap").length;
+  const scoreBand = getScoreBand(project.seo_score);
+
+  // The big blue button is the NEXT ACTION, never "scan again" by default.
+  // Priority mirrors getFirstStep(): approve → decide → delegate → scan.
+  const primaryAction =
+    counts.auto_fixed > 0
+      ? {
+          label: `Approve ${counts.auto_fixed} prepared ${plural(counts.auto_fixed, "fix", "fixes")}`,
+          to: "/issues",
+        }
+      : counts.needs_approval > 0
+        ? {
+            label: `Review ${counts.needs_approval} ${plural(counts.needs_approval, "item", "items")}`,
+            to: "/issues",
+          }
+        : counts.needs_developer > 0
+          ? { label: "See bigger jobs", to: "/issues" }
+          : { label: "Scan Website", to: "/crawl-status" };
+
+  const showScanSecondary = primaryAction.to !== "/crawl-status";
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">{project.business_name}</h1>
-          <p className="text-sm text-gray-500 flex items-center gap-1.5 mt-1">
-            <Globe className="w-3.5 h-3.5" />
-            {project.website_url}
-          </p>
-        </div>
-        <div className="flex gap-3">
-          <Link to="/crawl-status">
-            <Button className="gradient-primary text-white border-0">
-              <Search className="w-4 h-4 mr-2" /> Run New Crawl
-            </Button>
-          </Link>
-        </div>
-      </div>
+    <div className="min-h-screen bg-[#F7F8FA]">
+      <div className="mx-auto w-full max-w-4xl px-5 py-10 sm:px-6 lg:py-12">
+        {/* Header */}
+        <div className="mb-8 flex flex-col items-start justify-between gap-5 sm:flex-row">
+          <div>
+            <p className="text-sm font-medium text-blue-600">Your website</p>
+            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
+              {project.business_name}
+            </h1>
+            <p className="mt-2 flex items-center gap-1.5 text-sm text-slate-500">
+              <Globe className="h-3.5 w-3.5" />
+              {project.website_url}
+            </p>
+          </div>
 
-      {/* Score + summary */}
-      <div className="grid lg:grid-cols-4 gap-6">
-        <div className="bg-white rounded-2xl border border-gray-100 p-6 flex flex-col items-center justify-center relative">
-          <ScoreRing score={project.seo_score || 62} />
-          <div className="flex items-center gap-4 mt-4 text-xs text-gray-400">
-            {project.last_crawl_at && (
-              <span className="flex items-center gap-1">
-                <Calendar className="w-3 h-3" />
-                Last: {new Date(project.last_crawl_at).toLocaleDateString()}
-              </span>
+          <div className="flex items-center gap-3">
+            {showScanSecondary && (
+              <Button
+                asChild
+                variant="outline"
+                className="rounded-full border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 shadow-none hover:bg-slate-50"
+              >
+                <Link to="/crawl-status">Scan Website</Link>
+              </Button>
+            )}
+
+            <Button
+              asChild
+              className="rounded-full bg-blue-600 px-5 text-sm font-medium text-white shadow-none hover:bg-blue-700"
+            >
+              <Link to={primaryAction.to}>{primaryAction.label}</Link>
+            </Button>
+          </div>
+        </div>
+
+        {/* Score + what to do first */}
+        <div className="mb-7 grid gap-6 lg:grid-cols-3">
+          <div className="flex flex-col items-center justify-center rounded-3xl border border-slate-200/80 bg-white p-6 text-center shadow-sm">
+            {typeof project.seo_score === "number" ? (
+              <>
+                <ScoreRing score={project.seo_score} />
+                {scoreBand && (
+                  <p className="mt-3 text-sm font-medium text-slate-950">
+                    {scoreBand}
+                  </p>
+                )}
+                {scoreTrend !== null && scoreTrend !== 0 && (
+                  <p
+                    className={`mt-1 text-xs font-medium ${
+                      scoreTrend > 0 ? "text-emerald-600" : "text-slate-500"
+                    }`}
+                  >
+                    {scoreTrend > 0 ? `+${scoreTrend}` : scoreTrend} since your
+                    last scan
+                  </p>
+                )}
+                {project.last_crawl_at && (
+                  <p className="mt-2 flex items-center gap-1 text-xs text-slate-400">
+                    <Calendar className="h-3 w-3" />
+                    Last scan:{" "}
+                    {new Date(project.last_crawl_at).toLocaleDateString()}
+                  </p>
+                )}
+              </>
+            ) : (
+              <>
+                <p className="text-sm font-medium text-slate-950">
+                  No score yet
+                </p>
+                <p className="mt-1 text-sm leading-6 text-slate-500">
+                  Scan your website to get one.
+                </p>
+              </>
             )}
           </div>
+
+          <section className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-sm lg:col-span-2">
+            <div className="border-b border-slate-100 px-5 py-5 sm:px-6">
+              <h2 className="text-base font-semibold text-slate-950">
+                What to do first
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                {getFirstStep(counts)}
+              </p>
+              {topOpportunity && (
+                <p className="mt-2 text-sm leading-6 text-slate-500">
+                  Biggest opportunity:{" "}
+                  <span className="font-medium text-slate-700">
+                    {topOpportunity.title}
+                  </span>{" "}
+                  — {topOpportunity.why}
+                </p>
+              )}
+            </div>
+
+            <CounterRow counts={counts} />
+          </section>
         </div>
 
-        <div className="lg:col-span-3 grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          <StatCard icon={CheckCircle2} label="Prepared for you" value={autoFixed} color="green" subtitle="We prepared these for your review" />
-          <StatCard icon={Clock} label="Needs your approval" value={needsApproval} color="amber" subtitle="Review and approve fixes" />
-          <StatCard icon={Wrench} label="Needs a developer" value={needsDev} color="purple" subtitle="Clear instructions provided" />
-          <StatCard icon={AlertTriangle} label="404 errors found" value={errors404} color="red" />
-          <StatCard icon={FileText} label="Metadata issues" value={metaIssues} color="blue" />
-          <StatCard icon={Globe} label="Canonical issues" value={canonicalIssues} color="cyan" />
+        {/* Reassurance: fixes done + honest expectations */}
+        {doneCount > 0 && (
+          <section className="mb-7 rounded-3xl border border-slate-200/80 bg-white p-5 shadow-sm sm:p-6">
+            <p className="text-sm leading-6 text-slate-600">
+              <span className="font-medium text-slate-950">
+                {doneCount} {plural(doneCount, "fix", "fixes")} approved so far.
+              </span>{" "}
+              Google usually reflects changes within 1–3 weeks — nothing to do
+              while it catches up.
+            </p>
+          </section>
+        )}
+
+        {/* Quick actions */}
+        <div className="mb-7 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <QuickAction
+            to="/issues"
+            title="Open your Fix List"
+            description="Everything we found, in plain English, sorted by what to do first."
+          />
+          <QuickAction
+            to="/competitors"
+            title="See competitor opportunities"
+            description="A few ways other websites may be winning clicks you could have."
+          />
+          <QuickAction
+            to="/developer"
+            title="Have us do it for you"
+            description="Prefer to hand it off? Get expert implementation from $500."
+          />
         </div>
+
+        {/* Submit URLs */}
+        <div className="mb-7">
+          <UrlSubmissionPanel
+            project={project}
+            onCompetitorAdded={() => {}}
+            onWebsiteAdded={() => {}}
+          />
+        </div>
+
+        {/* Scan history */}
+        <CrawlHistory crawls={crawls} onDelete={handleCrawlDeleted} />
       </div>
-
-      {/* Quick actions */}
-      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        <Link to="/issues" className="bg-white rounded-xl border border-gray-100 p-5 hover:shadow-md hover:shadow-gray-100 transition-all group">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="font-semibold">View Fix List</h3>
-            <ExternalLink className="w-4 h-4 text-gray-400 group-hover:text-blue-600 transition-colors" />
-          </div>
-          <p className="text-sm text-gray-500">See all issues sorted by priority and status.</p>
-        </Link>
-        <Link to="/competitors" className="bg-white rounded-xl border border-gray-100 p-5 hover:shadow-md hover:shadow-gray-100 transition-all group">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="font-semibold">Competitor Gaps</h3>
-            <ExternalLink className="w-4 h-4 text-gray-400 group-hover:text-blue-600 transition-colors" />
-          </div>
-          <p className="text-sm text-gray-500">See why competitors may be outranking you.</p>
-        </Link>
-        <Link to="/developer" className="bg-white rounded-xl border border-gray-100 p-5 hover:shadow-md hover:shadow-gray-100 transition-all group">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="font-semibold">Request Done-for-You Help</h3>
-            <ExternalLink className="w-4 h-4 text-gray-400 group-hover:text-blue-600 transition-colors" />
-          </div>
-          <p className="text-sm text-gray-500">Get expert implementation starting at $500.</p>
-        </Link>
-      </div>
-
-      {/* Submit URLs */}
-      <UrlSubmissionPanel
-        project={project}
-        onCompetitorAdded={() => {}}
-        onWebsiteAdded={() => {}}
-      />
-
-      {/* Crawl history */}
-      <CrawlHistory crawls={crawls} onDelete={handleCrawlDeleted} />
-
-      {/* Recent issues needing attention */}
-      {needsApproval > 0 && (
-        <div className="bg-amber-50 border border-amber-100 rounded-xl p-5">
-          <h3 className="font-semibold text-amber-900 mb-1 flex items-center gap-2">
-            <Clock className="w-4 h-4" /> {needsApproval} fixes need your approval
-          </h3>
-          <p className="text-sm text-amber-700 mb-3">We found safe improvements but need your OK before applying them.</p>
-          <Link to="/issues?status=needs_approval">
-            <Button size="sm" variant="outline" className="border-amber-200 text-amber-700 hover:bg-amber-100">
-              Review Now
-            </Button>
-          </Link>
-        </div>
-      )}
     </div>
   );
 }

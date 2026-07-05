@@ -27,6 +27,11 @@ export const ACTIVE_STATUSES = new Set([
   "in_progress",
 ]);
 
+export const DONE_STATUSES = new Set([
+  "approved",
+  "completed",
+]);
+
 export function getIssueBucket(issue) {
   if (issue.status === "auto_fixed") return "auto_fixed";
   if (issue.status === "needs_approval") return "needs_approval";
@@ -97,4 +102,22 @@ export async function resolveActiveProject(base44) {
   }
 
   return { user, project: activeProject };
+}
+
+export function getScoreBand(score) {
+  if (typeof score !== "number") return null;
+  if (score >= 85) return "Strong foundation";
+  if (score >= 70) return "Good, with cleanup opportunities";
+  if (score >= 50) return "Needs focused improvement";
+  return "Needs attention";
+}
+
+export function getScoreTrend(crawls = []) {
+  const completed = crawls
+    .filter((crawl) => crawl.status === "complete" && typeof crawl.seo_score === "number")
+    .sort((a, b) => new Date(b.completed_at || b.started_at || 0) - new Date(a.completed_at || a.started_at || 0));
+
+  if (completed.length < 2) return null;
+
+  return Math.round(completed[0].seo_score - completed[1].seo_score);
 }

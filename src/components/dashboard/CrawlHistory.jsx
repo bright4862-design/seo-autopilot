@@ -5,12 +5,15 @@ import { Clock, Trash2, Loader2, CheckCircle2, AlertCircle } from "lucide-react"
 
 const STATUS_LABELS = {
   queued: "Finding pages",
+  reading_sitemap: "Reading sitemap",
   crawling_html: "Reading website content",
+  checking_links: "Checking internal links",
   rendering_js: "Reading website content",
   checking_metadata: "Checking search appearance",
   checking_canonicals: "Reviewing website setup",
   checking_sitemap: "Reviewing website setup",
   checking_redirects: "Checking page redirects",
+  finding_competitors: "Finding competitor pages",
   benchmarking_competitors: "Comparing competitors",
   generating_recommendations: "Preparing recommendations",
   complete: "Complete",

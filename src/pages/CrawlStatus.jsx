@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { base44 } from "@/api/base44Client";
+import { reviewFixesWithAi, computeHealthScore, summarizeFixes } from "@/lib/aiReview";
 import { Button } from "@/components/ui/button";
 import {
   Search, FileText, Code, Globe, ArrowRightLeft, BarChart3,
@@ -197,8 +198,24 @@ export default function CrawlStatus() {
         if (typeof scanData.pages_crawled === 'number') pagesCrawled = scanData.pages_crawled;
         if (typeof scanData.issues_found === 'number') issuesFound = scanData.issues_found;
         if (scanData.summary && typeof scanData.summary === 'object') summary = scanData.summary;
+
+        // AI review step: filter, group, rewrite and prioritize (falls back to raw scan results)
+        let topActions = [];
+        try {
+          const reviewed = await reviewFixesWithAi({ project, crawledPages: crawledPagesData, rawFixes: realFixes });
+          if (reviewed) {
+            realFixes = reviewed.fixes;
+            topActions = reviewed.topActions;
+            healthScore = computeHealthScore(realFixes);
+            issuesFound = realFixes.length;
+            summary = summarizeFixes(realFixes);
+          }
+        } catch (e) {
+          console.error('AI review failed, using scan results directly', e);
+        }
+
         scanSucceeded = true;
-        setScanResult({ fixes: realFixes, health_score: healthScore, pages_crawled: pagesCrawled, issues_found: issuesFound, summary, top_actions: scanData.top_actions || [] });
+        setScanResult({ fixes: realFixes, health_score: healthScore, pages_crawled: pagesCrawled, issues_found: issuesFound, summary, top_actions: topActions });
       } catch (e) {
         console.error('runRealScan failed, using demo fixes', e);
       }

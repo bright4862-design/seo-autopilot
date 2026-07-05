@@ -4,12 +4,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { X, Loader2, CheckCircle2 } from "lucide-react";
+import { X, Loader2 } from "lucide-react";
 
 const TITLES = {
-  waitlist: "Join the Waitlist",
-  cleanup: "Request SEO Cleanup",
-  custom_rebuild: "Contact Us About a Rebuild",
+  waitlist: "Join the waitlist",
+  cleanup: "Request cleanup help",
+  custom_rebuild: "Ask about a rebuild",
 };
 
 export default function LeadRequestModal({ requestType, selectedPlan, onClose }) {
@@ -61,42 +61,32 @@ export default function LeadRequestModal({ requestType, selectedPlan, onClose })
     setSaving(false);
   };
 
+  const inputClass = "mt-2 h-11 rounded-xl border-slate-200 bg-white text-[15px] shadow-none focus-visible:ring-blue-600";
+
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-          <h2 className="font-bold text-gray-900">{TITLES[requestType]}</h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100"><X className="w-4 h-4" /></button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/25 p-4" onClick={onClose}>
+      <div className="w-full max-w-md overflow-hidden rounded-3xl bg-white shadow-2xl shadow-slate-950/10" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-slate-100 px-6 py-5">
+          <h2 className="text-lg font-semibold text-slate-950">{TITLES[requestType]}</h2>
+          <button onClick={onClose} className="rounded-full p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-700"><X className="h-4 w-4" /></button>
         </div>
 
         {success ? (
           <div className="p-8 text-center">
-            <CheckCircle2 className="w-10 h-10 text-green-500 mx-auto mb-3" />
-            <p className="font-medium text-gray-800 mb-1">Thanks — we received your request and will follow up soon.</p>
-            <Button onClick={onClose} className="mt-4 gradient-primary text-white border-0">Close</Button>
+            <p className="text-base font-medium text-slate-950">Thanks — we received your request.</p>
+            <p className="mt-2 text-sm leading-6 text-slate-600">We’ll follow up soon.</p>
+            <Button onClick={onClose} className="mt-5 rounded-full bg-blue-600 px-5 text-sm font-medium text-white shadow-none hover:bg-blue-700">Close</Button>
           </div>
         ) : (
-          <div className="p-6 space-y-4">
-            <div>
-              <Label>Name</Label>
-              <Input className="mt-1.5" value={form.name} onChange={e => update("name", e.target.value)} placeholder="Your name" />
-            </div>
-            <div>
-              <Label>Email</Label>
-              <Input className="mt-1.5" type="email" value={form.email} onChange={e => update("email", e.target.value)} placeholder="you@example.com" />
-            </div>
-            <div>
-              <Label>Website URL</Label>
-              <Input className="mt-1.5" value={form.website_url} onChange={e => update("website_url", e.target.value)} placeholder="https://yourwebsite.com" />
-            </div>
-            <div>
-              <Label>Message (optional)</Label>
-              <Textarea className="mt-1.5" value={form.message} onChange={e => update("message", e.target.value)} placeholder="Tell us a bit about what you need..." rows={3} />
-            </div>
+          <div className="space-y-5 p-6">
+            <div><Label>Name</Label><Input className={inputClass} value={form.name} onChange={e => update("name", e.target.value)} placeholder="Your name" /></div>
+            <div><Label>Email</Label><Input className={inputClass} type="email" value={form.email} onChange={e => update("email", e.target.value)} placeholder="you@example.com" /></div>
+            <div><Label>Website address</Label><Input className={inputClass} value={form.website_url} onChange={e => update("website_url", e.target.value)} placeholder="https://yourwebsite.com" /></div>
+            <div><Label>Message <span className="font-normal text-slate-400">optional</span></Label><Textarea className="mt-2 rounded-xl border-slate-200 bg-white text-[15px] shadow-none focus-visible:ring-blue-600" value={form.message} onChange={e => update("message", e.target.value)} placeholder="Tell us what you need." rows={3} /></div>
             {error && <p className="text-sm text-red-600">{error}</p>}
-            <Button onClick={handleSubmit} disabled={!canSubmit || saving} className="w-full gradient-primary text-white border-0">
-              {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              {saving ? "Sending..." : "Send Request"}
+            <Button onClick={handleSubmit} disabled={!canSubmit || saving} className="w-full rounded-full bg-blue-600 text-sm font-medium text-white shadow-none hover:bg-blue-700">
+              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {saving ? "Sending…" : "Send request"}
             </Button>
           </div>
         )}

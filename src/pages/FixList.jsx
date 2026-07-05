@@ -9,9 +9,9 @@ import RecommendationCard from "@/components/fixlist/RecommendationCard";
 import { groupIssuesByPage } from "@/lib/friendlyLabels";
 
 const CATEGORIES = [
-  { key: "auto_fixed", title: "Prepared", subtitle: "Recommendations prepared for review.", empty: "Nothing is prepared yet." },
-  { key: "needs_approval", title: "Needs review", subtitle: "Recommended improvements for you to approve or skip.", empty: "Nothing needs your review right now." },
-  { key: "needs_developer", title: "May need help", subtitle: "Improvements that may need a website editor or done-for-you help.", empty: "No larger improvements found right now." },
+  { key: "auto_fixed", title: "Prepared", subtitle: "Ready for you to review.", empty: "Nothing is prepared yet." },
+  { key: "needs_approval", title: "Needs review", subtitle: "Recommendations for you to approve or skip.", empty: "Nothing needs review right now." },
+  { key: "needs_developer", title: "May need help", subtitle: "Larger improvements for a website editor or done-for-you help.", empty: "No larger improvements found right now." },
 ];
 
 export default function FixList() {
@@ -55,72 +55,74 @@ export default function FixList() {
   };
 
   const firstStep = counts.needs_approval > 0
-    ? "Start by reviewing the items that need your approval."
+    ? "Start by reviewing the recommendations that need your approval."
     : counts.needs_developer > 0
-      ? "Start with the improvements that may need help."
+      ? "Start with the improvements that may need extra help."
       : counts.auto_fixed > 0
         ? "Start by reviewing your prepared recommendations."
         : "Your scan looks clean based on the website content we reviewed.";
 
   return (
     <div className="min-h-screen bg-[#F7F8FA]">
-      <div className="mx-auto w-full max-w-5xl px-6 py-10">
-        <div className="mb-8 flex flex-col items-start justify-between gap-6 sm:flex-row">
+      <div className="mx-auto w-full max-w-4xl px-5 py-10 sm:px-6 lg:py-12">
+        <div className="mb-8 flex flex-col items-start justify-between gap-5 sm:flex-row">
           <div>
-            <h1 className="text-3xl font-semibold tracking-tight text-slate-950">Your Fix List</h1>
-            <p className="mt-2 text-base text-slate-500">Recommended website improvements for {project?.business_name || "your business"}.</p>
+            <p className="text-sm font-medium text-blue-600">Website recommendations</p>
+            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">Fix List</h1>
+            <p className="mt-2 text-base leading-7 text-slate-500">Clear next steps for {project?.business_name || "your website"}.</p>
           </div>
           <div className="flex items-center gap-3">
-            <Button asChild variant="outline" className="rounded-full border border-slate-200 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+            <Button asChild variant="outline" className="rounded-full border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 shadow-none hover:bg-slate-50">
               <Link to="/assistant">Ask AI</Link>
             </Button>
-            <Button onClick={startScan} className="rounded-full bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700">Scan Website</Button>
+            <Button onClick={startScan} className="rounded-full bg-blue-600 px-5 text-sm font-medium text-white shadow-none hover:bg-blue-700">Scan Website</Button>
           </div>
         </div>
 
         {!project ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center shadow-sm">
-            <h2 className="text-lg font-semibold text-slate-950">Add your website to start your first scan.</h2>
+          <div className="rounded-3xl border border-slate-200/80 bg-white p-10 text-center shadow-sm">
+            <h2 className="text-lg font-semibold text-slate-950">Add your website to start.</h2>
             <p className="mt-2 text-sm leading-6 text-slate-600">We’ll prepare simple recommendations in minutes.</p>
-            <Button onClick={startScan} className="mt-6 rounded-full bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700">Scan Website</Button>
+            <Button onClick={startScan} className="mt-6 rounded-full bg-blue-600 px-5 text-sm font-medium text-white shadow-none hover:bg-blue-700">Scan Website</Button>
           </div>
         ) : (
           <>
-            <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-base font-semibold text-slate-950">What to do first</h2>
-              <p className="mt-2 text-sm leading-6 text-slate-600">{firstStep}</p>
-            </div>
-
-            <div className="mb-8 grid grid-cols-3 gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
-              <div className="rounded-xl px-4 py-3"><div className="text-2xl font-semibold text-slate-950">{counts.auto_fixed}</div><div className="text-sm text-slate-500">Prepared</div></div>
-              <div className="rounded-xl px-4 py-3"><div className="text-2xl font-semibold text-slate-950">{counts.needs_approval}</div><div className="text-sm text-slate-500">Needs review</div></div>
-              <div className="rounded-xl px-4 py-3"><div className="text-2xl font-semibold text-slate-950">{counts.needs_developer}</div><div className="text-sm text-slate-500">May need help</div></div>
-            </div>
+            <section className="mb-7 overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-sm">
+              <div className="border-b border-slate-100 px-5 py-5 sm:px-6">
+                <h2 className="text-base font-semibold text-slate-950">What to do first</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-600">{firstStep}</p>
+              </div>
+              <div className="divide-y divide-slate-100">
+                <div className="flex items-center justify-between px-5 py-4 sm:px-6"><span className="text-sm text-slate-500">Prepared</span><span className="text-lg font-semibold text-slate-950">{counts.auto_fixed}</span></div>
+                <div className="flex items-center justify-between px-5 py-4 sm:px-6"><span className="text-sm text-slate-500">Needs review</span><span className="text-lg font-semibold text-slate-950">{counts.needs_approval}</span></div>
+                <div className="flex items-center justify-between px-5 py-4 sm:px-6"><span className="text-sm text-slate-500">May need help</span><span className="text-lg font-semibold text-slate-950">{counts.needs_developer}</span></div>
+              </div>
+            </section>
 
             {issues.length === 0 ? (
-              <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center shadow-sm">
+              <div className="rounded-3xl border border-slate-200/80 bg-white p-10 text-center shadow-sm">
                 <h2 className="text-lg font-semibold text-slate-950">{project.last_crawl_at ? "Your scan looks clean" : "No recommendations yet"}</h2>
                 <p className="mt-2 text-sm leading-6 text-slate-600">{project.last_crawl_at ? "Based on the website content we reviewed, no improvements are needed right now." : "Run your first scan to see recommended improvements."}</p>
-                <Button onClick={startScan} className="mt-6 rounded-full bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700">Scan Website</Button>
+                <Button onClick={startScan} className="mt-6 rounded-full bg-blue-600 px-5 text-sm font-medium text-white shadow-none hover:bg-blue-700">Scan Website</Button>
               </div>
             ) : (
-              CATEGORIES.map((category) => {
-                const grouped = groupIssuesByPage(issues.filter((issue) => issue.status === category.key));
-                return (
-                  <section key={category.key} className="mb-8 rounded-2xl border border-slate-200 bg-white shadow-sm">
-                    <div className="border-b border-slate-100 px-5 py-4">
-                      <h2 className="text-lg font-semibold text-slate-950">{category.title}</h2>
-                      <p className="mt-1 text-sm text-slate-500">{category.subtitle}</p>
-                    </div>
-                    <div>
-                      {grouped.length === 0 ? <p className="px-5 py-6 text-sm text-slate-500">{category.empty}</p> : grouped.map((item) => <RecommendationCard key={item.id} item={item} onReview={openItem} />)}
-                    </div>
-                  </section>
-                );
-              })
+              <div className="space-y-7">
+                {CATEGORIES.map((category) => {
+                  const grouped = groupIssuesByPage(issues.filter((issue) => issue.status === category.key));
+                  return (
+                    <section key={category.key} className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-sm">
+                      <div className="border-b border-slate-100 px-5 py-4 sm:px-6">
+                        <h2 className="text-base font-semibold text-slate-950">{category.title}</h2>
+                        <p className="mt-1 text-sm text-slate-500">{category.subtitle}</p>
+                      </div>
+                      {grouped.length === 0 ? <p className="px-5 py-5 text-sm text-slate-500 sm:px-6">{category.empty}</p> : grouped.map((item) => <RecommendationCard key={item.id} item={item} onReview={openItem} />)}
+                    </section>
+                  );
+                })}
+              </div>
             )}
 
-            <ScanHistory projectId={project.id} currentSeoScore={project.seo_score} />
+            <div className="mt-8"><ScanHistory projectId={project.id} currentSeoScore={project.seo_score} /></div>
           </>
         )}
       </div>

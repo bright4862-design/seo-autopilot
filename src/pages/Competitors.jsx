@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { computeCustomerMetrics } from "@/lib/competitorMetrics";
 import ComparisonTable from "@/components/competitors/ComparisonTable";
 import GapInsights from "@/components/competitors/GapInsights";
-import { CheckCircle2, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 const INSIGHT_CATEGORY = {
   "Competitors have more dedicated service pages": "content_pages",
@@ -77,23 +77,27 @@ export default function Competitors() {
 
   return (
     <div className="min-h-screen bg-[#F7F8FA]">
-      <div className="mx-auto w-full max-w-5xl px-6 py-10">
-        <div className="mb-8 flex flex-col items-start justify-between gap-6 sm:flex-row">
-          <div><h1 className="text-3xl font-semibold tracking-tight text-slate-950">Competitor Gaps</h1><p className="mt-2 text-base text-slate-500">See where other pages may be stronger.</p></div>
-          <Button asChild className="rounded-full bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700"><Link to="/crawl-status">Analyze keyword</Link></Button>
+      <div className="mx-auto w-full max-w-4xl px-5 py-10 sm:px-6 lg:py-12">
+        <div className="mb-8 flex flex-col items-start justify-between gap-5 sm:flex-row">
+          <div>
+            <p className="text-sm font-medium text-blue-600">Competitor view</p>
+            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">Competitor Gaps</h1>
+            <p className="mt-2 text-base leading-7 text-slate-500">See where similar pages may be clearer or more helpful.</p>
+          </div>
+          <Button asChild className="rounded-full bg-blue-600 px-5 text-sm font-medium text-white shadow-none hover:bg-blue-700"><Link to="/crawl-status">Add competitors</Link></Button>
         </div>
 
-        {planCreated && <div className="mb-6 flex items-center gap-2 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-600 shadow-sm"><CheckCircle2 className="h-4 w-4 text-green-600" /> Added to your improvement plan.</div>}
+        {planCreated && <div className="mb-6 rounded-2xl border border-slate-200/80 bg-white px-5 py-4 text-sm text-slate-600 shadow-sm">Added to your improvement plan.</div>}
 
         {competitors.length === 0 || !hasData ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center shadow-sm">
+          <div className="rounded-3xl border border-slate-200/80 bg-white p-10 text-center shadow-sm">
             <h2 className="text-lg font-semibold text-slate-950">No competitor gaps yet</h2>
             <p className="mt-2 text-sm leading-6 text-slate-600">Add competitor pages during your next scan to see where other sites may be stronger.</p>
-            <Button asChild className="mt-6 rounded-full bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700"><Link to="/crawl-status">Scan Website</Link></Button>
+            <Button asChild className="mt-6 rounded-full bg-blue-600 px-5 text-sm font-medium text-white shadow-none hover:bg-blue-700"><Link to="/crawl-status">Scan Website</Link></Button>
           </div>
         ) : (
-          <div className="space-y-8">
-            {insights.length > 0 ? <GapInsights insights={insights} onCreatePlan={createImprovementPlan} creatingPlan={creatingPlan} /> : <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"><p className="text-sm leading-6 text-slate-600">Good news — your site holds up well against these competitors.</p></div>}
+          <div className="space-y-7">
+            {insights.length > 0 ? <GapInsights insights={insights} onCreatePlan={createImprovementPlan} creatingPlan={creatingPlan} /> : <div className="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-sm"><p className="text-sm leading-6 text-slate-600">Good news — your site holds up well against these competitors.</p></div>}
             {creatingPlan && <div className="flex items-center gap-2 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Creating improvement plan…</div>}
             <ComparisonTable customer={customer} competitors={scanned} />
           </div>

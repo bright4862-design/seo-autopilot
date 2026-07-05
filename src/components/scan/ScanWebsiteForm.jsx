@@ -37,32 +37,37 @@ export default function ScanWebsiteForm({ project, competitors = [], saving, onS
     });
   };
 
+  const inputClass = "mt-2 h-11 rounded-xl border-slate-200 bg-white text-[15px] shadow-none focus-visible:ring-blue-600";
+
   return (
-    <form onSubmit={handleSubmit} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-      <div className="grid gap-5">
-        <div>
-          <Label htmlFor="business-name" className="text-sm font-medium text-slate-700">Business name</Label>
-          <Input id="business-name" placeholder="e.g. Norris Wine" value={businessName} onChange={(event) => setBusinessName(event.target.value)} className="mt-2 h-11 rounded-xl border-slate-200 bg-white" />
+    <form onSubmit={handleSubmit} className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-sm">
+      <div className="divide-y divide-slate-100">
+        <div className="p-5 sm:p-6">
+          <Label htmlFor="business-name" className="text-sm font-medium text-slate-900">Business name</Label>
+          <Input id="business-name" placeholder="e.g. Norris Wine" value={businessName} onChange={(event) => setBusinessName(event.target.value)} className={inputClass} />
         </div>
-        <div>
-          <Label htmlFor="website-url" className="text-sm font-medium text-slate-700">Website URL</Label>
-          <Input id="website-url" placeholder="https://yourwebsite.com" value={websiteUrl} onChange={(event) => setWebsiteUrl(event.target.value)} className="mt-2 h-11 rounded-xl border-slate-200 bg-white" />
+        <div className="p-5 sm:p-6">
+          <Label htmlFor="website-url" className="text-sm font-medium text-slate-900">Website address</Label>
+          <Input id="website-url" placeholder="https://yourwebsite.com" value={websiteUrl} onChange={(event) => setWebsiteUrl(event.target.value)} className={inputClass} />
         </div>
-        <div>
-          <Label htmlFor="keywords" className="text-sm font-medium text-slate-700">Important keywords <span className="font-normal text-slate-400">optional</span></Label>
-          <Input id="keywords" placeholder="wine tasting, local wine shop, organic wine" value={keywords} onChange={(event) => setKeywords(event.target.value)} className="mt-2 h-11 rounded-xl border-slate-200 bg-white" />
+        <div className="p-5 sm:p-6">
+          <Label htmlFor="keywords" className="text-sm font-medium text-slate-900">Words customers might search for <span className="font-normal text-slate-400">optional</span></Label>
+          <Input id="keywords" placeholder="wine tasting, local wine shop, organic wine" value={keywords} onChange={(event) => setKeywords(event.target.value)} className={inputClass} />
         </div>
-        <div>
-          <Label className="text-sm font-medium text-slate-700">Competitor pages <span className="font-normal text-slate-400">optional</span></Label>
-          <div className="mt-2 grid gap-2">
+        <div className="p-5 sm:p-6">
+          <Label className="text-sm font-medium text-slate-900">Competitor pages <span className="font-normal text-slate-400">optional</span></Label>
+          <p className="mt-1 text-sm leading-6 text-slate-500">Add pages you want to compare against.</p>
+          <div className="mt-3 grid gap-2">
             {competitorUrls.map((url, index) => (
-              <Input key={index} placeholder={`Competitor page ${index + 1}`} value={url} onChange={(event) => setCompetitorUrls((prev) => prev.map((value, itemIndex) => itemIndex === index ? event.target.value : value))} className="h-11 rounded-xl border-slate-200 bg-white" />
+              <Input key={index} placeholder={`Competitor page ${index + 1}`} value={url} onChange={(event) => setCompetitorUrls((prev) => prev.map((value, itemIndex) => itemIndex === index ? event.target.value : value))} className={inputClass} />
             ))}
           </div>
         </div>
-        <Button type="submit" disabled={!canSubmit} className="h-11 rounded-full bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700">
+      </div>
+      <div className="flex justify-end bg-slate-50/70 px-5 py-4 sm:px-6">
+        <Button type="submit" disabled={!canSubmit} className="h-11 rounded-full bg-blue-600 px-6 text-sm font-medium text-white shadow-none hover:bg-blue-700">
           {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-          {saving ? "Scanning…" : "Start Scan"}
+          {saving ? "Scanning…" : "Start scan"}
         </Button>
       </div>
     </form>

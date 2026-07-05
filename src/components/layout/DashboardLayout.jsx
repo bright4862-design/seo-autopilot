@@ -1,15 +1,15 @@
 import React, { useEffect, useState } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
-import { BarChart3, FileText, ListChecks, LogOut, Menu, Search, Shield, Wrench, X } from "lucide-react";
+import { Menu, X } from "lucide-react";
 
 const navItems = [
-  { label: "Fix List", path: "/dashboard", icon: ListChecks },
-  { label: "Scan Website", path: "/crawl-status", icon: Search },
-  { label: "Competitor Gaps", path: "/competitors", icon: BarChart3 },
-  { label: "Website Improvements", path: "/developer", icon: Wrench },
-  { label: "Scan Report", path: "/reports", icon: FileText },
-  { label: "Billing", path: "/billing", icon: FileText },
+  { label: "Fix List", path: "/dashboard" },
+  { label: "Scan Website", path: "/crawl-status" },
+  { label: "Competitor Gaps", path: "/competitors" },
+  { label: "Website Improvements", path: "/developer" },
+  { label: "Scan Report", path: "/reports" },
+  { label: "Billing", path: "/billing" },
 ];
 
 function NavLink({ item, active, onClick }) {
@@ -17,9 +17,8 @@ function NavLink({ item, active, onClick }) {
     <Link
       to={item.path}
       onClick={onClick}
-      className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition hover:bg-slate-50 hover:text-slate-950 ${active ? "bg-slate-100 text-blue-600" : "text-slate-500"}`}
+      className={`block rounded-xl px-4 py-3 text-[15px] font-medium transition ${active ? "bg-slate-100 text-slate-950" : "text-slate-500 hover:bg-slate-50 hover:text-slate-950"}`}
     >
-      <item.icon className="h-4 w-4" />
       {item.label}
     </Link>
   );
@@ -38,10 +37,10 @@ export default function DashboardLayout() {
 
   const sidebar = (
     <div className="flex h-full flex-col bg-white">
-      <div className="flex h-20 items-center gap-3 px-6">
-        <Link to="/dashboard" onClick={() => setSidebarOpen(false)} className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-950 text-sm font-semibold text-white">S</div>
-          <span className="text-base font-semibold tracking-tight text-slate-950">SEO Autopilot</span>
+      <div className="px-6 pb-6 pt-7">
+        <Link to="/dashboard" onClick={() => setSidebarOpen(false)} className="block">
+          <div className="text-[15px] font-semibold tracking-tight text-slate-950">SEO Autopilot</div>
+          <div className="mt-1 text-xs text-slate-400">Website SEO assistant</div>
         </Link>
       </div>
 
@@ -51,19 +50,17 @@ export default function DashboardLayout() {
         ))}
       </nav>
 
-      <div className="mt-auto space-y-1 border-t border-slate-200/70 p-3">
+      <div className="mt-auto space-y-1 border-t border-slate-100 p-3">
         {isAdmin && (
           <Link
             to="/admin"
             onClick={() => setSidebarOpen(false)}
-            className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition hover:bg-slate-50 hover:text-slate-950 ${location.pathname === "/admin" ? "bg-slate-100 text-blue-600" : "text-slate-500"}`}
+            className={`block rounded-xl px-4 py-3 text-[15px] font-medium transition ${location.pathname === "/admin" ? "bg-slate-100 text-slate-950" : "text-slate-500 hover:bg-slate-50 hover:text-slate-950"}`}
           >
-            <Shield className="h-4 w-4" />
             Admin
           </Link>
         )}
-        <button onClick={handleLogout} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-500 transition hover:bg-slate-50 hover:text-slate-950">
-          <LogOut className="h-4 w-4" />
+        <button onClick={handleLogout} className="block w-full rounded-xl px-4 py-3 text-left text-[15px] font-medium text-slate-500 transition hover:bg-slate-50 hover:text-slate-950">
           Sign out
         </button>
       </div>
@@ -71,7 +68,7 @@ export default function DashboardLayout() {
   );
 
   return (
-    <div className="min-h-screen bg-[#F7F8FA]">
+    <div className="min-h-screen bg-[#F7F8FA] text-slate-950">
       <aside className="fixed left-0 top-0 hidden h-screen w-64 border-r border-slate-200/70 bg-white lg:block">{sidebar}</aside>
 
       {sidebarOpen && (
@@ -91,6 +88,7 @@ export default function DashboardLayout() {
           <button aria-label="Open menu" onClick={() => setSidebarOpen(true)} className="rounded-full p-2 text-slate-600 hover:bg-slate-50">
             <Menu className="h-5 w-5" />
           </button>
+          <span className="ml-2 text-sm font-semibold text-slate-950">SEO Autopilot</span>
         </header>
         <main className="min-h-screen">
           <Outlet />

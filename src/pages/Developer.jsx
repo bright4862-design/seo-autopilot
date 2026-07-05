@@ -30,42 +30,44 @@ export default function Developer() {
 
   return (
     <div className="min-h-screen bg-[#F7F8FA]">
-      <div className="mx-auto w-full max-w-5xl px-6 py-10">
-        <div className="mb-8 flex items-start justify-between gap-6">
-          <div><h1 className="text-3xl font-semibold tracking-tight text-slate-950">Website Improvements</h1><p className="mt-2 text-base text-slate-500">Recommendations that may need a website editor, developer, or done-for-you help.</p></div>
+      <div className="mx-auto w-full max-w-4xl px-5 py-10 sm:px-6 lg:py-12">
+        <div className="mb-8">
+          <p className="text-sm font-medium text-blue-600">Bigger next steps</p>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">Website Improvements</h1>
+          <p className="mt-2 text-base leading-7 text-slate-500">Recommendations that may need a website editor or done-for-you help.</p>
         </div>
 
-        <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div><h2 className="text-base font-semibold text-slate-950">Need help with these?</h2><p className="mt-1 text-sm text-slate-500">Request done-for-you help and we’ll review your scan.</p></div>
-            <Button className="rounded-full bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700">Request help</Button>
+        <section className="mb-7 overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-sm">
+          <div className="flex flex-col gap-4 px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+            <div><h2 className="text-base font-semibold text-slate-950">Need help with these?</h2><p className="mt-1 text-sm leading-6 text-slate-500">Request a review of your scan and next steps.</p></div>
+            <Button className="rounded-full bg-blue-600 px-5 text-sm font-medium text-white shadow-none hover:bg-blue-700">Request help</Button>
           </div>
-        </div>
+        </section>
 
         {recs.length === 0 ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center shadow-sm">
+          <div className="rounded-3xl border border-slate-200/80 bg-white p-10 text-center shadow-sm">
             <h2 className="text-lg font-semibold text-slate-950">No website improvements right now.</h2>
             <p className="mt-2 text-sm leading-6 text-slate-600">Run a scan or add competitor pages to find larger opportunities.</p>
           </div>
         ) : (
-          <div className="space-y-8">
+          <div className="space-y-7">
             {GROUPS.map((group) => {
               const items = recs.filter(group.match);
               if (items.length === 0) return null;
               return (
-                <section key={group.key} className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-                  <div className="border-b border-slate-100 px-5 py-4"><h2 className="text-lg font-semibold text-slate-950">{group.title}</h2></div>
+                <section key={group.key} className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-sm">
+                  <div className="border-b border-slate-100 px-5 py-4 sm:px-6"><h2 className="text-base font-semibold text-slate-950">{group.title}</h2></div>
                   <div className="divide-y divide-slate-100">
                     {items.map((rec) => (
-                      <div key={rec.id} className="px-5 py-5">
+                      <div key={rec.id} className="px-5 py-5 sm:px-6">
                         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                           <div className="min-w-0">
-                            <h3 className="text-base font-medium text-slate-950">{customerText(rec.title)}</h3>
+                            <h3 className="text-[15px] font-medium text-slate-950">{customerText(rec.title)}</h3>
                             <p className="mt-2 text-sm leading-6 text-slate-600">{customerText(rec.description)}</p>
                             {rec.business_impact && <p className="mt-3 text-sm leading-6 text-slate-600"><span className="font-medium text-slate-950">Why it matters:</span> {customerText(rec.business_impact)}</p>}
-                            <div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">{getPriorityLabel(rec.priority)}</span><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">Suggested next step: review</span></div>
+                            <p className="mt-3 text-xs font-medium text-slate-400">{getPriorityLabel(rec.priority)} · Suggested next step: review</p>
                           </div>
-                          <Button variant="outline" className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Request help</Button>
+                          <Button variant="outline" className="rounded-full border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 shadow-none hover:bg-slate-50">Request help</Button>
                         </div>
                       </div>
                     ))}

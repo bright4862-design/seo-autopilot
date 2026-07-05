@@ -10,6 +10,7 @@ export default function Reports() {
   const [reports, setReports] = useState([]);
   const [project, setProject] = useState(null);
   const [issues, setIssues] = useState([]);
+  const [competitorDataCount, setCompetitorDataCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
 
@@ -32,15 +33,32 @@ export default function Reports() {
   useEffect(() => {
     trackEvent("scan_report_viewed");
     const load = async () => {
-      const projects = await base44.entities.BusinessProject.list("-created_date", 1);
-      if (projects.length > 0) {
-        setProject(projects[0]);
-        const [reps, iss] = await Promise.all([
-          base44.entities.Report.filter({ project_id: projects[0].id }),
-          base44.entities.SeoIssue.filter({ project_id: projects[0].id }),
+      const me = await base44.auth.me();
+      const activeProjectId = window.localStorage.getItem("active_project_id");
+      let activeProject = null;
+
+      if (activeProjectId) {
+        try {
+          activeProject = await base44.entities.BusinessProject.get(activeProjectId);
+        } catch (e) {}
+      }
+
+      if (!activeProject) {
+        const projects = await base44.entities.BusinessProject.list("-last_crawl_at", 10);
+        activeProject = projects.find((item) => item.owner_user_id === me.id || item.created_by_id === me.id) || projects[0];
+      }
+
+      if (activeProject) {
+        setProject(activeProject);
+        const [reps, iss, insights, keywordGaps] = await Promise.all([
+          base44.entities.Report.filter({ project_id: activeProject.id, owner_user_id: me.id }),
+          base44.entities.SeoIssue.filter({ project_id: activeProject.id, owner_user_id: me.id }),
+          base44.entities.CompetitorInsight.filter({ project_id: activeProject.id, owner_user_id: me.id }),
+          base44.entities.KeywordGapAnalysis.filter({ project_id: activeProject.id, owner_user_id: me.id }),
         ]);
         setReports(reps);
         setIssues(iss);
+        setCompetitorDataCount(insights.length + keywordGaps.length);
       }
       setLoading(false);
     };
@@ -61,7 +79,7 @@ export default function Reports() {
       approval_count: review,
       developer_count: help,
       seo_score: project.seo_score || 62,
-      competitor_summary: "Competitor gaps may show opportunities for clearer service pages, search titles, descriptions, and trust signals.",
+      competitor_summary: competitorDataCount > 0 ? "Competitor gaps may show opportunities for clearer service pages, search titles, descriptions, and trust signals." : "",
       next_steps: "1. Review the Fix List\n2. Approve recommendations that match your business\n3. Request help for larger website improvements\n4. Add competitor pages during your next scan",
     });
     setReports((prev) => [report, ...prev]);
@@ -112,7 +130,7 @@ export default function Reports() {
                   <section className="px-5 py-5 sm:px-6"><h3 className="text-sm font-semibold text-slate-950">Summary</h3><p className="mt-2 text-sm leading-6 text-slate-600">{customerText(report.summary)}</p></section>
                   <section className="px-5 py-5 sm:px-6"><h3 className="text-sm font-semibold text-slate-950">What to review</h3><p className="mt-2 text-sm leading-6 text-slate-600">{report.approval_count || 0} recommendations need review. {report.fixed_count || 0} are prepared.</p></section>
                   <section className="px-5 py-5 sm:px-6"><h3 className="text-sm font-semibold text-slate-950">Website improvements</h3><p className="mt-2 text-sm leading-6 text-slate-600">{report.developer_count || 0} recommendations may need help.</p></section>
-                  {report.competitor_summary && <section className="px-5 py-5 sm:px-6"><h3 className="text-sm font-semibold text-slate-950">Competitor gaps</h3><p className="mt-2 text-sm leading-6 text-slate-600">{customerText(report.competitor_summary)}</p></section>}
+                  {competitorDataCount > 0 && report.competitor_summary ? <section className="px-5 py-5 sm:px-6"><h3 className="text-sm font-semibold text-slate-950">Competitor gaps</h3><p className="mt-2 text-sm leading-6 text-slate-600">{customerText(report.competitor_summary)}</p></section> : <section className="px-5 py-5 sm:px-6"><p className="text-sm leading-6 text-slate-500">Add competitor pages during your next scan to compare your site.</p></section>}
                   {report.next_steps && <section className="px-5 py-5 sm:px-6"><h3 className="text-sm font-semibold text-slate-950">Next steps</h3><div className="mt-2 space-y-2">{customerText(report.next_steps).split("\n").map((step, index) => <p key={index} className="text-sm leading-6 text-slate-600">{step}</p>)}</div></section>}
                 </div>
 

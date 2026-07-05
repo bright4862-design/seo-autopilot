@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,6 +26,7 @@ export default function ScanWebsiteForm({ project, competitors = [], saving, onS
   }, [competitors]);
 
   const canSubmit = businessName.trim().length > 0 && websiteUrl.trim().length > 0 && !saving;
+  const hasCompetitorInput = keywords.trim().length > 0 || competitorUrls.some((url) => url.trim().length > 0);
 
   const handleSubmit = (event) => {
     event.preventDefault();
@@ -57,6 +59,8 @@ export default function ScanWebsiteForm({ project, competitors = [], saving, onS
         <div className="p-5 sm:p-6">
           <Label className="text-sm font-medium text-slate-900">Competitor pages <span className="font-normal text-slate-400">optional</span></Label>
           <p className="mt-1 text-sm leading-6 text-slate-500">Add pages you want to compare against.</p>
+          <p className="mt-1 text-sm leading-6 text-slate-500">After your scan, we’ll compare these pages and show gaps in your Fix List.</p>
+          {hasCompetitorInput && <Link to="/competitors" className="mt-2 inline-block text-sm font-medium text-blue-600 hover:text-blue-700">View competitor gaps</Link>}
           <div className="mt-3 grid gap-2">
             {competitorUrls.map((url, index) => (
               <Input key={index} placeholder={`Competitor page ${index + 1}`} value={url} onChange={(event) => setCompetitorUrls((prev) => prev.map((value, itemIndex) => itemIndex === index ? event.target.value : value))} className={inputClass} />

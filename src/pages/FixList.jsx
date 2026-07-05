@@ -19,6 +19,7 @@ export default function FixList() {
   const navigate = useNavigate();
   const [project, setProject] = useState(null);
   const [issues, setIssues] = useState([]);
+  const [competitorOpportunityCount, setCompetitorOpportunityCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [selectedIssue, setSelectedIssue] = useState(null);
   const [selectedGroup, setSelectedGroup] = useState(null);
@@ -43,8 +44,13 @@ export default function FixList() {
 
       if (activeProject) {
         setProject(activeProject);
-        const data = await base44.entities.SeoIssue.filter({ project_id: activeProject.id, owner_user_id: me.id });
+        const [data, insights, keywordGaps] = await Promise.all([
+          base44.entities.SeoIssue.filter({ project_id: activeProject.id, owner_user_id: me.id }),
+          base44.entities.CompetitorInsight.filter({ project_id: activeProject.id, owner_user_id: me.id }),
+          base44.entities.KeywordGapAnalysis.filter({ project_id: activeProject.id, owner_user_id: me.id }),
+        ]);
         setIssues(data);
+        setCompetitorOpportunityCount(insights.length + keywordGaps.length);
       }
       setLoading(false);
     };
@@ -119,6 +125,16 @@ export default function FixList() {
                 <div className="flex items-center justify-between px-5 py-4 sm:px-6"><span className="text-sm text-slate-500">May need help</span><span className="text-lg font-semibold text-slate-950">{counts.needs_developer}</span></div>
               </div>
             </section>
+
+            {competitorOpportunityCount > 0 && (
+              <section className="mb-7 rounded-3xl border border-slate-200/80 bg-white p-5 shadow-sm sm:p-6">
+                <h2 className="text-base font-semibold text-slate-950">Competitor opportunities</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-600">We found a few ways other pages may be stronger.</p>
+                <Button asChild variant="outline" className="mt-4 rounded-full border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 shadow-none hover:bg-slate-50">
+                  <Link to="/competitors">View competitor gaps</Link>
+                </Button>
+              </section>
+            )}
 
             {issues.length === 0 ? (
               <div className="rounded-3xl border border-slate-200/80 bg-white p-10 text-center shadow-sm">

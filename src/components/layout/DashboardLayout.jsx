@@ -7,7 +7,6 @@ import { Menu, X } from "lucide-react";
 const navItems = [
   { label: "Fix List", path: "/dashboard" },
   { label: "Scan Website", path: "/crawl-status" },
-  { label: "Competitor Gaps", path: "/competitors" },
   { label: "Website Improvements", path: "/developer" },
   { label: "Scan Report", path: "/reports" },
   { label: "Billing", path: "/billing" },

@@ -461,7 +461,12 @@ export default function CrawlStatus() {
                 {topActions.map((action, i) => (
                   <li key={i} className="flex items-start gap-2 text-sm text-blue-800">
                     <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold flex items-center justify-center mt-0.5">{i + 1}</span>
-                    <span>{action}</span>
+                    <span>
+                      {typeof action === 'string' ? action : action.title}
+                      {typeof action === 'object' && action.reason && (
+                        <span className="block text-xs text-blue-600 mt-0.5">{action.reason}</span>
+                      )}
+                    </span>
                   </li>
                 ))}
               </ol>

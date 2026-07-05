@@ -229,30 +229,61 @@ Deno.serve(async (req) => {
         }));
 
         const aiRes = await base44.integrations.Core.InvokeLLM({
-          prompt: `You are an intelligent SEO assistant reviewing raw scan results before showing them to a non-technical small business owner.
+          prompt: `You are an expert SEO strategist for small business websites.
 
-Business name: ${business_name || 'Unknown'}
-Business type: ${business_type || 'Unknown'}
-City: ${city || 'Unknown'}
-Website: ${baseUrl}
+Your job is to turn raw crawl findings into a short, useful, plain-English action plan for a non-technical business owner.
 
-Crawled pages (JSON): ${JSON.stringify(pagesForAi)}
-Raw fixes (JSON): ${JSON.stringify(withStatus.map(f => ({ page_url: f.page_url, category: f.category, customer_category: f.customer_category, issue_title: f.issue_title, plain_english_explanation: f.plain_english_explanation, why_it_matters: f.why_it_matters, ai_recommendation: f.ai_recommendation, current_value: f.current_value, recommended_value: f.recommended_value, priority: f.priority, status: f.status })))}
-Competitors (JSON): ${JSON.stringify(compForAi)}
+Important rules:
+- Do not overwhelm the user.
+- Do not show duplicate issues.
+- Ignore low-value utility pages such as cart, checkout, login, account, privacy, terms, search, and thank-you pages unless they are broken.
+- Prioritize homepage, service pages, product pages, location pages, about page, and high-value conversion pages.
+- Use simple language.
+- Do not use technical jargon unless you explain it.
+- Do not say anything was fixed or published.
+- Use "prepared," "recommended," "review," and "may help."
+- Do not promise rankings.
+- Merge related issues for the same page into one grouped recommendation.
+- Keep each fix's page_url unchanged, and keep category and status values exactly as they appear in the raw fixes.
 
-Clean up this fix list:
-1. Remove recommendations for low-value utility pages (cart, checkout, login, account, search, legal, privacy, terms, etc.) unless the page is broken. List removed page URLs in ignored_low_value_pages.
-2. Merge duplicate or near-duplicate issues for the same page into one fix.
-3. Order cleaned_fixes so business-important pages come first (homepage, services, products, about, contact), then by priority.
-4. Rewrite issue_title, plain_english_explanation, why_it_matters and ai_recommendation in warm, plain English for a business owner. No technical jargon (never use words like "meta", "canonical", "schema", "crawl", "SEO tag").
-5. Improve recommended_value titles and descriptions so they sound natural and specific to this business (use the business name, type and city; titles under 60 characters, descriptions under 155 characters).
-6. In grouped_page_recommendations, for each page with 2+ fixes give the page a friendly page_title (e.g. "Wine Club page") and a short list of its recommendations.
-7. Give 2-4 top_recommended_actions the owner should do first, and a 2-3 sentence plain_english_summary of the scan.
-8. NEVER claim the website was changed, fixed automatically, or that rankings will instantly improve. Use language like "prepared fix", "recommended improvement", "may help", "could improve", "next step".
-9. Keep each fix's page_url unchanged, and keep category and status values exactly as they appear in the raw fixes.`,
+Return JSON only.
+
+Input:
+Business name:
+${business_name || 'Unknown'}
+
+Business type:
+${business_type || 'Unknown'}
+
+City:
+${city || 'Unknown'}
+
+Website:
+${baseUrl}
+
+Crawled pages:
+${JSON.stringify(pagesForAi)}
+
+Raw fixes:
+${JSON.stringify(withStatus.map(f => ({ page_url: f.page_url, category: f.category, customer_category: f.customer_category, issue_title: f.issue_title, plain_english_explanation: f.plain_english_explanation, why_it_matters: f.why_it_matters, ai_recommendation: f.ai_recommendation, current_value: f.current_value, recommended_value: f.recommended_value, priority: f.priority, difficulty: f.difficulty, status: f.status })))}
+
+Competitor results:
+${JSON.stringify(compForAi)}`,
           response_json_schema: {
             type: 'object',
             properties: {
+              plain_english_summary: { type: 'string' },
+              top_recommended_actions: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    title: { type: 'string' },
+                    reason: { type: 'string' },
+                    priority: { type: 'string', enum: ['high', 'medium', 'low'] },
+                  },
+                },
+              },
               cleaned_fixes: {
                 type: 'array',
                 items: {
@@ -260,8 +291,11 @@ Clean up this fix list:
                   properties: {
                     page_url: { type: 'string' }, category: { type: 'string' }, customer_category: { type: 'string' },
                     issue_title: { type: 'string' }, plain_english_explanation: { type: 'string' }, why_it_matters: { type: 'string' },
-                    ai_recommendation: { type: 'string' }, current_value: { type: 'string' }, recommended_value: { type: 'string' },
-                    priority: { type: 'string' }, status: { type: 'string' },
+                    current_value: { type: 'string' }, recommended_value: { type: 'string' }, ai_recommendation: { type: 'string' },
+                    priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
+                    difficulty: { type: 'string', enum: ['easy', 'moderate', 'developer'] },
+                    status: { type: 'string', enum: ['auto_fixed', 'needs_approval', 'needs_developer'] },
+                    can_auto_fix: { type: 'boolean' }, requires_approval: { type: 'boolean' }, requires_developer: { type: 'boolean' },
                   },
                 },
               },
@@ -270,14 +304,25 @@ Clean up this fix list:
                 items: {
                   type: 'object',
                   properties: {
-                    page_url: { type: 'string' }, page_title: { type: 'string' },
-                    recommendations: { type: 'array', items: { type: 'string' } },
+                    page_url: { type: 'string' }, group_title: { type: 'string' }, summary: { type: 'string' },
+                    recommendations: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: { label: { type: 'string' }, recommendation: { type: 'string' } },
+                      },
+                    },
+                    priority: { type: 'string', enum: ['high', 'medium', 'low'] },
                   },
                 },
               },
-              top_recommended_actions: { type: 'array', items: { type: 'string' } },
-              ignored_low_value_pages: { type: 'array', items: { type: 'string' } },
-              plain_english_summary: { type: 'string' },
+              ignored_low_value_pages: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: { page_url: { type: 'string' }, reason: { type: 'string' } },
+                },
+              },
             },
           },
         });
@@ -300,16 +345,16 @@ Clean up this fix list:
             current_value: f.current_value || '',
             recommended_value: f.recommended_value || '',
             priority: ['critical', 'high', 'medium', 'low'].includes(f.priority) ? f.priority : 'medium',
-            difficulty: f.status === 'needs_developer' ? 'developer' : f.status === 'needs_approval' ? 'moderate' : 'easy',
+            difficulty: ['easy', 'moderate', 'developer'].includes(f.difficulty) ? f.difficulty : (f.status === 'needs_developer' ? 'developer' : f.status === 'needs_approval' ? 'moderate' : 'easy'),
             status: f.status,
             confidence_score: 85,
-            can_auto_fix: f.status === 'auto_fixed',
-            requires_approval: f.status === 'needs_approval',
-            requires_developer: f.status === 'needs_developer',
+            can_auto_fix: typeof f.can_auto_fix === 'boolean' ? f.can_auto_fix : f.status === 'auto_fixed',
+            requires_approval: typeof f.requires_approval === 'boolean' ? f.requires_approval : f.status === 'needs_approval',
+            requires_developer: typeof f.requires_developer === 'boolean' ? f.requires_developer : f.status === 'needs_developer',
           }));
           aiReviewed = true;
-          topActions = Array.isArray(aiRes.top_recommended_actions) ? aiRes.top_recommended_actions.filter(a => typeof a === 'string').slice(0, 5) : [];
-          ignoredPages = Array.isArray(aiRes.ignored_low_value_pages) ? aiRes.ignored_low_value_pages.filter(a => typeof a === 'string') : [];
+          topActions = Array.isArray(aiRes.top_recommended_actions) ? aiRes.top_recommended_actions.filter(a => a && typeof a.title === 'string').slice(0, 5) : [];
+          ignoredPages = Array.isArray(aiRes.ignored_low_value_pages) ? aiRes.ignored_low_value_pages.filter(a => a && typeof a.page_url === 'string') : [];
           plainSummary = typeof aiRes.plain_english_summary === 'string' ? aiRes.plain_english_summary : '';
           groupedRecommendations = Array.isArray(aiRes.grouped_page_recommendations) ? aiRes.grouped_page_recommendations : [];
         }

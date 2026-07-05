@@ -3,12 +3,15 @@ import { base44 } from "@/api/base44Client";
 import { trackEvent } from "@/lib/analytics";
 import { Button } from "@/components/ui/button";
 import {
+  AlertCircle,
   ArrowRight,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   Clipboard,
   HelpCircle,
   Loader2,
+  Search,
   Sparkles,
   Wrench,
 } from "lucide-react";
@@ -20,6 +23,14 @@ const ACTIVE_STATUSES = new Set([
   "open",
   "in_progress",
 ]);
+
+const FILTERS = [
+  { key: "all", label: "All" },
+  { key: "priority", label: "Priority" },
+  { key: "auto_fixed", label: "Prepared" },
+  { key: "needs_approval", label: "Needs review" },
+  { key: "needs_developer", label: "May need help" },
+];
 
 function getIssueBucket(issue) {
   if (issue.status === "needs_developer" || issue.requires_developer) {
@@ -45,13 +56,10 @@ function getBucketLabel(bucket) {
 }
 
 function getBucketDescription(bucket) {
-  if (bucket === "auto_fixed") return "Recommendations prepared for review.";
-  if (bucket === "needs_approval") return "Items that need your decision.";
-  if (bucket === "needs_developer") {
-    return "Larger improvements for a website editor or done-for-you help.";
-  }
-
-  return "Recommended website improvements.";
+  if (bucket === "auto_fixed") return "Ready-to-review recommendations.";
+  if (bucket === "needs_approval") return "Items that need a decision.";
+  if (bucket === "needs_developer") return "Larger improvements for help or cleanup.";
+  return "Website recommendations.";
 }
 
 function getBucketIcon(bucket) {
@@ -83,9 +91,16 @@ function friendlyCategory(category, customerCategory) {
 }
 
 function getPriorityLabel(priority) {
-  if (priority === "critical" || priority === "high") return "High impact";
-  if (priority === "medium") return "Medium impact";
-  return "Lower impact";
+  if (priority === "critical" || priority === "high") return "High";
+  if (priority === "medium") return "Medium";
+  return "Low";
+}
+
+function getPriorityRank(priority) {
+  if (priority === "critical") return 0;
+  if (priority === "high") return 1;
+  if (priority === "medium") return 2;
+  return 3;
 }
 
 function cleanUrl(url) {
@@ -142,7 +157,6 @@ function getAffectedPages(issue) {
 
 function groupIssuesForDisplay(issues) {
   const active = issues.filter((issue) => ACTIVE_STATUSES.has(issue.status));
-
   const map = new Map();
 
   for (const issue of active) {
@@ -150,7 +164,6 @@ function groupIssuesForDisplay(issues) {
     const category = issue.category || "web_dev";
     const title = issue.issue_title || "Review this recommendation";
     const affectedPages = getAffectedPages(issue);
-
     const hasManyAffected = affectedPages.length > 1;
 
     const key = hasManyAffected
@@ -183,6 +196,9 @@ function groupIssuesForDisplay(issues) {
   }
 
   return Array.from(map.values()).sort((a, b) => {
+    const priorityDiff = getPriorityRank(a.priority) - getPriorityRank(b.priority);
+    if (priorityDiff !== 0) return priorityDiff;
+
     const bucketOrder = {
       needs_approval: 0,
       auto_fixed: 1,
@@ -190,33 +206,23 @@ function groupIssuesForDisplay(issues) {
       open: 3,
     };
 
-    const priorityOrder = {
-      critical: 0,
-      high: 1,
-      medium: 2,
-      low: 3,
-    };
-
     const bucketDiff =
       (bucketOrder[a.bucket] ?? 9) - (bucketOrder[b.bucket] ?? 9);
 
     if (bucketDiff !== 0) return bucketDiff;
 
-    return (
-      (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9)
-    );
+    return String(a.issue_title || "").localeCompare(String(b.issue_title || ""));
   });
 }
 
 function summarizeCounts(groupedIssues) {
   return {
-    auto_fixed: groupedIssues.filter((item) => item.bucket === "auto_fixed")
-      .length,
-    needs_approval: groupedIssues.filter(
-      (item) => item.bucket === "needs_approval"
-    ).length,
-    needs_developer: groupedIssues.filter(
-      (item) => item.bucket === "needs_developer"
+    total: groupedIssues.length,
+    auto_fixed: groupedIssues.filter((item) => item.bucket === "auto_fixed").length,
+    needs_approval: groupedIssues.filter((item) => item.bucket === "needs_approval").length,
+    needs_developer: groupedIssues.filter((item) => item.bucket === "needs_developer").length,
+    high_priority: groupedIssues.filter(
+      (item) => item.priority === "critical" || item.priority === "high"
     ).length,
   };
 }
@@ -224,9 +230,19 @@ function summarizeCounts(groupedIssues) {
 function formatScore(value) {
   const number = Number(value);
 
-  if (!Number.isFinite(number) || number <= 0) return "Score unavailable";
+  if (!Number.isFinite(number) || number <= 0) return "—";
 
   return `${Math.round(number)}`;
+}
+
+function getScoreLabel(value) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number) || number <= 0) return "Score unavailable";
+  if (number >= 85) return "Strong";
+  if (number >= 70) return "Good";
+  if (number >= 55) return "Needs cleanup";
+  return "Needs attention";
 }
 
 function isStaleJob(job) {
@@ -282,10 +298,32 @@ async function copyText(text) {
   }
 }
 
-function RecommendationCard({ issue, onOpen }) {
-  const bucket = issue.bucket;
-  const Icon = getBucketIcon(bucket);
+function StatCard({ label, value, helper, icon: Icon }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
+            {label}
+          </p>
+          <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+            {value}
+          </p>
+          {helper && <p className="mt-1 text-sm text-slate-500">{helper}</p>}
+        </div>
 
+        {Icon && (
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100">
+            <Icon className="h-4 w-4 text-slate-600" />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RecommendationRow({ issue, onOpen }) {
+  const Icon = getBucketIcon(issue.bucket);
   const affectedPages = Array.isArray(issue.affected_pages)
     ? issue.affected_pages
     : [];
@@ -294,43 +332,45 @@ function RecommendationCard({ issue, onOpen }) {
     <button
       type="button"
       onClick={() => onOpen(issue)}
-      className="w-full rounded-3xl border border-slate-200/80 bg-white p-5 text-left shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
+      className="group w-full border-b border-slate-100 px-5 py-4 text-left last:border-b-0 hover:bg-slate-50"
     >
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex min-w-0 items-start gap-3">
-          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100">
-            <Icon className="h-4 w-4 text-slate-700" />
-          </div>
-
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="text-sm font-semibold text-slate-950">
-                {issue.issue_title || "Review this recommendation"}
-              </p>
-
-              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500">
-                {friendlyCategory(issue.category, issue.customer_category)}
-              </span>
-
-              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500">
-                {getPriorityLabel(issue.priority)}
-              </span>
-            </div>
-
-            <p className="mt-1 text-sm text-slate-500">
-              {formatPageLabel(issue.page_url)}
-              {affectedPages.length > 1 &&
-                ` · ${affectedPages.length} affected pages`}
-            </p>
-
-            <p className="mt-3 line-clamp-2 text-sm leading-6 text-slate-600">
-              {issue.plain_english_explanation ||
-                "This recommendation was prepared from your website scan."}
-            </p>
-          </div>
+      <div className="flex items-start gap-4">
+        <div className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100">
+          <Icon className="h-4 w-4 text-slate-700" />
         </div>
 
-        <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-slate-400" />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-semibold text-slate-950">
+              {issue.issue_title || "Review this recommendation"}
+            </h3>
+
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500">
+              {getBucketLabel(issue.bucket)}
+            </span>
+
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500">
+              {getPriorityLabel(issue.priority)}
+            </span>
+          </div>
+
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-500">
+            <span>{friendlyCategory(issue.category, issue.customer_category)}</span>
+            <span>·</span>
+            <span>
+              {affectedPages.length > 1
+                ? `${affectedPages.length} affected pages`
+                : formatPageLabel(issue.page_url)}
+            </span>
+          </div>
+
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+            {issue.plain_english_explanation ||
+              "This recommendation was prepared from your website scan."}
+          </p>
+        </div>
+
+        <ChevronRight className="mt-2 h-4 w-4 shrink-0 text-slate-300 group-hover:text-slate-500" />
       </div>
     </button>
   );
@@ -360,6 +400,7 @@ function IssueModal({ issue, onClose }) {
               {issue.issue_title}
             </h2>
             <p className="mt-2 text-sm text-slate-500">
+              {friendlyCategory(issue.category, issue.customer_category)} ·{" "}
               {formatPageLabel(issue.page_url)}
             </p>
           </div>
@@ -394,11 +435,11 @@ function IssueModal({ issue, onClose }) {
             </p>
           </section>
 
-          <section>
+          <section className="rounded-2xl bg-blue-50 p-4">
             <h3 className="text-sm font-semibold text-slate-950">
               Recommended next step
             </h3>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
+            <p className="mt-2 text-sm leading-6 text-slate-700">
               {recommendation}
             </p>
           </section>
@@ -408,7 +449,7 @@ function IssueModal({ issue, onClose }) {
               <h3 className="text-sm font-semibold text-slate-950">
                 Affected pages
               </h3>
-              <div className="mt-2 space-y-2">
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
                 {affectedPages.slice(0, 12).map((page, index) => (
                   <div
                     key={`${page}-${index}`}
@@ -441,7 +482,7 @@ function IssueModal({ issue, onClose }) {
             className="rounded-full border-slate-200 bg-white shadow-none"
           >
             <Clipboard className="mr-2 h-4 w-4" />
-            Copy recommendation
+            Copy next step
           </Button>
 
           <Button
@@ -463,6 +504,8 @@ export default function FixList() {
   const [jobs, setJobs] = useState([]);
   const [competitorInsights, setCompetitorInsights] = useState([]);
   const [selectedIssue, setSelectedIssue] = useState(null);
+  const [activeFilter, setActiveFilter] = useState("all");
+  const [showHistory, setShowHistory] = useState(false);
 
   useEffect(() => {
     trackEvent("fix_list_viewed");
@@ -505,7 +548,7 @@ export default function FixList() {
             base44.entities.SeoIssue.filter(
               { project_id: activeProject.id },
               "-created_date",
-              200
+              300
             ),
             base44.entities.CrawlJob.filter(
               { project_id: activeProject.id },
@@ -534,15 +577,23 @@ export default function FixList() {
   const groupedIssues = useMemo(() => groupIssuesForDisplay(issues), [issues]);
   const counts = useMemo(() => summarizeCounts(groupedIssues), [groupedIssues]);
 
-  const prepared = groupedIssues.filter((item) => item.bucket === "auto_fixed");
-  const needsReview = groupedIssues.filter(
-    (item) => item.bucket === "needs_approval"
-  );
-  const mayNeedHelp = groupedIssues.filter(
-    (item) => item.bucket === "needs_developer"
+  const priorityIssues = groupedIssues.filter(
+    (item) => item.priority === "critical" || item.priority === "high"
   );
 
-  const firstAction = needsReview[0] || prepared[0] || mayNeedHelp[0] || null;
+  const visibleIssues = useMemo(() => {
+    if (activeFilter === "all") return groupedIssues;
+    if (activeFilter === "priority") return priorityIssues;
+    return groupedIssues.filter((item) => item.bucket === activeFilter);
+  }, [activeFilter, groupedIssues, priorityIssues]);
+
+  const firstAction =
+    priorityIssues[0] ||
+    groupedIssues.find((item) => item.bucket === "needs_approval") ||
+    groupedIssues[0] ||
+    null;
+
+  const latestJob = jobs[0] || null;
 
   if (loading) {
     return (
@@ -554,8 +605,8 @@ export default function FixList() {
 
   return (
     <div className="min-h-screen bg-[#F7F8FA]">
-      <div className="mx-auto w-full max-w-5xl px-5 py-10 sm:px-6 lg:py-12">
-        <div className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
+      <div className="mx-auto w-full max-w-6xl px-5 py-8 sm:px-6 lg:py-10">
+        <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
           <div>
             <p className="text-sm font-medium text-blue-600">
               Website recommendations
@@ -564,9 +615,8 @@ export default function FixList() {
               Fix List
             </h1>
             <p className="mt-2 max-w-2xl text-base leading-7 text-slate-500">
-              SEO Autopilot scans your website, reviews important pages, looks
-              for competitor opportunities when possible, and prepares a simple
-              Fix List.
+              A prioritized list of what to review, prepare, or ask for help
+              with.
             </p>
           </div>
 
@@ -588,75 +638,92 @@ export default function FixList() {
           </div>
         </div>
 
+        <div className="mb-6 grid gap-3 md:grid-cols-4">
+          <StatCard
+            label="Score"
+            value={formatScore(project?.seo_score)}
+            helper={getScoreLabel(project?.seo_score)}
+            icon={Sparkles}
+          />
+          <StatCard
+            label="Recommendations"
+            value={counts.total}
+            helper={`${counts.high_priority} high priority`}
+            icon={AlertCircle}
+          />
+          <StatCard
+            label="Pages scanned"
+            value={latestJob?.pages_crawled ?? "—"}
+            helper={latestJob ? formatDate(latestJob.completed_at || latestJob.started_at) : "No scan yet"}
+            icon={Search}
+          />
+          <StatCard
+            label="May need help"
+            value={counts.needs_developer}
+            helper="Website setup or cleanup"
+            icon={Wrench}
+          />
+        </div>
+
         {firstAction && (
-          <button
-            type="button"
-            onClick={() => setSelectedIssue(firstAction)}
-            className="mb-6 w-full rounded-3xl border border-slate-200/80 bg-white p-6 text-left shadow-sm transition hover:bg-slate-50"
-          >
-            <div className="flex items-start justify-between gap-5">
+          <div className="mb-6 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <p className="text-sm font-medium text-blue-600">
-                  What to do first
+                  Recommended first step
                 </p>
-                <h2 className="mt-2 text-xl font-semibold tracking-tight text-slate-950">
+                <h2 className="mt-1 text-xl font-semibold tracking-tight text-slate-950">
                   {firstAction.issue_title}
                 </h2>
-                <p className="mt-2 text-sm leading-6 text-slate-600">
-                  {firstAction.plain_english_explanation}
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+                  {firstAction.ai_recommendation ||
+                    firstAction.recommended_value ||
+                    firstAction.plain_english_explanation}
                 </p>
               </div>
 
-              <ArrowRight className="h-5 w-5 shrink-0 text-slate-400" />
+              <Button
+                type="button"
+                onClick={() => setSelectedIssue(firstAction)}
+                className="w-fit rounded-full bg-slate-950 px-5 text-white shadow-none hover:bg-slate-800"
+              >
+                View details
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
             </div>
-          </button>
+          </div>
         )}
 
-        <div className="mb-6 grid gap-3 sm:grid-cols-3">
-          {[
-            ["auto_fixed", counts.auto_fixed],
-            ["needs_approval", counts.needs_approval],
-            ["needs_developer", counts.needs_developer],
-          ].map(([bucket, count]) => {
-            const Icon = getBucketIcon(bucket);
+        <div className="mb-4 flex flex-wrap gap-2">
+          {FILTERS.map((filter) => {
+            const isActive = activeFilter === filter.key;
 
             return (
-              <div
-                key={bucket}
-                className="rounded-3xl border border-slate-200/80 bg-white p-5 shadow-sm"
+              <button
+                key={filter.key}
+                type="button"
+                onClick={() => setActiveFilter(filter.key)}
+                className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                  isActive
+                    ? "bg-slate-950 text-white"
+                    : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
               >
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-medium text-slate-950">
-                      {getBucketLabel(bucket)}
-                    </p>
-                    <p className="mt-1 text-sm leading-5 text-slate-500">
-                      {getBucketDescription(bucket)}
-                    </p>
-                  </div>
-
-                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100">
-                    <Icon className="h-4 w-4 text-slate-700" />
-                  </div>
-                </div>
-
-                <p className="mt-4 text-3xl font-semibold tracking-tight text-slate-950">
-                  {count}
-                </p>
-              </div>
+                {filter.label}
+              </button>
             );
           })}
         </div>
 
         {competitorInsights.length > 0 && (
-          <div className="mb-6 rounded-3xl border border-slate-200/80 bg-white p-5 shadow-sm">
+          <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between gap-4">
               <div>
                 <p className="text-sm font-semibold text-slate-950">
-                  Competitor opportunities
+                  Competitor opportunities found
                 </p>
-                <p className="mt-1 text-sm leading-6 text-slate-500">
-                  We found a few ways other pages may be stronger.
+                <p className="mt-1 text-sm text-slate-500">
+                  Review where competitor pages may be stronger.
                 </p>
               </div>
 
@@ -672,13 +739,13 @@ export default function FixList() {
         )}
 
         {groupedIssues.length === 0 ? (
-          <div className="rounded-3xl border border-slate-200/80 bg-white p-8 text-center shadow-sm">
+          <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm">
             <h2 className="text-xl font-semibold tracking-tight text-slate-950">
               No recommendations yet.
             </h2>
             <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">
-              Run a website scan first. Once the scan finishes, your
-              recommendations will appear here.
+              Run a website scan first. Once the scan finishes, your Fix List
+              will appear here.
             </p>
 
             <Button
@@ -689,135 +756,103 @@ export default function FixList() {
             </Button>
           </div>
         ) : (
-          <div className="space-y-8">
-            {prepared.length > 0 && (
-              <section>
-                <div className="mb-3 flex items-end justify-between">
-                  <div>
-                    <h2 className="text-lg font-semibold text-slate-950">
-                      Prepared
-                    </h2>
-                    <p className="mt-1 text-sm text-slate-500">
-                      Recommendations prepared for review.
-                    </p>
-                  </div>
-                  <span className="text-sm text-slate-400">
-                    {prepared.length}
-                  </span>
-                </div>
+          <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+              <div>
+                <h2 className="text-base font-semibold text-slate-950">
+                  {activeFilter === "all"
+                    ? "All recommendations"
+                    : FILTERS.find((item) => item.key === activeFilter)?.label}
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  {visibleIssues.length} item{visibleIssues.length === 1 ? "" : "s"}
+                </p>
+              </div>
+            </div>
 
-                <div className="space-y-3">
-                  {prepared.map((issue) => (
-                    <RecommendationCard
-                      key={issue.id || issue.grouped_issue_ids?.join("-")}
-                      issue={issue}
-                      onOpen={setSelectedIssue}
-                    />
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {needsReview.length > 0 && (
-              <section>
-                <div className="mb-3 flex items-end justify-between">
-                  <div>
-                    <h2 className="text-lg font-semibold text-slate-950">
-                      Needs review
-                    </h2>
-                    <p className="mt-1 text-sm text-slate-500">
-                      Items that need your decision.
-                    </p>
-                  </div>
-                  <span className="text-sm text-slate-400">
-                    {needsReview.length}
-                  </span>
-                </div>
-
-                <div className="space-y-3">
-                  {needsReview.map((issue) => (
-                    <RecommendationCard
-                      key={issue.id || issue.grouped_issue_ids?.join("-")}
-                      issue={issue}
-                      onOpen={setSelectedIssue}
-                    />
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {mayNeedHelp.length > 0 && (
-              <section>
-                <div className="mb-3 flex items-end justify-between">
-                  <div>
-                    <h2 className="text-lg font-semibold text-slate-950">
-                      May need help
-                    </h2>
-                    <p className="mt-1 text-sm text-slate-500">
-                      Larger improvements for a website editor or done-for-you
-                      help.
-                    </p>
-                  </div>
-                  <span className="text-sm text-slate-400">
-                    {mayNeedHelp.length}
-                  </span>
-                </div>
-
-                <div className="space-y-3">
-                  {mayNeedHelp.map((issue) => (
-                    <RecommendationCard
-                      key={issue.id || issue.grouped_issue_ids?.join("-")}
-                      issue={issue}
-                      onOpen={setSelectedIssue}
-                    />
-                  ))}
-                </div>
-              </section>
+            {visibleIssues.length === 0 ? (
+              <div className="p-8 text-center">
+                <p className="text-sm text-slate-500">
+                  No recommendations in this section.
+                </p>
+              </div>
+            ) : (
+              visibleIssues.map((issue) => (
+                <RecommendationRow
+                  key={issue.id || issue.grouped_issue_ids?.join("-")}
+                  issue={issue}
+                  onOpen={setSelectedIssue}
+                />
+              ))
             )}
           </div>
         )}
 
         {jobs.length > 0 && (
-          <section className="mt-10">
-            <div className="mb-3">
-              <h2 className="text-lg font-semibold text-slate-950">
-                Scan history
-              </h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Your last 5 scans.
-              </p>
-            </div>
-
-            <div className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-sm">
-              <div className="grid grid-cols-5 gap-3 border-b border-slate-100 px-5 py-3 text-xs font-medium uppercase tracking-wide text-slate-400">
-                <div>Date</div>
-                <div>Status</div>
-                <div>Pages</div>
-                <div>Recommendations</div>
-                <div>Score</div>
+          <section className="mt-6 rounded-3xl border border-slate-200 bg-white shadow-sm">
+            <button
+              type="button"
+              onClick={() => setShowHistory((value) => !value)}
+              className="flex w-full items-center justify-between px-5 py-4 text-left"
+            >
+              <div>
+                <h2 className="text-base font-semibold text-slate-950">
+                  Scan history
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Last {jobs.length} scans
+                </p>
               </div>
 
-              {jobs.map((job) => (
-                <div
-                  key={job.id}
-                  className="grid grid-cols-5 gap-3 border-b border-slate-100 px-5 py-4 text-sm text-slate-600 last:border-b-0"
-                >
-                  <div>{formatDate(job.completed_at || job.started_at)}</div>
-                  <div>{formatJobStatus(job)}</div>
-                  <div>
-                    {typeof job.pages_crawled === "number"
-                      ? `${job.pages_crawled} pages`
-                      : "—"}
-                  </div>
-                  <div>
-                    {typeof job.issues_found === "number"
-                      ? `${job.issues_found} recommendations`
-                      : "—"}
-                  </div>
-                  <div>{formatScore(job.seo_score || project?.seo_score)}</div>
-                </div>
-              ))}
-            </div>
+              <ChevronDown
+                className={`h-4 w-4 text-slate-400 transition ${
+                  showHistory ? "rotate-180" : ""
+                }`}
+              />
+            </button>
+
+            {showHistory && (
+              <div className="overflow-x-auto border-t border-slate-100">
+                <table className="w-full min-w-[680px] text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-100 text-xs uppercase tracking-wide text-slate-400">
+                      <th className="px-5 py-3 font-medium">Date</th>
+                      <th className="px-5 py-3 font-medium">Status</th>
+                      <th className="px-5 py-3 font-medium">Pages</th>
+                      <th className="px-5 py-3 font-medium">Recommendations</th>
+                      <th className="px-5 py-3 font-medium">Score</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {jobs.map((job) => (
+                      <tr
+                        key={job.id}
+                        className="border-b border-slate-100 text-slate-600 last:border-b-0"
+                      >
+                        <td className="px-5 py-4">
+                          {formatDate(job.completed_at || job.started_at)}
+                        </td>
+                        <td className="px-5 py-4">{formatJobStatus(job)}</td>
+                        <td className="px-5 py-4">
+                          {typeof job.pages_crawled === "number"
+                            ? `${job.pages_crawled} pages`
+                            : "—"}
+                        </td>
+                        <td className="px-5 py-4">
+                          {typeof job.issues_found === "number"
+                            ? `${job.issues_found} recommendations`
+                            : "—"}
+                        </td>
+                        <td className="px-5 py-4">
+                          {formatScore(job.seo_score || project?.seo_score)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
         )}
 

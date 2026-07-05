@@ -134,7 +134,7 @@ Deno.serve(async (req) => {
     return Response.json(
       {
         success: false,
-        error: error?.message || "runAiReview failed",
+        error: error?.message || "aiReviewScan failed",
         stack: error?.stack || "",
       },
       { status: 500 }
@@ -224,7 +224,10 @@ function normalizeFix(fix, index) {
       recommendedValue,
     });
 
-  const stable = fix?.id || fix?.fix_id || stableId(`${pageUrl}|${category}|${title}|${index}`);
+  const stable =
+    fix?.id ||
+    fix?.fix_id ||
+    stableId(`${pageUrl}|${category}|${title}|${index}`);
 
   return {
     ...fix,
@@ -514,7 +517,8 @@ function makeFrontendCompatible(plan) {
     : [];
 
   const recommendedActions =
-    Array.isArray(plan.recommended_actions) && plan.recommended_actions.length > 0
+    Array.isArray(plan.recommended_actions) &&
+    plan.recommended_actions.length > 0
       ? plan.recommended_actions
       : topRecommendedActions.map((action) => {
           const fix = cleanedFixes.find(

@@ -93,6 +93,13 @@ export default function ScanWebsiteForm() {
         language: String(language || "en").trim().toLowerCase(),
         scan_mode: scanMode,
         enable_screaming_frog_lite: true,
+
+        // Option B:
+        // Allows deeper crawling of the manually entered website even when
+        // robots.txt restricts ordinary crawler access.
+        force_internal_crawl: true,
+        respect_robots_txt: false,
+
         competitor_urls: cleanedCompetitorUrls,
       };
 
@@ -612,7 +619,8 @@ async function callBase44Function(functionName, payload) {
 }
 
 function extractFunctionErrorMessage(error, functionName) {
-  const responseData = error?.response?.data || error?.data || error?.body || null;
+  const responseData =
+    error?.response?.data || error?.data || error?.body || null;
 
   if (typeof responseData === "string" && responseData.trim()) {
     return `${functionName} failed: ${responseData}`;

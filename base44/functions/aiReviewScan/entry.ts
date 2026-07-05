@@ -1,5 +1,18 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
+const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") || "";
+const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") || "gemini-3.5-flash";
+const GEMINI_BASE_URL =
+  Deno.env.get("GEMINI_BASE_URL") ||
+  "https://generativelanguage.googleapis.com/v1beta/models";
+
+const BASE44_AI_TIMEOUT_MS = Number(
+  Deno.env.get("BASE44_AI_TIMEOUT_MS") || 16000
+);
+const GEMINI_AI_TIMEOUT_MS = Number(
+  Deno.env.get("GEMINI_AI_TIMEOUT_MS") || 22000
+);
+
 const CATEGORY_MAP = {
   broken_page: "404_error",
   page_heading: "thin_content",
@@ -66,6 +79,7 @@ Deno.serve(async (req) => {
     if (!websiteUrl) {
       return Response.json({
         success: true,
+        ai_provider: "scanner_fallback",
         ai_review_warning:
           "AI review ran, but website_url was missing. Scanner recommendations are shown.",
         ...fallbackPlan,
@@ -75,61 +89,99 @@ Deno.serve(async (req) => {
     if (canonicalFixes.length === 0) {
       return Response.json({
         success: true,
+        ai_provider: "scanner_fallback",
         ai_review_warning:
           "AI review ran, but no scanner recommendations were provided.",
         ...fallbackPlan,
       });
     }
 
-    if (!base44.integrations?.Core?.InvokeLLM) {
-      return Response.json({
-        success: true,
-        ai_review_warning:
-          "AI review is reachable, but InvokeLLM is not available. Scanner recommendations are shown.",
-        ...fallbackPlan,
-      });
+    const prompt = buildPrompt({
+      body,
+      websiteUrl,
+      pages,
+      canonicalFixes,
+      fallbackPlan,
+    });
+
+    const aiErrors = [];
+
+    if (base44.integrations?.Core?.InvokeLLM) {
+      try {
+        const rawBase44Response = await withTimeout(
+          base44.integrations.Core.InvokeLLM({
+            prompt,
+            response_json_schema: responseSchema(),
+          }),
+          BASE44_AI_TIMEOUT_MS,
+          "Base44 AI review"
+        );
+
+        const aiResponse = unwrapAiResponse(rawBase44Response);
+
+        const merged = mergeAiIntoFallback({
+          aiResponse,
+          fallbackPlan,
+          canonicalFixes,
+          pages,
+        });
+
+        return Response.json({
+          success: true,
+          ai_provider: "base44_invokellm",
+          ...merged,
+        });
+      } catch (error) {
+        aiErrors.push(
+          `Base44 AI failed: ${
+            error?.message || "Unknown Base44 AI error."
+          }`
+        );
+      }
+    } else {
+      aiErrors.push("Base44 InvokeLLM is not available.");
     }
 
-    try {
-      const prompt = buildPrompt({
-        body,
-        websiteUrl,
-        pages,
-        canonicalFixes,
-        fallbackPlan,
-      });
-
-      const rawAiResponse = await withTimeout(
-        base44.integrations.Core.InvokeLLM({
+    if (GEMINI_API_KEY) {
+      try {
+        const geminiResponse = await callGeminiAiReview({
           prompt,
-          response_json_schema: responseSchema(),
-        }),
-        25000,
-        "AI review"
-      );
+          schema: responseSchema(),
+        });
 
-      const aiResponse = unwrapAiResponse(rawAiResponse);
+        const merged = mergeAiIntoFallback({
+          aiResponse: geminiResponse,
+          fallbackPlan,
+          canonicalFixes,
+          pages,
+        });
 
-      const merged = mergeAiIntoFallback({
-        aiResponse,
-        fallbackPlan,
-        canonicalFixes,
-        pages,
-      });
-
-      return Response.json({
-        success: true,
-        ...merged,
-      });
-    } catch (error) {
-      return Response.json({
-        success: true,
-        ai_review_warning:
-          error?.message ||
-          "AI review failed, so scanner recommendations are shown.",
-        ...fallbackPlan,
-      });
+        return Response.json({
+          success: true,
+          ai_provider: "gemini",
+          ai_review_warning:
+            aiErrors.length > 0
+              ? "Base44 AI was unavailable or timed out, so Gemini completed the AI review."
+              : "",
+          ...merged,
+        });
+      } catch (error) {
+        aiErrors.push(
+          `Gemini failed: ${error?.message || "Unknown Gemini error."}`
+        );
+      }
+    } else {
+      aiErrors.push("GEMINI_API_KEY is not configured.");
     }
+
+    return Response.json({
+      success: true,
+      ai_provider: "scanner_fallback",
+      ai_review_warning:
+        aiErrors.join(" ") ||
+        "AI review failed, so scanner recommendations are shown.",
+      ...fallbackPlan,
+    });
   } catch (error) {
     return Response.json(
       {
@@ -141,6 +193,107 @@ Deno.serve(async (req) => {
     );
   }
 });
+
+/* -------------------------------------------------------------------------- */
+/* Gemini                                                                       */
+/* -------------------------------------------------------------------------- */
+
+async function callGeminiAiReview({ prompt, schema }) {
+  const endpoint = `${GEMINI_BASE_URL}/${encodeURIComponent(
+    GEMINI_MODEL
+  )}:generateContent`;
+
+  const response = await withTimeout(
+    fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": GEMINI_API_KEY,
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text: prompt,
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 4096,
+          responseMimeType: "application/json",
+          responseSchema: schema,
+        },
+      }),
+    }),
+    GEMINI_AI_TIMEOUT_MS,
+    "Gemini AI review"
+  );
+
+  const text = await response.text();
+
+  if (!response.ok) {
+    throw new Error(
+      `Gemini returned status ${response.status}: ${clampText(text, 500)}`
+    );
+  }
+
+  let payload = {};
+
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error("Gemini returned a non-JSON API response.");
+  }
+
+  const modelText = extractGeminiText(payload);
+
+  if (!modelText) {
+    throw new Error("Gemini response did not include output text.");
+  }
+
+  return parseJsonObject(modelText);
+}
+
+function extractGeminiText(payload) {
+  const parts = payload?.candidates?.[0]?.content?.parts || [];
+
+  const text = parts
+    .map((part) => part?.text || "")
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+
+  return text;
+}
+
+function parseJsonObject(value) {
+  const raw = String(value || "").trim();
+
+  if (!raw) return {};
+
+  const cleaned = raw
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/i, "")
+    .trim();
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const firstBrace = cleaned.indexOf("{");
+    const lastBrace = cleaned.lastIndexOf("}");
+
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      return JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
+    }
+
+    throw new Error("Gemini returned text that could not be parsed as JSON.");
+  }
+}
 
 /* -------------------------------------------------------------------------- */
 /* Core normalization                                                          */
@@ -430,9 +583,7 @@ function buildFallbackPlan({ body, pages, canonicalFixes }) {
       `The main priorities are ${describeFixTypes(canonicalFixes)}.`
     );
   } else {
-    summaryParts.push(
-      "No major recommendations were returned from the scanner."
-    );
+    summaryParts.push("No major recommendations were returned from the scanner.");
   }
 
   if (Array.isArray(body?.competitor_page_snapshots)) {
@@ -440,7 +591,9 @@ function buildFallbackPlan({ body, pages, canonicalFixes }) {
 
     if (count > 0) {
       summaryParts.push(
-        `The scan also reviewed ${count} competitor page${count === 1 ? "" : "s"}.`
+        `The scan also reviewed ${count} competitor page${
+          count === 1 ? "" : "s"
+        }.`
       );
     }
   }
@@ -842,7 +995,11 @@ Competitor comparison:
 ${JSON.stringify(body?.competitor_comparison || null, null, 2)}
 
 Competitor snapshots:
-${JSON.stringify(trimCompetitorSnapshots(body?.competitor_page_snapshots || []), null, 2)}
+${JSON.stringify(
+  trimCompetitorSnapshots(body?.competitor_page_snapshots || []).slice(0, 3),
+  null,
+  2
+)}
 
 Fallback positives:
 ${JSON.stringify(fallbackPlan?.positive_findings || [], null, 2)}
@@ -1108,16 +1265,16 @@ function buildPositiveFindings({ body, pages }) {
   }
 
   if (safePages.filter((page) => page?.has_schema).length >= 1) {
-    positives.push(
-      "Your site includes some structured business information."
-    );
+    positives.push("Your site includes some structured business information.");
   }
 
   const summary = body?.technical_audit_summary;
 
   if (summary?.indexable_pages > 0) {
     positives.push(
-      `${summary.indexable_pages} page${summary.indexable_pages === 1 ? "" : "s"} appear indexable from the scan.`
+      `${summary.indexable_pages} page${
+        summary.indexable_pages === 1 ? "" : "s"
+      } appear indexable from the scan.`
     );
   }
 
@@ -1163,7 +1320,9 @@ function buildCompetitorInsights(body) {
       title: "Competitors answer customer questions",
       competitor_name: comparison?.competitors_compared?.[0]?.name || "",
       competitor_domain: comparison?.competitors_compared?.[0]?.domain || "",
-      evidence: `${faq.competitors_with_faq} competitor page${faq.competitors_with_faq === 1 ? "" : "s"} include a question-and-answer section.`,
+      evidence: `${faq.competitors_with_faq} competitor page${
+        faq.competitors_with_faq === 1 ? "" : "s"
+      } include a question-and-answer section.`,
       what_to_add:
         "Add 4–6 real customer questions and answers to your key service pages.",
       recommended_action:
@@ -1180,7 +1339,9 @@ function buildCompetitorInsights(body) {
       title: `Competitors cover “${gap.topic}”`,
       competitor_name: gap?.competitors?.[0] || "",
       competitor_domain: "",
-      evidence: `Found on ${gap?.competitors?.length || 1} competitor page${gap?.competitors?.length === 1 ? "" : "s"}.`,
+      evidence: `Found on ${gap?.competitors?.length || 1} competitor page${
+        gap?.competitors?.length === 1 ? "" : "s"
+      }.`,
       what_to_add: `Add a “${gap.topic}” section where it genuinely fits your services.`,
       recommended_action: `Add a “${gap.topic}” section where it genuinely fits your services.`,
       target_page: "/",
@@ -1238,8 +1399,7 @@ function describeFixTypes(fixes) {
   if (
     fixes.some(
       (fix) =>
-        fix.category === "performance_hint" ||
-        fix.category === "performance"
+        fix.category === "performance_hint" || fix.category === "performance"
     )
   ) {
     labels.push("page performance cleanup");
@@ -1258,7 +1418,9 @@ function describeFixTypes(fixes) {
   if (labels.length === 0) return "a few website cleanup items";
   if (labels.length === 1) return labels[0];
 
-  return `${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`;
+  return `${labels.slice(0, -1).join(", ")}, and ${
+    labels[labels.length - 1]
+  }`;
 }
 
 function friendlyCategory(category) {

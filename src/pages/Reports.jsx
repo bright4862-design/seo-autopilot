@@ -1,13 +1,30 @@
 import React, { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
-import { FileText, Download, CheckCircle2, Clock, Wrench, BarChart3, ArrowRight } from "lucide-react";
+import { exportScanReportPdf } from "@/lib/exportScanReport";
+import { FileText, Download, CheckCircle2, Clock, Wrench, BarChart3, ArrowRight, Loader2 } from "lucide-react";
 
 export default function Reports() {
   const [reports, setReports] = useState([]);
   const [project, setProject] = useState(null);
   const [issues, setIssues] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
+
+  const handleExport = async () => {
+    if (!project) return;
+    setExporting(true);
+    try {
+      const [jobs, devRecs, insights] = await Promise.all([
+        base44.entities.CrawlJob.filter({ project_id: project.id, status: "complete" }, "-created_date", 1),
+        base44.entities.DeveloperRecommendation.filter({ project_id: project.id }),
+        base44.entities.CompetitorInsight.filter({ project_id: project.id }),
+      ]);
+      exportScanReportPdf({ project, crawlJob: jobs[0], issues, devRecs, insights });
+    } finally {
+      setExporting(false);
+    }
+  };
 
   useEffect(() => {
     const load = async () => {
@@ -56,9 +73,15 @@ export default function Reports() {
           <h1 className="text-2xl font-bold tracking-tight">Scan Report</h1>
           <p className="text-sm text-gray-500 mt-1">Simple summaries of your website's progress</p>
         </div>
-        <Button onClick={generateReport} className="gradient-primary text-white border-0">
-          <FileText className="w-4 h-4 mr-2" /> Generate New Report
-        </Button>
+        <div className="flex gap-2">
+          <Button onClick={handleExport} disabled={!project || exporting} variant="outline">
+            {exporting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
+            Export Report
+          </Button>
+          <Button onClick={generateReport} className="gradient-primary text-white border-0">
+            <FileText className="w-4 h-4 mr-2" /> Generate New Report
+          </Button>
+        </div>
       </div>
 
       {reports.length === 0 ? (
@@ -136,8 +159,8 @@ export default function Reports() {
             )}
 
             <div className="px-6 py-4 border-t border-gray-100 bg-gray-50/50">
-              <Button variant="outline" size="sm" disabled>
-                <Download className="w-3.5 h-3.5 mr-1.5" /> Export PDF (Coming Soon)
+              <Button variant="outline" size="sm" onClick={handleExport} disabled={exporting}>
+                <Download className="w-3.5 h-3.5 mr-1.5" /> Export PDF
               </Button>
             </div>
           </div>

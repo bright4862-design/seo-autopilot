@@ -23,19 +23,19 @@ const SCAN_ISSUES = [
   {
     page_url: "/services", category: "meta_title", priority: "high", status: "auto_fixed",
     issue_title: "Missing page title on Services page",
-    plain_english_explanation: "Your Services page didn't have a title tag. We generated one for you.",
+    plain_english_explanation: "Your Services page didn't have a title tag. We prepared one for you.",
     why_it_matters: "Page titles are the first thing people see in Google. Without one, Google guesses — usually poorly.",
     current_value: "(empty)", recommended_value: "Plumbing & HVAC Services | Sunshine Plumbing Denver",
-    ai_recommendation: "We auto-generated a title using your business name and services.",
+    ai_recommendation: "We prepared a title using your business name and services.",
     confidence_score: 92, can_auto_fix: true, requires_approval: false, requires_developer: false,
   },
   {
     page_url: "/blog/tips", category: "internal_link", priority: "low", status: "auto_fixed",
     issue_title: "Broken internal link to removed blog post",
-    plain_english_explanation: "This page linked to a blog post that no longer exists. We removed the broken link.",
+    plain_english_explanation: "This page linked to a blog post that no longer exists. We flagged the broken link for removal.",
     why_it_matters: "Broken links make your site look unmaintained and waste Google's time.",
     current_value: "Link to /blog/summer-tips-2024 (404)", recommended_value: "Link removed",
-    ai_recommendation: "We removed the broken link automatically.",
+    ai_recommendation: "We flagged this broken link for removal.",
     confidence_score: 80, can_auto_fix: true, requires_approval: false, requires_developer: false,
   },
   {
@@ -44,7 +44,7 @@ const SCAN_ISSUES = [
     plain_english_explanation: "Your About page has no meta description — the short summary shown under your title in Google.",
     why_it_matters: "A good description convinces people to click your result over a competitor's.",
     current_value: "(empty)", recommended_value: "Sunshine Plumbing has served Denver for 15+ years. Licensed, insured, ready to help.",
-    ai_recommendation: "We wrote a description highlighting your experience and service area — approve it to apply.",
+    ai_recommendation: "We prepared a description highlighting your experience and service area — approve it to apply.",
     confidence_score: 85, can_auto_fix: false, requires_approval: true, requires_developer: false,
   },
   {
@@ -175,6 +175,7 @@ export default function CrawlStatus() {
       let issuesFound = 0;
       let summary = null;
       let crawledPagesData = [];
+      let scanSucceeded = false;
       try {
         const res = await base44.functions.invoke('runRealScan', {
           website_url: project.website_url,
@@ -191,6 +192,7 @@ export default function CrawlStatus() {
         if (typeof scanData.pages_crawled === 'number') pagesCrawled = scanData.pages_crawled;
         if (typeof scanData.issues_found === 'number') issuesFound = scanData.issues_found;
         if (scanData.summary && typeof scanData.summary === 'object') summary = scanData.summary;
+        scanSucceeded = true;
         setScanResult({ fixes: realFixes, health_score: healthScore, pages_crawled: pagesCrawled, issues_found: issuesFound, summary });
       } catch (e) {
         console.error('runRealScan failed, using demo fixes', e);
@@ -206,7 +208,20 @@ export default function CrawlStatus() {
         );
       }
 
-      const sourceFixes = realFixes.length > 0 ? realFixes : SCAN_ISSUES;
+      const sourceFixes = scanSucceeded ? realFixes : SCAN_ISSUES;
+      if (!scanSucceeded) {
+        setScanResult({
+          fixes: SCAN_ISSUES,
+          health_score: 62,
+          pages_crawled: 47,
+          issues_found: SCAN_ISSUES.length,
+          summary: {
+            we_can_fix: SCAN_ISSUES.filter(f => f.status === 'auto_fixed').length,
+            needs_approval: SCAN_ISSUES.filter(f => f.status === 'needs_approval').length,
+            needs_developer: SCAN_ISSUES.filter(f => f.requires_developer === true).length,
+          },
+        });
+      }
 
       await base44.entities.SeoIssue.bulkCreate(
         sourceFixes.map(f => ({

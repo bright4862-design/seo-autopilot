@@ -90,6 +90,7 @@ export default function ScanWebsiteForm() {
         ai_review: AI_REVIEW_FUNCTION,
       },
       scanner: {
+        scan_mode: scanResult?.scan_mode || "",
         pages: safeArray(scanResult?.pages || scanResult?.crawled_pages).length,
         fixes: safeArray(scanResult?.fixes || scanResult?.raw_fixes).length,
         grouped_findings: safeArray(scanResult?.grouped_findings).length,
@@ -160,7 +161,15 @@ export default function ScanWebsiteForm() {
         health_score: healthScore,
       },
     };
-  }, [error, scanResult, reviewResult, displayResult, fixes.length, pages.length, healthScore]);
+  }, [
+    error,
+    scanResult,
+    reviewResult,
+    displayResult,
+    fixes.length,
+    pages.length,
+    healthScore,
+  ]);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -272,7 +281,8 @@ export default function ScanWebsiteForm() {
 
         client_rendering: normalizedScanner.client_rendering || null,
 
-        competitor_urls: normalizedScanner.competitor_urls || cleanedCompetitorUrls,
+        competitor_urls:
+          normalizedScanner.competitor_urls || cleanedCompetitorUrls,
         competitor_results: normalizedScanner.competitor_results || [],
         competitor_page_snapshots:
           normalizedScanner.competitor_page_snapshots || [],
@@ -857,11 +867,9 @@ function FindingCard({ fix }) {
 
       {isBrokenPage ? (
         <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          <strong>Plain-English note:</strong> These URLs are inside the selected
-          language section, but the website may use English-style URL slugs. For
-          example, <code className="rounded bg-white px-1">/nl/category/wine-tourism</code>{" "}
-          is still a Dutch-section URL because it starts with{" "}
-          <code className="rounded bg-white px-1">/nl</code>.
+          <strong>Plain-English note:</strong> These pages may be old links,
+          hidden pages, unavailable pages, or pages that blocked the scanner.
+          Review the examples before assuming visitors are seeing a problem.
         </div>
       ) : null}
 
@@ -943,10 +951,6 @@ function Badge({ children }) {
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Base44 function caller                                                      */
-/* -------------------------------------------------------------------------- */
-
 async function callBase44Function(functionName, payload) {
   const errors = [];
 
@@ -978,7 +982,11 @@ async function callBase44Function(functionName, payload) {
   }
 
   throw new Error(
-    `${functionName} failed. ${errors.length ? errors.join(" | ") : "No supported Base44 function caller was found."}`
+    `${functionName} failed. ${
+      errors.length
+        ? errors.join(" | ")
+        : "No supported Base44 function caller was found."
+    }`
   );
 }
 
@@ -995,10 +1003,6 @@ function normalizeFunctionResponse(response) {
   return response;
 }
 
-/* -------------------------------------------------------------------------- */
-/* Friendly affected pages                                                     */
-/* -------------------------------------------------------------------------- */
-
 function buildFriendlyAffectedPages(fix) {
   const examples = safeArray(fix?.details?.examples);
   const affectedPages = safeArray(fix?.affected_pages);
@@ -1014,6 +1018,7 @@ function buildFriendlyAffectedPages(fix) {
         return {
           path,
           label:
+            cleanString(example.readable_label) ||
             cleanString(example.title) ||
             friendlyPageLabel(path) ||
             "Affected page",
@@ -1077,6 +1082,10 @@ function friendlyPageLabel(pathOrUrl) {
       : `Activity page: ${page}`;
   }
 
+  if (parts[0] === "wine" && parts[1]) {
+    return `Wine page: ${humanizeSlug(parts.slice(1).join(" / "))}`;
+  }
+
   const label = humanizeSlug(parts.join(" / "));
 
   return language ? `${language} page: ${label}` : label;
@@ -1126,10 +1135,6 @@ function cleanPath(input) {
   }
 }
 
-/* -------------------------------------------------------------------------- */
-/* Small helpers                                                               */
-/* -------------------------------------------------------------------------- */
-
 function pickFirstNonEmptyArray(values) {
   for (const value of values || []) {
     if (Array.isArray(value) && value.length > 0) return value;
@@ -1143,6 +1148,8 @@ function safeArray(value) {
 }
 
 function numberOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+
   const number = Number(value);
 
   return Number.isFinite(number) ? number : null;

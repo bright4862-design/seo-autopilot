@@ -1,7 +1,7 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
 const USER_AGENT =
-  "Mozilla/5.0 (compatible; SEO-Autopilot/3.1; +https://seoautopilot.app/bot)";
+  "Mozilla/5.0 (compatible; SEO-Autopilot/3.2; +https://seoautopilot.app/bot)";
 
 const MAX_HTML_BYTES = 800000;
 const CRAWL_TIME_BUDGET_MS = 95000;
@@ -46,10 +46,10 @@ const UTILITY_PATH_RE =
   /(cart|checkout|login|signin|signup|register|account|search|privacy|terms|thank-?you|payment|admin|wp-admin|reset|forgot|cookie|legal|disclaimer|tag|category|author|feed|rss|print|share)/i;
 
 const IMPORTANT_PAGE_RE =
-  /(home|service|services|product|products|loan|loans|program|programs|about|location|locations|contact|book|booking|appointment|pricing|packages|service-area|areas-we-serve|fix-and-flip|new-construction|bridge|rental|dscr|apply|application|menu|treatment|treatments|repair|installation|financing|mortgage|lending|case-study|case-studies)/i;
+  /(home|service|services|product|products|loan|loans|program|programs|about|location|locations|contact|book|booking|appointment|pricing|packages|service-area|areas-we-serve|fix-and-flip|new-construction|bridge|rental|dscr|apply|application|menu|treatment|treatments|repair|installation|financing|mortgage|lending|case-study|case-studies|activity|activities|booking|experience|experiences|tour|tours|things-to-do)/i;
 
 const SERVICE_LIKE_RE =
-  /(service|services|product|products|loan|loans|program|programs|pricing|packages|location|locations|area|areas|repair|installation|treatment|treatments|financing|mortgage|lending|fix-and-flip|bridge|rental|dscr|hard-money)/i;
+  /(service|services|product|products|loan|loans|program|programs|pricing|packages|location|locations|area|areas|repair|installation|treatment|treatments|financing|mortgage|lending|fix-and-flip|bridge|rental|dscr|hard-money|activity|activities|booking|experience|experiences|tour|tours|things-to-do)/i;
 
 const ASSET_RE =
   /\.(jpg|jpeg|png|gif|webp|svg|pdf|zip|css|js|ico|woff|woff2|ttf|mp4|mp3|mov|avi|xml|json)$/i;
@@ -69,6 +69,8 @@ const MEANINGFUL_SCHEMA_TYPES = new Set([
   "HowTo",
   "Article",
   "WebSite",
+  "Event",
+  "Offer",
 ]);
 
 Deno.serve(async (req) => {
@@ -317,14 +319,26 @@ async function crawlWebsite({
     if (seen.has(clean) || queued.has(clean)) return;
     if (!isSameDomain(clean, domain)) return;
     if (isAssetUrl(clean)) return;
-    if (isUtilityUrl(clean)) return;
-    if (isBlockedByRobots(clean, robots)) return;
+
+    const isStartUrl = source === "start";
+
+    // Always attempt the exact URL entered by the user.
+    // This prevents scans from returning 0 pages just because robots.txt,
+    // language paths, or utility filters block the first URL.
+    if (!isStartUrl && isUtilityUrl(clean)) return;
+    if (!isStartUrl && isBlockedByRobots(clean, robots)) return;
+
+    if (isStartUrl && isBlockedByRobots(clean, robots)) {
+      crawlWarnings.push(
+        "The start URL appears restricted by robots.txt, but the scanner checked it because it was entered manually."
+      );
+    }
 
     queued.add(clean);
     queue.push({
       url: clean,
       source,
-      priority: priorityScore(clean),
+      priority: isStartUrl ? 999 : priorityScore(clean),
     });
 
     queueDirty = true;
@@ -420,6 +434,12 @@ async function crawlWebsite({
   if (timeBudgetHit) {
     crawlWarnings.push(
       "The scan stopped early to stay within the time limit, so some pages were not reviewed."
+    );
+  }
+
+  if (finalPages.length === 0) {
+    crawlWarnings.push(
+      "The scanner could not read the start page. This can happen if the site blocks crawlers, redirects unexpectedly, requires JavaScript before content loads, or blocks server-side requests."
     );
   }
 
@@ -2186,9 +2206,11 @@ function groupedFinding({
   affected_pages,
   details = {},
 }) {
+  const stable = stableId(id);
+
   return {
-    id: stableId(id),
-    fix_id: stableId(id),
+    id: stable,
+    fix_id: stable,
     type: "site_level",
     page_url: affected_pages?.[0] || "/",
     category,
@@ -2947,7 +2969,7 @@ function detectTrustSignals(text) {
     [/certified|certification|accredited/i, "certifications"],
     [/guarantee|warranty/i, "guarantees"],
     [/case studies?|success stories?/i, "case studies"],
-    [/\b\d+\+?\s*(years|clients|customers|projects|homes|businesses)\b/i, "proof numbers"],
+    [/\b\d+\+?\s*(years|clients|customers|projects|homes|businesses|activities|bookings)\b/i, "proof numbers"],
     [/award|rated|rating|stars/i, "ratings or awards"],
   ]);
 }
@@ -2961,6 +2983,8 @@ function detectCtas(text) {
     [/apply (now|today|online)/i, "apply"],
     [/call (now|today)|phone/i, "call"],
     [/get started|start now/i, "get started"],
+    [/reserve|reservation/i, "reserve"],
+    [/buy ticket|tickets/i, "tickets"],
   ]);
 }
 
@@ -3251,7 +3275,7 @@ function priorityScore(url) {
   if (path === "/") return 100;
 
   if (
-    /service|services|product|products|program|programs|loan|loans|pricing|packages|fix-and-flip|bridge|rental|dscr|hard-money/.test(
+    /service|services|product|products|program|programs|loan|loans|pricing|packages|fix-and-flip|bridge|rental|dscr|hard-money|activity|activities|booking|experience|experiences|tour|tours|things-to-do/.test(
       path
     )
   ) {

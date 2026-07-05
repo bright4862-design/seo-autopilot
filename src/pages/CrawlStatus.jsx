@@ -336,7 +336,7 @@ export default function CrawlStatus() {
               <div className="grid grid-cols-3 gap-2 text-center">
                 <div>
                   <p className="text-lg font-bold text-green-700">{scanResult.summary.we_can_fix ?? 0}</p>
-                  <p className="text-xs text-gray-500">We fixed this</p>
+                  <p className="text-xs text-gray-500">Fix prepared</p>
                 </div>
                 <div>
                   <p className="text-lg font-bold text-amber-600">{scanResult.summary.needs_approval ?? 0}</p>

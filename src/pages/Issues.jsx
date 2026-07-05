@@ -59,7 +59,7 @@ export default function Issues() {
       {/* Summary badges */}
       <div className="flex flex-wrap gap-3">
         {[
-          { label: "We fixed this", count: issues.filter(i => i.status === "auto_fixed").length, cls: "bg-green-50 text-green-700 border-green-200" },
+          { label: "Fix prepared", count: issues.filter(i => i.status === "auto_fixed").length, cls: "bg-green-50 text-green-700 border-green-200" },
           { label: "Needs your approval", count: issues.filter(i => i.status === "needs_approval").length, cls: "bg-amber-50 text-amber-700 border-amber-200" },
           { label: "Needs a developer", count: issues.filter(i => i.status === "needs_developer").length, cls: "bg-purple-50 text-purple-700 border-purple-200" },
           { label: "Open", count: issues.filter(i => i.status === "open").length, cls: "bg-gray-50 text-gray-700 border-gray-200" },

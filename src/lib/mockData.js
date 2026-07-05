@@ -98,7 +98,7 @@ export const STATUS_COLORS = {
 
 export const STATUS_LABELS = {
   open: "Open",
-  auto_fixed: "We fixed this",
+  auto_fixed: "Fix prepared",
   needs_approval: "Needs your approval",
   approved: "Approved",
   rejected: "Rejected",

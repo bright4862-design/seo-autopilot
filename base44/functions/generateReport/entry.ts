@@ -21,7 +21,7 @@ Deno.serve(async (req) => {
 
     const report = await base44.entities.Report.create({
       project_id: projectId,
-      summary: `SEO scan of ${project.website_url} found ${issues.length} total issues. ${fixed} were automatically fixed, ${approval} need review, and ${developer} require developer work.`,
+      summary: `SEO scan of ${project.website_url} found ${issues.length} total issues. ${fixed} simple fixes were prepared for review, ${approval} need review, and ${developer} require developer work.`,
       fixed_count: fixed,
       approval_count: approval,
       developer_count: developer,

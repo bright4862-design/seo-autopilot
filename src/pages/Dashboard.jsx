@@ -104,7 +104,7 @@ export default function Dashboard() {
         </div>
 
         <div className="lg:col-span-3 grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          <StatCard icon={CheckCircle2} label="Fixed automatically" value={autoFixed} color="green" subtitle="We handled these for you" />
+          <StatCard icon={CheckCircle2} label="Prepared for you" value={autoFixed} color="green" subtitle="We prepared these for your review" />
           <StatCard icon={Clock} label="Needs your approval" value={needsApproval} color="amber" subtitle="Review and approve fixes" />
           <StatCard icon={Wrench} label="Needs a developer" value={needsDev} color="purple" subtitle="Clear instructions provided" />
           <StatCard icon={AlertTriangle} label="404 errors found" value={errors404} color="red" />

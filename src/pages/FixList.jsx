@@ -10,8 +10,8 @@ import {
 const CATEGORIES = [
   {
     key: "auto_fixed",
-    title: "We can fix this",
-    subtitle: "Already done — nothing for you to do.",
+    title: "Fixes prepared",
+    subtitle: "We prepared these simple fixes for your review.",
     empty: "Nothing here yet. Run a scan to find quick wins we can handle for you.",
     icon: CheckCircle2,
     iconBg: "bg-green-100 text-green-600",

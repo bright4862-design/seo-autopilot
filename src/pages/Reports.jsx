@@ -34,7 +34,7 @@ export default function Reports() {
 
     const report = await base44.entities.Report.create({
       project_id: project.id,
-      summary: `SEO scan of ${project.website_url} found ${issues.length} total issues. ${fixed} were automatically fixed, ${approval} need your review, and ${dev} require developer work.`,
+      summary: `SEO scan of ${project.website_url} found ${issues.length} total issues. ${fixed} simple fixes were prepared for review, ${approval} need your review, and ${dev} require developer work.`,
       fixed_count: fixed,
       approval_count: approval,
       developer_count: dev,
@@ -95,7 +95,7 @@ export default function Reports() {
               <div className="px-6 py-4 text-center border-r border-gray-100">
                 <CheckCircle2 className="w-5 h-5 text-green-500 mx-auto mb-1" />
                 <div className="text-xl font-bold text-green-600">{report.fixed_count}</div>
-                <div className="text-xs text-gray-500">We fixed this</div>
+                <div className="text-xs text-gray-500">Fix prepared</div>
               </div>
               <div className="px-6 py-4 text-center border-r border-gray-100">
                 <Clock className="w-5 h-5 text-amber-500 mx-auto mb-1" />

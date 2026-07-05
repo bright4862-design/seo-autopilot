@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
+import { queueEvent } from "@/lib/analytics";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -45,6 +46,7 @@ export default function Register() {
       if (result?.access_token) {
         base44.auth.setToken(result.access_token);
       }
+      queueEvent("user_registered", { method: "email" });
       window.location.href = "/dashboard";
     } catch (err) {
       setError(err.message || "Invalid verification code");
@@ -67,6 +69,7 @@ export default function Register() {
   };
 
   const handleGoogle = () => {
+    queueEvent("user_logged_in", { method: "google" });
     base44.auth.loginWithProvider("google", "/dashboard");
   };
 

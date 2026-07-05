@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
+import { trackEvent } from "@/lib/analytics";
 import { Button } from "@/components/ui/button";
 import LeadRequestModal from "@/components/billing/LeadRequestModal";
 import CleanupRequestModal from "@/components/billing/CleanupRequestModal";
@@ -19,6 +20,7 @@ export default function Billing() {
   const [leadModal, setLeadModal] = useState(null);
 
   useEffect(() => {
+    trackEvent("billing_viewed");
     const load = async () => {
       const projects = await base44.entities.BusinessProject.list("-created_date", 1);
       if (projects.length > 0) setCurrentPlan(projects[0].subscription_plan || "free");

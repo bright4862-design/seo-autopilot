@@ -1,5 +1,6 @@
 import React from "react";
 import { Button } from "@/components/ui/button";
+import { trackEvent } from "@/lib/analytics";
 import { customerText, friendlyCategory, getStatusLabel } from "@/lib/friendlyLabels";
 import { Copy, X } from "lucide-react";
 
@@ -8,6 +9,11 @@ export default function IssueDetailModal({ issue, onClose, onStatusUpdate }) {
 
   const copyRecommendation = async () => {
     await navigator.clipboard.writeText(nextStep);
+    trackEvent("recommendation_copied", { recommendation_id: issue.id });
+  };
+
+  const requestHelp = () => {
+    trackEvent("request_help_clicked", { recommendation_id: issue.id, source: "recommendation_modal" });
   };
 
   return (
@@ -48,7 +54,7 @@ export default function IssueDetailModal({ issue, onClose, onStatusUpdate }) {
             <Button variant="outline" className="rounded-full border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 shadow-none hover:bg-slate-50" onClick={() => onStatusUpdate(issue.id, "completed")}>Mark reviewed</Button>
           )}
           <Button variant="outline" className="rounded-full border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 shadow-none hover:bg-slate-50" onClick={copyRecommendation}><Copy className="mr-2 h-4 w-4" /> Copy</Button>
-          <Button variant="outline" className="rounded-full border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 shadow-none hover:bg-slate-50">Request help</Button>
+          <Button variant="outline" className="rounded-full border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 shadow-none hover:bg-slate-50" onClick={requestHelp}>Request help</Button>
         </div>
       </div>
     </div>

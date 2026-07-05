@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
+import { trackEvent } from "@/lib/analytics";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,6 +12,10 @@ export default function Onboarding() {
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState({ business_name: "", website_url: "" });
   const [competitorUrls, setCompetitorUrls] = useState(["", "", ""]);
+
+  useEffect(() => {
+    trackEvent("onboarding_started");
+  }, []);
 
   const update = (field, value) => setData(prev => ({ ...prev, [field]: value }));
   const updateCompetitor = (i, value) => setCompetitorUrls(prev => prev.map((v, idx) => (idx === i ? value : v)));
@@ -44,6 +49,7 @@ export default function Onboarding() {
           return { project_id: project.id, website_url: url, name, owner_user_id: user.id };
         }));
       }
+      trackEvent("onboarding_completed", { project_id: project.id, competitor_count: compUrls.length });
       navigate("/crawl-status?autostart=1");
     } catch (e) {
       console.error("Failed to start scan", e);

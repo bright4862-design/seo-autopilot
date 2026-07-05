@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
+import { queueEvent } from "@/lib/analytics";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,6 +21,7 @@ export default function Login() {
     setLoading(true);
     try {
       await base44.auth.loginViaEmailPassword(email, password);
+      queueEvent("user_logged_in", { method: "email" });
       window.location.href = "/dashboard";
     } catch (err) {
       setError(err.message || "Invalid email or password");
@@ -29,6 +31,7 @@ export default function Login() {
   };
 
   const handleGoogle = () => {
+    queueEvent("user_logged_in", { method: "google" });
     base44.auth.loginWithProvider("google", "/dashboard");
   };
 

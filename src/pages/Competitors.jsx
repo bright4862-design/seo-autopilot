@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
+import { trackEvent } from "@/lib/analytics";
 import { Button } from "@/components/ui/button";
 import { computeCustomerMetrics } from "@/lib/competitorMetrics";
 import ComparisonTable from "@/components/competitors/ComparisonTable";
@@ -25,6 +26,8 @@ export default function Competitors() {
   const [planCreated, setPlanCreated] = useState(false);
 
   useEffect(() => {
+    trackEvent("competitor_gaps_viewed");
+    trackEvent("keyword_gap_analysis_started", { source: "competitor_gaps_page" });
     const load = async () => {
       const projects = await base44.entities.BusinessProject.list("-created_date", 1);
       if (projects.length > 0) {
@@ -37,6 +40,7 @@ export default function Competitors() {
         ]);
         setCompetitors(comps);
         setInsights(ins);
+        trackEvent("keyword_gap_analysis_completed", { competitor_count: comps.length, insight_count: ins.length });
         if (jobs.length > 0) {
           const pages = await base44.entities.CrawledPage.filter({ crawl_job_id: jobs[0].id });
           setCustomer(computeCustomerMetrics(pages, proj.business_type, proj.city));
@@ -66,6 +70,7 @@ export default function Competitors() {
       status: "open",
     }));
     if (newRecs.length > 0) await base44.entities.DeveloperRecommendation.bulkCreate(newRecs);
+    trackEvent("improvement_plan_created", { recommendation_count: newRecs.length });
     setCreatingPlan(false);
     setPlanCreated(true);
   };

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { base44 } from "@/api/base44Client";
+import { trackEvent } from "@/lib/analytics";
 import { reviewFixesWithAi, computeHealthScore, summarizeFixes } from "@/lib/aiReview";
 import ScanWebsiteForm from "@/components/scan/ScanWebsiteForm";
 import { Button } from "@/components/ui/button";
@@ -57,6 +58,7 @@ export default function CrawlStatus() {
   const didAutoStart = useRef(false);
 
   useEffect(() => {
+    trackEvent("scan_page_viewed");
     const load = async () => {
       const projects = await base44.entities.BusinessProject.list("-created_date", 1);
       if (projects.length > 0) {
@@ -89,6 +91,7 @@ export default function CrawlStatus() {
     let job = existingJob;
 
     try {
+      trackEvent("scan_started", { project_id: proj.id, existing_job: Boolean(existingJob) });
       const me = await base44.auth.me();
       if (!job) {
         job = await base44.entities.CrawlJob.create({ project_id: proj.id, status: "queued", crawl_type: "full", started_at: new Date().toISOString(), owner_user_id: me.id });
@@ -210,6 +213,7 @@ export default function CrawlStatus() {
       const finalJob = await base44.entities.CrawlJob.update(job.id, { pages_found: pagesCrawled, pages_crawled: pagesCrawled, seo_score: healthScore, issues_found: sourceFixes.length, error_message: "" });
       setCrawlJob(finalJob);
       await base44.entities.BusinessProject.update(proj.id, { last_crawl_at: new Date().toISOString(), seo_score: healthScore });
+      trackEvent("scan_completed", { project_id: proj.id, pages_crawled: pagesCrawled, issues_found: sourceFixes.length, health_score: healthScore, real_scan_completed: scanSucceeded });
     } catch (err) {
       if (job) {
         try {
@@ -218,6 +222,7 @@ export default function CrawlStatus() {
         } catch (e) {}
       }
       setError(err.message || "Something went wrong during the scan. Please try again.");
+      trackEvent("scan_failed", { project_id: proj.id, message: err.message || "Scan failed" });
     } finally {
       setSimulating(false);
     }

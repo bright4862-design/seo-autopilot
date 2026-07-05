@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
-import { Shield, Users, Globe, Search, AlertTriangle, Clock, FileText, Settings, Inbox } from "lucide-react";
+import { Shield, Users, Search, AlertTriangle, Clock } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import AdminLeads from "@/components/admin/AdminLeads";
+import AdminAnalytics from "@/components/admin/AdminAnalytics";
 
 export default function Admin() {
   const [projects, setProjects] = useState([]);
@@ -70,6 +71,7 @@ export default function Admin() {
           <TabsTrigger value="crawls">Crawl Jobs</TabsTrigger>
           <TabsTrigger value="approvals">Pending Approvals</TabsTrigger>
           <TabsTrigger value="leads">Lead Requests</TabsTrigger>
+          <TabsTrigger value="analytics">Analytics</TabsTrigger>
         </TabsList>
 
         <TabsContent value="projects" className="mt-4">
@@ -161,6 +163,10 @@ export default function Admin() {
           <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
             <AdminLeads leads={leads} onStatusChange={handleLeadStatusChange} />
           </div>
+        </TabsContent>
+
+        <TabsContent value="analytics" className="mt-4">
+          <AdminAnalytics />
         </TabsContent>
       </Tabs>
     </div>

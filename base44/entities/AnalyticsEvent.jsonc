@@ -1,0 +1,74 @@
+{
+  "name": "AnalyticsEvent",
+  "type": "object",
+  "properties": {
+    "owner_user_id": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "event_name": {
+      "type": "string"
+    },
+    "event_category": {
+      "type": "string",
+      "enum": [
+        "auth",
+        "onboarding",
+        "scan",
+        "recommendation",
+        "competitor",
+        "report",
+        "help",
+        "billing",
+        "assistant"
+      ]
+    },
+    "page": {
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "created_at": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "owner_user_id",
+    "event_name",
+    "event_category",
+    "created_at"
+  ],
+  "rls": {
+    "create": {
+      "$or": [
+        {
+          "data.owner_user_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "read": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

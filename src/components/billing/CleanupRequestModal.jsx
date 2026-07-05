@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
+import { trackEvent } from "@/lib/analytics";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -77,6 +78,7 @@ export default function CleanupRequestModal({ onClose }) {
         status: "new",
         created_at: new Date().toISOString(),
       });
+      trackEvent("cleanup_requested", { selected_options: selectedOptions, has_scan_summary: Boolean(scanSummary) });
       setSuccess(true);
     } catch (e) {
       setError("Something went wrong. Please try again.");

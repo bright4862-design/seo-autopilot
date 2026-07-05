@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { base44 } from "@/api/base44Client";
+import { trackEvent } from "@/lib/analytics";
 import { Button } from "@/components/ui/button";
 import { customerText, getPriorityLabel } from "@/lib/friendlyLabels";
 
@@ -40,7 +41,7 @@ export default function Developer() {
         <section className="mb-7 overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-sm">
           <div className="flex flex-col gap-4 px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
             <div><h2 className="text-base font-semibold text-slate-950">Need help with these?</h2><p className="mt-1 text-sm leading-6 text-slate-500">Request a review of your scan and next steps.</p></div>
-            <Button className="rounded-full bg-blue-600 px-5 text-sm font-medium text-white shadow-none hover:bg-blue-700">Request help</Button>
+            <Button onClick={() => trackEvent("request_help_clicked", { source: "website_improvements_header" })} className="rounded-full bg-blue-600 px-5 text-sm font-medium text-white shadow-none hover:bg-blue-700">Request help</Button>
           </div>
         </section>
 
@@ -67,7 +68,7 @@ export default function Developer() {
                             {rec.business_impact && <p className="mt-3 text-sm leading-6 text-slate-600"><span className="font-medium text-slate-950">Why it matters:</span> {customerText(rec.business_impact)}</p>}
                             <p className="mt-3 text-xs font-medium text-slate-400">{getPriorityLabel(rec.priority)} · Suggested next step: review</p>
                           </div>
-                          <Button variant="outline" className="rounded-full border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 shadow-none hover:bg-slate-50">Request help</Button>
+                          <Button variant="outline" onClick={() => trackEvent("request_help_clicked", { source: "website_improvement_row", recommendation_id: rec.id })} className="rounded-full border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 shadow-none hover:bg-slate-50">Request help</Button>
                         </div>
                       </div>
                     ))}

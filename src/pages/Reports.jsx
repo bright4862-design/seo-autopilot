@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { base44 } from "@/api/base44Client";
+import { trackEvent } from "@/lib/analytics";
 import { Button } from "@/components/ui/button";
 import { exportScanReportPdf } from "@/lib/exportScanReport";
 import { customerText } from "@/lib/friendlyLabels";
@@ -22,12 +23,14 @@ export default function Reports() {
         base44.entities.CompetitorInsight.filter({ project_id: project.id }),
       ]);
       exportScanReportPdf({ project, crawlJob: jobs[0], issues, devRecs, insights });
+      trackEvent("report_exported", { issue_count: issues.length, has_crawl_job: Boolean(jobs[0]) });
     } finally {
       setExporting(false);
     }
   };
 
   useEffect(() => {
+    trackEvent("scan_report_viewed");
     const load = async () => {
       const projects = await base44.entities.BusinessProject.list("-created_date", 1);
       if (projects.length > 0) {
@@ -62,6 +65,7 @@ export default function Reports() {
       next_steps: "1. Review the Fix List\n2. Approve recommendations that match your business\n3. Request help for larger website improvements\n4. Add competitor pages during your next scan",
     });
     setReports((prev) => [report, ...prev]);
+    trackEvent("report_generated", { report_id: report.id, issue_count: issues.length });
   };
 
   if (loading) return <div className="flex h-64 items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-blue-600" /></div>;

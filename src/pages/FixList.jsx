@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
+import { trackEvent } from "@/lib/analytics";
 import { Button } from "@/components/ui/button";
 import IssueDetailModal from "@/components/issues/IssueDetailModal";
 import ScanHistory from "@/components/dashboard/ScanHistory";
@@ -23,6 +24,7 @@ export default function FixList() {
   const [selectedGroup, setSelectedGroup] = useState(null);
 
   useEffect(() => {
+    trackEvent("fix_list_viewed");
     const load = async () => {
       const projects = await base44.entities.BusinessProject.list("-created_date", 1);
       if (projects.length > 0) {
@@ -37,12 +39,17 @@ export default function FixList() {
 
   const handleStatusUpdate = async (issueId, newStatus) => {
     await base44.entities.SeoIssue.update(issueId, { status: newStatus });
+    const eventName = newStatus === "approved" ? "recommendation_approved" : newStatus === "rejected" ? "recommendation_rejected" : newStatus === "completed" ? "recommendation_marked_reviewed" : null;
+    if (eventName) trackEvent(eventName, { recommendation_id: issueId, status: newStatus });
     setIssues((prev) => prev.map((issue) => (issue.id === issueId ? { ...issue, status: newStatus } : issue)));
     if (selectedIssue?.id === issueId) setSelectedIssue((prev) => ({ ...prev, status: newStatus }));
   };
 
   const startScan = () => navigate("/crawl-status");
-  const openItem = (item) => item.grouped ? setSelectedGroup(item.recommendations) : setSelectedIssue(item);
+  const openItem = (item) => {
+    trackEvent("recommendation_opened", { recommendation_id: item.id, grouped: Boolean(item.grouped), count: item.recommendations?.length || 1 });
+    item.grouped ? setSelectedGroup(item.recommendations) : setSelectedIssue(item);
+  };
 
   if (loading) {
     return <div className="flex h-64 items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-blue-600" /></div>;

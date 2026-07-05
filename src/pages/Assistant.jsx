@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { base44 } from "@/api/base44Client";
+import { trackEvent } from "@/lib/analytics";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import MessageBubble from "@/components/agent/MessageBubble";
@@ -25,6 +26,7 @@ export default function Assistant() {
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
+    trackEvent("assistant_opened");
     loadConversations();
   }, []);
 
@@ -80,6 +82,7 @@ export default function Assistant() {
     try {
       const conv = base44.agents.getConversation(activeId) || { id: activeId };
       await base44.agents.addMessage(conv, { role: "user", content });
+      trackEvent("assistant_message_sent", { conversation_id: activeId, message_length: content.length });
     } catch (e) {
       console.error("Failed to send message", e);
     }

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
+import { flushQueuedEvents } from "@/lib/analytics";
 import { Menu, X } from "lucide-react";
 
 const navItems = [
@@ -30,6 +31,7 @@ export default function DashboardLayout() {
   const location = useLocation();
 
   useEffect(() => {
+    flushQueuedEvents();
     base44.auth.me().then((user) => setIsAdmin(user?.role === "admin")).catch(() => {});
   }, []);
 

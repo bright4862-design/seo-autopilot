@@ -1,7 +1,7 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
 const USER_AGENT =
-  "Mozilla/5.0 (compatible; SEO-Autopilot/3.3; +https://seoautopilot.app/bot)";
+  "Mozilla/5.0 (compatible; SEO-Autopilot/3.4; +https://seoautopilot.app/bot)";
 
 const MAX_HTML_BYTES = 800000;
 const CRAWL_TIME_BUDGET_MS = 95000;
@@ -9,6 +9,8 @@ const LARGE_HTML_BYTES = 500000;
 const HEAVY_SCRIPT_TAG_COUNT = 50;
 const LOW_TEXT_TO_HTML_RATIO = 3;
 const MIN_INTERNAL_LINKS_ON_IMPORTANT_PAGE = 2;
+
+const LANGUAGE_PATHS = ["en", "fr", "es", "de", "it", "pt", "nl"];
 
 const SCAN_MODES = {
   basic: {
@@ -132,6 +134,14 @@ Deno.serve(async (req) => {
       pages_crawled: crawlResult.pages_crawled,
       queued_remaining: crawlResult.queued_remaining,
 
+      crawl_scope: {
+        locked_to_start_language: Boolean(crawlResult.start_path_prefix),
+        start_path_prefix: crawlResult.start_path_prefix || "",
+        explanation: crawlResult.start_path_prefix
+          ? `The crawl was locked to ${crawlResult.start_path_prefix} because the starting URL used that language path.`
+          : "The crawl was not locked to a language path because the starting URL did not use one.",
+      },
+
       crawled_pages: crawlResult.crawled_pages,
       pages: crawlResult.crawled_pages,
       scanned_pages: crawlResult.crawled_pages,
@@ -192,6 +202,8 @@ async function crawlWebsite({
   const queued = new Set();
   const crawled = new Set();
 
+  const startPathPrefix = getStartPathPrefix(websiteUrl);
+
   const robots = await fetchRobotsRules(websiteUrl, config.timeoutMs);
 
   function addToQueue(candidateUrl, source = "internal") {
@@ -199,6 +211,7 @@ async function crawlWebsite({
 
     if (!normalized) return false;
     if (!isSameRegistrableSite(normalized, websiteUrl)) return false;
+    if (!matchesStartPathPrefix(normalized, startPathPrefix)) return false;
     if (isUtilityUrl(normalized)) return false;
     if (queued.has(normalized) || crawled.has(normalized)) return false;
 
@@ -240,6 +253,7 @@ async function crawlWebsite({
       robots,
       timeoutMs: config.timeoutMs,
       maxUrls: config.maxPages * 3,
+      startPathPrefix,
     });
 
     for (const url of sitemapUrls.slice(0, config.maxPages * 3)) {
@@ -301,12 +315,20 @@ async function crawlWebsite({
     );
   }
 
+  if (startPathPrefix) {
+    pushUniqueWarning(
+      crawlWarnings,
+      `The scan was locked to ${startPathPrefix} pages so other language versions were ignored.`
+    );
+  }
+
   return {
     crawled_pages: crawledPages,
     pages_found: queued.size,
     pages_crawled: crawledPages.length,
     queued_remaining: queue.length,
     crawl_warnings: crawlWarnings,
+    start_path_prefix: startPathPrefix,
   };
 }
 
@@ -824,7 +846,7 @@ function addContentFindings(fixes, pages) {
         priority: "medium",
         title: "Add more trust signals to important pages",
         explanation:
-          "Some important service pages may not show enough proof that visitors can trust the business.",
+          "Some important pages may not show enough proof that visitors can trust the business.",
         why:
           "Reviews, credentials, locations, guarantees, and real proof points can help visitors feel more confident.",
         affectedPages: noTrust.map((page) => cleanPath(page.url)),
@@ -845,7 +867,7 @@ function addContentFindings(fixes, pages) {
         priority: "low",
         title: "Add answers to common customer questions",
         explanation:
-          "Some important service pages do not appear to answer common customer questions.",
+          "Some important pages do not appear to answer common customer questions.",
         why:
           "FAQs can help visitors make decisions and can make pages more complete.",
         affectedPages: noFaq.map((page) => cleanPath(page.url)),
@@ -947,8 +969,7 @@ function addScreamingFrogLiteFindings(fixes, pages) {
         customerCategory: "Search appearance",
         priority: "medium",
         title: "Review duplicate search titles",
-        explanation:
-          "Some pages appear to use the same search title.",
+        explanation: "Some pages appear to use the same search title.",
         why:
           "Unique search titles help each page stand out for its own topic.",
         affectedPages: duplicateTitles.flatMap((group) =>
@@ -1006,10 +1027,8 @@ function addScreamingFrogLiteFindings(fixes, pages) {
         customerCategory: "Page content",
         priority: "low",
         title: "Review pages with multiple main headings",
-        explanation:
-          "Some pages appear to have more than one main heading.",
-        why:
-          "One clear main heading can make the page easier to understand.",
+        explanation: "Some pages appear to have more than one main heading.",
+        why: "One clear main heading can make the page easier to understand.",
         affectedPages: multipleH1s.map((page) => cleanPath(page.url)),
         difficulty: "moderate",
         status: "needs_approval",
@@ -1025,8 +1044,7 @@ function addScreamingFrogLiteFindings(fixes, pages) {
         customerCategory: "Technical SEO",
         priority: "low",
         title: "Add preferred-page settings",
-        explanation:
-          "Some pages do not show a preferred page address.",
+        explanation: "Some pages do not show a preferred page address.",
         why:
           "Preferred-page settings help search engines know which version of a page should be treated as the main one.",
         affectedPages: missingCanonicals.map((page) => cleanPath(page.url)),
@@ -1062,7 +1080,7 @@ function addScreamingFrogLiteFindings(fixes, pages) {
         category: "indexability",
         customerCategory: "Technical SEO",
         priority: "high",
-        title: "Review pages that may not be indexable",
+        title: "Review pages that may not be visible to search engines",
         explanation:
           "Some pages may be telling search engines not to show them in results.",
         why:
@@ -1120,8 +1138,7 @@ function addScreamingFrogLiteFindings(fixes, pages) {
         customerCategory: "Website setup",
         priority: "low",
         title: "Add descriptive text to important images",
-        explanation:
-          "Some images may be missing descriptive alt text.",
+        explanation: "Some images may be missing descriptive alt text.",
         why:
           "Image descriptions help accessibility and can help search engines understand image content.",
         affectedPages: imageAlt.map((page) => cleanPath(page.url)),
@@ -1438,6 +1455,7 @@ function buildScanSummary({
   crawlWarnings,
 }) {
   const positives = buildPositiveFindings(pages);
+  const score = calculateHealthScore(fixes);
   const summaryParts = [];
 
   if (positives.length > 0) {
@@ -1481,8 +1499,15 @@ function buildScanSummary({
   }
 
   return {
-    score: calculateHealthScore(fixes),
-    status_label: calculateHealthScore(fixes) >= 80 ? "Strong" : "Needs work",
+    score,
+    status_label:
+      score >= 85
+        ? "Great shape"
+        : score >= 70
+          ? "Good start"
+          : score >= 45
+            ? "Needs attention"
+            : "Needs urgent attention",
     plain_english_summary: summaryParts.join(" "),
     pages_scanned: pages.length,
     pages_failed: pages.filter((page) => {
@@ -1509,7 +1534,7 @@ function buildPositiveFindings(pages) {
   );
 
   if (successful.length > 0) {
-    positives.push("The scanner was able to read at least one page.");
+    positives.push("The scanner was able to read your pages.");
   }
 
   if (successful.some((page) => page.title && page.meta_description)) {
@@ -1750,7 +1775,13 @@ function robotsPathMatches(pattern, path) {
   return regex.test(path);
 }
 
-async function discoverSitemapUrls({ websiteUrl, robots, timeoutMs, maxUrls }) {
+async function discoverSitemapUrls({
+  websiteUrl,
+  robots,
+  timeoutMs,
+  maxUrls,
+  startPathPrefix,
+}) {
   const origin = new URL(websiteUrl).origin;
   const sitemapQueue = unique([
     ...(robots?.sitemaps || []),
@@ -1805,7 +1836,10 @@ async function discoverSitemapUrls({ websiteUrl, robots, timeoutMs, maxUrls }) {
           continue;
         }
 
-        if (!isUtilityUrl(normalized)) {
+        if (
+          !isUtilityUrl(normalized) &&
+          matchesStartPathPrefix(normalized, startPathPrefix)
+        ) {
           pageUrls.push(normalized);
         }
 
@@ -2015,7 +2049,7 @@ function detectTrustSignals(text) {
   const signals = [];
 
   const checks = [
-    ["reviews", ["review", "reviews", "testimonial", "testimonials"]],
+    ["reviews", ["review", "reviews", "testimonial", "testimonials", "avis"]],
     ["awards", ["award", "awards", "certified", "certification"]],
     ["experience", ["years of experience", "since 19", "since 20"]],
     ["guarantee", ["guarantee", "warranty"]],
@@ -2044,6 +2078,9 @@ function detectCtaPhrases(text) {
     "reserve",
     "learn more",
     "sign up",
+    "réserver",
+    "voir",
+    "découvrir",
   ];
 
   return phrases.filter((phrase) => lower.includes(phrase));
@@ -2176,6 +2213,35 @@ function isSameRegistrableSite(a, b) {
   }
 }
 
+function getStartPathPrefix(startUrl) {
+  try {
+    const path = new URL(startUrl).pathname.toLowerCase();
+    const match = path.match(/^\/([a-z]{2})(\/|$)/i);
+
+    if (!match) return "";
+
+    const language = match[1].toLowerCase();
+
+    if (!LANGUAGE_PATHS.includes(language)) return "";
+
+    return `/${language}`;
+  } catch {
+    return "";
+  }
+}
+
+function matchesStartPathPrefix(candidateUrl, startPathPrefix) {
+  if (!startPathPrefix) return true;
+
+  try {
+    const path = new URL(candidateUrl).pathname.toLowerCase();
+
+    return path === startPathPrefix || path.startsWith(`${startPathPrefix}/`);
+  } catch {
+    return false;
+  }
+}
+
 function isSitemapUrl(url) {
   try {
     const path = new URL(url).pathname.toLowerCase();
@@ -2204,6 +2270,9 @@ function isUtilityUrl(url) {
       /\/terms/i,
       /\/cookie/i,
       /\/cookies/i,
+      /\/cgu/i,
+      /\/mentions-legales/i,
+      /\/legal/i,
     ];
 
     return utilityPatterns.some((pattern) => pattern.test(path));
@@ -2218,7 +2287,16 @@ function isImportantPage(url) {
 
     if (path === "/" || path === "") return true;
 
-    return /\/(service|services|product|products|activity|activities|booking|experience|experiences|tour|tours|things-to-do|electricite|energie|wine|wines|shop|about|contact|location|locations)/i.test(
+    const languageRoot = path.match(/^\/([a-z]{2})\/?$/i);
+
+    if (
+      languageRoot &&
+      LANGUAGE_PATHS.includes(languageRoot[1].toLowerCase())
+    ) {
+      return true;
+    }
+
+    return /\/(service|services|product|products|activity|activities|booking|experience|experiences|tour|tours|things-to-do|electricite|energie|wine|wines|shop|about|contact|location|locations|listing|annonce|reservation|category|categories|guide|guides)/i.test(
       path
     );
   } catch {

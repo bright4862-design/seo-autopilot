@@ -4,24 +4,16 @@ const GOOGLE_API_KEY_NAME = "GOOGLE_" + "CUSTOM_SEARCH_API_KEY";
 const GOOGLE_CX_NAME = "GOOGLE_" + "CUSTOM_SEARCH_CX";
 
 const USER_AGENT =
-  "Mozilla/5.0 (compatible; SEO-Autopilot/2.2; +https://seoautopilot.app/bot)";
+  "Mozilla/5.0 (compatible; SEO-Autopilot/2.3; +https://seoautopilot.app/bot)";
 
-// Lowercase token used to match our crawler in robots.txt User-agent groups.
 const ROBOTS_AGENT_TOKEN = "seo-autopilot";
-
-// Hard wall-clock budget for the crawl loop so the function never dies
-// mid-flight. Tune to roughly 80% of your platform's function timeout.
 const CRAWL_TIME_BUDGET_MS = 100000;
-
-// Cap how much HTML we regex per page so one bloated page can't eat the CPU.
 const MAX_HTML_BYTES = 800000;
 
 const SCAN_LIMITS = {
-  // "basic" exists so the old lightweight scanner can be retired:
-  // point the frontend at this function with scan_mode: "basic".
   basic: {
     maxPages: 25,
-    concurrency: 6,
+    concurrency: 5,
     timeoutMs: 10000,
     useSitemap: false,
     discoverCompetitors: false,
@@ -37,9 +29,6 @@ const SCAN_LIMITS = {
     maxCompetitorSnapshots: 3,
     maxKeywords: 4,
   },
-  // Deep is capped at 200 pages per invocation. For larger sites, add
-  // resumable chunks: persist the frontier + pages to a ScanJob entity
-  // keyed by crawl_job_id and re-invoke until the queue is empty.
   deep: {
     maxPages: 200,
     concurrency: 10,
@@ -80,9 +69,6 @@ const MEANINGFUL_SCHEMA_TYPES = new Set([
   "WebSite",
 ]);
 
-// Strong placeholder patterns fire on a single hit; weak ones need >= 2
-// distinct hits on the same page, because words like "null" or "placeholder"
-// show up in legitimate copy (legal text, articles about design, etc.).
 const PLACEHOLDER_STRONG = [
   [/\[object Object\]/, "[object Object]"],
   [/\{\{[^}]*\}\}/, "{{ }}"],
@@ -164,8 +150,6 @@ Deno.serve(async (req) => {
     const crawlWarnings = [];
     const competitorWarnings = [];
 
-    // The site crawl and the competitor pipeline are independent, so run
-    // them concurrently instead of one after the other.
     const [site, competitors] = await Promise.all([
       runSitePipeline({ origin, domain, normalizedUrl, limits, crawlWarnings }),
       runCompetitorPipeline({
@@ -232,6 +216,32 @@ Deno.serve(async (req) => {
       competitorComparison,
     });
 
+    const scanSummary = {
+      score: healthScore,
+      status_label:
+        healthScore >= 80
+          ? "Strong"
+          : healthScore >= 60
+            ? "Good start"
+            : healthScore >= 40
+              ? "Needs work"
+              : "Needs urgent attention",
+      plain_english_summary:
+        siteSummary.plain_english_summary ||
+        "The scan completed. Review the recommended actions below.",
+      pages_scanned: crawlResult.pages.length,
+      pages_failed: crawlResult.failed.length,
+      high_priority_count: groupedFindings.filter((fix) =>
+        ["critical", "high"].includes(fix.priority)
+      ).length,
+      competitor_gap_count: groupedFindings.filter(
+        (fix) =>
+          fix.category === "competitor_gap" ||
+          fix.customer_category === "Competitor opportunities"
+      ).length,
+      positive_findings: siteSummary.positives.join(" "),
+    };
+
     return Response.json({
       success: true,
       scan_mode: scanMode,
@@ -239,13 +249,27 @@ Deno.serve(async (req) => {
       normalized_url: normalizedUrl,
       domain,
       scan_duration_ms: Date.now() - startedAt,
+
       pages_crawled: crawlResult.pages.length,
       pages_found: crawlResult.pagesFound,
       queued_remaining: crawlResult.queuedRemaining,
       health_score: healthScore,
+
       crawled_pages: crawlResult.pages,
+      pages: crawlResult.pages,
+
       raw_findings: rawFindings,
       grouped_findings: groupedFindings,
+
+      // Compatibility aliases. These prevent the AI review and UI from losing recommendations.
+      raw_fixes: groupedFindings,
+      fixes: groupedFindings,
+      findings: groupedFindings,
+      recommendations: groupedFindings,
+
+      scan_summary: scanSummary,
+      site_summary: siteSummary,
+
       broken_links: brokenLinks,
       discovered_competitors: discoveredCompetitors,
       created_competitors: createdCompetitors,
@@ -255,8 +279,8 @@ Deno.serve(async (req) => {
       client_rendering: clientRendering,
       competitor_urls,
       crawl_job_id,
-      site_summary: siteSummary,
       crawl_warnings: crawlWarnings,
+
       html_only_scan: true,
       javascript_rendering_used: false,
       deterministic_scan: true,
@@ -392,10 +416,6 @@ async function runCompetitorPipeline({
 
 /* ------------------------------- Crawl -------------------------------- */
 
-// Worker-pool crawler: every slot stays busy instead of waiting for the
-// slowest page in a batch. The queue is priority-sorted lazily (only when
-// dirty and only when a worker pulls the next item) instead of on every
-// insert, and priority scores are cached per URL.
 async function crawlWebsite({
   startUrl,
   domain,
@@ -440,7 +460,6 @@ async function crawlWebsite({
 
   addToQueue(startUrl, "start");
 
-  // Don't seed more sitemap URLs than the scan can possibly use.
   for (const url of (sitemapUrls || []).slice(0, maxPages * 2)) {
     addToQueue(url, "sitemap");
   }
@@ -452,6 +471,7 @@ async function crawlWebsite({
       );
       queueDirty = false;
     }
+
     return queue.shift();
   };
 
@@ -473,9 +493,9 @@ async function crawlWebsite({
       }
 
       queued.delete(item.url);
+
       if (seen.has(item.url)) continue;
       seen.add(item.url);
-
       inFlight++;
 
       try {
@@ -486,13 +506,13 @@ async function crawlWebsite({
           item.source
         );
 
-        const finalUrl = canonicalizeUrl(
-          page.url || page.final_url || item.url
-        );
+        const finalUrl = canonicalizeUrl(page.url || page.final_url || item.url);
 
         if (finalUrl && finalUrl !== item.url) {
-          // Redirect landed on a URL we already captured.
-          if (seen.has(finalUrl)) continue;
+          if (seen.has(finalUrl)) {
+            continue;
+          }
+
           seen.add(finalUrl);
         }
 
@@ -542,107 +562,6 @@ async function crawlWebsite({
     pagesFound: finalPages.length + queue.length,
     queuedRemaining: queue.length,
     failed,
-  };
-}
-
-// All competitor snapshots are fetched in parallel instead of one by one.
-async function crawlCompetitorSnapshots({
-  competitorResults,
-  maxSnapshots,
-  timeoutMs,
-}) {
-  const selected = stableDedupeCompetitors(competitorResults).slice(
-    0,
-    maxSnapshots
-  );
-
-  const snapshots = await Promise.all(
-    selected.map(async (competitor) => {
-      const url = competitor.url || competitor.website_url;
-      const domain = getDomain(url);
-
-      if (!url || !domain) return null;
-
-      const base = {
-        competitor_name: competitor.name || formatDomainName(domain),
-        competitor_domain: domain,
-        competitor_url: url,
-        source: competitor.source || "google_custom_search",
-        keyword: competitor.keyword || "",
-        serp_position: competitor.position || null,
-        serp_title: competitor.title || "",
-        serp_snippet: competitor.snippet || "",
-      };
-
-      try {
-        const page = await withTimeout(
-          fetchAndExtractPage(url, domain, timeoutMs, "competitor_serp"),
-          timeoutMs + 2000,
-          "Competitor page crawl"
-        );
-
-        return {
-          ...base,
-          status_code: page.status_code,
-          title: page.title,
-          meta_description: page.meta_description,
-          h1: page.h1,
-          h2s: page.h2s || [],
-          h3s: page.h3s || [],
-          word_count: page.word_count || 0,
-          has_faq: Boolean(page.has_faq),
-          faq_questions: page.faq_questions || [],
-          has_schema: Boolean(page.has_schema),
-          schema_types: page.schema_types || [],
-          has_phone: Boolean(page.has_phone),
-          has_email: Boolean(page.has_email),
-          cta_phrases: page.cta_phrases || [],
-          trust_signals: page.trust_signals || [],
-          visible_text_sample: String(page.visible_text_sample || "").slice(
-            0,
-            1800
-          ),
-        };
-      } catch {
-        return {
-          ...base,
-          ...emptySnapshotFields(),
-          fetch_error: "Could not read competitor page",
-        };
-      }
-    })
-  );
-
-  return snapshots
-    .filter(Boolean)
-    .sort((a, b) => {
-      const aPos = a.serp_position || 99;
-      const bPos = b.serp_position || 99;
-      if (aPos !== bPos) return aPos - bPos;
-      return String(a.competitor_domain).localeCompare(
-        String(b.competitor_domain)
-      );
-    });
-}
-
-function emptySnapshotFields() {
-  return {
-    status_code: 0,
-    title: "",
-    meta_description: "",
-    h1: "",
-    h2s: [],
-    h3s: [],
-    word_count: 0,
-    has_faq: false,
-    faq_questions: [],
-    has_schema: false,
-    schema_types: [],
-    has_phone: false,
-    has_email: false,
-    cta_phrases: [],
-    trust_signals: [],
-    visible_text_sample: "",
   };
 }
 
@@ -772,9 +691,7 @@ function extractPageData({
     crawl_source: source,
     status_code: status,
     content_type: contentType,
-    redirected: Boolean(
-      originalNormalized && originalNormalized !== normalizedUrl
-    ),
+    redirected: Boolean(originalNormalized && originalNormalized !== normalizedUrl),
     title,
     meta_description: metaDescription,
     h1,
@@ -812,8 +729,6 @@ function extractPageData({
     placeholder_text: placeholder.hits,
     placeholder_strong: placeholder.strong,
     script_tag_count: scriptTagCount,
-    // Very little visible text + lots of scripts on a 2xx page usually means
-    // the content is built in the browser (client-side rendering).
     likely_client_rendered:
       status >= 200 && status < 300 && wordCount < 80 && scriptTagCount > 10,
     is_utility_page: isUtilityPath(path),
@@ -877,7 +792,109 @@ function emptyPage({
   };
 }
 
-/* --------------------- Client-side rendering check --------------------- */
+/* ---------------------- Competitor snapshots ------------------------- */
+
+async function crawlCompetitorSnapshots({
+  competitorResults,
+  maxSnapshots,
+  timeoutMs,
+}) {
+  const selected = stableDedupeCompetitors(competitorResults).slice(
+    0,
+    maxSnapshots
+  );
+
+  const snapshots = await Promise.all(
+    selected.map(async (competitor) => {
+      const url = competitor.url || competitor.website_url;
+      const domain = getDomain(url);
+
+      if (!url || !domain) return null;
+
+      const base = {
+        competitor_name: competitor.name || formatDomainName(domain),
+        competitor_domain: domain,
+        competitor_url: url,
+        source: competitor.source || "google_custom_search",
+        keyword: competitor.keyword || "",
+        serp_position: competitor.position || null,
+        serp_title: competitor.title || "",
+        serp_snippet: competitor.snippet || "",
+      };
+
+      try {
+        const page = await withTimeout(
+          fetchAndExtractPage(url, domain, timeoutMs, "competitor_serp"),
+          timeoutMs + 2000,
+          "Competitor page crawl"
+        );
+
+        return {
+          ...base,
+          status_code: page.status_code,
+          title: page.title,
+          meta_description: page.meta_description,
+          h1: page.h1,
+          h2s: page.h2s || [],
+          h3s: page.h3s || [],
+          word_count: page.word_count || 0,
+          has_faq: Boolean(page.has_faq),
+          faq_questions: page.faq_questions || [],
+          has_schema: Boolean(page.has_schema),
+          schema_types: page.schema_types || [],
+          has_phone: Boolean(page.has_phone),
+          has_email: Boolean(page.has_email),
+          cta_phrases: page.cta_phrases || [],
+          trust_signals: page.trust_signals || [],
+          visible_text_sample: String(page.visible_text_sample || "").slice(
+            0,
+            1800
+          ),
+        };
+      } catch {
+        return {
+          ...base,
+          ...emptySnapshotFields(),
+          fetch_error: "Could not read competitor page",
+        };
+      }
+    })
+  );
+
+  return snapshots
+    .filter(Boolean)
+    .sort((a, b) => {
+      const aPos = a.serp_position || 99;
+      const bPos = b.serp_position || 99;
+      if (aPos !== bPos) return aPos - bPos;
+      return String(a.competitor_domain).localeCompare(
+        String(b.competitor_domain)
+      );
+    });
+}
+
+function emptySnapshotFields() {
+  return {
+    status_code: 0,
+    title: "",
+    meta_description: "",
+    h1: "",
+    h2s: [],
+    h3s: [],
+    word_count: 0,
+    has_faq: false,
+    faq_questions: [],
+    has_schema: false,
+    schema_types: [],
+    has_phone: false,
+    has_email: false,
+    cta_phrases: [],
+    trust_signals: [],
+    visible_text_sample: "",
+  };
+}
+
+/* --------------------- Client rendering / comparison ------------------ */
 
 function detectClientRendering(pages) {
   const candidates = (pages || []).filter(
@@ -899,10 +916,6 @@ function detectClientRendering(pages) {
   };
 }
 
-/* ---------------------- Competitor comparison ------------------------- */
-
-// Deterministic your-site-vs-competitors deltas. The AI layer narrates these
-// facts instead of guessing from raw snapshots.
 function buildCompetitorComparison({ pages, snapshots }) {
   const yours = (pages || []).filter(
     (p) =>
@@ -944,7 +957,7 @@ function buildCompetitorComparison({ pages, snapshots }) {
         meaningful.length > 0 &&
         meaningful.every((w) => yourHeadingText.includes(w))
       ) {
-        continue; // your pages already cover this topic
+        continue;
       }
 
       const entry =
@@ -1048,9 +1061,6 @@ function analyzePages({
     const isImportant =
       page.is_important_page || isImportantPage(path, page.title, page.h1);
 
-    // When the site builds pages in the browser, content-based checks on the
-    // initial HTML would produce false positives — suppress those checks for
-    // flagged pages (titles/descriptions live in the static head, so keep them).
     const contentSuppressed = Boolean(
       clientRendering?.detected && page.likely_client_rendered
     );
@@ -1094,8 +1104,6 @@ function analyzePages({
       placeholderPages.push({ page: path, hits: page.placeholder_text });
     }
 
-    // FAQ / CTA / trust checks only make sense on service-like pages —
-    // a contact or about page without an FAQ is not an issue.
     if (page.is_service_like && !contentSuppressed) {
       if (!page.has_faq) faqGapPages.push(page);
 
@@ -1126,11 +1134,11 @@ function analyzePages({
         title:
           "Your website builds pages in the browser, which limits what search engines read first",
         explanation:
-          "Several important pages send very little text in their initial code and rely on scripts to fill in the content afterwards. This scan reads the initial code, the same way search engines start.",
+          "Several important pages send very little text in their initial code and rely on scripts to fill in the content afterwards.",
         why:
-          "When key content only appears after scripts run, search engines can take longer to read it or may miss parts of it — and some checks in this report may under-count your content.",
+          "When key content only appears after scripts run, search engines can take longer to read it or may miss parts of it.",
         recommendation:
-          "Ask your website platform or developer whether important pages can include their main content directly in the page code (often called server-side rendering or static pages).",
+          "Ask your website platform or developer whether important pages can include their main content directly in the page code.",
         current: `${clientRendering.flagged_pages.length} of ${clientRendering.checked_pages} important pages affected`,
         priority: "high",
         status: "needs_developer",
@@ -1537,9 +1545,6 @@ function analyzePages({
   return dedupeFindings(findings);
 }
 
-// One finding per real, measured gap — not a single vague "look at
-// competitors" card. Falls back to the generic card only when snapshots
-// exist but a comparison couldn't be built.
 function buildComparisonFindings({ comparison, snapshots }) {
   const findings = [];
 
@@ -1773,6 +1778,31 @@ function groupAndPrioritizeFindings(findings) {
     .slice(0, 28);
 }
 
+function dedupeFindings(findings) {
+  const map = new Map();
+
+  for (const finding of findings || []) {
+    const key =
+      finding.id ||
+      `${finding.category}|${finding.issue_title}|${(finding.affected_pages || []).join(",")}`;
+
+    if (!map.has(key)) {
+      map.set(key, finding);
+      continue;
+    }
+
+    const existing = map.get(key);
+    map.set(key, {
+      ...existing,
+      affected_pages: Array.from(
+        new Set([...(existing.affected_pages || []), ...(finding.affected_pages || [])])
+      ).slice(0, 150),
+    });
+  }
+
+  return Array.from(map.values());
+}
+
 function detectDuplicateTitles(pages) {
   const map = new Map();
   const findings = [];
@@ -1896,8 +1926,6 @@ async function discoverCompetitorsFromGoogle({
 
   const ownDomain = getDomain(website_url);
 
-  // Keyword count is a plan-tier knob: Google CSE free tier is 100
-  // queries/day, so more keywords per scan means fewer scans per day.
   const keywords = buildCompetitorKeywords({
     business_name,
     business_type,
@@ -1905,7 +1933,6 @@ async function discoverCompetitorsFromGoogle({
     important_keywords,
   }).slice(0, Math.max(1, maxKeywords || 4));
 
-  // All searches run in parallel — 4–5 queries take ~as long as one.
   const runs = await Promise.all(
     keywords.map(async (keyword) => {
       try {
@@ -1935,7 +1962,6 @@ async function discoverCompetitorsFromGoogle({
   for (const run of runs) {
     for (const item of run.items) {
       const domain = getDomain(item.url);
-
       if (!isValidCompetitorDomain(domain, ownDomain)) continue;
 
       results.push({
@@ -2156,7 +2182,7 @@ function mergeCompetitorResults({ own_url, existing, manual, discovered, created
 
     const candidate = {
       name: item.name || formatDomainName(domain),
-      website_url: website_url,
+      website_url,
       url: item.original_result_url || website_url,
       domain,
       source: item.source || (item.keyword ? "google_custom_search" : "saved"),
@@ -2282,9 +2308,6 @@ async function readRobotsTxt(origin, warnings) {
   }
 }
 
-// Group-aware robots.txt parsing: only Disallow rules from groups that
-// target "*" or our own crawler apply. A Disallow aimed at some other bot
-// no longer blocks the scan. (Allow precedence is intentionally skipped.)
 function parseRobotsTxt(text) {
   const lines = String(text || "").split(/\r?\n/);
   const disallow = [];
@@ -2318,6 +2341,7 @@ function parseRobotsTxt(text) {
         currentAgents = [];
         collectingAgents = true;
       }
+
       if (value) currentAgents.push(value.toLowerCase());
       continue;
     }
@@ -2332,7 +2356,6 @@ function parseRobotsTxt(text) {
       continue;
     }
 
-    // Any other directive (crawl-delay, etc.) also ends agent collection.
     collectingAgents = false;
   }
 
@@ -2350,37 +2373,41 @@ function isBlockedByRobots(url, robots) {
 
   return robots.disallow.some((rule) => {
     if (!rule || rule === "/") return false;
-    return path.startsWith(rule);
+
+    const cleanRule = rule.split("*")[0];
+    if (!cleanRule) return false;
+
+    return path.startsWith(cleanRule);
   });
 }
 
 async function discoverSitemapUrls(origin, domain, robots, warnings) {
-  const candidates = Array.from(
-    new Set([
-      ...(robots?.sitemaps || []),
-      `${origin}/sitemap.xml`,
-      `${origin}/sitemap_index.xml`,
-      `${origin}/wp-sitemap.xml`,
-      `${origin}/page-sitemap.xml`,
-    ])
-  ).sort();
+  const candidates = [
+    ...(robots?.sitemaps || []),
+    `${origin}/sitemap.xml`,
+    `${origin}/sitemap_index.xml`,
+  ];
 
-  // All candidate sitemaps are read in parallel.
-  const results = await Promise.all(
-    candidates.map(async (sitemapUrl) => {
-      try {
-        return await readSitemap(sitemapUrl, domain, warnings, 0);
-      } catch {
-        warnings.push(`Could not read sitemap: ${sitemapUrl}`);
-        return [];
-      }
-    })
+  const all = [];
+
+  for (const sitemapUrl of Array.from(new Set(candidates))) {
+    try {
+      const urls = await fetchSitemapUrls(sitemapUrl, domain, 0);
+      all.push(...urls);
+    } catch {
+      warnings.push(`Could not read sitemap: ${sitemapUrl}`);
+    }
+  }
+
+  return stableSortUrls(
+    Array.from(new Set(all))
+      .filter((url) => isSameDomain(url, domain))
+      .filter((url) => !isAssetUrl(url))
+      .filter((url) => !isUtilityUrl(url))
   );
-
-  return stableSortUrls(results.flat()).slice(0, 1200);
 }
 
-async function readSitemap(sitemapUrl, domain, warnings, depth) {
+async function fetchSitemapUrls(sitemapUrl, domain, depth) {
   if (depth > 2) return [];
 
   const response = await withTimeout(
@@ -2390,33 +2417,22 @@ async function readSitemap(sitemapUrl, domain, warnings, depth) {
         accept: "application/xml,text/xml,*/*",
       },
     }),
-    7000,
-    "Sitemap fetch"
+    8000,
+    "sitemap"
   );
 
   if (!response.ok) return [];
 
   const xml = await response.text();
-  const urls = extractUrlsFromSitemap(xml);
+  const locs = extractUrlsFromSitemap(xml);
 
-  const sitemapChildren = urls.filter((url) => /sitemap/i.test(url));
-  const pageUrls = urls.filter(
-    (url) =>
-      isSameDomain(url, domain) && !isAssetUrl(url) && !/sitemap/i.test(url)
-  );
+  const sitemapLocs = locs.filter((url) => /\.xml($|\?)/i.test(url));
+  const pageUrls = locs.filter((url) => !/\.xml($|\?)/i.test(url));
 
   const childResults = await Promise.all(
-    sitemapChildren
-      .slice(0, 10)
-      .sort()
-      .map(async (child) => {
-        try {
-          return await readSitemap(child, domain, warnings, depth + 1);
-        } catch {
-          warnings.push(`Could not read nested sitemap: ${child}`);
-          return [];
-        }
-      })
+    sitemapLocs.slice(0, 10).map((child) =>
+      fetchSitemapUrls(child, domain, depth + 1).catch(() => [])
+    )
   );
 
   pageUrls.push(...childResults.flat());
@@ -2534,71 +2550,71 @@ function buildSiteSummary({
     positives.push("Your site includes structured trust or business information.");
   }
 
+  const plainParts = [];
+
+  if (groupedFindings.length === 0) {
+    plainParts.push(
+      "No major issues stood out from the pages we could access."
+    );
+  } else {
+    const high = groupedFindings.filter((f) =>
+      ["critical", "high"].includes(f.priority)
+    ).length;
+
+    plainParts.push(
+      high > 0
+        ? `We found ${high} high-priority improvement${high === 1 ? "" : "s"} to review first.`
+        : "We found a few medium and low-priority improvements to review."
+    );
+  }
+
+  if (competitorComparison?.competitors_compared?.length) {
+    plainParts.push(
+      `We compared your site with ${competitorComparison.competitors_compared.length} competitor page${competitorComparison.competitors_compared.length === 1 ? "" : "s"} found through Google results.`
+    );
+  }
+
+  if (clientRendering?.detected) {
+    plainParts.push(
+      "Some important pages appear to rely heavily on browser-rendered content, so content checks may need manual review."
+    );
+  }
+
   return {
     positives,
+    plain_english_summary: plainParts.join(" "),
     raw_findings_count: rawFindings.length,
     total_findings: groupedFindings.length,
     important_pages_found: importantPages.length,
     pages_with_faq: pagesWithFaq.length,
     pages_with_trust_signals: pagesWithTrust.length,
-    pages_with_calls_to_action: pagesWithCta.length,
+    pages_with_cta: pagesWithCta.length,
     pages_with_schema: pagesWithSchema.length,
     noindex_pages: noindexPages.length,
     scan_mode: scanMode,
     sitemap_urls_found: sitemapUrls.length,
-    robots_txt_found: Boolean(robots?.found),
-    discovered_competitor_count: discoveredCompetitors.length,
-    competitor_pages_reviewed: competitorPageSnapshots.length,
+    robots_found: Boolean(robots?.found),
     broken_links_count: brokenLinks.length,
-    client_rendering_detected: Boolean(clientRendering?.detected),
-    client_rendered_pages: clientRendering?.flagged_pages?.length || 0,
-    competitor_comparison_available: Boolean(competitorComparison),
-    competitor_topic_gaps_found: competitorComparison?.topic_gaps?.length || 0,
-    html_only_scan: true,
-    javascript_rendering_used: false,
-    deterministic_scan: true,
+    competitors_found: discoveredCompetitors.length,
+    competitor_snapshots_read: competitorPageSnapshots.length,
+    client_rendering,
   };
 }
 
 function calculateHealthScore(findings) {
-  let score = 94;
+  let score = 100;
 
-  for (const finding of findings) {
-    if (finding.priority === "critical") score -= 9;
-    else if (finding.priority === "high") score -= 6;
-    else if (finding.priority === "medium") score -= 4;
-    else score -= 1;
+  for (const finding of findings || []) {
+    if (finding.priority === "critical") score -= 16;
+    else if (finding.priority === "high") score -= 10;
+    else if (finding.priority === "medium") score -= 5;
+    else if (finding.priority === "low") score -= 2;
   }
 
-  return Math.max(45, Math.min(100, score));
+  return Math.max(0, Math.min(100, score));
 }
 
-/* ------------------------------ Helpers -------------------------------- */
-
-function priorityScore(url) {
-  const path = getPath(url).toLowerCase();
-
-  if (path === "/") return 100;
-  if (/service|services|loan|loans|program|programs|product|products/i.test(path)) return 95;
-  if (/location|locations|areas-we-serve|city/i.test(path)) return 85;
-  if (/about|contact|pricing|book|appointment|apply/i.test(path)) return 75;
-  if (/case-study|case-studies|portfolio|projects/i.test(path)) return 65;
-  if (/blog|article|news|resources/i.test(path)) return 35;
-
-  return 50;
-}
-
-// Priority scores are computed once per URL, not once per comparison.
-function stableSortUrls(urls) {
-  const unique = Array.from(
-    new Set((urls || []).map(canonicalizeUrl).filter(Boolean))
-  );
-
-  return unique
-    .map((url) => ({ url, priority: priorityScore(url) }))
-    .sort((a, b) => b.priority - a.priority || a.url.localeCompare(b.url))
-    .map((item) => item.url);
-}
+/* ------------------------------- Helpers ------------------------------- */
 
 function normalizeStartUrl(input) {
   let url = String(input || "").trim();
@@ -2694,7 +2710,7 @@ function isSameDomain(input, domain) {
 }
 
 function isAssetUrl(input) {
-  return ASSET_RE.test(input);
+  return ASSET_RE.test(String(input || "").split("?")[0]);
 }
 
 function isUtilityUrl(input) {
@@ -2715,10 +2731,21 @@ function isServiceLikePage(path, title = "", h1 = "") {
   return SERVICE_LIKE_RE.test(`${path}|${title}|${h1}`);
 }
 
+function priorityScore(url) {
+  const path = getPath(url).toLowerCase();
+
+  if (path === "/") return 100;
+  if (/service|services|product|products|program|programs|loan|loans|pricing|packages/.test(path)) return 90;
+  if (/about|contact|location|locations|areas-we-serve|service-area/.test(path)) return 80;
+  if (/case-study|case-studies|portfolio|work|projects/.test(path)) return 70;
+  if (/blog|article|news|guide/.test(path)) return 45;
+  return 50;
+}
+
 function extractVisibleText(html) {
   return cleanText(
     decodeHtml(
-      html
+      String(html || "")
         .replace(/<script[\s\S]*?<\/script>/gi, " ")
         .replace(/<style[\s\S]*?<\/style>/gi, " ")
         .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
@@ -2733,151 +2760,123 @@ function extractLinks(html, baseUrl) {
   const re = /<a[^>]+href=["']([^"']+)["'][^>]*>/gi;
   let match;
 
-  while ((match = re.exec(html)) !== null) {
+  while ((match = re.exec(String(html || ""))) !== null) {
     const href = match[1];
 
     if (!href) continue;
-    if (href.startsWith("#")) continue;
-    if (/^(mailto:|tel:|sms:|javascript:)/i.test(href)) continue;
+    if (/^(mailto:|tel:|javascript:|#)/i.test(href)) continue;
 
     const absolute = absolutizeUrl(href, baseUrl);
-
-    if (absolute && !isAssetUrl(absolute)) {
-      links.push(absolute);
-    }
+    if (absolute) links.push(absolute);
   }
 
-  return stableSortUrls(links);
+  return stableSortUrls(Array.from(new Set(links)));
 }
 
-function extractHeadings(html) {
-  return {
-    h2s: matchAllClean(html, /<h2[^>]*>([\s\S]*?)<\/h2>/gi).slice(0, 50),
-    h3s: matchAllClean(html, /<h3[^>]*>([\s\S]*?)<\/h3>/gi).slice(0, 80),
-  };
-}
-
-function extractImages(html, baseUrl = "") {
+function extractImages(html, baseUrl) {
   const images = [];
-  const re = /<img[^>]*>/gi;
+  const re = /<img\b[^>]*>/gi;
   let match;
 
-  while ((match = re.exec(html)) !== null) {
+  while ((match = re.exec(String(html || ""))) !== null) {
     const tag = match[0];
-
     const src =
-      matchFirst(tag, /src=["']([^"']+)["']/i) ||
-      matchFirst(tag, /data-src=["']([^"']+)["']/i) ||
-      matchFirst(tag, /data-lazy-src=["']([^"']+)["']/i) ||
+      matchFirst(tag, /\bsrc=["']([^"']+)["']/i) ||
+      matchFirst(tag, /\bdata-src=["']([^"']+)["']/i) ||
       "";
 
-    const alt = cleanText(decodeHtml(matchFirst(tag, /alt=["']([^"']*)["']/i)));
+    if (!src) continue;
+
+    const alt = matchFirst(tag, /\balt=["']([^"']*)["']/i);
 
     images.push({
-      src: src ? absolutizeUrl(src, baseUrl) : "",
-      alt,
-      has_alt: Boolean(alt),
+      src: absolutizeUrl(src, baseUrl),
+      alt: cleanText(alt),
+      has_alt: Boolean(cleanText(alt)),
     });
   }
 
   return images.slice(0, 200);
 }
 
+function extractHeadings(html) {
+  return {
+    h2s: matchAllClean(html, /<h2[^>]*>([\s\S]*?)<\/h2>/gi)
+      .filter((h) => !HEADING_JUNK_RE.test(h))
+      .slice(0, 30),
+    h3s: matchAllClean(html, /<h3[^>]*>([\s\S]*?)<\/h3>/gi)
+      .filter((h) => !HEADING_JUNK_RE.test(h))
+      .slice(0, 40),
+  };
+}
+
 function extractQuestions(text) {
-  return text
-    .split(/(?<=[?.!])\s+/)
-    .map(cleanText)
-    .filter((line) => line.endsWith("?"))
-    .slice(0, 30);
+  const output = [];
+  const re = /([^?.!]{8,120}\?)/g;
+  let match;
+
+  while ((match = re.exec(String(text || ""))) !== null) {
+    const question = cleanText(match[1]);
+    if (question && !HEADING_JUNK_RE.test(question)) output.push(question);
+  }
+
+  return Array.from(new Set(output)).slice(0, 10);
 }
 
 function detectSchemaTypes(html) {
-  const types = [];
+  const found = new Set();
 
-  const jsonLdBlocks = matchAllRaw(
-    html,
-    /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
-  );
-
-  for (const block of jsonLdBlocks) {
-    const matches = block.match(/"@type"\s*:\s*"([^"]+)"/gi) || [];
-
-    for (const item of matches) {
-      const type = item
-        .replace(/"@type"\s*:\s*"/i, "")
-        .replace(/"/g, "")
-        .trim();
-
-      if (type) types.push(type);
-    }
+  for (const type of MEANINGFUL_SCHEMA_TYPES) {
+    const re = new RegExp(`["']@type["']\\s*:\\s*["']${escapeRegExp(type)}["']`, "i");
+    if (re.test(html)) found.add(type);
   }
 
-  if (/schema\.org\/LocalBusiness/i.test(html)) types.push("LocalBusiness");
-  if (/schema\.org\/FAQPage/i.test(html)) types.push("FAQPage");
-  if (/schema\.org\/Organization/i.test(html)) types.push("Organization");
-  if (/schema\.org\/Product/i.test(html)) types.push("Product");
-  if (/schema\.org\/Service/i.test(html)) types.push("Service");
-  if (/schema\.org\/Review/i.test(html)) types.push("Review");
+  const schemaOrgMatches = matchAllRaw(html, /schema\.org\/([A-Za-z0-9]+)/gi);
+  for (const type of schemaOrgMatches) {
+    if (MEANINGFUL_SCHEMA_TYPES.has(type)) found.add(type);
+  }
 
-  return Array.from(new Set(types)).sort();
+  return Array.from(found).sort();
 }
 
 function detectTrustSignals(text) {
-  const lower = text.toLowerCase();
-
-  const signals = [
-    "reviews",
-    "testimonials",
-    "case study",
-    "case studies",
-    "years in business",
-    "licensed",
-    "certified",
-    "award",
-    "guarantee",
-    "trusted",
-    "rated",
-    "stars",
-    "projects",
-    "clients",
-    "customers",
-    "funded",
-    "insured",
-    "google reviews",
-    "bbb",
-    "five star",
-    "5-star",
-    "verified",
-    "accredited",
-    "in-house",
+  const signals = [];
+  const checks = [
+    [/reviews?|testimonials?/i, "reviews or testimonials"],
+    [/\blicen[cs]ed\b/i, "licensed"],
+    [/\binsured\b/i, "insured"],
+    [/\bbonded\b/i, "bonded"],
+    [/certified|certification|accredited/i, "certifications"],
+    [/guarantee|warranty/i, "guarantees"],
+    [/case studies?|success stories?/i, "case studies"],
+    [/\b\d+\+?\s*(years|clients|customers|projects|homes|businesses)\b/i, "proof numbers"],
+    [/award|rated|rating|stars/i, "ratings or awards"],
   ];
 
-  return signals.filter((signal) => lower.includes(signal)).sort();
+  for (const [re, label] of checks) {
+    if (re.test(text)) signals.push(label);
+  }
+
+  return Array.from(new Set(signals)).sort();
 }
 
 function detectCtas(text) {
-  const lower = text.toLowerCase();
-
-  const ctas = [
-    "contact us",
-    "call now",
-    "get started",
-    "request a quote",
-    "book now",
-    "schedule",
-    "apply now",
-    "start application",
-    "learn more",
-    "get a free",
-    "free consultation",
-    "talk to",
-    "speak with",
-    "request funding",
-    "apply online",
-    "get approved",
+  const phrases = [];
+  const checks = [
+    [/contact us|contact today|get in touch/i, "contact"],
+    [/request (a )?(quote|consultation|callback)/i, "request quote"],
+    [/book (now|online|a call|an appointment)/i, "book"],
+    [/schedule (a )?(call|consultation|appointment)/i, "schedule"],
+    [/apply (now|today|online)/i, "apply"],
+    [/call (now|today)|phone/i, "call"],
+    [/get started|start now/i, "get started"],
   ];
 
-  return ctas.filter((cta) => lower.includes(cta)).sort();
+  for (const [re, label] of checks) {
+    if (re.test(text)) phrases.push(label);
+  }
+
+  return Array.from(new Set(phrases)).sort();
 }
 
 function detectPlaceholderText(text) {
@@ -2892,25 +2891,29 @@ function detectPlaceholderText(text) {
   }
 
   for (const [re, label] of PLACEHOLDER_WEAK) {
-    if (re.test(text)) hits.push(label);
+    if (re.test(text)) {
+      hits.push(label);
+    }
   }
 
-  return { hits: hits.sort(), strong };
+  return {
+    strong,
+    hits: Array.from(new Set(hits)),
+  };
 }
 
-function normalizeHeading(heading) {
-  // \p{L}/\p{N} keep accented characters intact (important for non-English sites).
-  return cleanText(heading)
+function normalizeHeading(input) {
+  return cleanText(input)
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function median(numbers) {
-  const sorted = numbers.filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
-  if (sorted.length === 0) return 0;
-  return sorted[Math.floor(sorted.length / 2)];
+function countWords(text) {
+  return String(text || "")
+    .split(/\s+/)
+    .filter((word) => /[A-Za-z0-9]/.test(word)).length;
 }
 
 function suggestSearchTitle(page, businessName, businessType, city) {
@@ -2918,18 +2921,16 @@ function suggestSearchTitle(page, businessName, businessType, city) {
 
   if (path === "/") {
     return clamp(
-      [businessName, businessType, city].filter(Boolean).join(" | "),
+      [businessName || "Home", businessType, city].filter(Boolean).join(" | "),
       65
     );
   }
 
   const pageName =
-    path
-      .split("/")
-      .filter(Boolean)
-      .pop()
-      ?.replace(/[-_]/g, " ")
-      .replace(/\b\w/g, (char) => char.toUpperCase()) || "Page";
+    path.split("/").filter(Boolean).pop()?.replace(/[-_]/g, " ") ||
+    page.h1 ||
+    page.title ||
+    "Service";
 
   return clamp([pageName, businessName, city].filter(Boolean).join(" | "), 65);
 }
@@ -3050,43 +3051,56 @@ function cleanText(input) {
 
 function decodeHtml(input) {
   return String(input || "")
-    .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
-    .replace(/&#x27;/g, "'")
     .replace(/&apos;/g, "'")
     .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ");
 }
 
-function countWords(text) {
-  const cleaned = cleanText(text);
-  if (!cleaned) return 0;
-  return cleaned.split(/\s+/).filter(Boolean).length;
+function escapeRegExp(input) {
+  return String(input || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function dedupeFindings(findings) {
-  const seen = new Set();
-  const output = [];
+function stableSortUrls(urls) {
+  return Array.from(new Set((urls || []).filter(Boolean))).sort((a, b) =>
+    String(a).localeCompare(String(b))
+  );
+}
 
-  for (const finding of findings) {
-    const key = [
-      finding.type || "",
-      finding.category || "",
-      finding.issue_title || "",
-      JSON.stringify(finding.affected_pages || []),
-    ]
-      .join("|")
-      .toLowerCase();
+function median(values) {
+  const nums = (values || [])
+    .map((value) => Number(value || 0))
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b);
 
-    if (seen.has(key)) continue;
+  if (nums.length === 0) return 0;
 
-    seen.add(key);
-    output.push(finding);
-  }
+  const mid = Math.floor(nums.length / 2);
 
-  return output;
+  if (nums.length % 2) return nums[mid];
+
+  return Math.round((nums[mid - 1] + nums[mid]) / 2);
+}
+
+function joinHumanList(items) {
+  const safe = (items || []).filter(Boolean);
+
+  if (safe.length === 0) return "";
+  if (safe.length === 1) return safe[0];
+  if (safe.length === 2) return `${safe[0]} and ${safe[1]}`;
+
+  return `${safe.slice(0, -1).join(", ")}, and ${safe[safe.length - 1]}`;
+}
+
+function formatDomainName(domain) {
+  return String(domain || "")
+    .replace(/^www\./, "")
+    .split(".")[0]
+    .replace(/[-_]/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function stableId(input) {
@@ -3107,28 +3121,6 @@ function getOptionalSecret(name) {
   } catch {
     return "";
   }
-}
-
-function formatDomainName(domain) {
-  return String(domain || "")
-    .replace(/\.(com|net|org|co|io|us)$/i, "")
-    .split(/[.-]/)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function escapeRegExp(value) {
-  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function joinHumanList(items) {
-  const clean = (items || []).filter(Boolean);
-
-  if (clean.length === 0) return "";
-  if (clean.length === 1) return clean[0];
-  if (clean.length === 2) return `${clean[0]} and ${clean[1]}`;
-
-  return `${clean.slice(0, -1).join(", ")}, and ${clean[clean.length - 1]}`;
 }
 
 function sleep(ms) {

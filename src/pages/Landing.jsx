@@ -8,28 +8,28 @@ import {
 } from "lucide-react";
 
 const features = [
-  { icon: Zap, title: "AI Meta Titles", desc: "We write search-friendly titles for every page on your site." },
-  { icon: FileText, title: "AI Meta Descriptions", desc: "Click-worthy descriptions that make people choose you in Google." },
-  { icon: AlertTriangle, title: "404 Error Detection", desc: "Find and fix broken pages before they cost you customers." },
-  { icon: ArrowRightLeft, title: "Redirect Recommendations", desc: "Smart redirect suggestions so no visitor hits a dead end." },
-  { icon: Shield, title: "Canonical Tag Checks", desc: "Stop Google from getting confused about duplicate pages." },
-  { icon: Globe, title: "Sitemap Cleanup", desc: "Keep your sitemap clean so Google finds your best pages." },
-  { icon: Code, title: "JavaScript Page Checks", desc: "Make sure Google can see content loaded by JavaScript." },
-  { icon: BarChart3, title: "Competitor Benchmarking", desc: "See exactly why competitors outrank you — and how to catch up." },
-  { icon: TrendingUp, title: "Dev Recommendations", desc: "Clear instructions for web development work that boosts rankings." },
+  { icon: Zap, title: "AI search titles", desc: "We prepare search-friendly titles for every page on your site." },
+  { icon: FileText, title: "AI search descriptions", desc: "Helpful descriptions that make people choose you in Google." },
+  { icon: AlertTriangle, title: "Broken page detection", desc: "Find broken pages before they cost you customers." },
+  { icon: ArrowRightLeft, title: "Redirect recommendations", desc: "Smart redirect suggestions so no visitor hits a dead end." },
+  { icon: Shield, title: "Preferred page settings", desc: "Help Google understand the main version of each page." },
+  { icon: Globe, title: "Site list cleanup", desc: "Keep your important pages easier for Google to find." },
+  { icon: Code, title: "Content visibility checks", desc: "See when important content may need a closer review." },
+  { icon: BarChart3, title: "Competitor gaps", desc: "See where competitor pages may be stronger." },
+  { icon: TrendingUp, title: "Website improvements", desc: "Clear next steps for improvements that may help visibility." },
 ];
 
 const plans = [
-  { name: "Free Scan", price: "Free", period: "", desc: "See what's wrong", features: ["One-time homepage scan", "Top 5 issues found", "Competitor teaser", "Upgrade to fix everything"], cta: "Run Free Scan", highlighted: false },
-  { name: "DIY SEO Autopilot", price: "$20", period: "/month", desc: "Fix it yourself", features: ["Monthly full-site crawl", "Up to 250 pages", "AI meta titles & descriptions", "404 detection & redirects", "Canonical & sitemap checks", "3 competitor benchmarks", "Monthly SEO report"], cta: "Start DIY Plan", highlighted: true },
-  { name: "Growth", price: "$49", period: "/month", desc: "Grow faster", features: ["Weekly crawl", "Up to 1,000 pages", "100 JS-rendered pages", "5 competitor benchmarks", "Priority recommendations", "Google Search Console (coming soon)", "Everything in DIY"], cta: "Start Growth Plan", highlighted: false },
+  { name: "Free Scan", price: "Free", period: "", desc: "See what to improve", features: ["One-time homepage scan", "Top 5 recommendations", "Competitor teaser", "Upgrade for guided reviews"], cta: "Run Free Scan", highlighted: false },
+  { name: "DIY SEO Autopilot", price: "$20", period: "/month", desc: "Review it yourself", features: ["Monthly website scan", "Up to 250 pages", "AI search titles and descriptions", "Broken page and redirect recommendations", "Preferred page setting checks", "3 competitor benchmarks", "Monthly scan report"], cta: "Start DIY Plan", highlighted: true },
+  { name: "Growth", price: "$49", period: "/month", desc: "Grow faster", features: ["Weekly scan", "Up to 1,000 pages", "Deeper content visibility checks", "5 competitor benchmarks", "Priority recommendations", "Google Search Console (coming soon)", "Everything in DIY"], cta: "Start Growth Plan", highlighted: false },
 ];
 
 const faqs = [
-  { q: "How does the crawler work?", a: "We scan your website just like Google does — checking every page for SEO issues, broken links, missing metadata, and more. We also render JavaScript pages to catch hidden problems." },
-  { q: "Will this break my website?", a: "Absolutely not. We only scan and analyze your site. We never make changes to your website directly. All fixes are recommendations that you approve first." },
-  { q: "Do I need to know SEO?", a: "Not at all. We explain everything in plain English. Our AI does the technical work and tells you exactly what to do in words anyone can understand." },
-  { q: "What if I need a developer?", a: "We clearly separate 'easy fixes' from 'needs a developer.' For developer work, we provide clear instructions and offer implementation packages starting at $500." },
+  { q: "How does the scanner work?", a: "We scan your website content directly — checking pages for recommendations, broken links, missing search appearance details, and more." },
+  { q: "Will this change my website?", a: "No. We only scan and analyze your site. We never make changes to your website directly. All recommendations are for you to review first." },
+  { q: "Do I need to know SEO?", a: "Not at all. We explain everything in plain English and give you clear next steps anyone can understand." },
+  { q: "What if I need help?", a: "We clearly separate simple recommendations from improvements that may need help. For larger work, we provide clear next steps and optional support packages." },
   { q: "Can I cancel anytime?", a: "Yes. No contracts, no commitments. Cancel your subscription anytime from your dashboard." },
 ];
 
@@ -75,7 +75,7 @@ export default function Landing() {
             <span className="gradient-text">small business websites</span>
           </h1>
           <p className="text-lg md:text-xl text-gray-500 max-w-2xl mx-auto mb-10 leading-relaxed">
-            We crawl your site, fix the easy SEO issues, recommend redirects, clean up sitemap problems, and show what web-development work would help you compete.
+            We scan your site, prepare simple SEO recommendations, suggest redirects, highlight website setup opportunities, and show what could help you compete.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <Link to="/register">
@@ -103,7 +103,7 @@ export default function Landing() {
         <div className="max-w-5xl mx-auto px-4">
           <p className="text-center text-sm text-gray-400 mb-6">Trusted by small businesses across the country</p>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8 items-center justify-items-center">
-            {["850+ sites scanned", "12,000+ issues fixed", "4.9★ average rating", "93% renewal rate"].map(stat => (
+            {["850+ sites scanned", "12,000+ recommendations prepared", "4.9★ average rating", "93% renewal rate"].map(stat => (
               <div key={stat} className="text-center">
                 <p className="text-lg font-bold text-gray-900">{stat.split(" ")[0]}</p>
                 <p className="text-xs text-gray-500">{stat.split(" ").slice(1).join(" ")}</p>
@@ -117,8 +117,8 @@ export default function Landing() {
       <section id="features" className="py-20 px-4">
         <div className="max-w-6xl mx-auto">
           <div className="text-center mb-16">
-            <h2 className="text-3xl md:text-4xl font-bold tracking-tight mb-4">Everything your site needs to rank</h2>
-            <p className="text-gray-500 text-lg max-w-2xl mx-auto">We handle the technical SEO work so you can focus on running your business.</p>
+            <h2 className="text-3xl md:text-4xl font-bold tracking-tight mb-4">Everything your site needs to get clearer</h2>
+            <p className="text-gray-500 text-lg max-w-2xl mx-auto">We prepare plain-English website recommendations so you can focus on running your business.</p>
           </div>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {features.map(f => (
@@ -143,9 +143,9 @@ export default function Landing() {
           </div>
           <div className="grid md:grid-cols-3 gap-8">
             {[
-              { step: "1", title: "Connect your site", desc: "Enter your website URL and basic business info. Takes about 2 minutes." },
-              { step: "2", title: "We scan & fix", desc: "Our AI crawls your site, finds issues, and automatically fixes the easy ones." },
-              { step: "3", title: "Approve & grow", desc: "Review recommendations, approve fixes, and get clear developer instructions for the rest." },
+              { step: "1", title: "Add your site", desc: "Enter your website URL and basic business info. Takes about 2 minutes." },
+              { step: "2", title: "We scan and prepare", desc: "Our AI scans your site and prepares clear recommendations." },
+              { step: "3", title: "Review next steps", desc: "Review recommendations and get clear guidance for larger improvements." },
             ].map(s => (
               <div key={s.step} className="text-center">
                 <div className="w-12 h-12 rounded-2xl gradient-primary text-white font-bold text-lg flex items-center justify-center mx-auto mb-4">{s.step}</div>
@@ -165,9 +165,9 @@ export default function Landing() {
           </div>
           <div className="grid md:grid-cols-3 gap-6">
             {[
-              { name: "Sarah M.", biz: "Denver Dental Care", quote: "I had no idea my site had so many broken links. SEO Autopilot found and fixed them in minutes. My traffic is up 30% in two months." },
-              { name: "James K.", biz: "Peak Roofing Co", quote: "The competitor analysis alone was worth the subscription. I could see exactly why other roofers were outranking me." },
-              { name: "Maria L.", biz: "Sunrise Bakery", quote: "Finally an SEO tool that speaks my language. No jargon, no confusion — just clear steps to improve my Google rankings." },
+              { name: "Sarah M.", biz: "Denver Dental Care", quote: "I had no idea my site had so many broken links. SEO Autopilot found them and gave me clear next steps in minutes." },
+              { name: "James K.", biz: "Peak Roofing Co", quote: "The competitor comparison alone was helpful. I could see where other roofing pages looked stronger." },
+              { name: "Maria L.", biz: "Sunrise Bakery", quote: "Finally an SEO tool that speaks my language. No jargon, no confusion — just clear website improvement steps." },
             ].map(t => (
               <div key={t.name} className="p-6 rounded-2xl bg-white border border-gray-100 shadow-sm">
                 <div className="flex gap-1 mb-3">
@@ -218,7 +218,7 @@ export default function Landing() {
             ))}
           </div>
           <div className="mt-8 text-center">
-            <p className="text-sm text-gray-400">Need more? We offer Done-for-You SEO cleanup from $500 and custom website rebuilds. <Link to="/billing" className="text-blue-600 hover:underline">See all plans</Link></p>
+            <p className="text-sm text-gray-400">Need more? We offer done-for-you cleanup requests and custom website rebuild planning. <Link to="/billing" className="text-blue-600 hover:underline">See all plans</Link></p>
           </div>
         </div>
       </section>
@@ -248,8 +248,8 @@ export default function Landing() {
       {/* CTA */}
       <section className="py-20 px-4 bg-gray-900">
         <div className="max-w-3xl mx-auto text-center">
-          <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">Ready to fix your SEO?</h2>
-          <p className="text-gray-400 text-lg mb-8">Start with a free scan. See what's holding your site back in minutes.</p>
+          <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">Ready to review your SEO?</h2>
+          <p className="text-gray-400 text-lg mb-8">Start with a free scan. See clear next steps in minutes.</p>
           <Link to="/register">
             <Button size="lg" className="gradient-primary text-white border-0 text-base px-8 h-12">
               Run My First Scan — It's Free

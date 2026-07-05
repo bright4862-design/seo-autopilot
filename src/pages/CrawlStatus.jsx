@@ -1,98 +1,47 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { reviewFixesWithAi, computeHealthScore, summarizeFixes } from "@/lib/aiReview";
 import ScanWebsiteForm from "@/components/scan/ScanWebsiteForm";
 import { Button } from "@/components/ui/button";
-import {
-  Search, FileText, Code, Globe, ArrowRightLeft, BarChart3,
-  Zap, CheckCircle2, Loader2, Circle, Clock, AlertTriangle, Info
-} from "lucide-react";
+import { AlertTriangle, CheckCircle2, Circle, Loader2 } from "lucide-react";
 
-const CRAWL_STEPS = [
-  { key: "queued", label: "Queued", icon: Clock, desc: "Your crawl is in the queue" },
-  { key: "crawling_html", label: "Crawling HTML", icon: Search, desc: "Scanning all pages on your site" },
-  { key: "rendering_js", label: "Rendering JavaScript", icon: Code, desc: "Loading JavaScript-heavy pages" },
-  { key: "checking_metadata", label: "Checking Metadata", icon: FileText, desc: "Reviewing titles and descriptions" },
-  { key: "checking_canonicals", label: "Checking Canonicals", icon: Globe, desc: "Verifying canonical tags" },
-  { key: "checking_sitemap", label: "Checking Sitemap", icon: Globe, desc: "Validating your sitemap" },
-  { key: "checking_redirects", label: "Checking Redirects & 404s", icon: ArrowRightLeft, desc: "Finding broken pages and redirect chains" },
-  { key: "benchmarking_competitors", label: "Benchmarking Competitors", icon: BarChart3, desc: "Comparing your site to competitors" },
-  { key: "generating_recommendations", label: "Generating AI Recommendations", icon: Zap, desc: "Creating personalized fixes" },
-  { key: "complete", label: "Complete", icon: CheckCircle2, desc: "Your scan results are ready!" },
+const SCAN_STEPS = [
+  { key: "queued", label: "Finding pages" },
+  { key: "crawling_html", label: "Reading website content" },
+  { key: "checking_metadata", label: "Checking search appearance" },
+  { key: "checking_canonicals", label: "Reviewing website setup" },
+  { key: "benchmarking_competitors", label: "Comparing competitors" },
+  { key: "generating_recommendations", label: "Preparing recommendations" },
+  { key: "complete", label: "Complete" },
 ];
 
-const SCAN_ISSUES = [
+const DEMO_RECOMMENDATIONS = [
   {
     page_url: "/services", category: "meta_title", priority: "high", status: "auto_fixed",
-    issue_title: "Missing page title on Services page",
-    plain_english_explanation: "Your Services page didn't have a title tag. We prepared one for you.",
-    why_it_matters: "Page titles are the first thing people see in Google. Without one, Google guesses — usually poorly.",
-    current_value: "(empty)", recommended_value: "Plumbing & HVAC Services | Sunshine Plumbing Denver",
-    ai_recommendation: "We prepared a title using your business name and services.",
+    issue_title: "This page needs a clearer search title",
+    plain_english_explanation: "The services page could be clearer in search results.",
+    why_it_matters: "A clear search title helps customers understand the page before they click.",
+    current_value: "Not found", recommended_value: "Services | Your Business",
+    ai_recommendation: "Use a short title that includes the main service and business name.",
     confidence_score: 92, can_auto_fix: true, requires_approval: false, requires_developer: false,
   },
   {
-    page_url: "/blog/tips", category: "internal_link", priority: "low", status: "auto_fixed",
-    issue_title: "Broken internal link to removed blog post",
-    plain_english_explanation: "This page linked to a blog post that no longer exists. We flagged the broken link for removal.",
-    why_it_matters: "Broken links make your site look unmaintained and waste Google's time.",
-    current_value: "Link to /blog/summer-tips-2024 (404)", recommended_value: "Link removed",
-    ai_recommendation: "We flagged this broken link for removal.",
-    confidence_score: 80, can_auto_fix: true, requires_approval: false, requires_developer: false,
-  },
-  {
     page_url: "/about", category: "meta_description", priority: "medium", status: "needs_approval",
-    issue_title: "Missing description on About page",
-    plain_english_explanation: "Your About page has no meta description — the short summary shown under your title in Google.",
-    why_it_matters: "A good description convinces people to click your result over a competitor's.",
-    current_value: "(empty)", recommended_value: "Sunshine Plumbing has served Denver for 15+ years. Licensed, insured, ready to help.",
-    ai_recommendation: "We prepared a description highlighting your experience and service area — approve it to apply.",
+    issue_title: "Improve this page’s search description",
+    plain_english_explanation: "The about page needs a short summary for search results.",
+    why_it_matters: "A useful description can help more people choose your website.",
+    current_value: "Not found", recommended_value: "A short summary of your business, location, and services.",
+    ai_recommendation: "Review the prepared description and approve it if it matches your business.",
     confidence_score: 85, can_auto_fix: false, requires_approval: true, requires_developer: false,
   },
   {
-    page_url: "/old-summer-promo", category: "404_error", priority: "critical", status: "needs_approval",
-    issue_title: "Broken page returning an error",
-    plain_english_explanation: "This page no longer exists but people (and Google) still try to visit it.",
-    why_it_matters: "Broken pages frustrate visitors and waste your SEO value.",
-    current_value: "404 error", recommended_value: "Redirect to /services",
-    ai_recommendation: "We can set up a redirect from this old page to your services page — just approve it.",
-    confidence_score: 90, can_auto_fix: false, requires_approval: true, requires_developer: false,
-  },
-  {
-    page_url: "/water-heater-repair", category: "canonical", priority: "medium", status: "needs_approval",
-    issue_title: "Canonical tag points to a different URL version",
-    plain_english_explanation: "This page's canonical tag points to a URL with a trailing slash, but the real URL doesn't have one.",
-    why_it_matters: "When Google sees two versions of a page, it may split your ranking power between them.",
-    current_value: ".../water-heater-repair/", recommended_value: ".../water-heater-repair",
-    ai_recommendation: "We can update the canonical tag to match — approve and we'll apply it.",
-    confidence_score: 95, can_auto_fix: false, requires_approval: true, requires_developer: false,
-  },
-  {
-    page_url: "/drain-cleaning", category: "thin_content", priority: "high", status: "needs_developer",
-    issue_title: "Very little content on service page",
-    plain_english_explanation: "This page only has 87 words — not enough for Google to understand or rank it well.",
-    why_it_matters: "Pages with little content rarely rank. Your competitors' similar pages have 500-1,200 words.",
-    current_value: "87 words", recommended_value: "500+ words with service details & FAQ",
-    ai_recommendation: "A developer or writer should expand this page with service details and FAQs.",
-    confidence_score: 88, can_auto_fix: false, requires_approval: false, requires_developer: true,
-  },
-  {
     page_url: "/contact", category: "schema", priority: "medium", status: "needs_developer",
-    issue_title: "Missing business details for Google",
-    plain_english_explanation: "Your contact page doesn't tell Google your business name, address, phone, and hours in a format it understands.",
-    why_it_matters: "This helps Google show your phone number and hours directly in search results.",
-    current_value: "Not found", recommended_value: "Add LocalBusiness schema",
-    ai_recommendation: "A developer should add LocalBusiness schema markup to your contact page.",
-    confidence_score: 95, can_auto_fix: false, requires_approval: false, requires_developer: true,
-  },
-  {
-    page_url: "/", category: "performance", priority: "medium", status: "needs_developer",
-    issue_title: "Homepage loads slowly on mobile",
-    plain_english_explanation: "Your homepage takes over 5 seconds to load on mobile. Most visitors leave after 3.",
-    why_it_matters: "Google uses page speed as a ranking factor, and slow pages lose customers.",
-    current_value: "5.2s load time", recommended_value: "Under 3 seconds",
-    ai_recommendation: "A developer should optimize images and reduce JavaScript.",
-    confidence_score: 78, can_auto_fix: false, requires_approval: false, requires_developer: true,
+    issue_title: "Add clearer trust signals for search engines",
+    plain_english_explanation: "Your contact page may need business details in a format search engines understand.",
+    why_it_matters: "Clear business details can help customers find your hours, phone number, and location.",
+    current_value: "Not found", recommended_value: "Add business name, address, phone, and hours.",
+    ai_recommendation: "Ask a website editor or developer to add structured business details.",
+    confidence_score: 90, can_auto_fix: false, requires_approval: false, requires_developer: true,
   },
 ];
 
@@ -123,62 +72,46 @@ export default function CrawlStatus() {
   }, []);
 
   useEffect(() => {
-    if (didAutoStart.current) return;
-    if (!project) return;
+    if (didAutoStart.current || !project) return;
     const params = new URLSearchParams(window.location.search);
-    if (params.get("autostart") !== "1") return;
-    if (crawlJob?.status === "queued") {
+    if (params.get("autostart") === "1" && crawlJob?.status === "queued") {
       didAutoStart.current = true;
-      simulateCrawl(crawlJob);
+      simulateScan(crawlJob);
     }
   }, [project, crawlJob]);
 
-  const simulateCrawl = async (existingJob, projOverride) => {
+  const simulateScan = async (existingJob, projOverride) => {
     const proj = projOverride || project;
     if (!proj) return;
     setScanStarted(true);
     setSimulating(true);
     setError(null);
     let job = existingJob;
+
     try {
       const me = await base44.auth.me();
       if (!job) {
-        job = await base44.entities.CrawlJob.create({
-          project_id: proj.id,
-          status: "queued",
-          crawl_type: "full",
-          started_at: new Date().toISOString(),
-          owner_user_id: me.id,
-        });
+        job = await base44.entities.CrawlJob.create({ project_id: proj.id, status: "queued", crawl_type: "full", started_at: new Date().toISOString(), owner_user_id: me.id });
       }
       setCrawlJob(job);
 
-      // Start each scan with a clean Fix List
       try { await base44.entities.SeoIssue.deleteMany({ project_id: proj.id }); } catch (e) {}
 
-      const steps = CRAWL_STEPS.map(s => s.key).filter(k => k !== "complete");
-      for (const status of steps) {
-        await new Promise(r => setTimeout(r, 1500));
+      const stepKeys = SCAN_STEPS.map((step) => step.key).filter((key) => key !== "complete");
+      for (const status of stepKeys) {
+        await new Promise((resolve) => setTimeout(resolve, 1200));
         const updated = await base44.entities.CrawlJob.update(job.id, {
           status,
           pages_found: status === "crawling_html" ? 47 : undefined,
           pages_crawled: status === "checking_metadata" ? 47 : undefined,
-          js_pages_rendered: status === "checking_canonicals" ? 12 : undefined,
         });
         setCrawlJob(updated);
       }
 
-      await new Promise(r => setTimeout(r, 1000));
-      const completed = await base44.entities.CrawlJob.update(job.id, {
-        status: "complete",
-        completed_at: new Date().toISOString(),
-        pages_found: 47,
-        pages_crawled: 47,
-        js_pages_rendered: 12,
-      });
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      const completed = await base44.entities.CrawlJob.update(job.id, { status: "complete", completed_at: new Date().toISOString(), pages_found: 47, pages_crawled: 47 });
       setCrawlJob(completed);
 
-      // Turn the findings into simple fixes on the Fix List (real crawl + AI)
       let realFixes = [];
       let healthScore = 62;
       let pagesCrawled = 47;
@@ -186,8 +119,9 @@ export default function CrawlStatus() {
       let summary = null;
       let crawledPagesData = [];
       let scanSucceeded = false;
+
       try {
-        const res = await base44.functions.invoke('runRealScan', {
+        const res = await base44.functions.invoke("runRealScan", {
           website_url: proj.website_url,
           business_name: proj.business_name,
           business_type: proj.business_type,
@@ -196,17 +130,14 @@ export default function CrawlStatus() {
           crawl_job_id: job.id,
         });
         const scanData = res.data || {};
-        if (scanData.error) {
-          throw new Error(scanData.error);
-        }
+        if (scanData.error) throw new Error(scanData.error);
         realFixes = scanData.fixes || [];
         crawledPagesData = scanData.crawled_pages || [];
-        if (typeof scanData.health_score === 'number') healthScore = scanData.health_score;
-        if (typeof scanData.pages_crawled === 'number') pagesCrawled = scanData.pages_crawled;
-        if (typeof scanData.issues_found === 'number') issuesFound = scanData.issues_found;
-        if (scanData.summary && typeof scanData.summary === 'object') summary = scanData.summary;
+        if (typeof scanData.health_score === "number") healthScore = scanData.health_score;
+        if (typeof scanData.pages_crawled === "number") pagesCrawled = scanData.pages_crawled;
+        if (typeof scanData.issues_found === "number") issuesFound = scanData.issues_found;
+        if (scanData.summary && typeof scanData.summary === "object") summary = scanData.summary;
 
-        // AI review step: filter, group, rewrite and prioritize (falls back to raw scan results)
         let topActions = [];
         let positiveFindings = [];
         let aiSummary = "";
@@ -221,125 +152,72 @@ export default function CrawlStatus() {
             issuesFound = realFixes.length;
             summary = summarizeFixes(realFixes);
           }
-        } catch (e) {
-          console.error('AI review failed, using scan results directly', e);
-        }
+        } catch (e) {}
 
         scanSucceeded = true;
         setScanResult({ fixes: realFixes, health_score: healthScore, pages_crawled: pagesCrawled, issues_found: issuesFound, summary, top_actions: topActions, positive_findings: positiveFindings, ai_summary: aiSummary });
-      } catch (e) {
-        console.error('runRealScan failed, using demo fixes', e);
-      }
+      } catch (e) {}
 
       if (crawledPagesData.length) {
-        await base44.entities.CrawledPage.bulkCreate(
-          crawledPagesData.map(page => ({
-            ...page,
-            project_id: proj.id,
-            crawl_job_id: job.id,
-            owner_user_id: me.id,
-          }))
-        );
+        await base44.entities.CrawledPage.bulkCreate(crawledPagesData.map((page) => ({ ...page, project_id: proj.id, crawl_job_id: job.id, owner_user_id: me.id })));
       }
 
-      // Compare against competitors if any were added
       if (scanSucceeded) {
         try {
-          await base44.functions.invoke('scanCompetitors', {
-            project_id: proj.id,
-            business_type: proj.business_type,
-            city: proj.city,
-            customer_pages: crawledPagesData,
-          });
-        } catch (e) {
-          console.error('Competitor comparison failed', e);
-        }
+          await base44.functions.invoke("scanCompetitors", { project_id: proj.id, business_type: proj.business_type, city: proj.city, customer_pages: crawledPagesData });
+        } catch (e) {}
       }
 
-      const sourceFixes = scanSucceeded ? realFixes : SCAN_ISSUES;
+      const sourceFixes = scanSucceeded ? realFixes : DEMO_RECOMMENDATIONS;
       if (!scanSucceeded) {
         setScanResult({
-          fixes: SCAN_ISSUES,
+          fixes: DEMO_RECOMMENDATIONS,
           health_score: 62,
           pages_crawled: 47,
-          issues_found: SCAN_ISSUES.length,
+          issues_found: DEMO_RECOMMENDATIONS.length,
           summary: {
-            we_can_fix: SCAN_ISSUES.filter(f => f.status === 'auto_fixed').length,
-            needs_approval: SCAN_ISSUES.filter(f => f.status === 'needs_approval').length,
-            needs_developer: SCAN_ISSUES.filter(f => f.requires_developer === true).length,
+            we_can_fix: DEMO_RECOMMENDATIONS.filter((fix) => fix.status === "auto_fixed").length,
+            needs_approval: DEMO_RECOMMENDATIONS.filter((fix) => fix.status === "needs_approval").length,
+            needs_developer: DEMO_RECOMMENDATIONS.filter((fix) => fix.requires_developer === true).length,
           },
         });
       }
 
-      await base44.entities.SeoIssue.bulkCreate(
-        sourceFixes.map(f => ({
-          ...f,
-          project_id: proj.id,
-          crawl_job_id: job.id,
-          owner_user_id: me.id,
-        }))
-      );
-
-      // Clear old developer recommendations so they match the latest scan
+      await base44.entities.SeoIssue.bulkCreate(sourceFixes.map((fix) => ({ ...fix, project_id: proj.id, crawl_job_id: job.id, owner_user_id: me.id })));
       try { await base44.entities.DeveloperRecommendation.deleteMany({ project_id: proj.id }); } catch (e) {}
 
-      // Build developer recommendations from fixes that require a developer
-      const devFixes = sourceFixes.filter(f => f.requires_developer === true);
+      const devFixes = sourceFixes.filter((fix) => fix.requires_developer === true);
       if (devFixes.length > 0) {
-        const devRecs = devFixes.map(f => {
-          const category =
-            f.category === 'thin_content' ? 'content_pages' :
-            f.category === 'js_rendering' ? 'technical_seo' :
-            f.category === 'performance' ? 'speed_mobile' :
-            f.category === 'web_dev' ? 'website_structure' :
-            'technical_seo';
-          const estimated_complexity = f.difficulty === 'developer' ? 'moderate' : 'simple';
-          const recommended_package =
-            estimated_complexity === 'moderate' ? '500_cleanup' :
-            estimated_complexity === 'complex' ? 'custom_rebuild' :
-            'diy';
+        await base44.entities.DeveloperRecommendation.bulkCreate(devFixes.map((fix) => {
+          const category = fix.category === "thin_content" ? "content_pages" : fix.category === "performance" ? "speed_mobile" : fix.category === "web_dev" ? "website_structure" : "technical_seo";
+          const estimated_complexity = fix.difficulty === "developer" ? "moderate" : "simple";
+          const recommended_package = estimated_complexity === "moderate" ? "500_cleanup" : estimated_complexity === "complex" ? "custom_rebuild" : "diy";
           return {
             project_id: proj.id,
             owner_user_id: me.id,
-            title: f.issue_title,
-            description: f.plain_english_explanation,
+            title: fix.issue_title,
+            description: fix.plain_english_explanation,
             category,
-            priority: f.priority,
-            business_impact: f.why_it_matters,
+            priority: fix.priority,
+            business_impact: fix.why_it_matters,
             estimated_complexity,
             recommended_package,
-            status: 'open',
+            status: "open",
           };
-        });
-        await base44.entities.DeveloperRecommendation.bulkCreate(devRecs);
+        }));
       }
 
-      const finalJob = await base44.entities.CrawlJob.update(job.id, {
-        pages_found: pagesCrawled,
-        pages_crawled: pagesCrawled,
-        seo_score: healthScore,
-        issues_found: sourceFixes.length,
-        error_message: "",
-      });
+      const finalJob = await base44.entities.CrawlJob.update(job.id, { pages_found: pagesCrawled, pages_crawled: pagesCrawled, seo_score: healthScore, issues_found: sourceFixes.length, error_message: "" });
       setCrawlJob(finalJob);
-
-      await base44.entities.BusinessProject.update(proj.id, {
-        last_crawl_at: new Date().toISOString(),
-        seo_score: healthScore,
-      });
+      await base44.entities.BusinessProject.update(proj.id, { last_crawl_at: new Date().toISOString(), seo_score: healthScore });
     } catch (err) {
-      console.error("Crawl simulation failed", err);
       if (job) {
         try {
-          const failed = await base44.entities.CrawlJob.update(job.id, {
-            status: "failed",
-            completed_at: new Date().toISOString(),
-            error_message: err.message || "Scan failed",
-          });
+          const failed = await base44.entities.CrawlJob.update(job.id, { status: "failed", completed_at: new Date().toISOString(), error_message: err.message || "Scan failed" });
           setCrawlJob(failed);
         } catch (e) {}
       }
-      setError(err.message || "Something went wrong during the crawl. Please try again.");
+      setError(err.message || "Something went wrong during the scan. Please try again.");
     } finally {
       setSimulating(false);
     }
@@ -351,206 +229,98 @@ export default function CrawlStatus() {
     try {
       const me = await base44.auth.me();
       let proj = project;
+      const projectData = { business_name: form.business_name, website_url: form.website_url, important_keywords: form.important_keywords || [] };
       if (proj) {
-        proj = await base44.entities.BusinessProject.update(proj.id, {
-          business_name: form.business_name,
-          website_url: form.website_url,
-        });
+        proj = await base44.entities.BusinessProject.update(proj.id, projectData);
       } else {
-        proj = await base44.entities.BusinessProject.create({
-          business_name: form.business_name,
-          website_url: form.website_url,
-          status: "active",
-          seo_score: 0,
-          subscription_plan: "free",
-          cms_platform: "Unknown",
-          owner_user_id: me.id,
-        });
+        proj = await base44.entities.BusinessProject.create({ ...projectData, status: "active", seo_score: 0, subscription_plan: "free", cms_platform: "Unknown", owner_user_id: me.id });
       }
       setProject(proj);
 
-      // Replace competitors with the ones in the form
       try { await base44.entities.Competitor.deleteMany({ project_id: proj.id }); } catch (e) {}
-      const urls = form.competitor_urls.map(u => u.trim()).filter(Boolean);
+      const urls = form.competitor_urls.map((url) => url.trim()).filter(Boolean);
       let comps = [];
       if (urls.length > 0) {
-        comps = await base44.entities.Competitor.bulkCreate(urls.map(url => {
+        comps = await base44.entities.Competitor.bulkCreate(urls.map((url) => {
           let name = url;
           try { name = new URL(/^https?:\/\//i.test(url) ? url : "https://" + url).hostname.replace(/^www\./, ""); } catch (e) {}
           return { project_id: proj.id, website_url: url, name, owner_user_id: me.id };
         }));
       }
       setCompetitors(comps);
-
-      await simulateCrawl(null, proj);
+      await simulateScan(null, proj);
     } catch (e) {
       setError(e.message || "Could not start the scan. Please try again.");
       setSimulating(false);
     }
   };
 
-  const currentIdx = crawlJob ? CRAWL_STEPS.findIndex(s => s.key === crawlJob.status) : -1;
+  const currentIdx = crawlJob ? SCAN_STEPS.findIndex((step) => step.key === crawlJob.status) : -1;
+  const showProgress = scanStarted || (crawlJob && !["complete", "failed"].includes(crawlJob.status));
+  const hasNoRecommendations = (scanResult?.issues_found ?? 0) === 0;
 
-  const derivedActions = [];
-  if ((scanResult?.summary?.needs_approval ?? 0) > 0) derivedActions.push("Review approval items first");
-  if ((scanResult?.summary?.needs_developer ?? 0) > 0) derivedActions.push("Review developer recommendations");
-  if ((scanResult?.summary?.we_can_fix ?? 0) > 0) derivedActions.push("Review prepared titles and descriptions");
-  const topActions = scanResult?.top_actions?.length ? scanResult.top_actions : derivedActions;
-  const hasNoIssues = (scanResult?.issues_found ?? 0) === 0;
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
-      </div>
-    );
-  }
+  if (loading) return <div className="flex h-64 items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-blue-600" /></div>;
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Scan a website</h1>
-        <p className="text-sm text-gray-500 mt-1">Enter your business and website — we'll find simple SEO fixes in minutes.</p>
-      </div>
-
-      <ScanWebsiteForm project={project} competitors={competitors} saving={simulating} onScan={handleScan} />
-
-      {error && (
-        <div className="bg-red-50 border border-red-100 rounded-xl p-4 flex items-start gap-3">
-          <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
-          <div>
-            <p className="text-sm font-medium text-red-800">Scan failed</p>
-            <p className="text-xs text-red-600 mt-0.5">{error}</p>
-          </div>
+    <div className="min-h-screen bg-[#F7F8FA]">
+      <div className="mx-auto w-full max-w-3xl px-6 py-10">
+        <div className="mb-8">
+          <h1 className="text-3xl font-semibold tracking-tight text-slate-950">Scan a website</h1>
+          <p className="mt-2 text-base text-slate-500">Enter your website and we’ll prepare a simple Fix List.</p>
         </div>
-      )}
 
-      {/* Progress */}
-      {scanStarted && crawlJob && (
-      <div className="bg-white rounded-2xl border border-gray-100 p-6">
-        <div className="space-y-0">
-          {CRAWL_STEPS.map((step, i) => {
-            const isComplete = i < currentIdx;
-            const isCurrent = i === currentIdx;
-            const isPending = i > currentIdx;
+        <ScanWebsiteForm project={project} competitors={competitors} saving={simulating} onScan={handleScan} />
 
-            return (
-              <div key={step.key} className="flex gap-4">
-                <div className="flex flex-col items-center">
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${isComplete ? "bg-green-100" : isCurrent ? "bg-blue-100" : "bg-gray-100"}`}>
-                    {isComplete ? (
-                      <CheckCircle2 className="w-4 h-4 text-green-600" />
-                    ) : isCurrent ? (
-                      <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
-                    ) : (
-                      <Circle className="w-4 h-4 text-gray-300" />
-                    )}
+        {error && (
+          <div className="mt-6 rounded-2xl border border-red-100 bg-white p-5 shadow-sm">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 text-red-500" />
+              <div><p className="text-sm font-medium text-slate-950">Scan failed</p><p className="mt-1 text-sm leading-6 text-slate-600">{error}</p></div>
+            </div>
+          </div>
+        )}
+
+        {showProgress && crawlJob && (
+          <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="text-base font-semibold text-slate-950">Scan progress</h2>
+            <div className="mt-5 space-y-4">
+              {SCAN_STEPS.map((step, index) => {
+                const isComplete = index < currentIdx || crawlJob.status === "complete";
+                const isCurrent = index === currentIdx && crawlJob.status !== "complete";
+                return (
+                  <div key={step.key} className="flex items-center gap-3">
+                    <div className={`flex h-6 w-6 items-center justify-center rounded-full ${isComplete ? "bg-slate-950" : isCurrent ? "bg-blue-600" : "bg-slate-100"}`}>
+                      {isComplete ? <CheckCircle2 className="h-3.5 w-3.5 text-white" /> : isCurrent ? <Loader2 className="h-3.5 w-3.5 animate-spin text-white" /> : <Circle className="h-3.5 w-3.5 text-slate-300" />}
+                    </div>
+                    <span className={`text-sm ${isComplete || isCurrent ? "font-medium text-slate-950" : "text-slate-500"}`}>{step.label}</span>
                   </div>
-                  {i < CRAWL_STEPS.length - 1 && (
-                    <div className={`w-0.5 h-8 ${isComplete ? "bg-green-200" : "bg-gray-200"}`} />
-                  )}
-                </div>
-                <div className="pb-8">
-                  <p className={`text-sm font-medium ${isComplete ? "text-green-700" : isCurrent ? "text-blue-700" : "text-gray-400"}`}>
-                    {step.label}
-                  </p>
-                  <p className={`text-xs mt-0.5 ${isCurrent ? "text-blue-500" : "text-gray-400"}`}>
-                    {step.desc}
-                  </p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-      )}
-
-      {/* Scan note */}
-      <div className="bg-white border border-gray-100 rounded-xl p-4 flex items-start gap-3">
-        <Info className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
-        <p className="text-xs text-gray-500 leading-relaxed">
-          This scan checks the website HTML we can access directly. Some websites use JavaScript or private CMS settings that may require deeper review.
-        </p>
-      </div>
-
-      {/* Stats when complete */}
-      {scanStarted && crawlJob?.status === "complete" && (
-        <div className="bg-white border border-gray-100 rounded-2xl p-6">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center">
-              <CheckCircle2 className="w-5 h-5 text-green-600" />
+                );
+              })}
             </div>
-            <div>
-              <h3 className="font-bold text-gray-900 text-lg">Your scan is complete.</h3>
-              <p className="text-sm text-gray-500">
-                We scanned {scanResult?.pages_crawled ?? crawlJob.pages_found ?? 0} pages
-                and found {scanResult?.issues_found ?? 0} recommended {(scanResult?.issues_found ?? 0) === 1 ? 'improvement' : 'improvements'}.
-              </p>
-            </div>
+            <p className="mt-5 text-xs leading-5 text-slate-400">This scan reviews website content we can access directly. Some websites may need a deeper manual review.</p>
           </div>
+        )}
 
-          {scanResult?.ai_summary && (
-            <p className="text-sm text-gray-600 leading-relaxed mb-5">{scanResult.ai_summary}</p>
-          )}
-
-          {scanResult?.positive_findings?.length > 0 && (
-            <div className="space-y-1.5 mb-5">
-              <p className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">What's working well</p>
-              {scanResult.positive_findings.map((f, i) => (
-                <p key={i} className="flex items-start gap-2 text-sm text-gray-600">
-                  <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" />
-                  {f}
-                </p>
-              ))}
-            </div>
-          )}
-
-          <div className="grid grid-cols-3 gap-3 mb-5">
-            <div className="bg-green-50 border border-green-100 rounded-xl p-4 text-center">
-              <p className="text-2xl font-bold text-green-700">{scanResult?.summary?.we_can_fix ?? 0}</p>
-              <p className="text-xs text-gray-500 mt-1">Prepared for you</p>
-            </div>
-            <div className="bg-amber-50 border border-amber-100 rounded-xl p-4 text-center">
-              <p className="text-2xl font-bold text-amber-600">{scanResult?.summary?.needs_approval ?? 0}</p>
-              <p className="text-xs text-gray-500 mt-1">Needs your approval</p>
-            </div>
-            <div className="bg-purple-50 border border-purple-100 rounded-xl p-4 text-center">
-              <p className="text-2xl font-bold text-purple-600">{scanResult?.summary?.needs_developer ?? 0}</p>
-              <p className="text-xs text-gray-500 mt-1">Needs a developer</p>
-            </div>
-          </div>
-
-          <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mb-5">
-            <div className="flex items-center gap-2 mb-3">
-              <Zap className="w-4 h-4 text-blue-600 flex-shrink-0" />
-              <p className="text-xs font-medium text-blue-900 uppercase tracking-wider">
-                {hasNoIssues ? "Status" : "Top recommended actions"}
-              </p>
-            </div>
-            {hasNoIssues ? (
-              <p className="text-sm text-blue-800">No major issues found. Your site is looking good!</p>
-            ) : (
-              <ol className="space-y-2">
-                {topActions.map((action, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-blue-800">
-                    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold flex items-center justify-center mt-0.5">{i + 1}</span>
-                    <span>
-                      {typeof action === 'string' ? action : action.title}
-                      {typeof action === 'object' && action.reason && (
-                        <span className="block text-xs text-blue-600 mt-0.5">{action.reason}</span>
-                      )}
-                    </span>
-                  </li>
-                ))}
-              </ol>
+        {scanStarted && crawlJob?.status === "complete" && (
+          <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="text-lg font-semibold text-slate-950">Your scan is complete.</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              We scanned {scanResult?.pages_crawled ?? crawlJob.pages_found ?? 0} pages and found {scanResult?.issues_found ?? 0} recommended {(scanResult?.issues_found ?? 0) === 1 ? "improvement" : "improvements"}.
+            </p>
+            {scanResult?.ai_summary && <p className="mt-4 text-sm leading-6 text-slate-600">{scanResult.ai_summary}</p>}
+            {scanResult?.positive_findings?.length > 0 && (
+              <div className="mt-5"><p className="text-xs font-medium uppercase tracking-wide text-slate-400">What’s working well</p><div className="mt-3 space-y-2">{scanResult.positive_findings.map((finding, index) => <p key={index} className="text-sm leading-6 text-slate-600">{finding}</p>)}</div></div>
             )}
+            <div className="mt-5 grid gap-3 md:grid-cols-3">
+              <div className="rounded-xl bg-slate-50 p-4"><div className="text-2xl font-semibold text-slate-950">{scanResult?.summary?.we_can_fix ?? 0}</div><div className="text-sm text-slate-500">Prepared</div></div>
+              <div className="rounded-xl bg-slate-50 p-4"><div className="text-2xl font-semibold text-slate-950">{scanResult?.summary?.needs_approval ?? 0}</div><div className="text-sm text-slate-500">Needs review</div></div>
+              <div className="rounded-xl bg-slate-50 p-4"><div className="text-2xl font-semibold text-slate-950">{scanResult?.summary?.needs_developer ?? 0}</div><div className="text-sm text-slate-500">May need help</div></div>
+            </div>
+            <div className="mt-6"><Button asChild className="rounded-full bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700"><a href="/dashboard">View Fix List</a></Button></div>
+            {hasNoRecommendations && <p className="mt-4 text-sm text-slate-500">No major recommendations found. Your site is looking good.</p>}
           </div>
-
-          <div className="flex justify-center">
-            <a href="/dashboard"><Button className="gradient-primary text-white border-0">View Fix List</Button></a>
-          </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

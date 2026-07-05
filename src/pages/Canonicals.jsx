@@ -31,25 +31,25 @@ export default function Canonicals() {
   const notInSitemap = pages.filter(p => !p.in_sitemap && p.status_code === 200 && p.indexable);
 
   const sections = [
-    { title: "Missing Canonicals", desc: "Pages without a canonical tag — Google might index duplicate versions", icon: XCircle, color: "red", items: missingCanonical, render: p => p.url },
-    { title: "Sitemap URLs returning 404", desc: "Your sitemap tells Google to visit pages that don't exist", icon: AlertTriangle, color: "amber", items: sitemapWith404, render: p => p.url },
-    { title: "Pages missing from sitemap", desc: "Good pages that should be in your sitemap but aren't", icon: FileText, color: "blue", items: notInSitemap, render: p => p.url },
+    { title: "Missing preferred page settings", desc: "Pages that may not clearly tell Google which version is preferred", icon: XCircle, color: "red", items: missingCanonical, render: p => p.url },
+    { title: "Unavailable pages in site list", desc: "Your website asks Google to visit pages that do not work", icon: AlertTriangle, color: "amber", items: sitemapWith404, render: p => p.url },
+    { title: "Pages missing from site list", desc: "Good pages that may be harder for Google to find", icon: FileText, color: "blue", items: notInSitemap, render: p => p.url },
   ];
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Canonicals & Sitemap</h1>
-        <p className="text-sm text-gray-500 mt-1">Make sure Google sees the right pages and finds them in your sitemap</p>
+        <h1 className="text-2xl font-bold tracking-tight">Preferred Page Settings</h1>
+        <p className="text-sm text-gray-500 mt-1">Make sure Google sees the right pages and can find your important content.</p>
       </div>
 
       {/* Summary */}
       <div className="grid sm:grid-cols-4 gap-4">
         {[
           { label: "Total Pages", value: pages.length, color: "bg-blue-50 text-blue-700" },
-          { label: "In Sitemap", value: pages.filter(p => p.in_sitemap).length, color: "bg-green-50 text-green-700" },
-          { label: "Missing Canonical", value: missingCanonical.length, color: "bg-red-50 text-red-700" },
-          { label: "Sitemap 404s", value: sitemapWith404.length, color: "bg-amber-50 text-amber-700" },
+          { label: "In site list", value: pages.filter(p => p.in_sitemap).length, color: "bg-green-50 text-green-700" },
+          { label: "Missing settings", value: missingCanonical.length, color: "bg-red-50 text-red-700" },
+          { label: "Unavailable pages", value: sitemapWith404.length, color: "bg-amber-50 text-amber-700" },
         ].map(s => (
           <div key={s.label} className="bg-white rounded-xl border border-gray-100 p-4">
             <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${s.color}`}>{s.value}</span>
@@ -62,7 +62,7 @@ export default function Canonicals() {
       {issues.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-100">
-            <h3 className="font-semibold">Specific Issues Found</h3>
+            <h3 className="font-semibold">Specific recommendations found</h3>
           </div>
           <div className="divide-y divide-gray-50">
             {issues.map(iss => (
@@ -74,7 +74,7 @@ export default function Canonicals() {
                     <p className="text-xs text-gray-500 mt-1">{iss.plain_english_explanation}</p>
                   </div>
                   <span className={`text-xs px-2 py-1 rounded-full flex-shrink-0 ${iss.status === "needs_approval" ? "bg-amber-100 text-amber-700" : iss.status === "auto_fixed" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>
-                    {iss.status === "auto_fixed" ? "Fixed" : iss.status === "needs_approval" ? "Needs approval" : iss.status}
+                    {iss.status === "auto_fixed" ? "Prepared" : iss.status === "needs_approval" ? "Needs review" : iss.status}
                   </span>
                 </div>
               </div>

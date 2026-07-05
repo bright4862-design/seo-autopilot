@@ -1,120 +1,53 @@
 import React from "react";
 import { Button } from "@/components/ui/button";
-import { PRIORITY_COLORS, STATUS_COLORS, STATUS_LABELS, CATEGORY_LABELS } from "@/lib/mockData";
-import { X, CheckCircle2, XCircle, Wrench, ThumbsUp, AlertTriangle, Info, Zap } from "lucide-react";
+import { customerText, friendlyCategory, getStatusLabel } from "@/lib/friendlyLabels";
+import { Copy, X } from "lucide-react";
 
 export default function IssueDetailModal({ issue, onClose, onStatusUpdate }) {
+  const nextStep = customerText(issue.ai_recommendation || issue.recommended_value || "Review this recommendation and decide the next step.");
+
+  const copyRecommendation = async () => {
+    await navigator.clipboard.writeText(nextStep);
+  };
+
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <div className="sticky top-0 bg-white border-b border-gray-100 px-6 py-4 flex items-center justify-between rounded-t-2xl">
-          <div>
-            <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium border ${PRIORITY_COLORS[issue.priority]} mr-2`}>
-              {issue.priority}
-            </span>
-            <span className="text-xs text-gray-400">{CATEGORY_LABELS[issue.category]}</span>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4" onClick={onClose}>
+      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-0 shadow-xl" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-4 border-b border-slate-100 p-6">
+          <div className="min-w-0">
+            <div className="mb-3 inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">{getStatusLabel(issue)}</div>
+            <h2 className="text-2xl font-semibold tracking-tight text-slate-950">{customerText(issue.issue_title)}</h2>
+            <p className="mt-1 truncate text-sm text-slate-400">{issue.page_url}</p>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100"><X className="w-4 h-4" /></button>
+          <button aria-label="Close recommendation" onClick={onClose} className="rounded-full p-2 text-slate-500 hover:bg-slate-50"><X className="h-4 w-4" /></button>
         </div>
 
-        <div className="p-6 space-y-6">
-          <div>
-            <h2 className="text-lg font-bold text-gray-900 mb-1">{issue.issue_title}</h2>
-            <code className="text-xs bg-gray-100 px-2 py-1 rounded text-gray-600">{issue.page_url}</code>
-          </div>
+        <div className="space-y-6 p-6">
+          <section><h3 className="text-sm font-semibold text-slate-950">What we found</h3><p className="mt-2 text-sm leading-6 text-slate-600">{customerText(issue.plain_english_explanation || "We found a website improvement worth reviewing.")}</p></section>
+          <section><h3 className="text-sm font-semibold text-slate-950">Why it matters</h3><p className="mt-2 text-sm leading-6 text-slate-600">{customerText(issue.why_it_matters || "This may help customers and search engines understand your website more clearly.")}</p></section>
+          <section><h3 className="text-sm font-semibold text-slate-950">Recommended next step</h3><p className="mt-2 text-sm leading-6 text-slate-600">{nextStep}</p></section>
 
-          {/* Status */}
-          <div className="flex items-center gap-2">
-            <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium ${STATUS_COLORS[issue.status]}`}>
-              {STATUS_LABELS[issue.status]}
-            </span>
-            {issue.confidence_score > 0 && (
-              <span className="text-xs text-gray-400">Confidence: {issue.confidence_score}%</span>
-            )}
-          </div>
-
-          {/* Explanation */}
-          {issue.plain_english_explanation && (
-            <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
-              <div className="flex items-start gap-2">
-                <Info className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="text-sm font-medium text-blue-900 mb-1">What's happening</p>
-                  <p className="text-sm text-blue-700">{issue.plain_english_explanation}</p>
-                </div>
-              </div>
+          <details className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <summary className="cursor-pointer text-sm font-medium text-slate-700">Show technical details</summary>
+            <div className="mt-4 space-y-3 text-sm text-slate-600">
+              <div>Category: {friendlyCategory(issue.category)}</div>
+              <div>Current: {customerText(issue.current_value || "Not found")}</div>
+              <div>Recommended: {customerText(issue.recommended_value || nextStep)}</div>
+              {issue.confidence_score > 0 && <div>Confidence: {issue.confidence_score}%</div>}
             </div>
-          )}
+          </details>
 
-          {issue.why_it_matters && (
-            <div className="bg-amber-50 border border-amber-100 rounded-xl p-4">
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="text-sm font-medium text-amber-900 mb-1">Why this matters</p>
-                  <p className="text-sm text-amber-700">{issue.why_it_matters}</p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Current vs Recommended */}
-          {(issue.current_value || issue.recommended_value) && (
-            <div className="grid sm:grid-cols-2 gap-4">
-              {issue.current_value && (
-                <div className="bg-red-50 border border-red-100 rounded-xl p-4">
-                  <p className="text-xs font-medium text-red-600 mb-1 uppercase tracking-wider">Current</p>
-                  <p className="text-sm text-red-800">{issue.current_value}</p>
-                </div>
-              )}
-              {issue.recommended_value && (
-                <div className="bg-green-50 border border-green-100 rounded-xl p-4">
-                  <p className="text-xs font-medium text-green-600 mb-1 uppercase tracking-wider">Recommended</p>
-                  <p className="text-sm text-green-800">{issue.recommended_value}</p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {issue.ai_recommendation && (
-            <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4">
-              <div className="flex items-start gap-2">
-                <Zap className="w-4 h-4 text-indigo-600 mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="text-sm font-medium text-indigo-900 mb-1">AI Recommendation</p>
-                  <p className="text-sm text-indigo-700">{issue.ai_recommendation}</p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Flags */}
-          <div className="flex flex-wrap gap-2">
-            {issue.can_auto_fix && <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">✓ Prepared for you</span>}
-            {issue.requires_approval && <span className="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded-full">⏳ Requires your approval</span>}
-            {issue.requires_developer && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded-full">🔧 Needs a developer</span>}
-          </div>
-
-          {/* Actions */}
-          <div className="flex flex-wrap gap-3 pt-2 border-t border-gray-100">
-            {(issue.status === "needs_approval" || issue.status === "open") && (
+          <div className="flex flex-wrap gap-3 border-t border-slate-100 pt-5">
+            {issue.status === "needs_approval" || issue.status === "open" ? (
               <>
-                <Button size="sm" className="gradient-primary text-white border-0" onClick={() => onStatusUpdate(issue.id, "approved")}>
-                  <ThumbsUp className="w-3.5 h-3.5 mr-1.5" /> Approve Fix
-                </Button>
-                <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50" onClick={() => onStatusUpdate(issue.id, "rejected")}>
-                  <XCircle className="w-3.5 h-3.5 mr-1.5" /> Reject
-                </Button>
+                <Button className="rounded-full bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700" onClick={() => onStatusUpdate(issue.id, "approved")}>Approve</Button>
+                <Button variant="outline" className="rounded-full border border-slate-200 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50" onClick={() => onStatusUpdate(issue.id, "rejected")}>Not now</Button>
               </>
+            ) : (
+              <Button variant="outline" className="rounded-full border border-slate-200 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50" onClick={() => onStatusUpdate(issue.id, "completed")}>Mark reviewed</Button>
             )}
-            <Button size="sm" variant="outline" onClick={() => onStatusUpdate(issue.id, "completed")}>
-              <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" /> Mark Completed
-            </Button>
-            {issue.requires_developer && (
-              <Button size="sm" variant="outline" className="text-purple-600 border-purple-200 hover:bg-purple-50">
-                <Wrench className="w-3.5 h-3.5 mr-1.5" /> Request Help
-              </Button>
-            )}
+            <Button variant="outline" className="rounded-full border border-slate-200 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50" onClick={copyRecommendation}><Copy className="mr-2 h-4 w-4" /> Copy recommendation</Button>
+            <Button variant="outline" className="rounded-full border border-slate-200 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">Request help</Button>
           </div>
         </div>
       </div>

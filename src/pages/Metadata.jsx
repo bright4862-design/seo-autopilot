@@ -30,15 +30,15 @@ export default function Metadata() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">AI Metadata Generator</h1>
-        <p className="text-sm text-gray-500 mt-1">AI-written titles and descriptions for your pages. Pick the one that sounds best.</p>
+        <h1 className="text-2xl font-bold tracking-tight">Search Appearance</h1>
+        <p className="text-sm text-gray-500 mt-1">AI-written search titles and descriptions for your pages. Pick the one that sounds best.</p>
       </div>
 
       {recs.length === 0 ? (
         <div className="bg-white rounded-xl border border-gray-100 p-12 text-center">
           <Zap className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-          <p className="font-medium text-gray-600">No metadata recommendations yet</p>
-          <p className="text-sm text-gray-400 mt-1">Run a crawl to generate AI-powered title and description suggestions.</p>
+          <p className="font-medium text-gray-600">No search appearance recommendations yet</p>
+          <p className="text-sm text-gray-400 mt-1">Run a scan to generate AI-powered title and description suggestions.</p>
         </div>
       ) : (
         <div className="space-y-4">
@@ -60,7 +60,7 @@ export default function Metadata() {
                   {/* Title options */}
                   <div>
                     <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                      <Zap className="w-4 h-4 text-blue-600" /> Title Tag Options
+                      <Zap className="w-4 h-4 text-blue-600" /> Search title options
                     </h4>
                     <div className="space-y-2">
                       {[rec.recommended_title_1, rec.recommended_title_2, rec.recommended_title_3].filter(Boolean).map((title, i) => (
@@ -74,7 +74,7 @@ export default function Metadata() {
 
                   {/* Description options */}
                   <div>
-                    <h4 className="text-sm font-semibold text-gray-900 mb-3">Meta Description Options</h4>
+                    <h4 className="text-sm font-semibold text-gray-900 mb-3">Search description options</h4>
                     <div className="space-y-2">
                       {[rec.recommended_description_1, rec.recommended_description_2, rec.recommended_description_3].filter(Boolean).map((desc, i) => (
                         <div key={i} className="p-3 bg-gray-50 border border-gray-100 rounded-lg">

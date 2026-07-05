@@ -1,39 +1,17 @@
-import React, { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import IssueDetailModal from "@/components/issues/IssueDetailModal";
 import ScanHistory from "@/components/dashboard/ScanHistory";
-import WhatToDoFirst from "@/components/dashboard/WhatToDoFirst";
-import FixCard from "@/components/fixlist/FixCard";
-import GroupedFixCard from "@/components/fixlist/GroupedFixCard";
 import GroupedFixModal from "@/components/fixlist/GroupedFixModal";
+import RecommendationCard from "@/components/fixlist/RecommendationCard";
+import { groupIssuesByPage } from "@/lib/friendlyLabels";
 
 const CATEGORIES = [
-  {
-    key: "auto_fixed",
-    title: "Prepared fixes",
-    subtitle: "Simple improvements we prepared for your review.",
-    empty: "Nothing here yet. Run a scan to find quick wins.",
-  },
-  {
-    key: "needs_approval",
-    title: "Needs your approval",
-    subtitle: "Review and approve these recommended improvements.",
-    empty: "No fixes waiting for your approval.",
-  },
-  {
-    key: "needs_developer",
-    title: "Needs a developer",
-    subtitle: "These need a developer. We'll guide you through it.",
-    empty: "No developer work needed right now.",
-  },
-];
-
-const COUNTERS = [
-  { key: "auto_fixed", label: "Prepared" },
-  { key: "needs_approval", label: "Needs approval" },
-  { key: "needs_developer", label: "Needs developer" },
+  { key: "auto_fixed", title: "Prepared", subtitle: "Recommendations prepared for review.", empty: "Nothing is prepared yet." },
+  { key: "needs_approval", title: "Needs review", subtitle: "Recommended improvements for you to approve or skip.", empty: "Nothing needs your review right now." },
+  { key: "needs_developer", title: "May need help", subtitle: "Improvements that may need a website editor or done-for-you help.", empty: "No larger improvements found right now." },
 ];
 
 export default function FixList() {
@@ -49,8 +27,8 @@ export default function FixList() {
       const projects = await base44.entities.BusinessProject.list("-created_date", 1);
       if (projects.length > 0) {
         setProject(projects[0]);
-        const iss = await base44.entities.SeoIssue.filter({ project_id: projects[0].id });
-        setIssues(iss);
+        const data = await base44.entities.SeoIssue.filter({ project_id: projects[0].id });
+        setIssues(data);
       }
       setLoading(false);
     };
@@ -59,135 +37,96 @@ export default function FixList() {
 
   const handleStatusUpdate = async (issueId, newStatus) => {
     await base44.entities.SeoIssue.update(issueId, { status: newStatus });
-    setIssues(prev => prev.map(i => (i.id === issueId ? { ...i, status: newStatus } : i)));
-    if (selectedIssue?.id === issueId) setSelectedIssue(prev => ({ ...prev, status: newStatus }));
+    setIssues((prev) => prev.map((issue) => (issue.id === issueId ? { ...issue, status: newStatus } : issue)));
+    if (selectedIssue?.id === issueId) setSelectedIssue((prev) => ({ ...prev, status: newStatus }));
   };
 
   const startScan = () => navigate("/crawl-status");
-
-  // Group multiple prepared fixes for the same page into one card
-  const renderItems = (catKey, items) => {
-    if (catKey === "auto_fixed") {
-      const byPage = {};
-      items.forEach(i => { (byPage[i.page_url] = byPage[i.page_url] || []).push(i); });
-      return Object.entries(byPage).map(([url, group]) =>
-        group.length > 1
-          ? <GroupedFixCard key={url} group={group} onClick={() => setSelectedGroup(group)} />
-          : <FixCard key={group[0].id} issue={group[0]} onClick={() => setSelectedIssue(group[0])} />
-      );
-    }
-    return items.map(issue => (
-      <FixCard key={issue.id} issue={issue} onClick={() => setSelectedIssue(issue)} />
-    ));
-  };
+  const openItem = (item) => item.grouped ? setSelectedGroup(item.recommendations) : setSelectedIssue(item);
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
-      </div>
-    );
+    return <div className="flex h-64 items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-blue-600" /></div>;
   }
 
-  if (!project) {
-    return (
-      <div className="max-w-2xl mx-auto pt-16 text-center">
-        <h3 className="text-xl font-semibold text-gray-900 mb-2">Add your website to start your first scan.</h3>
-        <p className="text-sm text-gray-500 mb-6">We'll find simple SEO improvements in minutes.</p>
-        <Button onClick={startScan}>Scan Website</Button>
-      </div>
-    );
-  }
+  const counts = {
+    auto_fixed: issues.filter((issue) => issue.status === "auto_fixed").length,
+    needs_approval: issues.filter((issue) => issue.status === "needs_approval").length,
+    needs_developer: issues.filter((issue) => issue.status === "needs_developer").length,
+  };
 
-  const counts = CATEGORIES.reduce((acc, c) => {
-    acc[c.key] = issues.filter(i => i.status === c.key).length;
-    return acc;
-  }, {});
+  const firstStep = counts.needs_approval > 0
+    ? "Start by reviewing the items that need your approval."
+    : counts.needs_developer > 0
+      ? "Start with the improvements that may need help."
+      : counts.auto_fixed > 0
+        ? "Start by reviewing your prepared recommendations."
+        : "Your scan looks clean based on the website content we reviewed.";
 
   return (
-    <div className="max-w-3xl mx-auto space-y-8">
-      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight text-gray-900">Your Fix List</h1>
-          <p className="text-sm text-gray-500 mt-1.5">
-            Recommended SEO improvements for {project.business_name}.
-          </p>
-        </div>
-        <Button onClick={startScan}>Scan Website</Button>
-      </div>
-
-      <WhatToDoFirst counts={counts} />
-
-      <div className="grid grid-cols-3 divide-x divide-gray-100 bg-white rounded-xl border border-gray-100 shadow-sm">
-        {COUNTERS.map(c => (
-          <div key={c.key} className="p-4 text-center">
-            <div className="text-2xl font-semibold text-gray-900">{counts[c.key]}</div>
-            <div className="text-xs text-gray-500 mt-0.5">{c.label}</div>
+    <div className="min-h-screen bg-[#F7F8FA]">
+      <div className="mx-auto w-full max-w-5xl px-6 py-10">
+        <div className="mb-8 flex flex-col items-start justify-between gap-6 sm:flex-row">
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight text-slate-950">Your Fix List</h1>
+            <p className="mt-2 text-base text-slate-500">Recommended website improvements for {project?.business_name || "your business"}.</p>
           </div>
-        ))}
+          <div className="flex items-center gap-3">
+            <Button asChild variant="outline" className="rounded-full border border-slate-200 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+              <Link to="/assistant">Ask AI</Link>
+            </Button>
+            <Button onClick={startScan} className="rounded-full bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700">Scan Website</Button>
+          </div>
+        </div>
+
+        {!project ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center shadow-sm">
+            <h2 className="text-lg font-semibold text-slate-950">Add your website to start your first scan.</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-600">We’ll prepare simple recommendations in minutes.</p>
+            <Button onClick={startScan} className="mt-6 rounded-full bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700">Scan Website</Button>
+          </div>
+        ) : (
+          <>
+            <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h2 className="text-base font-semibold text-slate-950">What to do first</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-600">{firstStep}</p>
+            </div>
+
+            <div className="mb-8 grid grid-cols-3 gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+              <div className="rounded-xl px-4 py-3"><div className="text-2xl font-semibold text-slate-950">{counts.auto_fixed}</div><div className="text-sm text-slate-500">Prepared</div></div>
+              <div className="rounded-xl px-4 py-3"><div className="text-2xl font-semibold text-slate-950">{counts.needs_approval}</div><div className="text-sm text-slate-500">Needs review</div></div>
+              <div className="rounded-xl px-4 py-3"><div className="text-2xl font-semibold text-slate-950">{counts.needs_developer}</div><div className="text-sm text-slate-500">May need help</div></div>
+            </div>
+
+            {issues.length === 0 ? (
+              <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center shadow-sm">
+                <h2 className="text-lg font-semibold text-slate-950">{project.last_crawl_at ? "Your scan looks clean" : "No recommendations yet"}</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-600">{project.last_crawl_at ? "Based on the website content we reviewed, no improvements are needed right now." : "Run your first scan to see recommended improvements."}</p>
+                <Button onClick={startScan} className="mt-6 rounded-full bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700">Scan Website</Button>
+              </div>
+            ) : (
+              CATEGORIES.map((category) => {
+                const grouped = groupIssuesByPage(issues.filter((issue) => issue.status === category.key));
+                return (
+                  <section key={category.key} className="mb-8 rounded-2xl border border-slate-200 bg-white shadow-sm">
+                    <div className="border-b border-slate-100 px-5 py-4">
+                      <h2 className="text-lg font-semibold text-slate-950">{category.title}</h2>
+                      <p className="mt-1 text-sm text-slate-500">{category.subtitle}</p>
+                    </div>
+                    <div>
+                      {grouped.length === 0 ? <p className="px-5 py-6 text-sm text-slate-500">{category.empty}</p> : grouped.map((item) => <RecommendationCard key={item.id} item={item} onReview={openItem} />)}
+                    </div>
+                  </section>
+                );
+              })
+            )}
+
+            <ScanHistory projectId={project.id} currentSeoScore={project.seo_score} />
+          </>
+        )}
       </div>
 
-      {issues.length === 0 ? (
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-10 text-center">
-          {project.last_crawl_at ? (
-            <>
-              <h3 className="font-semibold text-gray-900 mb-1">Your scan looks clean</h3>
-              <p className="text-sm text-gray-500">Based on the accessible HTML we reviewed, no improvements are needed right now.</p>
-              <p className="text-sm text-gray-500 mb-6">Want a deeper review? Add competitors or request a manual review.</p>
-            </>
-          ) : (
-            <>
-              <h3 className="font-semibold text-gray-900 mb-1">No recommendations yet</h3>
-              <p className="text-sm text-gray-500 mb-6">Run your first scan to see recommended improvements.</p>
-            </>
-          )}
-          <Button onClick={startScan}>Scan Website</Button>
-        </div>
-      ) : (
-        <div className="space-y-8">
-          {CATEGORIES.map(cat => {
-            const items = issues.filter(i => i.status === cat.key);
-            return (
-              <section key={cat.key}>
-                <div className="px-1 mb-3">
-                  <div className="flex items-baseline gap-2">
-                    <h2 className="text-base font-semibold text-gray-900">{cat.title}</h2>
-                    <span className="text-sm text-gray-400">{items.length}</span>
-                  </div>
-                  <p className="text-xs text-gray-500 mt-0.5">{cat.subtitle}</p>
-                </div>
-                <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-                  {items.length === 0 ? (
-                    <p className="text-sm text-gray-400 px-5 py-6">{cat.empty}</p>
-                  ) : (
-                    <div className="divide-y divide-gray-50">
-                      {renderItems(cat.key, items)}
-                    </div>
-                  )}
-                </div>
-              </section>
-            );
-          })}
-        </div>
-      )}
-
-      <ScanHistory projectId={project.id} currentSeoScore={project.seo_score} />
-
-      {selectedIssue && (
-        <IssueDetailModal
-          issue={selectedIssue}
-          onClose={() => setSelectedIssue(null)}
-          onStatusUpdate={handleStatusUpdate}
-        />
-      )}
-
-      {selectedGroup && (
-        <GroupedFixModal
-          group={selectedGroup}
-          onClose={() => setSelectedGroup(null)}
-          onStatusUpdate={handleStatusUpdate}
-        />
-      )}
+      {selectedIssue && <IssueDetailModal issue={selectedIssue} onClose={() => setSelectedIssue(null)} onStatusUpdate={handleStatusUpdate} />}
+      {selectedGroup && <GroupedFixModal group={selectedGroup} onClose={() => setSelectedGroup(null)} onStatusUpdate={handleStatusUpdate} />}
     </div>
   );
 }

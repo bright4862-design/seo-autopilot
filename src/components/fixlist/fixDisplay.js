@@ -1,27 +1,28 @@
 export const STATUS_BADGES = {
-  auto_fixed: ["Prepared", "bg-green-50 text-green-700 border-green-200"],
-  needs_approval: ["Needs your approval", "bg-amber-50 text-amber-700 border-amber-200"],
-  needs_developer: ["Needs a developer", "bg-purple-50 text-purple-700 border-purple-200"],
+  auto_fixed: ["Prepared", "bg-slate-100 text-slate-600 border-slate-200"],
+  needs_approval: ["Needs review", "bg-slate-100 text-slate-600 border-slate-200"],
+  needs_developer: ["May need help", "bg-slate-100 text-slate-600 border-slate-200"],
 };
 
 export const IMPACT_BADGES = {
-  critical: "bg-red-50 text-red-700 border-red-200",
-  high: "bg-red-50 text-red-600 border-red-200",
-  medium: "bg-amber-50 text-amber-700 border-amber-200",
-  low: "bg-gray-50 text-gray-600 border-gray-200",
+  critical: "bg-slate-100 text-slate-600 border-slate-200",
+  high: "bg-slate-100 text-slate-600 border-slate-200",
+  medium: "bg-slate-100 text-slate-600 border-slate-200",
+  low: "bg-slate-100 text-slate-600 border-slate-200",
 };
 
 export const FIX_TYPE_LABELS = {
-  meta_title: "title",
-  meta_description: "description",
-  thin_content: "content",
-  canonical: "duplicate page signal",
+  meta_title: "search title",
+  meta_description: "search description",
+  thin_content: "page content",
+  canonical: "preferred page setting",
   "404_error": "broken page",
+  schema: "trust signals",
 };
 
 export function pageName(url) {
   if (!url || url === "/") return "homepage";
-  const seg = (url.split("?")[0].split("/").filter(Boolean).pop() || "page");
+  const seg = url.split("?")[0].split("/").filter(Boolean).pop() || "page";
   return seg.replace(/[-_]/g, " ").replace(/\b\w/g, c => c.toUpperCase()) + " page";
 }
 

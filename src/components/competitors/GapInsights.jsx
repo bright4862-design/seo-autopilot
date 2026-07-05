@@ -1,38 +1,27 @@
 import React from "react";
-import { TrendingUp, ArrowRight } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { customerText } from "@/lib/friendlyLabels";
 
-const IMPACT_STYLES = {
-  high: "bg-red-100 text-red-700",
-  medium: "bg-amber-100 text-amber-700",
-  low: "bg-gray-100 text-gray-600",
-};
-
-export default function GapInsights({ insights }) {
+export default function GapInsights({ insights, onCreatePlan, creatingPlan }) {
   return (
-    <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-      <div className="px-6 py-4 border-b border-gray-100">
-        <h3 className="font-semibold flex items-center gap-2">
-          <TrendingUp className="w-4 h-4 text-amber-500" />
-          Where competitors look stronger
-        </h3>
+    <section>
+      <div className="mb-4">
+        <h2 className="text-lg font-semibold text-slate-950">Where competitors look stronger</h2>
+        <p className="mt-1 text-sm text-slate-500">Focus on the biggest visible gaps first.</p>
       </div>
-      <div className="divide-y divide-gray-50">
-        {insights.map(insight => (
-          <div key={insight.id} className="px-6 py-4">
-            <div className="flex items-center gap-2 mb-1">
-              <h4 className="text-sm font-semibold text-gray-900">{insight.insight_title}</h4>
-              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${IMPACT_STYLES[insight.impact] || IMPACT_STYLES.medium}`}>
-                {insight.impact} impact
-              </span>
-            </div>
-            <p className="text-sm text-gray-500 mb-2">{insight.explanation}</p>
-            <p className="text-sm text-blue-700 flex items-start gap-1.5">
-              <ArrowRight className="w-4 h-4 mt-0.5 flex-shrink-0" />
-              {insight.recommended_action}
-            </p>
+      <div className="grid gap-4 md:grid-cols-2">
+        {insights.slice(0, 4).map((insight) => (
+          <div key={insight.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="text-base font-semibold text-slate-950">{customerText(insight.insight_title)}</h3>
+            <p className="mt-2 text-sm leading-6 text-slate-600">{customerText(insight.explanation)}</p>
+            {onCreatePlan && (
+              <Button variant="outline" onClick={onCreatePlan} disabled={creatingPlan} className="mt-4 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                {creatingPlan ? "Creating…" : "Create improvement plan"}
+              </Button>
+            )}
           </div>
         ))}
       </div>
-    </div>
+    </section>
   );
 }

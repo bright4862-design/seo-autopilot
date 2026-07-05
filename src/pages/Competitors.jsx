@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import { computeCustomerMetrics } from "@/lib/competitorMetrics";
 import ComparisonTable from "@/components/competitors/ComparisonTable";
 import GapInsights from "@/components/competitors/GapInsights";
-import { Users, ClipboardList, Loader2, CheckCircle2 } from "lucide-react";
+import { CheckCircle2, Loader2 } from "lucide-react";
 
 const INSIGHT_CATEGORY = {
   "Competitors have more dedicated service pages": "content_pages",
@@ -51,84 +52,53 @@ export default function Competitors() {
     setCreatingPlan(true);
     const me = await base44.auth.me();
     const existing = await base44.entities.DeveloperRecommendation.filter({ project_id: project.id });
-    const existingTitles = new Set(existing.map(r => r.title));
-    const newRecs = insights
-      .filter(i => !existingTitles.has(i.insight_title))
-      .map(i => ({
-        project_id: project.id,
-        owner_user_id: me.id,
-        title: i.insight_title,
-        description: i.explanation,
-        category: INSIGHT_CATEGORY[i.insight_title] || "technical_seo",
-        priority: i.impact === "high" ? "high" : i.impact === "low" ? "low" : "medium",
-        business_impact: i.recommended_action,
-        estimated_complexity: "moderate",
-        recommended_package: "diy",
-        status: "open",
-      }));
-    if (newRecs.length > 0) {
-      await base44.entities.DeveloperRecommendation.bulkCreate(newRecs);
-    }
+    const existingTitles = new Set(existing.map((rec) => rec.title));
+    const newRecs = insights.filter((insight) => !existingTitles.has(insight.insight_title)).map((insight) => ({
+      project_id: project.id,
+      owner_user_id: me.id,
+      title: insight.insight_title,
+      description: insight.explanation,
+      category: INSIGHT_CATEGORY[insight.insight_title] || "technical_seo",
+      priority: insight.impact === "high" ? "high" : insight.impact === "low" ? "low" : "medium",
+      business_impact: insight.recommended_action,
+      estimated_complexity: "moderate",
+      recommended_package: "diy",
+      status: "open",
+    }));
+    if (newRecs.length > 0) await base44.entities.DeveloperRecommendation.bulkCreate(newRecs);
     setCreatingPlan(false);
     setPlanCreated(true);
   };
 
-  if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" /></div>;
+  if (loading) return <div className="flex h-64 items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-blue-600" /></div>;
 
-  const scanned = competitors.filter(c => (c.title_quality_score || 0) > 0 || (c.meta_coverage_pct || 0) > 0 || (c.content_depth_score || 0) > 0);
+  const scanned = competitors.filter((c) => (c.title_quality_score || 0) > 0 || (c.meta_coverage_pct || 0) > 0 || (c.content_depth_score || 0) > 0);
   const hasData = scanned.length > 0 && customer;
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Competitor Comparison</h1>
-          <p className="text-sm text-gray-500 mt-1">See how your site compares — in plain English</p>
+    <div className="min-h-screen bg-[#F7F8FA]">
+      <div className="mx-auto w-full max-w-5xl px-6 py-10">
+        <div className="mb-8 flex flex-col items-start justify-between gap-6 sm:flex-row">
+          <div><h1 className="text-3xl font-semibold tracking-tight text-slate-950">Competitor Gaps</h1><p className="mt-2 text-base text-slate-500">See where other pages may be stronger.</p></div>
+          <Button asChild className="rounded-full bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700"><Link to="/crawl-status">Analyze keyword</Link></Button>
         </div>
-        {hasData && insights.length > 0 && (
-          planCreated ? (
-            <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 border border-green-100 rounded-lg px-4 py-2">
-              <CheckCircle2 className="w-4 h-4" /> Added to your improvement plan
-            </div>
-          ) : (
-            <Button onClick={createImprovementPlan} disabled={creatingPlan} className="gradient-primary text-white border-0">
-              {creatingPlan ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <ClipboardList className="w-4 h-4 mr-2" />}
-              Create improvement plan
-            </Button>
-          )
+
+        {planCreated && <div className="mb-6 flex items-center gap-2 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-600 shadow-sm"><CheckCircle2 className="h-4 w-4 text-green-600" /> Added to your improvement plan.</div>}
+
+        {competitors.length === 0 || !hasData ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center shadow-sm">
+            <h2 className="text-lg font-semibold text-slate-950">No competitor gaps yet</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-600">Add competitor pages during your next scan to see where other sites may be stronger.</p>
+            <Button asChild className="mt-6 rounded-full bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700"><Link to="/crawl-status">Scan Website</Link></Button>
+          </div>
+        ) : (
+          <div className="space-y-8">
+            {insights.length > 0 ? <GapInsights insights={insights} onCreatePlan={createImprovementPlan} creatingPlan={creatingPlan} /> : <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"><p className="text-sm leading-6 text-slate-600">Good news — your site holds up well against these competitors.</p></div>}
+            {creatingPlan && <div className="flex items-center gap-2 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Creating improvement plan…</div>}
+            <ComparisonTable customer={customer} competitors={scanned} />
+          </div>
         )}
       </div>
-
-      {competitors.length === 0 ? (
-        <div className="bg-white rounded-xl border border-gray-100 p-12 text-center">
-          <Users className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-          <p className="font-medium text-gray-600">No competitors added yet</p>
-          <p className="text-sm text-gray-400 mt-1">Add competitor websites during your next scan to compare your site.</p>
-        </div>
-      ) : !hasData ? (
-        <div className="bg-white rounded-xl border border-gray-100 p-12 text-center">
-          <Users className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-          <p className="font-medium text-gray-600">Competitor comparison not ready yet</p>
-          <p className="text-sm text-gray-400 mt-1">Run a scan and we'll compare your site to your competitors automatically.</p>
-        </div>
-      ) : (
-        <>
-          {/* Summary */}
-          <div className="bg-white rounded-xl border border-gray-100 p-6">
-            <p className="text-sm text-gray-700 leading-relaxed">
-              We compared your website to <span className="font-semibold">{scanned.length} competitor {scanned.length === 1 ? "site" : "sites"}</span>
-              {" "}({scanned.map(c => c.name || c.website_url).join(", ")}).
-              {insights.length > 0
-                ? ` We found ${insights.length} ${insights.length === 1 ? "area" : "areas"} where competitors look stronger — the details and next steps are below.`
-                : " Good news — your site holds up well against these competitors."}
-            </p>
-          </div>
-
-          {insights.length > 0 && <GapInsights insights={insights} />}
-
-          <ComparisonTable customer={customer} competitors={scanned} />
-        </>
-      )}
     </div>
   );
 }

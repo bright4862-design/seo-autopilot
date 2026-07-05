@@ -4,15 +4,15 @@ import { Button } from "@/components/ui/button";
 import { Clock, Trash2, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 
 const STATUS_LABELS = {
-  queued: "Queued",
-  crawling_html: "Crawling HTML",
-  rendering_js: "Rendering JS",
-  checking_metadata: "Checking Metadata",
-  checking_canonicals: "Checking Canonicals",
-  checking_sitemap: "Checking Sitemap",
-  checking_redirects: "Checking Redirects",
-  benchmarking_competitors: "Benchmarking Competitors",
-  generating_recommendations: "Generating Recommendations",
+  queued: "Finding pages",
+  crawling_html: "Reading website content",
+  rendering_js: "Reading website content",
+  checking_metadata: "Checking search appearance",
+  checking_canonicals: "Reviewing website setup",
+  checking_sitemap: "Reviewing website setup",
+  checking_redirects: "Checking page redirects",
+  benchmarking_competitors: "Comparing competitors",
+  generating_recommendations: "Preparing recommendations",
   complete: "Complete",
   failed: "Failed",
 };
@@ -27,8 +27,8 @@ export default function CrawlHistory({ crawls, onDelete }) {
     try {
       await base44.entities.CrawlJob.delete(id);
       onDelete && onDelete(id);
-    } catch (err) {
-      setError(err.message || "Failed to delete crawl");
+      } catch (err) {
+      setError(err.message || "Failed to delete scan");
     } finally {
       setDeletingId(null);
     }
@@ -36,11 +36,11 @@ export default function CrawlHistory({ crawls, onDelete }) {
 
   if (crawls.length === 0) {
     return (
-      <div className="bg-white rounded-2xl border border-gray-100 p-6">
-        <h3 className="font-semibold mb-1">Previous Crawls</h3>
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <h3 className="font-semibold mb-1 text-slate-950">Previous scans</h3>
         <div className="flex flex-col items-center justify-center py-8 text-center">
-          <Clock className="w-8 h-8 text-gray-300 mb-2" />
-          <p className="text-sm text-gray-400">No crawl history yet.</p>
+          <Clock className="w-8 h-8 text-slate-300 mb-2" />
+          <p className="text-sm text-slate-500">No scan history yet.</p>
         </div>
       </div>
     );
@@ -48,7 +48,7 @@ export default function CrawlHistory({ crawls, onDelete }) {
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 p-6">
-      <h3 className="font-semibold mb-4">Previous Crawls</h3>
+      <h3 className="font-semibold mb-4 text-slate-950">Previous scans</h3>
       {error && (
         <div className="mb-3 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">{error}</div>
       )}
@@ -82,7 +82,7 @@ export default function CrawlHistory({ crawls, onDelete }) {
                 onClick={() => handleDelete(c.id)}
                 disabled={deletingId === c.id}
                 className="text-gray-400 hover:text-red-600 hover:bg-red-50"
-                title="Delete crawl"
+                title="Delete scan"
               >
                 {deletingId === c.id ? (
                   <Loader2 className="w-4 h-4 animate-spin" />

@@ -33,6 +33,7 @@ export default function AdminLeads({ leads, onStatusChange }) {
             <th className="text-left font-medium text-gray-500 px-4 py-3">Website</th>
             <th className="text-left font-medium text-gray-500 px-4 py-3">Type</th>
             <th className="text-left font-medium text-gray-500 px-4 py-3">Plan</th>
+            <th className="text-left font-medium text-gray-500 px-4 py-3">Scan Context</th>
             <th className="text-left font-medium text-gray-500 px-4 py-3">Date</th>
             <th className="text-left font-medium text-gray-500 px-4 py-3">Status</th>
           </tr>
@@ -48,6 +49,23 @@ export default function AdminLeads({ leads, onStatusChange }) {
                 {lead.message && <p className="text-xs text-gray-400 mt-1 max-w-[200px]">{lead.message}</p>}
               </td>
               <td className="px-4 py-3 text-gray-600">{lead.selected_plan || "—"}</td>
+              <td className="px-4 py-3">
+                {lead.scan_summary ? (
+                  <div className="text-xs text-gray-600 space-y-0.5 min-w-[140px]">
+                    <p>Score: <span className="font-semibold">{lead.scan_summary.health_score}</span></p>
+                    <p>{lead.scan_summary.prepared_fixes} prepared · {lead.scan_summary.needs_approval} approval · {lead.scan_summary.needs_developer} developer</p>
+                    {lead.selected_help_options?.length > 0 && (
+                      <div className="flex flex-wrap gap-1 pt-1 max-w-[220px]">
+                        {lead.selected_help_options.map(opt => (
+                          <span key={opt} className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded-full">{opt}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <span className="text-xs text-gray-400">—</span>
+                )}
+              </td>
               <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{new Date(lead.created_at || lead.created_date).toLocaleDateString()}</td>
               <td className="px-4 py-3">
                 <select

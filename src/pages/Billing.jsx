@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import LeadRequestModal from "@/components/billing/LeadRequestModal";
+import CleanupRequestModal from "@/components/billing/CleanupRequestModal";
 import { CheckCircle2, Zap, Star } from "lucide-react";
 
 const plans = [
@@ -110,7 +111,10 @@ export default function Billing() {
         })}
       </div>
 
-      {leadModal && (
+      {leadModal && leadModal.type === "cleanup" && (
+        <CleanupRequestModal onClose={() => setLeadModal(null)} />
+      )}
+      {leadModal && leadModal.type !== "cleanup" && (
         <LeadRequestModal
           requestType={leadModal.type}
           selectedPlan={leadModal.plan}

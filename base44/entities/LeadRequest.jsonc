@@ -5,10 +5,16 @@
     "owner_user_id": {
       "type": "string"
     },
+    "project_id": {
+      "type": "string"
+    },
     "name": {
       "type": "string"
     },
     "email": {
+      "type": "string"
+    },
+    "business_name": {
       "type": "string"
     },
     "website_url": {
@@ -27,6 +33,29 @@
     },
     "message": {
       "type": "string"
+    },
+    "scan_summary": {
+      "type": "object",
+      "properties": {
+        "health_score": {
+          "type": "number"
+        },
+        "prepared_fixes": {
+          "type": "number"
+        },
+        "needs_approval": {
+          "type": "number"
+        },
+        "needs_developer": {
+          "type": "number"
+        }
+      }
+    },
+    "selected_help_options": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     },
     "status": {
       "type": "string",

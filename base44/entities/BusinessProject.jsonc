@@ -27,6 +27,14 @@
       },
       "default": []
     },
+    "scan_mode": {
+      "type": "string",
+      "enum": [
+        "quick",
+        "deep"
+      ],
+      "default": "quick"
+    },
     "cms_platform": {
       "type": "string",
       "enum": [

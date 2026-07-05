@@ -9,12 +9,15 @@
       "type": "string",
       "enum": [
         "queued",
+        "reading_sitemap",
         "crawling_html",
+        "checking_links",
         "rendering_js",
         "checking_metadata",
         "checking_canonicals",
         "checking_sitemap",
         "checking_redirects",
+        "finding_competitors",
         "benchmarking_competitors",
         "generating_recommendations",
         "complete",
@@ -26,6 +29,7 @@
       "type": "string",
       "enum": [
         "full",
+        "deep",
         "monthly",
         "competitor",
         "js_render"

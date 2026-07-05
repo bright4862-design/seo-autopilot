@@ -16,7 +16,10 @@ Deno.serve(async (req) => {
       website_url,
       crawled_pages,
       raw_fixes,
-      competitor_results
+      competitor_results,
+      discovered_competitors,
+      scan_mode,
+      crawl_warnings
     } = await req.json();
 
     if (!website_url) {
@@ -74,7 +77,10 @@ Deno.serve(async (req) => {
       website_url,
       crawled_pages,
       filteredFixes,
-      competitor_results
+      competitor_results,
+      discovered_competitors,
+      scan_mode,
+      crawl_warnings
     });
 
     const aiResponse = await base44.integrations.Core.InvokeLLM({
@@ -315,7 +321,10 @@ function buildPrompt({
   website_url,
   crawled_pages,
   filteredFixes,
-  competitor_results
+  competitor_results,
+  discovered_competitors,
+  scan_mode,
+  crawl_warnings
 }) {
   return `
 You are an expert SEO strategist for small business websites.
@@ -359,6 +368,15 @@ ${JSON.stringify(crawled_pages || [], null, 2)}
 
 Recommendations after basic filtering:
 ${JSON.stringify(filteredFixes || [], null, 2)}
+
+Scan mode:
+${scan_mode || 'quick'}
+
+Crawl warnings:
+${JSON.stringify(crawl_warnings || [], null, 2)}
+
+Discovered competitors:
+${JSON.stringify(discovered_competitors || [], null, 2)}
 
 Competitor results:
 ${JSON.stringify(competitor_results || [], null, 2)}

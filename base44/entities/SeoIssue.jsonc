@@ -39,7 +39,8 @@
         "duplicate_content",
         "schema",
         "performance",
-        "web_dev"
+        "web_dev",
+        "image_alt_text"
       ]
     },
     "customer_category": {

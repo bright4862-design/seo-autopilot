@@ -14,6 +14,14 @@
     "scan_source": {
       "type": "string"
     },
+    "scan_mode": {
+      "type": "string",
+      "enum": [
+        "quick",
+        "deep"
+      ],
+      "default": "quick"
+    },
     "raw_findings_count": {
       "type": "number",
       "default": 0
@@ -35,6 +43,14 @@
       "default": 0
     },
     "health_score": {
+      "type": "number",
+      "default": 0
+    },
+    "discovered_competitor_count": {
+      "type": "number",
+      "default": 0
+    },
+    "competitor_result_count": {
       "type": "number",
       "default": 0
     },
@@ -64,50 +80,31 @@
     "create": {
       "$or": [
         {
-          "data.owner_user_id": "{{user.id}}"
+          "user_condition": {
+            "role": "admin"
+          }
         },
         {
           "user_condition": {
-            "role": "admin"
+            "role": "user"
           }
         }
       ]
     },
     "read": {
-      "$or": [
-        {
-          "data.owner_user_id": "{{user.id}}"
-        },
-        {
-          "user_condition": {
-            "role": "admin"
-          }
-        }
-      ]
+      "user_condition": {
+        "role": "admin"
+      }
     },
     "update": {
-      "$or": [
-        {
-          "data.owner_user_id": "{{user.id}}"
-        },
-        {
-          "user_condition": {
-            "role": "admin"
-          }
-        }
-      ]
+      "user_condition": {
+        "role": "admin"
+      }
     },
     "delete": {
-      "$or": [
-        {
-          "data.owner_user_id": "{{user.id}}"
-        },
-        {
-          "user_condition": {
-            "role": "admin"
-          }
-        }
-      ]
+      "user_condition": {
+        "role": "admin"
+      }
     }
   }
 }

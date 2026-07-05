@@ -1,10 +1,9 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
-const GOOGLE_API_KEY_NAME = "GOOGLE_" + "CUSTOM_SEARCH_API_KEY";
-const GOOGLE_CX_NAME = "GOOGLE_" + "CUSTOM_SEARCH_CX";
+const SERPAPI_API_KEY_NAME = "SERPAPI_API_KEY";
 
 const USER_AGENT =
-  "Mozilla/5.0 (compatible; SEO-Autopilot/2.4; +https://seoautopilot.app/bot)";
+  "Mozilla/5.0 (compatible; SEO-Autopilot/2.5; +https://seoautopilot.app/bot)";
 
 const ROBOTS_AGENT_TOKEN = "seo-autopilot";
 const CRAWL_TIME_BUDGET_MS = 95000;
@@ -291,6 +290,7 @@ Deno.serve(async (req) => {
       crawl_job_id,
       crawl_warnings: crawlWarnings,
 
+      serpapi_enabled: Boolean(getOptionalSecret(SERPAPI_API_KEY_NAME)),
       html_only_scan: true,
       javascript_rendering_used: false,
       deterministic_scan: true,
@@ -368,7 +368,7 @@ async function runCompetitorPipeline({
   if (limits.discoverCompetitors) {
     try {
       const discovery = await withTimeout(
-        discoverCompetitorsFromGoogle({
+        discoverCompetitorsFromSerpApi({
           base44,
           user,
           project_id,
@@ -381,8 +381,8 @@ async function runCompetitorPipeline({
           important_keywords,
           maxKeywords: limits.maxKeywords,
         }),
-        20000,
-        "Google competitor discovery"
+        25000,
+        "SerpAPI competitor discovery"
       );
 
       discoveredCompetitors = discovery.discovered_competitors || [];
@@ -393,7 +393,7 @@ async function runCompetitorPipeline({
       }
     } catch (error) {
       warnings.push(
-        `Google competitor discovery was skipped: ${
+        `SerpAPI competitor discovery was skipped: ${
           error?.message || "Unknown error"
         }`
       );
@@ -854,7 +854,7 @@ async function crawlCompetitorSnapshots({
         competitor_name: competitor.name || formatDomainName(domain),
         competitor_domain: domain,
         competitor_url: url,
-        source: competitor.source || "google_custom_search",
+        source: competitor.source || "serpapi",
         keyword: competitor.keyword || "",
         serp_position: competitor.position || null,
         serp_title: competitor.title || "",
@@ -1105,7 +1105,6 @@ function analyzePages({
     const path = getPath(page.url);
 
     const isUtility = page.is_utility_page || isUtilityPath(path);
-
     const isImportant =
       page.is_important_page || isImportantPage(path, page.title, page.h1);
 
@@ -1605,7 +1604,7 @@ function buildComparisonFindings({ comparison, snapshots }) {
           customer_category: "Competitor opportunities",
           title: "Review competitor pages for content opportunities",
           explanation:
-            "We found competitor pages from Google results and reviewed what those pages include.",
+            "We found competitor pages from search results and reviewed what those pages include.",
           why:
             "Competitor pages can show what services, questions, proof points, and page sections customers may expect to see.",
           recommendation:
@@ -1636,7 +1635,7 @@ function buildComparisonFindings({ comparison, snapshots }) {
         id: "competitor-content-depth",
         category: "competitor_gap",
         customer_category: "Competitor opportunities",
-        title: "Competitor pages found on Google go much deeper than yours",
+        title: "Competitor pages found in search results go much deeper than yours",
         explanation: `Competitor pages we reviewed have a typical length of about ${depth.competitor_median_words} words. Your important pages have a typical length of about ${depth.your_median_words} words.`,
         why:
           "Pages that fully explain the service, the process, pricing context, and common questions give visitors more reasons to choose you.",
@@ -1954,9 +1953,9 @@ function detectDuplicateDescriptions(pages) {
   return findings;
 }
 
-/* ------------------------ Competitor discovery ------------------------- */
+/* ------------------------ SerpAPI competitor discovery ------------------------- */
 
-async function discoverCompetitorsFromGoogle({
+async function discoverCompetitorsFromSerpApi({
   base44,
   user,
   project_id,
@@ -1970,15 +1969,14 @@ async function discoverCompetitorsFromGoogle({
   maxKeywords,
 }) {
   const warnings = [];
-  const googleApiKey = getOptionalSecret(GOOGLE_API_KEY_NAME);
-  const googleCx = getOptionalSecret(GOOGLE_CX_NAME);
+  const serpApiKey = getOptionalSecret(SERPAPI_API_KEY_NAME);
 
-  if (!googleApiKey || !googleCx) {
+  if (!serpApiKey) {
     return {
       discovered_competitors: [],
       created_competitors: [],
       warnings: [
-        "Google competitor discovery is not configured. Add GOOGLE_CUSTOM_SEARCH_API_KEY and GOOGLE_CUSTOM_SEARCH_CX.",
+        "SerpAPI competitor discovery is not configured. Add SERPAPI_API_KEY.",
       ],
     };
   }
@@ -1996,21 +1994,25 @@ async function discoverCompetitorsFromGoogle({
     keywords.map(async (keyword) => {
       try {
         const items = await withTimeout(
-          searchGoogle({
+          searchSerpApi({
             keyword,
-            googleApiKey,
-            googleCx,
+            serpApiKey,
             ownDomain,
             country,
             language,
           }),
-          8000,
-          "Google search"
+          10000,
+          "SerpAPI search"
         );
 
         return { keyword, items };
-      } catch {
-        warnings.push(`Google search failed for "${keyword}".`);
+      } catch (error) {
+        warnings.push(
+          `SerpAPI search failed for "${keyword}": ${
+            error?.message || "Unknown error"
+          }`
+        );
+
         return { keyword, items: [] };
       }
     })
@@ -2025,7 +2027,7 @@ async function discoverCompetitorsFromGoogle({
       if (!isValidCompetitorDomain(domain, ownDomain)) continue;
 
       results.push({
-        source: "google_custom_search",
+        source: "serpapi",
         keyword: run.keyword,
         title: item.title,
         url: normalizeCompetitorUrl(item.url),
@@ -2053,17 +2055,14 @@ async function discoverCompetitorsFromGoogle({
         (item) => !existingDomains.has(item.domain)
       );
 
-      if (
-        toCreate.length > 0 &&
-        base44.entities?.Competitor?.bulkCreate
-      ) {
+      if (toCreate.length > 0 && base44.entities?.Competitor?.bulkCreate) {
         createdCompetitors = await base44.entities.Competitor.bulkCreate(
           toCreate.map((item) => ({
             project_id,
             owner_user_id: user.id,
             name: formatDomainName(item.domain),
             website_url: item.url,
-            notes: `Found from Google result for "${item.keyword}".`,
+            notes: `Found from SerpAPI result for "${item.keyword}".`,
             service_pages_count: 0,
             title_quality_score: 0,
             meta_coverage_pct: 0,
@@ -2076,7 +2075,9 @@ async function discoverCompetitorsFromGoogle({
       }
     } catch (error) {
       warnings.push(
-        `Could not save discovered competitors: ${error?.message || "Unknown error"}`
+        `Could not save discovered competitors: ${
+          error?.message || "Unknown error"
+        }`
       );
     }
   }
@@ -2088,20 +2089,19 @@ async function discoverCompetitorsFromGoogle({
   };
 }
 
-async function searchGoogle({
+async function searchSerpApi({
   keyword,
-  googleApiKey,
-  googleCx,
+  serpApiKey,
   ownDomain = "",
   country = "us",
   language = "en",
 }) {
   const query = ownDomain ? `${keyword} -site:${ownDomain}` : keyword;
 
-  const url = new URL("https://www.googleapis.com/customsearch/v1");
+  const url = new URL("https://serpapi.com/search.json");
 
-  url.searchParams.set("key", googleApiKey);
-  url.searchParams.set("cx", googleCx);
+  url.searchParams.set("engine", "google");
+  url.searchParams.set("api_key", serpApiKey);
   url.searchParams.set("q", query);
   url.searchParams.set("num", "10");
   url.searchParams.set("gl", String(country || "us").toLowerCase());
@@ -2115,19 +2115,31 @@ async function searchGoogle({
   });
 
   if (!response.ok) {
-    throw new Error(`Google search failed: ${response.status}`);
+    const text = await response.text().catch(() => "");
+    throw new Error(
+      `SerpAPI returned ${response.status}: ${text.slice(0, 300)}`
+    );
   }
 
   const data = await response.json();
-  const items = Array.isArray(data.items) ? data.items : [];
 
-  return items.map((item, index) => ({
-    title: item.title || "",
-    url: item.link || "",
-    snippet: item.snippet || "",
-    position: index + 1,
-    query,
-  }));
+  if (data.error) {
+    throw new Error(`SerpAPI error: ${data.error}`);
+  }
+
+  const organicResults = Array.isArray(data.organic_results)
+    ? data.organic_results
+    : [];
+
+  return organicResults
+    .map((item, index) => ({
+      title: item.title || "",
+      url: item.link || item.url || "",
+      snippet: item.snippet || "",
+      position: item.position || index + 1,
+      query,
+    }))
+    .filter((item) => item.url);
 }
 
 function buildCompetitorKeywords({
@@ -2296,7 +2308,7 @@ function mergeCompetitorResults({
       website_url,
       url: item.original_result_url || website_url,
       domain,
-      source: item.source || (item.keyword ? "google_custom_search" : "saved"),
+      source: item.source || (item.keyword ? "serpapi" : "saved"),
       keyword: item.keyword || "",
       title: item.title || "",
       snippet: item.snippet || "",
@@ -2696,7 +2708,7 @@ function buildSiteSummary({
 
   if (competitorComparison?.competitors_compared?.length) {
     plainParts.push(
-      `We compared your site with ${competitorComparison.competitors_compared.length} competitor page${competitorComparison.competitors_compared.length === 1 ? "" : "s"} found through Google results.`
+      `We compared your site with ${competitorComparison.competitors_compared.length} competitor page${competitorComparison.competitors_compared.length === 1 ? "" : "s"} found through search results.`
     );
   }
 
@@ -2867,6 +2879,7 @@ function priorityScore(url) {
   const path = getPath(url).toLowerCase();
 
   if (path === "/") return 100;
+
   if (
     /service|services|product|products|program|programs|loan|loans|pricing|packages|fix-and-flip|bridge|rental|dscr|hard-money/.test(
       path

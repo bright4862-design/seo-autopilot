@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from "react";
-import { Outlet, Link, useLocation } from "react-router-dom";
+import React, { useEffect, useMemo, useState } from "react";
+import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { flushQueuedEvents } from "@/lib/analytics";
-import { Menu, X } from "lucide-react";
+import { ChevronLeft } from "lucide-react";
+import MobileBottomNav from "@/components/layout/MobileBottomNav";
 
 const navItems = [
   { label: "Fix List", path: "/dashboard" },
@@ -12,12 +13,27 @@ const navItems = [
   { label: "Billing", path: "/billing" },
 ];
 
-function NavLink({ item, active, onClick }) {
+const pageTitles = {
+  "/dashboard": "Fix List",
+  "/crawl-status": "Scan Website",
+  "/issues": "Issue Details",
+  "/metadata": "Search Details",
+  "/redirects": "Redirects",
+  "/canonicals": "Preferred Pages",
+  "/js-rendering": "Website Rendering",
+  "/competitors": "Competitor Opportunities",
+  "/developer": "Website Improvements",
+  "/reports": "Scan Report",
+  "/assistant": "AI Assistant",
+  "/billing": "Billing",
+  "/admin": "Admin",
+};
+
+function NavLink({ item, active }) {
   return (
     <Link
       to={item.path}
-      onClick={onClick}
-      className={`block rounded-xl px-4 py-3 text-[15px] font-medium transition ${active ? "bg-slate-100 text-slate-950" : "text-slate-500 hover:bg-slate-50 hover:text-slate-950"}`}
+      className={`block rounded-xl px-4 py-3 text-[15px] font-medium transition-colors duration-200 ${active ? "bg-slate-100 text-slate-950" : "text-slate-500 hover:bg-slate-50 hover:text-slate-950"}`}
     >
       {item.label}
     </Link>
@@ -25,9 +41,9 @@ function NavLink({ item, active, onClick }) {
 }
 
 export default function DashboardLayout() {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
 
   useEffect(() => {
     flushQueuedEvents();
@@ -36,65 +52,61 @@ export default function DashboardLayout() {
 
   const handleLogout = () => base44.auth.logout("/");
 
-  const sidebar = (
-    <div className="flex h-full flex-col bg-white">
-      <div className="px-6 pb-6 pt-7">
-        <Link to="/dashboard" onClick={() => setSidebarOpen(false)} className="block">
-          <div className="text-[15px] font-semibold tracking-tight text-slate-950">SEO Autopilot</div>
-          <div className="mt-1 text-xs text-slate-400">Website SEO assistant</div>
-        </Link>
-      </div>
-
-      <nav className="space-y-1 px-3">
-        {navItems.map((item) => (
-          <NavLink key={item.path} item={item} active={location.pathname === item.path} onClick={() => setSidebarOpen(false)} />
-        ))}
-      </nav>
-
-      <div className="mt-auto space-y-1 border-t border-slate-100 p-3">
-        {isAdmin && (
-          <Link
-            to="/admin"
-            onClick={() => setSidebarOpen(false)}
-            className={`block rounded-xl px-4 py-3 text-[15px] font-medium transition ${location.pathname === "/admin" ? "bg-slate-100 text-slate-950" : "text-slate-500 hover:bg-slate-50 hover:text-slate-950"}`}
-          >
-            Admin
-          </Link>
-        )}
-        <button onClick={handleLogout} className="block w-full rounded-xl px-4 py-3 text-left text-[15px] font-medium text-slate-500 transition hover:bg-slate-50 hover:text-slate-950">
-          Sign out
-        </button>
-      </div>
-    </div>
-  );
+  const title = useMemo(() => pageTitles[location.pathname] || "SEO Autopilot", [location.pathname]);
+  const showBack = location.pathname !== "/dashboard";
 
   return (
-    <div className="min-h-screen bg-[#F7F8FA] text-slate-950">
-      <aside className="fixed left-0 top-0 hidden h-screen w-64 border-r border-slate-200/70 bg-white lg:block">{sidebar}</aside>
+    <div className="min-h-screen bg-[#F7F8FA] text-slate-950 dark:bg-slate-950 dark:text-white">
+      <aside className="fixed left-0 top-0 hidden h-screen w-64 border-r border-slate-200/70 bg-white lg:block dark:border-slate-800 dark:bg-slate-950">
+        <div className="flex h-full flex-col">
+          <div className="px-6 pb-6 pt-7">
+            <Link to="/dashboard" className="block">
+              <div className="text-[15px] font-semibold tracking-tight text-slate-950 dark:text-white">SEO Autopilot</div>
+              <div className="mt-1 text-xs text-slate-400 dark:text-slate-500">Website SEO assistant</div>
+            </Link>
+          </div>
 
-      {sidebarOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden">
-          <button aria-label="Close menu" className="absolute inset-0 bg-slate-950/20" onClick={() => setSidebarOpen(false)} />
-          <aside className="relative h-full w-72 border-r border-slate-200/70 bg-white shadow-xl">
-            <button aria-label="Close menu" onClick={() => setSidebarOpen(false)} className="absolute right-4 top-4 rounded-full p-2 text-slate-500 hover:bg-slate-50">
-              <X className="h-4 w-4" />
+          <nav className="space-y-1 px-3">
+            {navItems.map((item) => (
+              <NavLink key={item.path} item={item} active={location.pathname === item.path} />
+            ))}
+          </nav>
+
+          <div className="mt-auto space-y-1 border-t border-slate-100 p-3 dark:border-slate-800">
+            {isAdmin && (
+              <Link
+                to="/admin"
+                className={`block rounded-xl px-4 py-3 text-[15px] font-medium transition-colors duration-200 ${location.pathname === "/admin" ? "bg-slate-100 text-slate-950 dark:bg-slate-900 dark:text-white" : "text-slate-500 hover:bg-slate-50 hover:text-slate-950 dark:hover:bg-slate-900 dark:hover:text-white"}`}
+              >
+                Admin
+              </Link>
+            )}
+            <button onClick={handleLogout} className="block min-h-11 w-full rounded-xl px-4 py-3 text-left text-[15px] font-medium text-slate-500 transition-colors duration-200 hover:bg-slate-50 hover:text-slate-950 dark:hover:bg-slate-900 dark:hover:text-white">
+              Sign out
             </button>
-            {sidebar}
-          </aside>
+          </div>
         </div>
-      )}
+      </aside>
 
       <div className="lg:pl-64">
-        <header className="sticky top-0 z-30 flex h-14 items-center border-b border-slate-200/70 bg-white/85 px-4 backdrop-blur lg:hidden">
-          <button aria-label="Open menu" onClick={() => setSidebarOpen(true)} className="rounded-full p-2 text-slate-600 hover:bg-slate-50">
-            <Menu className="h-5 w-5" />
-          </button>
-          <span className="ml-2 text-sm font-semibold text-slate-950">SEO Autopilot</span>
+        <header className="sticky top-0 z-30 flex min-h-14 items-center border-b border-slate-200/70 bg-white/90 px-4 pt-[env(safe-area-inset-top)] backdrop-blur lg:hidden dark:border-slate-800 dark:bg-slate-950/90">
+          {showBack ? (
+            <button aria-label="Go back" onClick={() => navigate(-1)} className="mr-2 flex min-h-11 min-w-11 items-center justify-center rounded-full text-slate-600 transition-colors duration-200 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-900">
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+          ) : null}
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-slate-950 dark:text-white">{title}</p>
+            <p className="truncate text-xs text-slate-500">SEO Autopilot</p>
+          </div>
         </header>
-        <main className="min-h-screen">
+
+        <main className="min-h-screen pb-[calc(env(safe-area-inset-bottom)+5.75rem)] lg:pb-0">
           <Outlet />
         </main>
       </div>
+
+      <MobileBottomNav />
     </div>
   );
 }

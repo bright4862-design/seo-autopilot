@@ -284,6 +284,12 @@ export default function CrawlStatus() {
 
   const currentIdx = crawlJob ? CRAWL_STEPS.findIndex(s => s.key === crawlJob.status) : -1;
 
+  const topActions = [];
+  if ((scanResult?.summary?.needs_approval ?? 0) > 0) topActions.push("Review approval items first");
+  if ((scanResult?.summary?.needs_developer ?? 0) > 0) topActions.push("Review developer recommendations");
+  if ((scanResult?.summary?.we_can_fix ?? 0) > 0) topActions.push("Review prepared titles and descriptions");
+  const hasNoIssues = (scanResult?.issues_found ?? 0) === 0;
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -408,22 +414,22 @@ export default function CrawlStatus() {
           <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mb-5">
             <div className="flex items-center gap-2 mb-3">
               <Zap className="w-4 h-4 text-blue-600 flex-shrink-0" />
-              <p className="text-xs font-medium text-blue-900 uppercase tracking-wider">Top recommended actions</p>
+              <p className="text-xs font-medium text-blue-900 uppercase tracking-wider">
+                {hasNoIssues ? "Status" : "Top recommended actions"}
+              </p>
             </div>
-            <ol className="space-y-2">
-              <li className="flex items-start gap-2 text-sm text-blue-800">
-                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold flex items-center justify-center mt-0.5">1</span>
-                <span>Review prepared page titles and descriptions</span>
-              </li>
-              <li className="flex items-start gap-2 text-sm text-blue-800">
-                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold flex items-center justify-center mt-0.5">2</span>
-                <span>Approve redirect/canonical recommendations</span>
-              </li>
-              <li className="flex items-start gap-2 text-sm text-blue-800">
-                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold flex items-center justify-center mt-0.5">3</span>
-                <span>Request help for important pages that need more content</span>
-              </li>
-            </ol>
+            {hasNoIssues ? (
+              <p className="text-sm text-blue-800">No major issues found. Your site is looking good!</p>
+            ) : (
+              <ol className="space-y-2">
+                {topActions.map((action, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-blue-800">
+                    <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold flex items-center justify-center mt-0.5">{i + 1}</span>
+                    <span>{action}</span>
+                  </li>
+                ))}
+              </ol>
+            )}
           </div>
 
           <div className="flex justify-center">

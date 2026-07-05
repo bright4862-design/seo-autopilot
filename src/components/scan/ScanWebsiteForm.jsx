@@ -20,6 +20,9 @@ const ADVANCED_SCANNER_FUNCTION = "runAdvancedScan";
 const AI_REVIEW_FUNCTION = "aiReviewScan";
 const DEFAULT_COMPETITOR_FIELDS = ["", "", ""];
 
+const DASHBOARD_LAST_SCAN_KEY = "seo_autopilot:last_scan";
+const DASHBOARD_HISTORY_KEY = "seo_autopilot:scan_history";
+
 export default function ScanWebsiteForm() {
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [businessName, setBusinessName] = useState("");
@@ -374,6 +377,13 @@ export default function ScanWebsiteForm() {
           normalizedScanner?.competitor_insights ||
           [],
       };
+
+      saveScanForDashboard({
+        result: mergedFinal,
+        scannerPayload,
+        normalizedScanner,
+        normalizedReview,
+      });
 
       setFinalResult(mergedFinal);
     } catch (err) {
@@ -951,6 +961,10 @@ function Badge({ children }) {
   );
 }
 
+/* -------------------------------------------------------------------------- */
+/* Base44 function caller                                                      */
+/* -------------------------------------------------------------------------- */
+
 async function callBase44Function(functionName, payload) {
   const errors = [];
 
@@ -1002,6 +1016,105 @@ function normalizeFunctionResponse(response) {
 
   return response;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Dashboard persistence                                                       */
+/* -------------------------------------------------------------------------- */
+
+function saveScanForDashboard({
+  result,
+  scannerPayload,
+  normalizedScanner,
+  normalizedReview,
+}) {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return;
+
+    const now = new Date().toISOString();
+
+    const record = {
+      id: `scan_${Date.now()}`,
+      created_at: now,
+      website_url:
+        result?.normalized_url ||
+        result?.website_url ||
+        scannerPayload?.website_url ||
+        "",
+      domain: result?.domain || normalizedScanner?.domain || "",
+      scan_mode:
+        result?.scan_mode ||
+        normalizedScanner?.scan_mode ||
+        scannerPayload?.scan_mode ||
+        "",
+      ai_provider:
+        result?.ai_provider ||
+        normalizedReview?.ai_provider ||
+        "scanner_fallback",
+      result: {
+        ...result,
+        created_at: now,
+        website_url:
+          result?.website_url ||
+          scannerPayload?.website_url ||
+          result?.normalized_url ||
+          "",
+        normalized_url:
+          result?.normalized_url ||
+          normalizedScanner?.normalized_url ||
+          scannerPayload?.website_url ||
+          "",
+      },
+    };
+
+    window.localStorage.setItem(
+      DASHBOARD_LAST_SCAN_KEY,
+      JSON.stringify(record)
+    );
+
+    window.localStorage.setItem(
+      "SEO_AUTOPILOT_LAST_SCAN",
+      JSON.stringify(record)
+    );
+
+    const existingHistory =
+      safeJsonParseForDashboard(
+        window.localStorage.getItem(DASHBOARD_HISTORY_KEY)
+      ) || [];
+
+    const cleanedHistory = Array.isArray(existingHistory)
+      ? existingHistory.filter(
+          (item) => item?.website_url !== record.website_url
+        )
+      : [];
+
+    const nextHistory = [record, ...cleanedHistory].slice(0, 5);
+
+    window.localStorage.setItem(
+      DASHBOARD_HISTORY_KEY,
+      JSON.stringify(nextHistory)
+    );
+
+    window.localStorage.setItem(
+      "SEO_AUTOPILOT_SCAN_HISTORY",
+      JSON.stringify(nextHistory)
+    );
+  } catch (error) {
+    console.warn("Could not save scan result for dashboard", error);
+  }
+}
+
+function safeJsonParseForDashboard(value) {
+  try {
+    if (!value) return null;
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Friendly affected pages                                                     */
+/* -------------------------------------------------------------------------- */
 
 function buildFriendlyAffectedPages(fix) {
   const examples = safeArray(fix?.details?.examples);
@@ -1134,6 +1247,10 @@ function cleanPath(input) {
     return value.endsWith("/") && value !== "/" ? value.slice(0, -1) : value;
   }
 }
+
+/* -------------------------------------------------------------------------- */
+/* Small helpers                                                               */
+/* -------------------------------------------------------------------------- */
 
 function pickFirstNonEmptyArray(values) {
   for (const value of values || []) {

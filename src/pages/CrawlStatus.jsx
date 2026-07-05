@@ -46,6 +46,66 @@ const DEMO_RECOMMENDATIONS = [
   },
 ];
 
+const CATEGORY_MAP = {
+  broken_page: "404_error",
+  page_heading: "thin_content",
+  placeholder_text: "web_dev",
+  faq_gap: "thin_content",
+  cta_gap: "thin_content",
+  trust_signal_gap: "schema",
+  duplicate_search_titles: "duplicate_content",
+};
+
+const VALID_CATEGORIES = new Set(["meta_title", "meta_description", "404_error", "redirect", "canonical", "sitemap", "robots_txt", "js_rendering", "internal_link", "thin_content", "duplicate_content", "schema", "performance", "web_dev"]);
+const VALID_STATUSES = new Set(["auto_fixed", "needs_approval", "approved", "rejected", "needs_developer", "in_progress", "completed", "open"]);
+const VALID_PRIORITIES = new Set(["critical", "high", "medium", "low"]);
+const VALID_DIFFICULTIES = new Set(["easy", "moderate", "developer"]);
+
+const normalizePageUrl = (finding) => finding.page_url || finding.full_url || finding.affected_pages?.[0] || "/";
+
+const mapGroupedFindingToSeoIssue = (finding) => {
+  const affectedPages = Array.isArray(finding.affected_pages) ? finding.affected_pages.filter(Boolean) : [];
+  const category = CATEGORY_MAP[finding.category] || finding.category || "web_dev";
+  const recommendation = finding.ai_recommendation || finding.recommended_value || "Review this item.";
+  const affectedText = affectedPages.length ? `\n\nAffected pages: ${affectedPages.join(" · ")}` : "";
+  const status = VALID_STATUSES.has(finding.status) ? finding.status : finding.requires_developer ? "needs_developer" : finding.requires_approval ? "needs_approval" : "auto_fixed";
+
+  return {
+    page_url: normalizePageUrl(finding),
+    category: VALID_CATEGORIES.has(category) ? category : "web_dev",
+    customer_category: finding.customer_category || "Website improvement",
+    priority: VALID_PRIORITIES.has(finding.priority) ? finding.priority : "medium",
+    status,
+    difficulty: VALID_DIFFICULTIES.has(finding.difficulty) ? finding.difficulty : status === "needs_developer" ? "developer" : "easy",
+    issue_title: finding.issue_title || finding.title || "Review this website improvement",
+    plain_english_explanation: finding.plain_english_explanation || finding.explanation || finding.evidence || "This item was found during the website scan.",
+    why_it_matters: finding.why_it_matters || finding.why || "Fixing this can help visitors and search engines understand the website more clearly.",
+    current_value: finding.current_value || "",
+    recommended_value: finding.recommended_value || recommendation,
+    ai_recommendation: `${recommendation}${affectedText}`,
+    confidence_score: typeof finding.confidence_score === "number" ? finding.confidence_score : 90,
+    can_auto_fix: finding.can_auto_fix === true || status === "auto_fixed",
+    requires_approval: finding.requires_approval === true || status === "needs_approval",
+    requires_developer: finding.requires_developer === true || status === "needs_developer",
+  };
+};
+
+const mapCrawledPageForStorage = (page) => ({
+  url: page.url,
+  status_code: page.status_code || 0,
+  title: page.title || "",
+  meta_description: page.meta_description || "",
+  h1: page.h1 || "",
+  canonical_url: page.canonical_url || "",
+  word_count: page.word_count || 0,
+  indexable: !/noindex/i.test(page.robots_meta || ""),
+  in_sitemap: false,
+  rendered_title: "",
+  rendered_meta_description: "",
+  rendered_canonical: "",
+  js_difference_detected: false,
+});
+
 export default function CrawlStatus() {
   const [crawlJob, setCrawlJob] = useState(null);
   const [project, setProject] = useState(null);
@@ -124,7 +184,7 @@ export default function CrawlStatus() {
       let scanSucceeded = false;
 
       try {
-        const res = await base44.functions.invoke("runRealScan", {
+        const res = await base44.functions.invoke("runAdvancedScan", {
           website_url: proj.website_url,
           business_name: proj.business_name,
           business_type: proj.business_type,
@@ -133,16 +193,17 @@ export default function CrawlStatus() {
           crawl_job_id: job.id,
         });
         const scanData = res.data || {};
-        if (scanData.error) throw new Error(scanData.error);
-        realFixes = scanData.fixes || [];
+        if (scanData.error || scanData.success === false) throw new Error(scanData.error || "Scan failed");
+
         crawledPagesData = scanData.crawled_pages || [];
+        realFixes = Array.isArray(scanData.grouped_findings) ? scanData.grouped_findings.map(mapGroupedFindingToSeoIssue) : [];
         if (typeof scanData.health_score === "number") healthScore = scanData.health_score;
         if (typeof scanData.pages_crawled === "number") pagesCrawled = scanData.pages_crawled;
-        if (typeof scanData.issues_found === "number") issuesFound = scanData.issues_found;
-        if (scanData.summary && typeof scanData.summary === "object") summary = scanData.summary;
+        issuesFound = realFixes.length;
+        summary = summarizeFixes(realFixes);
 
         let topActions = [];
-        let positiveFindings = [];
+        let positiveFindings = Array.isArray(scanData.site_summary?.positives) ? scanData.site_summary.positives : [];
         let aiSummary = "";
         try {
           const reviewed = await reviewFixesWithAi({ project: proj, crawledPages: crawledPagesData, rawFixes: realFixes });
@@ -162,7 +223,7 @@ export default function CrawlStatus() {
       } catch (e) {}
 
       if (crawledPagesData.length) {
-        await base44.entities.CrawledPage.bulkCreate(crawledPagesData.map((page) => ({ ...page, project_id: proj.id, crawl_job_id: job.id, owner_user_id: me.id })));
+        await base44.entities.CrawledPage.bulkCreate(crawledPagesData.map((page) => ({ ...mapCrawledPageForStorage(page), project_id: proj.id, crawl_job_id: job.id, owner_user_id: me.id })));
       }
 
       if (scanSucceeded) {

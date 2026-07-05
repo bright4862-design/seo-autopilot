@@ -1,16 +1,25 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") || "";
-const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") || "gemini-3.5-flash";
+const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") || "gemini-3.1-flash-lite";
 const GEMINI_BASE_URL =
   Deno.env.get("GEMINI_BASE_URL") ||
   "https://generativelanguage.googleapis.com/v1beta/models";
 
 const BASE44_AI_TIMEOUT_MS = Number(
-  Deno.env.get("BASE44_AI_TIMEOUT_MS") || 16000
+  Deno.env.get("BASE44_AI_TIMEOUT_MS") || 25000
 );
 const GEMINI_AI_TIMEOUT_MS = Number(
-  Deno.env.get("GEMINI_AI_TIMEOUT_MS") || 22000
+  Deno.env.get("GEMINI_AI_TIMEOUT_MS") || 60000
+);
+
+const AI_PROVIDER_ORDER =
+  Deno.env.get("AI_PROVIDER_ORDER") || "gemini_first";
+
+const MAX_AI_FIXES = Number(Deno.env.get("MAX_AI_FIXES") || 25);
+const MAX_PROMPT_PAGES = Number(Deno.env.get("MAX_PROMPT_PAGES") || 15);
+const MAX_PROMPT_COMPETITORS = Number(
+  Deno.env.get("MAX_PROMPT_COMPETITORS") || 3
 );
 
 const CATEGORY_MAP = {
@@ -69,6 +78,7 @@ Deno.serve(async (req) => {
     ]);
 
     const canonicalFixes = prepareFixes(rawFixes);
+    const aiFixes = canonicalFixes.slice(0, MAX_AI_FIXES);
 
     const fallbackPlan = buildFallbackPlan({
       body,
@@ -100,78 +110,95 @@ Deno.serve(async (req) => {
       body,
       websiteUrl,
       pages,
-      canonicalFixes,
+      canonicalFixes: aiFixes,
       fallbackPlan,
     });
 
     const aiErrors = [];
 
-    if (base44.integrations?.Core?.InvokeLLM) {
-      try {
-        const rawBase44Response = await withTimeout(
-          base44.integrations.Core.InvokeLLM({
+    const providers =
+      AI_PROVIDER_ORDER === "base44_first"
+        ? ["base44", "gemini"]
+        : ["gemini", "base44"];
+
+    for (const provider of providers) {
+      if (provider === "gemini") {
+        if (!GEMINI_API_KEY) {
+          aiErrors.push("GEMINI_API_KEY is not configured.");
+          continue;
+        }
+
+        try {
+          const geminiResponse = await callGeminiAiReview({
             prompt,
-            response_json_schema: responseSchema(),
-          }),
-          BASE44_AI_TIMEOUT_MS,
-          "Base44 AI review"
-        );
+            schema: responseSchema(),
+          });
 
-        const aiResponse = unwrapAiResponse(rawBase44Response);
+          const merged = mergeAiIntoFallback({
+            aiResponse: geminiResponse,
+            fallbackPlan,
+            canonicalFixes,
+            pages,
+          });
 
-        const merged = mergeAiIntoFallback({
-          aiResponse,
-          fallbackPlan,
-          canonicalFixes,
-          pages,
-        });
-
-        return Response.json({
-          success: true,
-          ai_provider: "base44_invokellm",
-          ...merged,
-        });
-      } catch (error) {
-        aiErrors.push(
-          `Base44 AI failed: ${
-            error?.message || "Unknown Base44 AI error."
-          }`
-        );
+          return Response.json({
+            success: true,
+            ai_provider: "gemini",
+            ai_review_warning:
+              aiErrors.length > 0
+                ? aiErrors.join(" ")
+                : "",
+            ...merged,
+          });
+        } catch (error) {
+          aiErrors.push(
+            `Gemini failed: ${error?.message || "Unknown Gemini error."}`
+          );
+        }
       }
-    } else {
-      aiErrors.push("Base44 InvokeLLM is not available.");
-    }
 
-    if (GEMINI_API_KEY) {
-      try {
-        const geminiResponse = await callGeminiAiReview({
-          prompt,
-          schema: responseSchema(),
-        });
+      if (provider === "base44") {
+        if (!base44.integrations?.Core?.InvokeLLM) {
+          aiErrors.push("Base44 InvokeLLM is not available.");
+          continue;
+        }
 
-        const merged = mergeAiIntoFallback({
-          aiResponse: geminiResponse,
-          fallbackPlan,
-          canonicalFixes,
-          pages,
-        });
+        try {
+          const rawBase44Response = await withTimeout(
+            base44.integrations.Core.InvokeLLM({
+              prompt,
+              response_json_schema: responseSchema(),
+            }),
+            BASE44_AI_TIMEOUT_MS,
+            "Base44 AI review"
+          );
 
-        return Response.json({
-          success: true,
-          ai_provider: "gemini",
-          ai_review_warning:
-            aiErrors.length > 0
-              ? "Base44 AI was unavailable or timed out, so Gemini completed the AI review."
-              : "",
-          ...merged,
-        });
-      } catch (error) {
-        aiErrors.push(
-          `Gemini failed: ${error?.message || "Unknown Gemini error."}`
-        );
+          const aiResponse = unwrapAiResponse(rawBase44Response);
+
+          const merged = mergeAiIntoFallback({
+            aiResponse,
+            fallbackPlan,
+            canonicalFixes,
+            pages,
+          });
+
+          return Response.json({
+            success: true,
+            ai_provider: "base44_invokellm",
+            ai_review_warning:
+              aiErrors.length > 0
+                ? aiErrors.join(" ")
+                : "",
+            ...merged,
+          });
+        } catch (error) {
+          aiErrors.push(
+            `Base44 AI failed: ${
+              error?.message || "Unknown Base44 AI error."
+            }`
+          );
+        }
       }
-    } else {
-      aiErrors.push("GEMINI_API_KEY is not configured.");
     }
 
     return Response.json({
@@ -195,7 +222,7 @@ Deno.serve(async (req) => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* Gemini                                                                       */
+/* Gemini                                                                      */
 /* -------------------------------------------------------------------------- */
 
 async function callGeminiAiReview({ prompt, schema }) {
@@ -261,13 +288,11 @@ async function callGeminiAiReview({ prompt, schema }) {
 function extractGeminiText(payload) {
   const parts = payload?.candidates?.[0]?.content?.parts || [];
 
-  const text = parts
+  return parts
     .map((part) => part?.text || "")
     .filter(Boolean)
     .join("\n")
     .trim();
-
-  return text;
 }
 
 function parseJsonObject(value) {
@@ -972,19 +997,6 @@ ${JSON.stringify(body?.crawl_warnings || [], null, 2)}
 Technical audit summary:
 ${JSON.stringify(body?.technical_audit_summary || null, null, 2)}
 
-Screaming Frog Lite enabled:
-${JSON.stringify(
-  {
-    enabled: Boolean(body?.screaming_frog_lite_enabled),
-    audit_profile: body?.audit_profile || "",
-  },
-  null,
-  2
-)}
-
-Client rendering:
-${JSON.stringify(body?.client_rendering || null, null, 2)}
-
 Scanner findings:
 ${JSON.stringify(canonicalFixes.map(compactFixForPrompt), null, 2)}
 
@@ -996,7 +1008,10 @@ ${JSON.stringify(body?.competitor_comparison || null, null, 2)}
 
 Competitor snapshots:
 ${JSON.stringify(
-  trimCompetitorSnapshots(body?.competitor_page_snapshots || []).slice(0, 3),
+  trimCompetitorSnapshots(body?.competitor_page_snapshots || []).slice(
+    0,
+    MAX_PROMPT_COMPETITORS
+  ),
   null,
   2
 )}
@@ -1100,13 +1115,13 @@ function compactFixForPrompt(fix) {
     priority: fix.priority,
     status: fix.status,
     difficulty: fix.difficulty,
-    current_value: clampText(fix.current_value, 260),
-    recommended_value: clampText(fix.recommended_value, 320),
+    current_value: clampText(fix.current_value, 180),
+    recommended_value: clampText(fix.recommended_value, 240),
     affected_page_count: Array.isArray(fix.affected_pages)
       ? fix.affected_pages.length
       : 0,
     example_pages: Array.isArray(fix.affected_pages)
-      ? fix.affected_pages.slice(0, 8)
+      ? fix.affected_pages.slice(0, 5)
       : [],
     details: compactDetails(fix.details || {}),
   };
@@ -1124,7 +1139,7 @@ function compactDetails(details) {
   }
 
   if (Array.isArray(details?.examples)) {
-    output.examples = details.examples.slice(0, 6);
+    output.examples = details.examples.slice(0, 4);
   }
 
   if (details?.content_depth) {
@@ -1136,20 +1151,20 @@ function compactDetails(details) {
       ...details.faq_coverage,
       competitor_faq_examples: (
         details.faq_coverage.competitor_faq_examples || []
-      ).slice(0, 6),
+      ).slice(0, 4),
     };
   }
 
   if (Array.isArray(details?.topic_gaps)) {
-    output.topic_gaps = details.topic_gaps.slice(0, 8);
+    output.topic_gaps = details.topic_gaps.slice(0, 5);
   }
 
   if (Array.isArray(details?.schema_gaps)) {
-    output.schema_gaps = details.schema_gaps.slice(0, 8);
+    output.schema_gaps = details.schema_gaps.slice(0, 5);
   }
 
   if (Array.isArray(details?.trust_signal_gaps)) {
-    output.trust_signal_gaps = details.trust_signal_gaps.slice(0, 8);
+    output.trust_signal_gaps = details.trust_signal_gaps.slice(0, 5);
   }
 
   return output;
@@ -1158,20 +1173,14 @@ function compactDetails(details) {
 function buildPageProfile(pages) {
   return (Array.isArray(pages) ? pages : [])
     .filter((page) => page?.is_important_page && !page?.is_utility_page)
-    .slice(0, 25)
+    .slice(0, MAX_PROMPT_PAGES)
     .map((page) => ({
       page: cleanPath(page?.url || "/"),
       status_code: page?.status_code || 0,
       indexability: page?.indexability || "",
-      indexability_reasons: Array.isArray(page?.indexability_reasons)
-        ? page.indexability_reasons.slice(0, 4)
-        : [],
-      title: clampText(page?.title || "", 100),
-      title_length: page?.title_length || 0,
-      title_count: page?.title_count || 0,
+      title: clampText(page?.title || "", 90),
       meta_description_length: page?.meta_description_length || 0,
-      meta_description_count: page?.meta_description_count || 0,
-      h1: clampText(page?.h1 || "", 100),
+      h1: clampText(page?.h1 || "", 90),
       h1_count: page?.h1_count || 0,
       word_count: page?.word_count || 0,
       internal_link_count: page?.internal_link_count || 0,
@@ -1180,7 +1189,7 @@ function buildPageProfile(pages) {
       has_faq: Boolean(page?.has_faq),
       has_schema: Boolean(page?.has_schema),
       schema_types: Array.isArray(page?.schema_types)
-        ? page.schema_types.slice(0, 8)
+        ? page.schema_types.slice(0, 6)
         : [],
       trust_signal_count: Array.isArray(page?.trust_signals)
         ? page.trust_signals.length
@@ -1207,25 +1216,23 @@ function trimCompetitorSnapshots(snapshots) {
       competitor_name: item?.competitor_name || "",
       competitor_domain: item?.competitor_domain || "",
       competitor_url: item?.competitor_url || "",
-      keyword: item?.keyword || "",
-      serp_position: item?.serp_position || null,
-      title: clampText(item?.title || "", 120),
-      h1: clampText(item?.h1 || "", 120),
-      h2s: Array.isArray(item?.h2s) ? item.h2s.slice(0, 8) : [],
+      title: clampText(item?.title || "", 100),
+      h1: clampText(item?.h1 || "", 100),
+      h2s: Array.isArray(item?.h2s) ? item.h2s.slice(0, 6) : [],
       word_count: item?.word_count || 0,
       has_faq: Boolean(item?.has_faq),
       faq_questions: Array.isArray(item?.faq_questions)
-        ? item.faq_questions.slice(0, 6)
+        ? item.faq_questions.slice(0, 4)
         : [],
       has_schema: Boolean(item?.has_schema),
       schema_types: Array.isArray(item?.schema_types)
-        ? item.schema_types.slice(0, 8)
+        ? item.schema_types.slice(0, 6)
         : [],
       trust_signals: Array.isArray(item?.trust_signals)
-        ? item.trust_signals.slice(0, 8)
+        ? item.trust_signals.slice(0, 6)
         : [],
       cta_phrases: Array.isArray(item?.cta_phrases)
-        ? item.cta_phrases.slice(0, 8)
+        ? item.cta_phrases.slice(0, 6)
         : [],
     }));
 }

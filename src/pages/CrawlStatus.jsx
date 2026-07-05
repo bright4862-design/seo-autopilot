@@ -376,43 +376,49 @@ export default function CrawlStatus() {
 
       {/* Stats when complete */}
       {crawlJob?.status === "complete" && (
-        <div className="bg-green-50 border border-green-100 rounded-xl p-5 text-center">
-          <CheckCircle2 className="w-10 h-10 text-green-500 mx-auto mb-3" />
-          <h3 className="font-bold text-green-900 text-lg mb-1">Scan Complete!</h3>
-          <p className="text-sm text-green-700 mb-4">
-            We crawled {scanResult?.pages_crawled ?? crawlJob.pages_found ?? 0} pages
-            and found {scanResult?.issues_found ?? 0} SEO {(scanResult?.issues_found ?? 0) === 1 ? 'issue' : 'issues'}.
-          </p>
-          {scanResult?.summary && (
-            <div className="bg-white/60 rounded-lg p-3 mb-4">
-              <div className="grid grid-cols-3 gap-2 text-center">
-                <div>
-                  <p className="text-lg font-bold text-green-700">{scanResult.summary.we_can_fix ?? 0}</p>
-                  <p className="text-xs text-gray-500">Fix prepared</p>
-                </div>
-                <div>
-                  <p className="text-lg font-bold text-amber-600">{scanResult.summary.needs_approval ?? 0}</p>
-                  <p className="text-xs text-gray-500">Needs approval</p>
-                </div>
-                <div>
-                  <p className="text-lg font-bold text-blue-600">{scanResult.summary.needs_developer ?? 0}</p>
-                  <p className="text-xs text-gray-500">Needs developer</p>
-                </div>
+        <div className="bg-white border border-gray-100 rounded-2xl p-6">
+          <div className="flex items-center gap-3 mb-5">
+            <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center">
+              <CheckCircle2 className="w-5 h-5 text-green-600" />
+            </div>
+            <div>
+              <h3 className="font-bold text-gray-900 text-lg">Your scan is complete.</h3>
+              <p className="text-sm text-gray-500">
+                We scanned {scanResult?.pages_crawled ?? crawlJob.pages_found ?? 0} pages
+                and found {scanResult?.issues_found ?? 0} recommended {(scanResult?.issues_found ?? 0) === 1 ? 'improvement' : 'improvements'}.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3 mb-5">
+            <div className="bg-green-50 border border-green-100 rounded-xl p-4 text-center">
+              <p className="text-2xl font-bold text-green-700">{scanResult?.summary?.we_can_fix ?? 0}</p>
+              <p className="text-xs text-gray-500 mt-1">Prepared for you</p>
+            </div>
+            <div className="bg-amber-50 border border-amber-100 rounded-xl p-4 text-center">
+              <p className="text-2xl font-bold text-amber-600">{scanResult?.summary?.needs_approval ?? 0}</p>
+              <p className="text-xs text-gray-500 mt-1">Needs your approval</p>
+            </div>
+            <div className="bg-purple-50 border border-purple-100 rounded-xl p-4 text-center">
+              <p className="text-2xl font-bold text-purple-600">{scanResult?.summary?.needs_developer ?? 0}</p>
+              <p className="text-xs text-gray-500 mt-1">Needs a developer</p>
+            </div>
+          </div>
+
+          {(scanResult?.summary?.needs_approval ?? 0) > 0 && (
+            <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex items-start gap-3 mb-5">
+              <Zap className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-xs font-medium text-blue-900 uppercase tracking-wider">Top next step</p>
+                <p className="text-sm text-blue-700 mt-0.5">
+                  Review the {scanResult.summary.needs_approval} approval {(scanResult.summary.needs_approval) === 1 ? 'item' : 'items'} first.
+                </p>
               </div>
             </div>
           )}
-          <div className="grid grid-cols-2 gap-3 max-w-xs mx-auto mb-4">
-            <div className="bg-white rounded-lg p-3">
-              <p className="text-2xl font-bold text-green-700">{scanResult?.health_score ?? 0}</p>
-              <p className="text-xs text-gray-500">SEO Score</p>
-            </div>
-            <div className="bg-white rounded-lg p-3">
-              <p className="text-2xl font-bold text-green-700">{scanResult?.fixes?.length ?? 0}</p>
-              <p className="text-xs text-gray-500">Fixes Ready</p>
-            </div>
-          </div>
-          <div className="flex justify-center gap-3">
-            <a href="/dashboard"><Button size="sm" className="gradient-primary text-white border-0">View Fix List</Button></a>
+
+          <div className="flex justify-center">
+            <a href="/dashboard"><Button className="gradient-primary text-white border-0">View Fix List</Button></a>
           </div>
         </div>
       )}

@@ -32,9 +32,19 @@ export default function Issues() {
   }, []);
 
   const handleStatusUpdate = async (issueId, newStatus) => {
-    await base44.entities.SeoIssue.update(issueId, { status: newStatus });
+    const previousIssues = issues;
+    const previousSelectedIssue = selectedIssue;
+
     setIssues(prev => prev.map(i => i.id === issueId ? { ...i, status: newStatus } : i));
     if (selectedIssue?.id === issueId) setSelectedIssue(prev => ({ ...prev, status: newStatus }));
+
+    try {
+      await base44.entities.SeoIssue.update(issueId, { status: newStatus });
+    } catch (err) {
+      console.warn("Could not update issue status.", err);
+      setIssues(previousIssues);
+      setSelectedIssue(previousSelectedIssue);
+    }
   };
 
   const filtered = issues.filter(i => {

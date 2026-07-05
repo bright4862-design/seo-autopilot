@@ -2,7 +2,7 @@ import React from "react";
 import { Button } from "@/components/ui/button";
 import { trackEvent } from "@/lib/analytics";
 import { customerText, getStatusLabel } from "@/lib/friendlyLabels";
-import { Copy, X } from "lucide-react";
+import { ChevronLeft, Copy, X } from "lucide-react";
 
 export default function IssueDetailModal({ issue, onClose, onStatusUpdate }) {
   const nextStep = customerText(issue.ai_recommendation || issue.recommended_value || "Review this recommendation and decide the next step.");
@@ -28,7 +28,10 @@ export default function IssueDetailModal({ issue, onClose, onStatusUpdate }) {
             <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">{customerText(issue.issue_title)}</h2>
             <p className="mt-1 truncate text-sm text-slate-400">{issue.page_url}</p>
           </div>
-          <button aria-label="Close recommendation" onClick={onClose} className="rounded-full p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-700"><X className="h-4 w-4" /></button>
+          <div className="flex shrink-0 items-center gap-2">
+            <button aria-label="Back" onClick={onClose} className="inline-flex min-h-11 items-center gap-1 rounded-full px-3 text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-950 sm:hidden"><ChevronLeft className="h-4 w-4" /> Back</button>
+            <button aria-label="Close recommendation" onClick={onClose} className="rounded-full p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-700"><X className="h-4 w-4" /></button>
+          </div>
         </div>
 
         <div className="divide-y divide-slate-100">

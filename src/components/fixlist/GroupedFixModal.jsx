@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { customerText, friendlyCategory } from "@/lib/friendlyLabels";
 import { pageName } from "@/components/fixlist/fixDisplay";
-import { Loader2, X } from "lucide-react";
+import { ChevronLeft, Loader2, X } from "lucide-react";
 
 export default function GroupedFixModal({ group, onClose, onStatusUpdate }) {
   const [saving, setSaving] = useState(false);
@@ -21,7 +21,10 @@ export default function GroupedFixModal({ group, onClose, onStatusUpdate }) {
       <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white shadow-2xl shadow-slate-950/10" onClick={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
           <div><p className="text-sm font-medium text-blue-600">{group.length} recommendations</p><h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">Improve your {name}</h2><p className="mt-1 text-sm text-slate-400">{group[0].page_url}</p></div>
-          <button aria-label="Close recommendations" onClick={onClose} className="rounded-full p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-700"><X className="h-4 w-4" /></button>
+          <div className="flex shrink-0 items-center gap-2">
+            <button aria-label="Back" onClick={onClose} className="inline-flex min-h-11 items-center gap-1 rounded-full px-3 text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-950 sm:hidden"><ChevronLeft className="h-4 w-4" /> Back</button>
+            <button aria-label="Close recommendations" onClick={onClose} className="rounded-full p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-700"><X className="h-4 w-4" /></button>
+          </div>
         </div>
 
         <div className="divide-y divide-slate-100">

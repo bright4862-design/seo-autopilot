@@ -7,6 +7,7 @@ import IssueDetailModal from "@/components/issues/IssueDetailModal";
 import ScanHistory from "@/components/dashboard/ScanHistory";
 import GroupedFixModal from "@/components/fixlist/GroupedFixModal";
 import RecommendationCard from "@/components/fixlist/RecommendationCard";
+import PullToRefresh from "@/components/layout/PullToRefresh";
 import { groupIssuesByPage } from "@/lib/friendlyLabels";
 import {
   ACTIVE_STATUSES,
@@ -154,52 +155,50 @@ export default function FixList() {
   const [selectedIssue, setSelectedIssue] = useState(null);
   const [selectedGroup, setSelectedGroup] = useState(null);
 
+  const loadData = async () => {
+    try {
+      const { user, project: activeProject } = await resolveActiveProject(base44);
+
+      if (!activeProject) {
+        setLoading(false);
+        return;
+      }
+
+      setProject(activeProject);
+
+      const [issueData, insights, keywordGaps] = await Promise.all([
+        base44.entities.SeoIssue.filter({
+          project_id: activeProject.id,
+          owner_user_id: user.id,
+        }),
+        base44.entities.CompetitorInsight.filter({
+          project_id: activeProject.id,
+          owner_user_id: user.id,
+        }),
+        base44.entities.KeywordGapAnalysis.filter({
+          project_id: activeProject.id,
+          owner_user_id: user.id,
+        }),
+      ]);
+
+      const visibleIssues = (issueData || []).filter((issue) =>
+        ACTIVE_STATUSES.has(issue.status)
+      );
+
+      setIssues(visibleIssues);
+      setCompetitorOpportunityCount(
+        (insights?.length || 0) + (keywordGaps?.length || 0)
+      );
+    } catch (err) {
+      console.warn("Could not load Fix List.", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     trackEvent("fix_list_viewed");
-
-    const load = async () => {
-      try {
-        const { user, project: activeProject } =
-          await resolveActiveProject(base44);
-
-        if (!activeProject) {
-          setLoading(false);
-          return;
-        }
-
-        setProject(activeProject);
-
-        const [issueData, insights, keywordGaps] = await Promise.all([
-          base44.entities.SeoIssue.filter({
-            project_id: activeProject.id,
-            owner_user_id: user.id,
-          }),
-          base44.entities.CompetitorInsight.filter({
-            project_id: activeProject.id,
-            owner_user_id: user.id,
-          }),
-          base44.entities.KeywordGapAnalysis.filter({
-            project_id: activeProject.id,
-            owner_user_id: user.id,
-          }),
-        ]);
-
-        const visibleIssues = (issueData || []).filter((issue) =>
-          ACTIVE_STATUSES.has(issue.status)
-        );
-
-        setIssues(visibleIssues);
-        setCompetitorOpportunityCount(
-          (insights?.length || 0) + (keywordGaps?.length || 0)
-        );
-      } catch (err) {
-        console.warn("Could not load Fix List.", err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    load();
+    loadData();
   }, []);
 
   const counts = useMemo(() => countBuckets(issues), [issues]);
@@ -239,23 +238,8 @@ export default function FixList() {
   };
 
   const handleStatusUpdate = async (issueId, newStatus) => {
-    await base44.entities.SeoIssue.update(issueId, { status: newStatus });
-
-    const eventName =
-      newStatus === "approved"
-        ? "recommendation_approved"
-        : newStatus === "rejected"
-          ? "recommendation_rejected"
-          : newStatus === "completed"
-            ? "recommendation_marked_reviewed"
-            : null;
-
-    if (eventName) {
-      trackEvent(eventName, {
-        recommendation_id: issueId,
-        status: newStatus,
-      });
-    }
+    const previousIssues = issues;
+    const previousSelectedIssue = selectedIssue;
 
     setIssues((previous) =>
       previous
@@ -270,6 +254,30 @@ export default function FixList() {
         previous ? { ...previous, status: newStatus } : previous
       );
     }
+
+    try {
+      await base44.entities.SeoIssue.update(issueId, { status: newStatus });
+
+      const eventName =
+        newStatus === "approved"
+          ? "recommendation_approved"
+          : newStatus === "rejected"
+            ? "recommendation_rejected"
+            : newStatus === "completed"
+              ? "recommendation_marked_reviewed"
+              : null;
+
+      if (eventName) {
+        trackEvent(eventName, {
+          recommendation_id: issueId,
+          status: newStatus,
+        });
+      }
+    } catch (err) {
+      console.warn("Could not update recommendation status.", err);
+      setIssues(previousIssues);
+      setSelectedIssue(previousSelectedIssue);
+    }
   };
 
   if (loading) {
@@ -281,8 +289,9 @@ export default function FixList() {
   }
 
   return (
-    <div className="min-h-screen bg-[#F7F8FA]">
-      <div className="mx-auto w-full max-w-4xl px-5 py-10 sm:px-6 lg:py-12">
+    <PullToRefresh onRefresh={loadData}>
+      <div className="min-h-screen bg-[#F7F8FA] dark:bg-slate-950">
+        <div className="mx-auto w-full max-w-4xl px-5 py-10 sm:px-6 lg:py-12">
         <div className="mb-8 flex flex-col items-start justify-between gap-5 sm:flex-row">
           <div>
             <p className="text-sm font-medium text-blue-600">
@@ -368,13 +377,14 @@ export default function FixList() {
         />
       )}
 
-      {selectedGroup && (
-        <GroupedFixModal
-          group={selectedGroup}
-          onClose={() => setSelectedGroup(null)}
-          onStatusUpdate={handleStatusUpdate}
-        />
-      )}
-    </div>
+        {selectedGroup && (
+          <GroupedFixModal
+            group={selectedGroup}
+            onClose={() => setSelectedGroup(null)}
+            onStatusUpdate={handleStatusUpdate}
+          />
+        )}
+      </div>
+    </PullToRefresh>
   );
 }

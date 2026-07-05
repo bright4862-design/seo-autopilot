@@ -7,6 +7,7 @@ import { Globe, Calendar, ExternalLink } from "lucide-react";
 import ScoreRing from "@/components/dashboard/ScoreRing";
 import UrlSubmissionPanel from "@/components/dashboard/UrlSubmissionPanel";
 import CrawlHistory from "@/components/dashboard/CrawlHistory";
+import PullToRefresh from "@/components/layout/PullToRefresh";
 import {
   ACTIVE_STATUSES,
   DONE_STATUSES,
@@ -86,43 +87,41 @@ export default function Dashboard() {
   const [crawls, setCrawls] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const loadData = async () => {
+    try {
+      const { user, project: activeProject } = await resolveActiveProject(base44);
+
+      if (!activeProject) return;
+
+      setProject(activeProject);
+
+      const [issueData, jobs] = await Promise.all([
+        base44.entities.SeoIssue.filter({
+          project_id: activeProject.id,
+          owner_user_id: user.id,
+        }),
+        base44.entities.CrawlJob.filter(
+          { project_id: activeProject.id },
+          "-started_at"
+        ),
+      ]);
+
+      const all = issueData || [];
+      setIssues(all.filter((issue) => ACTIVE_STATUSES.has(issue.status)));
+      setDoneCount(
+        all.filter((issue) => DONE_STATUSES.has(issue.status)).length
+      );
+      setCrawls(jobs || []);
+    } catch (err) {
+      console.warn("Could not load the dashboard.", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     trackEvent("dashboard_viewed");
-
-    const load = async () => {
-      try {
-        const { user, project: activeProject } =
-          await resolveActiveProject(base44);
-
-        if (!activeProject) return;
-
-        setProject(activeProject);
-
-        const [issueData, jobs] = await Promise.all([
-          base44.entities.SeoIssue.filter({
-            project_id: activeProject.id,
-            owner_user_id: user.id,
-          }),
-          base44.entities.CrawlJob.filter(
-            { project_id: activeProject.id },
-            "-started_at"
-          ),
-        ]);
-
-        const all = issueData || [];
-        setIssues(all.filter((issue) => ACTIVE_STATUSES.has(issue.status)));
-        setDoneCount(
-          all.filter((issue) => DONE_STATUSES.has(issue.status)).length
-        );
-        setCrawls(jobs || []);
-      } catch (err) {
-        console.warn("Could not load the dashboard.", err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    load();
+    loadData();
   }, []);
 
   const counts = useMemo(() => countBuckets(issues), [issues]);
@@ -173,8 +172,9 @@ export default function Dashboard() {
   const showScanSecondary = primaryAction.to !== "/crawl-status";
 
   return (
-    <div className="min-h-screen bg-[#F7F8FA]">
-      <div className="mx-auto w-full max-w-4xl px-5 py-10 sm:px-6 lg:py-12">
+    <PullToRefresh onRefresh={loadData}>
+      <div className="min-h-screen bg-[#F7F8FA] dark:bg-slate-950">
+        <div className="mx-auto w-full max-w-4xl px-5 py-10 sm:px-6 lg:py-12">
         {/* Header */}
         <div className="mb-8 flex flex-col items-start justify-between gap-5 sm:flex-row">
           <div>
@@ -315,7 +315,8 @@ export default function Dashboard() {
 
         {/* Scan history */}
         <CrawlHistory crawls={crawls} onDelete={handleCrawlDeleted} />
+        </div>
       </div>
-    </div>
+    </PullToRefresh>
   );
 }

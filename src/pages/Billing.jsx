@@ -18,6 +18,7 @@ export default function Billing() {
   const navigate = useNavigate();
   const [currentPlan, setCurrentPlan] = useState("free");
   const [leadModal, setLeadModal] = useState(null);
+  const [deleteMessage, setDeleteMessage] = useState("");
 
   useEffect(() => {
     trackEvent("billing_viewed");
@@ -27,6 +28,14 @@ export default function Billing() {
     };
     load();
   }, []);
+
+  const handleDeleteAccount = () => {
+    const confirmed = window.confirm("Delete account requests are permanent. Do you want instructions for deleting your account?");
+    if (!confirmed) return;
+
+    trackEvent("delete_account_requested", { page: "billing" });
+    setDeleteMessage("To delete your account and personal data, please contact Base44 support from your account settings. This protects your account from accidental deletion.");
+  };
 
   return (
     <div className="min-h-screen bg-[#F7F8FA]">
@@ -75,6 +84,25 @@ export default function Billing() {
             );
           })}
         </div>
+
+        <section className="mt-7 rounded-3xl border border-red-100 bg-white px-5 py-5 shadow-sm sm:px-6">
+          <h2 className="text-base font-semibold text-slate-950">Account</h2>
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            Need to remove your account and data? Start here and we’ll show the safest next step.
+          </p>
+          {deleteMessage && (
+            <p className="mt-3 rounded-2xl bg-red-50 px-4 py-3 text-sm leading-6 text-red-700">
+              {deleteMessage}
+            </p>
+          )}
+          <Button
+            variant="outline"
+            className="mt-4 rounded-full border-red-200 bg-white px-5 text-sm font-medium text-red-600 shadow-none hover:bg-red-50 hover:text-red-700"
+            onClick={handleDeleteAccount}
+          >
+            Delete Account
+          </Button>
+        </section>
 
         {leadModal?.type === "cleanup" && <CleanupRequestModal onClose={() => setLeadModal(null)} />}
         {leadModal && leadModal.type !== "cleanup" && <LeadRequestModal requestType={leadModal.type} selectedPlan={leadModal.plan} onClose={() => setLeadModal(null)} />}

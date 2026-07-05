@@ -1,10 +1,27 @@
 import React, { useEffect, useRef, useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { trackEvent } from "@/lib/analytics";
-import { computeHealthScore, summarizeFixes } from "@/lib/aiReview";
 import ScanWebsiteForm from "@/components/scan/ScanWebsiteForm";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, CheckCircle2, Circle, Loader2 } from "lucide-react";
+
+/**
+ * IMPORTANT:
+ * Change this only if your existing backend scan function has a different name.
+ *
+ * Common names:
+ * - runRealScan
+ * - startCrawl
+ * - scanWebsite
+ * - crawlWebsite
+ */
+const SCAN_FUNCTION_NAME = "runRealScan";
+
+/**
+ * If aiReviewScan does not exist, leave this as-is.
+ * The code will try it, and if it fails, it will save crawler recommendations directly.
+ */
+const AI_REVIEW_FUNCTION_NAME = "aiReviewScan";
 
 const QUICK_SCAN_STEPS = [
   { key: "queued", label: "Finding pages" },
@@ -34,7 +51,8 @@ const CATEGORY_MAP = {
   cta_gap: "thin_content",
   trust_signal_gap: "schema",
   duplicate_search_titles: "duplicate_content",
-  image_alt_text: "image_alt_text",
+  image_alt_text: "web_dev",
+  content: "thin_content",
 };
 
 const VALID_CATEGORIES = new Set([
@@ -52,7 +70,6 @@ const VALID_CATEGORIES = new Set([
   "schema",
   "performance",
   "web_dev",
-  "image_alt_text",
 ]);
 
 const VALID_STATUSES = new Set([
@@ -95,20 +112,6 @@ function getScanMode(projectOrForm) {
   return projectOrForm?.scan_mode === "deep" ? "deep" : "quick";
 }
 
-function normalizePageUrl(finding) {
-  if (finding?.page_url) return finding.page_url;
-
-  if (Array.isArray(finding?.affected_pages) && finding.affected_pages[0]) {
-    return finding.affected_pages[0];
-  }
-
-  try {
-    if (finding?.full_url) return new URL(finding.full_url).pathname || "/";
-  } catch {}
-
-  return "/";
-}
-
 function getSafeStatus(item = {}) {
   if (VALID_STATUSES.has(item.status)) return item.status;
   if (item.requires_developer) return "needs_developer";
@@ -122,74 +125,139 @@ function getSafeCategory(category) {
   return VALID_CATEGORIES.has(mapped) ? mapped : "web_dev";
 }
 
-function mapGroupedFindingToSeoIssue(finding) {
-  const affectedPages = Array.isArray(finding?.affected_pages)
-    ? finding.affected_pages.filter(Boolean)
-    : [];
+function normalizePageUrl(item = {}) {
+  if (item.page_url) return cleanPath(item.page_url);
+  if (item.url) return cleanPath(item.url);
+  if (item.page) return cleanPath(item.page);
 
-  const status = getSafeStatus(finding);
-  const category = getSafeCategory(finding?.category);
-
-  const recommendation =
-    finding?.ai_recommendation ||
-    finding?.recommended_value ||
-    finding?.recommendation ||
-    "Review this recommendation.";
-
-  const details = {
-    ...(finding?.details || {}),
-    original_category: finding?.category || "",
-    scan_source: "runAdvancedScan",
-    grouped: finding?.type === "site_level",
-    html_only_scan: true,
-    javascript_rendering_used: false,
-  };
-
-  if (affectedPages.length > 0 && !details.affected_count) {
-    details.affected_count = affectedPages.length;
+  if (Array.isArray(item.affected_pages) && item.affected_pages[0]) {
+    return cleanPath(item.affected_pages[0]);
   }
 
+  return "/";
+}
+
+function cleanPath(input) {
+  try {
+    const parsed = new URL(input, window.location.origin);
+    const path = parsed.pathname || "/";
+    return path !== "/" && path.endsWith("/") ? path.slice(0, -1) : path;
+  } catch {
+    const value = String(input || "/").split("?")[0].split("#")[0];
+    if (!value || value === "/") return "/";
+    return value.endsWith("/") && value !== "/" ? value.slice(0, -1) : value;
+  }
+}
+
+function getAffectedPages(item = {}) {
+  if (Array.isArray(item.affected_pages)) {
+    return item.affected_pages.filter(Boolean).map(cleanPath);
+  }
+
+  if (Array.isArray(item.pages)) {
+    return item.pages.filter(Boolean).map(cleanPath);
+  }
+
+  if (item.page_url) return [cleanPath(item.page_url)];
+  if (item.url) return [cleanPath(item.url)];
+
+  return [];
+}
+
+function mapFindingToSeoIssue(item = {}) {
+  const status = getSafeStatus(item);
+  const category = getSafeCategory(item.category);
+  const affectedPages = getAffectedPages(item);
+
+  const recommendation =
+    item.ai_recommendation ||
+    item.recommended_value ||
+    item.recommendation ||
+    item.suggested_fix ||
+    item.fix ||
+    "Review this recommendation and decide whether to update the page.";
+
   return {
-    page_url: normalizePageUrl(finding),
+    page_url: normalizePageUrl(item),
     affected_pages: affectedPages,
-    details,
+    details: {
+      ...(item.details || {}),
+      original_category: item.category || "",
+      scan_source: SCAN_FUNCTION_NAME,
+      grouped: item.type === "site_level" || affectedPages.length > 1,
+    },
     category,
-    customer_category: finding?.customer_category || "Website improvement",
-    priority: VALID_PRIORITIES.has(finding?.priority)
-      ? finding.priority
-      : "medium",
+    customer_category:
+      item.customer_category || friendlyCategory(category) || "Website improvement",
+    priority: VALID_PRIORITIES.has(item.priority) ? item.priority : "medium",
     status,
-    difficulty: VALID_DIFFICULTIES.has(finding?.difficulty)
-      ? finding.difficulty
+    difficulty: VALID_DIFFICULTIES.has(item.difficulty)
+      ? item.difficulty
       : status === "needs_developer"
         ? "developer"
         : "easy",
     issue_title:
-      finding?.issue_title ||
-      finding?.title ||
-      "Review this website recommendation",
+      item.issue_title ||
+      item.title ||
+      item.name ||
+      getDefaultIssueTitle(category),
     plain_english_explanation:
-      finding?.plain_english_explanation ||
-      finding?.explanation ||
-      finding?.evidence ||
+      item.plain_english_explanation ||
+      item.explanation ||
+      item.description ||
+      item.evidence ||
       "This recommendation was found during the website scan.",
     why_it_matters:
-      finding?.why_it_matters ||
-      finding?.why ||
+      item.why_it_matters ||
+      item.why ||
       "Improving this can help visitors and search engines understand the website more clearly.",
-    current_value: finding?.current_value || "",
-    recommended_value: finding?.recommended_value || recommendation,
+    current_value: item.current_value || item.current || "",
+    recommended_value: item.recommended_value || recommendation,
     ai_recommendation: recommendation,
     confidence_score:
-      typeof finding?.confidence_score === "number"
-        ? finding.confidence_score
-        : 90,
-    can_auto_fix: finding?.can_auto_fix === true || status === "auto_fixed",
+      typeof item.confidence_score === "number" ? item.confidence_score : 90,
+    can_auto_fix: item.can_auto_fix === true || status === "auto_fixed",
     requires_approval:
-      finding?.requires_approval === true || status === "needs_approval",
+      item.requires_approval === true || status === "needs_approval",
     requires_developer:
-      finding?.requires_developer === true || status === "needs_developer",
+      item.requires_developer === true || status === "needs_developer",
   };
+}
+
+function friendlyCategory(category) {
+  const map = {
+    meta_title: "Search appearance",
+    meta_description: "Search appearance",
+    canonical: "Website setup",
+    schema: "Trust signals",
+    thin_content: "Page content",
+    duplicate_content: "Search appearance",
+    "404_error": "Broken page",
+    redirect: "Page redirect",
+    internal_link: "Internal links",
+    performance: "Website performance",
+    web_dev: "Website setup",
+  };
+
+  return map[category] || "Website improvement";
+}
+
+function getDefaultIssueTitle(category) {
+  const map = {
+    meta_title: "Improve search titles",
+    meta_description: "Add helpful search descriptions",
+    canonical: "Review preferred-page settings",
+    thin_content: "Improve important page content",
+    duplicate_content: "Review duplicate page content",
+    schema: "Add more trust signals",
+    "404_error": "Fix pages that may not be loading",
+    redirect: "Review page redirects",
+    internal_link: "Review internal links",
+    performance: "Review website performance",
+    web_dev: "Review website setup",
+  };
+
+  return map[category] || "Review this website recommendation";
 }
 
 function mapCrawledPageForStorage(page = {}) {
@@ -207,71 +275,80 @@ function mapCrawledPageForStorage(page = {}) {
     rendered_meta_description: "",
     rendered_canonical: "",
     js_difference_detected: false,
-    h2s: page.h2s || [],
-    h3s: page.h3s || [],
-    has_faq: Boolean(page.has_faq || page.hasFaq),
-    faq_questions: page.faq_questions || page.faqQuestions || [],
-    has_schema: Boolean(page.has_schema || page.hasSchema),
-    schema_types: page.schema_types || page.schemaTypes || [],
-    has_phone: Boolean(page.has_phone || page.hasPhone),
-    has_email: Boolean(page.has_email || page.hasEmail),
-    cta_phrases: page.cta_phrases || page.ctaPhrases || [],
-    trust_signals: page.trust_signals || page.trustSignals || [],
-    image_count: page.image_count || page.imageCount || 0,
-    images_missing_alt_count:
-      page.images_missing_alt_count || page.imagesMissingAltCount || 0,
-    placeholder_hits:
-      page.placeholder_hits ||
-      page.placeholderHits ||
-      page.placeholder_text ||
-      [],
   };
 }
 
 function normalizeSeoIssueForSave(fix, project, job, user) {
   const status = getSafeStatus(fix);
-  const category = getSafeCategory(fix?.category);
+  const category = getSafeCategory(fix.category);
 
   return {
     project_id: project.id,
     crawl_job_id: job.id,
     owner_user_id: user.id,
-    page_url: fix?.page_url || "/",
+    page_url: fix.page_url || "/",
     category,
-    customer_category: fix?.customer_category || "Website improvement",
-    priority: VALID_PRIORITIES.has(fix?.priority) ? fix.priority : "medium",
+    customer_category: fix.customer_category || "Website improvement",
+    priority: VALID_PRIORITIES.has(fix.priority) ? fix.priority : "medium",
     status,
-    difficulty: VALID_DIFFICULTIES.has(fix?.difficulty)
+    difficulty: VALID_DIFFICULTIES.has(fix.difficulty)
       ? fix.difficulty
       : status === "needs_developer"
         ? "developer"
         : "easy",
-    issue_title: fix?.issue_title || "Review this website recommendation",
+    issue_title: fix.issue_title || "Review this website recommendation",
     plain_english_explanation:
-      fix?.plain_english_explanation ||
+      fix.plain_english_explanation ||
       "This recommendation was found during the website scan.",
     why_it_matters:
-      fix?.why_it_matters ||
+      fix.why_it_matters ||
       "Improving this can help visitors and search engines understand the website more clearly.",
-    current_value: fix?.current_value || "",
+    current_value: fix.current_value || "",
     recommended_value:
-      fix?.recommended_value ||
-      fix?.ai_recommendation ||
+      fix.recommended_value ||
+      fix.ai_recommendation ||
       "Review this recommendation.",
     ai_recommendation:
-      fix?.ai_recommendation ||
-      fix?.recommended_value ||
+      fix.ai_recommendation ||
+      fix.recommended_value ||
       "Review this recommendation.",
     confidence_score:
-      typeof fix?.confidence_score === "number" ? fix.confidence_score : 90,
-    can_auto_fix: fix?.can_auto_fix === true || status === "auto_fixed",
+      typeof fix.confidence_score === "number" ? fix.confidence_score : 90,
+    can_auto_fix: fix.can_auto_fix === true || status === "auto_fixed",
     requires_approval:
-      fix?.requires_approval === true || status === "needs_approval",
+      fix.requires_approval === true || status === "needs_approval",
     requires_developer:
-      fix?.requires_developer === true || status === "needs_developer",
-    affected_pages: Array.isArray(fix?.affected_pages) ? fix.affected_pages : [],
-    details: fix?.details && typeof fix.details === "object" ? fix.details : {},
+      fix.requires_developer === true || status === "needs_developer",
+
+    /**
+     * These are helpful if your SeoIssue entity supports them.
+     * If Base44 rejects them, saveSeoIssuesSafely retries without them.
+     */
+    affected_pages: Array.isArray(fix.affected_pages) ? fix.affected_pages : [],
+    details: fix.details && typeof fix.details === "object" ? fix.details : {},
   };
+}
+
+function stripExtendedSeoFields(issue) {
+  const { affected_pages, details, ...safe } = issue;
+  return safe;
+}
+
+async function saveSeoIssuesSafely(issues) {
+  if (!issues.length) return;
+
+  try {
+    await base44.entities.SeoIssue.bulkCreate(issues);
+  } catch (error) {
+    console.warn(
+      "SeoIssue save failed with affected_pages/details. Retrying without them.",
+      error
+    );
+
+    await base44.entities.SeoIssue.bulkCreate(
+      issues.map(stripExtendedSeoFields)
+    );
+  }
 }
 
 function buildDeveloperRecommendation(fix, project, user) {
@@ -288,9 +365,6 @@ function buildDeveloperRecommendation(fix, project, user) {
   const estimated_complexity =
     fix.difficulty === "developer" ? "moderate" : "simple";
 
-  const recommended_package =
-    estimated_complexity === "moderate" ? "500_cleanup" : "diy";
-
   return {
     project_id: project.id,
     owner_user_id: user.id,
@@ -300,7 +374,8 @@ function buildDeveloperRecommendation(fix, project, user) {
     priority: fix.priority,
     business_impact: fix.why_it_matters,
     estimated_complexity,
-    recommended_package,
+    recommended_package:
+      estimated_complexity === "moderate" ? "500_cleanup" : "diy",
     status: "open",
   };
 }
@@ -309,6 +384,86 @@ function getCompetitorUrlsFromForm(form) {
   return (form?.competitor_urls || [])
     .map((url) => String(url || "").trim())
     .filter(Boolean);
+}
+
+function normalizeScore(value, fallback = 80) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number) || number <= 0) {
+    const fallbackNumber = Number(fallback);
+
+    if (Number.isFinite(fallbackNumber) && fallbackNumber > 0) {
+      return Math.max(45, Math.min(100, Math.round(fallbackNumber)));
+    }
+
+    return 80;
+  }
+
+  return Math.max(45, Math.min(100, Math.round(number)));
+}
+
+function computeSimpleHealthScore(fixes, scanData = {}) {
+  if (!Array.isArray(fixes) || fixes.length === 0) {
+    return normalizeScore(scanData.health_score || scanData.seo_score || 92);
+  }
+
+  let score = 92;
+
+  for (const fix of fixes) {
+    if (fix.priority === "critical" || fix.priority === "high") {
+      score -= 6;
+    } else if (fix.priority === "medium") {
+      score -= 4;
+    } else {
+      score -= 1;
+    }
+  }
+
+  return normalizeScore(score);
+}
+
+function summarizeFixes(fixes) {
+  const summary = {
+    we_can_fix: 0,
+    needs_approval: 0,
+    needs_developer: 0,
+  };
+
+  for (const fix of fixes || []) {
+    if (fix.status === "needs_developer" || fix.requires_developer) {
+      summary.needs_developer += 1;
+    } else if (fix.status === "needs_approval" || fix.requires_approval) {
+      summary.needs_approval += 1;
+    } else if (fix.status === "auto_fixed" || fix.can_auto_fix) {
+      summary.we_can_fix += 1;
+    } else {
+      summary.needs_approval += 1;
+    }
+  }
+
+  return summary;
+}
+
+function extractFindings(scanData = {}) {
+  const groupedFindings = Array.isArray(scanData.grouped_findings)
+    ? scanData.grouped_findings
+    : [];
+
+  const rawFindings = Array.isArray(scanData.raw_findings)
+    ? scanData.raw_findings
+    : [];
+
+  const legacyFixes = Array.isArray(scanData.fixes) ? scanData.fixes : [];
+  const legacyIssues = Array.isArray(scanData.issues) ? scanData.issues : [];
+  const recommendations = Array.isArray(scanData.recommendations)
+    ? scanData.recommendations
+    : [];
+
+  if (groupedFindings.length > 0) return groupedFindings;
+  if (legacyFixes.length > 0) return legacyFixes;
+  if (legacyIssues.length > 0) return legacyIssues;
+  if (recommendations.length > 0) return recommendations;
+  return rawFindings;
 }
 
 export default function CrawlStatus() {
@@ -360,19 +515,25 @@ export default function CrawlStatus() {
           setProject(activeProject);
           setActiveScanMode(getScanMode(activeProject));
 
-          const comps = await base44.entities.Competitor.filter({
-            project_id: activeProject.id,
-          });
+          try {
+            const comps = await base44.entities.Competitor.filter({
+              project_id: activeProject.id,
+            });
 
-          setCompetitors(comps || []);
+            setCompetitors(comps || []);
+          } catch {
+            setCompetitors([]);
+          }
 
-          const jobs = await base44.entities.CrawlJob.filter(
-            { project_id: activeProject.id },
-            "-created_date",
-            1
-          );
+          try {
+            const jobs = await base44.entities.CrawlJob.filter(
+              { project_id: activeProject.id },
+              "-created_date",
+              1
+            );
 
-          if (jobs.length > 0) setCrawlJob(jobs[0]);
+            if (jobs.length > 0) setCrawlJob(jobs[0]);
+          } catch {}
         }
       } catch (err) {
         console.warn("Could not load scan page data.", err);
@@ -389,7 +550,7 @@ export default function CrawlStatus() {
 
     const params = new URLSearchParams(window.location.search);
 
-    if (params.get("autostart") === "1" && crawlJob?.status === "queued") {
+    if (params.get("autostart") === "1") {
       didAutoStart.current = true;
       simulateScan(crawlJob, project);
     }
@@ -485,7 +646,7 @@ export default function CrawlStatus() {
       runProgressSteps(job, scanMode, runId);
 
       const scanResponse = await withTimeout(
-        base44.functions.invoke("runAdvancedScan", {
+        base44.functions.invoke(SCAN_FUNCTION_NAME, {
           website_url: activeProject.website_url,
           business_name: activeProject.business_name,
           business_type: activeProject.business_type,
@@ -508,20 +669,12 @@ export default function CrawlStatus() {
 
       const crawledPagesData = Array.isArray(scanData.crawled_pages)
         ? scanData.crawled_pages
-        : [];
+        : Array.isArray(scanData.pages)
+          ? scanData.pages
+          : [];
 
-      const groupedFindings = Array.isArray(scanData.grouped_findings)
-        ? scanData.grouped_findings
-        : [];
-
-      const rawFindings = Array.isArray(scanData.raw_findings)
-        ? scanData.raw_findings
-        : [];
-
-      const findingsForMapping =
-        groupedFindings.length > 0 ? groupedFindings : rawFindings;
-
-      const mappedSeoIssues = findingsForMapping.map(mapGroupedFindingToSeoIssue);
+      const findingsForMapping = extractFindings(scanData);
+      const mappedSeoIssues = findingsForMapping.map(mapFindingToSeoIssue);
 
       let finalFixes = mappedSeoIssues;
       let topActions = [];
@@ -553,9 +706,13 @@ export default function CrawlStatus() {
         competitorResultsForReview = discoveredCompetitors;
       }
 
+      /**
+       * Optional AI review.
+       * If the function does not exist, this catches the error and continues.
+       */
       try {
         const aiReviewRes = await withTimeout(
-          base44.functions.invoke("aiReviewScan", {
+          base44.functions.invoke(AI_REVIEW_FUNCTION_NAME, {
             business_name: activeProject.business_name,
             business_type: activeProject.business_type,
             city: activeProject.city,
@@ -577,7 +734,7 @@ export default function CrawlStatus() {
           : [];
 
         if (aiData.success && aiFixes.length > 0) {
-          finalFixes = aiFixes;
+          finalFixes = aiFixes.map(mapFindingToSeoIssue);
           topActions = Array.isArray(aiData.top_recommended_actions)
             ? aiData.top_recommended_actions
             : [];
@@ -593,7 +750,7 @@ export default function CrawlStatus() {
         }
       } catch (err) {
         console.warn(
-          "AI review failed or timed out. Falling back to crawler findings.",
+          "AI review not available. Saving crawler recommendations.",
           err
         );
         finalFixes = mappedSeoIssues;
@@ -611,13 +768,7 @@ export default function CrawlStatus() {
           : crawledPagesData.length;
 
       const finalSummary = summarizeFixes(finalFixes);
-
-      const finalHealthScore =
-        finalFixes.length > 0
-          ? computeHealthScore(finalFixes)
-          : typeof scanData.health_score === "number"
-            ? scanData.health_score
-            : 100;
+      const finalHealthScore = computeSimpleHealthScore(finalFixes, scanData);
 
       if (crawledPagesData.length > 0) {
         await base44.entities.CrawledPage.bulkCreate(
@@ -631,11 +782,11 @@ export default function CrawlStatus() {
       }
 
       if (finalFixes.length > 0) {
-        await base44.entities.SeoIssue.bulkCreate(
-          finalFixes.map((fix) =>
-            normalizeSeoIssueForSave(fix, activeProject, job, user)
-          )
+        const seoIssues = finalFixes.map((fix) =>
+          normalizeSeoIssueForSave(fix, activeProject, job, user)
         );
+
+        await saveSeoIssuesSafely(seoIssues);
       }
 
       try {
@@ -664,14 +815,16 @@ export default function CrawlStatus() {
           project_id: activeProject.id,
           crawl_job_id: job.id,
           owner_user_id: user.id,
-          scan_source: "runAdvancedScan",
+          scan_source: SCAN_FUNCTION_NAME,
           scan_mode: scanMode,
-          raw_findings_count: rawFindings.length,
-          grouped_findings_count: groupedFindings.length,
-          cleaned_fixes_count: finalFixes.length,
-          broken_links_count: Array.isArray(scanData.broken_links)
-            ? scanData.broken_links.length
+          raw_findings_count: Array.isArray(scanData.raw_findings)
+            ? scanData.raw_findings.length
             : 0,
+          grouped_findings_count: Array.isArray(scanData.grouped_findings)
+            ? scanData.grouped_findings.length
+            : 0,
+          cleaned_fixes_count: finalFixes.length,
+          saved_seo_issue_count: finalFixes.length,
           pages_crawled: pagesCrawled,
           pages_found:
             typeof scanData.pages_found === "number"
@@ -742,11 +895,8 @@ export default function CrawlStatus() {
         pages_crawled: pagesCrawled,
         issues_found: finalFixes.length,
         health_score: finalHealthScore,
-        raw_findings: rawFindings.length,
-        grouped_findings: groupedFindings.length,
-        cleaned_fixes: finalFixes.length,
         scan_mode: scanMode,
-        discovered_competitors: discoveredCompetitors.length,
+        scan_function: SCAN_FUNCTION_NAME,
       });
     } catch (err) {
       console.error("Scan failed.", err);
@@ -774,6 +924,7 @@ export default function CrawlStatus() {
         project_id: activeProject.id,
         message: err.message || "Scan failed",
         scan_mode: scanMode,
+        scan_function: SCAN_FUNCTION_NAME,
       });
     } finally {
       setSimulating(false);
@@ -886,6 +1037,11 @@ export default function CrawlStatus() {
                 <p className="mt-1 text-sm leading-6 text-slate-600">
                   {error}
                 </p>
+
+                <p className="mt-3 text-xs leading-5 text-slate-400">
+                  This page is currently calling the backend function:{" "}
+                  <span className="font-mono">{SCAN_FUNCTION_NAME}</span>
+                </p>
               </div>
             </div>
           </div>
@@ -952,7 +1108,7 @@ export default function CrawlStatus() {
             </h2>
 
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              We reviewed {scanResult.pages_crawled ?? 0} pages and found{" "}
+              We reviewed {scanResult.pages_crawled ?? 0} pages and prepared{" "}
               {scanResult.issues_found ?? 0} recommended{" "}
               {(scanResult.issues_found ?? 0) === 1
                 ? "improvement"
@@ -972,6 +1128,53 @@ export default function CrawlStatus() {
                 {scanResult.ai_summary}
               </p>
             )}
+
+            {scanResult.positive_findings?.length > 0 && (
+              <div className="mt-5">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                  What’s working well
+                </p>
+
+                <div className="mt-3 space-y-2">
+                  {scanResult.positive_findings.map((finding, index) => (
+                    <p key={index} className="text-sm leading-6 text-slate-600">
+                      {finding}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="mt-5 grid gap-3 md:grid-cols-3">
+              <div className="rounded-xl bg-slate-50 p-4">
+                <div className="text-2xl font-semibold text-slate-950">
+                  {scanResult.summary?.we_can_fix ?? 0}
+                </div>
+                <div className="text-sm text-slate-500">Prepared</div>
+              </div>
+
+              <div className="rounded-xl bg-slate-50 p-4">
+                <div className="text-2xl font-semibold text-slate-950">
+                  {scanResult.summary?.needs_approval ?? 0}
+                </div>
+                <div className="text-sm text-slate-500">Needs review</div>
+              </div>
+
+              <div className="rounded-xl bg-slate-50 p-4">
+                <div className="text-2xl font-semibold text-slate-950">
+                  {scanResult.summary?.needs_developer ?? 0}
+                </div>
+                <div className="text-sm text-slate-500">May need help</div>
+              </div>
+            </div>
+
+            {Array.isArray(scanResult.crawl_warnings) &&
+              scanResult.crawl_warnings.length > 0 && (
+                <p className="mt-4 text-xs leading-5 text-slate-400">
+                  Some parts of the site could not be reviewed automatically.
+                  Your Fix List is based on the pages we could access.
+                </p>
+              )}
 
             <div className="mt-6">
               <Button

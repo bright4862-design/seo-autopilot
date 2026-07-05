@@ -6,7 +6,7 @@ import { Loader2, AlertCircle, CheckCircle2, Bug } from "lucide-react";
 import { base44 } from "@/api/base44Client";
 
 const ADVANCED_SCANNER_FUNCTION = "runAdvancedScan";
-const AI_REVIEW_FUNCTION = "runAiReview";
+const AI_REVIEW_FUNCTION = "aiReviewScan";
 
 const DEFAULT_COMPETITOR_FIELDS = ["", "", ""];
 
@@ -256,7 +256,7 @@ export default function ScanWebsiteForm() {
               id="business_name"
               value={businessName}
               onChange={(event) => setBusinessName(event.target.value)}
-              placeholder="Center Street Lending"
+              placeholder="Funbooker"
             />
           </div>
 
@@ -266,7 +266,7 @@ export default function ScanWebsiteForm() {
               id="business_type"
               value={businessType}
               onChange={(event) => setBusinessType(event.target.value)}
-              placeholder="Hard money lender"
+              placeholder="Activities"
             />
           </div>
 
@@ -276,7 +276,7 @@ export default function ScanWebsiteForm() {
               id="city"
               value={city}
               onChange={(event) => setCity(event.target.value)}
-              placeholder="California"
+              placeholder="France"
             />
           </div>
 
@@ -301,7 +301,7 @@ export default function ScanWebsiteForm() {
               id="country"
               value={country}
               onChange={(event) => setCountry(event.target.value)}
-              placeholder="us"
+              placeholder="fr"
             />
           </div>
 

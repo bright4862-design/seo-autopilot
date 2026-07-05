@@ -1,11 +1,14 @@
 import React from "react";
 import { Button } from "@/components/ui/button";
 import { trackEvent } from "@/lib/analytics";
-import { customerText, friendlyCategory, getStatusLabel } from "@/lib/friendlyLabels";
+import { customerText, getStatusLabel } from "@/lib/friendlyLabels";
 import { Copy, X } from "lucide-react";
 
 export default function IssueDetailModal({ issue, onClose, onStatusUpdate }) {
   const nextStep = customerText(issue.ai_recommendation || issue.recommended_value || "Review this recommendation and decide the next step.");
+  const affectedPages = Array.isArray(issue.affected_pages) ? issue.affected_pages.filter(Boolean) : [];
+  const details = issue.details && typeof issue.details === "object" ? issue.details : {};
+  const affectedCount = details.affected_count || affectedPages.length;
 
   const copyRecommendation = async () => {
     await navigator.clipboard.writeText(nextStep);
@@ -33,12 +36,24 @@ export default function IssueDetailModal({ issue, onClose, onStatusUpdate }) {
           <section className="px-6 py-5"><h3 className="text-sm font-semibold text-slate-950">Why it matters</h3><p className="mt-2 text-sm leading-6 text-slate-600">{customerText(issue.why_it_matters || "This may help customers and search engines understand your website more clearly.")}</p></section>
           <section className="px-6 py-5"><h3 className="text-sm font-semibold text-slate-950">Recommended next step</h3><p className="mt-2 text-sm leading-6 text-slate-600">{nextStep}</p></section>
 
+          {affectedPages.length > 1 && (
+            <section className="px-6 py-5">
+              <h3 className="text-sm font-semibold text-slate-950">Affected pages</h3>
+              <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600">
+                {affectedPages.map((page, index) => <li key={`${page}-${index}`} className="break-all">{page}</li>)}
+              </ul>
+            </section>
+          )}
+
           <details className="px-6 py-5">
-            <summary className="cursor-pointer text-sm font-medium text-slate-500 hover:text-slate-950">More details</summary>
+            <summary className="cursor-pointer text-sm font-medium text-slate-500 hover:text-slate-950">Show technical details</summary>
             <div className="mt-4 grid gap-3 text-sm leading-6 text-slate-600">
-              <div><span className="text-slate-400">Area:</span> {friendlyCategory(issue.category)}</div>
-              <div><span className="text-slate-400">Current:</span> {customerText(issue.current_value || "Not found")}</div>
-              <div><span className="text-slate-400">Suggested:</span> {customerText(issue.recommended_value || nextStep)}</div>
+              <div><span className="text-slate-400">Category:</span> {issue.category}</div>
+              {details.original_category && <div><span className="text-slate-400">Original category:</span> {details.original_category}</div>}
+              {affectedCount > 0 && <div><span className="text-slate-400">Affected count:</span> {affectedCount}</div>}
+              {details.technical_term && <div><span className="text-slate-400">Technical term:</span> {details.technical_term}</div>}
+              {typeof details.html_only_scan === "boolean" && <div><span className="text-slate-400">HTML-only scan:</span> {details.html_only_scan ? "Yes" : "No"}</div>}
+              {typeof details.javascript_rendering_used === "boolean" && <div><span className="text-slate-400">JavaScript rendering used:</span> {details.javascript_rendering_used ? "Yes" : "No"}</div>}
               {issue.confidence_score > 0 && <div><span className="text-slate-400">Confidence:</span> {issue.confidence_score}%</div>}
             </div>
           </details>

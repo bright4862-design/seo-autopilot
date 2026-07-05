@@ -80,6 +80,10 @@ export function exportScanReportPdf({ project, crawlJob, issues, devRecs, insigh
       line(`• ${item.issue_title}`, { bold: true });
       if (item.page_url) line(`Page: ${item.page_url}`, { indent: 4, color: [107, 114, 128], size: 9 });
       if (item.plain_english_explanation) line(item.plain_english_explanation, { indent: 4, gap: 4 });
+      if (Array.isArray(item.affected_pages) && item.affected_pages.length > 0) {
+        line("Affected pages:", { indent: 4, bold: true, size: 9, gap: 1 });
+        item.affected_pages.forEach(page => line(`- ${page}`, { indent: 8, color: [107, 114, 128], size: 9, gap: 1 }));
+      }
     });
   };
 
@@ -94,6 +98,10 @@ export function exportScanReportPdf({ project, crawlJob, issues, devRecs, insigh
     recs.slice(0, 10).forEach(r => {
       line(`• ${r.title || r.issue_title}`, { bold: true });
       if (r.description || r.plain_english_explanation) line(r.description || r.plain_english_explanation, { indent: 4 });
+      if (Array.isArray(r.affected_pages) && r.affected_pages.length > 0) {
+        line("Affected pages:", { indent: 4, bold: true, size: 9, gap: 1 });
+        r.affected_pages.forEach(page => line(`- ${page}`, { indent: 8, color: [107, 114, 128], size: 9, gap: 1 }));
+      }
       if (r.business_impact || r.why_it_matters) line(`Why it matters: ${r.business_impact || r.why_it_matters}`, { indent: 4, color: [107, 114, 128], size: 9, gap: 4 });
     });
   }

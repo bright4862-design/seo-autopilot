@@ -67,11 +67,21 @@ const mapGroupedFindingToSeoIssue = (finding) => {
   const affectedPages = Array.isArray(finding.affected_pages) ? finding.affected_pages.filter(Boolean) : [];
   const category = CATEGORY_MAP[finding.category] || finding.category || "web_dev";
   const recommendation = finding.ai_recommendation || finding.recommended_value || "Review this item.";
-  const affectedText = affectedPages.length ? `\n\nAffected pages: ${affectedPages.join(" · ")}` : "";
+  const details = {
+    ...(finding.details || {}),
+    original_category: finding.category || "",
+    scan_source: "runAdvancedScan",
+    grouped: finding.type === "site_level",
+    html_only_scan: true,
+    javascript_rendering_used: false,
+  };
+  if (affectedPages.length > 0 && !details.affected_count) details.affected_count = affectedPages.length;
   const status = VALID_STATUSES.has(finding.status) ? finding.status : finding.requires_developer ? "needs_developer" : finding.requires_approval ? "needs_approval" : "auto_fixed";
 
   return {
     page_url: normalizePageUrl(finding),
+    affected_pages: affectedPages,
+    details,
     category: VALID_CATEGORIES.has(category) ? category : "web_dev",
     customer_category: finding.customer_category || "Website improvement",
     priority: VALID_PRIORITIES.has(finding.priority) ? finding.priority : "medium",
@@ -82,7 +92,7 @@ const mapGroupedFindingToSeoIssue = (finding) => {
     why_it_matters: finding.why_it_matters || finding.why || "Fixing this can help visitors and search engines understand the website more clearly.",
     current_value: finding.current_value || "",
     recommended_value: finding.recommended_value || recommendation,
-    ai_recommendation: `${recommendation}${affectedText}`,
+    ai_recommendation: recommendation,
     confidence_score: typeof finding.confidence_score === "number" ? finding.confidence_score : 90,
     can_auto_fix: finding.can_auto_fix === true || status === "auto_fixed",
     requires_approval: finding.requires_approval === true || status === "needs_approval",

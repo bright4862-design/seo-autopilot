@@ -11,6 +11,18 @@
     "page_url": {
       "type": "string"
     },
+    "affected_pages": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "details": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
     "category": {
       "type": "string",
       "enum": [

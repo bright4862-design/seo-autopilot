@@ -1098,6 +1098,8 @@ function saveScanForDashboard({
       "SEO_AUTOPILOT_SCAN_HISTORY",
       JSON.stringify(nextHistory)
     );
+
+    window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
   } catch (error) {
     console.warn("Could not save scan result for dashboard", error);
   }

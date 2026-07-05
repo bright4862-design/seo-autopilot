@@ -1,11 +1,5 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
-// Contract:
-// - Scanner findings are canonical.
-// - AI only rewrites / explains findings keyed by fix_id.
-// - This function accepts raw_fixes, grouped_findings, raw_findings, findings, fixes, or recommendations.
-// - This prevents recommendations disappearing when the scanner payload naming changes.
-
 const VALID_CATEGORIES = new Set([
   "meta_title",
   "meta_description",
@@ -34,29 +28,6 @@ const CATEGORY_MAP = {
   image_alt_text: "web_dev",
   competitor_gap: "thin_content",
 };
-
-const UTILITY_PAGE_WORDS = [
-  "cart",
-  "checkout",
-  "login",
-  "signin",
-  "signup",
-  "register",
-  "account",
-  "search",
-  "privacy",
-  "terms",
-  "thank-you",
-  "thankyou",
-  "payment",
-  "admin",
-  "wp-admin",
-  "reset",
-  "forgot",
-  "cookie",
-  "legal",
-  "disclaimer",
-];
 
 Deno.serve(async (req) => {
   try {
@@ -116,12 +87,13 @@ Deno.serve(async (req) => {
 
     const canonicalFixes = prepareFixes(rawFixes);
 
-    const deterministicPlan = buildDeterministicPlan({
+    const fallbackPlan = buildFallbackPlan({
       canonicalFixes,
-      crawled_pages: finalPages,
+      pages: finalPages,
       comparison: competitor_comparison,
       client_rendering,
       crawl_warnings,
+      health_score,
     });
 
     let aiResponse = null;
@@ -139,7 +111,7 @@ Deno.serve(async (req) => {
         comparison: competitor_comparison,
         snapshots: trimSnapshots(competitor_page_snapshots),
         client_rendering,
-        positives: deterministicPlan.positive_findings,
+        positives: fallbackPlan.positive_findings,
       });
 
       aiResponse = await withTimeout(
@@ -150,34 +122,25 @@ Deno.serve(async (req) => {
         25000,
         "AI review"
       );
-    } catch {
-      const fallback = withFrontendCompatibility({
-        merged: deterministicPlan,
-        pages: finalPages,
-        health_score,
-      });
-
+    } catch (error) {
       return Response.json({
         success: true,
         ai_review_warning:
-          "AI review was unavailable, so SEO Autopilot used its rule-based review instead.",
-        ...fallback,
+          error?.message ||
+          "AI review was unavailable, so scanner recommendations are shown.",
+        ...fallbackPlan,
       });
     }
 
     const merged = mergeAiIntoPlan({
       aiResponse,
-      deterministicPlan,
+      fallbackPlan,
       canonicalFixes,
     });
 
     return Response.json({
       success: true,
-      ...withFrontendCompatibility({
-        merged,
-        pages: finalPages,
-        health_score,
-      }),
+      ...merged,
     });
   } catch (error) {
     return Response.json(
@@ -190,130 +153,21 @@ Deno.serve(async (req) => {
   }
 });
 
-/* ------------------------- Compatibility output ------------------------ */
-
-function withFrontendCompatibility({ merged, pages, health_score }) {
-  const cleanedFixes = Array.isArray(merged.cleaned_fixes)
-    ? merged.cleaned_fixes
-    : [];
-
-  const competitorInsights = Array.isArray(merged.competitor_insights)
-    ? merged.competitor_insights
-    : [];
-
-  const topActions = Array.isArray(merged.top_recommended_actions)
-    ? merged.top_recommended_actions
-    : [];
-
-  const score =
-    typeof health_score === "number"
-      ? health_score
-      : calculateFallbackScore(cleanedFixes);
-
-  return {
-    ...merged,
-
-    raw_fixes: cleanedFixes,
-    fixes: cleanedFixes,
-    findings: cleanedFixes,
-    recommendations: cleanedFixes,
-
-    scan_summary: {
-      score,
-      status_label:
-        score >= 80
-          ? "Strong"
-          : score >= 60
-            ? "Good start"
-            : score >= 40
-              ? "Needs work"
-              : "Needs urgent attention",
-      plain_english_summary: merged.plain_english_summary,
-      pages_scanned: pages.length,
-      pages_failed: pages.filter((page) =>
-        String(page.status || page.status_code || "").toLowerCase().includes("fail")
-      ).length,
-      high_priority_count: cleanedFixes.filter((fix) =>
-        ["critical", "high"].includes(fix.priority)
-      ).length,
-      competitor_gap_count: competitorInsights.length,
-      positive_findings: (merged.positive_findings || []).join(" "),
-    },
-
-    recommended_actions: topActions.map((action) => {
-      const fix = cleanedFixes.find((item) => item.id === action.fix_id);
-
-      return {
-        fix_id: action.fix_id,
-        title: action.title || fix?.issue_title || "Recommended action",
-        plain_english_summary:
-          fix?.plain_english_explanation || action.reason || "",
-        why_it_matters: fix?.why_it_matters || action.reason || "",
-        what_to_do_steps: fix?.what_to_do || [],
-        who_can_do_this:
-          fix?.who_can_do_this === "your_web_person"
-            ? "Your web person"
-            : "You",
-        time_estimate: fix?.estimated_time || "",
-        priority: action.priority || fix?.priority || "medium",
-        affected_pages: fix?.affected_pages || [],
-      };
-    }),
-
-    competitor_insights: competitorInsights.map((insight) => ({
-      title: insight.headline || insight.title || "Competitor opportunity",
-      headline: insight.headline || insight.title || "Competitor opportunity",
-      competitor_name: insight.competitor_name || "",
-      competitor_domain: insight.competitor_domain || insight.competitor_name || "",
-      evidence: insight.evidence || "",
-      recommended_action: insight.what_to_add || insight.recommended_action || "",
-      what_to_add: insight.what_to_add || insight.recommended_action || "",
-      related_user_page: insight.target_page || "/",
-      target_page: insight.target_page || "/",
-      gap_type: "competitor_gap",
-    })),
-
-    pages,
-  };
-}
-
 function pickFirstNonEmptyArray(values) {
   for (const value of values || []) {
     if (Array.isArray(value) && value.length > 0) return value;
   }
-
   return [];
 }
 
-/* ------------------------- Canonical fix prep -------------------------- */
-
 function prepareFixes(rawFixes) {
-  const safe = Array.isArray(rawFixes) ? rawFixes : [];
-
-  const filtered = safe.filter((fix) => {
-    const pageUrl = String(fix.page_url || fix.url || "").toLowerCase();
-
-    const isUtilityPage = UTILITY_PAGE_WORDS.some((word) =>
-      pageUrl.includes(word)
-    );
-
-    const isBrokenPage =
-      fix.category === "404_error" ||
-      fix.category === "broken_page" ||
-      fix.category === "internal_link" ||
-      String(fix.issue_title || fix.title || "").toLowerCase().includes("broken");
-
-    if (isUtilityPage && !isBrokenPage) return false;
-
-    return true;
-  });
-
-  return dedupeFixesById(filtered.map(normalizeFix))
+  return (Array.isArray(rawFixes) ? rawFixes : [])
+    .map(normalizeFix)
     .sort(compareFixes)
-    .slice(0, 20);
+    .slice(0, 24);
 }
 
-function normalizeFix(fix) {
+function normalizeFix(fix, index = 0) {
   const category = safeCategory(fix.category);
 
   const status =
@@ -326,16 +180,22 @@ function normalizeFix(fix) {
           ? "auto_fixed"
           : "needs_approval");
 
-  const difficulty = safeDifficulty(fix.difficulty, safeStatus(status));
+  const title =
+    fix.issue_title ||
+    fix.title ||
+    fix.headline ||
+    defaultTitle(category);
 
   const normalized = {
+    ...fix,
     page_url: cleanPath(fix.page_url || fix.url || "/"),
     category,
     customer_category:
       fix.customer_category ||
       friendlyCategory(category) ||
       "Website improvement",
-    issue_title: fix.issue_title || fix.title || defaultTitle(category),
+    issue_title: title,
+    title,
     plain_english_explanation:
       fix.plain_english_explanation ||
       fix.explanation ||
@@ -344,11 +204,16 @@ function normalizeFix(fix) {
     why_it_matters:
       fix.why_it_matters ||
       fix.why ||
+      fix.reason ||
       "Improving this can help visitors and search engines understand the website more clearly.",
     current_value: stringifyValue(fix.current_value || fix.current || ""),
     recommended_value:
       stringifyValue(
-        fix.recommended_value || fix.recommendation || fix.suggested_fix || ""
+        fix.recommended_value ||
+          fix.recommendation ||
+          fix.suggested_fix ||
+          fix.ai_recommendation ||
+          ""
       ) || "Review this recommendation.",
     ai_recommendation:
       stringifyValue(
@@ -359,7 +224,7 @@ function normalizeFix(fix) {
           ""
       ) || "Review this recommendation.",
     priority: safePriority(fix.priority),
-    difficulty,
+    difficulty: safeDifficulty(fix.difficulty, status),
     status: safeStatus(status),
     can_auto_fix: status === "auto_fixed" || fix.can_auto_fix === true,
     requires_approval:
@@ -368,7 +233,9 @@ function normalizeFix(fix) {
       status === "needs_developer" || fix.requires_developer === true,
     affected_pages: Array.isArray(fix.affected_pages)
       ? fix.affected_pages.map(cleanPath).filter(Boolean)
-      : [],
+      : fix.page_url
+        ? [cleanPath(fix.page_url)]
+        : [],
     details: fix.details && typeof fix.details === "object" ? fix.details : {},
     confidence_score:
       typeof fix.confidence_score === "number" ? fix.confidence_score : 90,
@@ -380,87 +247,38 @@ function normalizeFix(fix) {
     who_can_do_this:
       fix.who_can_do_this === "you" || fix.who_can_do_this === "your_web_person"
         ? fix.who_can_do_this
-        : defaultOwner(difficulty),
-    estimated_time: fix.estimated_time || fix.time_estimate || defaultTime(difficulty),
+        : defaultOwner(safeDifficulty(fix.difficulty, status)),
+    estimated_time:
+      fix.estimated_time ||
+      fix.time_estimate ||
+      defaultTime(safeDifficulty(fix.difficulty, status)),
   };
 
-  normalized.id = fix.id || fix.fix_id || stableId(buildIntentKey(normalized));
+  normalized.id =
+    fix.id ||
+    fix.fix_id ||
+    stableId(`${normalized.page_url}|${normalized.category}|${title}|${index}`);
+
+  normalized.fix_id = normalized.id;
 
   return normalized;
 }
 
-function dedupeFixesById(fixes) {
-  const seen = new Set();
-  const output = [];
-
-  for (const fix of fixes || []) {
-    if (seen.has(fix.id)) continue;
-    seen.add(fix.id);
-    output.push(fix);
-  }
-
-  return output;
-}
-
-function buildIntentKey(fix) {
-  const title = String(fix.issue_title || "").toLowerCase();
-
-  if (fix.category === "canonical") return "site|canonical|preferred-pages";
-
-  if (fix.category === "web_dev" && /placeholder|numbers/i.test(title)) {
-    return "site|web_dev|placeholder";
-  }
-
-  if (fix.category === "duplicate_content") {
-    return `site|duplicate_content|${title}`;
-  }
-
-  if (fix.customer_category === "Competitor opportunities") {
-    return `site|competitor|${title}`;
-  }
-
-  if (fix.affected_pages?.length > 1) {
-    return `site|${fix.category}|${title}`;
-  }
-
-  return `${fix.page_url}|${fix.category}|${title}`;
-}
-
-function compareFixes(a, b) {
-  const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
-  const statusOrder = {
-    needs_approval: 0,
-    auto_fixed: 1,
-    needs_developer: 2,
-    open: 3,
-  };
-
-  const priorityDiff =
-    (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9);
-  if (priorityDiff !== 0) return priorityDiff;
-
-  const statusDiff = (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9);
-  if (statusDiff !== 0) return statusDiff;
-
-  const titleDiff = String(a.issue_title || "").localeCompare(
-    String(b.issue_title || "")
-  );
-  if (titleDiff !== 0) return titleDiff;
-
-  return String(a.page_url || "").localeCompare(String(b.page_url || ""));
-}
-
-/* ------------------------- Deterministic plan -------------------------- */
-
-function buildDeterministicPlan({
+function buildFallbackPlan({
   canonicalFixes,
-  crawled_pages,
+  pages,
   comparison,
   client_rendering,
   crawl_warnings,
+  health_score,
 }) {
-  const positiveFindings = buildPositiveFindings(crawled_pages);
+  const positiveFindings = buildPositiveFindings(pages);
   const competitorInsights = buildDeterministicInsights(comparison);
+
+  const score =
+    typeof health_score === "number"
+      ? health_score
+      : calculateFallbackScore(canonicalFixes);
 
   const topActions = canonicalFixes.slice(0, 5).map((fix) => ({
     fix_id: fix.id,
@@ -504,17 +322,17 @@ function buildDeterministicPlan({
 
   if (client_rendering?.detected) {
     summaryParts.push(
-      "Part of your site loads its content with scripts, so this review is based on what search engines can read first."
+      "Part of your site loads its content with scripts, so content checks may need manual review."
     );
   }
 
   if (crawl_warnings?.length) {
     summaryParts.push(
-      "Some parts of the site could not be reviewed automatically, so the recommendations are based on the pages we could access."
+      "Some parts of the site could not be reviewed automatically, so recommendations are based on the pages we could access."
     );
   }
 
-  return {
+  return withFrontendCompatibility({
     plain_english_summary: summaryParts.join(" "),
     top_recommended_actions: topActions,
     cleaned_fixes: canonicalFixes,
@@ -523,86 +341,12 @@ function buildDeterministicPlan({
     ignored_low_value_pages: [],
     positive_findings: positiveFindings,
     ai_rewrites_applied: 0,
-  };
+    pages,
+    score,
+  });
 }
 
-function buildDeterministicInsights(comparison) {
-  if (!comparison) return [];
-
-  const insights = [];
-  const depth = comparison.content_depth || {};
-  const faq = comparison.faq_coverage || {};
-
-  if (
-    depth.competitor_median_words > 0 &&
-    depth.your_median_words > 0 &&
-    depth.competitor_median_words >= depth.your_median_words * 2
-  ) {
-    insights.push({
-      headline: "Competitor pages go much deeper than yours",
-      competitor_name: topCompetitorName(comparison),
-      evidence: `Typical competitor page: about ${depth.competitor_median_words} words. Typical important page on your site: about ${depth.your_median_words} words.`,
-      what_to_add:
-        "Expand your key service pages with process steps, pricing context, eligibility or requirements, and proof points.",
-      target_page: "/",
-    });
-  }
-
-  if ((faq.competitors_with_faq || 0) >= 2 && (faq.your_pages_with_faq || 0) === 0) {
-    insights.push({
-      headline: "Competitors answer customer questions — you don’t yet",
-      competitor_name: topCompetitorName(comparison),
-      evidence: `${faq.competitors_with_faq} of ${faq.competitors_measured} competitor pages include a question-and-answer section. Example questions they answer: ${(faq.competitor_faq_examples || []).slice(0, 3).join(" ")}`,
-      what_to_add:
-        "Add 4–6 real customer questions and answers to your key service pages.",
-      target_page: "/",
-    });
-  }
-
-  for (const gap of (comparison.topic_gaps || []).slice(0, 3)) {
-    insights.push({
-      headline: `Competitors cover “${gap.topic}” — your pages don’t`,
-      competitor_name: gap.competitors?.[0] || "",
-      evidence: gap.serp_position
-        ? `Found on ${gap.competitors.length} competitor page${gap.competitors.length === 1 ? "" : "s"}, including one at position ${gap.serp_position} on Google for “${gap.keyword}”.`
-        : `Found on ${gap.competitors.length} competitor page${gap.competitors.length === 1 ? "" : "s"}.`,
-      what_to_add: `Add a “${gap.topic}” section where it genuinely fits your services.`,
-      target_page: "/",
-    });
-  }
-
-  if ((comparison.schema_gaps || []).length > 0) {
-    insights.push({
-      headline: "Competitors use structured business information you may be missing",
-      competitor_name: topCompetitorName(comparison),
-      evidence: `Missing structured information types found on competitor pages: ${comparison.schema_gaps.slice(0, 5).join(", ")}.`,
-      what_to_add:
-        "Ask your website platform or developer to add relevant structured business information to key pages.",
-      target_page: "/",
-    });
-  }
-
-  if ((comparison.trust_signal_gaps || []).length >= 3) {
-    insights.push({
-      headline: "Competitors show more trust proof",
-      competitor_name: topCompetitorName(comparison),
-      evidence: `Competitor pages mention trust signals such as ${comparison.trust_signal_gaps.slice(0, 4).join(", ")}.`,
-      what_to_add:
-        "Add real proof points such as reviews, credentials, guarantees, project numbers, or case studies where relevant.",
-      target_page: "/",
-    });
-  }
-
-  return insights.slice(0, 6);
-}
-
-function topCompetitorName(comparison) {
-  return comparison?.competitors_compared?.[0]?.name || "";
-}
-
-/* ------------------------------- Merge --------------------------------- */
-
-function mergeAiIntoPlan({ aiResponse, deterministicPlan, canonicalFixes }) {
+function mergeAiIntoPlan({ aiResponse, fallbackPlan, canonicalFixes }) {
   const validIds = new Set(canonicalFixes.map((fix) => fix.id));
   const rewrites = new Map();
 
@@ -612,7 +356,7 @@ function mergeAiIntoPlan({ aiResponse, deterministicPlan, canonicalFixes }) {
     }
   }
 
-  const cleaned_fixes = canonicalFixes.map((fix) => {
+  const cleanedFixes = canonicalFixes.map((fix) => {
     const rewrite = rewrites.get(fix.id);
     if (!rewrite) return fix;
 
@@ -624,6 +368,7 @@ function mergeAiIntoPlan({ aiResponse, deterministicPlan, canonicalFixes }) {
     return {
       ...fix,
       issue_title: safeString(rewrite.issue_title, fix.issue_title),
+      title: safeString(rewrite.issue_title, fix.issue_title),
       plain_english_explanation: safeString(
         rewrite.plain_english_explanation,
         fix.plain_english_explanation
@@ -655,7 +400,7 @@ function mergeAiIntoPlan({ aiResponse, deterministicPlan, canonicalFixes }) {
               : "medium",
           }))
           .filter((action) => action.title)
-      : deterministicPlan.top_recommended_actions;
+      : fallbackPlan.top_recommended_actions;
 
   const insights =
     Array.isArray(aiResponse?.competitor_insights) &&
@@ -664,123 +409,110 @@ function mergeAiIntoPlan({ aiResponse, deterministicPlan, canonicalFixes }) {
           .slice(0, 6)
           .map((insight) => ({
             headline: safeString(insight?.headline, ""),
+            title: safeString(insight?.headline, ""),
             competitor_name: safeString(insight?.competitor_name, ""),
             evidence: safeString(insight?.evidence, ""),
             what_to_add: safeString(insight?.what_to_add, ""),
+            recommended_action: safeString(insight?.what_to_add, ""),
             target_page: safeString(insight?.target_page, "/"),
           }))
           .filter((insight) => insight.headline && insight.evidence)
-      : deterministicPlan.competitor_insights;
+      : fallbackPlan.competitor_insights;
 
   const positives =
     Array.isArray(aiResponse?.positive_findings) &&
     aiResponse.positive_findings.length > 0
       ? aiResponse.positive_findings.slice(0, 5).map((item) => String(item))
-      : deterministicPlan.positive_findings;
+      : fallbackPlan.positive_findings;
 
-  return {
+  return withFrontendCompatibility({
     plain_english_summary: safeString(
       aiResponse?.plain_english_summary,
-      deterministicPlan.plain_english_summary
+      fallbackPlan.plain_english_summary
     ),
     top_recommended_actions: topActions,
-    cleaned_fixes,
+    cleaned_fixes: cleanedFixes,
     competitor_insights: insights,
     grouped_page_recommendations: [],
     ignored_low_value_pages: [],
     positive_findings: positives,
     ai_rewrites_applied: rewrites.size,
-  };
+    pages: fallbackPlan.crawled_pages || [],
+    score: fallbackPlan.health_score,
+  });
 }
 
-/* --------------------------- Prompt building --------------------------- */
+function withFrontendCompatibility(plan) {
+  const cleanedFixes = Array.isArray(plan.cleaned_fixes)
+    ? plan.cleaned_fixes
+    : [];
 
-function buildSiteProfile(pages) {
-  return (Array.isArray(pages) ? pages : [])
-    .filter((page) => page.is_important_page && !page.is_utility_page)
-    .slice(0, 15)
-    .map((page) => ({
-      page: cleanPath(page.url || "/"),
-      title: String(page.title || "").slice(0, 90),
-      h1: String(page.h1 || "").slice(0, 90),
-      word_count: page.word_count || 0,
-      has_faq: Boolean(page.has_faq),
-      trust_signal_count: Array.isArray(page.trust_signals)
-        ? page.trust_signals.length
-        : 0,
-      cta_count: Array.isArray(page.cta_phrases) ? page.cta_phrases.length : 0,
-      is_service_like: Boolean(page.is_service_like),
-      likely_client_rendered: Boolean(page.likely_client_rendered),
-    }));
-}
+  const pages = Array.isArray(plan.pages)
+    ? plan.pages
+    : Array.isArray(plan.crawled_pages)
+      ? plan.crawled_pages
+      : [];
 
-function trimSnapshots(snapshots) {
-  return (Array.isArray(snapshots) ? snapshots : [])
-    .filter((item) => item.status_code >= 200 && item.status_code < 400)
-    .slice(0, 3)
-    .map((item) => ({
-      competitor_name: item.competitor_name,
-      keyword: item.keyword,
-      serp_position: item.serp_position,
-      title: String(item.title || "").slice(0, 100),
-      h1: String(item.h1 || "").slice(0, 100),
-      h2s: Array.isArray(item.h2s) ? item.h2s.slice(0, 8) : [],
-      word_count: item.word_count || 0,
-      has_faq: Boolean(item.has_faq),
-      faq_questions: Array.isArray(item.faq_questions)
-        ? item.faq_questions.slice(0, 5)
-        : [],
-      trust_signals: item.trust_signals || [],
-      cta_phrases: item.cta_phrases || [],
-    }));
-}
-
-function compactFixForPrompt(fix) {
-  const details = fix.details || {};
-  const compactDetails = {};
-
-  if (details.content_depth) compactDetails.content_depth = details.content_depth;
-
-  if (details.faq_coverage) {
-    compactDetails.faq_coverage = {
-      ...details.faq_coverage,
-      competitor_faq_examples: (
-        details.faq_coverage.competitor_faq_examples || []
-      ).slice(0, 5),
-    };
-  }
-
-  if (Array.isArray(details.topic_gaps)) {
-    compactDetails.topic_gaps = details.topic_gaps.slice(0, 6);
-  }
-
-  if (details.schema_gaps) compactDetails.schema_gaps = details.schema_gaps;
-
-  if (details.trust_signal_gaps) {
-    compactDetails.trust_signal_gaps = details.trust_signal_gaps;
-  }
-
-  if (Array.isArray(details.examples)) {
-    compactDetails.examples = details.examples.slice(0, 3);
-  }
-
-  if (details.technical_term) {
-    compactDetails.technical_term = details.technical_term;
-  }
+  const score =
+    typeof plan.score === "number"
+      ? plan.score
+      : typeof plan.health_score === "number"
+        ? plan.health_score
+        : calculateFallbackScore(cleanedFixes);
 
   return {
-    fix_id: fix.id,
-    issue_title: fix.issue_title,
-    category: fix.category,
-    customer_category: fix.customer_category,
-    priority: fix.priority,
-    status: fix.status,
-    difficulty: fix.difficulty,
-    current_value: clampText(fix.current_value, 200),
-    recommended_value: clampText(fix.recommended_value, 240),
-    affected_page_count: (fix.affected_pages || []).length,
-    example_pages: (fix.affected_pages || []).slice(0, 3),
-    details: compactDetails,
+    ...plan,
+    health_score: score,
+
+    crawled_pages: pages,
+    pages,
+
+    raw_fixes: cleanedFixes,
+    fixes: cleanedFixes,
+    findings: cleanedFixes,
+    recommendations: cleanedFixes,
+
+    scan_summary: {
+      score,
+      status_label:
+        score >= 80
+          ? "Strong"
+          : score >= 60
+            ? "Good start"
+            : score >= 40
+              ? "Needs work"
+              : "Needs urgent attention",
+      plain_english_summary: plan.plain_english_summary,
+      pages_scanned: pages.length,
+      pages_failed: pages.filter((page) =>
+        String(page.status || page.status_code || "").toLowerCase().includes("fail")
+      ).length,
+      high_priority_count: cleanedFixes.filter((fix) =>
+        ["critical", "high"].includes(fix.priority)
+      ).length,
+      competitor_gap_count: (plan.competitor_insights || []).length,
+      positive_findings: (plan.positive_findings || []).join(" "),
+    },
+
+    recommended_actions: (plan.top_recommended_actions || []).map((action) => {
+      const fix = cleanedFixes.find((item) => item.id === action.fix_id);
+
+      return {
+        fix_id: action.fix_id,
+        title: action.title || fix?.issue_title || "Recommended action",
+        plain_english_summary:
+          fix?.plain_english_explanation || action.reason || "",
+        why_it_matters: fix?.why_it_matters || action.reason || "",
+        what_to_do_steps: fix?.what_to_do || [],
+        who_can_do_this:
+          fix?.who_can_do_this === "your_web_person"
+            ? "Your web person"
+            : "You",
+        time_estimate: fix?.estimated_time || "",
+        priority: action.priority || fix?.priority || "medium",
+        affected_pages: fix?.affected_pages || [],
+      };
+    }),
   };
 }
 
@@ -801,20 +533,18 @@ function buildPrompt({
   return `
 You are the AI explainer inside SEO Autopilot, an SEO tool for non-technical small business owners.
 
-A rule-based scanner has already decided what the findings are. Your job is to make each finding easy to understand and act on — not to change what was found.
+The rule-based scanner has already decided what the findings are. Your job is to make each finding easy to understand and act on — not to change what was found.
 
 Hard rules:
-1. The findings list is final. Do not add, remove, merge, or reorder findings. Only return rewrites keyed by the exact fix_id values in the list.
-2. Never invent a fix_id.
-3. Never claim anything was fixed, changed, or published. Use "prepared", "recommended", "review", "may help", "next step".
-4. Never promise rankings or traffic.
-5. Competitor facts must come only from the competitor data below. You may say a competitor page "was found at position N on Google for 'keyword'". Never say a competitor outranks this website — this website's own positions were not measured.
-6. Plain English only. Translate jargon: meta title -> search title, meta description -> search description, canonical -> preferred-page setting, schema -> structured business information / trust signals, noindex -> hidden from search engines.
-7. what_to_do must be 2–4 short imperative steps a busy owner can follow or hand to their web person.
-8. who_can_do_this is "you" when the owner can do it in a typical website editor. Use "your_web_person" when it needs code, platform settings, redirects, schema, or rendering changes.
-9. estimated_time is a rough human estimate like "about 15 minutes" or "an hour with your web person".
-10. competitor_insights: 3–6 items maximum, each grounded in a specific number, section, or question from the competitor data. Fill the evidence field with that specific fact.
-11. positive_findings: 3–5 short, factual sentences. Show what the site already does well before the cleanup list.
+1. The findings list is final. Do not add, remove, merge, or reorder findings.
+2. Only return rewrites keyed by exact fix_id values.
+3. Never invent a fix_id.
+4. Never promise rankings, traffic, or guaranteed results.
+5. Competitor facts must come only from the competitor data below.
+6. Plain English only.
+7. what_to_do must be 2–4 short action steps.
+8. who_can_do_this must be "you" or "your_web_person".
+9. competitor_insights must be grounded in specific data.
 
 Business name: ${business_name || "(not provided)"}
 Business type: ${business_type || "(not provided)"}
@@ -825,22 +555,22 @@ Scan mode: ${scan_mode}
 Crawl warnings:
 ${JSON.stringify(crawl_warnings || [], null, 2)}
 
-Client-side rendering check:
+Client-side rendering:
 ${JSON.stringify(client_rendering || { detected: false }, null, 2)}
 
-Findings (final — rewrite only, keyed by fix_id):
+Findings:
 ${JSON.stringify((canonicalFixes || []).map(compactFixForPrompt), null, 2)}
 
-Your site profile (top important pages):
+Site profile:
 ${JSON.stringify(siteProfile || [], null, 2)}
 
-Competitor comparison (deterministic deltas):
+Competitor comparison:
 ${JSON.stringify(comparison || null, null, 2)}
 
-Competitor page snapshots (top 3, trimmed):
+Competitor snapshots:
 ${JSON.stringify(snapshots || [], null, 2)}
 
-Suggested positives (keep or improve):
+Suggested positives:
 ${JSON.stringify(positives || [], null, 2)}
 
 Return JSON only.
@@ -924,40 +654,146 @@ function responseSchema() {
   };
 }
 
-/* ------------------------------ Positives ------------------------------ */
+function buildSiteProfile(pages) {
+  return (Array.isArray(pages) ? pages : [])
+    .filter((page) => page.is_important_page && !page.is_utility_page)
+    .slice(0, 15)
+    .map((page) => ({
+      page: cleanPath(page.url || "/"),
+      title: String(page.title || "").slice(0, 90),
+      h1: String(page.h1 || "").slice(0, 90),
+      word_count: page.word_count || 0,
+      has_faq: Boolean(page.has_faq),
+      trust_signal_count: Array.isArray(page.trust_signals)
+        ? page.trust_signals.length
+        : 0,
+      cta_count: Array.isArray(page.cta_phrases) ? page.cta_phrases.length : 0,
+      is_service_like: Boolean(page.is_service_like),
+      likely_client_rendered: Boolean(page.likely_client_rendered),
+    }));
+}
+
+function trimSnapshots(snapshots) {
+  return (Array.isArray(snapshots) ? snapshots : [])
+    .filter((item) => item.status_code >= 200 && item.status_code < 400)
+    .slice(0, 3)
+    .map((item) => ({
+      competitor_name: item.competitor_name,
+      keyword: item.keyword,
+      serp_position: item.serp_position,
+      title: String(item.title || "").slice(0, 100),
+      h1: String(item.h1 || "").slice(0, 100),
+      h2s: Array.isArray(item.h2s) ? item.h2s.slice(0, 8) : [],
+      word_count: item.word_count || 0,
+      has_faq: Boolean(item.has_faq),
+      faq_questions: Array.isArray(item.faq_questions)
+        ? item.faq_questions.slice(0, 5)
+        : [],
+      trust_signals: item.trust_signals || [],
+      cta_phrases: item.cta_phrases || [],
+    }));
+}
+
+function compactFixForPrompt(fix) {
+  return {
+    fix_id: fix.id,
+    issue_title: fix.issue_title,
+    category: fix.category,
+    customer_category: fix.customer_category,
+    priority: fix.priority,
+    status: fix.status,
+    difficulty: fix.difficulty,
+    current_value: clampText(fix.current_value, 200),
+    recommended_value: clampText(fix.recommended_value, 240),
+    affected_page_count: (fix.affected_pages || []).length,
+    example_pages: (fix.affected_pages || []).slice(0, 3),
+    details: fix.details || {},
+  };
+}
+
+function buildDeterministicInsights(comparison) {
+  if (!comparison) return [];
+
+  const insights = [];
+  const depth = comparison.content_depth || {};
+  const faq = comparison.faq_coverage || {};
+
+  if (
+    depth.competitor_median_words > 0 &&
+    depth.your_median_words > 0 &&
+    depth.competitor_median_words >= depth.your_median_words * 2
+  ) {
+    insights.push({
+      headline: "Competitor pages go much deeper than yours",
+      title: "Competitor pages go much deeper than yours",
+      competitor_name: comparison?.competitors_compared?.[0]?.name || "",
+      evidence: `Typical competitor page: about ${depth.competitor_median_words} words. Typical important page on your site: about ${depth.your_median_words} words.`,
+      what_to_add:
+        "Expand your key service pages with process steps, pricing context, eligibility or requirements, and proof points.",
+      recommended_action:
+        "Expand your key service pages with process steps, pricing context, eligibility or requirements, and proof points.",
+      target_page: "/",
+    });
+  }
+
+  if ((faq.competitors_with_faq || 0) >= 2 && (faq.your_pages_with_faq || 0) === 0) {
+    insights.push({
+      headline: "Competitors answer customer questions — you don’t yet",
+      title: "Competitors answer customer questions — you don’t yet",
+      competitor_name: comparison?.competitors_compared?.[0]?.name || "",
+      evidence: `${faq.competitors_with_faq} of ${faq.competitors_measured} competitor pages include a question-and-answer section.`,
+      what_to_add:
+        "Add 4–6 real customer questions and answers to your key service pages.",
+      recommended_action:
+        "Add 4–6 real customer questions and answers to your key service pages.",
+      target_page: "/",
+    });
+  }
+
+  for (const gap of (comparison.topic_gaps || []).slice(0, 3)) {
+    insights.push({
+      headline: `Competitors cover “${gap.topic}” — your pages don’t`,
+      title: `Competitors cover “${gap.topic}” — your pages don’t`,
+      competitor_name: gap.competitors?.[0] || "",
+      evidence: `Found on ${gap.competitors?.length || 1} competitor page${gap.competitors?.length === 1 ? "" : "s"}.`,
+      what_to_add: `Add a “${gap.topic}” section where it genuinely fits your services.`,
+      recommended_action: `Add a “${gap.topic}” section where it genuinely fits your services.`,
+      target_page: "/",
+    });
+  }
+
+  return insights.slice(0, 6);
+}
 
 function buildPositiveFindings(pages) {
   const safePages = Array.isArray(pages) ? pages : [];
-
-  const importantPages = safePages.filter((page) => page.is_important_page);
-  const trustPages = safePages.filter(
-    (page) => Array.isArray(page.trust_signals) && page.trust_signals.length > 0
-  );
-  const ctaPages = safePages.filter(
-    (page) => Array.isArray(page.cta_phrases) && page.cta_phrases.length > 0
-  );
-  const faqPages = safePages.filter((page) => page.has_faq);
-  const schemaPages = safePages.filter((page) => page.has_schema);
-
   const positives = [];
 
-  if (importantPages.length >= 4) {
+  if (safePages.filter((page) => page.is_important_page).length >= 4) {
     positives.push("Your site has a strong service-page foundation.");
   }
 
-  if (trustPages.length >= 1) {
+  if (
+    safePages.filter(
+      (page) => Array.isArray(page.trust_signals) && page.trust_signals.length > 0
+    ).length >= 1
+  ) {
     positives.push("Your site already includes strong trust signals.");
   }
 
-  if (ctaPages.length >= 1) {
+  if (
+    safePages.filter(
+      (page) => Array.isArray(page.cta_phrases) && page.cta_phrases.length > 0
+    ).length >= 1
+  ) {
     positives.push("Your site gives visitors clear ways to take the next step.");
   }
 
-  if (faqPages.length >= 1) {
+  if (safePages.filter((page) => page.has_faq).length >= 1) {
     positives.push("Your site already answers some customer questions.");
   }
 
-  if (schemaPages.length >= 1) {
+  if (safePages.filter((page) => page.has_schema).length >= 1) {
     positives.push("Your site includes structured business information.");
   }
 
@@ -967,47 +803,20 @@ function buildPositiveFindings(pages) {
 function describeFixTypes(fixes) {
   const labels = [];
 
-  if (fixes.some((fix) => fix.category === "meta_title")) {
-    labels.push("clearer search titles");
-  }
-
-  if (fixes.some((fix) => fix.category === "meta_description")) {
-    labels.push("better search descriptions");
-  }
-
-  if (fixes.some((fix) => fix.category === "canonical")) {
-    labels.push("preferred-page settings");
-  }
-
-  if (fixes.some((fix) => fix.category === "js_rendering")) {
-    labels.push("how the site loads its content");
-  }
-
-  if (fixes.some((fix) => fix.category === "web_dev")) {
-    labels.push("website setup cleanup");
-  }
-
-  if (fixes.some((fix) => fix.category === "thin_content")) {
-    labels.push("stronger page content");
-  }
-
-  if (fixes.some((fix) => fix.category === "schema")) {
-    labels.push("stronger trust signals");
-  }
-
-  if (
-    fixes.some((fix) => fix.customer_category === "Competitor opportunities")
-  ) {
-    labels.push("competitor content opportunities");
-  }
+  if (fixes.some((fix) => fix.category === "meta_title")) labels.push("clearer search titles");
+  if (fixes.some((fix) => fix.category === "meta_description")) labels.push("better search descriptions");
+  if (fixes.some((fix) => fix.category === "canonical")) labels.push("preferred-page settings");
+  if (fixes.some((fix) => fix.category === "js_rendering")) labels.push("how the site loads its content");
+  if (fixes.some((fix) => fix.category === "web_dev")) labels.push("website setup cleanup");
+  if (fixes.some((fix) => fix.category === "thin_content")) labels.push("stronger page content");
+  if (fixes.some((fix) => fix.category === "schema")) labels.push("stronger trust signals");
+  if (fixes.some((fix) => fix.customer_category === "Competitor opportunities")) labels.push("competitor content opportunities");
 
   if (labels.length === 0) return "a few website cleanup items";
   if (labels.length === 1) return labels[0];
 
   return `${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`;
 }
-
-/* ------------------------------- Helpers ------------------------------- */
 
 function safeCategory(category) {
   const mapped = CATEGORY_MAP[category] || category || "web_dev";
@@ -1027,10 +836,7 @@ function safeStatus(status) {
 }
 
 function safeDifficulty(difficulty, status) {
-  if (["easy", "moderate", "developer"].includes(difficulty)) {
-    return difficulty;
-  }
-
+  if (["easy", "moderate", "developer"].includes(difficulty)) return difficulty;
   if (status === "needs_developer") return "developer";
   if (status === "needs_approval") return "moderate";
   return "easy";
@@ -1086,6 +892,11 @@ function defaultTitle(category) {
   return map[category] || "Review this website recommendation";
 }
 
+function compareFixes(a, b) {
+  const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+  return (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9);
+}
+
 function cleanPath(input) {
   try {
     const parsed = new URL(input, "https://example.com");
@@ -1101,7 +912,6 @@ function cleanPath(input) {
 function stringifyValue(value) {
   if (typeof value === "string") return value;
   if (value === null || value === undefined) return "";
-
   try {
     return JSON.stringify(value);
   } catch {

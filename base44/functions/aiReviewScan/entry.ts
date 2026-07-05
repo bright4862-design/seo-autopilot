@@ -1,12 +1,10 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
-// Contract with the AI layer:
-// - The scanner's findings are CANONICAL. The AI never adds, removes, or
-//   merges findings — it only returns rewrites keyed by fix_id (plain-English
-//   explanation, 2–4 concrete steps, who can do it, rough time) plus
-//   competitor insights grounded in the deterministic comparison data.
-// - The merge step applies rewrites onto the canonical fixes, so a bad or
-//   partial AI response can never lose findings or break structured fields.
+// Contract:
+// - Scanner findings are canonical.
+// - AI only rewrites / explains findings keyed by fix_id.
+// - This function accepts raw_fixes, grouped_findings, raw_findings, findings, fixes, or recommendations.
+// - This prevents recommendations disappearing when the scanner payload naming changes.
 
 const VALID_CATEGORIES = new Set([
   "meta_title",
@@ -79,28 +77,48 @@ Deno.serve(async (req) => {
       business_type = "",
       city = "",
       website_url = "",
+      normalized_url = "",
       crawled_pages = [],
-      raw_fixes = [],
+      pages = [],
       competitor_page_snapshots = [],
       competitor_comparison = null,
       client_rendering = null,
       scan_mode = "quick",
       crawl_warnings = [],
+      health_score = null,
     } = body;
 
-    if (!website_url) {
+    const finalWebsiteUrl = website_url || normalized_url;
+
+    if (!finalWebsiteUrl) {
       return Response.json(
         { success: false, error: "website_url is required" },
         { status: 400 }
       );
     }
 
-    // Canonical fixes: normalized, ids guaranteed, deduped, sorted.
-    const canonicalFixes = prepareFixes(raw_fixes);
+    const finalPages =
+      Array.isArray(crawled_pages) && crawled_pages.length > 0
+        ? crawled_pages
+        : Array.isArray(pages)
+          ? pages
+          : [];
+
+    const rawFixes = pickFirstNonEmptyArray([
+      body.raw_fixes,
+      body.grouped_findings,
+      body.raw_findings,
+      body.findings,
+      body.fixes,
+      body.recommendations,
+      body.issues,
+    ]);
+
+    const canonicalFixes = prepareFixes(rawFixes);
 
     const deterministicPlan = buildDeterministicPlan({
       canonicalFixes,
-      crawled_pages,
+      crawled_pages: finalPages,
       comparison: competitor_comparison,
       client_rendering,
       crawl_warnings,
@@ -113,11 +131,11 @@ Deno.serve(async (req) => {
         business_name,
         business_type,
         city,
-        website_url,
+        website_url: finalWebsiteUrl,
         scan_mode,
         crawl_warnings,
         canonicalFixes,
-        siteProfile: buildSiteProfile(crawled_pages),
+        siteProfile: buildSiteProfile(finalPages),
         comparison: competitor_comparison,
         snapshots: trimSnapshots(competitor_page_snapshots),
         client_rendering,
@@ -133,11 +151,17 @@ Deno.serve(async (req) => {
         "AI review"
       );
     } catch {
+      const fallback = withFrontendCompatibility({
+        merged: deterministicPlan,
+        pages: finalPages,
+        health_score,
+      });
+
       return Response.json({
         success: true,
         ai_review_warning:
           "AI review was unavailable, so SEO Autopilot used its rule-based review instead.",
-        ...deterministicPlan,
+        ...fallback,
       });
     }
 
@@ -147,7 +171,14 @@ Deno.serve(async (req) => {
       canonicalFixes,
     });
 
-    return Response.json({ success: true, ...merged });
+    return Response.json({
+      success: true,
+      ...withFrontendCompatibility({
+        merged,
+        pages: finalPages,
+        health_score,
+      }),
+    });
   } catch (error) {
     return Response.json(
       {
@@ -159,13 +190,108 @@ Deno.serve(async (req) => {
   }
 });
 
+/* ------------------------- Compatibility output ------------------------ */
+
+function withFrontendCompatibility({ merged, pages, health_score }) {
+  const cleanedFixes = Array.isArray(merged.cleaned_fixes)
+    ? merged.cleaned_fixes
+    : [];
+
+  const competitorInsights = Array.isArray(merged.competitor_insights)
+    ? merged.competitor_insights
+    : [];
+
+  const topActions = Array.isArray(merged.top_recommended_actions)
+    ? merged.top_recommended_actions
+    : [];
+
+  const score =
+    typeof health_score === "number"
+      ? health_score
+      : calculateFallbackScore(cleanedFixes);
+
+  return {
+    ...merged,
+
+    raw_fixes: cleanedFixes,
+    fixes: cleanedFixes,
+    findings: cleanedFixes,
+    recommendations: cleanedFixes,
+
+    scan_summary: {
+      score,
+      status_label:
+        score >= 80
+          ? "Strong"
+          : score >= 60
+            ? "Good start"
+            : score >= 40
+              ? "Needs work"
+              : "Needs urgent attention",
+      plain_english_summary: merged.plain_english_summary,
+      pages_scanned: pages.length,
+      pages_failed: pages.filter((page) =>
+        String(page.status || page.status_code || "").toLowerCase().includes("fail")
+      ).length,
+      high_priority_count: cleanedFixes.filter((fix) =>
+        ["critical", "high"].includes(fix.priority)
+      ).length,
+      competitor_gap_count: competitorInsights.length,
+      positive_findings: (merged.positive_findings || []).join(" "),
+    },
+
+    recommended_actions: topActions.map((action) => {
+      const fix = cleanedFixes.find((item) => item.id === action.fix_id);
+
+      return {
+        fix_id: action.fix_id,
+        title: action.title || fix?.issue_title || "Recommended action",
+        plain_english_summary:
+          fix?.plain_english_explanation || action.reason || "",
+        why_it_matters: fix?.why_it_matters || action.reason || "",
+        what_to_do_steps: fix?.what_to_do || [],
+        who_can_do_this:
+          fix?.who_can_do_this === "your_web_person"
+            ? "Your web person"
+            : "You",
+        time_estimate: fix?.estimated_time || "",
+        priority: action.priority || fix?.priority || "medium",
+        affected_pages: fix?.affected_pages || [],
+      };
+    }),
+
+    competitor_insights: competitorInsights.map((insight) => ({
+      title: insight.headline || insight.title || "Competitor opportunity",
+      headline: insight.headline || insight.title || "Competitor opportunity",
+      competitor_name: insight.competitor_name || "",
+      competitor_domain: insight.competitor_domain || insight.competitor_name || "",
+      evidence: insight.evidence || "",
+      recommended_action: insight.what_to_add || insight.recommended_action || "",
+      what_to_add: insight.what_to_add || insight.recommended_action || "",
+      related_user_page: insight.target_page || "/",
+      target_page: insight.target_page || "/",
+      gap_type: "competitor_gap",
+    })),
+
+    pages,
+  };
+}
+
+function pickFirstNonEmptyArray(values) {
+  for (const value of values || []) {
+    if (Array.isArray(value) && value.length > 0) return value;
+  }
+
+  return [];
+}
+
 /* ------------------------- Canonical fix prep -------------------------- */
 
 function prepareFixes(rawFixes) {
   const safe = Array.isArray(rawFixes) ? rawFixes : [];
 
   const filtered = safe.filter((fix) => {
-    const pageUrl = String(fix.page_url || "").toLowerCase();
+    const pageUrl = String(fix.page_url || fix.url || "").toLowerCase();
 
     const isUtilityPage = UTILITY_PAGE_WORDS.some((word) =>
       pageUrl.includes(word)
@@ -175,7 +301,7 @@ function prepareFixes(rawFixes) {
       fix.category === "404_error" ||
       fix.category === "broken_page" ||
       fix.category === "internal_link" ||
-      String(fix.issue_title || "").toLowerCase().includes("broken");
+      String(fix.issue_title || fix.title || "").toLowerCase().includes("broken");
 
     if (isUtilityPage && !isBrokenPage) return false;
 
@@ -184,7 +310,7 @@ function prepareFixes(rawFixes) {
 
   return dedupeFixesById(filtered.map(normalizeFix))
     .sort(compareFixes)
-    .slice(0, 16);
+    .slice(0, 20);
 }
 
 function normalizeFix(fix) {
@@ -213,6 +339,7 @@ function normalizeFix(fix) {
     plain_english_explanation:
       fix.plain_english_explanation ||
       fix.explanation ||
+      fix.description ||
       "This recommendation was found during the website scan.",
     why_it_matters:
       fix.why_it_matters ||
@@ -247,17 +374,17 @@ function normalizeFix(fix) {
       typeof fix.confidence_score === "number" ? fix.confidence_score : 90,
     what_to_do: Array.isArray(fix.what_to_do)
       ? fix.what_to_do.slice(0, 4).map((step) => String(step))
-      : [],
+      : Array.isArray(fix.fix_steps)
+        ? fix.fix_steps.slice(0, 4).map((step) => String(step))
+        : [],
     who_can_do_this:
       fix.who_can_do_this === "you" || fix.who_can_do_this === "your_web_person"
         ? fix.who_can_do_this
         : defaultOwner(difficulty),
-    estimated_time: fix.estimated_time || defaultTime(difficulty),
+    estimated_time: fix.estimated_time || fix.time_estimate || defaultTime(difficulty),
   };
 
-  // Scanner-provided ids are preserved so AI rewrites can key onto them;
-  // anything without one gets a stable id derived from its intent key.
-  normalized.id = fix.id || stableId(buildIntentKey(normalized));
+  normalized.id = fix.id || fix.fix_id || stableId(buildIntentKey(normalized));
 
   return normalized;
 }
@@ -399,8 +526,6 @@ function buildDeterministicPlan({
   };
 }
 
-// Insights straight from the comparison object — used as the fallback when
-// the AI is unavailable, and as the grounding the AI must stick to.
 function buildDeterministicInsights(comparison) {
   if (!comparison) return [];
 
@@ -442,6 +567,28 @@ function buildDeterministicInsights(comparison) {
         ? `Found on ${gap.competitors.length} competitor page${gap.competitors.length === 1 ? "" : "s"}, including one at position ${gap.serp_position} on Google for “${gap.keyword}”.`
         : `Found on ${gap.competitors.length} competitor page${gap.competitors.length === 1 ? "" : "s"}.`,
       what_to_add: `Add a “${gap.topic}” section where it genuinely fits your services.`,
+      target_page: "/",
+    });
+  }
+
+  if ((comparison.schema_gaps || []).length > 0) {
+    insights.push({
+      headline: "Competitors use structured business information you may be missing",
+      competitor_name: topCompetitorName(comparison),
+      evidence: `Missing structured information types found on competitor pages: ${comparison.schema_gaps.slice(0, 5).join(", ")}.`,
+      what_to_add:
+        "Ask your website platform or developer to add relevant structured business information to key pages.",
+      target_page: "/",
+    });
+  }
+
+  if ((comparison.trust_signal_gaps || []).length >= 3) {
+    insights.push({
+      headline: "Competitors show more trust proof",
+      competitor_name: topCompetitorName(comparison),
+      evidence: `Competitor pages mention trust signals such as ${comparison.trust_signal_gaps.slice(0, 4).join(", ")}.`,
+      what_to_add:
+        "Add real proof points such as reviews, credentials, guarantees, project numbers, or case studies where relevant.",
       target_page: "/",
     });
   }
@@ -548,8 +695,6 @@ function mergeAiIntoPlan({ aiResponse, deterministicPlan, canonicalFixes }) {
 
 /* --------------------------- Prompt building --------------------------- */
 
-// Only what the model needs: compact fixes, a small site profile, the
-// comparison object, and 3 trimmed snapshots — not 100 full page dumps.
 function buildSiteProfile(pages) {
   return (Array.isArray(pages) ? pages : [])
     .filter((page) => page.is_important_page && !page.is_utility_page)
@@ -665,10 +810,10 @@ Hard rules:
 4. Never promise rankings or traffic.
 5. Competitor facts must come only from the competitor data below. You may say a competitor page "was found at position N on Google for 'keyword'". Never say a competitor outranks this website — this website's own positions were not measured.
 6. Plain English only. Translate jargon: meta title -> search title, meta description -> search description, canonical -> preferred-page setting, schema -> structured business information / trust signals, noindex -> hidden from search engines.
-7. what_to_do must be 2–4 short imperative steps a busy owner can follow or hand to their web person. Make steps specific to this business and finding, not generic advice.
-8. who_can_do_this is "you" when the owner can do it in a typical website editor (Squarespace, Wix, WordPress); "your_web_person" when it needs code or platform changes.
+7. what_to_do must be 2–4 short imperative steps a busy owner can follow or hand to their web person.
+8. who_can_do_this is "you" when the owner can do it in a typical website editor. Use "your_web_person" when it needs code, platform settings, redirects, schema, or rendering changes.
 9. estimated_time is a rough human estimate like "about 15 minutes" or "an hour with your web person".
-10. competitor_insights: 3–6 items maximum, each grounded in a specific number, section, or question from the competitor data. Fill the evidence field with that specific fact. No vague statements.
+10. competitor_insights: 3–6 items maximum, each grounded in a specific number, section, or question from the competitor data. Fill the evidence field with that specific fact.
 11. positive_findings: 3–5 short, factual sentences. Show what the site already does well before the cleanup list.
 
 Business name: ${business_name || "(not provided)"}
@@ -985,6 +1130,19 @@ function stableId(input) {
   }
 
   return `finding_${Math.abs(hash)}`;
+}
+
+function calculateFallbackScore(fixes) {
+  let score = 100;
+
+  for (const fix of fixes || []) {
+    if (fix.priority === "critical") score -= 16;
+    else if (fix.priority === "high") score -= 10;
+    else if (fix.priority === "medium") score -= 5;
+    else if (fix.priority === "low") score -= 2;
+  }
+
+  return Math.max(0, Math.min(100, score));
 }
 
 function withTimeout(promise, ms, label = "Operation") {

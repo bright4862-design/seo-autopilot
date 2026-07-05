@@ -53,8 +53,8 @@ export default function Reports() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">SEO Reports</h1>
-          <p className="text-sm text-gray-500 mt-1">Client-friendly summaries of your SEO progress</p>
+          <h1 className="text-2xl font-bold tracking-tight">Scan Report</h1>
+          <p className="text-sm text-gray-500 mt-1">Simple summaries of your website's progress</p>
         </div>
         <Button onClick={generateReport} className="gradient-primary text-white border-0">
           <FileText className="w-4 h-4 mr-2" /> Generate New Report

@@ -48,8 +48,8 @@ export default function Developer() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Web Development Recommendations</h1>
-          <p className="text-sm text-gray-500 mt-1">Developer work that would boost your rankings — sorted by impact</p>
+          <h1 className="text-2xl font-bold tracking-tight">Website Improvements</h1>
+          <p className="text-sm text-gray-500 mt-1">Improvements that could help your visibility — sorted by impact</p>
         </div>
         <Button className="gradient-primary text-white border-0">
           <Wrench className="w-4 h-4 mr-2" /> Request Done-for-You Help

@@ -4,6 +4,7 @@ import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import IssueDetailModal from "@/components/issues/IssueDetailModal";
 import ScanHistory from "@/components/dashboard/ScanHistory";
+import WhatToDoFirst from "@/components/dashboard/WhatToDoFirst";
 import {
   Search, CheckCircle2, Bell, Wrench, ChevronRight, RefreshCw, Loader2, Sparkles, ListChecks,
 } from "lucide-react";
@@ -112,6 +113,8 @@ export default function FixList() {
           <RefreshCw className="w-4 h-4 mr-2" /> Run New Scan
         </Button>
       </div>
+
+      <WhatToDoFirst counts={counts} />
 
       <div className="grid grid-cols-3 gap-3">
         {CATEGORIES.map(c => (

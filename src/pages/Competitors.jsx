@@ -124,9 +124,9 @@ export default function Competitors() {
             </p>
           </div>
 
-          <ComparisonTable customer={customer} competitors={scanned} />
-
           {insights.length > 0 && <GapInsights insights={insights} />}
+
+          <ComparisonTable customer={customer} competitors={scanned} />
         </>
       )}
     </div>

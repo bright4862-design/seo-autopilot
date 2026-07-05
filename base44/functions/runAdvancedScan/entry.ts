@@ -4,7 +4,7 @@ const GOOGLE_API_KEY_NAME = "GOOGLE_" + "CUSTOM_SEARCH_API_KEY";
 const GOOGLE_CX_NAME = "GOOGLE_" + "CUSTOM_SEARCH_CX";
 
 const USER_AGENT =
-  "Mozilla/5.0 (compatible; SEO-Autopilot/2.0; +https://seoautopilot.app/bot)";
+  "Mozilla/5.0 (compatible; SEO-Autopilot/2.1; +https://seoautopilot.app/bot)";
 
 const SCAN_LIMITS = {
   quick: {
@@ -12,8 +12,8 @@ const SCAN_LIMITS = {
     batchSize: 6,
     timeoutMs: 12000,
     useSitemap: true,
-    discoverCompetitors: false,
-    checkBrokenLinks: true,
+    discoverCompetitors: true,
+    maxCompetitorSnapshots: 3,
   },
   deep: {
     maxPages: 500,
@@ -21,7 +21,7 @@ const SCAN_LIMITS = {
     timeoutMs: 18000,
     useSitemap: true,
     discoverCompetitors: true,
-    checkBrokenLinks: true,
+    maxCompetitorSnapshots: 5,
   },
 };
 
@@ -94,29 +94,26 @@ Deno.serve(async (req) => {
     const startUrl = new URL(normalizedUrl);
     const origin = startUrl.origin;
     const domain = getDomain(normalizedUrl);
-
     const crawlWarnings = [];
 
     const robots = await readRobotsTxt(origin, crawlWarnings);
 
-    let discoveredCompetitors = [];
-    let createdCompetitors = [];
-
-    const providedCompetitors = await saveProvidedCompetitors({
+    const existingCompetitors = await getExistingCompetitors(base44, project_id);
+    const manualCompetitors = await saveProvidedCompetitors({
       base44,
       user,
       project_id,
       competitor_urls,
+      ownDomain: domain,
     });
 
-    if (providedCompetitors.length > 0) {
-      createdCompetitors.push(...providedCompetitors);
-    }
+    let discoveredCompetitors = [];
+    let createdCompetitors = [];
 
-    if (scanMode === "deep" && limits.discoverCompetitors) {
+    if (limits.discoverCompetitors) {
       try {
         const discovery = await withTimeout(
-          discoverCompetitorsFromSearch({
+          discoverCompetitorsFromGoogle({
             base44,
             user,
             project_id,
@@ -126,27 +123,38 @@ Deno.serve(async (req) => {
             city,
             important_keywords,
           }),
-          12000,
-          "Competitor discovery"
+          18000,
+          "Google competitor discovery"
         );
 
         discoveredCompetitors = discovery.discovered_competitors || [];
-
-        if (discovery.created_competitors?.length) {
-          createdCompetitors.push(...discovery.created_competitors);
-        }
+        createdCompetitors = discovery.created_competitors || [];
 
         if (discovery.warnings?.length) {
           crawlWarnings.push(...discovery.warnings);
         }
       } catch (error) {
         crawlWarnings.push(
-          `Competitor discovery was skipped: ${
+          `Google competitor discovery was skipped: ${
             error?.message || "Unknown error"
           }`
         );
       }
     }
+
+    const competitorResults = mergeCompetitorResults({
+      own_url: normalizedUrl,
+      existing: existingCompetitors,
+      manual: manualCompetitors,
+      discovered: discoveredCompetitors,
+      created: createdCompetitors,
+    });
+
+    const competitorPageSnapshots = await crawlCompetitorSnapshots({
+      competitorResults,
+      maxSnapshots: limits.maxCompetitorSnapshots,
+      timeoutMs: 14000,
+    });
 
     const sitemapUrls =
       limits.useSitemap
@@ -164,14 +172,12 @@ Deno.serve(async (req) => {
       crawlWarnings,
     });
 
-    const brokenLinks = limits.checkBrokenLinks
-      ? detectBrokenInternalLinks(crawlResult.pages)
-      : [];
+    const brokenLinks = detectBrokenInternalLinks(crawlResult.pages);
 
     const rawFindings = analyzePages({
       pages: crawlResult.pages,
       brokenLinks,
-      domain,
+      competitorPageSnapshots,
       business_name,
       business_type,
       city,
@@ -180,12 +186,6 @@ Deno.serve(async (req) => {
     const groupedFindings = groupAndPrioritizeFindings(rawFindings);
     const healthScore = calculateHealthScore(groupedFindings);
 
-    const competitorResults = mergeCompetitorResults({
-      own_url: normalizedUrl,
-      manual: providedCompetitors,
-      discovered: discoveredCompetitors,
-    });
-
     const siteSummary = buildSiteSummary({
       pages: crawlResult.pages,
       rawFindings,
@@ -193,6 +193,7 @@ Deno.serve(async (req) => {
       scanMode,
       sitemapUrls,
       discoveredCompetitors,
+      competitorPageSnapshots,
       brokenLinks,
       robots,
     });
@@ -214,12 +215,14 @@ Deno.serve(async (req) => {
       discovered_competitors: discoveredCompetitors,
       created_competitors: createdCompetitors,
       competitor_results: competitorResults,
+      competitor_page_snapshots: competitorPageSnapshots,
       competitor_urls,
       crawl_job_id,
       site_summary: siteSummary,
       crawl_warnings: crawlWarnings,
       html_only_scan: true,
       javascript_rendering_used: false,
+      deterministic_scan: true,
     });
   } catch (error) {
     return Response.json(
@@ -267,14 +270,13 @@ async function crawlWebsite({
       priority: priorityScore(clean),
     });
 
-    queue.sort((a, b) => b.priority - a.priority);
-
+    sortQueue(queue);
     return true;
   };
 
   addToQueue(startUrl, "start");
 
-  for (const url of sitemapUrls || []) {
+  for (const url of stableSortUrls(sitemapUrls || [])) {
     addToQueue(url, "sitemap");
   }
 
@@ -316,12 +318,16 @@ async function crawlWebsite({
       }
 
       if (page.status_code >= 200 && page.status_code < 400) {
-        for (const link of page.internal_links || []) {
+        const links = stableSortUrls(page.internal_links || []);
+
+        for (const link of links) {
           addToQueue(link, "internal");
         }
       }
     }
   }
+
+  pages.sort((a, b) => String(a.url || "").localeCompare(String(b.url || "")));
 
   if (failed.length > 0) {
     crawlWarnings.push(
@@ -341,6 +347,92 @@ async function crawlWebsite({
     queuedRemaining: queue.length,
     failed,
   };
+}
+
+async function crawlCompetitorSnapshots({
+  competitorResults,
+  maxSnapshots,
+  timeoutMs,
+}) {
+  const snapshots = [];
+  const selected = stableDedupeCompetitors(competitorResults).slice(0, maxSnapshots);
+
+  for (const competitor of selected) {
+    const url = competitor.url || competitor.website_url;
+    const domain = getDomain(url);
+
+    if (!url || !domain) continue;
+
+    try {
+      const page = await withTimeout(
+        fetchAndExtractPage(url, domain, timeoutMs, "competitor_serp"),
+        timeoutMs + 2000,
+        "Competitor page crawl"
+      );
+
+      snapshots.push({
+        competitor_name: competitor.name || formatDomainName(domain),
+        competitor_domain: domain,
+        competitor_url: url,
+        source: competitor.source || "google_custom_search",
+        keyword: competitor.keyword || "",
+        serp_position: competitor.position || null,
+        serp_title: competitor.title || "",
+        serp_snippet: competitor.snippet || "",
+        status_code: page.status_code,
+        title: page.title,
+        meta_description: page.meta_description,
+        h1: page.h1,
+        h2s: page.h2s || [],
+        h3s: page.h3s || [],
+        word_count: page.word_count || 0,
+        has_faq: Boolean(page.has_faq),
+        faq_questions: page.faq_questions || [],
+        has_schema: Boolean(page.has_schema),
+        schema_types: page.schema_types || [],
+        has_phone: Boolean(page.has_phone),
+        has_email: Boolean(page.has_email),
+        cta_phrases: page.cta_phrases || [],
+        trust_signals: page.trust_signals || [],
+        visible_text_sample: String(page.visible_text_sample || "").slice(0, 1800),
+      });
+    } catch {
+      snapshots.push({
+        competitor_name: competitor.name || formatDomainName(domain),
+        competitor_domain: domain,
+        competitor_url: url,
+        source: competitor.source || "google_custom_search",
+        keyword: competitor.keyword || "",
+        serp_position: competitor.position || null,
+        serp_title: competitor.title || "",
+        serp_snippet: competitor.snippet || "",
+        status_code: 0,
+        title: "",
+        meta_description: "",
+        h1: "",
+        h2s: [],
+        h3s: [],
+        word_count: 0,
+        has_faq: false,
+        faq_questions: [],
+        has_schema: false,
+        schema_types: [],
+        has_phone: false,
+        has_email: false,
+        cta_phrases: [],
+        trust_signals: [],
+        visible_text_sample: "",
+        fetch_error: "Could not read competitor page",
+      });
+    }
+  }
+
+  return snapshots.sort((a, b) => {
+    const aPos = a.serp_position || 99;
+    const bPos = b.serp_position || 99;
+    if (aPos !== bPos) return aPos - bPos;
+    return String(a.competitor_domain).localeCompare(String(b.competitor_domain));
+  });
 }
 
 async function fetchAndExtractPage(url, domain, timeoutMs, source = "unknown") {
@@ -414,30 +506,29 @@ function extractPageData({
 }) {
   const normalizedUrl = canonicalizeUrl(url);
   const originalNormalized = canonicalizeUrl(originalUrl);
+  const decodedHtml = decodeHtml(html);
 
   const title = cleanText(
-    decodeHtml(matchFirst(html, /<title[^>]*>([\s\S]*?)<\/title>/i))
+    matchFirst(decodedHtml, /<title[^>]*>([\s\S]*?)<\/title>/i)
   );
 
   const metaDescription = cleanText(
-    decodeHtml(
-      getMetaContent(html, "description") ||
-        getMetaProperty(html, "og:description") ||
-        getMetaName(html, "twitter:description")
-    )
+    getMetaContent(decodedHtml, "description") ||
+      getMetaProperty(decodedHtml, "og:description") ||
+      getMetaName(decodedHtml, "twitter:description")
   );
 
   const h1 = cleanText(
-    decodeHtml(matchFirst(html, /<h1[^>]*>([\s\S]*?)<\/h1>/i))
+    matchFirst(decodedHtml, /<h1[^>]*>([\s\S]*?)<\/h1>/i)
   );
 
   const canonicalRaw =
     matchFirst(
-      html,
+      decodedHtml,
       /<link[^>]+rel=["'][^"']*canonical[^"']*["'][^>]*href=["']([^"']+)["'][^>]*>/i
     ) ||
     matchFirst(
-      html,
+      decodedHtml,
       /<link[^>]+href=["']([^"']+)["'][^>]*rel=["'][^"']*canonical[^"']*["'][^>]*>/i
     ) ||
     "";
@@ -445,21 +536,19 @@ function extractPageData({
   const canonicalUrl = absolutizeUrl(canonicalRaw, url);
 
   const robotsMeta =
-    getMetaContent(html, "robots") ||
-    getMetaContent(html, "googlebot") ||
+    getMetaContent(decodedHtml, "robots") ||
+    getMetaContent(decodedHtml, "googlebot") ||
     "";
 
-  const pageText = extractVisibleText(html);
+  const pageText = extractVisibleText(decodedHtml);
   const wordCount = countWords(pageText);
-
-  const headings = extractHeadings(html);
-  const links = extractLinks(html, url);
-
+  const headings = extractHeadings(decodedHtml);
+  const links = extractLinks(decodedHtml, url);
   const internalLinks = links.filter((link) => isSameDomain(link, domain));
   const externalLinks = links.filter((link) => !isSameDomain(link, domain));
-  const images = extractImages(html, url);
+  const images = extractImages(decodedHtml, url);
   const faqQuestions = extractQuestions(pageText);
-  const schemaTypes = detectSchemaTypes(html);
+  const schemaTypes = detectSchemaTypes(decodedHtml);
   const trustSignals = detectTrustSignals(pageText);
   const ctaPhrases = detectCtas(pageText);
   const placeholderText = detectPlaceholderText(pageText);
@@ -483,9 +572,9 @@ function extractPageData({
     noindex: /noindex/i.test(robotsMeta),
     nofollow: /nofollow/i.test(robotsMeta),
     word_count: wordCount,
-    visible_text_sample: pageText.slice(0, 2000),
-    internal_links: Array.from(new Set(internalLinks)).slice(0, 500),
-    external_links: Array.from(new Set(externalLinks)).slice(0, 200),
+    visible_text_sample: pageText.slice(0, 2500),
+    internal_links: stableSortUrls(Array.from(new Set(internalLinks))).slice(0, 500),
+    external_links: stableSortUrls(Array.from(new Set(externalLinks))).slice(0, 200),
     images,
     image_count: images.length,
     images_missing_alt_count: images.filter((img) => !img.has_alt).length,
@@ -495,7 +584,7 @@ function extractPageData({
     faq_questions: faqQuestions,
     has_schema:
       schemaTypes.length > 0 ||
-      /application\/ld\+json|schema\.org/i.test(html),
+      /application\/ld\+json|schema\.org/i.test(decodedHtml),
     schema_types: schemaTypes,
     has_phone: /\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/.test(pageText),
     has_email: /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(pageText),
@@ -561,6 +650,7 @@ function emptyPage({
 function analyzePages({
   pages,
   brokenLinks,
+  competitorPageSnapshots,
   business_name,
   business_type,
   city,
@@ -677,7 +767,7 @@ function analyzePages({
   }
 
   if (weakTitlePages.length > 0) {
-    const examples = weakTitlePages.slice(0, 10);
+    const examples = weakTitlePages.slice(0, 12);
 
     findings.push(
       groupedFinding({
@@ -694,12 +784,7 @@ function analyzePages({
           "Clear search titles help people understand what each page is about before they click.",
         recommendation:
           examples.length === 1
-            ? suggestSearchTitle(
-                examples[0],
-                business_name,
-                business_type,
-                city
-              )
+            ? suggestSearchTitle(examples[0], business_name, business_type, city)
             : "Prepare short, unique search titles for the affected pages.",
         current: `${weakTitlePages.length} page${weakTitlePages.length === 1 ? "" : "s"} affected`,
         priority: "high",
@@ -724,7 +809,7 @@ function analyzePages({
   }
 
   if (missingDescriptionPages.length > 0) {
-    const examples = missingDescriptionPages.slice(0, 10);
+    const examples = missingDescriptionPages.slice(0, 12);
 
     findings.push(
       groupedFinding({
@@ -874,7 +959,7 @@ function analyzePages({
         affected_pages: thinPages.map((p) => getPath(p.url)),
         details: {
           affected_count: thinPages.length,
-          examples: thinPages.slice(0, 10).map((p) => ({
+          examples: thinPages.slice(0, 12).map((p) => ({
             page: getPath(p.url),
             word_count: p.word_count,
           })),
@@ -903,14 +988,14 @@ function analyzePages({
         affected_pages: placeholderPages.map((p) => p.page),
         details: {
           affected_count: placeholderPages.length,
-          examples: placeholderPages.slice(0, 10),
+          examples: placeholderPages.slice(0, 12),
           technical_term: "placeholder text",
         },
       })
     );
   }
 
-  if (faqGapPages.length > 0 && faqGapPages.length <= 20) {
+  if (faqGapPages.length > 0 && faqGapPages.length <= 25) {
     findings.push(
       groupedFinding({
         id: "faq-gaps",
@@ -933,7 +1018,7 @@ function analyzePages({
     );
   }
 
-  if (ctaGapPages.length > 0 && ctaGapPages.length <= 20) {
+  if (ctaGapPages.length > 0 && ctaGapPages.length <= 25) {
     findings.push(
       groupedFinding({
         id: "cta-gaps",
@@ -956,7 +1041,7 @@ function analyzePages({
     );
   }
 
-  if (trustGapPages.length > 0 && trustGapPages.length <= 20) {
+  if (trustGapPages.length > 0 && trustGapPages.length <= 25) {
     findings.push(
       groupedFinding({
         id: "trust-signal-gaps",
@@ -999,7 +1084,7 @@ function analyzePages({
         affected_pages: imageAltPages.map((p) => getPath(p.url)),
         details: {
           affected_count: imageAltPages.length,
-          examples: imageAltPages.slice(0, 10).map((p) => ({
+          examples: imageAltPages.slice(0, 12).map((p) => ({
             page: getPath(p.url),
             image_count: p.image_count,
             missing_alt_count: p.images_missing_alt_count,
@@ -1031,7 +1116,32 @@ function analyzePages({
           .filter(Boolean),
         details: {
           affected_count: brokenLinks.length,
-          examples: brokenLinks.slice(0, 20),
+          examples: brokenLinks.slice(0, 25),
+        },
+      })
+    );
+  }
+
+  if (competitorPageSnapshots.length > 0) {
+    findings.push(
+      groupedFinding({
+        id: "competitor-content-opportunities",
+        category: "competitor_gap",
+        customer_category: "Competitor opportunities",
+        title: "Review competitor pages for content opportunities",
+        explanation:
+          "We found competitor pages from Google results and reviewed what those pages include.",
+        why:
+          "Competitor pages can show what services, questions, proof points, and page sections customers may expect to see.",
+        recommendation:
+          "Compare your most important pages against these competitor pages and add helpful sections where appropriate.",
+        current: `${competitorPageSnapshots.length} competitor page${competitorPageSnapshots.length === 1 ? "" : "s"} reviewed`,
+        priority: "medium",
+        status: "needs_developer",
+        difficulty: "moderate",
+        affected_pages: ["/"],
+        details: {
+          competitor_page_snapshots: competitorPageSnapshots.slice(0, 5),
         },
       })
     );
@@ -1076,7 +1186,7 @@ function groupedFinding({
     can_auto_fix: status === "auto_fixed",
     requires_approval: status === "needs_approval",
     requires_developer: status === "needs_developer",
-    affected_pages: Array.from(new Set(affected_pages || [])).slice(0, 100),
+    affected_pages: Array.from(new Set(affected_pages || [])).slice(0, 150),
     details,
     confidence_score: 90,
   };
@@ -1101,15 +1211,19 @@ function groupAndPrioritizeFindings(findings) {
     .sort((a, b) => {
       const aPriority = priorityOrder[a.priority] ?? 9;
       const bPriority = priorityOrder[b.priority] ?? 9;
-
       if (aPriority !== bPriority) return aPriority - bPriority;
 
       const aStatus = statusOrder[a.status] ?? 9;
       const bStatus = statusOrder[b.status] ?? 9;
+      if (aStatus !== bStatus) return aStatus - bStatus;
 
-      return aStatus - bStatus;
+      const aTitle = String(a.issue_title || "");
+      const bTitle = String(b.issue_title || "");
+      if (aTitle !== bTitle) return aTitle.localeCompare(bTitle);
+
+      return String(a.page_url || "").localeCompare(String(b.page_url || ""));
     })
-    .slice(0, 25);
+    .slice(0, 28);
 }
 
 function detectDuplicateTitles(pages) {
@@ -1122,13 +1236,13 @@ function detectDuplicateTitles(pages) {
     if (page.is_utility_page) continue;
 
     const key = page.title.trim().toLowerCase();
-
     if (!map.has(key)) map.set(key, []);
     map.get(key).push(getPath(page.url));
   }
 
-  for (const [title, affectedPages] of map.entries()) {
-    if (affectedPages.length <= 1) continue;
+  for (const [title, affectedPages] of Array.from(map.entries()).sort()) {
+    const unique = Array.from(new Set(affectedPages)).sort();
+    if (unique.length <= 1) continue;
 
     findings.push(
       groupedFinding({
@@ -1146,9 +1260,9 @@ function detectDuplicateTitles(pages) {
         priority: "medium",
         status: "needs_approval",
         difficulty: "easy",
-        affected_pages: affectedPages,
+        affected_pages: unique,
         details: {
-          affected_count: affectedPages.length,
+          affected_count: unique.length,
           technical_term: "duplicate title",
         },
       })
@@ -1168,13 +1282,13 @@ function detectDuplicateDescriptions(pages) {
     if (page.is_utility_page) continue;
 
     const key = page.meta_description.trim().toLowerCase();
-
     if (!map.has(key)) map.set(key, []);
     map.get(key).push(getPath(page.url));
   }
 
-  for (const [description, affectedPages] of map.entries()) {
-    if (affectedPages.length <= 1) continue;
+  for (const [description, affectedPages] of Array.from(map.entries()).sort()) {
+    const unique = Array.from(new Set(affectedPages)).sort();
+    if (unique.length <= 1) continue;
 
     findings.push(
       groupedFinding({
@@ -1192,16 +1306,376 @@ function detectDuplicateDescriptions(pages) {
         priority: "medium",
         status: "auto_fixed",
         difficulty: "easy",
-        affected_pages: affectedPages,
+        affected_pages: unique,
         details: {
-          affected_count: affectedPages.length,
-          technical_term: "duplicate meta description",
+          affected_count: unique.length,
+          technical_term: "duplicate search description",
         },
       })
     );
   }
 
   return findings;
+}
+
+async function discoverCompetitorsFromGoogle({
+  base44,
+  user,
+  project_id,
+  website_url,
+  business_name,
+  business_type,
+  city,
+  important_keywords,
+}) {
+  const warnings = [];
+  const googleApiKey = getOptionalSecret(GOOGLE_API_KEY_NAME);
+  const googleCx = getOptionalSecret(GOOGLE_CX_NAME);
+
+  if (!googleApiKey || !googleCx) {
+    return {
+      discovered_competitors: [],
+      created_competitors: [],
+      warnings: [
+        "Google competitor discovery is not configured. Add GOOGLE_CUSTOM_SEARCH_API_KEY and GOOGLE_CUSTOM_SEARCH_CX.",
+      ],
+    };
+  }
+
+  const ownDomain = getDomain(website_url);
+
+  const keywords = buildCompetitorKeywords({
+    business_name,
+    business_type,
+    city,
+    important_keywords,
+  }).slice(0, 8);
+
+  const results = [];
+
+  for (const keyword of keywords) {
+    try {
+      const searchResults = await withTimeout(
+        searchGoogle(keyword, googleApiKey, googleCx, ownDomain),
+        7000,
+        "Google search"
+      );
+
+      for (const item of searchResults) {
+        const domain = getDomain(item.url);
+
+        if (!isValidCompetitorDomain(domain, ownDomain)) continue;
+
+        results.push({
+          source: "google_custom_search",
+          keyword,
+          title: item.title,
+          url: normalizeCompetitorUrl(item.url),
+          original_result_url: item.url,
+          domain,
+          position: item.position,
+          snippet: item.snippet,
+          query: item.query,
+        });
+      }
+    } catch {
+      warnings.push(`Google search failed for "${keyword}".`);
+    }
+  }
+
+  const discovered = dedupeCompetitors(results).slice(0, 8);
+  let createdCompetitors = [];
+
+  if (project_id && discovered.length > 0) {
+    const existing = await getExistingCompetitors(base44, project_id);
+    const existingDomains = new Set(
+      existing.map((item) => getDomain(item.website_url))
+    );
+
+    const toCreate = discovered.filter(
+      (item) => !existingDomains.has(item.domain)
+    );
+
+    if (toCreate.length > 0) {
+      createdCompetitors = await base44.entities.Competitor.bulkCreate(
+        toCreate.map((item) => ({
+          project_id,
+          owner_user_id: user.id,
+          name: formatDomainName(item.domain),
+          website_url: item.url,
+          notes: `Found from Google result for "${item.keyword}".`,
+          service_pages_count: 0,
+          title_quality_score: 0,
+          meta_coverage_pct: 0,
+          content_depth_score: 0,
+          faq_usage: false,
+          schema_usage: false,
+          broken_links_count: 0,
+        }))
+      );
+    }
+  }
+
+  return {
+    discovered_competitors: discovered,
+    created_competitors: createdCompetitors,
+    warnings,
+  };
+}
+
+async function searchGoogle(keyword, googleApiKey, googleCx, ownDomain = "") {
+  const query = ownDomain ? `${keyword} -site:${ownDomain}` : keyword;
+
+  const url = new URL("https://www.googleapis.com/customsearch/v1");
+  url.searchParams.set("key", googleApiKey);
+  url.searchParams.set("cx", googleCx);
+  url.searchParams.set("q", query);
+  url.searchParams.set("num", "10");
+  url.searchParams.set("gl", "us");
+  url.searchParams.set("hl", "en");
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      accept: "application/json",
+      "user-agent": USER_AGENT,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Google search failed: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const items = Array.isArray(data.items) ? data.items : [];
+
+  return items.map((item, index) => ({
+    title: item.title || "",
+    url: item.link || "",
+    snippet: item.snippet || "",
+    position: index + 1,
+    query,
+  }));
+}
+
+function buildCompetitorKeywords({
+  business_name,
+  business_type,
+  city,
+  important_keywords,
+}) {
+  const keywords = [];
+
+  for (const keyword of important_keywords || []) {
+    const clean = String(keyword || "").trim();
+    if (clean) keywords.push(clean);
+  }
+
+  const type = String(business_type || "").trim();
+  const place = String(city || "").trim();
+  const name = String(business_name || "").trim();
+
+  if (type && place) keywords.push(`${type} ${place}`);
+  if (type) keywords.push(`${type} near me`);
+  if (type && place) keywords.push(`best ${type} ${place}`);
+  if (name && type) keywords.push(`${type} companies`);
+
+  if (/loan|lender|mortgage|financ|real estate investment/i.test(type)) {
+    if (place) {
+      keywords.push(`fix and flip loans ${place}`);
+      keywords.push(`bridge loans ${place}`);
+      keywords.push(`hard money lender ${place}`);
+      keywords.push(`new construction loans ${place}`);
+      keywords.push(`rental property loans ${place}`);
+    } else {
+      keywords.push("fix and flip loans");
+      keywords.push("bridge loans");
+      keywords.push("hard money lender");
+      keywords.push("new construction loans");
+      keywords.push("rental property loans");
+    }
+  }
+
+  return Array.from(new Set(keywords.map((item) => item.trim()).filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b));
+}
+
+async function getExistingCompetitors(base44, project_id) {
+  if (!project_id) return [];
+
+  try {
+    const rows = await base44.entities.Competitor.filter({ project_id });
+    return Array.isArray(rows) ? rows : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveProvidedCompetitors({
+  base44,
+  user,
+  project_id,
+  competitor_urls,
+  ownDomain,
+}) {
+  const urls = (competitor_urls || [])
+    .map((url) => String(url || "").trim())
+    .filter(Boolean);
+
+  if (!project_id || urls.length === 0) return [];
+
+  const existing = await getExistingCompetitors(base44, project_id);
+  const existingDomains = new Set(
+    existing.map((item) => getDomain(item.website_url))
+  );
+
+  const toCreate = [];
+
+  for (const rawUrl of urls) {
+    const normalized = normalizeUrl(rawUrl);
+    const domain = getDomain(normalized);
+
+    if (!isValidCompetitorDomain(domain, ownDomain)) continue;
+    if (existingDomains.has(domain)) continue;
+
+    toCreate.push({
+      project_id,
+      owner_user_id: user.id,
+      name: formatDomainName(domain),
+      website_url: normalized,
+      notes: "Added from Scan Website.",
+      service_pages_count: 0,
+      title_quality_score: 0,
+      meta_coverage_pct: 0,
+      content_depth_score: 0,
+      faq_usage: false,
+      schema_usage: false,
+      broken_links_count: 0,
+    });
+  }
+
+  if (toCreate.length === 0) return [];
+
+  return await base44.entities.Competitor.bulkCreate(toCreate);
+}
+
+function mergeCompetitorResults({ own_url, existing, manual, discovered, created }) {
+  const ownDomain = getDomain(own_url);
+  const map = new Map();
+
+  for (const item of [
+    ...(discovered || []),
+    ...(created || []),
+    ...(manual || []),
+    ...(existing || []),
+  ]) {
+    const website_url =
+      item.website_url || item.url || item.original_result_url || "";
+
+    const domain = item.domain || getDomain(website_url);
+
+    if (!isValidCompetitorDomain(domain, ownDomain)) continue;
+
+    const current = map.get(domain);
+
+    const candidate = {
+      name: item.name || formatDomainName(domain),
+      website_url: website_url,
+      url: item.original_result_url || website_url,
+      domain,
+      source: item.source || (item.keyword ? "google_custom_search" : "saved"),
+      keyword: item.keyword || "",
+      title: item.title || "",
+      snippet: item.snippet || "",
+      position: item.position || 99,
+      query: item.query || "",
+    };
+
+    if (!current || candidate.position < current.position) {
+      map.set(domain, candidate);
+    }
+  }
+
+  return Array.from(map.values())
+    .sort((a, b) => {
+      const posDiff = (a.position || 99) - (b.position || 99);
+      if (posDiff !== 0) return posDiff;
+      return String(a.domain).localeCompare(String(b.domain));
+    })
+    .slice(0, 10);
+}
+
+function stableDedupeCompetitors(items) {
+  const map = new Map();
+
+  for (const item of items || []) {
+    const url = item.website_url || item.url || "";
+    const domain = item.domain || getDomain(url);
+
+    if (!domain) continue;
+
+    const current = map.get(domain);
+    const candidate = { ...item, domain };
+
+    if (!current || (candidate.position || 99) < (current.position || 99)) {
+      map.set(domain, candidate);
+    }
+  }
+
+  return Array.from(map.values()).sort((a, b) => {
+    const posDiff = (a.position || 99) - (b.position || 99);
+    if (posDiff !== 0) return posDiff;
+    return String(a.domain).localeCompare(String(b.domain));
+  });
+}
+
+function dedupeCompetitors(results) {
+  const map = new Map();
+
+  for (const result of results) {
+    if (!result.domain) continue;
+
+    const existing = map.get(result.domain);
+
+    if (!existing) {
+      map.set(result.domain, {
+        ...result,
+        appearances: 1,
+        best_position: result.position || 99,
+      });
+    } else {
+      existing.appearances += 1;
+      existing.best_position = Math.min(
+        existing.best_position,
+        result.position || 99
+      );
+
+      if ((result.position || 99) < (existing.position || 99)) {
+        existing.keyword = result.keyword;
+        existing.title = result.title;
+        existing.url = result.url;
+        existing.original_result_url = result.original_result_url;
+        existing.position = result.position;
+        existing.snippet = result.snippet;
+        existing.query = result.query;
+      }
+    }
+  }
+
+  return Array.from(map.values()).sort((a, b) => {
+    if (b.appearances !== a.appearances) return b.appearances - a.appearances;
+    return a.best_position - b.best_position;
+  });
+}
+
+function isValidCompetitorDomain(domain, ownDomain) {
+  if (!domain) return false;
+  if (!ownDomain) return false;
+  if (domain === ownDomain) return false;
+  if (domain.endsWith(`.${ownDomain}`)) return false;
+
+  return !EXCLUDED_COMPETITOR_DOMAINS.some(
+    (blocked) => domain === blocked || domain.endsWith(`.${blocked}`)
+  );
 }
 
 async function readRobotsTxt(origin, warnings) {
@@ -1218,22 +1692,14 @@ async function readRobotsTxt(origin, warnings) {
     );
 
     if (!response.ok) {
-      return {
-        found: false,
-        disallow: [],
-        sitemaps: [],
-      };
+      return { found: false, disallow: [], sitemaps: [] };
     }
 
     const text = await response.text();
     return parseRobotsTxt(text);
   } catch {
     warnings.push("Could not read robots.txt.");
-    return {
-      found: false,
-      disallow: [],
-      sitemaps: [],
-    };
+    return { found: false, disallow: [], sitemaps: [] };
   }
 }
 
@@ -1244,7 +1710,6 @@ function parseRobotsTxt(text) {
 
   for (const rawLine of lines) {
     const line = rawLine.split("#")[0].trim();
-
     if (!line) continue;
 
     const [keyRaw, ...valueParts] = line.split(":");
@@ -1262,8 +1727,8 @@ function parseRobotsTxt(text) {
 
   return {
     found: true,
-    disallow,
-    sitemaps,
+    disallow: Array.from(new Set(disallow)).sort(),
+    sitemaps: Array.from(new Set(sitemaps)).sort(),
   };
 }
 
@@ -1289,7 +1754,7 @@ async function discoverSitemapUrls(origin, domain, robots, warnings) {
     `${origin}/page-sitemap.xml`,
   ];
 
-  for (const sitemapUrl of Array.from(new Set(candidates))) {
+  for (const sitemapUrl of Array.from(new Set(candidates)).sort()) {
     try {
       const urls = await readSitemap(sitemapUrl, domain, warnings, 0);
       sitemapUrls.push(...urls);
@@ -1298,7 +1763,7 @@ async function discoverSitemapUrls(origin, domain, robots, warnings) {
     }
   }
 
-  return Array.from(new Set(sitemapUrls)).slice(0, 1000);
+  return stableSortUrls(Array.from(new Set(sitemapUrls))).slice(0, 1200);
 }
 
 async function readSitemap(sitemapUrl, domain, warnings, depth) {
@@ -1328,7 +1793,7 @@ async function readSitemap(sitemapUrl, domain, warnings, depth) {
       !/sitemap/i.test(url)
   );
 
-  for (const child of sitemapChildren.slice(0, 20)) {
+  for (const child of sitemapChildren.slice(0, 25).sort()) {
     try {
       const childUrls = await readSitemap(child, domain, warnings, depth + 1);
       pageUrls.push(...childUrls);
@@ -1337,7 +1802,7 @@ async function readSitemap(sitemapUrl, domain, warnings, depth) {
     }
   }
 
-  return pageUrls;
+  return stableSortUrls(pageUrls);
 }
 
 function extractUrlsFromSitemap(xml) {
@@ -1385,299 +1850,17 @@ function dedupeBrokenLinks(items) {
 
   for (const item of items) {
     const key = `${item.source_page}|${item.broken_link}|${item.status_code}`;
-
     if (seen.has(key)) continue;
 
     seen.add(key);
     output.push(item);
   }
 
-  return output;
-}
-
-async function discoverCompetitorsFromSearch({
-  base44,
-  user,
-  project_id,
-  website_url,
-  business_name,
-  business_type,
-  city,
-  important_keywords,
-}) {
-  const warnings = [];
-  const googleApiKey = getOptionalSecret(GOOGLE_API_KEY_NAME);
-  const googleCx = getOptionalSecret(GOOGLE_CX_NAME);
-
-  if (!googleApiKey || !googleCx) {
-    return {
-      discovered_competitors: [],
-      created_competitors: [],
-      warnings: [
-        "Automatic competitor discovery is not configured. Add GOOGLE_CUSTOM_SEARCH_API_KEY and GOOGLE_CUSTOM_SEARCH_CX.",
-      ],
-    };
-  }
-
-  const ownDomain = getDomain(website_url);
-
-  const keywords = buildCompetitorKeywords({
-    business_name,
-    business_type,
-    city,
-    important_keywords,
-  }).slice(0, 5);
-
-  const results = [];
-
-  for (const keyword of keywords) {
-    try {
-      const searchResults = await withTimeout(
-        searchGoogle(keyword, googleApiKey, googleCx),
-        5000,
-        "Google search"
-      );
-
-      for (const item of searchResults) {
-        const domain = getDomain(item.url);
-
-        if (!isValidCompetitorDomain(domain, ownDomain)) continue;
-
-        results.push({
-          source: "google_custom_search",
-          keyword,
-          title: item.title,
-          url: normalizeCompetitorUrl(item.url),
-          domain,
-          position: item.position,
-          snippet: item.snippet,
-        });
-      }
-    } catch {
-      warnings.push(`Search failed for "${keyword}".`);
-    }
-  }
-
-  const discovered = dedupeCompetitors(results).slice(0, 5);
-  let createdCompetitors = [];
-
-  if (project_id && discovered.length > 0) {
-    const existing = await base44.entities.Competitor.filter({ project_id });
-    const existingDomains = new Set(
-      (existing || []).map((item) => getDomain(item.website_url))
-    );
-
-    const toCreate = discovered.filter(
-      (item) => !existingDomains.has(item.domain)
-    );
-
-    if (toCreate.length > 0) {
-      createdCompetitors = await base44.entities.Competitor.bulkCreate(
-        toCreate.map((item) => ({
-          project_id,
-          owner_user_id: user.id,
-          name: formatDomainName(item.domain),
-          website_url: item.url,
-          notes: `Automatically found from search results for "${item.keyword}".`,
-          service_pages_count: 0,
-          title_quality_score: 0,
-          meta_coverage_pct: 0,
-          content_depth_score: 0,
-          faq_usage: false,
-          schema_usage: false,
-          broken_links_count: 0,
-        }))
-      );
-    }
-  }
-
-  return {
-    discovered_competitors: discovered,
-    created_competitors: createdCompetitors,
-    warnings,
-  };
-}
-
-async function saveProvidedCompetitors({
-  base44,
-  user,
-  project_id,
-  competitor_urls,
-}) {
-  const urls = (competitor_urls || [])
-    .map((url) => String(url || "").trim())
-    .filter(Boolean);
-
-  if (!project_id || urls.length === 0) return [];
-
-  const existing = await base44.entities.Competitor.filter({ project_id });
-  const existingDomains = new Set(
-    (existing || []).map((item) => getDomain(item.website_url))
-  );
-
-  const toCreate = [];
-
-  for (const rawUrl of urls) {
-    const normalized = normalizeUrl(rawUrl);
-    const domain = getDomain(normalized);
-
-    if (!domain || existingDomains.has(domain)) continue;
-
-    toCreate.push({
-      project_id,
-      owner_user_id: user.id,
-      name: formatDomainName(domain),
-      website_url: normalized,
-      notes: "Added from Scan Website.",
-      service_pages_count: 0,
-      title_quality_score: 0,
-      meta_coverage_pct: 0,
-      content_depth_score: 0,
-      faq_usage: false,
-      schema_usage: false,
-      broken_links_count: 0,
-    });
-  }
-
-  if (toCreate.length === 0) return [];
-
-  return await base44.entities.Competitor.bulkCreate(toCreate);
-}
-
-async function searchGoogle(keyword, googleApiKey, googleCx) {
-  const url = new URL("https://www.googleapis.com/customsearch/v1");
-  url.searchParams.set("key", googleApiKey);
-  url.searchParams.set("cx", googleCx);
-  url.searchParams.set("q", keyword);
-  url.searchParams.set("num", "5");
-
-  const response = await fetch(url.toString(), {
-    headers: {
-      accept: "application/json",
-      "user-agent": USER_AGENT,
-    },
+  return output.sort((a, b) => {
+    const sourceDiff = String(a.source_page).localeCompare(String(b.source_page));
+    if (sourceDiff !== 0) return sourceDiff;
+    return String(a.broken_link).localeCompare(String(b.broken_link));
   });
-
-  if (!response.ok) {
-    throw new Error(`Google search failed: ${response.status}`);
-  }
-
-  const data = await response.json();
-  const items = Array.isArray(data.items) ? data.items : [];
-
-  return items.map((item, index) => ({
-    title: item.title || "",
-    url: item.link || "",
-    snippet: item.snippet || "",
-    position: index + 1,
-  }));
-}
-
-function buildCompetitorKeywords({
-  business_name,
-  business_type,
-  city,
-  important_keywords,
-}) {
-  const keywords = [];
-
-  for (const keyword of important_keywords || []) {
-    const clean = String(keyword || "").trim();
-
-    if (clean) keywords.push(clean);
-  }
-
-  const type = String(business_type || "").trim();
-  const place = String(city || "").trim();
-
-  if (type && place) keywords.push(`${type} ${place}`);
-  if (type) keywords.push(`${type} near me`);
-  if (type && place) keywords.push(`best ${type} ${place}`);
-
-  if (/loan|lender|mortgage|financ/i.test(type)) {
-    if (place) {
-      keywords.push(`fix and flip loans ${place}`);
-      keywords.push(`bridge loans ${place}`);
-      keywords.push(`hard money lender ${place}`);
-      keywords.push(`new construction loans ${place}`);
-    } else {
-      keywords.push("fix and flip loans");
-      keywords.push("bridge loans");
-      keywords.push("hard money lender");
-      keywords.push("new construction loans");
-    }
-  }
-
-  if (business_name && type) keywords.push(`${type} companies`);
-
-  return Array.from(new Set(keywords)).filter(Boolean);
-}
-
-function mergeCompetitorResults({ own_url, manual, discovered }) {
-  const ownDomain = getDomain(own_url);
-  const map = new Map();
-
-  for (const item of [...(manual || []), ...(discovered || [])]) {
-    const website_url = item.website_url || item.url || "";
-    const domain = item.domain || getDomain(website_url);
-
-    if (!isValidCompetitorDomain(domain, ownDomain)) continue;
-
-    if (!map.has(domain)) {
-      map.set(domain, {
-        name: item.name || formatDomainName(domain),
-        website_url,
-        url: website_url,
-        domain,
-        source: item.source || "manual",
-        keyword: item.keyword || "",
-        title: item.title || "",
-        snippet: item.snippet || "",
-        position: item.position || null,
-      });
-    }
-  }
-
-  return Array.from(map.values()).slice(0, 8);
-}
-
-function dedupeCompetitors(results) {
-  const map = new Map();
-
-  for (const result of results) {
-    if (!result.domain) continue;
-
-    const existing = map.get(result.domain);
-
-    if (!existing) {
-      map.set(result.domain, {
-        ...result,
-        appearances: 1,
-        best_position: result.position || 99,
-      });
-    } else {
-      existing.appearances += 1;
-      existing.best_position = Math.min(
-        existing.best_position,
-        result.position || 99
-      );
-    }
-  }
-
-  return Array.from(map.values()).sort((a, b) => {
-    if (b.appearances !== a.appearances) return b.appearances - a.appearances;
-    return a.best_position - b.best_position;
-  });
-}
-
-function isValidCompetitorDomain(domain, ownDomain) {
-  if (!domain) return false;
-  if (domain === ownDomain) return false;
-  if (domain.endsWith(`.${ownDomain}`)) return false;
-
-  return !EXCLUDED_COMPETITOR_DOMAINS.some(
-    (blocked) => domain === blocked || domain.endsWith(`.${blocked}`)
-  );
 }
 
 function buildSiteSummary({
@@ -1687,6 +1870,7 @@ function buildSiteSummary({
   scanMode,
   sitemapUrls,
   discoveredCompetitors,
+  competitorPageSnapshots,
   brokenLinks,
   robots,
 }) {
@@ -1737,9 +1921,11 @@ function buildSiteSummary({
     sitemap_urls_found: sitemapUrls.length,
     robots_txt_found: Boolean(robots?.found),
     discovered_competitor_count: discoveredCompetitors.length,
+    competitor_pages_reviewed: competitorPageSnapshots.length,
     broken_links_count: brokenLinks.length,
     html_only_scan: true,
     javascript_rendering_used: false,
+    deterministic_scan: true,
   };
 }
 
@@ -1747,15 +1933,10 @@ function calculateHealthScore(findings) {
   let score = 94;
 
   for (const finding of findings) {
-    if (finding.priority === "critical") {
-      score -= 9;
-    } else if (finding.priority === "high") {
-      score -= 6;
-    } else if (finding.priority === "medium") {
-      score -= 4;
-    } else {
-      score -= 1;
-    }
+    if (finding.priority === "critical") score -= 9;
+    else if (finding.priority === "high") score -= 6;
+    else if (finding.priority === "medium") score -= 4;
+    else score -= 1;
   }
 
   return Math.max(45, Math.min(100, score));
@@ -1772,6 +1953,22 @@ function priorityScore(url) {
   if (/blog|article|news|resources/i.test(path)) return 35;
 
   return 50;
+}
+
+function sortQueue(queue) {
+  queue.sort((a, b) => {
+    if (b.priority !== a.priority) return b.priority - a.priority;
+    return String(a.url).localeCompare(String(b.url));
+  });
+}
+
+function stableSortUrls(urls) {
+  return Array.from(new Set((urls || []).map(canonicalizeUrl).filter(Boolean)))
+    .sort((a, b) => {
+      const priorityDiff = priorityScore(b) - priorityScore(a);
+      if (priorityDiff !== 0) return priorityDiff;
+      return a.localeCompare(b);
+    });
 }
 
 function normalizeStartUrl(input) {
@@ -1847,7 +2044,8 @@ function absolutizeUrl(href, base) {
 
 function getDomain(input) {
   try {
-    const url = /^https?:\/\//i.test(input) ? input : `https://${input}`;
+    const value = String(input || "");
+    const url = /^https?:\/\//i.test(value) ? value : `https://${value}`;
     return new URL(url).hostname.replace(/^www\./, "").toLowerCase();
   } catch {
     return "";
@@ -1914,7 +2112,7 @@ function extractLinks(html, baseUrl) {
     }
   }
 
-  return Array.from(new Set(links));
+  return stableSortUrls(links);
 }
 
 function extractHeadings(html) {
@@ -1988,7 +2186,7 @@ function detectSchemaTypes(html) {
   if (/schema\.org\/Service/i.test(html)) types.push("Service");
   if (/schema\.org\/Review/i.test(html)) types.push("Review");
 
-  return Array.from(new Set(types));
+  return Array.from(new Set(types)).sort();
 }
 
 function detectTrustSignals(text) {
@@ -2021,7 +2219,7 @@ function detectTrustSignals(text) {
     "in-house",
   ];
 
-  return signals.filter((signal) => lower.includes(signal));
+  return signals.filter((signal) => lower.includes(signal)).sort();
 }
 
 function detectCtas(text) {
@@ -2046,7 +2244,7 @@ function detectCtas(text) {
     "get approved",
   ];
 
-  return ctas.filter((cta) => lower.includes(cta));
+  return ctas.filter((cta) => lower.includes(cta)).sort();
 }
 
 function detectPlaceholderText(text) {
@@ -2061,7 +2259,7 @@ function detectPlaceholderText(text) {
     [/\bplaceholder\b/i, "placeholder"],
   ];
 
-  return patterns.filter(([re]) => re.test(text)).map(([, label]) => label);
+  return patterns.filter(([re]) => re.test(text)).map(([, label]) => label).sort();
 }
 
 function suggestSearchTitle(page, businessName, businessType, city) {
@@ -2160,9 +2358,7 @@ function getMetaProperty(html, property) {
 
 function clamp(value, max) {
   const text = String(value || "").trim();
-
   if (text.length <= max) return text;
-
   return text.slice(0, max - 1).trim();
 }
 
@@ -2180,7 +2376,7 @@ function matchAllClean(input, re) {
     if (value) output.push(value);
   }
 
-  return output;
+  return Array.from(new Set(output)).sort();
 }
 
 function matchAllRaw(input, re) {
@@ -2216,7 +2412,6 @@ function decodeHtml(input) {
 function countWords(text) {
   const cleaned = cleanText(text);
   if (!cleaned) return 0;
-
   return cleaned.split(/\s+/).filter(Boolean).length;
 }
 
@@ -2245,9 +2440,10 @@ function dedupeFindings(findings) {
 
 function stableId(input) {
   let hash = 0;
+  const value = String(input || "");
 
-  for (let i = 0; i < String(input).length; i++) {
-    hash = (hash << 5) - hash + String(input).charCodeAt(i);
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash << 5) - hash + value.charCodeAt(i);
     hash |= 0;
   }
 

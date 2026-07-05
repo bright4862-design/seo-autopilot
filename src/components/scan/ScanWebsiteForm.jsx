@@ -6,8 +6,8 @@ import { Label } from "@/components/ui/label";
 import { Loader2, AlertCircle, CheckCircle2, Bug } from "lucide-react";
 import { base44 } from "@/api/base44Client";
 
-const ADVANCED_SCANNER_FUNCTION = "advanced_scanner";
-const AI_REVIEW_FUNCTION = "ai_review";
+const ADVANCED_SCANNER_FUNCTION = "runAdvancedScan";
+const AI_REVIEW_FUNCTION = "runAiReview";
 
 const SCAN_STEPS = [
   "Finding pages",
@@ -29,13 +29,11 @@ function getArray(...values) {
 
 function unwrapFunctionResponse(response) {
   if (!response) return {};
-
   if (response.data?.data) return response.data.data;
   if (response.data?.result) return response.data.result;
   if (response.data) return response.data;
   if (response.result?.data) return response.result.data;
   if (response.result) return response.result;
-
   return response;
 }
 
@@ -56,22 +54,15 @@ function getDomain(url) {
 
 function normalizePriority(priority) {
   const value = String(priority || "").toLowerCase();
-
-  if (value === "critical") return "critical";
-  if (value === "high") return "high";
-  if (value === "medium") return "medium";
-  if (value === "low") return "low";
-
+  if (["critical", "high", "medium", "low"].includes(value)) return value;
   return "medium";
 }
 
 function normalizeFixStatus(fix) {
   if (fix.status) return fix.status;
-
   if (fix.requires_developer) return "needs_developer";
   if (fix.requires_approval) return "needs_approval";
   if (fix.can_auto_fix) return "auto_fixed";
-
   return "needs_approval";
 }
 
@@ -85,9 +76,7 @@ function normalizeFix(fix, index = 0) {
   const id =
     fix.id ||
     fix.fix_id ||
-    `fix_${index}_${String(title)
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")}`;
+    `fix_${index}_${String(title).toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
 
   const status = normalizeFixStatus(fix);
 
@@ -272,32 +261,38 @@ function normalizeScanResult(rawResponse) {
 }
 
 async function callBase44Function(functionName, payload) {
-  if (base44?.functions?.invoke) {
-    return await base44.functions.invoke(functionName, payload);
+  console.log("CALLING FUNCTION", functionName, payload);
+
+  if (!base44) {
+    throw new Error("base44 client is not available.");
   }
 
-  const response = await fetch(`/api/functions/${functionName}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
-
-  const text = await response.text();
-  let json = {};
-
-  try {
-    json = text ? JSON.parse(text) : {};
-  } catch {
-    json = { success: false, error: text };
+  if (base44.functions?.invoke) {
+    const response = await base44.functions.invoke(functionName, payload);
+    console.log("FUNCTION RESPONSE", functionName, response);
+    return response;
   }
 
-  if (!response.ok) {
-    throw new Error(json.error || `${functionName} failed`);
+  if (base44.functions?.[functionName]) {
+    const response = await base44.functions[functionName](payload);
+    console.log("FUNCTION RESPONSE", functionName, response);
+    return response;
   }
 
-  return json;
+  if (base44.integrations?.Core?.InvokeFunction) {
+    const response = await base44.integrations.Core.InvokeFunction({
+      name: functionName,
+      body: payload,
+    });
+    console.log("FUNCTION RESPONSE", functionName, response);
+    return response;
+  }
+
+  throw new Error(
+    `Could not find a Base44 function caller. Available base44 keys: ${Object.keys(
+      base44 || {}
+    ).join(", ")}`
+  );
 }
 
 function statusCounts(fixes) {
@@ -317,11 +312,7 @@ function statusCounts(fixes) {
       fix.who_can_do_this === "your_web_person"
   ).length;
 
-  return {
-    prepared,
-    needsReview,
-    mayNeedHelp,
-  };
+  return { prepared, needsReview, mayNeedHelp };
 }
 
 function StepCircle({ complete, active, children }) {
@@ -523,7 +514,7 @@ export default function ScanWebsiteForm({
 
       if (scanner.crawled_pages.length === 0) {
         throw new Error(
-          "The scanner returned zero pages. Check ADVANCED SCAN DEBUG in the browser console to confirm the scanner function response."
+          "The scanner returned zero pages. Check ADVANCED SCAN DEBUG in the browser console."
         );
       }
 
@@ -614,17 +605,9 @@ export default function ScanWebsiteForm({
       setActiveStep(SCAN_STEPS.length - 1);
       setScanComplete(true);
 
-      if (typeof onScanComplete === "function") {
-        onScanComplete(finalPayload);
-      }
-
-      if (typeof onComplete === "function") {
-        onComplete(finalPayload);
-      }
-
-      if (typeof onFinished === "function") {
-        onFinished(finalPayload);
-      }
+      if (typeof onScanComplete === "function") onScanComplete(finalPayload);
+      if (typeof onComplete === "function") onComplete(finalPayload);
+      if (typeof onFinished === "function") onFinished(finalPayload);
     } catch (err) {
       console.error(err);
       setError(err?.message || "The scan failed.");

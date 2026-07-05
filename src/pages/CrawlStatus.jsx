@@ -394,7 +394,7 @@ export default function CrawlStatus() {
       <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex items-start gap-3">
         <Info className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
         <p className="text-xs text-blue-700 leading-relaxed">
-          This scan checks the website HTML we can access directly. Some websites load important content after JavaScript runs, so deeper JavaScript rendering may require a developer review or upgraded scan.
+          This scan checks the website HTML we can access directly. Some websites use JavaScript or private CMS settings that may require deeper review.
         </p>
       </div>
 

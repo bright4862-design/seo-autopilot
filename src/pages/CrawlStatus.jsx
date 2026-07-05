@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { base44 } from "@/api/base44Client";
 import { reviewFixesWithAi, computeHealthScore, summarizeFixes } from "@/lib/aiReview";
+import ScanWebsiteForm from "@/components/scan/ScanWebsiteForm";
 import { Button } from "@/components/ui/button";
 import {
   Search, FileText, Code, Globe, ArrowRightLeft, BarChart3,
@@ -98,6 +99,7 @@ const SCAN_ISSUES = [
 export default function CrawlStatus() {
   const [crawlJob, setCrawlJob] = useState(null);
   const [project, setProject] = useState(null);
+  const [competitors, setCompetitors] = useState([]);
   const [loading, setLoading] = useState(true);
   const [simulating, setSimulating] = useState(false);
   const [error, setError] = useState(null);
@@ -109,6 +111,8 @@ export default function CrawlStatus() {
       const projects = await base44.entities.BusinessProject.list("-created_date", 1);
       if (projects.length > 0) {
         setProject(projects[0]);
+        const comps = await base44.entities.Competitor.filter({ project_id: projects[0].id });
+        setCompetitors(comps);
         const jobs = await base44.entities.CrawlJob.filter({ project_id: projects[0].id }, "-created_date", 1);
         if (jobs.length > 0) setCrawlJob(jobs[0]);
       }
@@ -128,8 +132,9 @@ export default function CrawlStatus() {
     }
   }, [project, crawlJob]);
 
-  const simulateCrawl = async (existingJob) => {
-    if (!project) return;
+  const simulateCrawl = async (existingJob, projOverride) => {
+    const proj = projOverride || project;
+    if (!proj) return;
     setSimulating(true);
     setError(null);
     let job = existingJob;
@@ -137,7 +142,7 @@ export default function CrawlStatus() {
       const me = await base44.auth.me();
       if (!job) {
         job = await base44.entities.CrawlJob.create({
-          project_id: project.id,
+          project_id: proj.id,
           status: "queued",
           crawl_type: "full",
           started_at: new Date().toISOString(),
@@ -147,7 +152,7 @@ export default function CrawlStatus() {
       setCrawlJob(job);
 
       // Start each scan with a clean Fix List
-      try { await base44.entities.SeoIssue.deleteMany({ project_id: project.id }); } catch (e) {}
+      try { await base44.entities.SeoIssue.deleteMany({ project_id: proj.id }); } catch (e) {}
 
       const steps = CRAWL_STEPS.map(s => s.key).filter(k => k !== "complete");
       for (const status of steps) {
@@ -181,11 +186,11 @@ export default function CrawlStatus() {
       let scanSucceeded = false;
       try {
         const res = await base44.functions.invoke('runRealScan', {
-          website_url: project.website_url,
-          business_name: project.business_name,
-          business_type: project.business_type,
-          city: project.city,
-          project_id: project.id,
+          website_url: proj.website_url,
+          business_name: proj.business_name,
+          business_type: proj.business_type,
+          city: proj.city,
+          project_id: proj.id,
           crawl_job_id: job.id,
         });
         const scanData = res.data || {};
@@ -224,7 +229,7 @@ export default function CrawlStatus() {
         await base44.entities.CrawledPage.bulkCreate(
           crawledPagesData.map(page => ({
             ...page,
-            project_id: project.id,
+            project_id: proj.id,
             crawl_job_id: job.id,
             owner_user_id: me.id,
           }))
@@ -235,9 +240,9 @@ export default function CrawlStatus() {
       if (scanSucceeded) {
         try {
           await base44.functions.invoke('scanCompetitors', {
-            project_id: project.id,
-            business_type: project.business_type,
-            city: project.city,
+            project_id: proj.id,
+            business_type: proj.business_type,
+            city: proj.city,
             customer_pages: crawledPagesData,
           });
         } catch (e) {
@@ -263,14 +268,14 @@ export default function CrawlStatus() {
       await base44.entities.SeoIssue.bulkCreate(
         sourceFixes.map(f => ({
           ...f,
-          project_id: project.id,
+          project_id: proj.id,
           crawl_job_id: job.id,
           owner_user_id: me.id,
         }))
       );
 
       // Clear old developer recommendations so they match the latest scan
-      try { await base44.entities.DeveloperRecommendation.deleteMany({ project_id: project.id }); } catch (e) {}
+      try { await base44.entities.DeveloperRecommendation.deleteMany({ project_id: proj.id }); } catch (e) {}
 
       // Build developer recommendations from fixes that require a developer
       const devFixes = sourceFixes.filter(f => f.requires_developer === true);
@@ -288,7 +293,7 @@ export default function CrawlStatus() {
             estimated_complexity === 'complex' ? 'custom_rebuild' :
             'diy';
           return {
-            project_id: project.id,
+            project_id: proj.id,
             owner_user_id: me.id,
             title: f.issue_title,
             description: f.plain_english_explanation,
@@ -312,7 +317,7 @@ export default function CrawlStatus() {
       });
       setCrawlJob(finalJob);
 
-      await base44.entities.BusinessProject.update(project.id, {
+      await base44.entities.BusinessProject.update(proj.id, {
         last_crawl_at: new Date().toISOString(),
         seo_score: healthScore,
       });
@@ -334,6 +339,50 @@ export default function CrawlStatus() {
     }
   };
 
+  const handleScan = async (form) => {
+    setSimulating(true);
+    setError(null);
+    try {
+      const me = await base44.auth.me();
+      let proj = project;
+      if (proj) {
+        proj = await base44.entities.BusinessProject.update(proj.id, {
+          business_name: form.business_name,
+          website_url: form.website_url,
+        });
+      } else {
+        proj = await base44.entities.BusinessProject.create({
+          business_name: form.business_name,
+          website_url: form.website_url,
+          status: "active",
+          seo_score: 0,
+          subscription_plan: "free",
+          cms_platform: "Unknown",
+          owner_user_id: me.id,
+        });
+      }
+      setProject(proj);
+
+      // Replace competitors with the ones in the form
+      try { await base44.entities.Competitor.deleteMany({ project_id: proj.id }); } catch (e) {}
+      const urls = form.competitor_urls.map(u => u.trim()).filter(Boolean);
+      let comps = [];
+      if (urls.length > 0) {
+        comps = await base44.entities.Competitor.bulkCreate(urls.map(url => {
+          let name = url;
+          try { name = new URL(/^https?:\/\//i.test(url) ? url : "https://" + url).hostname.replace(/^www\./, ""); } catch (e) {}
+          return { project_id: proj.id, website_url: url, name, owner_user_id: me.id };
+        }));
+      }
+      setCompetitors(comps);
+
+      await simulateCrawl(null, proj);
+    } catch (e) {
+      setError(e.message || "Could not start the scan. Please try again.");
+      setSimulating(false);
+    }
+  };
+
   const currentIdx = crawlJob ? CRAWL_STEPS.findIndex(s => s.key === crawlJob.status) : -1;
 
   const derivedActions = [];
@@ -351,31 +400,14 @@ export default function CrawlStatus() {
     );
   }
 
-  if (!project) {
-    return (
-      <div className="max-w-2xl mx-auto">
-        <div className="bg-white rounded-2xl border border-gray-100 p-10 text-center">
-          <Search className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-          <h3 className="font-semibold text-gray-800 mb-1">No project set up yet</h3>
-          <p className="text-sm text-gray-500 mb-5">Add your business website first to start an SEO scan.</p>
-          <a href="/onboarding"><Button className="gradient-primary text-white border-0">Set Up Project</Button></a>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="max-w-2xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Crawl Status</h1>
-          <p className="text-sm text-gray-500 mt-1">Track your website scan progress</p>
-        </div>
-        <Button onClick={() => simulateCrawl()} disabled={simulating} className="gradient-primary text-white border-0">
-          {simulating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Search className="w-4 h-4 mr-2" />}
-          {simulating ? "Scanning..." : crawlJob?.status === "complete" ? "Run New Scan" : "Scan My Website"}
-        </Button>
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Scan a website</h1>
+        <p className="text-sm text-gray-500 mt-1">Enter your business and website — we'll find simple SEO fixes in minutes.</p>
       </div>
+
+      <ScanWebsiteForm project={project} competitors={competitors} saving={simulating} onScan={handleScan} />
 
       {error && (
         <div className="bg-red-50 border border-red-100 rounded-xl p-4 flex items-start gap-3">
@@ -388,6 +420,7 @@ export default function CrawlStatus() {
       )}
 
       {/* Progress */}
+      {crawlJob && (
       <div className="bg-white rounded-2xl border border-gray-100 p-6">
         <div className="space-y-0">
           {CRAWL_STEPS.map((step, i) => {
@@ -424,6 +457,7 @@ export default function CrawlStatus() {
           })}
         </div>
       </div>
+      )}
 
       {/* Scan note */}
       <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex items-start gap-3">

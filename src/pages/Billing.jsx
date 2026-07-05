@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
+import LeadRequestModal from "@/components/billing/LeadRequestModal";
 import { CheckCircle2, Zap, Star } from "lucide-react";
 
 const plans = [
@@ -39,6 +40,7 @@ const plans = [
 export default function Billing() {
   const navigate = useNavigate();
   const [currentPlan, setCurrentPlan] = useState("free");
+  const [leadModal, setLeadModal] = useState(null);
 
   useEffect(() => {
     const load = async () => {
@@ -95,9 +97,11 @@ export default function Billing() {
               ) : isCurrent ? (
                 <Button disabled variant="outline" className="w-full">Current Plan</Button>
               ) : plan.comingSoon ? (
-                <Button disabled variant="outline" className="w-full">Join Waitlist</Button>
+                <Button variant="outline" className="w-full" onClick={() => setLeadModal({ type: "waitlist", plan: plan.id })}>
+                  Join Waitlist
+                </Button>
               ) : (
-                <Button variant="outline" className="w-full">
+                <Button variant="outline" className="w-full" onClick={() => setLeadModal({ type: plan.id === "done_for_you" ? "cleanup" : "custom_rebuild", plan: plan.id })}>
                   {plan.id === "done_for_you" ? "Request Cleanup" : "Contact Us"}
                 </Button>
               )}
@@ -105,6 +109,14 @@ export default function Billing() {
           );
         })}
       </div>
+
+      {leadModal && (
+        <LeadRequestModal
+          requestType={leadModal.type}
+          selectedPlan={leadModal.plan}
+          onClose={() => setLeadModal(null)}
+        />
+      )}
     </div>
   );
 }

@@ -1,28 +1,36 @@
 import React, { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
-import { Shield, Users, Globe, Search, AlertTriangle, Clock, FileText, Settings } from "lucide-react";
+import { Shield, Users, Globe, Search, AlertTriangle, Clock, FileText, Settings, Inbox } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import AdminLeads from "@/components/admin/AdminLeads";
 
 export default function Admin() {
   const [projects, setProjects] = useState([]);
   const [crawlJobs, setCrawlJobs] = useState([]);
   const [issues, setIssues] = useState([]);
+  const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const load = async () => {
-      const [p, c, i] = await Promise.all([
+      const [p, c, i, l] = await Promise.all([
         base44.entities.BusinessProject.list("-created_date", 50),
         base44.entities.CrawlJob.list("-created_date", 50),
         base44.entities.SeoIssue.list("-created_date", 50),
+        base44.entities.LeadRequest.list("-created_date", 100),
       ]);
       setProjects(p);
       setCrawlJobs(c);
       setIssues(i);
+      setLeads(l);
       setLoading(false);
     };
     load();
   }, []);
+
+  const handleLeadStatusChange = (leadId, status) => {
+    setLeads(prev => prev.map(l => (l.id === leadId ? { ...l, status } : l)));
+  };
 
   if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" /></div>;
 
@@ -61,6 +69,7 @@ export default function Admin() {
           <TabsTrigger value="projects">Projects</TabsTrigger>
           <TabsTrigger value="crawls">Crawl Jobs</TabsTrigger>
           <TabsTrigger value="approvals">Pending Approvals</TabsTrigger>
+          <TabsTrigger value="leads">Lead Requests</TabsTrigger>
         </TabsList>
 
         <TabsContent value="projects" className="mt-4">
@@ -145,6 +154,12 @@ export default function Admin() {
                 ))}
               </div>
             )}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="leads" className="mt-4">
+          <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+            <AdminLeads leads={leads} onStatusChange={handleLeadStatusChange} />
           </div>
         </TabsContent>
       </Tabs>

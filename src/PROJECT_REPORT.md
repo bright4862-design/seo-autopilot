@@ -13,7 +13,7 @@ SEO Autopilot is a guided SEO assistant for small business owners. A user signs 
 6. **Fix List (home)** — opens with a **"What to do first" guidance card** built from real issue counts (approvals → prepared fixes → website improvements, or "No major issues found"), then issues grouped into the three buckets with detail views (what's happening, why it matters, current vs. recommended, approve/reject/complete), plus scan history.
 7. **Competitors page** — comparison summary, **top competitor gaps shown first**, then the "Your Site vs. Competitor Average" table with friendly labels, and a "Create improvement plan" button that adds gaps to Website Improvements (no duplicates).
 8. **Website Improvements** (formerly "Developer") — recommendations requiring developer work, categorized, with suggested packages (DIY / $500 Cleanup / Custom Quote).
-9. **Scan Report** (formerly "Reports") — simple summary reports with score, counts, competitor insights, and next steps.
+9. **Scan Report** (formerly "Reports") — simple summary reports with score, counts, competitor insights, and next steps, plus an **"Export Report" button** that downloads a plain-English PDF (business info, scan date, health score, pages scanned, prepared fixes, approval items, website improvements, competitor gaps, and recommended next steps).
 10. **AI Assistant** — in-app chat agent for SEO questions.
 
 ## Navigation (customer-facing)
@@ -42,5 +42,5 @@ Fix List · New Scan · Competitors · Website Improvements · Scan Report · As
 ## Known limitations / not built yet
 - No JavaScript rendering in the crawler (HTML-only analysis).
 - No actual website editing — everything is a recommendation.
-- No payments, no PDF export of reports.
+- No payments.
 - No Google Search Console integration.

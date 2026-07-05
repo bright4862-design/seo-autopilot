@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 
 const navItems = [
   { label: "Fix List", path: "/dashboard", icon: ListChecks },
-  { label: "New Scan", path: "/crawl-status", icon: Search },
+  { label: "Scan Website", path: "/crawl-status", icon: Search },
   { label: "Competitors", path: "/competitors", icon: BarChart3 },
   { label: "Website Improvements", path: "/developer", icon: Wrench },
   { label: "Scan Report", path: "/reports", icon: FileText },
@@ -60,7 +60,7 @@ export default function DashboardLayout() {
         <div className="p-3 border-t border-border space-y-0.5">
           <Link to="/billing" onClick={() => setSidebarOpen(false)} className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground">
             <Settings className="w-4 h-4" />
-            Billing & Plans
+            Billing
           </Link>
           <Link to="/admin" onClick={() => setSidebarOpen(false)} className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground">
             <Shield className="w-4 h-4" />

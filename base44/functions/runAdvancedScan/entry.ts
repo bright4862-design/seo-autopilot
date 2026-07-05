@@ -4,24 +4,50 @@ const GOOGLE_API_KEY_NAME = "GOOGLE_" + "CUSTOM_SEARCH_API_KEY";
 const GOOGLE_CX_NAME = "GOOGLE_" + "CUSTOM_SEARCH_CX";
 
 const USER_AGENT =
-  "Mozilla/5.0 (compatible; SEO-Autopilot/2.1; +https://seoautopilot.app/bot)";
+  "Mozilla/5.0 (compatible; SEO-Autopilot/2.2; +https://seoautopilot.app/bot)";
+
+// Lowercase token used to match our crawler in robots.txt User-agent groups.
+const ROBOTS_AGENT_TOKEN = "seo-autopilot";
+
+// Hard wall-clock budget for the crawl loop so the function never dies
+// mid-flight. Tune to roughly 80% of your platform's function timeout.
+const CRAWL_TIME_BUDGET_MS = 100000;
+
+// Cap how much HTML we regex per page so one bloated page can't eat the CPU.
+const MAX_HTML_BYTES = 800000;
 
 const SCAN_LIMITS = {
+  // "basic" exists so the old lightweight scanner can be retired:
+  // point the frontend at this function with scan_mode: "basic".
+  basic: {
+    maxPages: 25,
+    concurrency: 6,
+    timeoutMs: 10000,
+    useSitemap: false,
+    discoverCompetitors: false,
+    maxCompetitorSnapshots: 0,
+    maxKeywords: 0,
+  },
   quick: {
     maxPages: 75,
-    batchSize: 6,
+    concurrency: 8,
     timeoutMs: 12000,
     useSitemap: true,
     discoverCompetitors: true,
     maxCompetitorSnapshots: 3,
+    maxKeywords: 4,
   },
+  // Deep is capped at 200 pages per invocation. For larger sites, add
+  // resumable chunks: persist the frontier + pages to a ScanJob entity
+  // keyed by crawl_job_id and re-invoke until the queue is empty.
   deep: {
-    maxPages: 500,
-    batchSize: 6,
-    timeoutMs: 18000,
+    maxPages: 200,
+    concurrency: 10,
+    timeoutMs: 15000,
     useSitemap: true,
     discoverCompetitors: true,
     maxCompetitorSnapshots: 5,
+    maxKeywords: 5,
   },
 };
 
@@ -29,10 +55,47 @@ const UTILITY_PATH_RE =
   /(cart|checkout|login|signin|signup|register|account|search|privacy|terms|thank-?you|payment|admin|wp-admin|reset|forgot|cookie|legal|disclaimer|tag|category|author|feed|rss|print|share)/i;
 
 const IMPORTANT_PAGE_RE =
-  /(^\/$)|(home|service|services|product|products|loan|loans|program|programs|about|location|locations|contact|book|booking|appointment|pricing|packages|service-area|areas-we-serve|fix-and-flip|new-construction|bridge|rental|dscr|apply|application|menu|treatment|repair|installation|financing|mortgage|lending|case-study|case-studies)/i;
+  /(home|service|services|product|products|loan|loans|program|programs|about|location|locations|contact|book|booking|appointment|pricing|packages|service-area|areas-we-serve|fix-and-flip|new-construction|bridge|rental|dscr|apply|application|menu|treatment|treatments|repair|installation|financing|mortgage|lending|case-study|case-studies)/i;
+
+const SERVICE_LIKE_RE =
+  /(service|services|product|products|loan|loans|program|programs|pricing|packages|location|locations|area|areas|repair|installation|treatment|treatments|financing|mortgage|lending)/i;
 
 const ASSET_RE =
   /\.(jpg|jpeg|png|gif|webp|svg|pdf|zip|css|js|ico|woff|woff2|ttf|mp4|mp3|mov|avi|xml|json)$/i;
+
+const HEADING_JUNK_RE =
+  /(menu|navigation|footer|subscribe|newsletter|follow us|share|related|copyright|sign in|log in|search|cookie)/i;
+
+const MEANINGFUL_SCHEMA_TYPES = new Set([
+  "LocalBusiness",
+  "Organization",
+  "Product",
+  "Service",
+  "Review",
+  "AggregateRating",
+  "FAQPage",
+  "BreadcrumbList",
+  "HowTo",
+  "Article",
+  "WebSite",
+]);
+
+// Strong placeholder patterns fire on a single hit; weak ones need >= 2
+// distinct hits on the same page, because words like "null" or "placeholder"
+// show up in legitimate copy (legal text, articles about design, etc.).
+const PLACEHOLDER_STRONG = [
+  [/\[object Object\]/, "[object Object]"],
+  [/\{\{[^}]*\}\}/, "{{ }}"],
+  [/\bgvar\+?\b/i, "gvar"],
+];
+
+const PLACEHOLDER_WEAK = [
+  [/\bundefined\b/i, "undefined"],
+  [/\bnull\b/i, "null"],
+  [/\bNaN\b/, "NaN"],
+  [/lorem ipsum/i, "lorem ipsum"],
+  [/\bplaceholder\b/i, "placeholder"],
+];
 
 const EXCLUDED_COMPETITOR_DOMAINS = [
   "google.com",
@@ -56,6 +119,8 @@ const EXCLUDED_COMPETITOR_DOMAINS = [
 ];
 
 Deno.serve(async (req) => {
+  const startedAt = Date.now();
+
   try {
     const base44 = createClientFromRequest(req);
     const user = await base44.auth.me();
@@ -74,13 +139,15 @@ Deno.serve(async (req) => {
       business_name = "",
       business_type = "",
       city = "",
+      country = "us",
+      language = "en",
       project_id = "",
       crawl_job_id = "",
       important_keywords = [],
       competitor_urls = [],
     } = body;
 
-    const scanMode = body.scan_mode === "deep" ? "deep" : "quick";
+    const scanMode = SCAN_LIMITS[body.scan_mode] ? body.scan_mode : "quick";
     const limits = SCAN_LIMITS[scanMode];
 
     if (!website_url) {
@@ -95,89 +162,54 @@ Deno.serve(async (req) => {
     const origin = startUrl.origin;
     const domain = getDomain(normalizedUrl);
     const crawlWarnings = [];
+    const competitorWarnings = [];
 
-    const robots = await readRobotsTxt(origin, crawlWarnings);
+    // The site crawl and the competitor pipeline are independent, so run
+    // them concurrently instead of one after the other.
+    const [site, competitors] = await Promise.all([
+      runSitePipeline({ origin, domain, normalizedUrl, limits, crawlWarnings }),
+      runCompetitorPipeline({
+        base44,
+        user,
+        project_id,
+        normalizedUrl,
+        domain,
+        business_name,
+        business_type,
+        city,
+        country,
+        language,
+        important_keywords,
+        competitor_urls,
+        limits,
+        warnings: competitorWarnings,
+      }),
+    ]);
 
-    const existingCompetitors = await getExistingCompetitors(base44, project_id);
-    const manualCompetitors = await saveProvidedCompetitors({
-      base44,
-      user,
-      project_id,
-      competitor_urls,
-      ownDomain: domain,
-    });
+    crawlWarnings.push(...competitorWarnings);
 
-    let discoveredCompetitors = [];
-    let createdCompetitors = [];
-
-    if (limits.discoverCompetitors) {
-      try {
-        const discovery = await withTimeout(
-          discoverCompetitorsFromGoogle({
-            base44,
-            user,
-            project_id,
-            website_url: normalizedUrl,
-            business_name,
-            business_type,
-            city,
-            important_keywords,
-          }),
-          18000,
-          "Google competitor discovery"
-        );
-
-        discoveredCompetitors = discovery.discovered_competitors || [];
-        createdCompetitors = discovery.created_competitors || [];
-
-        if (discovery.warnings?.length) {
-          crawlWarnings.push(...discovery.warnings);
-        }
-      } catch (error) {
-        crawlWarnings.push(
-          `Google competitor discovery was skipped: ${
-            error?.message || "Unknown error"
-          }`
-        );
-      }
-    }
-
-    const competitorResults = mergeCompetitorResults({
-      own_url: normalizedUrl,
-      existing: existingCompetitors,
-      manual: manualCompetitors,
-      discovered: discoveredCompetitors,
-      created: createdCompetitors,
-    });
-
-    const competitorPageSnapshots = await crawlCompetitorSnapshots({
+    const { robots, sitemapUrls, crawlResult } = site;
+    const {
+      discoveredCompetitors,
+      createdCompetitors,
       competitorResults,
-      maxSnapshots: limits.maxCompetitorSnapshots,
-      timeoutMs: 14000,
-    });
-
-    const sitemapUrls =
-      limits.useSitemap
-        ? await discoverSitemapUrls(origin, domain, robots, crawlWarnings)
-        : [];
-
-    const crawlResult = await crawlWebsite({
-      startUrl: normalizedUrl,
-      domain,
-      sitemapUrls,
-      robots,
-      maxPages: limits.maxPages,
-      batchSize: limits.batchSize,
-      timeoutMs: limits.timeoutMs,
-      crawlWarnings,
-    });
+      competitorPageSnapshots,
+    } = competitors;
 
     const brokenLinks = detectBrokenInternalLinks(crawlResult.pages);
+    const clientRendering = detectClientRendering(crawlResult.pages);
+
+    const competitorComparison = buildCompetitorComparison({
+      pages: crawlResult.pages,
+      snapshots: competitorPageSnapshots,
+    });
 
     const rawFindings = analyzePages({
       pages: crawlResult.pages,
       brokenLinks,
       competitorPageSnapshots,
+      competitorComparison,
+      clientRendering,
       business_name,
       business_type,
       city,
@@ -196,6 +228,8 @@ Deno.serve(async (req) => {
       competitorPageSnapshots,
       brokenLinks,
       robots,
+      clientRendering,
+      competitorComparison,
     });
 
     return Response.json({
@@ -204,6 +238,7 @@ Deno.serve(async (req) => {
       website_url,
       normalized_url: normalizedUrl,
       domain,
+      scan_duration_ms: Date.now() - startedAt,
       pages_crawled: crawlResult.pages.length,
       pages_found: crawlResult.pagesFound,
       queued_remaining: crawlResult.queuedRemaining,
@@ -216,6 +251,8 @@ Deno.serve(async (req) => {
       created_competitors: createdCompetitors,
       competitor_results: competitorResults,
       competitor_page_snapshots: competitorPageSnapshots,
+      competitor_comparison: competitorComparison,
+      client_rendering: clientRendering,
       competitor_urls,
       crawl_job_id,
       site_summary: siteSummary,
@@ -235,99 +272,252 @@ Deno.serve(async (req) => {
   }
 });
 
+/* ----------------------------- Pipelines ----------------------------- */
+
+async function runSitePipeline({
+  origin,
+  domain,
+  normalizedUrl,
+  limits,
+  crawlWarnings,
+}) {
+  const robots = await readRobotsTxt(origin, crawlWarnings);
+
+  const sitemapUrls = limits.useSitemap
+    ? await discoverSitemapUrls(origin, domain, robots, crawlWarnings)
+    : [];
+
+  const crawlResult = await crawlWebsite({
+    startUrl: normalizedUrl,
+    domain,
+    sitemapUrls,
+    robots,
+    maxPages: limits.maxPages,
+    concurrency: limits.concurrency,
+    timeoutMs: limits.timeoutMs,
+    crawlWarnings,
+  });
+
+  return { robots, sitemapUrls, crawlResult };
+}
+
+async function runCompetitorPipeline({
+  base44,
+  user,
+  project_id,
+  normalizedUrl,
+  domain,
+  business_name,
+  business_type,
+  city,
+  country,
+  language,
+  important_keywords,
+  competitor_urls,
+  limits,
+  warnings,
+}) {
+  const existing = await getExistingCompetitors(base44, project_id);
+
+  const manual = await saveProvidedCompetitors({
+    base44,
+    user,
+    project_id,
+    competitor_urls,
+    ownDomain: domain,
+  });
+
+  let discoveredCompetitors = [];
+  let createdCompetitors = [];
+
+  if (limits.discoverCompetitors) {
+    try {
+      const discovery = await withTimeout(
+        discoverCompetitorsFromGoogle({
+          base44,
+          user,
+          project_id,
+          website_url: normalizedUrl,
+          business_name,
+          business_type,
+          city,
+          country,
+          language,
+          important_keywords,
+          maxKeywords: limits.maxKeywords,
+        }),
+        20000,
+        "Google competitor discovery"
+      );
+
+      discoveredCompetitors = discovery.discovered_competitors || [];
+      createdCompetitors = discovery.created_competitors || [];
+
+      if (discovery.warnings?.length) {
+        warnings.push(...discovery.warnings);
+      }
+    } catch (error) {
+      warnings.push(
+        `Google competitor discovery was skipped: ${
+          error?.message || "Unknown error"
+        }`
+      );
+    }
+  }
+
+  const competitorResults = mergeCompetitorResults({
+    own_url: normalizedUrl,
+    existing,
+    manual,
+    discovered: discoveredCompetitors,
+    created: createdCompetitors,
+  });
+
+  const competitorPageSnapshots =
+    limits.maxCompetitorSnapshots > 0
+      ? await crawlCompetitorSnapshots({
+          competitorResults,
+          maxSnapshots: limits.maxCompetitorSnapshots,
+          timeoutMs: 14000,
+        })
+      : [];
+
+  return {
+    discoveredCompetitors,
+    createdCompetitors,
+    competitorResults,
+    competitorPageSnapshots,
+  };
+}
+
+/* ------------------------------- Crawl -------------------------------- */
+
+// Worker-pool crawler: every slot stays busy instead of waiting for the
+// slowest page in a batch. The queue is priority-sorted lazily (only when
+// dirty and only when a worker pulls the next item) instead of on every
+// insert, and priority scores are cached per URL.
 async function crawlWebsite({
   startUrl,
   domain,
   sitemapUrls = [],
   robots,
   maxPages,
-  batchSize,
+  concurrency,
   timeoutMs,
   crawlWarnings,
 }) {
+  const startedAt = Date.now();
   const queue = [];
-  const seen = new Set();
   const queued = new Set();
-  const failed = [];
+  const seen = new Set();
   const pages = [];
+  const failed = [];
+  let queueDirty = false;
+  let inFlight = 0;
+  let timeBudgetHit = false;
+
+  const prioCache = new Map();
+
+  const prio = (url) => {
+    if (!prioCache.has(url)) prioCache.set(url, priorityScore(url));
+    return prioCache.get(url);
+  };
 
   const addToQueue = (url, source = "link") => {
     const clean = canonicalizeUrl(url);
 
-    if (!clean) return false;
-    if (seen.has(clean)) return false;
-    if (queued.has(clean)) return false;
-    if (!isSameDomain(clean, domain)) return false;
-    if (isAssetUrl(clean)) return false;
-    if (isUtilityUrl(clean)) return false;
-    if (isBlockedByRobots(clean, robots)) return false;
+    if (!clean) return;
+    if (seen.has(clean) || queued.has(clean)) return;
+    if (!isSameDomain(clean, domain)) return;
+    if (isAssetUrl(clean)) return;
+    if (isUtilityUrl(clean)) return;
+    if (isBlockedByRobots(clean, robots)) return;
 
     queued.add(clean);
-
-    queue.push({
-      url: clean,
-      source,
-      priority: priorityScore(clean),
-    });
-
-    sortQueue(queue);
-    return true;
+    queue.push({ url: clean, source, priority: prio(clean) });
+    queueDirty = true;
   };
 
   addToQueue(startUrl, "start");
 
-  for (const url of stableSortUrls(sitemapUrls || [])) {
+  // Don't seed more sitemap URLs than the scan can possibly use.
+  for (const url of (sitemapUrls || []).slice(0, maxPages * 2)) {
     addToQueue(url, "sitemap");
   }
 
-  while (queue.length > 0 && pages.length < maxPages) {
-    const batchItems = queue.splice(0, batchSize);
-
-    for (const item of batchItems) {
-      queued.delete(item.url);
+  const nextItem = () => {
+    if (queueDirty) {
+      queue.sort(
+        (a, b) => b.priority - a.priority || a.url.localeCompare(b.url)
+      );
+      queueDirty = false;
     }
+    return queue.shift();
+  };
 
-    const results = await Promise.allSettled(
-      batchItems.map((item) =>
-        fetchAndExtractPage(item.url, domain, timeoutMs, item.source)
-      )
-    );
+  async function worker() {
+    while (true) {
+      if (pages.length + inFlight >= maxPages) return;
 
-    for (const result of results) {
-      if (pages.length >= maxPages) break;
+      if (Date.now() - startedAt > CRAWL_TIME_BUDGET_MS) {
+        timeBudgetHit = true;
+        return;
+      }
 
-      if (result.status !== "fulfilled") {
-        failed.push({ url: "", error: "Fetch promise failed" });
+      const item = nextItem();
+
+      if (!item) {
+        if (inFlight === 0) return;
+        await sleep(100);
         continue;
       }
 
-      const page = result.value;
-      const pageUrl = canonicalizeUrl(page.url || page.final_url || page.original_url);
+      queued.delete(item.url);
+      if (seen.has(item.url)) continue;
+      seen.add(item.url);
 
-      if (!pageUrl) continue;
-      if (seen.has(pageUrl)) continue;
+      inFlight++;
 
-      seen.add(pageUrl);
-      pages.push(page);
+      try {
+        const page = await fetchAndExtractPage(
+          item.url,
+          domain,
+          timeoutMs,
+          item.source
+        );
 
-      if (page.fetch_error) {
-        failed.push({
-          url: pageUrl,
-          error: page.fetch_error,
-        });
-      }
+        const finalUrl = canonicalizeUrl(
+          page.url || page.final_url || item.url
+        );
 
-      if (page.status_code >= 200 && page.status_code < 400) {
-        const links = stableSortUrls(page.internal_links || []);
-
-        for (const link of links) {
-          addToQueue(link, "internal");
+        if (finalUrl && finalUrl !== item.url) {
+          // Redirect landed on a URL we already captured.
+          if (seen.has(finalUrl)) continue;
+          seen.add(finalUrl);
         }
+
+        pages.push(page);
+
+        if (page.fetch_error) {
+          failed.push({ url: item.url, error: page.fetch_error });
+        }
+
+        if (page.status_code >= 200 && page.status_code < 400) {
+          for (const link of page.internal_links || []) {
+            addToQueue(link, "internal");
+          }
+        }
+      } finally {
+        inFlight--;
       }
     }
   }
 
-  pages.sort((a, b) => String(a.url || "").localeCompare(String(b.url || "")));
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+  const finalPages = pages
+    .slice(0, maxPages)
+    .sort((a, b) => String(a.url || "").localeCompare(String(b.url || "")));
 
   if (failed.length > 0) {
     crawlWarnings.push(
@@ -335,104 +525,125 @@ async function crawlWebsite({
     );
   }
 
-  if (pages.length >= maxPages) {
+  if (finalPages.length >= maxPages && queue.length > 0) {
     crawlWarnings.push(
       `Scan limit reached at ${maxPages} pages. A larger scan may find more pages.`
     );
   }
 
+  if (timeBudgetHit) {
+    crawlWarnings.push(
+      "The scan stopped early to stay within the time limit, so some pages were not reviewed."
+    );
+  }
+
   return {
-    pages,
-    pagesFound: pages.length + queue.length,
+    pages: finalPages,
+    pagesFound: finalPages.length + queue.length,
     queuedRemaining: queue.length,
     failed,
   };
 }
 
+// All competitor snapshots are fetched in parallel instead of one by one.
 async function crawlCompetitorSnapshots({
   competitorResults,
   maxSnapshots,
   timeoutMs,
 }) {
-  const snapshots = [];
-  const selected = stableDedupeCompetitors(competitorResults).slice(0, maxSnapshots);
+  const selected = stableDedupeCompetitors(competitorResults).slice(
+    0,
+    maxSnapshots
+  );
 
-  for (const competitor of selected) {
-    const url = competitor.url || competitor.website_url;
-    const domain = getDomain(url);
+  const snapshots = await Promise.all(
+    selected.map(async (competitor) => {
+      const url = competitor.url || competitor.website_url;
+      const domain = getDomain(url);
 
-    if (!url || !domain) continue;
+      if (!url || !domain) return null;
 
-    try {
-      const page = await withTimeout(
-        fetchAndExtractPage(url, domain, timeoutMs, "competitor_serp"),
-        timeoutMs + 2000,
-        "Competitor page crawl"
+      const base = {
+        competitor_name: competitor.name || formatDomainName(domain),
+        competitor_domain: domain,
+        competitor_url: url,
+        source: competitor.source || "google_custom_search",
+        keyword: competitor.keyword || "",
+        serp_position: competitor.position || null,
+        serp_title: competitor.title || "",
+        serp_snippet: competitor.snippet || "",
+      };
+
+      try {
+        const page = await withTimeout(
+          fetchAndExtractPage(url, domain, timeoutMs, "competitor_serp"),
+          timeoutMs + 2000,
+          "Competitor page crawl"
+        );
+
+        return {
+          ...base,
+          status_code: page.status_code,
+          title: page.title,
+          meta_description: page.meta_description,
+          h1: page.h1,
+          h2s: page.h2s || [],
+          h3s: page.h3s || [],
+          word_count: page.word_count || 0,
+          has_faq: Boolean(page.has_faq),
+          faq_questions: page.faq_questions || [],
+          has_schema: Boolean(page.has_schema),
+          schema_types: page.schema_types || [],
+          has_phone: Boolean(page.has_phone),
+          has_email: Boolean(page.has_email),
+          cta_phrases: page.cta_phrases || [],
+          trust_signals: page.trust_signals || [],
+          visible_text_sample: String(page.visible_text_sample || "").slice(
+            0,
+            1800
+          ),
+        };
+      } catch {
+        return {
+          ...base,
+          ...emptySnapshotFields(),
+          fetch_error: "Could not read competitor page",
+        };
+      }
+    })
+  );
+
+  return snapshots
+    .filter(Boolean)
+    .sort((a, b) => {
+      const aPos = a.serp_position || 99;
+      const bPos = b.serp_position || 99;
+      if (aPos !== bPos) return aPos - bPos;
+      return String(a.competitor_domain).localeCompare(
+        String(b.competitor_domain)
       );
+    });
+}
 
-      snapshots.push({
-        competitor_name: competitor.name || formatDomainName(domain),
-        competitor_domain: domain,
-        competitor_url: url,
-        source: competitor.source || "google_custom_search",
-        keyword: competitor.keyword || "",
-        serp_position: competitor.position || null,
-        serp_title: competitor.title || "",
-        serp_snippet: competitor.snippet || "",
-        status_code: page.status_code,
-        title: page.title,
-        meta_description: page.meta_description,
-        h1: page.h1,
-        h2s: page.h2s || [],
-        h3s: page.h3s || [],
-        word_count: page.word_count || 0,
-        has_faq: Boolean(page.has_faq),
-        faq_questions: page.faq_questions || [],
-        has_schema: Boolean(page.has_schema),
-        schema_types: page.schema_types || [],
-        has_phone: Boolean(page.has_phone),
-        has_email: Boolean(page.has_email),
-        cta_phrases: page.cta_phrases || [],
-        trust_signals: page.trust_signals || [],
-        visible_text_sample: String(page.visible_text_sample || "").slice(0, 1800),
-      });
-    } catch {
-      snapshots.push({
-        competitor_name: competitor.name || formatDomainName(domain),
-        competitor_domain: domain,
-        competitor_url: url,
-        source: competitor.source || "google_custom_search",
-        keyword: competitor.keyword || "",
-        serp_position: competitor.position || null,
-        serp_title: competitor.title || "",
-        serp_snippet: competitor.snippet || "",
-        status_code: 0,
-        title: "",
-        meta_description: "",
-        h1: "",
-        h2s: [],
-        h3s: [],
-        word_count: 0,
-        has_faq: false,
-        faq_questions: [],
-        has_schema: false,
-        schema_types: [],
-        has_phone: false,
-        has_email: false,
-        cta_phrases: [],
-        trust_signals: [],
-        visible_text_sample: "",
-        fetch_error: "Could not read competitor page",
-      });
-    }
-  }
-
-  return snapshots.sort((a, b) => {
-    const aPos = a.serp_position || 99;
-    const bPos = b.serp_position || 99;
-    if (aPos !== bPos) return aPos - bPos;
-    return String(a.competitor_domain).localeCompare(String(b.competitor_domain));
-  });
+function emptySnapshotFields() {
+  return {
+    status_code: 0,
+    title: "",
+    meta_description: "",
+    h1: "",
+    h2s: [],
+    h3s: [],
+    word_count: 0,
+    has_faq: false,
+    faq_questions: [],
+    has_schema: false,
+    schema_types: [],
+    has_phone: false,
+    has_email: false,
+    cta_phrases: [],
+    trust_signals: [],
+    visible_text_sample: "",
+  };
 }
 
 async function fetchAndExtractPage(url, domain, timeoutMs, source = "unknown") {
@@ -465,7 +676,8 @@ async function fetchAndExtractPage(url, domain, timeoutMs, source = "unknown") {
       });
     }
 
-    const html = await response.text();
+    let html = await response.text();
+    if (html.length > MAX_HTML_BYTES) html = html.slice(0, MAX_HTML_BYTES);
 
     return extractPageData({
       url: finalUrl,
@@ -518,9 +730,7 @@ function extractPageData({
       getMetaName(decodedHtml, "twitter:description")
   );
 
-  const h1 = cleanText(
-    matchFirst(decodedHtml, /<h1[^>]*>([\s\S]*?)<\/h1>/i)
-  );
+  const h1 = cleanText(matchFirst(decodedHtml, /<h1[^>]*>([\s\S]*?)<\/h1>/i));
 
   const canonicalRaw =
     matchFirst(
@@ -551,8 +761,9 @@ function extractPageData({
   const schemaTypes = detectSchemaTypes(decodedHtml);
   const trustSignals = detectTrustSignals(pageText);
   const ctaPhrases = detectCtas(pageText);
-  const placeholderText = detectPlaceholderText(pageText);
+  const placeholder = detectPlaceholderText(pageText);
   const path = getPath(normalizedUrl || url);
+  const scriptTagCount = (html.match(/<script/gi) || []).length;
 
   return {
     url: normalizedUrl,
@@ -561,7 +772,9 @@ function extractPageData({
     crawl_source: source,
     status_code: status,
     content_type: contentType,
-    redirected: Boolean(originalNormalized && originalNormalized !== normalizedUrl),
+    redirected: Boolean(
+      originalNormalized && originalNormalized !== normalizedUrl
+    ),
     title,
     meta_description: metaDescription,
     h1,
@@ -573,8 +786,14 @@ function extractPageData({
     nofollow: /nofollow/i.test(robotsMeta),
     word_count: wordCount,
     visible_text_sample: pageText.slice(0, 2500),
-    internal_links: stableSortUrls(Array.from(new Set(internalLinks))).slice(0, 500),
-    external_links: stableSortUrls(Array.from(new Set(externalLinks))).slice(0, 200),
+    internal_links: stableSortUrls(Array.from(new Set(internalLinks))).slice(
+      0,
+      500
+    ),
+    external_links: stableSortUrls(Array.from(new Set(externalLinks))).slice(
+      0,
+      200
+    ),
     images,
     image_count: images.length,
     images_missing_alt_count: images.filter((img) => !img.has_alt).length,
@@ -590,9 +809,16 @@ function extractPageData({
     has_email: /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(pageText),
     cta_phrases: ctaPhrases,
     trust_signals: trustSignals,
-    placeholder_text: placeholderText,
+    placeholder_text: placeholder.hits,
+    placeholder_strong: placeholder.strong,
+    script_tag_count: scriptTagCount,
+    // Very little visible text + lots of scripts on a 2xx page usually means
+    // the content is built in the browser (client-side rendering).
+    likely_client_rendered:
+      status >= 200 && status < 300 && wordCount < 80 && scriptTagCount > 10,
     is_utility_page: isUtilityPath(path),
     is_important_page: isImportantPage(path, title, h1),
+    is_service_like: isServiceLikePage(path, title, h1),
     fetch_error: "",
   };
 }
@@ -641,16 +867,158 @@ function emptyPage({
     cta_phrases: [],
     trust_signals: [],
     placeholder_text: [],
+    placeholder_strong: false,
+    script_tag_count: 0,
+    likely_client_rendered: false,
     is_utility_page: isUtilityPath(path),
     is_important_page: isImportantPage(path, "", ""),
+    is_service_like: isServiceLikePage(path, "", ""),
     fetch_error: error,
   };
 }
+
+/* --------------------- Client-side rendering check --------------------- */
+
+function detectClientRendering(pages) {
+  const candidates = (pages || []).filter(
+    (p) =>
+      p.status_code >= 200 &&
+      p.status_code < 300 &&
+      p.is_important_page &&
+      !p.is_utility_page
+  );
+
+  const flagged = candidates.filter((p) => p.likely_client_rendered);
+  const fraction = candidates.length > 0 ? flagged.length / candidates.length : 0;
+
+  return {
+    detected: candidates.length >= 3 && fraction > 0.4,
+    flagged_pages: flagged.map((p) => getPath(p.url)),
+    checked_pages: candidates.length,
+    fraction: Math.round(fraction * 100) / 100,
+  };
+}
+
+/* ---------------------- Competitor comparison ------------------------- */
+
+// Deterministic your-site-vs-competitors deltas. The AI layer narrates these
+// facts instead of guessing from raw snapshots.
+function buildCompetitorComparison({ pages, snapshots }) {
+  const yours = (pages || []).filter(
+    (p) =>
+      p.is_important_page &&
+      !p.is_utility_page &&
+      p.status_code >= 200 &&
+      p.status_code < 300 &&
+      !p.likely_client_rendered
+  );
+
+  const theirs = (snapshots || []).filter(
+    (s) =>
+      s.status_code >= 200 &&
+      s.status_code < 400 &&
+      Number(s.word_count || 0) > 100
+  );
+
+  if (yours.length === 0 || theirs.length === 0) return null;
+
+  const yourHeadingText = yours
+    .flatMap((p) => [p.h1, ...(p.h2s || []), ...(p.h3s || [])])
+    .map(normalizeHeading)
+    .filter(Boolean)
+    .join(" | ");
+
+  const topicMap = new Map();
+
+  for (const c of theirs) {
+    for (const heading of [...(c.h2s || []), ...(c.h3s || [])]) {
+      const normalized = normalizeHeading(heading);
+      if (!normalized) continue;
+
+      const words = normalized.split(" ");
+      if (words.length < 2 || words.length > 10) continue;
+      if (HEADING_JUNK_RE.test(normalized)) continue;
+
+      const meaningful = words.filter((w) => w.length > 3);
+      if (
+        meaningful.length > 0 &&
+        meaningful.every((w) => yourHeadingText.includes(w))
+      ) {
+        continue; // your pages already cover this topic
+      }
+
+      const entry =
+        topicMap.get(normalized) || {
+          topic: cleanText(heading),
+          competitors: [],
+          keyword: c.keyword || "",
+          serp_position: c.serp_position || null,
+        };
+
+      if (!entry.competitors.includes(c.competitor_name)) {
+        entry.competitors.push(c.competitor_name);
+      }
+
+      topicMap.set(normalized, entry);
+    }
+  }
+
+  const yourSchema = new Set(yours.flatMap((p) => p.schema_types || []));
+  const yourTrust = new Set(yours.flatMap((p) => p.trust_signals || []));
+  const theirSchema = Array.from(
+    new Set(theirs.flatMap((c) => c.schema_types || []))
+  );
+  const theirTrust = Array.from(
+    new Set(theirs.flatMap((c) => c.trust_signals || []))
+  );
+
+  return {
+    competitors_compared: theirs.map((c) => ({
+      name: c.competitor_name,
+      domain: c.competitor_domain,
+      url: c.competitor_url,
+      keyword: c.keyword || "",
+      serp_position: c.serp_position || null,
+      word_count: c.word_count || 0,
+      has_faq: Boolean(c.has_faq),
+    })),
+    content_depth: {
+      your_median_words: median(yours.map((p) => p.word_count || 0)),
+      competitor_median_words: median(theirs.map((c) => c.word_count || 0)),
+      your_pages_measured: yours.length,
+      competitor_pages_measured: theirs.length,
+    },
+    faq_coverage: {
+      your_pages_with_faq: yours.filter((p) => p.has_faq).length,
+      your_important_pages: yours.length,
+      competitors_with_faq: theirs.filter((c) => c.has_faq).length,
+      competitors_measured: theirs.length,
+      competitor_faq_examples: Array.from(
+        new Set(theirs.flatMap((c) => c.faq_questions || []))
+      ).slice(0, 8),
+    },
+    schema_gaps: theirSchema
+      .filter((t) => MEANINGFUL_SCHEMA_TYPES.has(t) && !yourSchema.has(t))
+      .sort(),
+    trust_signal_gaps: theirTrust.filter((t) => !yourTrust.has(t)).sort(),
+    topic_gaps: Array.from(topicMap.values())
+      .sort(
+        (a, b) =>
+          b.competitors.length - a.competitors.length ||
+          a.topic.localeCompare(b.topic)
+      )
+      .slice(0, 10),
+  };
+}
+
+/* ------------------------------ Analysis ------------------------------ */
 
 function analyzePages({
   pages,
   brokenLinks,
   competitorPageSnapshots,
+  competitorComparison,
+  clientRendering,
   business_name,
   business_type,
   city,
@@ -680,6 +1048,13 @@ function analyzePages({
     const isImportant =
       page.is_important_page || isImportantPage(path, page.title, page.h1);
 
+    // When the site builds pages in the browser, content-based checks on the
+    // initial HTML would produce false positives — suppress those checks for
+    // flagged pages (titles/descriptions live in the static head, so keep them).
+    const contentSuppressed = Boolean(
+      clientRendering?.detected && page.likely_client_rendered
+    );
+
     if (page.status_code === 0 || page.status_code >= 400) {
       brokenPages.push(page);
       continue;
@@ -696,7 +1071,7 @@ function analyzePages({
       missingDescriptionPages.push(page);
     }
 
-    if (!page.h1) {
+    if (!contentSuppressed && !page.h1) {
       missingHeadingPages.push(page);
     }
 
@@ -708,27 +1083,29 @@ function analyzePages({
       canonicalPages.push(page);
     }
 
-    if (page.word_count < 300) {
+    if (!contentSuppressed && page.word_count < 300) {
       thinPages.push(page);
     }
 
-    if (page.placeholder_text?.length > 0) {
-      placeholderPages.push({
-        page: path,
-        hits: page.placeholder_text,
-      });
+    if (
+      !contentSuppressed &&
+      (page.placeholder_strong || (page.placeholder_text?.length || 0) >= 2)
+    ) {
+      placeholderPages.push({ page: path, hits: page.placeholder_text });
     }
 
-    if (!page.has_faq) {
-      faqGapPages.push(page);
-    }
+    // FAQ / CTA / trust checks only make sense on service-like pages —
+    // a contact or about page without an FAQ is not an issue.
+    if (page.is_service_like && !contentSuppressed) {
+      if (!page.has_faq) faqGapPages.push(page);
 
-    if (!page.cta_phrases || page.cta_phrases.length === 0) {
-      ctaGapPages.push(page);
-    }
+      if (!page.cta_phrases || page.cta_phrases.length === 0) {
+        ctaGapPages.push(page);
+      }
 
-    if (!page.trust_signals || page.trust_signals.length === 0) {
-      trustGapPages.push(page);
+      if (!page.trust_signals || page.trust_signals.length === 0) {
+        trustGapPages.push(page);
+      }
     }
 
     if (
@@ -738,6 +1115,33 @@ function analyzePages({
     ) {
       imageAltPages.push(page);
     }
+  }
+
+  if (clientRendering?.detected) {
+    findings.push(
+      groupedFinding({
+        id: "client-side-rendering",
+        category: "js_rendering",
+        customer_category: "Website setup",
+        title:
+          "Your website builds pages in the browser, which limits what search engines read first",
+        explanation:
+          "Several important pages send very little text in their initial code and rely on scripts to fill in the content afterwards. This scan reads the initial code, the same way search engines start.",
+        why:
+          "When key content only appears after scripts run, search engines can take longer to read it or may miss parts of it — and some checks in this report may under-count your content.",
+        recommendation:
+          "Ask your website platform or developer whether important pages can include their main content directly in the page code (often called server-side rendering or static pages).",
+        current: `${clientRendering.flagged_pages.length} of ${clientRendering.checked_pages} important pages affected`,
+        priority: "high",
+        status: "needs_developer",
+        difficulty: "developer",
+        affected_pages: clientRendering.flagged_pages,
+        details: {
+          technical_term: "client-side rendering",
+          flagged_fraction: clientRendering.fraction,
+        },
+      })
+    );
   }
 
   if (brokenPages.length > 0) {
@@ -778,8 +1182,7 @@ function analyzePages({
           weakTitlePages.length === 1
             ? "Improve this page’s search title"
             : "Improve search titles on important pages",
-        explanation:
-          "Some important pages may need clearer search titles.",
+        explanation: "Some important pages may need clearer search titles.",
         why:
           "Clear search titles help people understand what each page is about before they click.",
         recommendation:
@@ -865,12 +1268,10 @@ function analyzePages({
           missingHeadingPages.length === 1
             ? "Add a clear main heading"
             : "Add clear main headings to important pages",
-        explanation:
-          "Some important pages may not have a clear main heading.",
+        explanation: "Some important pages may not have a clear main heading.",
         why:
           "A clear heading helps visitors quickly understand what a page is about.",
-        recommendation:
-          "Add one clear main heading to each affected page.",
+        recommendation: "Add one clear main heading to each affected page.",
         current: `${missingHeadingPages.length} page${missingHeadingPages.length === 1 ? "" : "s"} affected`,
         priority: "medium",
         status: "needs_approval",
@@ -974,7 +1375,8 @@ function analyzePages({
         id: "placeholder-text",
         category: "placeholder_text",
         customer_category: "Website setup",
-        title: "Important numbers may not be showing correctly to search engines",
+        title:
+          "Important numbers may not be showing correctly to search engines",
         explanation:
           "We found placeholder-like text where important business proof or page content may belong.",
         why:
@@ -1003,7 +1405,7 @@ function analyzePages({
         customer_category: "Page content",
         title: "Add answers to common customer questions",
         explanation:
-          "Some important pages do not appear to answer common customer questions.",
+          "Some important service pages do not appear to answer common customer questions.",
         why:
           "Question-and-answer sections can help visitors make decisions and understand your services.",
         recommendation:
@@ -1026,7 +1428,7 @@ function analyzePages({
         customer_category: "Page content",
         title: "Add clearer next steps on important pages",
         explanation:
-          "Some important pages may not clearly tell visitors what to do next.",
+          "Some important service pages may not clearly tell visitors what to do next.",
         why:
           "A clear next step can help more visitors contact you, book, apply, or request help.",
         recommendation:
@@ -1049,7 +1451,7 @@ function analyzePages({
         customer_category: "Trust signals",
         title: "Add more trust signals to important pages",
         explanation:
-          "Some important pages may not show enough proof that visitors can trust the business.",
+          "Some important service pages may not show enough proof that visitors can trust the business.",
         why:
           "Reviews, testimonials, project examples, credentials, and proof points can help visitors feel more confident.",
         recommendation:
@@ -1122,35 +1524,186 @@ function analyzePages({
     );
   }
 
-  if (competitorPageSnapshots.length > 0) {
-    findings.push(
-      groupedFinding({
-        id: "competitor-content-opportunities",
-        category: "competitor_gap",
-        customer_category: "Competitor opportunities",
-        title: "Review competitor pages for content opportunities",
-        explanation:
-          "We found competitor pages from Google results and reviewed what those pages include.",
-        why:
-          "Competitor pages can show what services, questions, proof points, and page sections customers may expect to see.",
-        recommendation:
-          "Compare your most important pages against these competitor pages and add helpful sections where appropriate.",
-        current: `${competitorPageSnapshots.length} competitor page${competitorPageSnapshots.length === 1 ? "" : "s"} reviewed`,
-        priority: "medium",
-        status: "needs_developer",
-        difficulty: "moderate",
-        affected_pages: ["/"],
-        details: {
-          competitor_page_snapshots: competitorPageSnapshots.slice(0, 5),
-        },
-      })
-    );
-  }
+  findings.push(
+    ...buildComparisonFindings({
+      comparison: competitorComparison,
+      snapshots: competitorPageSnapshots,
+    })
+  );
 
   findings.push(...detectDuplicateTitles(pages));
   findings.push(...detectDuplicateDescriptions(pages));
 
   return dedupeFindings(findings);
+}
+
+// One finding per real, measured gap — not a single vague "look at
+// competitors" card. Falls back to the generic card only when snapshots
+// exist but a comparison couldn't be built.
+function buildComparisonFindings({ comparison, snapshots }) {
+  const findings = [];
+
+  if (!comparison) {
+    if ((snapshots || []).length > 0) {
+      findings.push(
+        groupedFinding({
+          id: "competitor-content-opportunities",
+          category: "competitor_gap",
+          customer_category: "Competitor opportunities",
+          title: "Review competitor pages for content opportunities",
+          explanation:
+            "We found competitor pages from Google results and reviewed what those pages include.",
+          why:
+            "Competitor pages can show what services, questions, proof points, and page sections customers may expect to see.",
+          recommendation:
+            "Compare your most important pages against these competitor pages and add helpful sections where appropriate.",
+          current: `${snapshots.length} competitor page${snapshots.length === 1 ? "" : "s"} reviewed`,
+          priority: "medium",
+          status: "needs_developer",
+          difficulty: "moderate",
+          affected_pages: ["/"],
+          details: { competitor_page_snapshots: snapshots.slice(0, 5) },
+        })
+      );
+    }
+
+    return findings;
+  }
+
+  const depth = comparison.content_depth;
+
+  if (
+    depth.your_pages_measured >= 2 &&
+    depth.competitor_pages_measured >= 2 &&
+    depth.your_median_words > 0 &&
+    depth.competitor_median_words >= depth.your_median_words * 2
+  ) {
+    findings.push(
+      groupedFinding({
+        id: "competitor-content-depth",
+        category: "competitor_gap",
+        customer_category: "Competitor opportunities",
+        title: "Competitor pages found on Google go much deeper than yours",
+        explanation: `Competitor pages we reviewed have a typical length of about ${depth.competitor_median_words} words. Your important pages have a typical length of about ${depth.your_median_words} words.`,
+        why:
+          "Pages that fully explain the service, the process, pricing context, and common questions give visitors more reasons to choose you.",
+        recommendation:
+          "Expand your key service pages with the sections competitors cover. The topic list in the technical details shows exactly what they include that you may not.",
+        current: `About ${depth.your_median_words} words on your pages vs about ${depth.competitor_median_words} on competitor pages`,
+        priority: "high",
+        status: "needs_developer",
+        difficulty: "moderate",
+        affected_pages: ["/"],
+        details: {
+          content_depth: depth,
+          competitors_compared: comparison.competitors_compared,
+        },
+      })
+    );
+  }
+
+  const faq = comparison.faq_coverage;
+
+  if (faq.competitors_with_faq >= 2 && faq.your_pages_with_faq === 0) {
+    findings.push(
+      groupedFinding({
+        id: "competitor-faq-coverage",
+        category: "competitor_gap",
+        customer_category: "Competitor opportunities",
+        title:
+          "Competitors answer customer questions on their pages — yours don’t yet",
+        explanation: `${faq.competitors_with_faq} of ${faq.competitors_measured} competitor pages we reviewed include a question-and-answer section. We did not find one on your important pages.`,
+        why:
+          "Customers often compare businesses by the questions their pages answer before making contact.",
+        recommendation:
+          "Add 4–6 real customer questions and answers to your key service pages. The technical details include example questions competitors answer.",
+        current: `${faq.competitors_with_faq} of ${faq.competitors_measured} competitors have Q&A sections; your pages have 0`,
+        priority: "medium",
+        status: "needs_developer",
+        difficulty: "moderate",
+        affected_pages: ["/"],
+        details: { faq_coverage: faq },
+      })
+    );
+  }
+
+  if ((comparison.topic_gaps || []).length >= 3) {
+    const top = comparison.topic_gaps.slice(0, 6);
+    const topExamples = top
+      .slice(0, 3)
+      .map((t) => `“${t.topic}”`)
+      .join(", ");
+
+    findings.push(
+      groupedFinding({
+        id: "competitor-topic-gaps",
+        category: "competitor_gap",
+        customer_category: "Competitor opportunities",
+        title: "Competitor pages cover topics your pages don’t mention",
+        explanation: `Competitor pages include sections such as ${topExamples} that we could not find on your important pages.`,
+        why:
+          "These sections often answer the exact things customers compare before contacting a business.",
+        recommendation:
+          "Review the full topic list in the technical details and add the sections that genuinely fit your services.",
+        current: `${comparison.topic_gaps.length} topic${comparison.topic_gaps.length === 1 ? "" : "s"} found on competitor pages but not yours`,
+        priority: "medium",
+        status: "needs_developer",
+        difficulty: "moderate",
+        affected_pages: ["/"],
+        details: { topic_gaps: comparison.topic_gaps },
+      })
+    );
+  }
+
+  if ((comparison.schema_gaps || []).length > 0) {
+    findings.push(
+      groupedFinding({
+        id: "competitor-schema-gaps",
+        category: "schema",
+        customer_category: "Competitor opportunities",
+        title:
+          "Competitors give search engines structured business information you don’t",
+        explanation: `Competitor pages include structured information types (${comparison.schema_gaps.slice(0, 4).join(", ")}) that we did not find on your pages.`,
+        why:
+          "Structured business information helps search engines show richer results such as stars, FAQs, and business details.",
+        recommendation:
+          "Ask your website platform or developer to add the missing structured information types where they fit your pages.",
+        current: `Missing: ${comparison.schema_gaps.join(", ")}`,
+        priority: "low",
+        status: "needs_developer",
+        difficulty: "developer",
+        affected_pages: ["/"],
+        details: {
+          schema_gaps: comparison.schema_gaps,
+          technical_term: "schema markup",
+        },
+      })
+    );
+  }
+
+  if ((comparison.trust_signal_gaps || []).length >= 3) {
+    findings.push(
+      groupedFinding({
+        id: "competitor-trust-gaps",
+        category: "competitor_gap",
+        customer_category: "Competitor opportunities",
+        title: "Competitor pages show trust proof your pages don’t mention",
+        explanation: `Competitor pages mention ${joinHumanList(comparison.trust_signal_gaps.slice(0, 4))} — signals we could not find on your important pages.`,
+        why:
+          "Visible proof points help visitors feel confident enough to make contact.",
+        recommendation:
+          "Add the proof you genuinely have — reviews, credentials, project counts, guarantees — to your key pages.",
+        current: `${comparison.trust_signal_gaps.length} trust signal${comparison.trust_signal_gaps.length === 1 ? "" : "s"} found on competitor pages but not yours`,
+        priority: "medium",
+        status: "needs_developer",
+        difficulty: "moderate",
+        affected_pages: ["/"],
+        details: { trust_signal_gaps: comparison.trust_signal_gaps },
+      })
+    );
+  }
+
+  return findings;
 }
 
 function groupedFinding({
@@ -1193,13 +1746,7 @@ function groupedFinding({
 }
 
 function groupAndPrioritizeFindings(findings) {
-  const priorityOrder = {
-    critical: 0,
-    high: 1,
-    medium: 2,
-    low: 3,
-  };
-
+  const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
   const statusOrder = {
     needs_approval: 0,
     auto_fixed: 1,
@@ -1318,6 +1865,8 @@ function detectDuplicateDescriptions(pages) {
   return findings;
 }
 
+/* ------------------------ Competitor discovery ------------------------- */
+
 async function discoverCompetitorsFromGoogle({
   base44,
   user,
@@ -1326,7 +1875,10 @@ async function discoverCompetitorsFromGoogle({
   business_name,
   business_type,
   city,
+  country,
+  language,
   important_keywords,
+  maxKeywords,
 }) {
   const warnings = [];
   const googleApiKey = getOptionalSecret(GOOGLE_API_KEY_NAME);
@@ -1344,42 +1896,59 @@ async function discoverCompetitorsFromGoogle({
 
   const ownDomain = getDomain(website_url);
 
+  // Keyword count is a plan-tier knob: Google CSE free tier is 100
+  // queries/day, so more keywords per scan means fewer scans per day.
   const keywords = buildCompetitorKeywords({
     business_name,
     business_type,
     city,
     important_keywords,
-  }).slice(0, 8);
+  }).slice(0, Math.max(1, maxKeywords || 4));
+
+  // All searches run in parallel — 4–5 queries take ~as long as one.
+  const runs = await Promise.all(
+    keywords.map(async (keyword) => {
+      try {
+        const items = await withTimeout(
+          searchGoogle({
+            keyword,
+            googleApiKey,
+            googleCx,
+            ownDomain,
+            country,
+            language,
+          }),
+          8000,
+          "Google search"
+        );
+
+        return { keyword, items };
+      } catch {
+        warnings.push(`Google search failed for "${keyword}".`);
+        return { keyword, items: [] };
+      }
+    })
+  );
 
   const results = [];
 
-  for (const keyword of keywords) {
-    try {
-      const searchResults = await withTimeout(
-        searchGoogle(keyword, googleApiKey, googleCx, ownDomain),
-        7000,
-        "Google search"
-      );
+  for (const run of runs) {
+    for (const item of run.items) {
+      const domain = getDomain(item.url);
 
-      for (const item of searchResults) {
-        const domain = getDomain(item.url);
+      if (!isValidCompetitorDomain(domain, ownDomain)) continue;
 
-        if (!isValidCompetitorDomain(domain, ownDomain)) continue;
-
-        results.push({
-          source: "google_custom_search",
-          keyword,
-          title: item.title,
-          url: normalizeCompetitorUrl(item.url),
-          original_result_url: item.url,
-          domain,
-          position: item.position,
-          snippet: item.snippet,
-          query: item.query,
-        });
-      }
-    } catch {
-      warnings.push(`Google search failed for "${keyword}".`);
+      results.push({
+        source: "google_custom_search",
+        keyword: run.keyword,
+        title: item.title,
+        url: normalizeCompetitorUrl(item.url),
+        original_result_url: item.url,
+        domain,
+        position: item.position,
+        snippet: item.snippet,
+        query: item.query,
+      });
     }
   }
 
@@ -1423,7 +1992,14 @@ async function discoverCompetitorsFromGoogle({
   };
 }
 
-async function searchGoogle(keyword, googleApiKey, googleCx, ownDomain = "") {
+async function searchGoogle({
+  keyword,
+  googleApiKey,
+  googleCx,
+  ownDomain = "",
+  country = "us",
+  language = "en",
+}) {
   const query = ownDomain ? `${keyword} -site:${ownDomain}` : keyword;
 
   const url = new URL("https://www.googleapis.com/customsearch/v1");
@@ -1431,8 +2007,8 @@ async function searchGoogle(keyword, googleApiKey, googleCx, ownDomain = "") {
   url.searchParams.set("cx", googleCx);
   url.searchParams.set("q", query);
   url.searchParams.set("num", "10");
-  url.searchParams.set("gl", "us");
-  url.searchParams.set("hl", "en");
+  url.searchParams.set("gl", String(country || "us").toLowerCase());
+  url.searchParams.set("hl", String(language || "en").toLowerCase());
 
   const response = await fetch(url.toString(), {
     headers: {
@@ -1495,8 +2071,9 @@ function buildCompetitorKeywords({
     }
   }
 
-  return Array.from(new Set(keywords.map((item) => item.trim()).filter(Boolean)))
-    .sort((a, b) => a.localeCompare(b));
+  return Array.from(
+    new Set(keywords.map((item) => item.trim()).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b));
 }
 
 async function getExistingCompetitors(base44, project_id) {
@@ -1678,6 +2255,8 @@ function isValidCompetitorDomain(domain, ownDomain) {
   );
 }
 
+/* --------------------------- robots / sitemap -------------------------- */
+
 async function readRobotsTxt(origin, warnings) {
   try {
     const response = await withTimeout(
@@ -1703,26 +2282,58 @@ async function readRobotsTxt(origin, warnings) {
   }
 }
 
+// Group-aware robots.txt parsing: only Disallow rules from groups that
+// target "*" or our own crawler apply. A Disallow aimed at some other bot
+// no longer blocks the scan. (Allow precedence is intentionally skipped.)
 function parseRobotsTxt(text) {
   const lines = String(text || "").split(/\r?\n/);
   const disallow = [];
   const sitemaps = [];
 
+  let currentAgents = [];
+  let collectingAgents = true;
+
+  const groupApplies = () =>
+    currentAgents.some(
+      (agent) => agent === "*" || agent.includes(ROBOTS_AGENT_TOKEN)
+    );
+
   for (const rawLine of lines) {
     const line = rawLine.split("#")[0].trim();
     if (!line) continue;
 
-    const [keyRaw, ...valueParts] = line.split(":");
-    const key = String(keyRaw || "").trim().toLowerCase();
-    const value = valueParts.join(":").trim();
+    const separatorIndex = line.indexOf(":");
+    if (separatorIndex === -1) continue;
 
-    if (key === "disallow" && value && value !== "/") {
-      disallow.push(value);
+    const key = line.slice(0, separatorIndex).trim().toLowerCase();
+    const value = line.slice(separatorIndex + 1).trim();
+
+    if (key === "sitemap") {
+      if (value) sitemaps.push(value);
+      continue;
     }
 
-    if (key === "sitemap" && value) {
-      sitemaps.push(value);
+    if (key === "user-agent") {
+      if (!collectingAgents) {
+        currentAgents = [];
+        collectingAgents = true;
+      }
+      if (value) currentAgents.push(value.toLowerCase());
+      continue;
     }
+
+    if (key === "disallow" || key === "allow") {
+      collectingAgents = false;
+
+      if (key === "disallow" && value && value !== "/" && groupApplies()) {
+        disallow.push(value);
+      }
+
+      continue;
+    }
+
+    // Any other directive (crawl-delay, etc.) also ends agent collection.
+    collectingAgents = false;
   }
 
   return {
@@ -1744,26 +2355,29 @@ function isBlockedByRobots(url, robots) {
 }
 
 async function discoverSitemapUrls(origin, domain, robots, warnings) {
-  const sitemapUrls = [];
+  const candidates = Array.from(
+    new Set([
+      ...(robots?.sitemaps || []),
+      `${origin}/sitemap.xml`,
+      `${origin}/sitemap_index.xml`,
+      `${origin}/wp-sitemap.xml`,
+      `${origin}/page-sitemap.xml`,
+    ])
+  ).sort();
 
-  const candidates = [
-    ...(robots?.sitemaps || []),
-    `${origin}/sitemap.xml`,
-    `${origin}/sitemap_index.xml`,
-    `${origin}/wp-sitemap.xml`,
-    `${origin}/page-sitemap.xml`,
-  ];
+  // All candidate sitemaps are read in parallel.
+  const results = await Promise.all(
+    candidates.map(async (sitemapUrl) => {
+      try {
+        return await readSitemap(sitemapUrl, domain, warnings, 0);
+      } catch {
+        warnings.push(`Could not read sitemap: ${sitemapUrl}`);
+        return [];
+      }
+    })
+  );
 
-  for (const sitemapUrl of Array.from(new Set(candidates)).sort()) {
-    try {
-      const urls = await readSitemap(sitemapUrl, domain, warnings, 0);
-      sitemapUrls.push(...urls);
-    } catch {
-      warnings.push(`Could not read sitemap: ${sitemapUrl}`);
-    }
-  }
-
-  return stableSortUrls(Array.from(new Set(sitemapUrls))).slice(0, 1200);
+  return stableSortUrls(results.flat()).slice(0, 1200);
 }
 
 async function readSitemap(sitemapUrl, domain, warnings, depth) {
@@ -1788,19 +2402,24 @@ async function readSitemap(sitemapUrl, domain, warnings, depth) {
   const sitemapChildren = urls.filter((url) => /sitemap/i.test(url));
   const pageUrls = urls.filter(
     (url) =>
-      isSameDomain(url, domain) &&
-      !isAssetUrl(url) &&
-      !/sitemap/i.test(url)
+      isSameDomain(url, domain) && !isAssetUrl(url) && !/sitemap/i.test(url)
   );
 
-  for (const child of sitemapChildren.slice(0, 25).sort()) {
-    try {
-      const childUrls = await readSitemap(child, domain, warnings, depth + 1);
-      pageUrls.push(...childUrls);
-    } catch {
-      warnings.push(`Could not read nested sitemap: ${child}`);
-    }
-  }
+  const childResults = await Promise.all(
+    sitemapChildren
+      .slice(0, 10)
+      .sort()
+      .map(async (child) => {
+        try {
+          return await readSitemap(child, domain, warnings, depth + 1);
+        } catch {
+          warnings.push(`Could not read nested sitemap: ${child}`);
+          return [];
+        }
+      })
+  );
+
+  pageUrls.push(...childResults.flat());
 
   return stableSortUrls(pageUrls);
 }
@@ -1816,6 +2435,8 @@ function extractUrlsFromSitemap(xml) {
 
   return urls;
 }
+
+/* ---------------------------- Broken links ----------------------------- */
 
 function detectBrokenInternalLinks(pages) {
   const statusMap = new Map();
@@ -1857,11 +2478,15 @@ function dedupeBrokenLinks(items) {
   }
 
   return output.sort((a, b) => {
-    const sourceDiff = String(a.source_page).localeCompare(String(b.source_page));
+    const sourceDiff = String(a.source_page).localeCompare(
+      String(b.source_page)
+    );
     if (sourceDiff !== 0) return sourceDiff;
     return String(a.broken_link).localeCompare(String(b.broken_link));
   });
 }
+
+/* ------------------------------ Summary -------------------------------- */
 
 function buildSiteSummary({
   pages,
@@ -1873,6 +2498,8 @@ function buildSiteSummary({
   competitorPageSnapshots,
   brokenLinks,
   robots,
+  clientRendering,
+  competitorComparison,
 }) {
   const importantPages = pages.filter((p) => p.is_important_page);
   const pagesWithFaq = pages.filter((p) => p.has_faq);
@@ -1923,6 +2550,10 @@ function buildSiteSummary({
     discovered_competitor_count: discoveredCompetitors.length,
     competitor_pages_reviewed: competitorPageSnapshots.length,
     broken_links_count: brokenLinks.length,
+    client_rendering_detected: Boolean(clientRendering?.detected),
+    client_rendered_pages: clientRendering?.flagged_pages?.length || 0,
+    competitor_comparison_available: Boolean(competitorComparison),
+    competitor_topic_gaps_found: competitorComparison?.topic_gaps?.length || 0,
     html_only_scan: true,
     javascript_rendering_used: false,
     deterministic_scan: true,
@@ -1942,6 +2573,8 @@ function calculateHealthScore(findings) {
   return Math.max(45, Math.min(100, score));
 }
 
+/* ------------------------------ Helpers -------------------------------- */
+
 function priorityScore(url) {
   const path = getPath(url).toLowerCase();
 
@@ -1955,20 +2588,16 @@ function priorityScore(url) {
   return 50;
 }
 
-function sortQueue(queue) {
-  queue.sort((a, b) => {
-    if (b.priority !== a.priority) return b.priority - a.priority;
-    return String(a.url).localeCompare(String(b.url));
-  });
-}
-
+// Priority scores are computed once per URL, not once per comparison.
 function stableSortUrls(urls) {
-  return Array.from(new Set((urls || []).map(canonicalizeUrl).filter(Boolean)))
-    .sort((a, b) => {
-      const priorityDiff = priorityScore(b) - priorityScore(a);
-      if (priorityDiff !== 0) return priorityDiff;
-      return a.localeCompare(b);
-    });
+  const unique = Array.from(
+    new Set((urls || []).map(canonicalizeUrl).filter(Boolean))
+  );
+
+  return unique
+    .map((url) => ({ url, priority: priorityScore(url) }))
+    .sort((a, b) => b.priority - a.priority || a.url.localeCompare(b.url))
+    .map((item) => item.url);
 }
 
 function normalizeStartUrl(input) {
@@ -2077,7 +2706,13 @@ function isUtilityPath(path) {
 }
 
 function isImportantPage(path, title = "", h1 = "") {
+  if (path === "/") return true;
   return IMPORTANT_PAGE_RE.test(`${path}|${title}|${h1}`);
+}
+
+function isServiceLikePage(path, title = "", h1 = "") {
+  if (path === "/") return true;
+  return SERVICE_LIKE_RE.test(`${path}|${title}|${h1}`);
 }
 
 function extractVisibleText(html) {
@@ -2136,9 +2771,7 @@ function extractImages(html, baseUrl = "") {
       matchFirst(tag, /data-lazy-src=["']([^"']+)["']/i) ||
       "";
 
-    const alt = cleanText(
-      decodeHtml(matchFirst(tag, /alt=["']([^"']*)["']/i))
-    );
+    const alt = cleanText(decodeHtml(matchFirst(tag, /alt=["']([^"']*)["']/i)));
 
     images.push({
       src: src ? absolutizeUrl(src, baseUrl) : "",
@@ -2248,18 +2881,36 @@ function detectCtas(text) {
 }
 
 function detectPlaceholderText(text) {
-  const patterns = [
-    [/\bgvar\+?\b/i, "gvar"],
-    [/\bundefined\b/i, "undefined"],
-    [/\bnull\b/i, "null"],
-    [/\bNaN\b/i, "NaN"],
-    [/\[object Object\]/i, "[object Object]"],
-    [/\{\{[^}]*\}\}/i, "{{ }}"],
-    [/lorem ipsum/i, "lorem ipsum"],
-    [/\bplaceholder\b/i, "placeholder"],
-  ];
+  const hits = [];
+  let strong = false;
 
-  return patterns.filter(([re]) => re.test(text)).map(([, label]) => label).sort();
+  for (const [re, label] of PLACEHOLDER_STRONG) {
+    if (re.test(text)) {
+      hits.push(label);
+      strong = true;
+    }
+  }
+
+  for (const [re, label] of PLACEHOLDER_WEAK) {
+    if (re.test(text)) hits.push(label);
+  }
+
+  return { hits: hits.sort(), strong };
+}
+
+function normalizeHeading(heading) {
+  // \p{L}/\p{N} keep accented characters intact (important for non-English sites).
+  return cleanText(heading)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function median(numbers) {
+  const sorted = numbers.filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
+  if (sorted.length === 0) return 0;
+  return sorted[Math.floor(sorted.length / 2)];
 }
 
 function suggestSearchTitle(page, businessName, businessType, city) {
@@ -2468,6 +3119,20 @@ function formatDomainName(domain) {
 
 function escapeRegExp(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function joinHumanList(items) {
+  const clean = (items || []).filter(Boolean);
+
+  if (clean.length === 0) return "";
+  if (clean.length === 1) return clean[0];
+  if (clean.length === 2) return `${clean[0]} and ${clean[1]}`;
+
+  return `${clean.slice(0, -1).join(", ")}, and ${clean[clean.length - 1]}`;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function withTimeout(promise, ms, label = "Operation") {

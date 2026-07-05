@@ -8,91 +8,33 @@ import ScanHistory from "@/components/dashboard/ScanHistory";
 import GroupedFixModal from "@/components/fixlist/GroupedFixModal";
 import RecommendationCard from "@/components/fixlist/RecommendationCard";
 import { groupIssuesByPage } from "@/lib/friendlyLabels";
+import {
+  ACTIVE_STATUSES,
+  BUCKETS,
+  countBuckets,
+  getFirstStep,
+  getIssueBucket,
+  resolveActiveProject,
+} from "@/lib/appModel";
 
-const SECTIONS = [
-  {
-    key: "auto_fixed",
-    title: "Prepared",
-    subtitle: "Recommendations prepared for review.",
-    empty: "Nothing is prepared right now.",
-  },
-  {
-    key: "needs_approval",
-    title: "Needs review",
-    subtitle: "Items that need your decision.",
-    empty: "Nothing needs review right now.",
-  },
-  {
-    key: "needs_developer",
-    title: "May need help",
-    subtitle: "Larger improvements for a website editor or done-for-you help.",
-    empty: "No larger improvements found right now.",
-  },
-];
-
-const ACTIVE_STATUSES = new Set([
-  "auto_fixed",
-  "needs_approval",
-  "needs_developer",
-  "open",
-  "in_progress",
-]);
-
-function getIssueBucket(issue) {
-  if (issue.status === "auto_fixed") return "auto_fixed";
-  if (issue.status === "needs_approval") return "needs_approval";
-  if (issue.status === "needs_developer") return "needs_developer";
-
-  if (issue.requires_developer) return "needs_developer";
-  if (issue.requires_approval) return "needs_approval";
-  if (issue.can_auto_fix) return "auto_fixed";
-
-  return "needs_approval";
-}
-
-function getFirstStep(counts) {
-  if (counts.needs_approval > 0) {
-    return "Start with the items that need your review.";
-  }
-
-  if (counts.needs_developer > 0) {
-    return "Start with the improvements that may need help.";
-  }
-
-  if (counts.auto_fixed > 0) {
-    return "Start by reviewing your prepared recommendations.";
-  }
-
-  return "Your scan looks clean based on the website content we reviewed.";
-}
-
-function getBusinessLabel(project) {
-  return project?.business_name || "your website";
-}
+// The three sections come from the shared model so the Dashboard and the
+// Fix List always use the same titles and the same order.
+const SECTIONS = BUCKETS;
 
 function CounterRow({ counts }) {
   return (
     <div className="grid divide-y divide-slate-100 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-      <div className="flex items-center justify-between px-5 py-4 sm:block sm:px-6">
-        <p className="text-sm text-slate-500">Prepared</p>
-        <p className="text-xl font-semibold text-slate-950 sm:mt-1">
-          {counts.auto_fixed}
-        </p>
-      </div>
-
-      <div className="flex items-center justify-between px-5 py-4 sm:block sm:px-6">
-        <p className="text-sm text-slate-500">Needs review</p>
-        <p className="text-xl font-semibold text-slate-950 sm:mt-1">
-          {counts.needs_approval}
-        </p>
-      </div>
-
-      <div className="flex items-center justify-between px-5 py-4 sm:block sm:px-6">
-        <p className="text-sm text-slate-500">May need help</p>
-        <p className="text-xl font-semibold text-slate-950 sm:mt-1">
-          {counts.needs_developer}
-        </p>
-      </div>
+      {SECTIONS.map((section) => (
+        <div
+          key={section.key}
+          className="flex items-center justify-between px-5 py-4 sm:block sm:px-6"
+        >
+          <p className="text-sm text-slate-500">{section.title}</p>
+          <p className="text-xl font-semibold text-slate-950 sm:mt-1">
+            {counts[section.key]}
+          </p>
+        </div>
+      ))}
     </div>
   );
 }
@@ -104,7 +46,7 @@ function EmptyProjectState({ onScan }) {
         Add your website to start.
       </h2>
       <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-600">
-        Enter your website and we’ll prepare a simple Fix List.
+        Enter your website and we&rsquo;ll prepare a simple Fix List.
       </p>
       <Button
         onClick={onScan}
@@ -217,31 +159,8 @@ export default function FixList() {
 
     const load = async () => {
       try {
-        const user = await base44.auth.me();
-        const activeProjectId = window.localStorage.getItem("active_project_id");
-        let activeProject = null;
-
-        if (activeProjectId) {
-          try {
-            activeProject =
-              await base44.entities.BusinessProject.get(activeProjectId);
-          } catch {}
-        }
-
-        if (!activeProject) {
-          const projects = await base44.entities.BusinessProject.list(
-            "-last_crawl_at",
-            10
-          );
-
-          activeProject =
-            projects.find(
-              (item) =>
-                item.owner_user_id === user.id || item.created_by_id === user.id
-            ) ||
-            projects[0] ||
-            null;
-        }
+        const { user, project: activeProject } =
+          await resolveActiveProject(base44);
 
         if (!activeProject) {
           setLoading(false);
@@ -249,7 +168,6 @@ export default function FixList() {
         }
 
         setProject(activeProject);
-        window.localStorage.setItem("active_project_id", activeProject.id);
 
         const [issueData, insights, keywordGaps] = await Promise.all([
           base44.entities.SeoIssue.filter({
@@ -284,24 +202,13 @@ export default function FixList() {
     load();
   }, []);
 
-  const counts = useMemo(() => {
-    return issues.reduce(
-      (acc, issue) => {
-        const bucket = getIssueBucket(issue);
-        acc[bucket] += 1;
-        return acc;
-      },
-      {
-        auto_fixed: 0,
-        needs_approval: 0,
-        needs_developer: 0,
-      }
-    );
-  }, [issues]);
+  const counts = useMemo(() => countBuckets(issues), [issues]);
 
   const issuesBySection = useMemo(() => {
     return {
-      auto_fixed: issues.filter((issue) => getIssueBucket(issue) === "auto_fixed"),
+      auto_fixed: issues.filter(
+        (issue) => getIssueBucket(issue) === "auto_fixed"
+      ),
       needs_approval: issues.filter(
         (issue) => getIssueBucket(issue) === "needs_approval"
       ),
@@ -385,7 +292,9 @@ export default function FixList() {
               Fix List
             </h1>
             <p className="mt-2 text-base leading-7 text-slate-500">
-              SEO Autopilot scans your website, reviews important pages, looks for competitor opportunities when possible, and prepares a simple Fix List.
+              SEO Autopilot scans your website, reviews important pages, looks
+              for competitor opportunities when possible, and prepares a simple
+              Fix List.
             </p>
           </div>
 

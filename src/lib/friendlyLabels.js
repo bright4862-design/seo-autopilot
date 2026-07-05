@@ -31,6 +31,7 @@ export function friendlyCategory(category) {
     robots_txt: "Website setup",
     js_rendering: "Website setup",
     duplicate_content: "Page content",
+    image_alt_text: "Images",
   };
 
   return map[category] || "Website improvement";

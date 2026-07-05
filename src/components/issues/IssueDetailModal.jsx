@@ -90,7 +90,7 @@ export default function IssueDetailModal({ issue, onClose, onStatusUpdate }) {
 
           {/* Flags */}
           <div className="flex flex-wrap gap-2">
-            {issue.can_auto_fix && <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">✓ Can be auto-fixed</span>}
+            {issue.can_auto_fix && <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">✓ Prepared for you</span>}
             {issue.requires_approval && <span className="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded-full">⏳ Requires your approval</span>}
             {issue.requires_developer && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded-full">🔧 Needs a developer</span>}
           </div>

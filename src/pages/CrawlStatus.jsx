@@ -188,6 +188,9 @@ export default function CrawlStatus() {
           crawl_job_id: job.id,
         });
         const scanData = res.data || {};
+        if (scanData.error) {
+          throw new Error(scanData.error);
+        }
         realFixes = scanData.fixes || [];
         crawledPagesData = scanData.crawled_pages || [];
         if (typeof scanData.health_score === 'number') healthScore = scanData.health_score;

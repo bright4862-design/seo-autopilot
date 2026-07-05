@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2, Zap, Star } from "lucide-react";
@@ -14,12 +15,14 @@ const plans = [
     id: "diy", name: "DIY SEO Autopilot", price: "$20", period: "/month",
     desc: "Fix SEO issues yourself with AI guidance",
     features: ["Monthly full-site crawl", "Up to 250 pages", "Up to 25 JS-rendered pages", "AI meta titles & descriptions", "404 detection", "Redirect recommendations", "Canonical & sitemap checks", "3 competitor benchmarks", "Monthly SEO report"],
-    popular: true
+    popular: true,
+    comingSoon: true
   },
   {
     id: "growth", name: "Growth", price: "$49", period: "/month",
     desc: "More pages, more competitors, more insights",
-    features: ["Weekly crawl", "Up to 1,000 pages", "Up to 100 JS-rendered pages", "5 competitor benchmarks", "Priority AI recommendations", "Google Search Console (coming soon)", "Everything in DIY"]
+    features: ["Weekly crawl", "Up to 1,000 pages", "Up to 100 JS-rendered pages", "5 competitor benchmarks", "Priority AI recommendations", "Google Search Console (coming soon)", "Everything in DIY"],
+    comingSoon: true
   },
   {
     id: "done_for_you", name: "Done-for-You SEO Cleanup", price: "$500", period: " one-time",
@@ -34,6 +37,7 @@ const plans = [
 ];
 
 export default function Billing() {
+  const navigate = useNavigate();
   const [currentPlan, setCurrentPlan] = useState("free");
 
   useEffect(() => {
@@ -49,6 +53,13 @@ export default function Billing() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Billing & Plans</h1>
         <p className="text-sm text-gray-500 mt-1">Choose the plan that fits your business needs</p>
+      </div>
+
+      <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex items-start gap-3">
+        <Zap className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
+        <p className="text-sm text-blue-800 leading-relaxed">
+          Plans are coming soon. For now, you can run a free scan and request help manually.
+        </p>
       </div>
 
       <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
@@ -77,11 +88,17 @@ export default function Billing() {
                   </li>
                 ))}
               </ul>
-              {isCurrent ? (
+              {plan.id === "free" ? (
+                <Button className="w-full gradient-primary text-white border-0" onClick={() => navigate("/crawl-status")}>
+                  Run Free Scan
+                </Button>
+              ) : isCurrent ? (
                 <Button disabled variant="outline" className="w-full">Current Plan</Button>
+              ) : plan.comingSoon ? (
+                <Button disabled variant="outline" className="w-full">Join Waitlist</Button>
               ) : (
-                <Button className={`w-full ${plan.popular ? "gradient-primary text-white border-0" : ""}`} variant={plan.popular ? "default" : "outline"}>
-                  {plan.price === "Custom" ? "Contact Us" : plan.price === "Free" ? "Downgrade" : "Upgrade"}
+                <Button variant="outline" className="w-full">
+                  {plan.id === "done_for_you" ? "Request Cleanup" : "Contact Us"}
                 </Button>
               )}
             </div>

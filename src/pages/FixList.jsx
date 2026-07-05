@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import IssueDetailModal from "@/components/issues/IssueDetailModal";
+import ScanHistory from "@/components/dashboard/ScanHistory";
 import {
   Search, CheckCircle2, Bell, Wrench, ChevronRight, RefreshCw, Loader2, Sparkles, ListChecks,
 } from "lucide-react";
@@ -174,6 +175,8 @@ export default function FixList() {
           })}
         </div>
       )}
+
+      <ScanHistory projectId={project.id} currentSeoScore={project.seo_score} />
 
       {selectedIssue && (
         <IssueDetailModal

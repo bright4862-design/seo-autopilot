@@ -131,8 +131,8 @@ export default function CrawlStatus() {
     if (!project) return;
     setSimulating(true);
     setError(null);
+    let job = existingJob;
     try {
-      let job = existingJob;
       if (!job) {
         job = await base44.entities.CrawlJob.create({
           project_id: project.id,
@@ -267,6 +267,9 @@ export default function CrawlStatus() {
       const finalJob = await base44.entities.CrawlJob.update(job.id, {
         pages_found: pagesCrawled,
         pages_crawled: pagesCrawled,
+        seo_score: healthScore,
+        issues_found: sourceFixes.length,
+        error_message: "",
       });
       setCrawlJob(finalJob);
 
@@ -276,6 +279,16 @@ export default function CrawlStatus() {
       });
     } catch (err) {
       console.error("Crawl simulation failed", err);
+      if (job) {
+        try {
+          const failed = await base44.entities.CrawlJob.update(job.id, {
+            status: "failed",
+            completed_at: new Date().toISOString(),
+            error_message: err.message || "Scan failed",
+          });
+          setCrawlJob(failed);
+        } catch (e) {}
+      }
       setError(err.message || "Something went wrong during the crawl. Please try again.");
     } finally {
       setSimulating(false);

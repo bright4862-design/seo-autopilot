@@ -52,6 +52,12 @@
     },
     "error_message": {
       "type": "string"
+    },
+    "seo_score": {
+      "type": "number"
+    },
+    "issues_found": {
+      "type": "number"
     }
   },
   "required": [

@@ -1,0 +1,94 @@
+{
+  "name": "ScanDiagnostic",
+  "type": "object",
+  "properties": {
+    "owner_user_id": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "crawl_job_id": {
+      "type": "string"
+    },
+    "scan_source": {
+      "type": "string"
+    },
+    "raw_findings_count": {
+      "type": "number",
+      "default": 0
+    },
+    "grouped_findings_count": {
+      "type": "number",
+      "default": 0
+    },
+    "broken_links_count": {
+      "type": "number",
+      "default": 0
+    },
+    "pages_crawled": {
+      "type": "number",
+      "default": 0
+    },
+    "pages_found": {
+      "type": "number",
+      "default": 0
+    },
+    "health_score": {
+      "type": "number",
+      "default": 0
+    },
+    "crawl_warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "site_summary": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
+    "created_at": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "crawl_job_id",
+    "scan_source",
+    "created_at"
+  ],
+  "rls": {
+    "create": {
+      "$or": [
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        },
+        {
+          "user_condition": {
+            "role": "user"
+          }
+        }
+      ]
+    },
+    "read": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

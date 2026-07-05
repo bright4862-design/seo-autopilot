@@ -212,6 +212,24 @@ export default function CrawlStatus() {
         issuesFound = realFixes.length;
         summary = summarizeFixes(realFixes);
 
+        try {
+          await base44.entities.ScanDiagnostic.create({
+            project_id: proj.id,
+            crawl_job_id: job.id,
+            owner_user_id: me.id,
+            scan_source: "runAdvancedScan",
+            raw_findings_count: Array.isArray(scanData.raw_findings) ? scanData.raw_findings.length : 0,
+            grouped_findings_count: Array.isArray(scanData.grouped_findings) ? scanData.grouped_findings.length : 0,
+            broken_links_count: Array.isArray(scanData.broken_links) ? scanData.broken_links.length : 0,
+            pages_crawled: typeof scanData.pages_crawled === "number" ? scanData.pages_crawled : 0,
+            pages_found: typeof scanData.pages_found === "number" ? scanData.pages_found : 0,
+            health_score: typeof scanData.health_score === "number" ? scanData.health_score : 0,
+            crawl_warnings: Array.isArray(scanData.crawl_warnings) ? scanData.crawl_warnings : [],
+            site_summary: scanData.site_summary || {},
+            created_at: new Date().toISOString(),
+          });
+        } catch (e) {}
+
         let topActions = [];
         let positiveFindings = Array.isArray(scanData.site_summary?.positives) ? scanData.site_summary.positives : [];
         let aiSummary = "";

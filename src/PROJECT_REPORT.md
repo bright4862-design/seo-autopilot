@@ -5,18 +5,18 @@
 SEO Autopilot is an AI-powered SEO assistant for small business owners. A user signs up, enters their business name and website URL (plus optional competitors), and the app scans their site, has AI review the findings, compares the site to competitors, and produces a short, plain-English action plan — no technical jargon, no overwhelm. It never claims to modify the customer's website; it prepares recommendations for review.
 
 ## The intelligence pipeline (core differentiator)
-The product is built as a four-stage pipeline:
+The product is built as a four-stage pipeline, with each stage a separate, testable step:
 
-1. **Crawler — collects facts.** A real crawler fetches up to 25 pages of the actual website (following internal links) and extracts titles, descriptions, headings, canonical signals, word counts, link structure, and broken pages (404s).
-2. **Rules — find obvious issues.** Fast deterministic checks flag missing/weak titles, missing descriptions, duplicate-page signals, broken pages, and thin content on important pages. Low-value utility pages (cart, checkout, login, account, search, privacy, terms, thank-you, payment, admin, legal, etc.) are automatically excluded unless broken, and identical issues are deduplicated before anything is saved.
-3. **AI review — filters, groups, rewrites, prioritizes, explains.** A single AI strategist pass per scan receives the business context (name, type, city), all crawled pages, the raw rule findings, and competitor results, and returns structured JSON with:
+1. **Crawler — collects facts.** A real crawler (backend function `runRealScan`) fetches up to 25 pages of the actual website by following internal links and extracts titles, descriptions, headings, canonical signals, word counts, link structure, and broken pages (404s).
+2. **Rules — find obvious issues.** Fast deterministic checks inside the same function flag missing/weak titles, missing descriptions, duplicate-page signals, broken pages, and thin content on important pages. Low-value utility pages (cart, checkout, login, account, search, privacy, terms, thank-you, payment, admin, legal, etc.) are automatically excluded unless broken, and identical issues are deduplicated before anything is saved.
+3. **AI review — a dedicated second step.** A separate backend function (`aiReviewScan`) is called by the app after the crawl completes. It receives the business context (name, type, city), all crawled pages, the raw rule findings, and competitor results, makes one AI strategist call, and returns structured JSON:
    - **cleaned_fixes** — duplicates merged, utility-page noise removed, business-important pages first, every issue rewritten in warm plain English with business-specific recommended titles and descriptions
    - **top_recommended_actions** — 2–4 prioritized next steps, each with a title, a reason, and a priority
    - **grouped_page_recommendations** — related fixes for the same page merged into one page-level recommendation
    - **ignored_low_value_pages** — transparency about what was skipped and why
    - **plain_english_summary** — a 2–3 sentence owner-friendly summary of the scan
-   The AI is instructed to never claim anything was fixed or published, never promise rankings, and to use honest language ("prepared", "recommended", "may help").
-4. **UI — shows the few best next actions.** If AI review fails for any reason, the app silently falls back to the filtered, deduplicated rule-based results, so a scan always completes.
+   The AI is instructed to never claim anything was fixed or published, never promise rankings, and to use honest language ("prepared", "recommended", "may help"). The AI's output is validated against the app's allowed categories and statuses before being saved; the health score and summary counts are recomputed from the reviewed fixes.
+4. **UI — shows the few best next actions.** If the AI review fails or returns nothing usable, the app silently falls back to the filtered, deduplicated rule-based results — a scan always completes.
 
 ## Other AI abilities in the product
 - **AI-written recommendations** — search titles and descriptions are generated specifically for the business (name, type, city), not generic templates.
@@ -34,6 +34,13 @@ The product is built as a four-stage pipeline:
 7. **Website Improvements** — recommendations requiring developer work, categorized, with suggested packages (DIY / $500 Cleanup / Custom Quote).
 8. **Scan Report** — summary reports with score, counts, competitor insights, next steps, and a one-click plain-English PDF export.
 9. **AI Assistant** — in-app chat for SEO questions.
+
+## Backend functions
+- `runRealScan` — crawls the website and applies deterministic SEO rules (stages 1–2).
+- `aiReviewScan` — the AI strategist review pass (stage 3), called by the app after each scan.
+- `scanCompetitors` — crawls and scores competitor websites, generates gap insights.
+- `generateReport` — builds a scan report record from the latest results.
+- `startCrawl`, `getCrawlStatus` — scan job management.
 
 ## Navigation (customer-facing)
 Fix List · New Scan · Competitors · Website Improvements · Scan Report · Assistant · Billing & Plans · Admin (admins only)

@@ -66,6 +66,43 @@ Added a persistent info box on the Crawl Status page (visible throughout the sca
 
 Added `Info` icon import from lucide-react.
 
+### 4. Redesigned Scan Complete summary box
+The post-scan "complete" state on the Crawl Status page was redesigned:
+
+- Heading: "Your scan is complete."
+- Subtext: "We scanned N pages and found N recommended improvements."
+- Three colored count cards:
+  - **Prepared for you** (green) — `summary.we_can_fix`
+  - **Needs your approval** (amber) — `summary.needs_approval`
+  - **Needs a developer** (purple) — `summary.needs_developer`
+- Removed the old SEO Score / Fixes Ready stat tiles and the green-tinted full-width card.
+
+### 5. Dynamic "Top recommended actions" panel (replaces fixed list)
+The Scan Complete box now shows a **dynamic** list of recommended next actions based on which issue types were actually found. Actions appear in priority order and only when relevant:
+
+| Condition | Action shown |
+|-----------|--------------|
+| `summary.needs_approval > 0` | "Review approval items first" |
+| `summary.needs_developer > 0` | "Review developer recommendations" |
+| `summary.we_can_fix > 0` | "Review prepared titles and descriptions" |
+| `issues_found === 0` | "No major issues found. Your site is looking good!" (label becomes "Status") |
+
+Implementation: a `topActions` array is built by pushing each applicable action string in order; the panel header reads "Top recommended actions" (or "Status" when no issues), and when no issues were found it renders the single all-clear message instead of a numbered list.
+
+### 6. Demo fallback no longer misleads on a clean site
+Previously, if `runRealScan` succeeded but returned 0 issues, the Fix List would still be populated with the 8 hardcoded `SCAN_ISSUES` demo items — causing a mismatch (summary says "0 issues" but Fix List shows 8). Fixed by introducing a `scanSucceeded` flag: the demo fallback (`SCAN_ISSUES`) is now used **only** when `runRealScan` throws an error. When the demo fallback is used, `scanResult` is set with matching counts so the summary cards stay consistent with the Fix List.
+
+### 7. Demo fallback wording no longer implies the site was changed
+Updated the demo `SCAN_ISSUES` strings in `CrawlStatus.jsx` so they never imply the website was already modified (the app does not actually edit the user's site):
+
+| Old | New |
+|-----|-----|
+| "We generated one for you." | "We prepared one for you." |
+| "We auto-generated a title using your business name and services." | "We prepared a title using your business name and services." |
+| "We removed the broken link." | "We flagged the broken link for removal." |
+| "We removed the broken link automatically." | "We flagged this broken link for removal." |
+| "We wrote a description highlighting your experience and service area — approve it to apply." | "We prepared a description highlighting your experience and service area — approve it to apply." |
+
 ---
 
 ## Current Architecture (unchanged)

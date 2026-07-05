@@ -5,8 +5,11 @@ import { Button } from "@/components/ui/button";
 import IssueDetailModal from "@/components/issues/IssueDetailModal";
 import ScanHistory from "@/components/dashboard/ScanHistory";
 import WhatToDoFirst from "@/components/dashboard/WhatToDoFirst";
+import FixCard from "@/components/fixlist/FixCard";
+import GroupedFixCard from "@/components/fixlist/GroupedFixCard";
+import GroupedFixModal from "@/components/fixlist/GroupedFixModal";
 import {
-  Search, CheckCircle2, Bell, Wrench, ChevronRight, RefreshCw, Loader2, Sparkles, ListChecks,
+  Search, CheckCircle2, Bell, Wrench, RefreshCw, Sparkles, ListChecks,
 } from "lucide-react";
 
 const CATEGORIES = [
@@ -48,6 +51,7 @@ export default function FixList() {
   const [issues, setIssues] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedIssue, setSelectedIssue] = useState(null);
+  const [selectedGroup, setSelectedGroup] = useState(null);
 
   useEffect(() => {
     const load = async () => {
@@ -69,6 +73,22 @@ export default function FixList() {
   };
 
   const startScan = () => navigate("/crawl-status?autostart=1");
+
+  // Group multiple prepared fixes for the same page into one card
+  const renderItems = (catKey, items) => {
+    if (catKey === "auto_fixed") {
+      const byPage = {};
+      items.forEach(i => { (byPage[i.page_url] = byPage[i.page_url] || []).push(i); });
+      return Object.entries(byPage).map(([url, group]) =>
+        group.length > 1
+          ? <GroupedFixCard key={url} group={group} onClick={() => setSelectedGroup(group)} />
+          : <FixCard key={group[0].id} issue={group[0]} onClick={() => setSelectedIssue(group[0])} />
+      );
+    }
+    return items.map(issue => (
+      <FixCard key={issue.id} issue={issue} onClick={() => setSelectedIssue(issue)} />
+    ));
+  };
 
   if (loading) {
     return (
@@ -127,9 +147,20 @@ export default function FixList() {
 
       {issues.length === 0 ? (
         <div className="bg-white rounded-2xl border border-gray-100 p-10 text-center">
-          <Sparkles className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-          <h3 className="font-semibold text-gray-800 mb-1">No issues yet</h3>
-          <p className="text-sm text-gray-500 mb-5">Run your first scan to see a list of simple fixes.</p>
+          {project.last_crawl_at ? (
+            <>
+              <CheckCircle2 className="w-10 h-10 text-green-500 mx-auto mb-3" />
+              <h3 className="font-semibold text-gray-800 mb-1">Your scan looks clean</h3>
+              <p className="text-sm text-gray-500">Your scan looks clean based on the accessible HTML we reviewed.</p>
+              <p className="text-sm text-gray-500 mb-5">Want a deeper review? Add competitors or request a manual review.</p>
+            </>
+          ) : (
+            <>
+              <Sparkles className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+              <h3 className="font-semibold text-gray-800 mb-1">No issues yet</h3>
+              <p className="text-sm text-gray-500 mb-5">Run your first scan to see a list of simple fixes.</p>
+            </>
+          )}
           <Button onClick={startScan} className="gradient-primary text-white border-0">
             <Search className="w-4 h-4 mr-2" /> Scan My Website
           </Button>
@@ -158,19 +189,7 @@ export default function FixList() {
                   <p className="text-sm text-gray-400 px-4 py-6 text-center">{cat.empty}</p>
                 ) : (
                   <div className="divide-y divide-gray-50">
-                    {items.map(issue => (
-                      <button
-                        key={issue.id}
-                        onClick={() => setSelectedIssue(issue)}
-                        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors"
-                      >
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-800 truncate">{issue.issue_title}</p>
-                          <p className="text-xs text-gray-400 truncate">{issue.page_url}</p>
-                        </div>
-                        <ChevronRight className="w-4 h-4 text-gray-300 flex-shrink-0" />
-                      </button>
-                    ))}
+                    {renderItems(cat.key, items)}
                   </div>
                 )}
               </div>
@@ -185,6 +204,14 @@ export default function FixList() {
         <IssueDetailModal
           issue={selectedIssue}
           onClose={() => setSelectedIssue(null)}
+          onStatusUpdate={handleStatusUpdate}
+        />
+      )}
+
+      {selectedGroup && (
+        <GroupedFixModal
+          group={selectedGroup}
+          onClose={() => setSelectedGroup(null)}
           onStatusUpdate={handleStatusUpdate}
         />
       )}

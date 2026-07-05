@@ -198,7 +198,7 @@ export default function CrawlStatus() {
         if (typeof scanData.issues_found === 'number') issuesFound = scanData.issues_found;
         if (scanData.summary && typeof scanData.summary === 'object') summary = scanData.summary;
         scanSucceeded = true;
-        setScanResult({ fixes: realFixes, health_score: healthScore, pages_crawled: pagesCrawled, issues_found: issuesFound, summary });
+        setScanResult({ fixes: realFixes, health_score: healthScore, pages_crawled: pagesCrawled, issues_found: issuesFound, summary, top_actions: scanData.top_actions || [] });
       } catch (e) {
         console.error('runRealScan failed, using demo fixes', e);
       }
@@ -319,10 +319,11 @@ export default function CrawlStatus() {
 
   const currentIdx = crawlJob ? CRAWL_STEPS.findIndex(s => s.key === crawlJob.status) : -1;
 
-  const topActions = [];
-  if ((scanResult?.summary?.needs_approval ?? 0) > 0) topActions.push("Review approval items first");
-  if ((scanResult?.summary?.needs_developer ?? 0) > 0) topActions.push("Review developer recommendations");
-  if ((scanResult?.summary?.we_can_fix ?? 0) > 0) topActions.push("Review prepared titles and descriptions");
+  const derivedActions = [];
+  if ((scanResult?.summary?.needs_approval ?? 0) > 0) derivedActions.push("Review approval items first");
+  if ((scanResult?.summary?.needs_developer ?? 0) > 0) derivedActions.push("Review developer recommendations");
+  if ((scanResult?.summary?.we_can_fix ?? 0) > 0) derivedActions.push("Review prepared titles and descriptions");
+  const topActions = scanResult?.top_actions?.length ? scanResult.top_actions : derivedActions;
   const hasNoIssues = (scanResult?.issues_found ?? 0) === 0;
 
   if (loading) {

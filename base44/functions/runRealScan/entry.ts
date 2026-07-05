@@ -172,15 +172,17 @@ Deno.serve(async (req) => {
         });
       }
 
-      if (p.wordCount < 150 && p.status !== 404 && p.status !== 0) {
+      const utilityRe = /\/(contact|login|signin|signup|register|cart|checkout|privacy|terms|thank-you|thankyou|booking|account|search|tag|category|admin|wp-admin|dashboard|forgot|reset|cookie|legal|disclaimer)(\/|$)/i;
+      const importantRe = /(^\/$)|(home|service|services|product|products|about|location|locations|contact|book|booking|appointment|pricing|packages|service-area|areas-we-serve)/i;
+      if (p.status === 200 && p.wordCount < 250 && !utilityRe.test(pageUrl) && importantRe.test(pageUrl + '|' + (p.title || '') + '|' + (p.h1 || ''))) {
         issues.push({
           page_url: pageUrl, category: 'thin_content', customer_category: 'Page content',
-          issue_title: 'This page may not have enough helpful content',
-          plain_english_explanation: 'This page is very short and may not answer enough customer questions.',
+          issue_title: 'This important page may need more helpful content',
+          plain_english_explanation: 'This page looks important, but it may not give customers enough information to understand the service, location, benefits, or next step.',
           why_it_matters: 'Helpful pages usually explain the service, location, benefits, and common questions.',
-          ai_recommendation: 'Add more useful information, customer questions, service details, and a clear call to action.',
-          current_value: `${p.wordCount} words`, recommended_value: '300+ words with service details & FAQ',
-          priority: 'high', difficulty: 'developer', group: 'needs_developer',
+          ai_recommendation: 'Add helpful details such as services offered, location served, common questions, proof or reviews, and a clear call-to-action.',
+          current_value: `${p.wordCount} words`, recommended_value: '250+ words with service details & FAQ',
+          priority: 'medium', difficulty: 'developer', group: 'needs_developer',
           can_auto_fix: false, requires_approval: false, requires_developer: true,
         });
       }

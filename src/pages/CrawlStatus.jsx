@@ -3,7 +3,7 @@ import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import {
   Search, FileText, Code, Globe, ArrowRightLeft, BarChart3,
-  Zap, CheckCircle2, Loader2, Circle, Clock, AlertTriangle
+  Zap, CheckCircle2, Loader2, Circle, Clock, AlertTriangle, Info
 } from "lucide-react";
 
 const CRAWL_STEPS = [
@@ -349,6 +349,14 @@ export default function CrawlStatus() {
             );
           })}
         </div>
+      </div>
+
+      {/* Scan note */}
+      <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex items-start gap-3">
+        <Info className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
+        <p className="text-xs text-blue-700 leading-relaxed">
+          This scan checks the website HTML we can access directly. Some websites load important content after JavaScript runs, so deeper JavaScript rendering may require a developer review or upgraded scan.
+        </p>
       </div>
 
       {/* Stats when complete */}

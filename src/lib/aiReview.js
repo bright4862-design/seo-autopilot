@@ -37,6 +37,8 @@ export async function reviewFixesWithAi({ project, crawledPages, rawFixes }) {
   return {
     fixes: cleaned,
     topActions: Array.isArray(ai.top_recommended_actions) ? ai.top_recommended_actions : [],
+    positiveFindings: Array.isArray(ai.positive_findings) ? ai.positive_findings : [],
+    aiSummary: typeof ai.plain_english_summary === "string" ? ai.plain_english_summary : "",
   };
 }
 

@@ -194,6 +194,10 @@ Deno.serve(async (req) => {
               },
               required: ['page_url', 'reason']
             }
+          },
+          positive_findings: {
+            type: 'array',
+            items: { type: 'string' }
           }
         },
         required: [
@@ -201,7 +205,8 @@ Deno.serve(async (req) => {
           'top_recommended_actions',
           'cleaned_fixes',
           'grouped_page_recommendations',
-          'ignored_low_value_pages'
+          'ignored_low_value_pages',
+          'positive_findings'
         ]
       }
     });
@@ -223,7 +228,9 @@ Deno.serve(async (req) => {
       grouped_page_recommendations:
         aiResponse.grouped_page_recommendations || [],
       ignored_low_value_pages:
-        aiResponse.ignored_low_value_pages || []
+        aiResponse.ignored_low_value_pages || [],
+      positive_findings:
+        aiResponse.positive_findings || []
     });
   } catch (error) {
     return Response.json({
@@ -301,6 +308,11 @@ Important rules:
 - Merge related issues for the same page into one grouped recommendation.
 - Make the output feel like a smart assistant reviewed the site, not like a raw crawler report.
 - Keep recommendations practical for a small business owner.
+- Be balanced: start the summary with what the site already does well, then frame remaining items as cleanup opportunities. Never make a healthy site sound broken. Example tone: "Your website has a solid SEO foundation with dedicated service pages and strong trust signals. The main opportunities are cleanup items: review search descriptions, fix placeholder-like content if visible, and have a developer review preferred-page settings."
+- positive_findings: if the site has dedicated service, product, or loan pages, include "Your site has a strong service-page foundation." If pages include reviews, proof numbers, testimonials, phone numbers, or clear calls to action, include "Your site already includes strong trust signals." Add other genuine strengths you notice. Return an empty array only if nothing positive stands out.
+- Preferred-page settings: if the raw fixes include duplicate-page / canonical findings, keep them merged as ONE fix titled "Review preferred-page settings across important pages" with the affected pages listed in current_value, status "needs_developer", priority "medium". Never create one card per page. In customer-facing text say "preferred-page settings", "main version of the page", or "duplicate-page settings" — mention "canonical" only inside recommended_value as a technical detail.
+- Placeholder text: if the raw fixes flag placeholder-like text (gvar, undefined, null, NaN, [object Object], {{ }}, lorem ipsum, placeholder), keep it as ONE high-priority developer fix titled "Important numbers may not be showing correctly to search engines".
+- Search descriptions: for the homepage and service pages, write a recommended description specific to this business and page (use the crawled page titles/headings). Style example for a lender homepage: "Center Street Lending provides real estate investment loans for fix-and-flip, new construction, bridge, and short-term rental projects. Apply online or speak with a lending expert." Style example for a service page: "Explore fix-and-flip loans from Center Street Lending, including flexible rehab financing, competitive terms, in-house servicing, and fast investor-focused funding."
 
 Business name:
 ${business_name || ''}
@@ -373,7 +385,8 @@ Return this exact structure:
       "page_url": "",
       "reason": ""
     }
-  ]
+  ],
+  "positive_findings": [""]
 }
 `;
 }

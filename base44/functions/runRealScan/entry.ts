@@ -44,12 +44,19 @@ Deno.serve(async (req) => {
         firstMatch(html, /<link[^>]+rel=["']canonical["'][^>]*href=["']([^"']*)["']/i) ||
         firstMatch(html, /<link[^>]+href=["']([^"']*)["'][^>]+rel=["']canonical["']/i) ||
         '';
-      const wordCount = text(html).split(/\s+/).filter(Boolean).length;
+      const pageText = text(html);
+      const wordCount = pageText.split(/\s+/).filter(Boolean).length;
+      const placeholderPatterns = [
+        [/\bgvar\b/i, 'gvar'], [/\bundefined\b/, 'undefined'], [/\bnull\b/, 'null'], [/\bNaN\b/, 'NaN'],
+        [/\[object Object\]/, '[object Object]'], [/\{\{[^}]*\}\}/, '{{ }}'],
+        [/lorem ipsum/i, 'lorem ipsum'], [/\bplaceholder\b/i, 'placeholder'],
+      ];
+      const placeholderHits = placeholderPatterns.filter(([re]) => re.test(pageText)).map(([, label]) => label);
       const links = [];
       const linkRe = /<a[^>]+href=["']([^"']+)["']/gi;
       let lm;
       while ((lm = linkRe.exec(html)) !== null) links.push(lm[1]);
-      return { url, title, metaDesc, h1, canonical, wordCount, links };
+      return { url, title, metaDesc, h1, canonical, wordCount, links, placeholderHits };
     };
 
     // BFS crawl following internal links, up to MAX_PAGES
@@ -97,18 +104,24 @@ Deno.serve(async (req) => {
       return `${business_name} | Official Website`;
     };
 
-    const generateBasicDescription = () => {
-      const name = business_name || 'us';
-      const type = (business_type || '').toLowerCase();
-      if (business_type && city) return `Visit ${name} for trusted ${type} services in ${city}. Learn more, contact us, or request help today.`;
-      if (business_type) return `Visit ${name} for trusted ${type} services. Learn more, contact us, or request help today.`;
-      return `Visit ${name} to learn more about our services, contact our team, and get the help you need.`;
+    const describePage = (p, pageUrl) => {
+      const name = business_name || domain;
+      if (pageUrl === '/') {
+        const type = (business_type || 'services').toLowerCase();
+        if (city) return `${name} provides ${type} in ${city}. Learn more, get answers to common questions, or contact our team today.`;
+        return `${name} provides ${type}. Learn more, get answers to common questions, or contact our team today.`;
+      }
+      const seg = (pageUrl.split('/').filter(Boolean).pop() || '').replace(/[-_]/g, ' ');
+      const topic = ((p.h1 || p.title || seg).split('|')[0].trim() || 'this service').toLowerCase();
+      return `Learn about ${topic} from ${name} — what's included, key benefits, and how to get started.`;
     };
 
     // Utility pages: only flag when broken, never for titles/descriptions/content
     const lowValueRe = /(cart|checkout|login|signin|signup|register|account|search|privacy|terms|thank-?you|payment|admin|wp-admin|reset|forgot|cookie|legal|disclaimer)/i;
 
     const issues = [];
+    const canonicalPages = [];
+    const placeholderPages = [];
     for (const p of crawledPages) {
       const pageUrl = p.url === baseUrl ? '/' : (() => { try { return new URL(p.url).pathname; } catch { return p.url; } })();
       const isUtility = lowValueRe.test(pageUrl);
@@ -151,10 +164,10 @@ Deno.serve(async (req) => {
       }
 
       if (!isUtility && !p.metaDesc) {
-        const desc = generateBasicDescription();
+        const desc = describePage(p, pageUrl);
         issues.push({
           page_url: pageUrl, category: 'meta_description', customer_category: 'Search description',
-          issue_title: 'This page needs a better search description',
+          issue_title: "Improve this page's search description",
           plain_english_explanation: 'This page does not have a description for search results.',
           why_it_matters: 'A good description can help more people click your website from Google.',
           ai_recommendation: desc, current_value: '(empty)', recommended_value: desc,
@@ -163,17 +176,12 @@ Deno.serve(async (req) => {
         });
       }
 
-      if (!isUtility && !p.canonical) {
-        issues.push({
-          page_url: pageUrl, category: 'canonical', customer_category: 'Duplicate page signal',
-          issue_title: 'Google may be confused by duplicate page versions',
-          plain_english_explanation: 'This page does not clearly tell Google which version is the main version.',
-          why_it_matters: 'If Google finds multiple versions of the same page, it may not know which one to show.',
-          ai_recommendation: 'Set this page as the preferred version of itself.',
-          current_value: '(none)', recommended_value: 'Add a canonical tag',
-          priority: 'medium', difficulty: 'moderate', group: 'needs_approval',
-          can_auto_fix: false, requires_approval: true, requires_developer: false,
-        });
+      if (!isUtility && !p.canonical && !canonicalPages.includes(pageUrl)) {
+        canonicalPages.push(pageUrl);
+      }
+
+      if (!isUtility && p.status === 200 && (p.placeholderHits || []).length > 0 && !placeholderPages.some(x => x.page === pageUrl)) {
+        placeholderPages.push({ page: pageUrl, hits: p.placeholderHits });
       }
 
       const utilityRe = /\/(contact|login|signin|signup|register|cart|checkout|privacy|terms|thank-you|thankyou|booking|account|search|tag|category|admin|wp-admin|dashboard|forgot|reset|cookie|legal|disclaimer)(\/|$)/i;
@@ -190,6 +198,36 @@ Deno.serve(async (req) => {
           can_auto_fix: false, requires_approval: false, requires_developer: true,
         });
       }
+    }
+
+    // One grouped item for placeholder-like text found in accessible content
+    if (placeholderPages.length > 0) {
+      issues.push({
+        page_url: placeholderPages[0].page, category: 'web_dev', customer_category: 'Page content',
+        issue_title: 'Important numbers may not be showing correctly to search engines',
+        plain_english_explanation: 'We found placeholder-like text where important business proof or page content may belong. Visitors may see the page normally, but the accessible page content may not clearly show the final information.',
+        why_it_matters: 'Important proof points, service details, and trust signals should be easy for search engines and visitors to understand.',
+        ai_recommendation: 'Ask a developer to make sure the real text and numbers appear directly in the page content, not only through scripts or placeholders.',
+        current_value: 'Affected pages: ' + placeholderPages.map(p => `${p.page} (found: ${p.hits.join(', ')})`).join(' · '),
+        recommended_value: 'Real text and numbers visible directly in the page content',
+        priority: 'high', difficulty: 'developer', group: 'needs_developer',
+        can_auto_fix: false, requires_approval: false, requires_developer: true,
+      });
+    }
+
+    // One grouped item for preferred-page (canonical) settings instead of one card per page
+    if (canonicalPages.length > 0) {
+      issues.push({
+        page_url: canonicalPages[0], category: 'canonical', customer_category: 'Duplicate-page settings',
+        issue_title: 'Review preferred-page settings across important pages',
+        plain_english_explanation: 'Several important pages may not clearly tell search engines which version of the page is preferred. This is usually a website setup item, not an emergency.',
+        why_it_matters: 'When search engines know the main version of each page, they can show the right page in results.',
+        ai_recommendation: 'Ask your developer or SEO cleanup provider to add preferred-page settings to the affected pages.',
+        current_value: 'Affected pages: ' + canonicalPages.join(' · '),
+        recommended_value: 'Preferred-page settings on each affected page (technical detail: canonical tags)',
+        priority: 'medium', difficulty: 'developer', group: 'needs_developer',
+        can_auto_fix: false, requires_approval: false, requires_developer: true,
+      });
     }
 
     // --- deduplicate by page_url + category + issue_title ---

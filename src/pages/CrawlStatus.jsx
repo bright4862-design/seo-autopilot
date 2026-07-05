@@ -208,11 +208,15 @@ export default function CrawlStatus() {
 
         // AI review step: filter, group, rewrite and prioritize (falls back to raw scan results)
         let topActions = [];
+        let positiveFindings = [];
+        let aiSummary = "";
         try {
-          const reviewed = await reviewFixesWithAi({ project, crawledPages: crawledPagesData, rawFixes: realFixes });
+          const reviewed = await reviewFixesWithAi({ project: proj, crawledPages: crawledPagesData, rawFixes: realFixes });
           if (reviewed) {
             realFixes = reviewed.fixes;
             topActions = reviewed.topActions;
+            positiveFindings = reviewed.positiveFindings;
+            aiSummary = reviewed.aiSummary;
             healthScore = computeHealthScore(realFixes);
             issuesFound = realFixes.length;
             summary = summarizeFixes(realFixes);
@@ -222,7 +226,7 @@ export default function CrawlStatus() {
         }
 
         scanSucceeded = true;
-        setScanResult({ fixes: realFixes, health_score: healthScore, pages_crawled: pagesCrawled, issues_found: issuesFound, summary, top_actions: topActions });
+        setScanResult({ fixes: realFixes, health_score: healthScore, pages_crawled: pagesCrawled, issues_found: issuesFound, summary, top_actions: topActions, positive_findings: positiveFindings, ai_summary: aiSummary });
       } catch (e) {
         console.error('runRealScan failed, using demo fixes', e);
       }
@@ -484,6 +488,22 @@ export default function CrawlStatus() {
               </p>
             </div>
           </div>
+
+          {scanResult?.ai_summary && (
+            <p className="text-sm text-gray-600 leading-relaxed mb-5">{scanResult.ai_summary}</p>
+          )}
+
+          {scanResult?.positive_findings?.length > 0 && (
+            <div className="space-y-1.5 mb-5">
+              <p className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">What's working well</p>
+              {scanResult.positive_findings.map((f, i) => (
+                <p key={i} className="flex items-start gap-2 text-sm text-gray-600">
+                  <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" />
+                  {f}
+                </p>
+              ))}
+            </div>
+          )}
 
           <div className="grid grid-cols-3 gap-3 mb-5">
             <div className="bg-green-50 border border-green-100 rounded-xl p-4 text-center">

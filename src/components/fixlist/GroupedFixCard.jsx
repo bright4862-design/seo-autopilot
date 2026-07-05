@@ -28,7 +28,7 @@ export default function GroupedFixCard({ group, onClick }) {
           </div>
         </div>
         <span className="flex items-center gap-1 text-xs font-medium text-blue-600 flex-shrink-0 mt-1">
-          Review recommendations <ChevronRight className="w-3.5 h-3.5" />
+          Review <ChevronRight className="w-3.5 h-3.5" />
         </span>
       </div>
     </button>

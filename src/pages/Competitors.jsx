@@ -103,7 +103,7 @@ export default function Competitors() {
         <div className="bg-white rounded-xl border border-gray-100 p-12 text-center">
           <Users className="w-10 h-10 text-gray-300 mx-auto mb-3" />
           <p className="font-medium text-gray-600">No competitors added yet</p>
-          <p className="text-sm text-gray-400 mt-1">Add competitor websites when setting up a scan to see how you compare.</p>
+          <p className="text-sm text-gray-400 mt-1">Add competitor websites during your next scan to compare your site.</p>
         </div>
       ) : !hasData ? (
         <div className="bg-white rounded-xl border border-gray-100 p-12 text-center">

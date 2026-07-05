@@ -8,41 +8,32 @@ import WhatToDoFirst from "@/components/dashboard/WhatToDoFirst";
 import FixCard from "@/components/fixlist/FixCard";
 import GroupedFixCard from "@/components/fixlist/GroupedFixCard";
 import GroupedFixModal from "@/components/fixlist/GroupedFixModal";
-import {
-  Search, CheckCircle2, Bell, Wrench, RefreshCw, Sparkles, ListChecks,
-} from "lucide-react";
 
 const CATEGORIES = [
   {
     key: "auto_fixed",
-    title: "Fixes prepared",
-    subtitle: "We prepared these simple fixes for your review.",
-    empty: "Nothing here yet. Run a scan to find quick wins we can handle for you.",
-    icon: CheckCircle2,
-    iconBg: "bg-green-100 text-green-600",
-    countText: "text-green-600",
-    badge: "bg-green-50 text-green-700 border-green-200",
+    title: "Prepared fixes",
+    subtitle: "Simple improvements we prepared for your review.",
+    empty: "Nothing here yet. Run a scan to find quick wins.",
   },
   {
     key: "needs_approval",
     title: "Needs your approval",
-    subtitle: "We've prepared a fix — just review and approve.",
-    empty: "You're all caught up — no fixes waiting for your approval.",
-    icon: Bell,
-    iconBg: "bg-amber-100 text-amber-600",
-    countText: "text-amber-600",
-    badge: "bg-amber-50 text-amber-700 border-amber-200",
+    subtitle: "Review and approve these recommended improvements.",
+    empty: "No fixes waiting for your approval.",
   },
   {
     key: "needs_developer",
     title: "Needs a developer",
-    subtitle: "These need a developer to fix. We'll guide you through it.",
+    subtitle: "These need a developer. We'll guide you through it.",
     empty: "No developer work needed right now.",
-    icon: Wrench,
-    iconBg: "bg-purple-100 text-purple-600",
-    countText: "text-purple-600",
-    badge: "bg-purple-50 text-purple-700 border-purple-200",
   },
+];
+
+const COUNTERS = [
+  { key: "auto_fixed", label: "Prepared" },
+  { key: "needs_approval", label: "Needs approval" },
+  { key: "needs_developer", label: "Needs developer" },
 ];
 
 export default function FixList() {
@@ -72,7 +63,7 @@ export default function FixList() {
     if (selectedIssue?.id === issueId) setSelectedIssue(prev => ({ ...prev, status: newStatus }));
   };
 
-  const startScan = () => navigate("/crawl-status?autostart=1");
+  const startScan = () => navigate("/crawl-status");
 
   // Group multiple prepared fixes for the same page into one card
   const renderItems = (catKey, items) => {
@@ -100,15 +91,10 @@ export default function FixList() {
 
   if (!project) {
     return (
-      <div className="max-w-2xl mx-auto">
-        <div className="bg-white rounded-2xl border border-gray-100 p-10 text-center">
-          <Search className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-          <h3 className="font-semibold text-gray-800 mb-1">Let's scan your website</h3>
-          <p className="text-sm text-gray-500 mb-5">Add your business and website to get your first Fix List.</p>
-          <Button onClick={() => navigate("/onboarding")} className="gradient-primary text-white border-0">
-            Add Your Website
-          </Button>
-        </div>
+      <div className="max-w-2xl mx-auto pt-16 text-center">
+        <h3 className="text-xl font-semibold text-gray-900 mb-2">Add your website to start your first scan.</h3>
+        <p className="text-sm text-gray-500 mb-6">We'll find simple SEO improvements in minutes.</p>
+        <Button onClick={startScan}>Scan Website</Button>
       </div>
     );
   }
@@ -119,80 +105,67 @@ export default function FixList() {
   }, {});
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+    <div className="max-w-3xl mx-auto space-y-8">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <ListChecks className="w-6 h-6 text-blue-600" /> Your Fix List
-          </h1>
-          <p className="text-sm text-gray-500 mt-1">
-            {project.business_name} · {project.website_url}
+          <h1 className="text-3xl font-semibold tracking-tight text-gray-900">Your Fix List</h1>
+          <p className="text-sm text-gray-500 mt-1.5">
+            Recommended SEO improvements for {project.business_name}.
           </p>
         </div>
-        <Button onClick={startScan} className="gradient-primary text-white border-0">
-          <RefreshCw className="w-4 h-4 mr-2" /> Run New Scan
-        </Button>
+        <Button onClick={startScan}>Scan Website</Button>
       </div>
 
       <WhatToDoFirst counts={counts} />
 
-      <div className="grid grid-cols-3 gap-3">
-        {CATEGORIES.map(c => (
-          <div key={c.key} className="bg-white rounded-xl border border-gray-100 p-4 text-center">
-            <div className={`text-2xl font-bold ${c.countText}`}>{counts[c.key]}</div>
-            <div className="text-xs text-gray-500 mt-1">{c.title}</div>
+      <div className="grid grid-cols-3 divide-x divide-gray-100 bg-white rounded-xl border border-gray-100 shadow-sm">
+        {COUNTERS.map(c => (
+          <div key={c.key} className="p-4 text-center">
+            <div className="text-2xl font-semibold text-gray-900">{counts[c.key]}</div>
+            <div className="text-xs text-gray-500 mt-0.5">{c.label}</div>
           </div>
         ))}
       </div>
 
       {issues.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-gray-100 p-10 text-center">
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-10 text-center">
           {project.last_crawl_at ? (
             <>
-              <CheckCircle2 className="w-10 h-10 text-green-500 mx-auto mb-3" />
-              <h3 className="font-semibold text-gray-800 mb-1">Your scan looks clean</h3>
-              <p className="text-sm text-gray-500">Your scan looks clean based on the accessible HTML we reviewed.</p>
-              <p className="text-sm text-gray-500 mb-5">Want a deeper review? Add competitors or request a manual review.</p>
+              <h3 className="font-semibold text-gray-900 mb-1">Your scan looks clean</h3>
+              <p className="text-sm text-gray-500">Based on the accessible HTML we reviewed, no improvements are needed right now.</p>
+              <p className="text-sm text-gray-500 mb-6">Want a deeper review? Add competitors or request a manual review.</p>
             </>
           ) : (
             <>
-              <Sparkles className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-              <h3 className="font-semibold text-gray-800 mb-1">No issues yet</h3>
-              <p className="text-sm text-gray-500 mb-5">Run your first scan to see a list of simple fixes.</p>
+              <h3 className="font-semibold text-gray-900 mb-1">No recommendations yet</h3>
+              <p className="text-sm text-gray-500 mb-6">Run your first scan to see recommended improvements.</p>
             </>
           )}
-          <Button onClick={startScan} className="gradient-primary text-white border-0">
-            <Search className="w-4 h-4 mr-2" /> Scan My Website
-          </Button>
+          <Button onClick={startScan}>Scan Website</Button>
         </div>
       ) : (
-        <div className="space-y-5">
+        <div className="space-y-8">
           {CATEGORIES.map(cat => {
             const items = issues.filter(i => i.status === cat.key);
             return (
-              <div key={cat.key} className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-                <div className="flex items-center gap-3 p-4 border-b border-gray-50">
-                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${cat.iconBg}`}>
-                    <cat.icon className="w-4 h-4" />
+              <section key={cat.key}>
+                <div className="px-1 mb-3">
+                  <div className="flex items-baseline gap-2">
+                    <h2 className="text-base font-semibold text-gray-900">{cat.title}</h2>
+                    <span className="text-sm text-gray-400">{items.length}</span>
                   </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <h2 className="font-semibold text-gray-800">{cat.title}</h2>
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${cat.badge}`}>
-                        {items.length}
-                      </span>
-                    </div>
-                    <p className="text-xs text-gray-500">{cat.subtitle}</p>
-                  </div>
+                  <p className="text-xs text-gray-500 mt-0.5">{cat.subtitle}</p>
                 </div>
-                {items.length === 0 ? (
-                  <p className="text-sm text-gray-400 px-4 py-6 text-center">{cat.empty}</p>
-                ) : (
-                  <div className="divide-y divide-gray-50">
-                    {renderItems(cat.key, items)}
-                  </div>
-                )}
-              </div>
+                <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+                  {items.length === 0 ? (
+                    <p className="text-sm text-gray-400 px-5 py-6">{cat.empty}</p>
+                  ) : (
+                    <div className="divide-y divide-gray-50">
+                      {renderItems(cat.key, items)}
+                    </div>
+                  )}
+                </div>
+              </section>
             );
           })}
         </div>

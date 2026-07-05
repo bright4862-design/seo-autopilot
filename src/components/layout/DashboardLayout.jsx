@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import {
@@ -16,7 +16,12 @@ const navItems = [
 
 export default function DashboardLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
   const location = useLocation();
+
+  useEffect(() => {
+    base44.auth.me().then(u => setIsAdmin(u?.role === "admin")).catch(() => {});
+  }, []);
 
   const handleLogout = () => {
     base44.auth.logout("/");
@@ -62,10 +67,12 @@ export default function DashboardLayout() {
             <Settings className="w-4 h-4" />
             Billing
           </Link>
-          <Link to="/admin" onClick={() => setSidebarOpen(false)} className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground">
-            <Shield className="w-4 h-4" />
-            Admin
-          </Link>
+          {isAdmin && (
+            <Link to="/admin" onClick={() => setSidebarOpen(false)} className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground">
+              <Shield className="w-4 h-4" />
+              Admin
+            </Link>
+          )}
           <button onClick={handleLogout} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-muted-foreground hover:bg-red-50 hover:text-red-600 transition-colors">
             <LogOut className="w-4 h-4" />
             Sign out

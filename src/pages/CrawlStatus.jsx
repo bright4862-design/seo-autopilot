@@ -100,6 +100,7 @@ export default function CrawlStatus() {
   const [crawlJob, setCrawlJob] = useState(null);
   const [project, setProject] = useState(null);
   const [competitors, setCompetitors] = useState([]);
+  const [scanStarted, setScanStarted] = useState(false);
   const [loading, setLoading] = useState(true);
   const [simulating, setSimulating] = useState(false);
   const [error, setError] = useState(null);
@@ -135,6 +136,7 @@ export default function CrawlStatus() {
   const simulateCrawl = async (existingJob, projOverride) => {
     const proj = projOverride || project;
     if (!proj) return;
+    setScanStarted(true);
     setSimulating(true);
     setError(null);
     let job = existingJob;
@@ -413,14 +415,14 @@ export default function CrawlStatus() {
         <div className="bg-red-50 border border-red-100 rounded-xl p-4 flex items-start gap-3">
           <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
           <div>
-            <p className="text-sm font-medium text-red-800">Crawl failed</p>
+            <p className="text-sm font-medium text-red-800">Scan failed</p>
             <p className="text-xs text-red-600 mt-0.5">{error}</p>
           </div>
         </div>
       )}
 
       {/* Progress */}
-      {crawlJob && (
+      {scanStarted && crawlJob && (
       <div className="bg-white rounded-2xl border border-gray-100 p-6">
         <div className="space-y-0">
           {CRAWL_STEPS.map((step, i) => {
@@ -460,15 +462,15 @@ export default function CrawlStatus() {
       )}
 
       {/* Scan note */}
-      <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex items-start gap-3">
-        <Info className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
-        <p className="text-xs text-blue-700 leading-relaxed">
+      <div className="bg-white border border-gray-100 rounded-xl p-4 flex items-start gap-3">
+        <Info className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
+        <p className="text-xs text-gray-500 leading-relaxed">
           This scan checks the website HTML we can access directly. Some websites use JavaScript or private CMS settings that may require deeper review.
         </p>
       </div>
 
       {/* Stats when complete */}
-      {crawlJob?.status === "complete" && (
+      {scanStarted && crawlJob?.status === "complete" && (
         <div className="bg-white border border-gray-100 rounded-2xl p-6">
           <div className="flex items-center gap-3 mb-5">
             <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center">

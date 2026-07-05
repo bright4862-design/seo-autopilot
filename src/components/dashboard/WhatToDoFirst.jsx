@@ -1,5 +1,4 @@
 import React from "react";
-import { Compass, CheckCircle2 } from "lucide-react";
 
 export default function WhatToDoFirst({ counts }) {
   const steps = [];
@@ -8,20 +7,15 @@ export default function WhatToDoFirst({ counts }) {
   if ((counts.needs_developer || 0) > 0) steps.push("Review website improvements.");
 
   return (
-    <div className="bg-blue-50 border border-blue-100 rounded-2xl p-5">
-      <div className="flex items-center gap-2 mb-3">
-        <Compass className="w-4 h-4 text-blue-600" />
-        <h2 className="text-sm font-semibold text-blue-900 uppercase tracking-wider">What to do first</h2>
-      </div>
+    <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+      <h2 className="text-sm font-semibold text-gray-900 mb-3">What to do first</h2>
       {steps.length === 0 ? (
-        <p className="flex items-center gap-2 text-sm text-blue-800">
-          <CheckCircle2 className="w-4 h-4 text-green-600" /> No major issues found.
-        </p>
+        <p className="text-sm text-gray-500">No major issues found.</p>
       ) : (
         <ol className="space-y-2">
           {steps.map((step, i) => (
-            <li key={i} className="flex items-start gap-2 text-sm text-blue-800">
-              <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold flex items-center justify-center mt-0.5">{i + 1}</span>
+            <li key={i} className="flex items-start gap-2.5 text-sm text-gray-600">
+              <span className="flex-shrink-0 w-5 h-5 rounded-full bg-gray-100 text-gray-500 text-xs font-medium flex items-center justify-center mt-0.5">{i + 1}</span>
               <span>{step}</span>
             </li>
           ))}

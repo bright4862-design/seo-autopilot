@@ -1,123 +1,1235 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { base44 } from "@/api/base44Client";
-import { trackEvent } from "@/lib/analytics";
-import { Button } from "@/components/ui/button";
+import { useNavigate } from "react-router-dom";
 import {
   AlertCircle,
-  ArrowRight,
   CheckCircle2,
   ChevronDown,
-  ChevronRight,
-  Clipboard,
-  HelpCircle,
-  Loader2,
+  ExternalLink,
+  FileText,
+  HeartPulse,
+  LayoutDashboard,
+  ListChecks,
+  MonitorCog,
   Search,
   Sparkles,
   Wrench,
 } from "lucide-react";
 
-const ACTIVE_STATUSES = new Set([
-  "auto_fixed",
-  "needs_approval",
-  "needs_developer",
-  "open",
-  "in_progress",
-]);
+import { Button } from "@/components/ui/button";
 
-const FILTERS = [
-  { key: "all", label: "All" },
-  { key: "priority", label: "Priority" },
-  { key: "auto_fixed", label: "Prepared" },
-  { key: "needs_approval", label: "Needs review" },
-  { key: "needs_developer", label: "May need help" },
+const LAST_SCAN_KEYS = [
+  "seo_autopilot:last_scan",
+  "SEO_AUTOPILOT_LAST_SCAN",
 ];
 
-function getIssueBucket(issue) {
-  if (issue.status === "needs_developer" || issue.requires_developer) {
-    return "needs_developer";
-  }
+const SCAN_HISTORY_KEYS = [
+  "seo_autopilot:scan_history",
+  "SEO_AUTOPILOT_SCAN_HISTORY",
+];
 
-  if (issue.status === "needs_approval" || issue.requires_approval) {
-    return "needs_approval";
-  }
+const CMS_OPTIONS = [
+  { id: "wordpress", label: "WordPress" },
+  { id: "squarespace", label: "Squarespace" },
+  { id: "wix", label: "Wix" },
+  { id: "shopify", label: "Shopify" },
+  { id: "webflow", label: "Webflow" },
+  { id: "framer", label: "Framer" },
+  { id: "godaddy", label: "GoDaddy" },
+  { id: "custom", label: "Custom CMS" },
+];
 
-  if (issue.status === "auto_fixed" || issue.can_auto_fix) {
-    return "auto_fixed";
-  }
+const FILTERS = [
+  { id: "all", label: "All" },
+  { id: "priority", label: "Priority" },
+  { id: "prepared", label: "Can prepare" },
+  { id: "review", label: "Needs review" },
+  { id: "help", label: "May need help" },
+];
 
-  return "needs_approval";
-}
+export default function FixList() {
+  const navigate = useNavigate();
 
-function getBucketLabel(bucket) {
-  if (bucket === "auto_fixed") return "Prepared";
-  if (bucket === "needs_approval") return "Needs review";
-  if (bucket === "needs_developer") return "May need help";
-  return "Recommended";
-}
+  const [scanRecord, setScanRecord] = useState(null);
+  const [scanHistory, setScanHistory] = useState([]);
+  const [activeFilter, setActiveFilter] = useState("all");
+  const [selectedCms, setSelectedCms] = useState("wordpress");
+  const [historyOpen, setHistoryOpen] = useState(false);
 
-function getBucketDescription(bucket) {
-  if (bucket === "auto_fixed") return "Ready-to-review recommendations.";
-  if (bucket === "needs_approval") return "Items that need a decision.";
-  if (bucket === "needs_developer") return "Larger improvements for help or cleanup.";
-  return "Website recommendations.";
-}
+  useEffect(() => {
+    setScanRecord(loadLastScanRecord());
+    setScanHistory(loadScanHistory());
+  }, []);
 
-function getBucketIcon(bucket) {
-  if (bucket === "auto_fixed") return CheckCircle2;
-  if (bucket === "needs_approval") return HelpCircle;
-  if (bucket === "needs_developer") return Wrench;
-  return Sparkles;
-}
+  const scan = scanRecord?.result || scanRecord || null;
 
-function friendlyCategory(category, customerCategory) {
-  if (customerCategory) return customerCategory;
+  const fixes = useMemo(() => {
+    return pickFirstNonEmptyArray([
+      scan?.cleaned_fixes,
+      scan?.fixes,
+      scan?.findings,
+      scan?.recommendations,
+      scan?.raw_fixes,
+    ]);
+  }, [scan]);
 
-  const map = {
-    meta_title: "Search appearance",
-    meta_description: "Search appearance",
-    canonical: "Website setup",
-    schema: "Trust signals",
-    thin_content: "Page content",
-    duplicate_content: "Search appearance",
-    "404_error": "Broken page",
-    redirect: "Page redirect",
-    internal_link: "Internal links",
-    performance: "Website performance",
-    web_dev: "Website setup",
-    image_alt_text: "Images",
-  };
+  const pages = useMemo(() => {
+    return pickFirstNonEmptyArray([
+      scan?.crawled_pages,
+      scan?.pages,
+      scan?.scanned_pages,
+      scan?.crawl_pages,
+    ]);
+  }, [scan]);
 
-  return map[category] || "Website improvement";
-}
+  const healthReport =
+    scan?.website_health_report ||
+    scan?.scan_summary?.website_health_report ||
+    null;
 
-function getPriorityLabel(priority) {
-  if (priority === "critical" || priority === "high") return "High";
-  if (priority === "medium") return "Medium";
-  return "Low";
-}
+  const score =
+    numberOrNull(scan?.health_score) ??
+    numberOrNull(scan?.scan_summary?.score) ??
+    numberOrNull(healthReport?.health_score) ??
+    0;
 
-function getPriorityRank(priority) {
-  if (priority === "critical") return 0;
-  if (priority === "high") return 1;
-  if (priority === "medium") return 2;
-  return 3;
-}
+  const highPriorityCount = fixes.filter((fix) =>
+    ["critical", "high"].includes(String(fix.priority || ""))
+  ).length;
 
-function cleanUrl(url) {
-  try {
-    const parsed = new URL(url, window.location.origin);
-    parsed.hash = "";
-    parsed.search = "";
+  const helpCount = fixes.filter((fix) => needsWebHelp(fix)).length;
 
-    const path = parsed.pathname || "/";
-
-    if (path !== "/" && path.endsWith("/")) {
-      return path.slice(0, -1);
+  const filteredFixes = useMemo(() => {
+    if (activeFilter === "priority") {
+      return fixes.filter((fix) =>
+        ["critical", "high"].includes(String(fix.priority || ""))
+      );
     }
 
-    return path;
+    if (activeFilter === "prepared") {
+      return fixes.filter((fix) => !needsWebHelp(fix));
+    }
+
+    if (activeFilter === "review") {
+      return fixes.filter(
+        (fix) =>
+          fix.status === "needs_approval" ||
+          fix.requires_approval === true ||
+          !needsWebHelp(fix)
+      );
+    }
+
+    if (activeFilter === "help") {
+      return fixes.filter((fix) => needsWebHelp(fix));
+    }
+
+    return fixes;
+  }, [fixes, activeFilter]);
+
+  const actionPlan = useMemo(() => {
+    return buildActionPlan({
+      scan,
+      fixes,
+      healthReport,
+      selectedCms,
+    });
+  }, [scan, fixes, healthReport, selectedCms]);
+
+  const cmsLabel =
+    CMS_OPTIONS.find((item) => item.id === selectedCms)?.label || "your CMS";
+
+  const hasScan = Boolean(scan && (fixes.length > 0 || pages.length > 0));
+
+  return (
+    <div className="mx-auto max-w-7xl space-y-8 px-4 py-8 md:px-8">
+      <header>
+        <div className="flex items-center gap-2 text-sm font-semibold text-blue-700">
+          <LayoutDashboard className="h-4 w-4" />
+          Website recommendations
+        </div>
+
+        <h1 className="mt-2 text-4xl font-bold tracking-tight text-slate-950">
+          Fix List
+        </h1>
+
+        <p className="mt-3 max-w-3xl text-lg text-slate-600">
+          A prioritized list of what to review, prepare, or ask for help with.
+        </p>
+      </header>
+
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <MetricCard
+          label="Score"
+          value={score || "—"}
+          sublabel={score ? scoreToLabel(score) : "Run a scan"}
+          icon={<Sparkles className="h-5 w-5" />}
+        />
+
+        <MetricCard
+          label="Recommendations"
+          value={fixes.length}
+          sublabel={`${highPriorityCount} high priority`}
+          icon={<AlertCircle className="h-5 w-5" />}
+        />
+
+        <MetricCard
+          label="Pages scanned"
+          value={pages.length}
+          sublabel={formatDate(scanRecord?.created_at || scan?.created_at)}
+          icon={<Search className="h-5 w-5" />}
+        />
+
+        <MetricCard
+          label="May need help"
+          value={helpCount}
+          sublabel="Website setup or cleanup"
+          icon={<Wrench className="h-5 w-5" />}
+        />
+      </section>
+
+      {!hasScan ? (
+        <NoScanState onScan={() => navigate("/onboarding")} />
+      ) : (
+        <>
+          <AiActionPlan
+            plan={actionPlan}
+            provider={scan?.ai_provider}
+            cmsLabel={cmsLabel}
+            healthReport={healthReport}
+            score={score}
+          />
+
+          <CmsSelector
+            selectedCms={selectedCms}
+            onSelectCms={setSelectedCms}
+          />
+
+          <div className="flex flex-wrap gap-3">
+            {FILTERS.map((filter) => (
+              <button
+                key={filter.id}
+                type="button"
+                onClick={() => setActiveFilter(filter.id)}
+                className={`rounded-full border px-5 py-2 text-sm font-medium transition ${
+                  activeFilter === filter.id
+                    ? "border-slate-950 bg-slate-950 text-white"
+                    : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+
+          <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="mb-5 flex items-center gap-2">
+              <ListChecks className="h-5 w-5 text-blue-700" />
+              <h2 className="text-xl font-semibold text-slate-950">
+                Recommendations
+              </h2>
+            </div>
+
+            {filteredFixes.length === 0 ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-8 text-center">
+                <h3 className="text-lg font-semibold text-slate-950">
+                  No recommendations in this filter.
+                </h3>
+                <p className="mt-2 text-slate-600">
+                  Try switching back to All.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-5">
+                {filteredFixes.map((fix, index) => (
+                  <FixCard
+                    key={fix.id || fix.fix_id || index}
+                    fix={fix}
+                    cms={selectedCms}
+                    cmsLabel={cmsLabel}
+                    scan={scan}
+                    index={index}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        </>
+      )}
+
+      <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
+        <button
+          type="button"
+          onClick={() => setHistoryOpen((value) => !value)}
+          className="flex w-full items-center justify-between p-6 text-left"
+        >
+          <div>
+            <h2 className="text-xl font-semibold text-slate-950">
+              Scan history
+            </h2>
+            <p className="mt-1 text-slate-600">Last 5 scans</p>
+          </div>
+
+          <ChevronDown
+            className={`h-5 w-5 text-slate-400 transition ${
+              historyOpen ? "rotate-180" : ""
+            }`}
+          />
+        </button>
+
+        {historyOpen ? (
+          <div className="border-t border-slate-100 p-6">
+            {scanHistory.length === 0 ? (
+              <p className="text-sm text-slate-600">
+                No scan history has been saved yet.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {scanHistory.slice(0, 5).map((item, index) => (
+                  <button
+                    key={item.id || index}
+                    type="button"
+                    onClick={() => setScanRecord(item)}
+                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left hover:bg-white"
+                  >
+                    <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                      <div>
+                        <div className="font-semibold text-slate-950">
+                          {item.website_url || item.result?.normalized_url}
+                        </div>
+                        <div className="mt-1 text-sm text-slate-500">
+                          {formatDate(item.created_at)} ·{" "}
+                          {safeArray(
+                            item.result?.fixes || item.result?.cleaned_fixes
+                          ).length}{" "}
+                          recommendations ·{" "}
+                          {safeArray(
+                            item.result?.pages || item.result?.crawled_pages
+                          ).length}{" "}
+                          pages
+                        </div>
+                      </div>
+
+                      <span className="rounded-full bg-white px-3 py-1 text-sm text-slate-600">
+                        Score {item.result?.health_score ?? "—"}
+                      </span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+function NoScanState({ onScan }) {
+  return (
+    <section className="rounded-3xl border border-slate-200 bg-white p-10 text-center shadow-sm">
+      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
+        <Search className="h-7 w-7" />
+      </div>
+
+      <h2 className="mt-5 text-2xl font-bold text-slate-950">
+        No recommendations yet.
+      </h2>
+
+      <p className="mx-auto mt-3 max-w-xl text-slate-600">
+        Run a website scan first. Once the scan finishes, your Fix List,
+        AI-guided action plan, and CMS instructions will appear here.
+      </p>
+
+      <Button onClick={onScan} className="mt-6">
+        <Search className="mr-2 h-4 w-4" />
+        Scan Website
+      </Button>
+    </section>
+  );
+}
+
+function MetricCard({ label, value, sublabel, icon }) {
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-sm font-semibold uppercase tracking-wide text-slate-400">
+            {label}
+          </div>
+          <div className="mt-3 text-3xl font-bold text-slate-950">{value}</div>
+          <div className="mt-2 text-slate-600">{sublabel}</div>
+        </div>
+
+        <div className="rounded-2xl bg-slate-100 p-3 text-slate-600">
+          {icon}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AiActionPlan({ plan, provider, cmsLabel, healthReport, score }) {
+  const providerLabel =
+    provider === "gemini"
+      ? "Guided by Gemini"
+      : provider
+        ? `Guided by ${provider}`
+        : "AI-guided plan";
+
+  return (
+    <section className="rounded-3xl border border-blue-200 bg-gradient-to-br from-blue-50 to-white p-6 shadow-sm">
+      <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-semibold text-blue-700">
+            <Sparkles className="h-4 w-4" />
+            {providerLabel}
+          </div>
+
+          <h2 className="mt-2 text-2xl font-bold text-slate-950">
+            Best plan of action
+          </h2>
+
+          <p className="mt-3 max-w-4xl text-slate-700">
+            {healthReport?.overall_explanation ||
+              healthReport?.plain_english_summary ||
+              `Your website score is ${score}/100. Start with the highest priority items, then work through the easier content improvements.`}
+          </p>
+        </div>
+
+        <div className="rounded-2xl bg-white px-5 py-4 text-center shadow-sm">
+          <div className="text-sm text-slate-500">Selected CMS</div>
+          <div className="mt-1 font-semibold text-slate-950">{cmsLabel}</div>
+        </div>
+      </div>
+
+      <div className="mt-6 grid gap-4 lg:grid-cols-3">
+        {plan.map((step, index) => (
+          <div
+            key={index}
+            className="rounded-2xl border border-slate-200 bg-white p-5"
+          >
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-600 text-sm font-bold text-white">
+              {index + 1}
+            </div>
+
+            <h3 className="mt-4 font-semibold text-slate-950">
+              {step.title}
+            </h3>
+
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              {step.reason}
+            </p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function CmsSelector({ selectedCms, onSelectCms }) {
+  return (
+    <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="flex items-center gap-2">
+        <MonitorCog className="h-5 w-5 text-slate-700" />
+        <h2 className="text-xl font-semibold text-slate-950">
+          Choose your website builder
+        </h2>
+      </div>
+
+      <p className="mt-2 text-slate-600">
+        Click the CMS your site uses to see fix instructions written for that
+        platform.
+      </p>
+
+      <div className="mt-5 flex flex-wrap gap-3">
+        {CMS_OPTIONS.map((cms) => (
+          <button
+            key={cms.id}
+            type="button"
+            onClick={() => onSelectCms(cms.id)}
+            className={`rounded-full border px-5 py-2 text-sm font-medium transition ${
+              selectedCms === cms.id
+                ? "border-blue-600 bg-blue-600 text-white"
+                : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+            }`}
+          >
+            {cms.label}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function FixCard({ fix, cms, cmsLabel, scan, index }) {
+  const [openInstructions, setOpenInstructions] = useState(index < 2);
+
+  const priority = String(fix.priority || "medium");
+  const category = fix.customer_category || friendlyCategory(fix.category);
+  const steps = safeArray(fix.what_to_do || fix.what_to_do_steps || fix.fix_steps);
+  const affectedPages = buildFriendlyAffectedPages(fix);
+  const cmsSteps = getCmsInstructions(fix, cms, cmsLabel);
+  const helpNeeded = needsWebHelp(fix);
+
+  return (
+    <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex flex-wrap gap-2">
+            <Badge>{priority}</Badge>
+            <Badge>{category}</Badge>
+            {helpNeeded ? <Badge>may need help</Badge> : <Badge>can prepare</Badge>}
+          </div>
+
+          <h3 className="mt-4 text-xl font-bold text-slate-950">
+            {fix.issue_title || fix.title || "Website recommendation"}
+          </h3>
+
+          <p className="mt-2 max-w-4xl text-slate-600">
+            {fix.plain_english_explanation ||
+              fix.plain_english_summary ||
+              "This was found during the website scan."}
+          </p>
+        </div>
+
+        {helpNeeded ? (
+          <div className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            Best for your web person
+          </div>
+        ) : (
+          <div className="rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+            You can prepare this
+          </div>
+        )}
+      </div>
+
+      {fix.why_it_matters ? (
+        <div className="mt-5 rounded-2xl bg-slate-50 p-4">
+          <div className="text-sm font-semibold text-slate-950">
+            Why this matters
+          </div>
+          <p className="mt-1 text-sm leading-6 text-slate-600">
+            {fix.why_it_matters}
+          </p>
+        </div>
+      ) : null}
+
+      {steps.length > 0 ? (
+        <div className="mt-5">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-950">
+            <CheckCircle2 className="h-4 w-4 text-emerald-700" />
+            General next steps
+          </div>
+
+          <ol className="mt-3 space-y-2 text-sm leading-6 text-slate-600">
+            {steps.slice(0, 5).map((step, stepIndex) => (
+              <li key={stepIndex}>
+                <span className="font-semibold text-slate-900">
+                  {stepIndex + 1}.
+                </span>{" "}
+                {step}
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
+
+      <div className="mt-5 rounded-2xl border border-blue-200 bg-blue-50">
+        <button
+          type="button"
+          onClick={() => setOpenInstructions((value) => !value)}
+          className="flex w-full items-center justify-between p-4 text-left"
+        >
+          <div>
+            <div className="font-semibold text-blue-950">
+              How to fix this in {cmsLabel}
+            </div>
+            <div className="mt-1 text-sm text-blue-800">
+              Platform-specific instructions
+            </div>
+          </div>
+
+          <ChevronDown
+            className={`h-5 w-5 text-blue-700 transition ${
+              openInstructions ? "rotate-180" : ""
+            }`}
+          />
+        </button>
+
+        {openInstructions ? (
+          <div className="border-t border-blue-100 p-4">
+            <ol className="space-y-2 text-sm leading-6 text-blue-950">
+              {cmsSteps.map((step, stepIndex) => (
+                <li key={stepIndex}>
+                  <span className="font-semibold">{stepIndex + 1}.</span>{" "}
+                  {step}
+                </li>
+              ))}
+            </ol>
+          </div>
+        ) : null}
+      </div>
+
+      {affectedPages.length > 0 ? (
+        <div className="mt-5">
+          <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-950">
+            <FileText className="h-4 w-4 text-slate-600" />
+            Example affected pages
+          </div>
+
+          <div className="grid gap-2">
+            {affectedPages.slice(0, 6).map((page, pageIndex) => (
+              <AffectedPage
+                key={`${page.path}-${pageIndex}`}
+                page={page}
+                scan={scan}
+              />
+            ))}
+          </div>
+
+          {affectedPages.length > 6 ? (
+            <p className="mt-2 text-xs text-slate-500">
+              Plus {affectedPages.length - 6} more affected page
+              {affectedPages.length - 6 === 1 ? "" : "s"}.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function AffectedPage({ page, scan }) {
+  const href = buildPageHref(page.path, scan);
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div>
+          <div className="font-medium text-slate-950">{page.label}</div>
+          <div className="mt-1 flex items-center gap-1 text-xs text-slate-500">
+            <ExternalLink className="h-3 w-3" />
+            <code>{page.path}</code>
+          </div>
+        </div>
+
+        {href ? (
+          <a
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            className="text-sm font-medium text-blue-700 hover:underline"
+          >
+            Open page
+          </a>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function Badge({ children }) {
+  return (
+    <span className="rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-700">
+      {children}
+    </span>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Action plan                                                                 */
+/* -------------------------------------------------------------------------- */
+
+function buildActionPlan({ scan, fixes, healthReport, selectedCms }) {
+  const topActions = safeArray(
+    scan?.top_recommended_actions || scan?.recommended_actions
+  );
+
+  if (topActions.length > 0) {
+    return topActions.slice(0, 3).map((action, index) => ({
+      title: action.title || `Action ${index + 1}`,
+      reason:
+        action.reason ||
+        action.why_it_matters ||
+        "This is one of the highest value improvements from the scan.",
+    }));
+  }
+
+  if (healthReport?.next_best_step) {
+    return [
+      {
+        title: "Start with the next best step",
+        reason: healthReport.next_best_step,
+      },
+      {
+        title: `Choose your CMS instructions`,
+        reason: `Select ${selectedCms} or your actual CMS above, then follow the platform-specific steps on each recommendation.`,
+      },
+      {
+        title: "Rescan after changes",
+        reason:
+          "Run another scan after updates are published so the dashboard can confirm what improved.",
+      },
+    ];
+  }
+
+  const priorityFixes = fixes
+    .filter((fix) => ["critical", "high", "medium"].includes(fix.priority))
+    .slice(0, 3);
+
+  if (priorityFixes.length > 0) {
+    return priorityFixes.map((fix) => ({
+      title: fix.issue_title || fix.title || "Review this recommendation",
+      reason:
+        fix.why_it_matters ||
+        fix.plain_english_explanation ||
+        "This should be reviewed first because it may affect visitors or search visibility.",
+    }));
+  }
+
+  return [
+    {
+      title: "Review the recommendations",
+      reason:
+        "Start with the items marked high priority, then work through the easier content improvements.",
+    },
+    {
+      title: "Use the CMS instructions",
+      reason:
+        "Pick your website builder above and follow the instructions under each fix.",
+    },
+    {
+      title: "Scan again",
+      reason:
+        "After publishing changes, run another scan to update the Fix List.",
+    },
+  ];
+}
+
+/* -------------------------------------------------------------------------- */
+/* CMS instructions                                                            */
+/* -------------------------------------------------------------------------- */
+
+function getCmsInstructions(fix, cms, cmsLabel) {
+  const category = String(fix.category || "").toLowerCase();
+  const customerCategory = String(fix.customer_category || "").toLowerCase();
+
+  if (isBrokenPageFix(category, customerCategory)) {
+    return cmsBrokenPageSteps(cms, cmsLabel);
+  }
+
+  if (isTitleFix(category)) {
+    return cmsTitleSteps(cms, cmsLabel);
+  }
+
+  if (isDescriptionFix(category)) {
+    return cmsDescriptionSteps(cms, cmsLabel);
+  }
+
+  if (isContentFix(category, customerCategory)) {
+    return cmsContentSteps(cms, cmsLabel);
+  }
+
+  if (isTechnicalFix(category, customerCategory)) {
+    return cmsTechnicalSteps(cms, cmsLabel);
+  }
+
+  if (isPerformanceFix(category)) {
+    return cmsPerformanceSteps(cms, cmsLabel);
+  }
+
+  return [
+    `Open the affected page in ${cmsLabel}.`,
+    "Review the recommendation and compare it with what is currently on the page.",
+    "Make the update, save or publish the page, then run another scan.",
+  ];
+}
+
+function cmsBrokenPageSteps(cms, cmsLabel) {
+  const commonFinal =
+    "After fixing or redirecting the page, publish the change and run another scan.";
+
+  const map = {
+    wordpress: [
+      "In WordPress, go to Pages or Posts and search for the affected URL slug.",
+      "If the page should exist, restore it or update its permalink.",
+      "If the page is old, create a 301 redirect using a redirect plugin or your SEO plugin.",
+      commonFinal,
+    ],
+    squarespace: [
+      "In Squarespace, open Pages and look for the affected page or collection item.",
+      "If it should exist, restore or recreate the page.",
+      "If it is old, go to Settings > Developer Tools > URL Mappings and add a redirect.",
+      commonFinal,
+    ],
+    wix: [
+      "In Wix, open Site Pages and Menu and search for the affected page.",
+      "If the page should exist, restore it or update its page URL.",
+      "If it is old, go to SEO tools > URL Redirect Manager and create a redirect.",
+      commonFinal,
+    ],
+    shopify: [
+      "In Shopify, check Online Store > Pages, Products, Collections, or Blog posts.",
+      "If the URL should exist, restore the item or update its handle.",
+      "If it is old, go to Online Store > Navigation > View URL redirects and add a redirect.",
+      commonFinal,
+    ],
+    webflow: [
+      "In Webflow, check Pages and CMS Collections for the affected slug.",
+      "If it should exist, restore or recreate the page.",
+      "If it is old, add a 301 redirect in Site settings > Publishing > 301 redirects.",
+      commonFinal,
+    ],
+    framer: [
+      "In Framer, open Pages and search for the affected route.",
+      "If it should exist, recreate the page or correct the page path.",
+      "If it is old, add a redirect in site settings if your Framer plan supports redirects.",
+      commonFinal,
+    ],
+    godaddy: [
+      "In GoDaddy Website Builder, open Website > Pages and check whether the page exists.",
+      "If it should exist, recreate it or update the page URL.",
+      "If the page is old, use GoDaddy redirects or ask your web person to add a redirect.",
+      commonFinal,
+    ],
+  };
+
+  return map[cms] || [
+    `Open your CMS and search for the affected page path.`,
+    "If the page should exist, restore or recreate it.",
+    "If the page is old, create a 301 redirect to the closest live page.",
+    commonFinal,
+  ];
+}
+
+function cmsTitleSteps(cms, cmsLabel) {
+  const map = {
+    wordpress: [
+      "Open the affected page in WordPress.",
+      "Use your SEO plugin, such as Yoast, Rank Math, or All in One SEO, to edit the SEO title.",
+      "Keep the title clear, specific, and around 50–60 characters.",
+      "Update the page and rescan.",
+    ],
+    squarespace: [
+      "Open Pages in Squarespace and click the gear icon beside the affected page.",
+      "Go to SEO or Marketing settings.",
+      "Update the SEO title with a clear page-specific title.",
+      "Save and rescan.",
+    ],
+    wix: [
+      "Open the Wix editor and go to Site Pages.",
+      "Click the affected page, then open SEO Basics.",
+      "Update the title tag with a clear page-specific title.",
+      "Publish and rescan.",
+    ],
+    shopify: [
+      "Open the affected product, collection, page, or blog post in Shopify.",
+      "Scroll to Search engine listing and click Edit.",
+      "Update the page title.",
+      "Save and rescan.",
+    ],
+    webflow: [
+      "Open Webflow Pages or the CMS Collection item.",
+      "Open page settings.",
+      "Update the Title Tag in SEO Settings.",
+      "Publish and rescan.",
+    ],
+    framer: [
+      "Open the affected page in Framer.",
+      "Open page settings.",
+      "Update the page title / metadata title.",
+      "Publish and rescan.",
+    ],
+  };
+
+  return map[cms] || [
+    `Open the affected page in ${cmsLabel}.`,
+    "Find the SEO title or metadata title field.",
+    "Write a clear title that explains the page topic.",
+    "Publish and rescan.",
+  ];
+}
+
+function cmsDescriptionSteps(cms, cmsLabel) {
+  const map = {
+    wordpress: [
+      "Open the affected page in WordPress.",
+      "Use your SEO plugin to edit the meta description.",
+      "Write 1–2 helpful sentences explaining what the visitor will find.",
+      "Update the page and rescan.",
+    ],
+    squarespace: [
+      "Open the page settings in Squarespace.",
+      "Go to the SEO section.",
+      "Write a helpful SEO description.",
+      "Save and rescan.",
+    ],
+    wix: [
+      "Open the page in Wix Site Pages.",
+      "Go to SEO Basics.",
+      "Update the meta description.",
+      "Publish and rescan.",
+    ],
+    shopify: [
+      "Open the affected product, collection, page, or blog post.",
+      "Scroll to Search engine listing and click Edit.",
+      "Update the meta description.",
+      "Save and rescan.",
+    ],
+    webflow: [
+      "Open the page or CMS item in Webflow.",
+      "Open SEO Settings.",
+      "Update the Meta Description field.",
+      "Publish and rescan.",
+    ],
+    framer: [
+      "Open the affected page in Framer.",
+      "Open page settings.",
+      "Update the description metadata.",
+      "Publish and rescan.",
+    ],
+  };
+
+  return map[cms] || [
+    `Open the affected page in ${cmsLabel}.`,
+    "Find the SEO description or meta description field.",
+    "Write a short description that explains the page clearly.",
+    "Publish and rescan.",
+  ];
+}
+
+function cmsContentSteps(cms, cmsLabel) {
+  return [
+    `Open the affected page in ${cmsLabel}.`,
+    "Add helpful content that answers real visitor questions.",
+    "Include proof points such as reviews, location details, experience, pricing context, process details, or FAQs.",
+    "Make sure the page has one clear main heading and one clear next step.",
+    "Publish the update and run another scan.",
+  ];
+}
+
+function cmsTechnicalSteps(cms, cmsLabel) {
+  const map = {
+    wordpress: [
+      "Open the affected page in WordPress and check your SEO plugin settings.",
+      "Review indexability, canonical URL, social preview, schema, and page template settings.",
+      "If you are unsure, send this recommendation to your web person.",
+      "After changes are made, clear cache if needed and rescan.",
+    ],
+    squarespace: [
+      "Open the affected page settings in Squarespace.",
+      "Review SEO settings, social image/settings, URL slug, and page visibility.",
+      "For advanced schema or canonical issues, send this to your web person.",
+      "Save changes and rescan.",
+    ],
+    wix: [
+      "Open the affected page in Wix and go to SEO settings.",
+      "Review SEO Basics, Advanced SEO, structured data, and page visibility.",
+      "For advanced issues, use Wix SEO tools or ask your web person.",
+      "Publish and rescan.",
+    ],
+    shopify: [
+      "Open the affected product, collection, page, or theme template.",
+      "Review the search listing, theme SEO fields, structured data, and app-generated SEO settings.",
+      "For template or schema issues, ask your Shopify developer.",
+      "Save, publish if needed, and rescan.",
+    ],
+    webflow: [
+      "Open the affected page or CMS template in Webflow.",
+      "Review SEO settings, Open Graph settings, canonical settings, and custom code.",
+      "For template or JavaScript issues, ask your Webflow developer.",
+      "Publish and rescan.",
+    ],
+    framer: [
+      "Open the affected page settings in Framer.",
+      "Review metadata, social preview, page path, and visibility.",
+      "For advanced script or structured data issues, ask your web person.",
+      "Publish and rescan.",
+    ],
+  };
+
+  return map[cms] || [
+    `Open the affected page or template in ${cmsLabel}.`,
+    "Review SEO visibility, canonical settings, metadata, social preview, and structured data.",
+    "Ask your web person to handle anything involving templates, code, or scripts.",
+    "Publish and rescan.",
+  ];
+}
+
+function cmsPerformanceSteps(cms, cmsLabel) {
+  return [
+    `Open the affected page or template in ${cmsLabel}.`,
+    "Compress oversized images and remove unnecessary sections, apps, scripts, or embeds.",
+    "Check whether important text is visible without relying too heavily on scripts.",
+    "Ask your web person to review theme, template, and JavaScript performance.",
+    "Publish the changes and rescan.",
+  ];
+}
+
+/* -------------------------------------------------------------------------- */
+/* Classification helpers                                                      */
+/* -------------------------------------------------------------------------- */
+
+function isBrokenPageFix(category, customerCategory) {
+  return (
+    category.includes("broken") ||
+    category.includes("404") ||
+    customerCategory.includes("broken")
+  );
+}
+
+function isTitleFix(category) {
+  return category.includes("title");
+}
+
+function isDescriptionFix(category) {
+  return category.includes("description");
+}
+
+function isContentFix(category, customerCategory) {
+  return (
+    category.includes("thin_content") ||
+    category.includes("page_heading") ||
+    category.includes("faq") ||
+    customerCategory.includes("content") ||
+    customerCategory.includes("trust")
+  );
+}
+
+function isTechnicalFix(category, customerCategory) {
+  return (
+    category.includes("canonical") ||
+    category.includes("schema") ||
+    category.includes("index") ||
+    category.includes("robots") ||
+    category.includes("social") ||
+    category.includes("mobile") ||
+    category.includes("internal_link") ||
+    customerCategory.includes("technical")
+  );
+}
+
+function isPerformanceFix(category) {
+  return (
+    category.includes("performance") ||
+    category.includes("js_rendering") ||
+    category.includes("web_dev")
+  );
+}
+
+function needsWebHelp(fix) {
+  return (
+    fix.requires_developer === true ||
+    fix.status === "needs_developer" ||
+    fix.difficulty === "developer" ||
+    fix.who_can_do_this === "your_web_person"
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Storage                                                                     */
+/* -------------------------------------------------------------------------- */
+
+function loadLastScanRecord() {
+  for (const key of LAST_SCAN_KEYS) {
+    const value = safeJsonParse(window.localStorage.getItem(key));
+
+    if (value) return normalizeStoredRecord(value);
+  }
+
+  return null;
+}
+
+function loadScanHistory() {
+  for (const key of SCAN_HISTORY_KEYS) {
+    const value = safeJsonParse(window.localStorage.getItem(key));
+
+    if (Array.isArray(value)) {
+      return value.map(normalizeStoredRecord).filter(Boolean);
+    }
+  }
+
+  return [];
+}
+
+function normalizeStoredRecord(value) {
+  if (!value) return null;
+
+  if (value.result) return value;
+
+  return {
+    id: value.id || `scan_${Date.now()}`,
+    created_at: value.created_at || value.completed_at || "",
+    website_url: value.website_url || value.normalized_url || "",
+    result: value,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Friendly affected pages                                                     */
+/* -------------------------------------------------------------------------- */
+
+function buildFriendlyAffectedPages(fix) {
+  const examples = safeArray(fix?.details?.examples);
+  const affectedPages = safeArray(fix?.affected_pages);
+
+  if (examples.length > 0) {
+    return examples
+      .map((example) => {
+        const rawUrl = example.url || example.page_url || example.path || "";
+        const path = cleanPath(rawUrl);
+
+        if (!path) return null;
+
+        return {
+          path,
+          label:
+            cleanString(example.readable_label) ||
+            cleanString(example.title) ||
+            friendlyPageLabel(path) ||
+            "Affected page",
+          statusCode: example.status_code || example.status || "",
+        };
+      })
+      .filter(Boolean);
+  }
+
+  return affectedPages
+    .map((page) => {
+      const path = cleanPath(page);
+
+      if (!path) return null;
+
+      return {
+        path,
+        label: friendlyPageLabel(path),
+        statusCode: "",
+      };
+    })
+    .filter(Boolean);
+}
+
+function friendlyPageLabel(pathOrUrl) {
+  const path = cleanPath(pathOrUrl);
+  const language = getLanguageNameFromPath(path);
+
+  const cleaned = path
+    .replace(/^\/(en|fr|es|de|it|pt|nl)(\/|$)/i, "/")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
+
+  if (!cleaned) {
+    return language ? `${language} homepage` : "Homepage";
+  }
+
+  const parts = cleaned.split("/").filter(Boolean);
+
+  if (parts[0] === "category" && parts[1]) {
+    const category = humanizeSlug(parts.slice(1).join(" / "));
+
+    return language
+      ? `${language} category page: ${category}`
+      : `Category page: ${category}`;
+  }
+
+  if (parts[0] === "wine" && parts[1]) {
+    return `Wine page: ${humanizeSlug(parts.slice(1).join(" / "))}`;
+  }
+
+  if (parts[0] === "listing" && parts[1]) {
+    return `Listing page: ${humanizeSlug(parts.slice(1).join(" / "))}`;
+  }
+
+  if (parts[0] === "annonce" && parts[1]) {
+    return `Activity page: ${humanizeSlug(parts[1])}`;
+  }
+
+  const label = humanizeSlug(parts.join(" / "));
+
+  return language ? `${language} page: ${label}` : label;
+}
+
+function getLanguageNameFromPath(pathOrUrl) {
+  const path = cleanPath(pathOrUrl);
+  const match = path.match(/^\/(en|fr|es|de|it|pt|nl)(\/|$)/i);
+
+  if (!match) return "";
+
+  const map = {
+    en: "English",
+    fr: "French",
+    es: "Spanish",
+    de: "German",
+    it: "Italian",
+    pt: "Portuguese",
+    nl: "Dutch",
+  };
+
+  return map[match[1].toLowerCase()] || "";
+}
+
+function buildPageHref(path, scan) {
+  try {
+    const base =
+      scan?.normalized_url ||
+      scan?.website_url ||
+      scan?.scan_summary?.website_url ||
+      "";
+
+    if (!base) return "";
+
+    const origin = new URL(base).origin;
+
+    return new URL(path, origin).toString();
   } catch {
-    const value = String(url || "/").split("?")[0].split("#")[0];
+    return "";
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Generic helpers                                                             */
+/* -------------------------------------------------------------------------- */
+
+function pickFirstNonEmptyArray(values) {
+  for (const value of values || []) {
+    if (Array.isArray(value) && value.length > 0) return value;
+  }
+
+  return [];
+}
+
+function safeArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function safeJsonParse(value) {
+  try {
+    if (!value) return null;
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function numberOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+
+  const number = Number(value);
+
+  return Number.isFinite(number) ? number : null;
+}
+
+function cleanString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function cleanPath(input) {
+  try {
+    const parsed = new URL(String(input || ""), "https://example.com");
+    const path = parsed.pathname || "/";
+
+    return path !== "/" && path.endsWith("/") ? path.slice(0, -1) : path;
+  } catch {
+    const value = String(input || "/").split("?")[0].split("#")[0];
 
     if (!value || value === "/") return "/";
 
@@ -125,742 +1237,60 @@ function cleanUrl(url) {
   }
 }
 
-function formatPageLabel(url) {
-  const path = cleanUrl(url);
-
-  if (!path || path === "/") return "Homepage";
-
-  return path
-    .split("/")
-    .filter(Boolean)
-    .map((part) =>
-      decodeURIComponent(part)
-        .replace(/[-_]/g, " ")
-        .replace(/\b\w/g, (char) => char.toUpperCase())
-    )
-    .join(" › ");
+function humanizeSlug(value) {
+  return String(value || "")
+    .replace(/-/g, " ")
+    .replace(/_/g, " ")
+    .replace(/\s*\/\s*/g, " / ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function getAffectedPages(issue) {
-  const pages = [];
-
-  if (Array.isArray(issue.affected_pages)) {
-    pages.push(...issue.affected_pages);
-  }
-
-  if (issue.page_url) {
-    pages.push(issue.page_url);
-  }
-
-  return Array.from(new Set(pages.filter(Boolean).map(cleanUrl)));
-}
-
-function groupIssuesForDisplay(issues) {
-  const active = issues.filter((issue) => ACTIVE_STATUSES.has(issue.status));
-  const map = new Map();
-
-  for (const issue of active) {
-    const bucket = getIssueBucket(issue);
-    const category = issue.category || "web_dev";
-    const title = issue.issue_title || "Review this recommendation";
-    const affectedPages = getAffectedPages(issue);
-    const hasManyAffected = affectedPages.length > 1;
-
-    const key = hasManyAffected
-      ? [bucket, category, title].join("|").toLowerCase()
-      : [bucket, category, title, cleanUrl(issue.page_url)].join("|").toLowerCase();
-
-    if (!map.has(key)) {
-      map.set(key, {
-        ...issue,
-        bucket,
-        display_page_url: cleanUrl(issue.page_url || affectedPages[0] || "/"),
-        affected_pages: affectedPages,
-        grouped_count: 1,
-        grouped_issue_ids: [issue.id],
-      });
-    } else {
-      const existing = map.get(key);
-
-      existing.grouped_count += 1;
-      existing.grouped_issue_ids.push(issue.id);
-
-      const pages = new Set([
-        ...(existing.affected_pages || []),
-        ...affectedPages,
-        issue.page_url,
-      ]);
-
-      existing.affected_pages = Array.from(pages).filter(Boolean).map(cleanUrl);
-    }
-  }
-
-  return Array.from(map.values()).sort((a, b) => {
-    const priorityDiff = getPriorityRank(a.priority) - getPriorityRank(b.priority);
-    if (priorityDiff !== 0) return priorityDiff;
-
-    const bucketOrder = {
-      needs_approval: 0,
-      auto_fixed: 1,
-      needs_developer: 2,
-      open: 3,
-    };
-
-    const bucketDiff =
-      (bucketOrder[a.bucket] ?? 9) - (bucketOrder[b.bucket] ?? 9);
-
-    if (bucketDiff !== 0) return bucketDiff;
-
-    return String(a.issue_title || "").localeCompare(String(b.issue_title || ""));
-  });
-}
-
-function summarizeCounts(groupedIssues) {
-  return {
-    total: groupedIssues.length,
-    auto_fixed: groupedIssues.filter((item) => item.bucket === "auto_fixed").length,
-    needs_approval: groupedIssues.filter((item) => item.bucket === "needs_approval").length,
-    needs_developer: groupedIssues.filter((item) => item.bucket === "needs_developer").length,
-    high_priority: groupedIssues.filter(
-      (item) => item.priority === "critical" || item.priority === "high"
-    ).length,
+function friendlyCategory(category) {
+  const map = {
+    meta_title: "Search appearance",
+    meta_description: "Search appearance",
+    canonical: "Technical SEO",
+    schema: "Technical SEO",
+    thin_content: "Page content",
+    duplicate_content: "Search appearance",
+    "404_error": "Broken pages",
+    broken_page: "Broken pages",
+    redirect: "Page redirects",
+    internal_link: "Technical SEO",
+    performance: "Website performance",
+    web_dev: "Website setup",
+    robots_txt: "Search visibility",
+    js_rendering: "Website setup",
+    indexability: "Technical SEO",
+    mobile_setup: "Technical SEO",
+    social_metadata: "Technical SEO",
+    performance_hint: "Technical SEO",
+    competitor_gap: "Competitor opportunities",
   };
+
+  return map[category] || "Website improvement";
 }
 
-function formatScore(value) {
-  const number = Number(value);
-
-  if (!Number.isFinite(number) || number <= 0) return "—";
-
-  return `${Math.round(number)}`;
-}
-
-function getScoreLabel(value) {
-  const number = Number(value);
-
-  if (!Number.isFinite(number) || number <= 0) return "Score unavailable";
-  if (number >= 85) return "Strong";
-  if (number >= 70) return "Good";
-  if (number >= 55) return "Needs cleanup";
-  return "Needs attention";
-}
-
-function isStaleJob(job) {
-  const staleStatuses = new Set([
-    "queued",
-    "crawling_html",
-    "checking_metadata",
-    "checking_canonicals",
-    "checking_links",
-    "finding_competitors",
-    "benchmarking_competitors",
-    "generating_recommendations",
-    "in_progress",
-  ]);
-
-  if (!staleStatuses.has(job.status)) return false;
-
-  const dateValue = job.started_at || job.created_date || job.created_at;
-
-  if (!dateValue) return false;
-
-  const ageMs = Date.now() - new Date(dateValue).getTime();
-
-  return ageMs > 10 * 60 * 1000;
-}
-
-function formatJobStatus(job) {
-  if (isStaleJob(job)) return "Could not complete";
-  if (job.status === "complete") return "Complete";
-  if (job.status === "failed") return "Could not complete";
-  return "In progress";
+function scoreToLabel(score) {
+  if (!score) return "Run a scan";
+  if (score >= 85) return "Strong";
+  if (score >= 70) return "Good start";
+  if (score >= 45) return "Needs attention";
+  return "Needs urgent attention";
 }
 
 function formatDate(value) {
-  if (!value) return "—";
+  if (!value) return "No scan yet";
 
   try {
-    return new Date(value).toLocaleDateString(undefined, {
+    return new Intl.DateTimeFormat("en", {
       month: "short",
       day: "numeric",
       year: "numeric",
-    });
+    }).format(new Date(value));
   } catch {
-    return "—";
+    return String(value);
   }
-}
-
-async function copyText(text) {
-  try {
-    await navigator.clipboard.writeText(text || "");
-  } catch {
-    console.warn("Could not copy text.");
-  }
-}
-
-function StatCard({ label, value, helper, icon: Icon }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
-            {label}
-          </p>
-          <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-            {value}
-          </p>
-          {helper && <p className="mt-1 text-sm text-slate-500">{helper}</p>}
-        </div>
-
-        {Icon && (
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100">
-            <Icon className="h-4 w-4 text-slate-600" />
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function RecommendationRow({ issue, onOpen }) {
-  const Icon = getBucketIcon(issue.bucket);
-  const affectedPages = Array.isArray(issue.affected_pages)
-    ? issue.affected_pages
-    : [];
-
-  return (
-    <button
-      type="button"
-      onClick={() => onOpen(issue)}
-      className="group w-full border-b border-slate-100 px-5 py-4 text-left last:border-b-0 hover:bg-slate-50"
-    >
-      <div className="flex items-start gap-4">
-        <div className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100">
-          <Icon className="h-4 w-4 text-slate-700" />
-        </div>
-
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-sm font-semibold text-slate-950">
-              {issue.issue_title || "Review this recommendation"}
-            </h3>
-
-            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500">
-              {getBucketLabel(issue.bucket)}
-            </span>
-
-            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500">
-              {getPriorityLabel(issue.priority)}
-            </span>
-          </div>
-
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-500">
-            <span>{friendlyCategory(issue.category, issue.customer_category)}</span>
-            <span>·</span>
-            <span>
-              {affectedPages.length > 1
-                ? `${affectedPages.length} affected pages`
-                : formatPageLabel(issue.page_url)}
-            </span>
-          </div>
-
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-            {issue.plain_english_explanation ||
-              "This recommendation was prepared from your website scan."}
-          </p>
-        </div>
-
-        <ChevronRight className="mt-2 h-4 w-4 shrink-0 text-slate-300 group-hover:text-slate-500" />
-      </div>
-    </button>
-  );
-}
-
-function IssueModal({ issue, onClose }) {
-  if (!issue) return null;
-
-  const affectedPages = Array.isArray(issue.affected_pages)
-    ? issue.affected_pages.filter(Boolean)
-    : [];
-
-  const recommendation =
-    issue.ai_recommendation ||
-    issue.recommended_value ||
-    "Review this recommendation.";
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/30 px-4 py-6 sm:items-center">
-      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-6 shadow-xl">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-sm font-medium text-blue-600">
-              {getBucketLabel(issue.bucket)}
-            </p>
-            <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
-              {issue.issue_title}
-            </h2>
-            <p className="mt-2 text-sm text-slate-500">
-              {friendlyCategory(issue.category, issue.customer_category)} ·{" "}
-              {formatPageLabel(issue.page_url)}
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-full border border-slate-200 px-3 py-1.5 text-sm text-slate-500 hover:bg-slate-50"
-          >
-            Close
-          </button>
-        </div>
-
-        <div className="mt-6 space-y-5">
-          <section>
-            <h3 className="text-sm font-semibold text-slate-950">
-              What we found
-            </h3>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              {issue.plain_english_explanation ||
-                "This recommendation was found during the scan."}
-            </p>
-          </section>
-
-          <section>
-            <h3 className="text-sm font-semibold text-slate-950">
-              Why it matters
-            </h3>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              {issue.why_it_matters ||
-                "Improving this can help visitors and search engines understand the website more clearly."}
-            </p>
-          </section>
-
-          <section className="rounded-2xl bg-blue-50 p-4">
-            <h3 className="text-sm font-semibold text-slate-950">
-              Recommended next step
-            </h3>
-            <p className="mt-2 text-sm leading-6 text-slate-700">
-              {recommendation}
-            </p>
-          </section>
-
-          {affectedPages.length > 0 && (
-            <section>
-              <h3 className="text-sm font-semibold text-slate-950">
-                Affected pages
-              </h3>
-              <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                {affectedPages.slice(0, 12).map((page, index) => (
-                  <div
-                    key={`${page}-${index}`}
-                    className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600"
-                  >
-                    {formatPageLabel(page)}
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {issue.details && Object.keys(issue.details).length > 0 && (
-            <details className="rounded-2xl bg-slate-50 p-4">
-              <summary className="cursor-pointer text-sm font-medium text-slate-700">
-                Technical details
-              </summary>
-              <pre className="mt-3 whitespace-pre-wrap break-words text-xs leading-5 text-slate-500">
-                {JSON.stringify(issue.details, null, 2)}
-              </pre>
-            </details>
-          )}
-        </div>
-
-        <div className="mt-6 flex flex-wrap gap-2">
-          <Button
-            type="button"
-            onClick={() => copyText(recommendation)}
-            variant="outline"
-            className="rounded-full border-slate-200 bg-white shadow-none"
-          >
-            <Clipboard className="mr-2 h-4 w-4" />
-            Copy next step
-          </Button>
-
-          <Button
-            asChild
-            className="rounded-full bg-blue-600 px-5 text-white shadow-none hover:bg-blue-700"
-          >
-            <a href="/billing">Request help</a>
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-export default function FixList() {
-  const [loading, setLoading] = useState(true);
-  const [project, setProject] = useState(null);
-  const [issues, setIssues] = useState([]);
-  const [jobs, setJobs] = useState([]);
-  const [competitorInsights, setCompetitorInsights] = useState([]);
-  const [selectedIssue, setSelectedIssue] = useState(null);
-  const [activeFilter, setActiveFilter] = useState("all");
-  const [showHistory, setShowHistory] = useState(false);
-
-  useEffect(() => {
-    trackEvent("fix_list_viewed");
-
-    const load = async () => {
-      try {
-        const user = await base44.auth.me();
-        const activeProjectId = window.localStorage.getItem("active_project_id");
-
-        let activeProject = null;
-
-        if (activeProjectId) {
-          try {
-            activeProject =
-              await base44.entities.BusinessProject.get(activeProjectId);
-          } catch {}
-        }
-
-        if (!activeProject) {
-          const projects = await base44.entities.BusinessProject.list(
-            "-last_crawl_at",
-            10
-          );
-
-          activeProject =
-            projects.find(
-              (item) =>
-                item.owner_user_id === user.id || item.created_by_id === user.id
-            ) ||
-            projects[0] ||
-            null;
-        }
-
-        setProject(activeProject);
-
-        if (activeProject) {
-          window.localStorage.setItem("active_project_id", activeProject.id);
-
-          const [issueRows, jobRows, insights] = await Promise.all([
-            base44.entities.SeoIssue.filter(
-              { project_id: activeProject.id },
-              "-created_date",
-              300
-            ),
-            base44.entities.CrawlJob.filter(
-              { project_id: activeProject.id },
-              "-created_date",
-              5
-            ),
-            base44.entities.CompetitorInsight.filter({
-              project_id: activeProject.id,
-            }).catch(() => []),
-          ]);
-
-          setIssues(issueRows || []);
-          setJobs(jobRows || []);
-          setCompetitorInsights(insights || []);
-        }
-      } catch (error) {
-        console.warn("Could not load Fix List.", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    load();
-  }, []);
-
-  const groupedIssues = useMemo(() => groupIssuesForDisplay(issues), [issues]);
-  const counts = useMemo(() => summarizeCounts(groupedIssues), [groupedIssues]);
-
-  const priorityIssues = groupedIssues.filter(
-    (item) => item.priority === "critical" || item.priority === "high"
-  );
-
-  const visibleIssues = useMemo(() => {
-    if (activeFilter === "all") return groupedIssues;
-    if (activeFilter === "priority") return priorityIssues;
-    return groupedIssues.filter((item) => item.bucket === activeFilter);
-  }, [activeFilter, groupedIssues, priorityIssues]);
-
-  const firstAction =
-    priorityIssues[0] ||
-    groupedIssues.find((item) => item.bucket === "needs_approval") ||
-    groupedIssues[0] ||
-    null;
-
-  const latestJob = jobs[0] || null;
-
-  if (loading) {
-    return (
-      <div className="flex h-64 items-center justify-center">
-        <Loader2 className="h-7 w-7 animate-spin text-blue-600" />
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-[#F7F8FA]">
-      <div className="mx-auto w-full max-w-6xl px-5 py-8 sm:px-6 lg:py-10">
-        <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
-          <div>
-            <p className="text-sm font-medium text-blue-600">
-              Website recommendations
-            </p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
-              Fix List
-            </h1>
-            <p className="mt-2 max-w-2xl text-base leading-7 text-slate-500">
-              A prioritized list of what to review, prepare, or ask for help
-              with.
-            </p>
-          </div>
-
-          <div className="flex gap-2">
-            <Button
-              asChild
-              className="rounded-full bg-blue-600 px-5 text-white shadow-none hover:bg-blue-700"
-            >
-              <a href="/crawl-status">Scan Website</a>
-            </Button>
-
-            <Button
-              asChild
-              variant="outline"
-              className="rounded-full border-slate-200 bg-white px-5 shadow-none"
-            >
-              <a href="/assistant">Ask AI</a>
-            </Button>
-          </div>
-        </div>
-
-        <div className="mb-6 grid gap-3 md:grid-cols-4">
-          <StatCard
-            label="Score"
-            value={formatScore(project?.seo_score)}
-            helper={getScoreLabel(project?.seo_score)}
-            icon={Sparkles}
-          />
-          <StatCard
-            label="Recommendations"
-            value={counts.total}
-            helper={`${counts.high_priority} high priority`}
-            icon={AlertCircle}
-          />
-          <StatCard
-            label="Pages scanned"
-            value={latestJob?.pages_crawled ?? "—"}
-            helper={latestJob ? formatDate(latestJob.completed_at || latestJob.started_at) : "No scan yet"}
-            icon={Search}
-          />
-          <StatCard
-            label="May need help"
-            value={counts.needs_developer}
-            helper="Website setup or cleanup"
-            icon={Wrench}
-          />
-        </div>
-
-        {firstAction && (
-          <div className="mb-6 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <p className="text-sm font-medium text-blue-600">
-                  Recommended first step
-                </p>
-                <h2 className="mt-1 text-xl font-semibold tracking-tight text-slate-950">
-                  {firstAction.issue_title}
-                </h2>
-                <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-                  {firstAction.ai_recommendation ||
-                    firstAction.recommended_value ||
-                    firstAction.plain_english_explanation}
-                </p>
-              </div>
-
-              <Button
-                type="button"
-                onClick={() => setSelectedIssue(firstAction)}
-                className="w-fit rounded-full bg-slate-950 px-5 text-white shadow-none hover:bg-slate-800"
-              >
-                View details
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-        )}
-
-        <div className="mb-4 flex flex-wrap gap-2">
-          {FILTERS.map((filter) => {
-            const isActive = activeFilter === filter.key;
-
-            return (
-              <button
-                key={filter.key}
-                type="button"
-                onClick={() => setActiveFilter(filter.key)}
-                className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                  isActive
-                    ? "bg-slate-950 text-white"
-                    : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                }`}
-              >
-                {filter.label}
-              </button>
-            );
-          })}
-        </div>
-
-        {competitorInsights.length > 0 && (
-          <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <p className="text-sm font-semibold text-slate-950">
-                  Competitor opportunities found
-                </p>
-                <p className="mt-1 text-sm text-slate-500">
-                  Review where competitor pages may be stronger.
-                </p>
-              </div>
-
-              <Button
-                asChild
-                variant="outline"
-                className="rounded-full border-slate-200 bg-white shadow-none"
-              >
-                <a href="/competitors">View</a>
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {groupedIssues.length === 0 ? (
-          <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm">
-            <h2 className="text-xl font-semibold tracking-tight text-slate-950">
-              No recommendations yet.
-            </h2>
-            <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">
-              Run a website scan first. Once the scan finishes, your Fix List
-              will appear here.
-            </p>
-
-            <Button
-              asChild
-              className="mt-5 rounded-full bg-blue-600 px-5 text-white shadow-none hover:bg-blue-700"
-            >
-              <a href="/crawl-status">Scan Website</a>
-            </Button>
-          </div>
-        ) : (
-          <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-              <div>
-                <h2 className="text-base font-semibold text-slate-950">
-                  {activeFilter === "all"
-                    ? "All recommendations"
-                    : FILTERS.find((item) => item.key === activeFilter)?.label}
-                </h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  {visibleIssues.length} item{visibleIssues.length === 1 ? "" : "s"}
-                </p>
-              </div>
-            </div>
-
-            {visibleIssues.length === 0 ? (
-              <div className="p-8 text-center">
-                <p className="text-sm text-slate-500">
-                  No recommendations in this section.
-                </p>
-              </div>
-            ) : (
-              visibleIssues.map((issue) => (
-                <RecommendationRow
-                  key={issue.id || issue.grouped_issue_ids?.join("-")}
-                  issue={issue}
-                  onOpen={setSelectedIssue}
-                />
-              ))
-            )}
-          </div>
-        )}
-
-        {jobs.length > 0 && (
-          <section className="mt-6 rounded-3xl border border-slate-200 bg-white shadow-sm">
-            <button
-              type="button"
-              onClick={() => setShowHistory((value) => !value)}
-              className="flex w-full items-center justify-between px-5 py-4 text-left"
-            >
-              <div>
-                <h2 className="text-base font-semibold text-slate-950">
-                  Scan history
-                </h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  Last {jobs.length} scans
-                </p>
-              </div>
-
-              <ChevronDown
-                className={`h-4 w-4 text-slate-400 transition ${
-                  showHistory ? "rotate-180" : ""
-                }`}
-              />
-            </button>
-
-            {showHistory && (
-              <div className="overflow-x-auto border-t border-slate-100">
-                <table className="w-full min-w-[680px] text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-100 text-xs uppercase tracking-wide text-slate-400">
-                      <th className="px-5 py-3 font-medium">Date</th>
-                      <th className="px-5 py-3 font-medium">Status</th>
-                      <th className="px-5 py-3 font-medium">Pages</th>
-                      <th className="px-5 py-3 font-medium">Recommendations</th>
-                      <th className="px-5 py-3 font-medium">Score</th>
-                    </tr>
-                  </thead>
-
-                  <tbody>
-                    {jobs.map((job) => (
-                      <tr
-                        key={job.id}
-                        className="border-b border-slate-100 text-slate-600 last:border-b-0"
-                      >
-                        <td className="px-5 py-4">
-                          {formatDate(job.completed_at || job.started_at)}
-                        </td>
-                        <td className="px-5 py-4">{formatJobStatus(job)}</td>
-                        <td className="px-5 py-4">
-                          {typeof job.pages_crawled === "number"
-                            ? `${job.pages_crawled} pages`
-                            : "—"}
-                        </td>
-                        <td className="px-5 py-4">
-                          {typeof job.issues_found === "number"
-                            ? `${job.issues_found} recommendations`
-                            : "—"}
-                        </td>
-                        <td className="px-5 py-4">
-                          {formatScore(job.seo_score || project?.seo_score)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-        )}
-
-        <IssueModal
-          issue={selectedIssue}
-          onClose={() => setSelectedIssue(null)}
-        />
-      </div>
-    </div>
-  );
 }

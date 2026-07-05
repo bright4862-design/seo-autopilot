@@ -4,45 +4,35 @@ const GOOGLE_API_KEY_NAME = "GOOGLE_" + "CUSTOM_SEARCH_API_KEY";
 const GOOGLE_CX_NAME = "GOOGLE_" + "CUSTOM_SEARCH_CX";
 
 const USER_AGENT =
-  "Mozilla/5.0 (compatible; SEO-Autopilot/1.0; +https://seoautopilot.app/bot)";
+  "Mozilla/5.0 (compatible; SEO-Autopilot/2.0; +https://seoautopilot.app/bot)";
 
 const SCAN_LIMITS = {
   quick: {
-    maxPages: 50,
-    batchSize: 5,
+    maxPages: 75,
+    batchSize: 6,
     timeoutMs: 12000,
-    useSitemap: false,
+    useSitemap: true,
     discoverCompetitors: false,
+    checkBrokenLinks: true,
   },
   deep: {
-    maxPages: 200,
-    batchSize: 4,
+    maxPages: 500,
+    batchSize: 6,
     timeoutMs: 18000,
     useSitemap: true,
     discoverCompetitors: true,
+    checkBrokenLinks: true,
   },
 };
 
-function priorityScore(url) {
-  const path = getPath(url).toLowerCase();
-
-  if (path === "/") return 100;
-  if (/service|services|loan|loans|program|programs|product|products/i.test(path)) return 90;
-  if (/location|locations|areas-we-serve|city/i.test(path)) return 80;
-  if (/about|contact|pricing|book|appointment|apply/i.test(path)) return 70;
-  if (/blog|article|news|resources/i.test(path)) return 35;
-
-  return 50;
-}
-
 const UTILITY_PATH_RE =
-  /(cart|checkout|login|signin|signup|register|account|search|privacy|terms|thank-?you|payment|admin|wp-admin|reset|forgot|cookie|legal|disclaimer|tag|category|author)/i;
+  /(cart|checkout|login|signin|signup|register|account|search|privacy|terms|thank-?you|payment|admin|wp-admin|reset|forgot|cookie|legal|disclaimer|tag|category|author|feed|rss|print|share)/i;
 
 const IMPORTANT_PAGE_RE =
-  /(^\/$)|(home|service|services|product|products|loan|loans|program|programs|about|location|locations|contact|book|booking|appointment|pricing|packages|service-area|areas-we-serve|fix-and-flip|new-construction|bridge|rental|dscr)/i;
+  /(^\/$)|(home|service|services|product|products|loan|loans|program|programs|about|location|locations|contact|book|booking|appointment|pricing|packages|service-area|areas-we-serve|fix-and-flip|new-construction|bridge|rental|dscr|apply|application|menu|treatment|repair|installation|financing|mortgage|lending|case-study|case-studies)/i;
 
 const ASSET_RE =
-  /\.(jpg|jpeg|png|gif|webp|svg|pdf|zip|css|js|ico|woff|woff2|ttf|mp4|mp3|mov|avi)$/i;
+  /\.(jpg|jpeg|png|gif|webp|svg|pdf|zip|css|js|ico|woff|woff2|ttf|mp4|mp3|mov|avi|xml|json)$/i;
 
 const EXCLUDED_COMPETITOR_DOMAINS = [
   "google.com",
@@ -62,6 +52,7 @@ const EXCLUDED_COMPETITOR_DOMAINS = [
   "angi.com",
   "thumbtack.com",
   "houzz.com",
+  "pinterest.com",
 ];
 
 Deno.serve(async (req) => {
@@ -106,6 +97,8 @@ Deno.serve(async (req) => {
 
     const crawlWarnings = [];
 
+    const robots = await readRobotsTxt(origin, crawlWarnings);
+
     let discoveredCompetitors = [];
     let createdCompetitors = [];
 
@@ -116,67 +109,92 @@ Deno.serve(async (req) => {
       competitor_urls,
     });
 
-    createdCompetitors.push(...providedCompetitors);
+    if (providedCompetitors.length > 0) {
+      createdCompetitors.push(...providedCompetitors);
+    }
 
     if (scanMode === "deep" && limits.discoverCompetitors) {
       try {
-        const discovery = await discoverCompetitorsFromSearch({
-          base44,
-          user,
-          project_id,
-          website_url: normalizedUrl,
-          business_name,
-          business_type,
-          city,
-          important_keywords,
-        });
+        const discovery = await withTimeout(
+          discoverCompetitorsFromSearch({
+            base44,
+            user,
+            project_id,
+            website_url: normalizedUrl,
+            business_name,
+            business_type,
+            city,
+            important_keywords,
+          }),
+          12000,
+          "Competitor discovery"
+        );
 
         discoveredCompetitors = discovery.discovered_competitors || [];
-        createdCompetitors = discovery.created_competitors || [];
+
+        if (discovery.created_competitors?.length) {
+          createdCompetitors.push(...discovery.created_competitors);
+        }
 
         if (discovery.warnings?.length) {
           crawlWarnings.push(...discovery.warnings);
         }
       } catch (error) {
         crawlWarnings.push(
-          `Competitor discovery was skipped: ${error?.message || "Unknown error"}`
+          `Competitor discovery was skipped: ${
+            error?.message || "Unknown error"
+          }`
         );
       }
     }
 
     const sitemapUrls =
-      scanMode === "deep" && limits.useSitemap
-        ? await discoverSitemapUrls(origin, domain, crawlWarnings)
+      limits.useSitemap
+        ? await discoverSitemapUrls(origin, domain, robots, crawlWarnings)
         : [];
 
     const crawlResult = await crawlWebsite({
       startUrl: normalizedUrl,
       domain,
       sitemapUrls,
+      robots,
       maxPages: limits.maxPages,
       batchSize: limits.batchSize,
       timeoutMs: limits.timeoutMs,
       crawlWarnings,
     });
 
+    const brokenLinks = limits.checkBrokenLinks
+      ? detectBrokenInternalLinks(crawlResult.pages)
+      : [];
+
     const rawFindings = analyzePages({
       pages: crawlResult.pages,
+      brokenLinks,
       domain,
       business_name,
       business_type,
       city,
     });
 
-    const groupedFindings = groupFindings(rawFindings);
-    const brokenLinks = detectBrokenInternalLinks(crawlResult.pages);
+    const groupedFindings = groupAndPrioritizeFindings(rawFindings);
     const healthScore = calculateHealthScore(groupedFindings);
+
+    const competitorResults = mergeCompetitorResults({
+      own_url: normalizedUrl,
+      manual: providedCompetitors,
+      discovered: discoveredCompetitors,
+    });
 
     const siteSummary = buildSiteSummary({
       pages: crawlResult.pages,
-      findings: groupedFindings,
+      rawFindings,
+      groupedFindings,
       scanMode,
       sitemapUrls,
       discoveredCompetitors,
+      brokenLinks,
+      robots,
     });
 
     return Response.json({
@@ -187,6 +205,7 @@ Deno.serve(async (req) => {
       domain,
       pages_crawled: crawlResult.pages.length,
       pages_found: crawlResult.pagesFound,
+      queued_remaining: crawlResult.queuedRemaining,
       health_score: healthScore,
       crawled_pages: crawlResult.pages,
       raw_findings: rawFindings,
@@ -194,7 +213,7 @@ Deno.serve(async (req) => {
       broken_links: brokenLinks,
       discovered_competitors: discoveredCompetitors,
       created_competitors: createdCompetitors,
-      competitor_results: [...createdCompetitors, ...discoveredCompetitors],
+      competitor_results: competitorResults,
       competitor_urls,
       crawl_job_id,
       site_summary: siteSummary,
@@ -217,6 +236,7 @@ async function crawlWebsite({
   startUrl,
   domain,
   sitemapUrls = [],
+  robots,
   maxPages,
   batchSize,
   timeoutMs,
@@ -230,14 +250,17 @@ async function crawlWebsite({
 
   const addToQueue = (url, source = "link") => {
     const clean = canonicalizeUrl(url);
+
     if (!clean) return false;
     if (seen.has(clean)) return false;
     if (queued.has(clean)) return false;
     if (!isSameDomain(clean, domain)) return false;
     if (isAssetUrl(clean)) return false;
     if (isUtilityUrl(clean)) return false;
+    if (isBlockedByRobots(clean, robots)) return false;
 
     queued.add(clean);
+
     queue.push({
       url: clean,
       source,
@@ -272,10 +295,7 @@ async function crawlWebsite({
       if (pages.length >= maxPages) break;
 
       if (result.status !== "fulfilled") {
-        failed.push({
-          url: "",
-          error: "Fetch promise failed",
-        });
+        failed.push({ url: "", error: "Fetch promise failed" });
         continue;
       }
 
@@ -296,9 +316,7 @@ async function crawlWebsite({
       }
 
       if (page.status_code >= 200 && page.status_code < 400) {
-        const links = Array.isArray(page.internal_links) ? page.internal_links : [];
-
-        for (const link of links) {
+        for (const link of page.internal_links || []) {
           addToQueue(link, "internal");
         }
       }
@@ -313,7 +331,7 @@ async function crawlWebsite({
 
   if (pages.length >= maxPages) {
     crawlWarnings.push(
-      `Scan limit reached at ${maxPages} pages. A deeper scan may find more pages.`
+      `Scan limit reached at ${maxPages} pages. A larger scan may find more pages.`
     );
   }
 
@@ -439,15 +457,13 @@ function extractPageData({
 
   const internalLinks = links.filter((link) => isSameDomain(link, domain));
   const externalLinks = links.filter((link) => !isSameDomain(link, domain));
-
   const images = extractImages(html, url);
   const faqQuestions = extractQuestions(pageText);
   const schemaTypes = detectSchemaTypes(html);
   const trustSignals = detectTrustSignals(pageText);
   const ctaPhrases = detectCtas(pageText);
   const placeholderText = detectPlaceholderText(pageText);
-
-  const path = getPath(url);
+  const path = getPath(normalizedUrl || url);
 
   return {
     url: normalizedUrl,
@@ -456,7 +472,7 @@ function extractPageData({
     crawl_source: source,
     status_code: status,
     content_type: contentType,
-    redirected: originalNormalized && originalNormalized !== normalizedUrl,
+    redirected: Boolean(originalNormalized && originalNormalized !== normalizedUrl),
     title,
     meta_description: metaDescription,
     h1,
@@ -464,10 +480,12 @@ function extractPageData({
     h3s: headings.h3s,
     canonical_url: canonicalUrl,
     robots_meta: robotsMeta,
+    noindex: /noindex/i.test(robotsMeta),
+    nofollow: /nofollow/i.test(robotsMeta),
     word_count: wordCount,
-    visible_text_sample: pageText.slice(0, 1500),
-    internal_links: Array.from(new Set(internalLinks)).slice(0, 300),
-    external_links: Array.from(new Set(externalLinks)).slice(0, 150),
+    visible_text_sample: pageText.slice(0, 2000),
+    internal_links: Array.from(new Set(internalLinks)).slice(0, 500),
+    external_links: Array.from(new Set(externalLinks)).slice(0, 200),
     images,
     image_count: images.length,
     images_missing_alt_count: images.filter((img) => !img.has_alt).length,
@@ -516,6 +534,8 @@ function emptyPage({
     h3s: [],
     canonical_url: "",
     robots_meta: "",
+    noindex: false,
+    nofollow: false,
     word_count: 0,
     visible_text_sample: "",
     internal_links: [],
@@ -538,332 +558,512 @@ function emptyPage({
   };
 }
 
-function analyzePages({ pages, business_name, business_type, city }) {
+function analyzePages({
+  pages,
+  brokenLinks,
+  business_name,
+  business_type,
+  city,
+}) {
   const findings = [];
+
+  const importantPages = pages.filter(
+    (page) => page.is_important_page && !page.is_utility_page
+  );
+
+  const brokenPages = [];
+  const weakTitlePages = [];
+  const missingDescriptionPages = [];
+  const missingHeadingPages = [];
+  const noindexPages = [];
   const canonicalPages = [];
+  const thinPages = [];
   const placeholderPages = [];
+  const faqGapPages = [];
+  const ctaGapPages = [];
+  const trustGapPages = [];
+  const imageAltPages = [];
 
   for (const page of pages) {
     const path = getPath(page.url);
     const isUtility = page.is_utility_page || isUtilityPath(path);
-    const isImportant = page.is_important_page || isImportantPage(path, page.title, page.h1);
+    const isImportant =
+      page.is_important_page || isImportantPage(path, page.title, page.h1);
 
     if (page.status_code === 0 || page.status_code >= 400) {
-      findings.push(
-        finding({
-          page,
-          category: "broken_page",
-          customerCategory: "Broken page",
-          title: "This page may not be loading correctly",
-          explanation:
-            "We could not access this page successfully during the scan.",
-          why:
-            "Broken pages can frustrate visitors and make it harder for search engines to understand your website.",
-          recommendation:
-            "Ask your website editor or developer to review this page and fix the link or page setup.",
-          current: `Status: ${page.status_code}`,
-          priority: "high",
-          status: "needs_developer",
-          difficulty: "developer",
-        })
-      );
-
+      brokenPages.push(page);
       continue;
     }
 
     if (isUtility) continue;
+    if (!isImportant) continue;
 
-    if (!page.title) {
-      findings.push(
-        finding({
-          page,
-          category: "meta_title",
-          customerCategory: "Search title",
-          title: "Add a clear search title",
-          explanation:
-            "This page does not appear to have a clear title for search results.",
-          why:
-            "A clear search title helps people understand what the page is about before they click.",
-          recommendation: suggestSearchTitle(page, business_name, business_type, city),
-          current: "Not found",
-          priority: "high",
-          status: "auto_fixed",
-          difficulty: "easy",
-        })
-      );
-    } else if ((page.title.length < 20 || page.title.length > 70) && isImportant) {
-      findings.push(
-        finding({
-          page,
-          category: "meta_title",
-          customerCategory: "Search title",
-          title: "Improve this page’s search title",
-          explanation:
-            "This page has a search title, but it may be too short, too long, or unclear.",
-          why:
-            "A stronger search title may help people understand why this page is relevant.",
-          recommendation: suggestSearchTitle(page, business_name, business_type, city),
-          current: page.title,
-          priority: "medium",
-          status: "auto_fixed",
-          difficulty: "easy",
-        })
-      );
+    if (!page.title || page.title.length < 20 || page.title.length > 70) {
+      weakTitlePages.push(page);
     }
 
-    if (!page.meta_description && isImportant) {
-      findings.push(
-        finding({
-          page,
-          category: "meta_description",
-          customerCategory: "Search description",
-          title: "Add a helpful search description",
-          explanation:
-            "This important page does not appear to have a clear search description.",
-          why:
-            "A search description can help people understand what the page offers before they click.",
-          recommendation: suggestSearchDescription(page, business_name, business_type, city),
-          current: "Not found",
-          priority: "medium",
-          status: "auto_fixed",
-          difficulty: "easy",
-        })
-      );
+    if (!page.meta_description || page.meta_description.length < 50) {
+      missingDescriptionPages.push(page);
     }
 
-    if (!page.h1 && isImportant) {
-      findings.push(
-        finding({
-          page,
-          category: "page_heading",
-          customerCategory: "Page heading",
-          title: "Add a clear main heading",
-          explanation:
-            "This important page may not have a clear main heading.",
-          why:
-            "A clear heading helps visitors quickly understand what the page is about.",
-          recommendation:
-            "Add one clear main heading that describes the service or topic of the page.",
-          current: "Not found",
-          priority: "medium",
-          status: "needs_approval",
-          difficulty: "moderate",
-        })
-      );
+    if (!page.h1) {
+      missingHeadingPages.push(page);
     }
 
-    if (!page.canonical_url && isImportant) {
-      canonicalPages.push(path);
+    if (page.noindex) {
+      noindexPages.push(page);
     }
 
-    if (page.word_count < 300 && isImportant) {
-      findings.push(
-        finding({
-          page,
-          category: "thin_content",
-          customerCategory: "Page content",
-          title: "Add more helpful content to this page",
-          explanation:
-            "This important page may not have enough helpful content for visitors.",
-          why:
-            "Helpful pages usually explain the service, benefits, common questions, proof points, and next steps.",
-          recommendation:
-            "Add clearer service details, benefits, customer questions, proof points, and a stronger next step.",
-          current: `${page.word_count} words found`,
-          priority: "medium",
-          status: "needs_developer",
-          difficulty: "moderate",
-        })
-      );
+    if (!page.canonical_url) {
+      canonicalPages.push(page);
     }
 
-    if (page.placeholder_text?.length > 0 && isImportant) {
+    if (page.word_count < 300) {
+      thinPages.push(page);
+    }
+
+    if (page.placeholder_text?.length > 0) {
       placeholderPages.push({
         page: path,
         hits: page.placeholder_text,
       });
     }
 
-    if (isImportant && !page.has_faq) {
-      findings.push(
-        finding({
-          page,
-          category: "faq_gap",
-          customerCategory: "Page content",
-          title: "Add answers to common customer questions",
-          explanation:
-            "This important page does not appear to answer common customer questions.",
-          why:
-            "Question-and-answer sections can help visitors make decisions and understand your services.",
-          recommendation:
-            "Add 4–6 common questions and answers that customers usually ask before contacting you.",
-          current: "No clear question-and-answer section found",
-          priority: "low",
-          status: "needs_developer",
-          difficulty: "moderate",
-        })
-      );
+    if (!page.has_faq) {
+      faqGapPages.push(page);
     }
 
-    if (isImportant && page.cta_phrases.length === 0) {
-      findings.push(
-        finding({
-          page,
-          category: "cta_gap",
-          customerCategory: "Page content",
-          title: "Add a clearer next step",
-          explanation:
-            "This page may not clearly tell visitors what to do next.",
-          why:
-            "A clear next step can help more visitors contact you, book, apply, or request help.",
-          recommendation:
-            "Add a simple next step such as “Contact us,” “Request a quote,” “Book a call,” or “Apply now.”",
-          current: "No strong next step found",
-          priority: "medium",
-          status: "needs_developer",
-          difficulty: "moderate",
-        })
-      );
+    if (!page.cta_phrases || page.cta_phrases.length === 0) {
+      ctaGapPages.push(page);
     }
 
-    if (isImportant && page.trust_signals.length === 0) {
-      findings.push(
-        finding({
-          page,
-          category: "trust_signal_gap",
-          customerCategory: "Trust signals",
-          title: "Add more trust signals",
-          explanation:
-            "This important page may not show enough proof that visitors can trust the business.",
-          why:
-            "Reviews, testimonials, project examples, credentials, and proof points can help visitors feel more confident.",
-          recommendation:
-            "Add reviews, testimonials, proof numbers, case studies, certifications, or project examples where appropriate.",
-          current: "No clear trust signals found",
-          priority: "medium",
-          status: "needs_developer",
-          difficulty: "moderate",
-        })
-      );
+    if (!page.trust_signals || page.trust_signals.length === 0) {
+      trustGapPages.push(page);
     }
 
     if (
-      isImportant &&
       page.image_count >= 5 &&
+      page.images_missing_alt_count > 0 &&
       page.images_missing_alt_count / page.image_count > 0.5
     ) {
-      findings.push(
-        finding({
-          page,
-          category: "image_alt_text",
-          customerCategory: "Images",
-          title: "Improve image descriptions",
-          explanation:
-            "Several images on this page may not have helpful descriptions.",
-          why:
-            "Image descriptions can help accessibility and give search engines more context.",
-          recommendation:
-            "Add short, useful descriptions to important images on this page.",
-          current: `${page.images_missing_alt_count} of ${page.image_count} images may be missing descriptions`,
-          priority: "low",
-          status: "needs_developer",
-          difficulty: "moderate",
-        })
-      );
+      imageAltPages.push(page);
     }
   }
 
-  if (placeholderPages.length > 0) {
-    findings.push({
-      id: stableId("placeholder-text-group"),
-      type: "site_level",
-      page_url: placeholderPages[0].page,
-      category: "placeholder_text",
-      customer_category: "Website setup",
-      issue_title: "Important content may not be showing correctly",
-      plain_english_explanation:
-        "We found placeholder-like text where important business proof or page content may belong.",
-      why_it_matters:
-        "Important proof points, service details, and trust signals should be easy for search engines and visitors to understand.",
-      current_value:
-        "Affected pages: " +
-        placeholderPages.map((p) => `${p.page} (${p.hits.join(", ")})`).join(" · "),
-      recommended_value:
-        "Make sure the real text and numbers appear directly in the page content.",
-      ai_recommendation:
-        "Ask a developer to make sure final text and numbers appear directly in the page content, not only through scripts or placeholders.",
-      priority: "high",
-      difficulty: "developer",
-      status: "needs_developer",
-      can_auto_fix: false,
-      requires_approval: false,
-      requires_developer: true,
-      affected_pages: placeholderPages.map((p) => p.page),
-      details: {
-        technical_term: "placeholder text",
-        affected_count: placeholderPages.length,
-      },
-      confidence_score: 90,
-    });
+  if (brokenPages.length > 0) {
+    findings.push(
+      groupedFinding({
+        id: "broken-pages",
+        category: "broken_page",
+        customer_category: "Broken pages",
+        title:
+          brokenPages.length === 1
+            ? "One page may not be loading correctly"
+            : "Some pages may not be loading correctly",
+        explanation:
+          "We found pages that did not load successfully during the scan.",
+        why:
+          "Broken pages can frustrate visitors and make it harder for search engines to understand your website.",
+        recommendation:
+          "Ask your website editor or developer to review these pages and fix the links or page setup.",
+        current: `${brokenPages.length} page${brokenPages.length === 1 ? "" : "s"} affected`,
+        priority: "high",
+        status: "needs_developer",
+        difficulty: "developer",
+        affected_pages: brokenPages.map((p) => getPath(p.url)),
+        details: { affected_count: brokenPages.length },
+      })
+    );
+  }
+
+  if (weakTitlePages.length > 0) {
+    const examples = weakTitlePages.slice(0, 10);
+
+    findings.push(
+      groupedFinding({
+        id: "weak-search-titles",
+        category: "meta_title",
+        customer_category: "Search appearance",
+        title:
+          weakTitlePages.length === 1
+            ? "Improve this page’s search title"
+            : "Improve search titles on important pages",
+        explanation:
+          "Some important pages may need clearer search titles.",
+        why:
+          "Clear search titles help people understand what each page is about before they click.",
+        recommendation:
+          examples.length === 1
+            ? suggestSearchTitle(
+                examples[0],
+                business_name,
+                business_type,
+                city
+              )
+            : "Prepare short, unique search titles for the affected pages.",
+        current: `${weakTitlePages.length} page${weakTitlePages.length === 1 ? "" : "s"} affected`,
+        priority: "high",
+        status: "auto_fixed",
+        difficulty: "easy",
+        affected_pages: weakTitlePages.map((p) => getPath(p.url)),
+        details: {
+          affected_count: weakTitlePages.length,
+          examples: examples.map((p) => ({
+            page: getPath(p.url),
+            current_title: p.title || "Not found",
+            suggested_title: suggestSearchTitle(
+              p,
+              business_name,
+              business_type,
+              city
+            ),
+          })),
+        },
+      })
+    );
+  }
+
+  if (missingDescriptionPages.length > 0) {
+    const examples = missingDescriptionPages.slice(0, 10);
+
+    findings.push(
+      groupedFinding({
+        id: "missing-search-descriptions",
+        category: "meta_description",
+        customer_category: "Search appearance",
+        title:
+          missingDescriptionPages.length === 1
+            ? "Add a helpful search description"
+            : "Add helpful search descriptions to important pages",
+        explanation:
+          "Some important pages do not appear to have clear search descriptions.",
+        why:
+          "Search descriptions can help people understand what the page offers before they click.",
+        recommendation:
+          examples.length === 1
+            ? suggestSearchDescription(
+                examples[0],
+                business_name,
+                business_type,
+                city
+              )
+            : "Prepare short, helpful search descriptions for the affected pages.",
+        current: `${missingDescriptionPages.length} page${missingDescriptionPages.length === 1 ? "" : "s"} affected`,
+        priority: "medium",
+        status: "auto_fixed",
+        difficulty: "easy",
+        affected_pages: missingDescriptionPages.map((p) => getPath(p.url)),
+        details: {
+          affected_count: missingDescriptionPages.length,
+          examples: examples.map((p) => ({
+            page: getPath(p.url),
+            current_description: p.meta_description || "Not found",
+            suggested_description: suggestSearchDescription(
+              p,
+              business_name,
+              business_type,
+              city
+            ),
+          })),
+        },
+      })
+    );
+  }
+
+  if (missingHeadingPages.length > 0) {
+    findings.push(
+      groupedFinding({
+        id: "missing-main-headings",
+        category: "page_heading",
+        customer_category: "Page content",
+        title:
+          missingHeadingPages.length === 1
+            ? "Add a clear main heading"
+            : "Add clear main headings to important pages",
+        explanation:
+          "Some important pages may not have a clear main heading.",
+        why:
+          "A clear heading helps visitors quickly understand what a page is about.",
+        recommendation:
+          "Add one clear main heading to each affected page.",
+        current: `${missingHeadingPages.length} page${missingHeadingPages.length === 1 ? "" : "s"} affected`,
+        priority: "medium",
+        status: "needs_approval",
+        difficulty: "moderate",
+        affected_pages: missingHeadingPages.map((p) => getPath(p.url)),
+        details: { affected_count: missingHeadingPages.length },
+      })
+    );
+  }
+
+  if (noindexPages.length > 0) {
+    findings.push(
+      groupedFinding({
+        id: "noindex-important-pages",
+        category: "robots_txt",
+        customer_category: "Search visibility",
+        title: "Review search visibility on important pages",
+        explanation:
+          "Some important pages may be telling search engines not to include them in search results.",
+        why:
+          "Important service or business pages usually need to be visible to search engines.",
+        recommendation:
+          "Ask your website editor or developer to confirm whether these pages should be hidden from search engines.",
+        current: `${noindexPages.length} page${noindexPages.length === 1 ? "" : "s"} may be hidden`,
+        priority: "high",
+        status: "needs_developer",
+        difficulty: "developer",
+        affected_pages: noindexPages.map((p) => getPath(p.url)),
+        details: {
+          affected_count: noindexPages.length,
+          technical_term: "noindex",
+        },
+      })
+    );
   }
 
   if (canonicalPages.length >= 2) {
-    findings.push({
-      id: stableId("preferred-page-settings-group"),
-      type: "site_level",
-      page_url: canonicalPages[0],
-      category: "canonical",
-      customer_category: "Website setup",
-      issue_title: "Review preferred-page settings across important pages",
-      plain_english_explanation:
-        "Several important pages may not clearly tell search engines which version of the page is preferred.",
-      why_it_matters:
-        "Preferred-page settings can help search engines understand the main version of important pages.",
-      current_value: `${canonicalPages.length} pages may need review`,
-      recommended_value:
-        "Ask your website editor or developer to review preferred-page settings for these pages.",
-      ai_recommendation:
-        "Ask your website editor or SEO cleanup provider to review preferred-page settings across the affected pages.",
-      priority: "medium",
-      difficulty: "developer",
-      status: "needs_developer",
-      can_auto_fix: false,
-      requires_approval: false,
-      requires_developer: true,
-      affected_pages: canonicalPages,
-      details: {
-        technical_term: "canonical",
-        affected_count: canonicalPages.length,
-      },
-      confidence_score: 90,
-    });
+    findings.push(
+      groupedFinding({
+        id: "preferred-page-settings",
+        category: "canonical",
+        customer_category: "Website setup",
+        title: "Review preferred-page settings across important pages",
+        explanation:
+          "Several important pages may not clearly tell search engines which version of the page is preferred.",
+        why:
+          "Preferred-page settings help search engines understand the main version of important pages.",
+        recommendation:
+          "Ask your website editor or SEO cleanup provider to review preferred-page settings across the affected pages.",
+        current: `${canonicalPages.length} page${canonicalPages.length === 1 ? "" : "s"} affected`,
+        priority: "medium",
+        status: "needs_developer",
+        difficulty: "developer",
+        affected_pages: canonicalPages.map((p) => getPath(p.url)),
+        details: {
+          affected_count: canonicalPages.length,
+          technical_term: "canonical",
+        },
+      })
+    );
+  }
+
+  if (
+    thinPages.length > 0 &&
+    thinPages.length <= Math.max(5, importantPages.length * 0.75)
+  ) {
+    findings.push(
+      groupedFinding({
+        id: "thin-important-pages",
+        category: "thin_content",
+        customer_category: "Page content",
+        title:
+          thinPages.length === 1
+            ? "Add more helpful content to this page"
+            : "Add more helpful content to important pages",
+        explanation:
+          "Some important pages may not have enough useful content for visitors.",
+        why:
+          "Helpful pages usually explain the service, benefits, common questions, proof points, and next steps.",
+        recommendation:
+          "Add clearer service details, benefits, common questions, proof points, and a stronger next step.",
+        current: `${thinPages.length} page${thinPages.length === 1 ? "" : "s"} affected`,
+        priority: "medium",
+        status: "needs_developer",
+        difficulty: "moderate",
+        affected_pages: thinPages.map((p) => getPath(p.url)),
+        details: {
+          affected_count: thinPages.length,
+          examples: thinPages.slice(0, 10).map((p) => ({
+            page: getPath(p.url),
+            word_count: p.word_count,
+          })),
+        },
+      })
+    );
+  }
+
+  if (placeholderPages.length > 0) {
+    findings.push(
+      groupedFinding({
+        id: "placeholder-text",
+        category: "placeholder_text",
+        customer_category: "Website setup",
+        title: "Important numbers may not be showing correctly to search engines",
+        explanation:
+          "We found placeholder-like text where important business proof or page content may belong.",
+        why:
+          "Important proof points, service details, and trust signals should be easy for search engines and visitors to understand.",
+        recommendation:
+          "Ask a developer to make sure final text and numbers appear directly in the page content, not only through scripts or placeholders.",
+        current: `${placeholderPages.length} page${placeholderPages.length === 1 ? "" : "s"} affected`,
+        priority: "high",
+        status: "needs_developer",
+        difficulty: "developer",
+        affected_pages: placeholderPages.map((p) => p.page),
+        details: {
+          affected_count: placeholderPages.length,
+          examples: placeholderPages.slice(0, 10),
+          technical_term: "placeholder text",
+        },
+      })
+    );
+  }
+
+  if (faqGapPages.length > 0 && faqGapPages.length <= 20) {
+    findings.push(
+      groupedFinding({
+        id: "faq-gaps",
+        category: "faq_gap",
+        customer_category: "Page content",
+        title: "Add answers to common customer questions",
+        explanation:
+          "Some important pages do not appear to answer common customer questions.",
+        why:
+          "Question-and-answer sections can help visitors make decisions and understand your services.",
+        recommendation:
+          "Add 4–6 common questions and answers that customers usually ask before contacting you.",
+        current: `${faqGapPages.length} page${faqGapPages.length === 1 ? "" : "s"} affected`,
+        priority: "low",
+        status: "needs_developer",
+        difficulty: "moderate",
+        affected_pages: faqGapPages.map((p) => getPath(p.url)),
+        details: { affected_count: faqGapPages.length },
+      })
+    );
+  }
+
+  if (ctaGapPages.length > 0 && ctaGapPages.length <= 20) {
+    findings.push(
+      groupedFinding({
+        id: "cta-gaps",
+        category: "cta_gap",
+        customer_category: "Page content",
+        title: "Add clearer next steps on important pages",
+        explanation:
+          "Some important pages may not clearly tell visitors what to do next.",
+        why:
+          "A clear next step can help more visitors contact you, book, apply, or request help.",
+        recommendation:
+          "Add a simple next step such as “Contact us,” “Request a quote,” “Book a call,” or “Apply now.”",
+        current: `${ctaGapPages.length} page${ctaGapPages.length === 1 ? "" : "s"} affected`,
+        priority: "medium",
+        status: "needs_developer",
+        difficulty: "moderate",
+        affected_pages: ctaGapPages.map((p) => getPath(p.url)),
+        details: { affected_count: ctaGapPages.length },
+      })
+    );
+  }
+
+  if (trustGapPages.length > 0 && trustGapPages.length <= 20) {
+    findings.push(
+      groupedFinding({
+        id: "trust-signal-gaps",
+        category: "trust_signal_gap",
+        customer_category: "Trust signals",
+        title: "Add more trust signals to important pages",
+        explanation:
+          "Some important pages may not show enough proof that visitors can trust the business.",
+        why:
+          "Reviews, testimonials, project examples, credentials, and proof points can help visitors feel more confident.",
+        recommendation:
+          "Add reviews, testimonials, proof numbers, case studies, certifications, or project examples where appropriate.",
+        current: `${trustGapPages.length} page${trustGapPages.length === 1 ? "" : "s"} affected`,
+        priority: "medium",
+        status: "needs_developer",
+        difficulty: "moderate",
+        affected_pages: trustGapPages.map((p) => getPath(p.url)),
+        details: { affected_count: trustGapPages.length },
+      })
+    );
+  }
+
+  if (imageAltPages.length > 0) {
+    findings.push(
+      groupedFinding({
+        id: "image-descriptions",
+        category: "image_alt_text",
+        customer_category: "Images",
+        title: "Improve image descriptions on important pages",
+        explanation:
+          "Some important pages have several images that may not have helpful descriptions.",
+        why:
+          "Image descriptions can help accessibility and give search engines more context.",
+        recommendation:
+          "Add short, useful descriptions to important images on the affected pages.",
+        current: `${imageAltPages.length} page${imageAltPages.length === 1 ? "" : "s"} affected`,
+        priority: "low",
+        status: "needs_developer",
+        difficulty: "moderate",
+        affected_pages: imageAltPages.map((p) => getPath(p.url)),
+        details: {
+          affected_count: imageAltPages.length,
+          examples: imageAltPages.slice(0, 10).map((p) => ({
+            page: getPath(p.url),
+            image_count: p.image_count,
+            missing_alt_count: p.images_missing_alt_count,
+          })),
+        },
+      })
+    );
+  }
+
+  if (brokenLinks.length > 0) {
+    findings.push(
+      groupedFinding({
+        id: "broken-internal-links",
+        category: "internal_link",
+        customer_category: "Internal links",
+        title: "Fix broken internal links",
+        explanation:
+          "Some links inside the website point to pages that may not load correctly.",
+        why:
+          "Broken links can frustrate visitors and make the site harder for search engines to understand.",
+        recommendation:
+          "Update or remove the broken links shown in the technical details.",
+        current: `${brokenLinks.length} broken internal link${brokenLinks.length === 1 ? "" : "s"} found`,
+        priority: "high",
+        status: "needs_developer",
+        difficulty: "developer",
+        affected_pages: brokenLinks
+          .map((item) => getPath(item.source_page))
+          .filter(Boolean),
+        details: {
+          affected_count: brokenLinks.length,
+          examples: brokenLinks.slice(0, 20),
+        },
+      })
+    );
   }
 
   findings.push(...detectDuplicateTitles(pages));
+  findings.push(...detectDuplicateDescriptions(pages));
 
   return dedupeFindings(findings);
 }
 
-function finding({
-  page,
+function groupedFinding({
+  id,
   category,
-  customerCategory,
+  customer_category,
   title,
   explanation,
   why,
   recommendation,
-  current = "",
+  current,
   priority,
   status,
   difficulty,
+  affected_pages,
+  details = {},
 }) {
   return {
-    id: stableId(`${page.url}-${category}-${title}`),
-    type: "page_level",
-    page_url: getPath(page.url),
-    full_url: page.url,
+    id: stableId(id),
+    type: "site_level",
+    page_url: affected_pages?.[0] || "/",
     category,
-    customer_category: customerCategory,
+    customer_category,
     issue_title: title,
     plain_english_explanation: explanation,
     why_it_matters: why,
@@ -876,51 +1076,40 @@ function finding({
     can_auto_fix: status === "auto_fixed",
     requires_approval: status === "needs_approval",
     requires_developer: status === "needs_developer",
+    affected_pages: Array.from(new Set(affected_pages || [])).slice(0, 100),
+    details,
     confidence_score: 90,
-    affected_pages: [],
-    details: {},
   };
 }
 
-function groupFindings(findings) {
-  return dedupeFindings(findings);
-}
+function groupAndPrioritizeFindings(findings) {
+  const priorityOrder = {
+    critical: 0,
+    high: 1,
+    medium: 2,
+    low: 3,
+  };
 
-async function saveProvidedCompetitors({ base44, user, project_id, competitor_urls }) {
-  const urls = (competitor_urls || []).map((url) => String(url || "").trim()).filter(Boolean);
+  const statusOrder = {
+    needs_approval: 0,
+    auto_fixed: 1,
+    needs_developer: 2,
+    open: 3,
+  };
 
-  if (!project_id || urls.length === 0) return [];
+  return dedupeFindings(findings)
+    .sort((a, b) => {
+      const aPriority = priorityOrder[a.priority] ?? 9;
+      const bPriority = priorityOrder[b.priority] ?? 9;
 
-  try {
-    await base44.entities.Competitor.deleteMany({ project_id });
-  } catch {}
+      if (aPriority !== bPriority) return aPriority - bPriority;
 
-  return await base44.entities.Competitor.bulkCreate(
-    urls.map((url) => {
-      let normalizedUrl = url;
-      let name = url;
+      const aStatus = statusOrder[a.status] ?? 9;
+      const bStatus = statusOrder[b.status] ?? 9;
 
-      try {
-        normalizedUrl = /^https?:\/\//i.test(url) ? url : `https://${url}`;
-        name = new URL(normalizedUrl).hostname.replace(/^www\./, "");
-      } catch {}
-
-      return {
-        project_id,
-        owner_user_id: user.id,
-        name,
-        website_url: normalizedUrl,
-        notes: "Added from Scan Website.",
-        service_pages_count: 0,
-        title_quality_score: 0,
-        meta_coverage_pct: 0,
-        content_depth_score: 0,
-        faq_usage: false,
-        schema_usage: false,
-        broken_links_count: 0,
-      };
+      return aStatus - bStatus;
     })
-  );
+    .slice(0, 25);
 }
 
 function detectDuplicateTitles(pages) {
@@ -928,8 +1117,6 @@ function detectDuplicateTitles(pages) {
   const findings = [];
 
   for (const page of pages) {
-    const path = getPath(page.url);
-
     if (!page.title) continue;
     if (!page.is_important_page) continue;
     if (page.is_utility_page) continue;
@@ -937,43 +1124,275 @@ function detectDuplicateTitles(pages) {
     const key = page.title.trim().toLowerCase();
 
     if (!map.has(key)) map.set(key, []);
-    map.get(key).push(path);
+    map.get(key).push(getPath(page.url));
   }
 
   for (const [title, affectedPages] of map.entries()) {
     if (affectedPages.length <= 1) continue;
 
-    findings.push({
-      id: stableId(`duplicate-title-${title}`),
-      type: "site_level",
-      page_url: affectedPages[0],
-      category: "duplicate_search_titles",
-      customer_category: "Search appearance",
-      issue_title: "Several important pages use the same search title",
-      plain_english_explanation:
-        "Multiple important pages appear to use the same search title.",
-      why_it_matters:
-        "Unique search titles help visitors and search engines understand the purpose of each page.",
-      current_value: title,
-      recommended_value: "Prepare a unique search title for each affected page.",
-      ai_recommendation:
-        "Review the affected pages and prepare unique search titles for each one.",
-      priority: "medium",
-      difficulty: "easy",
-      status: "needs_approval",
-      can_auto_fix: false,
-      requires_approval: true,
-      requires_developer: false,
-      affected_pages: affectedPages,
-      details: {
-        technical_term: "duplicate title",
-        affected_count: affectedPages.length,
-      },
-      confidence_score: 90,
-    });
+    findings.push(
+      groupedFinding({
+        id: `duplicate-title-${title}`,
+        category: "duplicate_search_titles",
+        customer_category: "Search appearance",
+        title: "Several important pages use the same search title",
+        explanation:
+          "Multiple important pages appear to use the same search title.",
+        why:
+          "Unique search titles help visitors and search engines understand the purpose of each page.",
+        recommendation:
+          "Review the affected pages and prepare unique search titles for each one.",
+        current: title,
+        priority: "medium",
+        status: "needs_approval",
+        difficulty: "easy",
+        affected_pages: affectedPages,
+        details: {
+          affected_count: affectedPages.length,
+          technical_term: "duplicate title",
+        },
+      })
+    );
   }
 
   return findings;
+}
+
+function detectDuplicateDescriptions(pages) {
+  const map = new Map();
+  const findings = [];
+
+  for (const page of pages) {
+    if (!page.meta_description) continue;
+    if (!page.is_important_page) continue;
+    if (page.is_utility_page) continue;
+
+    const key = page.meta_description.trim().toLowerCase();
+
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(getPath(page.url));
+  }
+
+  for (const [description, affectedPages] of map.entries()) {
+    if (affectedPages.length <= 1) continue;
+
+    findings.push(
+      groupedFinding({
+        id: `duplicate-description-${description}`,
+        category: "meta_description",
+        customer_category: "Search appearance",
+        title: "Several important pages use the same search description",
+        explanation:
+          "Multiple important pages appear to use the same search description.",
+        why:
+          "Unique search descriptions can make each important page clearer in search results.",
+        recommendation:
+          "Prepare a unique search description for each affected page.",
+        current: clamp(description, 160),
+        priority: "medium",
+        status: "auto_fixed",
+        difficulty: "easy",
+        affected_pages: affectedPages,
+        details: {
+          affected_count: affectedPages.length,
+          technical_term: "duplicate meta description",
+        },
+      })
+    );
+  }
+
+  return findings;
+}
+
+async function readRobotsTxt(origin, warnings) {
+  try {
+    const response = await withTimeout(
+      fetch(`${origin}/robots.txt`, {
+        headers: {
+          "user-agent": USER_AGENT,
+          accept: "text/plain,*/*",
+        },
+      }),
+      5000,
+      "robots.txt"
+    );
+
+    if (!response.ok) {
+      return {
+        found: false,
+        disallow: [],
+        sitemaps: [],
+      };
+    }
+
+    const text = await response.text();
+    return parseRobotsTxt(text);
+  } catch {
+    warnings.push("Could not read robots.txt.");
+    return {
+      found: false,
+      disallow: [],
+      sitemaps: [],
+    };
+  }
+}
+
+function parseRobotsTxt(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  const disallow = [];
+  const sitemaps = [];
+
+  for (const rawLine of lines) {
+    const line = rawLine.split("#")[0].trim();
+
+    if (!line) continue;
+
+    const [keyRaw, ...valueParts] = line.split(":");
+    const key = String(keyRaw || "").trim().toLowerCase();
+    const value = valueParts.join(":").trim();
+
+    if (key === "disallow" && value && value !== "/") {
+      disallow.push(value);
+    }
+
+    if (key === "sitemap" && value) {
+      sitemaps.push(value);
+    }
+  }
+
+  return {
+    found: true,
+    disallow,
+    sitemaps,
+  };
+}
+
+function isBlockedByRobots(url, robots) {
+  if (!robots?.disallow?.length) return false;
+
+  const path = getPath(url);
+
+  return robots.disallow.some((rule) => {
+    if (!rule || rule === "/") return false;
+    return path.startsWith(rule);
+  });
+}
+
+async function discoverSitemapUrls(origin, domain, robots, warnings) {
+  const sitemapUrls = [];
+
+  const candidates = [
+    ...(robots?.sitemaps || []),
+    `${origin}/sitemap.xml`,
+    `${origin}/sitemap_index.xml`,
+    `${origin}/wp-sitemap.xml`,
+    `${origin}/page-sitemap.xml`,
+  ];
+
+  for (const sitemapUrl of Array.from(new Set(candidates))) {
+    try {
+      const urls = await readSitemap(sitemapUrl, domain, warnings, 0);
+      sitemapUrls.push(...urls);
+    } catch {
+      warnings.push(`Could not read sitemap: ${sitemapUrl}`);
+    }
+  }
+
+  return Array.from(new Set(sitemapUrls)).slice(0, 1000);
+}
+
+async function readSitemap(sitemapUrl, domain, warnings, depth) {
+  if (depth > 2) return [];
+
+  const response = await withTimeout(
+    fetch(sitemapUrl, {
+      headers: {
+        "user-agent": USER_AGENT,
+        accept: "application/xml,text/xml,*/*",
+      },
+    }),
+    7000,
+    "Sitemap fetch"
+  );
+
+  if (!response.ok) return [];
+
+  const xml = await response.text();
+  const urls = extractUrlsFromSitemap(xml);
+
+  const sitemapChildren = urls.filter((url) => /sitemap/i.test(url));
+  const pageUrls = urls.filter(
+    (url) =>
+      isSameDomain(url, domain) &&
+      !isAssetUrl(url) &&
+      !/sitemap/i.test(url)
+  );
+
+  for (const child of sitemapChildren.slice(0, 20)) {
+    try {
+      const childUrls = await readSitemap(child, domain, warnings, depth + 1);
+      pageUrls.push(...childUrls);
+    } catch {
+      warnings.push(`Could not read nested sitemap: ${child}`);
+    }
+  }
+
+  return pageUrls;
+}
+
+function extractUrlsFromSitemap(xml) {
+  const urls = [];
+  const re = /<loc>\s*([^<]+)\s*<\/loc>/gi;
+  let match;
+
+  while ((match = re.exec(xml)) !== null) {
+    urls.push(decodeHtml(match[1].trim()));
+  }
+
+  return urls;
+}
+
+function detectBrokenInternalLinks(pages) {
+  const statusMap = new Map();
+
+  for (const page of pages) {
+    statusMap.set(canonicalizeUrl(page.url), page.status_code);
+  }
+
+  const broken = [];
+
+  for (const page of pages) {
+    for (const link of page.internal_links || []) {
+      const clean = canonicalizeUrl(link);
+      const status = statusMap.get(clean);
+
+      if (status && status >= 400) {
+        broken.push({
+          source_page: page.url,
+          broken_link: clean,
+          status_code: status,
+        });
+      }
+    }
+  }
+
+  return dedupeBrokenLinks(broken);
+}
+
+function dedupeBrokenLinks(items) {
+  const seen = new Set();
+  const output = [];
+
+  for (const item of items) {
+    const key = `${item.source_page}|${item.broken_link}|${item.status_code}`;
+
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    output.push(item);
+  }
+
+  return output;
 }
 
 async function discoverCompetitorsFromSearch({
@@ -987,7 +1406,6 @@ async function discoverCompetitorsFromSearch({
   important_keywords,
 }) {
   const warnings = [];
-
   const googleApiKey = getOptionalSecret(GOOGLE_API_KEY_NAME);
   const googleCx = getOptionalSecret(GOOGLE_CX_NAME);
 
@@ -1014,7 +1432,11 @@ async function discoverCompetitorsFromSearch({
 
   for (const keyword of keywords) {
     try {
-      const searchResults = await searchGoogle(keyword, googleApiKey, googleCx);
+      const searchResults = await withTimeout(
+        searchGoogle(keyword, googleApiKey, googleCx),
+        5000,
+        "Google search"
+      );
 
       for (const item of searchResults) {
         const domain = getDomain(item.url);
@@ -1022,21 +1444,21 @@ async function discoverCompetitorsFromSearch({
         if (!isValidCompetitorDomain(domain, ownDomain)) continue;
 
         results.push({
+          source: "google_custom_search",
           keyword,
           title: item.title,
-          url: item.url,
+          url: normalizeCompetitorUrl(item.url),
           domain,
           position: item.position,
           snippet: item.snippet,
         });
       }
-    } catch (error) {
+    } catch {
       warnings.push(`Search failed for "${keyword}".`);
     }
   }
 
   const discovered = dedupeCompetitors(results).slice(0, 5);
-
   let createdCompetitors = [];
 
   if (project_id && discovered.length > 0) {
@@ -1074,6 +1496,52 @@ async function discoverCompetitorsFromSearch({
     created_competitors: createdCompetitors,
     warnings,
   };
+}
+
+async function saveProvidedCompetitors({
+  base44,
+  user,
+  project_id,
+  competitor_urls,
+}) {
+  const urls = (competitor_urls || [])
+    .map((url) => String(url || "").trim())
+    .filter(Boolean);
+
+  if (!project_id || urls.length === 0) return [];
+
+  const existing = await base44.entities.Competitor.filter({ project_id });
+  const existingDomains = new Set(
+    (existing || []).map((item) => getDomain(item.website_url))
+  );
+
+  const toCreate = [];
+
+  for (const rawUrl of urls) {
+    const normalized = normalizeUrl(rawUrl);
+    const domain = getDomain(normalized);
+
+    if (!domain || existingDomains.has(domain)) continue;
+
+    toCreate.push({
+      project_id,
+      owner_user_id: user.id,
+      name: formatDomainName(domain),
+      website_url: normalized,
+      notes: "Added from Scan Website.",
+      service_pages_count: 0,
+      title_quality_score: 0,
+      meta_coverage_pct: 0,
+      content_depth_score: 0,
+      faq_usage: false,
+      schema_usage: false,
+      broken_links_count: 0,
+    });
+  }
+
+  if (toCreate.length === 0) return [];
+
+  return await base44.entities.Competitor.bulkCreate(toCreate);
 }
 
 async function searchGoogle(keyword, googleApiKey, googleCx) {
@@ -1114,9 +1582,9 @@ function buildCompetitorKeywords({
   const keywords = [];
 
   for (const keyword of important_keywords || []) {
-    if (String(keyword || "").trim()) {
-      keywords.push(String(keyword).trim());
-    }
+    const clean = String(keyword || "").trim();
+
+    if (clean) keywords.push(clean);
   }
 
   const type = String(business_type || "").trim();
@@ -1143,6 +1611,34 @@ function buildCompetitorKeywords({
   if (business_name && type) keywords.push(`${type} companies`);
 
   return Array.from(new Set(keywords)).filter(Boolean);
+}
+
+function mergeCompetitorResults({ own_url, manual, discovered }) {
+  const ownDomain = getDomain(own_url);
+  const map = new Map();
+
+  for (const item of [...(manual || []), ...(discovered || [])]) {
+    const website_url = item.website_url || item.url || "";
+    const domain = item.domain || getDomain(website_url);
+
+    if (!isValidCompetitorDomain(domain, ownDomain)) continue;
+
+    if (!map.has(domain)) {
+      map.set(domain, {
+        name: item.name || formatDomainName(domain),
+        website_url,
+        url: website_url,
+        domain,
+        source: item.source || "manual",
+        keyword: item.keyword || "",
+        title: item.title || "",
+        snippet: item.snippet || "",
+        position: item.position || null,
+      });
+    }
+  }
+
+  return Array.from(map.values()).slice(0, 8);
 }
 
 function dedupeCompetitors(results) {
@@ -1184,90 +1680,22 @@ function isValidCompetitorDomain(domain, ownDomain) {
   );
 }
 
-async function discoverSitemapUrls(origin, domain, warnings) {
-  const sitemapUrls = [];
-
-  const candidates = [
-    `${origin}/sitemap.xml`,
-    `${origin}/sitemap_index.xml`,
-    `${origin}/wp-sitemap.xml`,
-  ];
-
-  for (const sitemapUrl of candidates) {
-    try {
-      const response = await fetch(sitemapUrl, {
-        headers: {
-          "user-agent": USER_AGENT,
-          accept: "application/xml,text/xml,*/*",
-        },
-      });
-
-      if (!response.ok) continue;
-
-      const xml = await response.text();
-      const urls = extractUrlsFromSitemap(xml).filter((url) =>
-        isSameDomain(url, domain)
-      );
-
-      sitemapUrls.push(...urls);
-    } catch {
-      warnings.push(`Could not read sitemap: ${sitemapUrl}`);
-    }
-  }
-
-  return Array.from(new Set(sitemapUrls)).slice(0, 200);
-}
-
-function extractUrlsFromSitemap(xml) {
-  const urls = [];
-  const re = /<loc>\s*([^<]+)\s*<\/loc>/gi;
-  let match;
-
-  while ((match = re.exec(xml)) !== null) {
-    urls.push(match[1].trim());
-  }
-
-  return urls;
-}
-
-function detectBrokenInternalLinks(pages) {
-  const statusMap = new Map();
-
-  for (const page of pages) {
-    statusMap.set(canonicalizeUrl(page.url), page.status_code);
-  }
-
-  const broken = [];
-
-  for (const page of pages) {
-    for (const link of page.internal_links || []) {
-      const clean = canonicalizeUrl(link);
-      const status = statusMap.get(clean);
-
-      if (status && status >= 400) {
-        broken.push({
-          source_page: page.url,
-          broken_link: clean,
-          status_code: status,
-        });
-      }
-    }
-  }
-
-  return broken;
-}
-
 function buildSiteSummary({
   pages,
-  findings,
+  rawFindings,
+  groupedFindings,
   scanMode,
   sitemapUrls,
   discoveredCompetitors,
+  brokenLinks,
+  robots,
 }) {
   const importantPages = pages.filter((p) => p.is_important_page);
   const pagesWithFaq = pages.filter((p) => p.has_faq);
   const pagesWithTrust = pages.filter((p) => p.trust_signals?.length > 0);
   const pagesWithCta = pages.filter((p) => p.cta_phrases?.length > 0);
+  const pagesWithSchema = pages.filter((p) => p.has_schema);
+  const noindexPages = pages.filter((p) => p.noindex);
 
   const positives = [];
 
@@ -1276,46 +1704,74 @@ function buildSiteSummary({
   }
 
   if (pagesWithTrust.length >= 1) {
-    positives.push("Your site includes trust signals such as reviews, proof points, or testimonials.");
+    positives.push(
+      "Your site includes trust signals such as reviews, proof points, or testimonials."
+    );
   }
 
   if (pagesWithCta.length >= 1) {
-    positives.push("Your site includes calls to action that help visitors take the next step.");
+    positives.push(
+      "Your site includes calls to action that help visitors take the next step."
+    );
   }
 
   if (pagesWithFaq.length >= 1) {
     positives.push("Your site answers some customer questions.");
   }
 
+  if (pagesWithSchema.length >= 1) {
+    positives.push("Your site includes structured trust or business information.");
+  }
+
   return {
     positives,
-    total_findings: findings.length,
+    raw_findings_count: rawFindings.length,
+    total_findings: groupedFindings.length,
     important_pages_found: importantPages.length,
     pages_with_faq: pagesWithFaq.length,
     pages_with_trust_signals: pagesWithTrust.length,
     pages_with_calls_to_action: pagesWithCta.length,
+    pages_with_schema: pagesWithSchema.length,
+    noindex_pages: noindexPages.length,
     scan_mode: scanMode,
     sitemap_urls_found: sitemapUrls.length,
+    robots_txt_found: Boolean(robots?.found),
     discovered_competitor_count: discoveredCompetitors.length,
+    broken_links_count: brokenLinks.length,
     html_only_scan: true,
     javascript_rendering_used: false,
   };
 }
 
 function calculateHealthScore(findings) {
-  let score = 100;
+  let score = 94;
 
   for (const finding of findings) {
-    if (finding.priority === "critical" || finding.priority === "high") {
-      score -= 8;
+    if (finding.priority === "critical") {
+      score -= 9;
+    } else if (finding.priority === "high") {
+      score -= 6;
     } else if (finding.priority === "medium") {
-      score -= 5;
+      score -= 4;
     } else {
-      score -= 2;
+      score -= 1;
     }
   }
 
-  return Math.max(0, Math.min(100, score));
+  return Math.max(45, Math.min(100, score));
+}
+
+function priorityScore(url) {
+  const path = getPath(url).toLowerCase();
+
+  if (path === "/") return 100;
+  if (/service|services|loan|loans|program|programs|product|products/i.test(path)) return 95;
+  if (/location|locations|areas-we-serve|city/i.test(path)) return 85;
+  if (/about|contact|pricing|book|appointment|apply/i.test(path)) return 75;
+  if (/case-study|case-studies|portfolio|projects/i.test(path)) return 65;
+  if (/blog|article|news|resources/i.test(path)) return 35;
+
+  return 50;
 }
 
 function normalizeStartUrl(input) {
@@ -1326,6 +1782,27 @@ function normalizeStartUrl(input) {
   }
 
   return canonicalizeUrl(url);
+}
+
+function normalizeUrl(input) {
+  let url = String(input || "").trim();
+
+  if (!/^https?:\/\//i.test(url)) {
+    url = `https://${url}`;
+  }
+
+  return canonicalizeUrl(url);
+}
+
+function normalizeCompetitorUrl(input) {
+  try {
+    const url = new URL(normalizeUrl(input));
+    url.hash = "";
+    url.search = "";
+    return url.origin;
+  } catch {
+    return input;
+  }
 }
 
 function canonicalizeUrl(input) {
@@ -1407,18 +1884,14 @@ function isImportantPage(path, title = "", h1 = "") {
 
 function extractVisibleText(html) {
   return cleanText(
-    html
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
-      .replace(/<!--[\s\S]*?-->/g, " ")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/&nbsp;/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
+    decodeHtml(
+      html
+        .replace(/<script[\s\S]*?<\/script>/gi, " ")
+        .replace(/<style[\s\S]*?<\/style>/gi, " ")
+        .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+        .replace(/<!--[\s\S]*?-->/g, " ")
+        .replace(/<[^>]+>/g, " ")
+    )
   );
 }
 
@@ -1446,29 +1919,37 @@ function extractLinks(html, baseUrl) {
 
 function extractHeadings(html) {
   return {
-    h2s: matchAllClean(html, /<h2[^>]*>([\s\S]*?)<\/h2>/gi).slice(0, 30),
-    h3s: matchAllClean(html, /<h3[^>]*>([\s\S]*?)<\/h3>/gi).slice(0, 40),
+    h2s: matchAllClean(html, /<h2[^>]*>([\s\S]*?)<\/h2>/gi).slice(0, 50),
+    h3s: matchAllClean(html, /<h3[^>]*>([\s\S]*?)<\/h3>/gi).slice(0, 80),
   };
 }
 
-function extractImages(html) {
+function extractImages(html, baseUrl = "") {
   const images = [];
   const re = /<img[^>]*>/gi;
   let match;
 
   while ((match = re.exec(html)) !== null) {
     const tag = match[0];
-    const src = matchFirst(tag, /src=["']([^"']+)["']/i);
-    const alt = matchFirst(tag, /alt=["']([^"']*)["']/i);
+
+    const src =
+      matchFirst(tag, /src=["']([^"']+)["']/i) ||
+      matchFirst(tag, /data-src=["']([^"']+)["']/i) ||
+      matchFirst(tag, /data-lazy-src=["']([^"']+)["']/i) ||
+      "";
+
+    const alt = cleanText(
+      decodeHtml(matchFirst(tag, /alt=["']([^"']*)["']/i))
+    );
 
     images.push({
-      src,
-      alt: cleanText(alt),
-      has_alt: Boolean(cleanText(alt)),
+      src: src ? absolutizeUrl(src, baseUrl) : "",
+      alt,
+      has_alt: Boolean(alt),
     });
   }
 
-  return images.slice(0, 150);
+  return images.slice(0, 200);
 }
 
 function extractQuestions(text) {
@@ -1476,7 +1957,7 @@ function extractQuestions(text) {
     .split(/(?<=[?.!])\s+/)
     .map(cleanText)
     .filter((line) => line.endsWith("?"))
-    .slice(0, 15);
+    .slice(0, 30);
 }
 
 function detectSchemaTypes(html) {
@@ -1503,6 +1984,9 @@ function detectSchemaTypes(html) {
   if (/schema\.org\/LocalBusiness/i.test(html)) types.push("LocalBusiness");
   if (/schema\.org\/FAQPage/i.test(html)) types.push("FAQPage");
   if (/schema\.org\/Organization/i.test(html)) types.push("Organization");
+  if (/schema\.org\/Product/i.test(html)) types.push("Product");
+  if (/schema\.org\/Service/i.test(html)) types.push("Service");
+  if (/schema\.org\/Review/i.test(html)) types.push("Review");
 
   return Array.from(new Set(types));
 }
@@ -1529,6 +2013,12 @@ function detectTrustSignals(text) {
     "funded",
     "insured",
     "google reviews",
+    "bbb",
+    "five star",
+    "5-star",
+    "verified",
+    "accredited",
+    "in-house",
   ];
 
   return signals.filter((signal) => lower.includes(signal));
@@ -1551,6 +2041,9 @@ function detectCtas(text) {
     "free consultation",
     "talk to",
     "speak with",
+    "request funding",
+    "apply online",
+    "get approved",
   ];
 
   return ctas.filter((cta) => lower.includes(cta));
@@ -1575,7 +2068,10 @@ function suggestSearchTitle(page, businessName, businessType, city) {
   const path = getPath(page.url);
 
   if (path === "/") {
-    return clamp([businessName, businessType, city].filter(Boolean).join(" | "), 65);
+    return clamp(
+      [businessName, businessType, city].filter(Boolean).join(" | "),
+      65
+    );
   }
 
   const pageName =
@@ -1605,11 +2101,60 @@ function suggestSearchDescription(page, businessName, businessType, city) {
   }
 
   const pageName =
-    path.split("/").filter(Boolean).pop()?.replace(/[-_]/g, " ") || "this service";
+    path.split("/").filter(Boolean).pop()?.replace(/[-_]/g, " ") ||
+    "this service";
 
   return clamp(
     `Learn about ${pageName} from ${name}. See key details, benefits, common questions, and how to get started.`,
     160
+  );
+}
+
+function getMetaContent(html, name) {
+  return getMetaName(html, name);
+}
+
+function getMetaName(html, name) {
+  const escaped = escapeRegExp(name);
+
+  return (
+    matchFirst(
+      html,
+      new RegExp(
+        `<meta[^>]+name=["']${escaped}["'][^>]*content=["']([^"']*)["'][^>]*>`,
+        "i"
+      )
+    ) ||
+    matchFirst(
+      html,
+      new RegExp(
+        `<meta[^>]+content=["']([^"']*)["'][^>]*name=["']${escaped}["'][^>]*>`,
+        "i"
+      )
+    ) ||
+    ""
+  );
+}
+
+function getMetaProperty(html, property) {
+  const escaped = escapeRegExp(property);
+
+  return (
+    matchFirst(
+      html,
+      new RegExp(
+        `<meta[^>]+property=["']${escaped}["'][^>]*content=["']([^"']*)["'][^>]*>`,
+        "i"
+      )
+    ) ||
+    matchFirst(
+      html,
+      new RegExp(
+        `<meta[^>]+content=["']([^"']*)["'][^>]*property=["']${escaped}["'][^>]*>`,
+        "i"
+      )
+    ) ||
+    ""
   );
 }
 
@@ -1621,55 +2166,8 @@ function clamp(value, max) {
   return text.slice(0, max - 1).trim();
 }
 
-function decodeHtml(input) {
-  return String(input || "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
-}
-
-function getMetaContent(html, name) {
-  return getMetaName(html, name);
-}
-
-function getMetaName(html, name) {
-  const escaped = escapeRegExp(name);
-  return (
-    matchFirst(
-      html,
-      new RegExp(`<meta[^>]+name=["']${escaped}["'][^>]*content=["']([^"']*)["'][^>]*>`, "i")
-    ) ||
-    matchFirst(
-      html,
-      new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]*name=["']${escaped}["'][^>]*>`, "i")
-    )
-  );
-}
-
-function getMetaProperty(html, property) {
-  const escaped = escapeRegExp(property);
-  return (
-    matchFirst(
-      html,
-      new RegExp(`<meta[^>]+property=["']${escaped}["'][^>]*content=["']([^"']*)["'][^>]*>`, "i")
-    ) ||
-    matchFirst(
-      html,
-      new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]*property=["']${escaped}["'][^>]*>`, "i")
-    )
-  );
-}
-
-function escapeRegExp(input) {
-  return String(input || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function matchFirst(input, re) {
-  const match = input.match(re);
+  const match = String(input || "").match(re);
   return match?.[1] || "";
 }
 
@@ -1677,8 +2175,8 @@ function matchAllClean(input, re) {
   const output = [];
   let match;
 
-  while ((match = re.exec(input)) !== null) {
-    const value = cleanText(match[1]);
+  while ((match = re.exec(String(input || ""))) !== null) {
+    const value = cleanText(decodeHtml(match[1]));
     if (value) output.push(value);
   }
 
@@ -1689,7 +2187,7 @@ function matchAllRaw(input, re) {
   const output = [];
   let match;
 
-  while ((match = re.exec(input)) !== null) {
+  while ((match = re.exec(String(input || ""))) !== null) {
     if (match[1]) output.push(match[1]);
   }
 
@@ -1701,6 +2199,18 @@ function cleanText(input) {
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function decodeHtml(input) {
+  return String(input || "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
 }
 
 function countWords(text) {
@@ -1717,7 +2227,6 @@ function dedupeFindings(findings) {
   for (const finding of findings) {
     const key = [
       finding.type || "",
-      finding.page_url || "",
       finding.category || "",
       finding.issue_title || "",
       JSON.stringify(finding.affected_pages || []),
@@ -1737,8 +2246,8 @@ function dedupeFindings(findings) {
 function stableId(input) {
   let hash = 0;
 
-  for (let i = 0; i < input.length; i++) {
-    hash = (hash << 5) - hash + input.charCodeAt(i);
+  for (let i = 0; i < String(input).length; i++) {
+    hash = (hash << 5) - hash + String(input).charCodeAt(i);
     hash |= 0;
   }
 
@@ -1754,9 +2263,29 @@ function getOptionalSecret(name) {
 }
 
 function formatDomainName(domain) {
-  return domain
+  return String(domain || "")
     .replace(/\.(com|net|org|co|io|us)$/i, "")
     .split(/[.-]/)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function withTimeout(promise, ms, label = "Operation") {
+  let timeoutId;
+
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(
+        new Error(`${label} timed out after ${Math.round(ms / 1000)} seconds.`)
+      );
+    }, ms);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    clearTimeout(timeoutId);
+  });
 }

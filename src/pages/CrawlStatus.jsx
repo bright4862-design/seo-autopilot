@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { trackEvent } from "@/lib/analytics";
-import { reviewFixesWithAi, computeHealthScore, summarizeFixes } from "@/lib/aiReview";
+import { computeHealthScore, summarizeFixes } from "@/lib/aiReview";
 import ScanWebsiteForm from "@/components/scan/ScanWebsiteForm";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, CheckCircle2, Circle, Loader2 } from "lucide-react";
@@ -116,6 +116,34 @@ const mapCrawledPageForStorage = (page) => ({
   js_difference_detected: false,
 });
 
+const normalizeSeoIssueForSave = (fix, proj, job, me) => {
+  const status = VALID_STATUSES.has(fix.status) ? fix.status : fix.requires_developer ? "needs_developer" : fix.requires_approval ? "needs_approval" : "auto_fixed";
+  const category = VALID_CATEGORIES.has(fix.category) ? fix.category : "web_dev";
+  return {
+    project_id: proj.id,
+    crawl_job_id: job.id,
+    owner_user_id: me.id,
+    page_url: fix.page_url || "/",
+    category,
+    customer_category: fix.customer_category || "Website improvement",
+    priority: VALID_PRIORITIES.has(fix.priority) ? fix.priority : "medium",
+    status,
+    difficulty: VALID_DIFFICULTIES.has(fix.difficulty) ? fix.difficulty : status === "needs_developer" ? "developer" : "easy",
+    issue_title: fix.issue_title || "Review this website improvement",
+    plain_english_explanation: fix.plain_english_explanation || "This item was found during the website scan.",
+    why_it_matters: fix.why_it_matters || "Fixing this can help visitors and search engines understand the website more clearly.",
+    current_value: fix.current_value || "",
+    recommended_value: fix.recommended_value || fix.ai_recommendation || "Review this item.",
+    ai_recommendation: fix.ai_recommendation || fix.recommended_value || "Review this item.",
+    confidence_score: typeof fix.confidence_score === "number" ? fix.confidence_score : 90,
+    can_auto_fix: fix.can_auto_fix === true || status === "auto_fixed",
+    requires_approval: fix.requires_approval === true || status === "needs_approval",
+    requires_developer: fix.requires_developer === true || status === "needs_developer",
+    affected_pages: Array.isArray(fix.affected_pages) ? fix.affected_pages : [],
+    details: fix.details && typeof fix.details === "object" ? fix.details : {},
+  };
+};
+
 export default function CrawlStatus() {
   const [crawlJob, setCrawlJob] = useState(null);
   const [project, setProject] = useState(null);
@@ -130,12 +158,26 @@ export default function CrawlStatus() {
   useEffect(() => {
     trackEvent("scan_page_viewed");
     const load = async () => {
-      const projects = await base44.entities.BusinessProject.list("-created_date", 1);
-      if (projects.length > 0) {
-        setProject(projects[0]);
-        const comps = await base44.entities.Competitor.filter({ project_id: projects[0].id });
+      const me = await base44.auth.me();
+      const activeProjectId = window.localStorage.getItem("active_project_id");
+      let activeProject = null;
+
+      if (activeProjectId) {
+        try {
+          activeProject = await base44.entities.BusinessProject.get(activeProjectId);
+        } catch (e) {}
+      }
+
+      if (!activeProject) {
+        const projects = await base44.entities.BusinessProject.list("-last_crawl_at", 10);
+        activeProject = projects.find((item) => item.owner_user_id === me.id || item.created_by_id === me.id) || projects[0];
+      }
+
+      if (activeProject) {
+        setProject(activeProject);
+        const comps = await base44.entities.Competitor.filter({ project_id: activeProject.id });
         setCompetitors(comps);
-        const jobs = await base44.entities.CrawlJob.filter({ project_id: projects[0].id }, "-created_date", 1);
+        const jobs = await base44.entities.CrawlJob.filter({ project_id: activeProject.id }, "-created_date", 1);
         if (jobs.length > 0) setCrawlJob(jobs[0]);
       }
       setLoading(false);
@@ -205,10 +247,67 @@ export default function CrawlStatus() {
         const scanData = res.data || {};
         if (scanData.error || scanData.success === false) throw new Error(scanData.error || "Scan failed");
 
-        crawledPagesData = scanData.crawled_pages || [];
-        realFixes = Array.isArray(scanData.grouped_findings) ? scanData.grouped_findings.map(mapGroupedFindingToSeoIssue) : [];
-        if (typeof scanData.health_score === "number") healthScore = scanData.health_score;
+        crawledPagesData = Array.isArray(scanData.crawled_pages) ? scanData.crawled_pages : [];
+        const groupedFindings = Array.isArray(scanData.grouped_findings) ? scanData.grouped_findings : [];
+        const rawFindings = Array.isArray(scanData.raw_findings) ? scanData.raw_findings : [];
+        const mappedSeoIssues = (groupedFindings.length > 0 ? groupedFindings : rawFindings).map(mapGroupedFindingToSeoIssue);
+        let finalFixes = mappedSeoIssues;
+        let topActions = [];
+        let positiveFindings = Array.isArray(scanData.site_summary?.positives) ? scanData.site_summary.positives : [];
+        let aiSummary = "";
+
+        try {
+          const competitorResults = (competitors || []).map((c) => ({
+            name: c.name,
+            website_url: c.website_url,
+            service_pages: c.service_pages_count,
+            title_quality: c.title_quality_score,
+            description_coverage: c.meta_coverage_pct,
+            content_depth: c.content_depth_score,
+          }));
+          const aiReviewRes = await base44.functions.invoke("aiReviewScan", {
+            business_name: proj.business_name,
+            business_type: proj.business_type,
+            city: proj.city,
+            website_url: proj.website_url,
+            crawled_pages: crawledPagesData,
+            raw_fixes: mappedSeoIssues,
+            competitor_results: competitorResults,
+          });
+          const aiData = aiReviewRes?.data || {};
+          const aiFixes = Array.isArray(aiData.cleaned_fixes) ? aiData.cleaned_fixes : [];
+
+          if (aiData.success && aiFixes.length > 0) {
+            finalFixes = aiFixes;
+            topActions = Array.isArray(aiData.top_recommended_actions) ? aiData.top_recommended_actions : [];
+            positiveFindings = Array.isArray(aiData.positive_findings) ? aiData.positive_findings : positiveFindings;
+            aiSummary = typeof aiData.plain_english_summary === "string" ? aiData.plain_english_summary : "";
+          } else {
+            console.warn("AI review returned no fixes. Falling back to grouped scan findings.");
+            finalFixes = mappedSeoIssues;
+          }
+        } catch (error) {
+          console.warn("AI review failed. Falling back to grouped scan findings.", error);
+          finalFixes = mappedSeoIssues;
+        }
+
+        if (mappedSeoIssues.length > 0 && finalFixes.length === 0) {
+          finalFixes = mappedSeoIssues;
+        }
+
+        console.log("Advanced scan result", {
+          success: scanData.success,
+          pages: scanData.pages_crawled,
+          rawFindings: rawFindings.length,
+          groupedFindings: groupedFindings.length,
+          healthScore: scanData.health_score,
+          mappedSeoIssues: mappedSeoIssues.length,
+          finalFixes: finalFixes.length,
+        });
+
+        realFixes = finalFixes;
         if (typeof scanData.pages_crawled === "number") pagesCrawled = scanData.pages_crawled;
+        healthScore = realFixes.length > 0 ? computeHealthScore(realFixes) : typeof scanData.health_score === "number" ? scanData.health_score : healthScore;
         issuesFound = realFixes.length;
         summary = summarizeFixes(realFixes);
 
@@ -218,8 +317,8 @@ export default function CrawlStatus() {
             crawl_job_id: job.id,
             owner_user_id: me.id,
             scan_source: "runAdvancedScan",
-            raw_findings_count: Array.isArray(scanData.raw_findings) ? scanData.raw_findings.length : 0,
-            grouped_findings_count: Array.isArray(scanData.grouped_findings) ? scanData.grouped_findings.length : 0,
+            raw_findings_count: rawFindings.length,
+            grouped_findings_count: groupedFindings.length,
             broken_links_count: Array.isArray(scanData.broken_links) ? scanData.broken_links.length : 0,
             pages_crawled: typeof scanData.pages_crawled === "number" ? scanData.pages_crawled : 0,
             pages_found: typeof scanData.pages_found === "number" ? scanData.pages_found : 0,
@@ -230,25 +329,11 @@ export default function CrawlStatus() {
           });
         } catch (e) {}
 
-        let topActions = [];
-        let positiveFindings = Array.isArray(scanData.site_summary?.positives) ? scanData.site_summary.positives : [];
-        let aiSummary = "";
-        try {
-          const reviewed = await reviewFixesWithAi({ project: proj, crawledPages: crawledPagesData, rawFixes: realFixes });
-          if (reviewed) {
-            realFixes = reviewed.fixes;
-            topActions = reviewed.topActions;
-            positiveFindings = reviewed.positiveFindings;
-            aiSummary = reviewed.aiSummary;
-            healthScore = computeHealthScore(realFixes);
-            issuesFound = realFixes.length;
-            summary = summarizeFixes(realFixes);
-          }
-        } catch (e) {}
-
         scanSucceeded = true;
         setScanResult({ fixes: realFixes, health_score: healthScore, pages_crawled: pagesCrawled, issues_found: issuesFound, summary, top_actions: topActions, positive_findings: positiveFindings, ai_summary: aiSummary });
-      } catch (e) {}
+      } catch (e) {
+        console.warn("Advanced scan failed.", e);
+      }
 
       if (crawledPagesData.length) {
         await base44.entities.CrawledPage.bulkCreate(crawledPagesData.map((page) => ({ ...mapCrawledPageForStorage(page), project_id: proj.id, crawl_job_id: job.id, owner_user_id: me.id })));
@@ -275,7 +360,7 @@ export default function CrawlStatus() {
         });
       }
 
-      await base44.entities.SeoIssue.bulkCreate(sourceFixes.map((fix) => ({ ...fix, project_id: proj.id, crawl_job_id: job.id, owner_user_id: me.id })));
+      await base44.entities.SeoIssue.bulkCreate(sourceFixes.map((fix) => normalizeSeoIssueForSave(fix, proj, job, me)));
       try { await base44.entities.DeveloperRecommendation.deleteMany({ project_id: proj.id }); } catch (e) {}
 
       const devFixes = sourceFixes.filter((fix) => fix.requires_developer === true);
@@ -330,6 +415,7 @@ export default function CrawlStatus() {
         proj = await base44.entities.BusinessProject.create({ ...projectData, status: "active", seo_score: 0, subscription_plan: "free", cms_platform: "Unknown", owner_user_id: me.id });
       }
       setProject(proj);
+      window.localStorage.setItem("active_project_id", proj.id);
 
       try { await base44.entities.Competitor.deleteMany({ project_id: proj.id }); } catch (e) {}
       const urls = form.competitor_urls.map((url) => url.trim()).filter(Boolean);

@@ -26,10 +26,24 @@ export default function FixList() {
   useEffect(() => {
     trackEvent("fix_list_viewed");
     const load = async () => {
-      const projects = await base44.entities.BusinessProject.list("-created_date", 1);
-      if (projects.length > 0) {
-        setProject(projects[0]);
-        const data = await base44.entities.SeoIssue.filter({ project_id: projects[0].id });
+      const me = await base44.auth.me();
+      const activeProjectId = window.localStorage.getItem("active_project_id");
+      let activeProject = null;
+
+      if (activeProjectId) {
+        try {
+          activeProject = await base44.entities.BusinessProject.get(activeProjectId);
+        } catch (e) {}
+      }
+
+      if (!activeProject) {
+        const projects = await base44.entities.BusinessProject.list("-last_crawl_at", 10);
+        activeProject = projects.find((item) => item.owner_user_id === me.id || item.created_by_id === me.id) || projects[0];
+      }
+
+      if (activeProject) {
+        setProject(activeProject);
+        const data = await base44.entities.SeoIssue.filter({ project_id: activeProject.id, owner_user_id: me.id });
         setIssues(data);
       }
       setLoading(false);

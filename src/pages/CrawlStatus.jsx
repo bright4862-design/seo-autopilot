@@ -518,17 +518,6 @@ export default function CrawlStatus() {
         ? scanData.raw_findings
         : [];
 
-      if (rawFindings.length === 0 && groupedFindings.length === 0) {
-        console.warn("runAdvancedScan returned zero findings", {
-          website_url: activeProject.website_url,
-          pages_crawled: scanData.pages_crawled,
-          pages_found: scanData.pages_found,
-          crawled_pages_sample: crawledPagesData.slice(0, 5),
-          site_summary: scanData.site_summary,
-          crawl_warnings: scanData.crawl_warnings,
-        });
-      }
-
       const findingsForMapping =
         groupedFindings.length > 0 ? groupedFindings : rawFindings;
 
@@ -600,14 +589,11 @@ export default function CrawlStatus() {
               ? aiData.plain_english_summary
               : "";
         } else {
-          console.warn(
-            "AI review returned no fixes. Falling back to grouped scan findings."
-          );
           finalFixes = mappedSeoIssues;
         }
       } catch (err) {
         console.warn(
-          "AI review failed or timed out. Falling back to grouped scan findings.",
+          "AI review failed or timed out. Falling back to crawler findings.",
           err
         );
         finalFixes = mappedSeoIssues;
@@ -616,19 +602,6 @@ export default function CrawlStatus() {
       if (mappedSeoIssues.length > 0 && finalFixes.length === 0) {
         finalFixes = mappedSeoIssues;
       }
-
-      console.log("Advanced scan result", {
-        success: scanData.success,
-        scanMode,
-        pages: scanData.pages_crawled,
-        rawFindings: rawFindings.length,
-        groupedFindings: groupedFindings.length,
-        mappedSeoIssues: mappedSeoIssues.length,
-        finalFixes: finalFixes.length,
-        discoveredCompetitors: discoveredCompetitors.length,
-        competitorResults: competitorResultsForReview.length,
-        healthScore: scanData.health_score,
-      });
 
       progressRunIdRef.current = 0;
 
@@ -695,6 +668,7 @@ export default function CrawlStatus() {
           scan_mode: scanMode,
           raw_findings_count: rawFindings.length,
           grouped_findings_count: groupedFindings.length,
+          cleaned_fixes_count: finalFixes.length,
           broken_links_count: Array.isArray(scanData.broken_links)
             ? scanData.broken_links.length
             : 0,
@@ -770,6 +744,7 @@ export default function CrawlStatus() {
         health_score: finalHealthScore,
         raw_findings: rawFindings.length,
         grouped_findings: groupedFindings.length,
+        cleaned_fixes: finalFixes.length,
         scan_mode: scanMode,
         discovered_competitors: discoveredCompetitors.length,
       });
@@ -997,56 +972,6 @@ export default function CrawlStatus() {
                 {scanResult.ai_summary}
               </p>
             )}
-
-            {scanResult.positive_findings?.length > 0 && (
-              <div className="mt-5">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
-                  What’s working well
-                </p>
-
-                <div className="mt-3 space-y-2">
-                  {scanResult.positive_findings.map((finding, index) => (
-                    <p
-                      key={index}
-                      className="text-sm leading-6 text-slate-600"
-                    >
-                      {finding}
-                    </p>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="mt-5 grid gap-3 md:grid-cols-3">
-              <div className="rounded-xl bg-slate-50 p-4">
-                <div className="text-2xl font-semibold text-slate-950">
-                  {scanResult.summary?.we_can_fix ?? 0}
-                </div>
-                <div className="text-sm text-slate-500">Prepared</div>
-              </div>
-
-              <div className="rounded-xl bg-slate-50 p-4">
-                <div className="text-2xl font-semibold text-slate-950">
-                  {scanResult.summary?.needs_approval ?? 0}
-                </div>
-                <div className="text-sm text-slate-500">Needs review</div>
-              </div>
-
-              <div className="rounded-xl bg-slate-50 p-4">
-                <div className="text-2xl font-semibold text-slate-950">
-                  {scanResult.summary?.needs_developer ?? 0}
-                </div>
-                <div className="text-sm text-slate-500">May need help</div>
-              </div>
-            </div>
-
-            {Array.isArray(scanResult.crawl_warnings) &&
-              scanResult.crawl_warnings.length > 0 && (
-                <p className="mt-4 text-xs leading-5 text-slate-400">
-                  Some parts of the site could not be reviewed automatically.
-                  Your Fix List is based on the pages we could access.
-                </p>
-              )}
 
             <div className="mt-6">
               <Button

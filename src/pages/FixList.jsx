@@ -50,47 +50,46 @@ export default function FixList() {
   const navigate = useNavigate();
 
   const [scanRecord, setScanRecord] = useState(null);
-  const [scanHistory, setScanHistory] = useState([]);
   const [activeFilter, setActiveFilter] = useState("all");
   const [selectedCms, setSelectedCms] = useState("wordpress");
-  const [historyOpen, setHistoryOpen] = useState(false);
 
   useEffect(() => {
-    setScanRecord(loadLastScanRecord());
-    setScanHistory(loadScanHistory());
+    function reload() {
+      setScanRecord(loadBestScanRecord());
+    }
+
+    reload();
+
+    window.addEventListener("focus", reload);
+    window.addEventListener("storage", reload);
+    window.addEventListener("seo-autopilot-scan-saved", reload);
+
+    return () => {
+      window.removeEventListener("focus", reload);
+      window.removeEventListener("storage", reload);
+      window.removeEventListener("seo-autopilot-scan-saved", reload);
+    };
   }, []);
 
-  const scan = scanRecord?.result || scanRecord || null;
+  const scan = scanRecord?.result || null;
 
-  const fixes = useMemo(() => {
-    return pickFirstNonEmptyArray([
-      scan?.cleaned_fixes,
-      scan?.fixes,
-      scan?.findings,
-      scan?.recommendations,
-      scan?.raw_fixes,
-    ]);
-  }, [scan]);
+  const fixes = useMemo(() => getFixes(scan), [scan]);
+  const pages = useMemo(() => getPages(scan), [scan]);
 
-  const pages = useMemo(() => {
-    return pickFirstNonEmptyArray([
-      scan?.crawled_pages,
-      scan?.pages,
-      scan?.scanned_pages,
-      scan?.crawl_pages,
-    ]);
-  }, [scan]);
+  const hasScan = Boolean(scan && (pages.length > 0 || fixes.length > 0));
 
   const healthReport =
     scan?.website_health_report ||
     scan?.scan_summary?.website_health_report ||
+    scan?.scan_summary ||
     null;
 
-  const score =
-    numberOrNull(scan?.health_score) ??
-    numberOrNull(scan?.scan_summary?.score) ??
-    numberOrNull(healthReport?.health_score) ??
-    0;
+  const score = hasScan
+    ? numberOrNull(scan?.health_score) ??
+      numberOrNull(scan?.scan_summary?.score) ??
+      numberOrNull(healthReport?.health_score) ??
+      calculateFallbackScore(fixes)
+    : null;
 
   const highPriorityCount = fixes.filter((fix) =>
     ["critical", "high"].includes(String(fix.priority || ""))
@@ -125,19 +124,18 @@ export default function FixList() {
     return fixes;
   }, [fixes, activeFilter]);
 
+  const cmsLabel =
+    CMS_OPTIONS.find((item) => item.id === selectedCms)?.label || "your CMS";
+
   const actionPlan = useMemo(() => {
     return buildActionPlan({
       scan,
       fixes,
       healthReport,
       selectedCms,
+      cmsLabel,
     });
-  }, [scan, fixes, healthReport, selectedCms]);
-
-  const cmsLabel =
-    CMS_OPTIONS.find((item) => item.id === selectedCms)?.label || "your CMS";
-
-  const hasScan = Boolean(scan && (fixes.length > 0 || pages.length > 0));
+  }, [scan, fixes, healthReport, selectedCms, cmsLabel]);
 
   return (
     <div className="mx-auto max-w-7xl space-y-8 px-4 py-8 md:px-8">
@@ -159,28 +157,32 @@ export default function FixList() {
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard
           label="Score"
-          value={score || "—"}
-          sublabel={score ? scoreToLabel(score) : "Run a scan"}
+          value={score === null ? "—" : score}
+          sublabel={score === null ? "Run a scan" : scoreToLabel(score)}
           icon={<Sparkles className="h-5 w-5" />}
         />
 
         <MetricCard
           label="Recommendations"
-          value={fixes.length}
-          sublabel={`${highPriorityCount} high priority`}
+          value={hasScan ? fixes.length : 0}
+          sublabel={`${hasScan ? highPriorityCount : 0} high priority`}
           icon={<AlertCircle className="h-5 w-5" />}
         />
 
         <MetricCard
           label="Pages scanned"
-          value={pages.length}
-          sublabel={formatDate(scanRecord?.created_at || scan?.created_at)}
+          value={hasScan ? pages.length : 0}
+          sublabel={
+            hasScan
+              ? formatDate(scanRecord?.created_at || scan?.created_at)
+              : "No scan yet"
+          }
           icon={<Search className="h-5 w-5" />}
         />
 
         <MetricCard
           label="May need help"
-          value={helpCount}
+          value={hasScan ? helpCount : 0}
           sublabel="Website setup or cleanup"
           icon={<Wrench className="h-5 w-5" />}
         />
@@ -198,10 +200,7 @@ export default function FixList() {
             score={score}
           />
 
-          <CmsSelector
-            selectedCms={selectedCms}
-            onSelectCms={setSelectedCms}
-          />
+          <CmsSelector selectedCms={selectedCms} onSelectCms={setSelectedCms} />
 
           <div className="flex flex-wrap gap-3">
             {FILTERS.map((filter) => (
@@ -254,71 +253,6 @@ export default function FixList() {
           </section>
         </>
       )}
-
-      <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
-        <button
-          type="button"
-          onClick={() => setHistoryOpen((value) => !value)}
-          className="flex w-full items-center justify-between p-6 text-left"
-        >
-          <div>
-            <h2 className="text-xl font-semibold text-slate-950">
-              Scan history
-            </h2>
-            <p className="mt-1 text-slate-600">Last 5 scans</p>
-          </div>
-
-          <ChevronDown
-            className={`h-5 w-5 text-slate-400 transition ${
-              historyOpen ? "rotate-180" : ""
-            }`}
-          />
-        </button>
-
-        {historyOpen ? (
-          <div className="border-t border-slate-100 p-6">
-            {scanHistory.length === 0 ? (
-              <p className="text-sm text-slate-600">
-                No scan history has been saved yet.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {scanHistory.slice(0, 5).map((item, index) => (
-                  <button
-                    key={item.id || index}
-                    type="button"
-                    onClick={() => setScanRecord(item)}
-                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left hover:bg-white"
-                  >
-                    <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                      <div>
-                        <div className="font-semibold text-slate-950">
-                          {item.website_url || item.result?.normalized_url}
-                        </div>
-                        <div className="mt-1 text-sm text-slate-500">
-                          {formatDate(item.created_at)} ·{" "}
-                          {safeArray(
-                            item.result?.fixes || item.result?.cleaned_fixes
-                          ).length}{" "}
-                          recommendations ·{" "}
-                          {safeArray(
-                            item.result?.pages || item.result?.crawled_pages
-                          ).length}{" "}
-                          pages
-                        </div>
-                      </div>
-
-                      <span className="rounded-full bg-white px-3 py-1 text-sm text-slate-600">
-                        Score {item.result?.health_score ?? "—"}
-                      </span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        ) : null}
-      </section>
     </div>
   );
 }
@@ -477,7 +411,11 @@ function FixCard({ fix, cms, cmsLabel, scan, index }) {
           <div className="flex flex-wrap gap-2">
             <Badge>{priority}</Badge>
             <Badge>{category}</Badge>
-            {helpNeeded ? <Badge>may need help</Badge> : <Badge>can prepare</Badge>}
+            {helpNeeded ? (
+              <Badge>may need help</Badge>
+            ) : (
+              <Badge>can prepare</Badge>
+            )}
           </div>
 
           <h3 className="mt-4 text-xl font-bold text-slate-950">
@@ -639,7 +577,7 @@ function Badge({ children }) {
 /* Action plan                                                                 */
 /* -------------------------------------------------------------------------- */
 
-function buildActionPlan({ scan, fixes, healthReport, selectedCms }) {
+function buildActionPlan({ scan, fixes, healthReport, selectedCms, cmsLabel }) {
   const topActions = safeArray(
     scan?.top_recommended_actions || scan?.recommended_actions
   );
@@ -661,8 +599,8 @@ function buildActionPlan({ scan, fixes, healthReport, selectedCms }) {
         reason: healthReport.next_best_step,
       },
       {
-        title: `Choose your CMS instructions`,
-        reason: `Select ${selectedCms} or your actual CMS above, then follow the platform-specific steps on each recommendation.`,
+        title: `Use ${cmsLabel} instructions`,
+        reason: `Follow the platform-specific steps under each recommendation for ${cmsLabel}.`,
       },
       {
         title: "Rescan after changes",
@@ -693,7 +631,7 @@ function buildActionPlan({ scan, fixes, healthReport, selectedCms }) {
         "Start with the items marked high priority, then work through the easier content improvements.",
     },
     {
-      title: "Use the CMS instructions",
+      title: `Use ${cmsLabel} instructions`,
       reason:
         "Pick your website builder above and follow the instructions under each fix.",
     },
@@ -1029,44 +967,153 @@ function needsWebHelp(fix) {
 /* Storage                                                                     */
 /* -------------------------------------------------------------------------- */
 
-function loadLastScanRecord() {
-  for (const key of LAST_SCAN_KEYS) {
-    const value = safeJsonParse(window.localStorage.getItem(key));
+function loadBestScanRecord() {
+  const records = [];
 
-    if (value) return normalizeStoredRecord(value);
+  for (const key of LAST_SCAN_KEYS) {
+    const parsed = safeJsonParse(window.localStorage.getItem(key));
+    collectRecords(parsed, records);
   }
 
-  return null;
+  for (const key of SCAN_HISTORY_KEYS) {
+    const parsed = safeJsonParse(window.localStorage.getItem(key));
+    collectRecords(parsed, records);
+  }
+
+  try {
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i);
+
+      if (!key) continue;
+
+      const lowerKey = key.toLowerCase();
+
+      if (
+        !lowerKey.includes("scan") &&
+        !lowerKey.includes("seo_autopilot") &&
+        !lowerKey.includes("seo-autopilot")
+      ) {
+        continue;
+      }
+
+      const parsed = safeJsonParse(window.localStorage.getItem(key));
+      collectRecords(parsed, records);
+    }
+  } catch {
+    // Ignore broad localStorage search errors.
+  }
+
+  const normalized = records
+    .map(normalizeStoredRecord)
+    .filter(Boolean)
+    .filter((record) => record.result);
+
+  const useful = normalized.filter(recordHasUsefulData);
+
+  const candidates = useful.length > 0 ? useful : normalized;
+
+  if (candidates.length === 0) return null;
+
+  return candidates.sort(compareRecordsByQualityAndDate)[0];
 }
 
-function loadScanHistory() {
-  for (const key of SCAN_HISTORY_KEYS) {
-    const value = safeJsonParse(window.localStorage.getItem(key));
+function collectRecords(value, records) {
+  if (!value) return;
 
-    if (Array.isArray(value)) {
-      return value.map(normalizeStoredRecord).filter(Boolean);
-    }
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectRecords(item, records));
+    return;
   }
 
-  return [];
+  if (typeof value === "object") {
+    records.push(value);
+  }
 }
 
 function normalizeStoredRecord(value) {
-  if (!value) return null;
+  if (!value || typeof value !== "object") return null;
 
-  if (value.result) return value;
+  const result = value.result && typeof value.result === "object" ? value.result : value;
+
+  const websiteUrl =
+    value.website_url ||
+    result.normalized_url ||
+    result.website_url ||
+    result.url ||
+    "";
+
+  const createdAt =
+    value.created_at ||
+    result.created_at ||
+    value.completed_at ||
+    result.completed_at ||
+    value.date ||
+    result.date ||
+    "";
 
   return {
-    id: value.id || `scan_${Date.now()}`,
-    created_at: value.created_at || value.completed_at || "",
-    website_url: value.website_url || value.normalized_url || "",
-    result: value,
+    id: value.id || result.id || `scan_${stableString(websiteUrl + createdAt)}`,
+    created_at: createdAt,
+    website_url: websiteUrl,
+    result,
   };
 }
 
+function recordHasUsefulData(record) {
+  const result = record?.result || {};
+  const pages = getPages(result);
+  const fixes = getFixes(result);
+
+  return pages.length > 0 || fixes.length > 0;
+}
+
+function compareRecordsByQualityAndDate(a, b) {
+  const aUseful = recordHasUsefulData(a) ? 1 : 0;
+  const bUseful = recordHasUsefulData(b) ? 1 : 0;
+
+  if (aUseful !== bUseful) return bUseful - aUseful;
+
+  const aPages = getPages(a.result).length;
+  const bPages = getPages(b.result).length;
+
+  if (aPages !== bPages) return bPages - aPages;
+
+  const aFixes = getFixes(a.result).length;
+  const bFixes = getFixes(b.result).length;
+
+  if (aFixes !== bFixes) return bFixes - aFixes;
+
+  const aTime = Date.parse(a.created_at || "") || 0;
+  const bTime = Date.parse(b.created_at || "") || 0;
+
+  return bTime - aTime;
+}
+
 /* -------------------------------------------------------------------------- */
-/* Friendly affected pages                                                     */
+/* Data helpers                                                                */
 /* -------------------------------------------------------------------------- */
+
+function getFixes(scan) {
+  return pickFirstNonEmptyArray([
+    scan?.cleaned_fixes,
+    scan?.fixes,
+    scan?.findings,
+    scan?.recommendations,
+    scan?.raw_fixes,
+    scan?.grouped_findings,
+    scan?.raw_findings,
+    scan?.issues,
+  ]);
+}
+
+function getPages(scan) {
+  return pickFirstNonEmptyArray([
+    scan?.crawled_pages,
+    scan?.pages,
+    scan?.scanned_pages,
+    scan?.crawl_pages,
+  ]);
+}
 
 function buildFriendlyAffectedPages(fix) {
   const examples = safeArray(fix?.details?.examples);
@@ -1274,11 +1321,24 @@ function friendlyCategory(category) {
 }
 
 function scoreToLabel(score) {
-  if (!score) return "Run a scan";
+  if (score === null || score === undefined) return "Run a scan";
   if (score >= 85) return "Strong";
   if (score >= 70) return "Good start";
   if (score >= 45) return "Needs attention";
   return "Needs urgent attention";
+}
+
+function calculateFallbackScore(fixes) {
+  let score = 100;
+
+  for (const fix of fixes || []) {
+    if (fix.priority === "critical") score -= 16;
+    else if (fix.priority === "high") score -= 10;
+    else if (fix.priority === "medium") score -= 5;
+    else if (fix.priority === "low") score -= 2;
+  }
+
+  return Math.max(0, Math.min(100, score));
 }
 
 function formatDate(value) {
@@ -1293,4 +1353,16 @@ function formatDate(value) {
   } catch {
     return String(value);
   }
+}
+
+function stableString(value) {
+  let hash = 0;
+  const text = String(value || "");
+
+  for (let i = 0; i < text.length; i++) {
+    hash = (hash << 5) - hash + text.charCodeAt(i);
+    hash |= 0;
+  }
+
+  return Math.abs(hash);
 }

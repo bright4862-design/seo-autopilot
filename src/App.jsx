@@ -75,9 +75,61 @@ const AuthenticatedApp = () => {
         }
       >
         <Route element={<DashboardLayout />}>
+          {/* Main visible pages */}
           <Route path="/dashboard" element={<FixList />} />
           <Route path="/onboarding" element={<Onboarding />} />
           <Route path="/billing" element={<Billing />} />
+
+          {/* Old/hidden routes redirected so they do not 404 */}
+          <Route path="/scan" element={<Navigate to="/onboarding" replace />} />
+          <Route
+            path="/scan-website"
+            element={<Navigate to="/onboarding" replace />}
+          />
+          <Route
+            path="/start-review"
+            element={<Navigate to="/onboarding" replace />}
+          />
+          <Route
+            path="/crawl-status"
+            element={<Navigate to="/onboarding" replace />}
+          />
+
+          <Route path="/reports" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/issues" element={<Navigate to="/dashboard" replace />} />
+          <Route
+            path="/website-improvements"
+            element={<Navigate to="/dashboard" replace />}
+          />
+          <Route
+            path="/metadata"
+            element={<Navigate to="/dashboard" replace />}
+          />
+          <Route
+            path="/redirects"
+            element={<Navigate to="/dashboard" replace />}
+          />
+          <Route
+            path="/canonicals"
+            element={<Navigate to="/dashboard" replace />}
+          />
+          <Route
+            path="/js-rendering"
+            element={<Navigate to="/dashboard" replace />}
+          />
+          <Route
+            path="/competitors"
+            element={<Navigate to="/dashboard" replace />}
+          />
+          <Route
+            path="/developer"
+            element={<Navigate to="/dashboard" replace />}
+          />
+          <Route
+            path="/assistant"
+            element={<Navigate to="/dashboard" replace />}
+          />
+          <Route path="/admin" element={<Navigate to="/dashboard" replace />} />
         </Route>
       </Route>
 

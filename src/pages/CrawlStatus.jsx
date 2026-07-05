@@ -133,12 +133,14 @@ export default function CrawlStatus() {
     setError(null);
     let job = existingJob;
     try {
+      const me = await base44.auth.me();
       if (!job) {
         job = await base44.entities.CrawlJob.create({
           project_id: project.id,
           status: "queued",
           crawl_type: "full",
           started_at: new Date().toISOString(),
+          owner_user_id: me.id,
         });
       }
       setCrawlJob(job);
@@ -204,6 +206,7 @@ export default function CrawlStatus() {
             ...page,
             project_id: project.id,
             crawl_job_id: job.id,
+            owner_user_id: me.id,
           }))
         );
       }
@@ -228,6 +231,7 @@ export default function CrawlStatus() {
           ...f,
           project_id: project.id,
           crawl_job_id: job.id,
+          owner_user_id: me.id,
         }))
       );
 
@@ -251,6 +255,7 @@ export default function CrawlStatus() {
             'diy';
           return {
             project_id: project.id,
+            owner_user_id: me.id,
             title: f.issue_title,
             description: f.plain_english_explanation,
             category,

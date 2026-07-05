@@ -18,6 +18,7 @@ export default function Onboarding() {
     if (!canSubmit) return;
     setSaving(true);
     try {
+      const user = await base44.auth.me();
       const project = await base44.entities.BusinessProject.create({
         business_name: data.business_name.trim(),
         website_url: data.website_url.trim(),
@@ -25,11 +26,13 @@ export default function Onboarding() {
         seo_score: 0,
         subscription_plan: "free",
         cms_platform: "Unknown",
+        owner_user_id: user.id,
       });
       await base44.entities.CrawlJob.create({
         project_id: project.id,
         status: "queued",
         crawl_type: "full",
+        owner_user_id: user.id,
       });
       navigate("/crawl-status?autostart=1");
     } catch (e) {

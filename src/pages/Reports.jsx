@@ -32,8 +32,10 @@ export default function Reports() {
     const approval = issues.filter(i => i.status === "needs_approval").length;
     const dev = issues.filter(i => i.status === "needs_developer").length;
 
+    const user = await base44.auth.me();
     const report = await base44.entities.Report.create({
       project_id: project.id,
+      owner_user_id: user.id,
       summary: `SEO scan of ${project.website_url} found ${issues.length} total issues. ${fixed} simple fixes were prepared for review, ${approval} need your review, and ${dev} require developer work.`,
       fixed_count: fixed,
       approval_count: approval,

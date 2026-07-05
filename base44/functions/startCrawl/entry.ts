@@ -15,6 +15,7 @@ Deno.serve(async (req) => {
       status: 'queued',
       crawl_type: 'full',
       started_at: new Date().toISOString(),
+      owner_user_id: user.id,
     });
 
     // In production, this would call an external crawler API

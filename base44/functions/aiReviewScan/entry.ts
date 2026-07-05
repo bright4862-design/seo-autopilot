@@ -1,6 +1,6 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
-const CATEGORY_MAP: Record<string, string> = {
+const CATEGORY_MAP = {
   broken_page: "404_error",
   page_heading: "thin_content",
   placeholder_text: "web_dev",
@@ -11,11 +11,12 @@ const CATEGORY_MAP: Record<string, string> = {
   duplicate_search_titles: "duplicate_content",
   duplicate_search_descriptions: "duplicate_content",
   duplicate_description: "duplicate_content",
-  competitor_gap: "thin_content",
-  mobile_setup: "web_dev",
-  performance_hint: "performance",
-  social_metadata: "web_dev",
-  indexability: "robots_txt",
+  competitor_gap: "competitor_gap",
+
+  mobile_setup: "mobile_setup",
+  performance_hint: "performance_hint",
+  social_metadata: "social_metadata",
+  indexability: "indexability",
 };
 
 Deno.serve(async (req) => {
@@ -36,6 +37,7 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
 
     const websiteUrl = body.website_url || body.normalized_url || "";
+
     const pages = pickFirstNonEmptyArray([
       body.crawled_pages,
       body.pages,
@@ -144,7 +146,7 @@ Deno.serve(async (req) => {
 /* Core normalization                                                          */
 /* -------------------------------------------------------------------------- */
 
-function pickFirstNonEmptyArray(values: unknown[]) {
+function pickFirstNonEmptyArray(values) {
   for (const value of values || []) {
     if (Array.isArray(value) && value.length > 0) {
       return value;
@@ -154,17 +156,17 @@ function pickFirstNonEmptyArray(values: unknown[]) {
   return [];
 }
 
-function prepareFixes(rawFixes: any[]) {
+function prepareFixes(rawFixes) {
   return dedupeByFixId(
     (Array.isArray(rawFixes) ? rawFixes : []).map((fix, index) =>
       normalizeFix(fix, index)
     )
   )
     .sort(compareFixes)
-    .slice(0, 40);
+    .slice(0, 50);
 }
 
-function normalizeFix(fix: any, index: number) {
+function normalizeFix(fix, index) {
   const rawCategory = String(fix?.category || fix?.type || "web_dev");
   const category = CATEGORY_MAP[rawCategory] || rawCategory || "web_dev";
 
@@ -222,18 +224,13 @@ function normalizeFix(fix: any, index: number) {
       recommendedValue,
     });
 
-  const normalized = {
+  const stable = fix?.id || fix?.fix_id || stableId(`${pageUrl}|${category}|${title}|${index}`);
+
+  return {
     ...fix,
 
-    id:
-      fix?.id ||
-      fix?.fix_id ||
-      stableId(`${pageUrl}|${category}|${title}|${index}`),
-
-    fix_id:
-      fix?.fix_id ||
-      fix?.id ||
-      stableId(`${pageUrl}|${category}|${title}|${index}`),
+    id: stable,
+    fix_id: stable,
 
     type: fix?.type || "site_level",
 
@@ -298,13 +295,9 @@ function normalizeFix(fix: any, index: number) {
       cleanString(fix?.time_estimate || fix?.estimated_time) ||
       defaultTime(difficulty),
   };
-
-  normalized.fix_id = normalized.id;
-
-  return normalized;
 }
 
-function normalizeAffectedPages(fix: any, fallbackPage: string) {
+function normalizeAffectedPages(fix, fallbackPage) {
   const rawPages = Array.isArray(fix?.affected_pages)
     ? fix.affected_pages
     : Array.isArray(fix?.pages)
@@ -318,7 +311,7 @@ function normalizeAffectedPages(fix: any, fallbackPage: string) {
   ).slice(0, 150);
 }
 
-function normalizeSteps(fix: any) {
+function normalizeSteps(fix) {
   const possible = [
     fix?.what_to_do,
     fix?.what_to_do_steps,
@@ -328,15 +321,20 @@ function normalizeSteps(fix: any) {
 
   for (const value of possible) {
     if (Array.isArray(value) && value.length > 0) {
-      return value.slice(0, 5).map((item) => String(item).trim()).filter(Boolean);
+      const steps = value
+        .slice(0, 5)
+        .map((item) => String(item).trim())
+        .filter(Boolean);
+
+      if (steps.length > 0) return steps;
     }
   }
 
   return null;
 }
 
-function dedupeByFixId(fixes: any[]) {
-  const seen = new Set<string>();
+function dedupeByFixId(fixes) {
+  const seen = new Set();
   const output = [];
 
   for (const fix of fixes || []) {
@@ -351,15 +349,15 @@ function dedupeByFixId(fixes: any[]) {
   return output;
 }
 
-function compareFixes(a: any, b: any) {
-  const priorityOrder: Record<string, number> = {
+function compareFixes(a, b) {
+  const priorityOrder = {
     critical: 0,
     high: 1,
     medium: 2,
     low: 3,
   };
 
-  const statusOrder: Record<string, number> = {
+  const statusOrder = {
     needs_approval: 0,
     auto_fixed: 1,
     needs_developer: 2,
@@ -385,15 +383,7 @@ function compareFixes(a: any, b: any) {
 /* Fallback plan                                                               */
 /* -------------------------------------------------------------------------- */
 
-function buildFallbackPlan({
-  body,
-  pages,
-  canonicalFixes,
-}: {
-  body: any;
-  pages: any[];
-  canonicalFixes: any[];
-}) {
+function buildFallbackPlan({ body, pages, canonicalFixes }) {
   const score =
     typeof body?.health_score === "number"
       ? body.health_score
@@ -474,28 +464,36 @@ function buildFallbackPlan({
 
   return makeFrontendCompatible({
     plain_english_summary: summaryParts.join(" "),
+
     top_recommended_actions: topRecommendedActions,
     recommended_actions: [],
+
     cleaned_fixes: canonicalFixes,
     raw_fixes: canonicalFixes,
     fixes: canonicalFixes,
     findings: canonicalFixes,
     recommendations: canonicalFixes,
+
     competitor_insights: competitorInsights,
+
     grouped_page_recommendations: [],
     ignored_low_value_pages: [],
     positive_findings: positiveFindings,
+
     ai_rewrites_applied: 0,
+
     crawled_pages: pages,
     pages,
+
     health_score: score,
+
     technical_audit_summary: body?.technical_audit_summary || null,
     screaming_frog_lite_enabled: Boolean(body?.screaming_frog_lite_enabled),
     audit_profile: body?.audit_profile || "",
   });
 }
 
-function makeFrontendCompatible(plan: any) {
+function makeFrontendCompatible(plan) {
   const cleanedFixes = Array.isArray(plan.cleaned_fixes)
     ? plan.cleaned_fixes
     : [];
@@ -518,9 +516,9 @@ function makeFrontendCompatible(plan: any) {
   const recommendedActions =
     Array.isArray(plan.recommended_actions) && plan.recommended_actions.length > 0
       ? plan.recommended_actions
-      : topRecommendedActions.map((action: any) => {
+      : topRecommendedActions.map((action) => {
           const fix = cleanedFixes.find(
-            (item: any) => item.id === action.fix_id || item.fix_id === action.fix_id
+            (item) => item.id === action.fix_id || item.fix_id === action.fix_id
           );
 
           return {
@@ -542,6 +540,8 @@ function makeFrontendCompatible(plan: any) {
 
   return {
     ...plan,
+
+    success: true,
 
     health_score: score,
 
@@ -579,23 +579,23 @@ function makeFrontendCompatible(plan: any) {
 
       pages_scanned: pages.length,
 
-      pages_failed: pages.filter((page: any) => {
+      pages_failed: pages.filter((page) => {
         const status = Number(page?.status_code || 0);
         return status >= 400 || status === 0 || page?.fetch_error;
       }).length,
 
-      high_priority_count: cleanedFixes.filter((fix: any) =>
+      high_priority_count: cleanedFixes.filter((fix) =>
         ["critical", "high"].includes(fix.priority)
       ).length,
 
       competitor_gap_count: cleanedFixes.filter(
-        (fix: any) =>
+        (fix) =>
           fix.category === "competitor_gap" ||
           fix.customer_category === "Competitor opportunities"
       ).length,
 
       technical_issue_count: cleanedFixes.filter(
-        (fix: any) => fix.customer_category === "Technical SEO"
+        (fix) => fix.customer_category === "Technical SEO"
       ).length,
 
       positive_findings: Array.isArray(plan.positive_findings)
@@ -609,7 +609,7 @@ function makeFrontendCompatible(plan: any) {
 /* AI merge                                                                    */
 /* -------------------------------------------------------------------------- */
 
-function unwrapAiResponse(response: any) {
+function unwrapAiResponse(response) {
   if (!response) return {};
 
   if (typeof response === "string") {
@@ -634,14 +634,9 @@ function mergeAiIntoFallback({
   fallbackPlan,
   canonicalFixes,
   pages,
-}: {
-  aiResponse: any;
-  fallbackPlan: any;
-  canonicalFixes: any[];
-  pages: any[];
 }) {
   const validIds = new Set(canonicalFixes.map((fix) => fix.id));
-  const rewrites = new Map<string, any>();
+  const rewrites = new Map();
 
   for (const rewrite of aiResponse?.fix_rewrites || []) {
     if (rewrite?.fix_id && validIds.has(rewrite.fix_id)) {
@@ -658,7 +653,7 @@ function mergeAiIntoFallback({
       Array.isArray(rewrite.what_to_do) && rewrite.what_to_do.length > 0
         ? rewrite.what_to_do
             .slice(0, 5)
-            .map((step: any) => String(step).trim())
+            .map((step) => String(step).trim())
             .filter(Boolean)
         : fix.what_to_do;
 
@@ -706,7 +701,7 @@ function mergeAiIntoFallback({
     aiResponse.top_recommended_actions.length > 0
       ? aiResponse.top_recommended_actions
           .slice(0, 5)
-          .map((action: any) => ({
+          .map((action) => ({
             fix_id: validIds.has(action?.fix_id) ? action.fix_id : "",
             title: cleanString(action?.title) || "",
             reason: cleanString(action?.reason) || "",
@@ -714,7 +709,7 @@ function mergeAiIntoFallback({
               ? action.priority
               : "medium",
           }))
-          .filter((action: any) => action.title)
+          .filter((action) => action.title)
       : fallbackPlan.top_recommended_actions;
 
   const competitorInsights =
@@ -722,7 +717,7 @@ function mergeAiIntoFallback({
     aiResponse.competitor_insights.length > 0
       ? aiResponse.competitor_insights
           .slice(0, 6)
-          .map((insight: any) => ({
+          .map((insight) => ({
             headline: cleanString(insight?.headline) || "",
             title: cleanString(insight?.headline) || "",
             competitor_name: cleanString(insight?.competitor_name) || "",
@@ -737,13 +732,13 @@ function mergeAiIntoFallback({
             related_user_page: cleanString(insight?.target_page) || "/",
             gap_type: "competitor_gap",
           }))
-          .filter((insight: any) => insight.headline && insight.evidence)
+          .filter((insight) => insight.headline && insight.evidence)
       : fallbackPlan.competitor_insights;
 
   const positives =
     Array.isArray(aiResponse?.positive_findings) &&
     aiResponse.positive_findings.length > 0
-      ? aiResponse.positive_findings.slice(0, 5).map((item: any) => String(item))
+      ? aiResponse.positive_findings.slice(0, 5).map((item) => String(item))
       : fallbackPlan.positive_findings;
 
   return makeFrontendCompatible({
@@ -754,6 +749,7 @@ function mergeAiIntoFallback({
       fallbackPlan.plain_english_summary,
 
     top_recommended_actions: topRecommendedActions,
+
     cleaned_fixes: cleanedFixes,
     raw_fixes: cleanedFixes,
     fixes: cleanedFixes,
@@ -780,12 +776,6 @@ function buildPrompt({
   pages,
   canonicalFixes,
   fallbackPlan,
-}: {
-  body: any;
-  websiteUrl: string;
-  pages: any[];
-  canonicalFixes: any[];
-  fallbackPlan: any;
 }) {
   return `
 You are the AI review layer for SEO Autopilot.
@@ -804,6 +794,7 @@ Hard rules:
 9. what_to_do must contain 2 to 5 short action steps.
 10. who_can_do_this must be either "you" or "your_web_person".
 11. Competitor insights must only use competitor data provided below.
+12. For Technical SEO findings, explain the issue as a website setup problem rather than using developer-only language.
 
 Business:
 ${JSON.stringify(
@@ -823,6 +814,16 @@ ${JSON.stringify(body?.crawl_warnings || [], null, 2)}
 
 Technical audit summary:
 ${JSON.stringify(body?.technical_audit_summary || null, null, 2)}
+
+Screaming Frog Lite enabled:
+${JSON.stringify(
+  {
+    enabled: Boolean(body?.screaming_frog_lite_enabled),
+    audit_profile: body?.audit_profile || "",
+  },
+  null,
+  2
+)}
 
 Client rendering:
 ${JSON.stringify(body?.client_rendering || null, null, 2)}
@@ -906,6 +907,7 @@ function responseSchema() {
           properties: {
             headline: { type: "string" },
             competitor_name: { type: "string" },
+            competitor_domain: { type: "string" },
             evidence: { type: "string" },
             what_to_add: { type: "string" },
             target_page: { type: "string" },
@@ -928,7 +930,7 @@ function responseSchema() {
   };
 }
 
-function compactFixForPrompt(fix: any) {
+function compactFixForPrompt(fix) {
   return {
     fix_id: fix.id,
     issue_title: fix.issue_title,
@@ -937,8 +939,8 @@ function compactFixForPrompt(fix: any) {
     priority: fix.priority,
     status: fix.status,
     difficulty: fix.difficulty,
-    current_value: clampText(fix.current_value, 250),
-    recommended_value: clampText(fix.recommended_value, 300),
+    current_value: clampText(fix.current_value, 260),
+    recommended_value: clampText(fix.recommended_value, 320),
     affected_page_count: Array.isArray(fix.affected_pages)
       ? fix.affected_pages.length
       : 0,
@@ -949,8 +951,8 @@ function compactFixForPrompt(fix: any) {
   };
 }
 
-function compactDetails(details: any) {
-  const output: any = {};
+function compactDetails(details) {
+  const output = {};
 
   if (details?.affected_count !== undefined) {
     output.affected_count = details.affected_count;
@@ -992,14 +994,17 @@ function compactDetails(details: any) {
   return output;
 }
 
-function buildPageProfile(pages: any[]) {
+function buildPageProfile(pages) {
   return (Array.isArray(pages) ? pages : [])
     .filter((page) => page?.is_important_page && !page?.is_utility_page)
-    .slice(0, 20)
+    .slice(0, 25)
     .map((page) => ({
       page: cleanPath(page?.url || "/"),
       status_code: page?.status_code || 0,
       indexability: page?.indexability || "",
+      indexability_reasons: Array.isArray(page?.indexability_reasons)
+        ? page.indexability_reasons.slice(0, 4)
+        : [],
       title: clampText(page?.title || "", 100),
       title_length: page?.title_length || 0,
       title_count: page?.title_count || 0,
@@ -1024,16 +1029,23 @@ function buildPageProfile(pages: any[]) {
         : 0,
       likely_client_rendered: Boolean(page?.likely_client_rendered),
       canonical_status: page?.canonical_status || "",
+      canonical_issue: page?.canonical_issue || "",
+      viewport_present: Boolean(page?.viewport_present),
+      open_graph_present: Boolean(page?.open_graph_present),
+      response_size_bytes: page?.response_size_bytes || 0,
+      script_tag_count: page?.script_tag_count || 0,
+      text_to_html_ratio: page?.text_to_html_ratio || 0,
     }));
 }
 
-function trimCompetitorSnapshots(snapshots: any[]) {
+function trimCompetitorSnapshots(snapshots) {
   return (Array.isArray(snapshots) ? snapshots : [])
     .filter((item) => Number(item?.status_code || 0) >= 200)
-    .slice(0, 5)
+    .slice(0, 6)
     .map((item) => ({
       competitor_name: item?.competitor_name || "",
       competitor_domain: item?.competitor_domain || "",
+      competitor_url: item?.competitor_url || "",
       keyword: item?.keyword || "",
       serp_position: item?.serp_position || null,
       title: clampText(item?.title || "", 120),
@@ -1061,9 +1073,8 @@ function trimCompetitorSnapshots(snapshots: any[]) {
 /* Positives / insights                                                        */
 /* -------------------------------------------------------------------------- */
 
-function buildPositiveFindings({ body, pages }: { body: any; pages: any[] }) {
+function buildPositiveFindings({ body, pages }) {
   const positives = [];
-
   const safePages = Array.isArray(pages) ? pages : [];
 
   if (safePages.filter((page) => page?.is_important_page).length >= 4) {
@@ -1109,7 +1120,7 @@ function buildPositiveFindings({ body, pages }: { body: any; pages: any[] }) {
   return positives.slice(0, 5);
 }
 
-function buildCompetitorInsights(body: any) {
+function buildCompetitorInsights(body) {
   const comparison = body?.competitor_comparison;
 
   if (!comparison) return [];
@@ -1121,7 +1132,7 @@ function buildCompetitorInsights(body: any) {
   if (
     depth?.competitor_median_words > 0 &&
     depth?.your_median_words > 0 &&
-    depth.competitor_median_words >= depth.your_median_words * 2
+    depth.competitor_median_words >= depth.your_median_words * 1.5
   ) {
     insights.push({
       headline: "Competitor pages go deeper than yours",
@@ -1140,7 +1151,7 @@ function buildCompetitorInsights(body: any) {
   }
 
   if (
-    Number(faq?.competitors_with_faq || 0) >= 2 &&
+    Number(faq?.competitors_with_faq || 0) >= 1 &&
     Number(faq?.your_pages_with_faq || 0) === 0
   ) {
     insights.push({
@@ -1148,7 +1159,7 @@ function buildCompetitorInsights(body: any) {
       title: "Competitors answer customer questions",
       competitor_name: comparison?.competitors_compared?.[0]?.name || "",
       competitor_domain: comparison?.competitors_compared?.[0]?.domain || "",
-      evidence: `${faq.competitors_with_faq} of ${faq.competitors_measured} competitor pages include a question-and-answer section.`,
+      evidence: `${faq.competitors_with_faq} competitor page${faq.competitors_with_faq === 1 ? "" : "s"} include a question-and-answer section.`,
       what_to_add:
         "Add 4–6 real customer questions and answers to your key service pages.",
       recommended_action:
@@ -1181,7 +1192,7 @@ function buildCompetitorInsights(body: any) {
 /* Text defaults                                                               */
 /* -------------------------------------------------------------------------- */
 
-function describeFixTypes(fixes: any[]) {
+function describeFixTypes(fixes) {
   const labels = [];
 
   if (fixes.some((fix) => fix.category === "meta_title")) {
@@ -1200,6 +1211,10 @@ function describeFixTypes(fixes: any[]) {
     labels.push("search visibility settings");
   }
 
+  if (fixes.some((fix) => fix.category === "indexability")) {
+    labels.push("indexability checks");
+  }
+
   if (fixes.some((fix) => fix.category === "js_rendering")) {
     labels.push("how the site loads content");
   }
@@ -1216,7 +1231,13 @@ function describeFixTypes(fixes: any[]) {
     labels.push("trust and structured information");
   }
 
-  if (fixes.some((fix) => fix.category === "performance")) {
+  if (
+    fixes.some(
+      (fix) =>
+        fix.category === "performance_hint" ||
+        fix.category === "performance"
+    )
+  ) {
     labels.push("page performance cleanup");
   }
 
@@ -1236,17 +1257,17 @@ function describeFixTypes(fixes: any[]) {
   return `${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`;
 }
 
-function friendlyCategory(category: string) {
-  const map: Record<string, string> = {
+function friendlyCategory(category) {
+  const map = {
     meta_title: "Search appearance",
     meta_description: "Search appearance",
-    canonical: "Website setup",
-    schema: "Trust signals",
+    canonical: "Technical SEO",
+    schema: "Technical SEO",
     thin_content: "Page content",
     duplicate_content: "Search appearance",
     "404_error": "Broken pages",
     redirect: "Page redirects",
-    internal_link: "Internal links",
+    internal_link: "Technical SEO",
     performance: "Website performance",
     web_dev: "Website setup",
     robots_txt: "Search visibility",
@@ -1255,19 +1276,20 @@ function friendlyCategory(category: string) {
     mobile_setup: "Technical SEO",
     social_metadata: "Technical SEO",
     performance_hint: "Technical SEO",
+    competitor_gap: "Competitor opportunities",
   };
 
   return map[category] || "Website improvement";
 }
 
-function defaultTitle(category: string) {
-  const map: Record<string, string> = {
+function defaultTitle(category) {
+  const map = {
     meta_title: "Improve search titles",
     meta_description: "Add helpful search descriptions",
     canonical: "Review preferred-page settings",
     thin_content: "Improve important page content",
     duplicate_content: "Review duplicate page content",
-    schema: "Add more trust signals",
+    schema: "Add more structured business information",
     "404_error": "Fix pages that may not be loading",
     redirect: "Review page redirects",
     internal_link: "Review internal links",
@@ -1279,20 +1301,13 @@ function defaultTitle(category: string) {
     mobile_setup: "Review mobile setup",
     social_metadata: "Review social sharing metadata",
     performance_hint: "Review heavy pages",
+    competitor_gap: "Review competitor content opportunities",
   };
 
   return map[category] || "Review this website recommendation";
 }
 
-function defaultSteps({
-  category,
-  difficulty,
-  recommendedValue,
-}: {
-  category: string;
-  difficulty: string;
-  recommendedValue: string;
-}) {
+function defaultSteps({ category, difficulty, recommendedValue }) {
   if (category === "meta_title") {
     return [
       "Review the affected page.",
@@ -1317,11 +1332,27 @@ function defaultSteps({
     ];
   }
 
-  if (category === "canonical" || category === "robots_txt") {
+  if (
+    category === "canonical" ||
+    category === "robots_txt" ||
+    category === "indexability"
+  ) {
     return [
       "Share this finding with your web person.",
       "Ask them to review the technical setting.",
       "Confirm the page should be visible as its own search result.",
+    ];
+  }
+
+  if (
+    category === "mobile_setup" ||
+    category === "social_metadata" ||
+    category === "performance_hint"
+  ) {
+    return [
+      "Share this finding with your web person.",
+      "Ask them to review the affected page template.",
+      "Confirm the issue is corrected after the update.",
     ];
   }
 
@@ -1340,11 +1371,11 @@ function defaultSteps({
   ].filter(Boolean);
 }
 
-function defaultOwner(difficulty: string) {
+function defaultOwner(difficulty) {
   return difficulty === "developer" ? "your_web_person" : "you";
 }
 
-function defaultTime(difficulty: string) {
+function defaultTime(difficulty) {
   if (difficulty === "easy") return "about 10–15 minutes";
   if (difficulty === "moderate") return "about 30–60 minutes";
   return "a task for your web person";
@@ -1354,13 +1385,13 @@ function defaultTime(difficulty: string) {
 /* Validation helpers                                                          */
 /* -------------------------------------------------------------------------- */
 
-function normalizePriority(priority: string) {
+function normalizePriority(priority) {
   return ["critical", "high", "medium", "low"].includes(priority)
     ? priority
     : "medium";
 }
 
-function normalizeStatus(status: string) {
+function normalizeStatus(status) {
   return ["auto_fixed", "needs_approval", "needs_developer", "open"].includes(
     status
   )
@@ -1368,7 +1399,7 @@ function normalizeStatus(status: string) {
     : "needs_approval";
 }
 
-function normalizeDifficulty(difficulty: string, status: string) {
+function normalizeDifficulty(difficulty, status) {
   if (["easy", "moderate", "developer"].includes(difficulty)) {
     return difficulty;
   }
@@ -1383,7 +1414,7 @@ function normalizeDifficulty(difficulty: string, status: string) {
 /* Utility                                                                     */
 /* -------------------------------------------------------------------------- */
 
-function cleanPath(input: any) {
+function cleanPath(input) {
   try {
     const parsed = new URL(String(input || ""), "https://example.com");
     const path = parsed.pathname || "/";
@@ -1398,7 +1429,7 @@ function cleanPath(input: any) {
   }
 }
 
-function stringifyValue(value: any) {
+function stringifyValue(value) {
   if (typeof value === "string") return value;
   if (value === null || value === undefined) return "";
 
@@ -1409,7 +1440,7 @@ function stringifyValue(value: any) {
   }
 }
 
-function cleanString(value: any) {
+function cleanString(value) {
   if (typeof value === "string" && value.trim()) {
     return value.trim();
   }
@@ -1417,7 +1448,7 @@ function cleanString(value: any) {
   return "";
 }
 
-function clampText(value: any, max: number) {
+function clampText(value, max) {
   const text = String(value || "").trim();
 
   if (text.length <= max) return text;
@@ -1425,7 +1456,7 @@ function clampText(value: any, max: number) {
   return text.slice(0, Math.max(0, max - 1)).trim();
 }
 
-function stableId(input: any) {
+function stableId(input) {
   let hash = 0;
   const value = String(input || "");
 
@@ -1437,7 +1468,7 @@ function stableId(input: any) {
   return `finding_${Math.abs(hash)}`;
 }
 
-function calculateFallbackScore(fixes: any[]) {
+function calculateFallbackScore(fixes) {
   let score = 100;
 
   for (const fix of fixes || []) {
@@ -1450,8 +1481,8 @@ function calculateFallbackScore(fixes: any[]) {
   return Math.max(0, Math.min(100, score));
 }
 
-function withTimeout(promise: Promise<any>, ms: number, label = "Operation") {
-  let timeoutId: number | undefined;
+function withTimeout(promise, ms, label = "Operation") {
+  let timeoutId;
 
   const timeoutPromise = new Promise((_, reject) => {
     timeoutId = setTimeout(() => {
@@ -1462,6 +1493,6 @@ function withTimeout(promise: Promise<any>, ms: number, label = "Operation") {
   });
 
   return Promise.race([promise, timeoutPromise]).finally(() => {
-    if (timeoutId) clearTimeout(timeoutId);
+    clearTimeout(timeoutId);
   });
 }

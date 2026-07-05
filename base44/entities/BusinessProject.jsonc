@@ -20,6 +20,13 @@
     "main_services": {
       "type": "string"
     },
+    "important_keywords": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
     "cms_platform": {
       "type": "string",
       "enum": [

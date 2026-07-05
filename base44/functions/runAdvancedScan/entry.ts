@@ -96,6 +96,15 @@ Deno.serve(async (req) => {
     let discoveredCompetitors = [];
     let createdCompetitors = [];
 
+    const providedCompetitors = await saveProvidedCompetitors({
+      base44,
+      user,
+      project_id,
+      competitor_urls,
+    });
+
+    createdCompetitors.push(...providedCompetitors);
+
     if (scanMode === "deep" && limits.discoverCompetitors) {
       try {
         const discovery = await discoverCompetitorsFromSearch({
@@ -172,6 +181,7 @@ Deno.serve(async (req) => {
       broken_links: brokenLinks,
       discovered_competitors: discoveredCompetitors,
       created_competitors: createdCompetitors,
+      competitor_results: [...createdCompetitors, ...discoveredCompetitors],
       competitor_urls,
       crawl_job_id,
       site_summary: siteSummary,
@@ -793,6 +803,43 @@ function finding({
 
 function groupFindings(findings) {
   return dedupeFindings(findings);
+}
+
+async function saveProvidedCompetitors({ base44, user, project_id, competitor_urls }) {
+  const urls = (competitor_urls || []).map((url) => String(url || "").trim()).filter(Boolean);
+
+  if (!project_id || urls.length === 0) return [];
+
+  try {
+    await base44.entities.Competitor.deleteMany({ project_id });
+  } catch {}
+
+  return await base44.entities.Competitor.bulkCreate(
+    urls.map((url) => {
+      let normalizedUrl = url;
+      let name = url;
+
+      try {
+        normalizedUrl = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+        name = new URL(normalizedUrl).hostname.replace(/^www\./, "");
+      } catch {}
+
+      return {
+        project_id,
+        owner_user_id: user.id,
+        name,
+        website_url: normalizedUrl,
+        notes: "Added from Scan Website.",
+        service_pages_count: 0,
+        title_quality_score: 0,
+        meta_coverage_pct: 0,
+        content_depth_score: 0,
+        faq_usage: false,
+        schema_usage: false,
+        broken_links_count: 0,
+      };
+    })
+  );
 }
 
 function detectDuplicateTitles(pages) {

@@ -320,7 +320,7 @@ function buildPrompt({
   return `
 You are an expert SEO strategist for small business websites.
 
-Your job is to turn raw crawl findings into a short, useful, plain-English action plan for a non-technical business owner.
+Your job is to turn scan findings into a short, useful, plain-English action plan for a non-technical business owner.
 
 Important rules:
 - Do not overwhelm the user.
@@ -333,7 +333,7 @@ Important rules:
 - Use "prepared," "recommended," "review," and "may help."
 - Do not promise rankings.
 - Merge related issues for the same page into one grouped recommendation.
-- Make the output feel like a smart assistant reviewed the site, not like a raw crawler report.
+- Make the output feel like a smart assistant reviewed the site, not like a raw scan report.
 - Keep recommendations practical for a small business owner.
 - If a raw fix includes affected_pages or details, keep customer-facing text clean and do not move affected pages into ai_recommendation; the system preserves those structured fields after your review.
 - Be balanced: start the summary with what the site already does well, then frame remaining items as cleanup opportunities. Never make a healthy site sound broken. Example tone: "Your website has a solid SEO foundation with dedicated service pages and strong trust signals. The main opportunities are cleanup items: review search descriptions, fix placeholder-like content if visible, and have a developer review preferred-page settings."
@@ -357,7 +357,7 @@ ${website_url || ''}
 Crawled pages:
 ${JSON.stringify(crawled_pages || [], null, 2)}
 
-Raw fixes after basic filtering:
+Recommendations after basic filtering:
 ${JSON.stringify(filteredFixes || [], null, 2)}
 
 Competitor results:

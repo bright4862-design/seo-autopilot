@@ -415,6 +415,9 @@ export default function CrawlStatus() {
         city: activeProject.city,
         project_id: activeProject.id,
         crawl_job_id: job.id,
+        important_keywords: activeProject.important_keywords || [],
+        competitor_urls: activeProject.competitor_urls || [],
+        scan_mode: activeProject.scan_mode || "quick",
       });
 
       const scanData = scanResponse?.data || {};
@@ -457,17 +460,37 @@ export default function CrawlStatus() {
       let positiveFindings = Array.isArray(scanData.site_summary?.positives)
         ? scanData.site_summary.positives
         : [];
+      let competitorScanResult = null;
+
+      const competitorRecordsFromScan = [
+        ...(Array.isArray(scanData.created_competitors) ? scanData.created_competitors : []),
+        ...(Array.isArray(scanData.discovered_competitors) ? scanData.discovered_competitors : []),
+      ];
+
+      if (competitorRecordsFromScan.length > 0) {
+        setCompetitors(competitorRecordsFromScan);
+      }
+
+      let competitorResultsForReview = Array.isArray(scanData.competitor_results)
+        ? scanData.competitor_results
+        : [];
+
+      if (competitorRecordsFromScan.length > 0) {
+        try {
+          competitorScanResult = await base44.functions.invoke("scanCompetitors", {
+            project_id: activeProject.id,
+            business_type: activeProject.business_type,
+            city: activeProject.city,
+            customer_pages: crawledPagesData,
+          });
+          competitorResultsForReview = competitorScanResult?.data?.competitors || competitorScanResult?.data?.results || competitorResultsForReview || competitorRecordsFromScan;
+        } catch (err) {
+          console.warn("Competitor scan fallback failed.", err);
+          competitorResultsForReview = competitorResultsForReview.length > 0 ? competitorResultsForReview : competitorRecordsFromScan;
+        }
+      }
 
       try {
-        const competitorResults = (competitors || []).map((competitor) => ({
-          name: competitor.name,
-          website_url: competitor.website_url,
-          service_pages: competitor.service_pages_count,
-          title_quality: competitor.title_quality_score,
-          description_coverage: competitor.meta_coverage_pct,
-          content_depth: competitor.content_depth_score,
-        }));
-
         const aiReviewRes = await base44.functions.invoke("aiReviewScan", {
           business_name: activeProject.business_name,
           business_type: activeProject.business_type,
@@ -475,7 +498,7 @@ export default function CrawlStatus() {
           website_url: activeProject.website_url,
           crawled_pages: crawledPagesData,
           raw_fixes: mappedSeoIssues,
-          competitor_results: competitorResults,
+          competitor_results: competitorResultsForReview,
         });
 
         const aiData = aiReviewRes?.data || {};
@@ -545,21 +568,6 @@ export default function CrawlStatus() {
             owner_user_id: user.id,
           }))
         );
-      }
-
-      let competitorScanResult = null;
-
-      if ((competitors || []).length > 0) {
-        try {
-          competitorScanResult = await base44.functions.invoke("scanCompetitors", {
-            project_id: activeProject.id,
-            business_type: activeProject.business_type,
-            city: activeProject.city,
-            customer_pages: crawledPagesData,
-          });
-        } catch (err) {
-          console.warn("Competitor scan failed.", err);
-        }
       }
 
       if (finalFixes.length > 0) {
@@ -727,42 +735,18 @@ export default function CrawlStatus() {
       setProject(activeProject);
       window.localStorage.setItem("active_project_id", activeProject.id);
 
-      try {
-        await base44.entities.Competitor.deleteMany({
-          project_id: activeProject.id,
-        });
-      } catch {}
-
       const competitorUrls = (form.competitor_urls || [])
         .map((url) => url.trim())
         .filter(Boolean);
 
-      let createdCompetitors = [];
+      setCompetitors([]);
 
-      if (competitorUrls.length > 0) {
-        createdCompetitors = await base44.entities.Competitor.bulkCreate(
-          competitorUrls.map((url) => {
-            let normalizedUrl = url;
-            let name = url;
-
-            try {
-              normalizedUrl = /^https?:\/\//i.test(url) ? url : `https://${url}`;
-              name = new URL(normalizedUrl).hostname.replace(/^www\./, "");
-            } catch {}
-
-            return {
-              project_id: activeProject.id,
-              website_url: normalizedUrl,
-              name,
-              owner_user_id: user.id,
-            };
-          })
-        );
-      }
-
-      setCompetitors(createdCompetitors);
-
-      await simulateScan(null, activeProject);
+      await simulateScan(null, {
+        ...activeProject,
+        important_keywords: form.important_keywords || [],
+        competitor_urls: competitorUrls,
+        scan_mode: form.scan_mode || "quick",
+      });
     } catch (err) {
       setError(err.message || "Could not start the scan. Please try again.");
       setSimulating(false);

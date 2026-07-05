@@ -1,3152 +1,1537 @@
-import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
+import React, { useEffect, useMemo, useState } from "react";
 
-const GOOGLE_API_KEY_NAME = "GOOGLE_" + "CUSTOM_SEARCH_API_KEY";
-const GOOGLE_CX_NAME = "GOOGLE_" + "CUSTOM_SEARCH_CX";
+/**
+ * AdvancedScanner.jsx
+ *
+ * Drop this into your Advanced Scanner page.
+ *
+ * IMPORTANT:
+ * - Change API_ENDPOINT below if your Base44/Deno function route is different.
+ * - Expected response shape is flexible. This page supports:
+ *   - scan_summary
+ *   - recommended_actions
+ *   - competitor_insights
+ *   - findings
+ *   - pages
+ *   - technical_details
+ *
+ * If your backend currently returns different keys, normalize them inside
+ * normalizeScanResult().
+ */
 
-const USER_AGENT =
-  "Mozilla/5.0 (compatible; SEO-Autopilot/2.2; +https://seoautopilot.app/bot)";
+const API_ENDPOINT = "/api/functions/advanced_scanner";
 
-// Lowercase token used to match our crawler in robots.txt User-agent groups.
-const ROBOTS_AGENT_TOKEN = "seo-autopilot";
-
-// Hard wall-clock budget for the crawl loop so the function never dies
-// mid-flight. Tune to roughly 80% of your platform's function timeout.
-const CRAWL_TIME_BUDGET_MS = 100000;
-
-// Cap how much HTML we regex per page so one bloated page can't eat the CPU.
-const MAX_HTML_BYTES = 800000;
-
-const SCAN_LIMITS = {
-  // "basic" exists so the old lightweight scanner can be retired:
-  // point the frontend at this function with scan_mode: "basic".
-  basic: {
-    maxPages: 25,
-    concurrency: 6,
-    timeoutMs: 10000,
-    useSitemap: false,
-    discoverCompetitors: false,
-    maxCompetitorSnapshots: 0,
-    maxKeywords: 0,
+const SCAN_STEPS = [
+  {
+    key: "access",
+    label: "Checking site access",
+    text: "Checking whether your website can be scanned.",
   },
+  {
+    key: "important_pages",
+    label: "Finding important pages",
+    text: "Finding your homepage, service pages, contact page, and other priority URLs first.",
+  },
+  {
+    key: "competitors",
+    label: "Discovering competitors",
+    text: "Looking for businesses ranking for similar searches.",
+  },
+  {
+    key: "crawl",
+    label: "Scanning your website",
+    text: "Checking titles, headings, content depth, trust signals, technical basics, and crawlability.",
+  },
+  {
+    key: "comparison",
+    label: "Comparing competitor pages",
+    text: "Comparing your site against competitor pages that Google is already showing.",
+  },
+  {
+    key: "ai_review",
+    label: "Creating recommendations",
+    text: "Turning the findings into plain-English actions.",
+  },
+];
+
+const DEPTH_OPTIONS = {
   quick: {
-    maxPages: 75,
-    concurrency: 8,
-    timeoutMs: 12000,
-    useSitemap: true,
-    discoverCompetitors: true,
-    maxCompetitorSnapshots: 3,
-    maxKeywords: 4,
+    label: "Quick scan",
+    description: "Up to 25 pages",
+    maxPages: 25,
   },
-  // Deep is capped at 200 pages per invocation. For larger sites, add
-  // resumable chunks: persist the frontier + pages to a ScanJob entity
-  // keyed by crawl_job_id and re-invoke until the queue is empty.
+  standard: {
+    label: "Standard scan",
+    description: "Up to 75 pages",
+    maxPages: 75,
+  },
   deep: {
+    label: "Deep scan",
+    description: "Larger resumable crawl",
     maxPages: 200,
-    concurrency: 10,
-    timeoutMs: 15000,
-    useSitemap: true,
-    discoverCompetitors: true,
-    maxCompetitorSnapshots: 5,
-    maxKeywords: 5,
   },
 };
 
-const UTILITY_PATH_RE =
-  /(cart|checkout|login|signin|signup|register|account|search|privacy|terms|thank-?you|payment|admin|wp-admin|reset|forgot|cookie|legal|disclaimer|tag|category|author|feed|rss|print|share)/i;
+const DEFAULT_RESULT = {
+  scan_summary: null,
+  recommended_actions: [],
+  competitor_insights: [],
+  findings: [],
+  pages: [],
+  technical_details: null,
+  raw: null,
+};
 
-const IMPORTANT_PAGE_RE =
-  /(home|service|services|product|products|loan|loans|program|programs|about|location|locations|contact|book|booking|appointment|pricing|packages|service-area|areas-we-serve|fix-and-flip|new-construction|bridge|rental|dscr|apply|application|menu|treatment|treatments|repair|installation|financing|mortgage|lending|case-study|case-studies)/i;
+function cx(...classes) {
+  return classes.filter(Boolean).join(" ");
+}
 
-const SERVICE_LIKE_RE =
-  /(service|services|product|products|loan|loans|program|programs|pricing|packages|location|locations|area|areas|repair|installation|treatment|treatments|financing|mortgage|lending)/i;
+function safeArray(value) {
+  return Array.isArray(value) ? value : [];
+}
 
-const ASSET_RE =
-  /\.(jpg|jpeg|png|gif|webp|svg|pdf|zip|css|js|ico|woff|woff2|ttf|mp4|mp3|mov|avi|xml|json)$/i;
+function cleanUrl(url) {
+  return String(url || "").trim();
+}
 
-const HEADING_JUNK_RE =
-  /(menu|navigation|footer|subscribe|newsletter|follow us|share|related|copyright|sign in|log in|search|cookie)/i;
+function ensureProtocol(url) {
+  const trimmed = cleanUrl(url);
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
 
-const MEANINGFUL_SCHEMA_TYPES = new Set([
-  "LocalBusiness",
-  "Organization",
-  "Product",
-  "Service",
-  "Review",
-  "AggregateRating",
-  "FAQPage",
-  "BreadcrumbList",
-  "HowTo",
-  "Article",
-  "WebSite",
-]);
-
-// Strong placeholder patterns fire on a single hit; weak ones need >= 2
-// distinct hits on the same page, because words like "null" or "placeholder"
-// show up in legitimate copy (legal text, articles about design, etc.).
-const PLACEHOLDER_STRONG = [
-  [/\[object Object\]/, "[object Object]"],
-  [/\{\{[^}]*\}\}/, "{{ }}"],
-  [/\bgvar\+?\b/i, "gvar"],
-];
-
-const PLACEHOLDER_WEAK = [
-  [/\bundefined\b/i, "undefined"],
-  [/\bnull\b/i, "null"],
-  [/\bNaN\b/, "NaN"],
-  [/lorem ipsum/i, "lorem ipsum"],
-  [/\bplaceholder\b/i, "placeholder"],
-];
-
-const EXCLUDED_COMPETITOR_DOMAINS = [
-  "google.com",
-  "facebook.com",
-  "instagram.com",
-  "linkedin.com",
-  "youtube.com",
-  "twitter.com",
-  "x.com",
-  "yelp.com",
-  "bbb.org",
-  "yellowpages.com",
-  "mapquest.com",
-  "chamberofcommerce.com",
-  "wikipedia.org",
-  "reddit.com",
-  "angi.com",
-  "thumbtack.com",
-  "houzz.com",
-  "pinterest.com",
-];
-
-Deno.serve(async (req) => {
-  const startedAt = Date.now();
-
+function getDomain(url) {
   try {
-    const base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
-
-    if (!user) {
-      return Response.json(
-        { success: false, error: "Unauthorized" },
-        { status: 401 }
-      );
-    }
-
-    const body = await req.json();
-
-    const {
-      website_url,
-      business_name = "",
-      business_type = "",
-      city = "",
-      country = "us",
-      language = "en",
-      project_id = "",
-      crawl_job_id = "",
-      important_keywords = [],
-      competitor_urls = [],
-    } = body;
-
-    const scanMode = SCAN_LIMITS[body.scan_mode] ? body.scan_mode : "quick";
-    const limits = SCAN_LIMITS[scanMode];
-
-    if (!website_url) {
-      return Response.json(
-        { success: false, error: "website_url is required" },
-        { status: 400 }
-      );
-    }
-
-    const normalizedUrl = normalizeStartUrl(website_url);
-    const startUrl = new URL(normalizedUrl);
-    const origin = startUrl.origin;
-    const domain = getDomain(normalizedUrl);
-    const crawlWarnings = [];
-    const competitorWarnings = [];
-
-    // The site crawl and the competitor pipeline are independent, so run
-    // them concurrently instead of one after the other.
-    const [site, competitors] = await Promise.all([
-      runSitePipeline({ origin, domain, normalizedUrl, limits, crawlWarnings }),
-      runCompetitorPipeline({
-        base44,
-        user,
-        project_id,
-        normalizedUrl,
-        domain,
-        business_name,
-        business_type,
-        city,
-        country,
-        language,
-        important_keywords,
-        competitor_urls,
-        limits,
-        warnings: competitorWarnings,
-      }),
-    ]);
-
-    crawlWarnings.push(...competitorWarnings);
-
-    const { robots, sitemapUrls, crawlResult } = site;
-    const {
-      discoveredCompetitors,
-      createdCompetitors,
-      competitorResults,
-      competitorPageSnapshots,
-    } = competitors;
-
-    const brokenLinks = detectBrokenInternalLinks(crawlResult.pages);
-    const clientRendering = detectClientRendering(crawlResult.pages);
-
-    const competitorComparison = buildCompetitorComparison({
-      pages: crawlResult.pages,
-      snapshots: competitorPageSnapshots,
-    });
-
-    const rawFindings = analyzePages({
-      pages: crawlResult.pages,
-      brokenLinks,
-      competitorPageSnapshots,
-      competitorComparison,
-      clientRendering,
-      business_name,
-      business_type,
-      city,
-    });
-
-    const groupedFindings = groupAndPrioritizeFindings(rawFindings);
-    const healthScore = calculateHealthScore(groupedFindings);
-
-    const siteSummary = buildSiteSummary({
-      pages: crawlResult.pages,
-      rawFindings,
-      groupedFindings,
-      scanMode,
-      sitemapUrls,
-      discoveredCompetitors,
-      competitorPageSnapshots,
-      brokenLinks,
-      robots,
-      clientRendering,
-      competitorComparison,
-    });
-
-    return Response.json({
-      success: true,
-      scan_mode: scanMode,
-      website_url,
-      normalized_url: normalizedUrl,
-      domain,
-      scan_duration_ms: Date.now() - startedAt,
-      pages_crawled: crawlResult.pages.length,
-      pages_found: crawlResult.pagesFound,
-      queued_remaining: crawlResult.queuedRemaining,
-      health_score: healthScore,
-      crawled_pages: crawlResult.pages,
-      raw_findings: rawFindings,
-      grouped_findings: groupedFindings,
-      broken_links: brokenLinks,
-      discovered_competitors: discoveredCompetitors,
-      created_competitors: createdCompetitors,
-      competitor_results: competitorResults,
-      competitor_page_snapshots: competitorPageSnapshots,
-      competitor_comparison: competitorComparison,
-      client_rendering: clientRendering,
-      competitor_urls,
-      crawl_job_id,
-      site_summary: siteSummary,
-      crawl_warnings: crawlWarnings,
-      html_only_scan: true,
-      javascript_rendering_used: false,
-      deterministic_scan: true,
-    });
-  } catch (error) {
-    return Response.json(
-      {
-        success: false,
-        error: error?.message || "Advanced scan failed",
-      },
-      { status: 500 }
-    );
-  }
-});
-
-/* ----------------------------- Pipelines ----------------------------- */
-
-async function runSitePipeline({
-  origin,
-  domain,
-  normalizedUrl,
-  limits,
-  crawlWarnings,
-}) {
-  const robots = await readRobotsTxt(origin, crawlWarnings);
-
-  const sitemapUrls = limits.useSitemap
-    ? await discoverSitemapUrls(origin, domain, robots, crawlWarnings)
-    : [];
-
-  const crawlResult = await crawlWebsite({
-    startUrl: normalizedUrl,
-    domain,
-    sitemapUrls,
-    robots,
-    maxPages: limits.maxPages,
-    concurrency: limits.concurrency,
-    timeoutMs: limits.timeoutMs,
-    crawlWarnings,
-  });
-
-  return { robots, sitemapUrls, crawlResult };
-}
-
-async function runCompetitorPipeline({
-  base44,
-  user,
-  project_id,
-  normalizedUrl,
-  domain,
-  business_name,
-  business_type,
-  city,
-  country,
-  language,
-  important_keywords,
-  competitor_urls,
-  limits,
-  warnings,
-}) {
-  const existing = await getExistingCompetitors(base44, project_id);
-
-  const manual = await saveProvidedCompetitors({
-    base44,
-    user,
-    project_id,
-    competitor_urls,
-    ownDomain: domain,
-  });
-
-  let discoveredCompetitors = [];
-  let createdCompetitors = [];
-
-  if (limits.discoverCompetitors) {
-    try {
-      const discovery = await withTimeout(
-        discoverCompetitorsFromGoogle({
-          base44,
-          user,
-          project_id,
-          website_url: normalizedUrl,
-          business_name,
-          business_type,
-          city,
-          country,
-          language,
-          important_keywords,
-          maxKeywords: limits.maxKeywords,
-        }),
-        20000,
-        "Google competitor discovery"
-      );
-
-      discoveredCompetitors = discovery.discovered_competitors || [];
-      createdCompetitors = discovery.created_competitors || [];
-
-      if (discovery.warnings?.length) {
-        warnings.push(...discovery.warnings);
-      }
-    } catch (error) {
-      warnings.push(
-        `Google competitor discovery was skipped: ${
-          error?.message || "Unknown error"
-        }`
-      );
-    }
-  }
-
-  const competitorResults = mergeCompetitorResults({
-    own_url: normalizedUrl,
-    existing,
-    manual,
-    discovered: discoveredCompetitors,
-    created: createdCompetitors,
-  });
-
-  const competitorPageSnapshots =
-    limits.maxCompetitorSnapshots > 0
-      ? await crawlCompetitorSnapshots({
-          competitorResults,
-          maxSnapshots: limits.maxCompetitorSnapshots,
-          timeoutMs: 14000,
-        })
-      : [];
-
-  return {
-    discoveredCompetitors,
-    createdCompetitors,
-    competitorResults,
-    competitorPageSnapshots,
-  };
-}
-
-/* ------------------------------- Crawl -------------------------------- */
-
-// Worker-pool crawler: every slot stays busy instead of waiting for the
-// slowest page in a batch. The queue is priority-sorted lazily (only when
-// dirty and only when a worker pulls the next item) instead of on every
-// insert, and priority scores are cached per URL.
-async function crawlWebsite({
-  startUrl,
-  domain,
-  sitemapUrls = [],
-  robots,
-  maxPages,
-  concurrency,
-  timeoutMs,
-  crawlWarnings,
-}) {
-  const startedAt = Date.now();
-  const queue = [];
-  const queued = new Set();
-  const seen = new Set();
-  const pages = [];
-  const failed = [];
-  let queueDirty = false;
-  let inFlight = 0;
-  let timeBudgetHit = false;
-
-  const prioCache = new Map();
-
-  const prio = (url) => {
-    if (!prioCache.has(url)) prioCache.set(url, priorityScore(url));
-    return prioCache.get(url);
-  };
-
-  const addToQueue = (url, source = "link") => {
-    const clean = canonicalizeUrl(url);
-
-    if (!clean) return;
-    if (seen.has(clean) || queued.has(clean)) return;
-    if (!isSameDomain(clean, domain)) return;
-    if (isAssetUrl(clean)) return;
-    if (isUtilityUrl(clean)) return;
-    if (isBlockedByRobots(clean, robots)) return;
-
-    queued.add(clean);
-    queue.push({ url: clean, source, priority: prio(clean) });
-    queueDirty = true;
-  };
-
-  addToQueue(startUrl, "start");
-
-  // Don't seed more sitemap URLs than the scan can possibly use.
-  for (const url of (sitemapUrls || []).slice(0, maxPages * 2)) {
-    addToQueue(url, "sitemap");
-  }
-
-  const nextItem = () => {
-    if (queueDirty) {
-      queue.sort(
-        (a, b) => b.priority - a.priority || a.url.localeCompare(b.url)
-      );
-      queueDirty = false;
-    }
-    return queue.shift();
-  };
-
-  async function worker() {
-    while (true) {
-      if (pages.length + inFlight >= maxPages) return;
-
-      if (Date.now() - startedAt > CRAWL_TIME_BUDGET_MS) {
-        timeBudgetHit = true;
-        return;
-      }
-
-      const item = nextItem();
-
-      if (!item) {
-        if (inFlight === 0) return;
-        await sleep(100);
-        continue;
-      }
-
-      queued.delete(item.url);
-      if (seen.has(item.url)) continue;
-      seen.add(item.url);
-
-      inFlight++;
-
-      try {
-        const page = await fetchAndExtractPage(
-          item.url,
-          domain,
-          timeoutMs,
-          item.source
-        );
-
-        const finalUrl = canonicalizeUrl(
-          page.url || page.final_url || item.url
-        );
-
-        if (finalUrl && finalUrl !== item.url) {
-          // Redirect landed on a URL we already captured.
-          if (seen.has(finalUrl)) continue;
-          seen.add(finalUrl);
-        }
-
-        pages.push(page);
-
-        if (page.fetch_error) {
-          failed.push({ url: item.url, error: page.fetch_error });
-        }
-
-        if (page.status_code >= 200 && page.status_code < 400) {
-          for (const link of page.internal_links || []) {
-            addToQueue(link, "internal");
-          }
-        }
-      } finally {
-        inFlight--;
-      }
-    }
-  }
-
-  await Promise.all(Array.from({ length: concurrency }, () => worker()));
-
-  const finalPages = pages
-    .slice(0, maxPages)
-    .sort((a, b) => String(a.url || "").localeCompare(String(b.url || "")));
-
-  if (failed.length > 0) {
-    crawlWarnings.push(
-      `${failed.length} page${failed.length === 1 ? "" : "s"} could not be fully read.`
-    );
-  }
-
-  if (finalPages.length >= maxPages && queue.length > 0) {
-    crawlWarnings.push(
-      `Scan limit reached at ${maxPages} pages. A larger scan may find more pages.`
-    );
-  }
-
-  if (timeBudgetHit) {
-    crawlWarnings.push(
-      "The scan stopped early to stay within the time limit, so some pages were not reviewed."
-    );
-  }
-
-  return {
-    pages: finalPages,
-    pagesFound: finalPages.length + queue.length,
-    queuedRemaining: queue.length,
-    failed,
-  };
-}
-
-// All competitor snapshots are fetched in parallel instead of one by one.
-async function crawlCompetitorSnapshots({
-  competitorResults,
-  maxSnapshots,
-  timeoutMs,
-}) {
-  const selected = stableDedupeCompetitors(competitorResults).slice(
-    0,
-    maxSnapshots
-  );
-
-  const snapshots = await Promise.all(
-    selected.map(async (competitor) => {
-      const url = competitor.url || competitor.website_url;
-      const domain = getDomain(url);
-
-      if (!url || !domain) return null;
-
-      const base = {
-        competitor_name: competitor.name || formatDomainName(domain),
-        competitor_domain: domain,
-        competitor_url: url,
-        source: competitor.source || "google_custom_search",
-        keyword: competitor.keyword || "",
-        serp_position: competitor.position || null,
-        serp_title: competitor.title || "",
-        serp_snippet: competitor.snippet || "",
-      };
-
-      try {
-        const page = await withTimeout(
-          fetchAndExtractPage(url, domain, timeoutMs, "competitor_serp"),
-          timeoutMs + 2000,
-          "Competitor page crawl"
-        );
-
-        return {
-          ...base,
-          status_code: page.status_code,
-          title: page.title,
-          meta_description: page.meta_description,
-          h1: page.h1,
-          h2s: page.h2s || [],
-          h3s: page.h3s || [],
-          word_count: page.word_count || 0,
-          has_faq: Boolean(page.has_faq),
-          faq_questions: page.faq_questions || [],
-          has_schema: Boolean(page.has_schema),
-          schema_types: page.schema_types || [],
-          has_phone: Boolean(page.has_phone),
-          has_email: Boolean(page.has_email),
-          cta_phrases: page.cta_phrases || [],
-          trust_signals: page.trust_signals || [],
-          visible_text_sample: String(page.visible_text_sample || "").slice(
-            0,
-            1800
-          ),
-        };
-      } catch {
-        return {
-          ...base,
-          ...emptySnapshotFields(),
-          fetch_error: "Could not read competitor page",
-        };
-      }
-    })
-  );
-
-  return snapshots
-    .filter(Boolean)
-    .sort((a, b) => {
-      const aPos = a.serp_position || 99;
-      const bPos = b.serp_position || 99;
-      if (aPos !== bPos) return aPos - bPos;
-      return String(a.competitor_domain).localeCompare(
-        String(b.competitor_domain)
-      );
-    });
-}
-
-function emptySnapshotFields() {
-  return {
-    status_code: 0,
-    title: "",
-    meta_description: "",
-    h1: "",
-    h2s: [],
-    h3s: [],
-    word_count: 0,
-    has_faq: false,
-    faq_questions: [],
-    has_schema: false,
-    schema_types: [],
-    has_phone: false,
-    has_email: false,
-    cta_phrases: [],
-    trust_signals: [],
-    visible_text_sample: "",
-  };
-}
-
-async function fetchAndExtractPage(url, domain, timeoutMs, source = "unknown") {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(url, {
-      redirect: "follow",
-      signal: controller.signal,
-      headers: {
-        "user-agent": USER_AGENT,
-        accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "accept-language": "en-US,en;q=0.9",
-      },
-    });
-
-    const contentType = response.headers.get("content-type") || "";
-    const finalUrl = response.url || url;
-
-    if (!contentType.toLowerCase().includes("text/html")) {
-      return emptyPage({
-        url: finalUrl,
-        originalUrl: url,
-        status: response.status,
-        contentType,
-        source,
-        error: `Skipped non-HTML content: ${contentType}`,
-      });
-    }
-
-    let html = await response.text();
-    if (html.length > MAX_HTML_BYTES) html = html.slice(0, MAX_HTML_BYTES);
-
-    return extractPageData({
-      url: finalUrl,
-      originalUrl: url,
-      status: response.status,
-      contentType,
-      html,
-      domain,
-      source,
-    });
-  } catch (error) {
-    const message =
-      error?.name === "AbortError"
-        ? "Page timed out"
-        : error?.message || "Fetch failed";
-
-    return emptyPage({
-      url,
-      originalUrl: url,
-      status: 0,
-      contentType: "",
-      source,
-      error: message,
-    });
-  } finally {
-    clearTimeout(timeout);
+    return new URL(ensureProtocol(url)).hostname.replace(/^www\./, "");
+  } catch {
+    return url || "";
   }
 }
 
-function extractPageData({
-  url,
-  originalUrl,
-  status,
-  contentType,
-  html,
-  domain,
-  source = "unknown",
-}) {
-  const normalizedUrl = canonicalizeUrl(url);
-  const originalNormalized = canonicalizeUrl(originalUrl);
-  const decodedHtml = decodeHtml(html);
-
-  const title = cleanText(
-    matchFirst(decodedHtml, /<title[^>]*>([\s\S]*?)<\/title>/i)
-  );
-
-  const metaDescription = cleanText(
-    getMetaContent(decodedHtml, "description") ||
-      getMetaProperty(decodedHtml, "og:description") ||
-      getMetaName(decodedHtml, "twitter:description")
-  );
-
-  const h1 = cleanText(matchFirst(decodedHtml, /<h1[^>]*>([\s\S]*?)<\/h1>/i));
-
-  const canonicalRaw =
-    matchFirst(
-      decodedHtml,
-      /<link[^>]+rel=["'][^"']*canonical[^"']*["'][^>]*href=["']([^"']+)["'][^>]*>/i
-    ) ||
-    matchFirst(
-      decodedHtml,
-      /<link[^>]+href=["']([^"']+)["'][^>]*rel=["'][^"']*canonical[^"']*["'][^>]*>/i
-    ) ||
-    "";
-
-  const canonicalUrl = absolutizeUrl(canonicalRaw, url);
-
-  const robotsMeta =
-    getMetaContent(decodedHtml, "robots") ||
-    getMetaContent(decodedHtml, "googlebot") ||
-    "";
-
-  const pageText = extractVisibleText(decodedHtml);
-  const wordCount = countWords(pageText);
-  const headings = extractHeadings(decodedHtml);
-  const links = extractLinks(decodedHtml, url);
-  const internalLinks = links.filter((link) => isSameDomain(link, domain));
-  const externalLinks = links.filter((link) => !isSameDomain(link, domain));
-  const images = extractImages(decodedHtml, url);
-  const faqQuestions = extractQuestions(pageText);
-  const schemaTypes = detectSchemaTypes(decodedHtml);
-  const trustSignals = detectTrustSignals(pageText);
-  const ctaPhrases = detectCtas(pageText);
-  const placeholder = detectPlaceholderText(pageText);
-  const path = getPath(normalizedUrl || url);
-  const scriptTagCount = (html.match(/<script/gi) || []).length;
-
-  return {
-    url: normalizedUrl,
-    original_url: originalNormalized || originalUrl,
-    final_url: normalizedUrl,
-    crawl_source: source,
-    status_code: status,
-    content_type: contentType,
-    redirected: Boolean(
-      originalNormalized && originalNormalized !== normalizedUrl
-    ),
-    title,
-    meta_description: metaDescription,
-    h1,
-    h2s: headings.h2s,
-    h3s: headings.h3s,
-    canonical_url: canonicalUrl,
-    robots_meta: robotsMeta,
-    noindex: /noindex/i.test(robotsMeta),
-    nofollow: /nofollow/i.test(robotsMeta),
-    word_count: wordCount,
-    visible_text_sample: pageText.slice(0, 2500),
-    internal_links: stableSortUrls(Array.from(new Set(internalLinks))).slice(
-      0,
-      500
-    ),
-    external_links: stableSortUrls(Array.from(new Set(externalLinks))).slice(
-      0,
-      200
-    ),
-    images,
-    image_count: images.length,
-    images_missing_alt_count: images.filter((img) => !img.has_alt).length,
-    has_faq:
-      faqQuestions.length >= 2 ||
-      /frequently asked questions|faqs|\bfaq\b/i.test(pageText),
-    faq_questions: faqQuestions,
-    has_schema:
-      schemaTypes.length > 0 ||
-      /application\/ld\+json|schema\.org/i.test(decodedHtml),
-    schema_types: schemaTypes,
-    has_phone: /\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/.test(pageText),
-    has_email: /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(pageText),
-    cta_phrases: ctaPhrases,
-    trust_signals: trustSignals,
-    placeholder_text: placeholder.hits,
-    placeholder_strong: placeholder.strong,
-    script_tag_count: scriptTagCount,
-    // Very little visible text + lots of scripts on a 2xx page usually means
-    // the content is built in the browser (client-side rendering).
-    likely_client_rendered:
-      status >= 200 && status < 300 && wordCount < 80 && scriptTagCount > 10,
-    is_utility_page: isUtilityPath(path),
-    is_important_page: isImportantPage(path, title, h1),
-    is_service_like: isServiceLikePage(path, title, h1),
-    fetch_error: "",
-  };
+function formatNumber(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number.toLocaleString() : "0";
 }
 
-function emptyPage({
-  url,
-  originalUrl,
-  status,
-  contentType,
-  source = "unknown",
-  error = "",
-}) {
-  const normalizedUrl = canonicalizeUrl(url);
-  const path = getPath(normalizedUrl || url);
-
-  return {
-    url: normalizedUrl || url,
-    original_url: canonicalizeUrl(originalUrl) || originalUrl,
-    final_url: normalizedUrl || url,
-    crawl_source: source,
-    status_code: status,
-    content_type: contentType,
-    redirected: false,
-    title: "",
-    meta_description: "",
-    h1: "",
-    h2s: [],
-    h3s: [],
-    canonical_url: "",
-    robots_meta: "",
-    noindex: false,
-    nofollow: false,
-    word_count: 0,
-    visible_text_sample: "",
-    internal_links: [],
-    external_links: [],
-    images: [],
-    image_count: 0,
-    images_missing_alt_count: 0,
-    has_faq: false,
-    faq_questions: [],
-    has_schema: false,
-    schema_types: [],
-    has_phone: false,
-    has_email: false,
-    cta_phrases: [],
-    trust_signals: [],
-    placeholder_text: [],
-    placeholder_strong: false,
-    script_tag_count: 0,
-    likely_client_rendered: false,
-    is_utility_page: isUtilityPath(path),
-    is_important_page: isImportantPage(path, "", ""),
-    is_service_like: isServiceLikePage(path, "", ""),
-    fetch_error: error,
-  };
+function scoreLabel(score) {
+  const number = Number(score || 0);
+  if (number >= 80) return "Strong";
+  if (number >= 60) return "Good start";
+  if (number >= 40) return "Needs work";
+  return "Needs urgent attention";
 }
 
-/* --------------------- Client-side rendering check --------------------- */
-
-function detectClientRendering(pages) {
-  const candidates = (pages || []).filter(
-    (p) =>
-      p.status_code >= 200 &&
-      p.status_code < 300 &&
-      p.is_important_page &&
-      !p.is_utility_page
-  );
-
-  const flagged = candidates.filter((p) => p.likely_client_rendered);
-  const fraction = candidates.length > 0 ? flagged.length / candidates.length : 0;
-
-  return {
-    detected: candidates.length >= 3 && fraction > 0.4,
-    flagged_pages: flagged.map((p) => getPath(p.url)),
-    checked_pages: candidates.length,
-    fraction: Math.round(fraction * 100) / 100,
-  };
+function scoreColor(score) {
+  const number = Number(score || 0);
+  if (number >= 80) return "bg-emerald-100 text-emerald-800 border-emerald-200";
+  if (number >= 60) return "bg-blue-100 text-blue-800 border-blue-200";
+  if (number >= 40) return "bg-amber-100 text-amber-800 border-amber-200";
+  return "bg-red-100 text-red-800 border-red-200";
 }
 
-/* ---------------------- Competitor comparison ------------------------- */
+function priorityClass(priority) {
+  const value = String(priority || "").toLowerCase();
 
-// Deterministic your-site-vs-competitors deltas. The AI layer narrates these
-// facts instead of guessing from raw snapshots.
-function buildCompetitorComparison({ pages, snapshots }) {
-  const yours = (pages || []).filter(
-    (p) =>
-      p.is_important_page &&
-      !p.is_utility_page &&
-      p.status_code >= 200 &&
-      p.status_code < 300 &&
-      !p.likely_client_rendered
-  );
-
-  const theirs = (snapshots || []).filter(
-    (s) =>
-      s.status_code >= 200 &&
-      s.status_code < 400 &&
-      Number(s.word_count || 0) > 100
-  );
-
-  if (yours.length === 0 || theirs.length === 0) return null;
-
-  const yourHeadingText = yours
-    .flatMap((p) => [p.h1, ...(p.h2s || []), ...(p.h3s || [])])
-    .map(normalizeHeading)
-    .filter(Boolean)
-    .join(" | ");
-
-  const topicMap = new Map();
-
-  for (const c of theirs) {
-    for (const heading of [...(c.h2s || []), ...(c.h3s || [])]) {
-      const normalized = normalizeHeading(heading);
-      if (!normalized) continue;
-
-      const words = normalized.split(" ");
-      if (words.length < 2 || words.length > 10) continue;
-      if (HEADING_JUNK_RE.test(normalized)) continue;
-
-      const meaningful = words.filter((w) => w.length > 3);
-      if (
-        meaningful.length > 0 &&
-        meaningful.every((w) => yourHeadingText.includes(w))
-      ) {
-        continue; // your pages already cover this topic
-      }
-
-      const entry =
-        topicMap.get(normalized) || {
-          topic: cleanText(heading),
-          competitors: [],
-          keyword: c.keyword || "",
-          serp_position: c.serp_position || null,
-        };
-
-      if (!entry.competitors.includes(c.competitor_name)) {
-        entry.competitors.push(c.competitor_name);
-      }
-
-      topicMap.set(normalized, entry);
-    }
+  if (value.includes("high") || value.includes("critical")) {
+    return "bg-red-100 text-red-800 border-red-200";
   }
 
-  const yourSchema = new Set(yours.flatMap((p) => p.schema_types || []));
-  const yourTrust = new Set(yours.flatMap((p) => p.trust_signals || []));
-  const theirSchema = Array.from(
-    new Set(theirs.flatMap((c) => c.schema_types || []))
-  );
-  const theirTrust = Array.from(
-    new Set(theirs.flatMap((c) => c.trust_signals || []))
-  );
+  if (value.includes("medium")) {
+    return "bg-amber-100 text-amber-800 border-amber-200";
+  }
 
-  return {
-    competitors_compared: theirs.map((c) => ({
-      name: c.competitor_name,
-      domain: c.competitor_domain,
-      url: c.competitor_url,
-      keyword: c.keyword || "",
-      serp_position: c.serp_position || null,
-      word_count: c.word_count || 0,
-      has_faq: Boolean(c.has_faq),
-    })),
-    content_depth: {
-      your_median_words: median(yours.map((p) => p.word_count || 0)),
-      competitor_median_words: median(theirs.map((c) => c.word_count || 0)),
-      your_pages_measured: yours.length,
-      competitor_pages_measured: theirs.length,
-    },
-    faq_coverage: {
-      your_pages_with_faq: yours.filter((p) => p.has_faq).length,
-      your_important_pages: yours.length,
-      competitors_with_faq: theirs.filter((c) => c.has_faq).length,
-      competitors_measured: theirs.length,
-      competitor_faq_examples: Array.from(
-        new Set(theirs.flatMap((c) => c.faq_questions || []))
-      ).slice(0, 8),
-    },
-    schema_gaps: theirSchema
-      .filter((t) => MEANINGFUL_SCHEMA_TYPES.has(t) && !yourSchema.has(t))
-      .sort(),
-    trust_signal_gaps: theirTrust.filter((t) => !yourTrust.has(t)).sort(),
-    topic_gaps: Array.from(topicMap.values())
-      .sort(
-        (a, b) =>
-          b.competitors.length - a.competitors.length ||
-          a.topic.localeCompare(b.topic)
-      )
-      .slice(0, 10),
-  };
+  if (value.includes("low")) {
+    return "bg-slate-100 text-slate-700 border-slate-200";
+  }
+
+  return "bg-blue-100 text-blue-800 border-blue-200";
 }
 
-/* ------------------------------ Analysis ------------------------------ */
+function categoryClass(category) {
+  const value = String(category || "").toLowerCase();
 
-function analyzePages({
-  pages,
-  brokenLinks,
-  competitorPageSnapshots,
-  competitorComparison,
-  clientRendering,
-  business_name,
-  business_type,
-  city,
-}) {
-  const findings = [];
+  if (value.includes("competitor")) return "bg-purple-100 text-purple-800 border-purple-200";
+  if (value.includes("content")) return "bg-blue-100 text-blue-800 border-blue-200";
+  if (value.includes("technical")) return "bg-slate-100 text-slate-800 border-slate-200";
+  if (value.includes("local")) return "bg-emerald-100 text-emerald-800 border-emerald-200";
+  if (value.includes("trust")) return "bg-indigo-100 text-indigo-800 border-indigo-200";
+  if (value.includes("performance")) return "bg-orange-100 text-orange-800 border-orange-200";
 
-  const importantPages = pages.filter(
-    (page) => page.is_important_page && !page.is_utility_page
-  );
-
-  const brokenPages = [];
-  const weakTitlePages = [];
-  const missingDescriptionPages = [];
-  const missingHeadingPages = [];
-  const noindexPages = [];
-  const canonicalPages = [];
-  const thinPages = [];
-  const placeholderPages = [];
-  const faqGapPages = [];
-  const ctaGapPages = [];
-  const trustGapPages = [];
-  const imageAltPages = [];
-
-  for (const page of pages) {
-    const path = getPath(page.url);
-    const isUtility = page.is_utility_page || isUtilityPath(path);
-    const isImportant =
-      page.is_important_page || isImportantPage(path, page.title, page.h1);
-
-    // When the site builds pages in the browser, content-based checks on the
-    // initial HTML would produce false positives — suppress those checks for
-    // flagged pages (titles/descriptions live in the static head, so keep them).
-    const contentSuppressed = Boolean(
-      clientRendering?.detected && page.likely_client_rendered
-    );
-
-    if (page.status_code === 0 || page.status_code >= 400) {
-      brokenPages.push(page);
-      continue;
-    }
-
-    if (isUtility) continue;
-    if (!isImportant) continue;
-
-    if (!page.title || page.title.length < 20 || page.title.length > 70) {
-      weakTitlePages.push(page);
-    }
-
-    if (!page.meta_description || page.meta_description.length < 50) {
-      missingDescriptionPages.push(page);
-    }
-
-    if (!contentSuppressed && !page.h1) {
-      missingHeadingPages.push(page);
-    }
-
-    if (page.noindex) {
-      noindexPages.push(page);
-    }
-
-    if (!page.canonical_url) {
-      canonicalPages.push(page);
-    }
-
-    if (!contentSuppressed && page.word_count < 300) {
-      thinPages.push(page);
-    }
-
-    if (
-      !contentSuppressed &&
-      (page.placeholder_strong || (page.placeholder_text?.length || 0) >= 2)
-    ) {
-      placeholderPages.push({ page: path, hits: page.placeholder_text });
-    }
-
-    // FAQ / CTA / trust checks only make sense on service-like pages —
-    // a contact or about page without an FAQ is not an issue.
-    if (page.is_service_like && !contentSuppressed) {
-      if (!page.has_faq) faqGapPages.push(page);
-
-      if (!page.cta_phrases || page.cta_phrases.length === 0) {
-        ctaGapPages.push(page);
-      }
-
-      if (!page.trust_signals || page.trust_signals.length === 0) {
-        trustGapPages.push(page);
-      }
-    }
-
-    if (
-      page.image_count >= 5 &&
-      page.images_missing_alt_count > 0 &&
-      page.images_missing_alt_count / page.image_count > 0.5
-    ) {
-      imageAltPages.push(page);
-    }
-  }
-
-  if (clientRendering?.detected) {
-    findings.push(
-      groupedFinding({
-        id: "client-side-rendering",
-        category: "js_rendering",
-        customer_category: "Website setup",
-        title:
-          "Your website builds pages in the browser, which limits what search engines read first",
-        explanation:
-          "Several important pages send very little text in their initial code and rely on scripts to fill in the content afterwards. This scan reads the initial code, the same way search engines start.",
-        why:
-          "When key content only appears after scripts run, search engines can take longer to read it or may miss parts of it — and some checks in this report may under-count your content.",
-        recommendation:
-          "Ask your website platform or developer whether important pages can include their main content directly in the page code (often called server-side rendering or static pages).",
-        current: `${clientRendering.flagged_pages.length} of ${clientRendering.checked_pages} important pages affected`,
-        priority: "high",
-        status: "needs_developer",
-        difficulty: "developer",
-        affected_pages: clientRendering.flagged_pages,
-        details: {
-          technical_term: "client-side rendering",
-          flagged_fraction: clientRendering.fraction,
-        },
-      })
-    );
-  }
-
-  if (brokenPages.length > 0) {
-    findings.push(
-      groupedFinding({
-        id: "broken-pages",
-        category: "broken_page",
-        customer_category: "Broken pages",
-        title:
-          brokenPages.length === 1
-            ? "One page may not be loading correctly"
-            : "Some pages may not be loading correctly",
-        explanation:
-          "We found pages that did not load successfully during the scan.",
-        why:
-          "Broken pages can frustrate visitors and make it harder for search engines to understand your website.",
-        recommendation:
-          "Ask your website editor or developer to review these pages and fix the links or page setup.",
-        current: `${brokenPages.length} page${brokenPages.length === 1 ? "" : "s"} affected`,
-        priority: "high",
-        status: "needs_developer",
-        difficulty: "developer",
-        affected_pages: brokenPages.map((p) => getPath(p.url)),
-        details: { affected_count: brokenPages.length },
-      })
-    );
-  }
-
-  if (weakTitlePages.length > 0) {
-    const examples = weakTitlePages.slice(0, 12);
-
-    findings.push(
-      groupedFinding({
-        id: "weak-search-titles",
-        category: "meta_title",
-        customer_category: "Search appearance",
-        title:
-          weakTitlePages.length === 1
-            ? "Improve this page’s search title"
-            : "Improve search titles on important pages",
-        explanation: "Some important pages may need clearer search titles.",
-        why:
-          "Clear search titles help people understand what each page is about before they click.",
-        recommendation:
-          examples.length === 1
-            ? suggestSearchTitle(examples[0], business_name, business_type, city)
-            : "Prepare short, unique search titles for the affected pages.",
-        current: `${weakTitlePages.length} page${weakTitlePages.length === 1 ? "" : "s"} affected`,
-        priority: "high",
-        status: "auto_fixed",
-        difficulty: "easy",
-        affected_pages: weakTitlePages.map((p) => getPath(p.url)),
-        details: {
-          affected_count: weakTitlePages.length,
-          examples: examples.map((p) => ({
-            page: getPath(p.url),
-            current_title: p.title || "Not found",
-            suggested_title: suggestSearchTitle(
-              p,
-              business_name,
-              business_type,
-              city
-            ),
-          })),
-        },
-      })
-    );
-  }
-
-  if (missingDescriptionPages.length > 0) {
-    const examples = missingDescriptionPages.slice(0, 12);
-
-    findings.push(
-      groupedFinding({
-        id: "missing-search-descriptions",
-        category: "meta_description",
-        customer_category: "Search appearance",
-        title:
-          missingDescriptionPages.length === 1
-            ? "Add a helpful search description"
-            : "Add helpful search descriptions to important pages",
-        explanation:
-          "Some important pages do not appear to have clear search descriptions.",
-        why:
-          "Search descriptions can help people understand what the page offers before they click.",
-        recommendation:
-          examples.length === 1
-            ? suggestSearchDescription(
-                examples[0],
-                business_name,
-                business_type,
-                city
-              )
-            : "Prepare short, helpful search descriptions for the affected pages.",
-        current: `${missingDescriptionPages.length} page${missingDescriptionPages.length === 1 ? "" : "s"} affected`,
-        priority: "medium",
-        status: "auto_fixed",
-        difficulty: "easy",
-        affected_pages: missingDescriptionPages.map((p) => getPath(p.url)),
-        details: {
-          affected_count: missingDescriptionPages.length,
-          examples: examples.map((p) => ({
-            page: getPath(p.url),
-            current_description: p.meta_description || "Not found",
-            suggested_description: suggestSearchDescription(
-              p,
-              business_name,
-              business_type,
-              city
-            ),
-          })),
-        },
-      })
-    );
-  }
-
-  if (missingHeadingPages.length > 0) {
-    findings.push(
-      groupedFinding({
-        id: "missing-main-headings",
-        category: "page_heading",
-        customer_category: "Page content",
-        title:
-          missingHeadingPages.length === 1
-            ? "Add a clear main heading"
-            : "Add clear main headings to important pages",
-        explanation: "Some important pages may not have a clear main heading.",
-        why:
-          "A clear heading helps visitors quickly understand what a page is about.",
-        recommendation: "Add one clear main heading to each affected page.",
-        current: `${missingHeadingPages.length} page${missingHeadingPages.length === 1 ? "" : "s"} affected`,
-        priority: "medium",
-        status: "needs_approval",
-        difficulty: "moderate",
-        affected_pages: missingHeadingPages.map((p) => getPath(p.url)),
-        details: { affected_count: missingHeadingPages.length },
-      })
-    );
-  }
-
-  if (noindexPages.length > 0) {
-    findings.push(
-      groupedFinding({
-        id: "noindex-important-pages",
-        category: "robots_txt",
-        customer_category: "Search visibility",
-        title: "Review search visibility on important pages",
-        explanation:
-          "Some important pages may be telling search engines not to include them in search results.",
-        why:
-          "Important service or business pages usually need to be visible to search engines.",
-        recommendation:
-          "Ask your website editor or developer to confirm whether these pages should be hidden from search engines.",
-        current: `${noindexPages.length} page${noindexPages.length === 1 ? "" : "s"} may be hidden`,
-        priority: "high",
-        status: "needs_developer",
-        difficulty: "developer",
-        affected_pages: noindexPages.map((p) => getPath(p.url)),
-        details: {
-          affected_count: noindexPages.length,
-          technical_term: "noindex",
-        },
-      })
-    );
-  }
-
-  if (canonicalPages.length >= 2) {
-    findings.push(
-      groupedFinding({
-        id: "preferred-page-settings",
-        category: "canonical",
-        customer_category: "Website setup",
-        title: "Review preferred-page settings across important pages",
-        explanation:
-          "Several important pages may not clearly tell search engines which version of the page is preferred.",
-        why:
-          "Preferred-page settings help search engines understand the main version of important pages.",
-        recommendation:
-          "Ask your website editor or SEO cleanup provider to review preferred-page settings across the affected pages.",
-        current: `${canonicalPages.length} page${canonicalPages.length === 1 ? "" : "s"} affected`,
-        priority: "medium",
-        status: "needs_developer",
-        difficulty: "developer",
-        affected_pages: canonicalPages.map((p) => getPath(p.url)),
-        details: {
-          affected_count: canonicalPages.length,
-          technical_term: "canonical",
-        },
-      })
-    );
-  }
-
-  if (
-    thinPages.length > 0 &&
-    thinPages.length <= Math.max(5, importantPages.length * 0.75)
-  ) {
-    findings.push(
-      groupedFinding({
-        id: "thin-important-pages",
-        category: "thin_content",
-        customer_category: "Page content",
-        title:
-          thinPages.length === 1
-            ? "Add more helpful content to this page"
-            : "Add more helpful content to important pages",
-        explanation:
-          "Some important pages may not have enough useful content for visitors.",
-        why:
-          "Helpful pages usually explain the service, benefits, common questions, proof points, and next steps.",
-        recommendation:
-          "Add clearer service details, benefits, common questions, proof points, and a stronger next step.",
-        current: `${thinPages.length} page${thinPages.length === 1 ? "" : "s"} affected`,
-        priority: "medium",
-        status: "needs_developer",
-        difficulty: "moderate",
-        affected_pages: thinPages.map((p) => getPath(p.url)),
-        details: {
-          affected_count: thinPages.length,
-          examples: thinPages.slice(0, 12).map((p) => ({
-            page: getPath(p.url),
-            word_count: p.word_count,
-          })),
-        },
-      })
-    );
-  }
-
-  if (placeholderPages.length > 0) {
-    findings.push(
-      groupedFinding({
-        id: "placeholder-text",
-        category: "placeholder_text",
-        customer_category: "Website setup",
-        title:
-          "Important numbers may not be showing correctly to search engines",
-        explanation:
-          "We found placeholder-like text where important business proof or page content may belong.",
-        why:
-          "Important proof points, service details, and trust signals should be easy for search engines and visitors to understand.",
-        recommendation:
-          "Ask a developer to make sure final text and numbers appear directly in the page content, not only through scripts or placeholders.",
-        current: `${placeholderPages.length} page${placeholderPages.length === 1 ? "" : "s"} affected`,
-        priority: "high",
-        status: "needs_developer",
-        difficulty: "developer",
-        affected_pages: placeholderPages.map((p) => p.page),
-        details: {
-          affected_count: placeholderPages.length,
-          examples: placeholderPages.slice(0, 12),
-          technical_term: "placeholder text",
-        },
-      })
-    );
-  }
-
-  if (faqGapPages.length > 0 && faqGapPages.length <= 25) {
-    findings.push(
-      groupedFinding({
-        id: "faq-gaps",
-        category: "faq_gap",
-        customer_category: "Page content",
-        title: "Add answers to common customer questions",
-        explanation:
-          "Some important service pages do not appear to answer common customer questions.",
-        why:
-          "Question-and-answer sections can help visitors make decisions and understand your services.",
-        recommendation:
-          "Add 4–6 common questions and answers that customers usually ask before contacting you.",
-        current: `${faqGapPages.length} page${faqGapPages.length === 1 ? "" : "s"} affected`,
-        priority: "low",
-        status: "needs_developer",
-        difficulty: "moderate",
-        affected_pages: faqGapPages.map((p) => getPath(p.url)),
-        details: { affected_count: faqGapPages.length },
-      })
-    );
-  }
-
-  if (ctaGapPages.length > 0 && ctaGapPages.length <= 25) {
-    findings.push(
-      groupedFinding({
-        id: "cta-gaps",
-        category: "cta_gap",
-        customer_category: "Page content",
-        title: "Add clearer next steps on important pages",
-        explanation:
-          "Some important service pages may not clearly tell visitors what to do next.",
-        why:
-          "A clear next step can help more visitors contact you, book, apply, or request help.",
-        recommendation:
-          "Add a simple next step such as “Contact us,” “Request a quote,” “Book a call,” or “Apply now.”",
-        current: `${ctaGapPages.length} page${ctaGapPages.length === 1 ? "" : "s"} affected`,
-        priority: "medium",
-        status: "needs_developer",
-        difficulty: "moderate",
-        affected_pages: ctaGapPages.map((p) => getPath(p.url)),
-        details: { affected_count: ctaGapPages.length },
-      })
-    );
-  }
-
-  if (trustGapPages.length > 0 && trustGapPages.length <= 25) {
-    findings.push(
-      groupedFinding({
-        id: "trust-signal-gaps",
-        category: "trust_signal_gap",
-        customer_category: "Trust signals",
-        title: "Add more trust signals to important pages",
-        explanation:
-          "Some important service pages may not show enough proof that visitors can trust the business.",
-        why:
-          "Reviews, testimonials, project examples, credentials, and proof points can help visitors feel more confident.",
-        recommendation:
-          "Add reviews, testimonials, proof numbers, case studies, certifications, or project examples where appropriate.",
-        current: `${trustGapPages.length} page${trustGapPages.length === 1 ? "" : "s"} affected`,
-        priority: "medium",
-        status: "needs_developer",
-        difficulty: "moderate",
-        affected_pages: trustGapPages.map((p) => getPath(p.url)),
-        details: { affected_count: trustGapPages.length },
-      })
-    );
-  }
-
-  if (imageAltPages.length > 0) {
-    findings.push(
-      groupedFinding({
-        id: "image-descriptions",
-        category: "image_alt_text",
-        customer_category: "Images",
-        title: "Improve image descriptions on important pages",
-        explanation:
-          "Some important pages have several images that may not have helpful descriptions.",
-        why:
-          "Image descriptions can help accessibility and give search engines more context.",
-        recommendation:
-          "Add short, useful descriptions to important images on the affected pages.",
-        current: `${imageAltPages.length} page${imageAltPages.length === 1 ? "" : "s"} affected`,
-        priority: "low",
-        status: "needs_developer",
-        difficulty: "moderate",
-        affected_pages: imageAltPages.map((p) => getPath(p.url)),
-        details: {
-          affected_count: imageAltPages.length,
-          examples: imageAltPages.slice(0, 12).map((p) => ({
-            page: getPath(p.url),
-            image_count: p.image_count,
-            missing_alt_count: p.images_missing_alt_count,
-          })),
-        },
-      })
-    );
-  }
-
-  if (brokenLinks.length > 0) {
-    findings.push(
-      groupedFinding({
-        id: "broken-internal-links",
-        category: "internal_link",
-        customer_category: "Internal links",
-        title: "Fix broken internal links",
-        explanation:
-          "Some links inside the website point to pages that may not load correctly.",
-        why:
-          "Broken links can frustrate visitors and make the site harder for search engines to understand.",
-        recommendation:
-          "Update or remove the broken links shown in the technical details.",
-        current: `${brokenLinks.length} broken internal link${brokenLinks.length === 1 ? "" : "s"} found`,
-        priority: "high",
-        status: "needs_developer",
-        difficulty: "developer",
-        affected_pages: brokenLinks
-          .map((item) => getPath(item.source_page))
-          .filter(Boolean),
-        details: {
-          affected_count: brokenLinks.length,
-          examples: brokenLinks.slice(0, 25),
-        },
-      })
-    );
-  }
-
-  findings.push(
-    ...buildComparisonFindings({
-      comparison: competitorComparison,
-      snapshots: competitorPageSnapshots,
-    })
-  );
-
-  findings.push(...detectDuplicateTitles(pages));
-  findings.push(...detectDuplicateDescriptions(pages));
-
-  return dedupeFindings(findings);
+  return "bg-slate-100 text-slate-700 border-slate-200";
 }
 
-// One finding per real, measured gap — not a single vague "look at
-// competitors" card. Falls back to the generic card only when snapshots
-// exist but a comparison couldn't be built.
-function buildComparisonFindings({ comparison, snapshots }) {
-  const findings = [];
+function gapTypeLabel(type) {
+  const value = String(type || "").replace(/_/g, " ");
 
-  if (!comparison) {
-    if ((snapshots || []).length > 0) {
-      findings.push(
-        groupedFinding({
-          id: "competitor-content-opportunities",
-          category: "competitor_gap",
-          customer_category: "Competitor opportunities",
-          title: "Review competitor pages for content opportunities",
-          explanation:
-            "We found competitor pages from Google results and reviewed what those pages include.",
-          why:
-            "Competitor pages can show what services, questions, proof points, and page sections customers may expect to see.",
-          recommendation:
-            "Compare your most important pages against these competitor pages and add helpful sections where appropriate.",
-          current: `${snapshots.length} competitor page${snapshots.length === 1 ? "" : "s"} reviewed`,
-          priority: "medium",
-          status: "needs_developer",
-          difficulty: "moderate",
-          affected_pages: ["/"],
-          details: { competitor_page_snapshots: snapshots.slice(0, 5) },
-        })
-      );
-    }
+  if (!value) return "Competitor gap";
 
-    return findings;
-  }
-
-  const depth = comparison.content_depth;
-
-  if (
-    depth.your_pages_measured >= 2 &&
-    depth.competitor_pages_measured >= 2 &&
-    depth.your_median_words > 0 &&
-    depth.competitor_median_words >= depth.your_median_words * 2
-  ) {
-    findings.push(
-      groupedFinding({
-        id: "competitor-content-depth",
-        category: "competitor_gap",
-        customer_category: "Competitor opportunities",
-        title: "Competitor pages found on Google go much deeper than yours",
-        explanation: `Competitor pages we reviewed have a typical length of about ${depth.competitor_median_words} words. Your important pages have a typical length of about ${depth.your_median_words} words.`,
-        why:
-          "Pages that fully explain the service, the process, pricing context, and common questions give visitors more reasons to choose you.",
-        recommendation:
-          "Expand your key service pages with the sections competitors cover. The topic list in the technical details shows exactly what they include that you may not.",
-        current: `About ${depth.your_median_words} words on your pages vs about ${depth.competitor_median_words} on competitor pages`,
-        priority: "high",
-        status: "needs_developer",
-        difficulty: "moderate",
-        affected_pages: ["/"],
-        details: {
-          content_depth: depth,
-          competitors_compared: comparison.competitors_compared,
-        },
-      })
-    );
-  }
-
-  const faq = comparison.faq_coverage;
-
-  if (faq.competitors_with_faq >= 2 && faq.your_pages_with_faq === 0) {
-    findings.push(
-      groupedFinding({
-        id: "competitor-faq-coverage",
-        category: "competitor_gap",
-        customer_category: "Competitor opportunities",
-        title:
-          "Competitors answer customer questions on their pages — yours don’t yet",
-        explanation: `${faq.competitors_with_faq} of ${faq.competitors_measured} competitor pages we reviewed include a question-and-answer section. We did not find one on your important pages.`,
-        why:
-          "Customers often compare businesses by the questions their pages answer before making contact.",
-        recommendation:
-          "Add 4–6 real customer questions and answers to your key service pages. The technical details include example questions competitors answer.",
-        current: `${faq.competitors_with_faq} of ${faq.competitors_measured} competitors have Q&A sections; your pages have 0`,
-        priority: "medium",
-        status: "needs_developer",
-        difficulty: "moderate",
-        affected_pages: ["/"],
-        details: { faq_coverage: faq },
-      })
-    );
-  }
-
-  if ((comparison.topic_gaps || []).length >= 3) {
-    const top = comparison.topic_gaps.slice(0, 6);
-    const topExamples = top
-      .slice(0, 3)
-      .map((t) => `“${t.topic}”`)
-      .join(", ");
-
-    findings.push(
-      groupedFinding({
-        id: "competitor-topic-gaps",
-        category: "competitor_gap",
-        customer_category: "Competitor opportunities",
-        title: "Competitor pages cover topics your pages don’t mention",
-        explanation: `Competitor pages include sections such as ${topExamples} that we could not find on your important pages.`,
-        why:
-          "These sections often answer the exact things customers compare before contacting a business.",
-        recommendation:
-          "Review the full topic list in the technical details and add the sections that genuinely fit your services.",
-        current: `${comparison.topic_gaps.length} topic${comparison.topic_gaps.length === 1 ? "" : "s"} found on competitor pages but not yours`,
-        priority: "medium",
-        status: "needs_developer",
-        difficulty: "moderate",
-        affected_pages: ["/"],
-        details: { topic_gaps: comparison.topic_gaps },
-      })
-    );
-  }
-
-  if ((comparison.schema_gaps || []).length > 0) {
-    findings.push(
-      groupedFinding({
-        id: "competitor-schema-gaps",
-        category: "schema",
-        customer_category: "Competitor opportunities",
-        title:
-          "Competitors give search engines structured business information you don’t",
-        explanation: `Competitor pages include structured information types (${comparison.schema_gaps.slice(0, 4).join(", ")}) that we did not find on your pages.`,
-        why:
-          "Structured business information helps search engines show richer results such as stars, FAQs, and business details.",
-        recommendation:
-          "Ask your website platform or developer to add the missing structured information types where they fit your pages.",
-        current: `Missing: ${comparison.schema_gaps.join(", ")}`,
-        priority: "low",
-        status: "needs_developer",
-        difficulty: "developer",
-        affected_pages: ["/"],
-        details: {
-          schema_gaps: comparison.schema_gaps,
-          technical_term: "schema markup",
-        },
-      })
-    );
-  }
-
-  if ((comparison.trust_signal_gaps || []).length >= 3) {
-    findings.push(
-      groupedFinding({
-        id: "competitor-trust-gaps",
-        category: "competitor_gap",
-        customer_category: "Competitor opportunities",
-        title: "Competitor pages show trust proof your pages don’t mention",
-        explanation: `Competitor pages mention ${joinHumanList(comparison.trust_signal_gaps.slice(0, 4))} — signals we could not find on your important pages.`,
-        why:
-          "Visible proof points help visitors feel confident enough to make contact.",
-        recommendation:
-          "Add the proof you genuinely have — reviews, credentials, project counts, guarantees — to your key pages.",
-        current: `${comparison.trust_signal_gaps.length} trust signal${comparison.trust_signal_gaps.length === 1 ? "" : "s"} found on competitor pages but not yours`,
-        priority: "medium",
-        status: "needs_developer",
-        difficulty: "moderate",
-        affected_pages: ["/"],
-        details: { trust_signal_gaps: comparison.trust_signal_gaps },
-      })
-    );
-  }
-
-  return findings;
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function groupedFinding({
-  id,
-  category,
-  customer_category,
-  title,
-  explanation,
-  why,
-  recommendation,
-  current,
-  priority,
-  status,
-  difficulty,
-  affected_pages,
-  details = {},
-}) {
-  return {
-    id: stableId(id),
-    type: "site_level",
-    page_url: affected_pages?.[0] || "/",
-    category,
-    customer_category,
-    issue_title: title,
-    plain_english_explanation: explanation,
-    why_it_matters: why,
-    current_value: current,
-    recommended_value: recommendation,
-    ai_recommendation: recommendation,
-    priority,
-    difficulty,
-    status,
-    can_auto_fix: status === "auto_fixed",
-    requires_approval: status === "needs_approval",
-    requires_developer: status === "needs_developer",
-    affected_pages: Array.from(new Set(affected_pages || [])).slice(0, 150),
-    details,
-    confidence_score: 90,
-  };
-}
+function normalizeScanResult(raw) {
+  if (!raw) return DEFAULT_RESULT;
 
-function groupAndPrioritizeFindings(findings) {
-  const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
-  const statusOrder = {
-    needs_approval: 0,
-    auto_fixed: 1,
-    needs_developer: 2,
-    open: 3,
-  };
+  const data = raw.data || raw.result || raw;
 
-  return dedupeFindings(findings)
-    .sort((a, b) => {
-      const aPriority = priorityOrder[a.priority] ?? 9;
-      const bPriority = priorityOrder[b.priority] ?? 9;
-      if (aPriority !== bPriority) return aPriority - bPriority;
+  const pages =
+    safeArray(data.pages) ||
+    safeArray(data.scanned_pages) ||
+    safeArray(data.crawl_pages);
 
-      const aStatus = statusOrder[a.status] ?? 9;
-      const bStatus = statusOrder[b.status] ?? 9;
-      if (aStatus !== bStatus) return aStatus - bStatus;
+  const findings =
+    safeArray(data.findings) ||
+    safeArray(data.fixes) ||
+    safeArray(data.issues) ||
+    [];
 
-      const aTitle = String(a.issue_title || "");
-      const bTitle = String(b.issue_title || "");
-      if (aTitle !== bTitle) return aTitle.localeCompare(bTitle);
+  const competitorInsights =
+    safeArray(data.competitor_insights) ||
+    safeArray(data.competitorInsights) ||
+    safeArray(data.competitor_gaps) ||
+    safeArray(data.competitor_recommendations) ||
+    [];
 
-      return String(a.page_url || "").localeCompare(String(b.page_url || ""));
-    })
-    .slice(0, 28);
-}
-
-function detectDuplicateTitles(pages) {
-  const map = new Map();
-  const findings = [];
-
-  for (const page of pages) {
-    if (!page.title) continue;
-    if (!page.is_important_page) continue;
-    if (page.is_utility_page) continue;
-
-    const key = page.title.trim().toLowerCase();
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(getPath(page.url));
-  }
-
-  for (const [title, affectedPages] of Array.from(map.entries()).sort()) {
-    const unique = Array.from(new Set(affectedPages)).sort();
-    if (unique.length <= 1) continue;
-
-    findings.push(
-      groupedFinding({
-        id: `duplicate-title-${title}`,
-        category: "duplicate_search_titles",
-        customer_category: "Search appearance",
-        title: "Several important pages use the same search title",
-        explanation:
-          "Multiple important pages appear to use the same search title.",
-        why:
-          "Unique search titles help visitors and search engines understand the purpose of each page.",
-        recommendation:
-          "Review the affected pages and prepare unique search titles for each one.",
-        current: title,
-        priority: "medium",
-        status: "needs_approval",
-        difficulty: "easy",
-        affected_pages: unique,
-        details: {
-          affected_count: unique.length,
-          technical_term: "duplicate title",
-        },
-      })
-    );
-  }
-
-  return findings;
-}
-
-function detectDuplicateDescriptions(pages) {
-  const map = new Map();
-  const findings = [];
-
-  for (const page of pages) {
-    if (!page.meta_description) continue;
-    if (!page.is_important_page) continue;
-    if (page.is_utility_page) continue;
-
-    const key = page.meta_description.trim().toLowerCase();
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(getPath(page.url));
-  }
-
-  for (const [description, affectedPages] of Array.from(map.entries()).sort()) {
-    const unique = Array.from(new Set(affectedPages)).sort();
-    if (unique.length <= 1) continue;
-
-    findings.push(
-      groupedFinding({
-        id: `duplicate-description-${description}`,
-        category: "meta_description",
-        customer_category: "Search appearance",
-        title: "Several important pages use the same search description",
-        explanation:
-          "Multiple important pages appear to use the same search description.",
-        why:
-          "Unique search descriptions can make each important page clearer in search results.",
-        recommendation:
-          "Prepare a unique search description for each affected page.",
-        current: clamp(description, 160),
-        priority: "medium",
-        status: "auto_fixed",
-        difficulty: "easy",
-        affected_pages: unique,
-        details: {
-          affected_count: unique.length,
-          technical_term: "duplicate search description",
-        },
-      })
-    );
-  }
-
-  return findings;
-}
-
-/* ------------------------ Competitor discovery ------------------------- */
-
-async function discoverCompetitorsFromGoogle({
-  base44,
-  user,
-  project_id,
-  website_url,
-  business_name,
-  business_type,
-  city,
-  country,
-  language,
-  important_keywords,
-  maxKeywords,
-}) {
-  const warnings = [];
-  const googleApiKey = getOptionalSecret(GOOGLE_API_KEY_NAME);
-  const googleCx = getOptionalSecret(GOOGLE_CX_NAME);
-
-  if (!googleApiKey || !googleCx) {
-    return {
-      discovered_competitors: [],
-      created_competitors: [],
-      warnings: [
-        "Google competitor discovery is not configured. Add GOOGLE_CUSTOM_SEARCH_API_KEY and GOOGLE_CUSTOM_SEARCH_CX.",
-      ],
-    };
-  }
-
-  const ownDomain = getDomain(website_url);
-
-  // Keyword count is a plan-tier knob: Google CSE free tier is 100
-  // queries/day, so more keywords per scan means fewer scans per day.
-  const keywords = buildCompetitorKeywords({
-    business_name,
-    business_type,
-    city,
-    important_keywords,
-  }).slice(0, Math.max(1, maxKeywords || 4));
-
-  // All searches run in parallel — 4–5 queries take ~as long as one.
-  const runs = await Promise.all(
-    keywords.map(async (keyword) => {
-      try {
-        const items = await withTimeout(
-          searchGoogle({
-            keyword,
-            googleApiKey,
-            googleCx,
-            ownDomain,
-            country,
-            language,
-          }),
-          8000,
-          "Google search"
-        );
-
-        return { keyword, items };
-      } catch {
-        warnings.push(`Google search failed for "${keyword}".`);
-        return { keyword, items: [] };
-      }
-    })
-  );
-
-  const results = [];
-
-  for (const run of runs) {
-    for (const item of run.items) {
-      const domain = getDomain(item.url);
-
-      if (!isValidCompetitorDomain(domain, ownDomain)) continue;
-
-      results.push({
-        source: "google_custom_search",
-        keyword: run.keyword,
+  const recommendedActions =
+    safeArray(data.recommended_actions) ||
+    safeArray(data.recommendedActions) ||
+    safeArray(data.top_recommended_actions) ||
+    findings
+      .filter((item) => String(item.priority || "").toLowerCase().includes("high"))
+      .slice(0, 5)
+      .map((item) => ({
+        fix_id: item.id || item.fix_id,
         title: item.title,
-        url: normalizeCompetitorUrl(item.url),
-        original_result_url: item.url,
-        domain,
-        position: item.position,
-        snippet: item.snippet,
-        query: item.query,
-      });
-    }
-  }
+        plain_english_summary:
+          item.plain_english_summary ||
+          item.summary ||
+          item.description ||
+          "This issue may be affecting how clearly customers and search engines understand your site.",
+        why_it_matters:
+          item.why_it_matters ||
+          "Fixing this can make the page clearer, easier to trust, and more useful for visitors.",
+        what_to_do_steps: item.fix_steps || item.steps || item.what_to_do_steps || [],
+        who_can_do_this: item.who_can_do_this || "Business owner or web designer",
+        time_estimate: item.time_estimate || "30 minutes",
+        priority: item.priority || "High",
+        affected_pages: item.affected_pages || item.pages || [],
+      }));
 
-  const discovered = dedupeCompetitors(results).slice(0, 8);
-  let createdCompetitors = [];
-
-  if (project_id && discovered.length > 0) {
-    const existing = await getExistingCompetitors(base44, project_id);
-    const existingDomains = new Set(
-      existing.map((item) => getDomain(item.website_url))
-    );
-
-    const toCreate = discovered.filter(
-      (item) => !existingDomains.has(item.domain)
-    );
-
-    if (toCreate.length > 0) {
-      createdCompetitors = await base44.entities.Competitor.bulkCreate(
-        toCreate.map((item) => ({
-          project_id,
-          owner_user_id: user.id,
-          name: formatDomainName(item.domain),
-          website_url: item.url,
-          notes: `Found from Google result for "${item.keyword}".`,
-          service_pages_count: 0,
-          title_quality_score: 0,
-          meta_coverage_pct: 0,
-          content_depth_score: 0,
-          faq_usage: false,
-          schema_usage: false,
-          broken_links_count: 0,
-        }))
-      );
-    }
-  }
+  const summary =
+    data.scan_summary ||
+    data.summary ||
+    {
+      score: data.score || data.overall_score || calculateFallbackScore(findings),
+      status_label: data.status_label,
+      plain_english_summary:
+        data.plain_english_summary ||
+        data.ai_summary ||
+        "The scan completed. Review the recommended actions below to see what to improve first.",
+      pages_scanned:
+        data.pages_scanned ||
+        data.page_count ||
+        pages.filter((page) => String(page.status || "").toLowerCase() !== "failed").length,
+      pages_failed:
+        data.pages_failed ||
+        pages.filter((page) => String(page.status || "").toLowerCase() === "failed").length,
+      high_priority_count:
+        data.high_priority_count ||
+        findings.filter((item) =>
+          String(item.priority || "").toLowerCase().includes("high")
+        ).length,
+      competitor_gap_count:
+        data.competitor_gap_count ||
+        competitorInsights.length,
+    };
 
   return {
-    discovered_competitors: discovered,
-    created_competitors: createdCompetitors,
-    warnings,
+    scan_summary: summary,
+    recommended_actions: recommendedActions,
+    competitor_insights: competitorInsights,
+    findings,
+    pages,
+    technical_details:
+      data.technical_details ||
+      data.technicalDetails ||
+      data.crawl_details ||
+      data.debug ||
+      null,
+    raw,
   };
 }
 
-async function searchGoogle({
-  keyword,
-  googleApiKey,
-  googleCx,
-  ownDomain = "",
-  country = "us",
-  language = "en",
-}) {
-  const query = ownDomain ? `${keyword} -site:${ownDomain}` : keyword;
+function calculateFallbackScore(findings) {
+  const high = findings.filter((item) =>
+    String(item.priority || "").toLowerCase().includes("high")
+  ).length;
 
-  const url = new URL("https://www.googleapis.com/customsearch/v1");
-  url.searchParams.set("key", googleApiKey);
-  url.searchParams.set("cx", googleCx);
-  url.searchParams.set("q", query);
-  url.searchParams.set("num", "10");
-  url.searchParams.set("gl", String(country || "us").toLowerCase());
-  url.searchParams.set("hl", String(language || "en").toLowerCase());
+  const medium = findings.filter((item) =>
+    String(item.priority || "").toLowerCase().includes("medium")
+  ).length;
 
-  const response = await fetch(url.toString(), {
+  const low = findings.filter((item) =>
+    String(item.priority || "").toLowerCase().includes("low")
+  ).length;
+
+  const penalty = high * 12 + medium * 6 + low * 2;
+  return Math.max(0, Math.min(100, 100 - penalty));
+}
+
+async function runAdvancedScan(payload) {
+  const response = await fetch(API_ENDPOINT, {
+    method: "POST",
     headers: {
-      accept: "application/json",
-      "user-agent": USER_AGENT,
+      "Content-Type": "application/json",
     },
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
-    throw new Error(`Google search failed: ${response.status}`);
+    const errorText = await response.text().catch(() => "");
+    throw new Error(errorText || `Scan failed with status ${response.status}`);
   }
 
-  const data = await response.json();
-  const items = Array.isArray(data.items) ? data.items : [];
-
-  return items.map((item, index) => ({
-    title: item.title || "",
-    url: item.link || "",
-    snippet: item.snippet || "",
-    position: index + 1,
-    query,
-  }));
+  return response.json();
 }
 
-function buildCompetitorKeywords({
-  business_name,
-  business_type,
-  city,
-  important_keywords,
-}) {
-  const keywords = [];
-
-  for (const keyword of important_keywords || []) {
-    const clean = String(keyword || "").trim();
-    if (clean) keywords.push(clean);
-  }
-
-  const type = String(business_type || "").trim();
-  const place = String(city || "").trim();
-  const name = String(business_name || "").trim();
-
-  if (type && place) keywords.push(`${type} ${place}`);
-  if (type) keywords.push(`${type} near me`);
-  if (type && place) keywords.push(`best ${type} ${place}`);
-  if (name && type) keywords.push(`${type} companies`);
-
-  if (/loan|lender|mortgage|financ|real estate investment/i.test(type)) {
-    if (place) {
-      keywords.push(`fix and flip loans ${place}`);
-      keywords.push(`bridge loans ${place}`);
-      keywords.push(`hard money lender ${place}`);
-      keywords.push(`new construction loans ${place}`);
-      keywords.push(`rental property loans ${place}`);
-    } else {
-      keywords.push("fix and flip loans");
-      keywords.push("bridge loans");
-      keywords.push("hard money lender");
-      keywords.push("new construction loans");
-      keywords.push("rental property loans");
-    }
-  }
-
-  return Array.from(
-    new Set(keywords.map((item) => item.trim()).filter(Boolean))
-  ).sort((a, b) => a.localeCompare(b));
-}
-
-async function getExistingCompetitors(base44, project_id) {
-  if (!project_id) return [];
-
-  try {
-    const rows = await base44.entities.Competitor.filter({ project_id });
-    return Array.isArray(rows) ? rows : [];
-  } catch {
-    return [];
-  }
-}
-
-async function saveProvidedCompetitors({
-  base44,
-  user,
-  project_id,
-  competitor_urls,
-  ownDomain,
-}) {
-  const urls = (competitor_urls || [])
-    .map((url) => String(url || "").trim())
-    .filter(Boolean);
-
-  if (!project_id || urls.length === 0) return [];
-
-  const existing = await getExistingCompetitors(base44, project_id);
-  const existingDomains = new Set(
-    existing.map((item) => getDomain(item.website_url))
+function Badge({ children, className = "" }) {
+  return (
+    <span
+      className={cx(
+        "inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium",
+        className
+      )}
+    >
+      {children}
+    </span>
   );
-
-  const toCreate = [];
-
-  for (const rawUrl of urls) {
-    const normalized = normalizeUrl(rawUrl);
-    const domain = getDomain(normalized);
-
-    if (!isValidCompetitorDomain(domain, ownDomain)) continue;
-    if (existingDomains.has(domain)) continue;
-
-    toCreate.push({
-      project_id,
-      owner_user_id: user.id,
-      name: formatDomainName(domain),
-      website_url: normalized,
-      notes: "Added from Scan Website.",
-      service_pages_count: 0,
-      title_quality_score: 0,
-      meta_coverage_pct: 0,
-      content_depth_score: 0,
-      faq_usage: false,
-      schema_usage: false,
-      broken_links_count: 0,
-    });
-  }
-
-  if (toCreate.length === 0) return [];
-
-  return await base44.entities.Competitor.bulkCreate(toCreate);
 }
 
-function mergeCompetitorResults({ own_url, existing, manual, discovered, created }) {
-  const ownDomain = getDomain(own_url);
-  const map = new Map();
+function Card({ children, className = "" }) {
+  return (
+    <div className={cx("rounded-2xl border border-slate-200 bg-white shadow-sm", className)}>
+      {children}
+    </div>
+  );
+}
 
-  for (const item of [
-    ...(discovered || []),
-    ...(created || []),
-    ...(manual || []),
-    ...(existing || []),
-  ]) {
-    const website_url =
-      item.website_url || item.url || item.original_result_url || "";
+function SectionHeader({ eyebrow, title, description, right }) {
+  return (
+    <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+      <div>
+        {eyebrow ? (
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-blue-700">
+            {eyebrow}
+          </p>
+        ) : null}
+        <h2 className="text-2xl font-bold tracking-tight text-slate-950">{title}</h2>
+        {description ? (
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">{description}</p>
+        ) : null}
+      </div>
+      {right ? <div>{right}</div> : null}
+    </div>
+  );
+}
 
-    const domain = item.domain || getDomain(website_url);
+function EmptyState({ title, description }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+      <h3 className="text-base font-semibold text-slate-950">{title}</h3>
+      <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-slate-600">{description}</p>
+    </div>
+  );
+}
 
-    if (!isValidCompetitorDomain(domain, ownDomain)) continue;
+function Toggle({ checked, onChange, label, help }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className="flex w-full items-start justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4 text-left transition hover:border-blue-300 hover:bg-blue-50/40"
+    >
+      <div>
+        <p className="text-sm font-semibold text-slate-950">{label}</p>
+        {help ? <p className="mt-1 text-xs leading-5 text-slate-600">{help}</p> : null}
+      </div>
+      <span
+        className={cx(
+          "relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition",
+          checked ? "bg-blue-600" : "bg-slate-300"
+        )}
+      >
+        <span
+          className={cx(
+            "absolute top-1 h-4 w-4 rounded-full bg-white transition",
+            checked ? "left-6" : "left-1"
+          )}
+        />
+      </span>
+    </button>
+  );
+}
 
-    const current = map.get(domain);
+function ProgressTimeline({ currentStep, progress }) {
+  return (
+    <Card className="overflow-hidden">
+      <div className="border-b border-slate-200 bg-slate-50 p-5">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h3 className="text-lg font-bold text-slate-950">Running advanced scan</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              We are prioritising important pages first, then competitor comparison.
+            </p>
+          </div>
+          <div className="text-right">
+            <p className="text-2xl font-bold text-blue-700">{Math.round(progress)}%</p>
+            <p className="text-xs text-slate-500">Progress</p>
+          </div>
+        </div>
+        <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-200">
+          <div
+            className="h-full rounded-full bg-blue-600 transition-all duration-500"
+            style={{ width: `${Math.max(5, Math.min(100, progress))}%` }}
+          />
+        </div>
+      </div>
 
-    const candidate = {
-      name: item.name || formatDomainName(domain),
-      website_url: website_url,
-      url: item.original_result_url || website_url,
-      domain,
-      source: item.source || (item.keyword ? "google_custom_search" : "saved"),
-      keyword: item.keyword || "",
-      title: item.title || "",
-      snippet: item.snippet || "",
-      position: item.position || 99,
-      query: item.query || "",
+      <div className="p-5">
+        <div className="space-y-4">
+          {SCAN_STEPS.map((step, index) => {
+            const isDone = index < currentStep;
+            const isActive = index === currentStep;
+
+            return (
+              <div key={step.key} className="flex gap-4">
+                <div
+                  className={cx(
+                    "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-sm font-bold",
+                    isDone
+                      ? "border-emerald-600 bg-emerald-600 text-white"
+                      : isActive
+                        ? "border-blue-600 bg-blue-600 text-white"
+                        : "border-slate-300 bg-white text-slate-500"
+                  )}
+                >
+                  {isDone ? "✓" : index + 1}
+                </div>
+                <div className="min-w-0">
+                  <p
+                    className={cx(
+                      "text-sm font-semibold",
+                      isActive ? "text-blue-800" : "text-slate-950"
+                    )}
+                  >
+                    {step.label}
+                  </p>
+                  <p className="mt-0.5 text-sm leading-5 text-slate-600">{step.text}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function SummaryCards({ summary }) {
+  const score = Number(summary?.score || 0);
+
+  const cards = [
+    {
+      label: "Overall SEO health",
+      value: score,
+      suffix: "/100",
+      badge: summary?.status_label || scoreLabel(score),
+      badgeClass: scoreColor(score),
+      helper: summary?.plain_english_summary || "Review the top actions below.",
+    },
+    {
+      label: "Top fixes",
+      value: summary?.high_priority_count || 0,
+      suffix: "",
+      badge: "Start here",
+      badgeClass: "bg-red-100 text-red-800 border-red-200",
+      helper: "High-priority recommendations to review first.",
+    },
+    {
+      label: "Competitor gaps",
+      value: summary?.competitor_gap_count || 0,
+      suffix: "",
+      badge: "What they do better",
+      badgeClass: "bg-purple-100 text-purple-800 border-purple-200",
+      helper: "Specific areas where competitors appear stronger.",
+    },
+    {
+      label: "Pages scanned",
+      value: summary?.pages_scanned || 0,
+      suffix: "",
+      badge:
+        Number(summary?.pages_failed || 0) > 0
+          ? `${summary?.pages_failed} failed/skipped`
+          : "Scan complete",
+      badgeClass:
+        Number(summary?.pages_failed || 0) > 0
+          ? "bg-amber-100 text-amber-800 border-amber-200"
+          : "bg-emerald-100 text-emerald-800 border-emerald-200",
+      helper: "Successful crawlable pages checked.",
+    },
+  ];
+
+  return (
+    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      {cards.map((card) => (
+        <Card key={card.label} className="p-5">
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-sm font-medium text-slate-600">{card.label}</p>
+            <Badge className={card.badgeClass}>{card.badge}</Badge>
+          </div>
+          <div className="mt-4 flex items-end gap-1">
+            <p className="text-4xl font-black tracking-tight text-slate-950">
+              {formatNumber(card.value)}
+            </p>
+            {card.suffix ? (
+              <p className="mb-1 text-sm font-semibold text-slate-500">{card.suffix}</p>
+            ) : null}
+          </div>
+          <p className="mt-3 text-sm leading-5 text-slate-600">{card.helper}</p>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+function RecommendedActionCard({ action, index }) {
+  const [open, setOpen] = useState(index === 0);
+  const steps = safeArray(action.what_to_do_steps || action.fix_steps || action.steps);
+  const affectedPages = safeArray(action.affected_pages || action.pages);
+
+  return (
+    <Card className="overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-start justify-between gap-4 p-5 text-left"
+      >
+        <div className="flex gap-4">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-600 text-sm font-bold text-white">
+            {index + 1}
+          </div>
+          <div>
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <Badge className={priorityClass(action.priority || "High")}>
+                {action.priority || "High priority"}
+              </Badge>
+              <Badge className="border-blue-200 bg-blue-50 text-blue-800">
+                {action.time_estimate || "30 minutes"}
+              </Badge>
+              <Badge className="border-slate-200 bg-slate-50 text-slate-700">
+                {action.who_can_do_this || "Business owner or web designer"}
+              </Badge>
+            </div>
+            <h3 className="text-lg font-bold text-slate-950">
+              {action.title || "Recommended action"}
+            </h3>
+            <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-600">
+              {action.plain_english_summary ||
+                action.summary ||
+                "This recommendation can help make your website clearer and more useful."}
+            </p>
+          </div>
+        </div>
+        <span className="text-xl text-slate-400">{open ? "−" : "+"}</span>
+      </button>
+
+      {open ? (
+        <div className="border-t border-slate-200 bg-slate-50 p-5">
+          <div className="grid gap-5 lg:grid-cols-2">
+            <div>
+              <h4 className="text-sm font-bold text-slate-950">Why it matters</h4>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                {action.why_it_matters ||
+                  "This helps visitors understand what you offer and helps search engines interpret the page more clearly."}
+              </p>
+            </div>
+
+            <div>
+              <h4 className="text-sm font-bold text-slate-950">What to do next</h4>
+              {steps.length > 0 ? (
+                <ol className="mt-2 space-y-2 text-sm leading-6 text-slate-600">
+                  {steps.map((step, stepIndex) => (
+                    <li key={`${step}-${stepIndex}`} className="flex gap-2">
+                      <span className="font-bold text-blue-700">{stepIndex + 1}.</span>
+                      <span>{step}</span>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  Review the affected pages and improve the content, trust signals, or technical setup
+                  described in this recommendation.
+                </p>
+              )}
+            </div>
+          </div>
+
+          {affectedPages.length > 0 ? (
+            <div className="mt-5">
+              <h4 className="text-sm font-bold text-slate-950">Affected pages</h4>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {affectedPages.slice(0, 8).map((page, pageIndex) => {
+                  const url = typeof page === "string" ? page : page.url;
+
+                  return (
+                    <span
+                      key={`${url}-${pageIndex}`}
+                      className="max-w-full truncate rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-700"
+                    >
+                      {url}
+                    </span>
+                  );
+                })}
+                {affectedPages.length > 8 ? (
+                  <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-500">
+                    +{affectedPages.length - 8} more
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
+function CompetitorInsightCard({ insight }) {
+  return (
+    <Card className="overflow-hidden border-purple-200">
+      <div className="border-b border-purple-100 bg-purple-50 p-5">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <div className="mb-2 flex flex-wrap gap-2">
+              <Badge className="border-purple-200 bg-white text-purple-800">
+                {gapTypeLabel(insight.gap_type)}
+              </Badge>
+              {insight.serp_position ? (
+                <Badge className="border-slate-200 bg-white text-slate-700">
+                  Search position #{insight.serp_position}
+                </Badge>
+              ) : null}
+            </div>
+            <h3 className="text-lg font-bold text-slate-950">
+              {insight.title || "Competitor advantage found"}
+            </h3>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              {insight.what_they_do_better ||
+                insight.summary ||
+                "A competitor page appears to give users or search engines more useful information."}
+            </p>
+          </div>
+
+          <div className="shrink-0 rounded-xl border border-purple-100 bg-white p-3 text-sm">
+            <p className="font-semibold text-slate-950">
+              {insight.competitor_domain || insight.domain || "Competitor"}
+            </p>
+            {insight.keyword ? (
+              <p className="mt-1 text-xs text-slate-500">Keyword: {insight.keyword}</p>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-5 p-5 lg:grid-cols-2">
+        <div>
+          <h4 className="text-sm font-bold text-slate-950">Evidence</h4>
+          {Array.isArray(insight.evidence) ? (
+            <ul className="mt-2 space-y-2 text-sm leading-6 text-slate-600">
+              {insight.evidence.map((item, index) => (
+                <li key={`${item}-${index}`} className="flex gap-2">
+                  <span className="text-purple-700">•</span>
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              {insight.evidence ||
+                "The competitor page appears to contain stronger signals than the matching page on your site."}
+            </p>
+          )}
+        </div>
+
+        <div>
+          <h4 className="text-sm font-bold text-slate-950">Recommended action</h4>
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            {insight.recommended_action ||
+              "Use this as inspiration to improve your own page. Do not copy competitor text; add your own useful, specific information."}
+          </p>
+
+          {insight.related_user_page ? (
+            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Related page on your site
+              </p>
+              <p className="mt-1 break-all text-sm text-slate-700">
+                {insight.related_user_page}
+              </p>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function DiagnosisPanel({ summary, recommendedActions, competitorInsights }) {
+  const topAction = recommendedActions[0];
+  const topCompetitorInsight = competitorInsights[0];
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="border-b border-slate-200 bg-slate-50 p-5">
+        <h3 className="text-lg font-bold text-slate-950">Plain-English website diagnosis</h3>
+        <p className="mt-1 text-sm text-slate-600">
+          The technical scan has been translated into business-friendly priorities.
+        </p>
+      </div>
+
+      <div className="grid gap-0 divide-y divide-slate-200 lg:grid-cols-4 lg:divide-x lg:divide-y-0">
+        <div className="p-5">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+            The main issue
+          </p>
+          <p className="mt-2 text-sm leading-6 text-slate-700">
+            {summary?.plain_english_summary ||
+              "Your website can be improved by making key pages clearer, more helpful, and easier for search engines to understand."}
+          </p>
+        </div>
+
+        <div className="p-5">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+            Best next step
+          </p>
+          <p className="mt-2 text-sm leading-6 text-slate-700">
+            {topAction?.title ||
+              "Start with the highest-priority recommendation before smaller technical fixes."}
+          </p>
+        </div>
+
+        <div className="p-5">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+            Competitor signal
+          </p>
+          <p className="mt-2 text-sm leading-6 text-slate-700">
+            {topCompetitorInsight?.what_they_do_better ||
+              topCompetitorInsight?.title ||
+              "Competitor comparison will appear here when enough competitor data is found."}
+          </p>
+        </div>
+
+        <div className="p-5">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+            Good things found
+          </p>
+          <p className="mt-2 text-sm leading-6 text-slate-700">
+            {summary?.positive_findings ||
+              "Use the page table below to see which pages already have titles, headings, and crawlable content."}
+          </p>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function FindingsTable({ findings }) {
+  const [priorityFilter, setPriorityFilter] = useState("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [openId, setOpenId] = useState(null);
+
+  const categories = useMemo(() => {
+    const unique = new Set(
+      findings
+        .map((item) => item.category || item.type)
+        .filter(Boolean)
+        .map(String)
+    );
+
+    return ["all", ...Array.from(unique)];
+  }, [findings]);
+
+  const filteredFindings = useMemo(() => {
+    return findings.filter((item) => {
+      const priority = String(item.priority || "").toLowerCase();
+      const category = String(item.category || item.type || "").toLowerCase();
+
+      const priorityMatch =
+        priorityFilter === "all" || priority.includes(priorityFilter.toLowerCase());
+
+      const categoryMatch =
+        categoryFilter === "all" || category === categoryFilter.toLowerCase();
+
+      return priorityMatch && categoryMatch;
+    });
+  }, [findings, priorityFilter, categoryFilter]);
+
+  if (!findings.length) {
+    return (
+      <EmptyState
+        title="No detailed findings returned"
+        description="The scan did not return individual findings. If the backend completed successfully, check that it sends a findings, fixes, or issues array."
+      />
+    );
+  }
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50 p-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-slate-950">
+            {filteredFindings.length} of {findings.length} findings shown
+          </p>
+          <p className="text-xs text-slate-500">
+            Technical details are collapsed by default for non-technical users.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <select
+            value={priorityFilter}
+            onChange={(event) => setPriorityFilter(event.target.value)}
+            className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm"
+          >
+            <option value="all">All priorities</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+
+          <select
+            value={categoryFilter}
+            onChange={(event) => setCategoryFilter(event.target.value)}
+            className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm"
+          >
+            {categories.map((category) => (
+              <option key={category} value={category}>
+                {category === "all" ? "All categories" : category}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="divide-y divide-slate-200">
+        {filteredFindings.map((finding, index) => {
+          const id = finding.id || finding.fix_id || `${finding.title}-${index}`;
+          const isOpen = openId === id;
+          const affectedPages = safeArray(finding.affected_pages || finding.pages);
+          const steps = safeArray(finding.fix_steps || finding.steps || finding.what_to_do_steps);
+
+          return (
+            <div key={id}>
+              <button
+                type="button"
+                onClick={() => setOpenId(isOpen ? null : id)}
+                className="flex w-full items-start justify-between gap-4 p-5 text-left hover:bg-slate-50"
+              >
+                <div>
+                  <div className="mb-2 flex flex-wrap gap-2">
+                    <Badge className={priorityClass(finding.priority)}>
+                      {finding.priority || "Priority"}
+                    </Badge>
+                    <Badge className={categoryClass(finding.category || finding.type)}>
+                      {finding.category || finding.type || "SEO"}
+                    </Badge>
+                    {finding.who_can_do_this ? (
+                      <Badge className="border-slate-200 bg-slate-50 text-slate-700">
+                        {finding.who_can_do_this}
+                      </Badge>
+                    ) : null}
+                    {finding.time_estimate ? (
+                      <Badge className="border-slate-200 bg-slate-50 text-slate-700">
+                        {finding.time_estimate}
+                      </Badge>
+                    ) : null}
+                  </div>
+
+                  <h3 className="text-base font-bold text-slate-950">
+                    {finding.title || "SEO finding"}
+                  </h3>
+                  <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-600">
+                    {finding.plain_english_summary ||
+                      finding.summary ||
+                      finding.description ||
+                      "This item may need review."}
+                  </p>
+                </div>
+
+                <span className="text-xl text-slate-400">{isOpen ? "−" : "+"}</span>
+              </button>
+
+              {isOpen ? (
+                <div className="border-t border-slate-200 bg-slate-50 p-5">
+                  <div className="grid gap-5 lg:grid-cols-3">
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-950">Fix steps</h4>
+                      {steps.length ? (
+                        <ol className="mt-2 space-y-2 text-sm leading-6 text-slate-600">
+                          {steps.map((step, stepIndex) => (
+                            <li key={`${step}-${stepIndex}`} className="flex gap-2">
+                              <span className="font-bold text-blue-700">{stepIndex + 1}.</span>
+                              <span>{step}</span>
+                            </li>
+                          ))}
+                        </ol>
+                      ) : (
+                        <p className="mt-2 text-sm leading-6 text-slate-600">
+                          Review this issue and improve the affected page based on the explanation above.
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-950">Affected pages</h4>
+                      {affectedPages.length ? (
+                        <div className="mt-2 space-y-2">
+                          {affectedPages.slice(0, 10).map((page, pageIndex) => {
+                            const url = typeof page === "string" ? page : page.url;
+
+                            return (
+                              <p
+                                key={`${url}-${pageIndex}`}
+                                className="break-all rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700"
+                              >
+                                {url}
+                              </p>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-sm leading-6 text-slate-600">
+                          No specific page was attached to this finding.
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-950">
+                        Technical details
+                      </h4>
+                      <p className="mt-2 whitespace-pre-wrap rounded-xl border border-slate-200 bg-white p-3 text-xs leading-5 text-slate-600">
+                        {finding.technical_detail ||
+                          finding.technical_details ||
+                          finding.raw_detail ||
+                          "No extra technical detail was returned for this finding."}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+function PagesTable({ pages }) {
+  const [showAll, setShowAll] = useState(false);
+  const visiblePages = showAll ? pages : pages.slice(0, 20);
+
+  if (!pages.length) {
+    return (
+      <EmptyState
+        title="No pages returned"
+        description="The scan did not return page-level data. Check that the backend sends a pages array."
+      />
+    );
+  }
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[980px] text-left text-sm">
+          <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+            <tr>
+              <th className="px-4 py-3 font-bold">Page URL</th>
+              <th className="px-4 py-3 font-bold">Type</th>
+              <th className="px-4 py-3 font-bold">Status</th>
+              <th className="px-4 py-3 font-bold">Words</th>
+              <th className="px-4 py-3 font-bold">Title</th>
+              <th className="px-4 py-3 font-bold">Meta</th>
+              <th className="px-4 py-3 font-bold">H1</th>
+              <th className="px-4 py-3 font-bold">Issues</th>
+              <th className="px-4 py-3 font-bold">Notes</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-200">
+            {visiblePages.map((page, index) => {
+              const status = String(page.status || "scanned").toLowerCase();
+              const likelyClientRendered =
+                page.likely_client_rendered ||
+                page.client_rendered ||
+                page.is_spa_shell;
+
+              return (
+                <tr key={`${page.url}-${index}`} className="align-top hover:bg-slate-50">
+                  <td className="max-w-[260px] break-all px-4 py-3 text-xs text-slate-700">
+                    {page.url}
+                  </td>
+                  <td className="px-4 py-3">
+                    <Badge className="border-slate-200 bg-slate-50 text-slate-700">
+                      {page.page_type || page.type || "Page"}
+                    </Badge>
+                  </td>
+                  <td className="px-4 py-3">
+                    <Badge
+                      className={
+                        status.includes("fail") || status.includes("error")
+                          ? "border-red-200 bg-red-100 text-red-800"
+                          : "border-emerald-200 bg-emerald-100 text-emerald-800"
+                      }
+                    >
+                      {page.status || "Scanned"}
+                    </Badge>
+                  </td>
+                  <td className="px-4 py-3 text-slate-700">
+                    {formatNumber(page.word_count || page.words)}
+                  </td>
+                  <td className="px-4 py-3">
+                    {page.title ? (
+                      <span className="text-emerald-700">Found</span>
+                    ) : (
+                      <span className="text-red-700">Missing</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {page.meta_description ? (
+                      <span className="text-emerald-700">Found</span>
+                    ) : (
+                      <span className="text-red-700">Missing</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {page.h1 ? (
+                      <span className="text-emerald-700">Found</span>
+                    ) : (
+                      <span className="text-red-700">Missing</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-slate-700">
+                    {formatNumber(page.issue_count || page.issues_found || 0)}
+                  </td>
+                  <td className="max-w-[260px] px-4 py-3 text-xs leading-5 text-slate-600">
+                    {likelyClientRendered ? (
+                      <span>
+                        This page may load much of its content in the browser. Content warnings may
+                        need manual review.
+                      </span>
+                    ) : (
+                      page.notes || "—"
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {pages.length > 20 ? (
+        <div className="border-t border-slate-200 bg-slate-50 p-4 text-center">
+          <button
+            type="button"
+            onClick={() => setShowAll(!showAll)}
+            className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+          >
+            {showAll ? "Show fewer pages" : `Show all ${pages.length} pages`}
+          </button>
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
+function TechnicalDetails({ technicalDetails }) {
+  const [open, setOpen] = useState(false);
+
+  if (!technicalDetails) {
+    return (
+      <EmptyState
+        title="No technical crawl details returned"
+        description="Technical details will appear here when the backend sends crawl_details or technical_details."
+      />
+    );
+  }
+
+  return (
+    <Card className="overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center justify-between gap-4 bg-slate-50 p-5 text-left"
+      >
+        <div>
+          <h3 className="text-lg font-bold text-slate-950">Technical crawl details</h3>
+          <p className="mt-1 text-sm text-slate-600">
+            For technical users. Hidden by default so business owners are not overwhelmed.
+          </p>
+        </div>
+        <span className="text-xl text-slate-400">{open ? "−" : "+"}</span>
+      </button>
+
+      {open ? (
+        <div className="border-t border-slate-200 p-5">
+          <pre className="max-h-[520px] overflow-auto rounded-xl bg-slate-950 p-4 text-xs leading-5 text-slate-100">
+            {JSON.stringify(technicalDetails, null, 2)}
+          </pre>
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
+export default function AdvancedScannerPage() {
+  const [url, setUrl] = useState("");
+  const [businessType, setBusinessType] = useState("");
+  const [location, setLocation] = useState("");
+  const [targetKeywords, setTargetKeywords] = useState("");
+  const [depth, setDepth] = useState("standard");
+  const [maxPages, setMaxPages] = useState(DEPTH_OPTIONS.standard.maxPages);
+
+  const [competitorDiscovery, setCompetitorDiscovery] = useState(true);
+  const [aiReview, setAiReview] = useState(true);
+  const [includeSitemap, setIncludeSitemap] = useState(true);
+  const [respectRobots, setRespectRobots] = useState(true);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  const [isScanning, setIsScanning] = useState(false);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [progress, setProgress] = useState(0);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState(DEFAULT_RESULT);
+
+  useEffect(() => {
+    setMaxPages(DEPTH_OPTIONS[depth].maxPages);
+  }, [depth]);
+
+  useEffect(() => {
+    if (!isScanning) return undefined;
+
+    const interval = window.setInterval(() => {
+      setProgress((previous) => {
+        const next = Math.min(previous + Math.random() * 7 + 2, 92);
+        const stepIndex = Math.min(
+          SCAN_STEPS.length - 1,
+          Math.floor((next / 100) * SCAN_STEPS.length)
+        );
+
+        setCurrentStep(stepIndex);
+        return next;
+      });
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [isScanning]);
+
+  const domainPreview = useMemo(() => getDomain(url), [url]);
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+
+    const websiteUrl = ensureProtocol(url);
+
+    if (!websiteUrl) {
+      setError("Enter a website URL before running the scan.");
+      return;
+    }
+
+    setError("");
+    setResult(DEFAULT_RESULT);
+    setIsScanning(true);
+    setCurrentStep(0);
+    setProgress(4);
+
+    const payload = {
+      url: websiteUrl,
+      website_url: websiteUrl,
+
+      business_type: businessType.trim(),
+      business_location: location.trim(),
+      location: location.trim(),
+
+      target_keywords: targetKeywords
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+
+      scan_depth: depth,
+      max_pages: Number(maxPages || DEPTH_OPTIONS[depth].maxPages),
+
+      competitor_discovery: competitorDiscovery,
+      include_competitors: competitorDiscovery,
+
+      ai_review: aiReview,
+      plain_english_ai_review: aiReview,
+
+      include_sitemap: includeSitemap,
+      respect_robots_txt: respectRobots,
+
+      output_contract: {
+        scan_summary: true,
+        recommended_actions: true,
+        competitor_insights: true,
+        findings: true,
+        pages: true,
+        technical_details: true,
+      },
     };
 
-    if (!current || candidate.position < current.position) {
-      map.set(domain, candidate);
-    }
-  }
+    try {
+      const rawResult = await runAdvancedScan(payload);
+      const normalized = normalizeScanResult(rawResult);
 
-  return Array.from(map.values())
-    .sort((a, b) => {
-      const posDiff = (a.position || 99) - (b.position || 99);
-      if (posDiff !== 0) return posDiff;
-      return String(a.domain).localeCompare(String(b.domain));
-    })
-    .slice(0, 10);
-}
-
-function stableDedupeCompetitors(items) {
-  const map = new Map();
-
-  for (const item of items || []) {
-    const url = item.website_url || item.url || "";
-    const domain = item.domain || getDomain(url);
-
-    if (!domain) continue;
-
-    const current = map.get(domain);
-    const candidate = { ...item, domain };
-
-    if (!current || (candidate.position || 99) < (current.position || 99)) {
-      map.set(domain, candidate);
-    }
-  }
-
-  return Array.from(map.values()).sort((a, b) => {
-    const posDiff = (a.position || 99) - (b.position || 99);
-    if (posDiff !== 0) return posDiff;
-    return String(a.domain).localeCompare(String(b.domain));
-  });
-}
-
-function dedupeCompetitors(results) {
-  const map = new Map();
-
-  for (const result of results) {
-    if (!result.domain) continue;
-
-    const existing = map.get(result.domain);
-
-    if (!existing) {
-      map.set(result.domain, {
-        ...result,
-        appearances: 1,
-        best_position: result.position || 99,
-      });
-    } else {
-      existing.appearances += 1;
-      existing.best_position = Math.min(
-        existing.best_position,
-        result.position || 99
+      setProgress(100);
+      setCurrentStep(SCAN_STEPS.length - 1);
+      setResult(normalized);
+    } catch (scanError) {
+      console.error(scanError);
+      setError(
+        scanError?.message ||
+          "The advanced scan could not be completed. Check the function route and try again."
       );
-
-      if ((result.position || 99) < (existing.position || 99)) {
-        existing.keyword = result.keyword;
-        existing.title = result.title;
-        existing.url = result.url;
-        existing.original_result_url = result.original_result_url;
-        existing.position = result.position;
-        existing.snippet = result.snippet;
-        existing.query = result.query;
-      }
+    } finally {
+      setIsScanning(false);
     }
   }
 
-  return Array.from(map.values()).sort((a, b) => {
-    if (b.appearances !== a.appearances) return b.appearances - a.appearances;
-    return a.best_position - b.best_position;
-  });
-}
-
-function isValidCompetitorDomain(domain, ownDomain) {
-  if (!domain) return false;
-  if (!ownDomain) return false;
-  if (domain === ownDomain) return false;
-  if (domain.endsWith(`.${ownDomain}`)) return false;
-
-  return !EXCLUDED_COMPETITOR_DOMAINS.some(
-    (blocked) => domain === blocked || domain.endsWith(`.${blocked}`)
-  );
-}
-
-/* --------------------------- robots / sitemap -------------------------- */
-
-async function readRobotsTxt(origin, warnings) {
-  try {
-    const response = await withTimeout(
-      fetch(`${origin}/robots.txt`, {
-        headers: {
-          "user-agent": USER_AGENT,
-          accept: "text/plain,*/*",
-        },
-      }),
-      5000,
-      "robots.txt"
-    );
-
-    if (!response.ok) {
-      return { found: false, disallow: [], sitemaps: [] };
-    }
-
-    const text = await response.text();
-    return parseRobotsTxt(text);
-  } catch {
-    warnings.push("Could not read robots.txt.");
-    return { found: false, disallow: [], sitemaps: [] };
-  }
-}
-
-// Group-aware robots.txt parsing: only Disallow rules from groups that
-// target "*" or our own crawler apply. A Disallow aimed at some other bot
-// no longer blocks the scan. (Allow precedence is intentionally skipped.)
-function parseRobotsTxt(text) {
-  const lines = String(text || "").split(/\r?\n/);
-  const disallow = [];
-  const sitemaps = [];
-
-  let currentAgents = [];
-  let collectingAgents = true;
-
-  const groupApplies = () =>
-    currentAgents.some(
-      (agent) => agent === "*" || agent.includes(ROBOTS_AGENT_TOKEN)
-    );
-
-  for (const rawLine of lines) {
-    const line = rawLine.split("#")[0].trim();
-    if (!line) continue;
-
-    const separatorIndex = line.indexOf(":");
-    if (separatorIndex === -1) continue;
-
-    const key = line.slice(0, separatorIndex).trim().toLowerCase();
-    const value = line.slice(separatorIndex + 1).trim();
-
-    if (key === "sitemap") {
-      if (value) sitemaps.push(value);
-      continue;
-    }
-
-    if (key === "user-agent") {
-      if (!collectingAgents) {
-        currentAgents = [];
-        collectingAgents = true;
-      }
-      if (value) currentAgents.push(value.toLowerCase());
-      continue;
-    }
-
-    if (key === "disallow" || key === "allow") {
-      collectingAgents = false;
-
-      if (key === "disallow" && value && value !== "/" && groupApplies()) {
-        disallow.push(value);
-      }
-
-      continue;
-    }
-
-    // Any other directive (crawl-delay, etc.) also ends agent collection.
-    collectingAgents = false;
-  }
-
-  return {
-    found: true,
-    disallow: Array.from(new Set(disallow)).sort(),
-    sitemaps: Array.from(new Set(sitemaps)).sort(),
-  };
-}
-
-function isBlockedByRobots(url, robots) {
-  if (!robots?.disallow?.length) return false;
-
-  const path = getPath(url);
-
-  return robots.disallow.some((rule) => {
-    if (!rule || rule === "/") return false;
-    return path.startsWith(rule);
-  });
-}
-
-async function discoverSitemapUrls(origin, domain, robots, warnings) {
-  const candidates = Array.from(
-    new Set([
-      ...(robots?.sitemaps || []),
-      `${origin}/sitemap.xml`,
-      `${origin}/sitemap_index.xml`,
-      `${origin}/wp-sitemap.xml`,
-      `${origin}/page-sitemap.xml`,
-    ])
-  ).sort();
-
-  // All candidate sitemaps are read in parallel.
-  const results = await Promise.all(
-    candidates.map(async (sitemapUrl) => {
-      try {
-        return await readSitemap(sitemapUrl, domain, warnings, 0);
-      } catch {
-        warnings.push(`Could not read sitemap: ${sitemapUrl}`);
-        return [];
-      }
-    })
-  );
-
-  return stableSortUrls(results.flat()).slice(0, 1200);
-}
-
-async function readSitemap(sitemapUrl, domain, warnings, depth) {
-  if (depth > 2) return [];
-
-  const response = await withTimeout(
-    fetch(sitemapUrl, {
-      headers: {
-        "user-agent": USER_AGENT,
-        accept: "application/xml,text/xml,*/*",
-      },
-    }),
-    7000,
-    "Sitemap fetch"
-  );
-
-  if (!response.ok) return [];
-
-  const xml = await response.text();
-  const urls = extractUrlsFromSitemap(xml);
-
-  const sitemapChildren = urls.filter((url) => /sitemap/i.test(url));
-  const pageUrls = urls.filter(
-    (url) =>
-      isSameDomain(url, domain) && !isAssetUrl(url) && !/sitemap/i.test(url)
-  );
-
-  const childResults = await Promise.all(
-    sitemapChildren
-      .slice(0, 10)
-      .sort()
-      .map(async (child) => {
-        try {
-          return await readSitemap(child, domain, warnings, depth + 1);
-        } catch {
-          warnings.push(`Could not read nested sitemap: ${child}`);
-          return [];
-        }
-      })
-  );
-
-  pageUrls.push(...childResults.flat());
-
-  return stableSortUrls(pageUrls);
-}
-
-function extractUrlsFromSitemap(xml) {
-  const urls = [];
-  const re = /<loc>\s*([^<]+)\s*<\/loc>/gi;
-  let match;
-
-  while ((match = re.exec(xml)) !== null) {
-    urls.push(decodeHtml(match[1].trim()));
-  }
-
-  return urls;
-}
-
-/* ---------------------------- Broken links ----------------------------- */
-
-function detectBrokenInternalLinks(pages) {
-  const statusMap = new Map();
-
-  for (const page of pages) {
-    statusMap.set(canonicalizeUrl(page.url), page.status_code);
-  }
-
-  const broken = [];
-
-  for (const page of pages) {
-    for (const link of page.internal_links || []) {
-      const clean = canonicalizeUrl(link);
-      const status = statusMap.get(clean);
-
-      if (status && status >= 400) {
-        broken.push({
-          source_page: page.url,
-          broken_link: clean,
-          status_code: status,
-        });
-      }
-    }
-  }
-
-  return dedupeBrokenLinks(broken);
-}
-
-function dedupeBrokenLinks(items) {
-  const seen = new Set();
-  const output = [];
-
-  for (const item of items) {
-    const key = `${item.source_page}|${item.broken_link}|${item.status_code}`;
-    if (seen.has(key)) continue;
-
-    seen.add(key);
-    output.push(item);
-  }
-
-  return output.sort((a, b) => {
-    const sourceDiff = String(a.source_page).localeCompare(
-      String(b.source_page)
-    );
-    if (sourceDiff !== 0) return sourceDiff;
-    return String(a.broken_link).localeCompare(String(b.broken_link));
-  });
-}
-
-/* ------------------------------ Summary -------------------------------- */
-
-function buildSiteSummary({
-  pages,
-  rawFindings,
-  groupedFindings,
-  scanMode,
-  sitemapUrls,
-  discoveredCompetitors,
-  competitorPageSnapshots,
-  brokenLinks,
-  robots,
-  clientRendering,
-  competitorComparison,
-}) {
-  const importantPages = pages.filter((p) => p.is_important_page);
-  const pagesWithFaq = pages.filter((p) => p.has_faq);
-  const pagesWithTrust = pages.filter((p) => p.trust_signals?.length > 0);
-  const pagesWithCta = pages.filter((p) => p.cta_phrases?.length > 0);
-  const pagesWithSchema = pages.filter((p) => p.has_schema);
-  const noindexPages = pages.filter((p) => p.noindex);
-
-  const positives = [];
-
-  if (importantPages.length >= 4) {
-    positives.push("Your site has several important service or business pages.");
-  }
-
-  if (pagesWithTrust.length >= 1) {
-    positives.push(
-      "Your site includes trust signals such as reviews, proof points, or testimonials."
-    );
-  }
-
-  if (pagesWithCta.length >= 1) {
-    positives.push(
-      "Your site includes calls to action that help visitors take the next step."
-    );
-  }
-
-  if (pagesWithFaq.length >= 1) {
-    positives.push("Your site answers some customer questions.");
-  }
-
-  if (pagesWithSchema.length >= 1) {
-    positives.push("Your site includes structured trust or business information.");
-  }
-
-  return {
-    positives,
-    raw_findings_count: rawFindings.length,
-    total_findings: groupedFindings.length,
-    important_pages_found: importantPages.length,
-    pages_with_faq: pagesWithFaq.length,
-    pages_with_trust_signals: pagesWithTrust.length,
-    pages_with_calls_to_action: pagesWithCta.length,
-    pages_with_schema: pagesWithSchema.length,
-    noindex_pages: noindexPages.length,
-    scan_mode: scanMode,
-    sitemap_urls_found: sitemapUrls.length,
-    robots_txt_found: Boolean(robots?.found),
-    discovered_competitor_count: discoveredCompetitors.length,
-    competitor_pages_reviewed: competitorPageSnapshots.length,
-    broken_links_count: brokenLinks.length,
-    client_rendering_detected: Boolean(clientRendering?.detected),
-    client_rendered_pages: clientRendering?.flagged_pages?.length || 0,
-    competitor_comparison_available: Boolean(competitorComparison),
-    competitor_topic_gaps_found: competitorComparison?.topic_gaps?.length || 0,
-    html_only_scan: true,
-    javascript_rendering_used: false,
-    deterministic_scan: true,
-  };
-}
-
-function calculateHealthScore(findings) {
-  let score = 94;
-
-  for (const finding of findings) {
-    if (finding.priority === "critical") score -= 9;
-    else if (finding.priority === "high") score -= 6;
-    else if (finding.priority === "medium") score -= 4;
-    else score -= 1;
-  }
-
-  return Math.max(45, Math.min(100, score));
-}
-
-/* ------------------------------ Helpers -------------------------------- */
-
-function priorityScore(url) {
-  const path = getPath(url).toLowerCase();
-
-  if (path === "/") return 100;
-  if (/service|services|loan|loans|program|programs|product|products/i.test(path)) return 95;
-  if (/location|locations|areas-we-serve|city/i.test(path)) return 85;
-  if (/about|contact|pricing|book|appointment|apply/i.test(path)) return 75;
-  if (/case-study|case-studies|portfolio|projects/i.test(path)) return 65;
-  if (/blog|article|news|resources/i.test(path)) return 35;
-
-  return 50;
-}
-
-// Priority scores are computed once per URL, not once per comparison.
-function stableSortUrls(urls) {
-  const unique = Array.from(
-    new Set((urls || []).map(canonicalizeUrl).filter(Boolean))
-  );
-
-  return unique
-    .map((url) => ({ url, priority: priorityScore(url) }))
-    .sort((a, b) => b.priority - a.priority || a.url.localeCompare(b.url))
-    .map((item) => item.url);
-}
-
-function normalizeStartUrl(input) {
-  let url = String(input || "").trim();
-
-  if (!/^https?:\/\//i.test(url)) {
-    url = `https://${url}`;
-  }
-
-  return canonicalizeUrl(url);
-}
-
-function normalizeUrl(input) {
-  let url = String(input || "").trim();
-
-  if (!/^https?:\/\//i.test(url)) {
-    url = `https://${url}`;
-  }
-
-  return canonicalizeUrl(url);
-}
-
-function normalizeCompetitorUrl(input) {
-  try {
-    const url = new URL(normalizeUrl(input));
-    url.hash = "";
-    url.search = "";
-    return url.origin;
-  } catch {
-    return input;
-  }
-}
-
-function canonicalizeUrl(input) {
-  try {
-    const url = new URL(input);
-    url.hash = "";
-
-    const removable = [
-      "utm_source",
-      "utm_medium",
-      "utm_campaign",
-      "utm_term",
-      "utm_content",
-      "gclid",
-      "fbclid",
-      "msclkid",
-    ];
-
-    for (const param of removable) {
-      url.searchParams.delete(param);
-    }
-
-    if (url.pathname !== "/" && url.pathname.endsWith("/")) {
-      url.pathname = url.pathname.slice(0, -1);
-    }
-
-    return url.toString();
-  } catch {
-    return "";
-  }
-}
-
-function absolutizeUrl(href, base) {
-  if (!href) return "";
-
-  try {
-    return canonicalizeUrl(new URL(href, base).toString());
-  } catch {
-    return "";
-  }
-}
-
-function getDomain(input) {
-  try {
-    const value = String(input || "");
-    const url = /^https?:\/\//i.test(value) ? value : `https://${value}`;
-    return new URL(url).hostname.replace(/^www\./, "").toLowerCase();
-  } catch {
-    return "";
-  }
-}
-
-function getPath(input) {
-  try {
-    return new URL(input).pathname || "/";
-  } catch {
-    return input || "/";
-  }
-}
-
-function isSameDomain(input, domain) {
-  return getDomain(input) === domain;
-}
-
-function isAssetUrl(input) {
-  return ASSET_RE.test(input);
-}
-
-function isUtilityUrl(input) {
-  return isUtilityPath(getPath(input));
-}
-
-function isUtilityPath(path) {
-  return UTILITY_PATH_RE.test(path);
-}
-
-function isImportantPage(path, title = "", h1 = "") {
-  if (path === "/") return true;
-  return IMPORTANT_PAGE_RE.test(`${path}|${title}|${h1}`);
-}
-
-function isServiceLikePage(path, title = "", h1 = "") {
-  if (path === "/") return true;
-  return SERVICE_LIKE_RE.test(`${path}|${title}|${h1}`);
-}
-
-function extractVisibleText(html) {
-  return cleanText(
-    decodeHtml(
-      html
-        .replace(/<script[\s\S]*?<\/script>/gi, " ")
-        .replace(/<style[\s\S]*?<\/style>/gi, " ")
-        .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
-        .replace(/<!--[\s\S]*?-->/g, " ")
-        .replace(/<[^>]+>/g, " ")
-    )
-  );
-}
-
-function extractLinks(html, baseUrl) {
-  const links = [];
-  const re = /<a[^>]+href=["']([^"']+)["'][^>]*>/gi;
-  let match;
-
-  while ((match = re.exec(html)) !== null) {
-    const href = match[1];
-
-    if (!href) continue;
-    if (href.startsWith("#")) continue;
-    if (/^(mailto:|tel:|sms:|javascript:)/i.test(href)) continue;
-
-    const absolute = absolutizeUrl(href, baseUrl);
-
-    if (absolute && !isAssetUrl(absolute)) {
-      links.push(absolute);
-    }
-  }
-
-  return stableSortUrls(links);
-}
-
-function extractHeadings(html) {
-  return {
-    h2s: matchAllClean(html, /<h2[^>]*>([\s\S]*?)<\/h2>/gi).slice(0, 50),
-    h3s: matchAllClean(html, /<h3[^>]*>([\s\S]*?)<\/h3>/gi).slice(0, 80),
-  };
-}
-
-function extractImages(html, baseUrl = "") {
-  const images = [];
-  const re = /<img[^>]*>/gi;
-  let match;
-
-  while ((match = re.exec(html)) !== null) {
-    const tag = match[0];
-
-    const src =
-      matchFirst(tag, /src=["']([^"']+)["']/i) ||
-      matchFirst(tag, /data-src=["']([^"']+)["']/i) ||
-      matchFirst(tag, /data-lazy-src=["']([^"']+)["']/i) ||
-      "";
-
-    const alt = cleanText(decodeHtml(matchFirst(tag, /alt=["']([^"']*)["']/i)));
-
-    images.push({
-      src: src ? absolutizeUrl(src, baseUrl) : "",
-      alt,
-      has_alt: Boolean(alt),
-    });
-  }
-
-  return images.slice(0, 200);
-}
-
-function extractQuestions(text) {
-  return text
-    .split(/(?<=[?.!])\s+/)
-    .map(cleanText)
-    .filter((line) => line.endsWith("?"))
-    .slice(0, 30);
-}
-
-function detectSchemaTypes(html) {
-  const types = [];
-
-  const jsonLdBlocks = matchAllRaw(
-    html,
-    /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
-  );
-
-  for (const block of jsonLdBlocks) {
-    const matches = block.match(/"@type"\s*:\s*"([^"]+)"/gi) || [];
-
-    for (const item of matches) {
-      const type = item
-        .replace(/"@type"\s*:\s*"/i, "")
-        .replace(/"/g, "")
-        .trim();
-
-      if (type) types.push(type);
-    }
-  }
-
-  if (/schema\.org\/LocalBusiness/i.test(html)) types.push("LocalBusiness");
-  if (/schema\.org\/FAQPage/i.test(html)) types.push("FAQPage");
-  if (/schema\.org\/Organization/i.test(html)) types.push("Organization");
-  if (/schema\.org\/Product/i.test(html)) types.push("Product");
-  if (/schema\.org\/Service/i.test(html)) types.push("Service");
-  if (/schema\.org\/Review/i.test(html)) types.push("Review");
-
-  return Array.from(new Set(types)).sort();
-}
-
-function detectTrustSignals(text) {
-  const lower = text.toLowerCase();
-
-  const signals = [
-    "reviews",
-    "testimonials",
-    "case study",
-    "case studies",
-    "years in business",
-    "licensed",
-    "certified",
-    "award",
-    "guarantee",
-    "trusted",
-    "rated",
-    "stars",
-    "projects",
-    "clients",
-    "customers",
-    "funded",
-    "insured",
-    "google reviews",
-    "bbb",
-    "five star",
-    "5-star",
-    "verified",
-    "accredited",
-    "in-house",
-  ];
-
-  return signals.filter((signal) => lower.includes(signal)).sort();
-}
-
-function detectCtas(text) {
-  const lower = text.toLowerCase();
-
-  const ctas = [
-    "contact us",
-    "call now",
-    "get started",
-    "request a quote",
-    "book now",
-    "schedule",
-    "apply now",
-    "start application",
-    "learn more",
-    "get a free",
-    "free consultation",
-    "talk to",
-    "speak with",
-    "request funding",
-    "apply online",
-    "get approved",
-  ];
-
-  return ctas.filter((cta) => lower.includes(cta)).sort();
-}
-
-function detectPlaceholderText(text) {
-  const hits = [];
-  let strong = false;
-
-  for (const [re, label] of PLACEHOLDER_STRONG) {
-    if (re.test(text)) {
-      hits.push(label);
-      strong = true;
-    }
-  }
-
-  for (const [re, label] of PLACEHOLDER_WEAK) {
-    if (re.test(text)) hits.push(label);
-  }
-
-  return { hits: hits.sort(), strong };
-}
-
-function normalizeHeading(heading) {
-  // \p{L}/\p{N} keep accented characters intact (important for non-English sites).
-  return cleanText(heading)
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function median(numbers) {
-  const sorted = numbers.filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
-  if (sorted.length === 0) return 0;
-  return sorted[Math.floor(sorted.length / 2)];
-}
-
-function suggestSearchTitle(page, businessName, businessType, city) {
-  const path = getPath(page.url);
-
-  if (path === "/") {
-    return clamp(
-      [businessName, businessType, city].filter(Boolean).join(" | "),
-      65
-    );
-  }
-
-  const pageName =
-    path
-      .split("/")
-      .filter(Boolean)
-      .pop()
-      ?.replace(/[-_]/g, " ")
-      .replace(/\b\w/g, (char) => char.toUpperCase()) || "Page";
-
-  return clamp([pageName, businessName, city].filter(Boolean).join(" | "), 65);
-}
-
-function suggestSearchDescription(page, businessName, businessType, city) {
-  const path = getPath(page.url);
-  const name = businessName || "This business";
-
-  if (path === "/") {
-    const type = businessType || "services";
-
-    return clamp(
-      city
-        ? `${name} provides ${type} in ${city}. Learn more, review your options, and contact the team today.`
-        : `${name} provides ${type}. Learn more, review your options, and contact the team today.`,
-      160
-    );
-  }
-
-  const pageName =
-    path.split("/").filter(Boolean).pop()?.replace(/[-_]/g, " ") ||
-    "this service";
-
-  return clamp(
-    `Learn about ${pageName} from ${name}. See key details, benefits, common questions, and how to get started.`,
-    160
-  );
-}
-
-function getMetaContent(html, name) {
-  return getMetaName(html, name);
-}
-
-function getMetaName(html, name) {
-  const escaped = escapeRegExp(name);
+  const hasResult = Boolean(result.scan_summary);
 
   return (
-    matchFirst(
-      html,
-      new RegExp(
-        `<meta[^>]+name=["']${escaped}["'][^>]*content=["']([^"']*)["'][^>]*>`,
-        "i"
-      )
-    ) ||
-    matchFirst(
-      html,
-      new RegExp(
-        `<meta[^>]+content=["']([^"']*)["'][^>]*name=["']${escaped}["'][^>]*>`,
-        "i"
-      )
-    ) ||
-    ""
+    <main className="min-h-screen bg-slate-100">
+      <section className="border-b border-slate-200 bg-gradient-to-br from-slate-950 via-blue-950 to-slate-900">
+        <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8 lg:py-16">
+          <div className="grid gap-8 lg:grid-cols-[1.05fr_0.95fr] lg:items-center">
+            <div>
+              <Badge className="border-blue-300/40 bg-blue-400/10 text-blue-100">
+                Advanced SEO diagnosis
+              </Badge>
+
+              <h1 className="mt-5 max-w-4xl text-4xl font-black tracking-tight text-white md:text-6xl">
+                Advanced SEO Scanner
+              </h1>
+
+              <p className="mt-5 max-w-2xl text-lg leading-8 text-blue-100">
+                Scan your website, compare it with real competitors, and get plain-English fixes
+                you can actually act on.
+              </p>
+
+              <div className="mt-8 grid gap-3 text-sm text-blue-100 sm:grid-cols-2">
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <p className="font-bold text-white">Plain-English fixes</p>
+                  <p className="mt-1 text-blue-100/80">
+                    Technical findings turned into simple next steps.
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <p className="font-bold text-white">Competitor gaps</p>
+                  <p className="mt-1 text-blue-100/80">
+                    Shows what better-ranking pages are doing differently.
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <p className="font-bold text-white">Important pages first</p>
+                  <p className="mt-1 text-blue-100/80">
+                    Prioritises service, about, contact, and high-value pages.
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <p className="font-bold text-white">Technical detail available</p>
+                  <p className="mt-1 text-blue-100/80">
+                    Crawl data is still there, but hidden until needed.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <Card className="border-white/10 bg-white p-5 shadow-2xl">
+              <form onSubmit={handleSubmit} className="space-y-5">
+                <div>
+                  <label className="text-sm font-bold text-slate-950">Website URL</label>
+                  <input
+                    value={url}
+                    onChange={(event) => setUrl(event.target.value)}
+                    placeholder="example.com"
+                    className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-base outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                  />
+                  {domainPreview ? (
+                    <p className="mt-2 text-xs text-slate-500">
+                      Scanner target: <span className="font-semibold">{domainPreview}</span>
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="text-sm font-bold text-slate-950">
+                      Business type
+                    </label>
+                    <input
+                      value={businessType}
+                      onChange={(event) => setBusinessType(event.target.value)}
+                      placeholder="Plumber, accountant, dentist..."
+                      className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-bold text-slate-950">
+                      Location / country
+                    </label>
+                    <input
+                      value={location}
+                      onChange={(event) => setLocation(event.target.value)}
+                      placeholder="Bristol, UK"
+                      className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-sm font-bold text-slate-950">
+                    Scan depth
+                  </label>
+                  <div className="mt-2 grid gap-3 sm:grid-cols-3">
+                    {Object.entries(DEPTH_OPTIONS).map(([key, option]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setDepth(key)}
+                        className={cx(
+                          "rounded-xl border p-4 text-left transition",
+                          depth === key
+                            ? "border-blue-600 bg-blue-50 ring-4 ring-blue-100"
+                            : "border-slate-200 bg-white hover:border-blue-300"
+                        )}
+                      >
+                        <p className="text-sm font-bold text-slate-950">{option.label}</p>
+                        <p className="mt-1 text-xs text-slate-500">{option.description}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid gap-3">
+                  <Toggle
+                    checked={competitorDiscovery}
+                    onChange={setCompetitorDiscovery}
+                    label="Competitor discovery"
+                    help="Finds businesses ranking for similar keywords so we can compare what they are doing better."
+                  />
+
+                  <Toggle
+                    checked={aiReview}
+                    onChange={setAiReview}
+                    label="Plain-English AI review"
+                    help="Turns technical findings into simple explanations, steps, and effort estimates."
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced(!showAdvanced)}
+                  className="text-sm font-semibold text-blue-700 hover:text-blue-900"
+                >
+                  {showAdvanced ? "Hide advanced settings" : "Show advanced settings"}
+                </button>
+
+                {showAdvanced ? (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="text-sm font-bold text-slate-950">
+                          Max pages
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="500"
+                          value={maxPages}
+                          onChange={(event) => setMaxPages(event.target.value)}
+                          className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-sm font-bold text-slate-950">
+                          Target keywords
+                        </label>
+                        <input
+                          value={targetKeywords}
+                          onChange={(event) => setTargetKeywords(event.target.value)}
+                          placeholder="keyword one, keyword two"
+                          className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      <Toggle
+                        checked={includeSitemap}
+                        onChange={setIncludeSitemap}
+                        label="Include sitemap URLs"
+                        help="Uses sitemap URLs to find important pages faster."
+                      />
+
+                      <Toggle
+                        checked={respectRobots}
+                        onChange={setRespectRobots}
+                        label="Respect robots.txt"
+                        help="Avoids scanning URLs that the website asks crawlers not to access."
+                      />
+                    </div>
+                  </div>
+                ) : null}
+
+                {error ? (
+                  <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-800">
+                    {error}
+                  </div>
+                ) : null}
+
+                <button
+                  type="submit"
+                  disabled={isScanning}
+                  className={cx(
+                    "w-full rounded-xl px-5 py-4 text-base font-bold text-white transition",
+                    isScanning
+                      ? "cursor-not-allowed bg-slate-400"
+                      : "bg-blue-600 hover:bg-blue-700"
+                  )}
+                >
+                  {isScanning ? "Running advanced scan..." : "Run Advanced Scan"}
+                </button>
+
+                <p className="text-center text-xs leading-5 text-slate-500">
+                  We check your pages, competitor examples, SEO basics, content depth, trust
+                  signals, and technical issues.
+                </p>
+              </form>
+            </Card>
+          </div>
+        </div>
+      </section>
+
+      <section className="mx-auto max-w-7xl space-y-10 px-4 py-10 sm:px-6 lg:px-8">
+        {isScanning ? (
+          <ProgressTimeline currentStep={currentStep} progress={progress} />
+        ) : null}
+
+        {!isScanning && !hasResult ? (
+          <Card className="p-8">
+            <div className="mx-auto max-w-3xl text-center">
+              <h2 className="text-2xl font-bold tracking-tight text-slate-950">
+                Ready to scan your website
+              </h2>
+              <p className="mt-3 text-sm leading-6 text-slate-600">
+                Enter a URL above to get an action-first SEO report. The results will prioritise
+                plain-English fixes, competitor gaps, and the most important pages before raw crawl
+                details.
+              </p>
+            </div>
+          </Card>
+        ) : null}
+
+        {!isScanning && hasResult ? (
+          <>
+            <SummaryCards summary={result.scan_summary} />
+
+            <DiagnosisPanel
+              summary={result.scan_summary}
+              recommendedActions={result.recommended_actions}
+              competitorInsights={result.competitor_insights}
+            />
+
+            <section>
+              <SectionHeader
+                eyebrow="Start here"
+                title="What to fix first"
+                description="These are the highest-value actions. They are written for business owners first, with technical details kept underneath."
+              />
+
+              {result.recommended_actions.length ? (
+                <div className="space-y-4">
+                  {result.recommended_actions.slice(0, 5).map((action, index) => (
+                    <RecommendedActionCard
+                      key={action.fix_id || action.id || `${action.title}-${index}`}
+                      action={action}
+                      index={index}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <EmptyState
+                  title="No recommended actions returned"
+                  description="The scan completed, but no top actions were returned. Check that the backend sends recommended_actions or top_recommended_actions."
+                />
+              )}
+            </section>
+
+            <section>
+              <SectionHeader
+                eyebrow="Competitor comparison"
+                title="What competitors are doing better"
+                description="This section should surface specific gaps, such as FAQs, stronger service copy, schema, trust signals, reviews, calls to action, and location detail."
+              />
+
+              {result.competitor_insights.length ? (
+                <div className="grid gap-4 lg:grid-cols-2">
+                  {result.competitor_insights.map((insight, index) => (
+                    <CompetitorInsightCard
+                      key={`${insight.title}-${insight.competitor_domain}-${index}`}
+                      insight={insight}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <EmptyState
+                  title="Competitor comparison was limited"
+                  description="We could not find enough relevant competitor data for this scan. Add target keywords manually and run the scan again."
+                />
+              )}
+            </section>
+
+            <section>
+              <SectionHeader
+                eyebrow="Full audit"
+                title="All findings"
+                description="Filter by priority or category. Each finding leads with a simple explanation, with technical detail hidden underneath."
+              />
+              <FindingsTable findings={result.findings} />
+            </section>
+
+            <section>
+              <SectionHeader
+                eyebrow="Crawl view"
+                title="Pages scanned"
+                description="Review what the scanner found on each page, including missing titles, headings, descriptions, thin content, and client-rendered warnings."
+              />
+              <PagesTable pages={result.pages} />
+            </section>
+
+            <section>
+              <SectionHeader
+                eyebrow="For technical users"
+                title="Technical crawl details"
+                description="Robots.txt, sitemap, redirects, skipped URLs, failed pages, timeouts, and raw crawl diagnostics."
+              />
+              <TechnicalDetails technicalDetails={result.technical_details} />
+            </section>
+          </>
+        ) : null}
+      </section>
+    </main>
   );
-}
-
-function getMetaProperty(html, property) {
-  const escaped = escapeRegExp(property);
-
-  return (
-    matchFirst(
-      html,
-      new RegExp(
-        `<meta[^>]+property=["']${escaped}["'][^>]*content=["']([^"']*)["'][^>]*>`,
-        "i"
-      )
-    ) ||
-    matchFirst(
-      html,
-      new RegExp(
-        `<meta[^>]+content=["']([^"']*)["'][^>]*property=["']${escaped}["'][^>]*>`,
-        "i"
-      )
-    ) ||
-    ""
-  );
-}
-
-function clamp(value, max) {
-  const text = String(value || "").trim();
-  if (text.length <= max) return text;
-  return text.slice(0, max - 1).trim();
-}
-
-function matchFirst(input, re) {
-  const match = String(input || "").match(re);
-  return match?.[1] || "";
-}
-
-function matchAllClean(input, re) {
-  const output = [];
-  let match;
-
-  while ((match = re.exec(String(input || ""))) !== null) {
-    const value = cleanText(decodeHtml(match[1]));
-    if (value) output.push(value);
-  }
-
-  return Array.from(new Set(output)).sort();
-}
-
-function matchAllRaw(input, re) {
-  const output = [];
-  let match;
-
-  while ((match = re.exec(String(input || ""))) !== null) {
-    if (match[1]) output.push(match[1]);
-  }
-
-  return output;
-}
-
-function cleanText(input) {
-  return String(input || "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function decodeHtml(input) {
-  return String(input || "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&#x27;/g, "'")
-    .replace(/&apos;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
-}
-
-function countWords(text) {
-  const cleaned = cleanText(text);
-  if (!cleaned) return 0;
-  return cleaned.split(/\s+/).filter(Boolean).length;
-}
-
-function dedupeFindings(findings) {
-  const seen = new Set();
-  const output = [];
-
-  for (const finding of findings) {
-    const key = [
-      finding.type || "",
-      finding.category || "",
-      finding.issue_title || "",
-      JSON.stringify(finding.affected_pages || []),
-    ]
-      .join("|")
-      .toLowerCase();
-
-    if (seen.has(key)) continue;
-
-    seen.add(key);
-    output.push(finding);
-  }
-
-  return output;
-}
-
-function stableId(input) {
-  let hash = 0;
-  const value = String(input || "");
-
-  for (let i = 0; i < value.length; i++) {
-    hash = (hash << 5) - hash + value.charCodeAt(i);
-    hash |= 0;
-  }
-
-  return `finding_${Math.abs(hash)}`;
-}
-
-function getOptionalSecret(name) {
-  try {
-    return Deno.env.get(name) || "";
-  } catch {
-    return "";
-  }
-}
-
-function formatDomainName(domain) {
-  return String(domain || "")
-    .replace(/\.(com|net|org|co|io|us)$/i, "")
-    .split(/[.-]/)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function escapeRegExp(value) {
-  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function joinHumanList(items) {
-  const clean = (items || []).filter(Boolean);
-
-  if (clean.length === 0) return "";
-  if (clean.length === 1) return clean[0];
-  if (clean.length === 2) return `${clean[0]} and ${clean[1]}`;
-
-  return `${clean.slice(0, -1).join(", ")}, and ${clean[clean.length - 1]}`;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function withTimeout(promise, ms, label = "Operation") {
-  let timeoutId;
-
-  const timeoutPromise = new Promise((_, reject) => {
-    timeoutId = setTimeout(() => {
-      reject(
-        new Error(`${label} timed out after ${Math.round(ms / 1000)} seconds.`)
-      );
-    }, ms);
-  });
-
-  return Promise.race([promise, timeoutPromise]).finally(() => {
-    clearTimeout(timeoutId);
-  });
 }

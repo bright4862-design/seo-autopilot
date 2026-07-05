@@ -172,7 +172,7 @@ Deno.serve(async (req) => {
         });
       }
 
-      if (p.wordCount < 150) {
+      if (p.wordCount < 150 && p.status !== 404 && p.status !== 0) {
         issues.push({
           page_url: pageUrl, category: 'thin_content', customer_category: 'Page content',
           issue_title: 'This page may not have enough helpful content',

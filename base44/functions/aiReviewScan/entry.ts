@@ -1,5 +1,13 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
+// Contract with the AI layer:
+// - The scanner's findings are CANONICAL. The AI never adds, removes, or
+//   merges findings — it only returns rewrites keyed by fix_id (plain-English
+//   explanation, 2–4 concrete steps, who can do it, rough time) plus
+//   competitor insights grounded in the deterministic comparison data.
+// - The merge step applies rewrites onto the canonical fixes, so a bad or
+//   partial AI response can never lose findings or break structured fields.
+
 const VALID_CATEGORIES = new Set([
   "meta_title",
   "meta_description",
@@ -73,9 +81,9 @@ Deno.serve(async (req) => {
       website_url = "",
       crawled_pages = [],
       raw_fixes = [],
-      competitor_results = [],
-      discovered_competitors = [],
       competitor_page_snapshots = [],
+      competitor_comparison = null,
+      client_rendering = null,
       scan_mode = "quick",
       crawl_warnings = [],
     } = body;
@@ -87,19 +95,14 @@ Deno.serve(async (req) => {
       );
     }
 
-    const filteredFixes = prepareInputFixes(raw_fixes);
+    // Canonical fixes: normalized, ids guaranteed, deduped, sorted.
+    const canonicalFixes = prepareFixes(raw_fixes);
 
     const deterministicPlan = buildDeterministicPlan({
-      business_name,
-      business_type,
-      city,
-      website_url,
+      canonicalFixes,
       crawled_pages,
-      filteredFixes,
-      competitor_results,
-      discovered_competitors,
-      competitor_page_snapshots,
-      scan_mode,
+      comparison: competitor_comparison,
+      client_rendering,
       crawl_warnings,
     });
 
@@ -111,16 +114,14 @@ Deno.serve(async (req) => {
         business_type,
         city,
         website_url,
-        crawled_pages: trimPagesForAI(crawled_pages),
-        filteredFixes,
-        competitor_results,
-        discovered_competitors,
-        competitor_page_snapshots: trimCompetitorsForAI(
-          competitor_page_snapshots
-        ),
         scan_mode,
         crawl_warnings,
-        deterministicPlan,
+        canonicalFixes,
+        siteProfile: buildSiteProfile(crawled_pages),
+        comparison: competitor_comparison,
+        snapshots: trimSnapshots(competitor_page_snapshots),
+        client_rendering,
+        positives: deterministicPlan.positive_findings,
       });
 
       aiResponse = await withTimeout(
@@ -128,7 +129,7 @@ Deno.serve(async (req) => {
           prompt,
           response_json_schema: responseSchema(),
         }),
-        30000,
+        25000,
         "AI review"
       );
     } catch {
@@ -140,57 +141,13 @@ Deno.serve(async (req) => {
       });
     }
 
-    const cleanedFromAI = Array.isArray(aiResponse?.cleaned_fixes)
-      ? aiResponse.cleaned_fixes
-      : [];
-
-    let cleanedFixes =
-      cleanedFromAI.length > 0
-        ? preserveStructuredFields(cleanedFromAI, filteredFixes)
-        : deterministicPlan.cleaned_fixes;
-
-    cleanedFixes = normalizeCleanedFixes(cleanedFixes);
-
-    if (filteredFixes.length > 0 && cleanedFixes.length === 0) {
-      cleanedFixes = deterministicPlan.cleaned_fixes;
-    }
-
-    const competitorFixes = buildCompetitorFixes({
-      competitor_results,
-      discovered_competitors,
-      competitor_page_snapshots,
+    const merged = mergeAiIntoPlan({
+      aiResponse,
+      deterministicPlan,
+      canonicalFixes,
     });
 
-    cleanedFixes = normalizeCleanedFixes([
-      ...cleanedFixes,
-      ...competitorFixes,
-    ]).slice(0, 16);
-
-    return Response.json({
-      success: true,
-      plain_english_summary:
-        aiResponse?.plain_english_summary ||
-        deterministicPlan.plain_english_summary,
-      top_recommended_actions:
-        Array.isArray(aiResponse?.top_recommended_actions) &&
-        aiResponse.top_recommended_actions.length > 0
-          ? aiResponse.top_recommended_actions.slice(0, 5)
-          : deterministicPlan.top_recommended_actions,
-      cleaned_fixes: cleanedFixes,
-      grouped_page_recommendations:
-        Array.isArray(aiResponse?.grouped_page_recommendations)
-          ? aiResponse.grouped_page_recommendations
-          : [],
-      ignored_low_value_pages:
-        Array.isArray(aiResponse?.ignored_low_value_pages)
-          ? aiResponse.ignored_low_value_pages
-          : [],
-      positive_findings:
-        Array.isArray(aiResponse?.positive_findings) &&
-        aiResponse.positive_findings.length > 0
-          ? aiResponse.positive_findings.slice(0, 5)
-          : deterministicPlan.positive_findings,
-    });
+    return Response.json({ success: true, ...merged });
   } catch (error) {
     return Response.json(
       {
@@ -202,34 +159,37 @@ Deno.serve(async (req) => {
   }
 });
 
-function prepareInputFixes(rawFixes) {
+/* ------------------------- Canonical fix prep -------------------------- */
+
+function prepareFixes(rawFixes) {
   const safe = Array.isArray(rawFixes) ? rawFixes : [];
 
-  return dedupeFixes(
-    safe
-      .filter((fix) => {
-        const pageUrl = String(fix.page_url || "").toLowerCase();
+  const filtered = safe.filter((fix) => {
+    const pageUrl = String(fix.page_url || "").toLowerCase();
 
-        const isUtilityPage = UTILITY_PAGE_WORDS.some((word) =>
-          pageUrl.includes(word)
-        );
+    const isUtilityPage = UTILITY_PAGE_WORDS.some((word) =>
+      pageUrl.includes(word)
+    );
 
-        const isBrokenPage =
-          fix.category === "404_error" ||
-          fix.category === "broken_page" ||
-          fix.category === "internal_link" ||
-          String(fix.issue_title || "").toLowerCase().includes("broken");
+    const isBrokenPage =
+      fix.category === "404_error" ||
+      fix.category === "broken_page" ||
+      fix.category === "internal_link" ||
+      String(fix.issue_title || "").toLowerCase().includes("broken");
 
-        if (isUtilityPage && !isBrokenPage) return false;
+    if (isUtilityPage && !isBrokenPage) return false;
 
-        return true;
-      })
-      .map(normalizeFix)
-  );
+    return true;
+  });
+
+  return dedupeFixesById(filtered.map(normalizeFix))
+    .sort(compareFixes)
+    .slice(0, 16);
 }
 
 function normalizeFix(fix) {
   const category = safeCategory(fix.category);
+
   const status =
     fix.status ||
     (fix.requires_developer
@@ -240,17 +200,16 @@ function normalizeFix(fix) {
           ? "auto_fixed"
           : "needs_approval");
 
-  return {
+  const difficulty = safeDifficulty(fix.difficulty, safeStatus(status));
+
+  const normalized = {
     page_url: cleanPath(fix.page_url || fix.url || "/"),
     category,
     customer_category:
       fix.customer_category ||
       friendlyCategory(category) ||
       "Website improvement",
-    issue_title:
-      fix.issue_title ||
-      fix.title ||
-      defaultTitle(category),
+    issue_title: fix.issue_title || fix.title || defaultTitle(category),
     plain_english_explanation:
       fix.plain_english_explanation ||
       fix.explanation ||
@@ -262,10 +221,7 @@ function normalizeFix(fix) {
     current_value: stringifyValue(fix.current_value || fix.current || ""),
     recommended_value:
       stringifyValue(
-        fix.recommended_value ||
-          fix.recommendation ||
-          fix.suggested_fix ||
-          ""
+        fix.recommended_value || fix.recommendation || fix.suggested_fix || ""
       ) || "Review this recommendation.",
     ai_recommendation:
       stringifyValue(
@@ -276,7 +232,7 @@ function normalizeFix(fix) {
           ""
       ) || "Review this recommendation.",
     priority: safePriority(fix.priority),
-    difficulty: safeDifficulty(fix.difficulty, status),
+    difficulty,
     status: safeStatus(status),
     can_auto_fix: status === "auto_fixed" || fix.can_auto_fix === true,
     requires_approval:
@@ -286,39 +242,101 @@ function normalizeFix(fix) {
     affected_pages: Array.isArray(fix.affected_pages)
       ? fix.affected_pages.map(cleanPath).filter(Boolean)
       : [],
-    details:
-      fix.details && typeof fix.details === "object" ? fix.details : {},
+    details: fix.details && typeof fix.details === "object" ? fix.details : {},
     confidence_score:
       typeof fix.confidence_score === "number" ? fix.confidence_score : 90,
+    what_to_do: Array.isArray(fix.what_to_do)
+      ? fix.what_to_do.slice(0, 4).map((step) => String(step))
+      : [],
+    who_can_do_this:
+      fix.who_can_do_this === "you" || fix.who_can_do_this === "your_web_person"
+        ? fix.who_can_do_this
+        : defaultOwner(difficulty),
+    estimated_time: fix.estimated_time || defaultTime(difficulty),
   };
+
+  // Scanner-provided ids are preserved so AI rewrites can key onto them;
+  // anything without one gets a stable id derived from its intent key.
+  normalized.id = fix.id || stableId(buildIntentKey(normalized));
+
+  return normalized;
 }
 
+function dedupeFixesById(fixes) {
+  const seen = new Set();
+  const output = [];
+
+  for (const fix of fixes || []) {
+    if (seen.has(fix.id)) continue;
+    seen.add(fix.id);
+    output.push(fix);
+  }
+
+  return output;
+}
+
+function buildIntentKey(fix) {
+  const title = String(fix.issue_title || "").toLowerCase();
+
+  if (fix.category === "canonical") return "site|canonical|preferred-pages";
+
+  if (fix.category === "web_dev" && /placeholder|numbers/i.test(title)) {
+    return "site|web_dev|placeholder";
+  }
+
+  if (fix.category === "duplicate_content") {
+    return `site|duplicate_content|${title}`;
+  }
+
+  if (fix.customer_category === "Competitor opportunities") {
+    return `site|competitor|${title}`;
+  }
+
+  if (fix.affected_pages?.length > 1) {
+    return `site|${fix.category}|${title}`;
+  }
+
+  return `${fix.page_url}|${fix.category}|${title}`;
+}
+
+function compareFixes(a, b) {
+  const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+  const statusOrder = {
+    needs_approval: 0,
+    auto_fixed: 1,
+    needs_developer: 2,
+    open: 3,
+  };
+
+  const priorityDiff =
+    (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9);
+  if (priorityDiff !== 0) return priorityDiff;
+
+  const statusDiff = (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9);
+  if (statusDiff !== 0) return statusDiff;
+
+  const titleDiff = String(a.issue_title || "").localeCompare(
+    String(b.issue_title || "")
+  );
+  if (titleDiff !== 0) return titleDiff;
+
+  return String(a.page_url || "").localeCompare(String(b.page_url || ""));
+}
+
+/* ------------------------- Deterministic plan -------------------------- */
+
 function buildDeterministicPlan({
+  canonicalFixes,
   crawled_pages,
-  filteredFixes,
-  competitor_results,
-  discovered_competitors,
-  competitor_page_snapshots,
+  comparison,
+  client_rendering,
   crawl_warnings,
 }) {
   const positiveFindings = buildPositiveFindings(crawled_pages);
+  const competitorInsights = buildDeterministicInsights(comparison);
 
-  const cleanedFixes = normalizeCleanedFixes(
-    cleanAndPrioritizeFixes(filteredFixes)
-  );
-
-  const competitorFixes = buildCompetitorFixes({
-    competitor_results,
-    discovered_competitors,
-    competitor_page_snapshots,
-  });
-
-  const finalFixes = normalizeCleanedFixes([
-    ...cleanedFixes,
-    ...competitorFixes,
-  ]).slice(0, 16);
-
-  const topActions = finalFixes.slice(0, 5).map((fix) => ({
+  const topActions = canonicalFixes.slice(0, 5).map((fix) => ({
+    fix_id: fix.id,
     title: fix.issue_title,
     reason: fix.why_it_matters,
     priority:
@@ -341,13 +359,25 @@ function buildDeterministicPlan({
     );
   }
 
-  if (finalFixes.length > 0) {
+  if (canonicalFixes.length > 0) {
     summaryParts.push(
-      `The main opportunities are ${describeFixTypes(finalFixes)}.`
+      `The main opportunities are ${describeFixTypes(canonicalFixes)}.`
     );
   } else {
     summaryParts.push(
       "No major issues stood out from the pages we could access."
+    );
+  }
+
+  if (comparison?.competitors_compared?.length) {
+    summaryParts.push(
+      `We also compared your pages against ${comparison.competitors_compared.length} competitor page${comparison.competitors_compared.length === 1 ? "" : "s"} found on Google.`
+    );
+  }
+
+  if (client_rendering?.detected) {
+    summaryParts.push(
+      "Part of your site loads its content with scripts, so this review is based on what search engines can read first."
     );
   }
 
@@ -360,273 +390,396 @@ function buildDeterministicPlan({
   return {
     plain_english_summary: summaryParts.join(" "),
     top_recommended_actions: topActions,
-    cleaned_fixes: finalFixes,
+    cleaned_fixes: canonicalFixes,
+    competitor_insights: competitorInsights,
     grouped_page_recommendations: [],
     ignored_low_value_pages: [],
     positive_findings: positiveFindings,
+    ai_rewrites_applied: 0,
   };
 }
 
-function cleanAndPrioritizeFixes(fixes) {
-  const byIntent = new Map();
+// Insights straight from the comparison object — used as the fallback when
+// the AI is unavailable, and as the grounding the AI must stick to.
+function buildDeterministicInsights(comparison) {
+  if (!comparison) return [];
 
-  for (const fix of fixes || []) {
-    const normalized = normalizeFix(fix);
-    const key = buildIntentKey(normalized);
+  const insights = [];
+  const depth = comparison.content_depth || {};
+  const faq = comparison.faq_coverage || {};
 
-    if (!byIntent.has(key)) {
-      byIntent.set(key, normalized);
-    } else {
-      const existing = byIntent.get(key);
-
-      existing.affected_pages = Array.from(
-        new Set([
-          ...(existing.affected_pages || []),
-          ...(normalized.affected_pages || []),
-          normalized.page_url,
-        ])
-      ).filter(Boolean);
-
-      existing.details = {
-        ...(existing.details || {}),
-        ...(normalized.details || {}),
-      };
-    }
-  }
-
-  return Array.from(byIntent.values())
-    .sort(compareFixes)
-    .slice(0, 14);
-}
-
-function compareFixes(a, b) {
-  const priorityOrder = {
-    critical: 0,
-    high: 1,
-    medium: 2,
-    low: 3,
-  };
-
-  const statusOrder = {
-    needs_approval: 0,
-    auto_fixed: 1,
-    needs_developer: 2,
-    open: 3,
-  };
-
-  const priorityDiff =
-    (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9);
-
-  if (priorityDiff !== 0) return priorityDiff;
-
-  const statusDiff =
-    (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9);
-
-  if (statusDiff !== 0) return statusDiff;
-
-  const titleDiff = String(a.issue_title || "").localeCompare(
-    String(b.issue_title || "")
-  );
-
-  if (titleDiff !== 0) return titleDiff;
-
-  return String(a.page_url || "").localeCompare(String(b.page_url || ""));
-}
-
-function buildIntentKey(fix) {
-  const title = String(fix.issue_title || "").toLowerCase();
-
-  if (fix.category === "canonical") return "site|canonical|preferred-pages";
-
-  if (fix.category === "web_dev" && /placeholder|numbers/i.test(title)) {
-    return "site|web_dev|placeholder";
-  }
-
-  if (fix.category === "duplicate_content") {
-    return "site|duplicate_content|titles";
-  }
-
-  if (fix.customer_category === "Competitor opportunities") {
-    return "site|competitor|content-opportunities";
-  }
-
-  if (fix.affected_pages?.length > 1) {
-    return `site|${fix.category}|${title}`;
-  }
-
-  return `${fix.page_url}|${fix.category}|${title}`;
-}
-
-function buildCompetitorFixes({
-  competitor_results,
-  discovered_competitors,
-  competitor_page_snapshots,
-}) {
-  const snapshots = Array.isArray(competitor_page_snapshots)
-    ? competitor_page_snapshots.filter((item) => item.status_code >= 200)
-    : [];
-
-  const competitors = [
-    ...(Array.isArray(competitor_results) ? competitor_results : []),
-    ...(Array.isArray(discovered_competitors) ? discovered_competitors : []),
-  ];
-
-  const unique = [];
-  const seen = new Set();
-
-  for (const item of competitors) {
-    const url = item.website_url || item.url || "";
-    const domain = getDomain(url);
-
-    if (!domain || seen.has(domain)) continue;
-
-    seen.add(domain);
-
-    unique.push({
-      name: item.name || formatDomainName(domain),
-      website_url: url,
-      keyword: item.keyword || "",
-      snippet: item.snippet || "",
-      position: item.position || null,
+  if (
+    depth.competitor_median_words > 0 &&
+    depth.your_median_words > 0 &&
+    depth.competitor_median_words >= depth.your_median_words * 2
+  ) {
+    insights.push({
+      headline: "Competitor pages go much deeper than yours",
+      competitor_name: topCompetitorName(comparison),
+      evidence: `Typical competitor page: about ${depth.competitor_median_words} words. Typical important page on your site: about ${depth.your_median_words} words.`,
+      what_to_add:
+        "Expand your key service pages with process steps, pricing context, eligibility or requirements, and proof points.",
+      target_page: "/",
     });
   }
 
-  if (unique.length === 0 && snapshots.length === 0) return [];
+  if ((faq.competitors_with_faq || 0) >= 2 && (faq.your_pages_with_faq || 0) === 0) {
+    insights.push({
+      headline: "Competitors answer customer questions — you don’t yet",
+      competitor_name: topCompetitorName(comparison),
+      evidence: `${faq.competitors_with_faq} of ${faq.competitors_measured} competitor pages include a question-and-answer section. Example questions they answer: ${(faq.competitor_faq_examples || []).slice(0, 3).join(" ")}`,
+      what_to_add:
+        "Add 4–6 real customer questions and answers to your key service pages.",
+      target_page: "/",
+    });
+  }
 
-  const strongestSignals = summarizeCompetitorSignals(snapshots);
+  for (const gap of (comparison.topic_gaps || []).slice(0, 3)) {
+    insights.push({
+      headline: `Competitors cover “${gap.topic}” — your pages don’t`,
+      competitor_name: gap.competitors?.[0] || "",
+      evidence: gap.serp_position
+        ? `Found on ${gap.competitors.length} competitor page${gap.competitors.length === 1 ? "" : "s"}, including one at position ${gap.serp_position} on Google for “${gap.keyword}”.`
+        : `Found on ${gap.competitors.length} competitor page${gap.competitors.length === 1 ? "" : "s"}.`,
+      what_to_add: `Add a “${gap.topic}” section where it genuinely fits your services.`,
+      target_page: "/",
+    });
+  }
 
-  return [
-    {
-      page_url: "/",
-      affected_pages: [],
-      category: "thin_content",
-      customer_category: "Competitor opportunities",
-      priority: "medium",
-      status: "needs_developer",
-      difficulty: "moderate",
-      issue_title: "Review competitor pages for content opportunities",
-      plain_english_explanation:
-        snapshots.length > 0
-          ? `We reviewed ${snapshots.length} competitor page${snapshots.length === 1 ? "" : "s"} from Google results and found useful comparison points.`
-          : "We found competitor pages that may be useful to compare against your website.",
-      why_it_matters:
-        "Competitor pages can show what services, questions, proof points, and page sections customers may expect to see.",
-      current_value:
-        snapshots.length > 0
-          ? `${snapshots.length} competitor page${snapshots.length === 1 ? "" : "s"} reviewed`
-          : `${unique.length} competitor page${unique.length === 1 ? "" : "s"} found`,
-      recommended_value:
-        strongestSignals ||
-        "Review competitor pages and look for missing service details, common questions, proof points, and calls to action.",
-      ai_recommendation:
-        strongestSignals ||
-        "Compare your most important pages against these competitor pages. Add useful sections only when they genuinely help customers understand your services.",
-      confidence_score: snapshots.length > 0 ? 90 : 80,
-      can_auto_fix: false,
-      requires_approval: false,
-      requires_developer: true,
-      details: {
-        competitors: unique.slice(0, 8),
-        competitor_page_snapshots: snapshots.slice(0, 5),
-      },
-    },
-  ];
+  return insights.slice(0, 6);
 }
 
-function summarizeCompetitorSignals(snapshots) {
-  if (!snapshots.length) return "";
-
-  const hasFaq = snapshots.some((item) => item.has_faq);
-  const hasTrust = snapshots.some(
-    (item) => Array.isArray(item.trust_signals) && item.trust_signals.length > 0
-  );
-  const hasCta = snapshots.some(
-    (item) => Array.isArray(item.cta_phrases) && item.cta_phrases.length > 0
-  );
-  const deepContent = snapshots.some((item) => Number(item.word_count || 0) > 900);
-
-  const suggestions = [];
-
-  if (deepContent) {
-    suggestions.push("clearer service details");
-  }
-
-  if (hasFaq) {
-    suggestions.push("customer questions and answers");
-  }
-
-  if (hasTrust) {
-    suggestions.push("reviews, proof points, or credibility signals");
-  }
-
-  if (hasCta) {
-    suggestions.push("stronger next-step buttons or contact prompts");
-  }
-
-  if (suggestions.length === 0) {
-    return "Review the competitor pages and look for useful sections that would genuinely help your customers.";
-  }
-
-  return `Competitor pages commonly include ${joinHumanList(
-    suggestions
-  )}. Review whether your important pages should add similar helpful sections.`;
+function topCompetitorName(comparison) {
+  return comparison?.competitors_compared?.[0]?.name || "";
 }
 
-function preserveStructuredFields(cleanedFixes, sourceFixes) {
-  return cleanedFixes.map((fix, index) => {
-    const source =
-      findMatchingSourceFix(fix, sourceFixes) || sourceFixes[index] || {};
+/* ------------------------------- Merge --------------------------------- */
+
+function mergeAiIntoPlan({ aiResponse, deterministicPlan, canonicalFixes }) {
+  const validIds = new Set(canonicalFixes.map((fix) => fix.id));
+  const rewrites = new Map();
+
+  for (const rewrite of aiResponse?.fix_rewrites || []) {
+    if (rewrite && validIds.has(rewrite.fix_id)) {
+      rewrites.set(rewrite.fix_id, rewrite);
+    }
+  }
+
+  const cleaned_fixes = canonicalFixes.map((fix) => {
+    const rewrite = rewrites.get(fix.id);
+    if (!rewrite) return fix;
+
+    const steps =
+      Array.isArray(rewrite.what_to_do) && rewrite.what_to_do.length > 0
+        ? rewrite.what_to_do.slice(0, 4).map((step) => String(step))
+        : fix.what_to_do;
 
     return {
       ...fix,
-      affected_pages: Array.isArray(fix.affected_pages)
-        ? fix.affected_pages
-        : source.affected_pages || [],
-      details: {
-        ...(source.details || {}),
-        ...(fix.details || {}),
-      },
+      issue_title: safeString(rewrite.issue_title, fix.issue_title),
+      plain_english_explanation: safeString(
+        rewrite.plain_english_explanation,
+        fix.plain_english_explanation
+      ),
+      why_it_matters: safeString(rewrite.why_it_matters, fix.why_it_matters),
+      what_to_do: steps,
+      who_can_do_this:
+        rewrite.who_can_do_this === "you" ||
+        rewrite.who_can_do_this === "your_web_person"
+          ? rewrite.who_can_do_this
+          : fix.who_can_do_this,
+      estimated_time: safeString(rewrite.estimated_time, fix.estimated_time),
+      ai_recommendation:
+        steps.length > 0 ? steps.join(" ") : fix.ai_recommendation,
     };
   });
+
+  const topActions =
+    Array.isArray(aiResponse?.top_recommended_actions) &&
+    aiResponse.top_recommended_actions.length > 0
+      ? aiResponse.top_recommended_actions
+          .slice(0, 5)
+          .map((action) => ({
+            fix_id: validIds.has(action?.fix_id) ? action.fix_id : "",
+            title: safeString(action?.title, ""),
+            reason: safeString(action?.reason, ""),
+            priority: ["high", "medium", "low"].includes(action?.priority)
+              ? action.priority
+              : "medium",
+          }))
+          .filter((action) => action.title)
+      : deterministicPlan.top_recommended_actions;
+
+  const insights =
+    Array.isArray(aiResponse?.competitor_insights) &&
+    aiResponse.competitor_insights.length > 0
+      ? aiResponse.competitor_insights
+          .slice(0, 6)
+          .map((insight) => ({
+            headline: safeString(insight?.headline, ""),
+            competitor_name: safeString(insight?.competitor_name, ""),
+            evidence: safeString(insight?.evidence, ""),
+            what_to_add: safeString(insight?.what_to_add, ""),
+            target_page: safeString(insight?.target_page, "/"),
+          }))
+          .filter((insight) => insight.headline && insight.evidence)
+      : deterministicPlan.competitor_insights;
+
+  const positives =
+    Array.isArray(aiResponse?.positive_findings) &&
+    aiResponse.positive_findings.length > 0
+      ? aiResponse.positive_findings.slice(0, 5).map((item) => String(item))
+      : deterministicPlan.positive_findings;
+
+  return {
+    plain_english_summary: safeString(
+      aiResponse?.plain_english_summary,
+      deterministicPlan.plain_english_summary
+    ),
+    top_recommended_actions: topActions,
+    cleaned_fixes,
+    competitor_insights: insights,
+    grouped_page_recommendations: [],
+    ignored_low_value_pages: [],
+    positive_findings: positives,
+    ai_rewrites_applied: rewrites.size,
+  };
 }
 
-function findMatchingSourceFix(fix, sourceFixes) {
-  return (
-    (sourceFixes || []).find(
-      (source) =>
-        String(source.page_url || "") === String(fix.page_url || "") &&
-        safeCategory(source.category) === safeCategory(fix.category) &&
-        String(source.issue_title || "") === String(fix.issue_title || "")
-    ) ||
-    (sourceFixes || []).find(
-      (source) =>
-        String(source.page_url || "") === String(fix.page_url || "") &&
-        safeCategory(source.category) === safeCategory(fix.category)
-    )
-  );
+/* --------------------------- Prompt building --------------------------- */
+
+// Only what the model needs: compact fixes, a small site profile, the
+// comparison object, and 3 trimmed snapshots — not 100 full page dumps.
+function buildSiteProfile(pages) {
+  return (Array.isArray(pages) ? pages : [])
+    .filter((page) => page.is_important_page && !page.is_utility_page)
+    .slice(0, 15)
+    .map((page) => ({
+      page: cleanPath(page.url || "/"),
+      title: String(page.title || "").slice(0, 90),
+      h1: String(page.h1 || "").slice(0, 90),
+      word_count: page.word_count || 0,
+      has_faq: Boolean(page.has_faq),
+      trust_signal_count: Array.isArray(page.trust_signals)
+        ? page.trust_signals.length
+        : 0,
+      cta_count: Array.isArray(page.cta_phrases) ? page.cta_phrases.length : 0,
+      is_service_like: Boolean(page.is_service_like),
+      likely_client_rendered: Boolean(page.likely_client_rendered),
+    }));
 }
 
-function normalizeCleanedFixes(fixes) {
-  return dedupeFixes((fixes || []).map(normalizeFix))
-    .sort(compareFixes)
-    .slice(0, 16);
+function trimSnapshots(snapshots) {
+  return (Array.isArray(snapshots) ? snapshots : [])
+    .filter((item) => item.status_code >= 200 && item.status_code < 400)
+    .slice(0, 3)
+    .map((item) => ({
+      competitor_name: item.competitor_name,
+      keyword: item.keyword,
+      serp_position: item.serp_position,
+      title: String(item.title || "").slice(0, 100),
+      h1: String(item.h1 || "").slice(0, 100),
+      h2s: Array.isArray(item.h2s) ? item.h2s.slice(0, 8) : [],
+      word_count: item.word_count || 0,
+      has_faq: Boolean(item.has_faq),
+      faq_questions: Array.isArray(item.faq_questions)
+        ? item.faq_questions.slice(0, 5)
+        : [],
+      trust_signals: item.trust_signals || [],
+      cta_phrases: item.cta_phrases || [],
+    }));
 }
 
-function dedupeFixes(fixes) {
-  const seen = new Set();
-  const output = [];
+function compactFixForPrompt(fix) {
+  const details = fix.details || {};
+  const compactDetails = {};
 
-  for (const fix of fixes || []) {
-    const key = buildIntentKey(fix).toLowerCase();
+  if (details.content_depth) compactDetails.content_depth = details.content_depth;
 
-    if (seen.has(key)) continue;
-
-    seen.add(key);
-    output.push(fix);
+  if (details.faq_coverage) {
+    compactDetails.faq_coverage = {
+      ...details.faq_coverage,
+      competitor_faq_examples: (
+        details.faq_coverage.competitor_faq_examples || []
+      ).slice(0, 5),
+    };
   }
 
-  return output;
+  if (Array.isArray(details.topic_gaps)) {
+    compactDetails.topic_gaps = details.topic_gaps.slice(0, 6);
+  }
+
+  if (details.schema_gaps) compactDetails.schema_gaps = details.schema_gaps;
+
+  if (details.trust_signal_gaps) {
+    compactDetails.trust_signal_gaps = details.trust_signal_gaps;
+  }
+
+  if (Array.isArray(details.examples)) {
+    compactDetails.examples = details.examples.slice(0, 3);
+  }
+
+  if (details.technical_term) {
+    compactDetails.technical_term = details.technical_term;
+  }
+
+  return {
+    fix_id: fix.id,
+    issue_title: fix.issue_title,
+    category: fix.category,
+    customer_category: fix.customer_category,
+    priority: fix.priority,
+    status: fix.status,
+    difficulty: fix.difficulty,
+    current_value: clampText(fix.current_value, 200),
+    recommended_value: clampText(fix.recommended_value, 240),
+    affected_page_count: (fix.affected_pages || []).length,
+    example_pages: (fix.affected_pages || []).slice(0, 3),
+    details: compactDetails,
+  };
 }
+
+function buildPrompt({
+  business_name,
+  business_type,
+  city,
+  website_url,
+  scan_mode,
+  crawl_warnings,
+  canonicalFixes,
+  siteProfile,
+  comparison,
+  snapshots,
+  client_rendering,
+  positives,
+}) {
+  return `
+You are the AI explainer inside SEO Autopilot, an SEO tool for non-technical small business owners.
+
+A rule-based scanner has already decided what the findings are. Your job is to make each finding easy to understand and act on — not to change what was found.
+
+Hard rules:
+1. The findings list is final. Do not add, remove, merge, or reorder findings. Only return rewrites keyed by the exact fix_id values in the list.
+2. Never invent a fix_id.
+3. Never claim anything was fixed, changed, or published. Use "prepared", "recommended", "review", "may help", "next step".
+4. Never promise rankings or traffic.
+5. Competitor facts must come only from the competitor data below. You may say a competitor page "was found at position N on Google for 'keyword'". Never say a competitor outranks this website — this website's own positions were not measured.
+6. Plain English only. Translate jargon: meta title -> search title, meta description -> search description, canonical -> preferred-page setting, schema -> structured business information / trust signals, noindex -> hidden from search engines.
+7. what_to_do must be 2–4 short imperative steps a busy owner can follow or hand to their web person. Make steps specific to this business and finding, not generic advice.
+8. who_can_do_this is "you" when the owner can do it in a typical website editor (Squarespace, Wix, WordPress); "your_web_person" when it needs code or platform changes.
+9. estimated_time is a rough human estimate like "about 15 minutes" or "an hour with your web person".
+10. competitor_insights: 3–6 items maximum, each grounded in a specific number, section, or question from the competitor data. Fill the evidence field with that specific fact. No vague statements.
+11. positive_findings: 3–5 short, factual sentences. Show what the site already does well before the cleanup list.
+
+Business name: ${business_name || "(not provided)"}
+Business type: ${business_type || "(not provided)"}
+City or service area: ${city || "(not provided)"}
+Website: ${website_url}
+Scan mode: ${scan_mode}
+
+Crawl warnings:
+${JSON.stringify(crawl_warnings || [], null, 2)}
+
+Client-side rendering check:
+${JSON.stringify(client_rendering || { detected: false }, null, 2)}
+
+Findings (final — rewrite only, keyed by fix_id):
+${JSON.stringify((canonicalFixes || []).map(compactFixForPrompt), null, 2)}
+
+Your site profile (top important pages):
+${JSON.stringify(siteProfile || [], null, 2)}
+
+Competitor comparison (deterministic deltas):
+${JSON.stringify(comparison || null, null, 2)}
+
+Competitor page snapshots (top 3, trimmed):
+${JSON.stringify(snapshots || [], null, 2)}
+
+Suggested positives (keep or improve):
+${JSON.stringify(positives || [], null, 2)}
+
+Return JSON only.
+`;
+}
+
+function responseSchema() {
+  return {
+    type: "object",
+    properties: {
+      plain_english_summary: { type: "string" },
+      top_recommended_actions: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            fix_id: { type: "string" },
+            title: { type: "string" },
+            reason: { type: "string" },
+            priority: { type: "string", enum: ["high", "medium", "low"] },
+          },
+          required: ["title", "reason", "priority"],
+        },
+      },
+      fix_rewrites: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            fix_id: { type: "string" },
+            issue_title: { type: "string" },
+            plain_english_explanation: { type: "string" },
+            why_it_matters: { type: "string" },
+            what_to_do: {
+              type: "array",
+              items: { type: "string" },
+            },
+            who_can_do_this: {
+              type: "string",
+              enum: ["you", "your_web_person"],
+            },
+            estimated_time: { type: "string" },
+          },
+          required: [
+            "fix_id",
+            "issue_title",
+            "plain_english_explanation",
+            "why_it_matters",
+            "what_to_do",
+            "who_can_do_this",
+            "estimated_time",
+          ],
+        },
+      },
+      competitor_insights: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            headline: { type: "string" },
+            competitor_name: { type: "string" },
+            evidence: { type: "string" },
+            what_to_add: { type: "string" },
+            target_page: { type: "string" },
+          },
+          required: ["headline", "evidence", "what_to_add"],
+        },
+      },
+      positive_findings: {
+        type: "array",
+        items: { type: "string" },
+      },
+    },
+    required: [
+      "plain_english_summary",
+      "top_recommended_actions",
+      "fix_rewrites",
+      "competitor_insights",
+      "positive_findings",
+    ],
+  };
+}
+
+/* ------------------------------ Positives ------------------------------ */
 
 function buildPositiveFindings(pages) {
   const safePages = Array.isArray(pages) ? pages : [];
@@ -681,6 +834,10 @@ function describeFixTypes(fixes) {
     labels.push("preferred-page settings");
   }
 
+  if (fixes.some((fix) => fix.category === "js_rendering")) {
+    labels.push("how the site loads its content");
+  }
+
   if (fixes.some((fix) => fix.category === "web_dev")) {
     labels.push("website setup cleanup");
   }
@@ -694,9 +851,7 @@ function describeFixTypes(fixes) {
   }
 
   if (
-    fixes.some(
-      (fix) => fix.customer_category === "Competitor opportunities"
-    )
+    fixes.some((fix) => fix.customer_category === "Competitor opportunities")
   ) {
     labels.push("competitor content opportunities");
   }
@@ -707,283 +862,7 @@ function describeFixTypes(fixes) {
   return `${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`;
 }
 
-function trimPagesForAI(pages) {
-  return (Array.isArray(pages) ? pages : []).slice(0, 100).map((page) => ({
-    url: page.url,
-    title: page.title,
-    meta_description: page.meta_description,
-    h1: page.h1,
-    h2s: Array.isArray(page.h2s) ? page.h2s.slice(0, 12) : [],
-    h3s: Array.isArray(page.h3s) ? page.h3s.slice(0, 12) : [],
-    word_count: page.word_count,
-    has_faq: page.has_faq,
-    faq_questions: Array.isArray(page.faq_questions)
-      ? page.faq_questions.slice(0, 8)
-      : [],
-    has_schema: page.has_schema,
-    schema_types: page.schema_types,
-    trust_signals: page.trust_signals,
-    cta_phrases: page.cta_phrases,
-    is_important_page: page.is_important_page,
-    visible_text_sample: String(page.visible_text_sample || "").slice(0, 1000),
-  }));
-}
-
-function trimCompetitorsForAI(snapshots) {
-  return (Array.isArray(snapshots) ? snapshots : []).slice(0, 5).map((item) => ({
-    competitor_name: item.competitor_name,
-    competitor_domain: item.competitor_domain,
-    competitor_url: item.competitor_url,
-    keyword: item.keyword,
-    serp_position: item.serp_position,
-    serp_title: item.serp_title,
-    serp_snippet: item.serp_snippet,
-    title: item.title,
-    meta_description: item.meta_description,
-    h1: item.h1,
-    h2s: Array.isArray(item.h2s) ? item.h2s.slice(0, 12) : [],
-    h3s: Array.isArray(item.h3s) ? item.h3s.slice(0, 12) : [],
-    word_count: item.word_count,
-    has_faq: item.has_faq,
-    faq_questions: Array.isArray(item.faq_questions)
-      ? item.faq_questions.slice(0, 10)
-      : [],
-    has_schema: item.has_schema,
-    schema_types: item.schema_types,
-    trust_signals: item.trust_signals,
-    cta_phrases: item.cta_phrases,
-    visible_text_sample: String(item.visible_text_sample || "").slice(0, 1200),
-  }));
-}
-
-function buildPrompt({
-  business_name,
-  business_type,
-  city,
-  website_url,
-  crawled_pages,
-  filteredFixes,
-  competitor_results,
-  discovered_competitors,
-  competitor_page_snapshots,
-  scan_mode,
-  crawl_warnings,
-  deterministicPlan,
-}) {
-  return `
-You are the AI strategist inside SEO Autopilot.
-
-The user is a small business owner. Explain SEO like a helpful expert, not a technical report.
-
-Your job:
-- Review the crawler findings.
-- Remove duplicates.
-- Group related issues.
-- Explain what to do next in plain English.
-- Keep the list useful and not overwhelming.
-- Preserve important structured data such as affected_pages and details when possible.
-- Do not claim changes were made.
-- Do not say anything was fixed or published.
-- Do not promise rankings.
-- Use "prepared", "recommended", "review", "may help", and "next step".
-- Avoid technical jargon. If unavoidable, explain it simply.
-- Show positives first, then cleanup opportunities.
-
-Important:
-The crawler decides what exists. You explain and prioritize it. Do not erase valid findings.
-
-Customer-facing language:
-- meta title = search title
-- meta description = search description
-- canonical = preferred-page setting
-- schema = trust signals / structured business information
-- issue = recommendation
-- developer required = may need help
-
-Grouping rules:
-- Preferred-page/canonical findings must be ONE card:
-  "Review preferred-page settings across important pages"
-  status: "needs_developer"
-  priority: "medium"
-  difficulty: "developer"
-
-- Placeholder-like text such as gvar, undefined, null, NaN, [object Object], {{ }}, lorem ipsum, or placeholder must be ONE high-priority developer card:
-  "Important numbers may not be showing correctly to search engines"
-
-- Search descriptions should be specific to the business and page.
-
-- Competitor opportunities must use the competitor page snapshots. Mention practical content gaps such as:
-  service details, FAQs, proof points, trust signals, calls to action, loan terms, process steps, eligibility, timelines, or location/service coverage.
-  Do not say the competitor is ranking better unless the data explicitly says that.
-
-Business:
-${business_name || ""}
-
-Business type:
-${business_type || ""}
-
-City or service area:
-${city || ""}
-
-Website:
-${website_url || ""}
-
-Scan mode:
-${scan_mode || "quick"}
-
-Crawl warnings:
-${JSON.stringify(crawl_warnings || [], null, 2)}
-
-Crawled pages:
-${JSON.stringify(crawled_pages || [], null, 2)}
-
-Filtered recommendations:
-${JSON.stringify(filteredFixes || [], null, 2)}
-
-Competitor results:
-${JSON.stringify(competitor_results || [], null, 2)}
-
-Discovered competitors:
-${JSON.stringify(discovered_competitors || [], null, 2)}
-
-Competitor page snapshots:
-${JSON.stringify(competitor_page_snapshots || [], null, 2)}
-
-Rule-based fallback plan:
-${JSON.stringify(deterministicPlan || {}, null, 2)}
-
-Return JSON only. Keep cleaned_fixes to 6–14 items unless there are fewer valid items.
-`;
-}
-
-function responseSchema() {
-  return {
-    type: "object",
-    properties: {
-      plain_english_summary: { type: "string" },
-      top_recommended_actions: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            title: { type: "string" },
-            reason: { type: "string" },
-            priority: {
-              type: "string",
-              enum: ["high", "medium", "low"],
-            },
-          },
-          required: ["title", "reason", "priority"],
-        },
-      },
-      cleaned_fixes: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            page_url: { type: "string" },
-            category: { type: "string" },
-            customer_category: { type: "string" },
-            issue_title: { type: "string" },
-            plain_english_explanation: { type: "string" },
-            why_it_matters: { type: "string" },
-            current_value: { type: "string" },
-            recommended_value: { type: "string" },
-            ai_recommendation: { type: "string" },
-            priority: {
-              type: "string",
-              enum: ["critical", "high", "medium", "low"],
-            },
-            difficulty: {
-              type: "string",
-              enum: ["easy", "moderate", "developer"],
-            },
-            status: {
-              type: "string",
-              enum: ["auto_fixed", "needs_approval", "needs_developer"],
-            },
-            can_auto_fix: { type: "boolean" },
-            requires_approval: { type: "boolean" },
-            requires_developer: { type: "boolean" },
-          },
-          required: [
-            "page_url",
-            "category",
-            "customer_category",
-            "issue_title",
-            "plain_english_explanation",
-            "why_it_matters",
-            "current_value",
-            "recommended_value",
-            "ai_recommendation",
-            "priority",
-            "difficulty",
-            "status",
-            "can_auto_fix",
-            "requires_approval",
-            "requires_developer",
-          ],
-        },
-      },
-      grouped_page_recommendations: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            page_url: { type: "string" },
-            group_title: { type: "string" },
-            summary: { type: "string" },
-            recommendations: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  label: { type: "string" },
-                  recommendation: { type: "string" },
-                },
-                required: ["label", "recommendation"],
-              },
-            },
-            priority: {
-              type: "string",
-              enum: ["high", "medium", "low"],
-            },
-          },
-          required: [
-            "page_url",
-            "group_title",
-            "summary",
-            "recommendations",
-            "priority",
-          ],
-        },
-      },
-      ignored_low_value_pages: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            page_url: { type: "string" },
-            reason: { type: "string" },
-          },
-          required: ["page_url", "reason"],
-        },
-      },
-      positive_findings: {
-        type: "array",
-        items: { type: "string" },
-      },
-    },
-    required: [
-      "plain_english_summary",
-      "top_recommended_actions",
-      "cleaned_fixes",
-      "grouped_page_recommendations",
-      "ignored_low_value_pages",
-      "positive_findings",
-    ],
-  };
-}
+/* ------------------------------- Helpers ------------------------------- */
 
 function safeCategory(category) {
   const mapped = CATEGORY_MAP[category] || category || "web_dev";
@@ -1012,6 +891,16 @@ function safeDifficulty(difficulty, status) {
   return "easy";
 }
 
+function defaultOwner(difficulty) {
+  return difficulty === "developer" ? "your_web_person" : "you";
+}
+
+function defaultTime(difficulty) {
+  if (difficulty === "easy") return "about 10–15 minutes";
+  if (difficulty === "moderate") return "about 30–60 minutes";
+  return "a task for your web person";
+}
+
 function friendlyCategory(category) {
   const map = {
     meta_title: "Search appearance",
@@ -1026,6 +915,7 @@ function friendlyCategory(category) {
     performance: "Website performance",
     web_dev: "Website setup",
     robots_txt: "Search visibility",
+    js_rendering: "Website setup",
   };
 
   return map[category] || "Website improvement";
@@ -1045,6 +935,7 @@ function defaultTitle(category) {
     performance: "Review website performance",
     web_dev: "Review website setup",
     robots_txt: "Review search visibility settings",
+    js_rendering: "Review how the site loads its content",
   };
 
   return map[category] || "Review this website recommendation";
@@ -1073,32 +964,27 @@ function stringifyValue(value) {
   }
 }
 
-function getDomain(input) {
-  try {
-    const value = String(input || "");
-    const url = /^https?:\/\//i.test(value) ? value : `https://${value}`;
-    return new URL(url).hostname.replace(/^www\./, "").toLowerCase();
-  } catch {
-    return "";
+function safeString(value, fallback) {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  return fallback;
+}
+
+function clampText(value, max) {
+  const text = String(value || "").trim();
+  if (text.length <= max) return text;
+  return text.slice(0, Math.max(0, max - 1)).trim();
+}
+
+function stableId(input) {
+  let hash = 0;
+  const value = String(input || "");
+
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash << 5) - hash + value.charCodeAt(i);
+    hash |= 0;
   }
-}
 
-function formatDomainName(domain) {
-  return String(domain || "")
-    .replace(/\.(com|net|org|co|io|us)$/i, "")
-    .split(/[.-]/)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function joinHumanList(items) {
-  const clean = items.filter(Boolean);
-
-  if (clean.length === 0) return "";
-  if (clean.length === 1) return clean[0];
-  if (clean.length === 2) return `${clean[0]} and ${clean[1]}`;
-
-  return `${clean.slice(0, -1).join(", ")}, and ${clean[clean.length - 1]}`;
+  return `finding_${Math.abs(hash)}`;
 }
 
 function withTimeout(promise, ms, label = "Operation") {

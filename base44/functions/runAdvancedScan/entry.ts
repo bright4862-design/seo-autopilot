@@ -3,24 +3,37 @@ import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 const GOOGLE_API_KEY_NAME = "GOOGLE_" + "CUSTOM_SEARCH_API_KEY";
 const GOOGLE_CX_NAME = "GOOGLE_" + "CUSTOM_SEARCH_CX";
 
-const USER_AGENT = "SEO-Autopilot/1.0";
+const USER_AGENT =
+  "Mozilla/5.0 (compatible; SEO-Autopilot/1.0; +https://seoautopilot.app/bot)";
 
 const SCAN_LIMITS = {
   quick: {
     maxPages: 50,
-    batchSize: 6,
-    timeoutMs: 10000,
+    batchSize: 5,
+    timeoutMs: 12000,
     useSitemap: false,
     discoverCompetitors: false,
   },
   deep: {
     maxPages: 200,
     batchSize: 4,
-    timeoutMs: 15000,
+    timeoutMs: 18000,
     useSitemap: true,
     discoverCompetitors: true,
   },
 };
+
+function priorityScore(url) {
+  const path = getPath(url).toLowerCase();
+
+  if (path === "/") return 100;
+  if (/service|services|loan|loans|program|programs|product|products/i.test(path)) return 90;
+  if (/location|locations|areas-we-serve|city/i.test(path)) return 80;
+  if (/about|contact|pricing|book|appointment|apply/i.test(path)) return 70;
+  if (/blog|article|news|resources/i.test(path)) return 35;
+
+  return 50;
+}
 
 const UTILITY_PATH_RE =
   /(cart|checkout|login|signin|signup|register|account|search|privacy|terms|thank-?you|payment|admin|wp-admin|reset|forgot|cookie|legal|disclaimer|tag|category|author)/i;
@@ -203,7 +216,7 @@ Deno.serve(async (req) => {
 async function crawlWebsite({
   startUrl,
   domain,
-  sitemapUrls,
+  sitemapUrls = [],
   maxPages,
   batchSize,
   timeoutMs,
@@ -212,65 +225,107 @@ async function crawlWebsite({
   const queue = [];
   const seen = new Set();
   const queued = new Set();
+  const failed = [];
   const pages = [];
 
-  const addToQueue = (url) => {
+  const addToQueue = (url, source = "link") => {
     const clean = canonicalizeUrl(url);
-    if (!clean) return;
-    if (seen.has(clean)) return;
-    if (queued.has(clean)) return;
-    if (!isSameDomain(clean, domain)) return;
-    if (isAssetUrl(clean)) return;
-    if (isUtilityUrl(clean)) return;
+    if (!clean) return false;
+    if (seen.has(clean)) return false;
+    if (queued.has(clean)) return false;
+    if (!isSameDomain(clean, domain)) return false;
+    if (isAssetUrl(clean)) return false;
+    if (isUtilityUrl(clean)) return false;
 
     queued.add(clean);
-    queue.push(clean);
+    queue.push({
+      url: clean,
+      source,
+      priority: priorityScore(clean),
+    });
+
+    queue.sort((a, b) => b.priority - a.priority);
+
+    return true;
   };
 
-  addToQueue(startUrl);
+  addToQueue(startUrl, "start");
 
-  for (const url of sitemapUrls) {
-    addToQueue(url);
+  for (const url of sitemapUrls || []) {
+    addToQueue(url, "sitemap");
   }
 
   while (queue.length > 0 && pages.length < maxPages) {
-    const batch = queue.splice(0, batchSize);
+    const batchItems = queue.splice(0, batchSize);
+
+    for (const item of batchItems) {
+      queued.delete(item.url);
+    }
 
     const results = await Promise.allSettled(
-      batch.map((url) => fetchAndExtractPage(url, domain, timeoutMs))
+      batchItems.map((item) =>
+        fetchAndExtractPage(item.url, domain, timeoutMs, item.source)
+      )
     );
 
     for (const result of results) {
       if (pages.length >= maxPages) break;
 
       if (result.status !== "fulfilled") {
-        crawlWarnings.push("A page could not be fetched.");
+        failed.push({
+          url: "",
+          error: "Fetch promise failed",
+        });
         continue;
       }
 
       const page = result.value;
-      const pageUrl = canonicalizeUrl(page.url);
+      const pageUrl = canonicalizeUrl(page.url || page.final_url || page.original_url);
 
+      if (!pageUrl) continue;
       if (seen.has(pageUrl)) continue;
 
       seen.add(pageUrl);
       pages.push(page);
 
+      if (page.fetch_error) {
+        failed.push({
+          url: pageUrl,
+          error: page.fetch_error,
+        });
+      }
+
       if (page.status_code >= 200 && page.status_code < 400) {
-        for (const link of page.internal_links || []) {
-          addToQueue(link);
+        const links = Array.isArray(page.internal_links) ? page.internal_links : [];
+
+        for (const link of links) {
+          addToQueue(link, "internal");
         }
       }
     }
   }
 
+  if (failed.length > 0) {
+    crawlWarnings.push(
+      `${failed.length} page${failed.length === 1 ? "" : "s"} could not be fully read.`
+    );
+  }
+
+  if (pages.length >= maxPages) {
+    crawlWarnings.push(
+      `Scan limit reached at ${maxPages} pages. A deeper scan may find more pages.`
+    );
+  }
+
   return {
     pages,
-    pagesFound: seen.size + queue.length,
+    pagesFound: pages.length + queue.length,
+    queuedRemaining: queue.length,
+    failed,
   };
 }
 
-async function fetchAndExtractPage(url, domain, timeoutMs) {
+async function fetchAndExtractPage(url, domain, timeoutMs, source = "unknown") {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -282,18 +337,21 @@ async function fetchAndExtractPage(url, domain, timeoutMs) {
         "user-agent": USER_AGENT,
         accept:
           "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept-language": "en-US,en;q=0.9",
       },
     });
 
     const contentType = response.headers.get("content-type") || "";
     const finalUrl = response.url || url;
 
-    if (!contentType.includes("text/html")) {
+    if (!contentType.toLowerCase().includes("text/html")) {
       return emptyPage({
         url: finalUrl,
         originalUrl: url,
         status: response.status,
         contentType,
+        source,
+        error: `Skipped non-HTML content: ${contentType}`,
       });
     }
 
@@ -306,14 +364,21 @@ async function fetchAndExtractPage(url, domain, timeoutMs) {
       contentType,
       html,
       domain,
+      source,
     });
   } catch (error) {
+    const message =
+      error?.name === "AbortError"
+        ? "Page timed out"
+        : error?.message || "Fetch failed";
+
     return emptyPage({
       url,
       originalUrl: url,
       status: 0,
       contentType: "",
-      error: error?.message || "Fetch failed",
+      source,
+      error: message,
     });
   } finally {
     clearTimeout(timeout);
@@ -327,42 +392,43 @@ function extractPageData({
   contentType,
   html,
   domain,
+  source = "unknown",
 }) {
-  const title = cleanText(matchFirst(html, /<title[^>]*>([\s\S]*?)<\/title>/i));
+  const normalizedUrl = canonicalizeUrl(url);
+  const originalNormalized = canonicalizeUrl(originalUrl);
 
-  const metaDescription = cleanText(
-    matchFirst(
-      html,
-      /<meta[^>]+name=["']description["'][^>]*content=["']([^"']*)["'][^>]*>/i
-    ) ||
-      matchFirst(
-        html,
-        /<meta[^>]+content=["']([^"']*)["'][^>]+name=["']description["'][^>]*>/i
-      )
+  const title = cleanText(
+    decodeHtml(matchFirst(html, /<title[^>]*>([\s\S]*?)<\/title>/i))
   );
 
-  const h1 = cleanText(matchFirst(html, /<h1[^>]*>([\s\S]*?)<\/h1>/i));
+  const metaDescription = cleanText(
+    decodeHtml(
+      getMetaContent(html, "description") ||
+        getMetaProperty(html, "og:description") ||
+        getMetaName(html, "twitter:description")
+    )
+  );
 
-  const canonicalUrl =
+  const h1 = cleanText(
+    decodeHtml(matchFirst(html, /<h1[^>]*>([\s\S]*?)<\/h1>/i))
+  );
+
+  const canonicalRaw =
     matchFirst(
       html,
-      /<link[^>]+rel=["']canonical["'][^>]*href=["']([^"']*)["'][^>]*>/i
+      /<link[^>]+rel=["'][^"']*canonical[^"']*["'][^>]*href=["']([^"']+)["'][^>]*>/i
     ) ||
     matchFirst(
       html,
-      /<link[^>]+href=["']([^"']*)["'][^>]+rel=["']canonical["'][^>]*>/i
+      /<link[^>]+href=["']([^"']+)["'][^>]*rel=["'][^"']*canonical[^"']*["'][^>]*>/i
     ) ||
     "";
 
+  const canonicalUrl = absolutizeUrl(canonicalRaw, url);
+
   const robotsMeta =
-    matchFirst(
-      html,
-      /<meta[^>]+name=["']robots["'][^>]*content=["']([^"']*)["'][^>]*>/i
-    ) ||
-    matchFirst(
-      html,
-      /<meta[^>]+content=["']([^"']*)["'][^>]+name=["']robots["'][^>]*>/i
-    ) ||
+    getMetaContent(html, "robots") ||
+    getMetaContent(html, "googlebot") ||
     "";
 
   const pageText = extractVisibleText(html);
@@ -370,10 +436,11 @@ function extractPageData({
 
   const headings = extractHeadings(html);
   const links = extractLinks(html, url);
+
   const internalLinks = links.filter((link) => isSameDomain(link, domain));
   const externalLinks = links.filter((link) => !isSameDomain(link, domain));
-  const images = extractImages(html);
 
+  const images = extractImages(html, url);
   const faqQuestions = extractQuestions(pageText);
   const schemaTypes = detectSchemaTypes(html);
   const trustSignals = detectTrustSignals(pageText);
@@ -383,29 +450,34 @@ function extractPageData({
   const path = getPath(url);
 
   return {
-    url: canonicalizeUrl(url),
-    original_url: originalUrl,
-    final_url: url,
+    url: normalizedUrl,
+    original_url: originalNormalized || originalUrl,
+    final_url: normalizedUrl,
+    crawl_source: source,
     status_code: status,
     content_type: contentType,
-    redirected: canonicalizeUrl(originalUrl) !== canonicalizeUrl(url),
+    redirected: originalNormalized && originalNormalized !== normalizedUrl,
     title,
     meta_description: metaDescription,
     h1,
     h2s: headings.h2s,
     h3s: headings.h3s,
-    canonical_url: absolutizeUrl(canonicalUrl, url),
+    canonical_url: canonicalUrl,
     robots_meta: robotsMeta,
     word_count: wordCount,
     visible_text_sample: pageText.slice(0, 1500),
-    internal_links: Array.from(new Set(internalLinks)).slice(0, 250),
+    internal_links: Array.from(new Set(internalLinks)).slice(0, 300),
     external_links: Array.from(new Set(externalLinks)).slice(0, 150),
     images,
     image_count: images.length,
     images_missing_alt_count: images.filter((img) => !img.has_alt).length,
-    has_faq: faqQuestions.length >= 2 || /frequently asked questions|faq/i.test(pageText),
+    has_faq:
+      faqQuestions.length >= 2 ||
+      /frequently asked questions|faqs|\bfaq\b/i.test(pageText),
     faq_questions: faqQuestions,
-    has_schema: schemaTypes.length > 0 || /application\/ld\+json|schema\.org/i.test(html),
+    has_schema:
+      schemaTypes.length > 0 ||
+      /application\/ld\+json|schema\.org/i.test(html),
     schema_types: schemaTypes,
     has_phone: /\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/.test(pageText),
     has_email: /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(pageText),
@@ -418,13 +490,22 @@ function extractPageData({
   };
 }
 
-function emptyPage({ url, originalUrl, status, contentType, error = "" }) {
-  const path = getPath(url);
+function emptyPage({
+  url,
+  originalUrl,
+  status,
+  contentType,
+  source = "unknown",
+  error = "",
+}) {
+  const normalizedUrl = canonicalizeUrl(url);
+  const path = getPath(normalizedUrl || url);
 
   return {
-    url: canonicalizeUrl(url),
-    original_url: originalUrl,
-    final_url: url,
+    url: normalizedUrl || url,
+    original_url: canonicalizeUrl(originalUrl) || originalUrl,
+    final_url: normalizedUrl || url,
+    crawl_source: source,
     status_code: status,
     content_type: contentType,
     redirected: false,
@@ -1538,6 +1619,53 @@ function clamp(value, max) {
   if (text.length <= max) return text;
 
   return text.slice(0, max - 1).trim();
+}
+
+function decodeHtml(input) {
+  return String(input || "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+function getMetaContent(html, name) {
+  return getMetaName(html, name);
+}
+
+function getMetaName(html, name) {
+  const escaped = escapeRegExp(name);
+  return (
+    matchFirst(
+      html,
+      new RegExp(`<meta[^>]+name=["']${escaped}["'][^>]*content=["']([^"']*)["'][^>]*>`, "i")
+    ) ||
+    matchFirst(
+      html,
+      new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]*name=["']${escaped}["'][^>]*>`, "i")
+    )
+  );
+}
+
+function getMetaProperty(html, property) {
+  const escaped = escapeRegExp(property);
+  return (
+    matchFirst(
+      html,
+      new RegExp(`<meta[^>]+property=["']${escaped}["'][^>]*content=["']([^"']*)["'][^>]*>`, "i")
+    ) ||
+    matchFirst(
+      html,
+      new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]*property=["']${escaped}["'][^>]*>`, "i")
+    )
+  );
+}
+
+function escapeRegExp(input) {
+  return String(input || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function matchFirst(input, re) {

@@ -1,7 +1,7 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
 const USER_AGENT =
-  "Mozilla/5.0 (compatible; SEO-Autopilot/3.4; +https://seoautopilot.app/bot)";
+  "Mozilla/5.0 (compatible; SEO-Autopilot/3.5; +https://seoautopilot.app/bot)";
 
 const MAX_HTML_BYTES = 800000;
 const CRAWL_TIME_BUDGET_MS = 95000;
@@ -201,6 +201,7 @@ async function crawlWebsite({
   const queue = [];
   const queued = new Set();
   const crawled = new Set();
+  const finalPageKeys = new Set();
 
   const startPathPrefix = getStartPathPrefix(websiteUrl);
 
@@ -213,7 +214,10 @@ async function crawlWebsite({
     if (!isSameRegistrableSite(normalized, websiteUrl)) return false;
     if (!matchesStartPathPrefix(normalized, startPathPrefix)) return false;
     if (isUtilityUrl(normalized)) return false;
-    if (queued.has(normalized) || crawled.has(normalized)) return false;
+
+    const key = canonicalQueueKey(normalized);
+
+    if (queued.has(key) || crawled.has(key)) return false;
 
     const robotsAllowed = robotsAllows(robots, normalized);
 
@@ -233,14 +237,17 @@ async function crawlWebsite({
       }
     }
 
-    queued.add(normalized);
+    queued.add(key);
+
     queue.push({
       url: normalized,
+      key,
       source,
       priority: source === "start" ? 999 : scoreUrlPriority(normalized),
+      depth: urlDepth(normalized),
     });
 
-    queue.sort((a, b) => b.priority - a.priority);
+    sortQueue(queue);
 
     return true;
   }
@@ -272,7 +279,7 @@ async function crawlWebsite({
 
     const pages = await Promise.all(
       batch.map(async (item) => {
-        crawled.add(item.url);
+        crawled.add(item.key || canonicalQueueKey(item.url));
 
         return await fetchAndExtractPage({
           url: item.url,
@@ -286,6 +293,13 @@ async function crawlWebsite({
     for (const page of pages) {
       if (crawledPages.length >= config.maxPages) break;
 
+      const pageKey = canonicalQueueKey(page.url || page.original_url);
+
+      if (finalPageKeys.has(pageKey)) {
+        continue;
+      }
+
+      finalPageKeys.add(pageKey);
       crawledPages.push(page);
 
       if (
@@ -293,7 +307,9 @@ async function crawlWebsite({
         page.status_code < 300 &&
         !page.fetch_error
       ) {
-        for (const link of page.internal_links || []) {
+        const sortedLinks = stableSortUrls(page.internal_links || []);
+
+        for (const link of sortedLinks) {
           if (crawledPages.length + queue.length >= config.maxPages * 2) break;
           addToQueue(link, "internal");
         }
@@ -420,9 +436,7 @@ function extractPageData({
   const h3s = extractHeadingTags(rawHtml, "h3");
 
   const links = extractLinks(rawHtml, url);
-  const internalLinks = links.filter((link) =>
-    isSameRegistrableSite(link, url)
-  );
+  const internalLinks = links.filter((link) => isSameRegistrableSite(link, url));
   const externalLinks = links.filter(
     (link) => !isSameRegistrableSite(link, url)
   );
@@ -674,9 +688,7 @@ function buildCompetitorComparison({ userPages, competitorSnapshots }) {
     },
 
     topic_gaps: topicGaps,
-
     schema_gaps: schemaGaps.slice(0, 8),
-
     trust_signal_gaps: [],
   };
 }
@@ -736,6 +748,7 @@ function buildFindings({
   addBrokenPageFindings(fixes, pages);
   addContentFindings(fixes, pages);
   addScreamingFrogLiteFindings(fixes, pages);
+  addClientRenderingFindings(fixes, pages);
   addCompetitorFindings(fixes, competitorComparison, competitorSnapshots);
 
   return dedupeFindings(fixes).sort(compareFindings);
@@ -749,6 +762,19 @@ function addBrokenPageFindings(fixes, pages) {
 
   if (brokenPages.length === 0) return;
 
+  const examplePages = brokenPages.slice(0, 10).map((page) => ({
+    url: page.url,
+    path: cleanPath(page.url),
+    readable_label: readablePageLabel(page.url),
+    status_code: page.status_code,
+    fetch_error: page.fetch_error || "",
+    title: page.title || "",
+  }));
+
+  const firstPath = cleanPath(brokenPages[0]?.url || "");
+  const languageName = languageNameFromPath(firstPath);
+  const languageText = languageName ? `${languageName} ` : "";
+
   fixes.push(
     makeFinding({
       id: "broken_pages",
@@ -757,21 +783,24 @@ function addBrokenPageFindings(fixes, pages) {
       priority: "high",
       title:
         brokenPages.length === 1
-          ? "One page may not be loading correctly"
-          : "Some pages may not be loading correctly",
+          ? `One ${languageText}page may not be loading correctly`
+          : `Some ${languageText}pages may not be loading correctly`,
       explanation:
-        "We found pages that did not load successfully during the scan.",
+        brokenPages.length === 1
+          ? `The scanner found one ${languageText.toLowerCase()}page that returned an error during the scan. This may be an old link, an unavailable page, or a page that blocks server-side checks.`
+          : `The scanner found ${brokenPages.length} ${languageText.toLowerCase()}pages that returned errors during the scan. These may be old links, unavailable pages, or pages that block server-side checks.`,
       why:
-        "Broken or blocked pages can stop visitors and search engines from understanding the website.",
+        "If these URLs are linked from your site, visitors may land on pages that do not work. If they are old or unimportant URLs, they can usually be cleaned up or ignored after review.",
       affectedPages: brokenPages.map((page) => cleanPath(page.url)),
       details: {
         affected_count: brokenPages.length,
-        examples: brokenPages.slice(0, 8).map((page) => ({
-          url: page.url,
-          status_code: page.status_code,
-          fetch_error: page.fetch_error,
-          title: page.title,
-        })),
+        plain_english_note: languageName
+          ? `These URLs are still in the ${languageName} section because they start with ${firstPath
+              .split("/")
+              .slice(0, 2)
+              .join("/")}. The words after that may still be English-style URL slugs because that is how the website names its pages.`
+          : "These URLs returned errors during the scan. They may be old links, unavailable pages, or pages blocked from server-side checks.",
+        examples: examplePages,
       },
       difficulty: "developer",
       status: "needs_developer",
@@ -1155,7 +1184,7 @@ function addScreamingFrogLiteFindings(fixes, pages) {
         category: "performance_hint",
         customerCategory: "Technical SEO",
         priority: "medium",
-        title: "Some important pages look heavy or script-heavy",
+        title: "Some pages look heavy or script-heavy",
         explanation:
           "Some pages have very large HTML, many scripts, or a low amount of visible text compared with the page code.",
         why:
@@ -1166,6 +1195,41 @@ function addScreamingFrogLiteFindings(fixes, pages) {
       })
     );
   }
+}
+
+function addClientRenderingFindings(fixes, pages) {
+  const flagged = unique(
+    (pages || [])
+      .filter((page) => page.likely_client_rendered)
+      .map((page) => cleanPath(page.url))
+  );
+
+  if (flagged.length === 0) return;
+
+  fixes.push(
+    makeFinding({
+      id: "client_rendered_pages",
+      category: "js_rendering",
+      customerCategory: "Website setup",
+      priority: "medium",
+      title: "Some page content may depend heavily on JavaScript",
+      explanation:
+        "Some pages looked light when checked from the server, which can happen when important content loads later in the browser.",
+      why:
+        "If important text loads only after scripts run, search engines and accessibility tools may not always see the full page clearly.",
+      affectedPages: flagged,
+      difficulty: "developer",
+      status: "needs_developer",
+      details: {
+        affected_count: flagged.length,
+        examples: flagged.slice(0, 8).map((path) => ({
+          url: path,
+          path,
+          readable_label: readablePageLabel(path),
+        })),
+      },
+    })
+  );
 }
 
 function addCompetitorFindings(fixes, competitorComparison, competitorSnapshots) {
@@ -1575,8 +1639,13 @@ function describeFixTypes(fixes) {
     labels.push("trust and structured information");
   }
 
-  if (fixes.some((fix) => fix.category === "performance_hint")) {
-    labels.push("page performance cleanup");
+  if (
+    fixes.some(
+      (fix) =>
+        fix.category === "performance_hint" || fix.category === "js_rendering"
+    )
+  ) {
+    labels.push("page setup and performance cleanup");
   }
 
   if (fixes.some((fix) => fix.category === "competitor_gap")) {
@@ -1613,14 +1682,18 @@ function buildClientRenderingSummary(pages) {
     (page) => page.status_code >= 200 && page.status_code < 300
   );
 
-  const flagged = checked.filter((page) => page.likely_client_rendered);
+  const flaggedPaths = unique(
+    checked
+      .filter((page) => page.likely_client_rendered)
+      .map((page) => cleanPath(page.url))
+  );
 
   return {
-    detected: flagged.length > 0,
-    flagged_pages: flagged.map((page) => cleanPath(page.url)),
+    detected: flaggedPaths.length > 0,
+    flagged_pages: flaggedPaths,
     checked_pages: checked.length,
     fraction: checked.length
-      ? Number((flagged.length / checked.length).toFixed(2))
+      ? Number((flaggedPaths.length / checked.length).toFixed(2))
       : 0,
   };
 }
@@ -1850,7 +1923,7 @@ async function discoverSitemapUrls({
     }
   }
 
-  return unique(pageUrls).slice(0, maxUrls);
+  return stableSortUrls(unique(pageUrls)).slice(0, maxUrls);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -2025,7 +2098,9 @@ function buildIndexability({ status, robotsMeta, canonical, url }) {
 function detectSocialMeta(html) {
   return {
     open_graph_present: /<meta\b[^>]*(property|name)=["']og:/i.test(html),
-    twitter_card_present: /<meta\b[^>]*(property|name)=["']twitter:/i.test(html),
+    twitter_card_present: /<meta\b[^>]*(property|name)=["']twitter:/i.test(
+      html
+    ),
   };
 }
 
@@ -2081,6 +2156,9 @@ function detectCtaPhrases(text) {
     "réserver",
     "voir",
     "découvrir",
+    "join",
+    "visit",
+    "shop",
   ];
 
   return phrases.filter((phrase) => lower.includes(phrase));
@@ -2155,20 +2233,8 @@ function normalizeCrawlUrl(candidate, baseUrl) {
     if (!["http:", "https:"].includes(parsed.protocol)) return "";
 
     parsed.hash = "";
-
-    const blockedParams = [
-      "utm_source",
-      "utm_medium",
-      "utm_campaign",
-      "utm_content",
-      "utm_term",
-      "fbclid",
-      "gclid",
-    ];
-
-    for (const param of blockedParams) {
-      parsed.searchParams.delete(param);
-    }
+    parsed.search = "";
+    parsed.hostname = parsed.hostname.toLowerCase();
 
     if (parsed.pathname !== "/" && parsed.pathname.endsWith("/")) {
       parsed.pathname = parsed.pathname.replace(/\/+$/, "");
@@ -2180,12 +2246,31 @@ function normalizeCrawlUrl(candidate, baseUrl) {
   }
 }
 
+function canonicalQueueKey(url) {
+  try {
+    const parsed = new URL(url);
+
+    parsed.hash = "";
+    parsed.search = "";
+    parsed.hostname = parsed.hostname.toLowerCase();
+
+    if (parsed.pathname !== "/" && parsed.pathname.endsWith("/")) {
+      parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+    }
+
+    return `${parsed.protocol}//${parsed.hostname}${parsed.pathname}`.toLowerCase();
+  } catch {
+    return String(url || "").toLowerCase();
+  }
+}
+
 function normalizeComparableUrl(url) {
   try {
     const parsed = new URL(url);
 
     parsed.hash = "";
     parsed.search = "";
+    parsed.hostname = parsed.hostname.toLowerCase();
 
     if (parsed.pathname !== "/" && parsed.pathname.endsWith("/")) {
       parsed.pathname = parsed.pathname.replace(/\/+$/, "");
@@ -2259,13 +2344,16 @@ function isUtilityUrl(url) {
 
     const utilityPatterns = [
       /\.(jpg|jpeg|png|gif|webp|svg|ico|xml|pdf|zip|mp4|mp3|css|js|woff|woff2|ttf)$/i,
+
       /\/wp-admin/i,
       /\/wp-json/i,
+
       /\/cart/i,
       /\/checkout/i,
       /\/login/i,
       /\/logout/i,
       /\/account/i,
+
       /\/privacy/i,
       /\/terms/i,
       /\/cookie/i,
@@ -2273,6 +2361,14 @@ function isUtilityUrl(url) {
       /\/cgu/i,
       /\/mentions-legales/i,
       /\/legal/i,
+
+      /backup/i,
+      /\/home-\d+$/i,
+      /\/old/i,
+      /\/draft/i,
+      /\/staging/i,
+      /\/test/i,
+      /\/preview/i,
     ];
 
     return utilityPatterns.some((pattern) => pattern.test(path));
@@ -2296,7 +2392,7 @@ function isImportantPage(url) {
       return true;
     }
 
-    return /\/(service|services|product|products|activity|activities|booking|experience|experiences|tour|tours|things-to-do|electricite|energie|wine|wines|shop|about|contact|location|locations|listing|annonce|reservation|category|categories|guide|guides)/i.test(
+    return /\/(service|services|product|products|activity|activities|booking|experience|experiences|tour|tours|things-to-do|electricite|energie|wine|wines|shop|about|contact|location|locations|listing|annonce|reservation|category|categories|guide|guides|collection|visit|club|story)/i.test(
       path
     );
   } catch {
@@ -2316,6 +2412,42 @@ function scoreUrlPriority(url) {
   } catch {
     return 0;
   }
+}
+
+function urlDepth(url) {
+  try {
+    return new URL(url).pathname.split("/").filter(Boolean).length;
+  } catch {
+    return 99;
+  }
+}
+
+function stableSortUrls(urls) {
+  return unique(urls || []).sort((a, b) => {
+    const priorityDiff = scoreUrlPriority(b) - scoreUrlPriority(a);
+
+    if (priorityDiff !== 0) return priorityDiff;
+
+    const depthDiff = urlDepth(a) - urlDepth(b);
+
+    if (depthDiff !== 0) return depthDiff;
+
+    return String(a).localeCompare(String(b));
+  });
+}
+
+function sortQueue(queue) {
+  queue.sort((a, b) => {
+    const priorityDiff = b.priority - a.priority;
+
+    if (priorityDiff !== 0) return priorityDiff;
+
+    const depthDiff = a.depth - b.depth;
+
+    if (depthDiff !== 0) return depthDiff;
+
+    return String(a.url).localeCompare(String(b.url));
+  });
 }
 
 function cleanPath(input) {
@@ -2349,6 +2481,83 @@ function normalizeUrlList(value) {
       })
       .filter(Boolean)
   );
+}
+
+function languageNameFromPath(pathOrUrl) {
+  const path = cleanPath(pathOrUrl);
+  const match = path.match(/^\/(en|fr|es|de|it|pt|nl)(\/|$)/i);
+
+  if (!match) return "";
+
+  const map = {
+    en: "English",
+    fr: "French",
+    es: "Spanish",
+    de: "German",
+    it: "Italian",
+    pt: "Portuguese",
+    nl: "Dutch",
+  };
+
+  return map[match[1].toLowerCase()] || "";
+}
+
+function readablePageLabel(pathOrUrl) {
+  const path = cleanPath(pathOrUrl);
+  const languageName = languageNameFromPath(path);
+
+  const withoutLanguage = path
+    .replace(/^\/(en|fr|es|de|it|pt|nl)(\/|$)/i, "/")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
+
+  if (!withoutLanguage) {
+    return languageName ? `${languageName} homepage` : "Homepage";
+  }
+
+  const parts = withoutLanguage.split("/").filter(Boolean);
+
+  if (parts[0] === "category" && parts[1]) {
+    const label = humanizeUrlSlug(parts.slice(1).join(" / "));
+
+    return languageName
+      ? `${languageName} category page: ${label}`
+      : `Category page: ${label}`;
+  }
+
+  if (parts[0] === "listing" && parts[1]) {
+    const label = humanizeUrlSlug(parts.slice(1).join(" / "));
+
+    return languageName
+      ? `${languageName} listing page: ${label}`
+      : `Listing page: ${label}`;
+  }
+
+  if (parts[0] === "annonce" && parts[1]) {
+    const label = humanizeUrlSlug(parts[1]);
+
+    return languageName
+      ? `${languageName} activity page: ${label}`
+      : `Activity page: ${label}`;
+  }
+
+  if (parts[0] === "wine" && parts[1]) {
+    return `Wine page: ${humanizeUrlSlug(parts.slice(1).join(" / "))}`;
+  }
+
+  const label = humanizeUrlSlug(parts.join(" / "));
+
+  return languageName ? `${languageName} page: ${label}` : label;
+}
+
+function humanizeUrlSlug(value) {
+  return String(value || "")
+    .replace(/-/g, " ")
+    .replace(/_/g, " ")
+    .replace(/\s*\/\s*/g, " / ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 /* -------------------------------------------------------------------------- */
@@ -2404,6 +2613,7 @@ function decodeHtml(value) {
   return String(value || "")
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"')
+    .replace(/&mdash;/g, "—")
     .replace(/&#039;/g, "'")
     .replace(/&#39;/g, "'")
     .replace(/&apos;/g, "'")

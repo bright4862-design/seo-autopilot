@@ -25,44 +25,29 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.json();
-    const crawlJobId = body.crawlJobId || body.crawl_job_id;
     const projectId = body.projectId || body.project_id;
+    const scanMode = body.scan_mode === "deep" ? "deep" : "quick";
 
-    if (!crawlJobId && !projectId) {
+    if (!projectId) {
       return Response.json(
-        {
-          success: false,
-          error: "crawlJobId or projectId is required",
-        },
+        { success: false, error: "projectId is required" },
         { status: 400 }
       );
     }
 
-    let crawlJob = null;
+    const project = await base44.entities.BusinessProject.get(projectId);
 
-    if (crawlJobId) {
-      crawlJob = await base44.entities.CrawlJob.get(crawlJobId);
-    } else {
-      const jobs = await base44.entities.CrawlJob.filter(
-        { project_id: projectId },
-        "-created_date",
-        1
-      );
-
-      crawlJob = jobs[0] || null;
-    }
-
-    if (!crawlJob) {
+    if (!project) {
       return Response.json(
-        { success: false, error: "Crawl job not found" },
+        { success: false, error: "Project not found" },
         { status: 404 }
       );
     }
 
     if (
-      crawlJob.owner_user_id &&
-      crawlJob.owner_user_id !== user.id &&
-      crawlJob.created_by_id !== user.id
+      project.owner_user_id &&
+      project.owner_user_id !== user.id &&
+      project.created_by_id !== user.id
     ) {
       return Response.json(
         { success: false, error: "Forbidden" },
@@ -70,42 +55,65 @@ Deno.serve(async (req) => {
       );
     }
 
-    const isStale = isStaleJob(crawlJob);
+    const existingJobs = await base44.entities.CrawlJob.filter(
+      { project_id: projectId },
+      "-created_date",
+      5
+    );
 
-    if (isStale) {
-      try {
-        crawlJob = await base44.entities.CrawlJob.update(crawlJob.id, {
-          status: "failed",
-          completed_at: new Date().toISOString(),
-          error_message:
-            crawlJob.error_message ||
-            "The scan took too long and could not complete.",
-        });
-      } catch {}
+    const existingActiveJob = existingJobs.find(
+      (job) => ACTIVE_STATUSES.has(job.status) && !isStaleJob(job)
+    );
+
+    if (existingActiveJob) {
+      return Response.json({
+        success: true,
+        crawl_job_id: existingActiveJob.id,
+        crawlJob: existingActiveJob,
+        crawl_job: existingActiveJob,
+        reused_existing_job: true,
+        message: "A scan is already in progress.",
+      });
     }
 
-    const progress = getProgress(crawlJob.status);
+    const now = new Date().toISOString();
+
+    const crawlJob = await base44.entities.CrawlJob.create({
+      project_id: projectId,
+      status: "queued",
+      crawl_type: scanMode === "deep" ? "deep" : "full",
+      started_at: now,
+      completed_at: "",
+      error_message: "",
+      pages_found: 0,
+      pages_crawled: 0,
+      issues_found: 0,
+      seo_score: 0,
+      owner_user_id: user.id,
+    });
+
+    try {
+      await base44.entities.BusinessProject.update(projectId, {
+        status: "scanning",
+        scan_mode: scanMode,
+      });
+    } catch {}
 
     return Response.json({
       success: true,
+      crawl_job_id: crawlJob.id,
       crawlJob,
       crawl_job: crawlJob,
-      status: crawlJob.status,
-      progress,
-      is_complete: crawlJob.status === "complete",
-      is_failed: crawlJob.status === "failed",
-      is_running: ACTIVE_STATUSES.has(crawlJob.status),
-      pages_crawled: crawlJob.pages_crawled || 0,
-      pages_found: crawlJob.pages_found || 0,
-      issues_found: crawlJob.issues_found || 0,
-      seo_score: crawlJob.seo_score || 0,
-      error_message: crawlJob.error_message || "",
+      reused_existing_job: false,
+      scan_mode: scanMode,
+      message:
+        "Crawl job created. The frontend should now call runAdvancedScan and then aiReviewScan.",
     });
   } catch (error) {
     return Response.json(
       {
         success: false,
-        error: error?.message || "Could not get crawl status",
+        error: error?.message || "Could not start crawl",
       },
       { status: 500 }
     );
@@ -122,22 +130,4 @@ function isStaleJob(job) {
   const ageMs = Date.now() - new Date(dateValue).getTime();
 
   return ageMs > 10 * 60 * 1000;
-}
-
-function getProgress(status) {
-  const map = {
-    queued: 5,
-    crawling_html: 25,
-    checking_metadata: 40,
-    checking_canonicals: 55,
-    checking_links: 65,
-    finding_competitors: 72,
-    benchmarking_competitors: 82,
-    generating_recommendations: 90,
-    in_progress: 50,
-    complete: 100,
-    failed: 100,
-  };
-
-  return map[status] ?? 0;
 }

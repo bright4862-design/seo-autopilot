@@ -1,7 +1,7 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
 const USER_AGENT =
-  "Mozilla/5.0 (compatible; SEO-Autopilot/3.2; +https://seoautopilot.app/bot)";
+  "Mozilla/5.0 (compatible; SEO-Autopilot/3.3; +https://seoautopilot.app/bot)";
 
 const MAX_HTML_BYTES = 800000;
 const CRAWL_TIME_BUDGET_MS = 95000;
@@ -239,9 +239,10 @@ async function crawlWebsite({
       websiteUrl,
       robots,
       timeoutMs: config.timeoutMs,
+      maxUrls: config.maxPages * 3,
     });
 
-    for (const url of sitemapUrls.slice(0, config.maxPages * 2)) {
+    for (const url of sitemapUrls.slice(0, config.maxPages * 3)) {
       addToQueue(url, "sitemap");
     }
   }
@@ -251,7 +252,9 @@ async function crawlWebsite({
     crawledPages.length < config.maxPages &&
     Date.now() - startedAt < CRAWL_TIME_BUDGET_MS
   ) {
-    const batch = queue.splice(0, config.concurrency);
+    const remainingSlots = Math.max(0, config.maxPages - crawledPages.length);
+    const batchSize = Math.min(config.concurrency, remainingSlots);
+    const batch = queue.splice(0, batchSize);
 
     const pages = await Promise.all(
       batch.map(async (item) => {
@@ -267,6 +270,8 @@ async function crawlWebsite({
     );
 
     for (const page of pages) {
+      if (crawledPages.length >= config.maxPages) break;
+
       crawledPages.push(page);
 
       if (
@@ -584,7 +589,8 @@ function buildCompetitorComparison({ userPages, competitorSnapshots }) {
   );
 
   const readableCompetitors = (competitorSnapshots || []).filter(
-    (item) => item.status_code >= 200 && item.status_code < 300 && item.word_count > 50
+    (item) =>
+      item.status_code >= 200 && item.status_code < 300 && item.word_count > 50
   );
 
   if (userImportant.length === 0 || readableCompetitors.length === 0) {
@@ -620,7 +626,9 @@ function buildCompetitorComparison({ userPages, competitorSnapshots }) {
     userImportant.flatMap((page) => page.schema_types || [])
   );
 
-  const schemaGaps = schemaTypes.filter((type) => !yourSchemaTypes.includes(type));
+  const schemaGaps = schemaTypes.filter(
+    (type) => !yourSchemaTypes.includes(type)
+  );
 
   return {
     competitors_compared: readableCompetitors.map((item) => ({
@@ -758,7 +766,9 @@ function addContentFindings(fixes, pages) {
       page.status_code < 300
   );
 
-  const missingH1 = importantPages.filter((page) => !page.h1 || page.h1_count === 0);
+  const missingH1 = importantPages.filter(
+    (page) => !page.h1 || page.h1_count === 0
+  );
 
   if (missingH1.length > 0) {
     fixes.push(
@@ -778,7 +788,9 @@ function addContentFindings(fixes, pages) {
     );
   }
 
-  const thinPages = importantPages.filter((page) => page.word_count > 0 && page.word_count < 250);
+  const thinPages = importantPages.filter(
+    (page) => page.word_count > 0 && page.word_count < 250
+  );
 
   if (thinPages.length > 0) {
     fixes.push(
@@ -844,7 +856,9 @@ function addContentFindings(fixes, pages) {
   }
 
   const lowInternalLinks = importantPages.filter(
-    (page) => Number(page.internal_link_count || 0) < MIN_INTERNAL_LINKS_ON_IMPORTANT_PAGE
+    (page) =>
+      Number(page.internal_link_count || 0) <
+      MIN_INTERNAL_LINKS_ON_IMPORTANT_PAGE
   );
 
   if (lowInternalLinks.length > 0) {
@@ -880,7 +894,9 @@ function addScreamingFrogLiteFindings(fixes, pages) {
   const multipleDescriptions = successfulPages.filter(
     (page) => Number(page.meta_description_count || 0) > 1
   );
-  const multipleH1s = successfulPages.filter((page) => Number(page.h1_count || 0) > 1);
+  const multipleH1s = successfulPages.filter(
+    (page) => Number(page.h1_count || 0) > 1
+  );
   const missingCanonicals = successfulPages.filter(
     (page) => !page.canonical_url
   );
@@ -888,7 +904,9 @@ function addScreamingFrogLiteFindings(fixes, pages) {
   const nonIndexable = successfulPages.filter(
     (page) => page.indexability === "non_indexable"
   );
-  const missingViewport = successfulPages.filter((page) => !page.viewport_present);
+  const missingViewport = successfulPages.filter(
+    (page) => !page.viewport_present
+  );
   const missingSocial = successfulPages.filter(
     (page) => !page.open_graph_present
   );
@@ -1135,7 +1153,8 @@ function addScreamingFrogLiteFindings(fixes, pages) {
 
 function addCompetitorFindings(fixes, competitorComparison, competitorSnapshots) {
   const readableCompetitors = (competitorSnapshots || []).filter(
-    (item) => item.status_code >= 200 && item.status_code < 300 && item.word_count > 50
+    (item) =>
+      item.status_code >= 200 && item.status_code < 300 && item.word_count > 50
   );
 
   if (readableCompetitors.length > 0) {
@@ -1215,7 +1234,10 @@ function addCompetitorFindings(fixes, competitorComparison, competitorSnapshots)
 
   const faq = competitorComparison.faq_coverage || {};
 
-  if (Number(faq.competitors_with_faq || 0) > 0 && Number(faq.your_pages_with_faq || 0) === 0) {
+  if (
+    Number(faq.competitors_with_faq || 0) > 0 &&
+    Number(faq.your_pages_with_faq || 0) === 0
+  ) {
     fixes.push(
       makeFinding({
         id: "competitor_faq_gap",
@@ -1292,9 +1314,13 @@ function makeFinding({
 
     who_can_do_this: difficulty === "developer" ? "your_web_person" : "you",
     estimated_time:
-      difficulty === "developer" ? "a task for your web person" : "about 30–60 minutes",
+      difficulty === "developer"
+        ? "a task for your web person"
+        : "about 30–60 minutes",
     time_estimate:
-      difficulty === "developer" ? "a task for your web person" : "about 30–60 minutes",
+      difficulty === "developer"
+        ? "a task for your web person"
+        : "about 30–60 minutes",
   };
 }
 
@@ -1366,8 +1392,9 @@ function buildTechnicalAuditSummary(pages) {
     pages_checked: safePages.length,
     important_pages_checked: important.length,
 
-    indexable_pages: successful.filter((page) => page.indexability === "indexable")
-      .length,
+    indexable_pages: successful.filter(
+      (page) => page.indexability === "indexable"
+    ).length,
     non_indexable_pages: successful.filter(
       (page) => page.indexability === "non_indexable"
     ).length,
@@ -1377,8 +1404,9 @@ function buildTechnicalAuditSummary(pages) {
       (page) => !page.meta_description
     ).length,
     missing_h1_count: important.filter((page) => !page.h1).length,
-    multiple_h1_count: important.filter((page) => Number(page.h1_count || 0) > 1)
-      .length,
+    multiple_h1_count: important.filter(
+      (page) => Number(page.h1_count || 0) > 1
+    ).length,
 
     missing_canonical_count: successful.filter((page) => !page.canonical_url)
       .length,
@@ -1506,11 +1534,19 @@ function buildPositiveFindings(pages) {
 function describeFixTypes(fixes) {
   const labels = [];
 
-  if (fixes.some((fix) => fix.category === "thin_content" || fix.category === "page_heading")) {
+  if (
+    fixes.some(
+      (fix) => fix.category === "thin_content" || fix.category === "page_heading"
+    )
+  ) {
     labels.push("stronger page content");
   }
 
-  if (fixes.some((fix) => fix.category === "trust_signal_gap" || fix.category === "schema")) {
+  if (
+    fixes.some(
+      (fix) => fix.category === "trust_signal_gap" || fix.category === "schema"
+    )
+  ) {
     labels.push("trust and structured information");
   }
 
@@ -1558,7 +1594,9 @@ function buildClientRenderingSummary(pages) {
     detected: flagged.length > 0,
     flagged_pages: flagged.map((page) => cleanPath(page.url)),
     checked_pages: checked.length,
-    fraction: checked.length ? Number((flagged.length / checked.length).toFixed(2)) : 0,
+    fraction: checked.length
+      ? Number((flagged.length / checked.length).toFixed(2))
+      : 0,
   };
 }
 
@@ -1586,7 +1624,7 @@ async function fetchRobotsRules(websiteUrl, timeoutMs) {
     if (!response.ok) {
       return {
         available: false,
-        rules: [],
+        groups: [],
         sitemaps: [],
       };
     }
@@ -1597,7 +1635,7 @@ async function fetchRobotsRules(websiteUrl, timeoutMs) {
   } catch {
     return {
       available: false,
-      rules: [],
+      groups: [],
       sitemaps: [],
     };
   }
@@ -1712,17 +1750,28 @@ function robotsPathMatches(pattern, path) {
   return regex.test(path);
 }
 
-async function discoverSitemapUrls({ websiteUrl, robots, timeoutMs }) {
+async function discoverSitemapUrls({ websiteUrl, robots, timeoutMs, maxUrls }) {
   const origin = new URL(websiteUrl).origin;
-  const candidates = unique([
+  const sitemapQueue = unique([
     ...(robots?.sitemaps || []),
     `${origin}/sitemap.xml`,
     `${origin}/sitemap_index.xml`,
   ]);
 
-  const urls = [];
+  const seenSitemaps = new Set();
+  const pageUrls = [];
 
-  for (const sitemapUrl of candidates.slice(0, 5)) {
+  while (
+    sitemapQueue.length > 0 &&
+    seenSitemaps.size < 20 &&
+    pageUrls.length < maxUrls
+  ) {
+    const sitemapUrl = sitemapQueue.shift();
+
+    if (!sitemapUrl || seenSitemaps.has(sitemapUrl)) continue;
+
+    seenSitemaps.add(sitemapUrl);
+
     try {
       const response = await fetchWithTimeout(
         sitemapUrl,
@@ -1743,13 +1792,31 @@ async function discoverSitemapUrls({ websiteUrl, robots, timeoutMs }) {
         .map((match) => decodeHtml(match[1]).trim())
         .filter(Boolean);
 
-      urls.push(...locs);
+      for (const loc of locs) {
+        const normalized = normalizeCrawlUrl(loc, websiteUrl);
+
+        if (!normalized) continue;
+        if (!isSameRegistrableSite(normalized, websiteUrl)) continue;
+
+        if (isSitemapUrl(normalized)) {
+          if (!seenSitemaps.has(normalized) && sitemapQueue.length < 50) {
+            sitemapQueue.push(normalized);
+          }
+          continue;
+        }
+
+        if (!isUtilityUrl(normalized)) {
+          pageUrls.push(normalized);
+        }
+
+        if (pageUrls.length >= maxUrls) break;
+      }
     } catch {
       // Ignore sitemap errors.
     }
   }
 
-  return unique(urls);
+  return unique(pageUrls).slice(0, maxUrls);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1757,7 +1824,9 @@ async function discoverSitemapUrls({ websiteUrl, robots, timeoutMs }) {
 /* -------------------------------------------------------------------------- */
 
 function extractTitleTags(html) {
-  return Array.from(String(html || "").matchAll(/<title[^>]*>([\s\S]*?)<\/title>/gi))
+  return Array.from(
+    String(html || "").matchAll(/<title[^>]*>([\s\S]*?)<\/title>/gi)
+  )
     .map((match) => cleanString(stripTags(match[1])))
     .filter(Boolean);
 }
@@ -1780,7 +1849,10 @@ function extractMetaNameContents(html, name) {
 }
 
 function extractHeadingTags(html, heading) {
-  const regex = new RegExp(`<${heading}\\b[^>]*>([\\s\\S]*?)<\\/${heading}>`, "gi");
+  const regex = new RegExp(
+    `<${heading}\\b[^>]*>([\\s\\S]*?)<\\/${heading}>`,
+    "gi"
+  );
 
   return Array.from(String(html || "").matchAll(regex))
     .map((match) => cleanString(stripTags(match[1])))
@@ -1848,7 +1920,10 @@ function extractSchemaTypes(html) {
 }
 
 function extractCanonical(html, pageUrl) {
-  const links = String(html || "").match(/<link\b[^>]*rel=["'][^"']*canonical[^"']*["'][^>]*>/gi) || [];
+  const links =
+    String(html || "").match(
+      /<link\b[^>]*rel=["'][^"']*canonical[^"']*["'][^>]*>/gi
+    ) || [];
 
   if (links.length === 0) {
     return {
@@ -1871,9 +1946,10 @@ function extractCanonical(html, pageUrl) {
 
   return {
     url: canonicalUrl,
-    status: normalizeComparableUrl(canonicalUrl) === normalizeComparableUrl(pageUrl)
-      ? "self_referencing"
-      : "points_elsewhere",
+    status:
+      normalizeComparableUrl(canonicalUrl) === normalizeComparableUrl(pageUrl)
+        ? "self_referencing"
+        : "points_elsewhere",
     issue: isSameRegistrableSite(canonicalUrl, pageUrl)
       ? ""
       : "Canonical points to a different domain.",
@@ -1920,7 +1996,10 @@ function detectSocialMeta(html) {
 }
 
 function extractHreflangs(html) {
-  const tags = String(html || "").match(/<link\b[^>]*rel=["'][^"']*alternate[^"']*["'][^>]*>/gi) || [];
+  const tags =
+    String(html || "").match(
+      /<link\b[^>]*rel=["'][^"']*alternate[^"']*["'][^>]*>/gi
+    ) || [];
 
   return tags
     .map((tag) => ({
@@ -1978,7 +2057,9 @@ function detectFaqQuestions(html, text) {
 
   const questionHeadings = headings.filter((heading) => heading.includes("?"));
 
-  const textQuestions = Array.from(String(text || "").matchAll(/([^.!?]{8,120}\?)/g))
+  const textQuestions = Array.from(
+    String(text || "").matchAll(/([^.!?]{8,120}\?)/g)
+  )
     .map((match) => cleanString(match[1]))
     .filter(Boolean);
 
@@ -2095,13 +2176,23 @@ function isSameRegistrableSite(a, b) {
   }
 }
 
+function isSitemapUrl(url) {
+  try {
+    const path = new URL(url).pathname.toLowerCase();
+
+    return path.endsWith(".xml") || path.includes("sitemap");
+  } catch {
+    return false;
+  }
+}
+
 function isUtilityUrl(url) {
   try {
     const parsed = new URL(url);
     const path = parsed.pathname.toLowerCase();
 
     const utilityPatterns = [
-      /\.(jpg|jpeg|png|gif|webp|svg|ico|pdf|zip|mp4|mp3|css|js|woff|woff2|ttf)$/i,
+      /\.(jpg|jpeg|png|gif|webp|svg|ico|xml|pdf|zip|mp4|mp3|css|js|woff|woff2|ttf)$/i,
       /\/wp-admin/i,
       /\/wp-json/i,
       /\/cart/i,

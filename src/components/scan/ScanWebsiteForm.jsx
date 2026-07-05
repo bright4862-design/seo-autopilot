@@ -10,6 +10,7 @@ export default function ScanWebsiteForm({ project, competitors = [], saving, onS
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [keywords, setKeywords] = useState("");
   const [competitorUrls, setCompetitorUrls] = useState(["", "", ""]);
+  const [scanDepth, setScanDepth] = useState("quick");
 
   useEffect(() => {
     if (project) {
@@ -36,6 +37,7 @@ export default function ScanWebsiteForm({ project, competitors = [], saving, onS
       website_url: websiteUrl.trim(),
       important_keywords: keywords.split(",").map((keyword) => keyword.trim()).filter(Boolean),
       competitor_urls: competitorUrls,
+      scan_mode: scanDepth,
     });
   };
 
@@ -55,6 +57,14 @@ export default function ScanWebsiteForm({ project, competitors = [], saving, onS
         <div className="p-5 sm:p-6">
           <Label htmlFor="keywords" className="text-sm font-medium text-slate-900">Words customers might search for <span className="font-normal text-slate-400">optional</span></Label>
           <Input id="keywords" placeholder="wine tasting, local wine shop, organic wine" value={keywords} onChange={(event) => setKeywords(event.target.value)} className={inputClass} />
+        </div>
+        <div className="p-5 sm:p-6">
+          <Label htmlFor="scan-depth" className="text-sm font-medium text-slate-900">Scan depth</Label>
+          <select id="scan-depth" value={scanDepth} onChange={(event) => setScanDepth(event.target.value)} className="mt-2 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-[15px] text-slate-950 shadow-none focus:outline-none focus:ring-1 focus:ring-blue-600">
+            <option value="quick">Quick scan</option>
+            <option value="deep">Deeper scan</option>
+          </select>
+          <p className="mt-2 text-sm leading-6 text-slate-500">Quick scans review key pages. Deeper scans review more pages and look for competitor opportunities when possible.</p>
         </div>
         <div className="p-5 sm:p-6">
           <Label className="text-sm font-medium text-slate-900">Competitor pages <span className="font-normal text-slate-400">optional</span></Label>

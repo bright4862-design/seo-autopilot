@@ -796,7 +796,7 @@ export default function CrawlStatus() {
             Scan Website
           </h1>
           <p className="mt-2 text-base leading-7 text-slate-500">
-            Enter your website and we’ll prepare a simple Fix List.
+            SEO Autopilot scans your website, reviews important pages, looks for competitor opportunities when possible, and prepares a simple Fix List.
           </p>
         </div>
 

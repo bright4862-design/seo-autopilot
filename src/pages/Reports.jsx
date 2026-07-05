@@ -95,7 +95,7 @@ export default function Reports() {
           <div>
             <p className="text-sm font-medium text-blue-600">Plain-English summary</p>
             <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">Scan Report</h1>
-            <p className="mt-2 text-base leading-7 text-slate-500">A simple summary you can save or share.</p>
+            <p className="mt-2 text-base leading-7 text-slate-500">SEO Autopilot scans your website, reviews important pages, looks for competitor opportunities when possible, and prepares a simple Fix List.</p>
           </div>
           <div className="flex gap-3">
             <Button onClick={handleExport} disabled={!project || exporting} className="rounded-full bg-blue-600 px-5 text-sm font-medium text-white shadow-none hover:bg-blue-700">

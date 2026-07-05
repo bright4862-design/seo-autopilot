@@ -385,7 +385,7 @@ export default function FixList() {
               Fix List
             </h1>
             <p className="mt-2 text-base leading-7 text-slate-500">
-              Clear next steps for {getBusinessLabel(project)}.
+              SEO Autopilot scans your website, reviews important pages, looks for competitor opportunities when possible, and prepares a simple Fix List.
             </p>
           </div>
 

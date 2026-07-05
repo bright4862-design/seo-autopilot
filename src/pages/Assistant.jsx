@@ -353,7 +353,7 @@ export default function Assistant() {
               Ask AI
             </h1>
             <p className="mt-2 max-w-2xl text-base leading-7 text-slate-500">
-              Ask about your Fix List, website improvements, or next steps.
+              SEO Autopilot scans your website, reviews important pages, looks for competitor opportunities when possible, and prepares a simple Fix List.
             </p>
           </div>
 

@@ -24,23 +24,28 @@ function getArray(...values) {
   for (const value of values) {
     if (Array.isArray(value) && value.length > 0) return value;
   }
+
   return [];
 }
 
 function unwrapFunctionResponse(response) {
   if (!response) return {};
+
   if (response.data?.data) return response.data.data;
   if (response.data?.result) return response.data.result;
   if (response.data) return response.data;
   if (response.result?.data) return response.result.data;
   if (response.result) return response.result;
+
   return response;
 }
 
 function ensureProtocol(url) {
   const clean = String(url || "").trim();
+
   if (!clean) return "";
   if (/^https?:\/\//i.test(clean)) return clean;
+
   return `https://${clean}`;
 }
 
@@ -54,15 +59,22 @@ function getDomain(url) {
 
 function normalizePriority(priority) {
   const value = String(priority || "").toLowerCase();
-  if (["critical", "high", "medium", "low"].includes(value)) return value;
+
+  if (value === "critical") return "critical";
+  if (value === "high") return "high";
+  if (value === "medium") return "medium";
+  if (value === "low") return "low";
+
   return "medium";
 }
 
 function normalizeFixStatus(fix) {
   if (fix.status) return fix.status;
+
   if (fix.requires_developer) return "needs_developer";
   if (fix.requires_approval) return "needs_approval";
   if (fix.can_auto_fix) return "auto_fixed";
+
   return "needs_approval";
 }
 
@@ -76,7 +88,9 @@ function normalizeFix(fix, index = 0) {
   const id =
     fix.id ||
     fix.fix_id ||
-    `fix_${index}_${String(title).toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
+    `fix_${index}_${String(title)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")}`;
 
   const status = normalizeFixStatus(fix);
 
@@ -86,30 +100,36 @@ function normalizeFix(fix, index = 0) {
     fix_id: id,
     status,
     priority: normalizePriority(fix.priority),
+
     issue_title: title,
     title,
+
     plain_english_explanation:
       fix.plain_english_explanation ||
       fix.plain_english_summary ||
       fix.summary ||
       fix.description ||
       "This improvement was found during the website scan.",
+
     why_it_matters:
       fix.why_it_matters ||
       fix.reason ||
       fix.why ||
       "Improving this can make the website clearer for visitors and search engines.",
+
     current_value:
       fix.current_value ||
       fix.current ||
       fix.technical_detail ||
       "",
+
     recommended_value:
       fix.recommended_value ||
       fix.recommendation ||
       fix.recommended_action ||
       fix.ai_recommendation ||
       "Review this recommendation.",
+
     what_to_do:
       Array.isArray(fix.what_to_do)
         ? fix.what_to_do
@@ -118,6 +138,7 @@ function normalizeFix(fix, index = 0) {
           : Array.isArray(fix.fix_steps)
             ? fix.fix_steps
             : [],
+
     affected_pages:
       Array.isArray(fix.affected_pages)
         ? fix.affected_pages
@@ -126,15 +147,18 @@ function normalizeFix(fix, index = 0) {
           : fix.page_url
             ? [fix.page_url]
             : [],
+
     customer_category:
       fix.customer_category ||
       fix.category ||
       fix.type ||
       "Website improvement",
+
     who_can_do_this:
       fix.who_can_do_this === "your_web_person"
         ? "Your web person"
         : fix.who_can_do_this || "You or your web person",
+
     estimated_time:
       fix.estimated_time ||
       fix.time_estimate ||
@@ -191,6 +215,7 @@ function normalizeScanResult(rawResponse) {
 
   return {
     ...data,
+
     success: data.success !== false,
     error: data.error || "",
 
@@ -213,6 +238,7 @@ function normalizeScanResult(rawResponse) {
     ),
 
     competitor_insights: competitorInsights,
+
     health_score: score,
 
     scan_summary: {
@@ -226,25 +252,30 @@ function normalizeScanResult(rawResponse) {
             : score >= 40
               ? "Needs work"
               : "Needs urgent attention"),
+
       plain_english_summary:
         data.scan_summary?.plain_english_summary ||
         data.plain_english_summary ||
         data.site_summary?.plain_english_summary ||
         "The scan completed. Review the recommended improvements below.",
+
       pages_scanned:
         data.scan_summary?.pages_scanned ||
         data.pages_crawled ||
         pages.length,
+
       pages_failed:
         data.scan_summary?.pages_failed ||
         data.failed_pages ||
         data.crawl_failed ||
         0,
+
       high_priority_count:
         data.scan_summary?.high_priority_count ||
         fixes.filter((fix) =>
           ["critical", "high"].includes(fix.priority)
         ).length,
+
       competitor_gap_count:
         data.scan_summary?.competitor_gap_count ||
         competitorInsights.length ||
@@ -260,39 +291,100 @@ function normalizeScanResult(rawResponse) {
   };
 }
 
+function extractFunctionErrorMessage(error, functionName) {
+  const responseData =
+    error?.response?.data ||
+    error?.data ||
+    error?.body ||
+    null;
+
+  if (typeof responseData === "string" && responseData.trim()) {
+    return `${functionName} failed: ${responseData}`;
+  }
+
+  const backendMessage =
+    responseData?.error ||
+    responseData?.message ||
+    error?.message ||
+    "Unknown backend error.";
+
+  const status = error?.response?.status || error?.status;
+
+  if (status) {
+    return `${functionName} failed with status ${status}: ${backendMessage}`;
+  }
+
+  return `${functionName} failed: ${backendMessage}`;
+}
+
 async function callBase44Function(functionName, payload) {
-  console.log("CALLING FUNCTION", functionName, payload);
+  console.log("CALLING BASE44 FUNCTION", {
+    functionName,
+    payload,
+    availableBase44Keys: base44 ? Object.keys(base44) : [],
+    availableFunctionKeys: base44?.functions
+      ? Object.keys(base44.functions)
+      : [],
+  });
 
   if (!base44) {
     throw new Error("base44 client is not available.");
   }
 
-  if (base44.functions?.invoke) {
-    const response = await base44.functions.invoke(functionName, payload);
-    console.log("FUNCTION RESPONSE", functionName, response);
-    return response;
-  }
+  try {
+    if (base44.functions?.invoke) {
+      const response = await base44.functions.invoke(functionName, payload);
 
-  if (base44.functions?.[functionName]) {
-    const response = await base44.functions[functionName](payload);
-    console.log("FUNCTION RESPONSE", functionName, response);
-    return response;
-  }
+      console.log("BASE44 FUNCTION RESPONSE", {
+        functionName,
+        response,
+      });
 
-  if (base44.integrations?.Core?.InvokeFunction) {
-    const response = await base44.integrations.Core.InvokeFunction({
-      name: functionName,
-      body: payload,
+      return response;
+    }
+
+    if (base44.functions?.[functionName]) {
+      const response = await base44.functions[functionName](payload);
+
+      console.log("BASE44 DIRECT FUNCTION RESPONSE", {
+        functionName,
+        response,
+      });
+
+      return response;
+    }
+
+    if (base44.integrations?.Core?.InvokeFunction) {
+      const response = await base44.integrations.Core.InvokeFunction({
+        name: functionName,
+        body: payload,
+      });
+
+      console.log("BASE44 CORE FUNCTION RESPONSE", {
+        functionName,
+        response,
+      });
+
+      return response;
+    }
+
+    throw new Error(
+      `Could not find a Base44 function caller. Available base44 keys: ${Object.keys(
+        base44 || {}
+      ).join(", ")}`
+    );
+  } catch (error) {
+    console.error("BASE44 FUNCTION CALL FAILED", {
+      functionName,
+      payload,
+      message: error?.message,
+      status: error?.response?.status || error?.status,
+      responseData: error?.response?.data,
+      fullError: error,
     });
-    console.log("FUNCTION RESPONSE", functionName, response);
-    return response;
-  }
 
-  throw new Error(
-    `Could not find a Base44 function caller. Available base44 keys: ${Object.keys(
-      base44 || {}
-    ).join(", ")}`
-  );
+    throw new Error(extractFunctionErrorMessage(error, functionName));
+  }
 }
 
 function statusCounts(fixes) {
@@ -312,7 +404,11 @@ function statusCounts(fixes) {
       fix.who_can_do_this === "your_web_person"
   ).length;
 
-  return { prepared, needsReview, mayNeedHelp };
+  return {
+    prepared,
+    needsReview,
+    mayNeedHelp,
+  };
 }
 
 function StepCircle({ complete, active, children }) {
@@ -356,6 +452,7 @@ function FixPreview({ fix }) {
         >
           {fix.priority}
         </span>
+
         <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">
           {fix.customer_category}
         </span>
@@ -449,6 +546,7 @@ export default function ScanWebsiteForm({
     setError("");
     setScanResult(null);
     setReviewResult(null);
+    setShowDebug(false);
     setActiveStep(0);
 
     const stepTimer = window.setInterval(() => {
@@ -506,7 +604,7 @@ export default function ScanWebsiteForm({
       });
 
       if (!scanner.success) {
-        throw new Error(scanner.error || "Advanced scanner failed.");
+        throw new Error(scanner.error || "runAdvancedScan failed.");
       }
 
       setScanResult(scanner);
@@ -514,7 +612,7 @@ export default function ScanWebsiteForm({
 
       if (scanner.crawled_pages.length === 0) {
         throw new Error(
-          "The scanner returned zero pages. Check ADVANCED SCAN DEBUG in the browser console."
+          "runAdvancedScan returned zero pages. Open Show debug and browser console to inspect the scanner response."
         );
       }
 
@@ -587,9 +685,12 @@ export default function ScanWebsiteForm({
               review.ai_review_warning ||
               "AI review returned no fixes, so scanner recommendations are shown.",
           };
+
           setReviewResult(finalReview);
         }
       } catch (aiError) {
+        console.warn("AI REVIEW FAILED, USING SCANNER RESULTS", aiError);
+
         finalReview = {
           ...scanner,
           ai_review_warning:
@@ -609,7 +710,7 @@ export default function ScanWebsiteForm({
       if (typeof onComplete === "function") onComplete(finalPayload);
       if (typeof onFinished === "function") onFinished(finalPayload);
     } catch (err) {
-      console.error(err);
+      console.error("SCAN WEBSITE FORM ERROR", err);
       setError(err?.message || "The scan failed.");
     } finally {
       window.clearInterval(stepTimer);
@@ -726,7 +827,7 @@ export default function ScanWebsiteForm({
             )}
           </Button>
 
-          {finalResult ? (
+          {(finalResult || error) ? (
             <Button
               type="button"
               variant="outline"
@@ -866,6 +967,11 @@ export default function ScanWebsiteForm({
           <pre className="max-h-[600px] overflow-auto bg-slate-950 p-5 text-xs leading-5 text-slate-100">
             {JSON.stringify(
               {
+                error,
+                functions: {
+                  scanner: ADVANCED_SCANNER_FUNCTION,
+                  ai_review: AI_REVIEW_FUNCTION,
+                },
                 scanner: {
                   pages: scanResult?.crawled_pages?.length || 0,
                   fixes: scanResult?.raw_fixes?.length || 0,

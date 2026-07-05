@@ -10,8 +10,10 @@ export default function Onboarding() {
   const navigate = useNavigate();
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState({ business_name: "", website_url: "" });
+  const [competitorUrls, setCompetitorUrls] = useState(["", "", ""]);
 
   const update = (field, value) => setData(prev => ({ ...prev, [field]: value }));
+  const updateCompetitor = (i, value) => setCompetitorUrls(prev => prev.map((v, idx) => (idx === i ? value : v)));
   const canSubmit = data.business_name.trim().length > 0 && data.website_url.trim().length > 0;
 
   const handleSubmit = async () => {
@@ -34,6 +36,14 @@ export default function Onboarding() {
         crawl_type: "full",
         owner_user_id: user.id,
       });
+      const compUrls = competitorUrls.map(u => u.trim()).filter(Boolean);
+      if (compUrls.length > 0) {
+        await base44.entities.Competitor.bulkCreate(compUrls.map(url => {
+          let name = url;
+          try { name = new URL(/^https?:\/\//i.test(url) ? url : "https://" + url).hostname.replace(/^www\./, ""); } catch (e) {}
+          return { project_id: project.id, website_url: url, name, owner_user_id: user.id };
+        }));
+      }
       navigate("/crawl-status?autostart=1");
     } catch (e) {
       console.error("Failed to start scan", e);
@@ -90,6 +100,20 @@ export default function Onboarding() {
                   />
                 </div>
                 <p className="text-xs text-gray-400 mt-2">We'll crawl this site to find easy SEO wins.</p>
+              </div>
+              <div>
+                <Label>Competitor websites <span className="text-gray-400 font-normal">(optional)</span></Label>
+                <div className="space-y-2 mt-1.5">
+                  {competitorUrls.map((url, i) => (
+                    <Input
+                      key={i}
+                      placeholder={`Competitor website ${i + 1}`}
+                      value={url}
+                      onChange={e => updateCompetitor(i, e.target.value)}
+                    />
+                  ))}
+                </div>
+                <p className="text-xs text-gray-400 mt-2">We'll compare your site against them in plain English.</p>
               </div>
             </div>
 

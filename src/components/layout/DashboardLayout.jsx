@@ -2,13 +2,14 @@ import React, { useState } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import {
-  ListChecks, Search, Settings, LogOut, Menu, Zap, User, Shield
+  ListChecks, Search, Settings, LogOut, Menu, Zap, User, Shield, BarChart3
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const navItems = [
   { label: "Fix List", path: "/dashboard", icon: ListChecks },
   { label: "New Scan", path: "/crawl-status", icon: Search },
+  { label: "Competitors", path: "/competitors", icon: BarChart3 },
 ];
 
 export default function DashboardLayout() {

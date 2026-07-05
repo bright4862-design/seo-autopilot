@@ -214,6 +214,20 @@ export default function CrawlStatus() {
         );
       }
 
+      // Compare against competitors if any were added
+      if (scanSucceeded) {
+        try {
+          await base44.functions.invoke('scanCompetitors', {
+            project_id: project.id,
+            business_type: project.business_type,
+            city: project.city,
+            customer_pages: crawledPagesData,
+          });
+        } catch (e) {
+          console.error('Competitor comparison failed', e);
+        }
+      }
+
       const sourceFixes = scanSucceeded ? realFixes : SCAN_ISSUES;
       if (!scanSucceeded) {
         setScanResult({

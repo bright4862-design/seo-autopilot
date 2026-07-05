@@ -71,6 +71,22 @@ const VALID_DIFFICULTIES = new Set(["easy", "moderate", "developer"]);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const withTimeout = (promise, ms, label = "Operation") => {
+  let timeoutId;
+
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(
+        new Error(`${label} timed out after ${Math.round(ms / 1000)} seconds.`)
+      );
+    }, ms);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    clearTimeout(timeoutId);
+  });
+};
+
 function getScanSteps(scanMode) {
   return scanMode === "deep" ? DEEP_SCAN_STEPS : QUICK_SCAN_STEPS;
 }
@@ -205,7 +221,10 @@ function mapCrawledPageForStorage(page = {}) {
     images_missing_alt_count:
       page.images_missing_alt_count || page.imagesMissingAltCount || 0,
     placeholder_hits:
-      page.placeholder_hits || page.placeholderHits || page.placeholder_text || [],
+      page.placeholder_hits ||
+      page.placeholderHits ||
+      page.placeholder_text ||
+      [],
   };
 }
 
@@ -382,7 +401,7 @@ export default function CrawlStatus() {
     );
 
     for (const step of stepsBeforeComplete) {
-      await sleep(800);
+      await sleep(scanMode === "deep" ? 1200 : 700);
 
       if (progressRunIdRef.current !== runId) return;
 
@@ -463,19 +482,23 @@ export default function CrawlStatus() {
         console.warn("Could not clear previous crawled pages.", err);
       }
 
-      const progressPromise = runProgressSteps(job, scanMode, runId);
+      runProgressSteps(job, scanMode, runId);
 
-      const scanResponse = await base44.functions.invoke("runAdvancedScan", {
-        website_url: activeProject.website_url,
-        business_name: activeProject.business_name,
-        business_type: activeProject.business_type,
-        city: activeProject.city,
-        project_id: activeProject.id,
-        crawl_job_id: job.id,
-        important_keywords: activeProject.important_keywords || [],
-        competitor_urls: activeProject.competitor_urls || [],
-        scan_mode: scanMode,
-      });
+      const scanResponse = await withTimeout(
+        base44.functions.invoke("runAdvancedScan", {
+          website_url: activeProject.website_url,
+          business_name: activeProject.business_name,
+          business_type: activeProject.business_type,
+          city: activeProject.city,
+          project_id: activeProject.id,
+          crawl_job_id: job.id,
+          important_keywords: activeProject.important_keywords || [],
+          competitor_urls: activeProject.competitor_urls || [],
+          scan_mode: scanMode,
+        }),
+        scanMode === "deep" ? 90000 : 45000,
+        "Website scan"
+      );
 
       const scanData = scanResponse?.data || {};
 
@@ -542,18 +565,22 @@ export default function CrawlStatus() {
       }
 
       try {
-        const aiReviewRes = await base44.functions.invoke("aiReviewScan", {
-          business_name: activeProject.business_name,
-          business_type: activeProject.business_type,
-          city: activeProject.city,
-          website_url: activeProject.website_url,
-          crawled_pages: crawledPagesData,
-          raw_fixes: mappedSeoIssues,
-          competitor_results: competitorResultsForReview,
-          discovered_competitors: discoveredCompetitors,
-          scan_mode: scanMode,
-          crawl_warnings: scanData.crawl_warnings || [],
-        });
+        const aiReviewRes = await withTimeout(
+          base44.functions.invoke("aiReviewScan", {
+            business_name: activeProject.business_name,
+            business_type: activeProject.business_type,
+            city: activeProject.city,
+            website_url: activeProject.website_url,
+            crawled_pages: crawledPagesData,
+            raw_fixes: mappedSeoIssues,
+            competitor_results: competitorResultsForReview,
+            discovered_competitors: discoveredCompetitors,
+            scan_mode: scanMode,
+            crawl_warnings: scanData.crawl_warnings || [],
+          }),
+          30000,
+          "AI review"
+        );
 
         const aiData = aiReviewRes?.data || {};
         const aiFixes = Array.isArray(aiData.cleaned_fixes)
@@ -579,7 +606,10 @@ export default function CrawlStatus() {
           finalFixes = mappedSeoIssues;
         }
       } catch (err) {
-        console.warn("AI review failed. Falling back to grouped scan findings.", err);
+        console.warn(
+          "AI review failed or timed out. Falling back to grouped scan findings.",
+          err
+        );
         finalFixes = mappedSeoIssues;
       }
 
@@ -600,7 +630,7 @@ export default function CrawlStatus() {
         healthScore: scanData.health_score,
       });
 
-      await progressPromise;
+      progressRunIdRef.current = 0;
 
       const pagesCrawled =
         typeof scanData.pages_crawled === "number"
@@ -699,7 +729,6 @@ export default function CrawlStatus() {
         error_message: "",
       });
 
-      progressRunIdRef.current = 0;
       setCrawlJob(completedJob);
 
       const updatedProject = await base44.entities.BusinessProject.update(

@@ -50,6 +50,9 @@
     "js_difference_detected": {
       "type": "boolean",
       "default": false
+    },
+    "owner_user_id": {
+      "type": "string"
     }
   },
   "required": [
@@ -75,6 +78,9 @@
     "read": {
       "$or": [
         {
+          "data.owner_user_id": "{{user.id}}"
+        },
+        {
           "created_by_id": "{{user.id}}"
         },
         {
@@ -87,6 +93,9 @@
     "update": {
       "$or": [
         {
+          "data.owner_user_id": "{{user.id}}"
+        },
+        {
           "created_by_id": "{{user.id}}"
         },
         {
@@ -98,6 +107,9 @@
     },
     "delete": {
       "$or": [
+        {
+          "data.owner_user_id": "{{user.id}}"
+        },
         {
           "created_by_id": "{{user.id}}"
         },

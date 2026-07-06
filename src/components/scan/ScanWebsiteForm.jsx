@@ -49,7 +49,6 @@ export default function ScanWebsiteForm({
   project = null,
   competitors = [],
   saving = false,
-  onScan = null,
 }) {
   const navigate = useNavigate();
 
@@ -111,27 +110,6 @@ export default function ScanWebsiteForm({
 
     try {
       const safeScanBudget = getSafeScanBudget(scanMode);
-
-      const formPayload = {
-        website_url: normalizedUrl,
-        business_name: businessName.trim(),
-        cms_platform: cmsPlatform,
-        cms_name: selectedCms?.label || "Custom / Not sure",
-        important_keywords: cleanedKeywords,
-        competitor_urls: cleanedCompetitorUrls,
-        scan_mode: scanMode,
-        max_pages: safeScanBudget.max_pages,
-        max_competitors: safeScanBudget.max_competitors,
-        max_browser_render_attempts:
-          safeScanBudget.max_browser_render_attempts,
-        crawl_timeout_ms: safeScanBudget.crawl_timeout_ms,
-      };
-
-      if (typeof onScan === "function") {
-        await onScan(formPayload);
-        navigate("/dashboard?scan=complete");
-        return;
-      }
 
       setActiveStep("Running crawler and Screaming Frog Lite checks");
 
@@ -339,7 +317,8 @@ export default function ScanWebsiteForm({
             </select>
 
             <p className="mt-1 text-xs text-slate-500">
-              Gemini will tailor the action plan to this CMS.
+              Gemini will tailor the action plan to this CMS. Joomla is
+              included.
             </p>
           </div>
 
@@ -355,6 +334,7 @@ export default function ScanWebsiteForm({
               rows={4}
               className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50"
             />
+
             <p className="mt-1 text-xs text-slate-500">
               Optional. One keyword per line.
             </p>
@@ -374,6 +354,7 @@ export default function ScanWebsiteForm({
               rows={4}
               className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50"
             />
+
             <p className="mt-1 text-xs text-slate-500">
               Optional. One competitor URL per line.
             </p>
@@ -640,8 +621,7 @@ function mergeScanAndAiReview({
       scanData?.site_summary?.positives ||
       [],
 
-    health_explanation:
-      aiData?.health_explanation || scanData?.health_explanation || "",
+    health_explanation: aiData?.health_explanation || scanData?.health_explanation || "",
 
     competitor_result:
       scanData?.competitor_result ||
@@ -937,6 +917,7 @@ function friendlyCustomerCategory(category) {
     performance: "Website performance",
     web_dev: "Website setup",
     scanner_blocked: "Scan coverage",
+    js_rendering: "Website setup",
   };
 
   return map[category] || "Website improvement";
@@ -962,41 +943,16 @@ function buildFallbackSummary({
 /* -------------------------------------------------------------------------- */
 
 async function callBase44Function(functionName, payload) {
-  const errors = [];
-
   if (base44?.functions?.invoke) {
-    try {
-      return await base44.functions.invoke(functionName, payload);
-    } catch (error) {
-      errors.push(`functions.invoke: ${error?.message || error}`);
-    }
+    return await base44.functions.invoke(functionName, payload);
   }
 
   if (typeof base44?.functions?.[functionName] === "function") {
-    try {
-      return await base44.functions[functionName](payload);
-    } catch (error) {
-      errors.push(`functions.${functionName}: ${error?.message || error}`);
-    }
-  }
-
-  if (base44?.integrations?.Core?.InvokeFunction) {
-    try {
-      return await base44.integrations.Core.InvokeFunction({
-        name: functionName,
-        body: payload,
-      });
-    } catch (error) {
-      errors.push(`InvokeFunction: ${error?.message || error}`);
-    }
+    return await base44.functions[functionName](payload);
   }
 
   throw new Error(
-    `${functionName} failed. ${
-      errors.length
-        ? errors.join(" | ")
-        : "No supported Base44 function caller was found."
-    }`
+    `${functionName} failed. No supported Base44 function caller was found.`
   );
 }
 

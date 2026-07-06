@@ -1,6 +1,6 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
-const VERSION = "runAdvancedScan_v9_browserless_budget_score_consistency";
+const VERSION = "runAdvancedScan_v10_expanded_discovery";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -190,7 +190,6 @@ Deno.serve(async (req) => {
       ...crawlResult.warnings,
       ...buildFriendlyWarnings({
         pages: crawlResult.pages,
-        crawlResult,
       }),
     ];
 
@@ -202,7 +201,8 @@ Deno.serve(async (req) => {
       business_name: body.business_name || "",
       scan_mode: budget.scan_mode,
 
-      max_pages_requested: body.max_pages || null,
+      max_pages_requested:
+        body.max_pages === undefined ? null : Number(body.max_pages),
       max_pages_effective: budget.max_pages,
       max_competitors_effective: budget.max_competitors,
 
@@ -275,6 +275,9 @@ Deno.serve(async (req) => {
         importance_strategy: crawlResult.sitemap_priority_summary,
         skipped_junk_urls_count: crawlResult.skipped_junk_urls_count,
         skipped_outside_prefix_count: crawlResult.skipped_outside_prefix_count,
+        expanded_discovery_attempts: crawlResult.expanded_discovery_attempts,
+        expanded_discovery_added: crawlResult.expanded_discovery_added,
+        discovery_hint_links_found: crawlResult.discovery_hint_links_found,
         start_url_candidates: crawlResult.start_url_candidates,
         fetch_error_class_counts: countFetchErrorClasses(crawlResult.pages),
         browserless_token_present: Boolean(BROWSERLESS_TOKEN),
@@ -416,6 +419,12 @@ async function crawlWebsite({
     outside_prefix: 0,
   };
 
+  const discoveryStats = {
+    expanded_discovery_attempts: 0,
+    expanded_discovery_added: 0,
+    discovery_hint_links_found: 0,
+  };
+
   const startUrlCandidates = buildStartUrlCandidates(startUrl);
 
   const sitemapEntries = budget.use_sitemap
@@ -423,7 +432,7 @@ async function crawlWebsite({
         origin,
         pathPrefix: crawlPathPrefix,
         deadlineAt,
-        maxUrls: budget.max_pages * 5,
+        maxUrls: budget.max_pages * 6,
         skippedStats,
       })
     : [];
@@ -507,9 +516,10 @@ async function crawlWebsite({
     if (queue.length >= budget.max_pages * 4) break;
   }
 
-  const pages: any[] = [];
+  let pages: any[] = [];
   let consecutiveBlockedInternal = 0;
   let stoppedForRateLimit = false;
+  let expandedDiscoveryAlreadyAttempted = false;
 
   while (
     queue.length > 0 &&
@@ -575,6 +585,9 @@ async function crawlWebsite({
       }
 
       pages.push(page);
+      discoveryStats.discovery_hint_links_found += Number(
+        page.discovery_link_count || 0
+      );
 
       collectRelatedSubdomains({
         page,
@@ -642,7 +655,12 @@ async function crawlWebsite({
         page.status_code < 300 &&
         !page.is_scanner_blocked
       ) {
-        for (const link of page.internal_links || []) {
+        const nextLinks = unique([
+          ...(page.internal_links || []),
+          ...(page.discovery_links || []),
+        ]);
+
+        for (const link of nextLinks) {
           if (pages.length + queue.length >= budget.max_pages * 4) break;
 
           addToQueue(
@@ -657,6 +675,29 @@ async function crawlWebsite({
     }
 
     if (stoppedForRateLimit) break;
+
+    if (
+      queue.length === 0 &&
+      pages.length < budget.max_pages &&
+      Date.now() < deadlineAt - 10000 &&
+      !expandedDiscoveryAlreadyAttempted
+    ) {
+      expandedDiscoveryAlreadyAttempted = true;
+      discoveryStats.expanded_discovery_attempts += 1;
+
+      const added = await expandDiscoveryWhenQueueEmpty({
+        origin,
+        startUrl,
+        pathPrefix: crawlPathPrefix,
+        pages,
+        discovered,
+        addToQueue,
+        deadlineAt,
+        budget,
+      });
+
+      discoveryStats.expanded_discovery_added += added;
+    }
   }
 
   if (Date.now() >= deadlineAt) {
@@ -680,6 +721,15 @@ async function crawlWebsite({
   if (skippedStats.junk_urls > 0) {
     warnings.push(
       `${skippedStats.junk_urls} low-value encoded or tracking-style URLs were skipped so the scan could focus on useful pages.`
+    );
+  }
+
+  if (
+    discoveryStats.expanded_discovery_attempts > 0 &&
+    discoveryStats.expanded_discovery_added > 0
+  ) {
+    warnings.push(
+      `The crawler expanded discovery after the normal queue ran out and found ${discoveryStats.expanded_discovery_added} extra candidate URLs.`
     );
   }
 
@@ -708,10 +758,13 @@ async function crawlWebsite({
     recommended_followup_scans: recommendedFollowups,
     skipped_junk_urls_count: skippedStats.junk_urls,
     skipped_outside_prefix_count: skippedStats.outside_prefix,
+    expanded_discovery_attempts: discoveryStats.expanded_discovery_attempts,
+    expanded_discovery_added: discoveryStats.expanded_discovery_added,
+    discovery_hint_links_found: discoveryStats.discovery_hint_links_found,
     start_url_candidates: startUrlCandidates,
     sitemap_priority_summary: {
       strategy:
-        "The scanner reads sitemap URLs first, learns common URL folders, tries cleaner start URL variants, boosts likely landing pages, demotes listing/archive/news/filter/encoded pages, and keeps the scan focused inside the requested folder or language path.",
+        "The scanner reads sitemap URLs first, learns common URL folders, tries cleaner start URL variants, extracts embedded URL hints, expands discovery when the queue runs out, boosts likely landing pages, demotes listing/archive/news/filter/encoded pages, and keeps the scan focused inside the requested folder or language path.",
       topic_dossier_prefix: importanceProfile.topic_dossier_prefix || "",
       sitemap_entries_found: sitemapEntries.length,
       important_page_patterns: importanceProfile.important_page_patterns,
@@ -720,9 +773,208 @@ async function crawlWebsite({
       related_subdomains_found: recommendedFollowups.length,
       skipped_junk_urls_count: skippedStats.junk_urls,
       skipped_outside_prefix_count: skippedStats.outside_prefix,
+      expanded_discovery_attempts: discoveryStats.expanded_discovery_attempts,
+      expanded_discovery_added: discoveryStats.expanded_discovery_added,
+      discovery_hint_links_found: discoveryStats.discovery_hint_links_found,
       start_url_candidates: startUrlCandidates,
     },
   };
+}
+
+async function expandDiscoveryWhenQueueEmpty({
+  origin,
+  startUrl,
+  pathPrefix,
+  pages,
+  discovered,
+  addToQueue,
+  deadlineAt,
+  budget,
+}: {
+  origin: string;
+  startUrl: string;
+  pathPrefix: string;
+  pages: any[];
+  discovered: Set<string>;
+  addToQueue: (url: string, source: string, inSitemap?: boolean) => void;
+  deadlineAt: number;
+  budget: any;
+}) {
+  const before = discovered.size;
+
+  const directCandidates = buildExpandedDiscoveryCandidates({
+    origin,
+    startUrl,
+    pathPrefix,
+    pages,
+  });
+
+  for (const candidate of directCandidates) {
+    if (Date.now() > deadlineAt - 8000) break;
+    if (discovered.size >= budget.max_pages * 4) break;
+
+    addToQueue(candidate, "expanded_discovery", false);
+  }
+
+  const discoveryProbeUrls = buildDiscoveryProbeUrls({
+    origin,
+    pathPrefix,
+    pages,
+  });
+
+  for (const probeUrl of discoveryProbeUrls) {
+    if (Date.now() > deadlineAt - 8000) break;
+    if (discovered.size >= budget.max_pages * 4) break;
+
+    try {
+      const result = await fetchHtmlWithRetry(probeUrl);
+
+      if (
+        result.status_code >= 200 &&
+        result.status_code < 300 &&
+        result.html &&
+        result.html.length > 200
+      ) {
+        const hints = extractInternalUrlHints({
+          html: result.html,
+          baseUrl: result.final_url || probeUrl,
+          origin,
+        });
+
+        for (const hint of hints) {
+          if (discovered.size >= budget.max_pages * 4) break;
+          addToQueue(hint, "expanded_discovery_hint", false);
+        }
+      }
+    } catch {
+      // Optional discovery probes should never fail the scan.
+    }
+  }
+
+  return Math.max(0, discovered.size - before);
+}
+
+function buildExpandedDiscoveryCandidates({
+  origin,
+  startUrl,
+  pathPrefix,
+  pages,
+}: {
+  origin: string;
+  startUrl: string;
+  pathPrefix: string;
+  pages: any[];
+}) {
+  const candidates = new Set<string>();
+
+  candidates.add(startUrl);
+  candidates.add(`${origin}/`);
+
+  if (pathPrefix) {
+    candidates.add(`${origin}${pathPrefix}`);
+  }
+
+  for (const page of pages) {
+    for (const link of page.internal_links || []) candidates.add(link);
+    for (const link of page.discovery_links || []) candidates.add(link);
+
+    try {
+      const parsed = new URL(page.url);
+      const parts = parsed.pathname.split("/").filter(Boolean);
+
+      if (parts.length > 1) {
+        candidates.add(`${origin}/${parts[0]}`);
+      }
+
+      if (parts.length > 2) {
+        candidates.add(`${origin}/${parts[0]}/${parts[1]}`);
+      }
+    } catch {
+      // Ignore.
+    }
+  }
+
+  const commonHighLevelPaths = [
+    "/about",
+    "/about-us",
+    "/our-story",
+    "/story",
+    "/contact",
+    "/visit",
+    "/locations",
+    "/services",
+    "/service",
+    "/products",
+    "/product",
+    "/collections",
+    "/collection",
+    "/shop",
+    "/store",
+    "/catalog",
+    "/wines",
+    "/wine",
+    "/club",
+    "/membership",
+    "/new-releases",
+    "/blog",
+    "/news",
+    "/faq",
+    "/faqs",
+    "/sitemap",
+    "/site-map",
+  ];
+
+  for (const path of commonHighLevelPaths) {
+    if (pathPrefix && !path.startsWith(pathPrefix)) {
+      candidates.add(`${origin}${path}`);
+    } else {
+      candidates.add(`${origin}${path}`);
+    }
+  }
+
+  return [...candidates].filter(Boolean).slice(0, 60);
+}
+
+function buildDiscoveryProbeUrls({
+  origin,
+  pathPrefix,
+  pages,
+}: {
+  origin: string;
+  pathPrefix: string;
+  pages: any[];
+}) {
+  const probes = new Set<string>();
+
+  probes.add(`${origin}/sitemap`);
+  probes.add(`${origin}/site-map`);
+  probes.add(`${origin}/pages`);
+  probes.add(`${origin}/collections`);
+  probes.add(`${origin}/collection`);
+  probes.add(`${origin}/shop`);
+  probes.add(`${origin}/products`);
+  probes.add(`${origin}/blog`);
+
+  if (pathPrefix) {
+    probes.add(`${origin}${pathPrefix}`);
+    probes.add(`${origin}${pathPrefix}/sitemap`);
+    probes.add(`${origin}${pathPrefix}/site-map`);
+  }
+
+  for (const page of pages.slice(0, 12)) {
+    try {
+      const parsed = new URL(page.url);
+      const parts = parsed.pathname.split("/").filter(Boolean);
+
+      if (parts[0]) {
+        probes.add(`${origin}/${parts[0]}`);
+      }
+    } catch {
+      // Ignore.
+    }
+  }
+
+  return [...probes].filter(Boolean).slice(0, 12);
 }
 
 function shouldAllowBrowserRenderForQueueItem({
@@ -1419,6 +1671,16 @@ function scoreUrlImportance({
     reasons.push("found from internal link");
   }
 
+  if (source === "expanded_discovery") {
+    score += 40;
+    reasons.push("found by expanded discovery");
+  }
+
+  if (source === "expanded_discovery_hint") {
+    score += 55;
+    reasons.push("found from embedded URL hint");
+  }
+
   if (sitemapEntry) {
     score += 60;
     reasons.push("listed in sitemap");
@@ -1776,6 +2038,14 @@ function extractPageFromHtml({
 
   const internalLinks = extractInternalLinks(html, finalUrl, origin);
   const externalLinks = extractExternalLinks(html, finalUrl, origin);
+  const discoveryLinks = unique([
+    ...internalLinks,
+    ...extractInternalUrlHints({
+      html,
+      baseUrl: finalUrl || url,
+      origin,
+    }),
+  ]).slice(0, 250);
 
   return {
     url: cleanUrl(url),
@@ -1809,6 +2079,8 @@ function extractPageFromHtml({
     internal_link_count: internalLinks.length,
     external_links: externalLinks,
     external_link_count: externalLinks.length,
+    discovery_links: discoveryLinks,
+    discovery_link_count: discoveryLinks.length,
 
     indexable: !/noindex/i.test(robotsMeta || ""),
     in_sitemap: inSitemap,
@@ -1824,6 +2096,77 @@ function extractPageFromHtml({
     template: makeUrlTemplate(url),
     extracted_at: new Date().toISOString(),
   };
+}
+
+function extractInternalUrlHints({
+  html,
+  baseUrl,
+  origin,
+}: {
+  html: string;
+  baseUrl: string;
+  origin: string;
+}) {
+  const output = new Set<string>();
+  const raw = String(html || "");
+
+  const absoluteMatches = raw.matchAll(/https?:\\?\/\\?\/[^"'`\s<>)]+/gi);
+
+  for (const match of absoluteMatches) {
+    const candidate = normalizeEmbeddedUrl(match[0]);
+
+    tryAddInternalHint(candidate, baseUrl, origin, output);
+  }
+
+  const quotedPathMatches = raw.matchAll(/["'`](\/[^"'`<>\s)]+)["'`]/g);
+
+  for (const match of quotedPathMatches) {
+    const candidate = normalizeEmbeddedUrl(match[1]);
+
+    tryAddInternalHint(candidate, baseUrl, origin, output);
+  }
+
+  const jsonFieldMatches = raw.matchAll(
+    /(?:url|href|slug|path|pathname)["']?\s*:\s*["']([^"']+)["']/gi
+  );
+
+  for (const match of jsonFieldMatches) {
+    const candidate = normalizeEmbeddedUrl(match[1]);
+
+    tryAddInternalHint(candidate, baseUrl, origin, output);
+  }
+
+  return [...output].slice(0, 250);
+}
+
+function normalizeEmbeddedUrl(value: string) {
+  return String(value || "")
+    .replace(/\\\//g, "/")
+    .replace(/&amp;/gi, "&")
+    .trim();
+}
+
+function tryAddInternalHint(
+  value: string,
+  baseUrl: string,
+  origin: string,
+  output: Set<string>
+) {
+  if (!value) return;
+  if (/^(mailto:|tel:|javascript:|data:|#)/i.test(value)) return;
+
+  try {
+    const url = new URL(value, baseUrl);
+
+    if (url.origin !== origin) return;
+    if (isProbablyAsset(url.pathname)) return;
+    if (isUtilityUrl(url.pathname)) return;
+    if (isLikelyEncodedOrJunkUrl(url.pathname)) return;
+
+    output.add(cleanUrl(url.toString()));
+  } catch {
+    // Ignore bad hints.
+  }
 }
 
 function detectBlocked({
@@ -3387,12 +3730,7 @@ function buildFollowupScanFindings({
   ];
 }
 
-function buildFriendlyWarnings({
-  pages,
-}: {
-  pages: any[];
-  crawlResult: any;
-}) {
+function buildFriendlyWarnings({ pages }: { pages: any[] }) {
   const warnings: string[] = [];
   const readablePages = pages.filter(isReadablePage);
   const internalBlockedPages = pages.filter(
@@ -3590,8 +3928,7 @@ function calculateHealthScore({
     score -= baseDeduction * impactMultiplier;
   }
 
-  const blockedRatio =
-    blockedInternalPages.length / Math.max(1, pages.length);
+  const blockedRatio = blockedInternalPages.length / Math.max(1, pages.length);
 
   if (blockedInternalPages.length > 0 && readablePages.length >= 10) {
     score -= Math.min(8, Math.round(blockedRatio * 10));
@@ -3664,7 +4001,8 @@ function buildScanSummary({
       queued_remaining: crawlResult.queued_remaining,
     },
     scan_focus: {
-      max_pages_enforced: crawlResult.sitemap_priority_summary?.max_pages_enforced,
+      max_pages_enforced:
+        crawlResult.sitemap_priority_summary?.max_pages_enforced,
       topic_dossier_prefix:
         crawlResult.sitemap_priority_summary?.topic_dossier_prefix || "",
       important_page_patterns: crawlResult.important_page_patterns,
@@ -3673,9 +4011,13 @@ function buildScanSummary({
       skipped_junk_urls_count: crawlResult.skipped_junk_urls_count || 0,
       skipped_outside_prefix_count:
         crawlResult.skipped_outside_prefix_count || 0,
+      expanded_discovery_attempts:
+        crawlResult.expanded_discovery_attempts || 0,
+      expanded_discovery_added: crawlResult.expanded_discovery_added || 0,
+      discovery_hint_links_found: crawlResult.discovery_hint_links_found || 0,
       start_url_candidates: crawlResult.start_url_candidates || [],
       explanation:
-        "The scanner prioritized sitemap and internal URLs that looked like important landing pages, tried cleaner start URL variants, bypassed robots.txt crawl restrictions, and deprioritized listing, archive, news, tag, search, encoded, and very deep pages where appropriate.",
+        "The scanner prioritized sitemap and internal URLs that looked like important landing pages, tried cleaner start URL variants, extracted embedded URL hints, expanded discovery when the normal queue ran out, bypassed robots.txt crawl restrictions, and deprioritized listing, archive, news, tag, search, encoded, and very deep pages where appropriate.",
     },
   };
 }

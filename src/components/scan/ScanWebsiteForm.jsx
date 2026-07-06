@@ -1,403 +1,238 @@
 import React, { useMemo, useState } from "react";
 import {
   AlertCircle,
-  Bug,
+  BarChart3,
   CheckCircle2,
   ExternalLink,
-  HeartPulse,
   Loader2,
   Search,
   Sparkles,
-  Wrench,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { base44 } from "@/api/base44Client";
 
 const ADVANCED_SCANNER_FUNCTION = "runAdvancedScan";
 const AI_REVIEW_FUNCTION = "aiReviewScan";
-const DEFAULT_COMPETITOR_FIELDS = ["", "", ""];
 
 const DASHBOARD_LAST_SCAN_KEY = "seo_autopilot:last_scan";
 const DASHBOARD_HISTORY_KEY = "seo_autopilot:scan_history";
 
-export default function ScanWebsiteForm() {
-  const [websiteUrl, setWebsiteUrl] = useState("");
-  const [businessName, setBusinessName] = useState("");
-  const [businessType, setBusinessType] = useState("");
-  const [city, setCity] = useState("");
-  const [country, setCountry] = useState("us");
-  const [language, setLanguage] = useState("en");
-  const [scanMode, setScanMode] = useState("deep");
-  const [competitorUrls, setCompetitorUrls] = useState(
-    DEFAULT_COMPETITOR_FIELDS
+const LEGACY_LAST_SCAN_KEY = "SEO_AUTOPILOT_LAST_SCAN";
+const LEGACY_HISTORY_KEY = "SEO_AUTOPILOT_SCAN_HISTORY";
+
+const SCAN_MODES = [
+  {
+    value: "quick",
+    label: "Quick",
+    description: "Good first pass for smaller sites.",
+  },
+  {
+    value: "deep",
+    label: "Deep",
+    description: "Best default scan for most websites.",
+  },
+  {
+    value: "advanced",
+    label: "Advanced",
+    description: "Largest scan with deeper page discovery.",
+  },
+];
+
+export default function ScanWebsiteForm({
+  project = null,
+  competitors = [],
+  saving = false,
+  onScan = null,
+}) {
+  const [websiteUrl, setWebsiteUrl] = useState(project?.website_url || "");
+  const [businessName, setBusinessName] = useState(
+    project?.business_name || ""
   );
+  const [keywordsText, setKeywordsText] = useState(
+    Array.isArray(project?.important_keywords)
+      ? project.important_keywords.join("\n")
+      : ""
+  );
+  const [competitorUrlsText, setCompetitorUrlsText] = useState(
+    getInitialCompetitorUrls(project, competitors).join("\n")
+  );
+  const [scanMode, setScanMode] = useState(project?.scan_mode || "deep");
 
-  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [activeStep, setActiveStep] = useState("");
   const [error, setError] = useState("");
-
-  const [scanResult, setScanResult] = useState(null);
-  const [reviewResult, setReviewResult] = useState(null);
   const [finalResult, setFinalResult] = useState(null);
+  const [debugPayload, setDebugPayload] = useState(null);
 
-  const [showDebug, setShowDebug] = useState(false);
+  const isLoading = submitting || saving;
+
+  const cleanedKeywords = useMemo(() => {
+    return splitLines(keywordsText);
+  }, [keywordsText]);
 
   const cleanedCompetitorUrls = useMemo(() => {
-    return competitorUrls
-      .map((url) => String(url || "").trim())
-      .filter(Boolean);
-  }, [competitorUrls]);
-
-  const displayResult = finalResult || reviewResult || scanResult || {};
-
-  const fixes = useMemo(() => {
-    return pickFirstNonEmptyArray([
-      displayResult.cleaned_fixes,
-      displayResult.fixes,
-      displayResult.findings,
-      displayResult.recommendations,
-      displayResult.raw_fixes,
-      scanResult?.raw_fixes,
-      scanResult?.fixes,
-    ]);
-  }, [displayResult, scanResult]);
-
-  const pages = useMemo(() => {
-    return pickFirstNonEmptyArray([
-      displayResult.crawled_pages,
-      displayResult.pages,
-      scanResult?.crawled_pages,
-      scanResult?.pages,
-    ]);
-  }, [displayResult, scanResult]);
-
-  const healthReport =
-    displayResult.website_health_report ||
-    displayResult.scan_summary?.website_health_report ||
-    displayResult.scan_summary ||
-    null;
-
-  const healthScore =
-    numberOrNull(displayResult.health_score) ??
-    numberOrNull(displayResult.scan_summary?.score) ??
-    numberOrNull(scanResult?.health_score) ??
-    null;
-
-  const debugPayload = useMemo(() => {
-    return {
-      error,
-      functions: {
-        scanner: ADVANCED_SCANNER_FUNCTION,
-        ai_review: AI_REVIEW_FUNCTION,
-      },
-      scanner: {
-        scan_mode: scanResult?.scan_mode || "",
-        pages: safeArray(scanResult?.pages || scanResult?.crawled_pages).length,
-        fixes: safeArray(scanResult?.fixes || scanResult?.raw_fixes).length,
-        grouped_findings: safeArray(scanResult?.grouped_findings).length,
-        raw_findings: safeArray(scanResult?.raw_findings).length,
-        normalized_url: scanResult?.normalized_url || "",
-        domain: scanResult?.domain || "",
-        pages_found: scanResult?.pages_found || 0,
-        pages_crawled: scanResult?.pages_crawled || 0,
-        queued_remaining: scanResult?.queued_remaining || 0,
-        screaming_frog_lite_enabled:
-          scanResult?.screaming_frog_lite_enabled || false,
-        audit_profile: scanResult?.audit_profile || "",
-        crawl_scope: scanResult?.crawl_scope || null,
-        technical_audit_summary: scanResult?.technical_audit_summary || null,
-        competitor_urls_returned: scanResult?.competitor_urls || [],
-        competitor_results: safeArray(scanResult?.competitor_results).length,
-        competitor_page_snapshots: safeArray(
-          scanResult?.competitor_page_snapshots
-        ).length,
-        competitor_comparison_exists: Boolean(
-          scanResult?.competitor_comparison
-        ),
-        first_competitor_results: safeArray(
-          scanResult?.competitor_results
-        ).slice(0, 5),
-        first_competitor_snapshots: safeArray(
-          scanResult?.competitor_page_snapshots
-        )
-          .slice(0, 5)
-          .map((item) => ({
-            competitor_name: item.competitor_name,
-            competitor_domain: item.competitor_domain,
-            competitor_url: item.competitor_url,
-            status_code: item.status_code,
-            title: item.title,
-            word_count: item.word_count,
-            fetch_error: item.fetch_error,
-          })),
-        client_rendering: scanResult?.client_rendering || null,
-        first_pages: safeArray(scanResult?.pages || scanResult?.crawled_pages)
-          .slice(0, 10)
-          .map((page) => ({
-            url: page.url,
-            status_code: page.status_code,
-            title: page.title,
-            word_count: page.word_count,
-            internal_links: page.internal_link_count,
-            likely_client_rendered: page.likely_client_rendered,
-            fetch_error: page.fetch_error,
-          })),
-        crawl_warnings: scanResult?.crawl_warnings || [],
-        error: scanResult?.error || "",
-      },
-      ai_review: {
-        pages: safeArray(reviewResult?.pages || reviewResult?.crawled_pages)
-          .length,
-        fixes: safeArray(reviewResult?.fixes || reviewResult?.raw_fixes).length,
-        cleaned_fixes: safeArray(reviewResult?.cleaned_fixes).length,
-        recommended_actions: safeArray(reviewResult?.recommended_actions).length,
-        provider: reviewResult?.ai_provider || "",
-        error: reviewResult?.error || "",
-        warning: reviewResult?.ai_review_warning || "",
-      },
-      final: {
-        pages: pages.length,
-        fixes: fixes.length,
-        competitor_insights: safeArray(displayResult.competitor_insights).length,
-        health_score: healthScore,
-      },
-    };
-  }, [
-    error,
-    scanResult,
-    reviewResult,
-    displayResult,
-    fixes.length,
-    pages.length,
-    healthScore,
-  ]);
+    return splitLines(competitorUrlsText);
+  }, [competitorUrlsText]);
 
   async function handleSubmit(event) {
     event.preventDefault();
 
-    setLoading(true);
     setError("");
-    setScanResult(null);
-    setReviewResult(null);
     setFinalResult(null);
+    setDebugPayload(null);
+
+    const normalizedUrl = normalizeWebsiteUrl(websiteUrl);
+
+    if (!normalizedUrl) {
+      setError("Enter a valid website URL.");
+      return;
+    }
+
+    if (!businessName.trim()) {
+      setError("Enter the business or website name.");
+      return;
+    }
+
+    setSubmitting(true);
 
     try {
-      const scannerPayload = {
-        website_url: String(websiteUrl || "").trim(),
-        business_name: String(businessName || "").trim(),
-        business_type: String(businessType || "").trim(),
-        city: String(city || "").trim(),
-        country: String(country || "us").trim().toLowerCase(),
-        language: String(language || "en").trim().toLowerCase(),
+      const formPayload = {
+        website_url: normalizedUrl,
+        business_name: businessName.trim(),
+        important_keywords: cleanedKeywords,
+        competitor_urls: cleanedCompetitorUrls,
         scan_mode: scanMode,
-        enable_screaming_frog_lite: true,
+      };
 
+      if (typeof onScan === "function") {
+        await onScan(formPayload);
+        return;
+      }
+
+      setActiveStep("Scanning website");
+
+      const scanPayload = {
+        website_url: normalizedUrl,
+        business_name: businessName.trim(),
+        important_keywords: cleanedKeywords,
+        competitor_urls: cleanedCompetitorUrls,
+        scan_mode: scanMode,
+
+        enable_screaming_frog_lite: true,
         force_internal_crawl: true,
         respect_robots_txt: false,
 
-        competitor_urls: cleanedCompetitorUrls,
+        source: "scan_website_page",
+        requested_at: new Date().toISOString(),
       };
 
       const scannerResponse = await callBase44Function(
         ADVANCED_SCANNER_FUNCTION,
-        scannerPayload
+        scanPayload
       );
 
-      const normalizedScanner = normalizeFunctionResponse(scannerResponse);
+      const scanData = normalizeFunctionResponse(scannerResponse);
 
-      setScanResult(normalizedScanner);
-
-      if (normalizedScanner?.success === false) {
-        throw new Error(
-          normalizedScanner?.error ||
-            "The scanner failed before the AI review could run."
-        );
+      if (scanData?.success === false || scanData?.error) {
+        throw new Error(scanData.error || "Website scan failed.");
       }
 
-      const aiPayload = {
-        ...scannerPayload,
+      setActiveStep("Reviewing recommendations with Gemini");
 
-        website_url:
-          normalizedScanner.normalized_url ||
-          normalizedScanner.website_url ||
-          scannerPayload.website_url,
-
-        normalized_url:
-          normalizedScanner.normalized_url || scannerPayload.website_url,
-
-        domain: normalizedScanner.domain || "",
-
-        crawled_pages:
-          normalizedScanner.crawled_pages ||
-          normalizedScanner.pages ||
-          normalizedScanner.scanned_pages ||
-          [],
-
-        pages:
-          normalizedScanner.pages ||
-          normalizedScanner.crawled_pages ||
-          normalizedScanner.scanned_pages ||
-          [],
-
-        raw_fixes:
-          normalizedScanner.raw_fixes ||
-          normalizedScanner.grouped_findings ||
-          normalizedScanner.raw_findings ||
-          normalizedScanner.fixes ||
-          [],
-
-        grouped_findings:
-          normalizedScanner.grouped_findings ||
-          normalizedScanner.raw_fixes ||
-          normalizedScanner.fixes ||
-          [],
-
-        raw_findings:
-          normalizedScanner.raw_findings ||
-          normalizedScanner.raw_fixes ||
-          normalizedScanner.fixes ||
-          [],
-
-        fixes:
-          normalizedScanner.fixes ||
-          normalizedScanner.raw_fixes ||
-          normalizedScanner.grouped_findings ||
-          [],
-
-        scan_summary:
-          normalizedScanner.scan_summary || normalizedScanner.site_summary || {},
-
-        health_score: normalizedScanner.health_score,
-
-        technical_audit_summary:
-          normalizedScanner.technical_audit_summary || null,
-
-        screaming_frog_lite_enabled:
-          normalizedScanner.screaming_frog_lite_enabled || false,
-
-        audit_profile: normalizedScanner.audit_profile || "",
-
-        crawl_warnings: normalizedScanner.crawl_warnings || [],
-        crawl_scope: normalizedScanner.crawl_scope || null,
-
-        client_rendering: normalizedScanner.client_rendering || null,
-
-        competitor_urls:
-          normalizedScanner.competitor_urls || cleanedCompetitorUrls,
-        competitor_results: normalizedScanner.competitor_results || [],
-        competitor_page_snapshots:
-          normalizedScanner.competitor_page_snapshots || [],
-        competitor_comparison: normalizedScanner.competitor_comparison || null,
-
-        pages_found: normalizedScanner.pages_found || 0,
-        pages_crawled: normalizedScanner.pages_crawled || 0,
-        queued_remaining: normalizedScanner.queued_remaining || 0,
-      };
-
-      let normalizedReview = null;
+      let aiData = null;
 
       try {
-        const reviewResponse = await callBase44Function(
+        const aiPayload = {
+          business_name: businessName.trim(),
+          website_url: normalizedUrl,
+          important_keywords: cleanedKeywords,
+          scan_mode: scanMode,
+
+          crawled_pages: firstArray([
+            scanData.crawled_pages,
+            scanData.pages,
+            scanData.scanned_pages,
+            scanData.crawl_pages,
+          ]),
+
+          raw_fixes: firstArray([
+            scanData.raw_fixes,
+            scanData.grouped_findings,
+            scanData.raw_findings,
+            scanData.fixes,
+            scanData.findings,
+            scanData.recommendations,
+            scanData.issues,
+          ]),
+
+          competitor_results: firstArray([
+            scanData.competitor_results,
+            scanData.discovered_competitors,
+            scanData.competitor_opportunities,
+          ]),
+
+          discovered_competitors: firstArray([
+            scanData.discovered_competitors,
+            scanData.created_competitors,
+          ]),
+
+          crawl_warnings: firstArray([scanData.crawl_warnings]),
+          technical_audit_summary: scanData.technical_audit_summary || {},
+          scan_summary: scanData.scan_summary || scanData.site_summary || {},
+        };
+
+        const aiResponse = await callBase44Function(
           AI_REVIEW_FUNCTION,
           aiPayload
         );
 
-        normalizedReview = normalizeFunctionResponse(reviewResponse);
+        aiData = normalizeFunctionResponse(aiResponse);
 
-        setReviewResult(normalizedReview);
+        if (aiData?.success === false && aiData?.error) {
+          console.warn("AI review returned an error.", aiData.error);
+        }
       } catch (aiError) {
-        normalizedReview = {
-          success: true,
-          ai_provider: "frontend_fallback",
-          ai_review_warning:
-            aiError?.message ||
-            "AI review failed, so scanner recommendations are shown.",
-          cleaned_fixes: aiPayload.raw_fixes,
-          fixes: aiPayload.raw_fixes,
-          recommendations: aiPayload.raw_fixes,
-          crawled_pages: aiPayload.crawled_pages,
-          pages: aiPayload.pages,
-          health_score: aiPayload.health_score,
-          scan_summary: aiPayload.scan_summary,
-          competitor_insights: [],
-        };
-
-        setReviewResult(normalizedReview);
+        console.warn("AI review was skipped or failed.", aiError);
       }
 
-      const mergedFinal = {
-        ...normalizedScanner,
-        ...normalizedReview,
+      setActiveStep("Saving scan to Fix List");
 
-        crawled_pages:
-          normalizedReview?.crawled_pages ||
-          normalizedReview?.pages ||
-          normalizedScanner?.crawled_pages ||
-          normalizedScanner?.pages ||
-          [],
-
-        pages:
-          normalizedReview?.pages ||
-          normalizedReview?.crawled_pages ||
-          normalizedScanner?.pages ||
-          normalizedScanner?.crawled_pages ||
-          [],
-
-        cleaned_fixes:
-          normalizedReview?.cleaned_fixes ||
-          normalizedReview?.fixes ||
-          normalizedScanner?.raw_fixes ||
-          normalizedScanner?.fixes ||
-          [],
-
-        fixes:
-          normalizedReview?.fixes ||
-          normalizedReview?.cleaned_fixes ||
-          normalizedScanner?.fixes ||
-          normalizedScanner?.raw_fixes ||
-          [],
-
-        recommendations:
-          normalizedReview?.recommendations ||
-          normalizedReview?.fixes ||
-          normalizedScanner?.recommendations ||
-          normalizedScanner?.fixes ||
-          [],
-
-        health_score:
-          normalizedReview?.health_score ??
-          normalizedScanner?.health_score ??
-          normalizedReview?.scan_summary?.score ??
-          normalizedScanner?.scan_summary?.score,
-
-        competitor_insights:
-          normalizedReview?.competitor_insights ||
-          normalizedScanner?.competitor_insights ||
-          [],
-      };
-
-      saveScanForDashboard({
-        result: mergedFinal,
-        scannerPayload,
-        normalizedScanner,
-        normalizedReview,
+      const mergedFinal = mergeScanAndAiReview({
+        scanData,
+        aiData,
+        websiteUrl: normalizedUrl,
+        businessName: businessName.trim(),
+        scanMode,
       });
 
+      saveScanForDashboard(mergedFinal);
+
       setFinalResult(mergedFinal);
+      setDebugPayload({
+        scanner_function: ADVANCED_SCANNER_FUNCTION,
+        ai_function: AI_REVIEW_FUNCTION,
+        scan_payload: scanPayload,
+        scanner_response: scanData,
+        ai_response: aiData,
+        saved_record: mergedFinal,
+      });
     } catch (err) {
-      setError(err?.message || "Scan failed.");
+      console.error("Website scan failed.", err);
+      setError(
+        err?.message ||
+          "The website scan failed. Check the backend function logs and try again."
+      );
     } finally {
-      setLoading(false);
+      setActiveStep("");
+      setSubmitting(false);
     }
   }
 
-  function updateCompetitorUrl(index, value) {
-    setCompetitorUrls((current) =>
-      current.map((item, itemIndex) => (itemIndex === index ? value : item))
-    );
-  }
+  const resultFixes = getRecommendations(finalResult);
+  const resultPages = getPages(finalResult);
+  const resultScore = getHealthScore(finalResult);
 
   return (
     <div className="space-y-6">
@@ -407,139 +242,143 @@ export default function ScanWebsiteForm() {
       >
         <div className="flex items-start gap-3">
           <div className="rounded-2xl bg-blue-50 p-3 text-blue-700">
-            <Search className="h-5 w-5" />
+            <Search className="h-6 w-6" />
           </div>
 
           <div>
-            <h2 className="text-xl font-semibold text-slate-950">
-              Scan a website
+            <h2 className="text-2xl font-bold text-slate-950">
+              Scan Website
             </h2>
-            <p className="mt-1 text-sm text-slate-600">
-              Crawl the site, review technical setup, and create plain-English
-              recommendations.
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+              Run the advanced scanner, review the results with Gemini, and sync
+              the completed scan directly to the Fix List.
             </p>
           </div>
         </div>
 
-        <div className="mt-6 grid gap-5 md:grid-cols-2">
-          <div className="md:col-span-2">
-            <Label htmlFor="website_url">Website URL</Label>
+        <div className="mt-6 grid gap-5">
+          <div>
+            <label className="text-sm font-medium text-slate-700">
+              Website URL
+            </label>
             <Input
-              id="website_url"
               value={websiteUrl}
               onChange={(event) => setWebsiteUrl(event.target.value)}
-              placeholder="https://www.example.com/en"
-              required
+              placeholder="https://www.example.com/"
+              disabled={isLoading}
               className="mt-2"
             />
           </div>
 
           <div>
-            <Label htmlFor="business_name">Business name</Label>
+            <label className="text-sm font-medium text-slate-700">
+              Business or website name
+            </label>
             <Input
-              id="business_name"
               value={businessName}
               onChange={(event) => setBusinessName(event.target.value)}
               placeholder="Example Business"
+              disabled={isLoading}
               className="mt-2"
             />
           </div>
 
           <div>
-            <Label htmlFor="business_type">Business type</Label>
-            <Input
-              id="business_type"
-              value={businessType}
-              onChange={(event) => setBusinessType(event.target.value)}
-              placeholder="Activity booking, restaurant, dentist..."
-              className="mt-2"
+            <label className="text-sm font-medium text-slate-700">
+              Important keywords
+            </label>
+            <textarea
+              value={keywordsText}
+              onChange={(event) => setKeywordsText(event.target.value)}
+              placeholder={"seo agency\nlocal plumber\nbest activities in paris"}
+              disabled={isLoading}
+              rows={4}
+              className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50"
             />
+            <p className="mt-1 text-xs text-slate-500">
+              One keyword per line. Optional, but helpful.
+            </p>
           </div>
 
           <div>
-            <Label htmlFor="city">City</Label>
-            <Input
-              id="city"
-              value={city}
-              onChange={(event) => setCity(event.target.value)}
-              placeholder="Paris"
-              className="mt-2"
+            <label className="text-sm font-medium text-slate-700">
+              Competitor URLs
+            </label>
+            <textarea
+              value={competitorUrlsText}
+              onChange={(event) => setCompetitorUrlsText(event.target.value)}
+              placeholder={"https://www.competitor-one.com/\nhttps://www.competitor-two.com/"}
+              disabled={isLoading}
+              rows={4}
+              className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50"
             />
+            <p className="mt-1 text-xs text-slate-500">
+              Optional. One competitor URL per line.
+            </p>
           </div>
 
           <div>
-            <Label htmlFor="country">Country</Label>
-            <Input
-              id="country"
-              value={country}
-              onChange={(event) => setCountry(event.target.value)}
-              placeholder="fr"
-              className="mt-2"
-            />
-          </div>
+            <label className="text-sm font-medium text-slate-700">
+              Scan depth
+            </label>
 
-          <div>
-            <Label htmlFor="language">Language</Label>
-            <select
-              id="language"
-              value={language}
-              onChange={(event) => setLanguage(event.target.value)}
-              className="mt-2 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900"
-            >
-              <option value="en">English</option>
-              <option value="fr">French</option>
-              <option value="nl">Dutch</option>
-              <option value="es">Spanish</option>
-              <option value="de">German</option>
-              <option value="it">Italian</option>
-              <option value="pt">Portuguese</option>
-            </select>
-          </div>
-
-          <div>
-            <Label htmlFor="scan_mode">Scan depth</Label>
-            <select
-              id="scan_mode"
-              value={scanMode}
-              onChange={(event) => setScanMode(event.target.value)}
-              className="mt-2 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900"
-            >
-              <option value="basic">Basic</option>
-              <option value="quick">Quick</option>
-              <option value="deep">Deep</option>
-              <option value="advanced">Advanced</option>
-            </select>
-          </div>
-
-          <div className="md:col-span-2">
-            <Label>Competitor URLs</Label>
             <div className="mt-2 grid gap-3 md:grid-cols-3">
-              {competitorUrls.map((url, index) => (
-                <Input
-                  key={index}
-                  value={url}
-                  onChange={(event) =>
-                    updateCompetitorUrl(index, event.target.value)
-                  }
-                  placeholder={`Competitor ${index + 1}`}
-                />
-              ))}
+              {SCAN_MODES.map((mode) => {
+                const active = scanMode === mode.value;
+
+                return (
+                  <button
+                    key={mode.value}
+                    type="button"
+                    disabled={isLoading}
+                    onClick={() => setScanMode(mode.value)}
+                    className={`rounded-2xl border p-4 text-left transition ${
+                      active
+                        ? "border-blue-500 bg-blue-50 text-blue-950"
+                        : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {active ? (
+                        <CheckCircle2 className="h-4 w-4 text-blue-700" />
+                      ) : (
+                        <div className="h-4 w-4 rounded-full border border-slate-300" />
+                      )}
+
+                      <span className="font-semibold">{mode.label}</span>
+                    </div>
+
+                    <p className="mt-2 text-xs leading-5 text-slate-500">
+                      {mode.description}
+                    </p>
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
 
         {error ? (
-          <div className="mt-5 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-            <div className="flex gap-2">
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="mt-0.5 h-4 w-4" />
               <span>{error}</span>
             </div>
           </div>
         ) : null}
 
-        <div className="mt-6 flex flex-wrap items-center gap-3">
-          <Button type="submit" disabled={loading}>
-            {loading ? (
+        {isLoading ? (
+          <div className="mt-6 rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
+            <div className="flex items-center gap-3">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>{activeStep || "Running scan..."}</span>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
+          <Button type="submit" disabled={isLoading}>
+            {isLoading ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 Scanning...
@@ -547,418 +386,409 @@ export default function ScanWebsiteForm() {
             ) : (
               <>
                 <Search className="mr-2 h-4 w-4" />
-                Start scan
+                Run website scan
               </>
             )}
           </Button>
 
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setShowDebug((value) => !value)}
-          >
-            <Bug className="mr-2 h-4 w-4" />
-            {showDebug ? "Hide debug" : "Show debug"}
-          </Button>
+          <p className="text-xs text-slate-500">
+            Uses <span className="font-mono">{ADVANCED_SCANNER_FUNCTION}</span>{" "}
+            and syncs to the Fix List.
+          </p>
         </div>
       </form>
 
-      {displayResult && Object.keys(displayResult).length > 0 ? (
-        <ResultsView
-          result={displayResult}
-          fixes={fixes}
-          pages={pages}
-          healthReport={healthReport}
-          healthScore={healthScore}
-        />
-      ) : null}
-
-      {showDebug ? (
-        <div className="rounded-3xl border border-slate-200 bg-slate-950 p-5 text-slate-100 shadow-sm">
-          <div className="mb-3 flex items-center gap-2">
-            <Bug className="h-4 w-4" />
-            <h3 className="font-semibold">Debug output</h3>
-          </div>
-          <pre className="max-h-[520px] overflow-auto whitespace-pre-wrap text-xs leading-5">
-            {JSON.stringify(debugPayload, null, 2)}
-          </pre>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function ResultsView({ result, fixes, pages, healthReport, healthScore }) {
-  const competitorInsights = safeArray(result?.competitor_insights);
-  const warnings = safeArray(result?.crawl_warnings);
-  const provider = result?.ai_provider || "";
-
-  return (
-    <div className="space-y-6">
-      <HealthSummary
-        healthReport={healthReport}
-        healthScore={healthScore}
-        pages={pages}
-        fixes={fixes}
-        provider={provider}
-      />
-
-      {warnings.length > 0 ? (
-        <div className="rounded-3xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
-          <div className="mb-2 flex items-center gap-2 font-semibold">
-            <AlertCircle className="h-4 w-4" />
-            Scan notes
-          </div>
-          <ul className="space-y-1">
-            {warnings.map((warning, index) => (
-              <li key={index}>• {warning}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      {competitorInsights.length > 0 ? (
+      {finalResult ? (
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="mb-4 flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-purple-700" />
-            <h3 className="text-lg font-semibold text-slate-950">
-              Competitor opportunities
-            </h3>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            {competitorInsights.map((insight, index) => (
-              <div
-                key={index}
-                className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
-              >
-                <h4 className="font-semibold text-slate-950">
-                  {insight.headline || insight.title || "Competitor insight"}
-                </h4>
-                {insight.evidence ? (
-                  <p className="mt-2 text-sm text-slate-600">
-                    {insight.evidence}
-                  </p>
-                ) : null}
-                {insight.what_to_add || insight.recommended_action ? (
-                  <p className="mt-3 text-sm font-medium text-slate-800">
-                    What to add:{" "}
-                    {insight.what_to_add || insight.recommended_action}
-                  </p>
-                ) : null}
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            <div>
+              <div className="flex items-center gap-2 text-sm font-semibold text-emerald-700">
+                <CheckCircle2 className="h-4 w-4" />
+                Scan complete
               </div>
-            ))}
-          </div>
-        </section>
-      ) : null}
 
-      <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="mb-4 flex items-center gap-2">
-          <Wrench className="h-5 w-5 text-blue-700" />
-          <h3 className="text-lg font-semibold text-slate-950">
-            Recommended fixes
-          </h3>
-        </div>
+              <h2 className="mt-2 text-2xl font-bold text-slate-950">
+                Fix List updated
+              </h2>
 
-        {fixes.length === 0 ? (
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">
-            No fixes were returned from this scan.
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {fixes.map((fix, index) => (
-              <FindingCard key={fix.id || fix.fix_id || index} fix={fix} />
-            ))}
-          </div>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function HealthSummary({ healthReport, healthScore, pages, fixes, provider }) {
-  const score =
-    numberOrNull(healthReport?.health_score) ?? numberOrNull(healthScore);
-
-  const grade =
-    healthReport?.health_grade ||
-    healthReport?.status_label ||
-    scoreToLabel(score);
-
-  const summary =
-    healthReport?.overall_explanation ||
-    healthReport?.plain_english_summary ||
-    "The scan completed. Review the recommendations below.";
-
-  const whatIsWorking = safeArray(healthReport?.what_is_working);
-  const topConcerns = safeArray(healthReport?.top_concerns);
-  const quickWins = safeArray(healthReport?.quick_wins);
-  const biggerProjects = safeArray(healthReport?.bigger_projects);
-
-  return (
-    <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-      <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <HeartPulse className="h-5 w-5 text-emerald-700" />
-            <h3 className="text-lg font-semibold text-slate-950">
-              Website health
-            </h3>
-          </div>
-
-          <p className="mt-3 max-w-3xl text-base leading-7 text-slate-700">
-            {summary}
-          </p>
-
-          {provider ? (
-            <p className="mt-2 text-xs text-slate-500">
-              AI review provider: {provider}
-            </p>
-          ) : null}
-        </div>
-
-        <div className="rounded-3xl bg-slate-950 px-6 py-5 text-white">
-          <div className="text-sm text-slate-300">Health score</div>
-          <div className="mt-1 text-4xl font-bold">
-            {score === null ? "—" : `${score}`}
-            {score !== null ? <span className="text-xl">/100</span> : null}
-          </div>
-          <div className="mt-1 text-sm text-slate-300">{grade}</div>
-        </div>
-      </div>
-
-      <div className="mt-6 grid gap-3 md:grid-cols-3">
-        <MetricCard label="Pages scanned" value={pages.length} />
-        <MetricCard label="Recommendations" value={fixes.length} />
-        <MetricCard
-          label="High priority"
-          value={
-            fixes.filter((fix) =>
-              ["critical", "high"].includes(String(fix.priority))
-            ).length
-          }
-        />
-      </div>
-
-      <div className="mt-6 grid gap-4 lg:grid-cols-2">
-        {whatIsWorking.length > 0 ? (
-          <HealthList
-            title="What is working"
-            icon={<CheckCircle2 className="h-4 w-4 text-emerald-700" />}
-            items={whatIsWorking}
-          />
-        ) : null}
-
-        {quickWins.length > 0 ? (
-          <HealthCards
-            title="Quick wins"
-            icon={<Sparkles className="h-4 w-4 text-purple-700" />}
-            items={quickWins}
-          />
-        ) : null}
-
-        {topConcerns.length > 0 ? (
-          <HealthCards
-            title="Top concerns"
-            icon={<AlertCircle className="h-4 w-4 text-amber-700" />}
-            items={topConcerns}
-          />
-        ) : null}
-
-        {biggerProjects.length > 0 ? (
-          <HealthCards
-            title="For your web person"
-            icon={<Wrench className="h-4 w-4 text-blue-700" />}
-            items={biggerProjects}
-          />
-        ) : null}
-      </div>
-
-      {healthReport?.next_best_step ? (
-        <div className="mt-5 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
-          <strong>Next best step:</strong> {healthReport.next_best_step}
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
-function MetricCard({ label, value }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-      <div className="text-sm text-slate-500">{label}</div>
-      <div className="mt-1 text-2xl font-semibold text-slate-950">{value}</div>
-    </div>
-  );
-}
-
-function HealthList({ title, icon, items }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-      <div className="mb-3 flex items-center gap-2 font-semibold text-slate-950">
-        {icon}
-        {title}
-      </div>
-      <ul className="space-y-2 text-sm text-slate-700">
-        {items.slice(0, 5).map((item, index) => (
-          <li key={index}>• {String(item)}</li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function HealthCards({ title, icon, items }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-      <div className="mb-3 flex items-center gap-2 font-semibold text-slate-950">
-        {icon}
-        {title}
-      </div>
-
-      <div className="space-y-3">
-        {items.slice(0, 4).map((item, index) => (
-          <div key={index} className="rounded-xl bg-white p-3">
-            <div className="font-medium text-slate-950">
-              {item.title || item.headline || item.action || String(item)}
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+                This scan was saved to local storage and the dashboard was
+                notified. Open the Fix List to see the synced recommendations.
+              </p>
             </div>
 
-            {item.plain_english_explanation ||
-            item.explanation ||
-            item.action ? (
-              <p className="mt-1 text-sm text-slate-600">
-                {item.plain_english_explanation ||
-                  item.explanation ||
-                  item.action}
-              </p>
-            ) : null}
-
-            {item.why_it_matters || item.why || item.expected_benefit ? (
-              <p className="mt-1 text-xs text-slate-500">
-                {item.why_it_matters || item.why || item.expected_benefit}
-              </p>
-            ) : null}
+            <Button asChild variant="outline">
+              <a href="/dashboard">
+                <ExternalLink className="mr-2 h-4 w-4" />
+                View Fix List
+              </a>
+            </Button>
           </div>
-        ))}
-      </div>
+
+          <div className="mt-6 grid gap-4 md:grid-cols-3">
+            <MetricCard
+              icon={<BarChart3 className="h-5 w-5" />}
+              label="Website Health"
+              value={resultScore ? `${resultScore}/100` : "Ready"}
+            />
+
+            <MetricCard
+              icon={<Search className="h-5 w-5" />}
+              label="Pages scanned"
+              value={resultPages.length || finalResult.pages_crawled || 0}
+            />
+
+            <MetricCard
+              icon={<Sparkles className="h-5 w-5" />}
+              label="Recommendations"
+              value={resultFixes.length}
+            />
+          </div>
+
+          {Array.isArray(finalResult.crawl_warnings) &&
+          finalResult.crawl_warnings.length > 0 ? (
+            <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              <div className="font-semibold">Scan notes</div>
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                {finalResult.crawl_warnings.slice(0, 4).map((warning, index) => (
+                  <li key={index}>{warning}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {resultFixes.length > 0 ? (
+            <div className="mt-6">
+              <h3 className="font-semibold text-slate-950">
+                Top recommendations
+              </h3>
+
+              <div className="mt-3 space-y-3">
+                {resultFixes.slice(0, 5).map((fix, index) => (
+                  <RecommendationCard key={index} fix={fix} />
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-600">
+              No recommendations were returned by this scan.
+            </div>
+          )}
+
+          {debugPayload ? (
+            <details className="mt-6">
+              <summary className="cursor-pointer text-sm font-medium text-slate-600">
+                Debug scan payload
+              </summary>
+
+              <pre className="mt-3 max-h-[420px] overflow-auto rounded-2xl bg-slate-950 p-4 text-xs leading-5 text-slate-100">
+                {JSON.stringify(debugPayload, null, 2)}
+              </pre>
+            </details>
+          ) : null}
+        </section>
+      ) : null}
     </div>
   );
 }
 
-function FindingCard({ fix }) {
-  const priority = String(fix.priority || "medium");
-  const category = fix.customer_category || friendlyCategory(fix.category);
-  const affectedPages = buildFriendlyAffectedPages(fix);
-  const steps = safeArray(
-    fix.what_to_do || fix.what_to_do_steps || fix.fix_steps
-  );
-
-  const isBrokenPage =
-    String(fix.category || "").includes("404") ||
-    String(fix.category || "").includes("broken") ||
-    String(fix.customer_category || "").toLowerCase().includes("broken");
-
+function MetricCard({ icon, label, value }) {
   return (
-    <article className="rounded-3xl border border-slate-200 bg-white p-5">
-      <div className="flex flex-wrap gap-2">
-        <Badge>{priority}</Badge>
-        <Badge>{category}</Badge>
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+      <div className="flex items-center gap-2 text-slate-500">
+        {icon}
+        <span className="text-sm font-medium">{label}</span>
       </div>
-
-      <h4 className="mt-4 text-xl font-semibold text-slate-950">
-        {fix.issue_title || fix.title || "Website recommendation"}
-      </h4>
-
-      <p className="mt-2 text-base leading-7 text-slate-600">
-        {fix.plain_english_explanation ||
-          fix.plain_english_summary ||
-          "This was found during the website scan."}
-      </p>
-
-      {isBrokenPage ? (
-        <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          <strong>Plain-English note:</strong> These pages may be old links,
-          hidden pages, unavailable pages, or pages that blocked the scanner.
-          Review the examples before assuming visitors are seeing a problem.
-        </div>
-      ) : null}
-
-      {fix.why_it_matters ? (
-        <div className="mt-4">
-          <div className="text-sm font-semibold text-slate-950">
-            Why this matters
-          </div>
-          <p className="mt-1 text-sm leading-6 text-slate-600">
-            {fix.why_it_matters}
-          </p>
-        </div>
-      ) : null}
-
-      {steps.length > 0 ? (
-        <div className="mt-4">
-          <div className="text-sm font-semibold text-slate-950">
-            What to do next
-          </div>
-          <ol className="mt-2 space-y-1 text-sm leading-6 text-slate-600">
-            {steps.slice(0, 5).map((step, index) => (
-              <li key={index}>
-                {index + 1}. {step}
-              </li>
-            ))}
-          </ol>
-        </div>
-      ) : null}
-
-      {affectedPages.length > 0 ? (
-        <div className="mt-5">
-          <div className="text-sm font-semibold text-slate-950">
-            Example affected pages
-          </div>
-
-          <div className="mt-2 grid gap-2">
-            {affectedPages.slice(0, 6).map((page, index) => (
-              <div
-                key={`${page.path}-${index}`}
-                className="rounded-2xl border border-slate-200 bg-slate-50 p-3"
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium text-slate-900">
-                    {page.label}
-                  </span>
-
-                  {page.statusCode ? (
-                    <span className="rounded-full bg-white px-2 py-0.5 text-xs text-slate-600">
-                      Status {page.statusCode}
-                    </span>
-                  ) : null}
-                </div>
-
-                <div className="mt-1 flex items-center gap-1 text-xs text-slate-500">
-                  <ExternalLink className="h-3 w-3" />
-                  <code>{page.path}</code>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {affectedPages.length > 6 ? (
-            <p className="mt-2 text-xs text-slate-500">
-              Plus {affectedPages.length - 6} more affected page
-              {affectedPages.length - 6 === 1 ? "" : "s"}.
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-    </article>
+      <div className="mt-2 text-2xl font-bold text-slate-950">{value}</div>
+    </div>
   );
 }
 
-function Badge({ children }) {
+function RecommendationCard({ fix }) {
+  const title =
+    fix.issue_title ||
+    fix.title ||
+    fix.name ||
+    fix.recommendation_title ||
+    "Website recommendation";
+
+  const description =
+    fix.plain_english_explanation ||
+    fix.description ||
+    fix.explanation ||
+    fix.recommendation ||
+    fix.ai_recommendation ||
+    fix.suggested_fix ||
+    "Review this recommendation in the Fix List.";
+
+  const priority = fix.priority || "medium";
+
+  const pages = getAffectedPages(fix);
+
   return (
-    <span className="rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-700">
-      {children}
-    </span>
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+      <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+        <div>
+          <h4 className="font-semibold text-slate-950">{title}</h4>
+          <p className="mt-1 text-sm leading-6 text-slate-600">
+            {description}
+          </p>
+        </div>
+
+        <span className="w-fit rounded-full bg-white px-3 py-1 text-xs font-semibold capitalize text-slate-600">
+          {priority}
+        </span>
+      </div>
+
+      {pages.length > 0 ? (
+        <div className="mt-3 text-xs text-slate-500">
+          Affected: {pages.slice(0, 3).join(", ")}
+          {pages.length > 3 ? ` +${pages.length - 3} more` : ""}
+        </div>
+      ) : null}
+    </div>
   );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Merge scanner + AI review                                                   */
+/* -------------------------------------------------------------------------- */
+
+function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, scanMode }) {
+  const aiFixes = firstArray([
+    aiData?.cleaned_fixes,
+    aiData?.raw_fixes,
+    aiData?.fixes,
+    aiData?.findings,
+    aiData?.recommendations,
+  ]);
+
+  const scannerFixes = firstArray([
+    scanData?.raw_fixes,
+    scanData?.grouped_findings,
+    scanData?.raw_findings,
+    scanData?.fixes,
+    scanData?.findings,
+    scanData?.recommendations,
+    scanData?.issues,
+  ]);
+
+  const finalFixes = aiFixes.length > 0 ? aiFixes : scannerFixes;
+
+  const pages = firstArray([
+    scanData?.crawled_pages,
+    scanData?.pages,
+    scanData?.scanned_pages,
+    scanData?.crawl_pages,
+    aiData?.crawled_pages,
+    aiData?.pages,
+  ]);
+
+  const healthScore = getFirstNumber([
+    aiData?.health_score,
+    aiData?.seo_score,
+    aiData?.website_health_report?.score,
+    aiData?.scan_summary?.health_score,
+    scanData?.health_score,
+    scanData?.seo_score,
+    scanData?.website_health_report?.score,
+    scanData?.scan_summary?.health_score,
+  ]);
+
+  const pagesCrawled = getFirstNumber([
+    scanData?.pages_crawled,
+    scanData?.pages_scanned,
+    scanData?.technical_audit_summary?.pages_checked,
+    pages.length,
+  ]);
+
+  const pagesFound = getFirstNumber([
+    scanData?.pages_found,
+    scanData?.pages_discovered,
+    scanData?.pages_crawled,
+    pages.length,
+  ]);
+
+  const crawlWarnings = firstArray([
+    scanData?.crawl_warnings,
+    aiData?.crawl_warnings,
+  ]);
+
+  const competitorResult =
+    scanData?.competitor_result ||
+    scanData?.competitor_results ||
+    scanData?.competitor_analysis ||
+    aiData?.competitor_result ||
+    aiData?.competitor_results ||
+    {};
+
+  return {
+    id: `scan_${Date.now()}`,
+    created_at: new Date().toISOString(),
+    website_url: websiteUrl,
+    business_name: businessName,
+    scan_mode: scanMode,
+
+    health_score: healthScore || 0,
+    seo_score: healthScore || 0,
+    pages_crawled: pagesCrawled || pages.length || 0,
+    pages_found: pagesFound || pages.length || 0,
+
+    recommendations: finalFixes,
+    fixes: finalFixes,
+    findings: finalFixes,
+
+    crawled_pages: pages,
+    pages,
+    scanned_pages: pages,
+
+    scan_summary:
+      aiData?.scan_summary ||
+      scanData?.scan_summary ||
+      scanData?.site_summary ||
+      {},
+
+    site_summary:
+      scanData?.site_summary ||
+      aiData?.site_summary ||
+      scanData?.scan_summary ||
+      {},
+
+    technical_audit_summary: scanData?.technical_audit_summary || {},
+
+    website_health_report:
+      aiData?.website_health_report ||
+      scanData?.website_health_report ||
+      {},
+
+    top_recommended_actions:
+      aiData?.top_recommended_actions ||
+      aiData?.recommended_actions ||
+      [],
+
+    positive_findings:
+      aiData?.positive_findings ||
+      scanData?.positive_findings ||
+      scanData?.site_summary?.positives ||
+      [],
+
+    health_explanation:
+      aiData?.health_explanation ||
+      scanData?.health_explanation ||
+      "",
+
+    customer_summary:
+      aiData?.customer_summary ||
+      aiData?.plain_english_summary ||
+      scanData?.customer_summary ||
+      "",
+
+    competitor_result: competitorResult,
+    competitor_results: firstArray([
+      scanData?.competitor_results,
+      aiData?.competitor_results,
+    ]),
+    competitor_opportunities: firstArray([
+      scanData?.competitor_opportunities,
+      aiData?.competitor_opportunities,
+    ]),
+
+    crawl_warnings: crawlWarnings,
+
+    debug: {
+      scanner_function: ADVANCED_SCANNER_FUNCTION,
+      ai_function: AI_REVIEW_FUNCTION,
+      scanner_success: scanData?.success !== false,
+      ai_success: aiData?.success === true,
+      ai_provider: aiData?.provider || aiData?.debug?.provider || "",
+    },
+
+    raw: {
+      scanner: scanData,
+      ai_review: aiData,
+    },
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Fix List sync                                                               */
+/* -------------------------------------------------------------------------- */
+
+function saveScanForDashboard(scanRecord) {
+  try {
+    const normalizedRecord = normalizeScanRecordForStorage(scanRecord);
+
+    const lastScanKeys = [DASHBOARD_LAST_SCAN_KEY, LEGACY_LAST_SCAN_KEY];
+    const historyKeys = [DASHBOARD_HISTORY_KEY, LEGACY_HISTORY_KEY];
+
+    lastScanKeys.forEach((key) => {
+      window.localStorage.setItem(key, JSON.stringify(normalizedRecord));
+    });
+
+    historyKeys.forEach((key) => {
+      const existingRaw = window.localStorage.getItem(key);
+      const existing = existingRaw ? JSON.parse(existingRaw) : [];
+      const history = Array.isArray(existing) ? existing : [];
+
+      const nextHistory = [
+        normalizedRecord,
+        ...history.filter((item) => item?.id !== normalizedRecord.id),
+      ].slice(0, 20);
+
+      window.localStorage.setItem(key, JSON.stringify(nextHistory));
+    });
+
+    window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
+  } catch (error) {
+    console.warn("Could not save scan for dashboard.", error);
+  }
+}
+
+function normalizeScanRecordForStorage(record) {
+  const fixes = getRecommendations(record);
+  const pages = getPages(record);
+  const healthScore = getHealthScore(record);
+
+  return {
+    ...record,
+    id: record.id || `scan_${Date.now()}`,
+    created_at: record.created_at || new Date().toISOString(),
+    website_url: record.website_url || "",
+    business_name: record.business_name || "",
+    scan_mode: record.scan_mode || "deep",
+
+    health_score: Number(healthScore || 0),
+    seo_score: Number(healthScore || 0),
+    pages_crawled: Number(record.pages_crawled || pages.length || 0),
+    pages_found: Number(record.pages_found || pages.length || 0),
+
+    recommendations: fixes,
+    fixes,
+    findings: fixes,
+
+    crawled_pages: pages,
+    pages,
+    scanned_pages: pages,
+
+    scan_summary: record.scan_summary || {},
+    site_summary: record.site_summary || {},
+    technical_audit_summary: record.technical_audit_summary || {},
+    website_health_report: record.website_health_report || {},
+
+    competitor_result: record.competitor_result || {},
+    competitor_results: Array.isArray(record.competitor_results)
+      ? record.competitor_results
+      : [],
+    competitor_opportunities: Array.isArray(record.competitor_opportunities)
+      ? record.competitor_opportunities
+      : [],
+
+    crawl_warnings: Array.isArray(record.crawl_warnings)
+      ? record.crawl_warnings
+      : [],
+
+    raw: record.raw || record,
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1018,296 +848,122 @@ function normalizeFunctionResponse(response) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Dashboard persistence                                                       */
+/* Helpers                                                                     */
 /* -------------------------------------------------------------------------- */
 
-function saveScanForDashboard({
-  result,
-  scannerPayload,
-  normalizedScanner,
-  normalizedReview,
-}) {
+function normalizeWebsiteUrl(value) {
+  const raw = String(value || "").trim();
+
+  if (!raw) return "";
+
   try {
-    if (typeof window === "undefined" || !window.localStorage) return;
+    const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    const parsed = new URL(withProtocol);
 
-    const now = new Date().toISOString();
-
-    const record = {
-      id: `scan_${Date.now()}`,
-      created_at: now,
-      website_url:
-        result?.normalized_url ||
-        result?.website_url ||
-        scannerPayload?.website_url ||
-        "",
-      domain: result?.domain || normalizedScanner?.domain || "",
-      scan_mode:
-        result?.scan_mode ||
-        normalizedScanner?.scan_mode ||
-        scannerPayload?.scan_mode ||
-        "",
-      ai_provider:
-        result?.ai_provider ||
-        normalizedReview?.ai_provider ||
-        "scanner_fallback",
-      result: {
-        ...result,
-        created_at: now,
-        website_url:
-          result?.website_url ||
-          scannerPayload?.website_url ||
-          result?.normalized_url ||
-          "",
-        normalized_url:
-          result?.normalized_url ||
-          normalizedScanner?.normalized_url ||
-          scannerPayload?.website_url ||
-          "",
-      },
-    };
-
-    window.localStorage.setItem(
-      DASHBOARD_LAST_SCAN_KEY,
-      JSON.stringify(record)
-    );
-
-    window.localStorage.setItem(
-      "SEO_AUTOPILOT_LAST_SCAN",
-      JSON.stringify(record)
-    );
-
-    const existingHistory =
-      safeJsonParseForDashboard(
-        window.localStorage.getItem(DASHBOARD_HISTORY_KEY)
-      ) || [];
-
-    const cleanedHistory = Array.isArray(existingHistory)
-      ? existingHistory.filter(
-          (item) => item?.website_url !== record.website_url
-        )
-      : [];
-
-    const nextHistory = [record, ...cleanedHistory].slice(0, 5);
-
-    window.localStorage.setItem(
-      DASHBOARD_HISTORY_KEY,
-      JSON.stringify(nextHistory)
-    );
-
-    window.localStorage.setItem(
-      "SEO_AUTOPILOT_SCAN_HISTORY",
-      JSON.stringify(nextHistory)
-    );
-
-    window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
-  } catch (error) {
-    console.warn("Could not save scan result for dashboard", error);
-  }
-}
-
-function safeJsonParseForDashboard(value) {
-  try {
-    if (!value) return null;
-    return JSON.parse(value);
+    return parsed.toString();
   } catch {
-    return null;
+    return "";
   }
 }
 
-/* -------------------------------------------------------------------------- */
-/* Friendly affected pages                                                     */
-/* -------------------------------------------------------------------------- */
-
-function buildFriendlyAffectedPages(fix) {
-  const examples = safeArray(fix?.details?.examples);
-  const affectedPages = safeArray(fix?.affected_pages);
-
-  if (examples.length > 0) {
-    return examples
-      .map((example) => {
-        const rawUrl = example.url || example.page_url || example.path || "";
-        const path = cleanPath(rawUrl);
-
-        if (!path) return null;
-
-        return {
-          path,
-          label:
-            cleanString(example.readable_label) ||
-            cleanString(example.title) ||
-            friendlyPageLabel(path) ||
-            "Affected page",
-          statusCode: example.status_code || example.status || "",
-        };
-      })
-      .filter(Boolean);
-  }
-
-  return affectedPages
-    .map((page) => {
-      const path = cleanPath(page);
-
-      if (!path) return null;
-
-      return {
-        path,
-        label: friendlyPageLabel(path),
-        statusCode: "",
-      };
-    })
+function splitLines(value) {
+  return String(value || "")
+    .split(/\n|,/)
+    .map((item) => item.trim())
     .filter(Boolean);
 }
 
-function friendlyPageLabel(pathOrUrl) {
-  const path = cleanPath(pathOrUrl);
-  const language = getLanguageNameFromPath(path);
-
-  const cleaned = path
-    .replace(/^\/(en|fr|es|de|it|pt|nl)(\/|$)/i, "/")
-    .replace(/^\/+/, "")
-    .replace(/\/+$/, "");
-
-  if (!cleaned) {
-    return language ? `${language} homepage` : "Homepage";
+function getInitialCompetitorUrls(project, competitors) {
+  if (Array.isArray(project?.competitor_urls)) {
+    return project.competitor_urls.filter(Boolean);
   }
 
-  const parts = cleaned.split("/").filter(Boolean);
-
-  if (parts[0] === "category" && parts[1]) {
-    const category = humanizeSlug(parts.slice(1).join(" / "));
-
-    return language
-      ? `${language} category page: ${category}`
-      : `Category page: ${category}`;
-  }
-
-  if (parts[0] === "listing" && parts[1]) {
-    const listing = humanizeSlug(parts.slice(1).join(" / "));
-
-    return language
-      ? `${language} listing page: ${listing}`
-      : `Listing page: ${listing}`;
-  }
-
-  if (parts[0] === "annonce" && parts[1]) {
-    const page = humanizeSlug(parts[1]);
-
-    return language
-      ? `${language} activity page: ${page}`
-      : `Activity page: ${page}`;
-  }
-
-  if (parts[0] === "wine" && parts[1]) {
-    return `Wine page: ${humanizeSlug(parts.slice(1).join(" / "))}`;
-  }
-
-  const label = humanizeSlug(parts.join(" / "));
-
-  return language ? `${language} page: ${label}` : label;
-}
-
-function getLanguageNameFromPath(pathOrUrl) {
-  const path = cleanPath(pathOrUrl);
-  const match = path.match(/^\/(en|fr|es|de|it|pt|nl)(\/|$)/i);
-
-  if (!match) return "";
-
-  const map = {
-    en: "English",
-    fr: "French",
-    es: "Spanish",
-    de: "German",
-    it: "Italian",
-    pt: "Portuguese",
-    nl: "Dutch",
-  };
-
-  return map[match[1].toLowerCase()] || "";
-}
-
-function humanizeSlug(value) {
-  return String(value || "")
-    .replace(/-/g, " ")
-    .replace(/_/g, " ")
-    .replace(/\s*\/\s*/g, " / ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function cleanPath(input) {
-  try {
-    const parsed = new URL(String(input || ""), "https://example.com");
-    const path = parsed.pathname || "/";
-
-    return path !== "/" && path.endsWith("/") ? path.slice(0, -1) : path;
-  } catch {
-    const value = String(input || "/").split("?")[0].split("#")[0];
-
-    if (!value || value === "/") return "/";
-
-    return value.endsWith("/") && value !== "/" ? value.slice(0, -1) : value;
-  }
-}
-
-/* -------------------------------------------------------------------------- */
-/* Small helpers                                                               */
-/* -------------------------------------------------------------------------- */
-
-function pickFirstNonEmptyArray(values) {
-  for (const value of values || []) {
-    if (Array.isArray(value) && value.length > 0) return value;
+  if (Array.isArray(competitors)) {
+    return competitors
+      .map((item) => item.website_url || item.url || item.domain || "")
+      .filter(Boolean);
   }
 
   return [];
 }
 
-function safeArray(value) {
-  return Array.isArray(value) ? value : [];
+function firstArray(values) {
+  for (const value of values) {
+    if (Array.isArray(value)) return value;
+  }
+
+  return [];
 }
 
-function numberOrNull(value) {
-  if (value === null || value === undefined || value === "") return null;
+function getFirstNumber(values) {
+  for (const value of values) {
+    const number = Number(value);
 
-  const number = Number(value);
+    if (Number.isFinite(number) && number > 0) {
+      return Math.round(number);
+    }
+  }
 
-  return Number.isFinite(number) ? number : null;
+  return 0;
 }
 
-function cleanString(value) {
-  return typeof value === "string" && value.trim() ? value.trim() : "";
+function getRecommendations(record) {
+  if (!record) return [];
+
+  return firstArray([
+    record.recommendations,
+    record.fixes,
+    record.findings,
+    record.raw_fixes,
+    record.grouped_findings,
+    record.raw?.recommendations,
+    record.raw?.fixes,
+    record.raw?.findings,
+    record.raw?.scanner?.raw_fixes,
+    record.raw?.scanner?.grouped_findings,
+    record.raw?.scanner?.recommendations,
+    record.raw?.ai_review?.cleaned_fixes,
+    record.raw?.ai_review?.recommendations,
+  ]);
 }
 
-function friendlyCategory(category) {
-  const map = {
-    meta_title: "Search appearance",
-    meta_description: "Search appearance",
-    canonical: "Technical SEO",
-    schema: "Technical SEO",
-    thin_content: "Page content",
-    duplicate_content: "Search appearance",
-    "404_error": "Broken pages",
-    broken_page: "Broken pages",
-    redirect: "Page redirects",
-    internal_link: "Technical SEO",
-    performance: "Website performance",
-    web_dev: "Website setup",
-    robots_txt: "Search visibility",
-    js_rendering: "Website setup",
-    indexability: "Technical SEO",
-    mobile_setup: "Technical SEO",
-    social_metadata: "Technical SEO",
-    performance_hint: "Technical SEO",
-    competitor_gap: "Competitor opportunities",
-  };
+function getPages(record) {
+  if (!record) return [];
 
-  return map[category] || "Website improvement";
+  return firstArray([
+    record.crawled_pages,
+    record.pages,
+    record.scanned_pages,
+    record.crawl_pages,
+    record.raw?.crawled_pages,
+    record.raw?.pages,
+    record.raw?.scanner?.crawled_pages,
+    record.raw?.scanner?.pages,
+  ]);
 }
 
-function scoreToLabel(score) {
-  if (score === null || score === undefined) return "Scan complete";
-  if (score >= 85) return "Great shape";
-  if (score >= 70) return "Good start";
-  if (score >= 45) return "Needs attention";
-  return "Needs urgent attention";
+function getHealthScore(record) {
+  if (!record) return 0;
+
+  return getFirstNumber([
+    record.health_score,
+    record.seo_score,
+    record.scan_summary?.health_score,
+    record.website_health_report?.score,
+    record.raw?.health_score,
+    record.raw?.seo_score,
+    record.raw?.scanner?.health_score,
+    record.raw?.scanner?.seo_score,
+    record.raw?.ai_review?.health_score,
+    record.raw?.ai_review?.website_health_report?.score,
+  ]);
+}
+
+function getAffectedPages(fix = {}) {
+  return firstArray([
+    fix.affected_pages,
+    fix.pages,
+    fix.urls,
+    fix.page_urls,
+  ]).map((item) => String(item || "")).filter(Boolean);
 }

@@ -3,7 +3,6 @@ import {
   BarChart3,
   CheckCircle2,
   ExternalLink,
-  KeyRound,
   Link2,
   Loader2,
   Plug,
@@ -15,9 +14,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { base44 } from "@/api/base44Client";
 
-const GOOGLE_CONNECT_FUNCTION = "googleSearchConsoleConnect";
-const GSC_INSIGHTS_FUNCTION = "getSearchConsoleInsights";
-const BING_BACKLINKS_FUNCTION = "getBingBacklinks";
+const GOOGLE_CONNECT_FUNCTION = "generateReport";
+const GSC_INSIGHTS_FUNCTION = "runRealScan";
+const BING_BACKLINKS_FUNCTION = "scanCompetitors";
 
 const GSC_STORAGE_KEY = "seo_autopilot:gsc_connection";
 
@@ -54,6 +53,28 @@ export default function Reports() {
 
     if (params.get("gsc") === "connected") {
       window.history.replaceState({}, "", "/reports");
+
+      const updatedStored = loadGoogleConnection();
+
+      if (updatedStored) {
+        setGoogleConnection(updatedStored);
+
+        const defaultSite =
+          updatedStored.selected_site ||
+          updatedStored.sites?.[0]?.siteUrl ||
+          updatedStored.sites?.[0]?.url ||
+          "";
+
+        setSelectedSite(defaultSite);
+        setBingSiteUrl(defaultSite);
+      }
+    }
+
+    if (params.get("gsc") === "error") {
+      setError(
+        "Google Search Console connection failed. Check your Google redirect URI and backend secrets."
+      );
+      window.history.replaceState({}, "", "/reports");
     }
   }, []);
 
@@ -80,12 +101,12 @@ export default function Reports() {
 
       setError(
         data?.error ||
-          "Google connection did not return an auth URL. Check the backend function."
+          "Google connection did not return an auth URL. Check generateReport."
       );
     } catch (err) {
       setError(
         err?.message ||
-          "Google Search Console connection failed. Make sure the backend function exists."
+          "Google Search Console connection failed. Make sure generateReport exists and is deployed."
       );
     } finally {
       setLoadingGoogle(false);
@@ -137,7 +158,7 @@ export default function Reports() {
     } catch (err) {
       setError(
         err?.message ||
-          "Could not load Google Search Console insights yet."
+          "Could not load Google Search Console insights. Make sure runRealScan exists and is deployed."
       );
     } finally {
       setLoadingInsights(false);
@@ -167,7 +188,7 @@ export default function Reports() {
     } catch (err) {
       setError(
         err?.message ||
-          "Could not load backlink data. Make sure the Bing Webmaster API key and backend function are configured."
+          "Could not load backlink data. Make sure scanCompetitors exists and BING_WEBMASTER_API_KEY is configured."
       );
     } finally {
       setLoadingBacklinks(false);
@@ -246,7 +267,7 @@ export default function Reports() {
           <div className="flex items-start gap-3">
             <CheckCircle2 className="mt-0.5 h-5 w-5 text-emerald-700" />
 
-            <div>
+            <div className="w-full">
               <h2 className="font-semibold text-emerald-950">
                 Google Search Console connected
               </h2>
@@ -270,7 +291,12 @@ export default function Reports() {
                     </option>
                   ))}
                 </select>
-              ) : null}
+              ) : (
+                <p className="mt-3 text-sm text-emerald-800">
+                  No Search Console properties were returned. Make sure this
+                  Google account has access to a verified property.
+                </p>
+              )}
             </div>
           </div>
         </section>
@@ -503,6 +529,7 @@ function PreviewList({ title, items, empty }) {
                   item.page ||
                   item.url ||
                   item.title ||
+                  item.referring_page ||
                   "SEO opportunity"}
               </div>
 

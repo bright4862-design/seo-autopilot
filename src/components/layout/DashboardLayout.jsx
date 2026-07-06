@@ -32,6 +32,14 @@ export default function DashboardLayout() {
       );
     }
 
+    if (href === "/onboarding") {
+      return (
+        location.pathname === "/onboarding" ||
+        location.pathname === "/scan" ||
+        location.pathname === "/crawl-status"
+      );
+    }
+
     if (href === "/reports") {
       return (
         location.pathname === "/reports" ||
@@ -107,7 +115,7 @@ function MobileHeader({ mobileOpen, onToggle }) {
           <div className="font-bold leading-tight text-slate-950">
             SEO Pilot
           </div>
-          <div className="text-xs text-slate-500">Fix List</div>
+          <div className="text-xs text-slate-500">Autopilot dashboard</div>
         </div>
       </Link>
 
@@ -122,7 +130,11 @@ function SidebarContent({ isActive, onNavigate, onLogout }) {
   return (
     <div className="flex h-full min-h-screen flex-col">
       <div className="border-b border-slate-100 p-6">
-        <Link to="/dashboard" onClick={onNavigate} className="flex items-center gap-3">
+        <Link
+          to="/dashboard"
+          onClick={onNavigate}
+          className="flex items-center gap-3"
+        >
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-600 text-white">
             <CheckCircle2 className="h-6 w-6" />
           </div>

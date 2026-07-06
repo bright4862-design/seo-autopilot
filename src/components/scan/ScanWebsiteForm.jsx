@@ -198,6 +198,20 @@ export default function ScanWebsiteForm({
         requested_at: new Date().toISOString(),
       };
 
+      writeScanDebug({
+        status: "running",
+        stage: "scanner_request_started",
+        website_url: normalizedUrl,
+        business_name: businessName.trim(),
+        cms_platform: cmsPlatform,
+        cms_name: selectedCms?.label || "Custom / Not sure",
+        scan_mode: scanMode,
+        requested_path_prefix: requestedPathPrefix,
+        payload: scanPayload,
+      });
+
+      refreshDebugData();
+
       const scannerResponse = await callBase44Function(
         ADVANCED_SCANNER_FUNCTION,
         scanPayload
@@ -298,6 +312,25 @@ export default function ScanWebsiteForm({
           technical_audit_summary: scanData.technical_audit_summary || {},
           scan_summary: scanData.scan_summary || scanData.site_summary || {},
         };
+
+        writeScanDebug({
+          status: "running",
+          stage: "ai_review_request_started",
+          website_url: normalizedUrl,
+          business_name: businessName.trim(),
+          cms_platform: cmsPlatform,
+          cms_name: selectedCms?.label || "Custom / Not sure",
+          scan_mode: scanMode,
+          requested_path_prefix: requestedPathPrefix,
+          scanner: scanData,
+          ai_payload_summary: {
+            crawled_pages_count: aiPayload.crawled_pages.length,
+            raw_fixes_count: aiPayload.raw_fixes.length,
+            competitor_results_count: aiPayload.competitor_results.length,
+          },
+        });
+
+        refreshDebugData();
 
         const aiResponse = await callBase44Function(
           AI_REVIEW_FUNCTION,
@@ -453,7 +486,11 @@ export default function ScanWebsiteForm({
               </div>
 
               <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="outline" onClick={refreshDebugData}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={refreshDebugData}
+                >
                   <RefreshCw className="mr-2 h-4 w-4" />
                   Refresh
                 </Button>
@@ -1315,6 +1352,30 @@ function buildFallbackSummary({
 /* -------------------------------------------------------------------------- */
 
 async function callBase44Function(functionName, payload) {
+  const timeoutMs =
+    functionName === ADVANCED_SCANNER_FUNCTION
+      ? Number(payload?.crawl_timeout_ms || 90000) + 15000
+      : 70000;
+
+  const callPromise = callBase44FunctionWithoutTimeout(functionName, payload);
+
+  return await Promise.race([
+    callPromise,
+    new Promise((_, reject) => {
+      window.setTimeout(() => {
+        reject(
+          new Error(
+            `${functionName} did not return within ${Math.round(
+              timeoutMs / 1000
+            )} seconds. The scan may have timed out before saving results.`
+          )
+        );
+      }, timeoutMs);
+    }),
+  ]);
+}
+
+async function callBase44FunctionWithoutTimeout(functionName, payload) {
   if (base44?.functions?.invoke) {
     return await base44.functions.invoke(functionName, payload);
   }

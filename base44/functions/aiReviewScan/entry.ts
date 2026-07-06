@@ -100,20 +100,16 @@ const VERTICAL_PROFILES = {
       "quote",
       "simulation",
       "simulateur",
-      "calcul",
+      "calcul-assurance",
       "calculator",
       "comparateur",
       "compare",
       "tarif",
-      "taux",
+      "taux-assurance",
       "contact",
       "souscription",
-      "assurance",
-      "pret",
-      "prêt",
-      "credit",
-      "crédit",
-      "guide",
+      "classement-assurances",
+      "meilleures-assurances",
     ],
   },
   travel_booking: {
@@ -246,7 +242,7 @@ const VERTICAL_PROFILES = {
   general: {
     label: "general website",
     keywords: [],
-    moneyPatterns: ["contact", "service", "product", "guide"],
+    moneyPatterns: ["contact", "service", "product"],
   },
 };
 
@@ -545,7 +541,7 @@ function buildSiteFingerprint({ body, pages, websiteUrl }) {
     regulatory_sensitivity: regulatorySensitivity,
     likely_money_page_patterns: VERTICAL_PROFILES[vertical]?.moneyPatterns || VERTICAL_PROFILES.general.moneyPatterns,
     low_value_page_patterns: LOW_VALUE_PAGE_PATTERNS,
-    scoring_model: "evidence_confidence_x_site_fit_x_business_impact_x_reach_v1",
+    scoring_model: "evidence_confidence_x_site_fit_x_business_impact_x_reach_v2_template_groups",
   };
 }
 
@@ -590,7 +586,7 @@ function prepareFixes(rawFixes, siteFingerprint, body) {
     (Array.isArray(rawFixes) ? rawFixes : []).map((fix, index) => normalizeFix(fix, index))
   );
 
-  return groupLowValueTemplateIssues(
+  return groupTemplateIssues(
     normalized.map((fix) => scoreFixForSite(fix, siteFingerprint, body))
   )
     .sort(compareFixes)
@@ -605,6 +601,7 @@ function scoreFixForSite(fix, siteFingerprint, body) {
   const siteFitScore = scoreSiteFit(fix, pageValue, siteFingerprint);
   const businessImpactScore = scoreBusinessImpact(fix, pageValue, siteFingerprint);
   const lowValuePage = pageValue.classification === "low_value";
+  const supportContent = pageValue.classification === "support_content";
   const cosmetic = isCosmeticIssue(fix);
   const severe = isSevereIssue(fix);
 
@@ -627,6 +624,10 @@ function scoreFixForSite(fix, siteFingerprint, body) {
     priority = priority === "critical" || priority === "high" ? "medium" : priority;
     why =
       "This is a real technical problem, but it is on a lower-priority news or archive page. Fix it after core business pages unless users actively reach this URL.";
+  } else if (supportContent && cosmetic && !severe) {
+    priority = priority === "critical" || priority === "high" ? "medium" : priority;
+    why =
+      "This guide or Q&A page can support search visibility, but it should be handled as a content-template cleanup after the main calculator, comparison, quote, and landing pages.";
   } else if (pageValue.classification === "money_page" && priority === "low") {
     priority = "medium";
   }
@@ -649,6 +650,7 @@ function scoreFixForSite(fix, siteFingerprint, body) {
     ai_recommendation: recommendedValue,
     difficulty,
     page_url: pageUrl,
+    page_template_family: getTemplateFamily(pageUrl),
     page_value_score: pageValue.score,
     page_value_label: pageValue.label,
     business_importance: pageValue.classification,
@@ -665,6 +667,7 @@ function scorePageValue(url, siteFingerprint, body) {
   const path = cleanPath(url).toLowerCase();
   const requested = cleanPath(body?.requested_path_prefix || body?.crawl_path_prefix || "").toLowerCase();
   const moneyPatterns = siteFingerprint.likely_money_page_patterns || [];
+  const family = getTemplateFamily(path);
 
   let score = 35;
   const reasons = [];
@@ -681,20 +684,20 @@ function scorePageValue(url, siteFingerprint, body) {
 
   for (const pattern of moneyPatterns) {
     if (path.includes(pattern)) {
-      score += 12;
+      score += 14;
       reasons.push(`matches ${pattern}`);
       break;
     }
   }
 
-  if (hasAny(path, ["contact", "devis", "quote", "simulation", "calcul", "calculator", "comparateur", "booking", "reservation"])) {
+  if (hasAny(path, ["contact", "devis", "quote", "simulation", "calcul-assurance", "calculator", "comparateur", "booking", "reservation"])) {
     score += 25;
     reasons.push("conversion or lead page");
   }
 
-  if (hasAny(path, ["guide", "resources", "learn", "questions-reponses", "faq"])) {
-    score += siteFingerprint.vertical === "insurance_finance" ? 18 : 10;
-    reasons.push("evergreen support content");
+  if (family === "guide" || family === "qa" || family === "legal_info") {
+    score += siteFingerprint.vertical === "insurance_finance" ? 8 : 5;
+    reasons.push("supporting guide or Q&A content");
   }
 
   if (isLowValuePage(path)) {
@@ -703,7 +706,7 @@ function scorePageValue(url, siteFingerprint, body) {
   }
 
   const clamped = Math.max(0, Math.min(100, score));
-  const classification = clamped >= 70 ? "money_page" : clamped <= 30 ? "low_value" : "standard";
+  const classification = clamped >= 70 ? "money_page" : clamped <= 30 ? "low_value" : family === "guide" || family === "qa" || family === "legal_info" ? "support_content" : "standard";
 
   return {
     score: clamped,
@@ -713,7 +716,9 @@ function scorePageValue(url, siteFingerprint, body) {
         ? "Important business page"
         : classification === "low_value"
           ? "Lower-priority news/archive page"
-          : "Standard page",
+          : classification === "support_content"
+            ? "Supporting guide/Q&A page"
+            : "Standard page",
     reasons,
   };
 }
@@ -754,56 +759,92 @@ function scoreSiteFit(fix, pageValue, siteFingerprint) {
 function scoreBusinessImpact(fix, pageValue, siteFingerprint) {
   let score = pageValue.score;
   if (isSevereIssue(fix)) score += 25;
-  if (isCosmeticIssue(fix)) score -= pageValue.classification === "low_value" ? 25 : 5;
-  if (siteFingerprint.business_model?.includes("quote") && hasAny(fix.page_url, ["devis", "quote", "simulation", "calcul", "comparateur"])) score += 18;
+  if (isCosmeticIssue(fix)) score -= pageValue.classification === "low_value" ? 25 : pageValue.classification === "support_content" ? 12 : 5;
+  if (siteFingerprint.business_model?.includes("quote") && hasAny(fix.page_url, ["devis", "quote", "simulation", "calcul-assurance", "comparateur"])) score += 18;
   if (siteFingerprint.business_model?.includes("booking") && hasAny(fix.page_url, ["booking", "reservation", "activity", "event"])) score += 18;
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
-function groupLowValueTemplateIssues(fixes) {
+function groupTemplateIssues(fixes) {
   const keep = [];
   const groups = new Map();
 
   for (const fix of fixes) {
-    const shouldGroup =
+    const family = fix.page_template_family || getTemplateFamily(fix.page_url);
+    const shouldGroupLowValue =
       fix.business_importance === "low_value" &&
       fix.priority === "low" &&
       isCosmeticIssue(fix);
+    const shouldGroupSupport =
+      ["guide", "qa", "legal_info"].includes(family) &&
+      fix.business_importance === "support_content" &&
+      isCosmeticIssue(fix) &&
+      !isSevereIssue(fix);
 
-    if (!shouldGroup) {
+    if (!shouldGroupLowValue && !shouldGroupSupport) {
       keep.push(fix);
       continue;
     }
 
-    const key = `${fix.rule || fix.category || "archive_cleanup"}`;
-    const title = archiveGroupTitle(fix);
+    const key = `${shouldGroupSupport ? family : "archive"}|${fix.rule || fix.category || "cleanup"}`;
+    const title = shouldGroupSupport ? supportGroupTitle(fix, family) : archiveGroupTitle(fix);
     const existing = groups.get(key) || {
       ...fix,
-      id: stableId(`archive_group_${key}`),
-      fix_id: stableId(`archive_group_${key}`),
+      id: stableId(`template_group_${key}`),
+      fix_id: stableId(`template_group_${key}`),
       page_url: "",
       issue_title: title,
       title,
-      plain_english_explanation:
-        "Several news, blog, or archive pages have the same lower-priority SEO cleanup issue.",
-      plain_english_summary:
-        "Several news, blog, or archive pages have the same lower-priority SEO cleanup issue.",
-      why_it_matters:
-        "These pages matter less than the pages that drive leads, sales, bookings, or quote requests. Grouping them keeps the FixList focused on business impact first.",
-      recommended_value:
-        "Review these pages later as a batch, or leave them until important business pages are fixed.",
-      ai_recommendation:
-        "Review these pages later as a batch, or leave them until important business pages are fixed.",
-      priority: "low",
+      plain_english_explanation: shouldGroupSupport
+        ? "Several guide or Q&A pages have the same SEO cleanup issue. Treat this as a template/content cleanup instead of separate one-off tasks."
+        : "Several news, blog, or archive pages have the same lower-priority SEO cleanup issue.",
+      plain_english_summary: shouldGroupSupport
+        ? "Several guide or Q&A pages have the same SEO cleanup issue. Treat this as a template/content cleanup instead of separate one-off tasks."
+        : "Several news, blog, or archive pages have the same lower-priority SEO cleanup issue.",
+      why_it_matters: shouldGroupSupport
+        ? "These pages can support search visibility, but they should not crowd out the calculator, comparison, quote, and main landing pages. Grouping them keeps the FixList practical."
+        : "These pages matter less than the pages that drive leads, sales, bookings, or quote requests. Grouping them keeps the FixList focused on business impact first.",
+      recommended_value: shouldGroupSupport
+        ? "Fix one guide/Q&A title or description pattern, then apply the same rule across the affected pages."
+        : "Review these pages later as a batch, or leave them until important business pages are fixed.",
+      ai_recommendation: shouldGroupSupport
+        ? "Fix one guide/Q&A title or description pattern, then apply the same rule across the affected pages."
+        : "Review these pages later as a batch, or leave them until important business pages are fixed.",
+      priority: shouldGroupSupport ? "medium" : "low",
       difficulty: "easy",
-      business_importance: "low_value_group",
+      business_importance: shouldGroupSupport ? "support_content_group" : "low_value_group",
       affected_pages: [],
-      page_value_score: 10,
-      page_value_label: "Grouped lower-priority archive pages",
+      page_value_score: shouldGroupSupport ? 45 : 10,
+      page_value_label: shouldGroupSupport ? "Grouped guide/Q&A content pages" : "Grouped lower-priority archive pages",
       evidence_confidence: 90,
-      site_fit_score: 20,
-      business_impact_score: 15,
-      overall_priority_score: 25,
+      site_fit_score: shouldGroupSupport ? 55 : 20,
+      business_impact_score: shouldGroupSupport ? 45 : 15,
+      reach_score: 60,
+      overall_priority_score: shouldGroupSupport ? 58 : 25,
+      what_to_do: shouldGroupSupport
+        ? [
+            "Pick one affected guide or Q&A page as the example.",
+            "Rewrite the title or description pattern so it is clearer and shorter.",
+            "Apply the same rule across the affected template group.",
+            "Run FixList again after publishing.",
+          ]
+        : [
+            "Fix your important business pages first.",
+            "Review these archive/news pages as a later batch.",
+            "Run FixList again if you decide to clean them up.",
+          ],
+      what_to_do_steps: shouldGroupSupport
+        ? [
+            "Pick one affected guide or Q&A page as the example.",
+            "Rewrite the title or description pattern so it is clearer and shorter.",
+            "Apply the same rule across the affected template group.",
+            "Run FixList again after publishing.",
+          ]
+        : [
+            "Fix your important business pages first.",
+            "Review these archive/news pages as a later batch.",
+            "Run FixList again if you decide to clean them up.",
+          ],
     };
 
     existing.affected_pages = Array.from(
@@ -811,12 +852,19 @@ function groupLowValueTemplateIssues(fixes) {
         ...existing.affected_pages,
         ...normalizeAffectedPages(fix, fix.page_url || "/"),
       ])
-    ).slice(0, 80);
+    ).slice(0, 100);
     existing.page_count = existing.affected_pages.length;
+    existing.reach_score = scoreReach(existing);
     groups.set(key, existing);
   }
 
-  return [...keep, ...groups.values()];
+  return [...keep, ...groups.values()].map((fix) => ({
+    ...fix,
+    overall_priority_score:
+      fix.business_importance === "support_content_group"
+        ? Math.max(55, Number(fix.overall_priority_score || 0))
+        : fix.overall_priority_score,
+  }));
 }
 
 function archiveGroupTitle(fix) {
@@ -827,6 +875,27 @@ function archiveGroupTitle(fix) {
   if (rule.includes("duplicate") || category.includes("duplicate")) return "Batch low-priority duplicate archive fields";
   if (rule.includes("alt")) return "Batch low-priority archive image alt text";
   return "Batch low-priority news/archive cleanup";
+}
+
+function supportGroupTitle(fix, family) {
+  const rule = String(fix?.rule || "").toLowerCase();
+  const label = family === "qa" ? "Q&A" : family === "legal_info" ? "legal/guide" : "guide";
+  if (rule.includes("description")) return `Batch ${label} page descriptions`;
+  if (rule.includes("title")) return `Batch ${label} page titles`;
+  if (rule.includes("duplicate")) return `Batch duplicate ${label} search fields`;
+  if (rule.includes("alt")) return `Batch ${label} image alt text`;
+  return `Batch ${label} page cleanup`;
+}
+
+function getTemplateFamily(url) {
+  const path = cleanPath(url).toLowerCase();
+  if (isLowValuePage(path)) return "archive";
+  if (path.includes("questions-reponses") || path.includes("faq")) return "qa";
+  if (path.includes("/loi-") || path.includes("/loi_") || path.includes("/legal")) return "legal_info";
+  if (path.includes("/le-guide") || path.includes("/guide")) return "guide";
+  if (hasAny(path, ["simulation", "simulateur", "calcul-assurance", "comparateur", "devis", "quote"])) return "conversion";
+  if (path.includes("contact")) return "contact";
+  return "standard";
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1084,11 +1153,11 @@ function makeFrontendCompatible(plan) {
           title: action.title || fix?.issue_title || "Recommended action",
           plain_english_summary: fix?.plain_english_explanation || action.reason || "",
           why_it_matters: fix?.why_it_matters || action.reason || "",
-          what_to_do_steps: fix?.what_to_do || [],
-          who_can_do_this: fix?.who_can_do_this === "your_web_person" ? "Your web person" : "You",
-          time_estimate: fix?.estimated_time || "",
+          what_to_do_steps: action.what_to_do_steps || fix?.what_to_do || [],
+          who_can_do_this: action.who_can_do_this || (fix?.who_can_do_this === "your_web_person" ? "Your web person" : "You"),
+          time_estimate: action.time_estimate || fix?.estimated_time || "",
           priority: action.priority || fix?.priority || "medium",
-          affected_pages: fix?.affected_pages || [],
+          affected_pages: action.affected_pages || fix?.affected_pages || [],
         };
       });
 
@@ -1163,12 +1232,7 @@ function mergeAiIntoFallback({ aiResponse, fallbackPlan, canonicalFixes, pages, 
   const topRecommendedActions = Array.isArray(aiResponse?.top_recommended_actions) && aiResponse.top_recommended_actions.length > 0
     ? aiResponse.top_recommended_actions
         .slice(0, 5)
-        .map((action) => ({
-          fix_id: validIds.has(action?.fix_id) ? action.fix_id : "",
-          title: cleanString(action?.title) || "",
-          reason: cleanString(action?.reason) || "",
-          priority: ["high", "medium", "low"].includes(action?.priority) ? action.priority : "medium",
-        }))
+        .map((action) => hydrateTopAction(action, cleanedFixes))
         .filter((action) => action.title)
     : cleanedFixes.slice(0, 5).map(fixToAction);
 
@@ -1207,6 +1271,37 @@ function mergeAiIntoFallback({ aiResponse, fallbackPlan, canonicalFixes, pages, 
     pages,
     site_fingerprint: siteFingerprint,
   });
+}
+
+function hydrateTopAction(action, fixes) {
+  const fix = fixes.find((item) => item.id === action?.fix_id || item.fix_id === action?.fix_id);
+  if (!fix) {
+    return {
+      fix_id: "",
+      title: cleanString(action?.title) || "Recommended action",
+      reason: cleanString(action?.reason) || "Review this recommendation.",
+      priority: ["high", "medium", "low"].includes(action?.priority) ? action.priority : "medium",
+      affected_pages: [],
+      what_to_do_steps: [],
+      who_can_do_this: "You",
+      time_estimate: "",
+    };
+  }
+
+  return {
+    ...fixToAction(fix),
+    title: cleanString(action?.title) || fix.issue_title,
+    reason: cleanString(action?.reason) || fix.why_it_matters,
+    plain_english_summary: fix.plain_english_explanation,
+    why_it_matters: cleanString(action?.reason) || fix.why_it_matters,
+    priority: ["high", "medium", "low"].includes(action?.priority)
+      ? action.priority
+      : fix.priority === "critical" || fix.priority === "high"
+        ? "high"
+        : fix.priority === "low"
+          ? "low"
+          : "medium",
+  };
 }
 
 function normalizeAiHealthReport({ aiReport, fallbackReport, score, fixes, pages, body, positives, siteFingerprint }) {
@@ -1252,7 +1347,7 @@ Hard rules:
 6. Use plain English for a non-technical business owner.
 7. Focus top actions on pages that drive leads, sales, bookings, quotes, or trust.
 8. News, blog, tag, feed, pagination, and old archive pages should not dominate the top priorities.
-9. If lower-value archive pages have repeated cosmetic issues, explain them as a grouped later batch.
+9. Guide and Q&A page issues should usually be grouped by template or content family unless the issue affects a true conversion page.
 10. For regulated or trust-sensitive sites, prioritize trust, clarity, indexability, and key conversion pages.
 
 Site fingerprint:
@@ -1437,6 +1532,7 @@ function compactFixForPrompt(fix) {
     affected_pages: fix.affected_pages?.slice(0, 8) || [],
     why_it_matters: fix.why_it_matters,
     recommended_value: fix.recommended_value,
+    page_template_family: fix.page_template_family,
     page_value_score: fix.page_value_score,
     page_value_label: fix.page_value_label,
     business_importance: fix.business_importance,
@@ -1471,7 +1567,7 @@ function buildPositiveFindings({ pages, siteFingerprint }) {
 
 function buildGroupedPageRecommendations(fixes) {
   return (fixes || [])
-    .filter((fix) => fix.business_importance === "low_value_group" || (Array.isArray(fix.affected_pages) && fix.affected_pages.length > 3))
+    .filter((fix) => fix.business_importance === "low_value_group" || fix.business_importance === "support_content_group" || (Array.isArray(fix.affected_pages) && fix.affected_pages.length > 3))
     .slice(0, 8)
     .map((fix) => ({
       title: fix.issue_title,
@@ -1488,6 +1584,13 @@ function fixToAction(fix) {
     title: fix.issue_title,
     reason: fix.why_it_matters,
     priority: fix.priority === "critical" || fix.priority === "high" ? "high" : fix.priority === "low" ? "low" : "medium",
+    plain_english_summary: fix.plain_english_explanation,
+    why_it_matters: fix.why_it_matters,
+    what_to_do_steps: fix.what_to_do_steps || fix.what_to_do || [],
+    who_can_do_this: fix.who_can_do_this === "your_web_person" ? "Your web person" : "You",
+    time_estimate: fix.time_estimate || fix.estimated_time || "",
+    affected_pages: fix.affected_pages || [],
+    page_url: fix.page_url || "",
   };
 }
 

@@ -1,7 +1,7 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
 const USER_AGENT =
-  "Mozilla/5.0 (compatible; SEO-Autopilot/3.5; +https://seoautopilot.app/bot)";
+  "Mozilla/5.0 (compatible; SEO-Autopilot/3.7; +https://seoautopilot.app/bot)";
 
 const MAX_HTML_BYTES = 800000;
 const CRAWL_TIME_BUDGET_MS = 95000;
@@ -9,6 +9,24 @@ const LARGE_HTML_BYTES = 500000;
 const HEAVY_SCRIPT_TAG_COUNT = 50;
 const LOW_TEXT_TO_HTML_RATIO = 3;
 const MIN_INTERNAL_LINKS_ON_IMPORTANT_PAGE = 2;
+
+const BROWSERLESS_TOKEN = Deno.env.get("BROWSERLESS_TOKEN") || "";
+const BROWSERLESS_CONTENT_ENDPOINT =
+  Deno.env.get("BROWSERLESS_CONTENT_ENDPOINT") ||
+  "https://production-sfo.browserless.io/content";
+
+const BROWSER_RENDER_TIMEOUT_MS = Number(
+  Deno.env.get("BROWSER_RENDER_TIMEOUT_MS") || 30000
+);
+
+const BROWSER_RENDER_MODE = String(
+  Deno.env.get("BROWSER_RENDER_MODE") || "blocked_only"
+).toLowerCase();
+
+const MAX_BROWSER_RENDER_ATTEMPTS_PER_SCAN = Math.max(
+  0,
+  Number(Deno.env.get("MAX_BROWSER_RENDER_ATTEMPTS_PER_SCAN") || 3)
+);
 
 const LANGUAGE_PATHS = ["en", "fr", "es", "de", "it", "pt", "nl"];
 
@@ -112,15 +130,19 @@ Deno.serve(async (req) => {
       competitorSnapshots: competitorResult.competitor_page_snapshots,
     });
 
+    const healthScore = calculateHealthScore({
+      fixes: rawFixes,
+      pages: crawlResult.crawled_pages,
+    });
+
     const scanSummary = buildScanSummary({
       pages: crawlResult.crawled_pages,
       fixes: rawFixes,
       technicalAuditSummary,
       competitorSnapshots: competitorResult.competitor_page_snapshots,
       crawlWarnings: crawlResult.crawl_warnings,
+      healthScore,
     });
-
-    const healthScore = calculateHealthScore(rawFixes);
 
     return Response.json({
       success: true,
@@ -171,6 +193,21 @@ Deno.serve(async (req) => {
       screaming_frog_lite_enabled: true,
       audit_profile: "screaming_frog_lite",
       robots_override_enabled: forceInternalCrawl,
+
+      browser_rendering: {
+        enabled: Boolean(BROWSERLESS_TOKEN),
+        provider: BROWSERLESS_TOKEN ? "browserless" : "",
+        mode: BROWSER_RENDER_MODE,
+        max_attempts_per_scan: MAX_BROWSER_RENDER_ATTEMPTS_PER_SCAN,
+        crawl_attempts_used: crawlResult.browser_render_attempts_used || 0,
+        competitor_attempts_used:
+          competitorResult.browser_render_attempts_used || 0,
+        crawl_attempts_max: crawlResult.browser_render_attempts_max || 0,
+        competitor_attempts_max:
+          competitorResult.browser_render_attempts_max || 0,
+        usage_policy:
+          "Browser rendering is only used for blocked start pages and blocked manual competitor URLs.",
+      },
     });
   } catch (error) {
     return Response.json(
@@ -202,6 +239,11 @@ async function crawlWebsite({
   const queued = new Set();
   const crawled = new Set();
   const finalPageKeys = new Set();
+
+  const browserRenderBudget = {
+    used: 0,
+    max: MAX_BROWSER_RENDER_ATTEMPTS_PER_SCAN,
+  };
 
   const startPathPrefix = getStartPathPrefix(websiteUrl);
 
@@ -286,6 +328,11 @@ async function crawlWebsite({
           domain,
           source: item.source,
           timeoutMs: config.timeoutMs,
+
+          // Save Browserless units:
+          // only the manually entered start page can use browser rendering.
+          allowBrowserRender: item.source === "start",
+          browserRenderBudget,
         });
       })
     );
@@ -302,10 +349,32 @@ async function crawlWebsite({
       finalPageKeys.add(pageKey);
       crawledPages.push(page);
 
+      if (page.is_scanner_blocked) {
+        pushUniqueWarning(
+          crawlWarnings,
+          "This website showed a protection, rate-limit, or browser-check page, so the scan could not review the real content for at least one page."
+        );
+
+        if (!BROWSERLESS_TOKEN) {
+          pushUniqueWarning(
+            crawlWarnings,
+            "Browser rendering is not configured. Add BROWSERLESS_TOKEN in Base44 secrets to improve scans on protected websites."
+          );
+        } else if (page.browser_render_attempted && !page.browser_rendered) {
+          pushUniqueWarning(
+            crawlWarnings,
+            "Browser rendering was attempted, but the website still appeared to block the scan."
+          );
+        } else if (page.browser_render_skipped) {
+          pushUniqueWarning(crawlWarnings, page.browser_render_skip_reason);
+        }
+      }
+
       if (
         page.status_code >= 200 &&
         page.status_code < 300 &&
-        !page.fetch_error
+        !page.fetch_error &&
+        !page.is_scanner_blocked
       ) {
         const sortedLinks = stableSortUrls(page.internal_links || []);
 
@@ -345,10 +414,21 @@ async function crawlWebsite({
     queued_remaining: queue.length,
     crawl_warnings: crawlWarnings,
     start_path_prefix: startPathPrefix,
+    browser_render_attempts_used: browserRenderBudget.used,
+    browser_render_attempts_max: browserRenderBudget.max,
   };
 }
 
-async function fetchAndExtractPage({ url, domain, source, timeoutMs }) {
+async function fetchAndExtractPage({
+  url,
+  domain,
+  source,
+  timeoutMs,
+  allowBrowserRender = false,
+  browserRenderBudget = null,
+}) {
+  let firstPage = null;
+
   try {
     const response = await fetchWithTimeout(
       url,
@@ -359,7 +439,7 @@ async function fetchAndExtractPage({ url, domain, source, timeoutMs }) {
           "User-Agent": USER_AGENT,
           Accept:
             "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "Accept-Language": "en-US,en;q=0.9",
+          "Accept-Language": "en-US,en;q=0.9,fr;q=0.8",
           "Cache-Control": "no-cache",
         },
       },
@@ -370,7 +450,7 @@ async function fetchAndExtractPage({ url, domain, source, timeoutMs }) {
     const contentType = response.headers.get("content-type") || "";
     const html = await readLimitedText(response, MAX_HTML_BYTES);
 
-    return extractPageData({
+    firstPage = extractPageData({
       url: finalUrl,
       originalUrl: url,
       status: response.status,
@@ -379,9 +459,50 @@ async function fetchAndExtractPage({ url, domain, source, timeoutMs }) {
       domain,
       source,
       fetchError: "",
+      browserRendered: false,
+      browserRenderAttempted: false,
     });
+
+    if (shouldRetryWithBrowser(firstPage)) {
+      if (
+        reserveBrowserRenderAttempt({
+          allowBrowserRender,
+          browserRenderBudget,
+        })
+      ) {
+        const rendered = await tryBrowserRenderedPage({
+          url: finalUrl,
+          originalUrl: url,
+          domain,
+          source,
+        });
+
+        if (rendered && isRenderedPageBetter(rendered, firstPage)) {
+          return rendered;
+        }
+
+        return {
+          ...firstPage,
+          browser_render_attempted: true,
+          browser_rendered: false,
+        };
+      }
+
+      return {
+        ...firstPage,
+        browser_render_attempted: false,
+        browser_rendered: false,
+        browser_render_skipped: true,
+        browser_render_skip_reason: getBrowserRenderSkipReason({
+          allowBrowserRender,
+          browserRenderBudget,
+        }),
+      };
+    }
+
+    return firstPage;
   } catch (error) {
-    return {
+    firstPage = {
       url,
       original_url: url,
       source,
@@ -399,12 +520,222 @@ async function fetchAndExtractPage({ url, domain, source, timeoutMs }) {
       is_important_page: isImportantPage(url),
       is_utility_page: isUtilityUrl(url),
       likely_client_rendered: false,
+      is_scanner_blocked: false,
+      scanner_block_reason: "",
       indexability: "unknown",
       indexability_reasons: ["The page could not be fetched."],
       response_size_bytes: 0,
       html_truncated: false,
+      browser_render_attempted: false,
+      browser_rendered: false,
+    };
+
+    if (
+      reserveBrowserRenderAttempt({
+        allowBrowserRender,
+        browserRenderBudget,
+      })
+    ) {
+      const rendered = await tryBrowserRenderedPage({
+        url,
+        originalUrl: url,
+        domain,
+        source,
+      });
+
+      if (rendered && isRenderedPageBetter(rendered, firstPage)) {
+        return rendered;
+      }
+
+      return {
+        ...firstPage,
+        browser_render_attempted: true,
+        browser_rendered: false,
+      };
+    }
+
+    return {
+      ...firstPage,
+      browser_render_skipped: true,
+      browser_render_skip_reason: getBrowserRenderSkipReason({
+        allowBrowserRender,
+        browserRenderBudget,
+      }),
     };
   }
+}
+
+function reserveBrowserRenderAttempt({
+  allowBrowserRender,
+  browserRenderBudget,
+}) {
+  if (!BROWSERLESS_TOKEN) return false;
+  if (BROWSER_RENDER_MODE === "off") return false;
+  if (!allowBrowserRender) return false;
+
+  if (!browserRenderBudget) return true;
+
+  if (browserRenderBudget.used >= browserRenderBudget.max) {
+    return false;
+  }
+
+  browserRenderBudget.used += 1;
+
+  return true;
+}
+
+function getBrowserRenderSkipReason({
+  allowBrowserRender,
+  browserRenderBudget,
+}) {
+  if (!BROWSERLESS_TOKEN) {
+    return "Browser rendering is not configured.";
+  }
+
+  if (BROWSER_RENDER_MODE === "off") {
+    return "Browser rendering is turned off by BROWSER_RENDER_MODE.";
+  }
+
+  if (!allowBrowserRender) {
+    return "Browser rendering is reserved for the start page and manual competitor URLs.";
+  }
+
+  if (
+    browserRenderBudget &&
+    browserRenderBudget.used >= browserRenderBudget.max
+  ) {
+    return "Browser rendering monthly-unit protection stopped this request because the scan reached its render-attempt limit.";
+  }
+
+  return "Browser rendering was skipped.";
+}
+
+async function tryBrowserRenderedPage({ url, originalUrl, domain, source }) {
+  if (!BROWSERLESS_TOKEN) return null;
+
+  try {
+    const rendered = await fetchRenderedHtmlWithBrowser(url);
+
+    if (!rendered?.html) return null;
+
+    return extractPageData({
+      url: rendered.finalUrl || url,
+      originalUrl,
+      status: rendered.status || 200,
+      contentType: "text/html; rendered=browserless",
+      html: rendered.html,
+      domain,
+      source,
+      fetchError: "",
+      browserRendered: true,
+      browserRenderAttempted: true,
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function fetchRenderedHtmlWithBrowser(url) {
+  const endpoint = appendTokenToBrowserlessUrl(BROWSERLESS_CONTENT_ENDPOINT);
+
+  const response = await fetchWithTimeout(
+    endpoint,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-cache",
+      },
+      body: JSON.stringify({
+        url,
+        gotoOptions: {
+          waitUntil: "networkidle2",
+          timeout: BROWSER_RENDER_TIMEOUT_MS,
+        },
+        waitForTimeout: 2500,
+      }),
+    },
+    BROWSER_RENDER_TIMEOUT_MS + 5000
+  );
+
+  const text = await response.text();
+
+  if (!response.ok) {
+    throw new Error(
+      `Browser rendering failed with status ${response.status}: ${clampText(
+        text,
+        300
+      )}`
+    );
+  }
+
+  return {
+    html: text,
+    finalUrl: url,
+    status: 200,
+  };
+}
+
+function appendTokenToBrowserlessUrl(endpoint) {
+  const url = new URL(endpoint);
+
+  if (!url.searchParams.get("token")) {
+    url.searchParams.set("token", BROWSERLESS_TOKEN);
+  }
+
+  return url.toString();
+}
+
+function shouldRetryWithBrowser(page) {
+  if (!page) return false;
+
+  const status = Number(page.status_code || 0);
+
+  if (page.is_scanner_blocked) return true;
+
+  if (status === 403 || status === 429 || status === 503 || status === 0) {
+    return true;
+  }
+
+  if (BROWSER_RENDER_MODE === "js_fallback") {
+    if (
+      status >= 200 &&
+      status < 300 &&
+      Number(page.word_count || 0) < 30 &&
+      Number(page.script_tag_count || 0) >= 10
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isRenderedPageBetter(rendered, firstPage) {
+  if (!rendered) return false;
+
+  if (rendered.is_scanner_blocked && !firstPage?.is_scanner_blocked) {
+    return false;
+  }
+
+  if (!rendered.is_scanner_blocked && firstPage?.is_scanner_blocked) {
+    return true;
+  }
+
+  const renderedWords = Number(rendered.word_count || 0);
+  const firstWords = Number(firstPage?.word_count || 0);
+
+  if (renderedWords >= Math.max(80, firstWords + 50)) return true;
+
+  if (
+    rendered.status_code >= 200 &&
+    rendered.status_code < 300 &&
+    firstPage?.status_code >= 400
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -420,6 +751,8 @@ function extractPageData({
   domain,
   source,
   fetchError,
+  browserRendered = false,
+  browserRenderAttempted = false,
 }) {
   const rawHtml = String(html || "");
   const lowerHtml = rawHtml.toLowerCase();
@@ -473,12 +806,20 @@ function extractPageData({
   const important = isImportantPage(url);
   const utility = isUtilityUrl(url);
 
+  const antiBot = detectAntiBotBlock({
+    status,
+    title,
+    visibleText,
+    html: rawHtml,
+  });
+
   const likelyClientRendered =
     status >= 200 &&
     status < 300 &&
     words.length < 80 &&
     scriptTagCount >= 20 &&
-    internalLinks.length > 0;
+    internalLinks.length > 0 &&
+    !antiBot.blocked;
 
   const trustSignals = detectTrustSignals(visibleText);
   const ctaPhrases = detectCtaPhrases(visibleText);
@@ -532,8 +873,10 @@ function extractPageData({
     canonical_issue: canonical.issue,
 
     robots_meta: robotsMeta,
-    indexability: indexability.status,
-    indexability_reasons: indexability.reasons,
+    indexability: antiBot.blocked ? "unknown" : indexability.status,
+    indexability_reasons: antiBot.blocked
+      ? ["The scanner received a protection or rate-limit page."]
+      : indexability.reasons,
 
     viewport_present: viewportPresent,
     charset_present: charsetPresent,
@@ -548,9 +891,80 @@ function extractPageData({
     script_tag_count: scriptTagCount,
     text_to_html_ratio: textToHtmlRatio,
 
-    is_important_page: important,
+    is_important_page: antiBot.blocked ? false : important,
     is_utility_page: utility,
     likely_client_rendered: likelyClientRendered,
+
+    is_scanner_blocked: antiBot.blocked,
+    scanner_block_reason: antiBot.reason,
+
+    browser_render_attempted: browserRenderAttempted,
+    browser_rendered: browserRendered,
+  };
+}
+
+function detectAntiBotBlock({ status, title, visibleText, html }) {
+  const lowerTitle = String(title || "").toLowerCase();
+  const lowerText = String(visibleText || "").toLowerCase();
+  const lowerHtml = String(html || "").toLowerCase();
+
+  const statusLooksBlocked =
+    Number(status) === 403 || Number(status) === 429 || Number(status) === 503;
+
+  const phrases = [
+    "just a moment",
+    "checking your browser",
+    "check your browser",
+    "enable javascript",
+    "please enable javascript",
+    "cloudflare",
+    "attention required",
+    "access denied",
+    "rate limit",
+    "too many requests",
+    "request blocked",
+    "bot detection",
+    "security check",
+    "verify you are human",
+    "are you human",
+    "captcha",
+    "datadome",
+    "akamai",
+    "perimeterx",
+    "imperva",
+  ];
+
+  const matchedPhrase = phrases.find(
+    (phrase) =>
+      lowerTitle.includes(phrase) ||
+      lowerText.includes(phrase) ||
+      lowerHtml.includes(phrase)
+  );
+
+  if (statusLooksBlocked && matchedPhrase) {
+    return {
+      blocked: true,
+      reason: `HTTP ${status} with protection phrase "${matchedPhrase}".`,
+    };
+  }
+
+  if (statusLooksBlocked && lowerText.length < 800) {
+    return {
+      blocked: true,
+      reason: `HTTP ${status} with very little readable page content.`,
+    };
+  }
+
+  if (matchedPhrase && tokenizeWords(visibleText).length < 80) {
+    return {
+      blocked: true,
+      reason: `Protection phrase "${matchedPhrase}" appeared instead of normal page content.`,
+    };
+  }
+
+  return {
+    blocked: false,
+    reason: "",
   };
 }
 
@@ -577,6 +991,11 @@ async function analyzeCompetitors({ competitorUrls, config, userPages }) {
     query: "",
   }));
 
+  const competitorBrowserRenderBudget = {
+    used: 0,
+    max: Math.min(MAX_BROWSER_RENDER_ATTEMPTS_PER_SCAN, urls.length),
+  };
+
   const snapshots = await Promise.all(
     competitorResults.map(async (competitor) => {
       const page = await fetchAndExtractPage({
@@ -584,6 +1003,10 @@ async function analyzeCompetitors({ competitorUrls, config, userPages }) {
         domain: competitor.domain,
         source: "competitor",
         timeoutMs: config.timeoutMs,
+
+        // Manual competitor URLs may use Browserless, but only if blocked.
+        allowBrowserRender: true,
+        browserRenderBudget: competitorBrowserRenderBudget,
       });
 
       return {
@@ -603,6 +1026,12 @@ async function analyzeCompetitors({ competitorUrls, config, userPages }) {
         trust_signals: page.trust_signals || [],
         cta_phrases: page.cta_phrases || [],
         visible_text_sample: page.visible_text_sample || "",
+        is_scanner_blocked: Boolean(page.is_scanner_blocked),
+        scanner_block_reason: page.scanner_block_reason || "",
+        browser_rendered: Boolean(page.browser_rendered),
+        browser_render_attempted: Boolean(page.browser_render_attempted),
+        browser_render_skipped: Boolean(page.browser_render_skipped),
+        browser_render_skip_reason: page.browser_render_skip_reason || "",
       };
     })
   );
@@ -616,17 +1045,25 @@ async function analyzeCompetitors({ competitorUrls, config, userPages }) {
     competitor_results: competitorResults,
     competitor_page_snapshots: snapshots,
     competitor_comparison: comparison,
+    browser_render_attempts_used: competitorBrowserRenderBudget.used,
+    browser_render_attempts_max: competitorBrowserRenderBudget.max,
   };
 }
 
 function buildCompetitorComparison({ userPages, competitorSnapshots }) {
   const userImportant = (userPages || []).filter(
-    (page) => page.is_important_page && !page.is_utility_page
+    (page) =>
+      page.is_important_page &&
+      !page.is_utility_page &&
+      !page.is_scanner_blocked
   );
 
   const readableCompetitors = (competitorSnapshots || []).filter(
     (item) =>
-      item.status_code >= 200 && item.status_code < 300 && item.word_count > 50
+      item.status_code >= 200 &&
+      item.status_code < 300 &&
+      item.word_count > 50 &&
+      !item.is_scanner_blocked
   );
 
   if (userImportant.length === 0 || readableCompetitors.length === 0) {
@@ -745,6 +1182,7 @@ function buildFindings({
 }) {
   const fixes = [];
 
+  addScannerBlockedFindings(fixes, pages);
   addBrokenPageFindings(fixes, pages);
   addContentFindings(fixes, pages);
   addScreamingFrogLiteFindings(fixes, pages);
@@ -754,9 +1192,60 @@ function buildFindings({
   return dedupeFindings(fixes).sort(compareFindings);
 }
 
+function addScannerBlockedFindings(fixes, pages) {
+  const blockedPages = (pages || []).filter((page) => page.is_scanner_blocked);
+
+  if (blockedPages.length === 0) return;
+
+  const startPageBlocked =
+    blockedPages.length === 1 ||
+    blockedPages.some((page) => page.source === "start");
+
+  fixes.push(
+    makeFinding({
+      id: "scanner_blocked",
+      category: "scanner_blocked",
+      customerCategory: "Scan limited",
+      priority: "high",
+      title: startPageBlocked
+        ? "Website protection blocked the scan"
+        : "Some pages blocked the scanner",
+      explanation: startPageBlocked
+        ? "The website showed a protection, browser-check, or rate-limit page instead of the real page content. This means the scan could not properly review the page."
+        : "Some pages showed a protection, browser-check, or rate-limit page instead of normal page content.",
+      why:
+        "This does not automatically mean the website is broken for visitors. It means the scanner could not see enough real content to give a reliable SEO review for those pages.",
+      affectedPages: blockedPages.map((page) => cleanPath(page.url)),
+      details: {
+        affected_count: blockedPages.length,
+        browser_rendering_enabled: Boolean(BROWSERLESS_TOKEN),
+        browser_render_mode: BROWSER_RENDER_MODE,
+        examples: blockedPages.slice(0, 8).map((page) => ({
+          url: page.url,
+          path: cleanPath(page.url),
+          readable_label: readablePageLabel(page.url),
+          status_code: page.status_code,
+          title: page.title,
+          word_count: page.word_count,
+          scanner_block_reason: page.scanner_block_reason,
+          browser_render_attempted: page.browser_render_attempted,
+          browser_rendered: page.browser_rendered,
+          browser_render_skipped: page.browser_render_skipped,
+          browser_render_skip_reason: page.browser_render_skip_reason || "",
+        })),
+      },
+      difficulty: "developer",
+      status: "needs_developer",
+    })
+  );
+}
+
 function addBrokenPageFindings(fixes, pages) {
   const brokenPages = pages.filter((page) => {
     const status = Number(page.status_code || 0);
+
+    if (page.is_scanner_blocked) return false;
+
     return status === 0 || status >= 400 || page.fetch_error;
   });
 
@@ -794,12 +1283,6 @@ function addBrokenPageFindings(fixes, pages) {
       affectedPages: brokenPages.map((page) => cleanPath(page.url)),
       details: {
         affected_count: brokenPages.length,
-        plain_english_note: languageName
-          ? `These URLs are still in the ${languageName} section because they start with ${firstPath
-              .split("/")
-              .slice(0, 2)
-              .join("/")}. The words after that may still be English-style URL slugs because that is how the website names its pages.`
-          : "These URLs returned errors during the scan. They may be old links, unavailable pages, or pages blocked from server-side checks.",
         examples: examplePages,
       },
       difficulty: "developer",
@@ -813,6 +1296,7 @@ function addContentFindings(fixes, pages) {
     (page) =>
       page.is_important_page &&
       !page.is_utility_page &&
+      !page.is_scanner_blocked &&
       page.status_code >= 200 &&
       page.status_code < 300
   );
@@ -934,7 +1418,10 @@ function addContentFindings(fixes, pages) {
 
 function addScreamingFrogLiteFindings(fixes, pages) {
   const successfulPages = pages.filter(
-    (page) => page.status_code >= 200 && page.status_code < 300
+    (page) =>
+      page.status_code >= 200 &&
+      page.status_code < 300 &&
+      !page.is_scanner_blocked
   );
 
   const missingTitles = successfulPages.filter((page) => !page.title);
@@ -981,8 +1468,7 @@ function addScreamingFrogLiteFindings(fixes, pages) {
         title: "Add missing search titles",
         explanation:
           "Some pages are missing a clear page title for search results.",
-        why:
-          "Search titles help people and search engines understand the page.",
+        why: "Search titles help people and search engines understand the page.",
         affectedPages: missingTitles.map((page) => cleanPath(page.url)),
         difficulty: "moderate",
         status: "needs_approval",
@@ -1112,8 +1598,7 @@ function addScreamingFrogLiteFindings(fixes, pages) {
         title: "Review pages that may not be visible to search engines",
         explanation:
           "Some pages may be telling search engines not to show them in results.",
-        why:
-          "Important pages should usually be available to search engines.",
+        why: "Important pages should usually be available to search engines.",
         affectedPages: nonIndexable.map((page) => cleanPath(page.url)),
         difficulty: "developer",
         status: "needs_developer",
@@ -1129,8 +1614,7 @@ function addScreamingFrogLiteFindings(fixes, pages) {
         customerCategory: "Technical SEO",
         priority: "medium",
         title: "Review mobile setup",
-        explanation:
-          "Some pages may be missing a mobile viewport setting.",
+        explanation: "Some pages may be missing a mobile viewport setting.",
         why:
           "Mobile setup helps pages display correctly on phones and tablets.",
         affectedPages: missingViewport.map((page) => cleanPath(page.url)),
@@ -1200,7 +1684,7 @@ function addScreamingFrogLiteFindings(fixes, pages) {
 function addClientRenderingFindings(fixes, pages) {
   const flagged = unique(
     (pages || [])
-      .filter((page) => page.likely_client_rendered)
+      .filter((page) => page.likely_client_rendered && !page.is_scanner_blocked)
       .map((page) => cleanPath(page.url))
   );
 
@@ -1235,8 +1719,34 @@ function addClientRenderingFindings(fixes, pages) {
 function addCompetitorFindings(fixes, competitorComparison, competitorSnapshots) {
   const readableCompetitors = (competitorSnapshots || []).filter(
     (item) =>
-      item.status_code >= 200 && item.status_code < 300 && item.word_count > 50
+      item.status_code >= 200 &&
+      item.status_code < 300 &&
+      item.word_count > 50 &&
+      !item.is_scanner_blocked
   );
+
+  const blockedCompetitors = (competitorSnapshots || []).filter(
+    (item) => item.is_scanner_blocked
+  );
+
+  if (blockedCompetitors.length > 0 && readableCompetitors.length === 0) {
+    fixes.push(
+      makeFinding({
+        id: "competitor_pages_blocked",
+        category: "scanner_blocked",
+        customerCategory: "Competitor opportunities",
+        priority: "medium",
+        title: "Competitor pages could not be fully checked",
+        explanation:
+          "The competitor pages showed protection or browser-check pages, so competitor insights are limited.",
+        why:
+          "Competitor analysis needs readable competitor content. If competitors block scans, the report can only show limited comparison.",
+        affectedPages: blockedCompetitors.map((item) => item.competitor_url),
+        difficulty: "moderate",
+        status: "needs_approval",
+      })
+    );
+  }
 
   if (readableCompetitors.length > 0) {
     fixes.push(
@@ -1406,6 +1916,22 @@ function makeFinding({
 }
 
 function defaultSteps(category, difficulty) {
+  if (category === "scanner_blocked") {
+    if (BROWSERLESS_TOKEN) {
+      return [
+        "Ask your web person to confirm whether this page blocks automated checks.",
+        "Review whether the site security settings are intentionally blocking SEO tools.",
+        "Try scanning again later or whitelist the scanner if appropriate.",
+      ];
+    }
+
+    return [
+      "Add BROWSERLESS_TOKEN in Base44 backend secrets if you want browser-rendered scans.",
+      "Ask your web person to review whether the site blocks automated SEO checks.",
+      "Try scanning again later or whitelist the scanner if appropriate.",
+    ];
+  }
+
   if (difficulty === "developer") {
     return [
       "Share this finding with your web person.",
@@ -1462,7 +1988,8 @@ function compareFindings(a, b) {
 
 function buildTechnicalAuditSummary(pages) {
   const safePages = Array.isArray(pages) ? pages : [];
-  const successful = safePages.filter(
+  const readable = safePages.filter((page) => !page.is_scanner_blocked);
+  const successful = readable.filter(
     (page) => page.status_code >= 200 && page.status_code < 300
   );
   const important = successful.filter(
@@ -1471,6 +1998,9 @@ function buildTechnicalAuditSummary(pages) {
 
   return {
     pages_checked: safePages.length,
+    readable_pages_checked: readable.length,
+    scanner_blocked_pages: safePages.filter((page) => page.is_scanner_blocked)
+      .length,
     important_pages_checked: important.length,
 
     indexable_pages: successful.filter(
@@ -1517,12 +2047,18 @@ function buildScanSummary({
   technicalAuditSummary,
   competitorSnapshots,
   crawlWarnings,
+  healthScore,
 }) {
   const positives = buildPositiveFindings(pages);
-  const score = calculateHealthScore(fixes);
+  const blockedPages = (pages || []).filter((page) => page.is_scanner_blocked);
+  const scanLimited = blockedPages.length > 0 && pages.length <= 2;
   const summaryParts = [];
 
-  if (positives.length > 0) {
+  if (scanLimited) {
+    summaryParts.push(
+      "The scan was limited because the website showed a protection, browser-check, or rate-limit page instead of normal content."
+    );
+  } else if (positives.length > 0) {
     summaryParts.push(`The scan found a working SEO foundation. ${positives[0]}`);
   } else {
     summaryParts.push(
@@ -1563,13 +2099,14 @@ function buildScanSummary({
   }
 
   return {
-    score,
-    status_label:
-      score >= 85
+    score: healthScore,
+    status_label: scanLimited
+      ? "Scan limited"
+      : healthScore >= 85
         ? "Great shape"
-        : score >= 70
+        : healthScore >= 70
           ? "Good start"
-          : score >= 45
+          : healthScore >= 45
             ? "Needs attention"
             : "Needs urgent attention",
     plain_english_summary: summaryParts.join(" "),
@@ -1578,6 +2115,7 @@ function buildScanSummary({
       const status = Number(page.status_code || 0);
       return status === 0 || status >= 400 || page.fetch_error;
     }).length,
+    scanner_blocked_pages: blockedPages.length,
     high_priority_count: fixes.filter((fix) =>
       ["critical", "high"].includes(fix.priority)
     ).length,
@@ -1594,7 +2132,10 @@ function buildScanSummary({
 function buildPositiveFindings(pages) {
   const positives = [];
   const successful = (pages || []).filter(
-    (page) => page.status_code >= 200 && page.status_code < 300
+    (page) =>
+      page.status_code >= 200 &&
+      page.status_code < 300 &&
+      !page.is_scanner_blocked
   );
 
   if (successful.length > 0) {
@@ -1622,6 +2163,10 @@ function buildPositiveFindings(pages) {
 
 function describeFixTypes(fixes) {
   const labels = [];
+
+  if (fixes.some((fix) => fix.category === "scanner_blocked")) {
+    labels.push("scan access");
+  }
 
   if (
     fixes.some(
@@ -1664,11 +2209,23 @@ function describeFixTypes(fixes) {
   }`;
 }
 
-function calculateHealthScore(fixes) {
+function calculateHealthScore({ fixes, pages }) {
+  const blockedPages = (pages || []).filter((page) => page.is_scanner_blocked);
+  const readablePages = (pages || []).filter((page) => !page.is_scanner_blocked);
+
+  if (blockedPages.length > 0 && readablePages.length === 0) {
+    return 40;
+  }
+
+  if (blockedPages.length > 0 && readablePages.length <= 1) {
+    return 50;
+  }
+
   let score = 100;
 
   for (const fix of fixes || []) {
-    if (fix.priority === "critical") score -= 16;
+    if (fix.category === "scanner_blocked") score -= 35;
+    else if (fix.priority === "critical") score -= 16;
     else if (fix.priority === "high") score -= 10;
     else if (fix.priority === "medium") score -= 5;
     else if (fix.priority === "low") score -= 2;
@@ -1679,7 +2236,10 @@ function calculateHealthScore(fixes) {
 
 function buildClientRenderingSummary(pages) {
   const checked = (pages || []).filter(
-    (page) => page.status_code >= 200 && page.status_code < 300
+    (page) =>
+      page.status_code >= 200 &&
+      page.status_code < 300 &&
+      !page.is_scanner_blocked
   );
 
   const flaggedPaths = unique(
@@ -2364,11 +2924,11 @@ function isUtilityUrl(url) {
 
       /backup/i,
       /\/home-\d+$/i,
-      /\/old/i,
-      /\/draft/i,
-      /\/staging/i,
-      /\/test/i,
-      /\/preview/i,
+      /\/old($|\/|-)/i,
+      /\/draft($|\/|-)/i,
+      /\/staging($|\/|-)/i,
+      /\/test($|\/|-)/i,
+      /\/preview($|\/|-)/i,
     ];
 
     return utilityPatterns.some((pattern) => pattern.test(path));
@@ -2686,6 +3246,8 @@ function friendlyNameFromDomain(domain) {
 }
 
 function pushUniqueWarning(warnings, warning) {
+  if (!warning) return;
+
   if (!warnings.includes(warning)) {
     warnings.push(warning);
   }

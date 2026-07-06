@@ -830,41 +830,38 @@ async function fetchWithBrowserless(url: string) {
 /* -------------------------------------------------------------------------- */
 
 async function discoverSitemapEntries({ origin, languagePrefix, deadlineAt, maxUrls }: { origin: string; languagePrefix: string; deadlineAt: number; maxUrls: number }) {
-  const sitemapCandidates = new Set<string>([`${origin}/sitemap.xml`, `${origin}/sitemap_index.xml`]);
+  const candidates = new Set<string>([`${origin}/sitemap.xml`, `${origin}/sitemap_index.xml`]);
   try {
     const robots = await fetchText(`${origin}/robots.txt`, SITEMAP_FETCH_TIMEOUT_MS);
     for (const line of robots.split(/\r?\n/)) {
       const match = line.match(/^sitemap:\s*(.+)$/i);
-      if (match?.[1]) sitemapCandidates.add(match[1].trim());
+      if (match?.[1]) candidates.add(match[1].trim());
     }
   } catch {}
 
-  const pageEntries = new Map<string, any>();
-  const sitemapQueue = [...sitemapCandidates].slice(0, 10);
-  const visitedSitemaps = new Set<string>();
-  while (sitemapQueue.length > 0 && pageEntries.size < maxUrls && Date.now() < deadlineAt - 5000) {
-    const sitemapUrl = sitemapQueue.shift();
-    if (!sitemapUrl || visitedSitemaps.has(sitemapUrl)) continue;
-    visitedSitemaps.add(sitemapUrl);
+  const entries = new Map<string, any>();
+  const queue = [...candidates].slice(0, 10);
+  const seen = new Set<string>();
+  while (queue.length && entries.size < maxUrls && Date.now() < deadlineAt - 5000) {
+    const sitemapUrl = queue.shift();
+    if (!sitemapUrl || seen.has(sitemapUrl)) continue;
+    seen.add(sitemapUrl);
     try {
       const xml = await fetchText(sitemapUrl, SITEMAP_FETCH_TIMEOUT_MS);
-      for (const child of parseSitemapIndexLocs(xml)) {
+      for (const child of parseSitemapIndexLocs(xml).slice(0, 25)) {
         const cleanedChild = cleanUrl(child);
-        if (sitemapQueue.length < 35 && cleanedChild && /\.xml(\?|$)/i.test(cleanedChild)) sitemapQueue.push(cleanedChild);
+        if (cleanedChild && /\.xml(\?|$)/i.test(cleanedChild)) queue.push(cleanedChild);
       }
       for (const entry of parseSitemapUrlEntries(xml)) {
-        if (pageEntries.size >= maxUrls) break;
+        if (entries.size >= maxUrls) break;
         const cleaned = cleanUrl(entry.url);
         if (!cleaned) continue;
-        if (/\.xml(\?|$)/i.test(cleaned)) {
-          if (sitemapQueue.length < 35) sitemapQueue.push(cleaned);
-        } else if (shouldCrawlUrl({ url: cleaned, origin, languagePrefix })) {
-          pageEntries.set(cleaned, { ...entry, url: cleaned, source_sitemap: sitemapUrl });
-        }
+        if (/\.xml(\?|$)/i.test(cleaned)) { if (queue.length < 35) queue.push(cleaned); continue; }
+        if (shouldCrawlUrl({ url: cleaned, origin, languagePrefix })) entries.set(cleaned, { ...entry, url: cleaned, source_sitemap: sitemapUrl });
       }
     } catch {}
   }
-  return [...pageEntries.values()].slice(0, maxUrls);
+  return [...entries.values()].slice(0, maxUrls);
 }
 
 function parseSitemapIndexLocs(xml: string) {
@@ -872,9 +869,9 @@ function parseSitemapIndexLocs(xml: string) {
 }
 
 function parseSitemapUrlEntries(xml: string) {
-  const urlBlocks = [...String(xml || "").matchAll(/<url\b[^>]*>([\s\S]*?)<\/url>/gi)];
-  if (!urlBlocks.length) return parseLocTags(xml).map((url) => ({ url, lastmod: "", priority: 0 }));
-  return urlBlocks.map((block) => ({ url: extractXmlTag(block[1] || "", "loc"), lastmod: extractXmlTag(block[1] || "", "lastmod"), priority: Number(extractXmlTag(block[1] || "", "priority") || 0) })).filter((entry) => entry.url);
+  const blocks = [...String(xml || "").matchAll(/<url\b[^>]*>([\s\S]*?)<\/url>/gi)];
+  if (!blocks.length) return parseLocTags(xml).map((url) => ({ url, lastmod: "", priority: 0 }));
+  return blocks.map((block) => ({ url: extractXmlTag(block[1] || "", "loc"), lastmod: extractXmlTag(block[1] || "", "lastmod"), priority: Number(extractXmlTag(block[1] || "", "priority") || 0) })).filter((entry) => entry.url);
 }
 
 function extractXmlTag(xml: string, tag: string) {
@@ -883,64 +880,32 @@ function extractXmlTag(xml: string, tag: string) {
 }
 
 function buildImportanceProfile({ startUrl, sitemapEntries, languagePrefix }: { startUrl: string; sitemapEntries: any[]; languagePrefix: string }) {
-  const topicDossierPrefix = detectTopicDossierPrefix(new URL(startUrl).pathname, languagePrefix);
-  const folderStats = new Map<string, any>();
-  for (const entry of sitemapEntries) {
-    const folder = getPrimaryFolder(entry.url, languagePrefix);
-    if (!folder) continue;
-    if (!folderStats.has(folder)) folderStats.set(folder, { folder, count: 0, average_depth_total: 0, demoted: isDemotedFolder(folder) });
-    const stat = folderStats.get(folder);
-    stat.count += 1;
-    stat.average_depth_total += getUrlDepth(entry.url);
-  }
-  const stats = [...folderStats.values()].map((stat) => ({ ...stat, average_depth: stat.average_depth_total / Math.max(1, stat.count) }));
-  const importantFolders = stats.filter((stat) => !stat.demoted && stat.count >= 2 && stat.average_depth <= 5.5).sort((a, b) => b.count - a.count).slice(0, 8).map((stat) => stat.folder);
-  const demotedFolders = stats.filter((stat) => stat.demoted).sort((a, b) => b.count - a.count).slice(0, 8).map((stat) => stat.folder);
-  return { topic_dossier_prefix: topicDossierPrefix, important_folders: importantFolders, demoted_folders: demotedFolders, important_page_patterns: [...(topicDossierPrefix ? [topicDossierPrefix] : []), ...importantFolders], deprioritized_page_patterns: unique([...demotedFolders, "/listing/", "/show", "/actualite/", "/actualité/", "/blog/", "/news/", "/tag/", "/author/", "/search", "/page/"]) };
+  const prefix = detectTopicDossierPrefix(new URL(startUrl).pathname, languagePrefix);
+  const folders = unique(sitemapEntries.map((entry) => getPrimaryFolder(entry.url, languagePrefix)).filter((folder) => folder && !isDemotedFolder(folder))).slice(0, 8);
+  return { topic_dossier_prefix: prefix, important_folders: folders, demoted_folders: [], important_page_patterns: unique([prefix, ...folders]), deprioritized_page_patterns: ["/listing/", "/show", "/actualite/", "/actualité/", "/blog/", "/news/", "/tag/", "/author/", "/search", "/page/"] };
 }
 
 function scoreUrlImportance({ url, source, startUrl, languagePrefix, profile, sitemapEntry }: { url: string; source: string; startUrl: string; languagePrefix: string; profile: any; sitemapEntry: any }) {
-  let score = 0;
+  let score = cleanUrl(url) === cleanUrl(startUrl) ? 10000 : 0;
   const reasons: string[] = [];
-  const add = (points: number, reason: string) => { score += points; reasons.push(reason); };
-  if (cleanUrl(url) === cleanUrl(startUrl)) add(10000, "starting page");
-  if (source === "start") add(900, "scan start");
-  if (source === "homepage_link") add(180, "linked from starting page");
-  if (source === "sitemap") add(90, "found in sitemap");
-  if (source === "internal") add(25, "found from internal link");
-  if (sitemapEntry) {
-    add(60, "listed in sitemap");
-    const priority = Number(sitemapEntry.priority || 0);
-    if (priority > 0) add(Math.round(priority * 60), `sitemap priority ${priority}`);
-    const recency = getLastmodRecencyBoost(sitemapEntry.lastmod);
-    if (recency > 0) add(recency, "recent sitemap update");
-  }
+  if (source === "start") { score += 900; reasons.push("scan start"); }
+  if (source === "homepage_link") { score += 180; reasons.push("linked from starting page"); }
+  if (source === "sitemap" || sitemapEntry) { score += 150; reasons.push("found in sitemap"); }
+  if (source === "internal") { score += 25; reasons.push("found from internal link"); }
   const depth = getUrlDepth(url);
-  if (depth <= 1) add(120, "short high-level URL"); else if (depth <= 3) add(60, "clean landing-page depth"); else if (depth >= 6) add(-80, "deep URL");
-  const folder = getPrimaryFolder(url, languagePrefix);
-  if (folder && profile.important_folders.includes(folder)) add(130, `common important site folder: ${folder}`);
-  const path = new URL(url).pathname;
-  const topicPrefix = profile.topic_dossier_prefix;
-  if (topicPrefix) path === topicPrefix || path.startsWith(`${topicPrefix}/`) ? add(300, `inside starting topic folder ${topicPrefix}`) : add(-280, `outside starting topic folder ${topicPrefix}`);
-  const lowValuePenalty = getLowValueUrlPenalty(url, topicPrefix);
-  if (lowValuePenalty.penalty > 0) add(-lowValuePenalty.penalty, lowValuePenalty.reason);
-  if (looksLikeLandingPage(url)) add(70, "looks like a landing page");
-  if (looksLikeListingDetail(url)) add(-240, "looks like a listing/detail page");
-  if (looksLikeFilterOrPagination(url)) add(-180, "looks like filtered or paginated page");
-  if (languagePrefix && path === `${languagePrefix}/`) add(120, "language homepage");
+  if (depth <= 2) score += 100; else if (depth >= 6) score -= 80;
+  if (profile.topic_dossier_prefix && new URL(url).pathname.startsWith(profile.topic_dossier_prefix)) score += 250;
+  if (looksLikeListingDetail(url) || looksLikeFilterOrPagination(url)) score -= 200;
   return { score, reasons };
 }
 
-function sortQueueByImportance(queue: Array<any>) { queue.sort((a, b) => b.importance_score !== a.importance_score ? b.importance_score - a.importance_score : a.url.length - b.url.length); }
-function detectTopicDossierPrefix(pathname: string, languagePrefix: string) { const path = normalizePath(pathname); let remainder = languagePrefix && path.startsWith(languagePrefix) ? path.slice(languagePrefix.length) || "/" : path; const first = remainder.split("/").filter(Boolean)[0]; return first && !isDemotedSegment(first) ? languagePrefix ? `${languagePrefix}/${first}` : `/${first}` : ""; }
+function sortQueueByImportance(queue: Array<any>) { queue.sort((a, b) => b.importance_score - a.importance_score || a.url.length - b.url.length); }
+function detectTopicDossierPrefix(pathname: string, languagePrefix: string) { const path = normalizePath(pathname); let rest = languagePrefix && path.startsWith(languagePrefix) ? path.slice(languagePrefix.length) || "/" : path; const first = rest.split("/").filter(Boolean)[0] || ""; return first && !isDemotedSegment(first) ? (languagePrefix ? `${languagePrefix}/${first}` : `/${first}`) : ""; }
 function getPrimaryFolder(url: string, languagePrefix: string) { try { let path = normalizePath(new URL(url).pathname); if (languagePrefix && path.startsWith(languagePrefix)) path = path.slice(languagePrefix.length) || "/"; const first = path.split("/").filter(Boolean)[0]; return first ? `/${first}/` : ""; } catch { return ""; } }
 function getUrlDepth(url: string) { try { return new URL(url).pathname.split("/").filter(Boolean).length; } catch { return 99; } }
-function getLastmodRecencyBoost(lastmod: string) { const time = new Date(lastmod || "").getTime(); if (!Number.isFinite(time)) return 0; const days = (Date.now() - time) / 86400000; return days <= 30 ? 45 : days <= 180 ? 30 : days <= 365 ? 15 : 0; }
-function isDemotedFolder(folder: string) { return ["/listing/", "/actualite/", "/actualité/", "/blog/", "/news/", "/tag/", "/author/", "/search/", "/page/", "/archive/", "/archives/", "/press/", "/presse/"].some((part) => String(folder || "").toLowerCase().includes(part)); }
-function isDemotedSegment(segment: string) { return ["listing", "actualite", "actualité", "blog", "news", "tag", "author", "search", "page", "archive", "archives", "press", "presse"].includes(String(segment || "").toLowerCase()); }
-function getLowValueUrlPenalty(url: string, topicPrefix: string) { const path = new URL(url).pathname.toLowerCase(); const insideTopic = topicPrefix && (path === topicPrefix || path.startsWith(`${topicPrefix}/`)); const newsLike = ["/actualite/", "/actualité/", "/blog/", "/news/", "/archive/", "/archives/"].some((part) => path.includes(part)); if (newsLike) return { penalty: insideTopic ? 90 : 230, reason: insideTopic ? "article/news page inside topic folder" : "article/news/archive page outside main topic" }; if (path.includes("/tag/") || path.includes("/author/") || path.includes("/search")) return { penalty: 220, reason: "tag, author, or search URL" }; return { penalty: 0, reason: "" }; }
-function looksLikeLandingPage(url: string) { try { const parts = new URL(url).pathname.split("/").filter(Boolean); const last = parts[parts.length - 1] || ""; return parts.length <= 2 || (["category", "categories", "place", "places", "activity", "activities"].some((word) => parts.includes(word)) && parts.length <= 4) || (!/\d{4}|\d{5,}/.test(last) && parts.length <= 4); } catch { return false; } }
-function looksLikeListingDetail(url: string) { try { const path = new URL(url).pathname.toLowerCase(); return (path.includes("/listing/") && path.endsWith("/show")) || path.includes("/listing/") || path.includes("/annonce/") || path.includes("/item/"); } catch { return false; } }
+function isDemotedFolder(folder: string) { return ["/listing/", "/actualite/", "/actualité/", "/blog/", "/news/", "/tag/", "/author/", "/search/", "/page/", "/archive/", "/archives/"].some((part) => String(folder || "").toLowerCase().includes(part)); }
+function isDemotedSegment(segment: string) { return ["listing", "actualite", "actualité", "blog", "news", "tag", "author", "search", "page", "archive", "archives"].includes(String(segment || "").toLowerCase()); }
+function looksLikeListingDetail(url: string) { try { const path = new URL(url).pathname.toLowerCase(); return path.includes("/listing/") || path.includes("/annonce/") || path.includes("/item/"); } catch { return false; } }
 function looksLikeFilterOrPagination(url: string) { try { const parsed = new URL(url); return parsed.pathname.toLowerCase().includes("/page/") || parsed.pathname.toLowerCase().includes("/filter/") || Boolean(parsed.searchParams.toString()); } catch { return false; } }
 
 /* -------------------------------------------------------------------------- */

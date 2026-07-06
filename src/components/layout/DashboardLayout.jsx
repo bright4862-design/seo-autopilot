@@ -5,7 +5,6 @@ import {
   CreditCard,
   LogOut,
   Menu,
-  Plug,
   Search,
   X,
 } from "lucide-react";
@@ -15,7 +14,6 @@ import { Button } from "@/components/ui/button";
 const navigationItems = [
   { name: "Fix Pages", href: "/dashboard", icon: CheckCircle2 },
   { name: "Scan Website", href: "/onboarding", icon: Search },
-  { name: "SEO Connections", href: "/reports", icon: Plug },
   { name: "Billing", href: "/billing", icon: CreditCard },
 ];
 
@@ -40,23 +38,10 @@ export default function DashboardLayout() {
       );
     }
 
-    if (href === "/reports") {
-      return (
-        location.pathname === "/reports" ||
-        location.pathname === "/seo-connections"
-      );
-    }
-
     return location.pathname === href || location.pathname.startsWith(`${href}/`);
   }
 
   function handleLogout() {
-    try {
-      window.localStorage.removeItem("seo_autopilot:gsc_connection");
-    } catch {
-      // Ignore localStorage errors.
-    }
-
     navigate("/login");
   }
 

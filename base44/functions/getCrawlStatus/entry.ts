@@ -3,11 +3,13 @@ const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET") || "";
 const GOOGLE_REDIRECT_URI = Deno.env.get("GOOGLE_REDIRECT_URI") || "";
 const GOOGLE_OAUTH_FINAL_REDIRECT =
   Deno.env.get("GOOGLE_OAUTH_FINAL_REDIRECT") || "/reports?gsc=connected";
+const GOOGLE_OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000;
 
 Deno.serve(async (req) => {
   try {
     const url = new URL(req.url);
     const code = url.searchParams.get("code") || "";
+    const state = url.searchParams.get("state") || "";
     const error = url.searchParams.get("error") || "";
 
     if (error) {
@@ -20,6 +22,10 @@ Deno.serve(async (req) => {
       return htmlResponse(buildErrorHtml("Missing Google OAuth code."));
     }
 
+    if (!state) {
+      return htmlResponse(buildErrorHtml("Missing Google OAuth state."));
+    }
+
     if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REDIRECT_URI) {
       return htmlResponse(
         buildErrorHtml(
@@ -28,6 +34,7 @@ Deno.serve(async (req) => {
       );
     }
 
+    const statePayload = await verifyOAuthState(state);
     const tokenResponse = await exchangeCodeForTokens(code);
 
     if (!tokenResponse.access_token) {
@@ -51,9 +58,10 @@ Deno.serve(async (req) => {
       sites,
       selected_site: sites?.[0]?.siteUrl || "",
       connected_at: new Date().toISOString(),
+      state_user_id: statePayload.user_id || "",
     };
 
-    return htmlResponse(buildSuccessHtml(connection));
+    return htmlResponse(buildSuccessHtml(connection, state));
   } catch (error) {
     return htmlResponse(
       buildErrorHtml(
@@ -62,6 +70,78 @@ Deno.serve(async (req) => {
     );
   }
 });
+
+async function verifyOAuthState(state: string) {
+  const [encodedPayload, signature] = String(state || "").split(".");
+
+  if (!encodedPayload || !signature) {
+    throw new Error("Invalid Google OAuth state.");
+  }
+
+  const expectedSignature = await signStatePayload(encodedPayload);
+
+  if (!timingSafeEqual(signature, expectedSignature)) {
+    throw new Error("Invalid Google OAuth state signature.");
+  }
+
+  const payload = JSON.parse(base64UrlDecode(encodedPayload));
+  const createdAt = Date.parse(payload.created_at || "");
+
+  if (!createdAt || Date.now() - createdAt > GOOGLE_OAUTH_STATE_MAX_AGE_MS) {
+    throw new Error("Google OAuth state expired. Please reconnect.");
+  }
+
+  if (!payload.nonce || !payload.user_id) {
+    throw new Error("Invalid Google OAuth state payload.");
+  }
+
+  return payload;
+}
+
+async function signStatePayload(encodedPayload: string) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(GOOGLE_CLIENT_SECRET),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(encodedPayload)
+  );
+
+  return base64UrlEncodeBytes(new Uint8Array(signature));
+}
+
+function base64UrlEncodeBytes(bytes: Uint8Array) {
+  let binary = "";
+
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function base64UrlDecode(value: string) {
+  const base64 = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+
+  return atob(padded);
+}
+
+function timingSafeEqual(a: string, b: string) {
+  if (a.length !== b.length) return false;
+
+  let diff = 0;
+
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+
+  return diff === 0;
+}
 
 async function exchangeCodeForTokens(code: string) {
   const body = new URLSearchParams();
@@ -115,9 +195,10 @@ async function listSearchConsoleSites(accessToken: string) {
   return Array.isArray(json.siteEntry) ? json.siteEntry : [];
 }
 
-function buildSuccessHtml(connection: Record<string, unknown>) {
+function buildSuccessHtml(connection: Record<string, unknown>, state: string) {
   const safeConnection = JSON.stringify(connection).replace(/</g, "\\u003c");
   const safeRedirect = JSON.stringify(GOOGLE_OAUTH_FINAL_REDIRECT);
+  const safeState = JSON.stringify(state);
 
   return `<!doctype html>
 <html>
@@ -132,10 +213,18 @@ function buildSuccessHtml(connection: Record<string, unknown>) {
     <script>
       try {
         const connection = ${safeConnection};
+        const returnedState = ${safeState};
+        const expectedState = window.localStorage.getItem("seo_autopilot:gsc_oauth_state") || "";
+
+        if (!expectedState || expectedState !== returnedState) {
+          throw new Error("Google OAuth state did not match this browser session.");
+        }
+
+        window.localStorage.removeItem("seo_autopilot:gsc_oauth_state");
         window.localStorage.setItem("seo_autopilot:gsc_connection", JSON.stringify(connection));
         window.location.href = ${safeRedirect};
       } catch (error) {
-        document.body.innerHTML = "<h1>Connection saved failed</h1><p>" + String(error.message || error) + "</p>";
+        document.body.innerHTML = "<h1>Connection save failed</h1><p>" + String(error.message || error) + "</p>";
       }
     </script>
   </body>

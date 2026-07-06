@@ -3124,131 +3124,106 @@ function humanizeUrlSlug(value) {
 /* Generic helpers                                                             */
 /* -------------------------------------------------------------------------- */
 
-async function fetchWithTimeout(url, options, timeoutMs) {
+async function fetchWithTimeout(url, options = {}, timeoutMs, redirectCount = 0) {
+  await assertSafePublicUrl(url);
+  await assertSafeBodyUrls(options.body);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
   try {
-    return await fetch(url, {
-      ...options,
-      signal: controller.signal,
-    });
+    const response = await fetch(url, { ...options, redirect: "manual", signal: controller.signal });
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location") || "";
+      if (!location) return response;
+      if (redirectCount >= 5) throw new Error("Too many redirects while checking this website.");
+      const nextUrl = new URL(location, url).toString();
+      await assertSafePublicUrl(nextUrl);
+      const nextOptions = response.status === 303 ? { ...options, method: "GET", body: undefined } : options;
+      return await fetchWithTimeout(nextUrl, nextOptions, timeoutMs, redirectCount + 1);
+    }
+    return response;
   } finally {
     clearTimeout(timeout);
   }
 }
 
+async function assertSafeBodyUrls(body) {
+  if (!body || typeof body !== "string" || !body.includes('"url"')) return;
+  try {
+    const payload = JSON.parse(body);
+    if (payload?.url) await assertSafePublicUrl(payload.url);
+  } catch {
+    return;
+  }
+}
+
+async function assertSafePublicUrl(input) {
+  const parsed = new URL(String(input || ""));
+  if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("Only http and https website URLs can be scanned.");
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (!hostname || hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local") || hostname.endsWith(".internal")) throw new Error("This website address is not allowed for scanning.");
+  if (isIpAddress(hostname)) {
+    if (!isPublicIpAddress(hostname)) throw new Error("Private or local network addresses cannot be scanned.");
+    return true;
+  }
+  const resolvedIps = await resolvePublicDns(hostname);
+  if (resolvedIps.length === 0) throw new Error("Could not verify that this website resolves to a public address.");
+  if (resolvedIps.some((ip) => !isPublicIpAddress(ip))) throw new Error("This website resolves to a private or local network address.");
+  return true;
+}
+
+function isIpAddress(value) { return isIpv4Address(value) || String(value || "").includes(":"); }
+function isIpv4Address(value) { const parts = String(value || "").split("."); return parts.length === 4 && parts.every((part) => /^\d+$/.test(part) && Number(part) >= 0 && Number(part) <= 255); }
+function isPublicIpAddress(ip) {
+  const value = String(ip || "").toLowerCase();
+  if (isIpv4Address(value)) {
+    const [a, b] = value.split(".").map(Number);
+    if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
+    if (a === 100 && b >= 64 && b <= 127) return false;
+    if (a === 169 && b === 254) return false;
+    if (a === 172 && b >= 16 && b <= 31) return false;
+    if (a === 192 && (b === 0 || b === 168)) return false;
+    if (a === 198 && (b === 18 || b === 19)) return false;
+    return value !== "255.255.255.255";
+  }
+  if (value === "::" || value === "::1" || value.startsWith("fe80:") || value.startsWith("fc") || value.startsWith("fd") || value.startsWith("ff") || value.startsWith("2001:db8")) return false;
+  if (value.startsWith("::ffff:")) return isPublicIpAddress(value.slice(7));
+  return value.includes(":");
+}
+
+async function resolvePublicDns(hostname) {
+  const cache = (globalThis as any).__safeDnsCache || new Map();
+  (globalThis as any).__safeDnsCache = cache;
+  if (cache.has(hostname)) return cache.get(hostname);
+  const results = [];
+  for (const type of ["A", "AAAA"]) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      const endpoint = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(hostname)}&type=${type}`;
+      const response = await fetch(endpoint, { headers: { Accept: "application/dns-json" }, signal: controller.signal });
+      clearTimeout(timeout);
+      const payload = await response.json().catch(() => ({}));
+      for (const answer of payload.Answer || []) if (answer?.data && isIpAddress(String(answer.data))) results.push(String(answer.data));
+    } catch {}
+  }
+  const uniqueResults = unique(results);
+  cache.set(hostname, uniqueResults);
+  return uniqueResults;
+}
+
 async function readLimitedText(response, maxBytes) {
   const text = await response.text();
-
-  if (approximateBytes(text) <= maxBytes) return text;
-
-  return text.slice(0, maxBytes);
+  return approximateBytes(text) <= maxBytes ? text : text.slice(0, maxBytes);
 }
-
-function approximateBytes(text) {
-  return new TextEncoder().encode(String(text || "")).length;
-}
-
-function tokenizeWords(text) {
-  return String(text || "")
-    .split(/\s+/)
-    .map((word) => word.trim())
-    .filter((word) => /[a-zA-ZÀ-ÿ0-9]/.test(word));
-}
-
-function cleanString(value) {
-  return decodeHtml(String(value || "").replace(/\s+/g, " ").trim());
-}
-
-function clampText(value, max) {
-  const text = cleanString(value);
-
-  if (text.length <= max) return text;
-
-  return text.slice(0, Math.max(0, max - 1)).trim();
-}
-
-function decodeHtml(value) {
-  return String(value || "")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&mdash;/g, "—")
-    .replace(/&#039;/g, "'")
-    .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&nbsp;/g, " ");
-}
-
-function countMatches(text, regex) {
-  return Array.from(String(text || "").matchAll(regex)).length;
-}
-
-function unique(values) {
-  return Array.from(new Set((values || []).filter(Boolean)));
-}
-
-function average(values) {
-  const nums = (values || []).map(Number).filter((num) => Number.isFinite(num));
-
-  if (nums.length === 0) return 0;
-
-  return nums.reduce((sum, value) => sum + value, 0) / nums.length;
-}
-
-function median(values) {
-  const nums = (values || [])
-    .map(Number)
-    .filter((num) => Number.isFinite(num))
-    .sort((a, b) => a - b);
-
-  if (nums.length === 0) return 0;
-
-  const mid = Math.floor(nums.length / 2);
-
-  if (nums.length % 2) return nums[mid];
-
-  return Math.round((nums[mid - 1] + nums[mid]) / 2);
-}
-
-function groupDuplicateValues(pages, field) {
-  const groups = new Map();
-
-  for (const page of pages || []) {
-    const value = cleanString(page[field]);
-
-    if (!value) continue;
-
-    const key = value.toLowerCase();
-
-    if (!groups.has(key)) {
-      groups.set(key, {
-        value,
-        pages: [],
-      });
-    }
-
-    groups.get(key).pages.push(page);
-  }
-
-  return Array.from(groups.values()).filter((group) => group.pages.length > 1);
-}
-
-function friendlyNameFromDomain(domain) {
-  const base = String(domain || "")
-    .replace(/^www\./i, "")
-    .split(".")[0]
-    .replace(/[-_]+/g, " ");
-
-  return base.charAt(0).toUpperCase() + base.slice(1);
-}
-
-function pushUniqueWarning(warnings, warning) {
-  if (!warning) return;
-
-  if (!warnings.includes(warning)) {
-    warnings.push(warning);
-  }
-}
+function approximateBytes(text) { return new TextEncoder().encode(String(text || "")).length; }
+function tokenizeWords(text) { return String(text || "").split(/\s+/).map((word) => word.trim()).filter((word) => /[a-zA-ZÀ-ÿ0-9]/.test(word)); }
+function cleanString(value) { return decodeHtml(String(value || "").replace(/\s+/g, " ").trim()); }
+function clampText(value, max) { const text = cleanString(value); return text.length <= max ? text : text.slice(0, Math.max(0, max - 1)).trim(); }
+function decodeHtml(value) { return String(value || "").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&mdash;/g, "—").replace(/&#039;/g, "'").replace(/&#39;/g, "'").replace(/&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " "); }
+function countMatches(text, regex) { return Array.from(String(text || "").matchAll(regex)).length; }
+function unique(values) { return Array.from(new Set((values || []).filter(Boolean))); }
+function average(values) { const nums = (values || []).map(Number).filter((num) => Number.isFinite(num)); return nums.length ? nums.reduce((sum, value) => sum + value, 0) / nums.length : 0; }
+function median(values) { const nums = (values || []).map(Number).filter((num) => Number.isFinite(num)).sort((a, b) => a - b); if (nums.length === 0) return 0; const mid = Math.floor(nums.length / 2); return nums.length % 2 ? nums[mid] : Math.round((nums[mid - 1] + nums[mid]) / 2); }
+function groupDuplicateValues(pages, field) { const groups = new Map(); for (const page of pages || []) { const value = cleanString(page[field]); if (!value) continue; const key = value.toLowerCase(); if (!groups.has(key)) groups.set(key, { value, pages: [] }); groups.get(key).pages.push(page); } return Array.from(groups.values()).filter((group) => group.pages.length > 1); }
+function friendlyNameFromDomain(domain) { const base = String(domain || "").replace(/^www\./i, "").split(".")[0].replace(/[-_]+/g, " "); return base.charAt(0).toUpperCase() + base.slice(1); }
+function pushUniqueWarning(warnings, warning) { if (warning && !warnings.includes(warning)) warnings.push(warning); }

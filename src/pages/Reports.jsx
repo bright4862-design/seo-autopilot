@@ -95,6 +95,10 @@ export default function Reports() {
       const data = normalizeFunctionResponse(response);
 
       if (data?.auth_url) {
+        if (data.oauth_state) {
+          window.localStorage.setItem("seo_autopilot:gsc_oauth_state", data.oauth_state);
+        }
+
         window.location.href = data.auth_url;
         return;
       }

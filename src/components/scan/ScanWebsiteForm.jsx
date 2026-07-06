@@ -26,6 +26,7 @@ const LEGACY_HISTORY_KEY = "SEO_AUTOPILOT_SCAN_HISTORY";
 
 const ACTIVE_SCAN_URL_KEY = "seo_autopilot:active_scan_url";
 const ACTIVE_SCAN_STARTED_AT_KEY = "seo_autopilot:active_scan_started_at";
+const SCAN_DEBUG_KEY = "seo_autopilot:scan_debug";
 
 const SCAN_MODES = [
   {
@@ -145,8 +146,23 @@ export default function ScanWebsiteForm({
       return;
     }
 
+    let scanData = null;
+    let aiData = null;
+
     setSubmitting(true);
     clearPreviousDashboardScan(normalizedUrl);
+
+    writeScanDebug({
+      status: "running",
+      stage: "scan_started",
+      website_url: normalizedUrl,
+      business_name: businessName.trim(),
+      cms_platform: cmsPlatform,
+      cms_name: selectedCms?.label || "Custom / Not sure",
+      scan_mode: scanMode,
+      requested_path_prefix: requestedPathPrefix,
+    });
+
     refreshDebugData();
 
     try {
@@ -187,15 +203,27 @@ export default function ScanWebsiteForm({
         scanPayload
       );
 
-      const scanData = normalizeFunctionResponse(scannerResponse);
+      scanData = normalizeFunctionResponse(scannerResponse);
+
+      writeScanDebug({
+        status: "running",
+        stage: "scanner_complete",
+        website_url: normalizedUrl,
+        business_name: businessName.trim(),
+        cms_platform: cmsPlatform,
+        cms_name: selectedCms?.label || "Custom / Not sure",
+        scan_mode: scanMode,
+        requested_path_prefix: requestedPathPrefix,
+        scanner: scanData,
+      });
+
+      refreshDebugData();
 
       if (scanData?.success === false || scanData?.error) {
         throw new Error(scanData.error || "Website scan failed.");
       }
 
       setActiveStep("Asking Gemini to simplify and prioritize the Fix List");
-
-      let aiData = null;
 
       try {
         const aiPayload = {
@@ -278,11 +306,42 @@ export default function ScanWebsiteForm({
 
         aiData = normalizeFunctionResponse(aiResponse);
 
+        writeScanDebug({
+          status: "running",
+          stage: "ai_review_complete",
+          website_url: normalizedUrl,
+          business_name: businessName.trim(),
+          cms_platform: cmsPlatform,
+          cms_name: selectedCms?.label || "Custom / Not sure",
+          scan_mode: scanMode,
+          requested_path_prefix: requestedPathPrefix,
+          scanner: scanData,
+          ai_review: aiData,
+        });
+
+        refreshDebugData();
+
         if (aiData?.success === false && aiData?.error) {
           console.warn("AI review returned an error.", aiData.error);
         }
       } catch (aiError) {
         console.warn("AI review was skipped or failed.", aiError);
+
+        writeScanDebug({
+          status: "running",
+          stage: "ai_review_failed_but_continuing",
+          website_url: normalizedUrl,
+          business_name: businessName.trim(),
+          cms_platform: cmsPlatform,
+          cms_name: selectedCms?.label || "Custom / Not sure",
+          scan_mode: scanMode,
+          requested_path_prefix: requestedPathPrefix,
+          scanner: scanData,
+          ai_review: aiData,
+          ai_error: aiError?.message || String(aiError),
+        });
+
+        refreshDebugData();
       }
 
       setActiveStep("Saving dashboard summary");
@@ -299,16 +358,47 @@ export default function ScanWebsiteForm({
       });
 
       saveScanForDashboard(mergedFinal);
+
+      writeScanDebug({
+        status: "saved",
+        stage: "dashboard_saved",
+        website_url: normalizedUrl,
+        business_name: businessName.trim(),
+        cms_platform: cmsPlatform,
+        cms_name: selectedCms?.label || "Custom / Not sure",
+        scan_mode: scanMode,
+        requested_path_prefix: requestedPathPrefix,
+        scanner: scanData,
+        ai_review: aiData,
+        final_record: mergedFinal,
+      });
+
       refreshDebugData();
 
       navigate("/dashboard?scan=complete");
     } catch (err) {
       console.error("Website scan failed.", err);
+
+      writeScanDebug({
+        status: "failed",
+        stage: "scan_failed",
+        website_url: normalizedUrl,
+        business_name: businessName.trim(),
+        cms_platform: cmsPlatform,
+        cms_name: selectedCms?.label || "Custom / Not sure",
+        scan_mode: scanMode,
+        requested_path_prefix: requestedPathPrefix,
+        error: err?.message || String(err),
+        scanner: scanData,
+        ai_review: aiData,
+      });
+
+      refreshDebugData();
+
       setError(
         err?.message ||
           "The website scan failed. Try Quick mode or check the backend function logs."
       );
-      refreshDebugData();
     } finally {
       setActiveStep("");
       setSubmitting(false);
@@ -358,8 +448,7 @@ export default function ScanWebsiteForm({
               <div>
                 <h3 className="font-bold text-slate-950">Scan debug</h3>
                 <p className="mt-1 text-xs text-slate-500">
-                  Use this to confirm which scan is saved and what the scanner
-                  returned.
+                  This is also saved to the dashboard debug panel.
                 </p>
               </div>
 
@@ -820,7 +909,7 @@ function mergeScanAndAiReview({
 }
 
 /* -------------------------------------------------------------------------- */
-/* Dashboard sync                                                              */
+/* Dashboard sync + debug                                                      */
 /* -------------------------------------------------------------------------- */
 
 function clearPreviousDashboardScan(activeUrl) {
@@ -830,6 +919,7 @@ function clearPreviousDashboardScan(activeUrl) {
       LEGACY_LAST_SCAN_KEY,
       DASHBOARD_HISTORY_KEY,
       LEGACY_HISTORY_KEY,
+      SCAN_DEBUG_KEY,
     ];
 
     keysToRemove.forEach((key) => {
@@ -859,6 +949,7 @@ function clearAllDashboardScanData() {
       LEGACY_HISTORY_KEY,
       ACTIVE_SCAN_URL_KEY,
       ACTIVE_SCAN_STARTED_AT_KEY,
+      SCAN_DEBUG_KEY,
     ].forEach((key) => {
       window.localStorage.removeItem(key);
     });
@@ -901,6 +992,22 @@ function saveScanForDashboard(scanRecord) {
     window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
   } catch (storageError) {
     console.warn("Could not save scan for dashboard.", storageError);
+  }
+}
+
+function writeScanDebug(data) {
+  try {
+    window.localStorage.setItem(
+      SCAN_DEBUG_KEY,
+      JSON.stringify({
+        ...data,
+        updated_at: new Date().toISOString(),
+      })
+    );
+
+    window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
+  } catch (storageError) {
+    console.warn("Could not write scan debug data.", storageError);
   }
 }
 
@@ -997,6 +1104,7 @@ function readScanDebugData() {
     LEGACY_HISTORY_KEY,
     ACTIVE_SCAN_URL_KEY,
     ACTIVE_SCAN_STARTED_AT_KEY,
+    SCAN_DEBUG_KEY,
   ];
 
   const raw = {};
@@ -1234,7 +1342,7 @@ function normalizeFunctionResponse(response) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Helpers                                                                     */
+/* Generic helpers                                                             */
 /* -------------------------------------------------------------------------- */
 
 function normalizeWebsiteUrl(value) {

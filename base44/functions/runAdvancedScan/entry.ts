@@ -82,10 +82,16 @@ Deno.serve(async (req) => {
     const base44 = createClientFromRequest(req);
 
     try {
-      await base44.auth.me();
+      const user = await base44.auth.me();
+      if (!user) throw new Error("Unauthorized");
     } catch {
-      // Base44 SDK invocation usually carries auth.
-      // Do not block local/internal scanner runs if auth context is unavailable.
+      return jsonResponse(
+        {
+          success: false,
+          error: "Unauthorized",
+        },
+        401
+      );
     }
 
     const body = await safeReadJson(req);
@@ -102,6 +108,8 @@ Deno.serve(async (req) => {
         400
       );
     }
+
+    await assertSafePublicUrl(websiteUrl);
 
     const deadlineAt = Date.now() + budget.crawl_timeout_ms - 3000;
 
@@ -646,14 +654,16 @@ async function fetchAndExtractPage({
   return page;
 }
 
-async function fetchWithTimeout(url: string, timeoutMs: number) {
+async function fetchWithTimeout(url: string, timeoutMs: number, redirectCount = 0) {
+  await assertSafePublicUrl(url);
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    return await fetch(url, {
+    const response = await fetch(url, {
       method: "GET",
-      redirect: "follow",
+      redirect: "manual",
       signal: controller.signal,
       headers: {
         "User-Agent":
@@ -663,6 +673,15 @@ async function fetchWithTimeout(url: string, timeoutMs: number) {
         "Accept-Language": "en-US,en;q=0.9",
       },
     });
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location") || "";
+      if (!location) return response;
+      if (redirectCount >= 5) throw new Error("Too many redirects while checking this website.");
+      return await fetchWithTimeout(new URL(location, url).toString(), timeoutMs, redirectCount + 1);
+    }
+
+    return response;
   } finally {
     clearTimeout(timeout);
   }
@@ -688,6 +707,9 @@ function shouldRetryWithBrowser(page: any) {
 }
 
 async function fetchWithBrowserless(url: string) {
+  await assertSafePublicUrl(url);
+  await assertSafePublicUrl(BROWSERLESS_CONTENT_ENDPOINT);
+
   const endpoint = new URL(BROWSERLESS_CONTENT_ENDPOINT);
 
   if (BROWSERLESS_TOKEN && !endpoint.searchParams.has("token")) {
@@ -1041,6 +1063,80 @@ function normalizeWebsiteUrl(value: string) {
   } catch {
     return "";
   }
+}
+
+async function assertSafePublicUrl(value: string) {
+  const parsed = new URL(String(value || ""));
+  if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("Only public http and https URLs can be scanned.");
+
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (!hostname || hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local") || hostname.endsWith(".internal")) {
+    throw new Error("Private or local network addresses cannot be scanned.");
+  }
+
+  if (isIpAddress(hostname)) {
+    if (!isPublicIpAddress(hostname)) throw new Error("Private or local network addresses cannot be scanned.");
+    return true;
+  }
+
+  const resolvedIps = await resolvePublicDns(hostname);
+  if (resolvedIps.length === 0) throw new Error("Could not verify this website resolves to a public address.");
+  if (resolvedIps.some((ip) => !isPublicIpAddress(ip))) throw new Error("This website resolves to a private or local network address.");
+
+  return true;
+}
+
+function isIpAddress(value: string) {
+  return isIpv4Address(value) || String(value || "").includes(":");
+}
+
+function isIpv4Address(value: string) {
+  const parts = String(value || "").split(".");
+  return parts.length === 4 && parts.every((part) => /^\d+$/.test(part) && Number(part) >= 0 && Number(part) <= 255);
+}
+
+function isPublicIpAddress(ip: string) {
+  const value = String(ip || "").toLowerCase();
+
+  if (isIpv4Address(value)) {
+    const [a, b] = value.split(".").map(Number);
+    if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
+    if (a === 100 && b >= 64 && b <= 127) return false;
+    if (a === 169 && b === 254) return false;
+    if (a === 172 && b >= 16 && b <= 31) return false;
+    if (a === 192 && (b === 0 || b === 168)) return false;
+    if (a === 198 && (b === 18 || b === 19)) return false;
+    return value !== "255.255.255.255";
+  }
+
+  if (value === "::" || value === "::1" || value.startsWith("fe80:") || value.startsWith("fc") || value.startsWith("fd") || value.startsWith("ff") || value.startsWith("2001:db8")) return false;
+  if (value.startsWith("::ffff:")) return isPublicIpAddress(value.slice(7));
+  return value.includes(":");
+}
+
+async function resolvePublicDns(hostname: string) {
+  const cache = (globalThis as any).__safeDnsCache || new Map();
+  (globalThis as any).__safeDnsCache = cache;
+  if (cache.has(hostname)) return cache.get(hostname);
+
+  const results: string[] = [];
+  for (const type of ["A", "AAAA"]) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      const endpoint = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(hostname)}&type=${type}`;
+      const response = await fetch(endpoint, { headers: { Accept: "application/dns-json" }, signal: controller.signal });
+      clearTimeout(timeout);
+      const payload = await response.json().catch(() => ({}));
+      for (const answer of payload.Answer || []) {
+        if (answer?.data && isIpAddress(String(answer.data))) results.push(String(answer.data));
+      }
+    } catch {}
+  }
+
+  const uniqueResults = unique(results);
+  cache.set(hostname, uniqueResults);
+  return uniqueResults;
 }
 
 function cleanUrl(value: string) {

@@ -1,133 +1,175 @@
-import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
-
-const ACTIVE_STATUSES = new Set([
-  "queued",
-  "crawling_html",
-  "checking_metadata",
-  "checking_canonicals",
-  "checking_links",
-  "finding_competitors",
-  "benchmarking_competitors",
-  "generating_recommendations",
-  "in_progress",
-]);
+const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_CLIENT_ID") || "";
+const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET") || "";
+const GOOGLE_REDIRECT_URI = Deno.env.get("GOOGLE_REDIRECT_URI") || "";
+const GOOGLE_OAUTH_FINAL_REDIRECT =
+  Deno.env.get("GOOGLE_OAUTH_FINAL_REDIRECT") || "/reports?gsc=connected";
 
 Deno.serve(async (req) => {
   try {
-    const base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
+    const url = new URL(req.url);
+    const code = url.searchParams.get("code") || "";
+    const error = url.searchParams.get("error") || "";
 
-    if (!user) {
-      return Response.json(
-        { success: false, error: "Unauthorized" },
-        { status: 401 }
+    if (error) {
+      return htmlResponse(
+        buildErrorHtml(`Google returned an OAuth error: ${escapeHtml(error)}`)
       );
     }
 
-    const body = await req.json();
-    const projectId = body.projectId || body.project_id;
-    const scanMode = body.scan_mode === "deep" ? "deep" : "quick";
+    if (!code) {
+      return htmlResponse(buildErrorHtml("Missing Google OAuth code."));
+    }
 
-    if (!projectId) {
-      return Response.json(
-        { success: false, error: "projectId is required" },
-        { status: 400 }
+    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REDIRECT_URI) {
+      return htmlResponse(
+        buildErrorHtml(
+          "Google OAuth secrets are missing. Configure GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI."
+        )
       );
     }
 
-    const project = await base44.entities.BusinessProject.get(projectId);
+    const tokenResponse = await exchangeCodeForTokens(code);
 
-    if (!project) {
-      return Response.json(
-        { success: false, error: "Project not found" },
-        { status: 404 }
+    if (!tokenResponse.access_token) {
+      return htmlResponse(
+        buildErrorHtml("Google did not return an access token.")
       );
     }
 
-    if (
-      project.owner_user_id &&
-      project.owner_user_id !== user.id &&
-      project.created_by_id !== user.id
-    ) {
-      return Response.json(
-        { success: false, error: "Forbidden" },
-        { status: 403 }
-      );
-    }
+    const sites = await listSearchConsoleSites(tokenResponse.access_token);
 
-    const existingJobs = await base44.entities.CrawlJob.filter(
-      { project_id: projectId },
-      "-created_date",
-      5
-    );
+    const connection = {
+      connected: true,
+      provider: "google_search_console",
+      access_token: tokenResponse.access_token,
+      refresh_token: tokenResponse.refresh_token || "",
+      token_type: tokenResponse.token_type || "Bearer",
+      expires_in: tokenResponse.expires_in || 3600,
+      expires_at:
+        Date.now() + Number(tokenResponse.expires_in || 3600) * 1000,
+      scope: tokenResponse.scope || "",
+      sites,
+      selected_site: sites?.[0]?.siteUrl || "",
+      connected_at: new Date().toISOString(),
+    };
 
-    const existingActiveJob = existingJobs.find(
-      (job) => ACTIVE_STATUSES.has(job.status) && !isStaleJob(job)
-    );
-
-    if (existingActiveJob) {
-      return Response.json({
-        success: true,
-        crawl_job_id: existingActiveJob.id,
-        crawlJob: existingActiveJob,
-        crawl_job: existingActiveJob,
-        reused_existing_job: true,
-        message: "A scan is already in progress.",
-      });
-    }
-
-    const now = new Date().toISOString();
-
-    const crawlJob = await base44.entities.CrawlJob.create({
-      project_id: projectId,
-      status: "queued",
-      crawl_type: scanMode === "deep" ? "deep" : "full",
-      started_at: now,
-      completed_at: "",
-      error_message: "",
-      pages_found: 0,
-      pages_crawled: 0,
-      issues_found: 0,
-      seo_score: 0,
-      owner_user_id: user.id,
-    });
-
-    try {
-      await base44.entities.BusinessProject.update(projectId, {
-        status: "scanning",
-        scan_mode: scanMode,
-      });
-    } catch {}
-
-    return Response.json({
-      success: true,
-      crawl_job_id: crawlJob.id,
-      crawlJob,
-      crawl_job: crawlJob,
-      reused_existing_job: false,
-      scan_mode: scanMode,
-      message:
-        "Crawl job created. The frontend should now call runAdvancedScan and then aiReviewScan.",
-    });
+    return htmlResponse(buildSuccessHtml(connection));
   } catch (error) {
-    return Response.json(
-      {
-        success: false,
-        error: error?.message || "Could not start crawl",
-      },
-      { status: 500 }
+    return htmlResponse(
+      buildErrorHtml(
+        error?.message || "Google Search Console callback failed."
+      )
     );
   }
 });
 
-function isStaleJob(job) {
-  if (!ACTIVE_STATUSES.has(job.status)) return false;
+async function exchangeCodeForTokens(code: string) {
+  const body = new URLSearchParams();
 
-  const dateValue = job.started_at || job.created_date || job.created_at;
+  body.set("client_id", GOOGLE_CLIENT_ID);
+  body.set("client_secret", GOOGLE_CLIENT_SECRET);
+  body.set("code", code);
+  body.set("grant_type", "authorization_code");
+  body.set("redirect_uri", GOOGLE_REDIRECT_URI);
 
-  if (!dateValue) return false;
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body,
+  });
 
-  const ageMs = Date.now() - new Date(dateValue).getTime();
+  const json = await response.json().catch(() => ({}));
 
-  return ageMs > 10 * 60 * 1000;
+  if (!response.ok) {
+    throw new Error(
+      `Google token exchange failed with status ${response.status}: ${
+        json.error_description || json.error || "Unknown error"
+      }`
+    );
+  }
+
+  return json;
+}
+
+async function listSearchConsoleSites(accessToken: string) {
+  const response = await fetch("https://www.googleapis.com/webmasters/v3/sites", {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+    },
+  });
+
+  const json = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(
+      `Could not list Search Console sites: ${
+        json.error?.message || response.status
+      }`
+    );
+  }
+
+  return Array.isArray(json.siteEntry) ? json.siteEntry : [];
+}
+
+function buildSuccessHtml(connection: Record<string, unknown>) {
+  const safeConnection = JSON.stringify(connection).replace(/</g, "\\u003c");
+  const safeRedirect = JSON.stringify(GOOGLE_OAUTH_FINAL_REDIRECT);
+
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Google Search Console Connected</title>
+  </head>
+  <body style="font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; padding: 40px;">
+    <h1>Google Search Console connected</h1>
+    <p>You can close this page if you are not redirected automatically.</p>
+
+    <script>
+      try {
+        const connection = ${safeConnection};
+        window.localStorage.setItem("seo_autopilot:gsc_connection", JSON.stringify(connection));
+        window.location.href = ${safeRedirect};
+      } catch (error) {
+        document.body.innerHTML = "<h1>Connection saved failed</h1><p>" + String(error.message || error) + "</p>";
+      }
+    </script>
+  </body>
+</html>`;
+}
+
+function buildErrorHtml(message: string) {
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Google Search Console Error</title>
+  </head>
+  <body style="font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; padding: 40px;">
+    <h1>Google Search Console connection failed</h1>
+    <p>${escapeHtml(message)}</p>
+    <p><a href="/reports">Go back to SEO Connections</a></p>
+  </body>
+</html>`;
+}
+
+function htmlResponse(html: string) {
+  return new Response(html, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+    },
+  });
+}
+
+function escapeHtml(value: string) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }

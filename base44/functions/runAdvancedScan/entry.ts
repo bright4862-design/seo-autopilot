@@ -108,6 +108,8 @@ Deno.serve(async (req) => {
       );
     }
 
+    await assertSafePublicUrl(websiteUrl);
+
     const deadlineAt = Date.now() + budget.crawl_timeout_ms - 3000;
 
     const crawlResult = await crawlWebsite({
@@ -733,27 +735,73 @@ async function fetchAndExtractPage({
   return page;
 }
 
-async function fetchWithTimeout(url: string, timeoutMs: number) {
+async function fetchWithTimeout(url: string, timeoutMs: number, redirectCount = 0) {
+  await assertSafePublicUrl(url);
+  const response = await pinnedFetch(url, timeoutMs);
+  if (response.status >= 300 && response.status < 400) {
+    const location = response.headers.get("location") || "";
+    if (!location) return response;
+    if (redirectCount >= 5) throw new Error("Too many redirects while checking this website.");
+    return await fetchWithTimeout(new URL(location, url).toString(), timeoutMs, redirectCount + 1);
+  }
+  return response;
+}
+
+async function assertSafePublicUrl(value: string) {
+  const url = new URL(String(value || ""));
+  if (!["http:", "https:"].includes(url.protocol)) throw new Error("Only public http and https URLs can be scanned.");
+  await resolvePinnedPublicIp(url.hostname);
+  return true;
+}
+
+async function pinnedFetch(url: string, timeoutMs: number) {
+  const parsed = new URL(url);
+  const ip = await resolvePinnedPublicIp(parsed.hostname);
+  if (parsed.protocol === "https:") return await pinnedHttpsGet(parsed, ip, timeoutMs);
+  const pinnedUrl = new URL(url);
+  pinnedUrl.hostname = ip;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    return await fetch(url, {
-      method: "GET",
-      redirect: "follow",
-      signal: controller.signal,
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (compatible; SEOAutopilotBot/1.0; +https://base44.app)",
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
+  try { return await fetch(pinnedUrl.toString(), { method: "GET", redirect: "manual", signal: controller.signal, headers: outboundHeaders(parsed) }); }
+  finally { clearTimeout(timeout); }
 }
+
+async function resolvePinnedPublicIp(hostname: string) {
+  const host = String(hostname || "").replace(/^\[|\]$/g, "").toLowerCase();
+  if (!host || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) throw new Error("Private or local network addresses cannot be scanned.");
+  if (isIpv4Address(host)) { if (!isPublicIpv4(host)) throw new Error("Private or local network addresses cannot be scanned."); return host; }
+  if (host.includes(":")) throw new Error("IPv6 scan targets are not supported for security reasons.");
+  const cache = (globalThis as any).__safeDnsCache || new Map();
+  (globalThis as any).__safeDnsCache = cache;
+  if (cache.has(host)) return cache.get(host);
+  const res = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=A`, { headers: { Accept: "application/dns-json" } });
+  const data = await res.json().catch(() => ({}));
+  const ips = (data.Answer || []).map((a: any) => String(a?.data || "")).filter(isIpv4Address);
+  if (!ips.length) throw new Error("Could not verify this website resolves to a public address.");
+  if (ips.some((ip: string) => !isPublicIpv4(ip))) throw new Error("This website resolves to a private or local network address.");
+  cache.set(host, ips[0]);
+  return ips[0];
+}
+
+function isIpv4Address(value: string) { const p = String(value || "").split("."); return p.length === 4 && p.every((x) => /^\d+$/.test(x) && Number(x) >= 0 && Number(x) <= 255); }
+function isPublicIpv4(ip: string) { const [a, b] = ip.split(".").map(Number); return !(a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && (b === 0 || b === 168)) || (a === 198 && (b === 18 || b === 19)) || ip === "255.255.255.255"); }
+function outboundHeaders(parsed: URL) { return { Host: parsed.host, "User-Agent": "Mozilla/5.0 (compatible; SEOAutopilotBot/1.0; +https://base44.app)", Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.9", "Accept-Encoding": "identity" }; }
+
+async function pinnedHttpsGet(parsed: URL, ip: string, timeoutMs: number) {
+  let conn: Deno.TlsConn | null = null;
+  const timer = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Request timed out.")), timeoutMs));
+  try {
+    conn = await Promise.race([Deno.connectTls({ hostname: ip, port: Number(parsed.port || 443), serverName: parsed.hostname }), timer]);
+    const request = `GET ${parsed.pathname || "/"}${parsed.search || ""} HTTP/1.1\r\nHost: ${parsed.host}\r\nUser-Agent: Mozilla/5.0 (compatible; SEOAutopilotBot/1.0; +https://base44.app)\r\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.9\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n`;
+    await Promise.race([conn.write(new TextEncoder().encode(request)), timer]);
+    const chunks: Uint8Array[] = [];
+    while (true) { const buffer = new Uint8Array(16384); const n = await Promise.race([conn.read(buffer), timer]); if (n === null) break; chunks.push(buffer.slice(0, n)); }
+    return parseRawHttpResponse(concatBytes(chunks));
+  } finally { try { conn?.close(); } catch {} }
+}
+
+function concatBytes(chunks: Uint8Array[]) { const out = new Uint8Array(chunks.reduce((s, c) => s + c.length, 0)); let o = 0; for (const c of chunks) { out.set(c, o); o += c.length; } return out; }
+function parseRawHttpResponse(raw: Uint8Array) { const text = new TextDecoder().decode(raw); const split = text.indexOf("\r\n\r\n"); if (split < 0) throw new Error("Invalid HTTP response."); const lines = text.slice(0, split).split("\r\n"); const headers = new Headers(); for (const line of lines.slice(1)) { const i = line.indexOf(":"); if (i > 0) headers.append(line.slice(0, i).trim(), line.slice(i + 1).trim()); } return new Response(new TextEncoder().encode(text.slice(split + 4)), { status: Number(lines[0]?.match(/\s(\d{3})\s/)?.[1] || 502), headers }); }
 
 function shouldRetryWithBrowser(page: any) {
   if (!BROWSERLESS_TOKEN) return false;
@@ -775,6 +823,9 @@ function shouldRetryWithBrowser(page: any) {
 }
 
 async function fetchWithBrowserless(url: string) {
+  await assertSafePublicUrl(url);
+  await assertSafePublicUrl(BROWSERLESS_CONTENT_ENDPOINT);
+
   const endpoint = new URL(BROWSERLESS_CONTENT_ENDPOINT);
 
   if (BROWSERLESS_TOKEN && !endpoint.searchParams.has("token")) {

@@ -32,17 +32,17 @@ const SCAN_MODES = [
   {
     value: "quick",
     label: "Quick",
-    description: "Fast first scan. Up to 40 pages.",
+    description: "Fast first scan. Up to 25 pages.",
   },
   {
     value: "deep",
     label: "Deep",
-    description: "Best default scan. Up to 85 pages.",
+    description: "Best default scan. Up to 60 pages.",
   },
   {
     value: "advanced",
     label: "Advanced",
-    description: "Larger scan. Up to 150 pages.",
+    description: "Larger scan. Up to 100 pages.",
   },
 ];
 
@@ -84,7 +84,7 @@ export default function ScanWebsiteForm({
     getInitialCompetitorUrls(project, competitors).join("\n")
   );
 
-  const [scanMode, setScanMode] = useState(project?.scan_mode || "deep");
+  const [scanMode, setScanMode] = useState(project?.scan_mode || "quick");
 
   const [submitting, setSubmitting] = useState(false);
   const [activeStep, setActiveStep] = useState("");
@@ -604,7 +604,8 @@ export default function ScanWebsiteForm({
             />
 
             <p className="mt-1 text-xs text-slate-500">
-              Optional. One competitor URL per line.
+              Optional. Competitor checks are currently disabled for reliability
+              but kept here for later.
             </p>
           </div>
 
@@ -683,8 +684,8 @@ export default function ScanWebsiteForm({
           </Button>
 
           <p className="text-xs text-slate-500">
-            After the scan finishes, you will be sent to the Fix Pages
-            dashboard.
+            Start with Quick. Use Deep or Advanced only after Quick returns
+            successfully.
           </p>
         </div>
       </form>
@@ -699,27 +700,27 @@ export default function ScanWebsiteForm({
 function getSafeScanBudget(scanMode) {
   if (scanMode === "advanced") {
     return {
-      max_pages: 150,
-      max_competitors: 3,
+      max_pages: 100,
+      max_competitors: 0,
       max_browser_render_attempts: 1,
-      crawl_timeout_ms: 90000,
+      crawl_timeout_ms: 65000,
     };
   }
 
   if (scanMode === "deep") {
     return {
-      max_pages: 85,
-      max_competitors: 2,
+      max_pages: 60,
+      max_competitors: 0,
       max_browser_render_attempts: 1,
-      crawl_timeout_ms: 75000,
+      crawl_timeout_ms: 50000,
     };
   }
 
   return {
-    max_pages: 40,
-    max_competitors: 1,
+    max_pages: 25,
+    max_competitors: 0,
     max_browser_render_attempts: 1,
-    crawl_timeout_ms: 45000,
+    crawl_timeout_ms: 30000,
   };
 }
 
@@ -766,16 +767,27 @@ function mergeScanAndAiReview({
     aiData?.pages,
   ]);
 
-  const healthScore = getFirstNumber([
-    aiData?.health_score,
-    aiData?.seo_score,
-    aiData?.website_health_report?.score,
-    aiData?.scan_summary?.health_score,
-    scanData?.health_score,
-    scanData?.seo_score,
-    scanData?.website_health_report?.score,
-    scanData?.scan_summary?.health_score,
-  ]);
+  const scannerReadablePages =
+    scanData?.technical_audit_summary?.readable_pages_checked || 0;
+
+  const scannerBlockedPages =
+    scanData?.technical_audit_summary?.scanner_blocked_pages || 0;
+
+  const scannerSaysBlocked =
+    scannerReadablePages === 0 && scannerBlockedPages > 0;
+
+  const healthScore = scannerSaysBlocked
+    ? getFirstNumber([scanData?.health_score, scanData?.seo_score, 35])
+    : getFirstNumber([
+        aiData?.health_score,
+        aiData?.seo_score,
+        aiData?.website_health_report?.score,
+        aiData?.scan_summary?.health_score,
+        scanData?.health_score,
+        scanData?.seo_score,
+        scanData?.website_health_report?.score,
+        scanData?.scan_summary?.health_score,
+      ]);
 
   const pagesCrawled = getFirstNumber([
     scanData?.pages_crawled,
@@ -878,9 +890,11 @@ function mergeScanAndAiReview({
     technical_audit_summary: scanData?.technical_audit_summary || {},
 
     website_health_report:
-      aiData?.website_health_report ||
-      scanData?.website_health_report ||
-      {},
+      scannerSaysBlocked
+        ? scanData?.website_health_report || scanData?.scan_summary || {}
+        : aiData?.website_health_report ||
+          scanData?.website_health_report ||
+          {},
 
     positive_findings:
       aiData?.positive_findings ||
@@ -888,8 +902,10 @@ function mergeScanAndAiReview({
       scanData?.site_summary?.positives ||
       [],
 
-    health_explanation:
-      aiData?.health_explanation || scanData?.health_explanation || "",
+    health_explanation: scannerSaysBlocked
+      ? scanData?.health_explanation ||
+        "The scanner could not read the page content, so the score is based on scan coverage rather than full SEO checks."
+      : aiData?.health_explanation || scanData?.health_explanation || "",
 
     crawl_scope: scanData?.crawl_scope || {},
     sitemap_priority_summary: scanData?.sitemap_priority_summary || {},
@@ -932,10 +948,10 @@ function mergeScanAndAiReview({
       scanner_version: scanData?.version || "",
       scanner_pages_crawled: scanData?.pages_crawled || 0,
       scanner_max_pages_effective: scanData?.max_pages_effective || 0,
-      scanner_readable_pages:
-        scanData?.technical_audit_summary?.readable_pages_checked || 0,
-      scanner_blocked_pages:
-        scanData?.technical_audit_summary?.scanner_blocked_pages || 0,
+      scanner_readable_pages: scannerReadablePages,
+      scanner_blocked_pages: scannerBlockedPages,
+      scanner_says_blocked: scannerSaysBlocked,
+      final_score_source: scannerSaysBlocked ? "scanner" : "ai_then_scanner",
     },
 
     raw: {
@@ -1065,7 +1081,7 @@ function normalizeScanRecordForStorage(record) {
     business_name: record.business_name || "",
     cms_platform: record.cms_platform || "custom",
     cms_name: record.cms_name || "Custom / Not sure",
-    scan_mode: record.scan_mode || "deep",
+    scan_mode: record.scan_mode || "quick",
 
     health_score: Number(healthScore || 0),
     seo_score: Number(healthScore || 0),
@@ -1354,7 +1370,7 @@ function buildFallbackSummary({
 async function callBase44Function(functionName, payload) {
   const timeoutMs =
     functionName === ADVANCED_SCANNER_FUNCTION
-      ? Number(payload?.crawl_timeout_ms || 90000) + 15000
+      ? Number(payload?.crawl_timeout_ms || 30000) + 15000
       : 70000;
 
   const callPromise = callBase44FunctionWithoutTimeout(functionName, payload);

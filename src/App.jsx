@@ -11,7 +11,6 @@ import ResetPassword from "@/pages/ResetPassword";
 
 import FixList from "@/pages/FixList";
 import Onboarding from "@/pages/Onboarding";
-import Reports from "@/pages/Reports";
 import Billing from "@/pages/Billing";
 
 export default function App() {
@@ -29,15 +28,21 @@ export default function App() {
         <Route element={<DashboardLayout />}>
           <Route path="/dashboard" element={<FixList />} />
           <Route path="/onboarding" element={<Onboarding />} />
-          <Route path="/reports" element={<Reports />} />
           <Route path="/billing" element={<Billing />} />
         </Route>
 
-        {/* Old route redirects */}
+        {/* Hidden / old pages */}
+        <Route path="/reports" element={<Navigate to="/dashboard" replace />} />
+        <Route
+          path="/seo-connections"
+          element={<Navigate to="/dashboard" replace />}
+        />
         <Route path="/fix-list" element={<Navigate to="/dashboard" replace />} />
         <Route path="/scan" element={<Navigate to="/onboarding" replace />} />
-        <Route path="/crawl-status" element={<Navigate to="/onboarding" replace />} />
-        <Route path="/seo-connections" element={<Navigate to="/reports" replace />} />
+        <Route
+          path="/crawl-status"
+          element={<Navigate to="/onboarding" replace />}
+        />
 
         {/* Fallback */}
         <Route path="*" element={<Navigate to="/dashboard" replace />} />

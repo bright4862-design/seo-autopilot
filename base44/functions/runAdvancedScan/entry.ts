@@ -1,6 +1,6 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
-const VERSION = "runAdvancedScan_v7_debug_start_variants_screaming_frog";
+const VERSION = "runAdvancedScan_v6_priority_pathlock_junk_filter";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -96,16 +96,8 @@ Deno.serve(async (req) => {
     const budget = resolveBudget(body);
 
     const websiteUrl = normalizeWebsiteUrl(body.website_url || body.url || "");
-
-    if (!websiteUrl) {
-      return jsonResponse(
-        {
-          success: false,
-          error: "Missing or invalid website_url.",
-        },
-        400
-      );
-    }
+    if (!websiteUrl) return jsonResponse({ success: false, error: "Missing or invalid website_url." }, 400);
+    await assertSafePublicUrl(websiteUrl);
 
     const deadlineAt = Date.now() + budget.crawl_timeout_ms - 3000;
 
@@ -187,7 +179,7 @@ Deno.serve(async (req) => {
       }),
     ];
 
-    return jsonResponse({
+    const responsePayload = {
       success: true,
       version: VERSION,
 
@@ -234,7 +226,7 @@ Deno.serve(async (req) => {
         competitor_attempts_max:
           competitorResult.browser_render_attempts_max || 0,
         usage_policy:
-          "Browser rendering is used only for blocked start pages/start variants and blocked manual competitor URLs.",
+          "Browser rendering is only used for blocked start pages and blocked manual competitor URLs.",
       },
 
       crawl_scope: crawlResult.crawl_scope,
@@ -268,10 +260,11 @@ Deno.serve(async (req) => {
         importance_strategy: crawlResult.sitemap_priority_summary,
         skipped_junk_urls_count: crawlResult.skipped_junk_urls_count,
         skipped_outside_prefix_count: crawlResult.skipped_outside_prefix_count,
-        start_url_candidates: crawlResult.start_url_candidates,
         request_received_at: new Date().toISOString(),
       },
-    });
+    };
+
+    return jsonResponse(responsePayload);
   } catch (error) {
     return jsonResponse(
       {
@@ -397,8 +390,6 @@ async function crawlWebsite({
     outside_prefix: 0,
   };
 
-  const startUrlCandidates = buildStartUrlCandidates(startUrl);
-
   const sitemapEntries = budget.use_sitemap
     ? await discoverSitemapEntries({
         origin,
@@ -477,13 +468,7 @@ async function crawlWebsite({
     sortQueueByImportance(queue);
   }
 
-  for (const candidate of startUrlCandidates) {
-    addToQueue(
-      candidate,
-      cleanUrl(candidate) === cleanUrl(startUrl) ? "start" : "start_variant",
-      sitemapEntryMap.has(cleanUrl(candidate))
-    );
-  }
+  addToQueue(startUrl, "start", sitemapEntryMap.has(cleanUrl(startUrl)));
 
   for (const entry of sitemapEntries) {
     addToQueue(entry.url, "sitemap", true);
@@ -535,8 +520,7 @@ async function crawlWebsite({
           inSitemap: item.in_sitemap,
           importanceScore: item.importance_score,
           importanceReasons: item.importance_reasons,
-          allowBrowserRender:
-            item.source === "start" || item.source === "start_variant",
+          allowBrowserRender: item.source === "start",
           browserRenderBudget,
           deadlineAt,
         })
@@ -563,9 +547,7 @@ async function crawlWebsite({
       });
 
       const isInternalBlocked =
-        page.source !== "start" &&
-        page.source !== "start_variant" &&
-        page.is_scanner_blocked === true;
+        page.source !== "start" && page.is_scanner_blocked === true;
 
       if (isInternalBlocked) {
         consecutiveBlockedInternal += 1;
@@ -582,10 +564,7 @@ async function crawlWebsite({
       ).length;
 
       const blockedInternalPages = pages.filter(
-        (item) =>
-          item.source !== "start" &&
-          item.source !== "start_variant" &&
-          item.is_scanner_blocked
+        (item) => item.source !== "start" && item.is_scanner_blocked
       ).length;
 
       const minReadablePagesBeforeEarlyStop =
@@ -597,7 +576,8 @@ async function crawlWebsite({
 
       const nearDeadline = Date.now() > deadlineAt - 12000;
 
-      const blockedRatio = blockedInternalPages / Math.max(1, pages.length);
+      const blockedRatio =
+        blockedInternalPages / Math.max(1, pages.length);
 
       const enoughUsefulPagesBeforeStopping =
         readablePages >= minReadablePagesBeforeEarlyStop || nearDeadline;
@@ -611,7 +591,10 @@ async function crawlWebsite({
         break;
       }
 
-      if (enoughUsefulPagesBeforeStopping && consecutiveBlockedInternal >= 20) {
+      if (
+        enoughUsefulPagesBeforeStopping &&
+        consecutiveBlockedInternal >= 20
+      ) {
         stoppedForRateLimit = true;
         break;
       }
@@ -626,9 +609,7 @@ async function crawlWebsite({
 
           addToQueue(
             link,
-            page.source === "start" || page.source === "start_variant"
-              ? "homepage_link"
-              : "internal",
+            page.source === "start" ? "homepage_link" : "internal",
             sitemapEntryMap.has(cleanUrl(link))
           );
         }
@@ -687,10 +668,9 @@ async function crawlWebsite({
     recommended_followup_scans: recommendedFollowups,
     skipped_junk_urls_count: skippedStats.junk_urls,
     skipped_outside_prefix_count: skippedStats.outside_prefix,
-    start_url_candidates: startUrlCandidates,
     sitemap_priority_summary: {
       strategy:
-        "The scanner reads sitemap URLs first, learns common URL folders, tries cleaner start URL variants, boosts likely landing pages, demotes listing/archive/news/filter/encoded pages, and keeps the scan focused inside the requested folder or language path.",
+        "The scanner reads sitemap URLs first, learns common URL folders, boosts likely landing pages, demotes listing/archive/news/filter/encoded pages, and keeps the scan focused inside the starting topic folder when one exists.",
       topic_dossier_prefix: importanceProfile.topic_dossier_prefix || "",
       sitemap_entries_found: sitemapEntries.length,
       important_page_patterns: importanceProfile.important_page_patterns,
@@ -699,7 +679,6 @@ async function crawlWebsite({
       related_subdomains_found: recommendedFollowups.length,
       skipped_junk_urls_count: skippedStats.junk_urls,
       skipped_outside_prefix_count: skippedStats.outside_prefix,
-      start_url_candidates: startUrlCandidates,
     },
   };
 }
@@ -800,96 +779,28 @@ async function fetchAndExtractPage({
   return page;
 }
 
-async function fetchWithTimeout(url: string, timeoutMs: number) {
+async function fetchWithTimeout(url: string, timeoutMs: number, redirectCount = 0) {
+  await assertSafePublicUrl(url);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
   try {
-    return await fetch(url, {
-      method: "GET",
-      redirect: "follow",
-      signal: controller.signal,
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (compatible; SEOAutopilotBot/1.0; +https://base44.app)",
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
+    const response = await fetch(url, { method: "GET", redirect: "manual", signal: controller.signal, headers: { "User-Agent": "Mozilla/5.0 (compatible; SEOAutopilotBot/1.0; +https://base44.app)", Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.9" } });
+    if (response.status >= 300 && response.status < 400) { const location = response.headers.get("location") || ""; if (!location) return response; if (redirectCount >= 5) throw new Error("Too many redirects while checking this website."); return await fetchWithTimeout(new URL(location, url).toString(), timeoutMs, redirectCount + 1); }
+    return response;
+  } finally { clearTimeout(timeout); }
 }
-
-function shouldRetryWithBrowser(page: any) {
-  if (!BROWSERLESS_TOKEN) return false;
-
-  if (page.is_scanner_blocked) return true;
-
-  if ([0, 403, 429, 503].includes(Number(page.status_code || 0))) {
-    return true;
-  }
-
-  if (BROWSER_RENDER_MODE === "js_fallback") {
-    return (
-      Number(page.word_count || 0) < 80 &&
-      Number(page.script_count || 0) >= 15
-    );
-  }
-
-  return false;
-}
-
+async function assertSafePublicUrl(value: string) { const url = new URL(String(value || "")); if (!/^https?:$/i.test(url.protocol)) throw new Error("Only public http and https URLs can be scanned."); const ips = await resolvePublicIps(url.hostname); if (!ips.length || ips.some((ip) => !isPublicIp(ip))) throw new Error("Private or local network addresses cannot be scanned."); }
+async function resolvePublicIps(hostname: string) { const host = String(hostname || "").replace(/^\[|\]$/g, "").toLowerCase(); if (!host || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) throw new Error("Private or local network addresses cannot be scanned."); if (isIpv4Address(host) || host.includes(":")) return [host]; const response = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=A`, { headers: { Accept: "application/dns-json" } }); const data = await response.json().catch(() => ({})); return (data.Answer || []).map((answer: any) => String(answer?.data || "")).filter(isIpv4Address); }
+function isIpv4Address(value: string) { const parts = String(value || "").split("."); return parts.length === 4 && parts.every((part) => /^\d+$/.test(part) && Number(part) >= 0 && Number(part) <= 255); }
+function isPublicIp(ip: string) { const value = String(ip || "").toLowerCase(); if (isIpv4Address(value)) return isPublicIpv4(value); return Boolean(value.includes(":")) && !value.startsWith("::1") && !value.startsWith("fc") && !value.startsWith("fd") && !value.startsWith("fe80"); }
+function isPublicIpv4(ip: string) { const [a, b] = ip.split(".").map(Number); return !(a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && (b === 0 || b === 168)) || (a === 198 && (b === 18 || b === 19)) || ip === "255.255.255.255"); }
+function shouldRetryWithBrowser(page: any) { if (!BROWSERLESS_TOKEN) return false; if (page.is_scanner_blocked) return true; if ([0, 403, 429, 503].includes(Number(page.status_code || 0))) return true; return BROWSER_RENDER_MODE === "js_fallback" && Number(page.word_count || 0) < 80 && Number(page.script_count || 0) >= 15; }
 async function fetchWithBrowserless(url: string) {
-  const endpoint = new URL(BROWSERLESS_CONTENT_ENDPOINT);
-
-  if (BROWSERLESS_TOKEN && !endpoint.searchParams.has("token")) {
-    endpoint.searchParams.set("token", BROWSERLESS_TOKEN);
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(),
-    BROWSER_RENDER_TIMEOUT_MS
-  );
-
-  try {
-    const response = await fetch(endpoint.toString(), {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        url,
-        waitForTimeout: 1500,
-        gotoOptions: {
-          waitUntil: "networkidle2",
-          timeout: BROWSER_RENDER_TIMEOUT_MS,
-        },
-      }),
-    });
-
-    const html = await response.text();
-
-    if (!response.ok) {
-      throw new Error(
-        `Browserless failed with status ${response.status}: ${html.slice(
-          0,
-          200
-        )}`
-      );
-    }
-
-    return {
-      html,
-      status_code: 200,
-      final_url: url,
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
+  await assertSafePublicUrl(url); await assertSafePublicUrl(BROWSERLESS_CONTENT_ENDPOINT);
+  const endpoint = new URL(BROWSERLESS_CONTENT_ENDPOINT); if (BROWSERLESS_TOKEN && !endpoint.searchParams.has("token")) endpoint.searchParams.set("token", BROWSERLESS_TOKEN);
+  const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), BROWSER_RENDER_TIMEOUT_MS);
+  try { const response = await fetch(endpoint.toString(), { method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url, waitForTimeout: 1500, gotoOptions: { waitUntil: "networkidle2", timeout: BROWSER_RENDER_TIMEOUT_MS } }) }); const html = await response.text(); if (!response.ok) throw new Error(`Browserless failed with status ${response.status}: ${html.slice(0, 200)}`); return { html, status_code: 200, final_url: url }; }
+  finally { clearTimeout(timeout); }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1163,11 +1074,6 @@ function scoreUrlImportance({
   if (source === "start") {
     score += 900;
     reasons.push("scan start");
-  }
-
-  if (source === "start_variant") {
-    score += 880;
-    reasons.push("cleaner start URL variant");
   }
 
   if (source === "homepage_link") {
@@ -2020,36 +1926,6 @@ function isInsidePathPrefix(value: string, prefix: string) {
   }
 }
 
-function buildStartUrlCandidates(startUrl: string) {
-  const output = new Set<string>();
-  const cleanedStart = cleanUrl(startUrl);
-
-  if (cleanedStart) output.add(cleanedStart);
-
-  try {
-    const parsed = new URL(startUrl);
-    const originalPath = parsed.pathname;
-
-    if (/\/index\.html?$/i.test(originalPath)) {
-      parsed.pathname = originalPath.replace(/\/index\.html?$/i, "/");
-      output.add(cleanUrl(parsed.toString()));
-    }
-
-    if (!originalPath.endsWith("/") && !/\.[a-z0-9]+$/i.test(originalPath)) {
-      parsed.pathname = `${originalPath}/`;
-      output.add(cleanUrl(parsed.toString()));
-    }
-
-    if (originalPath === "/" || originalPath === "") {
-      output.add(cleanUrl(parsed.origin + "/"));
-    }
-  } catch {
-    // Ignore invalid variants.
-  }
-
-  return [...output].filter(Boolean).slice(0, 3);
-}
-
 /* -------------------------------------------------------------------------- */
 /* Sitemap helpers                                                             */
 /* -------------------------------------------------------------------------- */
@@ -2424,7 +2300,8 @@ function runScreamingFrogLiteAudit({
           difficulty: "easy",
           page,
           title: "Improve social sharing metadata",
-          explanation: "This page may not have social sharing tags.",
+          explanation:
+            "This page may not have social sharing tags.",
           recommendation:
             "Add Open Graph title, description, and image fields in the CMS or SEO plugin.",
         })
@@ -2732,10 +2609,7 @@ function buildCoverageFindings({
 
   const blockedPages = pages.filter((page) => page.is_scanner_blocked);
   const internalBlockedPages = pages.filter(
-    (page) =>
-      page.source !== "start" &&
-      page.source !== "start_variant" &&
-      page.is_scanner_blocked
+    (page) => page.source !== "start" && page.is_scanner_blocked
   );
   const readablePages = pages.filter(isReadablePage);
 
@@ -2854,10 +2728,7 @@ function buildFriendlyWarnings({
   const warnings: string[] = [];
   const readablePages = pages.filter(isReadablePage);
   const internalBlockedPages = pages.filter(
-    (page) =>
-      page.source !== "start" &&
-      page.source !== "start_variant" &&
-      page.is_scanner_blocked
+    (page) => page.source !== "start" && page.is_scanner_blocked
   );
 
   if (internalBlockedPages.length > 0 && readablePages.length > 0) {
@@ -3006,18 +2877,11 @@ function calculateHealthScore({
 
   const readablePages = pages.filter(isReadablePage);
   const blockedInternalPages = pages.filter(
-    (page) =>
-      page.source !== "start" &&
-      page.source !== "start_variant" &&
-      page.is_scanner_blocked
+    (page) => page.source !== "start" && page.is_scanner_blocked
   );
 
   if (!startPage || startPage.is_scanner_blocked || readablePages.length === 0) {
-    return 35;
-  }
-
-  if (pages.length <= 2 && readablePages.length <= 1) {
-    return 40;
+    return 45;
   }
 
   let score = 94;
@@ -3046,7 +2910,7 @@ function calculateHealthScore({
     score += 3;
   }
 
-  return Math.max(35, Math.min(100, Math.round(score)));
+  return Math.max(45, Math.min(100, Math.round(score)));
 }
 
 function buildScanSummary({
@@ -3118,9 +2982,8 @@ function buildScanSummary({
       skipped_junk_urls_count: crawlResult.skipped_junk_urls_count || 0,
       skipped_outside_prefix_count:
         crawlResult.skipped_outside_prefix_count || 0,
-      start_url_candidates: crawlResult.start_url_candidates || [],
       explanation:
-        "The scanner prioritized sitemap and internal URLs that looked like important landing pages, tried cleaner start URL variants, and deprioritized listing, archive, news, tag, search, encoded, and very deep pages where appropriate.",
+        "The scanner prioritized sitemap and internal URLs that looked like important landing pages, and deprioritized listing, archive, news, tag, search, encoded, and very deep pages where appropriate.",
     },
   };
 }

@@ -1,6 +1,6 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
-const VERSION = "runAdvancedScan_v6_priority_pathlock_junk_filter";
+const VERSION = "runAdvancedScan_v7_debug_start_variants_screaming_frog";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -187,7 +187,7 @@ Deno.serve(async (req) => {
       }),
     ];
 
-    const responsePayload = {
+    return jsonResponse({
       success: true,
       version: VERSION,
 
@@ -234,7 +234,7 @@ Deno.serve(async (req) => {
         competitor_attempts_max:
           competitorResult.browser_render_attempts_max || 0,
         usage_policy:
-          "Browser rendering is only used for blocked start pages and blocked manual competitor URLs.",
+          "Browser rendering is used only for blocked start pages/start variants and blocked manual competitor URLs.",
       },
 
       crawl_scope: crawlResult.crawl_scope,
@@ -268,11 +268,10 @@ Deno.serve(async (req) => {
         importance_strategy: crawlResult.sitemap_priority_summary,
         skipped_junk_urls_count: crawlResult.skipped_junk_urls_count,
         skipped_outside_prefix_count: crawlResult.skipped_outside_prefix_count,
+        start_url_candidates: crawlResult.start_url_candidates,
         request_received_at: new Date().toISOString(),
       },
-    };
-
-    return jsonResponse(responsePayload);
+    });
   } catch (error) {
     return jsonResponse(
       {
@@ -398,6 +397,8 @@ async function crawlWebsite({
     outside_prefix: 0,
   };
 
+  const startUrlCandidates = buildStartUrlCandidates(startUrl);
+
   const sitemapEntries = budget.use_sitemap
     ? await discoverSitemapEntries({
         origin,
@@ -476,7 +477,13 @@ async function crawlWebsite({
     sortQueueByImportance(queue);
   }
 
-  addToQueue(startUrl, "start", sitemapEntryMap.has(cleanUrl(startUrl)));
+  for (const candidate of startUrlCandidates) {
+    addToQueue(
+      candidate,
+      cleanUrl(candidate) === cleanUrl(startUrl) ? "start" : "start_variant",
+      sitemapEntryMap.has(cleanUrl(candidate))
+    );
+  }
 
   for (const entry of sitemapEntries) {
     addToQueue(entry.url, "sitemap", true);
@@ -528,7 +535,8 @@ async function crawlWebsite({
           inSitemap: item.in_sitemap,
           importanceScore: item.importance_score,
           importanceReasons: item.importance_reasons,
-          allowBrowserRender: item.source === "start",
+          allowBrowserRender:
+            item.source === "start" || item.source === "start_variant",
           browserRenderBudget,
           deadlineAt,
         })
@@ -555,7 +563,9 @@ async function crawlWebsite({
       });
 
       const isInternalBlocked =
-        page.source !== "start" && page.is_scanner_blocked === true;
+        page.source !== "start" &&
+        page.source !== "start_variant" &&
+        page.is_scanner_blocked === true;
 
       if (isInternalBlocked) {
         consecutiveBlockedInternal += 1;
@@ -572,7 +582,10 @@ async function crawlWebsite({
       ).length;
 
       const blockedInternalPages = pages.filter(
-        (item) => item.source !== "start" && item.is_scanner_blocked
+        (item) =>
+          item.source !== "start" &&
+          item.source !== "start_variant" &&
+          item.is_scanner_blocked
       ).length;
 
       const minReadablePagesBeforeEarlyStop =
@@ -584,8 +597,7 @@ async function crawlWebsite({
 
       const nearDeadline = Date.now() > deadlineAt - 12000;
 
-      const blockedRatio =
-        blockedInternalPages / Math.max(1, pages.length);
+      const blockedRatio = blockedInternalPages / Math.max(1, pages.length);
 
       const enoughUsefulPagesBeforeStopping =
         readablePages >= minReadablePagesBeforeEarlyStop || nearDeadline;
@@ -599,10 +611,7 @@ async function crawlWebsite({
         break;
       }
 
-      if (
-        enoughUsefulPagesBeforeStopping &&
-        consecutiveBlockedInternal >= 20
-      ) {
+      if (enoughUsefulPagesBeforeStopping && consecutiveBlockedInternal >= 20) {
         stoppedForRateLimit = true;
         break;
       }
@@ -617,7 +626,9 @@ async function crawlWebsite({
 
           addToQueue(
             link,
-            page.source === "start" ? "homepage_link" : "internal",
+            page.source === "start" || page.source === "start_variant"
+              ? "homepage_link"
+              : "internal",
             sitemapEntryMap.has(cleanUrl(link))
           );
         }
@@ -676,9 +687,10 @@ async function crawlWebsite({
     recommended_followup_scans: recommendedFollowups,
     skipped_junk_urls_count: skippedStats.junk_urls,
     skipped_outside_prefix_count: skippedStats.outside_prefix,
+    start_url_candidates: startUrlCandidates,
     sitemap_priority_summary: {
       strategy:
-        "The scanner reads sitemap URLs first, learns common URL folders, boosts likely landing pages, demotes listing/archive/news/filter/encoded pages, and keeps the scan focused inside the starting topic folder when one exists.",
+        "The scanner reads sitemap URLs first, learns common URL folders, tries cleaner start URL variants, boosts likely landing pages, demotes listing/archive/news/filter/encoded pages, and keeps the scan focused inside the requested folder or language path.",
       topic_dossier_prefix: importanceProfile.topic_dossier_prefix || "",
       sitemap_entries_found: sitemapEntries.length,
       important_page_patterns: importanceProfile.important_page_patterns,
@@ -687,6 +699,7 @@ async function crawlWebsite({
       related_subdomains_found: recommendedFollowups.length,
       skipped_junk_urls_count: skippedStats.junk_urls,
       skipped_outside_prefix_count: skippedStats.outside_prefix,
+      start_url_candidates: startUrlCandidates,
     },
   };
 }
@@ -1150,6 +1163,11 @@ function scoreUrlImportance({
   if (source === "start") {
     score += 900;
     reasons.push("scan start");
+  }
+
+  if (source === "start_variant") {
+    score += 880;
+    reasons.push("cleaner start URL variant");
   }
 
   if (source === "homepage_link") {
@@ -2002,6 +2020,36 @@ function isInsidePathPrefix(value: string, prefix: string) {
   }
 }
 
+function buildStartUrlCandidates(startUrl: string) {
+  const output = new Set<string>();
+  const cleanedStart = cleanUrl(startUrl);
+
+  if (cleanedStart) output.add(cleanedStart);
+
+  try {
+    const parsed = new URL(startUrl);
+    const originalPath = parsed.pathname;
+
+    if (/\/index\.html?$/i.test(originalPath)) {
+      parsed.pathname = originalPath.replace(/\/index\.html?$/i, "/");
+      output.add(cleanUrl(parsed.toString()));
+    }
+
+    if (!originalPath.endsWith("/") && !/\.[a-z0-9]+$/i.test(originalPath)) {
+      parsed.pathname = `${originalPath}/`;
+      output.add(cleanUrl(parsed.toString()));
+    }
+
+    if (originalPath === "/" || originalPath === "") {
+      output.add(cleanUrl(parsed.origin + "/"));
+    }
+  } catch {
+    // Ignore invalid variants.
+  }
+
+  return [...output].filter(Boolean).slice(0, 3);
+}
+
 /* -------------------------------------------------------------------------- */
 /* Sitemap helpers                                                             */
 /* -------------------------------------------------------------------------- */
@@ -2376,8 +2424,7 @@ function runScreamingFrogLiteAudit({
           difficulty: "easy",
           page,
           title: "Improve social sharing metadata",
-          explanation:
-            "This page may not have social sharing tags.",
+          explanation: "This page may not have social sharing tags.",
           recommendation:
             "Add Open Graph title, description, and image fields in the CMS or SEO plugin.",
         })
@@ -2685,7 +2732,10 @@ function buildCoverageFindings({
 
   const blockedPages = pages.filter((page) => page.is_scanner_blocked);
   const internalBlockedPages = pages.filter(
-    (page) => page.source !== "start" && page.is_scanner_blocked
+    (page) =>
+      page.source !== "start" &&
+      page.source !== "start_variant" &&
+      page.is_scanner_blocked
   );
   const readablePages = pages.filter(isReadablePage);
 
@@ -2804,7 +2854,10 @@ function buildFriendlyWarnings({
   const warnings: string[] = [];
   const readablePages = pages.filter(isReadablePage);
   const internalBlockedPages = pages.filter(
-    (page) => page.source !== "start" && page.is_scanner_blocked
+    (page) =>
+      page.source !== "start" &&
+      page.source !== "start_variant" &&
+      page.is_scanner_blocked
   );
 
   if (internalBlockedPages.length > 0 && readablePages.length > 0) {
@@ -2953,11 +3006,18 @@ function calculateHealthScore({
 
   const readablePages = pages.filter(isReadablePage);
   const blockedInternalPages = pages.filter(
-    (page) => page.source !== "start" && page.is_scanner_blocked
+    (page) =>
+      page.source !== "start" &&
+      page.source !== "start_variant" &&
+      page.is_scanner_blocked
   );
 
   if (!startPage || startPage.is_scanner_blocked || readablePages.length === 0) {
-    return 45;
+    return 35;
+  }
+
+  if (pages.length <= 2 && readablePages.length <= 1) {
+    return 40;
   }
 
   let score = 94;
@@ -2986,7 +3046,7 @@ function calculateHealthScore({
     score += 3;
   }
 
-  return Math.max(45, Math.min(100, Math.round(score)));
+  return Math.max(35, Math.min(100, Math.round(score)));
 }
 
 function buildScanSummary({
@@ -3058,8 +3118,9 @@ function buildScanSummary({
       skipped_junk_urls_count: crawlResult.skipped_junk_urls_count || 0,
       skipped_outside_prefix_count:
         crawlResult.skipped_outside_prefix_count || 0,
+      start_url_candidates: crawlResult.start_url_candidates || [],
       explanation:
-        "The scanner prioritized sitemap and internal URLs that looked like important landing pages, and deprioritized listing, archive, news, tag, search, encoded, and very deep pages where appropriate.",
+        "The scanner prioritized sitemap and internal URLs that looked like important landing pages, tried cleaner start URL variants, and deprioritized listing, archive, news, tag, search, encoded, and very deep pages where appropriate.",
     },
   };
 }

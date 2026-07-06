@@ -15,6 +15,9 @@ const DASHBOARD_HISTORY_KEY = "seo_autopilot:scan_history";
 const LEGACY_LAST_SCAN_KEY = "SEO_AUTOPILOT_LAST_SCAN";
 const LEGACY_HISTORY_KEY = "SEO_AUTOPILOT_SCAN_HISTORY";
 
+const ACTIVE_SCAN_URL_KEY = "seo_autopilot:active_scan_url";
+const ACTIVE_SCAN_STARTED_AT_KEY = "seo_autopilot:active_scan_started_at";
+
 const SCAN_MODES = [
   {
     value: "quick",
@@ -95,6 +98,7 @@ export default function ScanWebsiteForm({
     setError("");
 
     const normalizedUrl = normalizeWebsiteUrl(websiteUrl);
+    const requestedPathPrefix = getRequestedPathPrefix(normalizedUrl);
 
     if (!normalizedUrl) {
       setError("Enter a valid website URL.");
@@ -107,6 +111,7 @@ export default function ScanWebsiteForm({
     }
 
     setSubmitting(true);
+    clearPreviousDashboardScan(normalizedUrl);
 
     try {
       const safeScanBudget = getSafeScanBudget(scanMode);
@@ -115,6 +120,11 @@ export default function ScanWebsiteForm({
 
       const scanPayload = {
         website_url: normalizedUrl,
+        requested_start_url: normalizedUrl,
+        crawl_path_prefix: requestedPathPrefix,
+        strict_path_prefix: true,
+        clear_previous_scan: true,
+
         business_name: businessName.trim(),
         cms_platform: cmsPlatform,
         cms_name: selectedCms?.label || "Custom / Not sure",
@@ -173,6 +183,8 @@ export default function ScanWebsiteForm({
             create_cms_specific_steps: true,
             include_developer_flags_only_when_needed: true,
             include_joomla_when_selected: true,
+            explain_scan_focus: true,
+            mention_followup_scans_only_if_useful: true,
           },
 
           crawled_pages: firstArray([
@@ -203,6 +215,21 @@ export default function ScanWebsiteForm({
             scanData.created_competitors,
           ]),
 
+          recommended_followup_scans: firstArray([
+            scanData.recommended_followup_scans,
+          ]),
+
+          important_page_patterns: firstArray([
+            scanData.important_page_patterns,
+          ]),
+
+          deprioritized_page_patterns: firstArray([
+            scanData.deprioritized_page_patterns,
+          ]),
+
+          sitemap_priority_summary: scanData.sitemap_priority_summary || {},
+
+          crawl_scope: scanData.crawl_scope || {},
           crawl_warnings: firstArray([scanData.crawl_warnings]),
           technical_audit_summary: scanData.technical_audit_summary || {},
           scan_summary: scanData.scan_summary || scanData.site_summary || {},
@@ -232,6 +259,7 @@ export default function ScanWebsiteForm({
         cmsPlatform,
         cmsName: selectedCms?.label || "Custom / Not sure",
         scanMode,
+        requestedPathPrefix,
       });
 
       saveScanForDashboard(mergedFinal);
@@ -487,6 +515,7 @@ function mergeScanAndAiReview({
   cmsPlatform,
   cmsName,
   scanMode,
+  requestedPathPrefix,
 }) {
   const aiFixes = firstArray([
     aiData?.cleaned_fixes,
@@ -547,6 +576,21 @@ function mergeScanAndAiReview({
     aiData?.recommended_actions,
   ]);
 
+  const recommendedFollowups = firstArray([
+    scanData?.recommended_followup_scans,
+    aiData?.recommended_followup_scans,
+  ]);
+
+  const importantPatterns = firstArray([
+    scanData?.important_page_patterns,
+    aiData?.important_page_patterns,
+  ]);
+
+  const deprioritizedPatterns = firstArray([
+    scanData?.deprioritized_page_patterns,
+    aiData?.deprioritized_page_patterns,
+  ]);
+
   const simpleSummary =
     aiData?.customer_summary ||
     aiData?.plain_english_summary ||
@@ -571,6 +615,9 @@ function mergeScanAndAiReview({
     created_at: new Date().toISOString(),
 
     website_url: websiteUrl,
+    website_key: normalizeWebsiteKey(websiteUrl),
+    requested_path_prefix: requestedPathPrefix || "",
+
     business_name: businessName,
     cms_platform: cmsPlatform,
     cms_name: cmsName,
@@ -621,7 +668,14 @@ function mergeScanAndAiReview({
       scanData?.site_summary?.positives ||
       [],
 
-    health_explanation: aiData?.health_explanation || scanData?.health_explanation || "",
+    health_explanation:
+      aiData?.health_explanation || scanData?.health_explanation || "",
+
+    crawl_scope: scanData?.crawl_scope || {},
+    sitemap_priority_summary: scanData?.sitemap_priority_summary || {},
+    important_page_patterns: importantPatterns,
+    deprioritized_page_patterns: deprioritizedPatterns,
+    recommended_followup_scans: recommendedFollowups,
 
     competitor_result:
       scanData?.competitor_result ||
@@ -654,6 +708,7 @@ function mergeScanAndAiReview({
       ai_success: aiData?.success === true,
       ai_provider: aiData?.provider || aiData?.debug?.provider || "",
       cms_platform: cmsPlatform,
+      requested_path_prefix: requestedPathPrefix || "",
     },
 
     raw: {
@@ -666,6 +721,31 @@ function mergeScanAndAiReview({
 /* -------------------------------------------------------------------------- */
 /* Dashboard sync                                                              */
 /* -------------------------------------------------------------------------- */
+
+function clearPreviousDashboardScan(activeUrl) {
+  try {
+    const keysToRemove = [
+      DASHBOARD_LAST_SCAN_KEY,
+      LEGACY_LAST_SCAN_KEY,
+      DASHBOARD_HISTORY_KEY,
+      LEGACY_HISTORY_KEY,
+    ];
+
+    keysToRemove.forEach((key) => {
+      window.localStorage.removeItem(key);
+    });
+
+    window.localStorage.setItem(ACTIVE_SCAN_URL_KEY, activeUrl);
+    window.localStorage.setItem(
+      ACTIVE_SCAN_STARTED_AT_KEY,
+      new Date().toISOString()
+    );
+
+    window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
+  } catch (error) {
+    console.warn("Could not clear previous dashboard scan.", error);
+  }
+}
 
 function saveScanForDashboard(scanRecord) {
   try {
@@ -685,11 +765,16 @@ function saveScanForDashboard(scanRecord) {
 
       const nextHistory = [
         normalizedRecord,
-        ...history.filter((item) => item?.id !== normalizedRecord.id),
+        ...history.filter(
+          (item) => item?.website_key !== normalizedRecord.website_key
+        ),
       ].slice(0, 20);
 
       window.localStorage.setItem(key, JSON.stringify(nextHistory));
     });
+
+    window.localStorage.removeItem(ACTIVE_SCAN_URL_KEY);
+    window.localStorage.removeItem(ACTIVE_SCAN_STARTED_AT_KEY);
 
     window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
   } catch (error) {
@@ -708,6 +793,9 @@ function normalizeScanRecordForStorage(record) {
     created_at: record.created_at || new Date().toISOString(),
 
     website_url: record.website_url || "",
+    website_key: normalizeWebsiteKey(record.website_url || ""),
+    requested_path_prefix: record.requested_path_prefix || "",
+
     business_name: record.business_name || "",
     cms_platform: record.cms_platform || "custom",
     cms_name: record.cms_name || "Custom / Not sure",
@@ -738,6 +826,22 @@ function normalizeScanRecordForStorage(record) {
     site_summary: record.site_summary || {},
     technical_audit_summary: record.technical_audit_summary || {},
     website_health_report: record.website_health_report || {},
+
+    crawl_scope: record.crawl_scope || {},
+    sitemap_priority_summary: record.sitemap_priority_summary || {},
+    important_page_patterns: Array.isArray(record.important_page_patterns)
+      ? record.important_page_patterns
+      : [],
+    deprioritized_page_patterns: Array.isArray(
+      record.deprioritized_page_patterns
+    )
+      ? record.deprioritized_page_patterns
+      : [],
+    recommended_followup_scans: Array.isArray(
+      record.recommended_followup_scans
+    )
+      ? record.recommended_followup_scans
+      : [],
 
     competitor_result: record.competitor_result || {},
     competitor_results: Array.isArray(record.competitor_results)
@@ -982,7 +1086,38 @@ function normalizeWebsiteUrl(value) {
     const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
     const parsed = new URL(withProtocol);
 
+    parsed.hash = "";
+
     return parsed.toString();
+  } catch {
+    return "";
+  }
+}
+
+function normalizeWebsiteKey(value) {
+  try {
+    const parsed = new URL(value);
+
+    return `${parsed.hostname.replace(/^www\./i, "")}${parsed.pathname}`;
+  } catch {
+    return String(value || "").trim().toLowerCase();
+  }
+}
+
+function getRequestedPathPrefix(value) {
+  try {
+    const parsed = new URL(value);
+    const parts = parsed.pathname.split("/").filter(Boolean);
+
+    if (parts.length === 0) return "";
+
+    const first = parts[0];
+
+    if (/^[a-z]{2}(-[a-z]{2})?$/i.test(first)) {
+      return `/${first}`;
+    }
+
+    return `/${first}`;
   } catch {
     return "";
   }

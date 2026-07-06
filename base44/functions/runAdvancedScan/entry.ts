@@ -934,11 +934,11 @@ async function fetchHtmlWithRetry(url: string) {
 }
 
 async function fetchWithTimeout(url: string, timeoutMs: number, redirectCount = 0) {
-  await assertPublicHttpUrlIfPresent(url);
+  const safe = await getValidatedFetchTarget(url);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { method: "GET", redirect: "manual", signal: controller.signal, headers: { "User-Agent": USER_AGENT, Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.9" } });
+    const response = await fetch(safe.target_url, { method: "GET", redirect: "manual", signal: controller.signal, headers: { "Host": safe.host_header, "User-Agent": USER_AGENT, Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.9" } });
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location") || "";
       if (!location) return response;
@@ -2007,22 +2007,9 @@ function decodeHtmlEntities(value: string) {
 /* URL filtering                                                               */
 /* -------------------------------------------------------------------------- */
 
-async function assertPublicHttpUrlIfPresent(value: string) {
-  const text = String(value || "").trim();
-  if (!/^https?:\/\//i.test(text)) return;
-  const ips = await resolvePublicIps(new URL(text).hostname);
-  if (!ips.length || ips.some((ip: string) => !isPublicIp(ip))) throw new Error("Private or local network addresses cannot be scanned.");
-}
-
-async function resolvePublicIps(hostname: string) {
-  const host = String(hostname || "").replace(/^\[|\]$/g, "").toLowerCase();
-  if (!host || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) throw new Error("Private or local network addresses cannot be scanned.");
-  if (isIpv4Address(host) || host.includes(":")) return [host];
-  const response = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=A`, { headers: { Accept: "application/dns-json" } });
-  const data = await response.json().catch(() => ({}));
-  return (data.Answer || []).map((answer: any) => String(answer?.data || "")).filter(isIpv4Address);
-}
-
+async function getValidatedFetchTarget(value: string) { const original = new URL(String(value || "")); const ips = await resolvePublicIps(original.hostname); const ip = ips.find((item: string) => isIpv4Address(item) && isPublicIp(item)); if (!ip || ips.some((item: string) => !isPublicIp(item))) throw new Error("Private or local network addresses cannot be scanned."); const target = new URL(original.toString()); target.hostname = ip; return { target_url: target.toString(), host_header: original.host }; }
+async function assertPublicHttpUrlIfPresent(value: string) { const text = String(value || "").trim(); if (/^https?:\/\//i.test(text)) await getValidatedFetchTarget(text); }
+async function resolvePublicIps(hostname: string) { const host = String(hostname || "").replace(/^\[|\]$/g, "").toLowerCase(); if (!host || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) throw new Error("Private or local network addresses cannot be scanned."); if (isIpv4Address(host) || host.includes(":")) return [host]; const response = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=A`, { headers: { Accept: "application/dns-json" } }); const data = await response.json().catch(() => ({})); return (data.Answer || []).map((answer: any) => String(answer?.data || "")).filter(isIpv4Address); }
 function isIpv4Address(value: string) { const parts = String(value || "").split("."); return parts.length === 4 && parts.every((part) => /^\d+$/.test(part) && Number(part) >= 0 && Number(part) <= 255); }
 function isPublicIp(ip: string) { const value = String(ip || "").toLowerCase(); return isIpv4Address(value) ? isPublicIpv4(value) : value.includes(":") && value !== "::" && !value.startsWith("::1") && !value.startsWith("fc") && !value.startsWith("fd") && !value.startsWith("fe80"); }
 function isPublicIpv4(ip: string) { const [a, b] = ip.split(".").map(Number); return !(a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && (b === 0 || b === 168)) || (a === 198 && (b === 18 || b === 19)) || ip === "255.255.255.255"); }

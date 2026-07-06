@@ -205,11 +205,12 @@ Deno.serve(async (req) => {
       ...fallbackPlan,
     });
   } catch (error) {
+    console.error("aiReviewScan failed", error);
+
     return Response.json(
       {
         success: false,
-        error: error?.message || "aiReviewScan failed",
-        stack: error?.stack || "",
+        error: "aiReviewScan failed. Please try again.",
       },
       { status: 500 }
     );

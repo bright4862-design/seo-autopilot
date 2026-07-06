@@ -12,8 +12,8 @@ import {
 import { Button } from "@/components/ui/button";
 
 const navigationItems = [
-  { name: "Fix Pages", href: "/dashboard", icon: CheckCircle2 },
-  { name: "Scan Website", href: "/onboarding", icon: Search },
+  { name: "FixList", href: "/dashboard", icon: CheckCircle2 },
+  { name: "New scan", href: "/onboarding", icon: Search },
   { name: "Billing", href: "/billing", icon: CreditCard },
 ];
 
@@ -26,7 +26,8 @@ export default function DashboardLayout() {
     if (href === "/dashboard") {
       return (
         location.pathname === "/dashboard" ||
-        location.pathname === "/fix-list"
+        location.pathname === "/fix-list" ||
+        location.pathname === "/issues"
       );
     }
 
@@ -97,10 +98,8 @@ function MobileHeader({ mobileOpen, onToggle }) {
         </div>
 
         <div>
-          <div className="font-bold leading-tight text-slate-950">
-            SEO Pilot
-          </div>
-          <div className="text-xs text-slate-500">Autopilot dashboard</div>
+          <div className="font-bold leading-tight text-slate-950">FixList</div>
+          <div className="text-xs text-slate-500">Plain-English SEO fixes</div>
         </div>
       </Link>
 
@@ -126,9 +125,9 @@ function SidebarContent({ isActive, onNavigate, onLogout }) {
 
           <div>
             <div className="text-lg font-bold leading-tight text-slate-950">
-              SEO Pilot
+              FixList
             </div>
-            <div className="text-sm text-slate-500">Autopilot dashboard</div>
+            <div className="text-sm text-slate-500">Plain-English SEO fixes</div>
           </div>
         </Link>
       </div>

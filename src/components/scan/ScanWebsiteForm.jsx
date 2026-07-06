@@ -486,9 +486,7 @@ export default function ScanWebsiteForm({
             <p className="mt-1 text-xs text-slate-500">
               Optional. Competitor checks are currently disabled for reliability but kept here for later.
             </p>
-          </div>
-
-          <div>
+          </div>          <div>
             <label className="text-sm font-medium text-slate-700">Scan depth</label>
             <div className="mt-2 grid gap-3 md:grid-cols-3">
               {SCAN_MODES.map((mode) => {

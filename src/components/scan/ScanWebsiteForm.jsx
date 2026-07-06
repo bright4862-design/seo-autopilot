@@ -1,11 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  AlertCircle,
-  CheckCircle2,
-  Loader2,
-  Search,
-} from "lucide-react";
+import { AlertCircle, CheckCircle2, Loader2, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,17 +19,17 @@ const SCAN_MODES = [
   {
     value: "quick",
     label: "Quick",
-    description: "Fast scan for a simple first review.",
+    description: "Fast first scan. Up to 40 pages.",
   },
   {
     value: "deep",
     label: "Deep",
-    description: "Best default scan for most websites.",
+    description: "Best default scan. Up to 85 pages.",
   },
   {
     value: "advanced",
     label: "Advanced",
-    description: "Largest scan with deeper page discovery.",
+    description: "Larger scan. Up to 150 pages.",
   },
 ];
 
@@ -115,6 +110,8 @@ export default function ScanWebsiteForm({
     setSubmitting(true);
 
     try {
+      const safeScanBudget = getSafeScanBudget(scanMode);
+
       const formPayload = {
         website_url: normalizedUrl,
         business_name: businessName.trim(),
@@ -123,6 +120,11 @@ export default function ScanWebsiteForm({
         important_keywords: cleanedKeywords,
         competitor_urls: cleanedCompetitorUrls,
         scan_mode: scanMode,
+        max_pages: safeScanBudget.max_pages,
+        max_competitors: safeScanBudget.max_competitors,
+        max_browser_render_attempts:
+          safeScanBudget.max_browser_render_attempts,
+        crawl_timeout_ms: safeScanBudget.crawl_timeout_ms,
       };
 
       if (typeof onScan === "function") {
@@ -145,6 +147,12 @@ export default function ScanWebsiteForm({
         enable_screaming_frog_lite: true,
         force_internal_crawl: true,
         respect_robots_txt: false,
+
+        max_pages: safeScanBudget.max_pages,
+        max_competitors: safeScanBudget.max_competitors,
+        max_browser_render_attempts:
+          safeScanBudget.max_browser_render_attempts,
+        crawl_timeout_ms: safeScanBudget.crawl_timeout_ms,
 
         source: "scan_website_page",
         requested_at: new Date().toISOString(),
@@ -175,7 +183,7 @@ export default function ScanWebsiteForm({
           scan_mode: scanMode,
 
           ai_review_goal:
-            "Simplify the crawler and Screaming Frog Lite results into a clear customer-friendly Fix List. Prioritize the fixes by business impact, explain what to do first, and tailor the implementation steps to the selected CMS.",
+            "Simplify the crawler and Screaming Frog Lite results into a clear customer-friendly Fix List. Prioritize fixes by business impact, explain what to do first, and tailor implementation steps to the selected CMS.",
 
           cms_instruction: buildCmsInstruction(cmsPlatform),
 
@@ -186,6 +194,7 @@ export default function ScanWebsiteForm({
             create_top_priorities: true,
             create_cms_specific_steps: true,
             include_developer_flags_only_when_needed: true,
+            include_joomla_when_selected: true,
           },
 
           crawled_pages: firstArray([
@@ -254,7 +263,7 @@ export default function ScanWebsiteForm({
       console.error("Website scan failed.", err);
       setError(
         err?.message ||
-          "The website scan failed. Check the backend function logs and try again."
+          "The website scan failed. Try Quick mode or check the backend function logs."
       );
     } finally {
       setActiveStep("");
@@ -279,7 +288,7 @@ export default function ScanWebsiteForm({
             </h2>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
               Scan your website, run technical checks, then let Gemini simplify
-              the results into a clear dashboard summary.
+              the results into a clear prioritized dashboard.
             </p>
           </div>
         </div>
@@ -330,8 +339,7 @@ export default function ScanWebsiteForm({
             </select>
 
             <p className="mt-1 text-xs text-slate-500">
-              Gemini will tailor the action plan to this CMS. Joomla is now
-              included.
+              Gemini will tailor the action plan to this CMS.
             </p>
           </div>
 
@@ -446,12 +454,44 @@ export default function ScanWebsiteForm({
           </Button>
 
           <p className="text-xs text-slate-500">
-            After the scan finishes, you will be sent to the Fix Pages dashboard.
+            After the scan finishes, you will be sent to the Fix Pages
+            dashboard.
           </p>
         </div>
       </form>
     </div>
   );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Safe scan budget                                                            */
+/* -------------------------------------------------------------------------- */
+
+function getSafeScanBudget(scanMode) {
+  if (scanMode === "advanced") {
+    return {
+      max_pages: 150,
+      max_competitors: 3,
+      max_browser_render_attempts: 1,
+      crawl_timeout_ms: 90000,
+    };
+  }
+
+  if (scanMode === "deep") {
+    return {
+      max_pages: 85,
+      max_competitors: 2,
+      max_browser_render_attempts: 1,
+      crawl_timeout_ms: 75000,
+    };
+  }
+
+  return {
+    max_pages: 40,
+    max_competitors: 1,
+    max_browser_render_attempts: 1,
+    crawl_timeout_ms: 45000,
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -601,9 +641,7 @@ function mergeScanAndAiReview({
       [],
 
     health_explanation:
-      aiData?.health_explanation ||
-      scanData?.health_explanation ||
-      "",
+      aiData?.health_explanation || scanData?.health_explanation || "",
 
     competitor_result:
       scanData?.competitor_result ||
@@ -904,10 +942,17 @@ function friendlyCustomerCategory(category) {
   return map[category] || "Website improvement";
 }
 
-function buildFallbackSummary({ healthScore, pagesCrawled, finalFixes, cmsName }) {
+function buildFallbackSummary({
+  healthScore,
+  pagesCrawled,
+  finalFixes,
+  cmsName,
+}) {
   const count = Array.isArray(finalFixes) ? finalFixes.length : 0;
 
-  return `The scan reviewed ${pagesCrawled || 0} pages and found ${count} recommended improvements. The current health score is ${
+  return `The scan reviewed ${
+    pagesCrawled || 0
+  } pages and found ${count} recommended improvements. The current health score is ${
     healthScore || "not available"
   }. The next steps are tailored for ${cmsName}.`;
 }

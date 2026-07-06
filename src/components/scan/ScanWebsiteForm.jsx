@@ -1,12 +1,10 @@
 import React, { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   AlertCircle,
-  BarChart3,
   CheckCircle2,
-  ExternalLink,
   Loader2,
   Search,
-  Sparkles,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -26,7 +24,7 @@ const SCAN_MODES = [
   {
     value: "quick",
     label: "Quick",
-    description: "Good first pass for smaller sites.",
+    description: "Fast scan for a simple first review.",
   },
   {
     value: "deep",
@@ -40,31 +38,50 @@ const SCAN_MODES = [
   },
 ];
 
+const CMS_OPTIONS = [
+  { value: "wordpress", label: "WordPress" },
+  { value: "squarespace", label: "Squarespace" },
+  { value: "wix", label: "Wix" },
+  { value: "shopify", label: "Shopify" },
+  { value: "webflow", label: "Webflow" },
+  { value: "framer", label: "Framer" },
+  { value: "godaddy", label: "GoDaddy" },
+  { value: "joomla", label: "Joomla" },
+  { value: "custom", label: "Custom / Not sure" },
+];
+
 export default function ScanWebsiteForm({
   project = null,
   competitors = [],
   saving = false,
   onScan = null,
 }) {
+  const navigate = useNavigate();
+
   const [websiteUrl, setWebsiteUrl] = useState(project?.website_url || "");
   const [businessName, setBusinessName] = useState(
     project?.business_name || ""
   );
+
+  const [cmsPlatform, setCmsPlatform] = useState(
+    normalizeCmsValue(project?.cms_platform || "custom")
+  );
+
   const [keywordsText, setKeywordsText] = useState(
     Array.isArray(project?.important_keywords)
       ? project.important_keywords.join("\n")
       : ""
   );
+
   const [competitorUrlsText, setCompetitorUrlsText] = useState(
     getInitialCompetitorUrls(project, competitors).join("\n")
   );
+
   const [scanMode, setScanMode] = useState(project?.scan_mode || "deep");
 
   const [submitting, setSubmitting] = useState(false);
   const [activeStep, setActiveStep] = useState("");
   const [error, setError] = useState("");
-  const [finalResult, setFinalResult] = useState(null);
-  const [debugPayload, setDebugPayload] = useState(null);
 
   const isLoading = submitting || saving;
 
@@ -76,12 +93,12 @@ export default function ScanWebsiteForm({
     return splitLines(competitorUrlsText);
   }, [competitorUrlsText]);
 
+  const selectedCms = CMS_OPTIONS.find((item) => item.value === cmsPlatform);
+
   async function handleSubmit(event) {
     event.preventDefault();
 
     setError("");
-    setFinalResult(null);
-    setDebugPayload(null);
 
     const normalizedUrl = normalizeWebsiteUrl(websiteUrl);
 
@@ -101,6 +118,8 @@ export default function ScanWebsiteForm({
       const formPayload = {
         website_url: normalizedUrl,
         business_name: businessName.trim(),
+        cms_platform: cmsPlatform,
+        cms_name: selectedCms?.label || "Custom / Not sure",
         important_keywords: cleanedKeywords,
         competitor_urls: cleanedCompetitorUrls,
         scan_mode: scanMode,
@@ -108,14 +127,17 @@ export default function ScanWebsiteForm({
 
       if (typeof onScan === "function") {
         await onScan(formPayload);
+        navigate("/dashboard?scan=complete");
         return;
       }
 
-      setActiveStep("Scanning website");
+      setActiveStep("Running crawler and Screaming Frog Lite checks");
 
       const scanPayload = {
         website_url: normalizedUrl,
         business_name: businessName.trim(),
+        cms_platform: cmsPlatform,
+        cms_name: selectedCms?.label || "Custom / Not sure",
         important_keywords: cleanedKeywords,
         competitor_urls: cleanedCompetitorUrls,
         scan_mode: scanMode,
@@ -139,7 +161,7 @@ export default function ScanWebsiteForm({
         throw new Error(scanData.error || "Website scan failed.");
       }
 
-      setActiveStep("Reviewing recommendations with Gemini");
+      setActiveStep("Asking Gemini to simplify and prioritize the Fix List");
 
       let aiData = null;
 
@@ -147,8 +169,24 @@ export default function ScanWebsiteForm({
         const aiPayload = {
           business_name: businessName.trim(),
           website_url: normalizedUrl,
+          cms_platform: cmsPlatform,
+          cms_name: selectedCms?.label || "Custom / Not sure",
           important_keywords: cleanedKeywords,
           scan_mode: scanMode,
+
+          ai_review_goal:
+            "Simplify the crawler and Screaming Frog Lite results into a clear customer-friendly Fix List. Prioritize the fixes by business impact, explain what to do first, and tailor the implementation steps to the selected CMS.",
+
+          cms_instruction: buildCmsInstruction(cmsPlatform),
+
+          output_requirements: {
+            keep_language_simple: true,
+            avoid_technical_jargon: true,
+            group_similar_issues: true,
+            create_top_priorities: true,
+            create_cms_specific_steps: true,
+            include_developer_flags_only_when_needed: true,
+          },
 
           crawled_pages: firstArray([
             scanData.crawled_pages,
@@ -197,27 +235,21 @@ export default function ScanWebsiteForm({
         console.warn("AI review was skipped or failed.", aiError);
       }
 
-      setActiveStep("Saving scan to Fix List");
+      setActiveStep("Saving dashboard summary");
 
       const mergedFinal = mergeScanAndAiReview({
         scanData,
         aiData,
         websiteUrl: normalizedUrl,
         businessName: businessName.trim(),
+        cmsPlatform,
+        cmsName: selectedCms?.label || "Custom / Not sure",
         scanMode,
       });
 
       saveScanForDashboard(mergedFinal);
 
-      setFinalResult(mergedFinal);
-      setDebugPayload({
-        scanner_function: ADVANCED_SCANNER_FUNCTION,
-        ai_function: AI_REVIEW_FUNCTION,
-        scan_payload: scanPayload,
-        scanner_response: scanData,
-        ai_response: aiData,
-        saved_record: mergedFinal,
-      });
+      navigate("/dashboard?scan=complete");
     } catch (err) {
       console.error("Website scan failed.", err);
       setError(
@@ -229,10 +261,6 @@ export default function ScanWebsiteForm({
       setSubmitting(false);
     }
   }
-
-  const resultFixes = getRecommendations(finalResult);
-  const resultPages = getPages(finalResult);
-  const resultScore = getHealthScore(finalResult);
 
   return (
     <div className="space-y-6">
@@ -250,8 +278,8 @@ export default function ScanWebsiteForm({
               Scan Website
             </h2>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-              Run the advanced scanner, review the results with Gemini, and sync
-              the completed scan directly to the Fix List.
+              Scan your website, run technical checks, then let Gemini simplify
+              the results into a clear dashboard summary.
             </p>
           </div>
         </div>
@@ -285,18 +313,42 @@ export default function ScanWebsiteForm({
 
           <div>
             <label className="text-sm font-medium text-slate-700">
+              What CMS does this website use?
+            </label>
+
+            <select
+              value={cmsPlatform}
+              onChange={(event) => setCmsPlatform(event.target.value)}
+              disabled={isLoading}
+              className="mt-2 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-950 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50"
+            >
+              {CMS_OPTIONS.map((cms) => (
+                <option key={cms.value} value={cms.value}>
+                  {cms.label}
+                </option>
+              ))}
+            </select>
+
+            <p className="mt-1 text-xs text-slate-500">
+              Gemini will tailor the action plan to this CMS. Joomla is now
+              included.
+            </p>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium text-slate-700">
               Important keywords
             </label>
             <textarea
               value={keywordsText}
               onChange={(event) => setKeywordsText(event.target.value)}
-              placeholder={"seo agency\nlocal plumber\nbest activities in paris"}
+              placeholder={"local service\nbest product\nnear me"}
               disabled={isLoading}
               rows={4}
               className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50"
             />
             <p className="mt-1 text-xs text-slate-500">
-              One keyword per line. Optional, but helpful.
+              Optional. One keyword per line.
             </p>
           </div>
 
@@ -307,7 +359,9 @@ export default function ScanWebsiteForm({
             <textarea
               value={competitorUrlsText}
               onChange={(event) => setCompetitorUrlsText(event.target.value)}
-              placeholder={"https://www.competitor-one.com/\nhttps://www.competitor-two.com/"}
+              placeholder={
+                "https://www.competitor-one.com/\nhttps://www.competitor-two.com/"
+              }
               disabled={isLoading}
               rows={4}
               className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50"
@@ -392,169 +446,27 @@ export default function ScanWebsiteForm({
           </Button>
 
           <p className="text-xs text-slate-500">
-            Uses <span className="font-mono">{ADVANCED_SCANNER_FUNCTION}</span>{" "}
-            and syncs to the Fix List.
+            After the scan finishes, you will be sent to the Fix Pages dashboard.
           </p>
         </div>
       </form>
-
-      {finalResult ? (
-        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-            <div>
-              <div className="flex items-center gap-2 text-sm font-semibold text-emerald-700">
-                <CheckCircle2 className="h-4 w-4" />
-                Scan complete
-              </div>
-
-              <h2 className="mt-2 text-2xl font-bold text-slate-950">
-                Fix List updated
-              </h2>
-
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-                This scan was saved to local storage and the dashboard was
-                notified. Open the Fix List to see the synced recommendations.
-              </p>
-            </div>
-
-            <Button asChild variant="outline">
-              <a href="/dashboard">
-                <ExternalLink className="mr-2 h-4 w-4" />
-                View Fix List
-              </a>
-            </Button>
-          </div>
-
-          <div className="mt-6 grid gap-4 md:grid-cols-3">
-            <MetricCard
-              icon={<BarChart3 className="h-5 w-5" />}
-              label="Website Health"
-              value={resultScore ? `${resultScore}/100` : "Ready"}
-            />
-
-            <MetricCard
-              icon={<Search className="h-5 w-5" />}
-              label="Pages scanned"
-              value={resultPages.length || finalResult.pages_crawled || 0}
-            />
-
-            <MetricCard
-              icon={<Sparkles className="h-5 w-5" />}
-              label="Recommendations"
-              value={resultFixes.length}
-            />
-          </div>
-
-          {Array.isArray(finalResult.crawl_warnings) &&
-          finalResult.crawl_warnings.length > 0 ? (
-            <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-              <div className="font-semibold">Scan notes</div>
-              <ul className="mt-2 list-disc space-y-1 pl-5">
-                {finalResult.crawl_warnings.slice(0, 4).map((warning, index) => (
-                  <li key={index}>{warning}</li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-
-          {resultFixes.length > 0 ? (
-            <div className="mt-6">
-              <h3 className="font-semibold text-slate-950">
-                Top recommendations
-              </h3>
-
-              <div className="mt-3 space-y-3">
-                {resultFixes.slice(0, 5).map((fix, index) => (
-                  <RecommendationCard key={index} fix={fix} />
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-600">
-              No recommendations were returned by this scan.
-            </div>
-          )}
-
-          {debugPayload ? (
-            <details className="mt-6">
-              <summary className="cursor-pointer text-sm font-medium text-slate-600">
-                Debug scan payload
-              </summary>
-
-              <pre className="mt-3 max-h-[420px] overflow-auto rounded-2xl bg-slate-950 p-4 text-xs leading-5 text-slate-100">
-                {JSON.stringify(debugPayload, null, 2)}
-              </pre>
-            </details>
-          ) : null}
-        </section>
-      ) : null}
-    </div>
-  );
-}
-
-function MetricCard({ icon, label, value }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-      <div className="flex items-center gap-2 text-slate-500">
-        {icon}
-        <span className="text-sm font-medium">{label}</span>
-      </div>
-      <div className="mt-2 text-2xl font-bold text-slate-950">{value}</div>
-    </div>
-  );
-}
-
-function RecommendationCard({ fix }) {
-  const title =
-    fix.issue_title ||
-    fix.title ||
-    fix.name ||
-    fix.recommendation_title ||
-    "Website recommendation";
-
-  const description =
-    fix.plain_english_explanation ||
-    fix.description ||
-    fix.explanation ||
-    fix.recommendation ||
-    fix.ai_recommendation ||
-    fix.suggested_fix ||
-    "Review this recommendation in the Fix List.";
-
-  const priority = fix.priority || "medium";
-
-  const pages = getAffectedPages(fix);
-
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-      <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-        <div>
-          <h4 className="font-semibold text-slate-950">{title}</h4>
-          <p className="mt-1 text-sm leading-6 text-slate-600">
-            {description}
-          </p>
-        </div>
-
-        <span className="w-fit rounded-full bg-white px-3 py-1 text-xs font-semibold capitalize text-slate-600">
-          {priority}
-        </span>
-      </div>
-
-      {pages.length > 0 ? (
-        <div className="mt-3 text-xs text-slate-500">
-          Affected: {pages.slice(0, 3).join(", ")}
-          {pages.length > 3 ? ` +${pages.length - 3} more` : ""}
-        </div>
-      ) : null}
     </div>
   );
 }
 
 /* -------------------------------------------------------------------------- */
-/* Merge scanner + AI review                                                   */
+/* Merge scanner + Gemini review                                               */
 /* -------------------------------------------------------------------------- */
 
-function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, scanMode }) {
+function mergeScanAndAiReview({
+  scanData,
+  aiData,
+  websiteUrl,
+  businessName,
+  cmsPlatform,
+  cmsName,
+  scanMode,
+}) {
   const aiFixes = firstArray([
     aiData?.cleaned_fixes,
     aiData?.raw_fixes,
@@ -609,24 +521,38 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, scan
     pages.length,
   ]);
 
-  const crawlWarnings = firstArray([
-    scanData?.crawl_warnings,
-    aiData?.crawl_warnings,
+  const topActions = firstArray([
+    aiData?.top_recommended_actions,
+    aiData?.recommended_actions,
   ]);
 
-  const competitorResult =
-    scanData?.competitor_result ||
-    scanData?.competitor_results ||
-    scanData?.competitor_analysis ||
-    aiData?.competitor_result ||
-    aiData?.competitor_results ||
-    {};
+  const simpleSummary =
+    aiData?.customer_summary ||
+    aiData?.plain_english_summary ||
+    aiData?.summary ||
+    buildFallbackSummary({
+      healthScore,
+      pagesCrawled,
+      finalFixes,
+      cmsName,
+    });
+
+  const cmsActionPlan =
+    aiData?.cms_action_plan ||
+    aiData?.cms_plan ||
+    aiData?.implementation_plan ||
+    buildCmsActionPlan(cmsPlatform, cmsName, finalFixes);
+
+  const prioritizedFixes = simplifyAndPrioritizeFixes(finalFixes);
 
   return {
     id: `scan_${Date.now()}`,
     created_at: new Date().toISOString(),
+
     website_url: websiteUrl,
     business_name: businessName,
+    cms_platform: cmsPlatform,
+    cms_name: cmsName,
     scan_mode: scanMode,
 
     health_score: healthScore || 0,
@@ -634,9 +560,16 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, scan
     pages_crawled: pagesCrawled || pages.length || 0,
     pages_found: pagesFound || pages.length || 0,
 
-    recommendations: finalFixes,
-    fixes: finalFixes,
-    findings: finalFixes,
+    customer_summary: simpleSummary,
+    simple_summary: simpleSummary,
+    cms_action_plan: cmsActionPlan,
+
+    top_recommended_actions:
+      topActions.length > 0 ? topActions : prioritizedFixes.slice(0, 5),
+
+    recommendations: prioritizedFixes,
+    fixes: prioritizedFixes,
+    findings: prioritizedFixes,
 
     crawled_pages: pages,
     pages,
@@ -661,11 +594,6 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, scan
       scanData?.website_health_report ||
       {},
 
-    top_recommended_actions:
-      aiData?.top_recommended_actions ||
-      aiData?.recommended_actions ||
-      [],
-
     positive_findings:
       aiData?.positive_findings ||
       scanData?.positive_findings ||
@@ -677,30 +605,37 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, scan
       scanData?.health_explanation ||
       "",
 
-    customer_summary:
-      aiData?.customer_summary ||
-      aiData?.plain_english_summary ||
-      scanData?.customer_summary ||
-      "",
+    competitor_result:
+      scanData?.competitor_result ||
+      scanData?.competitor_results ||
+      scanData?.competitor_analysis ||
+      aiData?.competitor_result ||
+      aiData?.competitor_results ||
+      {},
 
-    competitor_result: competitorResult,
     competitor_results: firstArray([
       scanData?.competitor_results,
       aiData?.competitor_results,
     ]),
+
     competitor_opportunities: firstArray([
       scanData?.competitor_opportunities,
       aiData?.competitor_opportunities,
     ]),
 
-    crawl_warnings: crawlWarnings,
+    crawl_warnings: firstArray([
+      scanData?.crawl_warnings,
+      aiData?.crawl_warnings,
+    ]),
 
     debug: {
       scanner_function: ADVANCED_SCANNER_FUNCTION,
       ai_function: AI_REVIEW_FUNCTION,
+      screaming_frog_lite_enabled: true,
       scanner_success: scanData?.success !== false,
       ai_success: aiData?.success === true,
       ai_provider: aiData?.provider || aiData?.debug?.provider || "",
+      cms_platform: cmsPlatform,
     },
 
     raw: {
@@ -711,7 +646,7 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, scan
 }
 
 /* -------------------------------------------------------------------------- */
-/* Fix List sync                                                               */
+/* Dashboard sync                                                              */
 /* -------------------------------------------------------------------------- */
 
 function saveScanForDashboard(scanRecord) {
@@ -753,14 +688,25 @@ function normalizeScanRecordForStorage(record) {
     ...record,
     id: record.id || `scan_${Date.now()}`,
     created_at: record.created_at || new Date().toISOString(),
+
     website_url: record.website_url || "",
     business_name: record.business_name || "",
+    cms_platform: record.cms_platform || "custom",
+    cms_name: record.cms_name || "Custom / Not sure",
     scan_mode: record.scan_mode || "deep",
 
     health_score: Number(healthScore || 0),
     seo_score: Number(healthScore || 0),
     pages_crawled: Number(record.pages_crawled || pages.length || 0),
     pages_found: Number(record.pages_found || pages.length || 0),
+
+    customer_summary: record.customer_summary || record.simple_summary || "",
+    simple_summary: record.simple_summary || record.customer_summary || "",
+    cms_action_plan: record.cms_action_plan || "",
+
+    top_recommended_actions: Array.isArray(record.top_recommended_actions)
+      ? record.top_recommended_actions
+      : [],
 
     recommendations: fixes,
     fixes,
@@ -787,8 +733,183 @@ function normalizeScanRecordForStorage(record) {
       ? record.crawl_warnings
       : [],
 
+    debug: record.debug || {},
     raw: record.raw || record,
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/* CMS instructions                                                            */
+/* -------------------------------------------------------------------------- */
+
+function buildCmsInstruction(cmsPlatform) {
+  const instructions = {
+    wordpress:
+      "Tailor fixes for WordPress. Mention SEO plugins such as Yoast, Rank Math, or All in One SEO when useful. Explain where to edit titles, meta descriptions, headings, internal links, schema, redirects, and image alt text.",
+    squarespace:
+      "Tailor fixes for Squarespace. Explain steps using page settings, SEO tab, page titles, descriptions, headings, image settings, redirects, and navigation settings.",
+    wix:
+      "Tailor fixes for Wix. Explain steps using Wix SEO settings, page SEO basics, URL slugs, headings, alt text, redirects, and structured data tools.",
+    shopify:
+      "Tailor fixes for Shopify. Explain steps for products, collections, pages, theme editor, navigation, image alt text, URL redirects, and SEO fields.",
+    webflow:
+      "Tailor fixes for Webflow. Explain steps using page settings, CMS collections, SEO settings, Open Graph settings, redirects, alt text, and publishing.",
+    framer:
+      "Tailor fixes for Framer. Explain steps using page settings, metadata, headings, redirects where available, components, images, and publishing.",
+    godaddy:
+      "Tailor fixes for GoDaddy Website Builder. Explain simple steps using page settings, SEO tools, headings, images, navigation, and redirects if available.",
+    joomla:
+      "Tailor fixes for Joomla. Explain steps using Articles, Menus, Global Configuration, Metadata Options, SEF URLs, redirects, extensions, templates, headings, image alt text, and structured data extensions where useful.",
+    custom:
+      "Tailor fixes for a custom or unknown CMS. Explain which changes can be made by a site editor and which likely need a developer.",
+  };
+
+  return instructions[cmsPlatform] || instructions.custom;
+}
+
+function buildCmsActionPlan(cmsPlatform, cmsName, fixes) {
+  const priorityCount = Array.isArray(fixes) ? fixes.length : 0;
+
+  const intro = `This website is marked as ${cmsName}. Start with the highest-impact SEO fixes first, then handle the easier cleanup tasks.`;
+
+  const cmsSteps = {
+    wordpress: [
+      "Open the page in WordPress.",
+      "Update the SEO title and meta description in Yoast, Rank Math, or your SEO plugin.",
+      "Improve the H1, headings, body copy, internal links, and image alt text.",
+      "Use a redirect plugin for broken or moved URLs.",
+    ],
+    squarespace: [
+      "Open the page settings in Squarespace.",
+      "Update the SEO title, description, URL slug, headings, and image descriptions.",
+      "Use redirects for old or broken URLs.",
+      "Republish and recheck the page.",
+    ],
+    wix: [
+      "Open the page in Wix.",
+      "Use SEO Basics to update the title, description, URL slug, and index settings.",
+      "Improve headings, body content, internal links, and image alt text.",
+      "Use Wix redirects for broken URLs.",
+    ],
+    shopify: [
+      "Open the product, collection, blog post, or page in Shopify.",
+      "Edit the search engine listing preview.",
+      "Improve product or page copy, headings, internal links, and image alt text.",
+      "Use URL redirects for changed or broken pages.",
+    ],
+    webflow: [
+      "Open the page or CMS item in Webflow.",
+      "Update SEO settings, Open Graph fields, headings, and content.",
+      "Fix alt text and internal links.",
+      "Publish the site and recheck the page.",
+    ],
+    framer: [
+      "Open the page settings in Framer.",
+      "Update metadata, headings, page copy, images, and links.",
+      "Republish and recheck the page.",
+      "Use developer help for custom redirects or technical issues.",
+    ],
+    godaddy: [
+      "Open the page in GoDaddy Website Builder.",
+      "Use the SEO/settings area to update page title and description.",
+      "Improve headings, text, navigation, and images.",
+      "Use developer help if redirects or advanced schema are not available.",
+    ],
+    joomla: [
+      "Open the article or menu item in Joomla.",
+      "Update the browser page title, meta description, alias, headings, and article content.",
+      "Check Global Configuration for SEF URLs and site metadata.",
+      "Use Joomla redirects or an SEO extension for broken URLs, canonical issues, and schema.",
+    ],
+    custom: [
+      "Update simple content issues in the CMS editor.",
+      "Send technical items such as redirects, schema, canonicals, and performance to a developer.",
+      "Recheck the page after changes are published.",
+    ],
+  };
+
+  const steps = cmsSteps[cmsPlatform] || cmsSteps.custom;
+
+  return `${intro} There are ${priorityCount} recommendations ready for review.\n\n${steps
+    .map((step, index) => `${index + 1}. ${step}`)
+    .join("\n")}`;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Priority simplification                                                     */
+/* -------------------------------------------------------------------------- */
+
+function simplifyAndPrioritizeFixes(fixes) {
+  if (!Array.isArray(fixes)) return [];
+
+  return fixes
+    .map((fix) => {
+      const priority = normalizePriority(fix.priority);
+
+      return {
+        ...fix,
+        priority,
+        customer_category:
+          fix.customer_category ||
+          friendlyCustomerCategory(fix.category) ||
+          "Website improvement",
+        simple_next_step:
+          fix.simple_next_step ||
+          fix.next_step ||
+          fix.ai_recommendation ||
+          fix.recommended_value ||
+          fix.recommendation ||
+          fix.suggested_fix ||
+          "Review this item and update the affected page.",
+      };
+    })
+    .sort((a, b) => priorityWeight(b.priority) - priorityWeight(a.priority));
+}
+
+function normalizePriority(priority) {
+  const value = String(priority || "").toLowerCase();
+
+  if (["critical", "high", "medium", "low"].includes(value)) return value;
+
+  return "medium";
+}
+
+function priorityWeight(priority) {
+  const map = {
+    critical: 4,
+    high: 3,
+    medium: 2,
+    low: 1,
+  };
+
+  return map[priority] || 2;
+}
+
+function friendlyCustomerCategory(category) {
+  const map = {
+    meta_title: "Search appearance",
+    meta_description: "Search appearance",
+    canonical: "Website setup",
+    schema: "Trust signals",
+    thin_content: "Page content",
+    duplicate_content: "Search appearance",
+    "404_error": "Broken page",
+    redirect: "Page redirect",
+    internal_link: "Internal links",
+    performance: "Website performance",
+    web_dev: "Website setup",
+    scanner_blocked: "Scan coverage",
+  };
+
+  return map[category] || "Website improvement";
+}
+
+function buildFallbackSummary({ healthScore, pagesCrawled, finalFixes, cmsName }) {
+  const count = Array.isArray(finalFixes) ? finalFixes.length : 0;
+
+  return `The scan reviewed ${pagesCrawled || 0} pages and found ${count} recommended improvements. The current health score is ${
+    healthScore || "not available"
+  }. The next steps are tailored for ${cmsName}.`;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -864,6 +985,16 @@ function normalizeWebsiteUrl(value) {
   } catch {
     return "";
   }
+}
+
+function normalizeCmsValue(value) {
+  const normalized = String(value || "")
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+
+  const validValues = CMS_OPTIONS.map((item) => item.value);
+
+  return validValues.includes(normalized) ? normalized : "custom";
 }
 
 function splitLines(value) {
@@ -957,13 +1088,4 @@ function getHealthScore(record) {
     record.raw?.ai_review?.health_score,
     record.raw?.ai_review?.website_health_report?.score,
   ]);
-}
-
-function getAffectedPages(fix = {}) {
-  return firstArray([
-    fix.affected_pages,
-    fix.pages,
-    fix.urls,
-    fix.page_urls,
-  ]).map((item) => String(item || "")).filter(Boolean);
 }

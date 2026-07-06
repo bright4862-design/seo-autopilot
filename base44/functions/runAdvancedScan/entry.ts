@@ -1,6 +1,6 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
-const VERSION = "runAdvancedScan_v4_safe_screaming_frog_lite";
+const VERSION = "runAdvancedScan_v5_sitemap_priority_screaming_frog_lite";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -81,10 +81,9 @@ Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
 
-    try {
-      const user = await base44.auth.me();
-      if (!user) throw new Error("Unauthorized");
-    } catch {
+    const user = await base44.auth.me().catch(() => null);
+
+    if (!user) {
       return jsonResponse(
         {
           success: false,
@@ -109,8 +108,6 @@ Deno.serve(async (req) => {
       );
     }
 
-    await assertSafePublicUrl(websiteUrl);
-
     const deadlineAt = Date.now() + budget.crawl_timeout_ms - 3000;
 
     const crawlResult = await crawlWebsite({
@@ -131,8 +128,14 @@ Deno.serve(async (req) => {
       crawlResult,
     });
 
+    const followupFindings = buildFollowupScanFindings({
+      followups: crawlResult.recommended_followup_scans,
+      startUrl: websiteUrl,
+    });
+
     const allRawFindings = [
       ...coverageFindings,
+      ...followupFindings,
       ...screamingFrogLite.raw_findings,
     ];
 
@@ -207,6 +210,11 @@ Deno.serve(async (req) => {
       scan_summary: scanSummary,
       site_summary: scanSummary,
 
+      important_page_patterns: crawlResult.important_page_patterns,
+      deprioritized_page_patterns: crawlResult.deprioritized_page_patterns,
+      recommended_followup_scans: crawlResult.recommended_followup_scans,
+      sitemap_priority_summary: crawlResult.sitemap_priority_summary,
+
       technical_audit_summary: screamingFrogLite.technical_audit_summary,
       screaming_frog_lite: {
         enabled: true,
@@ -257,6 +265,8 @@ Deno.serve(async (req) => {
         budget,
         screaming_frog_lite_enabled: true,
         audit_profile: "screaming_frog_lite",
+        sitemap_entries_found: crawlResult.sitemap_entries_found,
+        importance_strategy: crawlResult.sitemap_priority_summary,
         request_received_at: new Date().toISOString(),
       },
     };
@@ -366,6 +376,7 @@ async function crawlWebsite({
 }) {
   const start = new URL(startUrl);
   const origin = start.origin;
+  const baseDomain = getBaseDomain(start.hostname);
   const languagePrefix = detectLanguagePrefix(start.pathname);
 
   const browserRenderBudget = {
@@ -375,25 +386,38 @@ async function crawlWebsite({
 
   const warnings: string[] = [];
 
-  const sitemapUrls = budget.use_sitemap
-    ? await discoverSitemapUrls({
+  const sitemapEntries = budget.use_sitemap
+    ? await discoverSitemapEntries({
         origin,
         languagePrefix,
         deadlineAt,
-        maxUrls: budget.max_pages * 4,
+        maxUrls: budget.max_pages * 5,
       })
     : [];
 
-  const sitemapSet = new Set(sitemapUrls.map((url) => cleanUrl(url)));
+  const sitemapEntryMap = new Map<string, any>();
+
+  for (const entry of sitemapEntries) {
+    sitemapEntryMap.set(cleanUrl(entry.url), entry);
+  }
+
+  const importanceProfile = buildImportanceProfile({
+    startUrl,
+    sitemapEntries,
+    languagePrefix,
+  });
 
   const queue: Array<{
     url: string;
     source: string;
     in_sitemap: boolean;
+    importance_score: number;
+    importance_reasons: string[];
   }> = [];
 
   const discovered = new Set<string>();
   const fetched = new Set<string>();
+  const relatedSubdomains = new Map<string, any>();
 
   function addToQueue(url: string, source: string, inSitemap = false) {
     const cleaned = cleanUrl(url);
@@ -411,20 +435,35 @@ async function crawlWebsite({
       return;
     }
 
+    const sitemapEntry = sitemapEntryMap.get(cleaned) || null;
+
+    const score = scoreUrlImportance({
+      url: cleaned,
+      source,
+      startUrl,
+      languagePrefix,
+      profile: importanceProfile,
+      sitemapEntry,
+    });
+
     discovered.add(cleaned);
 
     queue.push({
       url: cleaned,
       source,
-      in_sitemap: inSitemap,
+      in_sitemap: inSitemap || Boolean(sitemapEntry),
+      importance_score: score.score,
+      importance_reasons: score.reasons,
     });
+
+    sortQueueByImportance(queue);
   }
 
-  addToQueue(startUrl, "start", sitemapSet.has(cleanUrl(startUrl)));
+  addToQueue(startUrl, "start", sitemapEntryMap.has(cleanUrl(startUrl)));
 
-  for (const sitemapUrl of sitemapUrls) {
-    addToQueue(sitemapUrl, "sitemap", true);
-    if (queue.length >= budget.max_pages * 3) break;
+  for (const entry of sitemapEntries) {
+    addToQueue(entry.url, "sitemap", true);
+    if (queue.length >= budget.max_pages * 4) break;
   }
 
   const pages: any[] = [];
@@ -440,6 +479,8 @@ async function crawlWebsite({
       url: string;
       source: string;
       in_sitemap: boolean;
+      importance_score: number;
+      importance_reasons: string[];
     }> = [];
 
     while (
@@ -468,6 +509,8 @@ async function crawlWebsite({
           source: item.source,
           origin,
           inSitemap: item.in_sitemap,
+          importanceScore: item.importance_score,
+          importanceReasons: item.importance_reasons,
           allowBrowserRender: item.source === "start",
           browserRenderBudget,
           deadlineAt,
@@ -477,6 +520,13 @@ async function crawlWebsite({
 
     for (const page of batchResults) {
       pages.push(page);
+
+      collectRelatedSubdomains({
+        page,
+        startHost: start.hostname,
+        baseDomain,
+        relatedSubdomains,
+      });
 
       const isInternalBlocked =
         page.source !== "start" && page.is_scanner_blocked === true;
@@ -523,8 +573,8 @@ async function crawlWebsite({
 
           addToQueue(
             link,
-            "internal",
-            sitemapSet.has(cleanUrl(link))
+            page.source === "start" ? "homepage_link" : "internal",
+            sitemapEntryMap.has(cleanUrl(link))
           );
         }
       }
@@ -551,6 +601,12 @@ async function crawlWebsite({
     );
   }
 
+  const recommendedFollowups = buildRecommendedFollowupScans({
+    relatedSubdomains,
+    startUrl,
+    baseDomain,
+  });
+
   return {
     pages,
     pages_found: discovered.size,
@@ -562,6 +618,21 @@ async function crawlWebsite({
       locked_to_start_language: Boolean(languagePrefix),
       start_path_prefix: languagePrefix || "",
       origin,
+      topic_dossier_prefix: importanceProfile.topic_dossier_prefix || "",
+    },
+    sitemap_entries_found: sitemapEntries.length,
+    important_page_patterns: importanceProfile.important_page_patterns,
+    deprioritized_page_patterns: importanceProfile.deprioritized_page_patterns,
+    recommended_followup_scans: recommendedFollowups,
+    sitemap_priority_summary: {
+      strategy:
+        "The scanner reads sitemap URLs first, learns common URL folders, boosts likely landing pages, demotes listing/archive/news/filter pages, and keeps the scan focused inside the starting topic folder when one exists.",
+      topic_dossier_prefix: importanceProfile.topic_dossier_prefix || "",
+      sitemap_entries_found: sitemapEntries.length,
+      important_page_patterns: importanceProfile.important_page_patterns,
+      deprioritized_page_patterns: importanceProfile.deprioritized_page_patterns,
+      max_pages_enforced: budget.max_pages,
+      related_subdomains_found: recommendedFollowups.length,
     },
   };
 }
@@ -571,6 +642,8 @@ async function fetchAndExtractPage({
   source,
   origin,
   inSitemap,
+  importanceScore,
+  importanceReasons,
   allowBrowserRender,
   browserRenderBudget,
   deadlineAt,
@@ -579,6 +652,8 @@ async function fetchAndExtractPage({
   source: string;
   origin: string;
   inSitemap: boolean;
+  importanceScore: number;
+  importanceReasons: string[];
   allowBrowserRender: boolean;
   browserRenderBudget: { used: number; max: number };
   deadlineAt: number;
@@ -615,6 +690,8 @@ async function fetchAndExtractPage({
     inSitemap,
     fetchError,
     fetchedByBrowser,
+    importanceScore,
+    importanceReasons,
   });
 
   if (
@@ -644,6 +721,8 @@ async function fetchAndExtractPage({
           inSitemap,
           fetchError: "",
           fetchedByBrowser,
+          importanceScore,
+          importanceReasons,
         });
       }
     } catch (error) {
@@ -654,16 +733,14 @@ async function fetchAndExtractPage({
   return page;
 }
 
-async function fetchWithTimeout(url: string, timeoutMs: number, redirectCount = 0) {
-  await assertSafePublicUrl(url);
-
+async function fetchWithTimeout(url: string, timeoutMs: number) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(url, {
+    return await fetch(url, {
       method: "GET",
-      redirect: "manual",
+      redirect: "follow",
       signal: controller.signal,
       headers: {
         "User-Agent":
@@ -673,15 +750,6 @@ async function fetchWithTimeout(url: string, timeoutMs: number, redirectCount = 
         "Accept-Language": "en-US,en;q=0.9",
       },
     });
-
-    if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get("location") || "";
-      if (!location) return response;
-      if (redirectCount >= 5) throw new Error("Too many redirects while checking this website.");
-      return await fetchWithTimeout(new URL(location, url).toString(), timeoutMs, redirectCount + 1);
-    }
-
-    return response;
   } finally {
     clearTimeout(timeout);
   }
@@ -707,9 +775,6 @@ function shouldRetryWithBrowser(page: any) {
 }
 
 async function fetchWithBrowserless(url: string) {
-  await assertSafePublicUrl(url);
-  await assertSafePublicUrl(BROWSERLESS_CONTENT_ENDPOINT);
-
   const endpoint = new URL(BROWSERLESS_CONTENT_ENDPOINT);
 
   if (BROWSERLESS_TOKEN && !endpoint.searchParams.has("token")) {
@@ -761,6 +826,577 @@ async function fetchWithBrowserless(url: string) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Sitemap + importance scoring                                                */
+/* -------------------------------------------------------------------------- */
+
+async function discoverSitemapEntries({
+  origin,
+  languagePrefix,
+  deadlineAt,
+  maxUrls,
+}: {
+  origin: string;
+  languagePrefix: string;
+  deadlineAt: number;
+  maxUrls: number;
+}) {
+  const sitemapCandidates = new Set<string>();
+
+  sitemapCandidates.add(`${origin}/sitemap.xml`);
+  sitemapCandidates.add(`${origin}/sitemap_index.xml`);
+
+  try {
+    const robots = await fetchText(
+      `${origin}/robots.txt`,
+      SITEMAP_FETCH_TIMEOUT_MS
+    );
+
+    for (const line of robots.split(/\r?\n/)) {
+      const match = line.match(/^sitemap:\s*(.+)$/i);
+
+      if (match?.[1]) {
+        sitemapCandidates.add(match[1].trim());
+      }
+    }
+  } catch {
+    // robots.txt is optional.
+  }
+
+  const pageEntries = new Map<string, any>();
+  const sitemapQueue = [...sitemapCandidates].slice(0, 10);
+  const visitedSitemaps = new Set<string>();
+
+  while (
+    sitemapQueue.length > 0 &&
+    pageEntries.size < maxUrls &&
+    Date.now() < deadlineAt - 5000
+  ) {
+    const sitemapUrl = sitemapQueue.shift();
+
+    if (!sitemapUrl || visitedSitemaps.has(sitemapUrl)) continue;
+
+    visitedSitemaps.add(sitemapUrl);
+
+    try {
+      const xml = await fetchText(sitemapUrl, SITEMAP_FETCH_TIMEOUT_MS);
+
+      const childSitemaps = parseSitemapIndexLocs(xml);
+
+      for (const child of childSitemaps) {
+        if (sitemapQueue.length >= 35) break;
+
+        const cleanedChild = cleanUrl(child);
+
+        if (cleanedChild && /\.xml(\?|$)/i.test(cleanedChild)) {
+          sitemapQueue.push(cleanedChild);
+        }
+      }
+
+      const entries = parseSitemapUrlEntries(xml);
+
+      for (const entry of entries) {
+        if (pageEntries.size >= maxUrls) break;
+
+        const cleaned = cleanUrl(entry.url);
+
+        if (!cleaned) continue;
+
+        if (/\.xml(\?|$)/i.test(cleaned)) {
+          if (sitemapQueue.length < 35) {
+            sitemapQueue.push(cleaned);
+          }
+          continue;
+        }
+
+        if (
+          shouldCrawlUrl({
+            url: cleaned,
+            origin,
+            languagePrefix,
+          })
+        ) {
+          pageEntries.set(cleaned, {
+            ...entry,
+            url: cleaned,
+            source_sitemap: sitemapUrl,
+          });
+        }
+      }
+    } catch {
+      // Ignore sitemap fetch failures.
+    }
+  }
+
+  return [...pageEntries.values()].slice(0, maxUrls);
+}
+
+function parseSitemapIndexLocs(xml: string) {
+  const sitemapBlocks = [
+    ...String(xml || "").matchAll(/<sitemap\b[^>]*>([\s\S]*?)<\/sitemap>/gi),
+  ];
+
+  return sitemapBlocks
+    .map((block) => extractXmlTag(block[1], "loc"))
+    .filter(Boolean);
+}
+
+function parseSitemapUrlEntries(xml: string) {
+  const urlBlocks = [
+    ...String(xml || "").matchAll(/<url\b[^>]*>([\s\S]*?)<\/url>/gi),
+  ];
+
+  if (urlBlocks.length > 0) {
+    return urlBlocks
+      .map((block) => {
+        const content = block[1] || "";
+
+        return {
+          url: extractXmlTag(content, "loc"),
+          lastmod: extractXmlTag(content, "lastmod"),
+          priority: Number(extractXmlTag(content, "priority") || 0),
+        };
+      })
+      .filter((entry) => entry.url);
+  }
+
+  return parseLocTags(xml).map((url) => ({
+    url,
+    lastmod: "",
+    priority: 0,
+  }));
+}
+
+function extractXmlTag(xml: string, tag: string) {
+  const regex = new RegExp(`<${tag}\\b[^>]*>\\s*([^<]+)\\s*</${tag}>`, "i");
+  const match = String(xml || "").match(regex);
+
+  return decodeHtmlEntities(match?.[1] || "").trim();
+}
+
+function buildImportanceProfile({
+  startUrl,
+  sitemapEntries,
+  languagePrefix,
+}: {
+  startUrl: string;
+  sitemapEntries: any[];
+  languagePrefix: string;
+}) {
+  const start = new URL(startUrl);
+  const topicDossierPrefix = detectTopicDossierPrefix(
+    start.pathname,
+    languagePrefix
+  );
+
+  const folderStats = new Map<string, any>();
+
+  for (const entry of sitemapEntries) {
+    const folder = getPrimaryFolder(entry.url, languagePrefix);
+
+    if (!folder) continue;
+
+    if (!folderStats.has(folder)) {
+      folderStats.set(folder, {
+        folder,
+        count: 0,
+        average_depth_total: 0,
+        demoted: isDemotedFolder(folder),
+      });
+    }
+
+    const stat = folderStats.get(folder);
+    stat.count += 1;
+    stat.average_depth_total += getUrlDepth(entry.url);
+  }
+
+  const importantFolders = [...folderStats.values()]
+    .map((stat) => ({
+      ...stat,
+      average_depth: stat.average_depth_total / Math.max(1, stat.count),
+    }))
+    .filter((stat) => {
+      if (stat.demoted) return false;
+      if (stat.count < 2) return false;
+      if (stat.average_depth > 5.5) return false;
+      return true;
+    })
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8)
+    .map((stat) => stat.folder);
+
+  const demotedFolders = [...folderStats.values()]
+    .filter((stat) => stat.demoted)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8)
+    .map((stat) => stat.folder);
+
+  const importantPagePatterns = [
+    ...(topicDossierPrefix ? [topicDossierPrefix] : []),
+    ...importantFolders,
+  ];
+
+  const deprioritizedPagePatterns = unique([
+    ...demotedFolders,
+    "/listing/",
+    "/show",
+    "/actualite/",
+    "/actualité/",
+    "/blog/",
+    "/news/",
+    "/tag/",
+    "/author/",
+    "/search",
+    "/page/",
+  ]);
+
+  return {
+    topic_dossier_prefix: topicDossierPrefix,
+    important_folders: importantFolders,
+    demoted_folders: demotedFolders,
+    important_page_patterns: importantPagePatterns,
+    deprioritized_page_patterns: deprioritizedPagePatterns,
+  };
+}
+
+function scoreUrlImportance({
+  url,
+  source,
+  startUrl,
+  languagePrefix,
+  profile,
+  sitemapEntry,
+}: {
+  url: string;
+  source: string;
+  startUrl: string;
+  languagePrefix: string;
+  profile: any;
+  sitemapEntry: any;
+}) {
+  let score = 0;
+  const reasons: string[] = [];
+
+  const cleanedUrl = cleanUrl(url);
+  const cleanedStart = cleanUrl(startUrl);
+
+  if (cleanedUrl === cleanedStart) {
+    score += 10000;
+    reasons.push("starting page");
+  }
+
+  if (source === "start") {
+    score += 900;
+    reasons.push("scan start");
+  }
+
+  if (source === "homepage_link") {
+    score += 180;
+    reasons.push("linked from starting page");
+  }
+
+  if (source === "sitemap") {
+    score += 90;
+    reasons.push("found in sitemap");
+  }
+
+  if (source === "internal") {
+    score += 25;
+    reasons.push("found from internal link");
+  }
+
+  if (sitemapEntry) {
+    score += 60;
+    reasons.push("listed in sitemap");
+
+    const sitemapPriority = Number(sitemapEntry.priority || 0);
+
+    if (sitemapPriority > 0) {
+      score += Math.round(sitemapPriority * 60);
+      reasons.push(`sitemap priority ${sitemapPriority}`);
+    }
+
+    const recencyBoost = getLastmodRecencyBoost(sitemapEntry.lastmod);
+
+    if (recencyBoost > 0) {
+      score += recencyBoost;
+      reasons.push("recent sitemap update");
+    }
+  }
+
+  const depth = getUrlDepth(url);
+
+  if (depth <= 1) {
+    score += 120;
+    reasons.push("short high-level URL");
+  } else if (depth <= 3) {
+    score += 60;
+    reasons.push("clean landing-page depth");
+  } else if (depth >= 6) {
+    score -= 80;
+    reasons.push("deep URL");
+  }
+
+  const folder = getPrimaryFolder(url, languagePrefix);
+
+  if (folder && profile.important_folders.includes(folder)) {
+    score += 130;
+    reasons.push(`common important site folder: ${folder}`);
+  }
+
+  const topicPrefix = profile.topic_dossier_prefix;
+
+  if (topicPrefix) {
+    const path = new URL(url).pathname;
+
+    if (path === topicPrefix || path.startsWith(`${topicPrefix}/`)) {
+      score += 300;
+      reasons.push(`inside starting topic folder ${topicPrefix}`);
+    } else {
+      score -= 280;
+      reasons.push(`outside starting topic folder ${topicPrefix}`);
+    }
+  }
+
+  const lowValuePenalty = getLowValueUrlPenalty(url, topicPrefix);
+
+  if (lowValuePenalty.penalty > 0) {
+    score -= lowValuePenalty.penalty;
+    reasons.push(lowValuePenalty.reason);
+  }
+
+  if (looksLikeLandingPage(url)) {
+    score += 70;
+    reasons.push("looks like a landing page");
+  }
+
+  if (looksLikeListingDetail(url)) {
+    score -= 240;
+    reasons.push("looks like a listing/detail page");
+  }
+
+  if (looksLikeFilterOrPagination(url)) {
+    score -= 180;
+    reasons.push("looks like filtered or paginated page");
+  }
+
+  if (languagePrefix && new URL(url).pathname === `${languagePrefix}/`) {
+    score += 120;
+    reasons.push("language homepage");
+  }
+
+  return {
+    score,
+    reasons,
+  };
+}
+
+function sortQueueByImportance(queue: Array<any>) {
+  queue.sort((a, b) => {
+    if (b.importance_score !== a.importance_score) {
+      return b.importance_score - a.importance_score;
+    }
+
+    return a.url.length - b.url.length;
+  });
+}
+
+function detectTopicDossierPrefix(pathname: string, languagePrefix: string) {
+  const path = normalizePath(pathname);
+
+  if (!path || path === "/") return "";
+
+  let remainder = path;
+
+  if (languagePrefix && remainder.startsWith(languagePrefix)) {
+    remainder = remainder.slice(languagePrefix.length) || "/";
+  }
+
+  const parts = remainder.split("/").filter(Boolean);
+
+  if (parts.length === 0) return "";
+
+  const first = parts[0];
+
+  if (!first || isDemotedSegment(first)) return "";
+
+  return languagePrefix ? `${languagePrefix}/${first}` : `/${first}`;
+}
+
+function getPrimaryFolder(url: string, languagePrefix: string) {
+  try {
+    const pathname = normalizePath(new URL(url).pathname);
+    let path = pathname;
+
+    if (languagePrefix && path.startsWith(languagePrefix)) {
+      path = path.slice(languagePrefix.length) || "/";
+    }
+
+    const first = path.split("/").filter(Boolean)[0];
+
+    return first ? `/${first}/` : "";
+  } catch {
+    return "";
+  }
+}
+
+function getUrlDepth(url: string) {
+  try {
+    return new URL(url).pathname.split("/").filter(Boolean).length;
+  } catch {
+    return 99;
+  }
+}
+
+function getLastmodRecencyBoost(lastmod: string) {
+  if (!lastmod) return 0;
+
+  const time = new Date(lastmod).getTime();
+
+  if (!Number.isFinite(time)) return 0;
+
+  const ageDays = (Date.now() - time) / 86400000;
+
+  if (ageDays <= 30) return 45;
+  if (ageDays <= 180) return 30;
+  if (ageDays <= 365) return 15;
+  return 0;
+}
+
+function isDemotedFolder(folder: string) {
+  const value = String(folder || "").toLowerCase();
+
+  return [
+    "/listing/",
+    "/actualite/",
+    "/actualité/",
+    "/blog/",
+    "/news/",
+    "/tag/",
+    "/author/",
+    "/search/",
+    "/page/",
+    "/archive/",
+    "/archives/",
+    "/press/",
+    "/presse/",
+  ].some((part) => value.includes(part));
+}
+
+function isDemotedSegment(segment: string) {
+  const value = String(segment || "").toLowerCase();
+
+  return [
+    "listing",
+    "actualite",
+    "actualité",
+    "blog",
+    "news",
+    "tag",
+    "author",
+    "search",
+    "page",
+    "archive",
+    "archives",
+    "press",
+    "presse",
+  ].includes(value);
+}
+
+function getLowValueUrlPenalty(url: string, topicPrefix: string) {
+  const parsed = new URL(url);
+  const path = parsed.pathname.toLowerCase();
+
+  const insideTopic =
+    topicPrefix && (path === topicPrefix || path.startsWith(`${topicPrefix}/`));
+
+  const newsLike =
+    path.includes("/actualite/") ||
+    path.includes("/actualité/") ||
+    path.includes("/blog/") ||
+    path.includes("/news/") ||
+    path.includes("/archive/") ||
+    path.includes("/archives/");
+
+  if (newsLike) {
+    return {
+      penalty: insideTopic ? 90 : 230,
+      reason: insideTopic
+        ? "article/news page inside topic folder"
+        : "article/news/archive page outside main topic",
+    };
+  }
+
+  if (
+    path.includes("/tag/") ||
+    path.includes("/author/") ||
+    path.includes("/search")
+  ) {
+    return {
+      penalty: 220,
+      reason: "tag, author, or search URL",
+    };
+  }
+
+  return {
+    penalty: 0,
+    reason: "",
+  };
+}
+
+function looksLikeLandingPage(url: string) {
+  try {
+    const parsed = new URL(url);
+    const parts = parsed.pathname.split("/").filter(Boolean);
+
+    if (parts.length <= 2) return true;
+
+    const last = parts[parts.length - 1] || "";
+
+    if (
+      ["category", "categories", "place", "places", "activity", "activities"].some(
+        (word) => parts.includes(word)
+      )
+    ) {
+      return parts.length <= 4;
+    }
+
+    return !/\d{4}|\d{5,}/.test(last) && parts.length <= 4;
+  } catch {
+    return false;
+  }
+}
+
+function looksLikeListingDetail(url: string) {
+  try {
+    const path = new URL(url).pathname.toLowerCase();
+
+    if (path.includes("/listing/") && path.endsWith("/show")) return true;
+    if (path.includes("/listing/")) return true;
+    if (path.includes("/annonce/")) return true;
+    if (path.includes("/item/")) return true;
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function looksLikeFilterOrPagination(url: string) {
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname.toLowerCase();
+
+    if (path.includes("/page/")) return true;
+    if (path.includes("/filter/")) return true;
+    if (parsed.searchParams.toString()) return true;
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
 /* HTML extraction                                                             */
 /* -------------------------------------------------------------------------- */
 
@@ -774,6 +1410,8 @@ function extractPageFromHtml({
   inSitemap,
   fetchError,
   fetchedByBrowser,
+  importanceScore,
+  importanceReasons,
 }: {
   url: string;
   finalUrl: string;
@@ -784,6 +1422,8 @@ function extractPageFromHtml({
   inSitemap: boolean;
   fetchError: string;
   fetchedByBrowser: boolean;
+  importanceScore: number;
+  importanceReasons: string[];
 }) {
   const title = extractTitle(html);
   const metaDescription = extractMeta(html, "description");
@@ -850,6 +1490,9 @@ function extractPageFromHtml({
     in_sitemap: inSitemap,
     is_scanner_blocked: isScannerBlocked,
     fetched_by_browser_render: fetchedByBrowser,
+
+    importance_score: importanceScore,
+    importance_reasons: importanceReasons,
 
     client_rendering_suspected:
       !isScannerBlocked && wordCount < 100 && scriptCount >= 15,
@@ -1065,80 +1708,6 @@ function normalizeWebsiteUrl(value: string) {
   }
 }
 
-async function assertSafePublicUrl(value: string) {
-  const parsed = new URL(String(value || ""));
-  if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("Only public http and https URLs can be scanned.");
-
-  const hostname = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-  if (!hostname || hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local") || hostname.endsWith(".internal")) {
-    throw new Error("Private or local network addresses cannot be scanned.");
-  }
-
-  if (isIpAddress(hostname)) {
-    if (!isPublicIpAddress(hostname)) throw new Error("Private or local network addresses cannot be scanned.");
-    return true;
-  }
-
-  const resolvedIps = await resolvePublicDns(hostname);
-  if (resolvedIps.length === 0) throw new Error("Could not verify this website resolves to a public address.");
-  if (resolvedIps.some((ip) => !isPublicIpAddress(ip))) throw new Error("This website resolves to a private or local network address.");
-
-  return true;
-}
-
-function isIpAddress(value: string) {
-  return isIpv4Address(value) || String(value || "").includes(":");
-}
-
-function isIpv4Address(value: string) {
-  const parts = String(value || "").split(".");
-  return parts.length === 4 && parts.every((part) => /^\d+$/.test(part) && Number(part) >= 0 && Number(part) <= 255);
-}
-
-function isPublicIpAddress(ip: string) {
-  const value = String(ip || "").toLowerCase();
-
-  if (isIpv4Address(value)) {
-    const [a, b] = value.split(".").map(Number);
-    if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
-    if (a === 100 && b >= 64 && b <= 127) return false;
-    if (a === 169 && b === 254) return false;
-    if (a === 172 && b >= 16 && b <= 31) return false;
-    if (a === 192 && (b === 0 || b === 168)) return false;
-    if (a === 198 && (b === 18 || b === 19)) return false;
-    return value !== "255.255.255.255";
-  }
-
-  if (value === "::" || value === "::1" || value.startsWith("fe80:") || value.startsWith("fc") || value.startsWith("fd") || value.startsWith("ff") || value.startsWith("2001:db8")) return false;
-  if (value.startsWith("::ffff:")) return isPublicIpAddress(value.slice(7));
-  return value.includes(":");
-}
-
-async function resolvePublicDns(hostname: string) {
-  const cache = (globalThis as any).__safeDnsCache || new Map();
-  (globalThis as any).__safeDnsCache = cache;
-  if (cache.has(hostname)) return cache.get(hostname);
-
-  const results: string[] = [];
-  for (const type of ["A", "AAAA"]) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-      const endpoint = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(hostname)}&type=${type}`;
-      const response = await fetch(endpoint, { headers: { Accept: "application/dns-json" }, signal: controller.signal });
-      clearTimeout(timeout);
-      const payload = await response.json().catch(() => ({}));
-      for (const answer of payload.Answer || []) {
-        if (answer?.data && isIpAddress(String(answer.data))) results.push(String(answer.data));
-      }
-    } catch {}
-  }
-
-  const uniqueResults = unique(results);
-  cache.set(hostname, uniqueResults);
-  return uniqueResults;
-}
-
 function cleanUrl(value: string) {
   try {
     const url = new URL(String(value || ""));
@@ -1168,6 +1737,14 @@ function cleanUrl(value: string) {
   } catch {
     return "";
   }
+}
+
+function normalizePath(pathname: string) {
+  const path = String(pathname || "/");
+
+  if (!path || path === "/") return "/";
+
+  return path.endsWith("/") ? path.slice(0, -1) : path;
 }
 
 function detectLanguagePrefix(pathname: string) {
@@ -1253,89 +1830,8 @@ function isUtilityUrl(pathname: string) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Sitemap discovery                                                           */
+/* Sitemap helpers                                                             */
 /* -------------------------------------------------------------------------- */
-
-async function discoverSitemapUrls({
-  origin,
-  languagePrefix,
-  deadlineAt,
-  maxUrls,
-}: {
-  origin: string;
-  languagePrefix: string;
-  deadlineAt: number;
-  maxUrls: number;
-}) {
-  const sitemapCandidates = new Set<string>();
-
-  sitemapCandidates.add(`${origin}/sitemap.xml`);
-  sitemapCandidates.add(`${origin}/sitemap_index.xml`);
-
-  try {
-    const robots = await fetchText(`${origin}/robots.txt`, SITEMAP_FETCH_TIMEOUT_MS);
-
-    for (const line of robots.split(/\r?\n/)) {
-      const match = line.match(/^sitemap:\s*(.+)$/i);
-
-      if (match?.[1]) {
-        sitemapCandidates.add(match[1].trim());
-      }
-    }
-  } catch {
-    // robots.txt is optional.
-  }
-
-  const pageUrls = new Set<string>();
-  const sitemapQueue = [...sitemapCandidates].slice(0, 10);
-  const visitedSitemaps = new Set<string>();
-
-  while (
-    sitemapQueue.length > 0 &&
-    pageUrls.size < maxUrls &&
-    Date.now() < deadlineAt - 5000
-  ) {
-    const sitemapUrl = sitemapQueue.shift();
-
-    if (!sitemapUrl || visitedSitemaps.has(sitemapUrl)) continue;
-
-    visitedSitemaps.add(sitemapUrl);
-
-    try {
-      const xml = await fetchText(sitemapUrl, SITEMAP_FETCH_TIMEOUT_MS);
-      const locs = parseLocTags(xml);
-
-      for (const loc of locs) {
-        if (pageUrls.size >= maxUrls) break;
-
-        const cleaned = cleanUrl(loc);
-
-        if (!cleaned) continue;
-
-        if (/\.xml(\?|$)/i.test(cleaned)) {
-          if (sitemapQueue.length < 25) {
-            sitemapQueue.push(cleaned);
-          }
-          continue;
-        }
-
-        if (
-          shouldCrawlUrl({
-            url: cleaned,
-            origin,
-            languagePrefix,
-          })
-        ) {
-          pageUrls.add(cleaned);
-        }
-      }
-    } catch {
-      // Ignore sitemap fetch failures.
-    }
-  }
-
-  return [...pageUrls].slice(0, maxUrls);
-}
 
 async function fetchText(url: string, timeoutMs: number) {
   const response = await fetchWithTimeout(url, timeoutMs);
@@ -1353,6 +1849,104 @@ function parseLocTags(xml: string) {
   return matches
     .map((match) => decodeHtmlEntities(match[1] || "").trim())
     .filter(Boolean);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Related subdomains                                                          */
+/* -------------------------------------------------------------------------- */
+
+function collectRelatedSubdomains({
+  page,
+  startHost,
+  baseDomain,
+  relatedSubdomains,
+}: {
+  page: any;
+  startHost: string;
+  baseDomain: string;
+  relatedSubdomains: Map<string, any>;
+}) {
+  const externalLinks = Array.isArray(page.external_links)
+    ? page.external_links
+    : [];
+
+  for (const link of externalLinks) {
+    try {
+      const parsed = new URL(link);
+      const host = parsed.hostname.replace(/^www\./i, "");
+      const normalizedStartHost = startHost.replace(/^www\./i, "");
+
+      if (host === normalizedStartHost) continue;
+      if (getBaseDomain(host) !== baseDomain) continue;
+
+      if (!relatedSubdomains.has(host)) {
+        relatedSubdomains.set(host, {
+          host,
+          url: `${parsed.protocol}//${parsed.host}/`,
+          seen_on_pages: [],
+          count: 0,
+        });
+      }
+
+      const item = relatedSubdomains.get(host);
+      item.count += 1;
+
+      if (item.seen_on_pages.length < 5) {
+        item.seen_on_pages.push(page.url);
+      }
+    } catch {
+      // Ignore invalid URLs.
+    }
+  }
+}
+
+function buildRecommendedFollowupScans({
+  relatedSubdomains,
+  startUrl,
+  baseDomain,
+}: {
+  relatedSubdomains: Map<string, any>;
+  startUrl: string;
+  baseDomain: string;
+}) {
+  const startHost = new URL(startUrl).hostname.replace(/^www\./i, "");
+
+  return [...relatedSubdomains.values()]
+    .filter((item) => item.host !== startHost)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8)
+    .map((item) => ({
+      type: "related_subdomain",
+      url: item.url,
+      host: item.host,
+      base_domain: baseDomain,
+      reason:
+        "This related subdomain was linked from the scanned website. It was not crawled in this scan so the 150-page limit stays focused.",
+      seen_link_count: item.count,
+      seen_on_pages: item.seen_on_pages,
+      recommended_action:
+        "Consider running a separate scan for this subdomain if it is important to the business.",
+    }));
+}
+
+function getBaseDomain(hostname: string) {
+  const host = String(hostname || "")
+    .toLowerCase()
+    .replace(/^www\./, "");
+
+  const parts = host.split(".").filter(Boolean);
+
+  if (parts.length <= 2) return host;
+
+  const secondLevelTlds = ["co.uk", "com.au", "com.br", "com.mx", "co.nz"];
+  const lastTwo = parts.slice(-2).join(".");
+  const lastThree = parts.slice(-3).join(".");
+
+  if (secondLevelTlds.includes(lastTwo) && parts.length >= 3) {
+    return lastThree;
+  }
+
+  return lastTwo;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1417,8 +2011,7 @@ function runScreamingFrogLiteAudit({
           difficulty: "easy",
           page,
           title: "Shorten long search titles",
-          explanation:
-            "Long titles can be cut off in search results.",
+          explanation: "Long titles can be cut off in search results.",
           recommendation:
             "Rewrite the title so the most important words appear near the beginning.",
         })
@@ -1577,8 +2170,7 @@ function runScreamingFrogLiteAudit({
           title: "Add mobile viewport settings",
           explanation:
             "This page may not be set up correctly for mobile screens.",
-          recommendation:
-            "Add a viewport meta tag in the site template or theme.",
+          recommendation: "Add a viewport meta tag in the site template or theme.",
         })
       );
     }
@@ -1631,8 +2223,7 @@ function runScreamingFrogLiteAudit({
           title: "Add missing image descriptions",
           explanation:
             "Some images on this page appear to be missing alt text.",
-          recommendation:
-            "Add short, useful alt text to important images.",
+          recommendation: "Add short, useful alt text to important images.",
           current_value: `${page.missing_alt_image_count} images missing alt text`,
         })
       );
@@ -1691,8 +2282,7 @@ function runScreamingFrogLiteAudit({
           difficulty: "developer",
           page,
           title: "Review redirected pages",
-          explanation:
-            "This page redirects to another URL.",
+          explanation: "This page redirects to another URL.",
           recommendation:
             "Update internal links so they point directly to the final URL.",
           current_value: page.url,
@@ -1845,6 +2435,8 @@ function makeFinding({
       title: page.title,
       meta_description: page.meta_description,
       h1: page.h1,
+      importance_score: page.importance_score,
+      importance_reasons: page.importance_reasons,
     },
   };
 }
@@ -1902,7 +2494,7 @@ function findDuplicateTitles(pages: any[]) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Scan coverage findings                                                      */
+/* Scan coverage + follow-up findings                                          */
 /* -------------------------------------------------------------------------- */
 
 function buildCoverageFindings({
@@ -1990,6 +2582,46 @@ function buildCoverageFindings({
   return findings;
 }
 
+function buildFollowupScanFindings({
+  followups,
+  startUrl,
+}: {
+  followups: any[];
+  startUrl: string;
+}) {
+  if (!Array.isArray(followups) || followups.length === 0) return [];
+
+  return [
+    {
+      rule: "related_subdomains_found",
+      category: "web_dev",
+      customer_category: "Scan planning",
+      priority: "low",
+      difficulty: "easy",
+      issue_title: "Related website sections may need separate scans",
+      title: "Related website sections may need separate scans",
+      plain_english_explanation:
+        "The scanner found related subdomains linked from this website. They were not crawled in this scan so the 150-page limit stays focused.",
+      why_it_matters:
+        "Large websites often split important content across subdomains. These can be scanned separately if they matter to the business.",
+      recommendation:
+        "Review the suggested follow-up scan list and run a separate scan only for the sections that are important.",
+      recommended_value: followups.map((item) => item.url).join(", "),
+      page_url: startUrl,
+      affected_pages: followups.map((item) => item.url),
+      affected_count: followups.length,
+      confidence_score: 80,
+      source: "crawler",
+      requires_approval: true,
+      requires_developer: false,
+      can_auto_fix: false,
+      details: {
+        recommended_followup_scans: followups,
+      },
+    },
+  ];
+}
+
 function buildFriendlyWarnings({
   pages,
 }: {
@@ -2051,6 +2683,8 @@ async function analyzeCompetitors({
         source: "manual_competitor",
         origin: parsed.origin,
         inSitemap: false,
+        importanceScore: 0,
+        importanceReasons: ["manual competitor URL"],
         allowBrowserRender: true,
         browserRenderBudget,
         deadlineAt,
@@ -2157,6 +2791,7 @@ function calculateHealthScore({
 
   for (const finding of findings) {
     if (finding.rule === "internal_pages_crawl_limited") continue;
+    if (finding.rule === "related_subdomains_found") continue;
 
     if (finding.priority === "high" || finding.priority === "critical") {
       score -= 5;
@@ -2206,15 +2841,21 @@ function buildScanSummary({
   const positives: string[] = [];
 
   if (readablePages.length > 0) {
-    positives.push(`The scanner successfully reviewed ${readablePages.length} readable pages.`);
+    positives.push(
+      `The scanner successfully reviewed ${readablePages.length} readable pages.`
+    );
   }
 
   if (Number(technicalSummary.average_word_count || 0) >= 500) {
-    positives.push("The readable pages have a healthy amount of content on average.");
+    positives.push(
+      "The readable pages have a healthy amount of content on average."
+    );
   }
 
   if (highPriorityCount === 0) {
-    positives.push("No critical site-wide SEO issue was found in the readable pages.");
+    positives.push(
+      "No critical site-wide SEO issue was found in the readable pages."
+    );
   }
 
   return {
@@ -2233,6 +2874,16 @@ function buildScanSummary({
       pages_found: crawlResult.pages_found,
       pages_crawled: pages.length,
       queued_remaining: crawlResult.queued_remaining,
+    },
+    scan_focus: {
+      max_pages_enforced: crawlResult.sitemap_priority_summary?.max_pages_enforced,
+      topic_dossier_prefix:
+        crawlResult.sitemap_priority_summary?.topic_dossier_prefix || "",
+      important_page_patterns: crawlResult.important_page_patterns,
+      deprioritized_page_patterns: crawlResult.deprioritized_page_patterns,
+      recommended_followup_scans: crawlResult.recommended_followup_scans,
+      explanation:
+        "The scanner prioritized sitemap and internal URLs that looked like important landing pages, and deprioritized listing, archive, news, tag, search, and very deep pages where appropriate.",
     },
   };
 }

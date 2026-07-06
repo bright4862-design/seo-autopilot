@@ -1,6 +1,6 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
-const VERSION = "runAdvancedScan_v6_priority_pathlock_junk_filter";
+const VERSION = "runAdvancedScan_v8_reliable_debug_no_robots_block";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -8,6 +8,9 @@ const CORS_HEADERS = {
     "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
+
+const USER_AGENT =
+  "Mozilla/5.0 (compatible; SEOAutopilotBot/1.0; +https://base44.app)";
 
 const BROWSERLESS_TOKEN = Deno.env.get("BROWSERLESS_TOKEN") || "";
 const BROWSERLESS_CONTENT_ENDPOINT =
@@ -96,8 +99,16 @@ Deno.serve(async (req) => {
     const budget = resolveBudget(body);
 
     const websiteUrl = normalizeWebsiteUrl(body.website_url || body.url || "");
-    if (!websiteUrl) return jsonResponse({ success: false, error: "Missing or invalid website_url." }, 400);
-    await assertSafePublicUrl(websiteUrl);
+
+    if (!websiteUrl) {
+      return jsonResponse(
+        {
+          success: false,
+          error: "Missing or invalid website_url.",
+        },
+        400
+      );
+    }
 
     const deadlineAt = Date.now() + budget.crawl_timeout_ms - 3000;
 
@@ -179,7 +190,7 @@ Deno.serve(async (req) => {
       }),
     ];
 
-    const responsePayload = {
+    return jsonResponse({
       success: true,
       version: VERSION,
 
@@ -226,7 +237,7 @@ Deno.serve(async (req) => {
         competitor_attempts_max:
           competitorResult.browser_render_attempts_max || 0,
         usage_policy:
-          "Browser rendering is only used for blocked start pages and blocked manual competitor URLs.",
+          "Browser rendering is used only when a starting page, start variant, or selected high-priority page needs a rendered check.",
       },
 
       crawl_scope: crawlResult.crawl_scope,
@@ -260,11 +271,13 @@ Deno.serve(async (req) => {
         importance_strategy: crawlResult.sitemap_priority_summary,
         skipped_junk_urls_count: crawlResult.skipped_junk_urls_count,
         skipped_outside_prefix_count: crawlResult.skipped_outside_prefix_count,
+        start_url_candidates: crawlResult.start_url_candidates,
+        fetch_error_class_counts: countFetchErrorClasses(crawlResult.pages),
+        robots_policy:
+          "robots.txt is used to discover sitemap URLs only. Disallow rules are not enforced in this version.",
         request_received_at: new Date().toISOString(),
       },
-    };
-
-    return jsonResponse(responsePayload);
+    });
   } catch (error) {
     return jsonResponse(
       {
@@ -383,12 +396,16 @@ async function crawlWebsite({
     max: budget.max_browser_render_attempts,
   };
 
+  const renderTemplateDecisionCache = new Map<string, boolean>();
+
   const warnings: string[] = [];
 
   const skippedStats = {
     junk_urls: 0,
     outside_prefix: 0,
   };
+
+  const startUrlCandidates = buildStartUrlCandidates(startUrl);
 
   const sitemapEntries = budget.use_sitemap
     ? await discoverSitemapEntries({
@@ -457,18 +474,22 @@ async function crawlWebsite({
 
     discovered.add(cleaned);
 
-    queue.push({
+    insertSortedByImportance(queue, {
       url: cleaned,
       source,
       in_sitemap: inSitemap || Boolean(sitemapEntry),
       importance_score: score.score,
       importance_reasons: score.reasons,
     });
-
-    sortQueueByImportance(queue);
   }
 
-  addToQueue(startUrl, "start", sitemapEntryMap.has(cleanUrl(startUrl)));
+  for (const candidate of startUrlCandidates) {
+    addToQueue(
+      candidate,
+      cleanUrl(candidate) === cleanUrl(startUrl) ? "start" : "start_variant",
+      sitemapEntryMap.has(cleanUrl(candidate))
+    );
+  }
 
   for (const entry of sitemapEntries) {
     addToQueue(entry.url, "sitemap", true);
@@ -520,7 +541,12 @@ async function crawlWebsite({
           inSitemap: item.in_sitemap,
           importanceScore: item.importance_score,
           importanceReasons: item.importance_reasons,
-          allowBrowserRender: item.source === "start",
+          allowBrowserRender: shouldAllowBrowserRenderForQueueItem({
+            item,
+            renderTemplateDecisionCache,
+          }),
+          allowBlockedBrowserRender:
+            item.source === "start" || item.source === "start_variant",
           browserRenderBudget,
           deadlineAt,
         })
@@ -547,7 +573,9 @@ async function crawlWebsite({
       });
 
       const isInternalBlocked =
-        page.source !== "start" && page.is_scanner_blocked === true;
+        page.source !== "start" &&
+        page.source !== "start_variant" &&
+        page.is_scanner_blocked === true;
 
       if (isInternalBlocked) {
         consecutiveBlockedInternal += 1;
@@ -564,7 +592,10 @@ async function crawlWebsite({
       ).length;
 
       const blockedInternalPages = pages.filter(
-        (item) => item.source !== "start" && item.is_scanner_blocked
+        (item) =>
+          item.source !== "start" &&
+          item.source !== "start_variant" &&
+          item.is_scanner_blocked
       ).length;
 
       const minReadablePagesBeforeEarlyStop =
@@ -576,8 +607,7 @@ async function crawlWebsite({
 
       const nearDeadline = Date.now() > deadlineAt - 12000;
 
-      const blockedRatio =
-        blockedInternalPages / Math.max(1, pages.length);
+      const blockedRatio = blockedInternalPages / Math.max(1, pages.length);
 
       const enoughUsefulPagesBeforeStopping =
         readablePages >= minReadablePagesBeforeEarlyStop || nearDeadline;
@@ -591,10 +621,7 @@ async function crawlWebsite({
         break;
       }
 
-      if (
-        enoughUsefulPagesBeforeStopping &&
-        consecutiveBlockedInternal >= 20
-      ) {
+      if (enoughUsefulPagesBeforeStopping && consecutiveBlockedInternal >= 20) {
         stoppedForRateLimit = true;
         break;
       }
@@ -609,7 +636,9 @@ async function crawlWebsite({
 
           addToQueue(
             link,
-            page.source === "start" ? "homepage_link" : "internal",
+            page.source === "start" || page.source === "start_variant"
+              ? "homepage_link"
+              : "internal",
             sitemapEntryMap.has(cleanUrl(link))
           );
         }
@@ -668,9 +697,10 @@ async function crawlWebsite({
     recommended_followup_scans: recommendedFollowups,
     skipped_junk_urls_count: skippedStats.junk_urls,
     skipped_outside_prefix_count: skippedStats.outside_prefix,
+    start_url_candidates: startUrlCandidates,
     sitemap_priority_summary: {
       strategy:
-        "The scanner reads sitemap URLs first, learns common URL folders, boosts likely landing pages, demotes listing/archive/news/filter/encoded pages, and keeps the scan focused inside the starting topic folder when one exists.",
+        "The scanner reads sitemap URLs first, learns common URL folders, tries cleaner start URL variants, boosts likely landing pages, demotes listing/archive/news/filter/encoded pages, and keeps the scan focused inside the requested folder or language path.",
       topic_dossier_prefix: importanceProfile.topic_dossier_prefix || "",
       sitemap_entries_found: sitemapEntries.length,
       important_page_patterns: importanceProfile.important_page_patterns,
@@ -679,8 +709,60 @@ async function crawlWebsite({
       related_subdomains_found: recommendedFollowups.length,
       skipped_junk_urls_count: skippedStats.junk_urls,
       skipped_outside_prefix_count: skippedStats.outside_prefix,
+      start_url_candidates: startUrlCandidates,
     },
   };
+}
+
+function shouldAllowBrowserRenderForQueueItem({
+  item,
+  renderTemplateDecisionCache,
+}: {
+  item: {
+    url: string;
+    source: string;
+    importance_score: number;
+  };
+  renderTemplateDecisionCache: Map<string, boolean>;
+}) {
+  if (item.source === "start" || item.source === "start_variant") {
+    return true;
+  }
+
+  if (BROWSER_RENDER_MODE !== "auto") {
+    return false;
+  }
+
+  const template = makeUrlTemplate(item.url);
+
+  if (template && renderTemplateDecisionCache.has(template)) {
+    return Boolean(renderTemplateDecisionCache.get(template));
+  }
+
+  const decision = item.importance_score >= 150;
+
+  if (template) {
+    renderTemplateDecisionCache.set(template, decision);
+  }
+
+  return decision;
+}
+
+function insertSortedByImportance(queue: Array<any>, item: any) {
+  let low = 0;
+  let high = queue.length;
+
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+
+    if (Number(queue[middle]?.importance_score || 0) < item.importance_score) {
+      high = middle;
+    } else {
+      low = middle + 1;
+    }
+  }
+
+  queue.splice(low, 0, item);
 }
 
 async function fetchAndExtractPage({
@@ -691,6 +773,7 @@ async function fetchAndExtractPage({
   importanceScore,
   importanceReasons,
   allowBrowserRender,
+  allowBlockedBrowserRender,
   browserRenderBudget,
   deadlineAt,
 }: {
@@ -701,30 +784,24 @@ async function fetchAndExtractPage({
   importanceScore: number;
   importanceReasons: string[];
   allowBrowserRender: boolean;
+  allowBlockedBrowserRender: boolean;
   browserRenderBudget: { used: number; max: number };
   deadlineAt: number;
 }) {
   let html = "";
   let statusCode = 0;
   let finalUrl = url;
-  let contentType = "";
   let fetchError = "";
+  let fetchErrorClass = "";
   let fetchedByBrowser = false;
 
-  try {
-    const response = await fetchWithTimeout(url, FETCH_TIMEOUT_MS);
-    statusCode = response.status;
-    finalUrl = response.url || url;
-    contentType = response.headers.get("content-type") || "";
+  const fetchResult = await fetchHtmlWithRetry(url);
 
-    if (/text\/html|application\/xhtml/i.test(contentType)) {
-      html = await response.text();
-    } else {
-      html = "";
-    }
-  } catch (error) {
-    fetchError = getErrorMessage(error);
-  }
+  html = fetchResult.html;
+  statusCode = fetchResult.status_code;
+  finalUrl = fetchResult.final_url || url;
+  fetchError = fetchResult.fetch_error;
+  fetchErrorClass = fetchResult.fetch_error_class;
 
   let page = extractPageFromHtml({
     url,
@@ -735,17 +812,19 @@ async function fetchAndExtractPage({
     origin,
     inSitemap,
     fetchError,
+    fetchErrorClass,
     fetchedByBrowser,
     importanceScore,
     importanceReasons,
   });
 
-  if (
+  const shouldTryRender =
     Date.now() < deadlineAt - 8000 &&
     allowBrowserRender &&
-    shouldRetryWithBrowser(page) &&
-    browserRenderBudget.used < browserRenderBudget.max
-  ) {
+    shouldRetryWithBrowser(page, allowBlockedBrowserRender) &&
+    browserRenderBudget.used < browserRenderBudget.max;
+
+  if (shouldTryRender) {
     try {
       browserRenderBudget.used += 1;
 
@@ -754,8 +833,10 @@ async function fetchAndExtractPage({
       if (rendered.html) {
         fetchedByBrowser = true;
         html = rendered.html;
-        statusCode = rendered.status_code || 200;
-        finalUrl = rendered.final_url || url;
+        statusCode = rendered.status_code || statusCode || 0;
+        finalUrl = rendered.final_url || finalUrl || url;
+        fetchError = "";
+        fetchErrorClass = "";
 
         page = extractPageFromHtml({
           url,
@@ -766,6 +847,7 @@ async function fetchAndExtractPage({
           origin,
           inSitemap,
           fetchError: "",
+          fetchErrorClass: "",
           fetchedByBrowser,
           importanceScore,
           importanceReasons,
@@ -779,28 +861,255 @@ async function fetchAndExtractPage({
   return page;
 }
 
-async function fetchWithTimeout(url: string, timeoutMs: number, redirectCount = 0) {
-  await assertSafePublicUrl(url);
+async function fetchHtmlWithRetry(url: string) {
+  let html = "";
+  let statusCode = 0;
+  let finalUrl = url;
+  let contentType = "";
+  let fetchError = "";
+  let fetchErrorClass = "";
+
+  try {
+    const response = await fetchWithTimeout(url, FETCH_TIMEOUT_MS);
+    statusCode = response.status;
+    finalUrl = response.url || url;
+    contentType = response.headers.get("content-type") || "";
+    fetchErrorClass = classifyFetchError(new Error(`HTTP ${statusCode}`), statusCode);
+
+    if (shouldRetryFetch(fetchErrorClass)) {
+      await sleep(jitterDelay());
+
+      const retryResponse = await fetchWithTimeout(url, FETCH_TIMEOUT_MS);
+      statusCode = retryResponse.status;
+      finalUrl = retryResponse.url || finalUrl;
+      contentType = retryResponse.headers.get("content-type") || "";
+      fetchErrorClass = classifyFetchError(
+        new Error(`HTTP ${statusCode}`),
+        statusCode
+      );
+
+      html = /text\/html|application\/xhtml/i.test(contentType)
+        ? await retryResponse.text()
+        : "";
+    } else {
+      html = /text\/html|application\/xhtml/i.test(contentType)
+        ? await response.text()
+        : "";
+    }
+
+    if (!fetchErrorClass || fetchErrorClass === "other") {
+      fetchErrorClass = "";
+    }
+  } catch (error) {
+    fetchError = getErrorMessage(error);
+    fetchErrorClass = classifyFetchError(error);
+
+    if (shouldRetryFetch(fetchErrorClass)) {
+      try {
+        await sleep(jitterDelay());
+
+        const retryResponse = await fetchWithTimeout(url, FETCH_TIMEOUT_MS);
+        statusCode = retryResponse.status;
+        finalUrl = retryResponse.url || url;
+        contentType = retryResponse.headers.get("content-type") || "";
+        html = /text\/html|application\/xhtml/i.test(contentType)
+          ? await retryResponse.text()
+          : "";
+        fetchError = "";
+        fetchErrorClass = classifyFetchError(
+          new Error(`HTTP ${statusCode}`),
+          statusCode
+        );
+
+        if (!fetchErrorClass || fetchErrorClass === "other") {
+          fetchErrorClass = "";
+        }
+      } catch (retryError) {
+        fetchError = getErrorMessage(retryError);
+        fetchErrorClass = classifyFetchError(retryError);
+      }
+    }
+  }
+
+  return {
+    html,
+    status_code: statusCode,
+    final_url: finalUrl,
+    fetch_error: fetchError,
+    fetch_error_class: fetchErrorClass,
+  };
+}
+
+async function fetchWithTimeout(url: string, timeoutMs: number) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
   try {
-    const response = await fetch(url, { method: "GET", redirect: "manual", signal: controller.signal, headers: { "User-Agent": "Mozilla/5.0 (compatible; SEOAutopilotBot/1.0; +https://base44.app)", Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.9" } });
-    if (response.status >= 300 && response.status < 400) { const location = response.headers.get("location") || ""; if (!location) return response; if (redirectCount >= 5) throw new Error("Too many redirects while checking this website."); return await fetchWithTimeout(new URL(location, url).toString(), timeoutMs, redirectCount + 1); }
-    return response;
-  } finally { clearTimeout(timeout); }
+    return await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: controller.signal,
+      headers: {
+        "User-Agent": USER_AGENT,
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
-async function assertSafePublicUrl(value: string) { const url = new URL(String(value || "")); if (!/^https?:$/i.test(url.protocol)) throw new Error("Only public http and https URLs can be scanned."); const ips = await resolvePublicIps(url.hostname); if (!ips.length || ips.some((ip) => !isPublicIp(ip))) throw new Error("Private or local network addresses cannot be scanned."); }
-async function resolvePublicIps(hostname: string) { const host = String(hostname || "").replace(/^\[|\]$/g, "").toLowerCase(); if (!host || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) throw new Error("Private or local network addresses cannot be scanned."); if (isIpv4Address(host) || host.includes(":")) return [host]; const response = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=A`, { headers: { Accept: "application/dns-json" } }); const data = await response.json().catch(() => ({})); return (data.Answer || []).map((answer: any) => String(answer?.data || "")).filter(isIpv4Address); }
-function isIpv4Address(value: string) { const parts = String(value || "").split("."); return parts.length === 4 && parts.every((part) => /^\d+$/.test(part) && Number(part) >= 0 && Number(part) <= 255); }
-function isPublicIp(ip: string) { const value = String(ip || "").toLowerCase(); if (isIpv4Address(value)) return isPublicIpv4(value); return Boolean(value.includes(":")) && !value.startsWith("::1") && !value.startsWith("fc") && !value.startsWith("fd") && !value.startsWith("fe80"); }
-function isPublicIpv4(ip: string) { const [a, b] = ip.split(".").map(Number); return !(a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && (b === 0 || b === 168)) || (a === 198 && (b === 18 || b === 19)) || ip === "255.255.255.255"); }
-function shouldRetryWithBrowser(page: any) { if (!BROWSERLESS_TOKEN) return false; if (page.is_scanner_blocked) return true; if ([0, 403, 429, 503].includes(Number(page.status_code || 0))) return true; return BROWSER_RENDER_MODE === "js_fallback" && Number(page.word_count || 0) < 80 && Number(page.script_count || 0) >= 15; }
+
+function classifyFetchError(error: unknown, statusCode = 0) {
+  const message = getErrorMessage(error).toLowerCase();
+
+  if ([403, 429, 503].includes(Number(statusCode || 0))) {
+    return "blocked";
+  }
+
+  if (statusCode >= 500) {
+    return "http_5xx";
+  }
+
+  if (message.includes("abort") || message.includes("timeout")) {
+    return "timeout";
+  }
+
+  if (
+    message.includes("dns") ||
+    message.includes("name not resolved") ||
+    message.includes("enotfound")
+  ) {
+    return "dns";
+  }
+
+  if (
+    message.includes("tls") ||
+    message.includes("ssl") ||
+    message.includes("certificate")
+  ) {
+    return "tls";
+  }
+
+  if (!message || message === "http 0" || message === "http 200") {
+    return "";
+  }
+
+  return "other";
+}
+
+function shouldRetryFetch(errorClass: string) {
+  return ["timeout", "http_5xx", "other"].includes(errorClass);
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function jitterDelay() {
+  return 250 + Math.floor(Math.random() * 500);
+}
+
+function shouldRetryWithBrowser(page: any, allowBlockedBrowserRender: boolean) {
+  if (!BROWSERLESS_TOKEN) return false;
+
+  const renderNeed =
+    Number(page.word_count || 0) < 80 && Number(page.script_count || 0) >= 15;
+
+  if (
+    allowBlockedBrowserRender &&
+    (page.is_scanner_blocked ||
+      [0, 403, 429, 503].includes(Number(page.status_code || 0)))
+  ) {
+    return true;
+  }
+
+  if (BROWSER_RENDER_MODE === "js_fallback" || BROWSER_RENDER_MODE === "auto") {
+    return renderNeed;
+  }
+
+  return false;
+}
+
 async function fetchWithBrowserless(url: string) {
-  await assertSafePublicUrl(url); await assertSafePublicUrl(BROWSERLESS_CONTENT_ENDPOINT);
-  const endpoint = new URL(BROWSERLESS_CONTENT_ENDPOINT); if (BROWSERLESS_TOKEN && !endpoint.searchParams.has("token")) endpoint.searchParams.set("token", BROWSERLESS_TOKEN);
-  const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), BROWSER_RENDER_TIMEOUT_MS);
-  try { const response = await fetch(endpoint.toString(), { method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url, waitForTimeout: 1500, gotoOptions: { waitUntil: "networkidle2", timeout: BROWSER_RENDER_TIMEOUT_MS } }) }); const html = await response.text(); if (!response.ok) throw new Error(`Browserless failed with status ${response.status}: ${html.slice(0, 200)}`); return { html, status_code: 200, final_url: url }; }
-  finally { clearTimeout(timeout); }
+  const endpoint = new URL(BROWSERLESS_CONTENT_ENDPOINT);
+
+  if (BROWSERLESS_TOKEN && !endpoint.searchParams.has("token")) {
+    endpoint.searchParams.set("token", BROWSERLESS_TOKEN);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    BROWSER_RENDER_TIMEOUT_MS
+  );
+
+  try {
+    const response = await fetch(endpoint.toString(), {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        url,
+        waitForTimeout: 1000,
+        viewport: {
+          width: 1366,
+          height: 900,
+        },
+        gotoOptions: {
+          waitUntil: "networkidle2",
+          timeout: BROWSER_RENDER_TIMEOUT_MS,
+        },
+        userAgent: USER_AGENT,
+      }),
+    });
+
+    const html = await response.text();
+
+    const finalUrl =
+      response.headers.get("x-response-url") ||
+      response.headers.get("browserless-final-url") ||
+      response.headers.get("location") ||
+      url;
+
+    if (!response.ok) {
+      throw new Error(
+        `Browserless failed with status ${response.status}: ${html.slice(
+          0,
+          200
+        )}`
+      );
+    }
+
+    if (!html || html.trim().length < 50) {
+      throw new Error("Browserless returned empty HTML.");
+    }
+
+    const visibleText = stripHtmlToText(html);
+    const title = extractTitle(html);
+
+    const renderedLooksBlocked = detectBlocked({
+      html: "",
+      text: visibleText,
+      title,
+      statusCode: response.status,
+    });
+
+    if (renderedLooksBlocked) {
+      throw new Error("Browserless render still appears blocked.");
+    }
+
+    return {
+      html,
+      status_code: response.status || 200,
+      final_url: finalUrl,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -839,7 +1148,7 @@ async function discoverSitemapEntries({
       }
     }
   } catch {
-    // robots.txt is optional.
+    // robots.txt is optional. In this version, robots.txt is only used to find sitemaps.
   }
 
   const pageEntries = new Map<string, any>();
@@ -1076,6 +1385,11 @@ function scoreUrlImportance({
     reasons.push("scan start");
   }
 
+  if (source === "start_variant") {
+    score += 880;
+    reasons.push("cleaner start URL variant");
+  }
+
   if (source === "homepage_link") {
     score += 180;
     reasons.push("linked from starting page");
@@ -1180,16 +1494,6 @@ function scoreUrlImportance({
     score,
     reasons,
   };
-}
-
-function sortQueueByImportance(queue: Array<any>) {
-  queue.sort((a, b) => {
-    if (b.importance_score !== a.importance_score) {
-      return b.importance_score - a.importance_score;
-    }
-
-    return a.url.length - b.url.length;
-  });
 }
 
 function detectTopicDossierPrefix(pathname: string, pathPrefix: string) {
@@ -1407,6 +1711,7 @@ function extractPageFromHtml({
   origin,
   inSitemap,
   fetchError,
+  fetchErrorClass,
   fetchedByBrowser,
   importanceScore,
   importanceReasons,
@@ -1419,6 +1724,7 @@ function extractPageFromHtml({
   origin: string;
   inSitemap: boolean;
   fetchError: string;
+  fetchErrorClass: string;
   fetchedByBrowser: boolean;
   importanceScore: number;
   importanceReasons: string[];
@@ -1459,6 +1765,7 @@ function extractPageFromHtml({
     source,
     status_code: statusCode,
     fetch_error: fetchError,
+    fetch_error_class: fetchErrorClass || "",
 
     title,
     meta_description: metaDescription,
@@ -1495,6 +1802,7 @@ function extractPageFromHtml({
     client_rendering_suspected:
       !isScannerBlocked && wordCount < 100 && scriptCount >= 15,
 
+    template: makeUrlTemplate(url),
     extracted_at: new Date().toISOString(),
   };
 }
@@ -1512,32 +1820,55 @@ function detectBlocked({
 }) {
   if ([403, 429, 503].includes(Number(statusCode || 0))) return true;
 
-  const haystack = `${title || ""} ${text || ""} ${html || ""}`
+  const visibleHaystack = `${title || ""} ${text || ""}`
     .toLowerCase()
     .slice(0, 6000);
 
-  const blockedPhrases = [
+  const challengePhrases = [
     "just a moment",
     "checking your browser",
     "enable javascript",
-    "cloudflare",
-    "access denied",
-    "rate limit",
-    "too many requests",
-    "captcha",
     "verify you are human",
+    "captcha",
+    "access denied",
     "are you a robot",
-    "bot detection",
+    "too many requests",
+    "rate limit",
+    "request blocked",
+  ];
+
+  if (challengePhrases.some((phrase) => visibleHaystack.includes(phrase))) {
+    return true;
+  }
+
+  const vendorWords = [
+    "cloudflare",
     "datadome",
     "akamai",
     "perimeterx",
     "imperva",
     "sucuri",
-    "request blocked",
-    "temporarily unavailable",
   ];
 
-  return blockedPhrases.some((phrase) => haystack.includes(phrase));
+  const vendorChallengePhrases = [
+    "just a moment",
+    "checking your browser",
+    "verify you are human",
+    "captcha",
+    "access denied",
+    "are you a robot",
+    "bot detection",
+  ];
+
+  const hasVendorWord = vendorWords.some((word) =>
+    visibleHaystack.includes(word)
+  );
+
+  const hasVendorChallenge = vendorChallengePhrases.some((phrase) =>
+    visibleHaystack.includes(phrase)
+  );
+
+  return hasVendorWord && hasVendorChallenge;
 }
 
 function stripHtmlToText(html: string) {
@@ -1829,35 +2160,49 @@ function isProbablyAsset(pathname: string) {
 }
 
 function isUtilityUrl(pathname: string) {
-  const value = String(pathname || "").toLowerCase();
+  const path = String(pathname || "").toLowerCase();
 
-  const blockedParts = [
-    "/wp-admin",
-    "/wp-json",
-    "/cart",
-    "/checkout",
-    "/login",
-    "/logout",
-    "/account",
-    "/my-account",
-    "/privacy",
-    "/terms",
-    "/cookie",
-    "/cookies",
-    "/legal",
-    "/cgu",
-    "/search",
-    "/tag/",
-    "/author/",
-    "/feed",
-    "/preview",
-    "/staging",
-    "/test",
-    "/backup",
-  ];
+  const segments = path
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => segment.trim());
 
-  if (blockedParts.some((part) => value.includes(part))) return true;
-  if (/\/home-\d+/.test(value)) return true;
+  if (segments.length === 0) return false;
+
+  const first = segments[0] || "";
+
+  if (first === "wp-admin" || first === "wp-json") return true;
+
+  const blockedWholeSegments = new Set([
+    "cart",
+    "checkout",
+    "login",
+    "logout",
+    "account",
+    "my-account",
+    "privacy",
+    "terms",
+    "cookie",
+    "cookies",
+    "legal",
+    "cgu",
+    "search",
+    "tag",
+    "author",
+    "feed",
+    "preview",
+    "staging",
+    "test",
+    "backup",
+  ]);
+
+  if (segments.some((segment) => blockedWholeSegments.has(segment))) {
+    return true;
+  }
+
+  if (segments.some((segment) => /^home-\d+$/.test(segment))) {
+    return true;
+  }
 
   return false;
 }
@@ -1924,6 +2269,65 @@ function isInsidePathPrefix(value: string, prefix: string) {
   } catch {
     return false;
   }
+}
+
+function buildStartUrlCandidates(startUrl: string) {
+  const output = new Set<string>();
+  const cleanedStart = cleanUrl(startUrl);
+
+  if (cleanedStart) output.add(cleanedStart);
+
+  try {
+    const parsed = new URL(startUrl);
+    const originalPath = parsed.pathname;
+
+    if (/\/index\.html?$/i.test(originalPath)) {
+      parsed.pathname = originalPath.replace(/\/index\.html?$/i, "/");
+      output.add(cleanUrl(parsed.toString()));
+    }
+
+    if (!originalPath.endsWith("/") && !/\.[a-z0-9]+$/i.test(originalPath)) {
+      parsed.pathname = `${originalPath}/`;
+      output.add(cleanUrl(parsed.toString()));
+    }
+
+    if (originalPath === "/" || originalPath === "") {
+      output.add(cleanUrl(parsed.origin + "/"));
+    }
+  } catch {
+    // Ignore invalid variants.
+  }
+
+  return [...output].filter(Boolean).slice(0, 3);
+}
+
+function makeUrlTemplate(url: string) {
+  try {
+    const parsed = new URL(url);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+
+    const templated = segments.map((segment, index) => {
+      if (index < 2) return segment;
+
+      if (isDynamicUrlSegment(segment)) return "*";
+
+      return segment;
+    });
+
+    return `/${templated.join("/")}`;
+  } catch {
+    return "";
+  }
+}
+
+function isDynamicUrlSegment(segment: string) {
+  const value = String(segment || "");
+
+  if (/^\d+$/.test(value)) return true;
+  if (/^[0-9a-f]{8,}-[0-9a-f-]{8,}$/i.test(value)) return true;
+  if (value.length > 45) return true;
+
+  return false;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -2300,8 +2704,7 @@ function runScreamingFrogLiteAudit({
           difficulty: "easy",
           page,
           title: "Improve social sharing metadata",
-          explanation:
-            "This page may not have social sharing tags.",
+          explanation: "This page may not have social sharing tags.",
           recommendation:
             "Add Open Graph title, description, and image fields in the CMS or SEO plugin.",
         })
@@ -2389,7 +2792,12 @@ function runScreamingFrogLiteAudit({
     }
   }
 
-  const duplicateTitleGroups = findDuplicateTitles(readablePages);
+  const duplicateTitleGroups = findDuplicateTitles(indexablePages);
+  const duplicateMetaDescriptionGroups = findDuplicateFieldGroups(
+    indexablePages,
+    "meta_description"
+  );
+  const duplicateH1Groups = findDuplicateFieldGroups(indexablePages, "h1");
 
   for (const group of duplicateTitleGroups) {
     rawFindings.push({
@@ -2411,7 +2819,96 @@ function runScreamingFrogLiteAudit({
       affected_pages: group.pages,
       page_url: group.pages[0],
       current_value: group.title,
-      confidence_score: 90,
+      fingerprint: fnv1a(`duplicate_title|${group.title}`),
+      confidence_score: 95,
+      source: "screaming_frog_lite",
+      requires_approval: true,
+      requires_developer: false,
+      can_auto_fix: false,
+    });
+  }
+
+  for (const group of duplicateMetaDescriptionGroups) {
+    rawFindings.push({
+      rule: "duplicate_meta_description",
+      category: "duplicate_content",
+      customer_category: "Search appearance",
+      priority: "low",
+      difficulty: "easy",
+      issue_title: "Review duplicate search descriptions",
+      title: "Review duplicate search descriptions",
+      plain_english_explanation:
+        "Multiple pages use the same search description, which can make search results less helpful.",
+      why_it_matters:
+        "Unique descriptions help each important page explain its own value in search results.",
+      recommendation:
+        "Rewrite the descriptions so each affected page has a unique, helpful summary.",
+      recommended_value:
+        "Give each affected page a unique description based on the page topic.",
+      affected_pages: group.pages,
+      page_url: group.pages[0],
+      current_value: group.value,
+      fingerprint: fnv1a(`duplicate_meta_description|${group.value}`),
+      confidence_score: 95,
+      source: "screaming_frog_lite",
+      requires_approval: true,
+      requires_developer: false,
+      can_auto_fix: false,
+    });
+  }
+
+  for (const group of duplicateH1Groups) {
+    rawFindings.push({
+      rule: "duplicate_h1",
+      category: "thin_content",
+      customer_category: "Page content",
+      priority: "low",
+      difficulty: "easy",
+      issue_title: "Review duplicate main headings",
+      title: "Review duplicate main headings",
+      plain_english_explanation:
+        "Multiple pages use the same main heading, which can make pages feel repetitive or unclear.",
+      why_it_matters:
+        "Unique headings help visitors and search engines understand what each page is about.",
+      recommendation:
+        "Update the main heading on each affected page so it clearly matches that page topic.",
+      recommended_value:
+        "Give each affected page a unique H1 based on its specific topic.",
+      affected_pages: group.pages,
+      page_url: group.pages[0],
+      current_value: group.value,
+      fingerprint: fnv1a(`duplicate_h1|${group.value}`),
+      confidence_score: 95,
+      source: "screaming_frog_lite",
+      requires_approval: true,
+      requires_developer: false,
+      can_auto_fix: false,
+    });
+  }
+
+  const orphanPages = findOrphanSitemapPages(pages);
+
+  if (orphanPages.length > 0) {
+    rawFindings.push({
+      rule: "orphan_page",
+      category: "internal_link",
+      customer_category: "Internal links",
+      priority: "low",
+      difficulty: "easy",
+      issue_title: "Pages not linked from your website",
+      title: "Pages not linked from your website",
+      plain_english_explanation:
+        "Some pages were found in the sitemap but were not linked from the pages the scanner checked.",
+      why_it_matters:
+        "Important pages should be linked from your website so visitors and search engines can discover them naturally.",
+      recommendation:
+        "Add internal links to important orphan pages from relevant service pages, menus, footer links, or related content.",
+      recommended_value:
+        "Link to important sitemap pages from relevant pages on your website.",
+      affected_pages: orphanPages.map((page) => page.url),
+      page_url: orphanPages[0]?.url || startUrl,
+      fingerprint: fnv1a("orphan_page|sitemap"),
+      confidence_score: 95,
       source: "screaming_frog_lite",
       requires_approval: true,
       requires_developer: false,
@@ -2463,6 +2960,9 @@ function runScreamingFrogLiteAudit({
         "heavy_pages",
         "client_rendering",
         "duplicate_titles",
+        "duplicate_meta_descriptions",
+        "duplicate_h1_headings",
+        "orphan_sitemap_pages",
       ],
     },
   };
@@ -2520,7 +3020,8 @@ function makeFinding({
     current_value,
     page_url: page.url,
     affected_pages: [page.url],
-    confidence_score: 90,
+    fingerprint: fnv1a(`${rule}|${cleanUrl(page.url)}`),
+    confidence_score: getFindingConfidence(rule),
     source: "screaming_frog_lite",
     requires_approval: difficulty !== "developer",
     requires_developer: difficulty === "developer",
@@ -2534,26 +3035,84 @@ function makeFinding({
       h1: page.h1,
       importance_score: page.importance_score,
       importance_reasons: page.importance_reasons,
+      fetch_error_class: page.fetch_error_class,
     },
   };
 }
 
+function getFindingConfidence(rule: string) {
+  const deterministicRules = [
+    "broken_page",
+    "missing_title",
+    "long_title",
+    "short_title",
+    "missing_meta_description",
+    "long_meta_description",
+    "missing_h1",
+    "multiple_h1",
+    "missing_canonical",
+    "noindex",
+    "missing_viewport",
+    "missing_schema",
+    "missing_open_graph",
+    "image_alt_text",
+    "redirect",
+    "duplicate_title",
+    "duplicate_meta_description",
+    "duplicate_h1",
+    "orphan_page",
+  ];
+
+  const heuristicRules = [
+    "thin_content",
+    "heavy_page",
+    "client_rendering",
+    "scanner_blocked_start_page",
+    "internal_pages_crawl_limited",
+  ];
+
+  if (deterministicRules.includes(rule)) return 95;
+  if (heuristicRules.includes(rule)) return 80;
+
+  return 85;
+}
+
 function groupFindings(findings: any[]) {
   const groups = new Map<string, any>();
+  const templateCounts = buildTemplateCounts(findings);
 
   for (const finding of findings) {
-    const key = `${finding.rule || finding.category}:${finding.issue_title}`;
+    const rule = finding.rule || finding.category || "unknown";
+    const title = finding.issue_title || finding.title || "Review this item";
+    const key = `${rule}:${title}`;
 
     if (!groups.has(key)) {
+      const {
+        details,
+        current_value,
+        recommended_value,
+        page_url,
+        affected_pages,
+        ...safeFinding
+      } = finding;
+
       groups.set(key, {
-        ...finding,
+        ...safeFinding,
+        rule,
+        issue_title: title,
+        title,
         type: "site_level",
         affected_pages: [],
         affected_count: 0,
+        samples: [],
+        fingerprint: fnv1a(`${rule}|${title}`),
+        template: "",
+        template_reach: 0,
       });
     }
 
     const group = groups.get(key);
+
     const pages = Array.isArray(finding.affected_pages)
       ? finding.affected_pages
       : finding.page_url
@@ -2563,11 +3122,53 @@ function groupFindings(findings: any[]) {
     group.affected_pages = unique([...group.affected_pages, ...pages]);
     group.affected_count = group.affected_pages.length;
     group.page_url = group.affected_pages[0] || finding.page_url || "/";
+
+    const sampleUrl = finding.page_url || pages[0] || "";
+
+    if (sampleUrl && group.samples.length < 3) {
+      group.samples.push({
+        url: sampleUrl,
+        current_value: finding.current_value || "",
+      });
+    }
+
+    const template = sampleUrl ? makeUrlTemplate(sampleUrl) : "";
+
+    if (template && !group.template) {
+      group.template = template;
+      group.template_reach = templateCounts.get(template) || 1;
+    }
   }
 
-  return [...groups.values()].sort(
-    (a, b) => priorityWeight(b.priority) - priorityWeight(a.priority)
-  );
+  return [...groups.values()].sort((a, b) => {
+    const priorityDiff = priorityWeight(b.priority) - priorityWeight(a.priority);
+
+    if (priorityDiff !== 0) return priorityDiff;
+
+    return Number(b.template_reach || 0) - Number(a.template_reach || 0);
+  });
+}
+
+function buildTemplateCounts(findings: any[]) {
+  const counts = new Map<string, number>();
+
+  for (const finding of findings) {
+    const pages = Array.isArray(finding.affected_pages)
+      ? finding.affected_pages
+      : finding.page_url
+        ? [finding.page_url]
+        : [];
+
+    for (const page of pages) {
+      const template = makeUrlTemplate(page);
+
+      if (!template) continue;
+
+      counts.set(template, (counts.get(template) || 0) + 1);
+    }
+  }
+
+  return counts;
 }
 
 function findDuplicateTitles(pages: any[]) {
@@ -2590,6 +3191,46 @@ function findDuplicateTitles(pages: any[]) {
     }));
 }
 
+function findDuplicateFieldGroups(pages: any[], fieldName: string) {
+  const map = new Map<string, string[]>();
+
+  for (const page of pages) {
+    const value = String(page[fieldName] || "").trim().toLowerCase();
+
+    if (!value) continue;
+
+    if (!map.has(value)) map.set(value, []);
+    map.get(value)?.push(page.url);
+  }
+
+  return [...map.entries()]
+    .filter(([, urls]) => urls.length > 1)
+    .map(([value, urls]) => ({
+      value,
+      pages: urls,
+    }));
+}
+
+function findOrphanSitemapPages(pages: any[]) {
+  const linkedUrls = new Set<string>();
+
+  for (const page of pages) {
+    for (const link of page.internal_links || []) {
+      linkedUrls.add(cleanUrl(link));
+    }
+  }
+
+  return pages.filter((page) => {
+    if (!page.in_sitemap) return false;
+    if (!isReadablePage(page)) return false;
+    if (page.source === "start" || page.source === "start_variant") {
+      return false;
+    }
+
+    return !linkedUrls.has(cleanUrl(page.url));
+  });
+}
+
 /* -------------------------------------------------------------------------- */
 /* Scan coverage + follow-up findings                                          */
 /* -------------------------------------------------------------------------- */
@@ -2609,7 +3250,10 @@ function buildCoverageFindings({
 
   const blockedPages = pages.filter((page) => page.is_scanner_blocked);
   const internalBlockedPages = pages.filter(
-    (page) => page.source !== "start" && page.is_scanner_blocked
+    (page) =>
+      page.source !== "start" &&
+      page.source !== "start_variant" &&
+      page.is_scanner_blocked
   );
   const readablePages = pages.filter(isReadablePage);
 
@@ -2633,7 +3277,10 @@ function buildCoverageFindings({
       page_url: startPage?.url || startUrl,
       affected_pages: blockedPages.map((page) => page.url),
       affected_count: blockedPages.length,
-      confidence_score: 90,
+      fingerprint: fnv1a(
+        `scanner_blocked_start_page|${cleanUrl(startPage?.url || startUrl)}`
+      ),
+      confidence_score: 80,
       source: "crawler",
       requires_approval: false,
       requires_developer: true,
@@ -2663,7 +3310,8 @@ function buildCoverageFindings({
       page_url: internalBlockedPages[0]?.url || startUrl,
       affected_pages: internalBlockedPages.map((page) => page.url),
       affected_count: internalBlockedPages.length,
-      confidence_score: 85,
+      fingerprint: fnv1a("internal_pages_crawl_limited|site"),
+      confidence_score: 80,
       source: "crawler",
       requires_approval: true,
       requires_developer: false,
@@ -2707,7 +3355,8 @@ function buildFollowupScanFindings({
       page_url: startUrl,
       affected_pages: followups.map((item) => item.url),
       affected_count: followups.length,
-      confidence_score: 80,
+      fingerprint: fnv1a("related_subdomains_found|site"),
+      confidence_score: 85,
       source: "crawler",
       requires_approval: true,
       requires_developer: false,
@@ -2728,7 +3377,10 @@ function buildFriendlyWarnings({
   const warnings: string[] = [];
   const readablePages = pages.filter(isReadablePage);
   const internalBlockedPages = pages.filter(
-    (page) => page.source !== "start" && page.is_scanner_blocked
+    (page) =>
+      page.source !== "start" &&
+      page.source !== "start_variant" &&
+      page.is_scanner_blocked
   );
 
   if (internalBlockedPages.length > 0 && readablePages.length > 0) {
@@ -2783,6 +3435,7 @@ async function analyzeCompetitors({
         importanceScore: 0,
         importanceReasons: ["manual competitor URL"],
         allowBrowserRender: true,
+        allowBlockedBrowserRender: true,
         browserRenderBudget,
         deadlineAt,
       });
@@ -2798,6 +3451,7 @@ async function analyzeCompetitors({
         schema_count: page.schema_count,
         internal_link_count: page.internal_link_count,
         is_scanner_blocked: page.is_scanner_blocked,
+        fetch_error_class: page.fetch_error_class,
       });
     } catch (error) {
       competitorResults.push({
@@ -2834,6 +3488,8 @@ async function analyzeCompetitors({
       current_value: `Your average: ${ownAverageWordCount} words`,
       recommended_value: `Competitor average: ${competitorAverageWordCount} words`,
       affected_pages: ownPages.slice(0, 5).map((page) => page.url),
+      fingerprint: fnv1a("competitor_word_count|site"),
+      confidence_score: 70,
       source: "competitor_comparison",
     });
   }
@@ -2877,11 +3533,18 @@ function calculateHealthScore({
 
   const readablePages = pages.filter(isReadablePage);
   const blockedInternalPages = pages.filter(
-    (page) => page.source !== "start" && page.is_scanner_blocked
+    (page) =>
+      page.source !== "start" &&
+      page.source !== "start_variant" &&
+      page.is_scanner_blocked
   );
 
   if (!startPage || startPage.is_scanner_blocked || readablePages.length === 0) {
-    return 45;
+    return 35;
+  }
+
+  if (pages.length <= 2 && readablePages.length <= 1) {
+    return 40;
   }
 
   let score = 94;
@@ -2890,13 +3553,22 @@ function calculateHealthScore({
     if (finding.rule === "internal_pages_crawl_limited") continue;
     if (finding.rule === "related_subdomains_found") continue;
 
-    if (finding.priority === "high" || finding.priority === "critical") {
-      score -= 5;
-    } else if (finding.priority === "medium") {
-      score -= 3;
-    } else {
-      score -= 1;
-    }
+    const baseDeduction =
+      finding.priority === "critical"
+        ? 8
+        : finding.priority === "high"
+          ? 5
+          : finding.priority === "medium"
+            ? 3
+            : 1;
+
+    const affectedCount = Number(finding.affected_count || 1);
+    const impactMultiplier = Math.min(
+      1.5,
+      0.5 + affectedCount / Math.max(1, readablePages.length)
+    );
+
+    score -= baseDeduction * impactMultiplier;
   }
 
   const blockedRatio =
@@ -2966,7 +3638,7 @@ function buildScanSummary({
     positives,
     plain_english_summary:
       `The scan reviewed ${pages.length} pages and found ${findings.length} grouped recommendations. ` +
-      `Screaming Frog Lite checks were completed for titles, descriptions, headings, canonicals, indexability, mobile setup, schema, image alt text, performance signals, redirects, and duplicate titles.`,
+      `Screaming Frog Lite checks were completed for titles, descriptions, headings, canonicals, indexability, mobile setup, schema, image alt text, performance signals, redirects, duplicate titles, duplicate descriptions, duplicate H1 headings, and orphan sitemap pages.`,
     coverage: {
       pages_found: crawlResult.pages_found,
       pages_crawled: pages.length,
@@ -2982,8 +3654,9 @@ function buildScanSummary({
       skipped_junk_urls_count: crawlResult.skipped_junk_urls_count || 0,
       skipped_outside_prefix_count:
         crawlResult.skipped_outside_prefix_count || 0,
+      start_url_candidates: crawlResult.start_url_candidates || [],
       explanation:
-        "The scanner prioritized sitemap and internal URLs that looked like important landing pages, and deprioritized listing, archive, news, tag, search, encoded, and very deep pages where appropriate.",
+        "The scanner prioritized sitemap and internal URLs that looked like important landing pages, tried cleaner start URL variants, bypassed robots.txt crawl restrictions, and deprioritized listing, archive, news, tag, search, encoded, and very deep pages where appropriate.",
     },
   };
 }
@@ -3005,4 +3678,26 @@ function priorityWeight(priority: string) {
   };
 
   return map[String(priority || "medium")] || 2;
+}
+
+function fnv1a(value: string) {
+  let hash = 0x811c9dc5;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+
+  return `fp_${(hash >>> 0).toString(16)}`;
+}
+
+function countFetchErrorClasses(pages: any[]) {
+  const counts: Record<string, number> = {};
+
+  for (const page of pages) {
+    const key = page.fetch_error_class || "none";
+    counts[key] = (counts[key] || 0) + 1;
+  }
+
+  return counts;
 }

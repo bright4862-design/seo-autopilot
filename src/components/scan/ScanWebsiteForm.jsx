@@ -1,6 +1,15 @@
 import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertCircle, CheckCircle2, Loader2, Search } from "lucide-react";
+import {
+  AlertCircle,
+  Bug,
+  CheckCircle2,
+  Copy,
+  Loader2,
+  RefreshCw,
+  Search,
+  Trash2,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -80,6 +89,10 @@ export default function ScanWebsiteForm({
   const [activeStep, setActiveStep] = useState("");
   const [error, setError] = useState("");
 
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [debugData, setDebugData] = useState(() => readScanDebugData());
+  const [debugCopied, setDebugCopied] = useState(false);
+
   const isLoading = submitting || saving;
 
   const cleanedKeywords = useMemo(() => {
@@ -91,6 +104,28 @@ export default function ScanWebsiteForm({
   }, [competitorUrlsText]);
 
   const selectedCms = CMS_OPTIONS.find((item) => item.value === cmsPlatform);
+
+  function refreshDebugData() {
+    setDebugData(readScanDebugData());
+  }
+
+  function clearDebugScanData() {
+    clearAllDashboardScanData();
+    refreshDebugData();
+  }
+
+  async function copyDebugData() {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(debugData, null, 2));
+      setDebugCopied(true);
+
+      window.setTimeout(() => {
+        setDebugCopied(false);
+      }, 1500);
+    } catch (copyError) {
+      console.warn("Could not copy debug data.", copyError);
+    }
+  }
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -112,6 +147,7 @@ export default function ScanWebsiteForm({
 
     setSubmitting(true);
     clearPreviousDashboardScan(normalizedUrl);
+    refreshDebugData();
 
     try {
       const safeScanBudget = getSafeScanBudget(scanMode);
@@ -263,6 +299,7 @@ export default function ScanWebsiteForm({
       });
 
       saveScanForDashboard(mergedFinal);
+      refreshDebugData();
 
       navigate("/dashboard?scan=complete");
     } catch (err) {
@@ -271,6 +308,7 @@ export default function ScanWebsiteForm({
         err?.message ||
           "The website scan failed. Try Quick mode or check the backend function logs."
       );
+      refreshDebugData();
     } finally {
       setActiveStep("");
       setSubmitting(false);
@@ -283,21 +321,77 @@ export default function ScanWebsiteForm({
         onSubmit={handleSubmit}
         className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"
       >
-        <div className="flex items-start gap-3">
-          <div className="rounded-2xl bg-blue-50 p-3 text-blue-700">
-            <Search className="h-6 w-6" />
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="rounded-2xl bg-blue-50 p-3 text-blue-700">
+              <Search className="h-6 w-6" />
+            </div>
+
+            <div>
+              <h2 className="text-2xl font-bold text-slate-950">
+                Scan Website
+              </h2>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+                Scan your website, run technical checks, then let Gemini
+                simplify the results into a clear prioritized dashboard.
+              </p>
+            </div>
           </div>
 
-          <div>
-            <h2 className="text-2xl font-bold text-slate-950">
-              Scan Website
-            </h2>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-              Scan your website, run technical checks, then let Gemini simplify
-              the results into a clear prioritized dashboard.
-            </p>
-          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              refreshDebugData();
+              setDebugOpen((value) => !value);
+            }}
+            className="shrink-0"
+          >
+            <Bug className="mr-2 h-4 w-4" />
+            {debugOpen ? "Hide debug" : "Show debug"}
+          </Button>
         </div>
+
+        {debugOpen ? (
+          <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3 className="font-bold text-slate-950">Scan debug</h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  Use this to confirm which scan is saved and what the scanner
+                  returned.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="outline" onClick={refreshDebugData}>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Refresh
+                </Button>
+
+                <Button type="button" variant="outline" onClick={copyDebugData}>
+                  <Copy className="mr-2 h-4 w-4" />
+                  {debugCopied ? "Copied" : "Copy JSON"}
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={clearDebugScanData}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Clear scans
+                </Button>
+              </div>
+            </div>
+
+            <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-slate-950">
+              <pre className="max-h-[420px] overflow-auto p-4 text-xs leading-5 text-slate-100">
+                {JSON.stringify(debugData, null, 2)}
+              </pre>
+            </div>
+          </div>
+        ) : null}
 
         <div className="mt-6 grid gap-5">
           <div>
@@ -709,6 +803,13 @@ function mergeScanAndAiReview({
       ai_provider: aiData?.provider || aiData?.debug?.provider || "",
       cms_platform: cmsPlatform,
       requested_path_prefix: requestedPathPrefix || "",
+      scanner_version: scanData?.version || "",
+      scanner_pages_crawled: scanData?.pages_crawled || 0,
+      scanner_max_pages_effective: scanData?.max_pages_effective || 0,
+      scanner_readable_pages:
+        scanData?.technical_audit_summary?.readable_pages_checked || 0,
+      scanner_blocked_pages:
+        scanData?.technical_audit_summary?.scanner_blocked_pages || 0,
     },
 
     raw: {
@@ -735,15 +836,36 @@ function clearPreviousDashboardScan(activeUrl) {
       window.localStorage.removeItem(key);
     });
 
-    window.localStorage.setItem(ACTIVE_SCAN_URL_KEY, activeUrl);
-    window.localStorage.setItem(
-      ACTIVE_SCAN_STARTED_AT_KEY,
-      new Date().toISOString()
-    );
+    if (activeUrl) {
+      window.localStorage.setItem(ACTIVE_SCAN_URL_KEY, activeUrl);
+      window.localStorage.setItem(
+        ACTIVE_SCAN_STARTED_AT_KEY,
+        new Date().toISOString()
+      );
+    }
 
     window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
-  } catch (error) {
-    console.warn("Could not clear previous dashboard scan.", error);
+  } catch (storageError) {
+    console.warn("Could not clear previous dashboard scan.", storageError);
+  }
+}
+
+function clearAllDashboardScanData() {
+  try {
+    [
+      DASHBOARD_LAST_SCAN_KEY,
+      LEGACY_LAST_SCAN_KEY,
+      DASHBOARD_HISTORY_KEY,
+      LEGACY_HISTORY_KEY,
+      ACTIVE_SCAN_URL_KEY,
+      ACTIVE_SCAN_STARTED_AT_KEY,
+    ].forEach((key) => {
+      window.localStorage.removeItem(key);
+    });
+
+    window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
+  } catch (storageError) {
+    console.warn("Could not clear scan data.", storageError);
   }
 }
 
@@ -777,8 +899,8 @@ function saveScanForDashboard(scanRecord) {
     window.localStorage.removeItem(ACTIVE_SCAN_STARTED_AT_KEY);
 
     window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
-  } catch (error) {
-    console.warn("Could not save scan for dashboard.", error);
+  } catch (storageError) {
+    console.warn("Could not save scan for dashboard.", storageError);
   }
 }
 
@@ -857,6 +979,44 @@ function normalizeScanRecordForStorage(record) {
 
     debug: record.debug || {},
     raw: record.raw || record,
+  };
+}
+
+function readScanDebugData() {
+  if (typeof window === "undefined") {
+    return {
+      raw: {},
+      parsed: {},
+    };
+  }
+
+  const keys = [
+    DASHBOARD_LAST_SCAN_KEY,
+    LEGACY_LAST_SCAN_KEY,
+    DASHBOARD_HISTORY_KEY,
+    LEGACY_HISTORY_KEY,
+    ACTIVE_SCAN_URL_KEY,
+    ACTIVE_SCAN_STARTED_AT_KEY,
+  ];
+
+  const raw = {};
+  const parsed = {};
+
+  keys.forEach((key) => {
+    const value = window.localStorage.getItem(key);
+    raw[key] = value;
+
+    try {
+      parsed[key] = value ? JSON.parse(value) : null;
+    } catch {
+      parsed[key] = value;
+    }
+  });
+
+  return {
+    read_at: new Date().toISOString(),
+    raw,
+    parsed,
   };
 }
 

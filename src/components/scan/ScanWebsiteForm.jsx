@@ -42,7 +42,7 @@ const SCAN_MODES = [
   {
     value: "advanced",
     label: "Advanced",
-    description: "Larger scan. Up to 100 pages.",
+    description: "Larger scan. Up to 150 pages.",
   },
 ];
 
@@ -700,10 +700,12 @@ export default function ScanWebsiteForm({
 function getSafeScanBudget(scanMode) {
   if (scanMode === "advanced") {
     return {
-      max_pages: 100,
+      max_pages: 150,
       max_competitors: 0,
       max_browser_render_attempts: 1,
-      crawl_timeout_ms: 65000,
+      // Must match the backend advanced budget (MODE_LIMITS.advanced.crawl_timeout_ms)
+      // or the crawl gets starved before it reaches 150 pages.
+      crawl_timeout_ms: 90000,
     };
   }
 

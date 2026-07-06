@@ -25,7 +25,7 @@ export default function App() {
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<ResetPassword />} />
 
-        {/* App pages */}
+        {/* Main app */}
         <Route element={<DashboardLayout />}>
           <Route path="/dashboard" element={<FixList />} />
           <Route path="/onboarding" element={<Onboarding />} />
@@ -33,13 +33,13 @@ export default function App() {
           <Route path="/billing" element={<Billing />} />
         </Route>
 
-        {/* Redirect old or unknown routes */}
+        {/* Old route redirects */}
         <Route path="/fix-list" element={<Navigate to="/dashboard" replace />} />
         <Route path="/scan" element={<Navigate to="/onboarding" replace />} />
-        <Route
-          path="/seo-connections"
-          element={<Navigate to="/reports" replace />}
-        />
+        <Route path="/crawl-status" element={<Navigate to="/onboarding" replace />} />
+        <Route path="/seo-connections" element={<Navigate to="/reports" replace />} />
+
+        {/* Fallback */}
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </BrowserRouter>

@@ -20,10 +20,8 @@ const AI_REVIEW_FUNCTION = "aiReviewScan";
 
 const DASHBOARD_LAST_SCAN_KEY = "seo_autopilot:last_scan";
 const DASHBOARD_HISTORY_KEY = "seo_autopilot:scan_history";
-
 const LEGACY_LAST_SCAN_KEY = "SEO_AUTOPILOT_LAST_SCAN";
 const LEGACY_HISTORY_KEY = "SEO_AUTOPILOT_SCAN_HISTORY";
-
 const ACTIVE_SCAN_URL_KEY = "seo_autopilot:active_scan_url";
 const ACTIVE_SCAN_STARTED_AT_KEY = "seo_autopilot:active_scan_started_at";
 const SCAN_DEBUG_KEY = "seo_autopilot:scan_debug";
@@ -32,12 +30,12 @@ const SCAN_MODES = [
   {
     value: "quick",
     label: "Quick",
-    description: "Fast first scan. Up to 25 pages.",
+    description: "Fast first scan. Up to 40 pages.",
   },
   {
     value: "deep",
     label: "Deep",
-    description: "Best default scan. Up to 60 pages.",
+    description: "Best default scan. Up to 85 pages.",
   },
   {
     value: "advanced",
@@ -66,44 +64,34 @@ export default function ScanWebsiteForm({
   const navigate = useNavigate();
 
   const [websiteUrl, setWebsiteUrl] = useState(project?.website_url || "");
-  const [businessName, setBusinessName] = useState(
-    project?.business_name || ""
-  );
-
+  const [businessName, setBusinessName] = useState(project?.business_name || "");
   const [cmsPlatform, setCmsPlatform] = useState(
     normalizeCmsValue(project?.cms_platform || "custom")
   );
-
   const [keywordsText, setKeywordsText] = useState(
     Array.isArray(project?.important_keywords)
       ? project.important_keywords.join("\n")
       : ""
   );
-
   const [competitorUrlsText, setCompetitorUrlsText] = useState(
     getInitialCompetitorUrls(project, competitors).join("\n")
   );
-
   const [scanMode, setScanMode] = useState(project?.scan_mode || "quick");
 
   const [submitting, setSubmitting] = useState(false);
   const [activeStep, setActiveStep] = useState("");
   const [error, setError] = useState("");
-
   const [debugOpen, setDebugOpen] = useState(false);
   const [debugData, setDebugData] = useState(() => readScanDebugData());
   const [debugCopied, setDebugCopied] = useState(false);
 
   const isLoading = submitting || saving;
 
-  const cleanedKeywords = useMemo(() => {
-    return splitLines(keywordsText);
-  }, [keywordsText]);
-
-  const cleanedCompetitorUrls = useMemo(() => {
-    return splitLines(competitorUrlsText);
-  }, [competitorUrlsText]);
-
+  const cleanedKeywords = useMemo(() => splitLines(keywordsText), [keywordsText]);
+  const cleanedCompetitorUrls = useMemo(
+    () => splitLines(competitorUrlsText),
+    [competitorUrlsText]
+  );
   const selectedCms = CMS_OPTIONS.find((item) => item.value === cmsPlatform);
 
   function refreshDebugData() {
@@ -119,10 +107,7 @@ export default function ScanWebsiteForm({
     try {
       await navigator.clipboard.writeText(JSON.stringify(debugData, null, 2));
       setDebugCopied(true);
-
-      window.setTimeout(() => {
-        setDebugCopied(false);
-      }, 1500);
+      window.setTimeout(() => setDebugCopied(false), 1500);
     } catch (copyError) {
       console.warn("Could not copy debug data.", copyError);
     }
@@ -130,24 +115,26 @@ export default function ScanWebsiteForm({
 
   async function handleSubmit(event) {
     event.preventDefault();
-
     setError("");
 
     const normalizedUrl = normalizeWebsiteUrl(websiteUrl);
     const requestedPathPrefix = getRequestedPathPrefix(normalizedUrl);
+    const trimmedBusinessName = businessName.trim();
+    const cmsName = selectedCms?.label || "Custom / Not sure";
 
     if (!normalizedUrl) {
       setError("Enter a valid website URL.");
       return;
     }
 
-    if (!businessName.trim()) {
+    if (!trimmedBusinessName) {
       setError("Enter the business or website name.");
       return;
     }
 
     let scanData = null;
     let aiData = null;
+    let mergedFinal = null;
 
     setSubmitting(true);
     clearPreviousDashboardScan(normalizedUrl);
@@ -156,13 +143,12 @@ export default function ScanWebsiteForm({
       status: "running",
       stage: "scan_started",
       website_url: normalizedUrl,
-      business_name: businessName.trim(),
+      business_name: trimmedBusinessName,
       cms_platform: cmsPlatform,
-      cms_name: selectedCms?.label || "Custom / Not sure",
+      cms_name: cmsName,
       scan_mode: scanMode,
       requested_path_prefix: requestedPathPrefix,
     });
-
     refreshDebugData();
 
     try {
@@ -176,24 +162,19 @@ export default function ScanWebsiteForm({
         crawl_path_prefix: requestedPathPrefix,
         strict_path_prefix: true,
         clear_previous_scan: true,
-
-        business_name: businessName.trim(),
+        business_name: trimmedBusinessName,
         cms_platform: cmsPlatform,
-        cms_name: selectedCms?.label || "Custom / Not sure",
+        cms_name: cmsName,
         important_keywords: cleanedKeywords,
         competitor_urls: cleanedCompetitorUrls,
         scan_mode: scanMode,
-
         enable_screaming_frog_lite: true,
         force_internal_crawl: true,
         respect_robots_txt: false,
-
         max_pages: safeScanBudget.max_pages,
         max_competitors: safeScanBudget.max_competitors,
-        max_browser_render_attempts:
-          safeScanBudget.max_browser_render_attempts,
+        max_browser_render_attempts: safeScanBudget.max_browser_render_attempts,
         crawl_timeout_ms: safeScanBudget.crawl_timeout_ms,
-
         source: "scan_website_page",
         requested_at: new Date().toISOString(),
       };
@@ -202,35 +183,39 @@ export default function ScanWebsiteForm({
         status: "running",
         stage: "scanner_request_started",
         website_url: normalizedUrl,
-        business_name: businessName.trim(),
+        business_name: trimmedBusinessName,
         cms_platform: cmsPlatform,
-        cms_name: selectedCms?.label || "Custom / Not sure",
+        cms_name: cmsName,
         scan_mode: scanMode,
         requested_path_prefix: requestedPathPrefix,
-        payload: scanPayload,
+        payload_summary: {
+          max_pages: scanPayload.max_pages,
+          max_competitors: scanPayload.max_competitors,
+          max_browser_render_attempts: scanPayload.max_browser_render_attempts,
+          crawl_timeout_ms: scanPayload.crawl_timeout_ms,
+          keyword_count: scanPayload.important_keywords.length,
+          competitor_url_count: scanPayload.competitor_urls.length,
+        },
       });
-
       refreshDebugData();
 
       const scannerResponse = await callBase44Function(
         ADVANCED_SCANNER_FUNCTION,
         scanPayload
       );
-
       scanData = normalizeFunctionResponse(scannerResponse);
 
       writeScanDebug({
         status: "running",
         stage: "scanner_complete",
         website_url: normalizedUrl,
-        business_name: businessName.trim(),
+        business_name: trimmedBusinessName,
         cms_platform: cmsPlatform,
-        cms_name: selectedCms?.label || "Custom / Not sure",
+        cms_name: cmsName,
         scan_mode: scanMode,
         requested_path_prefix: requestedPathPrefix,
-        scanner: scanData,
+        scanner: slimScannerData(scanData),
       });
-
       refreshDebugData();
 
       if (scanData?.success === false || scanData?.error) {
@@ -240,118 +225,49 @@ export default function ScanWebsiteForm({
       setActiveStep("Asking Gemini to simplify and prioritize the Fix List");
 
       try {
-        const aiPayload = {
-          business_name: businessName.trim(),
-          website_url: normalizedUrl,
-          cms_platform: cmsPlatform,
-          cms_name: selectedCms?.label || "Custom / Not sure",
-          important_keywords: cleanedKeywords,
-          scan_mode: scanMode,
-
-          ai_review_goal:
-            "Simplify the crawler and Screaming Frog Lite results into a clear customer-friendly Fix List. Prioritize fixes by business impact, explain what to do first, and tailor implementation steps to the selected CMS.",
-
-          cms_instruction: buildCmsInstruction(cmsPlatform),
-
-          output_requirements: {
-            keep_language_simple: true,
-            avoid_technical_jargon: true,
-            group_similar_issues: true,
-            create_top_priorities: true,
-            create_cms_specific_steps: true,
-            include_developer_flags_only_when_needed: true,
-            include_joomla_when_selected: true,
-            explain_scan_focus: true,
-            mention_followup_scans_only_if_useful: true,
-          },
-
-          crawled_pages: firstArray([
-            scanData.crawled_pages,
-            scanData.pages,
-            scanData.scanned_pages,
-            scanData.crawl_pages,
-          ]),
-
-          raw_fixes: firstArray([
-            scanData.raw_fixes,
-            scanData.grouped_findings,
-            scanData.raw_findings,
-            scanData.fixes,
-            scanData.findings,
-            scanData.recommendations,
-            scanData.issues,
-          ]),
-
-          competitor_results: firstArray([
-            scanData.competitor_results,
-            scanData.discovered_competitors,
-            scanData.competitor_opportunities,
-          ]),
-
-          discovered_competitors: firstArray([
-            scanData.discovered_competitors,
-            scanData.created_competitors,
-          ]),
-
-          recommended_followup_scans: firstArray([
-            scanData.recommended_followup_scans,
-          ]),
-
-          important_page_patterns: firstArray([
-            scanData.important_page_patterns,
-          ]),
-
-          deprioritized_page_patterns: firstArray([
-            scanData.deprioritized_page_patterns,
-          ]),
-
-          sitemap_priority_summary: scanData.sitemap_priority_summary || {},
-
-          crawl_scope: scanData.crawl_scope || {},
-          crawl_warnings: firstArray([scanData.crawl_warnings]),
-          technical_audit_summary: scanData.technical_audit_summary || {},
-          scan_summary: scanData.scan_summary || scanData.site_summary || {},
-        };
+        const aiPayload = buildAiReviewPayload({
+          scanData,
+          businessName: trimmedBusinessName,
+          websiteUrl: normalizedUrl,
+          cmsPlatform,
+          cmsName,
+          cleanedKeywords,
+          scanMode,
+        });
 
         writeScanDebug({
           status: "running",
           stage: "ai_review_request_started",
           website_url: normalizedUrl,
-          business_name: businessName.trim(),
+          business_name: trimmedBusinessName,
           cms_platform: cmsPlatform,
-          cms_name: selectedCms?.label || "Custom / Not sure",
+          cms_name: cmsName,
           scan_mode: scanMode,
           requested_path_prefix: requestedPathPrefix,
-          scanner: scanData,
+          scanner: slimScannerData(scanData),
           ai_payload_summary: {
             crawled_pages_count: aiPayload.crawled_pages.length,
             raw_fixes_count: aiPayload.raw_fixes.length,
             competitor_results_count: aiPayload.competitor_results.length,
           },
         });
-
         refreshDebugData();
 
-        const aiResponse = await callBase44Function(
-          AI_REVIEW_FUNCTION,
-          aiPayload
-        );
-
+        const aiResponse = await callBase44Function(AI_REVIEW_FUNCTION, aiPayload);
         aiData = normalizeFunctionResponse(aiResponse);
 
         writeScanDebug({
           status: "running",
           stage: "ai_review_complete",
           website_url: normalizedUrl,
-          business_name: businessName.trim(),
+          business_name: trimmedBusinessName,
           cms_platform: cmsPlatform,
-          cms_name: selectedCms?.label || "Custom / Not sure",
+          cms_name: cmsName,
           scan_mode: scanMode,
           requested_path_prefix: requestedPathPrefix,
-          scanner: scanData,
-          ai_review: aiData,
+          scanner: slimScannerData(scanData),
+          ai_review: slimAiData(aiData),
         });
-
         refreshDebugData();
 
         if (aiData?.success === false && aiData?.error) {
@@ -359,33 +275,31 @@ export default function ScanWebsiteForm({
         }
       } catch (aiError) {
         console.warn("AI review was skipped or failed.", aiError);
-
         writeScanDebug({
           status: "running",
           stage: "ai_review_failed_but_continuing",
           website_url: normalizedUrl,
-          business_name: businessName.trim(),
+          business_name: trimmedBusinessName,
           cms_platform: cmsPlatform,
-          cms_name: selectedCms?.label || "Custom / Not sure",
+          cms_name: cmsName,
           scan_mode: scanMode,
           requested_path_prefix: requestedPathPrefix,
-          scanner: scanData,
-          ai_review: aiData,
+          scanner: slimScannerData(scanData),
+          ai_review: slimAiData(aiData),
           ai_error: aiError?.message || String(aiError),
         });
-
         refreshDebugData();
       }
 
       setActiveStep("Saving dashboard summary");
 
-      const mergedFinal = mergeScanAndAiReview({
+      mergedFinal = mergeScanAndAiReview({
         scanData,
         aiData,
         websiteUrl: normalizedUrl,
-        businessName: businessName.trim(),
+        businessName: trimmedBusinessName,
         cmsPlatform,
-        cmsName: selectedCms?.label || "Custom / Not sure",
+        cmsName,
         scanMode,
         requestedPathPrefix,
       });
@@ -396,36 +310,34 @@ export default function ScanWebsiteForm({
         status: "saved",
         stage: "dashboard_saved",
         website_url: normalizedUrl,
-        business_name: businessName.trim(),
+        business_name: trimmedBusinessName,
         cms_platform: cmsPlatform,
-        cms_name: selectedCms?.label || "Custom / Not sure",
+        cms_name: cmsName,
         scan_mode: scanMode,
         requested_path_prefix: requestedPathPrefix,
-        scanner: scanData,
-        ai_review: aiData,
-        final_record: mergedFinal,
+        scanner: slimScannerData(scanData),
+        ai_review: slimAiData(aiData),
+        final_record: slimScanRecord(mergedFinal),
       });
-
       refreshDebugData();
 
       navigate("/dashboard?scan=complete");
     } catch (err) {
       console.error("Website scan failed.", err);
-
       writeScanDebug({
         status: "failed",
         stage: "scan_failed",
         website_url: normalizedUrl,
-        business_name: businessName.trim(),
+        business_name: trimmedBusinessName,
         cms_platform: cmsPlatform,
-        cms_name: selectedCms?.label || "Custom / Not sure",
+        cms_name: cmsName,
         scan_mode: scanMode,
         requested_path_prefix: requestedPathPrefix,
         error: err?.message || String(err),
-        scanner: scanData,
-        ai_review: aiData,
+        scanner: slimScannerData(scanData),
+        ai_review: slimAiData(aiData),
+        final_record: slimScanRecord(mergedFinal),
       });
-
       refreshDebugData();
 
       setError(
@@ -451,12 +363,9 @@ export default function ScanWebsiteForm({
             </div>
 
             <div>
-              <h2 className="text-2xl font-bold text-slate-950">
-                Scan Website
-              </h2>
+              <h2 className="text-2xl font-bold text-slate-950">Scan Website</h2>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-                Scan your website, run technical checks, then let Gemini
-                simplify the results into a clear prioritized dashboard.
+                Scan your website, run technical checks, then let Gemini simplify the results into a clear prioritized dashboard.
               </p>
             </div>
           </div>
@@ -481,30 +390,20 @@ export default function ScanWebsiteForm({
               <div>
                 <h3 className="font-bold text-slate-950">Scan debug</h3>
                 <p className="mt-1 text-xs text-slate-500">
-                  This is also saved to the dashboard debug panel.
+                  This now stores a compact debug summary so the final dashboard save does not fail.
                 </p>
               </div>
 
               <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={refreshDebugData}
-                >
+                <Button type="button" variant="outline" onClick={refreshDebugData}>
                   <RefreshCw className="mr-2 h-4 w-4" />
                   Refresh
                 </Button>
-
                 <Button type="button" variant="outline" onClick={copyDebugData}>
                   <Copy className="mr-2 h-4 w-4" />
                   {debugCopied ? "Copied" : "Copy JSON"}
                 </Button>
-
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={clearDebugScanData}
-                >
+                <Button type="button" variant="outline" onClick={clearDebugScanData}>
                   <Trash2 className="mr-2 h-4 w-4" />
                   Clear scans
                 </Button>
@@ -521,9 +420,7 @@ export default function ScanWebsiteForm({
 
         <div className="mt-6 grid gap-5">
           <div>
-            <label className="text-sm font-medium text-slate-700">
-              Website URL
-            </label>
+            <label className="text-sm font-medium text-slate-700">Website URL</label>
             <Input
               value={websiteUrl}
               onChange={(event) => setWebsiteUrl(event.target.value)}
@@ -534,9 +431,7 @@ export default function ScanWebsiteForm({
           </div>
 
           <div>
-            <label className="text-sm font-medium text-slate-700">
-              Business or website name
-            </label>
+            <label className="text-sm font-medium text-slate-700">Business or website name</label>
             <Input
               value={businessName}
               onChange={(event) => setBusinessName(event.target.value)}
@@ -547,10 +442,7 @@ export default function ScanWebsiteForm({
           </div>
 
           <div>
-            <label className="text-sm font-medium text-slate-700">
-              What CMS does this website use?
-            </label>
-
+            <label className="text-sm font-medium text-slate-700">What CMS does this website use?</label>
             <select
               value={cmsPlatform}
               onChange={(event) => setCmsPlatform(event.target.value)}
@@ -563,17 +455,13 @@ export default function ScanWebsiteForm({
                 </option>
               ))}
             </select>
-
             <p className="mt-1 text-xs text-slate-500">
-              Gemini will tailor the action plan to this CMS. Joomla is
-              included.
+              Gemini will tailor the action plan to this CMS. Joomla is included.
             </p>
           </div>
 
           <div>
-            <label className="text-sm font-medium text-slate-700">
-              Important keywords
-            </label>
+            <label className="text-sm font-medium text-slate-700">Important keywords</label>
             <textarea
               value={keywordsText}
               onChange={(event) => setKeywordsText(event.target.value)}
@@ -582,42 +470,29 @@ export default function ScanWebsiteForm({
               rows={4}
               className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50"
             />
-
-            <p className="mt-1 text-xs text-slate-500">
-              Optional. One keyword per line.
-            </p>
+            <p className="mt-1 text-xs text-slate-500">Optional. One keyword per line.</p>
           </div>
 
           <div>
-            <label className="text-sm font-medium text-slate-700">
-              Competitor URLs
-            </label>
+            <label className="text-sm font-medium text-slate-700">Competitor URLs</label>
             <textarea
               value={competitorUrlsText}
               onChange={(event) => setCompetitorUrlsText(event.target.value)}
-              placeholder={
-                "https://www.competitor-one.com/\nhttps://www.competitor-two.com/"
-              }
+              placeholder={"https://www.competitor-one.com/\nhttps://www.competitor-two.com/"}
               disabled={isLoading}
               rows={4}
               className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50"
             />
-
             <p className="mt-1 text-xs text-slate-500">
-              Optional. Competitor checks are currently disabled for reliability
-              but kept here for later.
+              Optional. Competitor checks are currently disabled for reliability but kept here for later.
             </p>
           </div>
 
           <div>
-            <label className="text-sm font-medium text-slate-700">
-              Scan depth
-            </label>
-
+            <label className="text-sm font-medium text-slate-700">Scan depth</label>
             <div className="mt-2 grid gap-3 md:grid-cols-3">
               {SCAN_MODES.map((mode) => {
                 const active = scanMode === mode.value;
-
                 return (
                   <button
                     key={mode.value}
@@ -636,13 +511,9 @@ export default function ScanWebsiteForm({
                       ) : (
                         <div className="h-4 w-4 rounded-full border border-slate-300" />
                       )}
-
                       <span className="font-semibold">{mode.label}</span>
                     </div>
-
-                    <p className="mt-2 text-xs leading-5 text-slate-500">
-                      {mode.description}
-                    </p>
+                    <p className="mt-2 text-xs leading-5 text-slate-500">{mode.description}</p>
                   </button>
                 );
               })}
@@ -682,10 +553,8 @@ export default function ScanWebsiteForm({
               </>
             )}
           </Button>
-
           <p className="text-xs text-slate-500">
-            Start with Quick. Use Deep or Advanced only after Quick returns
-            successfully.
+            Start with Quick. Use Deep or Advanced only after Quick returns successfully.
           </p>
         </div>
       </form>
@@ -693,9 +562,63 @@ export default function ScanWebsiteForm({
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Safe scan budget                                                            */
-/* -------------------------------------------------------------------------- */
+function buildAiReviewPayload({
+  scanData,
+  businessName,
+  websiteUrl,
+  cmsPlatform,
+  cmsName,
+  cleanedKeywords,
+  scanMode,
+}) {
+  return {
+    business_name: businessName,
+    website_url: websiteUrl,
+    cms_platform: cmsPlatform,
+    cms_name: cmsName,
+    important_keywords: cleanedKeywords,
+    scan_mode: scanMode,
+    ai_review_goal:
+      "Simplify the crawler and Screaming Frog Lite results into a clear customer-friendly Fix List. Prioritize fixes by business impact, explain what to do first, and tailor implementation steps to the selected CMS.",
+    cms_instruction: buildCmsInstruction(cmsPlatform),
+    output_requirements: {
+      keep_language_simple: true,
+      avoid_technical_jargon: true,
+      group_similar_issues: true,
+      create_top_priorities: true,
+      create_cms_specific_steps: true,
+      include_developer_flags_only_when_needed: true,
+      include_joomla_when_selected: true,
+      explain_scan_focus: true,
+      mention_followup_scans_only_if_useful: true,
+    },
+    crawled_pages: firstArray([
+      scanData?.crawled_pages,
+      scanData?.pages,
+      scanData?.scanned_pages,
+      scanData?.crawl_pages,
+    ]).slice(0, 80),
+    raw_fixes: firstArray([
+      scanData?.raw_fixes,
+      scanData?.grouped_findings,
+      scanData?.raw_findings,
+      scanData?.fixes,
+      scanData?.findings,
+      scanData?.recommendations,
+      scanData?.issues,
+    ]).slice(0, 120),
+    competitor_results: [],
+    discovered_competitors: [],
+    recommended_followup_scans: firstArray([scanData?.recommended_followup_scans]),
+    important_page_patterns: firstArray([scanData?.important_page_patterns]),
+    deprioritized_page_patterns: firstArray([scanData?.deprioritized_page_patterns]),
+    sitemap_priority_summary: scanData?.sitemap_priority_summary || {},
+    crawl_scope: scanData?.crawl_scope || {},
+    crawl_warnings: firstArray([scanData?.crawl_warnings]),
+    technical_audit_summary: scanData?.technical_audit_summary || {},
+    scan_summary: scanData?.scan_summary || scanData?.site_summary || {},
+  };
+}
 
 function getSafeScanBudget(scanMode) {
   if (scanMode === "advanced") {
@@ -703,32 +626,26 @@ function getSafeScanBudget(scanMode) {
       max_pages: 150,
       max_competitors: 0,
       max_browser_render_attempts: 1,
-      // Must match the backend advanced budget (MODE_LIMITS.advanced.crawl_timeout_ms)
-      // or the crawl gets starved before it reaches 150 pages.
       crawl_timeout_ms: 90000,
     };
   }
 
   if (scanMode === "deep") {
     return {
-      max_pages: 60,
+      max_pages: 85,
       max_competitors: 0,
       max_browser_render_attempts: 1,
-      crawl_timeout_ms: 50000,
+      crawl_timeout_ms: 75000,
     };
   }
 
   return {
-    max_pages: 25,
+    max_pages: 40,
     max_competitors: 0,
     max_browser_render_attempts: 1,
-    crawl_timeout_ms: 30000,
+    crawl_timeout_ms: 45000,
   };
 }
-
-/* -------------------------------------------------------------------------- */
-/* Merge scanner + Gemini review                                               */
-/* -------------------------------------------------------------------------- */
 
 function mergeScanAndAiReview({
   scanData,
@@ -740,14 +657,6 @@ function mergeScanAndAiReview({
   scanMode,
   requestedPathPrefix,
 }) {
-  const aiFixes = firstArray([
-    aiData?.cleaned_fixes,
-    aiData?.raw_fixes,
-    aiData?.fixes,
-    aiData?.findings,
-    aiData?.recommendations,
-  ]);
-
   const scannerFixes = firstArray([
     scanData?.raw_fixes,
     scanData?.grouped_findings,
@@ -758,7 +667,17 @@ function mergeScanAndAiReview({
     scanData?.issues,
   ]);
 
-  const finalFixes = aiFixes.length > 0 ? aiFixes : scannerFixes;
+  const aiFixes = firstArray([
+    aiData?.cleaned_fixes,
+    aiData?.recommendations,
+    aiData?.fixes,
+    aiData?.findings,
+    aiData?.raw_fixes,
+  ]);
+
+  const finalFixes = simplifyAndPrioritizeFixes(
+    (aiFixes.length > 0 ? aiFixes : scannerFixes).slice(0, 120)
+  );
 
   const pages = firstArray([
     scanData?.crawled_pages,
@@ -767,16 +686,11 @@ function mergeScanAndAiReview({
     scanData?.crawl_pages,
     aiData?.crawled_pages,
     aiData?.pages,
-  ]);
+  ]).slice(0, 120);
 
-  const scannerReadablePages =
-    scanData?.technical_audit_summary?.readable_pages_checked || 0;
-
-  const scannerBlockedPages =
-    scanData?.technical_audit_summary?.scanner_blocked_pages || 0;
-
-  const scannerSaysBlocked =
-    scannerReadablePages === 0 && scannerBlockedPages > 0;
+  const scannerReadablePages = scanData?.technical_audit_summary?.readable_pages_checked || 0;
+  const scannerBlockedPages = scanData?.technical_audit_summary?.scanner_blocked_pages || 0;
+  const scannerSaysBlocked = scannerReadablePages === 0 && scannerBlockedPages > 0;
 
   const healthScore = scannerSaysBlocked
     ? getFirstNumber([scanData?.health_score, scanData?.seo_score, 35])
@@ -784,10 +698,10 @@ function mergeScanAndAiReview({
         aiData?.health_score,
         aiData?.seo_score,
         aiData?.website_health_report?.score,
+        aiData?.website_health_report?.health_score,
         aiData?.scan_summary?.health_score,
         scanData?.health_score,
         scanData?.seo_score,
-        scanData?.website_health_report?.score,
         scanData?.scan_summary?.health_score,
       ]);
 
@@ -810,25 +724,13 @@ function mergeScanAndAiReview({
     aiData?.recommended_actions,
   ]);
 
-  const recommendedFollowups = firstArray([
-    scanData?.recommended_followup_scans,
-    aiData?.recommended_followup_scans,
-  ]);
-
-  const importantPatterns = firstArray([
-    scanData?.important_page_patterns,
-    aiData?.important_page_patterns,
-  ]);
-
-  const deprioritizedPatterns = firstArray([
-    scanData?.deprioritized_page_patterns,
-    aiData?.deprioritized_page_patterns,
-  ]);
-
   const simpleSummary =
     aiData?.customer_summary ||
     aiData?.plain_english_summary ||
     aiData?.summary ||
+    aiData?.website_health_report?.overall_explanation ||
+    scanData?.scan_summary?.summary ||
+    scanData?.site_summary?.summary ||
     buildFallbackSummary({
       healthScore,
       pagesCrawled,
@@ -836,115 +738,68 @@ function mergeScanAndAiReview({
       cmsName,
     });
 
-  const cmsActionPlan =
-    aiData?.cms_action_plan ||
-    aiData?.cms_plan ||
-    aiData?.implementation_plan ||
-    buildCmsActionPlan(cmsPlatform, cmsName, finalFixes);
-
-  const prioritizedFixes = simplifyAndPrioritizeFixes(finalFixes);
-
   return {
     id: `scan_${Date.now()}`,
     created_at: new Date().toISOString(),
-
     website_url: websiteUrl,
     website_key: normalizeWebsiteKey(websiteUrl),
     requested_path_prefix: requestedPathPrefix || "",
-
     business_name: businessName,
     cms_platform: cmsPlatform,
     cms_name: cmsName,
     scan_mode: scanMode,
-
     health_score: healthScore || 0,
     seo_score: healthScore || 0,
     pages_crawled: pagesCrawled || pages.length || 0,
     pages_found: pagesFound || pages.length || 0,
-
     customer_summary: simpleSummary,
     simple_summary: simpleSummary,
-    cms_action_plan: cmsActionPlan,
-
+    cms_action_plan:
+      aiData?.cms_action_plan ||
+      aiData?.cms_plan ||
+      aiData?.implementation_plan ||
+      buildCmsActionPlan(cmsPlatform, cmsName, finalFixes),
     top_recommended_actions:
-      topActions.length > 0 ? topActions : prioritizedFixes.slice(0, 5),
-
-    recommendations: prioritizedFixes,
-    fixes: prioritizedFixes,
-    findings: prioritizedFixes,
-
-    crawled_pages: pages,
-    pages,
-    scanned_pages: pages,
-
-    scan_summary:
-      aiData?.scan_summary ||
-      scanData?.scan_summary ||
-      scanData?.site_summary ||
-      {},
-
-    site_summary:
-      scanData?.site_summary ||
-      aiData?.site_summary ||
-      scanData?.scan_summary ||
-      {},
-
-    technical_audit_summary: scanData?.technical_audit_summary || {},
-
-    website_health_report:
+      topActions.length > 0 ? topActions.slice(0, 5).map(slimAction) : finalFixes.slice(0, 5).map(fixToAction),
+    recommendations: finalFixes.map(slimFix),
+    fixes: finalFixes.map(slimFix),
+    findings: finalFixes.map(slimFix),
+    crawled_pages: pages.map(slimPage),
+    pages: pages.map(slimPage),
+    scanned_pages: pages.map(slimPage),
+    scan_summary: slimScanSummary(aiData?.scan_summary || scanData?.scan_summary || scanData?.site_summary || {}, healthScore, pagesCrawled, finalFixes),
+    site_summary: slimScanSummary(scanData?.site_summary || scanData?.scan_summary || {}, healthScore, pagesCrawled, finalFixes),
+    technical_audit_summary: slimTechnicalSummary(scanData?.technical_audit_summary || {}),
+    website_health_report: slimHealthReport(
       scannerSaysBlocked
         ? scanData?.website_health_report || scanData?.scan_summary || {}
-        : aiData?.website_health_report ||
-          scanData?.website_health_report ||
-          {},
-
-    positive_findings:
-      aiData?.positive_findings ||
-      scanData?.positive_findings ||
-      scanData?.site_summary?.positives ||
-      [],
-
+        : aiData?.website_health_report || scanData?.website_health_report || {}
+    ),
+    positive_findings: firstArray([
+      aiData?.positive_findings,
+      scanData?.positive_findings,
+      scanData?.site_summary?.positives,
+    ]).slice(0, 8).map(String),
     health_explanation: scannerSaysBlocked
       ? scanData?.health_explanation ||
         "The scanner could not read the page content, so the score is based on scan coverage rather than full SEO checks."
       : aiData?.health_explanation || scanData?.health_explanation || "",
-
     crawl_scope: scanData?.crawl_scope || {},
-    sitemap_priority_summary: scanData?.sitemap_priority_summary || {},
-    important_page_patterns: importantPatterns,
-    deprioritized_page_patterns: deprioritizedPatterns,
-    recommended_followup_scans: recommendedFollowups,
-
-    competitor_result:
-      scanData?.competitor_result ||
-      scanData?.competitor_results ||
-      scanData?.competitor_analysis ||
-      aiData?.competitor_result ||
-      aiData?.competitor_results ||
-      {},
-
-    competitor_results: firstArray([
-      scanData?.competitor_results,
-      aiData?.competitor_results,
-    ]),
-
-    competitor_opportunities: firstArray([
-      scanData?.competitor_opportunities,
-      aiData?.competitor_opportunities,
-    ]),
-
-    crawl_warnings: firstArray([
-      scanData?.crawl_warnings,
-      aiData?.crawl_warnings,
-    ]),
-
+    sitemap_priority_summary: slimSitemapSummary(scanData?.sitemap_priority_summary || {}),
+    important_page_patterns: firstArray([scanData?.important_page_patterns, aiData?.important_page_patterns]).slice(0, 20),
+    deprioritized_page_patterns: firstArray([scanData?.deprioritized_page_patterns, aiData?.deprioritized_page_patterns]).slice(0, 20),
+    recommended_followup_scans: firstArray([scanData?.recommended_followup_scans, aiData?.recommended_followup_scans]).slice(0, 10),
+    competitor_result: {},
+    competitor_results: [],
+    competitor_opportunities: [],
+    crawl_warnings: firstArray([scanData?.crawl_warnings, aiData?.crawl_warnings]).slice(0, 10),
     debug: {
       scanner_function: ADVANCED_SCANNER_FUNCTION,
       ai_function: AI_REVIEW_FUNCTION,
       screaming_frog_lite_enabled: true,
       scanner_success: scanData?.success !== false,
       ai_success: aiData?.success === true,
-      ai_provider: aiData?.provider || aiData?.debug?.provider || "",
+      ai_provider: aiData?.provider || aiData?.ai_provider || aiData?.debug?.provider || "",
       cms_platform: cmsPlatform,
       requested_path_prefix: requestedPathPrefix || "",
       scanner_version: scanData?.version || "",
@@ -954,39 +809,90 @@ function mergeScanAndAiReview({
       scanner_blocked_pages: scannerBlockedPages,
       scanner_says_blocked: scannerSaysBlocked,
       final_score_source: scannerSaysBlocked ? "scanner" : "ai_then_scanner",
+      saved_as_slim_record: true,
     },
-
     raw: {
-      scanner: scanData,
-      ai_review: aiData,
+      scanner: slimScannerData(scanData),
+      ai_review: slimAiData(aiData),
     },
   };
 }
 
-/* -------------------------------------------------------------------------- */
-/* Dashboard sync + debug                                                      */
-/* -------------------------------------------------------------------------- */
+function saveScanForDashboard(scanRecord) {
+  try {
+    const normalizedRecord = slimScanRecord(normalizeScanRecordForStorage(scanRecord));
+    const serialized = JSON.stringify(normalizedRecord);
+
+    [DASHBOARD_LAST_SCAN_KEY, LEGACY_LAST_SCAN_KEY].forEach((key) => {
+      window.localStorage.setItem(key, serialized);
+    });
+
+    [DASHBOARD_HISTORY_KEY, LEGACY_HISTORY_KEY].forEach((key) => {
+      const existingRaw = window.localStorage.getItem(key);
+      const existing = existingRaw ? JSON.parse(existingRaw) : [];
+      const history = Array.isArray(existing) ? existing : [];
+      const nextHistory = [
+        normalizedRecord,
+        ...history.filter((item) => item?.website_key !== normalizedRecord.website_key),
+      ].slice(0, 8).map(slimScanRecord);
+
+      window.localStorage.setItem(key, JSON.stringify(nextHistory));
+    });
+
+    window.localStorage.removeItem(ACTIVE_SCAN_URL_KEY);
+    window.localStorage.removeItem(ACTIVE_SCAN_STARTED_AT_KEY);
+    window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
+  } catch (storageError) {
+    console.error("Could not save slim scan for dashboard.", storageError);
+    throw new Error(
+      "Gemini finished, but the dashboard could not save the scan summary. Clear scans and try again."
+    );
+  }
+}
+
+function normalizeScanRecordForStorage(record) {
+  const fixes = getRecommendations(record).map(slimFix);
+  const pages = getPages(record).map(slimPage);
+  const healthScore = getHealthScore(record);
+
+  return {
+    ...record,
+    id: record?.id || `scan_${Date.now()}`,
+    created_at: record?.created_at || new Date().toISOString(),
+    website_url: record?.website_url || "",
+    website_key: normalizeWebsiteKey(record?.website_url || ""),
+    business_name: record?.business_name || "",
+    cms_platform: record?.cms_platform || "custom",
+    cms_name: record?.cms_name || "Custom / Not sure",
+    scan_mode: record?.scan_mode || "quick",
+    health_score: Number(healthScore || 0),
+    seo_score: Number(healthScore || 0),
+    pages_crawled: Number(record?.pages_crawled || pages.length || 0),
+    pages_found: Number(record?.pages_found || pages.length || 0),
+    customer_summary: record?.customer_summary || record?.simple_summary || "",
+    simple_summary: record?.simple_summary || record?.customer_summary || "",
+    recommendations: fixes,
+    fixes,
+    findings: fixes,
+    crawled_pages: pages,
+    pages,
+    scanned_pages: pages,
+  };
+}
 
 function clearPreviousDashboardScan(activeUrl) {
   try {
-    const keysToRemove = [
+    [
       DASHBOARD_LAST_SCAN_KEY,
       LEGACY_LAST_SCAN_KEY,
       DASHBOARD_HISTORY_KEY,
       LEGACY_HISTORY_KEY,
       SCAN_DEBUG_KEY,
-    ];
-
-    keysToRemove.forEach((key) => {
-      window.localStorage.removeItem(key);
-    });
+    ].forEach((key) => window.localStorage.removeItem(key));
 
     if (activeUrl) {
       window.localStorage.setItem(ACTIVE_SCAN_URL_KEY, activeUrl);
-      window.localStorage.setItem(
-        ACTIVE_SCAN_STARTED_AT_KEY,
-        new Date().toISOString()
-      );
+      window.localStorage.setItem(ACTIVE_SCAN_STARTED_AT_KEY, new Date().toISOString());
     }
 
     window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
@@ -1005,48 +911,11 @@ function clearAllDashboardScanData() {
       ACTIVE_SCAN_URL_KEY,
       ACTIVE_SCAN_STARTED_AT_KEY,
       SCAN_DEBUG_KEY,
-    ].forEach((key) => {
-      window.localStorage.removeItem(key);
-    });
+    ].forEach((key) => window.localStorage.removeItem(key));
 
     window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
   } catch (storageError) {
     console.warn("Could not clear scan data.", storageError);
-  }
-}
-
-function saveScanForDashboard(scanRecord) {
-  try {
-    const normalizedRecord = normalizeScanRecordForStorage(scanRecord);
-
-    const lastScanKeys = [DASHBOARD_LAST_SCAN_KEY, LEGACY_LAST_SCAN_KEY];
-    const historyKeys = [DASHBOARD_HISTORY_KEY, LEGACY_HISTORY_KEY];
-
-    lastScanKeys.forEach((key) => {
-      window.localStorage.setItem(key, JSON.stringify(normalizedRecord));
-    });
-
-    historyKeys.forEach((key) => {
-      const existingRaw = window.localStorage.getItem(key);
-      const existing = existingRaw ? JSON.parse(existingRaw) : [];
-      const history = Array.isArray(existing) ? existing : [];
-
-      const nextHistory = [
-        normalizedRecord,
-        ...history.filter(
-          (item) => item?.website_key !== normalizedRecord.website_key
-        ),
-      ].slice(0, 20);
-
-      window.localStorage.setItem(key, JSON.stringify(nextHistory));
-    });
-
-    window.localStorage.removeItem(ACTIVE_SCAN_URL_KEY);
-    window.localStorage.removeItem(ACTIVE_SCAN_STARTED_AT_KEY);
-
-    window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
-  } catch (storageError) {
-    console.warn("Could not save scan for dashboard.", storageError);
   }
 }
 
@@ -1055,102 +924,18 @@ function writeScanDebug(data) {
     window.localStorage.setItem(
       SCAN_DEBUG_KEY,
       JSON.stringify({
-        ...data,
+        ...slimDebugData(data),
         updated_at: new Date().toISOString(),
       })
     );
-
     window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
   } catch (storageError) {
-    console.warn("Could not write scan debug data.", storageError);
+    console.warn("Could not write compact scan debug data.", storageError);
   }
-}
-
-function normalizeScanRecordForStorage(record) {
-  const fixes = getRecommendations(record);
-  const pages = getPages(record);
-  const healthScore = getHealthScore(record);
-
-  return {
-    ...record,
-    id: record.id || `scan_${Date.now()}`,
-    created_at: record.created_at || new Date().toISOString(),
-
-    website_url: record.website_url || "",
-    website_key: normalizeWebsiteKey(record.website_url || ""),
-    requested_path_prefix: record.requested_path_prefix || "",
-
-    business_name: record.business_name || "",
-    cms_platform: record.cms_platform || "custom",
-    cms_name: record.cms_name || "Custom / Not sure",
-    scan_mode: record.scan_mode || "quick",
-
-    health_score: Number(healthScore || 0),
-    seo_score: Number(healthScore || 0),
-    pages_crawled: Number(record.pages_crawled || pages.length || 0),
-    pages_found: Number(record.pages_found || pages.length || 0),
-
-    customer_summary: record.customer_summary || record.simple_summary || "",
-    simple_summary: record.simple_summary || record.customer_summary || "",
-    cms_action_plan: record.cms_action_plan || "",
-
-    top_recommended_actions: Array.isArray(record.top_recommended_actions)
-      ? record.top_recommended_actions
-      : [],
-
-    recommendations: fixes,
-    fixes,
-    findings: fixes,
-
-    crawled_pages: pages,
-    pages,
-    scanned_pages: pages,
-
-    scan_summary: record.scan_summary || {},
-    site_summary: record.site_summary || {},
-    technical_audit_summary: record.technical_audit_summary || {},
-    website_health_report: record.website_health_report || {},
-
-    crawl_scope: record.crawl_scope || {},
-    sitemap_priority_summary: record.sitemap_priority_summary || {},
-    important_page_patterns: Array.isArray(record.important_page_patterns)
-      ? record.important_page_patterns
-      : [],
-    deprioritized_page_patterns: Array.isArray(
-      record.deprioritized_page_patterns
-    )
-      ? record.deprioritized_page_patterns
-      : [],
-    recommended_followup_scans: Array.isArray(
-      record.recommended_followup_scans
-    )
-      ? record.recommended_followup_scans
-      : [],
-
-    competitor_result: record.competitor_result || {},
-    competitor_results: Array.isArray(record.competitor_results)
-      ? record.competitor_results
-      : [],
-    competitor_opportunities: Array.isArray(record.competitor_opportunities)
-      ? record.competitor_opportunities
-      : [],
-
-    crawl_warnings: Array.isArray(record.crawl_warnings)
-      ? record.crawl_warnings
-      : [],
-
-    debug: record.debug || {},
-    raw: record.raw || record,
-  };
 }
 
 function readScanDebugData() {
-  if (typeof window === "undefined") {
-    return {
-      raw: {},
-      parsed: {},
-    };
-  }
+  if (typeof window === "undefined") return { raw: {}, parsed: {} };
 
   const keys = [
     DASHBOARD_LAST_SCAN_KEY,
@@ -1168,7 +953,6 @@ function readScanDebugData() {
   keys.forEach((key) => {
     const value = window.localStorage.getItem(key);
     raw[key] = value;
-
     try {
       parsed[key] = value ? JSON.parse(value) : null;
     } catch {
@@ -1176,16 +960,8 @@ function readScanDebugData() {
     }
   });
 
-  return {
-    read_at: new Date().toISOString(),
-    raw,
-    parsed,
-  };
+  return { read_at: new Date().toISOString(), raw, parsed };
 }
-
-/* -------------------------------------------------------------------------- */
-/* CMS instructions                                                            */
-/* -------------------------------------------------------------------------- */
 
 function buildCmsInstruction(cmsPlatform) {
   const instructions = {
@@ -1214,9 +990,7 @@ function buildCmsInstruction(cmsPlatform) {
 
 function buildCmsActionPlan(cmsPlatform, cmsName, fixes) {
   const priorityCount = Array.isArray(fixes) ? fixes.length : 0;
-
   const intro = `This website is marked as ${cmsName}. Start with the highest-impact SEO fixes first, then handle the easier cleanup tasks.`;
-
   const cmsSteps = {
     wordpress: [
       "Open the page in WordPress.",
@@ -1274,100 +1048,36 @@ function buildCmsActionPlan(cmsPlatform, cmsName, fixes) {
   };
 
   const steps = cmsSteps[cmsPlatform] || cmsSteps.custom;
-
   return `${intro} There are ${priorityCount} recommendations ready for review.\n\n${steps
     .map((step, index) => `${index + 1}. ${step}`)
     .join("\n")}`;
 }
-
-/* -------------------------------------------------------------------------- */
-/* Priority simplification                                                     */
-/* -------------------------------------------------------------------------- */
 
 function simplifyAndPrioritizeFixes(fixes) {
   if (!Array.isArray(fixes)) return [];
 
   return fixes
     .map((fix) => {
-      const priority = normalizePriority(fix.priority);
-
-      return {
+      const priority = normalizePriority(fix?.priority);
+      return slimFix({
         ...fix,
         priority,
         customer_category:
-          fix.customer_category ||
-          friendlyCustomerCategory(fix.category) ||
+          fix?.customer_category ||
+          friendlyCustomerCategory(fix?.category) ||
           "Website improvement",
         simple_next_step:
-          fix.simple_next_step ||
-          fix.next_step ||
-          fix.ai_recommendation ||
-          fix.recommended_value ||
-          fix.recommendation ||
-          fix.suggested_fix ||
+          fix?.simple_next_step ||
+          fix?.next_step ||
+          fix?.ai_recommendation ||
+          fix?.recommended_value ||
+          fix?.recommendation ||
+          fix?.suggested_fix ||
           "Review this item and update the affected page.",
-      };
+      });
     })
     .sort((a, b) => priorityWeight(b.priority) - priorityWeight(a.priority));
 }
-
-function normalizePriority(priority) {
-  const value = String(priority || "").toLowerCase();
-
-  if (["critical", "high", "medium", "low"].includes(value)) return value;
-
-  return "medium";
-}
-
-function priorityWeight(priority) {
-  const map = {
-    critical: 4,
-    high: 3,
-    medium: 2,
-    low: 1,
-  };
-
-  return map[priority] || 2;
-}
-
-function friendlyCustomerCategory(category) {
-  const map = {
-    meta_title: "Search appearance",
-    meta_description: "Search appearance",
-    canonical: "Website setup",
-    schema: "Trust signals",
-    thin_content: "Page content",
-    duplicate_content: "Search appearance",
-    "404_error": "Broken page",
-    redirect: "Page redirect",
-    internal_link: "Internal links",
-    performance: "Website performance",
-    web_dev: "Website setup",
-    scanner_blocked: "Scan coverage",
-    js_rendering: "Website setup",
-  };
-
-  return map[category] || "Website improvement";
-}
-
-function buildFallbackSummary({
-  healthScore,
-  pagesCrawled,
-  finalFixes,
-  cmsName,
-}) {
-  const count = Array.isArray(finalFixes) ? finalFixes.length : 0;
-
-  return `The scan reviewed ${
-    pagesCrawled || 0
-  } pages and found ${count} recommended improvements. The current health score is ${
-    healthScore || "not available"
-  }. The next steps are tailored for ${cmsName}.`;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Base44 function caller                                                      */
-/* -------------------------------------------------------------------------- */
 
 async function callBase44Function(functionName, payload) {
   const timeoutMs =
@@ -1409,32 +1119,301 @@ async function callBase44FunctionWithoutTimeout(functionName, payload) {
 
 function normalizeFunctionResponse(response) {
   if (!response) return {};
-
   if (response.data?.data) return response.data.data;
   if (response.data?.result) return response.data.result;
   if (response.data) return response.data;
   if (response.result?.data) return response.result.data;
   if (response.result) return response.result;
   if (response.body) return response.body;
-
   return response;
 }
 
-/* -------------------------------------------------------------------------- */
-/* Generic helpers                                                             */
-/* -------------------------------------------------------------------------- */
+function slimDebugData(data = {}) {
+  return {
+    ...data,
+    scanner: data.scanner ? slimScannerData(data.scanner) : data.scanner,
+    ai_review: data.ai_review ? slimAiData(data.ai_review) : data.ai_review,
+    final_record: data.final_record ? slimScanRecord(data.final_record) : data.final_record,
+  };
+}
+
+function slimScannerData(scanner = {}) {
+  if (!scanner) return null;
+  return {
+    success: scanner.success,
+    version: scanner.version,
+    website_url: scanner.website_url,
+    scan_mode: scanner.scan_mode,
+    max_pages_requested: scanner.max_pages_requested,
+    max_pages_effective: scanner.max_pages_effective,
+    pages_found: scanner.pages_found,
+    pages_crawled: scanner.pages_crawled,
+    queued_remaining: scanner.queued_remaining,
+    health_score: scanner.health_score,
+    seo_score: scanner.seo_score,
+    scan_summary: slimScanSummary(scanner.scan_summary || scanner.site_summary || {}, scanner.health_score, scanner.pages_crawled, getRecommendations(scanner)),
+    technical_audit_summary: slimTechnicalSummary(scanner.technical_audit_summary || {}),
+    screaming_frog_lite: scanner.screaming_frog_lite || null,
+    browser_rendering: scanner.browser_rendering || null,
+    crawl_scope: scanner.crawl_scope || {},
+    crawl_warnings: firstArray([scanner.crawl_warnings]).slice(0, 10),
+    recommendations_count: getRecommendations(scanner).length,
+    pages_preview: getPages(scanner).slice(0, 10).map(slimPage),
+    recommendations_preview: getRecommendations(scanner).slice(0, 12).map(slimFix),
+    debug: {
+      ssrf_hardened: scanner.debug?.ssrf_hardened,
+      skipped_urls: scanner.debug?.skipped_urls,
+      sitemap_entries_found: scanner.debug?.sitemap_entries_found,
+    },
+  };
+}
+
+function slimAiData(ai = {}) {
+  if (!ai) return null;
+  const recommendations = getRecommendations(ai);
+  return {
+    success: ai.success,
+    ai_provider: ai.ai_provider || ai.provider || ai.debug?.provider || "",
+    ai_review_warning: ai.ai_review_warning || "",
+    health_score: ai.health_score || ai.seo_score || ai.website_health_report?.health_score || ai.website_health_report?.score || 0,
+    customer_summary: ai.customer_summary || ai.plain_english_summary || ai.summary || ai.website_health_report?.overall_explanation || "",
+    website_health_report: slimHealthReport(ai.website_health_report || {}),
+    top_recommended_actions: firstArray([ai.top_recommended_actions, ai.recommended_actions]).slice(0, 5).map(slimAction),
+    recommendations_count: recommendations.length,
+    recommendations_preview: recommendations.slice(0, 12).map(slimFix),
+    ai_rewrites_applied: ai.ai_rewrites_applied || 0,
+  };
+}
+
+function slimScanRecord(record = {}) {
+  if (!record) return null;
+  return {
+    id: record.id || `scan_${Date.now()}`,
+    created_at: record.created_at || new Date().toISOString(),
+    website_url: record.website_url || "",
+    website_key: record.website_key || normalizeWebsiteKey(record.website_url || ""),
+    requested_path_prefix: record.requested_path_prefix || "",
+    business_name: record.business_name || "",
+    cms_platform: record.cms_platform || "custom",
+    cms_name: record.cms_name || "Custom / Not sure",
+    scan_mode: record.scan_mode || "quick",
+    health_score: Number(record.health_score || record.seo_score || 0),
+    seo_score: Number(record.seo_score || record.health_score || 0),
+    pages_crawled: Number(record.pages_crawled || getPages(record).length || 0),
+    pages_found: Number(record.pages_found || getPages(record).length || 0),
+    customer_summary: record.customer_summary || record.simple_summary || "",
+    simple_summary: record.simple_summary || record.customer_summary || "",
+    cms_action_plan: record.cms_action_plan || "",
+    top_recommended_actions: firstArray([record.top_recommended_actions]).slice(0, 5).map(slimAction),
+    recommendations: getRecommendations(record).slice(0, 120).map(slimFix),
+    fixes: getRecommendations(record).slice(0, 120).map(slimFix),
+    findings: getRecommendations(record).slice(0, 120).map(slimFix),
+    crawled_pages: getPages(record).slice(0, 120).map(slimPage),
+    pages: getPages(record).slice(0, 120).map(slimPage),
+    scanned_pages: getPages(record).slice(0, 120).map(slimPage),
+    scan_summary: slimScanSummary(record.scan_summary || {}, record.health_score, record.pages_crawled, getRecommendations(record)),
+    site_summary: slimScanSummary(record.site_summary || record.scan_summary || {}, record.health_score, record.pages_crawled, getRecommendations(record)),
+    technical_audit_summary: slimTechnicalSummary(record.technical_audit_summary || {}),
+    website_health_report: slimHealthReport(record.website_health_report || {}),
+    positive_findings: firstArray([record.positive_findings]).slice(0, 8).map(String),
+    health_explanation: record.health_explanation || "",
+    crawl_scope: record.crawl_scope || {},
+    sitemap_priority_summary: slimSitemapSummary(record.sitemap_priority_summary || {}),
+    important_page_patterns: firstArray([record.important_page_patterns]).slice(0, 20),
+    deprioritized_page_patterns: firstArray([record.deprioritized_page_patterns]).slice(0, 20),
+    recommended_followup_scans: firstArray([record.recommended_followup_scans]).slice(0, 10),
+    competitor_result: {},
+    competitor_results: [],
+    competitor_opportunities: [],
+    crawl_warnings: firstArray([record.crawl_warnings]).slice(0, 10),
+    debug: record.debug || {},
+    raw: record.raw || {},
+  };
+}
+
+function slimFix(fix = {}) {
+  const affectedPages = firstArray([fix.affected_pages, fix.pages, fix.page_urls]);
+  const fallbackPage = fix.page_url || fix.url || "";
+  return {
+    id: fix.id || fix.fix_id || fix.fingerprint || stableId(`${fallbackPage}|${fix.category}|${fix.title || fix.issue_title}`),
+    fix_id: fix.fix_id || fix.id || fix.fingerprint || stableId(`${fallbackPage}|${fix.category}|${fix.title || fix.issue_title}`),
+    rule: fix.rule || "",
+    category: fix.category || "web_dev",
+    customer_category: fix.customer_category || friendlyCustomerCategory(fix.category),
+    priority: normalizePriority(fix.priority),
+    difficulty: fix.difficulty || (fix.requires_developer ? "developer" : "easy"),
+    status: fix.status || (fix.requires_developer ? "needs_developer" : fix.can_auto_fix ? "auto_fixed" : "needs_approval"),
+    issue_title: cleanString(fix.issue_title || fix.title || "Review this recommendation"),
+    title: cleanString(fix.title || fix.issue_title || "Review this recommendation"),
+    plain_english_explanation: cleanString(fix.plain_english_explanation || fix.explanation || fix.summary || fix.description || "This recommendation was found during the website scan."),
+    plain_english_summary: cleanString(fix.plain_english_summary || fix.plain_english_explanation || fix.explanation || ""),
+    why_it_matters: cleanString(fix.why_it_matters || fix.why || fix.impact || "Improving this can help visitors and search engines understand the website more clearly."),
+    recommendation: cleanString(fix.recommendation || fix.ai_recommendation || fix.recommended_value || fix.suggested_fix || "Review this recommendation."),
+    recommended_value: cleanString(fix.recommended_value || fix.recommendation || fix.ai_recommendation || fix.suggested_fix || "Review this recommendation."),
+    simple_next_step: cleanString(fix.simple_next_step || fix.next_step || fix.recommended_value || fix.recommendation || "Review this item and update the affected page."),
+    page_url: fallbackPage,
+    affected_pages: unique([...(affectedPages || []), ...(fallbackPage ? [fallbackPage] : [])].map(String)).slice(0, 25),
+    current_value: clampText(fix.current_value || fix.current || "", 240),
+    can_auto_fix: Boolean(fix.can_auto_fix),
+    requires_approval: fix.requires_approval !== false,
+    requires_developer: Boolean(fix.requires_developer),
+    what_to_do: firstArray([fix.what_to_do, fix.what_to_do_steps, fix.fix_steps, fix.steps]).slice(0, 5).map(String),
+    what_to_do_steps: firstArray([fix.what_to_do_steps, fix.what_to_do, fix.fix_steps, fix.steps]).slice(0, 5).map(String),
+    estimated_time: fix.estimated_time || fix.time_estimate || "",
+    confidence_score: typeof fix.confidence_score === "number" ? fix.confidence_score : 90,
+    source: fix.source || "",
+  };
+}
+
+function slimPage(page = {}) {
+  return {
+    url: page.url || page.final_url || "",
+    final_url: page.final_url || page.url || "",
+    source: page.source || "",
+    status_code: Number(page.status_code || 0),
+    title: clampText(page.title || "", 140),
+    meta_description: clampText(page.meta_description || "", 220),
+    h1: clampText(page.h1 || "", 140),
+    h1_count: Number(page.h1_count || 0),
+    canonical_url: page.canonical_url || "",
+    robots_meta: page.robots_meta || "",
+    word_count: Number(page.word_count || 0),
+    html_size: Number(page.html_size || 0),
+    image_count: Number(page.image_count || 0),
+    missing_alt_image_count: Number(page.missing_alt_image_count || 0),
+    schema_count: Number(page.schema_count || 0),
+    internal_link_count: Number(page.internal_link_count || 0),
+    indexable: page.indexable !== false,
+    in_sitemap: Boolean(page.in_sitemap),
+    is_scanner_blocked: Boolean(page.is_scanner_blocked),
+    client_rendering_suspected: Boolean(page.client_rendering_suspected),
+  };
+}
+
+function slimAction(action = {}) {
+  return {
+    fix_id: action.fix_id || action.id || "",
+    title: cleanString(action.title || action.issue_title || "Recommended action"),
+    reason: cleanString(action.reason || action.why_it_matters || action.plain_english_summary || ""),
+    priority: ["high", "medium", "low"].includes(action.priority) ? action.priority : normalizePriority(action.priority),
+    plain_english_summary: cleanString(action.plain_english_summary || action.reason || ""),
+    why_it_matters: cleanString(action.why_it_matters || action.reason || ""),
+    what_to_do_steps: firstArray([action.what_to_do_steps, action.what_to_do, action.steps]).slice(0, 5).map(String),
+    who_can_do_this: action.who_can_do_this || "You",
+    time_estimate: action.time_estimate || action.estimated_time || "",
+    affected_pages: firstArray([action.affected_pages]).slice(0, 10),
+  };
+}
+
+function fixToAction(fix = {}) {
+  return slimAction({
+    fix_id: fix.fix_id || fix.id,
+    title: fix.title || fix.issue_title,
+    reason: fix.why_it_matters || fix.plain_english_explanation,
+    priority: normalizePriority(fix.priority),
+    affected_pages: fix.affected_pages || [],
+  });
+}
+
+function slimTechnicalSummary(summary = {}) {
+  return {
+    audit_profile: summary.audit_profile || "",
+    screaming_frog_lite_enabled: Boolean(summary.screaming_frog_lite_enabled),
+    pages_checked: Number(summary.pages_checked || 0),
+    readable_pages_checked: Number(summary.readable_pages_checked || 0),
+    scanner_blocked_pages: Number(summary.scanner_blocked_pages || 0),
+    important_pages_checked: Number(summary.important_pages_checked || 0),
+    indexable_pages: Number(summary.indexable_pages || 0),
+    missing_meta_description_count: Number(summary.missing_meta_description_count || 0),
+    heavy_page_count: Number(summary.heavy_page_count || 0),
+    average_word_count: Number(summary.average_word_count || 0),
+    checks_completed: firstArray([summary.checks_completed]).slice(0, 30),
+  };
+}
+
+function slimScanSummary(summary = {}, healthScore = 0, pagesCrawled = 0, fixes = []) {
+  return {
+    website_url: summary.website_url || "",
+    business_name: summary.business_name || "",
+    health_score: Number(summary.health_score || summary.score || healthScore || 0),
+    score: Number(summary.score || summary.health_score || healthScore || 0),
+    pages_checked: Number(summary.pages_checked || summary.pages_scanned || pagesCrawled || 0),
+    pages_scanned: Number(summary.pages_scanned || summary.pages_checked || pagesCrawled || 0),
+    readable_pages_checked: Number(summary.readable_pages_checked || 0),
+    scanner_blocked_pages: Number(summary.scanner_blocked_pages || 0),
+    total_findings: Number(summary.total_findings || (Array.isArray(fixes) ? fixes.length : 0)),
+    high_priority_findings: Number(summary.high_priority_findings || 0),
+    high_priority_count: Number(summary.high_priority_count || 0),
+    summary: summary.summary || summary.plain_english_summary || "",
+    plain_english_summary: summary.plain_english_summary || summary.summary || "",
+    scan_focus: summary.scan_focus || {},
+    website_health_report: summary.website_health_report ? slimHealthReport(summary.website_health_report) : undefined,
+  };
+}
+
+function slimHealthReport(report = {}) {
+  return {
+    health_score: Number(report.health_score || report.score || 0),
+    health_grade: report.health_grade || report.status_label || "",
+    overall_explanation: report.overall_explanation || report.plain_english_summary || report.summary || "",
+    what_is_working: firstArray([report.what_is_working]).slice(0, 5).map(String),
+    top_concerns: firstArray([report.top_concerns]).slice(0, 5),
+    quick_wins: firstArray([report.quick_wins]).slice(0, 5),
+    bigger_projects: firstArray([report.bigger_projects]).slice(0, 5),
+    limitations: firstArray([report.limitations]).slice(0, 5).map(String),
+    next_best_step: report.next_best_step || "",
+  };
+}
+
+function slimSitemapSummary(summary = {}) {
+  return {
+    strategy: summary.strategy || "",
+    max_pages_enforced: summary.max_pages_enforced || 0,
+    skipped_urls: summary.skipped_urls || {},
+  };
+}
+
+function normalizePriority(priority) {
+  const value = String(priority || "").toLowerCase();
+  if (["critical", "high", "medium", "low"].includes(value)) return value;
+  return "medium";
+}
+
+function priorityWeight(priority) {
+  return { critical: 4, high: 3, medium: 2, low: 1 }[priority] || 2;
+}
+
+function friendlyCustomerCategory(category) {
+  const map = {
+    meta_title: "Search appearance",
+    meta_description: "Search appearance",
+    canonical: "Website setup",
+    schema: "Trust signals",
+    thin_content: "Page content",
+    duplicate_content: "Search appearance",
+    "404_error": "Broken page",
+    redirect: "Page redirect",
+    internal_link: "Internal links",
+    performance: "Website performance",
+    web_dev: "Website setup",
+    scanner_blocked: "Scan coverage",
+    js_rendering: "Website setup",
+  };
+  return map[category] || "Website improvement";
+}
+
+function buildFallbackSummary({ healthScore, pagesCrawled, finalFixes, cmsName }) {
+  const count = Array.isArray(finalFixes) ? finalFixes.length : 0;
+  return `The scan reviewed ${pagesCrawled || 0} pages and found ${count} recommended improvements. The current health score is ${healthScore || "not available"}. The next steps are tailored for ${cmsName}.`;
+}
 
 function normalizeWebsiteUrl(value) {
   const raw = String(value || "").trim();
-
   if (!raw) return "";
-
   try {
     const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
     const parsed = new URL(withProtocol);
-
     parsed.hash = "";
-
     return parsed.toString();
   } catch {
     return "";
@@ -1444,7 +1423,6 @@ function normalizeWebsiteUrl(value) {
 function normalizeWebsiteKey(value) {
   try {
     const parsed = new URL(value);
-
     return `${parsed.hostname.replace(/^www\./i, "")}${parsed.pathname}`;
   } catch {
     return String(value || "").trim().toLowerCase();
@@ -1455,15 +1433,9 @@ function getRequestedPathPrefix(value) {
   try {
     const parsed = new URL(value);
     const parts = parsed.pathname.split("/").filter(Boolean);
-
     if (parts.length === 0) return "";
-
     const first = parts[0];
-
-    if (/^[a-z]{2}(-[a-z]{2})?$/i.test(first)) {
-      return `/${first}`;
-    }
-
+    if (/^[a-z]{2}(-[a-z]{2})?$/i.test(first)) return `/${first}`;
     return `/${first}`;
   } catch {
     return "";
@@ -1471,12 +1443,8 @@ function getRequestedPathPrefix(value) {
 }
 
 function normalizeCmsValue(value) {
-  const normalized = String(value || "")
-    .toLowerCase()
-    .replace(/\s+/g, "_");
-
+  const normalized = String(value || "").toLowerCase().replace(/\s+/g, "_");
   const validValues = CMS_OPTIONS.map((item) => item.value);
-
   return validValues.includes(normalized) ? normalized : "custom";
 }
 
@@ -1488,48 +1456,39 @@ function splitLines(value) {
 }
 
 function getInitialCompetitorUrls(project, competitors) {
-  if (Array.isArray(project?.competitor_urls)) {
-    return project.competitor_urls.filter(Boolean);
-  }
-
+  if (Array.isArray(project?.competitor_urls)) return project.competitor_urls.filter(Boolean);
   if (Array.isArray(competitors)) {
     return competitors
       .map((item) => item.website_url || item.url || item.domain || "")
       .filter(Boolean);
   }
-
   return [];
 }
 
 function firstArray(values) {
-  for (const value of values) {
+  for (const value of values || []) {
     if (Array.isArray(value)) return value;
   }
-
   return [];
 }
 
 function getFirstNumber(values) {
-  for (const value of values) {
+  for (const value of values || []) {
     const number = Number(value);
-
-    if (Number.isFinite(number) && number > 0) {
-      return Math.round(number);
-    }
+    if (Number.isFinite(number) && number > 0) return Math.round(number);
   }
-
   return 0;
 }
 
 function getRecommendations(record) {
   if (!record) return [];
-
   return firstArray([
     record.recommendations,
     record.fixes,
     record.findings,
     record.raw_fixes,
     record.grouped_findings,
+    record.cleaned_fixes,
     record.raw?.recommendations,
     record.raw?.fixes,
     record.raw?.findings,
@@ -1543,7 +1502,6 @@ function getRecommendations(record) {
 
 function getPages(record) {
   if (!record) return [];
-
   return firstArray([
     record.crawled_pages,
     record.pages,
@@ -1558,17 +1516,43 @@ function getPages(record) {
 
 function getHealthScore(record) {
   if (!record) return 0;
-
   return getFirstNumber([
     record.health_score,
     record.seo_score,
     record.scan_summary?.health_score,
     record.website_health_report?.score,
+    record.website_health_report?.health_score,
     record.raw?.health_score,
     record.raw?.seo_score,
     record.raw?.scanner?.health_score,
     record.raw?.scanner?.seo_score,
     record.raw?.ai_review?.health_score,
     record.raw?.ai_review?.website_health_report?.score,
+    record.raw?.ai_review?.website_health_report?.health_score,
   ]);
+}
+
+function cleanString(value) {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  return "";
+}
+
+function clampText(value, max) {
+  const text = String(value || "").trim();
+  if (text.length <= max) return text;
+  return text.slice(0, Math.max(0, max - 1)).trim();
+}
+
+function stableId(input) {
+  let hash = 0;
+  const value = String(input || "");
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash << 5) - hash + value.charCodeAt(i);
+    hash |= 0;
+  }
+  return `finding_${Math.abs(hash)}`;
+}
+
+function unique(values) {
+  return Array.from(new Set(values.filter(Boolean)));
 }

@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   BarChart3,
+  CheckCircle2,
   ExternalLink,
   KeyRound,
   Link2,
@@ -11,11 +12,14 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { base44 } from "@/api/base44Client";
 
 const GOOGLE_CONNECT_FUNCTION = "googleSearchConsoleConnect";
 const GSC_INSIGHTS_FUNCTION = "getSearchConsoleInsights";
 const BING_BACKLINKS_FUNCTION = "getBingBacklinks";
+
+const GSC_STORAGE_KEY = "seo_autopilot:gsc_connection";
 
 export default function Reports() {
   const [loadingGoogle, setLoadingGoogle] = useState(false);
@@ -23,14 +27,47 @@ export default function Reports() {
   const [loadingBacklinks, setLoadingBacklinks] = useState(false);
 
   const [error, setError] = useState("");
-  const [googleStatus, setGoogleStatus] = useState(null);
+  const [googleConnection, setGoogleConnection] = useState(null);
   const [searchConsoleInsights, setSearchConsoleInsights] = useState(null);
   const [backlinkData, setBacklinkData] = useState(null);
+
+  const [selectedSite, setSelectedSite] = useState("");
+  const [bingSiteUrl, setBingSiteUrl] = useState("");
+
+  useEffect(() => {
+    const stored = loadGoogleConnection();
+
+    if (stored) {
+      setGoogleConnection(stored);
+
+      const defaultSite =
+        stored.selected_site ||
+        stored.sites?.[0]?.siteUrl ||
+        stored.sites?.[0]?.url ||
+        "";
+
+      setSelectedSite(defaultSite);
+      setBingSiteUrl(defaultSite);
+    }
+
+    const params = new URLSearchParams(window.location.search);
+
+    if (params.get("gsc") === "connected") {
+      window.history.replaceState({}, "", "/reports");
+    }
+  }, []);
+
+  const sites = useMemo(() => {
+    return safeArray(googleConnection?.sites);
+  }, [googleConnection]);
+
+  const isGoogleConnected = Boolean(
+    googleConnection?.access_token || googleConnection?.refresh_token
+  );
 
   async function connectGoogleSearchConsole() {
     setLoadingGoogle(true);
     setError("");
-    setGoogleStatus(null);
 
     try {
       const response = await callBase44Function(GOOGLE_CONNECT_FUNCTION, {});
@@ -41,7 +78,10 @@ export default function Reports() {
         return;
       }
 
-      setGoogleStatus(data);
+      setError(
+        data?.error ||
+          "Google connection did not return an auth URL. Check the backend function."
+      );
     } catch (err) {
       setError(
         err?.message ||
@@ -57,16 +97,47 @@ export default function Reports() {
     setError("");
 
     try {
+      const connection = loadGoogleConnection();
+
+      if (!connection?.access_token && !connection?.refresh_token) {
+        throw new Error("Connect Google Search Console first.");
+      }
+
       const response = await callBase44Function(GSC_INSIGHTS_FUNCTION, {
         days: 28,
+        site_url: selectedSite || connection.selected_site || "",
+        access_token: connection.access_token || "",
+        refresh_token: connection.refresh_token || "",
       });
 
       const data = normalizeFunctionResponse(response);
+
+      if (data?.connection_update) {
+        const updatedConnection = {
+          ...connection,
+          ...data.connection_update,
+          selected_site:
+            data.site_url ||
+            selectedSite ||
+            connection.selected_site ||
+            connection.sites?.[0]?.siteUrl ||
+            "",
+        };
+
+        saveGoogleConnection(updatedConnection);
+        setGoogleConnection(updatedConnection);
+      }
+
+      if (data?.site_url && !selectedSite) {
+        setSelectedSite(data.site_url);
+        setBingSiteUrl(data.site_url);
+      }
+
       setSearchConsoleInsights(data);
     } catch (err) {
       setError(
         err?.message ||
-          "Could not load Google Search Console insights yet. Make sure the backend function exists."
+          "Could not load Google Search Console insights yet."
       );
     } finally {
       setLoadingInsights(false);
@@ -78,17 +149,43 @@ export default function Reports() {
     setError("");
 
     try {
-      const response = await callBase44Function(BING_BACKLINKS_FUNCTION, {});
-      const data = normalizeFunctionResponse(response);
+      const siteUrl = bingSiteUrl || selectedSite;
 
+      if (!siteUrl) {
+        throw new Error(
+          "Enter a verified Bing Webmaster Tools site URL first."
+        );
+      }
+
+      const response = await callBase44Function(BING_BACKLINKS_FUNCTION, {
+        site_url: siteUrl,
+        count: 100,
+      });
+
+      const data = normalizeFunctionResponse(response);
       setBacklinkData(data);
     } catch (err) {
       setError(
         err?.message ||
-          "Could not load backlink data yet. Make sure the Bing Webmaster API key and backend function are configured."
+          "Could not load backlink data. Make sure the Bing Webmaster API key and backend function are configured."
       );
     } finally {
       setLoadingBacklinks(false);
+    }
+  }
+
+  function handleSiteChange(value) {
+    setSelectedSite(value);
+    setBingSiteUrl(value);
+
+    if (googleConnection) {
+      const updated = {
+        ...googleConnection,
+        selected_site: value,
+      };
+
+      saveGoogleConnection(updated);
+      setGoogleConnection(updated);
     }
   }
 
@@ -122,8 +219,13 @@ export default function Reports() {
           title="Google Search Console"
           badge="Best free keyword data"
           description="Connect Google Search Console to pull real Google queries, clicks, impressions, CTR, average position, and page-level opportunities."
-          buttonLabel="Connect Google Search Console"
+          buttonLabel={
+            isGoogleConnected
+              ? "Reconnect Google Search Console"
+              : "Connect Google Search Console"
+          }
           loading={loadingGoogle}
+          connected={isGoogleConnected}
           onClick={connectGoogleSearchConsole}
         />
 
@@ -134,9 +236,45 @@ export default function Reports() {
           description="Use Bing Webmaster Tools as the free backlink source for referring pages, linked pages, anchor text, and link opportunities."
           buttonLabel="Check Backlinks"
           loading={loadingBacklinks}
+          connected={Boolean(backlinkData)}
           onClick={loadBingBacklinks}
         />
       </section>
+
+      {isGoogleConnected ? (
+        <section className="rounded-3xl border border-emerald-200 bg-emerald-50 p-5">
+          <div className="flex items-start gap-3">
+            <CheckCircle2 className="mt-0.5 h-5 w-5 text-emerald-700" />
+
+            <div>
+              <h2 className="font-semibold text-emerald-950">
+                Google Search Console connected
+              </h2>
+
+              <p className="mt-1 text-sm text-emerald-800">
+                Choose the verified property SEO Pilot should use.
+              </p>
+
+              {sites.length > 0 ? (
+                <select
+                  value={selectedSite}
+                  onChange={(event) => handleSiteChange(event.target.value)}
+                  className="mt-4 h-10 w-full max-w-xl rounded-md border border-emerald-200 bg-white px-3 text-sm text-slate-900"
+                >
+                  {sites.map((site, index) => (
+                    <option
+                      key={`${site.siteUrl || site.url}-${index}`}
+                      value={site.siteUrl || site.url}
+                    >
+                      {site.siteUrl || site.url}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
@@ -179,6 +317,49 @@ export default function Reports() {
 
       <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex items-center gap-2">
+          <Link2 className="h-5 w-5 text-blue-700" />
+          <h2 className="text-xl font-semibold text-slate-950">
+            Bing backlink tracker
+          </h2>
+        </div>
+
+        <p className="mt-2 max-w-3xl text-slate-600">
+          Enter a site that is verified in Bing Webmaster Tools. This should
+          usually match your selected Search Console property.
+        </p>
+
+        <div className="mt-4 flex flex-col gap-3 md:flex-row">
+          <Input
+            value={bingSiteUrl}
+            onChange={(event) => setBingSiteUrl(event.target.value)}
+            placeholder="https://www.example.com/"
+            className="md:max-w-xl"
+          />
+
+          <Button
+            type="button"
+            onClick={loadBingBacklinks}
+            disabled={loadingBacklinks}
+          >
+            {loadingBacklinks ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Loading...
+              </>
+            ) : (
+              <>
+                <Link2 className="mr-2 h-4 w-4" />
+                Load backlinks
+              </>
+            )}
+          </Button>
+        </div>
+
+        {backlinkData ? <BacklinkPreview data={backlinkData} /> : null}
+      </section>
+
+      <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex items-center gap-2">
           <ShieldCheck className="h-5 w-5 text-emerald-700" />
           <h2 className="text-xl font-semibold text-slate-950">
             What this unlocks
@@ -207,38 +388,6 @@ export default function Reports() {
           />
         </div>
       </section>
-
-      {backlinkData ? (
-        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-center gap-2">
-            <Link2 className="h-5 w-5 text-blue-700" />
-            <h2 className="text-xl font-semibold text-slate-950">
-              Backlink preview
-            </h2>
-          </div>
-
-          <BacklinkSummary data={backlinkData} />
-
-          <pre className="mt-5 max-h-[420px] overflow-auto rounded-2xl bg-slate-950 p-4 text-xs leading-5 text-slate-100">
-            {JSON.stringify(backlinkData, null, 2)}
-          </pre>
-        </section>
-      ) : null}
-
-      {googleStatus ? (
-        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-center gap-2">
-            <KeyRound className="h-5 w-5 text-blue-700" />
-            <h2 className="text-xl font-semibold text-slate-950">
-              Google connection response
-            </h2>
-          </div>
-
-          <pre className="mt-4 max-h-[420px] overflow-auto rounded-2xl bg-slate-950 p-4 text-xs leading-5 text-slate-100">
-            {JSON.stringify(googleStatus, null, 2)}
-          </pre>
-        </section>
-      ) : null}
     </div>
   );
 }
@@ -250,6 +399,7 @@ function ConnectionCard({
   description,
   buttonLabel,
   loading,
+  connected,
   onClick,
 }) {
   return (
@@ -257,8 +407,14 @@ function ConnectionCard({
       <div className="flex items-start justify-between gap-4">
         <div className="rounded-2xl bg-blue-50 p-3 text-blue-700">{icon}</div>
 
-        <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-          {badge}
+        <span
+          className={`rounded-full px-3 py-1 text-xs font-semibold ${
+            connected
+              ? "bg-emerald-50 text-emerald-700"
+              : "bg-slate-100 text-slate-600"
+          }`}
+        >
+          {connected ? "Connected" : badge}
         </span>
       </div>
 
@@ -300,9 +456,10 @@ function InsightsPreview({ data }) {
   const keywordOpportunities = safeArray(data.keyword_opportunities);
   const lowCtrPages = safeArray(data.low_ctr_pages);
   const topPages = safeArray(data.top_pages);
+  const pageKeywordOpportunities = safeArray(data.page_keyword_opportunities);
 
   return (
-    <div className="mt-6 grid gap-4 lg:grid-cols-3">
+    <div className="mt-6 grid gap-4 lg:grid-cols-2">
       <PreviewList
         title="Keyword opportunities"
         items={keywordOpportunities}
@@ -320,6 +477,12 @@ function InsightsPreview({ data }) {
         items={topPages}
         empty="No top pages returned yet."
       />
+
+      <PreviewList
+        title="Page + keyword opportunities"
+        items={pageKeywordOpportunities}
+        empty="No page keyword opportunities returned yet."
+      />
     </div>
   );
 }
@@ -333,11 +496,21 @@ function PreviewList({ title, items, empty }) {
         <p className="mt-3 text-sm text-slate-500">{empty}</p>
       ) : (
         <div className="mt-3 space-y-3">
-          {items.slice(0, 5).map((item, index) => (
+          {items.slice(0, 8).map((item, index) => (
             <div key={index} className="rounded-xl bg-white p-3 text-sm">
-              <div className="font-medium text-slate-950">
-                {item.query || item.page || item.url || item.title || "Item"}
+              <div className="break-words font-medium text-slate-950">
+                {item.query ||
+                  item.page ||
+                  item.url ||
+                  item.title ||
+                  "SEO opportunity"}
               </div>
+
+              {item.page && item.query ? (
+                <div className="mt-1 break-words text-xs text-slate-500">
+                  {item.page}
+                </div>
+              ) : null}
 
               <div className="mt-1 text-slate-500">
                 {formatMetricLine(item)}
@@ -350,30 +523,38 @@ function PreviewList({ title, items, empty }) {
   );
 }
 
-function BacklinkSummary({ data }) {
-  const backlinks =
-    data.backlinks_count ||
-    data.total_backlinks ||
-    data.backlinks?.length ||
-    data.links?.length ||
-    0;
-
-  const referringDomains =
-    data.referring_domains_count ||
-    data.total_referring_domains ||
-    data.referring_domains?.length ||
-    data.domains?.length ||
-    0;
-
-  const topLinkedPages = safeArray(
-    data.top_linked_pages || data.linked_pages || data.pages
-  );
+function BacklinkPreview({ data }) {
+  const topLinkedPages = safeArray(data.top_linked_pages);
+  const sampleLinks = safeArray(data.sample_links);
 
   return (
-    <div className="mt-5 grid gap-4 md:grid-cols-3">
-      <MetricCard label="Backlinks" value={backlinks} />
-      <MetricCard label="Referring domains" value={referringDomains} />
-      <MetricCard label="Linked pages" value={topLinkedPages.length} />
+    <div className="mt-6 space-y-5">
+      <div className="grid gap-4 md:grid-cols-3">
+        <MetricCard label="Backlinks" value={data.backlinks_count || 0} />
+        <MetricCard
+          label="Referring domains"
+          value={data.referring_domains_count || 0}
+        />
+        <MetricCard label="Linked pages" value={topLinkedPages.length} />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <PreviewList
+          title="Top linked pages"
+          items={topLinkedPages}
+          empty="No linked pages returned."
+        />
+
+        <PreviewList
+          title="Sample backlinks"
+          items={sampleLinks}
+          empty="No backlink samples returned."
+        />
+      </div>
+
+      <pre className="max-h-[420px] overflow-auto rounded-2xl bg-slate-950 p-4 text-xs leading-5 text-slate-100">
+        {JSON.stringify(data, null, 2)}
+      </pre>
     </div>
   );
 }
@@ -413,6 +594,14 @@ function formatMetricLine(item) {
     parts.push(`position ${Number(item.position).toFixed(1)}`);
   }
 
+  if (item.backlinks !== undefined) {
+    parts.push(`${item.backlinks} backlinks`);
+  }
+
+  if (item.referring_page) {
+    parts.push(`from ${item.referring_page}`);
+  }
+
   return parts.length ? parts.join(" · ") : "SEO opportunity";
 }
 
@@ -424,6 +613,30 @@ function formatPercent(value) {
   if (number <= 1) return `${(number * 100).toFixed(1)}%`;
 
   return `${number.toFixed(1)}%`;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Google connection local storage                                             */
+/* -------------------------------------------------------------------------- */
+
+function loadGoogleConnection() {
+  try {
+    const raw = window.localStorage.getItem(GSC_STORAGE_KEY);
+
+    if (!raw) return null;
+
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function saveGoogleConnection(connection) {
+  try {
+    window.localStorage.setItem(GSC_STORAGE_KEY, JSON.stringify(connection));
+  } catch {
+    // Ignore localStorage errors.
+  }
 }
 
 /* -------------------------------------------------------------------------- */

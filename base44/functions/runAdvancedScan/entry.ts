@@ -100,15 +100,8 @@ Deno.serve(async (req) => {
 
     const websiteUrl = normalizeWebsiteUrl(body.website_url || body.url || "");
 
-    if (!websiteUrl) {
-      return jsonResponse(
-        {
-          success: false,
-          error: "Missing or invalid website_url.",
-        },
-        400
-      );
-    }
+    if (!websiteUrl) return jsonResponse({ success: false, error: "Missing or invalid website_url." }, 400);
+    await assertPublicHttpUrlIfPresent(websiteUrl);
 
     const deadlineAt = Date.now() + budget.crawl_timeout_ms - 3000;
 
@@ -940,25 +933,20 @@ async function fetchHtmlWithRetry(url: string) {
   };
 }
 
-async function fetchWithTimeout(url: string, timeoutMs: number) {
+async function fetchWithTimeout(url: string, timeoutMs: number, redirectCount = 0) {
+  await assertPublicHttpUrlIfPresent(url);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
   try {
-    return await fetch(url, {
-      method: "GET",
-      redirect: "follow",
-      signal: controller.signal,
-      headers: {
-        "User-Agent": USER_AGENT,
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
+    const response = await fetch(url, { method: "GET", redirect: "manual", signal: controller.signal, headers: { "User-Agent": USER_AGENT, Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.9" } });
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location") || "";
+      if (!location) return response;
+      if (redirectCount >= 5) throw new Error("Too many redirects while checking this website.");
+      return await fetchWithTimeout(new URL(location, url).toString(), timeoutMs, redirectCount + 1);
+    }
+    return response;
+  } finally { clearTimeout(timeout); }
 }
 
 function classifyFetchError(error: unknown, statusCode = 0) {
@@ -1033,11 +1021,10 @@ function shouldRetryWithBrowser(page: any, allowBlockedBrowserRender: boolean) {
 }
 
 async function fetchWithBrowserless(url: string) {
+  await assertPublicHttpUrlIfPresent(url);
+  await assertPublicHttpUrlIfPresent(BROWSERLESS_CONTENT_ENDPOINT);
   const endpoint = new URL(BROWSERLESS_CONTENT_ENDPOINT);
-
-  if (BROWSERLESS_TOKEN && !endpoint.searchParams.has("token")) {
-    endpoint.searchParams.set("token", BROWSERLESS_TOKEN);
-  }
+  if (BROWSERLESS_TOKEN && !endpoint.searchParams.has("token")) endpoint.searchParams.set("token", BROWSERLESS_TOKEN);
 
   const controller = new AbortController();
   const timeout = setTimeout(
@@ -2020,53 +2007,29 @@ function decodeHtmlEntities(value: string) {
 /* URL filtering                                                               */
 /* -------------------------------------------------------------------------- */
 
-function normalizeWebsiteUrl(value: string) {
-  const raw = String(value || "").trim();
-
-  if (!raw) return "";
-
-  try {
-    const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-    const url = new URL(withProtocol);
-
-    url.hash = "";
-
-    return url.toString();
-  } catch {
-    return "";
-  }
+async function assertPublicHttpUrlIfPresent(value: string) {
+  const text = String(value || "").trim();
+  if (!/^https?:\/\//i.test(text)) return;
+  const ips = await resolvePublicIps(new URL(text).hostname);
+  if (!ips.length || ips.some((ip: string) => !isPublicIp(ip))) throw new Error("Private or local network addresses cannot be scanned.");
 }
 
-function cleanUrl(value: string) {
-  try {
-    const url = new URL(String(value || ""));
-
-    url.hash = "";
-
-    const removableParams = [
-      "utm_source",
-      "utm_medium",
-      "utm_campaign",
-      "utm_term",
-      "utm_content",
-      "fbclid",
-      "gclid",
-      "msclkid",
-    ];
-
-    for (const param of removableParams) {
-      url.searchParams.delete(param);
-    }
-
-    if (url.pathname !== "/" && url.pathname.endsWith("/")) {
-      url.pathname = url.pathname.slice(0, -1);
-    }
-
-    return url.toString();
-  } catch {
-    return "";
-  }
+async function resolvePublicIps(hostname: string) {
+  const host = String(hostname || "").replace(/^\[|\]$/g, "").toLowerCase();
+  if (!host || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) throw new Error("Private or local network addresses cannot be scanned.");
+  if (isIpv4Address(host) || host.includes(":")) return [host];
+  const response = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=A`, { headers: { Accept: "application/dns-json" } });
+  const data = await response.json().catch(() => ({}));
+  return (data.Answer || []).map((answer: any) => String(answer?.data || "")).filter(isIpv4Address);
 }
+
+function isIpv4Address(value: string) { const parts = String(value || "").split("."); return parts.length === 4 && parts.every((part) => /^\d+$/.test(part) && Number(part) >= 0 && Number(part) <= 255); }
+function isPublicIp(ip: string) { const value = String(ip || "").toLowerCase(); return isIpv4Address(value) ? isPublicIpv4(value) : value.includes(":") && value !== "::" && !value.startsWith("::1") && !value.startsWith("fc") && !value.startsWith("fd") && !value.startsWith("fe80"); }
+function isPublicIpv4(ip: string) { const [a, b] = ip.split(".").map(Number); return !(a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && (b === 0 || b === 168)) || (a === 198 && (b === 18 || b === 19)) || ip === "255.255.255.255"); }
+
+function normalizeWebsiteUrl(value: string) { try { const raw = String(value || "").trim(); if (!raw) return ""; const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`); url.hash = ""; return url.toString(); } catch { return ""; } }
+
+function cleanUrl(value: string) { try { const url = new URL(String(value || "")); url.hash = ""; for (const param of ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid", "gclid", "msclkid"]) url.searchParams.delete(param); if (url.pathname !== "/" && url.pathname.endsWith("/")) url.pathname = url.pathname.slice(0, -1); return url.toString(); } catch { return ""; } }
 
 function normalizePath(pathname: string) {
   const path = String(pathname || "/");

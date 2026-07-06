@@ -3125,18 +3125,16 @@ function humanizeUrlSlug(value) {
 /* -------------------------------------------------------------------------- */
 
 async function fetchWithTimeout(url, options = {}, timeoutMs, redirectCount = 0) {
-  await assertSafePublicUrl(url);
-  await assertSafeBodyUrls(options.body);
+  const safeRequest = await buildSafeOutboundRequest(url, options);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { ...options, redirect: "manual", signal: controller.signal });
+    const response = await fetch(safeRequest.url, { ...safeRequest.options, redirect: "manual", signal: controller.signal });
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location") || "";
       if (!location) return response;
       if (redirectCount >= 5) throw new Error("Too many redirects while checking this website.");
       const nextUrl = new URL(location, url).toString();
-      await assertSafePublicUrl(nextUrl);
       const nextOptions = response.status === 303 ? { ...options, method: "GET", body: undefined } : options;
       return await fetchWithTimeout(nextUrl, nextOptions, timeoutMs, redirectCount + 1);
     }
@@ -3146,14 +3144,24 @@ async function fetchWithTimeout(url, options = {}, timeoutMs, redirectCount = 0)
   }
 }
 
+async function buildSafeOutboundRequest(url, options = {}) {
+  const safety = await assertSafePublicUrl(url);
+  await assertSafeBodyUrls(options.body);
+  if (safety.protocol !== "http:" || safety.isLiteralIp) return { url, options };
+  const pinnedIp = safety.resolvedIps.find(isIpv4Address);
+  if (!pinnedIp) throw new Error("HTTP scans require a verified public IPv4 address.");
+  const original = new URL(url);
+  const pinned = new URL(url);
+  pinned.hostname = pinnedIp;
+  return { url: pinned.toString(), options: { ...options, headers: { ...(options.headers || {}), Host: original.host } } };
+}
+
 async function assertSafeBodyUrls(body) {
   if (!body || typeof body !== "string" || !body.includes('"url"')) return;
   try {
     const payload = JSON.parse(body);
     if (payload?.url) await assertSafePublicUrl(payload.url);
-  } catch {
-    return;
-  }
+  } catch {}
 }
 
 async function assertSafePublicUrl(input) {
@@ -3163,32 +3171,17 @@ async function assertSafePublicUrl(input) {
   if (!hostname || hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local") || hostname.endsWith(".internal")) throw new Error("This website address is not allowed for scanning.");
   if (isIpAddress(hostname)) {
     if (!isPublicIpAddress(hostname)) throw new Error("Private or local network addresses cannot be scanned.");
-    return true;
+    return { protocol: parsed.protocol, hostname, isLiteralIp: true, resolvedIps: [hostname] };
   }
   const resolvedIps = await resolvePublicDns(hostname);
   if (resolvedIps.length === 0) throw new Error("Could not verify that this website resolves to a public address.");
   if (resolvedIps.some((ip) => !isPublicIpAddress(ip))) throw new Error("This website resolves to a private or local network address.");
-  return true;
+  return { protocol: parsed.protocol, hostname, isLiteralIp: false, resolvedIps };
 }
 
 function isIpAddress(value) { return isIpv4Address(value) || String(value || "").includes(":"); }
 function isIpv4Address(value) { const parts = String(value || "").split("."); return parts.length === 4 && parts.every((part) => /^\d+$/.test(part) && Number(part) >= 0 && Number(part) <= 255); }
-function isPublicIpAddress(ip) {
-  const value = String(ip || "").toLowerCase();
-  if (isIpv4Address(value)) {
-    const [a, b] = value.split(".").map(Number);
-    if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
-    if (a === 100 && b >= 64 && b <= 127) return false;
-    if (a === 169 && b === 254) return false;
-    if (a === 172 && b >= 16 && b <= 31) return false;
-    if (a === 192 && (b === 0 || b === 168)) return false;
-    if (a === 198 && (b === 18 || b === 19)) return false;
-    return value !== "255.255.255.255";
-  }
-  if (value === "::" || value === "::1" || value.startsWith("fe80:") || value.startsWith("fc") || value.startsWith("fd") || value.startsWith("ff") || value.startsWith("2001:db8")) return false;
-  if (value.startsWith("::ffff:")) return isPublicIpAddress(value.slice(7));
-  return value.includes(":");
-}
+function isPublicIpAddress(ip) { const value = String(ip || "").toLowerCase(); if (isIpv4Address(value)) { const [a, b] = value.split(".").map(Number); if (a === 0 || a === 10 || a === 127 || a >= 224) return false; if (a === 100 && b >= 64 && b <= 127) return false; if (a === 169 && b === 254) return false; if (a === 172 && b >= 16 && b <= 31) return false; if (a === 192 && (b === 0 || b === 168)) return false; if (a === 198 && (b === 18 || b === 19)) return false; return value !== "255.255.255.255"; } if (value === "::" || value === "::1" || value.startsWith("fe80:") || value.startsWith("fc") || value.startsWith("fd") || value.startsWith("ff") || value.startsWith("2001:db8")) return false; if (value.startsWith("::ffff:")) return isPublicIpAddress(value.slice(7)); return value.includes(":"); }
 
 async function resolvePublicDns(hostname) {
   const cache = (globalThis as any).__safeDnsCache || new Map();

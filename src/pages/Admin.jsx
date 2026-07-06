@@ -11,9 +11,18 @@ export default function Admin() {
   const [issues, setIssues] = useState([]);
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     const load = async () => {
+      const user = await base44.auth.me();
+      if (user?.role !== "admin") {
+        setIsAdmin(false);
+        setLoading(false);
+        return;
+      }
+
+      setIsAdmin(true);
       const [p, c, i, l] = await Promise.all([
         base44.entities.BusinessProject.list("-created_date", 50),
         base44.entities.CrawlJob.list("-created_date", 50),
@@ -34,6 +43,16 @@ export default function Admin() {
   };
 
   if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" /></div>;
+
+  if (!isAdmin) {
+    return (
+      <div className="rounded-xl border border-gray-100 bg-white p-8 text-center">
+        <Shield className="mx-auto h-8 w-8 text-gray-300" />
+        <h1 className="mt-3 text-lg font-semibold text-gray-900">Admin access required</h1>
+        <p className="mt-1 text-sm text-gray-500">This area is only available to admins.</p>
+      </div>
+    );
+  }
 
   const failedCrawls = crawlJobs.filter(c => c.status === "failed");
   const pendingApprovals = issues.filter(i => i.status === "needs_approval");

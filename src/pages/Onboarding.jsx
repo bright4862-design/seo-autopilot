@@ -40,17 +40,17 @@ const SCAN_MODES = [
   {
     value: "quick",
     label: "Quick",
-    description: "Fast first scan. Up to 25 pages.",
+    description: "Emergency reliable scan. Up to 12 pages.",
   },
   {
     value: "deep",
     label: "Deep",
-    description: "Reliable larger scan. Up to 60 pages.",
+    description: "Reliable scan. Up to 25 pages.",
   },
   {
     value: "advanced",
     label: "Advanced",
-    description: "Largest synchronous scan. Up to 100 pages.",
+    description: "Largest reliable scan. Up to 40 pages.",
   },
 ];
 
@@ -86,13 +86,11 @@ export default function Onboarding() {
 
   const selectedCms = CMS_OPTIONS.find((item) => item.value === cmsPlatform);
 
-  const cleanedKeywords = useMemo(() => {
-    return splitLines(keywordsText);
-  }, [keywordsText]);
-
-  const cleanedCompetitorUrls = useMemo(() => {
-    return splitLines(competitorUrlsText);
-  }, [competitorUrlsText]);
+  const cleanedKeywords = useMemo(() => splitLines(keywordsText), [keywordsText]);
+  const cleanedCompetitorUrls = useMemo(
+    () => splitLines(competitorUrlsText),
+    [competitorUrlsText]
+  );
 
   const activeBudget = getSafeScanBudget(scanMode);
 
@@ -158,7 +156,7 @@ export default function Onboarding() {
     try {
       const safeScanBudget = getSafeScanBudget(scanMode);
 
-      setActiveStep("Running crawler and Screaming Frog Lite checks");
+      setActiveStep("Running emergency reliable crawler checks");
 
       const scanPayload = {
         website_url: normalizedUrl,
@@ -178,13 +176,15 @@ export default function Onboarding() {
         force_internal_crawl: true,
         respect_robots_txt: false,
 
+        skip_sitemap_discovery: true,
+        emergency_fast_scan: true,
+
         max_pages: safeScanBudget.max_pages,
         max_competitors: safeScanBudget.max_competitors,
-        max_browser_render_attempts:
-          safeScanBudget.max_browser_render_attempts,
+        max_browser_render_attempts: safeScanBudget.max_browser_render_attempts,
         crawl_timeout_ms: safeScanBudget.crawl_timeout_ms,
 
-        source: "onboarding_scan_page_inline",
+        source: "onboarding_scan_page_emergency_fast",
         requested_at: new Date().toISOString(),
       };
 
@@ -227,7 +227,7 @@ export default function Onboarding() {
         throw new Error(scanData.error || "Website scan failed.");
       }
 
-      setActiveStep("Asking Gemini to simplify and prioritize the Fix List");
+      setActiveStep("Asking Gemini to simplify the Fix List");
 
       try {
         const aiPayload = {
@@ -239,7 +239,7 @@ export default function Onboarding() {
           scan_mode: scanMode,
 
           ai_review_goal:
-            "Simplify the crawler and Screaming Frog Lite results into a clear customer-friendly Fix List. Prioritize fixes by business impact, explain what to do first, and tailor implementation steps to the selected CMS.",
+            "Simplify the crawler and Screaming Frog Lite results into a clear customer-friendly Fix List. Prioritize fixes by business impact and tailor implementation steps to the selected CMS.",
 
           cms_instruction: buildCmsInstruction(cmsPlatform),
 
@@ -321,11 +321,7 @@ export default function Onboarding() {
 
         refreshDebugData();
 
-        const aiResponse = await callBase44Function(
-          AI_REVIEW_FUNCTION,
-          aiPayload
-        );
-
+        const aiResponse = await callBase44Function(AI_REVIEW_FUNCTION, aiPayload);
         aiData = normalizeFunctionResponse(aiResponse);
 
         writeScanDebug({
@@ -342,10 +338,6 @@ export default function Onboarding() {
         });
 
         refreshDebugData();
-
-        if (aiData?.success === false && aiData?.error) {
-          console.warn("AI review returned an error.", aiData.error);
-        }
       } catch (aiError) {
         console.warn("AI review was skipped or failed.", aiError);
 
@@ -447,8 +439,8 @@ export default function Onboarding() {
                 </h1>
 
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-                  Run a focused SEO scan, then turn the results into a clear Fix
-                  List with simple CMS-specific next steps.
+                  Run a focused emergency scan first. Once this returns
+                  reliably, increase scan size again.
                 </p>
               </div>
             </div>
@@ -532,10 +524,6 @@ export default function Onboarding() {
                 disabled={submitting}
                 className="mt-2"
               />
-              <p className="mt-1 text-xs text-slate-500">
-                For best results, use a clean folder URL like
-                https://www.example.com/services/
-              </p>
             </div>
 
             <div>
@@ -602,8 +590,7 @@ export default function Onboarding() {
                 className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50"
               />
               <p className="mt-1 text-xs text-slate-500">
-                Optional. Competitor checks are temporarily capped for
-                reliability.
+                Optional. Competitor checks are disabled in emergency mode.
               </p>
             </div>
 
@@ -646,6 +633,7 @@ export default function Onboarding() {
                       <p className="mt-2 text-xs font-semibold text-slate-700">
                         Sends: {budget.max_pages} pages,{" "}
                         {budget.max_competitors} competitors,{" "}
+                        {budget.max_browser_render_attempts} renders,{" "}
                         {Math.round(budget.crawl_timeout_ms / 1000)}s timeout
                       </p>
                     </button>
@@ -663,8 +651,7 @@ export default function Onboarding() {
                 <strong>{activeBudget.max_pages} pages</strong>,{" "}
                 <strong>{activeBudget.max_competitors} competitors</strong>,{" "}
                 <strong>
-                  {activeBudget.max_browser_render_attempts} browser render
-                  attempt
+                  {activeBudget.max_browser_render_attempts} browser renders
                 </strong>
                 , and a{" "}
                 <strong>
@@ -672,6 +659,10 @@ export default function Onboarding() {
                   timeout
                 </strong>
                 .
+              </p>
+              <p className="mt-2 text-xs text-slate-500">
+                It also sends skip_sitemap_discovery=true and
+                emergency_fast_scan=true.
               </p>
             </div>
           </div>
@@ -710,8 +701,7 @@ export default function Onboarding() {
             </Button>
 
             <p className="text-xs text-slate-500">
-              Start with Quick. Use Deep or Advanced only after Quick returns
-              successfully.
+              Run Quick first. It should return before increasing scan size.
             </p>
           </div>
         </form>
@@ -727,27 +717,27 @@ export default function Onboarding() {
 function getSafeScanBudget(scanMode) {
   if (scanMode === "advanced") {
     return {
-      max_pages: 100,
+      max_pages: 40,
       max_competitors: 0,
-      max_browser_render_attempts: 1,
-      crawl_timeout_ms: 65000,
+      max_browser_render_attempts: 0,
+      crawl_timeout_ms: 30000,
     };
   }
 
   if (scanMode === "deep") {
     return {
-      max_pages: 60,
+      max_pages: 25,
       max_competitors: 0,
-      max_browser_render_attempts: 1,
-      crawl_timeout_ms: 50000,
+      max_browser_render_attempts: 0,
+      crawl_timeout_ms: 25000,
     };
   }
 
   return {
-    max_pages: 25,
+    max_pages: 12,
     max_competitors: 0,
-    max_browser_render_attempts: 1,
-    crawl_timeout_ms: 30000,
+    max_browser_render_attempts: 0,
+    crawl_timeout_ms: 18000,
   };
 }
 
@@ -1152,7 +1142,7 @@ function normalizeScanRecordForStorage(record) {
 async function callBase44Function(functionName, payload) {
   const timeoutMs =
     functionName === ADVANCED_SCANNER_FUNCTION
-      ? Number(payload?.crawl_timeout_ms || 30000) + 15000
+      ? Number(payload?.crawl_timeout_ms || 18000) + 15000
       : 70000;
 
   const callPromise = callBase44FunctionWithoutTimeout(functionName, payload);
@@ -1207,7 +1197,7 @@ function normalizeFunctionResponse(response) {
 function buildCmsInstruction(cmsPlatform) {
   const instructions = {
     wordpress:
-      "Tailor fixes for WordPress. Mention SEO plugins such as Yoast, Rank Math, or All in One SEO when useful. Explain where to edit titles, meta descriptions, headings, internal links, schema, redirects, and image alt text.",
+      "Tailor fixes for WordPress. Mention SEO plugins such as Yoast, Rank Math, or All in One SEO when useful.",
     squarespace:
       "Tailor fixes for Squarespace. Explain steps using page settings, SEO tab, page titles, descriptions, headings, image settings, redirects, and navigation settings.",
     wix:
@@ -1232,13 +1222,13 @@ function buildCmsInstruction(cmsPlatform) {
 function buildCmsActionPlan(cmsPlatform, cmsName, fixes) {
   const priorityCount = Array.isArray(fixes) ? fixes.length : 0;
 
-  const intro = `This website is marked as ${cmsName}. Start with the highest-impact SEO fixes first, then handle the easier cleanup tasks.`;
+  const intro = `This website is marked as ${cmsName}. Start with the highest-impact SEO fixes first.`;
 
   const cmsSteps = {
     wordpress: [
       "Open the page in WordPress.",
       "Update the SEO title and meta description in Yoast, Rank Math, or your SEO plugin.",
-      "Improve the H1, headings, body copy, internal links, and image alt text.",
+      "Improve headings, copy, internal links, and image alt text.",
       "Use a redirect plugin for broken or moved URLs.",
     ],
     squarespace: [
@@ -1250,13 +1240,13 @@ function buildCmsActionPlan(cmsPlatform, cmsName, fixes) {
     wix: [
       "Open the page in Wix.",
       "Use SEO Basics to update the title, description, URL slug, and index settings.",
-      "Improve headings, body content, internal links, and image alt text.",
+      "Improve headings, content, links, and image alt text.",
       "Use Wix redirects for broken URLs.",
     ],
     shopify: [
       "Open the product, collection, blog post, or page in Shopify.",
       "Edit the search engine listing preview.",
-      "Improve product or page copy, headings, internal links, and image alt text.",
+      "Improve page copy, headings, links, and image alt text.",
       "Use URL redirects for changed or broken pages.",
     ],
     webflow: [
@@ -1345,16 +1335,6 @@ function getRequestedPathPrefix(value) {
   } catch {
     return "";
   }
-}
-
-function normalizeCmsValue(value) {
-  const normalized = String(value || "")
-    .toLowerCase()
-    .replace(/\s+/g, "_");
-
-  const validValues = CMS_OPTIONS.map((item) => item.value);
-
-  return validValues.includes(normalized) ? normalized : "custom";
 }
 
 function splitLines(value) {

@@ -1,6 +1,6 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
-const VERSION = "runAdvancedScan_v8_reliable_debug_no_robots_block";
+const VERSION = "runAdvancedScan_v9_browserless_budget_score_consistency";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -100,8 +100,15 @@ Deno.serve(async (req) => {
 
     const websiteUrl = normalizeWebsiteUrl(body.website_url || body.url || "");
 
-    if (!websiteUrl) return jsonResponse({ success: false, error: "Missing or invalid website_url." }, 400);
-    await assertPublicHttpUrlIfPresent(websiteUrl);
+    if (!websiteUrl) {
+      return jsonResponse(
+        {
+          success: false,
+          error: "Missing or invalid website_url.",
+        },
+        400
+      );
+    }
 
     const deadlineAt = Date.now() + budget.crawl_timeout_ms - 3000;
 
@@ -152,6 +159,10 @@ Deno.serve(async (req) => {
         budget,
         deadlineAt,
       });
+    } else if (budget.max_competitors <= 0) {
+      competitorResult.skipped = true;
+      competitorResult.reason =
+        "Competitor checks were skipped for this scan so the main website scan returns reliably.";
     } else {
       competitorResult.skipped = true;
       competitorResult.reason =
@@ -230,7 +241,7 @@ Deno.serve(async (req) => {
         competitor_attempts_max:
           competitorResult.browser_render_attempts_max || 0,
         usage_policy:
-          "Browser rendering is used only when a starting page, start variant, or selected high-priority page needs a rendered check.",
+          "Browser rendering is used when the starting page, a start variant, or a selected high-priority page needs a rendered check.",
       },
 
       crawl_scope: crawlResult.crawl_scope,
@@ -266,6 +277,7 @@ Deno.serve(async (req) => {
         skipped_outside_prefix_count: crawlResult.skipped_outside_prefix_count,
         start_url_candidates: crawlResult.start_url_candidates,
         fetch_error_class_counts: countFetchErrorClasses(crawlResult.pages),
+        browserless_token_present: Boolean(BROWSERLESS_TOKEN),
         robots_policy:
           "robots.txt is used to discover sitemap URLs only. Disallow rules are not enforced in this version.",
         request_received_at: new Date().toISOString(),
@@ -315,8 +327,13 @@ function resolveBudget(body: any) {
   const scanMode = MODE_LIMITS[requestedMode] ? requestedMode : "deep";
   const defaults = MODE_LIMITS[scanMode];
 
+  const hasRequestedMaxPages = body.max_pages !== undefined;
   const requestedMaxPages = Number(body.max_pages || 0);
+
+  const hasRequestedMaxCompetitors = body.max_competitors !== undefined;
   const requestedMaxCompetitors = Number(body.max_competitors || 0);
+
+  const hasRequestedTimeout = body.crawl_timeout_ms !== undefined;
   const requestedTimeout = Number(body.crawl_timeout_ms || 0);
 
   const requestedBrowserAttempts =
@@ -324,29 +341,30 @@ function resolveBudget(body: any) {
       ? Number(body.max_browser_render_attempts)
       : ENV_MAX_BROWSER_RENDER_ATTEMPTS;
 
+  const browserAttempts =
+    BROWSERLESS_TOKEN && requestedBrowserAttempts <= 0
+      ? 1
+      : requestedBrowserAttempts;
+
   return {
     scan_mode: scanMode,
 
     max_pages:
-      requestedMaxPages > 0
+      hasRequestedMaxPages && requestedMaxPages > 0
         ? Math.max(1, Math.min(defaults.max_pages, requestedMaxPages))
         : defaults.max_pages,
 
-    max_competitors:
-      requestedMaxCompetitors > 0
-        ? Math.max(
-            0,
-            Math.min(defaults.max_competitors, requestedMaxCompetitors)
-          )
-        : defaults.max_competitors,
+    max_competitors: hasRequestedMaxCompetitors
+      ? Math.max(
+          0,
+          Math.min(defaults.max_competitors, requestedMaxCompetitors)
+        )
+      : defaults.max_competitors,
 
-    max_browser_render_attempts: Math.max(
-      0,
-      Math.min(3, requestedBrowserAttempts)
-    ),
+    max_browser_render_attempts: Math.max(0, Math.min(3, browserAttempts)),
 
     crawl_timeout_ms:
-      requestedTimeout > 0
+      hasRequestedTimeout && requestedTimeout > 0
         ? Math.max(
             20000,
             Math.min(defaults.crawl_timeout_ms, requestedTimeout)
@@ -867,7 +885,10 @@ async function fetchHtmlWithRetry(url: string) {
     statusCode = response.status;
     finalUrl = response.url || url;
     contentType = response.headers.get("content-type") || "";
-    fetchErrorClass = classifyFetchError(new Error(`HTTP ${statusCode}`), statusCode);
+    fetchErrorClass = classifyFetchError(
+      new Error(`HTTP ${statusCode}`),
+      statusCode
+    );
 
     if (shouldRetryFetch(fetchErrorClass)) {
       await sleep(jitterDelay());
@@ -933,20 +954,25 @@ async function fetchHtmlWithRetry(url: string) {
   };
 }
 
-async function fetchWithTimeout(url: string, timeoutMs: number, redirectCount = 0) {
-  const safe = await getValidatedFetchTarget(url);
+async function fetchWithTimeout(url: string, timeoutMs: number) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
   try {
-    const response = await fetch(safe.target_url, { method: "GET", redirect: "manual", signal: controller.signal, headers: { "Host": safe.host_header, "User-Agent": USER_AGENT, Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.9" } });
-    if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get("location") || "";
-      if (!location) return response;
-      if (redirectCount >= 5) throw new Error("Too many redirects while checking this website.");
-      return await fetchWithTimeout(new URL(location, url).toString(), timeoutMs, redirectCount + 1);
-    }
-    return response;
-  } finally { clearTimeout(timeout); }
+    return await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: controller.signal,
+      headers: {
+        "User-Agent": USER_AGENT,
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function classifyFetchError(error: unknown, statusCode = 0) {
@@ -1021,10 +1047,11 @@ function shouldRetryWithBrowser(page: any, allowBlockedBrowserRender: boolean) {
 }
 
 async function fetchWithBrowserless(url: string) {
-  await assertPublicHttpUrlIfPresent(url);
-  await assertPublicHttpUrlIfPresent(BROWSERLESS_CONTENT_ENDPOINT);
   const endpoint = new URL(BROWSERLESS_CONTENT_ENDPOINT);
-  if (BROWSERLESS_TOKEN && !endpoint.searchParams.has("token")) endpoint.searchParams.set("token", BROWSERLESS_TOKEN);
+
+  if (BROWSERLESS_TOKEN && !endpoint.searchParams.has("token")) {
+    endpoint.searchParams.set("token", BROWSERLESS_TOKEN);
+  }
 
   const controller = new AbortController();
   const timeout = setTimeout(
@@ -1642,9 +1669,14 @@ function looksLikeLandingPage(url: string) {
     const last = parts[parts.length - 1] || "";
 
     if (
-      ["category", "categories", "place", "places", "activity", "activities"].some(
-        (word) => parts.includes(word)
-      )
+      [
+        "category",
+        "categories",
+        "place",
+        "places",
+        "activity",
+        "activities",
+      ].some((word) => parts.includes(word))
     ) {
       return parts.length <= 4;
     }
@@ -2007,16 +2039,53 @@ function decodeHtmlEntities(value: string) {
 /* URL filtering                                                               */
 /* -------------------------------------------------------------------------- */
 
-async function getValidatedFetchTarget(value: string) { const original = new URL(String(value || "")); const ips = await resolvePublicIps(original.hostname); const ip = ips.find((item: string) => isIpv4Address(item) && isPublicIp(item)); if (!ip || ips.some((item: string) => !isPublicIp(item))) throw new Error("Private or local network addresses cannot be scanned."); const target = new URL(original.toString()); target.hostname = ip; return { target_url: target.toString(), host_header: original.host }; }
-async function assertPublicHttpUrlIfPresent(value: string) { const text = String(value || "").trim(); if (/^https?:\/\//i.test(text)) await getValidatedFetchTarget(text); }
-async function resolvePublicIps(hostname: string) { const host = String(hostname || "").replace(/^\[|\]$/g, "").toLowerCase(); if (!host || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) throw new Error("Private or local network addresses cannot be scanned."); if (isIpv4Address(host) || host.includes(":")) return [host]; const response = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=A`, { headers: { Accept: "application/dns-json" } }); const data = await response.json().catch(() => ({})); return (data.Answer || []).map((answer: any) => String(answer?.data || "")).filter(isIpv4Address); }
-function isIpv4Address(value: string) { const parts = String(value || "").split("."); return parts.length === 4 && parts.every((part) => /^\d+$/.test(part) && Number(part) >= 0 && Number(part) <= 255); }
-function isPublicIp(ip: string) { const value = String(ip || "").toLowerCase(); return isIpv4Address(value) ? isPublicIpv4(value) : value.includes(":") && value !== "::" && !value.startsWith("::1") && !value.startsWith("fc") && !value.startsWith("fd") && !value.startsWith("fe80"); }
-function isPublicIpv4(ip: string) { const [a, b] = ip.split(".").map(Number); return !(a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && (b === 0 || b === 168)) || (a === 198 && (b === 18 || b === 19)) || ip === "255.255.255.255"); }
+function normalizeWebsiteUrl(value: string) {
+  const raw = String(value || "").trim();
 
-function normalizeWebsiteUrl(value: string) { try { const raw = String(value || "").trim(); if (!raw) return ""; const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`); url.hash = ""; return url.toString(); } catch { return ""; } }
+  if (!raw) return "";
 
-function cleanUrl(value: string) { try { const url = new URL(String(value || "")); url.hash = ""; for (const param of ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid", "gclid", "msclkid"]) url.searchParams.delete(param); if (url.pathname !== "/" && url.pathname.endsWith("/")) url.pathname = url.pathname.slice(0, -1); return url.toString(); } catch { return ""; } }
+  try {
+    const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    const url = new URL(withProtocol);
+
+    url.hash = "";
+
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+function cleanUrl(value: string) {
+  try {
+    const url = new URL(String(value || ""));
+
+    url.hash = "";
+
+    const removableParams = [
+      "utm_source",
+      "utm_medium",
+      "utm_campaign",
+      "utm_term",
+      "utm_content",
+      "fbclid",
+      "gclid",
+      "msclkid",
+    ];
+
+    for (const param of removableParams) {
+      url.searchParams.delete(param);
+    }
+
+    if (url.pathname !== "/" && url.pathname.endsWith("/")) {
+      url.pathname = url.pathname.slice(0, -1);
+    }
+
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
 
 function normalizePath(pathname: string) {
   const path = String(pathname || "/");
@@ -2372,7 +2441,7 @@ function buildRecommendedFollowupScans({
       host: item.host,
       base_domain: baseDomain,
       reason:
-        "This related subdomain was linked from the scanned website. It was not crawled in this scan so the 150-page limit stays focused.",
+        "This related subdomain was linked from the scanned website. It was not crawled in this scan so the page limit stays focused.",
       seen_link_count: item.count,
       seen_on_pages: item.seen_on_pages,
       recommended_action:
@@ -3296,7 +3365,7 @@ function buildFollowupScanFindings({
       issue_title: "Related website sections may need separate scans",
       title: "Related website sections may need separate scans",
       plain_english_explanation:
-        "The scanner found related subdomains linked from this website. They were not crawled in this scan so the 150-page limit stays focused.",
+        "The scanner found related subdomains linked from this website. They were not crawled in this scan so the page limit stays focused.",
       why_it_matters:
         "Large websites often split important content across subdomains. These can be scanned separately if they matter to the business.",
       recommendation:

@@ -59,7 +59,7 @@ export default function Landing() {
           <div className="mx-auto max-w-4xl text-center">
             <div className="mb-6 inline-flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700">
               <ShieldCheck className="h-3.5 w-3.5" />
-              Read-only website scan
+              Read-only scan — no site changes
             </div>
 
             <h1 className="text-4xl font-extrabold tracking-tight text-slate-950 sm:text-6xl">

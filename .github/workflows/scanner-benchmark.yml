@@ -39,6 +39,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r scanner-api/requirements.txt
 
+      - name: Run scanner tests
+        working-directory: scanner-api
+        run: pytest
+
       - name: Run benchmark
         working-directory: scanner-api
         run: |

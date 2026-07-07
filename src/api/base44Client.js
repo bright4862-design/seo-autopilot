@@ -24,6 +24,13 @@ const RECOMMENDATION_ARRAY_KEYS = [
   'issues',
 ];
 
+const PAGE_ARRAY_KEYS = [
+  'pages',
+  'crawled_pages',
+  'scanned_pages',
+  'crawl_pages',
+];
+
 function parsePossibleJson(value) {
   if (!value || typeof value !== 'string') return null;
   const text = value.trim();
@@ -105,40 +112,55 @@ function sanitizeFunctionResponse(functionName, response) {
 function sanitizeResponseContainer(value, depth = 0) {
   if (!value || typeof value !== 'object' || depth > 5) return;
 
+  const blockedPageKeys = collectBlockedPageKeys(value);
+  const keptFixIds = new Set();
+
   for (const key of RECOMMENDATION_ARRAY_KEYS) {
-    if (Array.isArray(value[key])) value[key] = sanitizeRecommendationArray(value[key]);
+    if (Array.isArray(value[key])) {
+      value[key] = sanitizeRecommendationArray(value[key], blockedPageKeys);
+      for (const item of value[key]) addFixId(keptFixIds, item);
+    }
   }
 
-  if (Array.isArray(value.top_recommended_actions)) value.top_recommended_actions = value.top_recommended_actions.map(sanitizeAction).filter(Boolean);
-  if (Array.isArray(value.recommended_actions)) value.recommended_actions = value.recommended_actions.map(sanitizeAction).filter(Boolean);
+  if (Array.isArray(value.top_recommended_actions)) value.top_recommended_actions = sanitizeActions(value.top_recommended_actions, blockedPageKeys, keptFixIds);
+  if (Array.isArray(value.recommended_actions)) value.recommended_actions = sanitizeActions(value.recommended_actions, blockedPageKeys, keptFixIds);
 
   for (const nestedKey of ['data', 'result', 'body', 'payload']) {
     if (value[nestedKey] && typeof value[nestedKey] === 'object') sanitizeResponseContainer(value[nestedKey], depth + 1);
   }
 }
 
-function sanitizeRecommendationArray(items) {
-  return items.map(sanitizeRecommendation).filter(Boolean);
+function sanitizeRecommendationArray(items, blockedPageKeys = new Set()) {
+  return items.map((item) => sanitizeRecommendation(item, blockedPageKeys)).filter(Boolean);
 }
 
-function sanitizeRecommendation(item) {
+function sanitizeRecommendation(item, blockedPageKeys = new Set()) {
   if (!item || typeof item !== 'object') return item;
-  const affectedPages = cleanPageList([...(firstArray([item.affected_pages, item.pages, item.page_urls]) || []), item.page_url || item.url || '']);
-  const artifactOnly = affectedPages.length === 0 && hasArtifactUrl([item.page_url, item.url, ...(firstArray([item.affected_pages, item.pages, item.page_urls]) || [])]);
+  const originalPages = [...(firstArray([item.affected_pages, item.pages, item.page_urls]) || []), item.page_url || item.url || ''];
+  const affectedPages = cleanPageList(originalPages);
+  const artifactOnly = affectedPages.length === 0 && hasArtifactUrl(originalPages);
   if (artifactOnly) return null;
+
+  const blockedAccess = isBlockedAccessRecommendation(item);
+  let displayPages = affectedPages;
+
+  if (!blockedAccess && blockedPageKeys.size > 0 && affectedPages.length > 0) {
+    displayPages = affectedPages.filter((page) => !blockedPageKeys.has(normalizePageKey(page)));
+    if (displayPages.length === 0) return null;
+  }
 
   const next = { ...item };
   next.title = cleanFixTitle(next.title || next.issue_title || '');
   next.issue_title = cleanFixTitle(next.issue_title || next.title || '');
 
-  if (affectedPages.length > 0) {
-    next.affected_pages = affectedPages;
-    next.pages = affectedPages;
-    next.page_urls = affectedPages;
-    next.page_url = isArtifactUrl(next.page_url) ? affectedPages[0] : (next.page_url || affectedPages[0]);
+  if (displayPages.length > 0) {
+    next.affected_pages = displayPages;
+    next.pages = displayPages;
+    next.page_urls = displayPages;
+    next.page_url = isArtifactUrl(next.page_url) || isBlockedPageKey(next.page_url, blockedPageKeys) ? displayPages[0] : (next.page_url || displayPages[0]);
   }
 
-  if (affectedPages.length <= 1 && isRepeatedTemplateText(`${next.title} ${next.issue_title} ${next.plain_english_explanation || ''}`)) {
+  if (!blockedAccess && displayPages.length <= 1 && isRepeatedTemplateText(`${next.title} ${next.issue_title} ${next.plain_english_explanation || ''}`)) {
     next.title = singlePageTitle(next);
     next.issue_title = next.title;
     next.plain_english_explanation = cleanSinglePageExplanation(next.plain_english_explanation || next.explanation || 'Review this issue on the affected page.');
@@ -151,13 +173,49 @@ function sanitizeRecommendation(item) {
   return next;
 }
 
-function sanitizeAction(action) {
+function sanitizeActions(actions, blockedPageKeys = new Set(), keptFixIds = new Set()) {
+  return actions
+    .map((action) => sanitizeAction(action, blockedPageKeys))
+    .filter((action) => action && (!action.fix_id || keptFixIds.size === 0 || keptFixIds.has(action.fix_id)));
+}
+
+function sanitizeAction(action, blockedPageKeys = new Set()) {
   if (!action || typeof action !== 'object') return action;
   const next = { ...action };
   next.title = cleanFixTitle(next.title || next.issue_title || '');
   next.issue_title = cleanFixTitle(next.issue_title || next.title || '');
-  next.affected_pages = cleanPageList(firstArray([next.affected_pages, next.pages, next.page_urls]));
+  next.affected_pages = cleanPageList(firstArray([next.affected_pages, next.pages, next.page_urls])).filter((page) => !blockedPageKeys.has(normalizePageKey(page)) || isBlockedAccessRecommendation(next));
   return hasArtifactUrl([next.page_url, next.url, ...(next.affected_pages || [])]) && next.affected_pages.length === 0 ? null : next;
+}
+
+function collectBlockedPageKeys(value) {
+  const blocked = new Set();
+
+  for (const key of PAGE_ARRAY_KEYS) {
+    for (const page of Array.isArray(value[key]) ? value[key] : []) {
+      if (isBlockedAccessPage(page)) addPageKey(blocked, page?.final_url || page?.url || page?.path || '');
+    }
+  }
+
+  for (const key of RECOMMENDATION_ARRAY_KEYS) {
+    for (const item of Array.isArray(value[key]) ? value[key] : []) {
+      if (!isBlockedAccessRecommendation(item)) continue;
+      for (const page of cleanPageList([...(firstArray([item.affected_pages, item.pages, item.page_urls]) || []), item.page_url || item.url || ''])) addPageKey(blocked, page);
+    }
+  }
+
+  return blocked;
+}
+
+function isBlockedAccessPage(page = {}) {
+  const text = `${page?.status_code || ''} ${page?.fetch_error || ''} ${page?.title || ''} ${page?.h1 || ''} ${page?.meta_description || ''}`.toLowerCase();
+  return Number(page?.status_code || 0) === 429 || /429|too many requests|rate[- ]?limit|rate limited|bot protection|cloudflare|verifying your connection|checking your browser/.test(text);
+}
+
+function isBlockedAccessRecommendation(item = {}) {
+  const text = `${item?.rule || ''} ${item?.category || ''} ${item?.title || ''} ${item?.issue_title || ''} ${item?.current_value || ''} ${item?.plain_english_explanation || ''} ${item?.recommended_value || ''} ${item?.source || ''}`.toLowerCase();
+  const status = Number(item?.status_code || item?.current_status_code || item?.http_status || item?.evidence?.status_code || 0);
+  return status === 429 || /429|too many requests|rate[- ]?limit|rate limited|bot protection|cloudflare|verifying your connection|connection verification|blocked_page_429|rate_limited_page|crawler access|scan coverage/.test(text);
 }
 
 function cleanPageList(values = []) {
@@ -172,6 +230,20 @@ function cleanPageList(values = []) {
     output.push(text);
   }
   return output;
+}
+
+function addPageKey(target, value) {
+  const key = normalizePageKey(value);
+  if (key) target.add(key);
+}
+
+function addFixId(target, item = {}) {
+  const id = item?.fix_id || item?.id;
+  if (id) target.add(id);
+}
+
+function isBlockedPageKey(value, blockedPageKeys) {
+  return Boolean(value && blockedPageKeys?.has?.(normalizePageKey(value)));
 }
 
 function normalizePageKey(value) {
@@ -189,6 +261,7 @@ function cleanFixTitle(value) {
     .replace(/category page pages/gi, 'category pages')
     .replace(/standard page pages/gi, 'standard pages')
     .replace(/product page pages/gi, 'product pages')
+    .replace(/contact page pages/gi, 'contact pages')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -215,7 +288,7 @@ function isRepeatedTemplateText(value) {
 }
 
 function isImageAltIssue(item = {}) {
-  return /image_alt|image alt|alt text|image description/i.test(`${item.rule || ''} ${item.category || ''} ${item.title || ''} ${item.issue_title || ''}`);
+  return /image_alt|image alt|alt text|missing alt|image description/i.test(`${item.rule || ''} ${item.category || ''} ${item.title || ''} ${item.issue_title || ''}`);
 }
 
 function isOneMissingAlt(item = {}) {

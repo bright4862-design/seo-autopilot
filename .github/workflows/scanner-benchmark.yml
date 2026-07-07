@@ -1,0 +1,49 @@
+name: Scanner live benchmark
+
+# Manual, on-demand only. Runs the Python scanner against a live site and prints
+# the benchmark line to the job log. This is a REPORTING job — it does not gate
+# merges or fail on a "does not beat Deno" verdict.
+
+on:
+  workflow_dispatch:
+    inputs:
+      site:
+        description: "Which site to benchmark"
+        required: true
+        default: "pretto"
+        type: choice
+        options:
+          - pretto
+          - meilleurtaux
+          - funbooker
+          - centerstreet
+          - all
+
+jobs:
+  benchmark:
+    name: Live benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install scanner deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scanner-api/requirements.txt
+
+      - name: Run benchmark
+        working-directory: scanner-api
+        run: |
+          if [ "${{ github.event.inputs.site }}" = "all" ]; then
+            python benchmark.py
+          else
+            python benchmark.py "${{ github.event.inputs.site }}"
+          fi

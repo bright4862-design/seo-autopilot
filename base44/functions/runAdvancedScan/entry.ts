@@ -1,16 +1,17 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
-const VERSION = "runAdvancedScan_v18_evidence_arrays";
+const VERSION = "runAdvancedScan_v19_policy_evidence_arrays";
 const CORS_HEADERS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
-const USER_AGENT = "Mozilla/5.0 (compatible; FixListBot/1.8; +https://base44.app)";
+const USER_AGENT = "Mozilla/5.0 (compatible; FixListBot/1.9; +https://base44.app)";
 const FETCH_TIMEOUT_MS = 12000;
 const MAX_BODY_CHARS = 1_500_000;
 const MAX_SITEMAP_FETCHES = 12;
+const DEFAULT_POLICY = { rendering_mode: "unknown", platform_guess: "", priority_boost_patterns: [], priority_deprioritize_patterns: [], skip_patterns: [], source: "default", error: "" };
 const MODE_LIMITS = {
-  basic: { max_pages: 25, crawl_timeout_ms: 35000, use_sitemap: false },
-  quick: { max_pages: 40, crawl_timeout_ms: 45000, use_sitemap: true },
-  deep: { max_pages: 85, crawl_timeout_ms: 75000, use_sitemap: true },
-  advanced: { max_pages: 150, crawl_timeout_ms: 90000, use_sitemap: true },
+  basic: { max_pages: 25, crawl_timeout_ms: 35000, use_sitemap: false, derive_policy: false },
+  quick: { max_pages: 40, crawl_timeout_ms: 45000, use_sitemap: true, derive_policy: false },
+  deep: { max_pages: 85, crawl_timeout_ms: 75000, use_sitemap: true, derive_policy: true },
+  advanced: { max_pages: 150, crawl_timeout_ms: 90000, use_sitemap: true, derive_policy: true },
 };
 const TRUST = ["/about", "/contact", "/privacy", "/terms", "/security", "/legal", "/mentions-legales", "/cgv"];
 const ROUTE_SEGMENTS = ["/login", "/register", "/account", "/my-account", "/dashboard", "/cart", "/checkout", "/billing", "/admin"];
@@ -30,8 +31,9 @@ Deno.serve(async (req) => {
     if (!websiteUrl) return jsonResponse({ success: false, version: VERSION, error: "Missing or invalid website_url.", received_keys: Object.keys(rawBody || {}), resolved_keys: Object.keys(body || {}) }, 400);
     const safety = await validatePublicHttpUrl(websiteUrl);
     if (!safety.ok) return jsonResponse({ success: false, version: VERSION, error: safety.reason, received_keys: Object.keys(rawBody || {}), resolved_keys: Object.keys(body || {}) }, 400);
+    const invokeLLM = typeof base44.integrations?.Core?.InvokeLLM === "function" ? async (prompt) => await base44.integrations.Core.InvokeLLM({ prompt }) : null;
 
-    const crawlResult = await crawlWebsite({ startUrl: websiteUrl, budget, pathPrefix: body.path_prefix || body.requested_path_prefix || body.crawl_path_prefix || "" });
+    const crawlResult = await crawlWebsite({ startUrl: websiteUrl, budget, pathPrefix: body.path_prefix || body.requested_path_prefix || body.crawl_path_prefix || "", invokeLLM });
     const rawFindings = buildFindings(crawlResult.pages, websiteUrl);
     const groupedFindings = groupFindings(rawFindings);
     const healthScore = calculateHealthScore(crawlResult.pages, groupedFindings);
@@ -43,7 +45,7 @@ Deno.serve(async (req) => {
       success: true,
       version: VERSION,
       scanner_version: VERSION,
-      scanner_profile: "screaming_frog_lite_evidence_arrays_v18",
+      scanner_profile: "screaming_frog_lite_policy_evidence_arrays_v19",
       screaming_frog_lite_enabled: true,
       website_url: websiteUrl,
       normalized_url: websiteUrl,
@@ -61,6 +63,8 @@ Deno.serve(async (req) => {
       recommendations: groupedFindings,
       health_score: healthScore,
       scan_summary: buildScanSummary(crawlResult.pages, groupedFindings, healthScore, crawlResult.pages_found, suspiciousUrlArtifacts.length),
+      crawl_policy: crawlResult.crawl_policy,
+      crawl_policy_source: crawlResult.crawl_policy?.source || "default",
       verified_failed_pages: verifiedFailedPages,
       suspicious_url_artifacts: suspiciousUrlArtifacts,
       verified_failed_page_count: verifiedFailedPages.length,
@@ -75,6 +79,8 @@ Deno.serve(async (req) => {
         verified_failed_pages: verifiedFailedPages.length,
         suspicious_url_artifacts: suspiciousUrlArtifacts.length,
         route_boundary_candidates_crawled: crawlResult.pages.filter((page) => page.route_boundary_candidate).length,
+        crawl_policy: crawlResult.crawl_policy,
+        crawl_policy_source: crawlResult.crawl_policy?.source || "default",
         url_evidence_summary: evidenceSummary,
         crawl_warnings: crawlResult.warnings,
       },
@@ -86,18 +92,20 @@ Deno.serve(async (req) => {
   }
 });
 
-async function crawlWebsite({ startUrl, budget, pathPrefix }) {
+async function crawlWebsite({ startUrl, budget, pathPrefix, invokeLLM }) {
   const start = new URL(startUrl);
   const origin = start.origin;
   const normalizedPrefix = normalizePathPrefix(pathPrefix || start.pathname || "/");
+  const policy = await deriveCrawlPolicy({ origin, start, budget, invokeLLM });
   const queue = [], seen = new Set(), discoveryMap = new Map(), pages = [], warnings = [], artifacts = [];
   const startedAt = Date.now();
-  enqueueUrl({ queue, discoveryMap, url: start.href, discoveredFrom: "seed", sourcePage: "", linkText: "", artifactSink: artifacts });
+  if (policy?.source === "failed" && policy?.error) warnings.push(`Crawl policy fell back to default: ${policy.error}`);
+  enqueueUrl({ queue, discoveryMap, url: start.href, discoveredFrom: "seed", sourcePage: "", linkText: "", artifactSink: artifacts, policy });
 
   if (budget.use_sitemap) {
     const deadline = Date.now() + Math.min(20000, Math.floor(budget.crawl_timeout_ms * 0.25));
     const sitemapUrls = await loadSitemapUrls(origin, budget.max_pages * 4, normalizedPrefix, deadline, artifacts).catch((error) => { warnings.push(`Could not read sitemap: ${error?.message || "unknown error"}`); return []; });
-    for (const url of sitemapUrls) if (queue.length < budget.max_pages * 5 && shouldCrawlUrl(url, start, normalizedPrefix)) enqueueUrl({ queue, discoveryMap, url, discoveredFrom: "sitemap", sourcePage: `${origin}/sitemap.xml`, linkText: "", artifactSink: artifacts });
+    for (const url of sitemapUrls) if (queue.length < budget.max_pages * 5 && shouldCrawlUrl(url, start, normalizedPrefix)) enqueueUrl({ queue, discoveryMap, url, discoveredFrom: "sitemap", sourcePage: `${origin}/sitemap.xml`, linkText: "", artifactSink: artifacts, policy });
   }
 
   while (queue.length > 0 && pages.length < budget.max_pages && Date.now() - startedAt < budget.crawl_timeout_ms) {
@@ -115,11 +123,59 @@ async function crawlWebsite({ startUrl, budget, pathPrefix }) {
       for (const link of extractLinks(fetched.text, fetched.final_url || clean)) {
         if (queue.length + seen.size >= budget.max_pages * 6) break;
         if (isEncodedArtifactPath(link.href)) { recordArtifact(artifacts, { url: link.href, discoveredFrom: "internal_link", sourcePage: fetched.final_url || clean, linkText: link.text }); continue; }
-        if (shouldCrawlUrl(link.href, start, normalizedPrefix) && !seen.has(canonicalizeUrl(link.href))) enqueueUrl({ queue, discoveryMap, url: link.href, discoveredFrom: "internal_link", sourcePage: fetched.final_url || clean, linkText: link.text, artifactSink: artifacts });
+        if (shouldCrawlUrl(link.href, start, normalizedPrefix) && !seen.has(canonicalizeUrl(link.href))) enqueueUrl({ queue, discoveryMap, url: link.href, discoveredFrom: "internal_link", sourcePage: fetched.final_url || clean, linkText: link.text, artifactSink: artifacts, policy });
       }
     }
   }
-  return { pages, pages_found: Math.max(seen.size + queue.length, pages.length), queued_remaining: queue.length, warnings, suspicious_url_artifacts: uniqueArtifacts(artifacts) };
+  return { pages, pages_found: Math.max(seen.size + queue.length, pages.length), queued_remaining: queue.length, warnings, crawl_policy: policy, suspicious_url_artifacts: uniqueArtifacts(artifacts) };
+}
+
+async function deriveCrawlPolicy({ origin, start, budget, invokeLLM }) {
+  if (!budget.derive_policy) return { ...DEFAULT_POLICY, source: "disabled" };
+  if (typeof invokeLLM !== "function") return { ...DEFAULT_POLICY, source: "unavailable", error: "InvokeLLM unavailable" };
+  try {
+    const [home, robots, sitemapIndex] = await Promise.all([safeFetchText(start.href).catch(() => null), safeFetchText(`${origin}/robots.txt`).catch(() => null), safeFetchText(`${origin}/sitemap.xml`).catch(() => null)]);
+    const prompt = `Return only JSON for an SEO crawl policy with keys rendering_mode, platform_guess, priority_boost_patterns, priority_deprioritize_patterns, skip_patterns. Origin: ${origin}. Home words: ${stripHtml(home?.text || "").slice(0, 1200)}. Robots: ${(robots?.text || "").slice(0, 1200)}. Sitemap sample: ${(sitemapIndex?.text || "").slice(0, 1800)}`;
+    const raw = await withTimeoutPromise(invokeLLM(prompt), 9000);
+    return { ...sanitizePolicy(raw), source: "ai", error: "" };
+  } catch (error) {
+    return { ...DEFAULT_POLICY, source: "failed", error: String(error?.message || error || "policy failed").slice(0, 180) };
+  }
+}
+
+function sanitizePolicy(raw) {
+  const parsed = parsePolicyResponse(raw);
+  const cleanList = (value) => unique((Array.isArray(value) ? value : []).map(cleanPolicyPattern).filter(Boolean)).slice(0, 8);
+  const protectedPatterns = ["/", "/contact", "/about", "/privacy", "/terms", "/product", "/products", "/category", "/listing", "/login", "/account", "/cart", "/checkout", "/dashboard", "/devis", "/quote", "/booking", "/reservation", "/simulation", "/calculator", "/pricing", "/demo"];
+  const skipPatterns = cleanList(parsed.skip_patterns).filter((p) => !isRouteBoundaryCandidate(p) && !matchesAnyPattern(p, protectedPatterns));
+  return { rendering_mode: ["ssr", "csr", "hybrid", "unknown"].includes(parsed.rendering_mode) ? parsed.rendering_mode : "unknown", platform_guess: String(parsed.platform_guess || "").slice(0, 60), priority_boost_patterns: cleanList(parsed.priority_boost_patterns), priority_deprioritize_patterns: cleanList(parsed.priority_deprioritize_patterns), skip_patterns: skipPatterns };
+}
+
+function parsePolicyResponse(raw) {
+  if (raw && typeof raw === "object") {
+    if (raw.rendering_mode || raw.priority_boost_patterns || raw.priority_deprioritize_patterns || raw.skip_patterns) return raw;
+    if (raw.data?.data) return parsePolicyResponse(raw.data.data);
+    if (raw.data?.result) return parsePolicyResponse(raw.data.result);
+    if (raw.result?.data) return parsePolicyResponse(raw.result.data);
+    if (raw.result) return parsePolicyResponse(raw.result);
+    if (raw.content?.[0]?.text) return parsePolicyResponse(raw.content[0].text);
+    if (raw.text) return parsePolicyResponse(raw.text);
+  }
+  try {
+    const text = String(raw || "").replace(/```json|```/g, "").trim();
+    const first = text.indexOf("{");
+    const last = text.lastIndexOf("}");
+    return first >= 0 && last > first ? JSON.parse(text.slice(first, last + 1)) : DEFAULT_POLICY;
+  } catch {
+    return DEFAULT_POLICY;
+  }
+}
+
+function cleanPolicyPattern(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw || raw.length > 120) return "";
+  if (/^https?:\/\//i.test(raw)) { try { return new URL(raw).pathname || "/"; } catch { return ""; } }
+  return raw.startsWith("/") || raw.includes("*") ? raw : `/${raw}`;
 }
 
 async function safeFetchText(url, redirectCount = 0) {
@@ -177,7 +233,7 @@ async function fetchSitemapLocs(sitemapUrl, fetchedSitemaps, artifactSink = []) 
   return output;
 }
 
-function enqueueUrl({ queue, discoveryMap, url, discoveredFrom, sourcePage, linkText, artifactSink = [] }) {
+function enqueueUrl({ queue, discoveryMap, url, discoveredFrom, sourcePage, linkText, artifactSink = [], policy }) {
   const clean = canonicalizeUrl(url);
   if (!clean) { if (isEncodedArtifactPath(url)) recordArtifact(artifactSink, { url, discoveredFrom, sourcePage, linkText }); return; }
   if (isEncodedArtifactPath(clean)) { recordArtifact(artifactSink, { url: clean, discoveredFrom, sourcePage, linkText }); return; }
@@ -186,22 +242,28 @@ function enqueueUrl({ queue, discoveryMap, url, discoveredFrom, sourcePage, link
   record.source_pages = unique([...record.source_pages, cleanPath(sourcePage || "")].filter(Boolean)).slice(0, 8);
   record.link_text_samples = unique([...record.link_text_samples, cleanText(linkText || "")].filter(Boolean)).slice(0, 5);
   discoveryMap.set(clean, record);
-  const priority = computeQueuePriority(cleanPath(clean), record);
+  const priority = computeQueuePriority(cleanPath(clean), record, policy);
   const existing = queue.find((item) => canonicalizeUrl(item.url || item) === clean);
   if (existing) existing.priority = Math.max(existing.priority || 0, priority); else queue.push({ url: clean, priority });
 }
 
-function computeQueuePriority(path, discovery) {
+function computeQueuePriority(path, discovery, policy) {
   const clean = cleanPath(path).toLowerCase();
   if (isEncodedArtifactPath(clean)) return 0;
   const sources = discovery?.discovered_from || [];
   const family = classifyTemplateFamily(clean);
+  const route = isRouteBoundaryCandidate(clean);
   let score = sources.includes("seed") ? 100 : sources.includes("sitemap") ? 70 : 50;
   if (sources.includes("sitemap") && sources.includes("internal_link")) score = 82;
   if (TRUST.some((p) => clean.startsWith(p))) score += 25;
   if (["conversion", "product_detail", "category_listing", "contact"].includes(family)) score += 22;
-  if (isRouteBoundaryCandidate(clean)) score += 12;
+  if (route) score += 12;
   if (isLowValuePage(clean)) score -= 25;
+  if (policy) {
+    if (matchesAnyPattern(clean, policy.priority_boost_patterns)) score += route ? 8 : 35;
+    if (matchesAnyPattern(clean, policy.priority_deprioritize_patterns)) score -= route ? 10 : 35;
+    if (matchesAnyPattern(clean, policy.skip_patterns) && !route) score -= 45;
+  }
   return Math.max(0, Math.min(150, score));
 }
 
@@ -325,6 +387,8 @@ function stripHtml(html) { return cleanText(String(html || "").replace(/<script[
 function cleanText(value) { return decodeHtml(String(value || "")).replace(/\s+/g, " ").trim(); }
 function decodeHtml(value) { return String(value || "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'"); }
 function escapeRegExp(value) { return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+function matchesAnyPattern(path, patterns = []) { const clean = cleanPath(path).toLowerCase(); return (patterns || []).some((pattern) => { const p = cleanPolicyPattern(pattern); if (!p) return false; if (p.includes("*")) return new RegExp(`^${escapeRegExp(p).replace(/\\\*/g, ".*")}`).test(clean); return clean.includes(p); }); }
 function unique(values) { return Array.from(new Set((values || []).filter((value) => value !== undefined && value !== null && String(value).trim() !== ""))); }
 function humanize(value) { return String(value || "template").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim(); }
 function stableId(input) { let hash = 0; const value = String(input || ""); for (let i = 0; i < value.length; i += 1) { hash = (hash << 5) - hash + value.charCodeAt(i); hash |= 0; } return `finding_${Math.abs(hash)}`; }
+function withTimeoutPromise(promise, timeoutMs) { let timeoutId; const timeout = new Promise((_, reject) => { timeoutId = setTimeout(() => reject(new Error(`Policy derivation timed out after ${Math.round(timeoutMs / 1000)} seconds.`)), timeoutMs); }); return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId)); }

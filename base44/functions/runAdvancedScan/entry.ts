@@ -1,6 +1,6 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
-const VERSION = "runAdvancedScan_v11_ssrf_hardened_screaming_frog_lite";
+const VERSION = "runAdvancedScan_v12_business_intent_screaming_frog_lite";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -8,18 +8,41 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const USER_AGENT = "Mozilla/5.0 (compatible; SEOAutopilotBot/1.0; +https://base44.app)";
+const USER_AGENT = "Mozilla/5.0 (compatible; FixListBot/1.2; +https://base44.app)";
 const FETCH_TIMEOUT_MS = 12000;
-const SITEMAP_FETCH_TIMEOUT_MS = 8000;
 const MAX_REDIRECTS = 4;
 const MAX_BODY_CHARS = 1_500_000;
 
-const MODE_LIMITS: Record<string, { max_pages: number; crawl_timeout_ms: number; concurrency: number; use_sitemap: boolean }> = {
-  basic: { max_pages: 25, crawl_timeout_ms: 35000, concurrency: 3, use_sitemap: false },
-  quick: { max_pages: 40, crawl_timeout_ms: 45000, concurrency: 3, use_sitemap: true },
-  deep: { max_pages: 85, crawl_timeout_ms: 75000, concurrency: 4, use_sitemap: true },
-  advanced: { max_pages: 150, crawl_timeout_ms: 90000, concurrency: 5, use_sitemap: true },
+const MODE_LIMITS = {
+  basic: { max_pages: 25, crawl_timeout_ms: 35000, use_sitemap: false },
+  quick: { max_pages: 40, crawl_timeout_ms: 45000, use_sitemap: true },
+  deep: { max_pages: 85, crawl_timeout_ms: 75000, use_sitemap: true },
+  advanced: { max_pages: 150, crawl_timeout_ms: 90000, use_sitemap: true },
 };
+
+const INTERNAL_ROUTE_PATTERNS = [
+  "/admin",
+  "/developer",
+  "/assistant",
+  "/billing",
+  "/login",
+  "/register",
+  "/forgot-password",
+  "/reset-password",
+  "/dashboard",
+  "/issues",
+  "/reports",
+  "/crawl-status",
+  "/metadata",
+  "/canonicals",
+  "/redirects",
+  "/js-rendering",
+  "/competitors",
+];
+
+const TRUST_PAGE_PATTERNS = ["/about", "/contact", "/privacy", "/terms", "/security", "/legal", "/mentions-legales"];
+const UTILITY_SEGMENTS = ["/cart", "/checkout", "/login", "/logout", "/account", "/my-account", "/search", "/feed", "/wp-admin", "/wp-json", "/preview"];
+const LOW_VALUE_SEGMENTS = ["/tag/", "/tags/", "/author/", "/archive/", "/archives/", "/feed/", "/rss/", "/page/"];
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -32,549 +55,637 @@ Deno.serve(async (req) => {
     const body = await safeReadJson(req);
     const budget = resolveBudget(body);
     const websiteUrl = normalizeWebsiteUrl(body.website_url || body.url || "");
-
     if (!websiteUrl) return jsonResponse({ success: false, error: "Missing or invalid website_url." }, 400);
 
     const safety = await validatePublicHttpUrl(websiteUrl);
-    if (!safety.ok) {
-      return jsonResponse({ success: false, version: VERSION, error: safety.reason }, 400);
-    }
+    if (!safety.ok) return jsonResponse({ success: false, version: VERSION, error: safety.reason }, 400);
 
-    const deadlineAt = Date.now() + budget.crawl_timeout_ms - 3000;
-    const crawlResult = await crawlWebsite({ startUrl: websiteUrl, body, budget, deadlineAt });
-    const screamingFrogLite = runScreamingFrogLiteAudit({ pages: crawlResult.pages, startUrl: websiteUrl });
-    const coverageFindings = buildCoverageFindings({ pages: crawlResult.pages, startUrl: websiteUrl });
-    const allRawFindings = [...coverageFindings, ...screamingFrogLite.raw_findings];
-    const groupedFindings = groupFindings(allRawFindings);
-    const healthScore = calculateHealthScore({ pages: crawlResult.pages, findings: groupedFindings, technicalSummary: screamingFrogLite.technical_audit_summary });
-    const scanSummary = buildScanSummary({ websiteUrl, body, healthScore, pages: crawlResult.pages, findings: groupedFindings, technicalSummary: screamingFrogLite.technical_audit_summary, crawlResult });
+    const crawlResult = await crawlWebsite({ startUrl: websiteUrl, budget, pathPrefix: body.path_prefix || body.requested_path_prefix || body.crawl_path_prefix || "" });
+    const rawFindings = buildFindings({ pages: crawlResult.pages, websiteUrl, crawlResult });
+    const groupedFindings = groupFindings(rawFindings);
+    const healthScore = calculateHealthScore({ pages: crawlResult.pages, findings: groupedFindings });
+    const summary = buildScanSummary({ pages: crawlResult.pages, findings: groupedFindings, healthScore, crawlResult });
 
     return jsonResponse({
       success: true,
       version: VERSION,
+      scanner_version: VERSION,
+      scanner_profile: "screaming_frog_lite_business_intent_v12",
+      screaming_frog_lite_enabled: true,
       website_url: websiteUrl,
-      business_name: body.business_name || "",
-      scan_mode: budget.scan_mode,
-      max_pages_requested: body.max_pages === undefined ? null : Number(body.max_pages),
-      max_pages_effective: budget.max_pages,
-      max_competitors_effective: 0,
+      normalized_url: websiteUrl,
+      scan_mode: body.scan_mode || body.audit_profile || "advanced",
+      audit_profile: body.audit_profile || body.scan_mode || "advanced",
       pages_found: crawlResult.pages_found,
       pages_crawled: crawlResult.pages.length,
       queued_remaining: crawlResult.queued_remaining,
-      health_score: healthScore,
-      seo_score: healthScore,
-      scan_summary: scanSummary,
-      site_summary: scanSummary,
-      important_page_patterns: crawlResult.important_page_patterns,
-      deprioritized_page_patterns: crawlResult.deprioritized_page_patterns,
-      recommended_followup_scans: [],
-      sitemap_priority_summary: crawlResult.sitemap_priority_summary,
-      technical_audit_summary: screamingFrogLite.technical_audit_summary,
-      screaming_frog_lite: {
-        enabled: true,
-        audit_profile: "screaming_frog_lite",
-        raw_findings_count: screamingFrogLite.raw_findings.length,
-        grouped_findings_count: groupedFindings.length,
-      },
-      browser_rendering: {
-        enabled: false,
-        provider: "",
-        mode: "disabled_for_ssrf_safe_launch",
-        max_attempts_per_scan: 0,
-        crawl_attempts_used: 0,
-        competitor_attempts_used: 0,
-        crawl_attempts_max: 0,
-        competitor_attempts_max: 0,
-        usage_policy: "Browserless is disabled in this hardened launch build so user-entered URLs are not forwarded to a separate server-side browser service.",
-      },
-      crawl_scope: crawlResult.crawl_scope,
-      crawl_warnings: crawlResult.warnings,
-      competitor_results: [],
-      competitor_opportunities: [],
-      discovered_competitors: [],
-      competitor_result: {
-        competitor_results: [],
-        competitor_opportunities: [],
-        browser_render_attempts_used: 0,
-        browser_render_attempts_max: 0,
-        skipped: true,
-        reason: "Competitor checks are disabled in this launch build so the main scan stays reliable and SSRF-safe.",
-      },
-      raw_findings: allRawFindings,
-      grouped_findings: groupedFindings,
-      raw_fixes: groupedFindings,
-      fixes: groupedFindings,
-      findings: groupedFindings,
-      recommendations: groupedFindings,
-      issues: groupedFindings,
       crawled_pages: crawlResult.pages,
       pages: crawlResult.pages,
-      scanned_pages: crawlResult.pages,
-      crawl_pages: crawlResult.pages,
-      debug: {
-        version: VERSION,
-        budget,
-        ssrf_hardened: true,
-        security_policy: "Only public http/https URLs on the original same origin are fetched. Local, private, link-local, reserved, credentialed, custom-port, and cross-origin redirect targets are blocked before network requests continue.",
-        skipped_urls: crawlResult.skipped_urls,
-        sitemap_entries_found: crawlResult.sitemap_entries_found,
-        request_received_at: new Date().toISOString(),
+      raw_fixes: groupedFindings,
+      raw_findings: rawFindings,
+      grouped_findings: groupedFindings,
+      findings: groupedFindings,
+      recommendations: groupedFindings,
+      health_score: healthScore,
+      scan_summary: summary,
+      technical_audit_summary: {
+        scanner_version: VERSION,
+        screaming_frog_lite_enabled: true,
+        pages_crawled: crawlResult.pages.length,
+        pages_found: crawlResult.pages_found,
+        failed_pages: crawlResult.pages.filter((page) => page.status_code >= 400 || page.fetch_error).length,
+        route_boundary_risk: routeBoundaryRisk(crawlResult.pages),
+        duplicate_casing_routes: findDuplicateCasingRoutes(crawlResult.pages),
+        free_base44_subdomain: safeHostname(websiteUrl).endsWith(".base44.app"),
+        crawl_warnings: crawlResult.warnings,
       },
+      crawl_warnings: crawlResult.warnings,
     });
   } catch (error) {
-    return jsonResponse({ success: false, version: VERSION, error: getErrorMessage(error) }, 500);
+    console.error("runAdvancedScan failed", error);
+    return jsonResponse({ success: false, version: VERSION, error: "Advanced scan failed. Please try again." }, 500);
   }
 });
 
-async function safeReadJson(req: Request) {
-  try { return await req.json(); } catch { return {}; }
-}
-
-function jsonResponse(data: Record<string, unknown>, status = 200) {
-  return new Response(JSON.stringify(data), { status, headers: { ...CORS_HEADERS, "Content-Type": "application/json; charset=utf-8" } });
-}
-
-function getErrorMessage(error: unknown) {
-  if (error instanceof Error) return error.message;
-  return String(error || "Unknown error");
-}
-
-function resolveBudget(body: any) {
-  const requestedMode = String(body.scan_mode || "deep").toLowerCase();
-  const scanMode = MODE_LIMITS[requestedMode] ? requestedMode : "deep";
-  const defaults = MODE_LIMITS[scanMode];
-  const requestedMaxPages = Number(body.max_pages || 0);
-  const requestedTimeout = Number(body.crawl_timeout_ms || 0);
-
-  return {
-    scan_mode: scanMode,
-    max_pages: requestedMaxPages > 0 ? Math.max(1, Math.min(defaults.max_pages, requestedMaxPages)) : defaults.max_pages,
-    max_competitors: 0,
-    max_browser_render_attempts: 0,
-    crawl_timeout_ms: requestedTimeout > 0 ? Math.max(20000, Math.min(defaults.crawl_timeout_ms, requestedTimeout)) : defaults.crawl_timeout_ms,
-    concurrency: defaults.concurrency,
-    use_sitemap: defaults.use_sitemap,
-  };
-}
-
-function normalizeWebsiteUrl(value: string) {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-  try {
-    const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-    const parsed = new URL(withProtocol);
-    parsed.hash = "";
-    return parsed.toString();
-  } catch {
-    return "";
-  }
-}
-
-async function validatePublicHttpUrl(value: string) {
-  try {
-    const parsed = new URL(value);
-    const syntax = validateUrlSyntax(parsed);
-    if (!syntax.ok) return syntax;
-    const dns = await validateDnsPublic(parsed.hostname);
-    if (!dns.ok) return dns;
-    return { ok: true, reason: "" };
-  } catch {
-    return { ok: false, reason: "Invalid URL." };
-  }
-}
-
-function validateUrlSyntax(parsed: URL) {
-  if (!/^https?:$/i.test(parsed.protocol)) return { ok: false, reason: "Only http and https URLs can be scanned." };
-  if (parsed.username || parsed.password) return { ok: false, reason: "URLs with embedded credentials cannot be scanned." };
-  if (parsed.port && !["80", "443"].includes(parsed.port)) return { ok: false, reason: "Only standard web ports 80 and 443 can be scanned." };
-  const host = normalizeHost(parsed.hostname);
-  if (!host || isBlockedHost(host)) return { ok: false, reason: "Local, private, or reserved hosts cannot be scanned." };
-  if (isIpLiteral(host) && isPrivateOrReservedIp(host)) return { ok: false, reason: "Private or reserved IP addresses cannot be scanned." };
-  return { ok: true, reason: "" };
-}
-
-async function validateDnsPublic(hostname: string) {
-  const host = normalizeHost(hostname);
-  if (isIpLiteral(host)) return isPrivateOrReservedIp(host) ? { ok: false, reason: "Private or reserved IP addresses cannot be scanned." } : { ok: true, reason: "" };
-  const addresses: string[] = [];
-  try { addresses.push(...(await Deno.resolveDns(host, "A"))); } catch {}
-  try { addresses.push(...(await Deno.resolveDns(host, "AAAA"))); } catch {}
-  for (const address of addresses) {
-    if (isPrivateOrReservedIp(address)) return { ok: false, reason: "This hostname resolves to a private or reserved network address." };
-  }
-  return { ok: true, reason: "" };
-}
-
-function normalizeHost(value: string) {
-  return String(value || "").trim().toLowerCase().replace(/^\[/, "").replace(/\]$/, "").replace(/\.$/, "");
-}
-
-function isBlockedHost(hostname: string) {
-  const host = normalizeHost(hostname);
-  return !host || host === "localhost" || host.includes("localhost") || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal") || host.endsWith(".lan") || host.endsWith(".home") || host.endsWith(".corp") || host.endsWith(".test") || host.endsWith(".invalid") || host.endsWith(".example");
-}
-
-function isIpLiteral(hostname: string) {
-  const host = normalizeHost(hostname);
-  return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(":");
-}
-
-function isPrivateOrReservedIp(value: string) {
-  const ip = normalizeHost(value);
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
-    const parts = ip.split(".").map(Number);
-    if (parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return true;
-    const [a, b] = parts;
-    if (a === 0 || a === 10 || a === 127 || a >= 224) return true;
-    if (a === 169 && b === 254) return true;
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 192 && b === 168) return true;
-    if (a === 100 && b >= 64 && b <= 127) return true;
-    return false;
-  }
-  if (ip.includes(":")) {
-    const compact = ip.toLowerCase();
-    return compact === "::" || compact === "::1" || compact.startsWith("fc") || compact.startsWith("fd") || compact.startsWith("fe80") || compact.startsWith("ff") || compact.startsWith("0:");
-  }
-  return false;
-}
-
-async function safeFetch(url: string, timeoutMs: number, allowedOrigin: string) {
-  let currentUrl = cleanUrl(url);
-  for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount += 1) {
-    await assertAllowedFetchTarget(currentUrl, allowedOrigin);
-    const response = await fetchWithTimeoutNoRedirect(currentUrl, timeoutMs);
-    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
-    const location = response.headers.get("location") || "";
-    if (!location) return response;
-    const nextUrl = cleanUrl(new URL(location, currentUrl).toString());
-    await assertAllowedFetchTarget(nextUrl, allowedOrigin);
-    currentUrl = nextUrl;
-  }
-  throw new Error("Too many redirects while fetching page.");
-}
-
-async function assertAllowedFetchTarget(url: string, allowedOrigin: string) {
-  const parsed = new URL(url);
-  const syntax = validateUrlSyntax(parsed);
-  if (!syntax.ok) throw new Error(syntax.reason);
-  if (parsed.origin !== allowedOrigin) throw new Error("Cross-origin redirects or fetches are not allowed during scans.");
-  const dns = await validateDnsPublic(parsed.hostname);
-  if (!dns.ok) throw new Error(dns.reason);
-}
-
-async function fetchWithTimeoutNoRedirect(url: string, timeoutMs: number) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, {
-      method: "GET",
-      redirect: "manual",
-      signal: controller.signal,
-      headers: { "User-Agent": USER_AGENT, Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.9" },
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function crawlWebsite({ startUrl, body, budget, deadlineAt }: { startUrl: string; body: any; budget: any; deadlineAt: number }) {
+async function crawlWebsite({ startUrl, budget, pathPrefix }) {
   const start = new URL(startUrl);
   const origin = start.origin;
-  const requestedPathPrefix = normalizeRequestedPathPrefix(body.crawl_path_prefix || body.start_path_prefix || "");
-  const crawlPathPrefix = requestedPathPrefix || detectLanguagePrefix(start.pathname);
-  const queue: Array<{ url: string; source: string; in_sitemap: boolean }> = [];
-  const discovered = new Set<string>();
-  const fetched = new Set<string>();
-  const skippedUrls: Record<string, number> = {};
-  const warnings: string[] = [];
+  const normalizedPrefix = normalizePathPrefix(pathPrefix || start.pathname || "/");
+  const queue = [];
+  const seen = new Set();
+  const pages = [];
+  const warnings = [];
+  const startedAt = Date.now();
 
-  function noteSkip(reason: string) { skippedUrls[reason] = Number(skippedUrls[reason] || 0) + 1; }
-  function addToQueue(url: string, source: string, inSitemap = false) {
-    const cleaned = cleanUrl(url);
-    if (!cleaned || discovered.has(cleaned)) return;
-    const check = shouldCrawlUrl({ url: cleaned, origin, pathPrefix: crawlPathPrefix });
-    if (!check.ok) { noteSkip(check.reason); return; }
-    discovered.add(cleaned);
-    queue.push({ url: cleaned, source, in_sitemap: inSitemap });
-  }
+  queue.push(start.href);
 
-  addToQueue(startUrl, "start", false);
-
-  if (budget.use_sitemap && Date.now() < deadlineAt - 5000) {
-    for (const entry of await discoverSitemapEntries({ origin, pathPrefix: crawlPathPrefix, deadlineAt, maxUrls: budget.max_pages * 3, noteSkip })) {
+  if (budget.use_sitemap) {
+    const sitemapUrls = await loadSitemapUrls(origin, budget.max_pages * 2).catch((error) => {
+      warnings.push(`Could not read sitemap: ${error?.message || "unknown error"}`);
+      return [];
+    });
+    for (const url of sitemapUrls) {
       if (queue.length >= budget.max_pages * 3) break;
-      addToQueue(entry.url, "sitemap", true);
+      if (shouldCrawlUrl(url, start, normalizedPrefix)) queue.push(url);
     }
   }
 
-  const pages: any[] = [];
-  while (queue.length > 0 && pages.length < budget.max_pages && Date.now() < deadlineAt) {
-    const batch = queue.splice(0, budget.concurrency).filter((item) => {
-      const cleaned = cleanUrl(item.url);
-      if (!cleaned || fetched.has(cleaned)) return false;
-      fetched.add(cleaned);
-      return true;
-    });
-    if (batch.length === 0) break;
-    const results = await Promise.all(batch.map((item) => fetchAndExtractPage({ ...item, origin })));
-    for (const page of results) {
-      if (crawlPathPrefix && page.final_url && !isInsidePathPrefix(page.final_url, crawlPathPrefix)) { noteSkip("outside_prefix_after_redirect"); continue; }
-      pages.push(page);
-      if (page.status_code >= 200 && page.status_code < 300 && !page.is_scanner_blocked) {
-        for (const link of page.internal_links || []) {
-          if (pages.length + queue.length >= budget.max_pages * 3) break;
-          addToQueue(link, page.source === "start" ? "homepage_link" : "internal", false);
-        }
+  while (queue.length > 0 && pages.length < budget.max_pages && Date.now() - startedAt < budget.crawl_timeout_ms) {
+    const next = queue.shift();
+    const clean = canonicalizeUrl(next);
+    if (!clean || seen.has(clean)) continue;
+    seen.add(clean);
+
+    const safety = await validatePublicHttpUrl(clean);
+    if (!safety.ok) {
+      warnings.push(`Skipped unsafe URL ${clean}: ${safety.reason}`);
+      continue;
+    }
+
+    const fetched = await safeFetchText(clean).catch((error) => ({ ok: false, url: clean, final_url: clean, status: 0, content_type: "", text: "", error: error?.message || "Fetch failed" }));
+    const page = extractPageFromHtml({ requestedUrl: clean, fetched });
+    pages.push(page);
+
+    if (fetched.text && isHtmlContent(fetched.content_type) && fetched.status >= 200 && fetched.status < 400) {
+      const links = extractLinks(fetched.text, fetched.final_url || clean);
+      for (const link of links) {
+        if (queue.length + seen.size >= budget.max_pages * 4) break;
+        if (shouldCrawlUrl(link, start, normalizedPrefix) && !seen.has(canonicalizeUrl(link))) queue.push(link);
       }
     }
   }
-
-  if (Date.now() >= deadlineAt) warnings.push("The scan returned a partial result before the function timeout limit.");
-  if (crawlPathPrefix) warnings.push(`The scan was locked to ${crawlPathPrefix} pages so unrelated sections were ignored.`);
-  if (pages.length > 0 && pages.filter(isReadablePage).length === 0) warnings.push("The scanner could not read normal page content. The website may be blocking crawler requests or requiring JavaScript rendering.");
 
   return {
     pages,
-    pages_found: discovered.size,
+    pages_found: Math.max(seen.size + queue.length, pages.length),
     queued_remaining: queue.length,
     warnings,
-    crawl_scope: { locked_to_start_language: Boolean(crawlPathPrefix), start_path_prefix: crawlPathPrefix || "", origin, security_scope: "same-origin-public-http-only" },
-    sitemap_entries_found: Math.max(0, discovered.size - 1),
-    important_page_patterns: crawlPathPrefix ? [crawlPathPrefix] : ["/"],
-    deprioritized_page_patterns: ["/cart/", "/checkout/", "/login/", "/account/", "/search/", "/tag/", "/author/", "/feed/"],
-    skipped_urls: skippedUrls,
-    sitemap_priority_summary: { strategy: "The scanner reads same-origin sitemap URLs, manually validates redirects, and blocks private/local/reserved network targets before every fetch.", max_pages_enforced: budget.max_pages, skipped_urls: skippedUrls },
   };
-
-  async function fetchAndExtractPage({ url, source, in_sitemap, origin }: { url: string; source: string; in_sitemap: boolean; origin: string }) {
-    let html = "", statusCode = 0, finalUrl = url, fetchError = "", fetchErrorClass = "", contentType = "";
-    try {
-      const response = await safeFetch(url, FETCH_TIMEOUT_MS, origin);
-      statusCode = response.status;
-      finalUrl = cleanUrl(response.url || url);
-      contentType = response.headers.get("content-type") || "";
-      if (/text\/html|application\/xhtml/i.test(contentType)) html = (await response.text()).slice(0, MAX_BODY_CHARS);
-      fetchErrorClass = classifyFetchError(new Error(`HTTP ${statusCode}`), statusCode);
-      if (!fetchErrorClass || fetchErrorClass === "other") fetchErrorClass = "";
-    } catch (error) {
-      fetchError = getErrorMessage(error);
-      fetchErrorClass = classifyFetchError(error);
-    }
-    return extractPageFromHtml({ url, finalUrl, html, statusCode, source, origin, inSitemap: in_sitemap, fetchError, fetchErrorClass });
-  }
 }
 
-async function discoverSitemapEntries({ origin, pathPrefix, deadlineAt, maxUrls, noteSkip }: { origin: string; pathPrefix: string; deadlineAt: number; maxUrls: number; noteSkip: (reason: string) => void }) {
-  const sitemapQueue = [`${origin}/sitemap.xml`, `${origin}/sitemap_index.xml`];
-  const visited = new Set<string>();
-  const pageEntries = new Map<string, any>();
+async function safeFetchText(url, redirectCount = 0) {
+  if (redirectCount > MAX_REDIRECTS) throw new Error("Too many redirects");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const robots = await fetchText(`${origin}/robots.txt`, SITEMAP_FETCH_TIMEOUT_MS, origin);
-    for (const line of robots.split(/\r?\n/)) {
-      const match = line.match(/^sitemap:\s*(.+)$/i);
-      if (match?.[1]) {
-        const cleaned = cleanUrl(new URL(match[1].trim(), origin).toString());
-        const check = shouldCrawlUrl({ url: cleaned, origin, pathPrefix: "" });
-        if (check.ok) sitemapQueue.push(cleaned);
-      }
+    const response = await fetch(url, {
+      method: "GET",
+      redirect: "manual",
+      signal: controller.signal,
+      headers: { "User-Agent": USER_AGENT, Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" },
+    });
+    const status = response.status;
+    const location = response.headers.get("location");
+    if ([301, 302, 303, 307, 308].includes(status) && location) {
+      const redirected = new URL(location, url).href;
+      const safety = await validatePublicHttpUrl(redirected);
+      if (!safety.ok) throw new Error(`Unsafe redirect blocked: ${safety.reason}`);
+      return await safeFetchText(redirected, redirectCount + 1);
     }
-  } catch {}
-  while (sitemapQueue.length > 0 && pageEntries.size < maxUrls && Date.now() < deadlineAt - 5000) {
-    const sitemapUrl = sitemapQueue.shift();
-    if (!sitemapUrl || visited.has(sitemapUrl)) continue;
-    visited.add(sitemapUrl);
-    try {
-      const xml = await fetchText(sitemapUrl, SITEMAP_FETCH_TIMEOUT_MS, origin);
-      for (const loc of parseLocTags(xml)) {
-        const cleaned = cleanUrl(new URL(loc, origin).toString());
-        if (!cleaned) continue;
-        if (/\.xml(\?|$)/i.test(cleaned)) { if (sitemapQueue.length < 25) sitemapQueue.push(cleaned); continue; }
-        const check = shouldCrawlUrl({ url: cleaned, origin, pathPrefix });
-        if (!check.ok) { noteSkip(check.reason); continue; }
-        pageEntries.set(cleaned, { url: cleaned, source_sitemap: sitemapUrl });
-      }
-    } catch {}
+    const contentType = response.headers.get("content-type") || "";
+    const text = isHtmlContent(contentType) || contentType.includes("xml") ? (await response.text()).slice(0, MAX_BODY_CHARS) : "";
+    return { ok: response.ok, url, final_url: response.url || url, status, content_type: contentType, text, error: "" };
+  } finally {
+    clearTimeout(timer);
   }
-  return [...pageEntries.values()].slice(0, maxUrls);
 }
 
-async function fetchText(url: string, timeoutMs: number, origin: string) {
-  const response = await safeFetch(url, timeoutMs, origin);
-  if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.status}`);
-  return (await response.text()).slice(0, MAX_BODY_CHARS);
+async function loadSitemapUrls(origin, limit) {
+  const urls = [];
+  const robots = await safeFetchText(`${origin}/robots.txt`).catch(() => null);
+  const sitemapCandidates = [];
+  if (robots?.text) {
+    const matches = robots.text.match(/^sitemap:\s*(.+)$/gim) || [];
+    for (const match of matches) sitemapCandidates.push(match.replace(/^sitemap:\s*/i, "").trim());
+  }
+  sitemapCandidates.push(`${origin}/sitemap.xml`);
+
+  for (const sitemapUrl of Array.from(new Set(sitemapCandidates))) {
+    if (urls.length >= limit) break;
+    const fetched = await safeFetchText(sitemapUrl).catch(() => null);
+    if (!fetched?.text) continue;
+    const locs = [...fetched.text.matchAll(/<loc>\s*([^<]+)\s*<\/loc>/gi)].map((match) => decodeHtml(match[1].trim()));
+    for (const loc of locs) {
+      if (urls.length >= limit) break;
+      if (/\.xml(\.gz)?$/i.test(loc)) continue;
+      urls.push(loc);
+    }
+  }
+  return urls;
 }
 
-function shouldCrawlUrl({ url, origin, pathPrefix }: { url: string; origin: string; pathPrefix: string }) {
+function shouldCrawlUrl(url, start, pathPrefix) {
   try {
     const parsed = new URL(url);
-    if (parsed.origin !== origin) return { ok: false, reason: "external" };
-    const syntax = validateUrlSyntax(parsed);
-    if (!syntax.ok) return { ok: false, reason: "unsafe_url" };
-    if (pathPrefix) {
-      const path = normalizePath(parsed.pathname);
-      if (path !== pathPrefix && !path.startsWith(`${pathPrefix}/`)) return { ok: false, reason: "outside_prefix" };
-    }
-    if (isProbablyAsset(parsed.pathname)) return { ok: false, reason: "asset" };
-    if (isUtilityUrl(parsed.pathname)) return { ok: false, reason: "utility" };
-    if (isLikelyEncodedOrJunkUrl(parsed.pathname)) return { ok: false, reason: "junk" };
-    return { ok: true, reason: "" };
-  } catch { return { ok: false, reason: "invalid" }; }
-}
-
-function cleanUrl(value: string) {
-  try {
-    const parsed = new URL(value);
+    if (parsed.origin !== start.origin) return false;
+    if (!/^https?:$/i.test(parsed.protocol)) return false;
     parsed.hash = "";
-    for (const param of ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid", "gclid"]) parsed.searchParams.delete(param);
-    parsed.search = parsed.searchParams.toString() ? `?${parsed.searchParams.toString()}` : "";
-    return parsed.toString();
-  } catch { return ""; }
-}
-
-function normalizeRequestedPathPrefix(value: string) {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-  const cleaned = raw.startsWith("/") ? raw : `/${raw}`;
-  const withoutTrailingSlash = cleaned !== "/" && cleaned.endsWith("/") ? cleaned.slice(0, -1) : cleaned;
-  return withoutTrailingSlash === "/" ? "" : withoutTrailingSlash;
-}
-
-function detectLanguagePrefix(pathname: string) {
-  const first = String(pathname || "/").split("/").filter(Boolean)[0] || "";
-  return /^[a-z]{2}(-[a-z]{2})?$/i.test(first) ? `/${first}` : "";
-}
-
-function isInsidePathPrefix(value: string, prefix: string) {
-  try { const path = normalizePath(new URL(value).pathname); return path === prefix || path.startsWith(`${prefix}/`); } catch { return false; }
-}
-
-function normalizePath(pathname: string) {
-  let path = String(pathname || "/");
-  path = path.startsWith("/") ? path : `/${path}`;
-  path = path.replace(/\/+/g, "/");
-  return path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
-}
-
-function isProbablyAsset(pathname: string) {
-  return /\.(jpg|jpeg|png|gif|webp|svg|ico|pdf|zip|rar|7z|css|js|mjs|woff|woff2|ttf|eot|mp4|mp3|avi|mov|xml)$/i.test(pathname);
-}
-
-function isUtilityUrl(pathname: string) {
-  const blocked = new Set(["cart", "checkout", "login", "logout", "account", "my-account", "privacy", "terms", "cookie", "cookies", "legal", "search", "tag", "author", "feed", "preview", "wp-admin", "wp-json"]);
-  return String(pathname || "").toLowerCase().split("/").filter(Boolean).some((segment) => blocked.has(segment));
-}
-
-function isLikelyEncodedOrJunkUrl(pathname: string) {
-  for (const part of String(pathname || "").split("/").filter(Boolean).map(safeDecodeURIComponent)) {
-    const cleaned = part.trim();
-    if (!cleaned) continue;
-    const base64ish = cleaned.length >= 22 && /^[A-Za-z0-9+/=_-]+$/.test(cleaned) && /[A-Z]/.test(cleaned) && /[a-z]/.test(cleaned) && !cleaned.includes("-");
-    if (!base64ish) continue;
-    try { const decoded = atob(cleaned.replace(/-/g, "+").replace(/_/g, "/")); if (/^https?:\/\//i.test(decoded) || decoded.startsWith("/")) return true; } catch { if (cleaned.length >= 32) return true; }
+    const path = parsed.pathname || "/";
+    const lower = path.toLowerCase();
+    if (/\.(jpg|jpeg|png|gif|webp|svg|pdf|zip|css|js|ico|woff2?|ttf|mp4|mov|avi)$/i.test(lower)) return false;
+    if (UTILITY_SEGMENTS.some((segment) => lower === segment || lower.startsWith(`${segment}/`))) return false;
+    if (pathPrefix && pathPrefix !== "/" && !path.startsWith(pathPrefix)) return false;
+    return true;
+  } catch {
+    return false;
   }
-  return false;
 }
 
-function safeDecodeURIComponent(value: string) { try { return decodeURIComponent(value); } catch { return value; } }
-function parseLocTags(xml: string) { return [...String(xml || "").matchAll(/<loc>\s*([^<]+)\s*<\/loc>/gi)].map((match) => decodeHtmlEntities(match[1] || "").trim()).filter(Boolean); }
-
-function extractPageFromHtml({ url, finalUrl, html, statusCode, source, origin, inSitemap, fetchError, fetchErrorClass }: { url: string; finalUrl: string; html: string; statusCode: number; source: string; origin: string; inSitemap: boolean; fetchError: string; fetchErrorClass: string }) {
-  const title = extractTitle(html);
+function extractPageFromHtml({ requestedUrl, fetched }) {
+  const html = fetched.text || "";
+  const finalUrl = fetched.final_url || requestedUrl;
+  const path = cleanPath(finalUrl);
+  const status = Number(fetched.status || 0);
+  const title = extractTagText(html, "title");
   const metaDescription = extractMeta(html, "description");
-  const robotsMeta = extractMeta(html, "robots");
+  const robots = extractMeta(html, "robots");
   const viewport = extractMeta(html, "viewport");
-  const canonicalUrl = extractCanonical(html, finalUrl || url);
-  const h1s = extractAllH1(html);
-  const text = stripHtmlToText(html);
-  const wordCount = text ? text.split(/\s+/).filter(Boolean).length : 0;
-  const scriptCount = countMatches(html, /<script\b/gi);
-  const imageCount = countMatches(html, /<img\b/gi);
-  const missingAltImageCount = countImagesMissingAlt(html);
-  const schemaCount = countMatches(html, /<script[^>]+type=["']application\/ld\+json["']/gi);
-  const ogCount = countMatches(html, /<meta[^>]+property=["']og:/gi);
-  const internalLinks = extractInternalLinks(html, finalUrl || url, origin);
-  const externalLinks = extractExternalLinks(html, finalUrl || url, origin);
-  const isScannerBlocked = detectBlocked({ html, text, statusCode, title });
+  const canonical = extractLinkRel(html, "canonical");
+  const h1s = extractHeadingTexts(html, "h1");
+  const h2s = extractHeadingTexts(html, "h2");
+  const imageStats = extractImageStats(html);
+  const linkStats = extractLinkStats(html, finalUrl);
+  const schemaTypes = extractSchemaTypes(html);
+  const visibleText = stripHtml(html);
+  const wordCount = visibleText ? visibleText.split(/\s+/).filter(Boolean).length : 0;
+  const clientRenderingSuspected = status >= 200 && status < 400 && html.length > 0 && wordCount < 80 && (html.includes("id=\"root\"") || html.includes("id=\"app\"") || html.includes("type=\"module\""));
+  const indexable = status >= 200 && status < 400 && !robots.toLowerCase().includes("noindex");
+  const pageTemplateFamily = classifyTemplateFamily(path);
+  const estimatedPageIntent = estimatePageIntent(path, { title, h1: h1s[0] || "", robots, status });
+
   return {
-    url: cleanUrl(url), final_url: cleanUrl(finalUrl || url), original_url: cleanUrl(url), source, status_code: statusCode, fetch_error: fetchError, fetch_error_class: fetchErrorClass || "",
-    title, meta_description: metaDescription, h1: h1s[0] || "", h1s, h1_count: h1s.length, canonical_url: canonicalUrl, robots_meta: robotsMeta, viewport,
-    word_count: wordCount, text_length: text.length, html_size: html.length, script_count: scriptCount, stylesheet_count: countMatches(html, /<link[^>]+rel=["']?stylesheet/gi), image_count: imageCount, missing_alt_image_count: missingAltImageCount, schema_count: schemaCount, open_graph_tag_count: ogCount,
-    internal_links: internalLinks, internal_link_count: internalLinks.length, external_links: externalLinks, external_link_count: externalLinks.length, discovery_links: internalLinks, discovery_link_count: internalLinks.length,
-    indexable: !/noindex/i.test(robotsMeta || ""), in_sitemap: inSitemap, is_scanner_blocked: isScannerBlocked, fetched_by_browser_render: false, importance_score: source === "start" ? 10000 : source === "sitemap" ? 150 : 80, importance_reasons: [source], client_rendering_suspected: !isScannerBlocked && wordCount < 100 && scriptCount >= 15, template: makeUrlTemplate(url), extracted_at: new Date().toISOString(),
+    url: requestedUrl,
+    final_url: finalUrl,
+    path,
+    status_code: status,
+    fetch_error: fetched.error || "",
+    content_type: fetched.content_type || "",
+    title,
+    title_length: title.length,
+    meta_description: metaDescription,
+    meta_description_length: metaDescription.length,
+    robots,
+    viewport,
+    canonical,
+    canonical_status: canonical ? (sameCanonicalPath(finalUrl, canonical) ? "self_or_equivalent" : "canonical_to_different_url") : "missing",
+    robots_indexability_status: indexable ? "indexable" : "not_indexable",
+    h1: h1s[0] || "",
+    h1_count: h1s.length,
+    h2_count: h2s.length,
+    word_count: wordCount,
+    image_count: imageStats.total,
+    image_missing_alt_count: imageStats.missingAlt,
+    internal_link_count: linkStats.internal,
+    external_link_count: linkStats.external,
+    schema_types: schemaTypes,
+    has_schema: schemaTypes.length > 0,
+    client_rendering_suspected: clientRenderingSuspected,
+    page_template_family: pageTemplateFamily,
+    estimated_page_intent: estimatedPageIntent,
+    conversion_signals: extractSignals(path, visibleText, ["contact", "quote", "devis", "demo", "pricing", "booking", "reservation", "checkout", "buy", "cart", "appointment"]),
+    trust_signals: extractSignals(path, visibleText, ["privacy", "terms", "about", "contact", "address", "phone", "security", "reviews", "testimonials", "legal"]),
+    indexable,
   };
 }
 
-function extractInternalLinks(html: string, baseUrl: string, origin: string) { return unique(extractLinks(html, baseUrl).filter((link) => { try { return new URL(link).origin === origin; } catch { return false; } })).slice(0, 250); }
-function extractExternalLinks(html: string, baseUrl: string, origin: string) { return unique(extractLinks(html, baseUrl).filter((link) => { try { return new URL(link).origin !== origin; } catch { return false; } })).slice(0, 250); }
-function extractLinks(html: string, baseUrl: string) {
-  const links: string[] = [];
-  for (const match of String(html || "").matchAll(/<a\b[^>]+href=["']([^"']+)["']/gi)) {
-    const raw = decodeHtmlEntities(match[1] || "").trim();
-    if (!raw || /^(mailto:|tel:|javascript:|data:|#)/i.test(raw)) continue;
-    try { links.push(cleanUrl(new URL(raw, baseUrl).toString())); } catch {}
+function buildFindings({ pages, websiteUrl }) {
+  const findings = [];
+  const hostname = safeHostname(websiteUrl);
+
+  if (hostname.endsWith(".base44.app")) {
+    findings.push(createFinding({ rule: "free_base44_subdomain", category: "indexability", priority: "high", title: "Move production SEO to a custom domain", pageUrl: "/", affectedPages: ["/"], explanation: "The site is on a Base44 subdomain. It can be crawled, but a branded custom domain is a stronger long-term SEO and trust setup.", recommendation: "Connect a branded custom domain before treating this as the permanent production SEO home.", difficulty: "developer" }));
   }
-  return links.filter(Boolean);
+
+  for (const page of pages) {
+    const path = cleanPath(page.final_url || page.url || "/");
+    if (page.status_code >= 400 || page.fetch_error) {
+      findings.push(createFinding({ rule: statusRule(page.status_code), category: "404_error", priority: page.status_code >= 500 ? "critical" : "high", title: "Fix pages that are not loading", pageUrl: path, affectedPages: [path], currentValue: page.fetch_error || `HTTP ${page.status_code}`, explanation: "This page did not load cleanly during the scan.", recommendation: "Check whether the page should exist, redirect it to a useful page, or fix the server/blocking issue.", difficulty: "developer", source: "screaming_frog_lite" }));
+      continue;
+    }
+
+    if (isInternalAppRoute(path) && page.indexable) {
+      findings.push(createFinding({ rule: "internal_route_indexable", category: "indexability", priority: "critical", title: "Keep internal app routes out of search", pageUrl: path, affectedPages: [path], currentValue: "Internal/app route appears crawlable and indexable", explanation: "This looks like an app, auth, dashboard, admin, billing, or report route rather than a public marketing page.", recommendation: "Require login or add noindex for internal/auth/app routes. Keep only true public landing/help pages indexable.", difficulty: "developer", source: "screaming_frog_lite" }));
+    }
+
+    if (!page.title) findings.push(createFinding({ rule: "missing_title", category: "meta_title", priority: page.estimated_page_intent === "money_or_conversion" ? "high" : "medium", title: "Add a clear search title", pageUrl: path, affectedPages: [path], explanation: "This page is missing a title for browser tabs and search results.", recommendation: "Add a short, specific page title that explains the page purpose.", difficulty: "easy" }));
+    if (!page.meta_description && page.estimated_page_intent !== "internal_or_auth") findings.push(createFinding({ rule: "missing_meta_description", category: "meta_description", priority: page.estimated_page_intent === "money_or_conversion" ? "high" : "medium", title: "Add a clear search description", pageUrl: path, affectedPages: [path], explanation: "This page is missing a meta description.", recommendation: "Add a short description that explains the page and why someone should click.", difficulty: "easy" }));
+    if (page.h1_count === 0 && page.estimated_page_intent !== "internal_or_auth") findings.push(createFinding({ rule: "missing_h1", category: "thin_content", priority: "medium", title: "Add one clear page heading", pageUrl: path, affectedPages: [path], explanation: "The page does not have a clear H1 heading.", recommendation: "Add one main heading that matches the page purpose.", difficulty: "easy" }));
+    if (page.h1_count > 1) findings.push(createFinding({ rule: "multiple_h1", category: "thin_content", priority: "low", title: "Use one main page heading", pageUrl: path, affectedPages: [path], explanation: "The page has more than one H1 heading.", recommendation: "Keep one H1 as the main page heading and make the rest H2/H3 headings.", difficulty: "easy" }));
+    if (!page.canonical && page.indexable && page.estimated_page_intent !== "internal_or_auth") findings.push(createFinding({ rule: "canonical_missing", category: "canonical", priority: "high", title: "Add a canonical URL", pageUrl: path, affectedPages: [path], explanation: "The page does not expose a canonical URL.", recommendation: "Add a self-referencing canonical or point to the preferred version of this page.", difficulty: "developer" }));
+    if (page.canonical_status === "canonical_to_different_url") findings.push(createFinding({ rule: "canonical_to_other_url", category: "canonical", priority: "high", title: "Review canonical target", pageUrl: path, affectedPages: [path], currentValue: page.canonical, explanation: "The page points its canonical URL somewhere else.", recommendation: "Confirm whether this page should be indexed or whether the canonical target is correct.", difficulty: "developer" }));
+    if (page.client_rendering_suspected) findings.push(createFinding({ rule: "client_rendering", category: "web_dev", priority: "high", title: "Check JavaScript-rendered content", pageUrl: path, affectedPages: [path], explanation: "The raw HTML looks thin and may rely heavily on JavaScript rendering.", recommendation: "Make sure search engines receive useful crawlable HTML for important public pages.", difficulty: "developer" }));
+    if (page.image_missing_alt_count > 0 && page.estimated_page_intent !== "internal_or_auth") findings.push(createFinding({ rule: "image_alt_text", category: "image_alt_text", priority: page.image_missing_alt_count >= 10 ? "medium" : "low", title: "Add useful image descriptions", pageUrl: path, affectedPages: [path], currentValue: `${page.image_missing_alt_count} images missing alt text`, explanation: "Some meaningful images may not have text descriptions.", recommendation: "Add short, specific alt text to meaningful images. Decorative images can stay empty.", difficulty: "easy" }));
+    if (page.estimated_page_intent === "money_or_conversion" && !page.has_schema) findings.push(createFinding({ rule: "schema", category: "schema", priority: "medium", title: "Add structured data to important pages", pageUrl: path, affectedPages: [path], explanation: "This looks like an important business page, but no structured data was detected.", recommendation: "Add appropriate schema such as Organization, LocalBusiness, Product, Service, Breadcrumb, or FAQ where relevant.", difficulty: "developer" }));
+  }
+
+  const duplicateCasing = findDuplicateCasingRoutes(pages);
+  if (duplicateCasing.length > 0) {
+    findings.push(createFinding({ rule: "duplicate_route_casing", category: "duplicate_content", priority: "high", title: "Consolidate duplicate URL casing", pageUrl: duplicateCasing[0], affectedPages: duplicateCasing, explanation: "The crawl found routes that differ mainly by capitalization.", recommendation: "Choose one canonical casing, update internal links, and redirect or noindex duplicates.", difficulty: "developer" }));
+  }
+
+  const trustPages = pages.map((page) => cleanPath(page.final_url || page.url || "").toLowerCase()).filter((path) => TRUST_PAGE_PATTERNS.some((pattern) => path.startsWith(pattern)));
+  if (pages.length >= 4 && trustPages.length === 0) {
+    findings.push(createFinding({ rule: "missing_trust_pages", category: "schema", priority: "medium", title: "Add public trust pages", pageUrl: "/", affectedPages: ["/"], explanation: "The scan did not find obvious About, Contact, Privacy, Terms, or Security pages.", recommendation: "Add or expose trust pages and link them from the footer.", difficulty: "moderate" }));
+  }
+
+  const repeatedSnapshots = findRepeatedSnapshotGroups(pages);
+  if (repeatedSnapshots.length > 0) {
+    findings.push(createFinding({ rule: "thin_repetitive_public_snapshots", category: "thin_content", priority: "high", title: "Reduce thin repetitive public snapshots", pageUrl: repeatedSnapshots[0], affectedPages: repeatedSnapshots, explanation: "Several public routes return very similar titles, headings, or descriptions.", recommendation: "Noindex private/app routes and add richer route-specific copy only to public pages that should rank or convert.", difficulty: "moderate" }));
+  }
+
+  return findings;
 }
 
-function extractTitle(html: string) { const match = String(html || "").match(/<title[^>]*>([\s\S]*?)<\/title>/i); return decodeHtmlEntities((match?.[1] || "").replace(/\s+/g, " ").trim()); }
-function extractMeta(html: string, name: string) {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  for (const regex of [new RegExp(`<meta[^>]+name=["']${escaped}["'][^>]+content=["']([^"']*)["'][^>]*>`, "i"), new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]+name=["']${escaped}["'][^>]*>`, "i")]) {
-    const match = String(html || "").match(regex);
-    if (match?.[1]) return decodeHtmlEntities(match[1].trim());
+function groupFindings(findings) {
+  const output = [];
+  const groups = new Map();
+
+  for (const finding of findings) {
+    const affected = Array.isArray(finding.affected_pages) ? finding.affected_pages : [];
+    const groupableFailure = isFailureRule(finding.rule) || String(finding.current_value || "").match(/\b(404|410|429|500|503)\b/);
+    const lowValueCosmetic = isLowValuePage(finding.page_url) && ["missing_meta_description", "missing_title", "image_alt_text"].includes(finding.rule);
+
+    if (!groupableFailure && !lowValueCosmetic) {
+      output.push(finding);
+      continue;
+    }
+
+    const family = classifyTemplateFamily(finding.page_url);
+    const bucket = groupableFailure ? `failure|${finding.rule}|${family}|${statusBucket(finding)}` : `lowvalue|${finding.rule}|${family}`;
+    const existing = groups.get(bucket) || {
+      ...finding,
+      id: stableId(`group|${bucket}`),
+      fix_id: stableId(`group|${bucket}`),
+      page_url: "",
+      issue_title: groupableFailure ? groupFailureTitle(finding, family) : groupLowValueTitle(finding),
+      title: groupableFailure ? groupFailureTitle(finding, family) : groupLowValueTitle(finding),
+      plain_english_explanation: groupableFailure ? "Several similar pages are failing or blocked in the same way. Treat this as one shared crawlability/template problem." : "Several lower-priority archive/news/tag pages have the same cleanup issue.",
+      plain_english_summary: groupableFailure ? "Several similar pages are failing or blocked in the same way. Treat this as one shared crawlability/template problem." : "Several lower-priority archive/news/tag pages have the same cleanup issue.",
+      why_it_matters: groupableFailure ? "A repeated loading or blocking problem can hide important pages from users and search engines. Fixing the shared cause is more useful than editing pages one by one." : "These pages should not crowd out higher-value product, service, booking, quote, or trust pages.",
+      recommended_value: groupableFailure ? "Check shared redirects, firewall/bot protection, server rules, or templates causing these failures, then rescan." : "Batch these lower-priority cleanup items after important business pages are fixed.",
+      ai_recommendation: groupableFailure ? "Check shared redirects, firewall/bot protection, server rules, or templates causing these failures, then rescan." : "Batch these lower-priority cleanup items after important business pages are fixed.",
+      priority: groupableFailure ? "high" : "low",
+      difficulty: groupableFailure ? "developer" : "easy",
+      requires_developer: groupableFailure,
+      affected_pages: [],
+      source: "screaming_frog_lite",
+    };
+    existing.affected_pages = Array.from(new Set([...existing.affected_pages, ...affected])).slice(0, 150);
+    groups.set(bucket, existing);
+  }
+
+  return [...output, ...groups.values()].map((finding) => ({ ...finding, page_count: finding.affected_pages?.length || 1 }));
+}
+
+function createFinding({ rule, category, priority, title, pageUrl, affectedPages, currentValue = "", explanation, recommendation, difficulty = "moderate", source = "screaming_frog_lite" }) {
+  const id = stableId(`${rule}|${pageUrl}|${title}`);
+  const owner = difficulty === "developer" ? "your_web_person" : "you";
+  const steps = difficulty === "developer" ? ["Send this item to your web person.", "Ask them to review the affected URL or shared template.", "Apply the safest fix and publish it.", "Run FixList again to confirm it is resolved."] : ["Open the affected page or template.", recommendation, "Save and publish the change.", "Run FixList again after publishing."];
+  return {
+    id,
+    fix_id: id,
+    type: "site_level",
+    rule,
+    category,
+    customer_category: friendlyCategory(category),
+    issue_title: title,
+    title,
+    page_url: cleanPath(pageUrl || "/"),
+    affected_pages: Array.from(new Set((affectedPages || [pageUrl || "/"]).map((item) => cleanPath(item)).filter(Boolean))),
+    plain_english_explanation: explanation,
+    plain_english_summary: explanation,
+    why_it_matters: explanation,
+    current_value: currentValue,
+    recommended_value: recommendation,
+    ai_recommendation: recommendation,
+    priority,
+    difficulty,
+    status: difficulty === "developer" ? "needs_developer" : "needs_approval",
+    can_auto_fix: false,
+    requires_approval: difficulty !== "developer",
+    requires_developer: difficulty === "developer",
+    what_to_do: steps,
+    what_to_do_steps: steps,
+    fix_steps: steps,
+    who_can_do_this: owner,
+    estimated_time: difficulty === "developer" ? "about 1–2 hours" : "about 10–30 minutes",
+    time_estimate: difficulty === "developer" ? "about 1–2 hours" : "about 10–30 minutes",
+    confidence_score: 88,
+    source,
+  };
+}
+
+function calculateHealthScore({ pages, findings }) {
+  let score = 92;
+  const failedPages = pages.filter((page) => page.status_code >= 400 || page.fetch_error).length;
+  score -= Math.min(35, failedPages * 4);
+  for (const finding of findings) {
+    if (finding.priority === "critical") score -= 14;
+    else if (finding.priority === "high") score -= 8;
+    else if (finding.priority === "medium") score -= 4;
+    else score -= 1;
+  }
+  return Math.max(20, Math.min(95, Math.round(score)));
+}
+
+function buildScanSummary({ pages, findings, healthScore, crawlResult }) {
+  const failedPages = pages.filter((page) => page.status_code >= 400 || page.fetch_error).length;
+  const highPriority = findings.filter((finding) => ["critical", "high"].includes(finding.priority)).length;
+  const routeRisk = routeBoundaryRisk(pages);
+  return {
+    score: healthScore,
+    status_label: healthScore >= 90 ? "Excellent" : healthScore >= 75 ? "Good" : healthScore >= 55 ? "Fair" : "Needs work",
+    plain_english_summary: `FixList crawled ${pages.length} pages and found ${findings.length} grouped finding${findings.length === 1 ? "" : "s"}. ${failedPages} page${failedPages === 1 ? "" : "s"} failed or were blocked. Route-boundary risk is ${routeRisk}.`,
+    pages_scanned: pages.length,
+    pages_failed: failedPages,
+    high_priority_count: highPriority,
+    technical_issue_count: findings.length,
+    queued_remaining: crawlResult.queued_remaining,
+    crawl_warnings: crawlResult.warnings,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* URL safety                                                                  */
+/* -------------------------------------------------------------------------- */
+
+async function validatePublicHttpUrl(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return { ok: false, reason: "Invalid URL." };
+  }
+  if (!["http:", "https:"].includes(url.protocol)) return { ok: false, reason: "Only http and https URLs can be scanned." };
+  const hostname = url.hostname.toLowerCase();
+  if (!hostname || hostname === "localhost" || hostname.endsWith(".localhost")) return { ok: false, reason: "Localhost URLs cannot be scanned." };
+  if (isPrivateHostname(hostname)) return { ok: false, reason: "Private/internal hostnames cannot be scanned." };
+  if (isIpAddress(hostname) && isPrivateIp(hostname)) return { ok: false, reason: "Private/internal IP addresses cannot be scanned." };
+
+  if (typeof Deno.resolveDns === "function" && !isIpAddress(hostname)) {
+    try {
+      const records = await Deno.resolveDns(hostname, "A");
+      if (records.some((ip) => isPrivateIp(ip))) return { ok: false, reason: "DNS resolves to a private/internal IP." };
+    } catch {
+      // DNS can fail in some edge runtimes. The fetch layer still validates redirects.
+    }
+  }
+  return { ok: true };
+}
+
+function isPrivateHostname(hostname) {
+  return hostname === "0.0.0.0" || hostname.endsWith(".internal") || hostname.endsWith(".local") || hostname.endsWith(".lan") || hostname.endsWith(".home") || hostname.endsWith(".corp");
+}
+
+function isIpAddress(value) { return /^\d{1,3}(\.\d{1,3}){3}$/.test(value) || value.includes(":"); }
+function isPrivateIp(ip) {
+  if (ip.includes(":")) {
+    const lower = ip.toLowerCase();
+    return lower === "::1" || lower.startsWith("fc") || lower.startsWith("fd") || lower.startsWith("fe80:");
+  }
+  const parts = ip.split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => Number.isNaN(part) || part < 0 || part > 255)) return true;
+  const [a, b] = parts;
+  return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || a === 0;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Extraction helpers                                                          */
+/* -------------------------------------------------------------------------- */
+
+function extractTagText(html, tag) {
+  const match = html.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i"));
+  return decodeHtml(stripHtml(match?.[1] || "")).trim();
+}
+
+function extractHeadingTexts(html, tag) {
+  const matches = [...html.matchAll(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "gi"))];
+  return matches.map((match) => decodeHtml(stripHtml(match[1] || "")).trim()).filter(Boolean).slice(0, 20);
+}
+
+function extractMeta(html, name) {
+  const patterns = [
+    new RegExp(`<meta[^>]+name=["']${escapeRegExp(name)}["'][^>]*content=["']([^"']*)["'][^>]*>`, "i"),
+    new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]*name=["']${escapeRegExp(name)}["'][^>]*>`, "i"),
+  ];
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match?.[1]) return decodeHtml(match[1]).trim();
   }
   return "";
 }
-function extractCanonical(html: string, baseUrl: string) { const match = String(html || "").match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["'][^>]*>/i); if (!match?.[1]) return ""; try { return cleanUrl(new URL(match[1], baseUrl).toString()); } catch { return match[1]; } }
-function extractAllH1(html: string) { return [...String(html || "").matchAll(/<h1[^>]*>([\s\S]*?)<\/h1>/gi)].map((match) => decodeHtmlEntities(String(match[1] || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim())).filter(Boolean); }
-function stripHtmlToText(html: string) { return decodeHtmlEntities(String(html || "").replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<noscript[\s\S]*?<\/noscript>/gi, " ").replace(/<!--[\s\S]*?-->/g, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()); }
-function countMatches(value: string, regex: RegExp) { return [...String(value || "").matchAll(regex)].length; }
-function countImagesMissingAlt(html: string) { return [...String(html || "").matchAll(/<img\b[^>]*>/gi)].filter((match) => !/\salt=["'][^"']*["']/i.test(match[0])).length; }
-function detectBlocked({ html, text, statusCode, title }: { html: string; text: string; statusCode: number; title: string }) { if ([403, 429, 503].includes(Number(statusCode || 0))) return true; const haystack = `${title || ""} ${text || ""} ${html || ""}`.toLowerCase().slice(0, 8000); return ["just a moment", "checking your browser", "enable javascript", "verify you are human", "captcha", "access denied", "are you a robot", "too many requests", "rate limit", "request blocked", "cloudflare", "datadome"].some((phrase) => haystack.includes(phrase)); }
-function decodeHtmlEntities(value: string) { return String(value || "").replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&quot;/gi, '"').replace(/&#39;/g, "'").replace(/&#x2F;/gi, "/"); }
-function unique<T>(items: T[]) { return [...new Set(items.filter(Boolean))]; }
-function makeUrlTemplate(url: string) { try { return new URL(url).pathname.split("/").filter(Boolean).map((segment, index) => index < 2 ? segment : (/^\d+$/.test(segment) || segment.length > 45 ? "*" : segment)).join("/"); } catch { return ""; } }
-function classifyFetchError(error: unknown, statusCode = 0) { const message = getErrorMessage(error).toLowerCase(); if ([403, 429, 503].includes(Number(statusCode || 0))) return "blocked"; if (statusCode >= 500) return "http_5xx"; if (message.includes("abort") || message.includes("timeout")) return "timeout"; if (message.includes("dns") || message.includes("not found") || message.includes("enotfound")) return "dns"; if (message.includes("tls") || message.includes("ssl") || message.includes("certificate")) return "tls"; if (!message || message === "http 0" || message === "http 200") return ""; return "other"; }
 
-function runScreamingFrogLiteAudit({ pages, startUrl }: { pages: any[]; startUrl: string }) {
-  const raw_findings: any[] = [];
-  const readablePages = pages.filter(isReadablePage);
-  const indexablePages = readablePages.filter((page) => page.indexable !== false);
-  for (const page of pages) if (Number(page.status_code || 0) >= 400 || Number(page.status_code || 0) === 0) raw_findings.push(makeFinding("broken_page", "404_error", "Broken page", "high", page, "Fix pages that are not loading", "This page did not load successfully for the scanner.", "Restore the page, update the link, or redirect it to the closest useful page."));
-  for (const page of readablePages) {
-    if (!page.title) raw_findings.push(makeFinding("missing_title", "meta_title", "Search appearance", "high", page, "Add a search title", "This page is missing a title tag.", "Add a clear title that describes the page and includes the main topic."));
-    else if (page.title.length > 65) raw_findings.push(makeFinding("long_title", "meta_title", "Search appearance", "medium", page, "Shorten long search titles", "This page title may be too long for search results.", "Keep the title focused and under about 60 characters where possible."));
-    if (!page.meta_description) raw_findings.push(makeFinding("missing_meta_description", "meta_description", "Search appearance", "high", page, "Add a search description", "This page is missing a meta description.", "Add a helpful description that explains why someone should visit this page."));
-    else if (page.meta_description.length > 160) raw_findings.push(makeFinding("long_meta_description", "meta_description", "Search appearance", "low", page, "Shorten long search descriptions", "This description may be too long for search results.", "Keep descriptions concise and useful."));
-    if (!page.h1) raw_findings.push(makeFinding("missing_h1", "thin_content", "Page content", "medium", page, "Add a clear main heading", "This page does not appear to have a clear H1 heading.", "Add one main heading that clearly describes the page topic."));
-    if (Number(page.h1_count || 0) > 1) raw_findings.push(makeFinding("multiple_h1", "thin_content", "Page content", "low", page, "Review pages with multiple main headings", "Multiple H1 headings can make the page structure less clear.", "Keep one main H1 and use H2/H3 headings for sections."));
-    if (Number(page.word_count || 0) > 0 && Number(page.word_count || 0) < 200) raw_findings.push(makeFinding("thin_content", "thin_content", "Page content", "medium", page, "Improve thin pages", "This page has very little readable content.", "Add useful information, FAQs, examples, service details, or next steps where relevant."));
-    if (!page.canonical_url) raw_findings.push(makeFinding("missing_canonical", "canonical", "Website setup", "low", page, "Review canonical settings", "This page does not show a canonical URL in the HTML.", "Add or confirm the preferred version of this page in your CMS or SEO plugin."));
-    if (page.indexable === false) raw_findings.push(makeFinding("noindex", "canonical", "Website setup", "high", page, "Review pages marked noindex", "This page appears to tell search engines not to index it.", "If this page should appear in Google, remove the noindex setting."));
-    if (!page.viewport) raw_findings.push(makeFinding("missing_viewport", "performance", "Mobile experience", "medium", page, "Add mobile viewport settings", "This page may not be set up correctly for mobile screens.", "Add a viewport meta tag in the site template or theme."));
-    if (Number(page.schema_count || 0) === 0) raw_findings.push(makeFinding("missing_schema", "schema", "Trust signals", "low", page, "Add structured data where useful", "This page does not appear to include structured data.", "Add relevant schema such as Organization, LocalBusiness, Product, Article, FAQ, or Breadcrumb schema."));
-    if (Number(page.open_graph_tag_count || 0) === 0) raw_findings.push(makeFinding("missing_open_graph", "web_dev", "Social sharing", "low", page, "Improve social sharing metadata", "This page may not have social sharing tags.", "Add Open Graph title, description, and image fields in the CMS or SEO plugin."));
-    if (Number(page.missing_alt_image_count || 0) > 0) raw_findings.push(makeFinding("image_alt_text", "web_dev", "Images", "low", page, "Add missing image descriptions", "Some images on this page appear to be missing alt text.", "Add short, useful alt text to important images."));
-    if (Number(page.html_size || 0) > 800000 || Number(page.script_count || 0) > 70) raw_findings.push(makeFinding("heavy_page", "performance", "Website performance", "medium", page, "Review heavy pages", "This page appears large or script-heavy.", "Compress images, reduce unused scripts, and review third-party apps or plugins."));
-    if (page.client_rendering_suspected) raw_findings.push(makeFinding("client_rendering", "js_rendering", "Website setup", "medium", page, "Review JavaScript-rendered content", "This page may rely heavily on JavaScript before important content appears.", "Make sure the main content, title, links, and headings are available in the initial HTML where possible."));
-    if (page.final_url !== page.url && cleanUrl(page.final_url) && cleanUrl(page.url)) raw_findings.push(makeFinding("redirect", "redirect", "Page redirect", "low", page, "Review redirected pages", "This page redirects to another URL.", "Update internal links so they point directly to the final URL."));
+function extractLinkRel(html, rel) {
+  const patterns = [
+    new RegExp(`<link[^>]+rel=["'][^"']*${escapeRegExp(rel)}[^"']*["'][^>]*href=["']([^"']*)["'][^>]*>`, "i"),
+    new RegExp(`<link[^>]+href=["']([^"']*)["'][^>]*rel=["'][^"']*${escapeRegExp(rel)}[^"']*["'][^>]*>`, "i"),
+  ];
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match?.[1]) return decodeHtml(match[1]).trim();
   }
-  addDuplicateFindings(raw_findings, indexablePages, "title", "duplicate_title", "duplicate_content", "Search appearance", "Review duplicate search titles");
-  addDuplicateFindings(raw_findings, indexablePages, "meta_description", "duplicate_meta_description", "duplicate_content", "Search appearance", "Review duplicate search descriptions");
-  addDuplicateFindings(raw_findings, indexablePages, "h1", "duplicate_h1", "thin_content", "Page content", "Review duplicate main headings");
-  const orphanPages = pages.filter((page) => page.in_sitemap && page.source === "sitemap" && Number(page.internal_link_count || 0) === 0 && isReadablePage(page));
-  if (orphanPages.length > 0) raw_findings.push(makeGroupedFinding("orphan_page", "internal_link", "Internal links", "low", "Pages not linked from your website", orphanPages.map((page) => page.url), "Some pages were found in the sitemap but were not linked from the pages the scanner checked.", "Add internal links to important orphan pages from relevant menus, footers, or content."));
-  return { raw_findings, technical_audit_summary: { audit_profile: "screaming_frog_lite", screaming_frog_lite_enabled: true, pages_checked: pages.length, readable_pages_checked: readablePages.length, scanner_blocked_pages: pages.filter((page) => page.is_scanner_blocked).length, important_pages_checked: readablePages.length, indexable_pages: indexablePages.length, missing_meta_description_count: raw_findings.filter((item) => item.rule === "missing_meta_description").length, heavy_page_count: raw_findings.filter((item) => item.rule === "heavy_page").length, average_word_count: Math.round(readablePages.reduce((sum, page) => sum + Number(page.word_count || 0), 0) / Math.max(1, readablePages.length)), checks_completed: ["status_codes", "titles", "meta_descriptions", "h1_headings", "canonicals", "indexability", "mobile_viewport", "schema", "open_graph", "image_alt_text", "thin_content", "redirects", "heavy_pages", "client_rendering", "duplicate_titles", "duplicate_meta_descriptions", "duplicate_h1_headings", "orphan_sitemap_pages"] } };
+  return "";
 }
 
-function makeFinding(rule: string, category: string, customer_category: string, priority: string, page: any, title: string, explanation: string, recommendation: string) { return { rule, category, customer_category, priority, difficulty: priority === "high" ? "moderate" : "easy", issue_title: title, title, plain_english_explanation: explanation, why_it_matters: explanation, recommendation, recommended_value: recommendation, affected_pages: [page.url], page_url: page.url, current_value: page.title || page.meta_description || page.h1 || page.status_code || "", fingerprint: fnv1a(`${rule}|${page.url}`), confidence_score: 90, source: "screaming_frog_lite", requires_approval: true, requires_developer: ["canonical", "performance", "js_rendering"].includes(category), can_auto_fix: false }; }
-function makeGroupedFinding(rule: string, category: string, customer_category: string, priority: string, title: string, pages: string[], explanation: string, recommendation: string) { return { rule, category, customer_category, priority, difficulty: "easy", issue_title: title, title, plain_english_explanation: explanation, why_it_matters: explanation, recommendation, recommended_value: recommendation, affected_pages: pages, page_url: pages[0] || "", fingerprint: fnv1a(`${rule}|${pages.join("|")}`), confidence_score: 90, source: "screaming_frog_lite", requires_approval: true, requires_developer: false, can_auto_fix: false }; }
-function addDuplicateFindings(output: any[], pages: any[], field: string, rule: string, category: string, customer_category: string, title: string) { const groups = new Map<string, string[]>(); for (const page of pages) { const value = String(page[field] || "").trim().toLowerCase(); if (!value) continue; if (!groups.has(value)) groups.set(value, []); groups.get(value)?.push(page.url); } for (const [value, urls] of groups) if (urls.length > 1) output.push(makeGroupedFinding(rule, category, customer_category, rule === "duplicate_title" ? "medium" : "low", title, urls, "Multiple pages use the same SEO field, which can make it harder for search engines to understand which page is most relevant.", `Rewrite this field so each affected page is unique. Duplicate value: ${value.slice(0, 120)}`)); }
-function isReadablePage(page: any) { return Number(page.status_code || 0) >= 200 && Number(page.status_code || 0) < 300 && !page.is_scanner_blocked && Number(page.word_count || 0) > 50; }
-function groupFindings(findings: any[]) { const seen = new Set<string>(); const output: any[] = []; for (const item of findings) { const key = item.fingerprint || `${item.rule}|${item.page_url}`; if (seen.has(key)) continue; seen.add(key); output.push(item); } return output.sort((a, b) => priorityWeight(b.priority) - priorityWeight(a.priority)).slice(0, 120); }
-function priorityWeight(priority: string) { return { critical: 4, high: 3, medium: 2, low: 1 }[String(priority || "medium").toLowerCase()] || 2; }
-function calculateHealthScore({ pages, findings, technicalSummary }: { pages: any[]; findings: any[]; technicalSummary: any }) { const readable = Number(technicalSummary?.readable_pages_checked || 0); const blocked = Number(technicalSummary?.scanner_blocked_pages || 0); if (readable === 0 && blocked > 0) return 35; if (pages.length === 0) return 25; let score = 92; for (const finding of findings) score -= { high: 8, medium: 4, low: 1 }[String(finding.priority || "medium").toLowerCase()] || 3; if (readable < Math.min(5, pages.length)) score -= 10; return Math.max(20, Math.min(98, Math.round(score))); }
-function buildCoverageFindings({ pages, startUrl }: { pages: any[]; startUrl: string }) { if (pages.length > 0) return []; return [makeGroupedFinding("scanner_no_pages", "scanner_blocked", "Scan coverage", "high", "Scanner could not read the website", [startUrl], "The scanner could not fetch readable pages from this website.", "Check whether the website blocks crawler requests, requires JavaScript, or has firewall rules that need to allow the scanner.")]; }
-function buildScanSummary({ websiteUrl, body, healthScore, pages, findings, technicalSummary, crawlResult }: { websiteUrl: string; body: any; healthScore: number; pages: any[]; findings: any[]; technicalSummary: any; crawlResult: any }) { const high = findings.filter((item) => item.priority === "high").length; return { website_url: websiteUrl, business_name: body.business_name || "", health_score: healthScore, pages_checked: pages.length, readable_pages_checked: technicalSummary.readable_pages_checked || 0, scanner_blocked_pages: technicalSummary.scanner_blocked_pages || 0, total_findings: findings.length, high_priority_findings: high, summary: `The scan checked ${pages.length} pages and found ${findings.length} SEO improvements, including ${high} high-priority items.`, scan_focus: crawlResult.crawl_scope || {} }; }
-function fnv1a(value: string) { let hash = 0x811c9dc5; for (let i = 0; i < value.length; i += 1) { hash ^= value.charCodeAt(i); hash = Math.imul(hash, 0x01000193); } return `sf_${(hash >>> 0).toString(16)}`; }
+function extractLinks(html, baseUrl) {
+  const links = [];
+  const matches = html.matchAll(/<a\s+[^>]*href=["']([^"'#]+)["'][^>]*>/gi);
+  for (const match of matches) {
+    try {
+      const url = new URL(decodeHtml(match[1]), baseUrl);
+      url.hash = "";
+      links.push(url.href);
+    } catch {}
+  }
+  return Array.from(new Set(links)).slice(0, 500);
+}
+
+function extractImageStats(html) {
+  const images = [...html.matchAll(/<img\s+[^>]*>/gi)].map((match) => match[0]);
+  let missingAlt = 0;
+  for (const img of images) {
+    const alt = img.match(/\salt=["']([^"']*)["']/i);
+    if (!alt || !String(alt[1] || "").trim()) missingAlt += 1;
+  }
+  return { total: images.length, missingAlt };
+}
+
+function extractLinkStats(html, baseUrl) {
+  const base = new URL(baseUrl);
+  let internal = 0;
+  let external = 0;
+  for (const href of extractLinks(html, baseUrl)) {
+    try {
+      const parsed = new URL(href);
+      if (parsed.origin === base.origin) internal += 1;
+      else external += 1;
+    } catch {}
+  }
+  return { internal, external };
+}
+
+function extractSchemaTypes(html) {
+  const types = new Set();
+  for (const match of html.matchAll(/"@type"\s*:\s*"([^"]+)"/gi)) types.add(match[1]);
+  for (const match of html.matchAll(/itemtype=["'][^"']*schema\.org\/([^"']+)["']/gi)) types.add(match[1]);
+  return Array.from(types).slice(0, 20);
+}
+
+function extractSignals(path, text, values) {
+  const haystack = `${path} ${String(text || "").slice(0, 4000)}`.toLowerCase();
+  return values.filter((value) => haystack.includes(value)).slice(0, 12);
+}
+
+function stripHtml(value) {
+  return String(value || "").replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function decodeHtml(value) {
+  return String(value || "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+}
+
+/* -------------------------------------------------------------------------- */
+/* Classification helpers                                                      */
+/* -------------------------------------------------------------------------- */
+
+function classifyTemplateFamily(url) {
+  const path = cleanPath(url).toLowerCase();
+  if (isInternalAppRoute(path)) return "internal_app";
+  if (isLowValuePage(path)) return "archive";
+  if (path.includes("faq") || path.includes("questions-reponses")) return "qa";
+  if (path.includes("privacy") || path.includes("terms") || path.includes("legal") || path.includes("mentions-legales")) return "legal_info";
+  if (path.includes("/guide") || path.includes("/blog")) return "guide";
+  if (hasAny(path, ["simulation", "simulateur", "calcul", "comparateur", "devis", "quote", "pricing", "demo", "booking", "reservation"])) return "conversion";
+  if (hasAny(path, ["/collections/", "/collection/", "/category/", "/categorie/", "/listing", "/show", "/pass", "/ticket", "/stage", "/pilotage"])) return "category_listing";
+  if (hasAny(path, ["/products/", "/product/", "/produit/", "/p/"])) return "product_detail";
+  if (path.includes("contact")) return "contact";
+  return "standard";
+}
+
+function estimatePageIntent(path, page) {
+  const lower = cleanPath(path).toLowerCase();
+  if (isInternalAppRoute(lower)) return "internal_or_auth";
+  if (isLowValuePage(lower)) return "low_value_archive";
+  if (hasAny(lower, ["contact", "devis", "quote", "simulation", "pricing", "demo", "booking", "reservation", "product", "collection", "ticket", "stage", "pass"])) return "money_or_conversion";
+  if (hasAny(lower, ["privacy", "terms", "about", "security", "legal", "mentions-legales"])) return "trust";
+  if (hasAny(`${lower} ${page?.title || ""} ${page?.h1 || ""}`, ["guide", "faq", "question", "blog", "news", "article"])) return "support_content";
+  return "standard_public";
+}
+
+function routeBoundaryRisk(pages) {
+  const count = (pages || []).filter((page) => isInternalAppRoute(page.url || page.final_url) && pageIsIndexable(page)).length;
+  return count >= 4 ? "high" : count > 0 ? "medium" : "low";
+}
+
+function isInternalAppRoute(url) {
+  const path = cleanPath(url).toLowerCase().replace(/\/$/, "");
+  return INTERNAL_ROUTE_PATTERNS.some((pattern) => path === pattern || path.startsWith(`${pattern}/`));
+}
+
+function isLowValuePage(url) {
+  const path = cleanPath(url).toLowerCase();
+  if (/\/(20\d{2})([-/](janvier|fevrier|février|mars|avril|mai|juin|juillet|aout|août|septembre|octobre|novembre|decembre|décembre|january|february|march|april|may|june|july|august|september|october|november|december))?(\/|$)/i.test(path)) return true;
+  if (/\/(20\d{2})[-/]?\d{1,2}(\/|$)/i.test(path)) return true;
+  if (LOW_VALUE_SEGMENTS.some((segment) => path.includes(segment))) return true;
+  return path.includes("?page=") || path.includes("&page=") || path.includes("?tag=") || path.includes("&tag=");
+}
+
+function findDuplicateCasingRoutes(pages) {
+  const buckets = new Map();
+  for (const page of pages || []) {
+    const path = cleanPath(page.final_url || page.url || "");
+    if (!path) continue;
+    const lower = path.toLowerCase();
+    const existing = buckets.get(lower) || new Set();
+    existing.add(path);
+    buckets.set(lower, existing);
+  }
+  const output = [];
+  for (const variants of buckets.values()) if (variants.size > 1) output.push(...variants);
+  return Array.from(new Set(output));
+}
+
+function findRepeatedSnapshotGroups(pages) {
+  const buckets = new Map();
+  for (const page of pages || []) {
+    const path = cleanPath(page.final_url || page.url || "");
+    if (!path || isInternalAppRoute(path)) continue;
+    const title = normalizeSnapshotText(page.title || page.h1 || "");
+    const description = normalizeSnapshotText(page.meta_description || "");
+    const key = `${title}|${description}`;
+    if (key.length < 18) continue;
+    const existing = buckets.get(key) || [];
+    existing.push(path);
+    buckets.set(key, existing);
+  }
+  for (const pagesForKey of buckets.values()) if (pagesForKey.length >= 4) return pagesForKey;
+  return [];
+}
+
+function normalizeSnapshotText(value) { return String(value || "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 140); }
+function pageIsIndexable(page) { const robots = String(page.robots || "").toLowerCase(); return page.indexable !== false && !robots.includes("noindex") && Number(page.status_code || 200) < 400; }
+function statusRule(status) { if (status === 429) return "blocked_page_429"; if (status === 410) return "410_error"; if (status >= 500) return "server_error"; if (status >= 400) return "404_error"; return "fetch_error"; }
+function isFailureRule(rule) { return ["404_error", "410_error", "server_error", "blocked_page_429", "fetch_error"].includes(rule); }
+function statusBucket(finding) { const value = `${finding.current_value || ""} ${finding.rule || ""}`.toLowerCase(); for (const code of ["429", "404", "410", "500", "503"]) if (value.includes(code)) return code; if (value.includes("blocked")) return "blocked"; return finding.rule || "failed"; }
+function groupFailureTitle(finding, family) { const bucket = statusBucket(finding); if (bucket === "429" || bucket === "blocked") return `Group blocked ${family} pages`; if (bucket === "404" || bucket === "410") return `Group missing ${family} pages`; if (bucket === "500" || bucket === "503") return `Group server errors on ${family} pages`; return "Group repeated page loading problems"; }
+function groupLowValueTitle(finding) { if (finding.rule.includes("description")) return "Batch low-priority archive descriptions"; if (finding.rule.includes("title")) return "Batch low-priority archive titles"; if (finding.rule.includes("alt")) return "Batch low-priority archive image descriptions"; return "Batch low-priority archive cleanup"; }
+function sameCanonicalPath(pageUrl, canonical) { try { const page = new URL(pageUrl); const canon = new URL(canonical, pageUrl); return page.origin === canon.origin && normalizeTrailingSlash(page.pathname) === normalizeTrailingSlash(canon.pathname); } catch { return false; } }
+function normalizeTrailingSlash(path) { return path === "/" ? "/" : path.replace(/\/$/, ""); }
+
+/* -------------------------------------------------------------------------- */
+/* Generic helpers                                                             */
+/* -------------------------------------------------------------------------- */
+
+async function safeReadJson(req) { try { return await req.json(); } catch { return {}; } }
+function resolveBudget(body) { const mode = String(body.scan_mode || body.audit_profile || "advanced").toLowerCase(); return MODE_LIMITS[mode] || MODE_LIMITS.advanced; }
+function normalizeWebsiteUrl(value) { const raw = String(value || "").trim(); if (!raw) return ""; try { return new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).href; } catch { return ""; } }
+function normalizePathPrefix(value) { const path = cleanPath(value || "/"); if (!path || path === "/") return "/"; return path.endsWith("/") ? path.slice(0, -1) : path; }
+function canonicalizeUrl(value) { try { const url = new URL(value); url.hash = ""; if ((url.protocol === "https:" && url.port === "443") || (url.protocol === "http:" && url.port === "80")) url.port = ""; return url.href; } catch { return ""; } }
+function isHtmlContent(contentType) { return !contentType || contentType.includes("text/html") || contentType.includes("application/xhtml+xml"); }
+function cleanPath(value) { const raw = String(value || "").trim(); if (!raw) return ""; try { if (/^https?:\/\//i.test(raw)) return new URL(raw).pathname || "/"; } catch {} return raw.startsWith("/") ? raw : `/${raw}`; }
+function safeHostname(value) { try { return new URL(String(value || "")).hostname.toLowerCase(); } catch { return ""; } }
+function hasAny(text, values) { const haystack = String(text || "").toLowerCase(); return values.some((value) => haystack.includes(String(value).toLowerCase())); }
+function escapeRegExp(value) { return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+function stableId(input) { let hash = 0; const value = String(input || ""); for (let i = 0; i < value.length; i += 1) { hash = (hash << 5) - hash + value.charCodeAt(i); hash |= 0; } return `finding_${Math.abs(hash)}`; }
+function friendlyCategory(category) { const map = { meta_title: "Search appearance", meta_description: "Search appearance", duplicate_content: "Search appearance", canonical: "Website setup", schema: "Trust signals", thin_content: "Page content", "404_error": "Broken page", redirect: "Page redirect", internal_link: "Internal links", performance: "Website performance", web_dev: "Website setup", mobile_setup: "Mobile setup", performance_hint: "Website performance", social_metadata: "Social sharing", indexability: "Indexability", image_alt_text: "Images" }; return map[category] || "Website improvement"; }
+function jsonResponse(payload, status = 200) { return Response.json(payload, { status, headers: CORS_HEADERS }); }

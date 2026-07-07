@@ -46,8 +46,14 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install pytest
-        run: python -m pip install --upgrade pip pytest
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip pytest pytest-asyncio
+          pip install -r scanner-api/requirements.txt
 
-      - name: Run scanner regression tests
+      - name: Run root scanner regression tests
+        run: pytest tests/
+
+      - name: Run Python scanner-api tests
+        working-directory: scanner-api
         run: pytest tests/

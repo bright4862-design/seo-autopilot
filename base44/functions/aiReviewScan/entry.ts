@@ -72,6 +72,50 @@ const SEVERE_RULES = new Set([
   "indexability",
 ]);
 
+const STRUCTURAL_RULES = new Set([
+  "broken_page",
+  "404_error",
+  "server_error",
+  "redirect_loop",
+  "canonical_missing",
+  "canonical_to_other_domain",
+  "mobile_setup",
+  "performance_hint",
+  "js_rendering",
+  "client_rendering",
+  "internal_link",
+]);
+
+const SEMANTIC_RULES = new Set([
+  "schema",
+  "social_metadata",
+  "structured_data",
+  "product_schema",
+  "localbusiness_schema",
+  "breadcrumb_schema",
+]);
+
+const CONTENT_TRUST_RULES = new Set([
+  "trust_signal_gap",
+  "faq_gap",
+  "cta_gap",
+  "thin_content",
+  "author",
+  "reviewer",
+  "methodology",
+  "content_quality",
+]);
+
+const CRAWL_INDEX_RULES = new Set([
+  "indexability",
+  "noindex",
+  "blocked_by_robots",
+  "robots_meta",
+  "orphan_sitemap_page",
+  "faceted_url",
+  "pagination",
+]);
+
 const VERTICAL_PROFILES = {
   insurance_finance: {
     label: "insurance / finance lead generation",
@@ -541,7 +585,7 @@ function buildSiteFingerprint({ body, pages, websiteUrl }) {
     regulatory_sensitivity: regulatorySensitivity,
     likely_money_page_patterns: VERTICAL_PROFILES[vertical]?.moneyPatterns || VERTICAL_PROFILES.general.moneyPatterns,
     low_value_page_patterns: LOW_VALUE_PAGE_PATTERNS,
-    scoring_model: "evidence_confidence_x_site_fit_x_business_impact_x_reach_v2_template_groups",
+    scoring_model: "evidence_confidence_x_site_fit_x_business_impact_x_reach_v3_page_type_meta_gate",
   };
 }
 
@@ -596,12 +640,22 @@ function prepareFixes(rawFixes, siteFingerprint, body) {
 function scoreFixForSite(fix, siteFingerprint, body) {
   const pageUrl = cleanPath(fix?.page_url || fix?.affected_pages?.[0] || "/") || "/";
   const pageValue = scorePageValue(pageUrl, siteFingerprint, body);
+  const pageType = classifyPageType(pageUrl, pageValue, siteFingerprint, fix);
+  const defectClass = classifyDefectClass(fix, pageType, pageValue, siteFingerprint);
   const evidenceConfidence = scoreEvidenceConfidence(fix);
   const reachScore = scoreReach(fix);
-  const siteFitScore = scoreSiteFit(fix, pageValue, siteFingerprint);
-  const businessImpactScore = scoreBusinessImpact(fix, pageValue, siteFingerprint);
+  const siteFitScore = scoreSiteFit(fix, pageValue, siteFingerprint, defectClass);
+  const businessImpactScore = scoreBusinessImpact(fix, pageValue, siteFingerprint, defectClass);
   const lowValuePage = pageValue.classification === "low_value";
   const supportContent = pageValue.classification === "support_content";
+  const metadataIssue = isMetadataIssue(fix);
+  const metaRewriteAllowed = shouldAllowMetaRewrite({
+    fix,
+    pageType,
+    pageValue,
+    defectClass,
+    siteFingerprint,
+  });
   const cosmetic = isCosmeticIssue(fix);
   const severe = isSevereIssue(fix);
 
@@ -610,6 +664,14 @@ function scoreFixForSite(fix, siteFingerprint, body) {
   let why = fix.why_it_matters;
   let recommendedValue = fix.recommended_value;
   let difficulty = fix.difficulty;
+
+  if (metadataIssue && !metaRewriteAllowed && !severe) {
+    priority = pageType === "article_or_blog" || pageType === "support_guide_or_qa" ? "medium" : "low";
+    why =
+      "This is a metadata cleanup item, but FixList found a more important page-type or template signal first. Handle it as a batch after structural, trust, schema, crawl, and conversion-page work.";
+    recommendedValue =
+      "Do not rewrite this page one by one yet. Group the pattern and fix higher-impact page or template issues first.";
+  }
 
   if (lowValuePage && cosmetic && !severe) {
     priority = "low";
@@ -637,7 +699,7 @@ function scoreFixForSite(fix, siteFingerprint, body) {
   }
 
   const overallPriorityScore = Math.round(
-    evidenceConfidence * 0.25 + siteFitScore * 0.25 + businessImpactScore * 0.35 + reachScore * 0.15
+    evidenceConfidence * 0.22 + siteFitScore * 0.24 + businessImpactScore * 0.38 + reachScore * 0.16
   );
 
   return {
@@ -650,9 +712,17 @@ function scoreFixForSite(fix, siteFingerprint, body) {
     ai_recommendation: recommendedValue,
     difficulty,
     page_url: pageUrl,
+    page_type: pageType,
     page_template_family: getTemplateFamily(pageUrl),
     page_value_score: pageValue.score,
     page_value_label: pageValue.label,
+    primary_defect_class: defectClass,
+    meta_rewrite_allowed: metaRewriteAllowed,
+    meta_regeneration_gate: metadataIssue
+      ? metaRewriteAllowed
+        ? "allowed_metadata_is_primary_gap"
+        : "blocked_metadata_not_primary_gap"
+      : "not_metadata",
     business_importance: pageValue.classification,
     evidence_confidence: evidenceConfidence,
     site_fit_score: siteFitScore,
@@ -737,7 +807,7 @@ function scoreReach(fix) {
   return Math.max(5, Math.min(100, count * 12));
 }
 
-function scoreSiteFit(fix, pageValue, siteFingerprint) {
+function scoreSiteFit(fix, pageValue, siteFingerprint, defectClass = "metadata") {
   let score = 45 + pageValue.score * 0.45;
   const category = String(fix?.category || "").toLowerCase();
   const rule = String(fix?.rule || "").toLowerCase();
@@ -752,16 +822,20 @@ function scoreSiteFit(fix, pageValue, siteFingerprint) {
     score += 15;
   }
   if (siteFingerprint.regulatory_sensitivity === "regulated" && isTrustOrEntityIssue(fix)) score += 18;
+  if (["structural", "crawl_index", "semantic_schema", "content_trust"].includes(defectClass)) score += 12;
 
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
-function scoreBusinessImpact(fix, pageValue, siteFingerprint) {
+function scoreBusinessImpact(fix, pageValue, siteFingerprint, defectClass = "metadata") {
   let score = pageValue.score;
   if (isSevereIssue(fix)) score += 25;
   if (isCosmeticIssue(fix)) score -= pageValue.classification === "low_value" ? 25 : pageValue.classification === "support_content" ? 12 : 5;
   if (siteFingerprint.business_model?.includes("quote") && hasAny(fix.page_url, ["devis", "quote", "simulation", "calcul-assurance", "comparateur"])) score += 18;
   if (siteFingerprint.business_model?.includes("booking") && hasAny(fix.page_url, ["booking", "reservation", "activity", "event"])) score += 18;
+  if (["structural", "crawl_index"].includes(defectClass)) score += 18;
+  if (defectClass === "semantic_schema" && pageValue.classification === "money_page") score += 15;
+  if (defectClass === "content_trust" && siteFingerprint.regulatory_sensitivity === "regulated") score += 18;
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
@@ -780,14 +854,23 @@ function groupTemplateIssues(fixes) {
       fix.business_importance === "support_content" &&
       isCosmeticIssue(fix) &&
       !isSevereIssue(fix);
+    const shouldGroupBlockedMeta =
+      fix.meta_regeneration_gate === "blocked_metadata_not_primary_gap" &&
+      !isSevereIssue(fix) &&
+      fix.business_importance !== "money_page";
 
-    if (!shouldGroupLowValue && !shouldGroupSupport) {
+    if (!shouldGroupLowValue && !shouldGroupSupport && !shouldGroupBlockedMeta) {
       keep.push(fix);
       continue;
     }
 
-    const key = `${shouldGroupSupport ? family : "archive"}|${fix.rule || fix.category || "cleanup"}`;
-    const title = shouldGroupSupport ? supportGroupTitle(fix, family) : archiveGroupTitle(fix);
+    const groupFamily = shouldGroupSupport ? family : shouldGroupLowValue ? "archive" : fix.page_type || "metadata_later";
+    const key = `${groupFamily}|${fix.rule || fix.category || "cleanup"}`;
+    const title = shouldGroupSupport
+      ? supportGroupTitle(fix, family)
+      : shouldGroupLowValue
+        ? archiveGroupTitle(fix)
+        : deferredMetaGroupTitle(fix, groupFamily);
     const existing = groups.get(key) || {
       ...fix,
       id: stableId(`template_group_${key}`),
@@ -797,30 +880,51 @@ function groupTemplateIssues(fixes) {
       title,
       plain_english_explanation: shouldGroupSupport
         ? "Several guide or Q&A pages have the same SEO cleanup issue. Treat this as a template/content cleanup instead of separate one-off tasks."
-        : "Several news, blog, or archive pages have the same lower-priority SEO cleanup issue.",
+        : shouldGroupLowValue
+          ? "Several news, blog, or archive pages have the same lower-priority SEO cleanup issue."
+          : "Several pages have metadata cleanup opportunities, but metadata is not the first bottleneck for this page type.",
       plain_english_summary: shouldGroupSupport
         ? "Several guide or Q&A pages have the same SEO cleanup issue. Treat this as a template/content cleanup instead of separate one-off tasks."
-        : "Several news, blog, or archive pages have the same lower-priority SEO cleanup issue.",
+        : shouldGroupLowValue
+          ? "Several news, blog, or archive pages have the same lower-priority SEO cleanup issue."
+          : "Several pages have metadata cleanup opportunities, but metadata is not the first bottleneck for this page type.",
       why_it_matters: shouldGroupSupport
         ? "These pages can support search visibility, but they should not crowd out the calculator, comparison, quote, and main landing pages. Grouping them keeps the FixList practical."
-        : "These pages matter less than the pages that drive leads, sales, bookings, or quote requests. Grouping them keeps the FixList focused on business impact first.",
+        : shouldGroupLowValue
+          ? "These pages matter less than the pages that drive leads, sales, bookings, or quote requests. Grouping them keeps the FixList focused on business impact first."
+          : "The right order is to fix page type, crawl/index, schema, trust, or template problems first, then polish titles and descriptions as a batch.",
       recommended_value: shouldGroupSupport
         ? "Fix one guide/Q&A title or description pattern, then apply the same rule across the affected pages."
-        : "Review these pages later as a batch, or leave them until important business pages are fixed.",
+        : shouldGroupLowValue
+          ? "Review these pages later as a batch, or leave them until important business pages are fixed."
+          : "Keep these metadata changes as a later batch. Do not make them the first priority unless the page is a true money page.",
       ai_recommendation: shouldGroupSupport
         ? "Fix one guide/Q&A title or description pattern, then apply the same rule across the affected pages."
-        : "Review these pages later as a batch, or leave them until important business pages are fixed.",
+        : shouldGroupLowValue
+          ? "Review these pages later as a batch, or leave them until important business pages are fixed."
+          : "Keep these metadata changes as a later batch. Do not make them the first priority unless the page is a true money page.",
       priority: shouldGroupSupport ? "medium" : "low",
       difficulty: "easy",
-      business_importance: shouldGroupSupport ? "support_content_group" : "low_value_group",
+      business_importance: shouldGroupSupport
+        ? "support_content_group"
+        : shouldGroupLowValue
+          ? "low_value_group"
+          : "deferred_metadata_group",
+      primary_defect_class: shouldGroupBlockedMeta ? "metadata_deferred" : fix.primary_defect_class,
+      meta_rewrite_allowed: false,
+      meta_regeneration_gate: shouldGroupBlockedMeta ? "blocked_grouped_for_later" : fix.meta_regeneration_gate,
       affected_pages: [],
-      page_value_score: shouldGroupSupport ? 45 : 10,
-      page_value_label: shouldGroupSupport ? "Grouped guide/Q&A content pages" : "Grouped lower-priority archive pages",
+      page_value_score: shouldGroupSupport ? 45 : shouldGroupLowValue ? 10 : 30,
+      page_value_label: shouldGroupSupport
+        ? "Grouped guide/Q&A content pages"
+        : shouldGroupLowValue
+          ? "Grouped lower-priority archive pages"
+          : "Grouped deferred metadata pages",
       evidence_confidence: 90,
-      site_fit_score: shouldGroupSupport ? 55 : 20,
-      business_impact_score: shouldGroupSupport ? 45 : 15,
+      site_fit_score: shouldGroupSupport ? 55 : shouldGroupLowValue ? 20 : 30,
+      business_impact_score: shouldGroupSupport ? 45 : shouldGroupLowValue ? 15 : 25,
       reach_score: 60,
-      overall_priority_score: shouldGroupSupport ? 58 : 25,
+      overall_priority_score: shouldGroupSupport ? 58 : shouldGroupLowValue ? 25 : 32,
       what_to_do: shouldGroupSupport
         ? [
             "Pick one affected guide or Q&A page as the example.",
@@ -828,11 +932,17 @@ function groupTemplateIssues(fixes) {
             "Apply the same rule across the affected template group.",
             "Run FixList again after publishing.",
           ]
-        : [
-            "Fix your important business pages first.",
-            "Review these archive/news pages as a later batch.",
-            "Run FixList again if you decide to clean them up.",
-          ],
+        : shouldGroupLowValue
+          ? [
+              "Fix your important business pages first.",
+              "Review these archive/news pages as a later batch.",
+              "Run FixList again if you decide to clean them up.",
+            ]
+          : [
+              "Fix structural, schema, trust, crawl, or conversion-page issues first.",
+              "Then review this metadata pattern as a batch.",
+              "Only rewrite individual metadata when it is the main remaining gap.",
+            ],
       what_to_do_steps: shouldGroupSupport
         ? [
             "Pick one affected guide or Q&A page as the example.",
@@ -840,11 +950,17 @@ function groupTemplateIssues(fixes) {
             "Apply the same rule across the affected template group.",
             "Run FixList again after publishing.",
           ]
-        : [
-            "Fix your important business pages first.",
-            "Review these archive/news pages as a later batch.",
-            "Run FixList again if you decide to clean them up.",
-          ],
+        : shouldGroupLowValue
+          ? [
+              "Fix your important business pages first.",
+              "Review these archive/news pages as a later batch.",
+              "Run FixList again if you decide to clean them up.",
+            ]
+          : [
+              "Fix structural, schema, trust, crawl, or conversion-page issues first.",
+              "Then review this metadata pattern as a batch.",
+              "Only rewrite individual metadata when it is the main remaining gap.",
+            ],
     };
 
     existing.affected_pages = Array.from(
@@ -887,6 +1003,15 @@ function supportGroupTitle(fix, family) {
   return `Batch ${label} page cleanup`;
 }
 
+function deferredMetaGroupTitle(fix, family) {
+  const rule = String(fix?.rule || "").toLowerCase();
+  const label = String(family || "page").replace(/_/g, " ");
+  if (rule.includes("description")) return `Defer ${label} meta descriptions`;
+  if (rule.includes("title")) return `Defer ${label} search titles`;
+  if (rule.includes("duplicate")) return `Defer duplicate ${label} search fields`;
+  return `Defer ${label} metadata cleanup`;
+}
+
 function getTemplateFamily(url) {
   const path = cleanPath(url).toLowerCase();
   if (isLowValuePage(path)) return "archive";
@@ -894,8 +1019,68 @@ function getTemplateFamily(url) {
   if (path.includes("/loi-") || path.includes("/loi_") || path.includes("/legal")) return "legal_info";
   if (path.includes("/le-guide") || path.includes("/guide")) return "guide";
   if (hasAny(path, ["simulation", "simulateur", "calcul-assurance", "comparateur", "devis", "quote"])) return "conversion";
+  if (hasAny(path, ["/collections/", "/category/", "/categorie/", "/c/"])) return "category_listing";
+  if (hasAny(path, ["/products/", "/product/", "/produit/", "/p/"])) return "product_detail";
   if (path.includes("contact")) return "contact";
   return "standard";
+}
+
+function classifyPageType(url, pageValue, siteFingerprint, fix) {
+  const path = cleanPath(url).toLowerCase();
+  const family = getTemplateFamily(path);
+  const value = `${path} ${fix?.category || ""} ${fix?.rule || ""} ${fix?.issue_title || ""}`.toLowerCase();
+
+  if (path === "/" || path.endsWith("/index.html")) return "landing_page";
+  if (family === "conversion") return "comparison_tool_or_calculator";
+  if (family === "category_listing") return "category_or_listing";
+  if (family === "product_detail") return "product_detail";
+  if (family === "contact") return "contact_or_lead_page";
+  if (family === "archive") return "article_or_archive";
+  if (["guide", "qa", "legal_info"].includes(family)) return "support_guide_or_qa";
+  if (hasAny(value, ["booking", "reservation", "checkout", "cart", "panier"])) return "booking_or_checkout_flow";
+  if (hasAny(value, ["agency", "agence", "location", "adresse", "map", "localbusiness"])) return "location_page";
+  if (pageValue.classification === "money_page") return "landing_page";
+  if (siteFingerprint.vertical === "ecommerce" && hasAny(path, ["shop", "boutique", "collection"])) return "category_or_listing";
+  return "standard_page";
+}
+
+function classifyDefectClass(fix, pageType, pageValue, siteFingerprint) {
+  const value = `${fix?.rule || ""} ${fix?.category || ""} ${fix?.issue_title || ""} ${fix?.current_value || ""}`.toLowerCase();
+
+  if (matchesAnyRule(value, CRAWL_INDEX_RULES)) return "crawl_index";
+  if (matchesAnyRule(value, STRUCTURAL_RULES) || isSevereIssue(fix)) return "structural";
+  if (matchesAnyRule(value, SEMANTIC_RULES)) return "semantic_schema";
+  if (matchesAnyRule(value, CONTENT_TRUST_RULES) || (siteFingerprint.regulatory_sensitivity === "regulated" && pageValue.classification === "money_page" && hasAny(value, ["trust", "author", "review", "method", "thin"]))) {
+    return "content_trust";
+  }
+  if (isMetadataIssue(fix)) return "metadata";
+  if (["category_or_listing", "booking_or_checkout_flow"].includes(pageType) && hasAny(value, ["duplicate", "pagination", "filter", "facet"])) {
+    return "crawl_index";
+  }
+  return "content_or_template";
+}
+
+function shouldAllowMetaRewrite({ fix, pageType, pageValue, defectClass }) {
+  if (!isMetadataIssue(fix)) return false;
+  if (["structural", "crawl_index", "semantic_schema", "content_trust"].includes(defectClass)) return false;
+  if (pageValue.classification === "low_value") return false;
+  if (["article_or_archive", "support_guide_or_qa"].includes(pageType)) return false;
+  if (["comparison_tool_or_calculator", "contact_or_lead_page", "landing_page", "product_detail", "category_or_listing", "location_page"].includes(pageType)) return true;
+  return pageValue.classification === "money_page";
+}
+
+function isMetadataIssue(fix) {
+  const value = `${fix?.rule || ""} ${fix?.category || ""} ${fix?.issue_title || ""}`.toLowerCase();
+  return hasAny(value, ["meta", "title", "description", "duplicate_search", "duplicate title", "duplicate description", "search field"]);
+}
+
+function matchesAnyRule(value, rules) {
+  const haystack = String(value || "").toLowerCase();
+  for (const rule of rules || []) {
+    const raw = String(rule || "").toLowerCase();
+    if (haystack.includes(raw) || haystack.includes(raw.replace(/_/g, " "))) return true;
+  }
+  return false;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1348,7 +1533,8 @@ Hard rules:
 7. Focus top actions on pages that drive leads, sales, bookings, quotes, or trust.
 8. News, blog, tag, feed, pagination, and old archive pages should not dominate the top priorities.
 9. Guide and Q&A page issues should usually be grouped by template or content family unless the issue affects a true conversion page.
-10. For regulated or trust-sensitive sites, prioritize trust, clarity, indexability, and key conversion pages.
+10. Metadata rewriting is gated. Only recommend title or meta-description rewrites when metadata is the primary gap for that page type. If the primary defect is structural, crawl/index, schema, trust, rendering, canonical, or template-level, explain that before metadata polishing.
+11. For regulated or trust-sensitive sites, prioritize trust, clarity, indexability, and key conversion pages.
 
 Site fingerprint:
 ${JSON.stringify(siteFingerprint, null, 2)}
@@ -1387,7 +1573,7 @@ ${JSON.stringify(
 Technical audit summary:
 ${JSON.stringify(body?.technical_audit_summary || null, null, 2)}
 
-Prioritized scanner findings with evidence and page-value scores:
+Prioritized scanner findings with evidence, page-type, defect-class, and meta-gate scores:
 ${JSON.stringify(canonicalFixes.map(compactFixForPrompt), null, 2)}
 
 Representative page profile:
@@ -1532,7 +1718,11 @@ function compactFixForPrompt(fix) {
     affected_pages: fix.affected_pages?.slice(0, 8) || [],
     why_it_matters: fix.why_it_matters,
     recommended_value: fix.recommended_value,
+    page_type: fix.page_type,
     page_template_family: fix.page_template_family,
+    primary_defect_class: fix.primary_defect_class,
+    meta_rewrite_allowed: fix.meta_rewrite_allowed,
+    meta_regeneration_gate: fix.meta_regeneration_gate,
     page_value_score: fix.page_value_score,
     page_value_label: fix.page_value_label,
     business_importance: fix.business_importance,
@@ -1567,7 +1757,7 @@ function buildPositiveFindings({ pages, siteFingerprint }) {
 
 function buildGroupedPageRecommendations(fixes) {
   return (fixes || [])
-    .filter((fix) => fix.business_importance === "low_value_group" || fix.business_importance === "support_content_group" || (Array.isArray(fix.affected_pages) && fix.affected_pages.length > 3))
+    .filter((fix) => fix.business_importance === "low_value_group" || fix.business_importance === "support_content_group" || fix.business_importance === "deferred_metadata_group" || (Array.isArray(fix.affected_pages) && fix.affected_pages.length > 3))
     .slice(0, 8)
     .map((fix) => ({
       title: fix.issue_title,

@@ -1,11 +1,12 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
-const VERSION = "runAdvancedScan_v19_policy_evidence_arrays";
+const VERSION = "runAdvancedScan_v20_artifact_precision";
 const CORS_HEADERS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
-const USER_AGENT = "Mozilla/5.0 (compatible; FixListBot/1.9; +https://base44.app)";
+const USER_AGENT = "Mozilla/5.0 (compatible; FixListBot/2.0; +https://base44.app)";
 const FETCH_TIMEOUT_MS = 12000;
 const MAX_BODY_CHARS = 1_500_000;
 const MAX_SITEMAP_FETCHES = 12;
+const MAX_ARTIFACT_EVIDENCE = 100;
 const DEFAULT_POLICY = { rendering_mode: "unknown", platform_guess: "", priority_boost_patterns: [], priority_deprioritize_patterns: [], skip_patterns: [], source: "default", error: "" };
 const MODE_LIMITS = {
   basic: { max_pages: 25, crawl_timeout_ms: 35000, use_sitemap: false, derive_policy: false },
@@ -34,7 +35,7 @@ Deno.serve(async (req) => {
     const invokeLLM = typeof base44.integrations?.Core?.InvokeLLM === "function" ? async (prompt) => await base44.integrations.Core.InvokeLLM({ prompt }) : null;
 
     const crawlResult = await crawlWebsite({ startUrl: websiteUrl, budget, pathPrefix: body.path_prefix || body.requested_path_prefix || body.crawl_path_prefix || "", invokeLLM });
-    const rawFindings = buildFindings(crawlResult.pages, websiteUrl);
+    const rawFindings = buildFindings(crawlResult.pages, websiteUrl, budget);
     const groupedFindings = groupFindings(rawFindings);
     const healthScore = calculateHealthScore(crawlResult.pages, groupedFindings);
     const verifiedFailedPages = crawlResult.pages.filter(isVerifiedFailedPage).map(pageEvidenceObject);
@@ -45,7 +46,7 @@ Deno.serve(async (req) => {
       success: true,
       version: VERSION,
       scanner_version: VERSION,
-      scanner_profile: "screaming_frog_lite_policy_evidence_arrays_v19",
+      scanner_profile: "screaming_frog_lite_artifact_precision_v20",
       screaming_frog_lite_enabled: true,
       website_url: websiteUrl,
       normalized_url: websiteUrl,
@@ -267,7 +268,7 @@ function computeQueuePriority(path, discovery, policy) {
   return Math.max(0, Math.min(150, score));
 }
 
-function buildFindings(pages, websiteUrl) {
+function buildFindings(pages, websiteUrl, budget = MODE_LIMITS.advanced) {
   const findings = [];
   if (safeHostname(websiteUrl).endsWith(".base44.app")) findings.push(createFinding({ rule: "free_base44_subdomain", category: "indexability", priority: "high", title: "Move production SEO to a custom domain", pageUrl: "/", explanation: "The site is on a Base44 subdomain. A branded custom domain is stronger for SEO and trust.", recommendation: "Connect a branded custom domain before treating this as the permanent production SEO home.", difficulty: "developer" }));
   for (const page of pages) {
@@ -288,13 +289,14 @@ function buildFindings(pages, websiteUrl) {
     if (page.estimated_page_intent === "money_or_conversion" && !page.has_schema) findings.push(createFinding({ rule: "schema", category: "schema", priority: "medium", title: "Add structured data to important pages", pageUrl: path, explanation: "This looks like an important business page, but no structured data was detected.", recommendation: "Add appropriate schema such as Organization, Product, Service, Breadcrumb, or FAQ where relevant.", difficulty: "developer" }));
   }
   const trustPages = pages.map((p) => cleanPath(p.final_url || p.url || "").toLowerCase()).filter((p) => TRUST.some((t) => p.startsWith(t)));
-  if (pages.length >= 10 && trustPages.length === 0) findings.push(createFinding({ rule: "missing_trust_pages", category: "schema", priority: "medium", title: "Add public trust pages", pageUrl: "/", explanation: "The scan did not find obvious About, Contact, Privacy, Terms, or Security pages.", recommendation: "Add or expose trust pages and link them from the footer.", difficulty: "moderate" }));
+  if (pages.length >= 15 && trustPages.length === 0) findings.push(createFinding({ rule: "missing_trust_pages", category: "schema", priority: "medium", title: "Add public trust pages", pageUrl: "/", explanation: "The scan did not find obvious About, Contact, Privacy, Terms, or Security pages.", recommendation: "Add or expose trust pages and link them from the footer.", difficulty: "moderate" }));
+  if (budget.max_pages >= 80 && pages.length > 0 && pages.length < 15 && findings.length === 0) findings.push(createFinding({ rule: "limited_crawl_coverage", category: "web_dev", priority: "medium", title: "Scan coverage was limited", pageUrl: "/", currentValue: `${pages.length} pages checked`, explanation: "FixList loaded only a small sample of this section. The pages it did check looked mostly clean, so recommendations would be low-confidence until coverage improves.", recommendation: "Run a broader scan or ask your web person to confirm sitemap and internal links expose the rest of this section. Then rerun FixList before making SEO changes.", difficulty: "developer" }));
   return findings;
 }
 
 function createFinding({ rule, category, priority, title, pageUrl, affectedPages, currentValue = "", explanation, recommendation, difficulty = "easy", source = "screaming_frog_lite", sourcePages = [], linkTextSamples = [] }) {
   const id = stableId(`${rule}|${pageUrl}|${title}`);
-  const developer = difficulty === "developer" || /429|server|firewall|render|schema|canonical|route|index|redirect/i.test(`${rule} ${category} ${title} ${recommendation}`);
+  const developer = difficulty === "developer" || /429|server|firewall|render|schema|canonical|route|index|redirect|coverage|sitemap/i.test(`${rule} ${category} ${title} ${recommendation}`);
   return { id, fix_id: id, rule, category, customer_category: friendlyCategory(category), priority, difficulty: developer ? "developer" : difficulty, status: developer ? "needs_developer" : "needs_approval", issue_title: title, title, plain_english_explanation: explanation, plain_english_summary: explanation, why_it_matters: explanation, current_value: currentValue, recommended_value: recommendation, recommendation, ai_recommendation: recommendation, page_url: pageUrl, affected_pages: unique(affectedPages || [pageUrl]), source_pages: unique(sourcePages), link_text_samples: unique(linkTextSamples), requires_developer: developer, requires_approval: !developer, can_auto_fix: false, who_can_do_this: developer ? "your_web_person" : "you", estimated_time: developer ? "about 1–2 hours" : "about 10–20 minutes", confidence_score: 88, source, page_template_family: classifyTemplateFamily(pageUrl), estimated_page_intent: estimatePageIntent(pageUrl, {}), primary_defect_class: rule.includes("429") || rule.includes("blocked") ? "blocked_access" : developer ? "structural" : "content", meta_regeneration_gate: /meta|title|description/i.test(`${rule} ${category}`) ? "allowed_metadata_is_primary_gap" : "not_metadata" };
 }
 
@@ -349,8 +351,8 @@ function shouldCrawlUrl(url, start, pathPrefix) { try { const parsed = new URL(u
 function rankChildSitemaps(children, pathPrefix) { const tokens = String(pathPrefix || "/").toLowerCase().split("/").filter(Boolean); const score = (url) => { const target = String(url || "").toLowerCase(); let value = 0; if (tokens.length && tokens.every((token) => target.includes(token))) value += 40; else if (tokens.some((token) => target.includes(token))) value += 20; if (/(page|product|categor|service|listing|collection|post|article)/.test(target)) value += 8; if (/(tag|author|archive|news-\d{4}|blog-\d{4}|image|video)/.test(target)) value -= 15; return value; }; return unique(children).sort((a, b) => score(b) - score(a)); }
 function dequeueByPriority(queue) { queue.sort((a, b) => (b.priority || 0) - (a.priority || 0)); return queue.shift(); }
 function pageEvidenceObject(page) { return { url: page.url || "", final_url: page.final_url || page.url || "", path: page.path || cleanPath(page.final_url || page.url || ""), status_code: Number(page.status_code || 0), fetch_error: page.fetch_error || "", url_confidence: page.url_confidence || "", url_suspicion_reasons: page.url_suspicion_reasons || [], discovered_from: page.discovered_from || [], source_pages: page.source_pages || [], link_text_samples: page.link_text_samples || [], page_template_family: page.page_template_family || "", estimated_page_intent: page.estimated_page_intent || "", title: page.title || "", h1: page.h1 || "" }; }
-function recordArtifact(target, { url, discoveredFrom, sourcePage, linkText, reason = "encoded_or_base64_like_path" }) { if (!Array.isArray(target) || target.length >= 500) return; const value = String(url || "").trim(); if (!value) return; target.push({ url: value.slice(0, 500), path: cleanPath(value).slice(0, 500), url_confidence: "crawler_artifact", url_suspicion_reasons: [reason], discovered_from: [String(discoveredFrom || "unknown")], source_pages: unique([cleanPath(sourcePage || "")].filter(Boolean)), link_text_samples: unique([cleanText(linkText || "")].filter(Boolean)), suppressed_from_crawl: true }); }
-function uniqueArtifacts(items) { const seen = new Set(), output = []; for (const item of items || []) { const key = `${item.url || item.final_url || item.path}|${(item.source_pages || []).join("|")}`; if (!key || seen.has(key)) continue; seen.add(key); output.push(item); } return output.slice(0, 500); }
+function recordArtifact(target, { url, discoveredFrom, sourcePage, linkText, reason = "encoded_or_base64_like_path" }) { if (!Array.isArray(target) || target.length >= MAX_ARTIFACT_EVIDENCE) return; const value = String(url || "").trim(); if (!value) return; target.push({ url: value.slice(0, 500), path: cleanPath(value).slice(0, 500), url_confidence: "crawler_artifact", url_suspicion_reasons: [reason], discovered_from: [String(discoveredFrom || "unknown")], source_pages: unique([cleanPath(sourcePage || "")].filter(Boolean)), link_text_samples: unique([cleanText(linkText || "")].filter(Boolean)), suppressed_from_crawl: true }); }
+function uniqueArtifacts(items) { const seen = new Set(), output = []; for (const item of items || []) { const key = `${item.url || item.final_url || item.path}|${(item.source_pages || []).join("|")}`; if (!key || seen.has(key)) continue; seen.add(key); output.push(item); } return output.slice(0, MAX_ARTIFACT_EVIDENCE); }
 function buildUrlEvidenceSummary(pages, artifacts = []) { const out = { confirmed_seed: 0, confirmed_sitemap_and_linked: 0, sitemap_listed: 0, internally_linked: 0, linked_but_failed: 0, crawler_artifact: artifacts.length || 0, unknown_discovery: 0, route_boundary_candidates: { crawled: 0, indexable: 0, examples: [] } }; for (const page of pages) { out[page.url_confidence] = Number(out[page.url_confidence] || 0) + 1; if (page.route_boundary_candidate) { out.route_boundary_candidates.crawled += 1; if (page.indexable) out.route_boundary_candidates.indexable += 1; if (out.route_boundary_candidates.examples.length < 10) out.route_boundary_candidates.examples.push(page.path || cleanPath(page.url)); } } return out; }
 function buildScanSummary(pages, findings, healthScore, pagesFound, artifactCount = 0) { const verified = pages.filter(isVerifiedFailedPage).length; const suspicious = pages.filter((p) => p.url_confidence === "crawler_artifact").length + Number(artifactCount || 0); return { health_score: healthScore, score: healthScore, pages_scanned: pages.length, pages_crawled: pages.length, pages_found: pagesFound, verified_failed_pages: verified, suspicious_url_artifacts: suspicious, high_priority_count: findings.filter((f) => ["critical", "high"].includes(f.priority)).length, technical_issue_count: findings.length, status_label: healthScore >= 75 ? "Good" : healthScore >= 55 ? "Fair" : "Needs work", plain_english_summary: `The scanner reviewed ${pages.length} pages${pagesFound ? ` out of about ${pagesFound} discovered URLs` : ""}. ${verified ? `${verified} verified failed page checks need review. ` : ""}${suspicious ? `${suspicious} suspicious crawler artifacts were separated from customer-facing issues. ` : ""}Start with grouped technical and money-page issues first.` }; }
 function calculateHealthScore(pages, findings) { let score = 92; score -= Math.min(35, pages.filter(isVerifiedFailedPage).length * 8); score -= Math.min(20, pages.filter((p) => p.status_code === 429 && p.url_confidence !== "crawler_artifact").length * 4); for (const f of findings) score -= f.priority === "critical" ? 10 : f.priority === "high" ? 6 : f.priority === "medium" ? 2 : 0; return Math.max(20, Math.min(98, Math.round(score))); }
@@ -361,7 +363,8 @@ function classifyTemplateFamily(url = "") { const p = cleanPath(url).toLowerCase
 function estimatePageIntent(path = "", { title = "", h1 = "", robots = "", status = 200 }) { const t = `${path} ${title} ${h1}`.toLowerCase(); if (isEncodedArtifactPath(t)) return "crawler_artifact"; if (status >= 400 || t.includes("429")) return status === 429 ? "blocked_access" : "failed"; if (robots.toLowerCase().includes("noindex")) return "not_indexed"; if (isRouteBoundaryCandidate(t)) return "internal_or_auth"; if (/devis|quote|pricing|tarif|contact|booking|reservation|checkout|ticket|voucher|pass|show|listing|product|produit|collection|category|simulation|simulateur|calcul|calculator|comparateur|demo|signup|energie|electricite|gaz|fournisseur/.test(t)) return "money_or_conversion"; if (/privacy|terms|legal|about|contact|security/.test(t)) return "trust_or_legal"; if (/faq|guide|blog|article|question/.test(t)) return "support_content"; if (isLowValuePage(t)) return "archive"; return "standard"; }
 function isRouteBoundaryCandidate(url = "") { const p = cleanPath(url).toLowerCase(); return ROUTE_SEGMENTS.some((s) => p.includes(s)); }
 function isLowValuePage(url = "") { const p = cleanPath(url).toLowerCase(); if (/\/(20\d{2})([-/]\d{1,2}|\/|$)/.test(p)) return true; return ["/tag/", "/tags/", "/author/", "/archive/", "/archives/", "/feed/", "/rss/", "/page/"].some((s) => p.includes(s)); }
-function isEncodedArtifactPath(value = "") { const p = cleanPath(value).split("?")[0]; return /\/[A-Za-z0-9+/_=-]{32,}={0,2}(\/|$)/.test(p) || /\/L2[A-Za-z0-9+/_=-]{10,}={0,2}(\/|$)/.test(p); }
+function isEncodedArtifactPath(value = "") { const p = cleanPath(value).split("?")[0]; return p.split("/").filter(Boolean).some((segment) => { const decoded = safeDecodeURIComponent(segment); if (/^(L2|aHR0c|aHR0p|eyJ|PGE|PHN)[A-Za-z0-9+/_-]{10,}={0,2}$/.test(segment)) return true; if (/^[A-Za-z0-9+/_-]{24,}={1,2}$/.test(segment)) return true; if (/%2f/i.test(segment) && /%3a|%2f/i.test(segment)) return true; if (/^https?:/i.test(decoded) || decoded.startsWith("/")) return true; return false; }); }
+function safeDecodeURIComponent(value) { try { return decodeURIComponent(String(value || "")); } catch { return String(value || ""); } }
 function extractLinks(html, baseUrl) { const out = []; const re = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi; let m; while ((m = re.exec(html)) && out.length < 2000) { try { out.push({ href: new URL(decodeHtml(m[1]), baseUrl).href, text: cleanText(stripHtml(m[2] || "")) }); } catch {} } return out; }
 function extractTagText(html, tag) { const m = String(html || "").match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i")); return cleanText(decodeHtml(m?.[1] || "")); }
 function extractHeadingTexts(html, tag) { const out = []; const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "gi"); let m; while ((m = re.exec(String(html || ""))) && out.length < 10) out.push(cleanText(stripHtml(decodeHtml(m[1] || "")))); return out.filter(Boolean); }

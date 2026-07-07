@@ -88,8 +88,28 @@ function sanitizeResponseContainer(value, depth = 0) {
   if (Array.isArray(value.top_recommended_actions)) value.top_recommended_actions = sanitizeActions(value.top_recommended_actions, blockedPageKeys, keptFixIds, coverage);
   if (Array.isArray(value.recommended_actions)) value.recommended_actions = sanitizeActions(value.recommended_actions, blockedPageKeys, keptFixIds, coverage);
 
+  clarifyLowCoverageSummary(value, coverage);
+
   for (const nestedKey of ['data', 'result', 'body', 'payload']) {
     if (value[nestedKey] && typeof value[nestedKey] === 'object') sanitizeResponseContainer(value[nestedKey], depth + 1);
+  }
+}
+
+function clarifyLowCoverageSummary(value, coverage = {}) {
+  if (!lowEvidenceCoverage(coverage)) return;
+  const recommendationCount = RECOMMENDATION_ARRAY_KEYS.reduce((count, key) => count + (Array.isArray(value[key]) ? value[key].length : 0), 0);
+  const hasCoverageCard = RECOMMENDATION_ARRAY_KEYS.some((key) => Array.isArray(value[key]) && value[key].some((item) => /limited_crawl_coverage|scan coverage was limited/i.test(`${item?.rule || ''} ${item?.title || ''} ${item?.issue_title || ''}`)));
+  if (recommendationCount > 0 && !hasCoverageCard) return;
+  const pages = Number(coverage.pages || 0);
+  const message = `FixList only checked ${pages} pages in this section, so it did not have enough coverage to make confident SEO recommendations. The pages it did check looked mostly clean. Expand the crawl or confirm the sitemap/internal links for this section, then rerun FixList.`;
+  for (const key of ['customer_summary', 'simple_summary', 'health_explanation']) if (typeof value[key] === 'string') value[key] = message;
+  if (value.scan_summary && typeof value.scan_summary === 'object') value.scan_summary.plain_english_summary = message;
+  if (value.site_summary && typeof value.site_summary === 'object') value.site_summary.plain_english_summary = message;
+  if (value.website_health_report && typeof value.website_health_report === 'object') {
+    value.website_health_report.overall_explanation = message;
+    value.website_health_report.top_concerns = ['Limited crawl coverage.'];
+    value.website_health_report.quick_wins = ['Expand the scan coverage before changing page content or trust signals.'];
+    value.website_health_report.next_best_step = 'Rerun the scan after confirming sitemap and internal links expose the rest of this section.';
   }
 }
 
@@ -177,7 +197,7 @@ function getCoverageSnapshot(value = {}) {
 }
 
 function lowEvidenceCoverage(coverage = {}) {
-  return Number(coverage.pages || 0) > 0 && Number(coverage.pages || 0) < 10;
+  return Number(coverage.pages || 0) > 0 && Number(coverage.pages || 0) < 15;
 }
 
 function isBlockedAccessPage(page = {}) {
@@ -292,10 +312,17 @@ function isArtifactUrl(value) {
   if (!text) return false;
   let path = text;
   try { path = new URL(text, 'https://fixlist.local').pathname; } catch {}
-  return /(^|\/)(aHR0cHM6|aHR0cDov|L2[a-zA-Z0-9+/=_-]{12,}|[A-Za-z0-9+/=_-]{36,}={0,2})(\/|$)/.test(path)
-    || /\/[A-Za-z0-9+/_=-]{32,}={0,2}(\/|$)/.test(path)
-    || /\/L2[A-Za-z0-9+/_=-]{10,}={0,2}(\/|$)/.test(path);
+  return path.split('/').filter(Boolean).some((segment) => {
+    const decoded = safeDecodeURIComponent(segment);
+    if (/^(L2|aHR0c|aHR0p|eyJ|PGE|PHN)[A-Za-z0-9+/_-]{10,}={0,2}$/.test(segment)) return true;
+    if (/^[A-Za-z0-9+/_-]{24,}={1,2}$/.test(segment)) return true;
+    if (/%2f/i.test(segment) && /%3a|%2f/i.test(segment)) return true;
+    if (/^https?:/i.test(decoded) || decoded.startsWith('/')) return true;
+    return false;
+  });
 }
+
+function safeDecodeURIComponent(value) { try { return decodeURIComponent(String(value || '')); } catch { return String(value || ''); } }
 
 function firstArray(values) {
   for (const value of values || []) {

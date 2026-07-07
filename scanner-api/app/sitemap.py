@@ -5,6 +5,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from .artifact_filter import is_artifact_url, record_artifact
+from .security import safe_get
 
 MAX_SITEMAP_FETCHES = 20
 
@@ -13,10 +14,11 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
     roots: list[str] = []
     robots_url = f"{origin}/robots.txt"
     try:
-        robots = await client.get(robots_url)
-        for line in robots.text.splitlines():
-            if line.lower().startswith("sitemap:"):
-                roots.append(line.split(":", 1)[1].strip())
+        robots = await safe_get(client, robots_url)
+        if robots is not None:
+            for line in robots.text.splitlines():
+                if line.lower().startswith("sitemap:"):
+                    roots.append(line.split(":", 1)[1].strip())
     except Exception:
         pass
 
@@ -56,8 +58,8 @@ async def fetch_sitemap_locs(client: httpx.AsyncClient, sitemap_url: str, fetche
         return []
     fetched.add(sitemap_url)
     try:
-        response = await client.get(sitemap_url)
-        if response.status_code >= 400:
+        response = await safe_get(client, sitemap_url)
+        if response is None or response.status_code >= 400:
             return []
     except Exception:
         return []

@@ -1,0 +1,26 @@
+{
+  "scanner_version": "runAdvancedScan_v15_route_boundary_candidates",
+  "crawl_policy": {"source": "ai", "priority_boost_patterns": ["/products", "/collections", "/cart", "/checkout", "/returns"], "priority_deprioritize_patterns": ["/blogs", "/tag", "/page"], "skip_patterns": []},
+  "crawl_policy_source": "ai",
+  "pages_crawled": 8,
+  "pages_found": 70,
+  "health_score": 62,
+  "url_evidence_summary": {"sitemap": 4, "internal_link": 4, "verified_failed_pages": 1, "suspicious_url_artifacts": 0},
+  "verified_failed_pages": [{"url": "https://jackssurfboards.example/products/old-board", "status_code": 404, "source_pages": ["https://jackssurfboards.example/collections/surfboards"]}],
+  "suspicious_url_artifacts": [],
+  "pages": [
+    {"url": "https://jackssurfboards.example/", "status_code": 200, "estimated_page_intent": "home", "page_template_family": "home_page", "discovered_from": "seed", "source_pages": []},
+    {"url": "https://jackssurfboards.example/collections/surfboards", "status_code": 200, "estimated_page_intent": "category", "page_template_family": "collection_page", "discovered_from": "internal_link", "source_pages": ["https://jackssurfboards.example/"]},
+    {"url": "https://jackssurfboards.example/collections/wetsuits", "status_code": 200, "estimated_page_intent": "category", "page_template_family": "collection_page", "discovered_from": "sitemap", "source_pages": ["https://jackssurfboards.example/sitemap.xml"]},
+    {"url": "https://jackssurfboards.example/products/fish-surfboard", "status_code": 200, "estimated_page_intent": "product", "page_template_family": "product_page", "discovered_from": "internal_link", "source_pages": ["https://jackssurfboards.example/collections/surfboards"]},
+    {"url": "https://jackssurfboards.example/products/longboard", "status_code": 200, "estimated_page_intent": "product", "page_template_family": "product_page", "discovered_from": "internal_link", "source_pages": ["https://jackssurfboards.example/collections/surfboards"]},
+    {"url": "https://jackssurfboards.example/cart", "status_code": 200, "estimated_page_intent": "route_boundary", "page_template_family": "cart_page", "route_boundary_candidate": true, "indexable": true, "discovered_from": "internal_link", "source_pages": ["https://jackssurfboards.example/products/fish-surfboard"]},
+    {"url": "https://jackssurfboards.example/checkout", "status_code": 200, "estimated_page_intent": "route_boundary", "page_template_family": "checkout_page", "route_boundary_candidate": true, "indexable": true, "discovered_from": "internal_link", "source_pages": ["https://jackssurfboards.example/cart"]},
+    {"url": "https://jackssurfboards.example/policies/returns", "status_code": 200, "estimated_page_intent": "trust", "page_template_family": "trust_page", "discovered_from": "sitemap", "source_pages": ["https://jackssurfboards.example/sitemap.xml"]}
+  ],
+  "grouped_findings": [
+    {"rule_id": "product_schema", "severity": "high", "owner": "Your web person", "template_family": "product_page", "urls": ["https://jackssurfboards.example/products/fish-surfboard", "https://jackssurfboards.example/products/longboard", "https://jackssurfboards.example/products/groveler", "https://jackssurfboards.example/products/step-up"]},
+    {"rule_id": "route_boundary_candidate_indexable", "severity": "critical", "owner": "Your web person", "template_family": "checkout_page", "urls": ["https://jackssurfboards.example/cart", "https://jackssurfboards.example/checkout"]},
+    {"rule_id": "broken_page", "severity": "high", "owner": "Your web person", "template_family": "product_page", "urls": ["https://jackssurfboards.example/products/old-board"], "source_pages": ["https://jackssurfboards.example/collections/surfboards"]}
+  ]
+}

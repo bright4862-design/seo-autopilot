@@ -1,6 +1,6 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
-const VERSION = "runAdvancedScan_v13_url_evidence_screaming_frog_lite";
+const VERSION = "runAdvancedScan_v14_policy_guided_screaming_frog_lite";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -8,16 +8,27 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const USER_AGENT = "Mozilla/5.0 (compatible; FixListBot/1.3; +https://base44.app)";
+const USER_AGENT = "Mozilla/5.0 (compatible; FixListBot/1.4; +https://base44.app)";
 const FETCH_TIMEOUT_MS = 12000;
+const POLICY_MODEL_TIMEOUT_MS = 9000;
 const MAX_REDIRECTS = 4;
 const MAX_BODY_CHARS = 1_500_000;
 
+const DEFAULT_POLICY = {
+  rendering_mode: "unknown",
+  platform_guess: "",
+  priority_boost_patterns: [],
+  priority_deprioritize_patterns: [],
+  skip_patterns: [],
+  source: "default",
+  error: "",
+};
+
 const MODE_LIMITS = {
-  basic: { max_pages: 25, crawl_timeout_ms: 35000, use_sitemap: false },
-  quick: { max_pages: 40, crawl_timeout_ms: 45000, use_sitemap: true },
-  deep: { max_pages: 85, crawl_timeout_ms: 75000, use_sitemap: true },
-  advanced: { max_pages: 150, crawl_timeout_ms: 90000, use_sitemap: true },
+  basic: { max_pages: 25, crawl_timeout_ms: 35000, use_sitemap: false, derive_policy: false },
+  quick: { max_pages: 40, crawl_timeout_ms: 45000, use_sitemap: true, derive_policy: false },
+  deep: { max_pages: 85, crawl_timeout_ms: 75000, use_sitemap: true, derive_policy: false },
+  advanced: { max_pages: 150, crawl_timeout_ms: 90000, use_sitemap: true, derive_policy: true },
 };
 
 const INTERNAL_ROUTE_PATTERNS = [
@@ -61,7 +72,16 @@ Deno.serve(async (req) => {
     const safety = await validatePublicHttpUrl(websiteUrl);
     if (!safety.ok) return jsonResponse({ success: false, version: VERSION, error: safety.reason }, 400);
 
-    const crawlResult = await crawlWebsite({ startUrl: websiteUrl, budget, pathPrefix: body.path_prefix || body.requested_path_prefix || body.crawl_path_prefix || "" });
+    const invokeLLM = typeof base44.integrations?.Core?.InvokeLLM === "function"
+      ? async (prompt) => await base44.integrations.Core.InvokeLLM({ prompt })
+      : null;
+
+    const crawlResult = await crawlWebsite({
+      startUrl: websiteUrl,
+      budget,
+      pathPrefix: body.path_prefix || body.requested_path_prefix || body.crawl_path_prefix || "",
+      invokeLLM,
+    });
     const rawFindings = buildFindings({ pages: crawlResult.pages, websiteUrl, crawlResult });
     const groupedFindings = groupFindings(rawFindings);
     const healthScore = calculateHealthScore({ pages: crawlResult.pages, findings: groupedFindings });
@@ -72,7 +92,7 @@ Deno.serve(async (req) => {
       success: true,
       version: VERSION,
       scanner_version: VERSION,
-      scanner_profile: "screaming_frog_lite_url_evidence_v13",
+      scanner_profile: "screaming_frog_lite_policy_guided_v14",
       screaming_frog_lite_enabled: true,
       website_url: websiteUrl,
       normalized_url: websiteUrl,
@@ -90,6 +110,8 @@ Deno.serve(async (req) => {
       recommendations: groupedFindings,
       health_score: healthScore,
       scan_summary: summary,
+      crawl_policy: crawlResult.crawl_policy,
+      crawl_policy_source: crawlResult.crawl_policy?.source || "default",
       url_evidence_summary: urlEvidenceSummary,
       technical_audit_summary: {
         scanner_version: VERSION,
@@ -102,6 +124,7 @@ Deno.serve(async (req) => {
         route_boundary_risk: routeBoundaryRisk(crawlResult.pages),
         duplicate_casing_routes: findDuplicateCasingRoutes(crawlResult.pages),
         free_base44_subdomain: safeHostname(websiteUrl).endsWith(".base44.app"),
+        crawl_policy: crawlResult.crawl_policy,
         url_evidence_summary: urlEvidenceSummary,
         crawl_warnings: crawlResult.warnings,
       },
@@ -113,10 +136,11 @@ Deno.serve(async (req) => {
   }
 });
 
-async function crawlWebsite({ startUrl, budget, pathPrefix }) {
+async function crawlWebsite({ startUrl, budget, pathPrefix, invokeLLM }) {
   const start = new URL(startUrl);
   const origin = start.origin;
   const normalizedPrefix = normalizePathPrefix(pathPrefix || start.pathname || "/");
+  const policy = await deriveCrawlPolicy({ origin, start, budget, invokeLLM });
   const queue = [];
   const seen = new Set();
   const discoveryMap = new Map();
@@ -124,7 +148,9 @@ async function crawlWebsite({ startUrl, budget, pathPrefix }) {
   const warnings = [];
   const startedAt = Date.now();
 
-  enqueueUrl({ queue, discoveryMap, url: start.href, discoveredFrom: "seed", sourcePage: "", linkText: "" });
+  if (policy?.source === "failed" && policy?.error) warnings.push(`Crawl policy fell back to default: ${policy.error}`);
+
+  enqueueUrl({ queue, discoveryMap, url: start.href, discoveredFrom: "seed", sourcePage: "", linkText: "", policy });
 
   if (budget.use_sitemap) {
     const sitemapUrls = await loadSitemapUrls(origin, budget.max_pages * 4).catch((error) => {
@@ -133,12 +159,12 @@ async function crawlWebsite({ startUrl, budget, pathPrefix }) {
     });
     for (const url of sitemapUrls) {
       if (queue.length >= budget.max_pages * 5) break;
-      if (shouldCrawlUrl(url, start, normalizedPrefix)) enqueueUrl({ queue, discoveryMap, url, discoveredFrom: "sitemap", sourcePage: `${origin}/sitemap.xml`, linkText: "" });
+      if (shouldCrawlUrl(url, start, normalizedPrefix)) enqueueUrl({ queue, discoveryMap, url, discoveredFrom: "sitemap", sourcePage: `${origin}/sitemap.xml`, linkText: "", policy });
     }
   }
 
   while (queue.length > 0 && pages.length < budget.max_pages && Date.now() - startedAt < budget.crawl_timeout_ms) {
-    const next = queue.shift();
+    const next = dequeueByPriority(queue);
     const clean = canonicalizeUrl(next?.url || next);
     if (!clean || seen.has(clean)) continue;
     seen.add(clean);
@@ -166,6 +192,7 @@ async function crawlWebsite({ startUrl, budget, pathPrefix }) {
             discoveredFrom: "internal_link",
             sourcePage: fetched.final_url || clean,
             linkText: link.text,
+            policy,
           });
         }
       }
@@ -177,18 +204,181 @@ async function crawlWebsite({ startUrl, budget, pathPrefix }) {
     pages_found: Math.max(seen.size + queue.length, pages.length),
     queued_remaining: queue.length,
     warnings,
+    crawl_policy: policy,
   };
 }
 
-function enqueueUrl({ queue, discoveryMap, url, discoveredFrom, sourcePage, linkText }) {
+/* -------------------------------------------------------------------------- */
+/* Advisory crawl policy                                                        */
+/* -------------------------------------------------------------------------- */
+
+async function deriveCrawlPolicy({ origin, start, budget, invokeLLM }) {
+  if (!budget.derive_policy) return { ...DEFAULT_POLICY, source: "disabled" };
+  if (typeof invokeLLM !== "function") return { ...DEFAULT_POLICY, source: "unavailable", error: "InvokeLLM unavailable" };
+
+  try {
+    const [home, robots, sitemapIndex] = await Promise.all([
+      safeFetchText(start.href).catch(() => null),
+      safeFetchText(`${origin}/robots.txt`).catch(() => null),
+      safeFetchText(`${origin}/sitemap.xml`).catch(() => null),
+    ]);
+    const prompt = buildPolicyPrompt({ origin, home, robots, sitemapIndex });
+    const raw = await withTimeoutPromise(invokeLLM(prompt), POLICY_MODEL_TIMEOUT_MS);
+    return { ...sanitizePolicy(raw), source: "ai", error: "" };
+  } catch (error) {
+    return { ...DEFAULT_POLICY, source: "failed", error: String(error?.message || error || "policy failed").slice(0, 180) };
+  }
+}
+
+function buildPolicyPrompt({ origin, home, robots, sitemapIndex }) {
+  const fingerprint = summarizeHomeFingerprint(home?.text || "");
+  const robotsSitemaps = (robots?.text?.match(/^sitemap:\s*(.+)$/gim) || []).map((line) => line.replace(/^sitemap:\s*/i, "").trim()).slice(0, 6);
+  const robotsDisallows = (robots?.text?.match(/^disallow:\s*(.+)$/gim) || []).map((line) => line.replace(/^disallow:\s*/i, "").trim()).slice(0, 20);
+  const locSample = sitemapIndex?.text ? [...sitemapIndex.text.matchAll(/<loc>\s*([^<]+)\s*<\/loc>/gi)].map((match) => match[1].trim()).slice(0, 40) : [];
+
+  const context = { origin, home_fingerprint: fingerprint, robots_sitemaps: robotsSitemaps, robots_disallows: robotsDisallows, sitemap_loc_sample: locSample };
+
+  return `You are a crawl-planning assistant for FixList, an SEO crawler for business owners. Return a small advisory crawl policy for a deterministic crawler.
+
+RULES:
+- Output ONLY a raw JSON object. No prose, markdown, or backticks.
+- Patterns are simple path substrings or globs using "*". They match URL paths only.
+- You may only prioritize URLs the crawler would already discover on this origin. Never invent URLs.
+- Keep each list to at most 8 entries.
+- priority_boost_patterns: money, conversion, product, category, booking, quote, trust, or lead paths worth crawling first.
+- priority_deprioritize_patterns: archives, tags, pagination, feeds, old news, utility or low-value paths to crawl later.
+- skip_patterns: only patterns that look safely low-value. The crawler treats these as crawl-last advice, not hard skips.
+- Never put the homepage, requested landing page, contact, about, privacy, terms, product/category/listing, quote, booking, simulation, calculator, demo, or pricing paths in skip_patterns.
+
+Return exactly this shape:
+{"rendering_mode":"ssr|csr|hybrid|unknown","platform_guess":"string","priority_boost_patterns":[],"priority_deprioritize_patterns":[],"skip_patterns":[]}
+
+CONTEXT:
+${JSON.stringify(context)}`;
+}
+
+function summarizeHomeFingerprint(html) {
+  const h = String(html || "");
+  const lower = h.toLowerCase();
+  const markers = ["wp-content", "wp-json", "shopify", "cdn.shopify", "squarespace", "commerce7", "wix", "webflow", "drupal", "hubspot", "/_next/", "/_nuxt/", "gatsby", "cloudflare"];
+  return {
+    has_root_div: /id=["'](root|app|__next|__nuxt)["']/i.test(h),
+    module_scripts: /<script[^>]+type=["']module["']/i.test(h),
+    generator: (h.match(/<meta[^>]+name=["']generator["'][^>]+content=["']([^"']+)["']/i)?.[1] || "").slice(0, 80),
+    body_word_count: stripHtml(h).split(/\s+/).filter(Boolean).length,
+    markers: markers.filter((marker) => lower.includes(marker)).slice(0, 12),
+  };
+}
+
+function sanitizePolicy(raw) {
+  const parsed = parsePolicyResponse(raw);
+  const cleanList = (value) => Array.from(new Set((Array.isArray(value) ? value : []).map((item) => cleanPolicyPattern(item)).filter(Boolean))).slice(0, 8);
+  const skipPatterns = cleanList(parsed.skip_patterns).filter((pattern) => !matchesAnyPattern(pattern, ["/", "/contact", "/about", "/privacy", "/terms", "/security", "/product", "/products", "/category", "/listing", "/devis", "/quote", "/booking", "/reservation", "/simulation", "/calculator", "/pricing", "/demo"]));
+  return {
+    rendering_mode: ["ssr", "csr", "hybrid", "unknown"].includes(parsed.rendering_mode) ? parsed.rendering_mode : "unknown",
+    platform_guess: String(parsed.platform_guess || "").slice(0, 60),
+    priority_boost_patterns: cleanList(parsed.priority_boost_patterns),
+    priority_deprioritize_patterns: cleanList(parsed.priority_deprioritize_patterns),
+    skip_patterns: skipPatterns,
+  };
+}
+
+function parsePolicyResponse(raw) {
+  if (raw && typeof raw === "object") {
+    if (raw.rendering_mode || raw.priority_boost_patterns || raw.priority_deprioritize_patterns || raw.skip_patterns) return raw;
+    if (raw.data?.data) return parsePolicyResponse(raw.data.data);
+    if (raw.data?.result) return parsePolicyResponse(raw.data.result);
+    if (raw.result?.data) return parsePolicyResponse(raw.result.data);
+    if (raw.result) return parsePolicyResponse(raw.result);
+    if (raw.content?.[0]?.text) return parsePolicyResponse(raw.content[0].text);
+    if (raw.text) return parsePolicyResponse(raw.text);
+  }
+
+  try {
+    const text = String(raw || "").replace(/```json|```/g, "").trim();
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start === -1 || end === -1) return DEFAULT_POLICY;
+    return JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return DEFAULT_POLICY;
+  }
+}
+
+function cleanPolicyPattern(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw || raw.length > 120) return "";
+  if (/^https?:\/\//i.test(raw)) {
+    try { return new URL(raw).pathname || "/"; } catch { return ""; }
+  }
+  return raw.startsWith("/") || raw.includes("*") ? raw : `/${raw}`;
+}
+
+function computeQueuePriority({ path, discovery, policy }) {
+  const sources = discovery?.discovered_from || [];
+  const clean = cleanPath(path).toLowerCase();
+  const family = classifyTemplateFamily(clean);
+  let score = 40;
+
+  if (sources.includes("seed")) score = 100;
+  else if (sources.includes("sitemap") && sources.includes("internal_link")) score = 82;
+  else if (sources.includes("sitemap")) score = 70;
+  else if (sources.includes("internal_link")) score = 60;
+
+  if (TRUST_PAGE_PATTERNS.some((pattern) => clean.startsWith(pattern))) score += 25;
+  if (["conversion", "product_detail", "category_listing", "contact"].includes(family)) score += 22;
+  if (isInternalAppRoute(clean)) score += 18;
+  if (family === "guide" || family === "qa") score += 8;
+  if (isLowValuePage(clean)) score -= 25;
+  if (ARTIFACT_SEGMENT_RE.test(clean)) score -= 60;
+
+  if (policy) {
+    if (matchesAnyPattern(clean, policy.priority_boost_patterns)) score += 35;
+    if (matchesAnyPattern(clean, policy.priority_deprioritize_patterns)) score -= 35;
+    if (matchesAnyPattern(clean, policy.skip_patterns)) score -= 45;
+  }
+
+  if (sources.includes("seed")) score = Math.max(score, 100);
+  return Math.max(0, Math.min(150, score));
+}
+
+function matchesAnyPattern(path, patterns) {
+  if (!Array.isArray(patterns) || patterns.length === 0) return false;
+  const target = cleanPath(path).toLowerCase();
+  return patterns.some((pattern) => {
+    const raw = String(pattern || "").trim().toLowerCase();
+    if (!raw) return false;
+    if (!raw.includes("*")) return target.includes(raw);
+    const regex = new RegExp(`^${raw.split("*").map(escapeRegExp).join(".*")}$`);
+    return regex.test(target);
+  });
+}
+
+function dequeueByPriority(queue) {
+  if (queue.length === 0) return undefined;
+  let bestIndex = 0;
+  for (let i = 1; i < queue.length; i += 1) if ((queue[i].priority || 0) > (queue[bestIndex].priority || 0)) bestIndex = i;
+  return queue.splice(bestIndex, 1)[0];
+}
+
+function withTimeoutPromise(promise, ms) {
+  return Promise.race([Promise.resolve(promise), new Promise((_, reject) => setTimeout(() => reject(new Error("policy model timeout")), ms))]);
+}
+
+function enqueueUrl({ queue, discoveryMap, url, discoveredFrom, sourcePage, linkText, policy }) {
   const clean = canonicalizeUrl(url);
   if (!clean) return;
+  const path = cleanPath(clean);
   const existing = discoveryMap.get(clean) || emptyDiscovery(discoveredFrom);
   existing.discovered_from = Array.from(new Set([...(existing.discovered_from || []), discoveredFrom].filter(Boolean))).slice(0, 6);
   existing.source_pages = Array.from(new Set([...(existing.source_pages || []), cleanPath(sourcePage || "")].filter(Boolean))).slice(0, 8);
   existing.link_text_samples = Array.from(new Set([...(existing.link_text_samples || []), cleanText(linkText || "")].filter(Boolean))).slice(0, 5);
   discoveryMap.set(clean, existing);
-  if (!queue.some((item) => canonicalizeUrl(item.url || item) === clean)) queue.push({ url: clean });
+
+  const priority = computeQueuePriority({ path, discovery: existing, policy });
+  const existingItem = queue.find((item) => canonicalizeUrl(item.url || item) === clean);
+  if (existingItem) existingItem.priority = Math.max(existingItem.priority || 0, priority);
+  else queue.push({ url: clean, priority });
 }
 
 function emptyDiscovery(source) {
@@ -545,14 +735,16 @@ function buildScanSummary({ pages, findings, healthScore, crawlResult }) {
   const highPriority = findings.filter((finding) => ["critical", "high"].includes(finding.priority)).length;
   const routeRisk = routeBoundaryRisk(pages);
   const accessWarning = pages.length <= 1 && verifiedFailedPages === pages.length && pages.length > 0 ? " Crawl access is severely limited, so the score is capped." : "";
+  const policyText = crawlResult.crawl_policy?.source === "ai" ? " AI policy helped prioritize the crawl queue." : " Deterministic crawl policy was used.";
   return {
     score: healthScore,
     status_label: healthScore >= 90 ? "Excellent" : healthScore >= 75 ? "Good" : healthScore >= 55 ? "Fair" : "Needs work",
-    plain_english_summary: `FixList crawled ${pages.length} pages and found ${findings.length} grouped finding${findings.length === 1 ? "" : "s"}. ${verifiedFailedPages} verified page${verifiedFailedPages === 1 ? "" : "s"} failed or were blocked. ${suspiciousArtifacts} suspicious URL artifact${suspiciousArtifacts === 1 ? "" : "s"} need proof before being treated as broken links. Route-boundary risk is ${routeRisk}.${accessWarning}`,
+    plain_english_summary: `FixList crawled ${pages.length} pages and found ${findings.length} grouped finding${findings.length === 1 ? "" : "s"}. ${verifiedFailedPages} verified page${verifiedFailedPages === 1 ? "" : "s"} failed or were blocked. ${suspiciousArtifacts} suspicious URL artifact${suspiciousArtifacts === 1 ? "" : "s"} need proof before being treated as broken links. Route-boundary risk is ${routeRisk}.${policyText}${accessWarning}`,
     pages_scanned: pages.length,
     pages_failed: failedPages,
     verified_failed_pages: verifiedFailedPages,
     suspicious_url_artifacts: suspiciousArtifacts,
+    crawl_policy_source: crawlResult.crawl_policy?.source || "default",
     high_priority_count: highPriority,
     technical_issue_count: findings.length,
     queued_remaining: crawlResult.queued_remaining,

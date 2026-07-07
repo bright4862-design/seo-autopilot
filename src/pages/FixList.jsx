@@ -18,21 +18,11 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import {
-  BUCKETS,
-  BUCKET_ORDER,
-  getCategoryLabel,
-  getFirstStep,
-  getIssueBucket,
-  getScoreBand,
-} from "@/lib/friendlyLabels";
 
 const DASHBOARD_LAST_SCAN_KEY = "seo_autopilot:last_scan";
 const DASHBOARD_HISTORY_KEY = "seo_autopilot:scan_history";
-
 const LEGACY_LAST_SCAN_KEY = "SEO_AUTOPILOT_LAST_SCAN";
 const LEGACY_HISTORY_KEY = "SEO_AUTOPILOT_SCAN_HISTORY";
-
 const ACTIVE_SCAN_URL_KEY = "seo_autopilot:active_scan_url";
 const ACTIVE_SCAN_STARTED_AT_KEY = "seo_autopilot:active_scan_started_at";
 const SCAN_DEBUG_KEY = "seo_autopilot:scan_debug";
@@ -67,50 +57,72 @@ const PRIORITY_FILTERS = [
   { value: "low", label: "Low" },
 ];
 
-const BAND_STYLES = {
-  green: "bg-emerald-50 text-emerald-700",
-  blue: "bg-blue-50 text-blue-700",
-  amber: "bg-amber-50 text-amber-700",
-  red: "bg-rose-50 text-rose-700",
+const CATEGORY_LABELS = {
+  "404_error": "Broken page",
+  broken_page: "Broken page",
+  meta_title: "Search title",
+  meta_description: "Search description",
+  duplicate_content: "Duplicate search text",
+  canonical: "Canonical / duplicate page setting",
+  schema: "Trust signals",
+  thin_content: "Page content",
+  web_dev: "Website setup",
+  image_alt_text: "Images",
+  alt_text: "Images",
+  internal_link: "Internal links",
+  performance: "Performance",
+  performance_hint: "Performance",
+  scanner_blocked: "Scan coverage",
+  js_rendering: "JavaScript rendering",
+  indexability: "Indexability",
+  social_metadata: "Social sharing",
 };
+
+const BUCKETS = {
+  needs_approval: {
+    title: "Your turn",
+    subtitle: "Quick decisions you or your team can review.",
+    cta: "Review now",
+  },
+  auto_fixed: {
+    title: "Prepared for you",
+    subtitle: "Suggested improvements prepared for review.",
+    cta: "See prepared fixes",
+  },
+  needs_developer: {
+    title: "Get help",
+    subtitle: "Technical fixes to send to your web person.",
+    cta: "See technical tasks",
+  },
+};
+
+const BUCKET_ORDER = ["needs_approval", "auto_fixed", "needs_developer"];
 
 export default function FixList() {
   const navigate = useNavigate();
-
   const [scanRecord, setScanRecord] = useState(() => readBestScanRecord());
   const [debugData, setDebugData] = useState(() => readScanDebugData());
-  const [selectedCms, setSelectedCms] = useState(() =>
-    normalizeCmsValue(scanRecord?.cms_platform || "wordpress")
-  );
   const [priorityFilter, setPriorityFilter] = useState("all");
+  const [selectedCms, setSelectedCms] = useState(() => normalizeCmsValue(scanRecord?.cms_platform || "custom"));
 
   function reloadScan() {
-    const nextScan = readBestScanRecord();
-
-    setScanRecord(nextScan);
+    const next = readBestScanRecord();
+    setScanRecord(next);
     setDebugData(readScanDebugData());
-
-    if (nextScan?.cms_platform) {
-      setSelectedCms(normalizeCmsValue(nextScan.cms_platform));
-    }
+    if (next?.cms_platform) setSelectedCms(normalizeCmsValue(next.cms_platform));
   }
 
   useEffect(() => {
     reloadScan();
-
     window.addEventListener("seo-autopilot-scan-saved", reloadScan);
     window.addEventListener("storage", reloadScan);
-
     return () => {
       window.removeEventListener("seo-autopilot-scan-saved", reloadScan);
       window.removeEventListener("storage", reloadScan);
     };
   }, []);
 
-  const recommendations = useMemo(() => {
-    return getRecommendations(scanRecord).map(normalizeRecommendation);
-  }, [scanRecord]);
-
+  const recommendations = useMemo(() => getRecommendations(scanRecord).map(normalizeRecommendation), [scanRecord]);
   const filteredRecommendations = useMemo(() => {
     if (priorityFilter === "all") return recommendations;
     return recommendations.filter((item) => item.priority === priorityFilter);
@@ -119,102 +131,38 @@ export default function FixList() {
   const pages = useMemo(() => getPages(scanRecord), [scanRecord]);
   const healthScore = getHealthScore(scanRecord);
   const pagesScanned = getPagesScanned(scanRecord, pages);
-
-  const counts = useMemo(() => {
-    return recommendations.reduce(
-      (acc, item) => {
-        acc[item.bucket] += 1;
-        return acc;
-      },
-      { needs_approval: 0, auto_fixed: 0, needs_developer: 0 }
-    );
-  }, [recommendations]);
-
-  const categoryCounts = useMemo(() => {
-    const map = new Map();
-
-    recommendations.forEach((item) => {
-      const key = item.category || "other";
-      map.set(key, Number(map.get(key) || 0) + 1);
-    });
-
-    return [...map.entries()].sort((a, b) => b[1] - a[1]);
-  }, [recommendations]);
-
-  const hasUsefulScan = Boolean(
-    scanRecord &&
-      (recommendations.length > 0 || pages.length > 0 || healthScore > 0)
-  );
-
-  const cmsLabel =
-    CMS_OPTIONS.find((item) => item.value === selectedCms)?.label ||
-    "Custom / Not sure";
-
-  const summary =
-    scanRecord?.customer_summary ||
-    scanRecord?.simple_summary ||
-    scanRecord?.scan_summary?.plain_english_summary ||
-    scanRecord?.site_summary?.plain_english_summary ||
-    "";
-
+  const hasUsefulScan = Boolean(scanRecord && (recommendations.length > 0 || pages.length > 0 || healthScore > 0));
+  const cmsLabel = CMS_OPTIONS.find((cms) => cms.value === selectedCms)?.label || "Custom / Not sure";
   const topActions = getTopActions(scanRecord, recommendations);
+  const counts = countBuckets(recommendations);
+  const summary = getBestSummary(scanRecord, healthScore, pagesScanned, recommendations.length);
 
   return (
     <div className="min-h-screen bg-[#F7F8FA] px-4 py-6 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl space-y-6">
-        <PageHeader
-          hasUsefulScan={hasUsefulScan}
-          onScan={() => navigate("/onboarding")}
-        />
+        <PageHeader hasUsefulScan={hasUsefulScan} onScan={() => navigate("/onboarding")} />
 
         {hasUsefulScan ? (
           <>
             <NextStepCard counts={counts} onReview={() => scrollToRecommendations()} />
 
             <div className="grid gap-6 xl:grid-cols-3">
-              <WebsiteHealthCard
-                healthScore={healthScore}
-                pagesScanned={pagesScanned}
-                createdAt={scanRecord?.created_at}
-              />
-
+              <WebsiteHealthCard healthScore={healthScore} pagesScanned={pagesScanned} createdAt={scanRecord?.created_at} />
               <BucketOverview counts={counts} />
             </div>
 
-            <PlainEnglishFindings categoryCounts={categoryCounts} />
+            <AiActionPlan summary={summary} topActions={topActions} cmsLabel={cmsLabel} />
 
-            <ScanDebugPanel
-              debugData={debugData}
-              onRefresh={reloadScan}
-              onClear={() => {
-                clearAllScanData();
-                reloadScan();
-              }}
-            />
-
-            <AiActionPlan
-              summary={summary}
-              topActions={topActions}
-              cmsLabel={cmsLabel}
-              healthScore={healthScore}
-              pagesScanned={pagesScanned}
-              recommendationsCount={recommendations.length}
-              scanRecord={scanRecord}
-            />
+            <ScanDebugPanel debugData={debugData} onRefresh={reloadScan} onClear={() => { clearAllScanData(); reloadScan(); }} />
 
             <CmsSelector selectedCms={selectedCms} onChange={setSelectedCms} />
 
-            <div
-              id="recommendations"
-              className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"
-            >
+            <section id="recommendations" className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <h2 className="text-xl font-bold text-slate-950">
-                    Recommendations
-                  </h2>
+                  <h2 className="text-xl font-bold text-slate-950">Your FixList</h2>
                   <p className="mt-1 text-sm text-slate-500">
-                    Start with the quickest decisions first. Every card explains what it means, why it matters, and what to do next.
+                    Each card now uses the scan evidence first: the affected page, current value, business importance, and AI steps.
                   </p>
                 </div>
 
@@ -239,29 +187,18 @@ export default function FixList() {
               <div className="mt-5 space-y-4">
                 {filteredRecommendations.length > 0 ? (
                   filteredRecommendations.map((recommendation, index) => (
-                    <RecommendationCard
-                      key={`${recommendation.title}-${index}`}
-                      recommendation={recommendation}
-                      cms={selectedCms}
-                    />
+                    <RecommendationCard key={`${recommendation.id}-${index}`} recommendation={recommendation} cms={selectedCms} />
                   ))
                 ) : (
                   <EmptyFilteredState />
                 )}
               </div>
-            </div>
+            </section>
           </>
         ) : (
           <>
             <NoScanState onScan={() => navigate("/onboarding")} />
-            <ScanDebugPanel
-              debugData={debugData}
-              onRefresh={reloadScan}
-              onClear={() => {
-                clearAllScanData();
-                reloadScan();
-              }}
-            />
+            <ScanDebugPanel debugData={debugData} onRefresh={reloadScan} onClear={() => { clearAllScanData(); reloadScan(); }} />
           </>
         )}
       </div>
@@ -269,64 +206,43 @@ export default function FixList() {
   );
 }
 
-function scrollToRecommendations() {
-  const element = document.getElementById("recommendations");
-  if (element) element.scrollIntoView({ behavior: "smooth", block: "start" });
-}
-
-/* -------------------------------------------------------------------------- */
-/* Header + plain-English dashboard                                            */
-/* -------------------------------------------------------------------------- */
-
 function PageHeader({ hasUsefulScan, onScan }) {
   return (
     <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
       <div>
-        <div className="flex items-center gap-2 text-sm font-medium text-blue-700">
+        <div className="flex items-center gap-2 text-sm font-medium text-indigo-700">
           <ListChecks className="h-4 w-4" />
-          Website recommendations
+          Plain-English SEO fixes
         </div>
-
-        <h1 className="mt-2 text-3xl font-bold text-slate-950">Fix List</h1>
-
+        <h1 className="mt-2 text-3xl font-bold text-slate-950">FixList</h1>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-          Plain-English improvements grouped by what needs your attention, what is prepared, and what may need help.
+          Prioritized recommendations based on page type, business value, and what the scanner actually found.
         </p>
       </div>
-
       <Button type="button" onClick={onScan} variant={hasUsefulScan ? "outline" : "default"}>
         <Search className="mr-2 h-4 w-4" />
-        {hasUsefulScan ? "Scan Website again" : "Scan Website"}
+        {hasUsefulScan ? "Run new scan" : "Run my scan"}
       </Button>
     </div>
   );
 }
 
 function NextStepCard({ counts, onReview }) {
-  const firstStep = getFirstStep(counts);
   const activeBucket = BUCKET_ORDER.find((key) => Number(counts[key] || 0) > 0);
   const bucket = activeBucket ? BUCKETS[activeBucket] : null;
-
   return (
     <section className="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-sm sm:p-7">
       <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-sm font-medium text-blue-600">Your next step</p>
+          <p className="text-sm font-medium text-indigo-600">Your next step</p>
           <h2 className="mt-2 text-xl font-semibold text-slate-950">
-            {firstStep}
+            {bucket ? `Start with ${bucket.title}` : "Your scan has recommendations ready."}
           </h2>
           <p className="mt-2 text-sm leading-6 text-slate-600">
-            {bucket
-              ? bucket.subtitle
-              : "Run a fresh scan any time to check for new opportunities."}
+            {bucket?.subtitle || "Review the highest-impact items first."}
           </p>
         </div>
-
-        <Button
-          type="button"
-          onClick={onReview}
-          className="shrink-0 rounded-full bg-blue-600 px-6 text-sm font-medium text-white shadow-none hover:bg-blue-700"
-        >
+        <Button type="button" onClick={onReview} className="shrink-0 rounded-full bg-indigo-600 px-6 text-sm font-medium text-white shadow-none hover:bg-indigo-700">
           {bucket?.cta || "Review recommendations"}
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
@@ -336,36 +252,22 @@ function NextStepCard({ counts, onReview }) {
 }
 
 function WebsiteHealthCard({ healthScore, pagesScanned, createdAt }) {
-  const hasScore = Number(healthScore || 0) > 0;
-  const band = hasScore ? getScoreBand(Number(healthScore)) : null;
-
+  const band = getScoreBand(healthScore);
   return (
     <section className="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-sm">
       <h2 className="text-base font-semibold text-slate-950">Website health</h2>
-
-      {hasScore ? (
-        <div className="mt-4 space-y-4">
-          <div>
-            <div className="text-5xl font-bold tracking-tight text-slate-950">
-              {healthScore}
-            </div>
-            {band ? (
-              <span className={`mt-3 inline-flex rounded-full px-3 py-1 text-xs font-medium ${BAND_STYLES[band.tone]}`}>
-                {band.label}
-              </span>
-            ) : null}
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-            <MiniStat label="Pages checked" value={pagesScanned} icon={FileText} />
-            <MiniStat label="Last scan" value={createdAt ? formatDate(createdAt) : "Recent"} icon={CheckCircle2} />
-          </div>
+      <div className="mt-4 space-y-4">
+        <div>
+          <div className="text-5xl font-bold tracking-tight text-slate-950">{healthScore || "—"}</div>
+          <span className={`mt-3 inline-flex rounded-full px-3 py-1 text-xs font-medium ${band.className}`}>
+            {band.label}
+          </span>
         </div>
-      ) : (
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          Run your first scan to get your score.
-        </p>
-      )}
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+          <MiniStat label="Pages checked" value={pagesScanned || 0} icon={FileText} />
+          <MiniStat label="Last scan" value={createdAt ? formatDate(createdAt) : "Recent"} icon={CheckCircle2} />
+        </div>
+      </div>
     </section>
   );
 }
@@ -374,7 +276,7 @@ function MiniStat({ label, value, icon: Icon }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
       <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500">
-        <Icon className="h-3.5 w-3.5" />
+        <Icon className="h-4 w-4" />
         {label}
       </div>
       <div className="mt-2 text-sm font-semibold text-slate-950">{value}</div>
@@ -388,19 +290,11 @@ function BucketOverview({ counts }) {
       {BUCKET_ORDER.map((key) => {
         const bucket = BUCKETS[key];
         const count = Number(counts[key] || 0);
-
         return (
-          <div
-            key={key}
-            className="group flex items-center justify-between gap-4 rounded-3xl border border-slate-200/80 bg-white px-6 py-5 shadow-sm"
-          >
+          <div key={key} className="flex items-center justify-between gap-4 rounded-3xl border border-slate-200/80 bg-white px-6 py-5 shadow-sm">
             <div>
-              <p className="text-base font-semibold text-slate-950">
-                {bucket.title}
-              </p>
-              <p className="mt-1 text-sm text-slate-500">
-                {count > 0 ? bucket.subtitle : bucket.empty}
-              </p>
+              <p className="text-base font-semibold text-slate-950">{bucket.title}</p>
+              <p className="mt-1 text-sm text-slate-500">{bucket.subtitle}</p>
             </div>
             <span className="text-2xl font-semibold text-slate-950">{count}</span>
           </div>
@@ -410,191 +304,25 @@ function BucketOverview({ counts }) {
   );
 }
 
-function PlainEnglishFindings({ categoryCounts }) {
-  if (categoryCounts.length === 0) return null;
-
+function AiActionPlan({ summary, topActions, cmsLabel }) {
   return (
-    <section className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-sm">
-      <div className="border-b border-slate-100 px-5 py-4 sm:px-6">
-        <h2 className="text-base font-semibold text-slate-950">
-          What we found, in plain English
-        </h2>
-        <p className="mt-1 text-sm text-slate-500">
-          No jargon — just what each recommendation means for the business.
-        </p>
-      </div>
-      <div className="divide-y divide-slate-100">
-        {categoryCounts.slice(0, 8).map(([category, count]) => {
-          const label = getCategoryLabel(category);
-          return (
-            <div
-              key={category}
-              className="flex items-start justify-between gap-4 px-5 py-4 sm:px-6"
-            >
-              <div>
-                <p className="text-sm font-medium text-slate-950">
-                  {label.title}
-                </p>
-                {label.why ? (
-                  <p className="mt-1 text-sm text-slate-500">{label.why}</p>
-                ) : null}
-              </div>
-              <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500">
-                {count}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Debug panel                                                                 */
-/* -------------------------------------------------------------------------- */
-
-function ScanDebugPanel({ debugData, onRefresh, onClear }) {
-  const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
-
-  const summary = useMemo(() => buildDebugSummary(debugData), [debugData]);
-
-  async function copyJson() {
-    try {
-      await navigator.clipboard.writeText(JSON.stringify(debugData, null, 2));
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch (error) {
-      console.warn("Could not copy scan debug data.", error);
-    }
-  }
-
-  return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h2 className="flex items-center gap-2 text-lg font-bold text-slate-950">
-            <Bug className="h-5 w-5" />
-            Scan debug
-          </h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Use this when the dashboard shows 0 pages, an old scan, or a blocked scan.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" onClick={() => setOpen((value) => !value)}>
-            <Bug className="mr-2 h-4 w-4" />
-            {open ? "Hide debug" : "Show debug"}
-          </Button>
-          <Button type="button" variant="outline" onClick={onRefresh}>
-            <RefreshCw className="mr-2 h-4 w-4" />
-            Refresh
-          </Button>
-          <Button type="button" variant="outline" onClick={copyJson}>
-            <Copy className="mr-2 h-4 w-4" />
-            {copied ? "Copied" : "Copy JSON"}
-          </Button>
-          <Button type="button" variant="outline" onClick={onClear}>
-            <Trash2 className="mr-2 h-4 w-4" />
-            Clear scans
-          </Button>
-        </div>
-      </div>
-
-      <div className="mt-5 grid gap-3 md:grid-cols-4">
-        <DebugStat label="Status" value={summary.status || "None"} />
-        <DebugStat label="Website" value={summary.websiteUrl || "None"} />
-        <DebugStat label="Pages" value={summary.pages || "0"} />
-        <DebugStat label="Readable" value={summary.readablePages || "0"} />
-        <DebugStat label="Blocked" value={summary.blockedPages || "0"} />
-        <DebugStat label="Max pages" value={summary.maxPages || "0"} />
-        <DebugStat label="Score" value={summary.score || "None"} />
-        <DebugStat label="Error" value={summary.error || "None"} />
-      </div>
-
-      {open ? (
-        <div className="mt-5 overflow-hidden rounded-2xl border border-slate-200 bg-slate-950">
-          <pre className="max-h-[560px] overflow-auto p-4 text-xs leading-5 text-slate-100">
-            {JSON.stringify(debugData, null, 2)}
-          </pre>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function DebugStat({ label, value }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
-        {label}
-      </div>
-      <div className="mt-2 break-words text-sm font-semibold text-slate-950">
-        {String(value)}
-      </div>
-    </div>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* AI plan + CMS selector                                                      */
-/* -------------------------------------------------------------------------- */
-
-function AiActionPlan({
-  summary,
-  topActions,
-  cmsLabel,
-  healthScore,
-  pagesScanned,
-  recommendationsCount,
-  scanRecord,
-}) {
-  const scanFocus = getScanFocus(scanRecord);
-
-  return (
-    <div className="rounded-3xl border border-blue-100 bg-blue-50 p-5 shadow-sm">
+    <section className="rounded-3xl border border-indigo-100 bg-indigo-50 p-5 shadow-sm">
       <div className="flex items-start gap-3">
-        <div className="rounded-2xl bg-white p-3 text-blue-700 shadow-sm">
+        <div className="rounded-2xl bg-white p-3 text-indigo-700 shadow-sm">
           <Sparkles className="h-5 w-5" />
         </div>
-
         <div className="min-w-0 flex-1">
           <h2 className="text-lg font-bold text-slate-950">Plain-English plan</h2>
-          <p className="mt-1 text-sm font-semibold text-blue-950">
-            Best plan of action
-          </p>
-
-          <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-700">
-            {summary ||
-              `Your website health score is ${
-                healthScore || "not available"
-              }. The scanner reviewed ${pagesScanned} pages and found ${recommendationsCount} recommendations.`}
-          </p>
-
-          {scanFocus ? (
-            <div className="mt-4 rounded-2xl border border-blue-100 bg-white/70 p-4 text-sm text-slate-700">
-              <p className="font-semibold text-slate-950">Scan focus</p>
-              <p className="mt-1 leading-6">{scanFocus}</p>
-            </div>
-          ) : null}
-
-          <div className="mt-5">
-            <p className="text-sm font-semibold text-slate-950">Selected CMS</p>
-            <p className="mt-1 text-sm text-slate-600">{cmsLabel}</p>
-          </div>
-
+          <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-700">{summary}</p>
+          <p className="mt-4 text-sm text-slate-600">Selected CMS: <span className="font-semibold text-slate-950">{cmsLabel}</span></p>
           {topActions.length > 0 ? (
             <div className="mt-5 grid gap-3 md:grid-cols-3">
               {topActions.slice(0, 3).map((action, index) => (
-                <div key={`${action.title || action.issue_title || index}`} className="rounded-2xl border border-blue-100 bg-white p-4">
-                  <div className="text-sm font-bold text-blue-700">{index + 1}</div>
-                  <p className="mt-2 text-sm font-bold text-slate-950">
-                    {action.title || action.issue_title || action.recommendation || "Review this item"}
-                  </p>
+                <div key={`${action.title || index}`} className="rounded-2xl border border-indigo-100 bg-white p-4">
+                  <div className="text-sm font-bold text-indigo-700">{index + 1}</div>
+                  <p className="mt-2 text-sm font-bold text-slate-950">{action.title || action.issue_title || "Review this item"}</p>
                   <p className="mt-2 text-sm leading-5 text-slate-600">
-                    {action.plain_english_explanation || action.explanation || action.simple_next_step || action.recommendation || "Review the affected pages and make the recommended update."}
+                    {action.reason || action.why_it_matters || action.plain_english_summary || "Review the affected pages and make the recommended update."}
                   </p>
                 </div>
               ))}
@@ -602,17 +330,15 @@ function AiActionPlan({
           ) : null}
         </div>
       </div>
-    </div>
+    </section>
   );
 }
 
 function CmsSelector({ selectedCms, onChange }) {
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+    <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
       <h2 className="text-lg font-bold text-slate-950">Choose your website builder</h2>
-      <p className="mt-1 text-sm text-slate-500">
-        Click the CMS your site uses to see instructions written for that platform.
-      </p>
+      <p className="mt-1 text-sm text-slate-500">Switch the instruction style without rerunning the scan.</p>
       <div className="mt-4 flex flex-wrap gap-2">
         {CMS_OPTIONS.map((cms) => (
           <button
@@ -629,77 +355,67 @@ function CmsSelector({ selectedCms, onChange }) {
           </button>
         ))}
       </div>
-    </div>
+    </section>
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Recommendation cards                                                        */
-/* -------------------------------------------------------------------------- */
-
 function RecommendationCard({ recommendation, cms }) {
   const priorityStyles = getPriorityStyles(recommendation.priority);
+  const bucket = BUCKETS[recommendation.bucket] || BUCKETS.needs_approval;
   const affectedPages = recommendation.affectedPages.slice(0, 6);
-  const extraCount = Math.max(0, recommendation.affectedPages.length - 6);
+  const extraCount = Math.max(0, recommendation.affectedPages.length - affectedPages.length);
   const cmsSteps = getCmsSteps(cms, recommendation);
-  const bucket = BUCKETS[recommendation.bucket];
+  const evidenceItems = buildEvidenceItems(recommendation);
 
   return (
     <article className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className={`rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide ${priorityStyles.badge}`}>
-              {getPriorityLabel(recommendation.priority)}
-            </span>
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-              {recommendation.customerCategory}
-            </span>
-            <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
-              {bucket?.title || "Your turn"}
-            </span>
+            <span className={`rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide ${priorityStyles.badge}`}>{getPriorityLabel(recommendation.priority)}</span>
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">{recommendation.customerCategory}</span>
+            <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700">{bucket.title}</span>
           </div>
-
-          <h3 className="mt-4 text-xl font-bold text-slate-950">
-            {recommendation.title}
-          </h3>
-          <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-600">
-            {recommendation.explanation}
-          </p>
+          <h3 className="mt-4 text-xl font-bold text-slate-950">{recommendation.title}</h3>
+          <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-600">{recommendation.explanation}</p>
         </div>
-
         <div className="flex shrink-0 items-center gap-2 rounded-2xl bg-slate-50 px-4 py-3 text-sm font-medium text-slate-600">
           {recommendation.needsHelp ? <MonitorCog className="h-4 w-4" /> : <Wrench className="h-4 w-4" />}
           {recommendation.needsHelp ? "Best for your web person" : "Quick review"}
         </div>
       </div>
 
+      {evidenceItems.length > 0 ? (
+        <div className="mt-5 rounded-2xl border border-indigo-100 bg-indigo-50/70 p-4">
+          <p className="text-sm font-bold text-slate-950">What FixList noticed</p>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            {evidenceItems.map((item) => (
+              <div key={item.label} className="rounded-xl bg-white px-3 py-2 text-sm">
+                <span className="font-semibold text-slate-950">{item.label}: </span>
+                <span className="text-slate-600">{item.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
           <p className="text-sm font-bold text-slate-950">Why this matters</p>
-          <p className="mt-2 text-sm leading-6 text-slate-600">
-            {recommendation.whyItMatters}
-          </p>
+          <p className="mt-2 text-sm leading-6 text-slate-600">{recommendation.whyItMatters}</p>
         </div>
-
         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
           <p className="text-sm font-bold text-slate-950">What to do next</p>
           <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm leading-6 text-slate-600">
-            {recommendation.generalSteps.map((step, index) => (
-              <li key={`${step}-${index}`}>{step}</li>
-            ))}
+            {recommendation.generalSteps.map((step, index) => <li key={`${step}-${index}`}>{step}</li>)}
           </ol>
         </div>
       </div>
 
       <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-        <p className="text-sm font-bold text-slate-950">
-          {CMS_OPTIONS.find((item) => item.value === cms)?.label || "Custom / Not sure"} steps
-        </p>
+        <p className="text-sm font-bold text-slate-950">{CMS_OPTIONS.find((item) => item.value === cms)?.label || "Custom / Not sure"} steps</p>
         <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm leading-6 text-slate-600">
-          {cmsSteps.map((step, index) => (
-            <li key={`${step}-${index}`}>{step}</li>
-          ))}
+          {cmsSteps.map((step, index) => <li key={`${step}-${index}`}>{step}</li>)}
         </ol>
       </div>
 
@@ -707,12 +423,8 @@ function RecommendationCard({ recommendation, cms }) {
         <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
           <p className="text-sm font-bold text-slate-950">Example affected pages</p>
           <div className="mt-3 space-y-2">
-            {affectedPages.map((page, index) => (
-              <AffectedPage key={`${page}-${index}`} page={page} />
-            ))}
-            {extraCount > 0 ? (
-              <p className="text-sm text-slate-500">Plus {extraCount} more affected pages.</p>
-            ) : null}
+            {affectedPages.map((page, index) => <AffectedPage key={`${page}-${index}`} page={page} />)}
+            {extraCount > 0 ? <p className="text-sm text-slate-500">Plus {extraCount} more affected pages.</p> : null}
           </div>
         </div>
       ) : null}
@@ -721,12 +433,10 @@ function RecommendationCard({ recommendation, cms }) {
 }
 
 function AffectedPage({ page }) {
-  const label = formatPageLabel(page);
-
   return (
     <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2">
       <div className="min-w-0">
-        <p className="truncate text-sm font-medium text-slate-950">{label}</p>
+        <p className="truncate text-sm font-medium text-slate-950">{formatPageLabel(page)}</p>
         <p className="truncate text-xs text-slate-500">{formatPagePath(page)}</p>
       </div>
       {isFullUrl(page) ? (
@@ -738,27 +448,68 @@ function AffectedPage({ page }) {
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Empty states                                                                */
-/* -------------------------------------------------------------------------- */
+function ScanDebugPanel({ debugData, onRefresh, onClear }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const summary = useMemo(() => buildDebugSummary(debugData), [debugData]);
+
+  async function copyJson() {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(debugData, null, 2));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch (error) {
+      console.warn("Could not copy scan debug data.", error);
+    }
+  }
+
+  return (
+    <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="flex items-center gap-2 text-lg font-bold text-slate-950"><Bug className="h-5 w-5" /> Scan debug</h2>
+          <p className="mt-1 text-sm text-slate-500">Use this to confirm the scan saved and which logic ran.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" onClick={() => setOpen((value) => !value)}><Bug className="mr-2 h-4 w-4" />{open ? "Hide debug" : "Show debug"}</Button>
+          <Button type="button" variant="outline" onClick={onRefresh}><RefreshCw className="mr-2 h-4 w-4" />Refresh</Button>
+          <Button type="button" variant="outline" onClick={copyJson}><Copy className="mr-2 h-4 w-4" />{copied ? "Copied" : "Copy JSON"}</Button>
+          <Button type="button" variant="outline" onClick={onClear}><Trash2 className="mr-2 h-4 w-4" />Clear scans</Button>
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-3 md:grid-cols-4">
+        <DebugStat label="Status" value={summary.status || "None"} />
+        <DebugStat label="Website" value={summary.websiteUrl || "None"} />
+        <DebugStat label="Pages" value={summary.pages || "0"} />
+        <DebugStat label="Score" value={summary.score || "None"} />
+      </div>
+
+      {open ? (
+        <div className="mt-5 overflow-hidden rounded-2xl border border-slate-200 bg-slate-950">
+          <pre className="max-h-[560px] overflow-auto p-4 text-xs leading-5 text-slate-100">{JSON.stringify(debugData, null, 2)}</pre>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function DebugStat({ label, value }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="mt-2 break-words text-sm font-semibold text-slate-950">{String(value)}</div>
+    </div>
+  );
+}
 
 function NoScanState({ onScan }) {
   return (
     <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm">
-      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-3xl bg-slate-100 text-slate-600">
-        <AlertCircle className="h-6 w-6" />
-      </div>
-      <h2 className="mt-5 text-xl font-bold text-slate-950">No recommendations yet.</h2>
-      <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-        Run a website scan first. Once the scan finishes, your Fix List, plain-English action plan, and CMS instructions will appear here.
-      </p>
-      <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-slate-500">
-        Run your first scan to get your score.
-      </p>
-      <Button type="button" onClick={onScan} className="mt-5">
-        <Search className="mr-2 h-4 w-4" />
-        Scan Website
-      </Button>
+      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-3xl bg-slate-100 text-slate-600"><AlertCircle className="h-6 w-6" /></div>
+      <h2 className="mt-5 text-xl font-bold text-slate-950">No FixList yet.</h2>
+      <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-slate-600">Run a website scan first. Once it finishes, your plain-English action plan will appear here.</p>
+      <Button type="button" onClick={onScan} className="mt-5"><Search className="mr-2 h-4 w-4" />Run my scan</Button>
     </div>
   );
 }
@@ -772,9 +523,122 @@ function EmptyFilteredState() {
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Local storage + debug                                                       */
-/* -------------------------------------------------------------------------- */
+function normalizeRecommendation(item = {}) {
+  const priority = normalizePriority(item.priority);
+  const category = String(item.category || "other").toLowerCase();
+  const affectedPages = firstArray([item.affected_pages, item.pages, item.page_urls]);
+  const fallbackPage = item.page_url || item.url || "";
+  const bucket = getIssueBucket(item);
+  const customerCategory = item.customer_category || CATEGORY_LABELS[category] || humanize(category || "Website improvement");
+  const title = cleanString(item.issue_title || item.title || item.name) || buildSpecificTitle(item);
+  const explanation = cleanString(item.plain_english_explanation || item.plain_english_summary || item.explanation || item.description || item.summary || item.recommendation) || buildSpecificExplanation(item);
+  const whyItMatters = cleanString(item.why_it_matters || item.impact || item.reason) || buildSpecificWhy(item);
+  const recommendation = cleanString(item.simple_next_step || item.recommended_value || item.recommendation || item.suggested_fix || item.ai_recommendation) || "Review the affected page and make the recommended update.";
+  const needsHelp = bucket === "needs_developer";
+
+  return {
+    id: item.id || item.fix_id || stableId(`${fallbackPage}|${category}|${title}`),
+    original: item,
+    category,
+    priority,
+    bucket,
+    customerCategory,
+    title,
+    explanation,
+    whyItMatters,
+    recommendation,
+    affectedPages: unique([...affectedPages.map(String), ...(fallbackPage ? [fallbackPage] : [])]),
+    currentValue: cleanString(item.current_value || item.current || item.detected_value),
+    pageType: cleanString(item.page_type || item.page_value_label || item.business_importance),
+    defectClass: cleanString(item.primary_defect_class || item.meta_regeneration_gate),
+    pageValueLabel: cleanString(item.page_value_label),
+    businessImportance: cleanString(item.business_importance),
+    metaGate: cleanString(item.meta_regeneration_gate),
+    needsHelp,
+    generalSteps: buildGeneralSteps(item, recommendation, needsHelp),
+  };
+}
+
+function buildSpecificTitle(item = {}) {
+  const category = String(item.category || "").toLowerCase();
+  const rule = String(item.rule || "").toLowerCase();
+  if (rule.includes("long_title") || category === "meta_title") return "Improve this page's Google title";
+  if (rule.includes("description") || category === "meta_description") return "Improve this page's Google description";
+  if (rule.includes("schema") || category === "schema") return "Add business details for Google";
+  if (rule.includes("canonical") || category === "canonical") return "Confirm the official version of this page";
+  if (rule.includes("image_alt")) return "Add helpful image descriptions";
+  if (rule.includes("h1") || category === "thin_content") return "Clarify the page content";
+  return "Review this recommendation";
+}
+
+function buildSpecificExplanation(item = {}) {
+  const current = cleanString(item.current_value || item.current);
+  const page = firstArray([item.affected_pages])[0] || item.page_url || "this page";
+  const category = String(item.category || "").toLowerCase();
+  if (category === "meta_title") return current ? `The current Google title is: “${clampText(current, 160)}”. It may be too long or unclear for the page shown below.` : "This page's Google title needs a clearer, shorter version.";
+  if (category === "meta_description") return current ? `The current Google description is: “${clampText(current, 180)}”. It may be too long, missing, or not clear enough for search results.` : "This page needs a clearer Google result description.";
+  if (category === "schema") return `The page ${page} is missing structured business details that help Google understand the organization, service, product, or FAQ content.`;
+  if (category === "canonical") return `The page ${page} does not clearly declare its official URL, which can cause duplicate-page confusion.`;
+  return "FixList found this issue in the scan evidence for the affected page below.";
+}
+
+function buildSpecificWhy(item = {}) {
+  const pageType = cleanString(item.page_type || item.page_value_label || item.business_importance);
+  const category = String(item.category || "").toLowerCase();
+  if (category === "meta_title") return pageType ? `This matters because this is a ${humanize(pageType)}. The Google title should make the page topic and offer clear before people click.` : "A better title can improve clarity in Google results and help visitors choose the right page.";
+  if (category === "meta_description") return pageType ? `This matters because this is a ${humanize(pageType)}. The description should explain the value of the page and set the right expectation before the click.` : "A better description can improve how useful and trustworthy the result looks in Google.";
+  if (category === "schema") return "Structured data can help Google understand who the business is, what it offers, and whether the page is trustworthy.";
+  if (category === "canonical") return "Canonical settings help Google know which URL should get credit instead of splitting signals across duplicate versions.";
+  return "Fixing this can improve how visitors and search engines understand the page.";
+}
+
+function buildGeneralSteps(item = {}, recommendation, needsHelp) {
+  const existing = firstArray([item.what_to_do_steps, item.what_to_do, item.fix_steps, item.general_steps, item.next_steps, item.steps, item.action_steps]);
+  if (existing.length > 0) return existing.map(String).slice(0, 5);
+  if (needsHelp) return ["Share this item with your web person.", "Ask them to review the affected URL and scan evidence.", "Publish the fix and run FixList again."];
+
+  const category = String(item.category || "").toLowerCase();
+  if (category === "meta_title") return ["Open the affected page in your CMS.", "Write a shorter title that names the specific page, service, product, or tool.", "Put the most important phrase near the beginning and keep the brand at the end.", "Publish and run FixList again."];
+  if (category === "meta_description") return ["Open the affected page's SEO settings.", "Write one concise description that says what the visitor can do on this page.", "Mention the main benefit or next step, not generic marketing copy.", "Publish and run FixList again."];
+  if (category === "schema") return ["Choose the right schema type for the page, such as Organization, LocalBusiness, Product, FAQ, or Breadcrumb.", "Add the schema through your CMS, SEO plugin, theme, or developer.", "Validate the page with a structured data checker."];
+  if (category === "canonical") return ["Open the affected page or template.", "Set the canonical URL to the clean official version of the page.", "Check that duplicate/filter/tracking URLs point back to the official version."];
+  return ["Review the affected page.", recommendation, "Publish the change and run FixList again."];
+}
+
+function getCmsSteps(cms, recommendation) {
+  const category = String(recommendation.original?.category || "").toLowerCase();
+  const title = category === "meta_title";
+  const description = category === "meta_description";
+  const schema = category === "schema";
+  const canonical = category === "canonical";
+
+  if (cms === "shopify") {
+    if (title || description) return ["In Shopify, open the affected product, collection, page, or blog post.", "Scroll to Search engine listing and click Edit.", title ? "Rewrite the Page title so it is specific and not cut off." : "Rewrite the Meta description so it explains the product, collection, or page clearly.", "Save and run FixList again."];
+    return ["Open the affected item in Shopify.", "Update the content, theme, image alt text, redirects, or structured data as needed.", "Save and run FixList again."];
+  }
+
+  if (cms === "wordpress") {
+    if (title || description) return ["In WordPress, open the affected Page or Post.", "Open your SEO plugin panel, such as Yoast or Rank Math.", title ? "Edit the SEO title using the page's specific topic and offer." : "Edit the meta description using a concise benefit and next step.", "Update, publish, and run FixList again."];
+    if (schema || canonical) return ["Open the page in WordPress or your SEO plugin.", canonical ? "Set the canonical URL to the official clean URL." : "Add the correct schema type through your SEO plugin or theme.", "Save, clear cache, and run FixList again."];
+  }
+
+  if (cms === "joomla") {
+    if (title || description) return ["In Joomla, open the related Article or Menu Item.", title ? "Update the Browser Page Title with a shorter page-specific title." : "Update the Meta Description with a concise page-specific description.", "Save, clear cache if needed, and run FixList again."];
+    return ["In Joomla, open the Article, Menu Item, template, or SEO extension connected to this page.", "Apply the recommended content, canonical, schema, redirect, or image update.", "Save, clear cache, and run FixList again."];
+  }
+
+  return ["Open the affected page in your website editor or SEO settings.", title || description ? "Update the page-specific Google title or description using the scan evidence above." : "Apply the recommended content, setup, image, schema, redirect, or technical fix.", "Publish the update and run FixList again."];
+}
+
+function buildEvidenceItems(recommendation) {
+  const items = [];
+  if (recommendation.pageType) items.push({ label: "Page type", value: humanize(recommendation.pageType) });
+  if (recommendation.pageValueLabel) items.push({ label: "Business value", value: recommendation.pageValueLabel });
+  if (recommendation.defectClass) items.push({ label: "Issue type", value: humanize(recommendation.defectClass) });
+  if (recommendation.metaGate) items.push({ label: "Meta gate", value: humanize(recommendation.metaGate) });
+  if (recommendation.currentValue) items.push({ label: "Current value", value: clampText(recommendation.currentValue, 180) });
+  return items.slice(0, 5);
+}
 
 function readBestScanRecord() {
   const candidates = [];
@@ -788,21 +652,27 @@ function readBestScanRecord() {
   if (Array.isArray(history)) candidates.push(...history);
   if (Array.isArray(legacyHistory)) candidates.push(...legacyHistory);
 
-  const validCandidates = candidates
-    .filter(Boolean)
-    .map(normalizeStoredScanCandidate)
-    .filter(isUsefulScanCandidate)
-    .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+  const valid = candidates.filter(Boolean).map(normalizeStoredScanCandidate).filter(isUsefulScanCandidate).sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+  return valid[0] || null;
+}
 
-  return validCandidates[0] || null;
+function normalizeStoredScanCandidate(candidate) {
+  if (!candidate || typeof candidate !== "object") return null;
+  const pages = getPages(candidate);
+  const recommendations = getRecommendations(candidate);
+  const score = getHealthScore(candidate);
+  return { ...candidate, pages, crawled_pages: pages, recommendations, fixes: recommendations, findings: recommendations, health_score: score, seo_score: score };
+}
+
+function isUsefulScanCandidate(candidate) {
+  if (!candidate) return false;
+  return Boolean(candidate.website_url || candidate.raw?.scanner?.website_url) && (getPages(candidate).length > 0 || getRecommendations(candidate).length > 0 || getHealthScore(candidate) > 0);
 }
 
 function readScanDebugData() {
   if (typeof window === "undefined") return { raw: {}, parsed: {} };
-
   const raw = {};
   const parsed = {};
-
   STORAGE_KEYS.forEach((key) => {
     const value = window.localStorage.getItem(key);
     raw[key] = value;
@@ -812,7 +682,6 @@ function readScanDebugData() {
       parsed[key] = value;
     }
   });
-
   return { read_at: new Date().toISOString(), raw, parsed };
 }
 
@@ -835,301 +704,68 @@ function safeParseLocalStorage(key) {
   }
 }
 
-function normalizeStoredScanCandidate(candidate) {
-  if (!candidate || typeof candidate !== "object") return null;
-
-  const pages = getPages(candidate);
-  const recommendations = getRecommendations(candidate);
-  const score = getHealthScore(candidate);
-
-  return {
-    ...candidate,
-    pages,
-    crawled_pages: pages,
-    recommendations,
-    fixes: recommendations,
-    findings: recommendations,
-    health_score: score,
-    seo_score: score,
-  };
-}
-
-function isUsefulScanCandidate(candidate) {
-  if (!candidate) return false;
-  const pages = getPages(candidate);
-  const recommendations = getRecommendations(candidate);
-  const score = getHealthScore(candidate);
-  if (!candidate.website_url && !candidate.raw?.scanner?.website_url) return false;
-  return pages.length > 0 || recommendations.length > 0 || score > 0;
-}
-
 function buildDebugSummary(debugData) {
   const parsed = debugData?.parsed || {};
   const scanDebug = parsed[SCAN_DEBUG_KEY] || {};
   const lastScan = parsed[DASHBOARD_LAST_SCAN_KEY] || parsed[LEGACY_LAST_SCAN_KEY] || {};
-  const scanner = scanDebug?.scanner || lastScan?.raw?.scanner || lastScan?.raw_scanner || {};
-
+  const scanner = scanDebug?.scanner || lastScan?.raw?.scanner || {};
   return {
     status: scanDebug?.status || scanDebug?.stage || "unknown",
     websiteUrl: scanDebug?.website_url || lastScan?.website_url || parsed[ACTIVE_SCAN_URL_KEY] || "",
     pages: scanner?.pages_crawled || lastScan?.pages_crawled || lastScan?.pages?.length || lastScan?.crawled_pages?.length || 0,
-    readablePages: scanner?.technical_audit_summary?.readable_pages_checked || lastScan?.technical_audit_summary?.readable_pages_checked || 0,
-    blockedPages: scanner?.technical_audit_summary?.scanner_blocked_pages || lastScan?.technical_audit_summary?.scanner_blocked_pages || 0,
-    maxPages: scanner?.max_pages_effective || lastScan?.raw?.scanner?.max_pages_effective || 0,
     score: lastScan?.health_score || lastScan?.seo_score || scanner?.health_score || scanner?.seo_score || 0,
-    error: scanDebug?.error || scanner?.error || lastScan?.raw?.scanner?.error || "",
   };
 }
 
-/* -------------------------------------------------------------------------- */
-/* Data extraction                                                             */
-/* -------------------------------------------------------------------------- */
-
 function getRecommendations(record) {
   if (!record) return [];
-  return firstArray([
-    record.recommendations,
-    record.fixes,
-    record.findings,
-    record.raw_fixes,
-    record.grouped_findings,
-    record.raw?.recommendations,
-    record.raw?.fixes,
-    record.raw?.findings,
-    record.raw?.scanner?.raw_fixes,
-    record.raw?.scanner?.grouped_findings,
-    record.raw?.scanner?.recommendations,
-    record.raw?.scanner?.fixes,
-    record.raw?.ai_review?.cleaned_fixes,
-    record.raw?.ai_review?.recommendations,
-    record.raw?.ai_review?.fixes,
-    record.raw?.ai_review?.findings,
-  ]);
+  return firstArray([record.recommendations, record.fixes, record.findings, record.raw_fixes, record.grouped_findings, record.raw?.recommendations, record.raw?.fixes, record.raw?.findings, record.raw?.scanner?.raw_fixes, record.raw?.scanner?.grouped_findings, record.raw?.scanner?.recommendations, record.raw?.scanner?.fixes, record.raw?.ai_review?.cleaned_fixes, record.raw?.ai_review?.recommendations, record.raw?.ai_review?.fixes, record.raw?.ai_review?.findings]);
 }
 
 function getPages(record) {
   if (!record) return [];
-  return firstArray([
-    record.crawled_pages,
-    record.pages,
-    record.scanned_pages,
-    record.crawl_pages,
-    record.raw?.crawled_pages,
-    record.raw?.pages,
-    record.raw?.scanner?.crawled_pages,
-    record.raw?.scanner?.pages,
-    record.raw?.scanner?.scanned_pages,
-  ]);
+  return firstArray([record.crawled_pages, record.pages, record.scanned_pages, record.crawl_pages, record.raw?.crawled_pages, record.raw?.pages, record.raw?.scanner?.crawled_pages, record.raw?.scanner?.pages, record.raw?.scanner?.scanned_pages]);
 }
 
 function getHealthScore(record) {
   if (!record) return 0;
-  return getFirstNumber([
-    record.health_score,
-    record.seo_score,
-    record.scan_summary?.health_score,
-    record.website_health_report?.score,
-    record.raw?.health_score,
-    record.raw?.seo_score,
-    record.raw?.scanner?.health_score,
-    record.raw?.scanner?.seo_score,
-    record.raw?.ai_review?.health_score,
-    record.raw?.ai_review?.website_health_report?.score,
-  ]);
+  return getFirstNumber([record.health_score, record.seo_score, record.scan_summary?.health_score, record.website_health_report?.score, record.website_health_report?.health_score, record.raw?.health_score, record.raw?.seo_score, record.raw?.scanner?.health_score, record.raw?.scanner?.seo_score, record.raw?.ai_review?.health_score, record.raw?.ai_review?.website_health_report?.score, record.raw?.ai_review?.website_health_report?.health_score]);
 }
 
 function getPagesScanned(record, pages) {
-  return getFirstNumber([
-    record?.pages_crawled,
-    record?.pages_scanned,
-    record?.technical_audit_summary?.pages_checked,
-    record?.raw?.scanner?.pages_crawled,
-    pages?.length,
-  ]);
+  return getFirstNumber([record?.pages_crawled, record?.pages_scanned, record?.technical_audit_summary?.pages_checked, record?.raw?.scanner?.pages_crawled, pages?.length]);
 }
 
 function getTopActions(record, recommendations) {
-  const explicit = firstArray([
-    record?.top_recommended_actions,
-    record?.recommended_actions,
-    record?.raw?.ai_review?.top_recommended_actions,
-    record?.raw?.ai_review?.recommended_actions,
-  ]);
-  return explicit.length > 0 ? explicit : recommendations.slice(0, 3);
+  const explicit = firstArray([record?.top_recommended_actions, record?.recommended_actions, record?.raw?.ai_review?.top_recommended_actions, record?.raw?.ai_review?.recommended_actions]);
+  const normalizedExplicit = explicit.map((item) => ({ ...item, ...recommendations.find((rec) => rec.id === item.fix_id || rec.original?.fix_id === item.fix_id) }));
+  return normalizedExplicit.length > 0 ? normalizedExplicit : recommendations.slice(0, 3);
 }
 
-function getScanFocus(record) {
-  const focus = record?.scan_summary?.scan_focus || record?.site_summary?.scan_focus || record?.raw?.scanner?.scan_summary?.scan_focus || {};
-  if (focus.explanation) return focus.explanation;
-  const prefix = record?.crawl_scope?.start_path_prefix || record?.raw?.scanner?.crawl_scope?.start_path_prefix || "";
-  if (prefix) return `The scan focused on the ${prefix} section and ignored unrelated sections so the page limit stayed focused.`;
-  return "";
+function getBestSummary(record, healthScore, pagesScanned, recommendationsCount) {
+  return cleanString(record?.customer_summary || record?.simple_summary || record?.scan_summary?.plain_english_summary || record?.site_summary?.plain_english_summary || record?.website_health_report?.overall_explanation) || `Your website health score is ${healthScore || "not available"}. The scanner reviewed ${pagesScanned || 0} pages and found ${recommendationsCount || 0} recommendations.`;
 }
 
-/* -------------------------------------------------------------------------- */
-/* Recommendation normalization                                                */
-/* -------------------------------------------------------------------------- */
-
-function normalizeRecommendation(item) {
-  const priority = normalizePriority(item?.priority);
-  const category = String(item?.category || "other").toLowerCase();
-  const categoryLabel = getCategoryLabel(category);
-  const bucket = getIssueBucket(item || {});
-
-  const affectedPages = firstArray([item?.affected_pages, item?.pages, item?.page_urls]);
-  const fallbackPage = item?.page_url || item?.url || "";
-
-  const sourceTitle = item?.title || item?.issue_title || item?.name || "";
-  const title = categoryLabel.title || sourceTitle || "Review this recommendation";
-
-  const explanation =
-    item?.plain_english_explanation ||
-    categoryLabel.why ||
-    item?.explanation ||
-    item?.description ||
-    item?.summary ||
-    item?.recommendation ||
-    "Review this item and update the affected page where needed.";
-
-  const whyItMatters =
-    categoryLabel.why ||
-    item?.why_it_matters ||
-    item?.impact ||
-    "Fixing this can improve how visitors and search engines understand the page.";
-
-  const recommendation =
-    item?.simple_next_step ||
-    categoryLabel.what ||
-    item?.recommended_value ||
-    item?.recommendation ||
-    item?.suggested_fix ||
-    item?.ai_recommendation ||
-    "Review the affected page and make the recommended update.";
-
-  const needsHelp = bucket === "needs_developer";
-
-  return {
-    original: item,
-    category,
-    title,
-    priority,
-    bucket,
-    explanation,
-    whyItMatters,
-    recommendation,
-    customerCategory: categoryLabel.title || "Website improvement",
-    affectedPages: unique([
-      ...affectedPages.map(String),
-      ...(fallbackPage ? [fallbackPage] : []),
-    ]),
-    needsHelp,
-    generalSteps: buildGeneralSteps(item, recommendation, needsHelp),
-  };
+function countBuckets(recommendations) {
+  return recommendations.reduce((acc, item) => {
+    acc[item.bucket] = Number(acc[item.bucket] || 0) + 1;
+    return acc;
+  }, { needs_approval: 0, auto_fixed: 0, needs_developer: 0 });
 }
 
-function buildGeneralSteps(item, recommendation, needsHelp) {
-  const existing = firstArray([item?.general_steps, item?.next_steps, item?.steps, item?.action_steps]);
-  if (existing.length > 0) return existing.map(String).slice(0, 5);
-
-  if (needsHelp) {
-    return [
-      "Share this recommendation with your web person.",
-      "Ask them to review the technical detail.",
-      "Run another scan after the update is published.",
-    ];
-  }
-
-  const category = String(item?.category || "").toLowerCase();
-  if (category.includes("meta_title")) {
-    return ["Review the affected page.", "Write one short, specific Google result title.", "Include the main service or page topic."];
-  }
-  if (category.includes("meta_description")) {
-    return ["Review the affected page.", "Write one helpful Google result description.", "Explain what the visitor will find on the page."];
-  }
-  if (category.includes("thin_content")) {
-    return ["Review the affected page.", "Add more useful service details.", "Add common questions, proof points, and a clear next step."];
-  }
-
-  return ["Review the affected page.", recommendation, "Publish the change and run another scan."];
+function getIssueBucket(item = {}) {
+  if (item.status === "auto_fixed") return "auto_fixed";
+  if (item.status === "needs_developer" || item.requires_developer) return "needs_developer";
+  if (item.status === "needs_approval" || item.requires_approval) return "needs_approval";
+  const category = String(item.category || "").toLowerCase();
+  if (["canonical", "redirect", "performance", "scanner_blocked", "js_rendering", "indexability"].includes(category)) return "needs_developer";
+  return "needs_approval";
 }
 
-function getCmsSteps(cms, recommendation) {
-  const category = String(recommendation.original?.category || "").toLowerCase();
-  const common = {
-    wordpress: [
-      "In WordPress, open the affected Page or Post.",
-      "Update the visible content, Google result title, Google result description, headings, links, and image descriptions where relevant.",
-      "After fixing the page, publish the change and run another scan.",
-    ],
-    squarespace: [
-      "Open the affected page in Squarespace.",
-      "Review page settings, Google result title, Google result description, URL slug, headings, and image descriptions.",
-      "Update the content, save, publish, and run another scan.",
-    ],
-    wix: [
-      "Open the affected page in Wix.",
-      "Use SEO Basics to update the Google result title, description, URL slug, and visibility settings.",
-      "Improve headings, copy, internal links, and image descriptions, then publish.",
-    ],
-    shopify: [
-      "Open the affected product, collection, blog post, or page in Shopify.",
-      "Edit the search engine listing preview.",
-      "Improve copy, headings, internal links, image descriptions, and page forwarding where needed.",
-      "Save, publish, and run another scan.",
-    ],
-    webflow: [
-      "Open the affected page or CMS item in Webflow.",
-      "Review page settings, social sharing fields, headings, content, image descriptions, and internal links.",
-      "Publish the site and run another scan.",
-    ],
-    framer: [
-      "Open the affected page in Framer.",
-      "Review page settings, headings, content, images, and links.",
-      "Publish and run another scan. Ask a developer for page forwarding or technical template changes.",
-    ],
-    godaddy: [
-      "Open the affected page in GoDaddy Website Builder.",
-      "Use the page settings area to update the title, description, headings, images, and navigation.",
-      "Publish the change and run another scan.",
-    ],
-    joomla: [
-      "In Joomla, open the related Article or Menu Item.",
-      "Update the Browser Page Title, Google result description, Alias, headings, article content, and image descriptions.",
-      "Check Global Configuration for search-friendly URL and site details.",
-      "Use Joomla Redirects or an SEO extension for page forwarding, duplicate page settings, business details for Google, or technical cleanup.",
-    ],
-    custom: [
-      "Open the affected page in your website editor.",
-      "Update the visible content, title, description, headings, images, or links if your editor allows it.",
-      "Send technical items such as page forwarding, duplicate page settings, business details for Google, JavaScript rendering, or performance to a developer.",
-      "Publish the update and run another scan.",
-    ],
-  };
-
-  if (category.includes("404")) {
-    return {
-      ...common,
-      wordpress: [
-        "In WordPress, go to Pages or Posts and search for the affected URL slug.",
-        "If the page should exist, restore it or update its permalink.",
-        "If the page is old, create a page forwarding rule using a redirect plugin or your SEO plugin.",
-        "After fixing or forwarding the page, publish the change and run another scan.",
-      ],
-      joomla: [
-        "In Joomla, check whether the related Article, Category, or Menu Item still exists.",
-        "If the page should exist, restore it or correct the menu alias.",
-        "If the page moved, add page forwarding in Joomla Redirects or your SEO extension.",
-        "Clear cache and run another scan.",
-      ],
-    }[cms] || common.custom;
-  }
-
-  return common[cms] || common.custom;
+function scrollToRecommendations() {
+  const element = document.getElementById("recommendations");
+  if (element) element.scrollIntoView({ behavior: "smooth", block: "start" });
 }
-
-/* -------------------------------------------------------------------------- */
-/* Formatting                                                                  */
-/* -------------------------------------------------------------------------- */
 
 function normalizePriority(priority) {
   const value = String(priority || "").toLowerCase();
@@ -1153,6 +789,14 @@ function getPriorityLabel(priority) {
   return "Lower impact";
 }
 
+function getScoreBand(score) {
+  const value = Number(score || 0);
+  if (value >= 85) return { label: "Great", className: "bg-emerald-50 text-emerald-700" };
+  if (value >= 70) return { label: "Good", className: "bg-blue-50 text-blue-700" };
+  if (value >= 50) return { label: "Getting there", className: "bg-amber-50 text-amber-700" };
+  return { label: "Needs work", className: "bg-rose-50 text-rose-700" };
+}
+
 function formatDate(value) {
   try {
     return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
@@ -1166,18 +810,17 @@ function formatPageLabel(value) {
     const parsed = new URL(value);
     const parts = parsed.pathname.split("/").filter(Boolean);
     if (parts.length === 0) return "Homepage";
-    return parts.slice(-3).join(" / ").replace(/[-_]/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+    return titleCase(parts.slice(-3).join(" / ").replace(/[-_]/g, " "));
   } catch {
     const cleaned = String(value || "").replace(/^https?:\/\/[^/]+/i, "");
     if (!cleaned || cleaned === "/") return "Homepage";
-    return cleaned.split("/").filter(Boolean).slice(-3).join(" / ").replace(/[-_]/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+    return titleCase(cleaned.split("/").filter(Boolean).slice(-3).join(" / ").replace(/[-_]/g, " "));
   }
 }
 
 function formatPagePath(value) {
   try {
-    const parsed = new URL(value);
-    return parsed.pathname || "/";
+    return new URL(value).pathname || "/";
   } catch {
     return String(value || "");
   }
@@ -1187,25 +830,21 @@ function isFullUrl(value) {
   return /^https?:\/\//i.test(String(value || ""));
 }
 
-/* -------------------------------------------------------------------------- */
-/* Generic helpers                                                             */
-/* -------------------------------------------------------------------------- */
-
 function normalizeCmsValue(value) {
   const normalized = String(value || "").toLowerCase().replace(/\s+/g, "_");
-  const validValues = CMS_OPTIONS.map((item) => item.value);
-  return validValues.includes(normalized) ? normalized : "custom";
+  const valid = CMS_OPTIONS.map((item) => item.value);
+  return valid.includes(normalized) ? normalized : "custom";
 }
 
 function firstArray(values) {
-  for (const value of values) {
+  for (const value of values || []) {
     if (Array.isArray(value)) return value;
   }
   return [];
 }
 
 function getFirstNumber(values) {
-  for (const value of values) {
+  for (const value of values || []) {
     const number = Number(value);
     if (Number.isFinite(number) && number > 0) return Math.round(number);
   }
@@ -1213,5 +852,38 @@ function getFirstNumber(values) {
 }
 
 function unique(values) {
-  return Array.from(new Set(values.filter(Boolean)));
+  return Array.from(new Set((values || []).filter(Boolean)));
+}
+
+function cleanString(value) {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  return "";
+}
+
+function clampText(value, max) {
+  const text = String(value || "").trim();
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(0, max - 1)).trim()}…`;
+}
+
+function stableId(input) {
+  let hash = 0;
+  const value = String(input || "");
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash << 5) - hash + value.charCodeAt(i);
+    hash |= 0;
+  }
+  return `finding_${Math.abs(hash)}`;
+}
+
+function humanize(value = "") {
+  return String(value || "")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function titleCase(value = "") {
+  return String(value || "").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }

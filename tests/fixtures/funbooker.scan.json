@@ -1,0 +1,56 @@
+{
+  "scanner_version": "runAdvancedScan_v15_route_boundary_candidates",
+  "crawl_policy": {
+    "source": "ai",
+    "priority_boost_patterns": ["/activites", "/reservation", "/billet", "/experience"],
+    "priority_deprioritize_patterns": ["/blog", "/tag", "/page"],
+    "skip_patterns": []
+  },
+  "crawl_policy_source": "ai",
+  "pages_crawled": 9,
+  "pages_found": 120,
+  "health_score": 70,
+  "url_evidence_summary": {
+    "sitemap": 5,
+    "internal_link": 4,
+    "verified_failed_pages": 0,
+    "suspicious_url_artifacts": 0
+  },
+  "verified_failed_pages": [],
+  "suspicious_url_artifacts": [],
+  "pages": [
+    {"url": "https://www.funbooker.example/", "status_code": 200, "estimated_page_intent": "home", "page_template_family": "home_page", "discovered_from": "seed", "source_pages": []},
+    {"url": "https://www.funbooker.example/activites/paris", "status_code": 200, "estimated_page_intent": "category", "page_template_family": "category_page", "discovered_from": "internal_link", "source_pages": ["https://www.funbooker.example/"]},
+    {"url": "https://www.funbooker.example/activites/lyon", "status_code": 200, "estimated_page_intent": "category", "page_template_family": "category_page", "discovered_from": "sitemap", "source_pages": ["https://www.funbooker.example/sitemap.xml"]},
+    {"url": "https://www.funbooker.example/activites/bordeaux", "status_code": 200, "estimated_page_intent": "category", "page_template_family": "category_page", "discovered_from": "sitemap", "source_pages": ["https://www.funbooker.example/sitemap.xml"]},
+    {"url": "https://www.funbooker.example/experience/escape-game-paris", "status_code": 200, "estimated_page_intent": "listing", "page_template_family": "listing_page", "discovered_from": "internal_link", "source_pages": ["https://www.funbooker.example/activites/paris"]},
+    {"url": "https://www.funbooker.example/experience/croisiere-seine", "status_code": 200, "estimated_page_intent": "listing", "page_template_family": "listing_page", "discovered_from": "internal_link", "source_pages": ["https://www.funbooker.example/activites/paris"]},
+    {"url": "https://www.funbooker.example/reservation/escape-game-paris", "status_code": 200, "estimated_page_intent": "booking", "page_template_family": "booking_page", "discovered_from": "internal_link", "source_pages": ["https://www.funbooker.example/experience/escape-game-paris"]},
+    {"url": "https://www.funbooker.example/blog/old-news", "status_code": 200, "estimated_page_intent": "archive", "page_template_family": "article_page", "discovered_from": "internal_link", "source_pages": ["https://www.funbooker.example/"]},
+    {"url": "https://www.funbooker.example/a-propos", "status_code": 200, "estimated_page_intent": "trust", "page_template_family": "trust_page", "discovered_from": "sitemap", "source_pages": ["https://www.funbooker.example/sitemap.xml"]}
+  ],
+  "grouped_findings": [
+    {
+      "rule_id": "image_alt_text",
+      "severity": "medium",
+      "owner": "You",
+      "template_family": "listing_page",
+      "urls": [
+        "https://www.funbooker.example/experience/escape-game-paris",
+        "https://www.funbooker.example/experience/croisiere-seine",
+        "https://www.funbooker.example/experience/atelier-poterie",
+        "https://www.funbooker.example/experience/stage-pilotage",
+        "https://www.funbooker.example/experience/visite-guidee",
+        "https://www.funbooker.example/experience/cours-cuisine"
+      ],
+      "source_pages": ["https://www.funbooker.example/activites/paris"]
+    },
+    {
+      "rule_id": "product_schema",
+      "severity": "high",
+      "owner": "Your web person",
+      "template_family": "listing_page",
+      "urls": ["https://www.funbooker.example/experience/escape-game-paris", "https://www.funbooker.example/experience/croisiere-seine"]
+    }
+  ]
+}

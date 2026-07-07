@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
-import { Globe, AlertTriangle, CheckCircle2, XCircle, FileText, Search } from "lucide-react";
+import { AlertTriangle, CheckCircle2, XCircle, FileText } from "lucide-react";
 
 export default function Canonicals() {
   const [pages, setPages] = useState([]);
@@ -26,7 +26,6 @@ export default function Canonicals() {
   if (loading) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" /></div>;
 
   const missingCanonical = pages.filter(p => !p.canonical_url && p.status_code === 200);
-  const canonicalTo404 = pages.filter(p => p.canonical_url && p.status_code === 404);
   const sitemapWith404 = pages.filter(p => p.in_sitemap && p.status_code === 404);
   const notInSitemap = pages.filter(p => !p.in_sitemap && p.status_code === 200 && p.indexable);
 

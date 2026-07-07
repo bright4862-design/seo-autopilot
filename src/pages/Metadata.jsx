@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
-import { Zap, CheckCircle2, XCircle, ChevronDown, ChevronUp } from "lucide-react";
+import { Zap, CheckCircle2, ChevronDown, ChevronUp } from "lucide-react";
 
 export default function Metadata() {
   const [recs, setRecs] = useState([]);

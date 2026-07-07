@@ -46,20 +46,21 @@ const CMS_OPTIONS = [
 ];
 
 const LOW_VALUE_PAGE_PATTERNS = [
-  "actualites",
-  "news",
-  "blog",
-  "archive",
-  "archives",
-  "tag",
-  "tags",
-  "category",
-  "categorie",
-  "author",
-  "feed",
-  "rss",
-  "page/",
+  "/actualites",
+  "/news",
+  "/blog",
+  "/archive",
+  "/archives",
+  "/tag/",
+  "/tags/",
+  "/category/",
+  "/categorie/",
+  "/author/",
+  "/feed",
+  "/rss",
+  "/page/",
   "?page=",
+  "&page=",
   "?p=",
 ];
 
@@ -90,6 +91,10 @@ const COMMERCIAL_PAGE_PATTERNS = [
   "product",
   "produit",
   "guide",
+  "listing",
+  "show",
+  "pass",
+  "ticket",
 ];
 
 const LOW_VALUE_RULES = new Set([
@@ -398,10 +403,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
 
   return (
     <div className="space-y-6">
-      <form
-        onSubmit={handleSubmit}
-        className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"
-      >
+      <form onSubmit={handleSubmit} className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex items-start gap-3">
             <div className="rounded-2xl bg-indigo-50 p-3 text-indigo-600">
@@ -409,9 +411,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
             </div>
             <div>
               <p className="text-sm font-medium text-slate-500">FixList scan</p>
-              <h2 className="mt-1 text-2xl font-bold text-slate-950">
-                Create your FixList
-              </h2>
+              <h2 className="mt-1 text-2xl font-bold text-slate-950">Create your FixList</h2>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
                 Enter a website URL and we’ll turn the scan into a plain-English list of what to fix, what matters most, and what may need a developer.
               </p>
@@ -441,9 +441,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h3 className="font-bold text-slate-950">Scan debug</h3>
-                <p className="mt-1 text-xs text-slate-500">
-                  Compact debug summary for testing the final save step.
-                </p>
+                <p className="mt-1 text-xs text-slate-500">Compact debug summary for testing the final save step.</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button type="button" variant="outline" onClick={refreshDebugData}>
@@ -481,9 +479,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
               />
             </div>
             <div>
-              <label className="text-sm font-medium text-slate-700">
-                Business or website name
-              </label>
+              <label className="text-sm font-medium text-slate-700">Business or website name</label>
               <Input
                 value={businessName}
                 onChange={(event) => setBusinessName(event.target.value)}
@@ -512,14 +508,10 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
                     }`}
                   >
                     <div className="flex items-center gap-2">
-                      <CheckCircle2
-                        className={`h-4 w-4 ${active ? "text-indigo-600" : "text-slate-300"}`}
-                      />
+                      <CheckCircle2 className={`h-4 w-4 ${active ? "text-indigo-600" : "text-slate-300"}`} />
                       <span className="font-semibold">{mode.label}</span>
                     </div>
-                    <p className="mt-2 text-xs leading-5 text-slate-500">
-                      {mode.description}
-                    </p>
+                    <p className="mt-2 text-xs leading-5 text-slate-500">{mode.description}</p>
                   </button>
                 );
               })}
@@ -537,9 +529,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
           {optionalOpen ? (
             <div className="grid gap-5 rounded-3xl border border-slate-200 bg-slate-50 p-4 lg:grid-cols-2">
               <div>
-                <label className="text-sm font-medium text-slate-700">
-                  CMS / website builder
-                </label>
+                <label className="text-sm font-medium text-slate-700">CMS / website builder</label>
                 <select
                   value={cmsPlatform}
                   onChange={(event) => setCmsPlatform(event.target.value)}
@@ -552,14 +542,10 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
                     </option>
                   ))}
                 </select>
-                <p className="mt-1 text-xs text-slate-500">
-                  We’ll tailor every fix to your CMS — where to click and what to change.
-                </p>
+                <p className="mt-1 text-xs text-slate-500">We’ll tailor every fix to your CMS — where to click and what to change.</p>
               </div>
               <div>
-                <label className="text-sm font-medium text-slate-700">
-                  Important keywords
-                </label>
+                <label className="text-sm font-medium text-slate-700">Important keywords</label>
                 <textarea
                   value={keywordsText}
                   onChange={(event) => setKeywordsText(event.target.value)}
@@ -568,9 +554,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
                   rows={4}
                   className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:bg-slate-50"
                 />
-                <p className="mt-1 text-xs text-slate-500">
-                  Optional. We’ll check whether your pages clearly target these searches.
-                </p>
+                <p className="mt-1 text-xs text-slate-500">Optional. We’ll check whether your pages clearly target these searches.</p>
               </div>
             </div>
           ) : null}
@@ -595,11 +579,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         ) : null}
 
         <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <Button
-            type="submit"
-            disabled={isLoading}
-            className="bg-indigo-600 text-white hover:bg-indigo-700"
-          >
+          <Button type="submit" disabled={isLoading} className="bg-indigo-600 text-white hover:bg-indigo-700">
             {isLoading ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -612,25 +592,14 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
               </>
             )}
           </Button>
-          <p className="text-xs text-slate-500">
-            Most scans take 1–2 minutes. Start with Quick check, then use Standard or Full site if needed.
-          </p>
+          <p className="text-xs text-slate-500">Most scans take 1–2 minutes. Start with Quick check, then use Standard or Full site if needed.</p>
         </div>
       </form>
     </div>
   );
 }
 
-function buildAiReviewPayload({
-  scanData,
-  businessName,
-  websiteUrl,
-  cmsPlatform,
-  cmsName,
-  cleanedKeywords,
-  scanMode,
-  requestedPathPrefix,
-}) {
+function buildAiReviewPayload({ scanData, businessName, websiteUrl, cmsPlatform, cmsName, cleanedKeywords, scanMode, requestedPathPrefix }) {
   return {
     business_name: businessName,
     website_url: websiteUrl,
@@ -639,20 +608,20 @@ function buildAiReviewPayload({
     important_keywords: cleanedKeywords,
     scan_mode: scanMode,
     ai_review_goal:
-      "Create a customer-friendly FixList that prioritizes business-important pages first. Core service pages, product pages, quote/contact/calculator/comparison pages, and the scanned section landing page should outrank news, blog, archive, tag, feed, pagination, and old monthly archive pages. Group repetitive low-value archive issues instead of listing them one by one.",
+      "Create a customer-friendly FixList that prioritizes business-important pages first. Core service pages, product pages, quote/contact/calculator/comparison pages, booking/listing pages, and the scanned section landing page should outrank news, blog, archive, tag, feed, pagination, and old monthly archive pages. Group repetitive low-value archive issues instead of listing them one by one.",
     cms_instruction: buildCmsInstruction(cmsPlatform),
     business_priority_instruction: {
       rule: "Prioritize by business importance, not just technical severity.",
       high_priority_pages: [
         "homepage or scanned section landing page",
-        "service, product, category, quote, calculator, booking, pricing, comparison, contact, and conversion pages",
+        "service, product, category, listing, booking, quote, calculator, pricing, comparison, contact, and conversion pages",
         "evergreen guides that support commercial intent",
         "pages matching the user-provided important keywords",
       ],
       low_priority_pages: [
         "old news posts",
         "month/year archive pages",
-        "blog index pages",
+        "blog archives",
         "tag/category archive pages",
         "feed/rss/pagination pages",
       ],
@@ -676,35 +645,13 @@ function buildAiReviewPayload({
       demote_low_value_archive_pages: true,
       group_repetitive_archive_issues: true,
     },
-    crawled_pages: firstArray([
-      scanData?.crawled_pages,
-      scanData?.pages,
-      scanData?.scanned_pages,
-      scanData?.crawl_pages,
-    ]).slice(0, 80),
-    raw_fixes: firstArray([
-      scanData?.raw_fixes,
-      scanData?.grouped_findings,
-      scanData?.raw_findings,
-      scanData?.fixes,
-      scanData?.findings,
-      scanData?.recommendations,
-      scanData?.issues,
-    ]).slice(0, 120),
+    crawled_pages: firstArray([scanData?.crawled_pages, scanData?.pages, scanData?.scanned_pages, scanData?.crawl_pages]).slice(0, 80),
+    raw_fixes: firstArray([scanData?.raw_fixes, scanData?.grouped_findings, scanData?.raw_findings, scanData?.fixes, scanData?.findings, scanData?.recommendations, scanData?.issues]).slice(0, 120),
     competitor_results: [],
     discovered_competitors: [],
     recommended_followup_scans: firstArray([scanData?.recommended_followup_scans]),
-    important_page_patterns: unique([
-      ...firstArray([scanData?.important_page_patterns]),
-      requestedPathPrefix || "",
-      ...COMMERCIAL_PAGE_PATTERNS,
-    ]).slice(0, 50),
-    deprioritized_page_patterns: unique([
-      ...firstArray([scanData?.deprioritized_page_patterns]),
-      ...LOW_VALUE_PAGE_PATTERNS,
-      "actualites/YYYY-mois",
-      "news/month archive",
-    ]).slice(0, 50),
+    important_page_patterns: unique([...(firstArray([scanData?.important_page_patterns]) || []), requestedPathPrefix || "", ...COMMERCIAL_PAGE_PATTERNS]).slice(0, 50),
+    deprioritized_page_patterns: unique([...(firstArray([scanData?.deprioritized_page_patterns]) || []), ...LOW_VALUE_PAGE_PATTERNS, "actualites/YYYY-mois", "news/month archive"]).slice(0, 50),
     sitemap_priority_summary: scanData?.sitemap_priority_summary || {},
     crawl_scope: scanData?.crawl_scope || {},
     crawl_warnings: firstArray([scanData?.crawl_warnings]),
@@ -714,89 +661,26 @@ function buildAiReviewPayload({
 }
 
 function getSafeScanBudget(scanMode) {
-  if (scanMode === "advanced") {
-    return { max_pages: 150, max_competitors: 0, max_browser_render_attempts: 1, crawl_timeout_ms: 90000 };
-  }
-  if (scanMode === "deep") {
-    return { max_pages: 85, max_competitors: 0, max_browser_render_attempts: 1, crawl_timeout_ms: 75000 };
-  }
+  if (scanMode === "advanced") return { max_pages: 150, max_competitors: 0, max_browser_render_attempts: 1, crawl_timeout_ms: 90000 };
+  if (scanMode === "deep") return { max_pages: 85, max_competitors: 0, max_browser_render_attempts: 1, crawl_timeout_ms: 75000 };
   return { max_pages: 40, max_competitors: 0, max_browser_render_attempts: 1, crawl_timeout_ms: 45000 };
 }
 
-function mergeScanAndAiReview({
-  scanData,
-  aiData,
-  websiteUrl,
-  businessName,
-  cmsPlatform,
-  cmsName,
-  scanMode,
-  requestedPathPrefix,
-}) {
-  const scannerFixes = firstArray([
-    scanData?.raw_fixes,
-    scanData?.grouped_findings,
-    scanData?.raw_findings,
-    scanData?.fixes,
-    scanData?.findings,
-    scanData?.recommendations,
-    scanData?.issues,
-  ]);
-  const aiFixes = firstArray([
-    aiData?.cleaned_fixes,
-    aiData?.recommendations,
-    aiData?.fixes,
-    aiData?.findings,
-    aiData?.raw_fixes,
-  ]);
-  const finalFixes = simplifyAndPrioritizeFixes(
-    (aiFixes.length > 0 ? aiFixes : scannerFixes).slice(0, 120),
-    { requestedPathPrefix }
-  );
-  const pages = firstArray([
-    scanData?.crawled_pages,
-    scanData?.pages,
-    scanData?.scanned_pages,
-    scanData?.crawl_pages,
-    aiData?.crawled_pages,
-    aiData?.pages,
-  ]).slice(0, 120);
+function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsPlatform, cmsName, scanMode, requestedPathPrefix }) {
+  const scannerFixes = firstArray([scanData?.raw_fixes, scanData?.grouped_findings, scanData?.raw_findings, scanData?.fixes, scanData?.findings, scanData?.recommendations, scanData?.issues]);
+  const aiFixes = firstArray([aiData?.cleaned_fixes, aiData?.recommendations, aiData?.fixes, aiData?.findings, aiData?.raw_fixes]);
+  const finalFixes = simplifyAndPrioritizeFixes((aiFixes.length > 0 ? aiFixes : scannerFixes).slice(0, 120), { requestedPathPrefix });
+  const pages = firstArray([scanData?.crawled_pages, scanData?.pages, scanData?.scanned_pages, scanData?.crawl_pages, aiData?.crawled_pages, aiData?.pages]).slice(0, 120);
   const scannerReadablePages = scanData?.technical_audit_summary?.readable_pages_checked || 0;
   const scannerBlockedPages = scanData?.technical_audit_summary?.scanner_blocked_pages || 0;
   const scannerSaysBlocked = scannerReadablePages === 0 && scannerBlockedPages > 0;
   const healthScore = scannerSaysBlocked
     ? getFirstNumber([scanData?.health_score, scanData?.seo_score, 35])
-    : getFirstNumber([
-        aiData?.health_score,
-        aiData?.seo_score,
-        aiData?.website_health_report?.score,
-        aiData?.website_health_report?.health_score,
-        aiData?.scan_summary?.health_score,
-        scanData?.health_score,
-        scanData?.seo_score,
-        scanData?.scan_summary?.health_score,
-      ]);
-  const pagesCrawled = getFirstNumber([
-    scanData?.pages_crawled,
-    scanData?.pages_scanned,
-    scanData?.technical_audit_summary?.pages_checked,
-    pages.length,
-  ]);
-  const pagesFound = getFirstNumber([
-    scanData?.pages_found,
-    scanData?.pages_discovered,
-    scanData?.pages_crawled,
-    pages.length,
-  ]);
+    : getFirstNumber([aiData?.health_score, aiData?.seo_score, aiData?.website_health_report?.score, aiData?.website_health_report?.health_score, aiData?.scan_summary?.health_score, scanData?.health_score, scanData?.seo_score, scanData?.scan_summary?.health_score]);
+  const pagesCrawled = getFirstNumber([scanData?.pages_crawled, scanData?.pages_scanned, scanData?.technical_audit_summary?.pages_checked, pages.length]);
+  const pagesFound = getFirstNumber([scanData?.pages_found, scanData?.pages_discovered, scanData?.pages_crawled, pages.length]);
   const topActions = firstArray([aiData?.top_recommended_actions, aiData?.recommended_actions]);
-  const simpleSummary =
-    aiData?.customer_summary ||
-    aiData?.plain_english_summary ||
-    aiData?.summary ||
-    aiData?.website_health_report?.overall_explanation ||
-    scanData?.scan_summary?.summary ||
-    scanData?.site_summary?.summary ||
-    buildFallbackSummary({ healthScore, pagesCrawled, finalFixes, cmsName });
+  const simpleSummary = aiData?.customer_summary || aiData?.plain_english_summary || aiData?.summary || aiData?.website_health_report?.overall_explanation || scanData?.scan_summary?.summary || scanData?.site_summary?.summary || buildFallbackSummary({ healthScore, pagesCrawled, finalFixes, cmsName });
 
   return {
     id: `scan_${Date.now()}`,
@@ -814,56 +698,26 @@ function mergeScanAndAiReview({
     pages_found: pagesFound || pages.length || 0,
     customer_summary: simpleSummary,
     simple_summary: simpleSummary,
-    cms_action_plan:
-      aiData?.cms_action_plan ||
-      aiData?.cms_plan ||
-      aiData?.implementation_plan ||
-      buildCmsActionPlan(cmsPlatform, cmsName, finalFixes),
-    top_recommended_actions:
-      topActions.length > 0
-        ? simplifyAndPrioritizeFixes(topActions, { requestedPathPrefix }).slice(0, 5).map(slimAction)
-        : finalFixes.slice(0, 5).map(fixToAction),
+    cms_action_plan: aiData?.cms_action_plan || aiData?.cms_plan || aiData?.implementation_plan || buildCmsActionPlan(cmsPlatform, cmsName, finalFixes),
+    top_recommended_actions: topActions.length > 0 ? simplifyAndPrioritizeFixes(topActions, { requestedPathPrefix }).slice(0, 5).map(slimAction) : finalFixes.slice(0, 5).map(fixToAction),
     recommendations: finalFixes.map(slimFix),
     fixes: finalFixes.map(slimFix),
     findings: finalFixes.map(slimFix),
     crawled_pages: pages.map(slimPage),
     pages: pages.map(slimPage),
     scanned_pages: pages.map(slimPage),
-    scan_summary: slimScanSummary(
-      aiData?.scan_summary || scanData?.scan_summary || scanData?.site_summary || {},
-      healthScore,
-      pagesCrawled,
-      finalFixes
-    ),
-    site_summary: slimScanSummary(
-      scanData?.site_summary || scanData?.scan_summary || {},
-      healthScore,
-      pagesCrawled,
-      finalFixes
-    ),
+    scan_summary: slimScanSummary(aiData?.scan_summary || scanData?.scan_summary || scanData?.site_summary || {}, healthScore, pagesCrawled, finalFixes),
+    site_summary: slimScanSummary(scanData?.site_summary || scanData?.scan_summary || {}, healthScore, pagesCrawled, finalFixes),
     technical_audit_summary: slimTechnicalSummary(scanData?.technical_audit_summary || {}),
-    website_health_report: slimHealthReport(
-      scannerSaysBlocked
-        ? scanData?.website_health_report || scanData?.scan_summary || {}
-        : aiData?.website_health_report || scanData?.website_health_report || {}
-    ),
-    positive_findings: firstArray([
-      aiData?.positive_findings,
-      scanData?.positive_findings,
-      scanData?.site_summary?.positives,
-    ]).slice(0, 8).map(String),
-    health_explanation: scannerSaysBlocked
-      ? scanData?.health_explanation ||
-        "The scanner could not read the page content, so the score is based on scan coverage rather than full SEO checks."
-      : aiData?.health_explanation || scanData?.health_explanation || "",
+    website_health_report: slimHealthReport(scannerSaysBlocked ? scanData?.website_health_report || scanData?.scan_summary || {} : aiData?.website_health_report || scanData?.website_health_report || {}),
+    positive_findings: firstArray([aiData?.positive_findings, scanData?.positive_findings, scanData?.site_summary?.positives]).slice(0, 8).map(String),
+    health_explanation: scannerSaysBlocked ? scanData?.health_explanation || "The scanner could not read the page content, so the score is based on scan coverage rather than full SEO checks." : aiData?.health_explanation || scanData?.health_explanation || "",
     crawl_scope: scanData?.crawl_scope || {},
     sitemap_priority_summary: slimSitemapSummary(scanData?.sitemap_priority_summary || {}),
     important_page_patterns: firstArray([scanData?.important_page_patterns, aiData?.important_page_patterns]).slice(0, 20),
-    deprioritized_page_patterns: unique([
-      ...firstArray([scanData?.deprioritized_page_patterns, aiData?.deprioritized_page_patterns]),
-      ...LOW_VALUE_PAGE_PATTERNS,
-    ]).slice(0, 30),
+    deprioritized_page_patterns: unique([...firstArray([scanData?.deprioritized_page_patterns, aiData?.deprioritized_page_patterns]), ...LOW_VALUE_PAGE_PATTERNS]).slice(0, 30),
     recommended_followup_scans: firstArray([scanData?.recommended_followup_scans, aiData?.recommended_followup_scans]).slice(0, 10),
+    site_fingerprint: aiData?.site_fingerprint || aiData?.scan_summary?.site_fingerprint || {},
     competitor_result: {},
     competitor_results: [],
     competitor_opportunities: [],
@@ -888,10 +742,7 @@ function mergeScanAndAiReview({
       business_priority_rules_enabled: true,
       low_value_archive_patterns: LOW_VALUE_PAGE_PATTERNS,
     },
-    raw: {
-      scanner: slimScannerData(scanData),
-      ai_review: slimAiData(aiData),
-    },
+    raw: { scanner: slimScannerData(scanData), ai_review: slimAiData(aiData) },
   };
 }
 
@@ -899,17 +750,12 @@ function saveScanForDashboard(scanRecord) {
   try {
     const normalizedRecord = slimScanRecord(normalizeScanRecordForStorage(scanRecord));
     const serialized = JSON.stringify(normalizedRecord);
-    [DASHBOARD_LAST_SCAN_KEY, LEGACY_LAST_SCAN_KEY].forEach((key) => {
-      window.localStorage.setItem(key, serialized);
-    });
+    [DASHBOARD_LAST_SCAN_KEY, LEGACY_LAST_SCAN_KEY].forEach((key) => window.localStorage.setItem(key, serialized));
     [DASHBOARD_HISTORY_KEY, LEGACY_HISTORY_KEY].forEach((key) => {
       const existingRaw = window.localStorage.getItem(key);
       const existing = existingRaw ? JSON.parse(existingRaw) : [];
       const history = Array.isArray(existing) ? existing : [];
-      const nextHistory = [
-        normalizedRecord,
-        ...history.filter((item) => item?.website_key !== normalizedRecord.website_key),
-      ].slice(0, 8).map(slimScanRecord);
+      const nextHistory = [normalizedRecord, ...history.filter((item) => item?.website_key !== normalizedRecord.website_key)].slice(0, 8).map(slimScanRecord);
       window.localStorage.setItem(key, JSON.stringify(nextHistory));
     });
     window.localStorage.removeItem(ACTIVE_SCAN_URL_KEY);
@@ -917,9 +763,7 @@ function saveScanForDashboard(scanRecord) {
     window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
   } catch (storageError) {
     console.error("Could not save slim scan for dashboard.", storageError);
-    throw new Error(
-      "The scan finished, but FixList could not save the summary. Clear scans and try again."
-    );
+    throw new Error("The scan finished, but FixList could not save the summary. Clear scans and try again.");
   }
 }
 
@@ -967,15 +811,7 @@ function clearPreviousDashboardScan(activeUrl) {
 
 function clearAllDashboardScanData() {
   try {
-    [
-      DASHBOARD_LAST_SCAN_KEY,
-      LEGACY_LAST_SCAN_KEY,
-      DASHBOARD_HISTORY_KEY,
-      LEGACY_HISTORY_KEY,
-      ACTIVE_SCAN_URL_KEY,
-      ACTIVE_SCAN_STARTED_AT_KEY,
-      SCAN_DEBUG_KEY,
-    ].forEach((key) => window.localStorage.removeItem(key));
+    [DASHBOARD_LAST_SCAN_KEY, LEGACY_LAST_SCAN_KEY, DASHBOARD_HISTORY_KEY, LEGACY_HISTORY_KEY, ACTIVE_SCAN_URL_KEY, ACTIVE_SCAN_STARTED_AT_KEY, SCAN_DEBUG_KEY].forEach((key) => window.localStorage.removeItem(key));
     window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
   } catch (storageError) {
     console.warn("Could not clear scan data.", storageError);
@@ -984,10 +820,7 @@ function clearAllDashboardScanData() {
 
 function writeScanDebug(data) {
   try {
-    window.localStorage.setItem(
-      SCAN_DEBUG_KEY,
-      JSON.stringify({ ...slimDebugData(data), updated_at: new Date().toISOString() })
-    );
+    window.localStorage.setItem(SCAN_DEBUG_KEY, JSON.stringify({ ...slimDebugData(data), updated_at: new Date().toISOString() }));
     window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
   } catch (storageError) {
     console.warn("Could not write compact scan debug data.", storageError);
@@ -996,15 +829,7 @@ function writeScanDebug(data) {
 
 function readScanDebugData() {
   if (typeof window === "undefined") return { raw: {}, parsed: {} };
-  const keys = [
-    DASHBOARD_LAST_SCAN_KEY,
-    LEGACY_LAST_SCAN_KEY,
-    DASHBOARD_HISTORY_KEY,
-    LEGACY_HISTORY_KEY,
-    ACTIVE_SCAN_URL_KEY,
-    ACTIVE_SCAN_STARTED_AT_KEY,
-    SCAN_DEBUG_KEY,
-  ];
+  const keys = [DASHBOARD_LAST_SCAN_KEY, LEGACY_LAST_SCAN_KEY, DASHBOARD_HISTORY_KEY, LEGACY_HISTORY_KEY, ACTIVE_SCAN_URL_KEY, ACTIVE_SCAN_STARTED_AT_KEY, SCAN_DEBUG_KEY];
   const raw = {};
   const parsed = {};
   keys.forEach((key) => {
@@ -1021,24 +846,15 @@ function readScanDebugData() {
 
 function buildCmsInstruction(cmsPlatform) {
   const instructions = {
-    wordpress:
-      "Tailor fixes for WordPress. Mention SEO plugins such as Yoast, Rank Math, or All in One SEO when useful. Explain where to edit titles, meta descriptions, headings, internal links, schema, redirects, and image alt text.",
-    squarespace:
-      "Tailor fixes for Squarespace. Explain steps using page settings, SEO tab, page titles, descriptions, headings, image settings, redirects, and navigation settings.",
-    wix:
-      "Tailor fixes for Wix. Explain steps using Wix SEO settings, page SEO basics, URL slugs, headings, alt text, redirects, and structured data tools.",
-    shopify:
-      "Tailor fixes for Shopify. Explain steps for products, collections, pages, theme editor, navigation, image alt text, URL redirects, and SEO fields.",
-    webflow:
-      "Tailor fixes for Webflow. Explain steps using page settings, CMS collections, SEO settings, Open Graph settings, redirects, alt text, and publishing.",
-    framer:
-      "Tailor fixes for Framer. Explain steps using page settings, metadata, headings, redirects where available, components, images, and publishing.",
-    godaddy:
-      "Tailor fixes for GoDaddy Website Builder. Explain simple steps using page settings, SEO tools, headings, images, navigation, and redirects if available.",
-    joomla:
-      "Tailor fixes for Joomla. Explain steps using Articles, Menus, Global Configuration, Metadata Options, SEF URLs, redirects, extensions, templates, headings, image alt text, and structured data extensions where useful.",
-    custom:
-      "Tailor fixes for a custom or unknown CMS. Explain which changes can be made by a site editor and which likely need a developer.",
+    wordpress: "Tailor fixes for WordPress. Mention SEO plugins such as Yoast, Rank Math, or All in One SEO when useful. Explain where to edit titles, meta descriptions, headings, internal links, schema, redirects, and image alt text.",
+    squarespace: "Tailor fixes for Squarespace. Explain steps using page settings, SEO tab, page titles, descriptions, headings, image settings, redirects, and navigation settings.",
+    wix: "Tailor fixes for Wix. Explain steps using Wix SEO settings, page SEO basics, URL slugs, headings, alt text, redirects, and structured data tools.",
+    shopify: "Tailor fixes for Shopify. Explain steps for products, collections, pages, theme editor, navigation, image alt text, URL redirects, and SEO fields.",
+    webflow: "Tailor fixes for Webflow. Explain steps using page settings, CMS collections, SEO settings, Open Graph settings, redirects, alt text, and publishing.",
+    framer: "Tailor fixes for Framer. Explain steps using page settings, metadata, headings, redirects where available, components, images, and publishing.",
+    godaddy: "Tailor fixes for GoDaddy Website Builder. Explain simple steps using page settings, SEO tools, headings, images, navigation, and redirects if available.",
+    joomla: "Tailor fixes for Joomla. Explain steps using Articles, Menus, Global Configuration, Metadata Options, SEF URLs, redirects, extensions, templates, headings, image alt text, and structured data extensions where useful.",
+    custom: "Tailor fixes for a custom or unknown CMS. Explain which changes can be made by a site editor and which likely need a developer.",
   };
   return instructions[cmsPlatform] || instructions.custom;
 }
@@ -1072,16 +888,8 @@ function applyBusinessPriorityRules(fix = {}, options = {}) {
   const normalized = slimFix({
     ...fix,
     priority: normalizePriority(fix?.priority),
-    customer_category:
-      fix?.customer_category || friendlyCustomerCategory(fix?.category) || "Website improvement",
-    simple_next_step:
-      fix?.simple_next_step ||
-      fix?.next_step ||
-      fix?.ai_recommendation ||
-      fix?.recommended_value ||
-      fix?.recommendation ||
-      fix?.suggested_fix ||
-      "Review this item and update the affected page.",
+    customer_category: fix?.customer_category || friendlyCustomerCategory(fix?.category) || "Website improvement",
+    simple_next_step: fix?.simple_next_step || fix?.next_step || fix?.ai_recommendation || fix?.recommended_value || fix?.recommendation || fix?.suggested_fix || "Review this item and update the affected page.",
   });
   const url = normalized.page_url || normalized.affected_pages?.[0] || "";
   const lowValue = isLowValuePage(url);
@@ -1095,18 +903,25 @@ function applyBusinessPriorityRules(fix = {}, options = {}) {
   let whyItMatters = normalized.why_it_matters;
   let simpleNextStep = normalized.simple_next_step;
 
+  if (isImageAltTextIssue(normalized) && /metadata|meta descriptions|search titles/i.test(title)) {
+    priority = priority === "high" || priority === "critical" ? "medium" : priority;
+    title = normalized.affected_pages?.length > 1 ? "Batch image alt text on listing pages" : "Add missing image descriptions";
+    issueTitle = title;
+    whyItMatters = "These are image accessibility improvements, not metadata rewrites. Add helpful alt text to important images after the highest-impact booking, listing, performance, and conversion issues are handled.";
+    simpleNextStep = normalized.affected_pages?.length > 1
+      ? "Pick one listing as the example, add short useful alt text to important images, then apply the same image rule across the affected listings."
+      : "Add short, useful alt text to the important images on this page.";
+  }
+
   if (lowValue && lowValueRule && !severe && !important) {
     priority = "low";
     title = title.includes("archive") ? title : `Low-priority archive cleanup: ${title}`;
     issueTitle = title;
-    whyItMatters =
-      "This is on a news, blog, or archive page, so it is usually less important than fixing core service or conversion pages first.";
-    simpleNextStep =
-      "Handle this later after the main service, guide, calculator, quote, and contact pages are cleaned up.";
+    whyItMatters = "This is on a news, blog, or archive page, so it is usually less important than fixing core service or conversion pages first.";
+    simpleNextStep = "Handle this later after the main service, guide, calculator, quote, listing, booking, and contact pages are cleaned up.";
   } else if (lowValue && severe && !important) {
     priority = priority === "critical" || priority === "high" ? "medium" : priority;
-    whyItMatters =
-      "This is a technical issue on a lower-priority news or archive page. Fix it after core business pages unless customers actively use this URL.";
+    whyItMatters = "This is a technical issue on a lower-priority news or archive page. Fix it after core business pages unless customers actively use this URL.";
   } else if (important && isSearchAppearanceIssue(normalized)) {
     priority = priority === "low" ? "medium" : priority;
   }
@@ -1118,7 +933,13 @@ function applyBusinessPriorityRules(fix = {}, options = {}) {
     issue_title: issueTitle,
     why_it_matters: whyItMatters,
     simple_next_step: simpleNextStep,
-    business_importance: important ? "important" : lowValue ? "low_value_archive" : "standard",
+    business_importance: normalized.business_importance && normalized.business_importance !== "standard"
+      ? normalized.business_importance
+      : important
+        ? "important"
+        : lowValue
+          ? "low_value_archive"
+          : "standard",
     is_low_value_page: lowValue,
     is_important_business_page: important,
   };
@@ -1128,11 +949,7 @@ function groupLowValueArchiveIssues(fixes) {
   const groups = new Map();
   const keep = [];
   fixes.forEach((fix) => {
-    const shouldGroup =
-      fix.is_low_value_page &&
-      !fix.is_important_business_page &&
-      fix.priority === "low" &&
-      (LOW_VALUE_RULES.has(fix.rule) || LOW_VALUE_RULES.has(fix.category));
+    const shouldGroup = fix.is_low_value_page && !fix.is_important_business_page && fix.priority === "low" && (LOW_VALUE_RULES.has(fix.rule) || LOW_VALUE_RULES.has(fix.category));
     if (!shouldGroup) {
       keep.push(fix);
       return;
@@ -1144,18 +961,12 @@ function groupLowValueArchiveIssues(fixes) {
       fix_id: stableId(`archive_group_${key}`),
       title: getArchiveGroupTitle(fix),
       issue_title: getArchiveGroupTitle(fix),
-      plain_english_explanation:
-        "Several news, blog, or archive pages have the same lower-priority SEO cleanup issue.",
-      plain_english_summary:
-        "Several news, blog, or archive pages have the same lower-priority SEO cleanup issue.",
-      why_it_matters:
-        "These pages matter less than core service, guide, quote, calculator, and contact pages. Grouping them keeps the FixList focused on business impact first.",
-      recommendation:
-        "Review these archive pages later as a batch, or leave them until higher-value pages are fixed.",
-      recommended_value:
-        "Review these archive pages later as a batch, or leave them until higher-value pages are fixed.",
-      simple_next_step:
-        "Fix your important pages first. Then decide whether these archive pages need cleanup at all.",
+      plain_english_explanation: "Several news, blog, or archive pages have the same lower-priority SEO cleanup issue.",
+      plain_english_summary: "Several news, blog, or archive pages have the same lower-priority SEO cleanup issue.",
+      why_it_matters: "These pages matter less than core service, guide, quote, calculator, listing, booking, and contact pages. Grouping them keeps the FixList focused on business impact first.",
+      recommendation: "Review these archive pages later as a batch, or leave them until higher-value pages are fixed.",
+      recommended_value: "Review these archive pages later as a batch, or leave them until higher-value pages are fixed.",
+      simple_next_step: "Fix your important pages first. Then decide whether these archive pages need cleanup at all.",
       affected_pages: [],
       page_url: "",
       current_value: "Grouped low-priority archive/news pages",
@@ -1163,11 +974,7 @@ function groupLowValueArchiveIssues(fixes) {
       priority: "low",
       business_importance: "low_value_archive_group",
     };
-    existing.affected_pages = unique([
-      ...existing.affected_pages,
-      ...firstArray([fix.affected_pages]),
-      fix.page_url,
-    ]).slice(0, 40);
+    existing.affected_pages = unique([...existing.affected_pages, ...firstArray([fix.affected_pages]), fix.page_url]).slice(0, 40);
     existing.page_count = existing.affected_pages.length;
     groups.set(key, existing);
   });
@@ -1175,15 +982,9 @@ function groupLowValueArchiveIssues(fixes) {
 }
 
 function getArchiveGroupTitle(fix = {}) {
-  if (fix.rule === "missing_meta_description" || fix.category === "meta_description") {
-    return "Batch low-priority news/archive descriptions";
-  }
-  if (fix.rule === "long_title" || fix.category === "meta_title") {
-    return "Batch low-priority news/archive titles";
-  }
-  if (fix.rule?.includes("duplicate") || fix.category === "duplicate_content") {
-    return "Batch low-priority duplicate archive fields";
-  }
+  if (fix.rule === "missing_meta_description" || fix.category === "meta_description") return "Batch low-priority news/archive descriptions";
+  if (fix.rule === "long_title" || fix.category === "meta_title") return "Batch low-priority news/archive titles";
+  if (fix.rule?.includes("duplicate") || fix.category === "duplicate_content") return "Batch low-priority duplicate archive fields";
   return "Batch low-priority archive cleanup";
 }
 
@@ -1194,11 +995,7 @@ async function callBase44Function(functionName, payload) {
     callPromise,
     new Promise((_, reject) => {
       window.setTimeout(() => {
-        reject(
-          new Error(
-            `${functionName} did not return within ${Math.round(timeoutMs / 1000)} seconds. The scan may have timed out before saving results.`
-          )
-        );
+        reject(new Error(`${functionName} did not return within ${Math.round(timeoutMs / 1000)} seconds. The scan may have timed out before saving results.`));
       }, timeoutMs);
     }),
   ]);
@@ -1252,11 +1049,7 @@ function slimScannerData(scanner = {}) {
     recommendations_count: getRecommendations(scanner).length,
     pages_preview: getPages(scanner).slice(0, 10).map(slimPage),
     recommendations_preview: getRecommendations(scanner).slice(0, 12).map(slimFix),
-    debug: {
-      ssrf_hardened: scanner.debug?.ssrf_hardened,
-      skipped_urls: scanner.debug?.skipped_urls,
-      sitemap_entries_found: scanner.debug?.sitemap_entries_found,
-    },
+    debug: { ssrf_hardened: scanner.debug?.ssrf_hardened, skipped_urls: scanner.debug?.skipped_urls, sitemap_entries_found: scanner.debug?.sitemap_entries_found },
   };
 }
 
@@ -1270,6 +1063,7 @@ function slimAiData(ai = {}) {
     health_score: ai.health_score || ai.seo_score || ai.website_health_report?.health_score || ai.website_health_report?.score || 0,
     customer_summary: ai.customer_summary || ai.plain_english_summary || ai.summary || ai.website_health_report?.overall_explanation || "",
     website_health_report: slimHealthReport(ai.website_health_report || {}),
+    site_fingerprint: ai.site_fingerprint || ai.scan_summary?.site_fingerprint || {},
     top_recommended_actions: firstArray([ai.top_recommended_actions, ai.recommended_actions]).slice(0, 5).map(slimAction),
     recommendations_count: recommendations.length,
     recommendations_preview: recommendations.slice(0, 12).map(slimFix),
@@ -1314,6 +1108,7 @@ function slimScanRecord(record = {}) {
     important_page_patterns: firstArray([record.important_page_patterns]).slice(0, 20),
     deprioritized_page_patterns: firstArray([record.deprioritized_page_patterns]).slice(0, 20),
     recommended_followup_scans: firstArray([record.recommended_followup_scans]).slice(0, 10),
+    site_fingerprint: record.site_fingerprint || record.scan_summary?.site_fingerprint || {},
     competitor_result: {},
     competitor_results: [],
     competitor_opportunities: [],
@@ -1327,17 +1122,24 @@ function slimFix(fix = {}) {
   const affectedPages = firstArray([fix.affected_pages, fix.pages, fix.page_urls]);
   const fallbackPage = fix.page_url || fix.url || "";
   const id = fix.id || fix.fix_id || fix.fingerprint || stableId(`${fallbackPage}|${fix.category}|${fix.title || fix.issue_title}`);
+  const normalizedRule = fix.rule || "";
+  const normalizedCategory = fix.category || "web_dev";
+  const imageAlt = normalizedRule === "image_alt_text" || /alt/i.test(normalizedRule) || /image_alt/i.test(normalizedCategory);
+  const safeTitle = imageAlt && /metadata cleanup|meta descriptions|search titles/i.test(fix.title || fix.issue_title || "")
+    ? (affectedPages.length > 1 ? "Batch image alt text on listing pages" : "Add missing image descriptions")
+    : cleanString(fix.title || fix.issue_title || "Review this recommendation");
+
   return {
     id,
     fix_id: fix.fix_id || id,
-    rule: fix.rule || "",
-    category: fix.category || "web_dev",
-    customer_category: fix.customer_category || friendlyCustomerCategory(fix.category),
+    rule: normalizedRule,
+    category: normalizedCategory,
+    customer_category: imageAlt ? "Images" : fix.customer_category || friendlyCustomerCategory(fix.category),
     priority: normalizePriority(fix.priority),
     difficulty: fix.difficulty || (fix.requires_developer ? "developer" : "easy"),
     status: fix.status || (fix.requires_developer ? "needs_developer" : fix.can_auto_fix ? "auto_fixed" : "needs_approval"),
-    issue_title: cleanString(fix.issue_title || fix.title || "Review this recommendation"),
-    title: cleanString(fix.title || fix.issue_title || "Review this recommendation"),
+    issue_title: safeTitle,
+    title: safeTitle,
     plain_english_explanation: cleanString(fix.plain_english_explanation || fix.explanation || fix.summary || fix.description || "This recommendation was found during the website scan."),
     plain_english_summary: cleanString(fix.plain_english_summary || fix.plain_english_explanation || fix.explanation || ""),
     why_it_matters: cleanString(fix.why_it_matters || fix.why || fix.impact || "Improving this can help visitors and search engines understand the website more clearly."),
@@ -1345,7 +1147,7 @@ function slimFix(fix = {}) {
     recommended_value: cleanString(fix.recommended_value || fix.recommendation || fix.ai_recommendation || fix.suggested_fix || "Review this recommendation."),
     simple_next_step: cleanString(fix.simple_next_step || fix.next_step || fix.recommended_value || fix.recommendation || "Review this item and update the affected page."),
     page_url: fallbackPage,
-    affected_pages: unique([...(affectedPages || []), ...(fallbackPage ? [fallbackPage] : [])].map(String)).slice(0, 40),
+    affected_pages: unique([...(affectedPages || []), ...(fallbackPage ? [fallbackPage] : [])].map(String)).slice(0, 100),
     current_value: clampText(fix.current_value || fix.current || "", 240),
     can_auto_fix: Boolean(fix.can_auto_fix),
     requires_approval: fix.requires_approval !== false,
@@ -1358,6 +1160,18 @@ function slimFix(fix = {}) {
     business_importance: fix.business_importance || "standard",
     is_low_value_page: Boolean(fix.is_low_value_page),
     is_important_business_page: Boolean(fix.is_important_business_page),
+    page_type: fix.page_type || "",
+    page_template_family: fix.page_template_family || "",
+    primary_defect_class: fix.primary_defect_class || "",
+    meta_rewrite_allowed: Boolean(fix.meta_rewrite_allowed),
+    meta_regeneration_gate: fix.meta_regeneration_gate || "",
+    page_value_score: Number(fix.page_value_score || 0),
+    page_value_label: fix.page_value_label || "",
+    evidence_confidence: Number(fix.evidence_confidence || 0),
+    site_fit_score: Number(fix.site_fit_score || 0),
+    business_impact_score: Number(fix.business_impact_score || 0),
+    reach_score: Number(fix.reach_score || 0),
+    overall_priority_score: Number(fix.overall_priority_score || 0),
   };
 }
 
@@ -1402,13 +1216,7 @@ function slimAction(action = {}) {
 }
 
 function fixToAction(fix = {}) {
-  return slimAction({
-    fix_id: fix.fix_id || fix.id,
-    title: fix.title || fix.issue_title,
-    reason: fix.why_it_matters || fix.plain_english_explanation,
-    priority: normalizePriority(fix.priority),
-    affected_pages: fix.affected_pages || [],
-  });
+  return slimAction({ fix_id: fix.fix_id || fix.id, title: fix.title || fix.issue_title, reason: fix.why_it_matters || fix.plain_english_explanation, priority: normalizePriority(fix.priority), affected_pages: fix.affected_pages || [] });
 }
 
 function slimTechnicalSummary(summary = {}) {
@@ -1443,6 +1251,7 @@ function slimScanSummary(summary = {}, healthScore = 0, pagesCrawled = 0, fixes 
     summary: summary.summary || summary.plain_english_summary || "",
     plain_english_summary: summary.plain_english_summary || summary.summary || "",
     scan_focus: summary.scan_focus || {},
+    site_fingerprint: summary.site_fingerprint || {},
     website_health_report: summary.website_health_report ? slimHealthReport(summary.website_health_report) : undefined,
   };
 }
@@ -1462,21 +1271,21 @@ function slimHealthReport(report = {}) {
 }
 
 function slimSitemapSummary(summary = {}) {
-  return {
-    strategy: summary.strategy || "",
-    max_pages_enforced: summary.max_pages_enforced || 0,
-    skipped_urls: summary.skipped_urls || {},
-  };
+  return { strategy: summary.strategy || "", max_pages_enforced: summary.max_pages_enforced || 0, skipped_urls: summary.skipped_urls || {} };
 }
 
 function isLowValuePage(url = "") {
   const normalized = normalizePathText(url);
   if (!normalized) return false;
-  if (/\/(20\d{2})([-/](janvier|fevrier|février|mars|avril|mai|juin|juillet|aout|août|septembre|octobre|novembre|decembre|décembre|january|february|march|april|may|june|july|august|september|october|november|december))?(\/|$)/i.test(normalized)) {
-    return true;
-  }
-  if (/\/(20\d{2})[-/]?\d{1,2}(\/|$)/i.test(normalized)) return true;
-  return LOW_VALUE_PAGE_PATTERNS.some((pattern) => normalized.includes(pattern));
+  const pathOnly = normalized.split(/[?#]/)[0];
+  const queryOnly = normalized.includes("?") ? normalized.slice(normalized.indexOf("?")) : "";
+  const value = `${pathOnly}${queryOnly}`;
+  if (/\/(actualites|news|blog|archives?|feed|rss)(\/|$)/i.test(pathOnly)) return true;
+  if (/\/(tag|tags|category|categorie|author|page)\//i.test(pathOnly)) return true;
+  if (/[?&](page|p|tag|category)=/i.test(queryOnly)) return true;
+  if (/\/(actualites|news|blog)\/(20\d{2})([-/](janvier|fevrier|février|mars|avril|mai|juin|juillet|aout|août|septembre|octobre|novembre|decembre|décembre|january|february|march|april|may|june|july|august|september|october|november|december))?(\/|$)/i.test(pathOnly)) return true;
+  if (/\/(actualites|news|blog)\/(20\d{2})[-/]?\d{1,2}(\/|$)/i.test(pathOnly)) return true;
+  return LOW_VALUE_PAGE_PATTERNS.some((pattern) => value.includes(pattern));
 }
 
 function isImportantBusinessPage(url = "", options = {}) {
@@ -1503,6 +1312,12 @@ function isSearchAppearanceIssue(fix = {}) {
   return ["meta", "title", "description", "duplicate"].some((term) => rule.includes(term) || category.includes(term));
 }
 
+function isImageAltTextIssue(fix = {}) {
+  const rule = String(fix.rule || "").toLowerCase();
+  const category = String(fix.category || "").toLowerCase();
+  return rule.includes("image_alt") || rule.includes("alt_text") || category.includes("image_alt");
+}
+
 function businessSortScore(fix = {}, options = {}) {
   const priority = priorityWeight(fix.priority) * 100;
   const url = fix.page_url || fix.affected_pages?.[0] || "";
@@ -1512,7 +1327,8 @@ function businessSortScore(fix = {}, options = {}) {
   const importance = important ? 35 : lowValue ? -35 : 0;
   const severity = severe ? 12 : 0;
   const groupedPenalty = fix.business_importance === "low_value_archive_group" ? -5 : 0;
-  return priority + importance + severity + groupedPenalty;
+  const aiPriority = Number(fix.overall_priority_score || 0) / 10;
+  return priority + importance + severity + groupedPenalty + aiPriority;
 }
 
 function normalizePriority(priority) {
@@ -1592,9 +1408,7 @@ function normalizeCmsValue(value) {
 
 function normalizePathText(value) {
   try {
-    if (/^https?:\/\//i.test(String(value))) {
-      return new URL(value).pathname.toLowerCase();
-    }
+    if (/^https?:\/\//i.test(String(value))) return new URL(value).pathname.toLowerCase();
   } catch {
     // fall through
   }
@@ -1622,54 +1436,17 @@ function getFirstNumber(values) {
 
 function getRecommendations(record) {
   if (!record) return [];
-  return firstArray([
-    record.recommendations,
-    record.fixes,
-    record.findings,
-    record.raw_fixes,
-    record.grouped_findings,
-    record.cleaned_fixes,
-    record.raw?.recommendations,
-    record.raw?.fixes,
-    record.raw?.findings,
-    record.raw?.scanner?.raw_fixes,
-    record.raw?.scanner?.grouped_findings,
-    record.raw?.scanner?.recommendations,
-    record.raw?.ai_review?.cleaned_fixes,
-    record.raw?.ai_review?.recommendations,
-  ]);
+  return firstArray([record.recommendations, record.fixes, record.findings, record.raw_fixes, record.grouped_findings, record.cleaned_fixes, record.raw?.recommendations, record.raw?.fixes, record.raw?.findings, record.raw?.scanner?.raw_fixes, record.raw?.scanner?.grouped_findings, record.raw?.scanner?.recommendations, record.raw?.ai_review?.cleaned_fixes, record.raw?.ai_review?.recommendations]);
 }
 
 function getPages(record) {
   if (!record) return [];
-  return firstArray([
-    record.crawled_pages,
-    record.pages,
-    record.scanned_pages,
-    record.crawl_pages,
-    record.raw?.crawled_pages,
-    record.raw?.pages,
-    record.raw?.scanner?.crawled_pages,
-    record.raw?.scanner?.pages,
-  ]);
+  return firstArray([record.crawled_pages, record.pages, record.scanned_pages, record.crawl_pages, record.raw?.crawled_pages, record.raw?.pages, record.raw?.scanner?.crawled_pages, record.raw?.scanner?.pages]);
 }
 
 function getHealthScore(record) {
   if (!record) return 0;
-  return getFirstNumber([
-    record.health_score,
-    record.seo_score,
-    record.scan_summary?.health_score,
-    record.website_health_report?.score,
-    record.website_health_report?.health_score,
-    record.raw?.health_score,
-    record.raw?.seo_score,
-    record.raw?.scanner?.health_score,
-    record.raw?.scanner?.seo_score,
-    record.raw?.ai_review?.health_score,
-    record.raw?.ai_review?.website_health_report?.score,
-    record.raw?.ai_review?.website_health_report?.health_score,
-  ]);
+  return getFirstNumber([record.health_score, record.seo_score, record.scan_summary?.health_score, record.website_health_report?.score, record.website_health_report?.health_score, record.raw?.health_score, record.raw?.seo_score, record.raw?.scanner?.health_score, record.raw?.scanner?.seo_score, record.raw?.ai_review?.health_score, record.raw?.ai_review?.website_health_report?.score, record.raw?.ai_review?.website_health_report?.health_score]);
 }
 
 function cleanString(value) {

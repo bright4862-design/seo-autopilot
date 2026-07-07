@@ -1,3 +1,5 @@
+import asyncio
+import hashlib
 import time
 from urllib.parse import urldefrag, urlparse
 
@@ -5,6 +7,7 @@ import httpx
 
 from .artifact_filter import MAX_ARTIFACT_EVIDENCE, is_artifact_url, record_artifact
 from .extract import extract_links, extract_page
+from .security import is_public_http_url, safe_get
 from .sitemap import load_sitemap_urls
 
 VERSION = "python_scanner_v1"
@@ -19,11 +22,13 @@ SCAN_BUDGETS = {
 TRUST_PATHS = ["/about", "/contact", "/privacy", "/terms", "/security", "/legal", "/mentions-legales", "/cgv"]
 
 
-async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: str = "advanced", **kwargs) -> dict:
+async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: str = "advanced", concurrency: int = 8, **kwargs) -> dict:
     budget = SCAN_BUDGETS.get(str(scan_mode or "advanced").lower(), SCAN_BUDGETS["advanced"])
     start_url = normalize_url(website_url)
     if not start_url:
         return {"success": False, "version": VERSION, "error": "Missing or invalid website_url."}
+    if not is_public_http_url(start_url):
+        return {"success": False, "version": VERSION, "error": "website_url must resolve to a public host."}
 
     parsed_start = urlparse(start_url)
     origin = f"{parsed_start.scheme}://{parsed_start.netloc}"
@@ -60,7 +65,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
 
     async with httpx.AsyncClient(
         timeout=12,
-        follow_redirects=True,
+        follow_redirects=False,
         headers={"User-Agent": "Mozilla/5.0 (compatible; FixListPythonScanner/1.0)"},
     ) as client:
         sitemap_urls = await load_sitemap_urls(client, origin, prefix, budget["max_pages"] * 5, artifacts)
@@ -68,22 +73,61 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
             enqueue(url, "sitemap", "/sitemap.xml", "")
 
         deadline = time.monotonic() + budget["timeout"]
-        while queue and len(pages) < budget["max_pages"] and time.monotonic() < deadline:
-            url = queue.pop(0)
-            queued.discard(url)
-            if url in seen:
-                continue
-            seen.add(url)
+        max_pages = budget["max_pages"]
+        state_lock = asyncio.Lock()
+        crawl_state = {"claimed": 0, "in_flight": 0}
 
-            page = await fetch_and_extract(client, url, discovery.get(url, empty_discovery()))
-            pages.append(page)
-
-            html = page.pop("_html", "")
-            if page.get("status_code") == 200 and html:
-                for link in extract_links(html, page.get("final_url") or url):
-                    if len(queue) + len(seen) >= budget["max_pages"] * 8:
+        async def worker() -> None:
+            while True:
+                target = None
+                snapshot = None
+                async with state_lock:
+                    if time.monotonic() >= deadline or crawl_state["claimed"] >= max_pages:
+                        return
+                    while queue:
+                        candidate = queue.pop(0)
+                        queued.discard(candidate)
+                        if candidate in seen:
+                            continue
+                        target = candidate
                         break
-                    enqueue(link["href"], "internal_link", page.get("path") or "", link.get("text") or "")
+                    if target is None:
+                        # Nothing queued: stop only when no other worker might enqueue more.
+                        if crawl_state["in_flight"] == 0:
+                            return
+                    else:
+                        seen.add(target)
+                        crawl_state["claimed"] += 1
+                        crawl_state["in_flight"] += 1
+                        # Snapshot discovery lists so a concurrent merge can't mutate mid-read.
+                        record = discovery.get(target, empty_discovery())
+                        snapshot = {key: list(value) for key, value in record.items()}
+                if target is None:
+                    await asyncio.sleep(0.01)
+                    continue
+
+                page = None
+                discovered = []
+                try:
+                    page = await fetch_and_extract(client, target, snapshot)
+                    html = page.pop("_html", "")
+                    # Parse links OUTSIDE the lock (CPU-bound) so workers don't block each other.
+                    discovered = extract_links(html, page.get("final_url") or target) if (page.get("status_code") == 200 and html) else []
+                except Exception:
+                    page = extract_page("", target, target, 0, "", snapshot, fetch_error="worker_processing_failed")
+                    discovered = []
+                finally:
+                    async with state_lock:
+                        if page is not None:
+                            pages.append(page)
+                        crawl_state["in_flight"] -= 1
+                        for link in discovered:
+                            if len(queue) + len(seen) >= max_pages * 8:
+                                break
+                            enqueue(link["href"], "internal_link", page.get("path") or "", link.get("text") or "")
+
+        workers = [asyncio.create_task(worker()) for _ in range(max(1, concurrency))]
+        await asyncio.gather(*workers)
 
     findings = build_findings(pages)
     grouped = group_findings(findings)
@@ -131,8 +175,12 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
 
 
 async def fetch_and_extract(client: httpx.AsyncClient, url: str, discovery: dict) -> dict:
+    if not is_public_http_url(url):
+        return extract_page("", url, url, 0, "", discovery, fetch_error="blocked_non_public_host")
     try:
-        response = await client.get(url)
+        response = await safe_get(client, url)
+        if response is None:
+            return extract_page("", url, url, 0, "", discovery, fetch_error="blocked_non_public_redirect")
         content_type = response.headers.get("content-type", "")
         html = response.text if "html" in content_type or "xml" in content_type or not content_type else ""
         page = extract_page(html, url, str(response.url), response.status_code, content_type, discovery)
@@ -147,6 +195,8 @@ def build_findings(pages: list[dict]) -> list[dict]:
     for page in pages:
         path = page.get("path") or "/"
         if page.get("url_confidence") == "crawler_artifact":
+            continue
+        if str(page.get("fetch_error") or "").startswith("blocked_"):
             continue
         status_code = int(page.get("status_code") or 0)
         if status_code >= 400 or page.get("fetch_error"):
@@ -248,6 +298,8 @@ def page_evidence(page: dict) -> dict:
 
 
 def is_verified_failed(page: dict) -> bool:
+    if str(page.get("fetch_error") or "").startswith("blocked_"):
+        return False
     return bool((int(page.get("status_code") or 0) >= 400 or page.get("fetch_error")) and page.get("url_confidence") != "crawler_artifact")
 
 
@@ -268,6 +320,11 @@ def normalize_url(value: str) -> str:
     try:
         parsed = urlparse(raw)
         if parsed.scheme not in ["http", "https"] or not parsed.netloc:
+            return ""
+        host = parsed.hostname or ""
+        if any(ch.isspace() for ch in parsed.netloc):
+            return ""
+        if "." not in host and host != "localhost":
             return ""
         clean, _ = urldefrag(raw)
         return clean.rstrip("/") if parsed.path != "/" else clean
@@ -325,4 +382,4 @@ def friendly_category(category: str) -> str:
 
 
 def stable_id(value: str) -> str:
-    return "finding_" + str(abs(hash(value)) % 10_000_000_000)
+    return "finding_" + hashlib.sha1(str(value).encode("utf-8")).hexdigest()[:12]

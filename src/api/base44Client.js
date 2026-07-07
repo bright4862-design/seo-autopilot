@@ -79,11 +79,18 @@ function decorateFunctionError(error) {
   return wrapped;
 }
 
+function sanitizeFunctionPayload(functionName, payload) {
+  if (functionName !== 'runAdvancedScan' || !payload || typeof payload !== 'object') return payload;
+  const { max_pages, max_browser_render_attempts, crawl_timeout_ms, ...cleanPayload } = payload;
+  return cleanPayload;
+}
+
 if (rawBase44?.functions?.invoke) {
   const originalInvoke = rawBase44.functions.invoke.bind(rawBase44.functions);
   rawBase44.functions.invoke = async (...args) => {
+    const [functionName, payload, ...rest] = args;
     try {
-      return await originalInvoke(...args);
+      return await originalInvoke(functionName, sanitizeFunctionPayload(functionName, payload), ...rest);
     } catch (error) {
       throw decorateFunctionError(error);
     }

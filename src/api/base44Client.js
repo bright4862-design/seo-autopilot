@@ -3,7 +3,6 @@ import { appParams } from '@/lib/app-params';
 
 const { appId, token, functionsVersion, appBaseUrl } = appParams;
 
-// Create a client with authentication required
 const rawBase44 = createClient({
   appId,
   token,
@@ -13,23 +12,8 @@ const rawBase44 = createClient({
   appBaseUrl
 });
 
-const RECOMMENDATION_ARRAY_KEYS = [
-  'recommendations',
-  'cleaned_fixes',
-  'fixes',
-  'findings',
-  'raw_fixes',
-  'raw_findings',
-  'grouped_findings',
-  'issues',
-];
-
-const PAGE_ARRAY_KEYS = [
-  'pages',
-  'crawled_pages',
-  'scanned_pages',
-  'crawl_pages',
-];
+const RECOMMENDATION_ARRAY_KEYS = ['recommendations', 'cleaned_fixes', 'fixes', 'findings', 'raw_fixes', 'raw_findings', 'grouped_findings', 'issues'];
+const PAGE_ARRAY_KEYS = ['pages', 'crawled_pages', 'scanned_pages', 'crawl_pages'];
 
 function parsePossibleJson(value) {
   if (!value || typeof value !== 'string') return null;
@@ -44,43 +28,23 @@ function parsePossibleJson(value) {
 }
 
 function getErrorPayload(error) {
-  const candidates = [
-    error?.response?.data,
-    error?.data,
-    error?.body,
-    error?.cause?.response?.data,
-    error?.cause?.data,
-    error?.cause?.body,
-    parsePossibleJson(error?.message),
-  ];
-
+  const candidates = [error?.response?.data, error?.data, error?.body, error?.cause?.response?.data, error?.cause?.data, error?.cause?.body, parsePossibleJson(error?.message)];
   for (const candidate of candidates) {
     if (candidate && typeof candidate === 'object') {
-      return {
-        status: error?.response?.status || candidate.status || candidate.status_code || '',
-        statusText: error?.response?.statusText || candidate.statusText || '',
-        ...candidate,
-      };
+      return { status: error?.response?.status || candidate.status || candidate.status_code || '', statusText: error?.response?.statusText || candidate.statusText || '', ...candidate };
     }
   }
-
-  return {
-    status: error?.response?.status || '',
-    statusText: error?.response?.statusText || '',
-    message: error?.message || '',
-  };
+  return { status: error?.response?.status || '', statusText: error?.response?.statusText || '', message: error?.message || '' };
 }
 
 function formatFunctionError(error) {
   const payload = getErrorPayload(error);
   const message = payload.error || payload.message || payload.detail || payload.statusText || error?.message || 'Base44 function request failed.';
   const parts = [String(message)];
-
   if (payload.status) parts.push(`HTTP ${payload.status}`);
   if (payload.version) parts.push(`version: ${payload.version}`);
   if (Array.isArray(payload.received_keys)) parts.push(`received_keys: ${payload.received_keys.join(', ') || 'none'}`);
   if (Array.isArray(payload.resolved_keys)) parts.push(`resolved_keys: ${payload.resolved_keys.join(', ') || 'none'}`);
-
   return { message: parts.join(' · '), payload };
 }
 
@@ -111,39 +75,32 @@ function sanitizeFunctionResponse(functionName, response) {
 
 function sanitizeResponseContainer(value, depth = 0) {
   if (!value || typeof value !== 'object' || depth > 5) return;
-
   const blockedPageKeys = collectBlockedPageKeys(value);
+  const coverage = getCoverageSnapshot(value);
   const keptFixIds = new Set();
 
   for (const key of RECOMMENDATION_ARRAY_KEYS) {
-    if (Array.isArray(value[key])) {
-      value[key] = sanitizeRecommendationArray(value[key], blockedPageKeys);
-      for (const item of value[key]) addFixId(keptFixIds, item);
-    }
+    if (!Array.isArray(value[key])) continue;
+    value[key] = dedupeRecommendations(value[key].map((item) => sanitizeRecommendation(item, blockedPageKeys, coverage)).filter(Boolean));
+    for (const item of value[key]) addFixId(keptFixIds, item);
   }
 
-  if (Array.isArray(value.top_recommended_actions)) value.top_recommended_actions = sanitizeActions(value.top_recommended_actions, blockedPageKeys, keptFixIds);
-  if (Array.isArray(value.recommended_actions)) value.recommended_actions = sanitizeActions(value.recommended_actions, blockedPageKeys, keptFixIds);
+  if (Array.isArray(value.top_recommended_actions)) value.top_recommended_actions = sanitizeActions(value.top_recommended_actions, blockedPageKeys, keptFixIds, coverage);
+  if (Array.isArray(value.recommended_actions)) value.recommended_actions = sanitizeActions(value.recommended_actions, blockedPageKeys, keptFixIds, coverage);
 
   for (const nestedKey of ['data', 'result', 'body', 'payload']) {
     if (value[nestedKey] && typeof value[nestedKey] === 'object') sanitizeResponseContainer(value[nestedKey], depth + 1);
   }
 }
 
-function sanitizeRecommendationArray(items, blockedPageKeys = new Set()) {
-  return items.map((item) => sanitizeRecommendation(item, blockedPageKeys)).filter(Boolean);
-}
-
-function sanitizeRecommendation(item, blockedPageKeys = new Set()) {
+function sanitizeRecommendation(item, blockedPageKeys = new Set(), coverage = {}) {
   if (!item || typeof item !== 'object') return item;
-  const originalPages = [...(firstArray([item.affected_pages, item.pages, item.page_urls]) || []), item.page_url || item.url || ''];
+  const originalPages = [...firstArray([item.affected_pages, item.pages, item.page_urls]), item.page_url || item.url || ''];
   const affectedPages = cleanPageList(originalPages);
-  const artifactOnly = affectedPages.length === 0 && hasArtifactUrl(originalPages);
-  if (artifactOnly) return null;
+  if (affectedPages.length === 0 && hasArtifactUrl(originalPages)) return null;
 
   const blockedAccess = isBlockedAccessRecommendation(item);
   let displayPages = affectedPages;
-
   if (!blockedAccess && blockedPageKeys.size > 0 && affectedPages.length > 0) {
     displayPages = affectedPages.filter((page) => !blockedPageKeys.has(normalizePageKey(page)));
     if (displayPages.length === 0) return null;
@@ -153,11 +110,24 @@ function sanitizeRecommendation(item, blockedPageKeys = new Set()) {
   next.title = cleanFixTitle(next.title || next.issue_title || '');
   next.issue_title = cleanFixTitle(next.issue_title || next.title || '');
 
+  if (!blockedAccess && lowEvidenceCoverage(coverage)) {
+    if (isTrustPageRecommendation(next)) return null;
+    if (isLowValueMetaRecommendation(next)) return null;
+    if (isImageAltIssue(next) && (displayPages.length <= 1 || isOneMissingAlt(next))) return null;
+  }
+
   if (displayPages.length > 0) {
     next.affected_pages = displayPages;
     next.pages = displayPages;
     next.page_urls = displayPages;
     next.page_url = isArtifactUrl(next.page_url) || isBlockedPageKey(next.page_url, blockedPageKeys) ? displayPages[0] : (next.page_url || displayPages[0]);
+  }
+
+  if (!blockedAccess && hasBlockedAccessSteps(next)) {
+    const steps = fallbackSteps(next);
+    next.what_to_do_steps = steps;
+    next.what_to_do = steps;
+    next.fix_steps = steps;
   }
 
   if (!blockedAccess && displayPages.length <= 1 && isRepeatedTemplateText(`${next.title} ${next.issue_title} ${next.plain_english_explanation || ''}`)) {
@@ -166,56 +136,59 @@ function sanitizeRecommendation(item, blockedPageKeys = new Set()) {
     next.plain_english_explanation = cleanSinglePageExplanation(next.plain_english_explanation || next.explanation || 'Review this issue on the affected page.');
   }
 
-  if (isImageAltIssue(next) && isOneMissingAlt(next) && ['critical', 'high'].includes(String(next.priority || '').toLowerCase())) {
-    next.priority = 'medium';
-  }
-
+  if (isImageAltIssue(next) && isOneMissingAlt(next) && ['critical', 'high'].includes(String(next.priority || '').toLowerCase())) next.priority = 'medium';
   return next;
 }
 
-function sanitizeActions(actions, blockedPageKeys = new Set(), keptFixIds = new Set()) {
-  return actions
-    .map((action) => sanitizeAction(action, blockedPageKeys))
-    .filter((action) => action && (!action.fix_id || keptFixIds.size === 0 || keptFixIds.has(action.fix_id)));
+function sanitizeActions(actions, blockedPageKeys = new Set(), keptFixIds = new Set(), coverage = {}) {
+  return actions.map((action) => sanitizeAction(action, blockedPageKeys, coverage)).filter((action) => action && (!action.fix_id || keptFixIds.size === 0 || keptFixIds.has(action.fix_id)));
 }
 
-function sanitizeAction(action, blockedPageKeys = new Set()) {
+function sanitizeAction(action, blockedPageKeys = new Set(), coverage = {}) {
   if (!action || typeof action !== 'object') return action;
   const next = { ...action };
   next.title = cleanFixTitle(next.title || next.issue_title || '');
   next.issue_title = cleanFixTitle(next.issue_title || next.title || '');
   next.affected_pages = cleanPageList(firstArray([next.affected_pages, next.pages, next.page_urls])).filter((page) => !blockedPageKeys.has(normalizePageKey(page)) || isBlockedAccessRecommendation(next));
+  if (lowEvidenceCoverage(coverage) && !isBlockedAccessRecommendation(next) && (isTrustPageRecommendation(next) || isLowValueMetaRecommendation(next))) return null;
   return hasArtifactUrl([next.page_url, next.url, ...(next.affected_pages || [])]) && next.affected_pages.length === 0 ? null : next;
 }
 
 function collectBlockedPageKeys(value) {
   const blocked = new Set();
-
   for (const key of PAGE_ARRAY_KEYS) {
     for (const page of Array.isArray(value[key]) ? value[key] : []) {
       if (isBlockedAccessPage(page)) addPageKey(blocked, page?.final_url || page?.url || page?.path || '');
     }
   }
-
   for (const key of RECOMMENDATION_ARRAY_KEYS) {
     for (const item of Array.isArray(value[key]) ? value[key] : []) {
       if (!isBlockedAccessRecommendation(item)) continue;
-      for (const page of cleanPageList([...(firstArray([item.affected_pages, item.pages, item.page_urls]) || []), item.page_url || item.url || ''])) addPageKey(blocked, page);
+      for (const page of cleanPageList([...firstArray([item.affected_pages, item.pages, item.page_urls]), item.page_url || item.url || ''])) addPageKey(blocked, page);
     }
   }
-
   return blocked;
+}
+
+function getCoverageSnapshot(value = {}) {
+  const pages = Math.max(numberValue(value.pages_crawled), numberValue(value.pages_scanned), numberValue(value.scan_summary?.pages_crawled), numberValue(value.scan_summary?.pages_scanned), numberValue(value.technical_audit_summary?.pages_crawled), ...PAGE_ARRAY_KEYS.map((key) => Array.isArray(value[key]) ? value[key].length : 0));
+  const found = Math.max(numberValue(value.pages_found), numberValue(value.scan_summary?.pages_found), numberValue(value.technical_audit_summary?.pages_found), pages);
+  return { pages, found };
+}
+
+function lowEvidenceCoverage(coverage = {}) {
+  return Number(coverage.pages || 0) > 0 && Number(coverage.pages || 0) < 10;
 }
 
 function isBlockedAccessPage(page = {}) {
   const text = `${page?.status_code || ''} ${page?.fetch_error || ''} ${page?.title || ''} ${page?.h1 || ''} ${page?.meta_description || ''}`.toLowerCase();
-  return Number(page?.status_code || 0) === 429 || /429|too many requests|rate[- ]?limit|rate limited|bot protection|cloudflare|verifying your connection|checking your browser/.test(text);
+  return Number(page?.status_code || 0) === 429 || /429|too many requests|rate[- ]?limit|rate limited|verifying your connection|checking your browser/.test(text);
 }
 
 function isBlockedAccessRecommendation(item = {}) {
   const text = `${item?.rule || ''} ${item?.category || ''} ${item?.title || ''} ${item?.issue_title || ''} ${item?.current_value || ''} ${item?.plain_english_explanation || ''} ${item?.recommended_value || ''} ${item?.source || ''}`.toLowerCase();
   const status = Number(item?.status_code || item?.current_status_code || item?.http_status || item?.evidence?.status_code || 0);
-  return status === 429 || /429|too many requests|rate[- ]?limit|rate limited|bot protection|cloudflare|verifying your connection|connection verification|blocked_page_429|rate_limited_page|crawler access|scan coverage/.test(text);
+  return status === 429 || /429|too many requests|rate[- ]?limit|rate limited|blocked_page_429|rate_limited_page|crawler access|scan coverage/.test(text);
 }
 
 function cleanPageList(values = []) {
@@ -232,19 +205,30 @@ function cleanPageList(values = []) {
   return output;
 }
 
-function addPageKey(target, value) {
-  const key = normalizePageKey(value);
-  if (key) target.add(key);
+function dedupeRecommendations(items = []) {
+  const seen = new Set();
+  const output = [];
+  for (const item of items) {
+    const key = semanticRecommendationKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(item);
+  }
+  return output;
 }
 
-function addFixId(target, item = {}) {
-  const id = item?.fix_id || item?.id;
-  if (id) target.add(id);
+function semanticRecommendationKey(item = {}) {
+  const pages = cleanPageList([...firstArray([item.affected_pages, item.pages, item.page_urls]), item.page_url || item.url || '']).map(normalizePageKey).slice(0, 5).join('|');
+  const title = cleanFixTitle(item.title || item.issue_title || '').toLowerCase();
+  const rule = String(item.rule || '').toLowerCase();
+  const category = String(item.category || '').toLowerCase();
+  if (isTrustPageRecommendation(item)) return `trust|${rule || category}|${title}`;
+  return `${rule}|${category}|${title}|${pages}`;
 }
 
-function isBlockedPageKey(value, blockedPageKeys) {
-  return Boolean(value && blockedPageKeys?.has?.(normalizePageKey(value)));
-}
+function addPageKey(target, value) { const key = normalizePageKey(value); if (key) target.add(key); }
+function addFixId(target, item = {}) { const id = item?.fix_id || item?.id; if (id) target.add(id); }
+function isBlockedPageKey(value, blockedPageKeys) { return Boolean(value && blockedPageKeys?.has?.(normalizePageKey(value))); }
 
 function normalizePageKey(value) {
   try {
@@ -283,21 +267,25 @@ function cleanSinglePageExplanation(value) {
     .trim();
 }
 
-function isRepeatedTemplateText(value) {
-  return /repeated|template-level|shared template|template issue/i.test(String(value || ''));
+function hasBlockedAccessSteps(item = {}) {
+  return /429|rate[- ]?limit|verification responses/i.test(firstArray([item.what_to_do_steps, item.what_to_do, item.fix_steps]).join(' '));
 }
 
-function isImageAltIssue(item = {}) {
-  return /image_alt|image alt|alt text|missing alt|image description/i.test(`${item.rule || ''} ${item.category || ''} ${item.title || ''} ${item.issue_title || ''}`);
+function fallbackSteps(item = {}) {
+  const category = String(item.category || '').toLowerCase();
+  const rule = String(item.rule || '').toLowerCase();
+  if (category === 'schema' || rule.includes('schema')) return ['Choose the correct schema type for the page.', 'Add it through the CMS, SEO plugin, theme, or developer workflow.', 'Validate structured data after publishing.'];
+  if (category === 'canonical' || rule.includes('canonical')) return ['Identify the preferred URL for this page.', 'Add a canonical tag in the HTML head pointing to that URL.', 'Publish the update and run FixList again.'];
+  if (isImageAltIssue(item)) return ['Open the affected page or template.', 'Add short, specific alt text to meaningful images.', 'Publish the update and run FixList again.'];
+  return ['Review the affected page.', 'Make the recommended update.', 'Publish and run FixList again.'];
 }
 
-function isOneMissingAlt(item = {}) {
-  return /(^|\D)1\s+images?\s+missing\s+alt/i.test(`${item.current_value || ''} ${item.current || ''} ${item.detected_value || ''}`);
-}
-
-function hasArtifactUrl(values = []) {
-  return (values || []).some(isArtifactUrl);
-}
+function isRepeatedTemplateText(value) { return /repeated|template-level|shared template|template issue/i.test(String(value || '')); }
+function isTrustPageRecommendation(item = {}) { return /missing_trust_pages|trust pages|public trust|about, contact, privacy|legal, contact/i.test(`${item.rule || ''} ${item.category || ''} ${item.title || ''} ${item.issue_title || ''} ${item.plain_english_explanation || ''}`); }
+function isLowValueMetaRecommendation(item = {}) { return /archive|tag page|low value|lower-priority archive/i.test(`${item.page_template_family || ''} ${item.page_type || ''} ${item.business_importance || ''} ${(item.affected_pages || []).join(' ')} ${item.title || ''} ${item.issue_title || ''}`) && /meta|description|title|search appearance/i.test(`${item.category || ''} ${item.rule || ''} ${item.title || ''}`); }
+function isImageAltIssue(item = {}) { return /image_alt|image alt|alt text|missing alt|image description/i.test(`${item.rule || ''} ${item.category || ''} ${item.title || ''} ${item.issue_title || ''}`); }
+function isOneMissingAlt(item = {}) { return /(^|\D)1\s+images?\s+missing\s+alt/i.test(`${item.current_value || ''} ${item.current || ''} ${item.detected_value || ''}`); }
+function hasArtifactUrl(values = []) { return (values || []).some(isArtifactUrl); }
 
 function isArtifactUrl(value) {
   const text = String(value || '').trim();
@@ -315,6 +303,8 @@ function firstArray(values) {
   }
   return [];
 }
+
+function numberValue(value) { const number = Number(value || 0); return Number.isFinite(number) ? number : 0; }
 
 if (rawBase44?.functions?.invoke) {
   const originalInvoke = rawBase44.functions.invoke.bind(rawBase44.functions);

@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Copy,
   Download,
+  FileJson,
   Loader2,
   RefreshCw,
   Search,
@@ -64,10 +65,13 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   const [debugOpen, setDebugOpen] = useState(false);
   const [debugData, setDebugData] = useState(() => readScanDebugData());
   const [debugCopied, setDebugCopied] = useState(false);
+  const [debugCompressed, setDebugCompressed] = useState(true);
 
   const isLoading = submitting || saving;
   const cleanedKeywords = useMemo(() => splitLines(keywordsText), [keywordsText]);
   const selectedCms = CMS_OPTIONS.find((item) => item.value === cmsPlatform);
+  const displayedDebugData = debugCompressed ? compressDebugData(debugData) : debugData;
+  const displayedDebugText = JSON.stringify(displayedDebugData, null, debugCompressed ? 0 : 2);
 
   function refreshDebugData() {
     setDebugData(readScanDebugData());
@@ -78,9 +82,11 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
     refreshDebugData();
   }
 
-  async function copyDebugData() {
+  async function copyDebugData(compact = debugCompressed) {
     try {
-      await navigator.clipboard.writeText(JSON.stringify(readScanDebugData(), null, 2));
+      const snapshot = readScanDebugData();
+      const payload = compact ? compressDebugData(snapshot) : snapshot;
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, compact ? 0 : 2));
       setDebugCopied(true);
       window.setTimeout(() => setDebugCopied(false), 1500);
     } catch (copyError) {
@@ -88,16 +94,17 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
     }
   }
 
-  function downloadDebugData() {
+  function downloadDebugData(compact = true) {
     const snapshot = readScanDebugData();
+    const payload = compact ? compressDebugData(snapshot) : snapshot;
     const website = snapshot?.parsed?.[DASHBOARD_LAST_SCAN_KEY]?.website_url || snapshot?.parsed?.[LEGACY_LAST_SCAN_KEY]?.website_url || websiteUrl || "fixlist";
     const host = safeHostname(website) || "fixlist";
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: "application/json;charset=utf-8" });
+    const blob = new Blob([JSON.stringify(payload, null, compact ? 0 : 2)], { type: "application/json;charset=utf-8" });
     const objectUrl = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = objectUrl;
-    link.download = `fixlist-debug-${host}-${timestamp}.json`;
+    link.download = `fixlist-debug-${compact ? "compact" : "full"}-${host}-${timestamp}.json`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -175,12 +182,12 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       setActiveStep("Saving your FixList");
       mergedFinal = mergeScanAndAiReview({ scanData, aiData, websiteUrl: normalizedUrl, businessName: trimmedBusinessName, cmsPlatform, cmsName, scanMode, requestedPathPrefix });
       saveScanForDashboard(mergedFinal);
-      writeScanDebug({ status: "saved", stage: "dashboard_saved", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), download_available: true });
+      writeScanDebug({ status: "saved", stage: "dashboard_saved", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), compact_debug_available: true, download_available: true });
       refreshDebugData();
       navigate("/dashboard?scan=complete");
     } catch (err) {
       console.error("Website scan failed.", err);
-      writeScanDebug({ status: "failed", stage: "scan_failed", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, error: err?.message || String(err), scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), download_available: true });
+      writeScanDebug({ status: "failed", stage: "scan_failed", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, error: err?.message || String(err), scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), compact_debug_available: true, download_available: true });
       refreshDebugData();
       setError(err?.message || "The website scan failed. Try Quick check first or check the backend function logs.");
     } finally {
@@ -210,17 +217,19 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h3 className="font-bold text-slate-950">Scan debug</h3>
-                <p className="mt-1 text-xs text-slate-500">Use Download JSON for large scans that are too big to paste into chat.</p>
+                <p className="mt-1 text-xs text-slate-500">Compact mode removes raw localStorage strings and limits previews so the JSON is small enough to share.</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button type="button" variant="outline" onClick={refreshDebugData}><RefreshCw className="mr-2 h-4 w-4" />Refresh</Button>
-                <Button type="button" variant="outline" onClick={copyDebugData}><Copy className="mr-2 h-4 w-4" />{debugCopied ? "Copied" : "Copy JSON"}</Button>
-                <Button type="button" variant="outline" onClick={downloadDebugData}><Download className="mr-2 h-4 w-4" />Download JSON</Button>
+                <Button type="button" variant="outline" onClick={() => setDebugCompressed((value) => !value)}><FileJson className="mr-2 h-4 w-4" />{debugCompressed ? "Show full" : "Compress"}</Button>
+                <Button type="button" variant="outline" onClick={() => copyDebugData(debugCompressed)}><Copy className="mr-2 h-4 w-4" />{debugCopied ? "Copied" : debugCompressed ? "Copy compact" : "Copy full"}</Button>
+                <Button type="button" variant="outline" onClick={() => downloadDebugData(true)}><Download className="mr-2 h-4 w-4" />Download compact</Button>
+                <Button type="button" variant="outline" onClick={() => downloadDebugData(false)}><Download className="mr-2 h-4 w-4" />Download full</Button>
                 <Button type="button" variant="outline" onClick={clearDebugScanData}><Trash2 className="mr-2 h-4 w-4" />Clear scans</Button>
               </div>
             </div>
             <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-slate-950">
-              <pre className="max-h-[420px] overflow-auto p-4 text-xs leading-5 text-slate-100">{JSON.stringify(debugData, null, 2)}</pre>
+              <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words p-4 text-xs leading-5 text-slate-100">{displayedDebugText}</pre>
             </div>
           </div>
         ) : null}
@@ -399,11 +408,117 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
       saved_as_slim_record: true,
       evidence_fields_preserved: true,
       template_grouping_enabled: true,
+      compact_debug_enabled: true,
       download_json_enabled: true,
       scan_coverage_pages_crawled: pagesCrawled,
       scan_coverage_pages_found: pagesFound,
     },
     raw: { scanner: slimScannerData(scanData), ai_review: slimAiData(aiData) },
+  };
+}
+
+function compressDebugData(snapshot = {}) {
+  const parsed = snapshot?.parsed || {};
+  const debug = parsed[SCAN_DEBUG_KEY] || {};
+  const lastScan = parsed[DASHBOARD_LAST_SCAN_KEY] || parsed[LEGACY_LAST_SCAN_KEY] || debug.final_record || null;
+  const history = firstArray([parsed[DASHBOARD_HISTORY_KEY], parsed[LEGACY_HISTORY_KEY]]).slice(0, 3);
+  const compressed = {
+    compressed: true,
+    read_at: snapshot?.read_at || new Date().toISOString(),
+    keys: {
+      last_scan: DASHBOARD_LAST_SCAN_KEY,
+      history: DASHBOARD_HISTORY_KEY,
+      debug: SCAN_DEBUG_KEY,
+    },
+    active_scan_url: parsed[ACTIVE_SCAN_URL_KEY] || "",
+    active_scan_started_at: parsed[ACTIVE_SCAN_STARTED_AT_KEY] || "",
+    debug: compressDebugRecord(debug),
+    latest_scan: compressScanRecord(lastScan),
+    history: history.map(compressScanRecord),
+  };
+  return compressed;
+}
+
+function compressDebugRecord(debug = {}) {
+  if (!debug || typeof debug !== "object") return null;
+  return {
+    status: debug.status || "",
+    stage: debug.stage || "",
+    updated_at: debug.updated_at || "",
+    website_url: debug.website_url || "",
+    business_name: debug.business_name || "",
+    scan_mode: debug.scan_mode || "",
+    requested_path_prefix: debug.requested_path_prefix || "",
+    error: debug.error || "",
+    ai_error: debug.ai_error || "",
+    payload_summary: debug.payload_summary || null,
+    ai_payload_summary: debug.ai_payload_summary || null,
+    scanner: debug.scanner || null,
+    ai_review: debug.ai_review || null,
+    final_record: compressScanRecord(debug.final_record),
+  };
+}
+
+function compressScanRecord(record = {}) {
+  if (!record || typeof record !== "object") return null;
+  const recommendations = getRecommendations(record).slice(0, 24).map((fix) => ({
+    id: fix.fix_id || fix.id || "",
+    rule: fix.rule || "",
+    category: fix.category || "",
+    title: fix.title || fix.issue_title || "",
+    priority: fix.priority || "",
+    who_can_do_this: fix.who_can_do_this || "",
+    difficulty: fix.difficulty || "",
+    status: fix.status || "",
+    business_importance: fix.business_importance || "",
+    page_url: fix.page_url || fix.affected_pages?.[0] || "",
+    affected_pages_count: firstArray([fix.affected_pages]).length,
+    affected_pages_preview: firstArray([fix.affected_pages]).slice(0, 8),
+    reason: clampText(fix.why_it_matters || fix.reason || fix.plain_english_explanation || "", 260),
+  }));
+  const pages = getPages(record).slice(0, 35).map((page) => ({
+    url: page.url || page.final_url || "",
+    status_code: page.status_code || 0,
+    title: clampText(page.title || "", 120),
+    h1: clampText(page.h1 || "", 120),
+    indexable: page.indexable !== false,
+    in_sitemap: Boolean(page.in_sitemap),
+    page_template_family: page.page_template_family || "",
+    estimated_page_intent: page.estimated_page_intent || "",
+    route_boundary_candidate: Boolean(page.route_boundary_candidate),
+    url_confidence: page.url_confidence || "",
+  }));
+  return {
+    id: record.id || "",
+    created_at: record.created_at || "",
+    website_url: record.website_url || "",
+    business_name: record.business_name || "",
+    scan_mode: record.scan_mode || "",
+    health_score: record.health_score || record.seo_score || 0,
+    pages_crawled: record.pages_crawled || 0,
+    pages_found: record.pages_found || 0,
+    customer_summary: clampText(record.customer_summary || record.simple_summary || record.scan_summary?.plain_english_summary || "", 1200),
+    crawl_policy_source: record.crawl_policy_source || record.crawl_policy?.source || record.technical_audit_summary?.crawl_policy_source || "",
+    verified_failed_pages: getFirstNumber([record.verified_failed_pages, record.scan_summary?.verified_failed_pages, record.technical_audit_summary?.verified_failed_pages]),
+    suspicious_url_artifacts: getFirstNumber([record.suspicious_url_artifacts, record.scan_summary?.suspicious_url_artifacts, record.technical_audit_summary?.suspicious_url_artifacts]),
+    site_fingerprint: record.site_fingerprint || record.scan_summary?.site_fingerprint || {},
+    archetype_playbook: record.archetype_playbook || {},
+    url_evidence_summary: record.url_evidence_summary || record.technical_audit_summary?.url_evidence_summary || {},
+    technical_audit_summary: record.technical_audit_summary ? {
+      scanner_version: record.technical_audit_summary.scanner_version || "",
+      pages_crawled: record.technical_audit_summary.pages_crawled || 0,
+      pages_found: record.technical_audit_summary.pages_found || 0,
+      verified_failed_pages: record.technical_audit_summary.verified_failed_pages || 0,
+      suspicious_url_artifacts: record.technical_audit_summary.suspicious_url_artifacts || 0,
+      route_boundary_candidates_crawled: record.technical_audit_summary.route_boundary_candidates_crawled || 0,
+      crawl_policy_source: record.technical_audit_summary.crawl_policy_source || record.technical_audit_summary.crawl_policy?.source || "",
+    } : null,
+    debug: record.debug || {},
+    top_recommended_actions: firstArray([record.top_recommended_actions]).slice(0, 5),
+    recommendations_count: getRecommendations(record).length,
+    recommendations_preview: recommendations,
+    pages_preview_count: pages.length,
+    pages_preview: pages,
   };
 }
 
@@ -490,7 +605,7 @@ function clearAllDashboardScanData() {
 
 function writeScanDebug(data) {
   try {
-    const fullDebug = { ...data, updated_at: new Date().toISOString(), local_storage_keys: { last_scan: DASHBOARD_LAST_SCAN_KEY, history: DASHBOARD_HISTORY_KEY, debug: SCAN_DEBUG_KEY }, download_json_enabled: true };
+    const fullDebug = { ...data, updated_at: new Date().toISOString(), local_storage_keys: { last_scan: DASHBOARD_LAST_SCAN_KEY, history: DASHBOARD_HISTORY_KEY, debug: SCAN_DEBUG_KEY }, compact_debug_enabled: true, download_json_enabled: true };
     window.localStorage.setItem(SCAN_DEBUG_KEY, JSON.stringify(fullDebug));
     window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
   } catch (storageError) {
@@ -548,7 +663,7 @@ function slimScanRecord(record = {}) {
   if (!record) return null;
   const recommendations = getRecommendations(record);
   const pages = getPages(record);
-  return { ...record, id: record.id || `scan_${Date.now()}`, created_at: record.created_at || new Date().toISOString(), website_url: record.website_url || "", website_key: record.website_key || normalizeWebsiteKey(record.website_url || ""), recommendations: recommendations.slice(0, 120).map(slimFix), fixes: recommendations.slice(0, 120).map(slimFix), findings: recommendations.slice(0, 120).map(slimFix), crawled_pages: pages.slice(0, 150).map(slimPage), pages: pages.slice(0, 150).map(slimPage), scanned_pages: pages.slice(0, 150).map(slimPage), top_recommended_actions: firstArray([record.top_recommended_actions]).slice(0, 5).map((action) => hydrateActionWithFix(action, findSimilarFix(action, recommendations))), debug: { ...(record.debug || {}), download_json_enabled: true } };
+  return { ...record, id: record.id || `scan_${Date.now()}`, created_at: record.created_at || new Date().toISOString(), website_url: record.website_url || "", website_key: record.website_key || normalizeWebsiteKey(record.website_url || ""), recommendations: recommendations.slice(0, 120).map(slimFix), fixes: recommendations.slice(0, 120).map(slimFix), findings: recommendations.slice(0, 120).map(slimFix), crawled_pages: pages.slice(0, 150).map(slimPage), pages: pages.slice(0, 150).map(slimPage), scanned_pages: pages.slice(0, 150).map(slimPage), top_recommended_actions: firstArray([record.top_recommended_actions]).slice(0, 5).map((action) => hydrateActionWithFix(action, findSimilarFix(action, recommendations))), debug: { ...(record.debug || {}), compact_debug_enabled: true, download_json_enabled: true } };
 }
 
 function slimFix(fix = {}) {
@@ -658,33 +773,9 @@ function fixToAction(fix = {}) {
   return hydrateActionWithFix({ fix_id: fix.fix_id || fix.id, title: fix.title || fix.issue_title, reason: fix.why_it_matters || fix.plain_english_explanation, priority: normalizePriority(fix.priority), affected_pages: fix.affected_pages || [] }, fix);
 }
 
-function dedupeFixes(fixes) {
-  const seen = new Set();
-  const output = [];
-  for (const fix of fixes || []) {
-    const key = fix.fix_id || fix.id || `${fix.rule}|${fix.title}|${fix.page_url}|${firstArray([fix.affected_pages]).join(",")}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    output.push(fix);
-  }
-  return output;
-}
-
-function normalizeCoverageSummary(summary, pagesCrawled) {
-  const text = String(summary || "");
-  const count = Number(pagesCrawled || 0);
-  if (!count || !text) return text;
-  return text.replace(/The scanner reviewed\s+\d+\s+pages/gi, `The scanner reviewed ${count} pages`).replace(/scanner reviewed\s+\d+\s+pages/gi, `scanner reviewed ${count} pages`);
-}
-
-function normalizeSiteFingerprint(fingerprint = {}, pages = []) {
-  const pathText = pages.map((page) => `${page.url || ""} ${page.final_url || ""} ${page.estimated_page_intent || ""}`).join(" ").toLowerCase();
-  const bookingHits = countIncludes(pathText, "booking") + countIncludes(pathText, "reservation") + countIncludes(pathText, "ticket") + countIncludes(pathText, "checkout") + countIncludes(pathText, "voucher");
-  const energyHits = countIncludes(pathText, "energie") + countIncludes(pathText, "énergie") + countIncludes(pathText, "electricite") + countIncludes(pathText, "électricité") + countIncludes(pathText, "gaz") + countIncludes(pathText, "fournisseur");
-  if (energyHits >= 3 && (!fingerprint.primary_archetype || fingerprint.primary_archetype === "finance_insurance_lead_gen" || fingerprint.vertical === "insurance_finance")) return { ...fingerprint, primary_archetype: "utilities_comparison_lead_gen", vertical: "utilities_comparison_lead_gen", archetype_label: "utilities / energy comparison lead generation", vertical_label: "utilities / energy comparison lead generation", business_model: "quote_or_comparison_lead_gen", vertical_confidence: Math.max(Number(fingerprint.vertical_confidence || 0), 0.85) };
-  if (bookingHits >= 5 && (!fingerprint.vertical || fingerprint.vertical === "ecommerce")) return { ...fingerprint, primary_archetype: "booking_experiences_marketplace", vertical: "travel_booking", archetype_label: "booking / experiences marketplace", vertical_label: "booking / experiences marketplace", business_model: "booking_or_reservation", vertical_confidence: Math.max(Number(fingerprint.vertical_confidence || 0), 0.85) };
-  return fingerprint;
-}
+function dedupeFixes(fixes) { const seen = new Set(); const output = []; for (const fix of fixes || []) { const key = fix.fix_id || fix.id || `${fix.rule}|${fix.title}|${fix.page_url}|${firstArray([fix.affected_pages]).join(",")}`; if (seen.has(key)) continue; seen.add(key); output.push(fix); } return output; }
+function normalizeCoverageSummary(summary, pagesCrawled) { const text = String(summary || ""); const count = Number(pagesCrawled || 0); if (!count || !text) return text; return text.replace(/The scanner reviewed\s+\d+\s+pages/gi, `The scanner reviewed ${count} pages`).replace(/scanner reviewed\s+\d+\s+pages/gi, `scanner reviewed ${count} pages`); }
+function normalizeSiteFingerprint(fingerprint = {}, pages = []) { const pathText = pages.map((page) => `${page.url || ""} ${page.final_url || ""} ${page.estimated_page_intent || ""}`).join(" ").toLowerCase(); const bookingHits = countIncludes(pathText, "booking") + countIncludes(pathText, "reservation") + countIncludes(pathText, "ticket") + countIncludes(pathText, "checkout") + countIncludes(pathText, "voucher"); const energyHits = countIncludes(pathText, "energie") + countIncludes(pathText, "énergie") + countIncludes(pathText, "electricite") + countIncludes(pathText, "électricité") + countIncludes(pathText, "gaz") + countIncludes(pathText, "fournisseur"); if (energyHits >= 3 && (!fingerprint.primary_archetype || fingerprint.primary_archetype === "finance_insurance_lead_gen" || fingerprint.vertical === "insurance_finance")) return { ...fingerprint, primary_archetype: "utilities_comparison_lead_gen", vertical: "utilities_comparison_lead_gen", archetype_label: "utilities / energy comparison lead generation", vertical_label: "utilities / energy comparison lead generation", business_model: "quote_or_comparison_lead_gen", vertical_confidence: Math.max(Number(fingerprint.vertical_confidence || 0), 0.85) }; if (bookingHits >= 5 && (!fingerprint.vertical || fingerprint.vertical === "ecommerce")) return { ...fingerprint, primary_archetype: "booking_experiences_marketplace", vertical: "travel_booking", archetype_label: "booking / experiences marketplace", vertical_label: "booking / experiences marketplace", business_model: "booking_or_reservation", vertical_confidence: Math.max(Number(fingerprint.vertical_confidence || 0), 0.85) }; return fingerprint; }
 
 function getTemplateGroupTitle(fix = {}, family = "template") { const value = `${fix.rule || ""} ${fix.category || ""} ${fix.title || ""}`.toLowerCase(); const label = String(family || "template").replace(/_/g, " "); if (value.includes("client") || value.includes("javascript") || value.includes("render")) return `Fix crawlable HTML for ${label} pages`; if (value.includes("route") || value.includes("index")) return `Review route-boundary indexing for ${label} pages`; if (value.includes("schema")) return `Add structured data to ${label} templates`; if (value.includes("h1")) return `Fix missing H1 headings on ${label} templates`; if (value.includes("alt")) return `Batch image descriptions on ${label} pages`; if (value.includes("description")) return `Batch meta descriptions on ${label} pages`; return `Fix repeated ${label} template issue`; }
 function getTemplateGroupExplanation(fix = {}) { if (/client|javascript|render/i.test(`${fix.rule} ${fix.title}`)) return "Several similar business-critical pages appear to rely on JavaScript for their main content. Treat this as one template rendering issue, not many separate page edits."; if (/route|index/i.test(`${fix.rule} ${fix.title}`)) return "Several checkout, login, account, cart, dashboard, or app-like routes need one route-boundary review."; return "Several similar pages have the same template-level issue. Fix the shared template or pattern instead of creating one task per page."; }

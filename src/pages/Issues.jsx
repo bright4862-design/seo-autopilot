@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PRIORITY_COLORS, STATUS_COLORS, STATUS_LABELS, CATEGORY_LABELS } from "@/lib/mockData";
 import IssueDetailModal from "@/components/issues/IssueDetailModal";
-import { Search, Filter, AlertTriangle } from "lucide-react";
+import { Search, AlertTriangle } from "lucide-react";
 
 export default function Issues() {
   const [issues, setIssues] = useState([]);

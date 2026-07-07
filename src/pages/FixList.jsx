@@ -60,6 +60,9 @@ const PRIORITY_FILTERS = [
 const CATEGORY_LABELS = {
   "404_error": "Broken page",
   broken_page: "Broken page",
+  blocked_page: "Scan coverage",
+  blocked_page_429: "Scan coverage",
+  scanner_blocked: "Scan coverage",
   meta_title: "Search title",
   meta_description: "Search description",
   duplicate_content: "Duplicate search text",
@@ -72,7 +75,6 @@ const CATEGORY_LABELS = {
   internal_link: "Internal links",
   performance: "Performance",
   performance_hint: "Performance",
-  scanner_blocked: "Scan coverage",
   js_rendering: "JavaScript rendering",
   indexability: "Indexability",
   social_metadata: "Social sharing",
@@ -97,6 +99,8 @@ const BUCKETS = {
 };
 
 const BUCKET_ORDER = ["needs_approval", "auto_fixed", "needs_developer"];
+const ENERGY_PATH_HINTS = ["energie", "énergie", "electricite", "électricité", "gaz", "fournisseur", "kwh", "tarif"];
+const CREDIT_PATH_HINTS = ["rachat-de-credits", "rachat-de-credit", "credit", "crédit", "credits", "crédits", "pret", "prêt", "emprunt"];
 
 export default function FixList() {
   const navigate = useNavigate();
@@ -122,7 +126,7 @@ export default function FixList() {
     };
   }, []);
 
-  const recommendations = useMemo(() => getRecommendations(scanRecord).map(normalizeRecommendation), [scanRecord]);
+  const recommendations = useMemo(() => getRecommendations(scanRecord).map((item) => normalizeRecommendation(item, scanRecord)), [scanRecord]);
   const filteredRecommendations = useMemo(() => {
     if (priorityFilter === "all") return recommendations;
     return recommendations.filter((item) => item.priority === priorityFilter);
@@ -162,7 +166,7 @@ export default function FixList() {
                 <div>
                   <h2 className="text-xl font-bold text-slate-950">Your FixList</h2>
                   <p className="mt-1 text-sm text-slate-500">
-                    Each card now uses the scan evidence first: the affected page, current value, business importance, and AI steps.
+                    Each card uses scan evidence first: affected page, current value, business importance, route scope, and AI steps.
                   </p>
                 </div>
 
@@ -216,7 +220,7 @@ function PageHeader({ hasUsefulScan, onScan }) {
         </div>
         <h1 className="mt-2 text-3xl font-bold text-slate-950">FixList</h1>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-          Prioritized recommendations based on page type, business value, and what the scanner actually found.
+          Prioritized recommendations based on page type, business value, route scope, and what the scanner actually found.
         </p>
       </div>
       <Button type="button" onClick={onScan} variant={hasUsefulScan ? "outline" : "default"}>
@@ -259,9 +263,7 @@ function WebsiteHealthCard({ healthScore, pagesScanned, createdAt }) {
       <div className="mt-4 space-y-4">
         <div>
           <div className="text-5xl font-bold tracking-tight text-slate-950">{healthScore || "—"}</div>
-          <span className={`mt-3 inline-flex rounded-full px-3 py-1 text-xs font-medium ${band.className}`}>
-            {band.label}
-          </span>
+          <span className={`mt-3 inline-flex rounded-full px-3 py-1 text-xs font-medium ${band.className}`}>{band.label}</span>
         </div>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
           <MiniStat label="Pages checked" value={pagesScanned || 0} icon={FileText} />
@@ -308,9 +310,7 @@ function AiActionPlan({ summary, topActions, cmsLabel }) {
   return (
     <section className="rounded-3xl border border-indigo-100 bg-indigo-50 p-5 shadow-sm">
       <div className="flex items-start gap-3">
-        <div className="rounded-2xl bg-white p-3 text-indigo-700 shadow-sm">
-          <Sparkles className="h-5 w-5" />
-        </div>
+        <div className="rounded-2xl bg-white p-3 text-indigo-700 shadow-sm"><Sparkles className="h-5 w-5" /></div>
         <div className="min-w-0 flex-1">
           <h2 className="text-lg font-bold text-slate-950">Plain-English plan</h2>
           <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-700">{summary}</p>
@@ -321,9 +321,7 @@ function AiActionPlan({ summary, topActions, cmsLabel }) {
                 <div key={`${action.title || index}`} className="rounded-2xl border border-indigo-100 bg-white p-4">
                   <div className="text-sm font-bold text-indigo-700">{index + 1}</div>
                   <p className="mt-2 text-sm font-bold text-slate-950">{action.title || action.issue_title || "Review this item"}</p>
-                  <p className="mt-2 text-sm leading-5 text-slate-600">
-                    {action.reason || action.why_it_matters || action.plain_english_summary || "Review the affected pages and make the recommended update."}
-                  </p>
+                  <p className="mt-2 text-sm leading-5 text-slate-600">{action.reason || action.why_it_matters || action.plain_english_summary || "Review the affected pages and make the recommended update."}</p>
                 </div>
               ))}
             </div>
@@ -341,16 +339,7 @@ function CmsSelector({ selectedCms, onChange }) {
       <p className="mt-1 text-sm text-slate-500">Switch the instruction style without rerunning the scan.</p>
       <div className="mt-4 flex flex-wrap gap-2">
         {CMS_OPTIONS.map((cms) => (
-          <button
-            key={cms.value}
-            type="button"
-            onClick={() => onChange(cms.value)}
-            className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-              selectedCms === cms.value
-                ? "bg-slate-950 text-white"
-                : "bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-950"
-            }`}
-          >
+          <button key={cms.value} type="button" onClick={() => onChange(cms.value)} className={`rounded-full px-4 py-2 text-sm font-medium transition ${selectedCms === cms.value ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-950"}`}>
             {cms.label}
           </button>
         ))}
@@ -375,6 +364,7 @@ function RecommendationCard({ recommendation, cms }) {
             <span className={`rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide ${priorityStyles.badge}`}>{getPriorityLabel(recommendation.priority)}</span>
             <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">{recommendation.customerCategory}</span>
             <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700">{bucket.title}</span>
+            {recommendation.scopeRelationship ? <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">{humanize(recommendation.scopeRelationship)}</span> : null}
           </div>
           <h3 className="mt-4 text-xl font-bold text-slate-950">{recommendation.title}</h3>
           <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-600">{recommendation.explanation}</p>
@@ -440,9 +430,7 @@ function AffectedPage({ page }) {
         <p className="truncate text-xs text-slate-500">{formatPagePath(page)}</p>
       </div>
       {isFullUrl(page) ? (
-        <a href={page} target="_blank" rel="noreferrer" className="shrink-0 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-950" aria-label="Open page">
-          <ExternalLink className="h-4 w-4" />
-        </a>
+        <a href={page} target="_blank" rel="noreferrer" className="shrink-0 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-950" aria-label="Open page"><ExternalLink className="h-4 w-4" /></a>
       ) : null}
     </div>
   );
@@ -523,17 +511,19 @@ function EmptyFilteredState() {
   );
 }
 
-function normalizeRecommendation(item = {}) {
-  const priority = normalizePriority(item.priority);
+function normalizeRecommendation(item = {}, scanRecord = {}) {
+  const evidence = extractRecommendationEvidence(item, scanRecord);
+  const blocked429 = isBlocked429(item);
+  const priority = blocked429 ? blockedPriority(item, evidence) : normalizePriority(item.priority);
   const category = String(item.category || "other").toLowerCase();
   const affectedPages = firstArray([item.affected_pages, item.pages, item.page_urls]);
-  const fallbackPage = item.page_url || item.url || "";
-  const bucket = getIssueBucket(item);
-  const customerCategory = item.customer_category || CATEGORY_LABELS[category] || humanize(category || "Website improvement");
-  const title = cleanString(item.issue_title || item.title || item.name) || buildSpecificTitle(item);
-  const explanation = cleanString(item.plain_english_explanation || item.plain_english_summary || item.explanation || item.description || item.summary || item.recommendation) || buildSpecificExplanation(item);
-  const whyItMatters = cleanString(item.why_it_matters || item.impact || item.reason) || buildSpecificWhy(item);
-  const recommendation = cleanString(item.simple_next_step || item.recommended_value || item.recommendation || item.suggested_fix || item.ai_recommendation) || "Review the affected page and make the recommended update.";
+  const fallbackPage = item.page_url || item.url || affectedPages[0] || "";
+  const bucket = blocked429 ? "needs_developer" : getIssueBucket(item);
+  const customerCategory = blocked429 ? "Scan coverage" : item.customer_category || CATEGORY_LABELS[category] || humanize(category || "Website improvement");
+  const title = blocked429 ? build429Title(evidence) : cleanString(item.issue_title || item.title || item.name) || buildSpecificTitle(item);
+  const explanation = blocked429 ? build429Explanation(evidence) : cleanString(item.plain_english_explanation || item.plain_english_summary || item.explanation || item.description || item.summary || item.recommendation) || buildSpecificExplanation(item);
+  const whyItMatters = blocked429 ? build429Why(evidence) : cleanString(item.why_it_matters || item.impact || item.reason) || buildSpecificWhy(item);
+  const recommendation = blocked429 ? build429Recommendation(evidence) : cleanString(item.simple_next_step || item.recommended_value || item.recommendation || item.suggested_fix || item.ai_recommendation) || "Review the affected page and make the recommended update.";
   const needsHelp = bucket === "needs_developer";
 
   return {
@@ -548,15 +538,133 @@ function normalizeRecommendation(item = {}) {
     whyItMatters,
     recommendation,
     affectedPages: unique([...affectedPages.map(String), ...(fallbackPage ? [fallbackPage] : [])]),
-    currentValue: cleanString(item.current_value || item.current || item.detected_value),
-    pageType: cleanString(item.page_type || item.page_value_label || item.business_importance),
-    defectClass: cleanString(item.primary_defect_class || item.meta_regeneration_gate),
-    pageValueLabel: cleanString(item.page_value_label),
-    businessImportance: cleanString(item.business_importance),
+    currentValue: blocked429 ? "HTTP 429 — crawler was rate-limited or blocked" : cleanString(item.current_value || item.current || item.detected_value),
+    pageType: blocked429 && evidence.scopeRelationship === "sibling_sous_dossier" ? "Sibling sous-dossier" : cleanString(item.page_type || item.page_value_label || item.business_importance),
+    defectClass: blocked429 ? "Rate-limit / crawler access" : cleanString(item.primary_defect_class || item.meta_regeneration_gate),
+    pageValueLabel: blocked429 ? evidence.businessValueLabel : cleanString(item.page_value_label),
+    businessImportance: blocked429 ? evidence.businessImportance : cleanString(item.business_importance),
     metaGate: cleanString(item.meta_regeneration_gate),
+    scopeRelationship: evidence.scopeRelationship,
     needsHelp,
-    generalSteps: buildGeneralSteps(item, recommendation, needsHelp),
+    generalSteps: blocked429 ? build429Steps(evidence) : buildGeneralSteps(item, recommendation, needsHelp),
   };
+}
+
+function extractRecommendationEvidence(item = {}, scanRecord = {}) {
+  const affectedPages = firstArray([item.affected_pages, item.pages, item.page_urls]);
+  const pageUrl = item.page_url || item.url || affectedPages[0] || "";
+  const allPages = unique([...affectedPages, ...(pageUrl ? [pageUrl] : [])].map(String));
+  const scanUrl = scanRecord?.website_url || scanRecord?.raw?.scanner?.website_url || scanRecord?.debug?.website_url || "";
+  const scopeRelationship = classifyScopeRelationship({ scanUrl, pageUrl, affectedPages: allPages });
+  const path = firstPath(allPages);
+  const statusCode = getFirstNumber([item.status_code, item.current_status_code, item.http_status, item.evidence?.status_code]);
+  const sourcePages = firstArray([item.source_pages, item.evidence?.source_pages]);
+  const affectedCount = allPages.length;
+  const businessValueLabel = scopeRelationship === "sibling_sous_dossier"
+    ? "Same parent brand, different business vertical"
+    : isEnergyPath(path) || isImportantBusinessPath(path)
+      ? "Potentially important path"
+      : "Standard page";
+  const businessImportance = scopeRelationship === "sibling_sous_dossier"
+    ? "same_parent_sibling_sous_dossier"
+    : isEnergyPath(path) || isImportantBusinessPath(path)
+      ? "potentially_important"
+      : "standard";
+  return { affectedPages: allPages, scanUrl, pageUrl, path, statusCode, sourcePages, affectedCount, scopeRelationship, businessValueLabel, businessImportance };
+}
+
+function isBlocked429(item = {}) {
+  const text = `${item.rule || ""} ${item.category || ""} ${item.title || ""} ${item.issue_title || ""} ${item.current_value || ""} ${item.fetch_error || ""} ${item.recommended_value || ""}`.toLowerCase();
+  const status = getFirstNumber([item.status_code, item.current_status_code, item.http_status, item.evidence?.status_code]);
+  return status === 429 || text.includes("429") || text.includes("rate limit") || text.includes("rate-limit") || text.includes("too many requests") || text.includes("bot protection");
+}
+
+function build429Title(evidence) {
+  if (evidence.scopeRelationship === "sibling_sous_dossier") return "Check Meilleurtaux rate limiting on sibling sous-dossiers";
+  if (evidence.affectedCount > 1) return "Check pages blocked by rate limiting";
+  return "Check this HTTP 429 scan block";
+}
+
+function build429Explanation(evidence) {
+  if (evidence.scopeRelationship === "sibling_sous_dossier") {
+    return "The scanner hit HTTP 429 on a Meilleurtaux parent-domain path that appears to be a sibling sous-dossier, such as credit or loan content, rather than the selected energy section. This usually means the broader Meilleurtaux server, CDN, firewall, or bot-protection layer rate-limited the crawler.";
+  }
+  return "The page returned HTTP 429 during the scan. That usually means the server, CDN, firewall, or bot-protection layer rate-limited the crawler. Verify whether normal users and legitimate search crawlers can load it before treating it as a confirmed broken customer page.";
+}
+
+function build429Why(evidence) {
+  if (evidence.scopeRelationship === "sibling_sous_dossier") {
+    return "This is useful parent-domain evidence, but it should not be described as a primary energy-comparison customer page unless the selected crawl scope or source-page evidence proves it belongs to that journey.";
+  }
+  return "Rate limiting can hide pages from crawlers if configured too aggressively. But a 429 is not the same as a confirmed broken page, so the next step is to verify crawler and user access rather than rewrite the page.";
+}
+
+function build429Recommendation(evidence) {
+  if (evidence.scopeRelationship === "sibling_sous_dossier") {
+    return "Ask your web person to review rate-limit and bot-protection rules for the Meilleurtaux parent domain and confirm whether this sibling sous-dossier should be part of the selected scan scope.";
+  }
+  return "Ask your web person to check server, CDN, firewall, and bot-protection logs for this URL and confirm whether Googlebot and normal users can access it.";
+}
+
+function build429Steps(evidence) {
+  const base = [
+    "Send the affected URL or URL group to your web person.",
+    "Check server, CDN, firewall, and bot-protection logs for HTTP 429 responses.",
+    "Confirm whether Googlebot and normal users can load the page without being rate-limited.",
+  ];
+  if (evidence.scopeRelationship === "sibling_sous_dossier") {
+    return [
+      ...base,
+      "Confirm whether this sibling sous-dossier should be included in the current scan scope or treated as parent-domain evidence only.",
+      "Adjust rate-limit rules only if legitimate crawlers or users are being blocked.",
+    ];
+  }
+  return [...base, "Adjust rate-limit rules if legitimate crawlers are blocked, then run FixList again."];
+}
+
+function blockedPriority(item, evidence) {
+  const original = normalizePriority(item.priority);
+  if (evidence.affectedCount >= 3) return original === "low" ? "medium" : original;
+  if (evidence.scopeRelationship === "sibling_sous_dossier") return original === "critical" || original === "high" ? "medium" : original;
+  if (evidence.businessImportance === "potentially_important") return original === "low" ? "medium" : original;
+  return original === "critical" || original === "high" ? "medium" : original;
+}
+
+function classifyScopeRelationship({ scanUrl, pageUrl, affectedPages }) {
+  const scanHost = safeHostname(scanUrl);
+  const pageHost = safeHostname(pageUrl || affectedPages?.[0] || "") || scanHost;
+  const scanRoot = rootDomain(scanHost);
+  const pageRoot = rootDomain(pageHost);
+  const pathText = [pageUrl, ...(affectedPages || [])].join(" ").toLowerCase();
+  const scanText = String(scanUrl || "").toLowerCase();
+  const sameParent = scanRoot && pageRoot && scanRoot === pageRoot;
+
+  if (sameParent && isEnergyPath(scanText) && isCreditPath(pathText) && !isEnergyPath(pathText)) return "sibling_sous_dossier";
+  if (sameParent && scanHost && pageHost && scanHost !== pageHost) return "same_parent_domain";
+  return "";
+}
+
+function isEnergyPath(value) {
+  const text = String(value || "").toLowerCase();
+  return ENERGY_PATH_HINTS.some((hint) => text.includes(hint));
+}
+
+function isCreditPath(value) {
+  const text = String(value || "").toLowerCase();
+  return CREDIT_PATH_HINTS.some((hint) => text.includes(hint));
+}
+
+function isImportantBusinessPath(value) {
+  const text = String(value || "").toLowerCase();
+  return /devis|quote|simulation|simulateur|calcul|calculator|comparateur|pricing|tarif|contact|checkout|booking|reservation|product|produit|collection|category|fournisseur/.test(text);
+}
+
+function firstPath(values) {
+  const value = Array.isArray(values) ? values.find(Boolean) : values;
+  try {
+    if (/^https?:\/\//i.test(String(value || ""))) return new URL(value).pathname || "/";
+  } catch {}
+  return String(value || "");
 }
 
 function buildSpecificTitle(item = {}) {
@@ -606,6 +714,15 @@ function buildGeneralSteps(item = {}, recommendation, needsHelp) {
 }
 
 function getCmsSteps(cms, recommendation) {
+  if (isBlocked429(recommendation.original)) {
+    return [
+      "Do not edit page copy first. This is a server/CDN/firewall access check.",
+      "Send the affected URL(s) and HTTP 429 evidence to your web person.",
+      "Ask them to check rate-limit, bot-protection, CDN, firewall, and server logs.",
+      "Confirm whether Googlebot and normal users can access the page, then rescan.",
+    ];
+  }
+
   const category = String(recommendation.original?.category || "").toLowerCase();
   const title = category === "meta_title";
   const description = category === "meta_description";
@@ -632,12 +749,13 @@ function getCmsSteps(cms, recommendation) {
 
 function buildEvidenceItems(recommendation) {
   const items = [];
+  if (recommendation.scopeRelationship) items.push({ label: "Scope", value: humanize(recommendation.scopeRelationship) });
   if (recommendation.pageType) items.push({ label: "Page type", value: humanize(recommendation.pageType) });
   if (recommendation.pageValueLabel) items.push({ label: "Business value", value: recommendation.pageValueLabel });
   if (recommendation.defectClass) items.push({ label: "Issue type", value: humanize(recommendation.defectClass) });
   if (recommendation.metaGate) items.push({ label: "Meta gate", value: humanize(recommendation.metaGate) });
   if (recommendation.currentValue) items.push({ label: "Current value", value: clampText(recommendation.currentValue, 180) });
-  return items.slice(0, 5);
+  return items.slice(0, 6);
 }
 
 function readBestScanRecord() {
@@ -676,11 +794,7 @@ function readScanDebugData() {
   STORAGE_KEYS.forEach((key) => {
     const value = window.localStorage.getItem(key);
     raw[key] = value;
-    try {
-      parsed[key] = value ? JSON.parse(value) : null;
-    } catch {
-      parsed[key] = value;
-    }
+    try { parsed[key] = value ? JSON.parse(value) : null; } catch { parsed[key] = value; }
   });
   return { read_at: new Date().toISOString(), raw, parsed };
 }
@@ -704,46 +818,41 @@ function safeParseLocalStorage(key) {
   }
 }
 
-function buildDebugSummary(debugData) {
-  const parsed = debugData?.parsed || {};
-  const scanDebug = parsed[SCAN_DEBUG_KEY] || {};
-  const lastScan = parsed[DASHBOARD_LAST_SCAN_KEY] || parsed[LEGACY_LAST_SCAN_KEY] || {};
-  const scanner = scanDebug?.scanner || lastScan?.raw?.scanner || {};
-  return {
-    status: scanDebug?.status || scanDebug?.stage || "unknown",
-    websiteUrl: scanDebug?.website_url || lastScan?.website_url || parsed[ACTIVE_SCAN_URL_KEY] || "",
-    pages: scanner?.pages_crawled || lastScan?.pages_crawled || lastScan?.pages?.length || lastScan?.crawled_pages?.length || 0,
-    score: lastScan?.health_score || lastScan?.seo_score || scanner?.health_score || scanner?.seo_score || 0,
-  };
-}
-
 function getRecommendations(record) {
-  if (!record) return [];
-  return firstArray([record.recommendations, record.fixes, record.findings, record.raw_fixes, record.grouped_findings, record.raw?.recommendations, record.raw?.fixes, record.raw?.findings, record.raw?.scanner?.raw_fixes, record.raw?.scanner?.grouped_findings, record.raw?.scanner?.recommendations, record.raw?.scanner?.fixes, record.raw?.ai_review?.cleaned_fixes, record.raw?.ai_review?.recommendations, record.raw?.ai_review?.fixes, record.raw?.ai_review?.findings]);
+  return firstArray([record?.recommendations, record?.fixes, record?.findings, record?.cleaned_fixes, record?.raw_fixes, record?.issues]);
 }
 
 function getPages(record) {
-  if (!record) return [];
-  return firstArray([record.crawled_pages, record.pages, record.scanned_pages, record.crawl_pages, record.raw?.crawled_pages, record.raw?.pages, record.raw?.scanner?.crawled_pages, record.raw?.scanner?.pages, record.raw?.scanner?.scanned_pages]);
+  return firstArray([record?.crawled_pages, record?.pages, record?.scanned_pages, record?.raw?.scanner?.pages_preview]);
+}
+
+function getTopActions(record, normalizedRecommendations) {
+  const actions = firstArray([record?.top_recommended_actions, record?.recommended_actions]);
+  if (actions.length > 0) return actions.slice(0, 5).map((action) => sanitizeTopAction(action, normalizedRecommendations));
+  return normalizedRecommendations.slice(0, 5).map((item) => ({ title: item.title, reason: item.whyItMatters, priority: item.priority }));
+}
+
+function sanitizeTopAction(action = {}, normalizedRecommendations = []) {
+  const match = normalizedRecommendations.find((item) => item.id === action.fix_id || item.original?.fix_id === action.fix_id || item.original?.id === action.fix_id);
+  if (match && isBlocked429(match.original)) return { title: match.title, reason: match.whyItMatters, priority: match.priority };
+  return action;
 }
 
 function getHealthScore(record) {
-  if (!record) return 0;
-  return getFirstNumber([record.health_score, record.seo_score, record.scan_summary?.health_score, record.website_health_report?.score, record.website_health_report?.health_score, record.raw?.health_score, record.raw?.seo_score, record.raw?.scanner?.health_score, record.raw?.scanner?.seo_score, record.raw?.ai_review?.health_score, record.raw?.ai_review?.website_health_report?.score, record.raw?.ai_review?.website_health_report?.health_score]);
+  const score = Number(record?.health_score || record?.seo_score || record?.website_health_report?.health_score || record?.scan_summary?.health_score || record?.scan_summary?.score || 0);
+  return Number.isFinite(score) ? Math.round(score) : 0;
 }
 
 function getPagesScanned(record, pages) {
-  return getFirstNumber([record?.pages_crawled, record?.pages_scanned, record?.technical_audit_summary?.pages_checked, record?.raw?.scanner?.pages_crawled, pages?.length]);
+  const count = Number(record?.pages_crawled || record?.pages_scanned || record?.pages_checked || record?.scan_summary?.pages_scanned || record?.technical_audit_summary?.pages_crawled || pages.length || 0);
+  return Number.isFinite(count) ? count : 0;
 }
 
-function getTopActions(record, recommendations) {
-  const explicit = firstArray([record?.top_recommended_actions, record?.recommended_actions, record?.raw?.ai_review?.top_recommended_actions, record?.raw?.ai_review?.recommended_actions]);
-  const normalizedExplicit = explicit.map((item) => ({ ...item, ...recommendations.find((rec) => rec.id === item.fix_id || rec.original?.fix_id === item.fix_id) }));
-  return normalizedExplicit.length > 0 ? normalizedExplicit : recommendations.slice(0, 3);
-}
-
-function getBestSummary(record, healthScore, pagesScanned, recommendationsCount) {
-  return cleanString(record?.customer_summary || record?.simple_summary || record?.scan_summary?.plain_english_summary || record?.site_summary?.plain_english_summary || record?.website_health_report?.overall_explanation) || `Your website health score is ${healthScore || "not available"}. The scanner reviewed ${pagesScanned || 0} pages and found ${recommendationsCount || 0} recommendations.`;
+function getBestSummary(record, healthScore, pagesScanned, issueCount) {
+  const summary = cleanString(record?.customer_summary || record?.simple_summary || record?.website_health_report?.overall_explanation || record?.scan_summary?.plain_english_summary || record?.scan_summary?.summary);
+  if (summary) return normalizeCoverageSummary(summary, pagesScanned);
+  const label = getScoreBand(healthScore).label;
+  return `Your website health is ${label.toLowerCase()} with a score of ${healthScore || 0}/100. FixList reviewed ${pagesScanned || 0} pages and found ${issueCount || 0} recommendations. Start with the highest-impact items first.`;
 }
 
 function countBuckets(recommendations) {
@@ -754,75 +863,59 @@ function countBuckets(recommendations) {
 }
 
 function getIssueBucket(item = {}) {
-  if (item.status === "auto_fixed") return "auto_fixed";
-  if (item.status === "needs_developer" || item.requires_developer) return "needs_developer";
-  if (item.status === "needs_approval" || item.requires_approval) return "needs_approval";
-  const category = String(item.category || "").toLowerCase();
-  if (["canonical", "redirect", "performance", "scanner_blocked", "js_rendering", "indexability"].includes(category)) return "needs_developer";
+  const owner = String(item.who_can_do_this || item.owner || "").toLowerCase();
+  const status = String(item.status || "").toLowerCase();
+  const difficulty = String(item.difficulty || "").toLowerCase();
+  const text = `${item.rule || ""} ${item.category || ""} ${item.title || ""} ${item.issue_title || ""} ${item.recommended_value || ""} ${item.why_it_matters || ""}`.toLowerCase();
+  if (owner.includes("web") || owner.includes("developer") || difficulty === "developer" || status === "needs_developer") return "needs_developer";
+  if (/429|server|firewall|bot protection|cloudflare|rate.limit|crawlable html|javascript|rendering|schema|canonical|redirect|robots|noindex|indexability/.test(text)) return "needs_developer";
+  if (status === "auto_fixed" || item.can_auto_fix) return "auto_fixed";
   return "needs_approval";
 }
 
-function scrollToRecommendations() {
-  const element = document.getElementById("recommendations");
-  if (element) element.scrollIntoView({ behavior: "smooth", block: "start" });
-}
-
-function normalizePriority(priority) {
-  const value = String(priority || "").toLowerCase();
-  if (["critical", "high", "medium", "low"].includes(value)) return value;
+function normalizePriority(value) {
+  const priority = String(value || "").toLowerCase();
+  if (["critical", "high", "medium", "low"].includes(priority)) return priority;
   return "medium";
 }
 
-function getPriorityStyles(priority) {
-  const styles = {
-    critical: { badge: "bg-red-100 text-red-700" },
-    high: { badge: "bg-orange-100 text-orange-700" },
-    medium: { badge: "bg-yellow-100 text-yellow-700" },
-    low: { badge: "bg-slate-100 text-slate-600" },
-  };
-  return styles[priority] || styles.medium;
+function getPriorityLabel(priority) {
+  if (priority === "critical") return "Critical";
+  if (priority === "high") return "High";
+  if (priority === "low") return "Low";
+  return "Medium";
 }
 
-function getPriorityLabel(priority) {
-  if (priority === "critical" || priority === "high") return "High impact";
-  if (priority === "medium") return "Medium impact";
-  return "Lower impact";
+function getPriorityStyles(priority) {
+  if (priority === "critical") return { badge: "bg-red-50 text-red-700" };
+  if (priority === "high") return { badge: "bg-orange-50 text-orange-700" };
+  if (priority === "low") return { badge: "bg-slate-100 text-slate-600" };
+  return { badge: "bg-amber-50 text-amber-700" };
 }
 
 function getScoreBand(score) {
-  const value = Number(score || 0);
-  if (value >= 85) return { label: "Great", className: "bg-emerald-50 text-emerald-700" };
-  if (value >= 70) return { label: "Good", className: "bg-blue-50 text-blue-700" };
-  if (value >= 50) return { label: "Getting there", className: "bg-amber-50 text-amber-700" };
-  return { label: "Needs work", className: "bg-rose-50 text-rose-700" };
+  const number = Number(score || 0);
+  if (number >= 90) return { label: "Excellent", className: "bg-emerald-50 text-emerald-700" };
+  if (number >= 75) return { label: "Good", className: "bg-emerald-50 text-emerald-700" };
+  if (number >= 55) return { label: "Fair", className: "bg-amber-50 text-amber-700" };
+  return { label: "Needs work", className: "bg-red-50 text-red-700" };
 }
 
-function formatDate(value) {
+function formatPageLabel(page) {
   try {
-    return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    const url = new URL(page);
+    return url.hostname;
   } catch {
-    return "Recent";
+    return String(page || "Page").replace(/^https?:\/\//, "");
   }
 }
 
-function formatPageLabel(value) {
+function formatPagePath(page) {
   try {
-    const parsed = new URL(value);
-    const parts = parsed.pathname.split("/").filter(Boolean);
-    if (parts.length === 0) return "Homepage";
-    return titleCase(parts.slice(-3).join(" / ").replace(/[-_]/g, " "));
+    const url = new URL(page);
+    return `${url.pathname}${url.search}` || "/";
   } catch {
-    const cleaned = String(value || "").replace(/^https?:\/\/[^/]+/i, "");
-    if (!cleaned || cleaned === "/") return "Homepage";
-    return titleCase(cleaned.split("/").filter(Boolean).slice(-3).join(" / ").replace(/[-_]/g, " "));
-  }
-}
-
-function formatPagePath(value) {
-  try {
-    return new URL(value).pathname || "/";
-  } catch {
-    return String(value || "");
+    return String(page || "");
   }
 }
 
@@ -831,39 +924,62 @@ function isFullUrl(value) {
 }
 
 function normalizeCmsValue(value) {
-  const normalized = String(value || "").toLowerCase().replace(/\s+/g, "_");
-  const valid = CMS_OPTIONS.map((item) => item.value);
-  return valid.includes(normalized) ? normalized : "custom";
+  const normalized = String(value || "custom").toLowerCase();
+  return CMS_OPTIONS.some((item) => item.value === normalized) ? normalized : "custom";
 }
 
 function firstArray(values) {
   for (const value of values || []) {
-    if (Array.isArray(value)) return value;
+    if (Array.isArray(value) && value.length > 0) return value;
   }
   return [];
+}
+
+function unique(values) {
+  return Array.from(new Set((values || []).filter((value) => value !== undefined && value !== null && String(value).trim() !== "")));
+}
+
+function cleanString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function clampText(value, max) {
+  const text = String(value || "").trim();
+  return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1)).trim()}…`;
 }
 
 function getFirstNumber(values) {
   for (const value of values || []) {
     const number = Number(value);
-    if (Number.isFinite(number) && number > 0) return Math.round(number);
+    if (Number.isFinite(number) && number >= 0) return number;
   }
   return 0;
 }
 
-function unique(values) {
-  return Array.from(new Set((values || []).filter(Boolean)));
+function humanize(value) {
+  return String(value || "").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim().replace(/^\w/, (char) => char.toUpperCase());
 }
 
-function cleanString(value) {
-  if (typeof value === "string" && value.trim()) return value.trim();
-  return "";
+function normalizeCoverageSummary(summary, pagesCrawled) {
+  const text = String(summary || "");
+  const count = Number(pagesCrawled || 0);
+  if (!count || !text) return text;
+  return text.replace(/The scanner reviewed\s+\d+\s+pages/gi, `The scanner reviewed ${count} pages`).replace(/scanner reviewed\s+\d+\s+pages/gi, `scanner reviewed ${count} pages`);
 }
 
-function clampText(value, max) {
-  const text = String(value || "").trim();
-  if (text.length <= max) return text;
-  return `${text.slice(0, Math.max(0, max - 1)).trim()}…`;
+function safeHostname(value) {
+  try {
+    return new URL(String(value || "")).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function rootDomain(hostname) {
+  const host = String(hostname || "").replace(/^www\./, "").toLowerCase();
+  const parts = host.split(".").filter(Boolean);
+  if (parts.length <= 2) return host;
+  return parts.slice(-2).join(".");
 }
 
 function stableId(input) {
@@ -876,14 +992,27 @@ function stableId(input) {
   return `finding_${Math.abs(hash)}`;
 }
 
-function humanize(value = "") {
-  return String(value || "")
-    .replace(/_/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+function buildDebugSummary(debugData = {}) {
+  const parsed = debugData.parsed || {};
+  const debug = parsed[SCAN_DEBUG_KEY] || {};
+  const lastScan = parsed[DASHBOARD_LAST_SCAN_KEY] || parsed[LEGACY_LAST_SCAN_KEY] || debug.final_record || {};
+  return {
+    status: debug.status || debug.stage || "saved",
+    websiteUrl: lastScan.website_url || debug.website_url || parsed[ACTIVE_SCAN_URL_KEY] || "",
+    pages: lastScan.pages_crawled || debug.final_record?.pages_crawled || debug.scanner?.pages_crawled || 0,
+    score: lastScan.health_score || debug.final_record?.health_score || debug.ai_review?.health_score || debug.scanner?.health_score || "",
+  };
 }
 
-function titleCase(value = "") {
-  return String(value || "").replace(/\b\w/g, (letter) => letter.toUpperCase());
+function scrollToRecommendations() {
+  const element = document.getElementById("recommendations");
+  if (element) element.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function formatDate(value) {
+  try {
+    return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+  } catch {
+    return "Recent";
+  }
 }

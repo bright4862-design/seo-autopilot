@@ -1,0 +1,24 @@
+{
+  "scanner_version": "runAdvancedScan_v15_route_boundary_candidates",
+  "crawl_policy": {"source": "failed", "error": "InvokeLLM timeout", "priority_boost_patterns": [], "priority_deprioritize_patterns": [], "skip_patterns": []},
+  "crawl_policy_source": "failed",
+  "pages_crawled": 6,
+  "pages_found": 18,
+  "health_score": 54,
+  "url_evidence_summary": {"sitemap": 2, "internal_link": 4, "verified_failed_pages": 0, "suspicious_url_artifacts": 0},
+  "verified_failed_pages": [],
+  "suspicious_url_artifacts": [],
+  "pages": [
+    {"url": "https://app.example/", "status_code": 200, "estimated_page_intent": "home", "page_template_family": "home_page", "discovered_from": "seed", "source_pages": []},
+    {"url": "https://app.example/pricing", "status_code": 200, "estimated_page_intent": "pricing", "page_template_family": "pricing_page", "discovered_from": "internal_link", "source_pages": ["https://app.example/"]},
+    {"url": "https://app.example/demo", "status_code": 200, "estimated_page_intent": "lead_capture", "page_template_family": "demo_page", "discovered_from": "internal_link", "source_pages": ["https://app.example/"]},
+    {"url": "https://app.example/login", "status_code": 200, "estimated_page_intent": "route_boundary", "page_template_family": "auth_page", "route_boundary_candidate": true, "indexable": true, "discovered_from": "internal_link", "source_pages": ["https://app.example/"]},
+    {"url": "https://app.example/Dashboard", "status_code": 200, "estimated_page_intent": "route_boundary", "page_template_family": "app_shell_page", "route_boundary_candidate": true, "indexable": true, "discovered_from": "internal_link", "source_pages": ["https://app.example/login"]},
+    {"url": "https://app.example/dashboard", "status_code": 200, "estimated_page_intent": "route_boundary", "page_template_family": "app_shell_page", "route_boundary_candidate": true, "indexable": true, "discovered_from": "internal_link", "source_pages": ["https://app.example/login"]}
+  ],
+  "grouped_findings": [
+    {"rule_id": "route_boundary_candidate_indexable", "severity": "critical", "owner": "Your web person", "template_family": "app_shell_page", "urls": ["https://app.example/login", "https://app.example/Dashboard", "https://app.example/dashboard"]},
+    {"rule_id": "duplicate_route_casing", "severity": "high", "owner": "Your web person", "template_family": "app_shell_page", "urls": ["https://app.example/Dashboard", "https://app.example/dashboard"]},
+    {"rule_id": "free_base44_subdomain", "severity": "high", "owner": "Your web person", "template_family": "home_page", "urls": ["https://app.example/"]}
+  ]
+}

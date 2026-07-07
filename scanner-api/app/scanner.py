@@ -1,0 +1,328 @@
+import time
+from urllib.parse import urldefrag, urlparse
+
+import httpx
+
+from .artifact_filter import MAX_ARTIFACT_EVIDENCE, is_artifact_url, record_artifact
+from .extract import extract_links, extract_page
+from .sitemap import load_sitemap_urls
+
+VERSION = "python_scanner_v1"
+
+SCAN_BUDGETS = {
+    "basic": {"max_pages": 25, "timeout": 35},
+    "quick": {"max_pages": 40, "timeout": 45},
+    "deep": {"max_pages": 85, "timeout": 75},
+    "advanced": {"max_pages": 150, "timeout": 90},
+}
+
+TRUST_PATHS = ["/about", "/contact", "/privacy", "/terms", "/security", "/legal", "/mentions-legales", "/cgv"]
+
+
+async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: str = "advanced", **kwargs) -> dict:
+    budget = SCAN_BUDGETS.get(str(scan_mode or "advanced").lower(), SCAN_BUDGETS["advanced"])
+    start_url = normalize_url(website_url)
+    if not start_url:
+        return {"success": False, "version": VERSION, "error": "Missing or invalid website_url."}
+
+    parsed_start = urlparse(start_url)
+    origin = f"{parsed_start.scheme}://{parsed_start.netloc}"
+    prefix = normalize_prefix(path_prefix or parsed_start.path or "/")
+
+    pages: list[dict] = []
+    queue: list[str] = []
+    queued: set[str] = set()
+    seen: set[str] = set()
+    discovery: dict[str, dict] = {}
+    artifacts: list[dict] = []
+
+    def enqueue(url: str, source: str, source_page: str = "", link_text: str = "") -> None:
+        clean = normalize_url(url)
+        if not clean:
+            if is_artifact_url(url):
+                record_artifact(artifacts, url, source, source_page, link_text)
+            return
+        if is_artifact_url(clean):
+            record_artifact(artifacts, clean, source, source_page, link_text)
+            return
+        if not same_origin(clean, origin):
+            return
+        if prefix and prefix != "/" and not (urlparse(clean).path or "/").startswith(prefix):
+            return
+        if clean in queued or clean in seen:
+            merge_discovery(discovery.setdefault(clean, empty_discovery()), source, source_page, link_text)
+            return
+        queued.add(clean)
+        queue.append(clean)
+        merge_discovery(discovery.setdefault(clean, empty_discovery()), source, source_page, link_text)
+
+    enqueue(start_url, "seed")
+
+    async with httpx.AsyncClient(
+        timeout=12,
+        follow_redirects=True,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; FixListPythonScanner/1.0)"},
+    ) as client:
+        sitemap_urls = await load_sitemap_urls(client, origin, prefix, budget["max_pages"] * 5, artifacts)
+        for url in sitemap_urls:
+            enqueue(url, "sitemap", "/sitemap.xml", "")
+
+        deadline = time.monotonic() + budget["timeout"]
+        while queue and len(pages) < budget["max_pages"] and time.monotonic() < deadline:
+            url = queue.pop(0)
+            queued.discard(url)
+            if url in seen:
+                continue
+            seen.add(url)
+
+            page = await fetch_and_extract(client, url, discovery.get(url, empty_discovery()))
+            pages.append(page)
+
+            html = page.pop("_html", "")
+            if page.get("status_code") == 200 and html:
+                for link in extract_links(html, page.get("final_url") or url):
+                    if len(queue) + len(seen) >= budget["max_pages"] * 8:
+                        break
+                    enqueue(link["href"], "internal_link", page.get("path") or "", link.get("text") or "")
+
+    findings = build_findings(pages)
+    grouped = group_findings(findings)
+    verified_failed = [page_evidence(page) for page in pages if is_verified_failed(page)]
+    artifacts = dedupe_artifacts(artifacts)[:MAX_ARTIFACT_EVIDENCE]
+    health_score = calculate_health_score(pages, grouped)
+    pages_found = max(len(pages), len(pages) + len(queue), len(seen) + len(queue))
+
+    return {
+        "success": True,
+        "version": VERSION,
+        "scanner_version": VERSION,
+        "scanner_profile": "python_screaming_frog_lite_v1",
+        "screaming_frog_lite_enabled": True,
+        "website_url": start_url,
+        "normalized_url": start_url,
+        "scan_mode": scan_mode,
+        "pages_crawled": len(pages),
+        "pages_found": pages_found,
+        "queued_remaining": len(queue),
+        "pages": pages,
+        "crawled_pages": pages,
+        "raw_findings": findings,
+        "grouped_findings": grouped,
+        "findings": grouped,
+        "recommendations": grouped,
+        "health_score": health_score,
+        "scan_summary": build_scan_summary(pages, grouped, health_score, pages_found, len(artifacts)),
+        "verified_failed_pages": verified_failed,
+        "suspicious_url_artifacts": artifacts,
+        "verified_failed_page_count": len(verified_failed),
+        "suspicious_url_artifact_count": len(artifacts),
+        "url_evidence_summary": build_evidence_summary(pages, len(artifacts)),
+        "technical_audit_summary": {
+            "scanner_version": VERSION,
+            "pages_crawled": len(pages),
+            "pages_found": pages_found,
+            "failed_pages": sum(1 for page in pages if page.get("status_code", 0) >= 400 or page.get("fetch_error")),
+            "verified_failed_pages": len(verified_failed),
+            "suspicious_url_artifacts": len(artifacts),
+            "url_evidence_summary": build_evidence_summary(pages, len(artifacts)),
+        },
+        "crawl_warnings": [],
+    }
+
+
+async def fetch_and_extract(client: httpx.AsyncClient, url: str, discovery: dict) -> dict:
+    try:
+        response = await client.get(url)
+        content_type = response.headers.get("content-type", "")
+        html = response.text if "html" in content_type or "xml" in content_type or not content_type else ""
+        page = extract_page(html, url, str(response.url), response.status_code, content_type, discovery)
+        page["_html"] = html
+        return page
+    except Exception as exc:
+        return extract_page("", url, url, 0, "", discovery, fetch_error=str(exc)[:220])
+
+
+def build_findings(pages: list[dict]) -> list[dict]:
+    findings: list[dict] = []
+    for page in pages:
+        path = page.get("path") or "/"
+        if page.get("url_confidence") == "crawler_artifact":
+            continue
+        status_code = int(page.get("status_code") or 0)
+        if status_code >= 400 or page.get("fetch_error"):
+            findings.append(create_finding(
+                rule="rate_limited_page" if status_code == 429 else "failed_page",
+                category="web_dev" if status_code == 429 else "404_error",
+                priority="high" if status_code == 429 or status_code >= 500 else "medium",
+                title="Check pages blocked by rate limiting" if status_code == 429 else "Fix pages that are not loading",
+                page_url=path,
+                current_value=page.get("fetch_error") or f"HTTP {status_code}",
+                explanation="The page did not load cleanly during the scan and has a real discovery source.",
+                recommendation="Check whether the page should exist, redirect it, or fix the server/access issue.",
+                difficulty="developer",
+                source_pages=page.get("source_pages", []),
+                link_text_samples=page.get("link_text_samples", []),
+            ))
+            continue
+        if not page.get("title"):
+            findings.append(create_finding("missing_title", "meta_title", "medium", "Add a clear search title", path, explanation="This page is missing a title.", recommendation="Add a short, specific page title."))
+        if not page.get("meta_description") and page.get("estimated_page_intent") != "internal_or_auth":
+            findings.append(create_finding("missing_meta_description", "meta_description", "medium", "Add a clear search description", path, explanation="This page is missing a meta description.", recommendation="Add a short description that explains the page and why someone should click."))
+        if page.get("h1_count", 0) == 0 and page.get("estimated_page_intent") != "internal_or_auth":
+            findings.append(create_finding("missing_h1", "thin_content", "medium", "Add one clear page heading", path, explanation="The page does not have a clear H1 heading.", recommendation="Add one main heading that matches the page purpose."))
+        if page.get("h1_count", 0) > 1:
+            findings.append(create_finding("multiple_h1", "thin_content", "low", "Use one main page heading", path, explanation="The page has more than one H1 heading.", recommendation="Keep one H1 as the main page heading and make the rest H2/H3 headings."))
+        if not page.get("canonical") and page.get("indexable"):
+            findings.append(create_finding("canonical_missing", "canonical", "medium", "Add a canonical URL", path, explanation="The page does not expose a canonical URL.", recommendation="Add a self-referencing canonical or point to the preferred version.", difficulty="developer"))
+        missing_alt = int(page.get("image_missing_alt_count") or 0)
+        if missing_alt > 0:
+            findings.append(create_finding("image_alt_text", "image_alt_text", "medium" if missing_alt >= 10 else "low", "Add useful image descriptions", path, current_value=f"{missing_alt} images missing alt text", explanation="Some meaningful images may not have text descriptions.", recommendation="Add short, specific alt text to meaningful images."))
+    return findings
+
+
+def create_finding(rule: str, category: str, priority: str, title: str, page_url: str, current_value: str = "", explanation: str = "", recommendation: str = "", difficulty: str = "easy", source_pages: list[str] | None = None, link_text_samples: list[str] | None = None) -> dict:
+    developer = difficulty == "developer" or any(token in f"{rule} {category} {title}" for token in ["429", "schema", "canonical", "web_dev"])
+    finding_id = stable_id(f"{rule}|{page_url}|{title}")
+    return {
+        "id": finding_id,
+        "fix_id": finding_id,
+        "rule": rule,
+        "category": category,
+        "customer_category": friendly_category(category),
+        "priority": priority,
+        "difficulty": "developer" if developer else difficulty,
+        "status": "needs_developer" if developer else "needs_approval",
+        "title": title,
+        "issue_title": title,
+        "plain_english_explanation": explanation,
+        "plain_english_summary": explanation,
+        "why_it_matters": explanation,
+        "current_value": current_value,
+        "recommended_value": recommendation,
+        "recommendation": recommendation,
+        "ai_recommendation": recommendation,
+        "page_url": page_url,
+        "affected_pages": [page_url],
+        "source_pages": list(dict.fromkeys(source_pages or [])),
+        "link_text_samples": list(dict.fromkeys(link_text_samples or [])),
+        "requires_developer": developer,
+        "requires_approval": not developer,
+        "can_auto_fix": False,
+        "who_can_do_this": "your_web_person" if developer else "you",
+        "confidence_score": 88,
+    }
+
+
+def group_findings(findings: list[dict]) -> list[dict]:
+    # Keep v1 conservative. Grouping can be expanded after fixture tests pass.
+    return findings
+
+
+def build_scan_summary(pages: list[dict], findings: list[dict], health_score: int, pages_found: int, artifact_count: int) -> dict:
+    return {
+        "health_score": health_score,
+        "score": health_score,
+        "pages_scanned": len(pages),
+        "pages_crawled": len(pages),
+        "pages_found": pages_found,
+        "verified_failed_pages": sum(1 for page in pages if is_verified_failed(page)),
+        "suspicious_url_artifacts": artifact_count,
+        "high_priority_count": sum(1 for item in findings if item.get("priority") in ["critical", "high"]),
+        "technical_issue_count": len(findings),
+        "status_label": "Good" if health_score >= 75 else "Fair" if health_score >= 55 else "Needs work",
+        "plain_english_summary": f"The Python scanner reviewed {len(pages)} pages and found {len(findings)} evidence-based issues.",
+    }
+
+
+def build_evidence_summary(pages: list[dict], artifact_count: int) -> dict:
+    summary = {"confirmed_seed": 0, "confirmed_sitemap_and_linked": 0, "sitemap_listed": 0, "internally_linked": 0, "linked_but_failed": 0, "crawler_artifact": artifact_count, "unknown_discovery": 0}
+    for page in pages:
+        key = page.get("url_confidence") or "unknown_discovery"
+        summary[key] = summary.get(key, 0) + 1
+    return summary
+
+
+def page_evidence(page: dict) -> dict:
+    keys = ["url", "final_url", "path", "status_code", "fetch_error", "url_confidence", "url_suspicion_reasons", "discovered_from", "source_pages", "link_text_samples", "page_template_family", "estimated_page_intent", "title", "h1"]
+    return {key: page.get(key) for key in keys}
+
+
+def is_verified_failed(page: dict) -> bool:
+    return bool((int(page.get("status_code") or 0) >= 400 or page.get("fetch_error")) and page.get("url_confidence") != "crawler_artifact")
+
+
+def calculate_health_score(pages: list[dict], findings: list[dict]) -> int:
+    score = 92
+    score -= min(35, sum(1 for page in pages if is_verified_failed(page)) * 8)
+    for finding in findings:
+        score -= {"critical": 10, "high": 6, "medium": 2}.get(finding.get("priority"), 0)
+    return max(20, min(98, round(score)))
+
+
+def normalize_url(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if not raw.startswith(("http://", "https://")):
+        raw = f"https://{raw}"
+    try:
+        parsed = urlparse(raw)
+        if parsed.scheme not in ["http", "https"] or not parsed.netloc:
+            return ""
+        clean, _ = urldefrag(raw)
+        return clean.rstrip("/") if parsed.path != "/" else clean
+    except Exception:
+        return ""
+
+
+def normalize_prefix(value: str) -> str:
+    path = urlparse(value).path if value.startswith(("http://", "https://")) else value
+    path = f"/{path.strip('/')}" if path and path != "/" else "/"
+    return path.rstrip("/") if path != "/" else "/"
+
+
+def same_origin(url: str, origin: str) -> bool:
+    parsed = urlparse(url)
+    return f"{parsed.scheme}://{parsed.netloc}" == origin
+
+
+def empty_discovery() -> dict:
+    return {"discovered_from": [], "source_pages": [], "link_text_samples": []}
+
+
+def merge_discovery(record: dict, source: str, source_page: str, link_text: str) -> None:
+    if source and source not in record["discovered_from"]:
+        record["discovered_from"].append(source)
+    if source_page and source_page not in record["source_pages"]:
+        record["source_pages"].append(source_page)
+    if link_text and link_text not in record["link_text_samples"]:
+        record["link_text_samples"].append(link_text[:180])
+
+
+def dedupe_artifacts(items: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    output: list[dict] = []
+    for item in items:
+        key = f"{item.get('url')}|{item.get('source_pages')}"
+        if key not in seen:
+            seen.add(key)
+            output.append(item)
+    return output
+
+
+def friendly_category(category: str) -> str:
+    return {
+        "meta_title": "Search appearance",
+        "meta_description": "Search appearance",
+        "canonical": "Website setup",
+        "schema": "Trust signals",
+        "thin_content": "Page content",
+        "404_error": "Broken page",
+        "web_dev": "Website setup",
+        "image_alt_text": "Images",
+        "indexability": "Indexability",
+    }.get(category, "Website improvement")
+
+
+def stable_id(value: str) -> str:
+    return "finding_" + str(abs(hash(value)) % 10_000_000_000)

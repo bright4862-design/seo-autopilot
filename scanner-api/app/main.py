@@ -3,9 +3,8 @@ import os
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-from .scanner import run_scan
+from .scanner import VERSION, run_scan
 
-VERSION = "python_scanner_v1"
 SCANNER_API_KEY = os.getenv("SCANNER_API_KEY", "")
 
 app = FastAPI(title="FixList Scanner API", version=VERSION)

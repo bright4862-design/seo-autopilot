@@ -38,17 +38,14 @@ Deno.serve(async (req) => {
       cms_platform: body.cms_platform || body.platform || "",
     };
 
-    const response = await withTimeout(
-      fetch(`${scannerUrl}/scan`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(scannerKey ? { "x-scanner-key": scannerKey } : {}),
-        },
-        body: JSON.stringify(payload),
-      }),
-      FETCH_TIMEOUT_MS,
-    );
+    const response = await fetchWithTimeout(`${scannerUrl}/scan`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(scannerKey ? { "x-scanner-key": scannerKey } : {}),
+      },
+      body: JSON.stringify(payload),
+    }, FETCH_TIMEOUT_MS);
 
     const resultText = await response.text();
     const result = parseJson(resultText) || { success: false, error: resultText.slice(0, 500) };
@@ -87,14 +84,11 @@ function parseJson(text) {
   try { return JSON.parse(text || "{}"); } catch { return null; }
 }
 
-async function withTimeout(promise, timeoutMs) {
+async function fetchWithTimeout(url, options, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await Promise.race([
-      promise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error(`Timed out after ${timeoutMs}ms`)), timeoutMs)),
-    ]);
+    return await fetch(url, { ...options, signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }

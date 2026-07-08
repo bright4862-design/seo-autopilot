@@ -1,6 +1,6 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
-const VERSION = "runPythonScanner_wrapper_v2_url_aliases";
+const VERSION = "runPythonScanner_wrapper_v3_cloud_api_secret";
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -21,10 +21,10 @@ Deno.serve(async (req) => {
     rawBody = await safeReadJson(req);
     body = unwrapRequestBody(rawBody);
 
-    const scannerUrl = String(Deno.env.get("SCANNER_API_URL") || Deno.env.get("PYTHON_SCANNER_API_URL") || Deno.env.get("PYTHON_SCANNER_URL") || Deno.env.get("SCANNER_URL") || "").replace(/\/+$/, "");
+    const scannerUrl = String(Deno.env.get("SCANNER_API_URL") || Deno.env.get("PYTHON_SCANNER_API_URL") || Deno.env.get("PYTHON_SCANNER_URL") || Deno.env.get("SCANNER_URL") || Deno.env.get("cloud_api") || Deno.env.get("CLOUD_API") || "").replace(/\/+$/, "");
     const scannerKey = String(Deno.env.get("SCANNER_API_KEY") || Deno.env.get("PYTHON_SCANNER_API_KEY") || "");
     if (!scannerUrl) {
-      return jsonResponse({ success: false, version: VERSION, error: "Python scanner is not configured. Set SCANNER_API_URL before using runPythonScanner." }, 503);
+      return jsonResponse({ success: false, version: VERSION, error: "Python scanner is not configured. Set SCANNER_API_URL or cloud_api before using runPythonScanner." }, 503);
     }
 
     const websiteUrl = body.website_url || body.url || body.normalized_url || body.requested_start_url || body.start_url || body.target_url || "";

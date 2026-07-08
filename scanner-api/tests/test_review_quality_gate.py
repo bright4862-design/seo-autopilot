@@ -5,7 +5,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.review_quality_gate import run_review_with_quality_gate
+from app.review import run_review
 
 
 def test_metadata_only_review_is_scan_incomplete_not_excellent() -> None:
@@ -36,7 +36,7 @@ def test_metadata_only_review_is_scan_incomplete_not_excellent() -> None:
         }
     }
 
-    result = run_review_with_quality_gate(payload)
+    result = run_review(payload)
 
     assert result["ai_provider"] == "python_review_api"
     assert result["review_version"] == "python_review_v1_archetype_templates"
@@ -49,8 +49,8 @@ def test_metadata_only_review_is_scan_incomplete_not_excellent() -> None:
     assert quality["evidence_complete"] is False
     assert quality["metadata_without_pages"] is True
 
-    assert result["health_score"] <= 70
-    assert result["website_health_report"]["health_score"] <= 70
+    assert result["health_score"] <= 55
+    assert result["website_health_report"]["health_score"] <= 55
     assert result["website_health_report"]["health_grade"] == "Scan incomplete"
     assert "page evidence" in result["ai_review_warning"]
 

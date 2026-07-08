@@ -1,16 +1,30 @@
 import asyncio
 import hashlib
+import re
 import time
 from urllib.parse import urldefrag, urlparse
 
 import httpx
 
 from .artifact_filter import MAX_ARTIFACT_EVIDENCE, is_artifact_url, record_artifact
-from .extract import extract_links, extract_page
+from .extract import classify_template, extract_links, extract_page
 from .security import is_public_http_url, safe_get
 from .sitemap import load_sitemap_urls
 
-VERSION = "python_scanner_v1"
+VERSION = "python_scanner_v2_contract_parity"
+
+# The Python crawler does not derive an AI crawl policy (no InvokeLLM here), but it
+# still emits the policy contract so AI Review keeps provenance. source="disabled"
+# mirrors the Deno path when policy derivation is off.
+DEFAULT_POLICY = {
+    "rendering_mode": "unknown",
+    "platform_guess": "",
+    "priority_boost_patterns": [],
+    "priority_deprioritize_patterns": [],
+    "skip_patterns": [],
+    "source": "disabled",
+    "error": "",
+}
 
 SCAN_BUDGETS = {
     "basic": {"max_pages": 25, "timeout": 35},
@@ -130,6 +144,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         await asyncio.gather(*workers)
 
     findings = build_findings(pages)
+    findings.extend(duplicate_casing_findings(pages))
     grouped = group_findings(findings)
     verified_failed = [page_evidence(page) for page in pages if is_verified_failed(page)]
     artifacts = dedupe_artifacts(artifacts)[:MAX_ARTIFACT_EVIDENCE]
@@ -154,6 +169,8 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         "grouped_findings": grouped,
         "findings": grouped,
         "recommendations": grouped,
+        "crawl_policy": DEFAULT_POLICY,
+        "crawl_policy_source": DEFAULT_POLICY["source"],
         "health_score": health_score,
         "scan_summary": build_scan_summary(pages, grouped, health_score, pages_found, len(artifacts)),
         "verified_failed_pages": verified_failed,
@@ -169,6 +186,10 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
             "verified_failed_pages": len(verified_failed),
             "suspicious_url_artifacts": len(artifacts),
             "url_evidence_summary": build_evidence_summary(pages, len(artifacts)),
+            "crawl_policy": DEFAULT_POLICY,
+            "crawl_policy_source": DEFAULT_POLICY["source"],
+            "duplicate_casing_routes": detect_duplicate_casing_routes(pages),
+            "screaming_frog_lite_enabled": True,
         },
         "crawl_warnings": [],
     }
@@ -253,6 +274,8 @@ def create_finding(rule: str, category: str, priority: str, title: str, page_url
         "ai_recommendation": recommendation,
         "page_url": page_url,
         "affected_pages": [page_url],
+        "page_template_family": classify_template(page_url),
+        "primary_defect_class": "blocked_access" if ("429" in rule or "blocked" in rule) else ("structural" if developer else "content"),
         "source_pages": list(dict.fromkeys(source_pages or [])),
         "link_text_samples": list(dict.fromkeys(link_text_samples or [])),
         "requires_developer": developer,
@@ -263,8 +286,147 @@ def create_finding(rule: str, category: str, priority: str, title: str, page_url
     }
 
 
+FAILURE_RULES = {"rate_limited_page", "failed_page", "server_error", "404_error", "410_error"}
+TEMPLATE_RULES = {"client_rendering", "canonical_missing", "schema", "missing_h1", "multiple_h1", "image_alt_text", "missing_meta_description"}
+GROUP_MIN_AFFECTED = 3
+
+
+def humanize(value: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[_-]+", " ", str(value or "template"))).strip()
+
+
+def grouping_key(finding: dict) -> str:
+    family = classify_template(finding.get("page_url") or (finding.get("affected_pages") or [""])[0] or "")
+    rule = finding.get("rule", "")
+    if rule in FAILURE_RULES:
+        return f"failure|{rule}|{family}"
+    if rule in TEMPLATE_RULES:
+        return f"template|{rule}|{family}"
+    return ""
+
+
+def group_template_title(rule: str, family: str) -> str:
+    fam = humanize(family)
+    if rule == "schema":
+        return f"Add structured data to {fam} templates"
+    if rule == "image_alt_text":
+        return f"Batch image descriptions on {fam} pages"
+    if rule == "missing_meta_description":
+        return f"Batch meta descriptions on {fam} pages"
+    if rule == "missing_h1":
+        return f"Batch page headings on {fam} pages"
+    if rule == "canonical_missing":
+        return f"Add canonical URLs across {fam} templates"
+    return f"Fix repeated {fam} template issue"
+
+
 def group_findings(findings: list[dict]) -> list[dict]:
-    # Keep v1 conservative. Grouping can be expanded after fixture tests pass.
+    direct: list[dict] = []
+    groups: dict[str, list[dict]] = {}
+    for finding in findings:
+        key = grouping_key(finding)
+        if not key:
+            direct.append(finding)
+            continue
+        groups.setdefault(key, []).append(finding)
+
+    for key, members in groups.items():
+        affected = _unique_nonempty([p for f in members for p in (f.get("affected_pages") or [f.get("page_url")])])[:150]
+        # Only collapse into a template card when multiple pages share the issue.
+        if len(affected) < GROUP_MIN_AFFECTED:
+            direct.extend(members)
+            continue
+        sample = members[0]
+        family = classify_template(sample.get("page_url") or "")
+        blocked = key.startswith("failure|rate_limited_page") or sample.get("rule") == "rate_limited_page"
+        if blocked:
+            title = "Check pages blocked by rate limiting"
+            explanation = "Several similar pages returned HTTP 429 or rate limiting. Treat this as one crawler-access problem."
+            recommendation = "Ask your web person to check server, CDN, firewall, and rate-limit logs. Confirm Googlebot and normal users can access the affected URLs."
+        else:
+            title = group_template_title(sample.get("rule", ""), family)
+            explanation = "Several similar pages have the same template-level issue. Fix the shared template or pattern instead of creating one task per page."
+            recommendation = "Fix one representative page/template first, then roll out the same rule across the affected group."
+        group_id = stable_id(f"group|{key}")
+        grouped = dict(sample)
+        grouped.update({
+            "id": group_id,
+            "fix_id": group_id,
+            "page_url": "",
+            "title": title,
+            "issue_title": title,
+            "plain_english_explanation": explanation,
+            "plain_english_summary": explanation,
+            "why_it_matters": explanation,
+            "recommended_value": recommendation,
+            "recommendation": recommendation,
+            "ai_recommendation": recommendation,
+            "priority": "high" if blocked else ("medium" if sample.get("priority") == "high" else sample.get("priority")),
+            "difficulty": "developer" if blocked else sample.get("difficulty"),
+            "requires_developer": blocked or sample.get("requires_developer", False),
+            "who_can_do_this": "your_web_person" if (blocked or sample.get("requires_developer")) else sample.get("who_can_do_this"),
+            "affected_pages": affected,
+            "page_count": len(affected),
+            "source_pages": _unique_nonempty([p for f in members for p in (f.get("source_pages") or [])]),
+            "link_text_samples": _unique_nonempty([t for f in members for t in (f.get("link_text_samples") or [])]),
+        })
+        direct.append(grouped)
+    return direct
+
+
+def _unique_nonempty(values: list) -> list:
+    seen: set = set()
+    out: list = []
+    for value in values:
+        cleaned = str(value or "").strip()
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            out.append(cleaned)
+    return out
+
+
+def detect_duplicate_casing_routes(pages: list[dict]) -> list[dict]:
+    by_lower: dict[str, list[str]] = {}
+    for page in pages:
+        path = str(page.get("path") or "")
+        if not path:
+            continue
+        by_lower.setdefault(path.lower(), [])
+        if path not in by_lower[path.lower()]:
+            by_lower[path.lower()].append(path)
+    return [{"path": lower, "variants": variants} for lower, variants in by_lower.items() if len(variants) > 1][:20]
+
+
+_CASING_HIGH_RISK = ("/dashboard", "/account", "/login", "/cart", "/checkout", "/admin")
+
+
+def duplicate_casing_findings(pages: list[dict]) -> list[dict]:
+    findings: list[dict] = []
+    for item in detect_duplicate_casing_routes(pages):
+        variants = item["variants"]
+        high_risk = any(part in path.lower() for path in variants for part in _CASING_HIGH_RISK)
+        finding = create_finding(
+            rule="duplicate_route_casing",
+            category="indexability",
+            priority="high" if high_risk else "medium",
+            title="Fix duplicate URL casing variants",
+            page_url="",
+            current_value=", ".join(variants[:6]),
+            explanation="The crawler found URLs that differ only by uppercase/lowercase letters. These can create duplicate crawlable pages or expose app-route variants.",
+            recommendation="Ask your web person to choose one canonical casing, redirect the other variants, and make sure internal links use the preferred version.",
+            difficulty="developer",
+        )
+        finding_id = stable_id("duplicate_route_casing|" + "|".join(variants))
+        finding.update({
+            "id": finding_id,
+            "fix_id": finding_id,
+            "why_it_matters": "Search engines may treat these as separate URLs, which can split ranking signals and create duplicate or indexable app routes.",
+            "affected_pages": variants,
+            "page_count": len(variants),
+            "page_template_family": "route_boundary" if high_risk else "standard",
+            "primary_defect_class": "structural",
+        })
+        findings.append(finding)
     return findings
 
 
@@ -279,6 +441,7 @@ def build_scan_summary(pages: list[dict], findings: list[dict], health_score: in
         "suspicious_url_artifacts": artifact_count,
         "high_priority_count": sum(1 for item in findings if item.get("priority") in ["critical", "high"]),
         "technical_issue_count": len(findings),
+        "duplicate_casing_routes": detect_duplicate_casing_routes(pages),
         "status_label": "Good" if health_score >= 75 else "Fair" if health_score >= 55 else "Needs work",
         "plain_english_summary": f"The Python scanner reviewed {len(pages)} pages and found {len(findings)} evidence-based issues.",
     }

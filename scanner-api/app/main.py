@@ -4,7 +4,8 @@ from typing import Any
 from fastapi import Body, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-from .review import REVIEW_VERSION, run_review
+from .review import REVIEW_VERSION
+from .review_quality_gate import run_review_with_quality_gate
 from .scanner import VERSION, run_scan
 
 SCANNER_API_KEY = os.getenv("SCANNER_API_KEY", "")
@@ -44,4 +45,4 @@ async def review(payload: dict[str, Any] = Body(default_factory=dict), x_scanner
     if SCANNER_API_KEY and x_scanner_key != SCANNER_API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    return run_review(payload)
+    return run_review_with_quality_gate(payload)

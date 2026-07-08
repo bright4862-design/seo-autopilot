@@ -137,18 +137,35 @@ def is_route_boundary(path: str) -> bool:
 
 
 def classify_template(path: str) -> str:
-    p = path.lower()
+    p = str(path or "").lower()
+    clean = p.split("?")[0].split("#")[0].rstrip("/")
+    if clean in ("", "/") or clean.count("/") == 0:
+        return "homepage"
     if is_route_boundary(p):
         return "route_boundary"
     if any(x in p for x in ["/tag/", "/author/", "/archive/", "/page/"]):
         return "archive"
-    if any(x in p for x in ["simulation", "simulateur", "calcul", "calculator", "comparateur", "devis", "quote", "pricing", "tarif", "pret", "credit"]):
+    if re.search(r"/annonce/.*?/voir|/annonce/|/activite|/activité|/activity|/experience|/expérience|/atelier|/stage/|/pilotage", p):
+        return "activity_detail"
+    if re.search(r"/loans?/|/loan-overview|/fix-and-flip|/bridge|/rental|/dscr|/hard-money|pret|prêt|credit|crédit|immobilier|mortgage|hypotheque|hypothèque|rachat", p):
+        return "loan_program"
+    if re.search(r"/apply-now|/apply|/request-a-payoff|/document-exchange|/souscription|/devis|/quote|/signup|/demo|/contact-sales", p):
         return "conversion"
-    if any(x in p for x in ["/category/", "/categorie/", "/collection", "listing"]):
-        return "category_listing"
-    if any(x in p for x in ["guide", "blog", "article", "conseils", "actualites"]):
-        return "guide"
-    if any(x in p for x in ["privacy", "terms", "legal", "mentions-legales", "cgv"]):
+    if re.search(r"/calcul|/calculator|/simulateur|/simulation", p):
+        return "calculator"
+    if re.search(r"/comparateur|/compare|/versus|/vs-", p):
+        return "comparison_page"
+    if re.search(r"booking|reservation|réservation|ticket_order|gift_voucher|cadeau|coffret|billet|/ticket|/pass", p):
+        return "booking_or_checkout"
+    if re.search(r"/products?/|/produit/|/p/", p):
+        return "product_page"
+    if re.search(r"/collections?/|/category/|/categorie/|/catégorie/|/marque/|/brand/|listing", p):
+        return "collection_page"
+    if re.search(r"/locations?/|/agence|/ville/|/region/|/store-locator", p):
+        return "location_landing"
+    if any(x in p for x in ["guide", "blog", "article", "conseils", "actualites", "/faq", "question"]):
+        return "guide_article"
+    if any(x in p for x in ["privacy", "terms", "legal", "mentions-legales", "cgv", "conditions"]):
         return "legal_info"
     if "contact" in p:
         return "contact"
@@ -161,7 +178,7 @@ def estimate_intent(path: str, title: str, h1: str, status_code: int) -> str:
         return "blocked_access" if status_code == 429 else "failed"
     if is_route_boundary(text):
         return "internal_or_auth"
-    if re.search(r"devis|quote|pricing|tarif|contact|booking|reservation|checkout|product|produit|collection|category|simulation|simulateur|calcul|calculator|comparateur|demo|signup|pret|credit", text):
+    if re.search(r"devis|quote|pricing|tarif|contact|booking|reservation|checkout|product|produit|collection|category|simulation|simulateur|calcul|calculator|comparateur|demo|signup|pret|prêt|credit|crédit|annonce|voir|activite|activité|activity|experience|expérience|billet|ticket|stage|pass|loans?|apply-now|request-a-payoff|document-exchange|fix-and-flip|bridge|dscr|rental", text):
         return "money_or_conversion"
     if re.search(r"privacy|terms|legal|about|contact|security|mentions", text):
         return "trust_or_legal"

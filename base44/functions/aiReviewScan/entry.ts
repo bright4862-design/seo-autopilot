@@ -1,6 +1,6 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
-const AI_REVIEW_VERSION = "aiReviewScan_v2_scanner_evidence_fixes";
+const AI_REVIEW_VERSION = "aiReviewScan_v3_clean_current_value";
 const SCORING_MODEL = "fixlist_archetype_playbooks_v2_scanner_evidence_fixes";
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -389,7 +389,7 @@ function normalizeFix(fix, index) {
     why_it_matters: why,
     recommended_value: recommendation,
     ai_recommendation: recommendation,
-    current_value: cleanString(fix?.current_value || fix?.current || fix?.status_code ? `HTTP ${fix.status_code}` : ""),
+    current_value: cleanString(fix?.current_value || fix?.current || (fix?.status_code ? `HTTP ${fix.status_code}` : "")),
     page_url: pageUrl,
     affected_pages: affected,
     source_pages: Array.isArray(fix?.source_pages) ? fix.source_pages.slice(0, 20) : [],

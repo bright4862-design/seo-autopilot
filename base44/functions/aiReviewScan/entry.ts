@@ -3,6 +3,7 @@ import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 const AI_REVIEW_VERSION = "aiReviewScan_v6_normalized_python_review_input";
 const PYTHON_REVIEW_VERSION = "python_review_v1_archetype_templates";
 const DENO_FALLBACK_PROFILE = "deno_review_safety_fallback_v6";
+const DENO_FALLBACK_EVIDENCE_CONTRACT = "deno_review_fallback_evidence_contract_v1";
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -132,6 +133,7 @@ function buildDenoSafetyFallback(body, reason, configured, wasWrapped) {
     python_review_api_url_configured: Boolean(configured),
     python_review_fallback_reason: reason || "unknown reason",
     deno_fallback_profile: DENO_FALLBACK_PROFILE,
+    deno_fallback_evidence_contract: DENO_FALLBACK_EVIDENCE_CONTRACT,
     plain_english_summary: summary,
     website_health_report: report,
     health_explanation: summary,
@@ -218,10 +220,13 @@ function buildFallbackFixes(body, pages, fingerprint) {
 function normalizeScannerFixes(rawFixes, fingerprint, body) {
   return (rawFixes || []).filter((fix) => fix && typeof fix === "object").map((fix) => {
     const affectedPages = unique((fix.affected_pages || fix.urls || fix.pages || [fix.page_url || "/"]).map(cleanPath).filter(Boolean));
+    const sourcePages = normalizeSourcePages(fix.source_pages, affectedPages);
+    const linkTextSamples = normalizeLinkTextSamples(fix.link_text_samples);
     const rule = cleanString(fix.rule || fix.rule_id || fix.type || "scanner_finding");
     const category = cleanString(fix.category || friendlyCategoryToTechnical(rule));
     const recommendation = cleanString(fix.recommendation || fix.ai_recommendation || fix.recommended_value || "Review and fix this scanner finding.");
     const title = cleanString(fix.title || fix.issue_title || "Review scanner finding");
+    const currentValue = cleanString(fix.current_value || fix.current) || evidenceCurrentValue({ rule, affectedPages, sourcePages, statusCodes: fix.status_codes });
     return scoreFix({
       ...fix,
       rule,
@@ -230,8 +235,10 @@ function normalizeScannerFixes(rawFixes, fingerprint, body) {
       title,
       issue_title: title,
       affected_pages: affectedPages,
+      source_pages: sourcePages,
+      link_text_samples: linkTextSamples,
       page_url: cleanPath(fix.page_url || affectedPages[0] || "/"),
-      current_value: cleanString(fix.current_value || fix.current || "Detected from scanner evidence."),
+      current_value: currentValue,
       recommendation,
       recommended_value: recommendation,
       ai_recommendation: recommendation,
@@ -276,7 +283,7 @@ function pagePatternFixes(pages) {
       affectedPages: affected,
       difficulty: affected.length >= 5 ? "developer" : bucket.difficulty,
       source: `deno_fallback_page_pattern:${bucket.rule}:${bucket.family}`,
-      extra: { current_value: bucket.currentValue, page_template_family: bucket.family },
+      extra: { current_value: templateCurrentValue(affected), source_pages: affected, link_text_samples: [], page_template_family: bucket.family },
     }));
   }
   return fixes;
@@ -284,6 +291,9 @@ function pagePatternFixes(pages) {
 
 function makeFix({ rule, category, priority, title, explanation, why, recommendation, affectedPages, difficulty, source, extra = {} }) {
   const cleanAffected = unique((affectedPages || ["/"]).map(cleanPath).filter(Boolean)).slice(0, 150);
+  const sourcePages = normalizeSourcePages(extra.source_pages, cleanAffected);
+  const linkTextSamples = normalizeLinkTextSamples(extra.link_text_samples);
+  const currentValue = cleanString(extra.current_value) || evidenceCurrentValue({ rule, affectedPages: cleanAffected, sourcePages, statusCodes: extra.status_codes });
   const page = cleanAffected[0] || "/";
   const developerOwned = difficulty === "developer" || cleanAffected.length >= 5 || /canonical|redirect|server|schema|template|404|410|429|blocked|indexability|route/i.test(`${rule} ${category} ${title}`);
   const id = stableId(`fallback|${rule}|${page}|${title}|${cleanAffected.join(",")}`);
@@ -300,7 +310,6 @@ function makeFix({ rule, category, priority, title, explanation, why, recommenda
     plain_english_explanation: explanation,
     plain_english_summary: explanation,
     why_it_matters: why,
-    current_value: extra.current_value || "Detected from crawl evidence and site patterns.",
     recommended_value: recommendation,
     ai_recommendation: recommendation,
     recommendation,
@@ -321,6 +330,9 @@ function makeFix({ rule, category, priority, title, explanation, why, recommenda
     time_estimate: developerOwned ? "about 1–2 hours" : "about 10–20 minutes",
     source,
     ...extra,
+    current_value: currentValue,
+    source_pages: sourcePages,
+    link_text_samples: linkTextSamples,
   };
 }
 
@@ -329,13 +341,21 @@ function scoreFix(fix, fingerprint, body) {
   const pageValue = scorePageValue(pageUrl, fingerprint, body);
   const defectClass = classifyDefectClass(fix);
   const evidenceConfidence = Number(fix.confidence_score || 80);
-  const reachScore = Math.max(5, Math.min(100, (fix.affected_pages?.length || 1) * 10));
+  const affectedPages = unique((fix.affected_pages || [pageUrl]).map(cleanPath).filter(Boolean));
+  const sourcePages = normalizeSourcePages(fix.source_pages, affectedPages);
+  const linkTextSamples = normalizeLinkTextSamples(fix.link_text_samples);
+  const currentValue = cleanString(fix.current_value) || evidenceCurrentValue({ rule: fix.rule, affectedPages, sourcePages, statusCodes: fix.status_codes });
+  const reachScore = Math.max(5, Math.min(100, affectedPages.length * 10));
   let overall = Math.round(evidenceConfidence * 0.24 + pageValue.score * 0.27 + reachScore * 0.15 + (["structural", "crawl_index", "blocked_access"].includes(defectClass) ? 18 : 0) + 22);
   overall = Math.max(0, Math.min(100, overall));
   const priority = fix.priority === "critical" ? "critical" : overall >= 82 ? "critical" : overall >= 68 ? "high" : overall >= 44 ? "medium" : "low";
-  const developerOwned = fix.requires_developer || fix.difficulty === "developer" || (["structural", "crawl_index", "blocked_access", "semantic_schema"].includes(defectClass) && (fix.affected_pages?.length || 0) >= 2);
+  const developerOwned = fix.requires_developer || fix.difficulty === "developer" || (["structural", "crawl_index", "blocked_access", "semantic_schema"].includes(defectClass) && affectedPages.length >= 2);
   return {
     ...fix,
+    current_value: currentValue,
+    affected_pages: affectedPages,
+    source_pages: sourcePages,
+    link_text_samples: linkTextSamples,
     priority,
     page_type: pageValue.classification,
     page_template_family: fix.page_template_family || getTemplateFamily(pageUrl),
@@ -458,6 +478,10 @@ function addBucket(buckets, rule, category, family, page, title, explanation, wh
   buckets.get(key).pages.push(page);
 }
 
+function normalizeSourcePages(value, affectedPages = []) { const sourcePages = Array.isArray(value) ? unique(value.map(cleanPath).filter(Boolean)) : []; return (sourcePages.length ? sourcePages : unique((affectedPages || []).map(cleanPath).filter(Boolean))).slice(0, 30); }
+function normalizeLinkTextSamples(value) { return Array.isArray(value) ? unique(value.map((item) => cleanString(item)).filter(Boolean)).slice(0, 12) : []; }
+function templateCurrentValue(paths) { const clean = unique((paths || []).map(cleanPath).filter(Boolean)); if (!clean.length) return "No affected pages recorded."; const more = clean.length > 3 ? ` (+${clean.length - 3} more)` : ""; return `${clean.length} affected ${clean.length === 1 ? "page" : "pages"}: ${clean.slice(0, 3).join(", ")}${more}`; }
+function evidenceCurrentValue({ rule = "", affectedPages = [], sourcePages = [], statusCodes = [] } = {}) { const affected = unique((affectedPages || []).map(cleanPath).filter(Boolean)); const sources = unique((sourcePages || []).map(cleanPath).filter(Boolean)); const codes = unique(Array.isArray(statusCodes) ? statusCodes.map((code) => Number(code)).filter(Boolean) : []); const sample = affected.slice(0, 3).join(", "); if (/404|410|broken|failed|429|blocked|rate/i.test(String(rule)) && affected.length) { const http = codes.length ? ` HTTP ${codes.join("/")}` : " failed or access-limited"; return `${affected.length} affected ${affected.length === 1 ? "URL" : "URLs"}${http}: ${sample}${affected.length > 3 ? ` (+${affected.length - 3} more)` : ""}${sources.length ? `. Source evidence: ${sources.slice(0, 3).join(", ")}` : ""}`; } return templateCurrentValue(affected.length ? affected : sources); }
 function isFailedPage(page) { const status = Number(page?.status_code || page?.status || 0); if (status >= 400 && status !== 429) return true; const error = String(page?.fetch_error || page?.error || "").toLowerCase(); return hasAny(error, ["404", "410", "500", "503", "not found", "server error"]); }
 function isBlockedAccessPage(page) { const status = Number(page?.status_code || page?.status || 0); const text = `${page?.fetch_error || ""} ${page?.title || ""} ${page?.content_type || ""}`.toLowerCase(); return status === 429 || hasAny(text, ["rate limit", "too many requests", "connection verification", "bot protection", "access denied", "cloudflare"]); }
 function pageEvidenceUrl(page) { return page?.url || page?.final_url || page?.path || page?.page_url || "/"; }

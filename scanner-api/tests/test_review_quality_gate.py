@@ -59,3 +59,33 @@ def test_metadata_only_review_is_scan_incomplete_not_excellent() -> None:
     assert fixes[0]["rule"] == "review_evidence_missing"
     assert fixes[0]["who_can_do_this"] == "your_web_person"
     assert fixes[0]["requires_developer"] is True
+
+
+def test_blocked_crawl_is_capped_and_flagged() -> None:
+    result = run_review({
+        "website_url": "https://www.meilleurtaux.com",
+        "pages": [{"final_url": "https://www.meilleurtaux.com/", "status_code": 429}],
+        "scan_coverage": {"pages_found": 50, "pages_crawled": 1, "sampled_pages_sent_to_ai": 1},
+    })
+
+    assert result["health_score"] <= 45
+    assert result["website_health_report"]["health_score"] <= 45
+    assert result["website_health_report"]["health_grade"] == "Blocked / incomplete"
+    assert result["scan_status"] == "blocked_or_incomplete"
+    assert result["review_input_quality"]["blocked_or_429_pages"] == 1
+
+
+def test_healthy_crawl_with_few_blocks_is_not_capped() -> None:
+    pages = [{"final_url": f"https://x.com/p{i}", "status_code": 200} for i in range(150)]
+    pages[0]["status_code"] = 429
+    pages[1]["status_code"] = 429
+
+    result = run_review({
+        "website_url": "https://x.com",
+        "pages": pages,
+        "scan_coverage": {"pages_found": 983, "pages_crawled": 150, "sampled_pages_sent_to_ai": 150},
+    })
+
+    assert result["scan_status"] == "complete"
+    assert result["website_health_report"]["health_grade"] != "Blocked / incomplete"
+    assert result["review_input_quality"]["blocked_or_429_pages"] == 2

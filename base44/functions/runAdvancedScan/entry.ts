@@ -1,9 +1,12 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
-const VERSION = "runAdvancedScan_v20_artifact_precision";
+const VERSION = "runAdvancedScan_v21_python_first";
+const PYTHON_SCANNER_VERSION = "python_scanner_v2_contract_parity";
+const DENO_FALLBACK_PROFILE = "deno_screaming_frog_lite_fallback_v21";
 const CORS_HEADERS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
-const USER_AGENT = "Mozilla/5.0 (compatible; FixListBot/2.0; +https://base44.app)";
+const USER_AGENT = "Mozilla/5.0 (compatible; FixListBot/2.1; +https://base44.app)";
 const FETCH_TIMEOUT_MS = 12000;
+const PYTHON_TIMEOUT_MS = 120000;
 const MAX_BODY_CHARS = 1_500_000;
 const MAX_SITEMAP_FETCHES = 12;
 const MAX_ARTIFACT_EVIDENCE = 100;
@@ -20,11 +23,14 @@ const HARD_SKIP = ["/logout", "/search", "/feed", "/rss", "/wp-admin", "/wp-json
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
+  if (req.method !== "POST") return jsonResponse({ success: false, version: VERSION, error: "Method not allowed" }, 405);
+
   let rawBody = {}, body = {};
   try {
     const base44 = createClientFromRequest(req);
     const user = await base44.auth.me().catch(() => null);
     if (!user) return jsonResponse({ success: false, version: VERSION, error: "Unauthorized" }, 401);
+
     rawBody = await safeReadJson(req);
     body = unwrapRequestBody(rawBody);
     const budget = resolveBudget(body);
@@ -32,10 +38,18 @@ Deno.serve(async (req) => {
     if (!websiteUrl) return jsonResponse({ success: false, version: VERSION, error: "Missing or invalid website_url.", received_keys: Object.keys(rawBody || {}), resolved_keys: Object.keys(body || {}) }, 400);
     const safety = await validatePublicHttpUrl(websiteUrl);
     if (!safety.ok) return jsonResponse({ success: false, version: VERSION, error: safety.reason, received_keys: Object.keys(rawBody || {}), resolved_keys: Object.keys(body || {}) }, 400);
-    const invokeLLM = typeof base44.integrations?.Core?.InvokeLLM === "function" ? async (prompt) => await base44.integrations.Core.InvokeLLM({ prompt }) : null;
 
-    const crawlResult = await crawlWebsite({ startUrl: websiteUrl, budget, pathPrefix: body.path_prefix || body.requested_path_prefix || body.crawl_path_prefix || "", invokeLLM });
-    const rawFindings = buildFindings(crawlResult.pages, websiteUrl, budget);
+    const pathPrefix = body.path_prefix || body.requested_path_prefix || body.crawl_path_prefix || "";
+    const scanMode = body.scan_mode || body.audit_profile || "advanced";
+    const pythonAttempt = await tryPythonScanner({ body, websiteUrl, pathPrefix, scanMode });
+    if (pythonAttempt.ok) return jsonResponse(toPythonAdvancedScanResponse(pythonAttempt.result, scanMode));
+
+    const invokeLLM = typeof base44.integrations?.Core?.InvokeLLM === "function" ? async (prompt) => await base44.integrations.Core.InvokeLLM({ prompt }) : null;
+    const fallbackReason = pythonAttempt.reason || "Python scanner unavailable; used Deno fallback.";
+    const crawlResult = await crawlWebsite({ startUrl: websiteUrl, budget, pathPrefix, invokeLLM });
+    crawlResult.warnings = unique([...(crawlResult.warnings || []), `Python scanner fallback used: ${fallbackReason}`]);
+
+    const rawFindings = [...buildFindings(crawlResult.pages, websiteUrl, budget), ...duplicateCasingFindings(crawlResult.pages)];
     const groupedFindings = groupFindings(rawFindings);
     const healthScore = calculateHealthScore(crawlResult.pages, groupedFindings);
     const verifiedFailedPages = crawlResult.pages.filter(isVerifiedFailedPage).map(pageEvidenceObject);
@@ -46,11 +60,15 @@ Deno.serve(async (req) => {
       success: true,
       version: VERSION,
       scanner_version: VERSION,
-      scanner_profile: "screaming_frog_lite_artifact_precision_v20",
+      scanner_profile: DENO_FALLBACK_PROFILE,
       screaming_frog_lite_enabled: true,
+      advanced_scan_backend: "deno_fallback",
+      deno_fallback_used: true,
+      scanner_api_url_configured: pythonAttempt.configured,
+      python_scanner_fallback_reason: fallbackReason,
       website_url: websiteUrl,
       normalized_url: websiteUrl,
-      scan_mode: body.scan_mode || body.audit_profile || "advanced",
+      scan_mode: scanMode,
       audit_profile: body.audit_profile || body.scan_mode || "advanced",
       pages_found: crawlResult.pages_found,
       pages_crawled: crawlResult.pages.length,
@@ -73,13 +91,18 @@ Deno.serve(async (req) => {
       url_evidence_summary: evidenceSummary,
       technical_audit_summary: {
         scanner_version: VERSION,
+        scanner_profile: DENO_FALLBACK_PROFILE,
         screaming_frog_lite_enabled: true,
+        advanced_scan_backend: "deno_fallback",
+        deno_fallback_used: true,
+        python_scanner_fallback_reason: fallbackReason,
         pages_crawled: crawlResult.pages.length,
         pages_found: crawlResult.pages_found,
         failed_pages: crawlResult.pages.filter((page) => page.status_code >= 400 || page.fetch_error).length,
         verified_failed_pages: verifiedFailedPages.length,
         suspicious_url_artifacts: suspiciousUrlArtifacts.length,
         route_boundary_candidates_crawled: crawlResult.pages.filter((page) => page.route_boundary_candidate).length,
+        duplicate_casing_routes: detectDuplicateCasingRoutes(crawlResult.pages),
         crawl_policy: crawlResult.crawl_policy,
         crawl_policy_source: crawlResult.crawl_policy?.source || "default",
         url_evidence_summary: evidenceSummary,
@@ -92,6 +115,58 @@ Deno.serve(async (req) => {
     return jsonResponse({ success: false, version: VERSION, error: "Advanced scan failed. Please try again.", detail: String(error?.message || error || "unknown error").slice(0, 240), received_keys: Object.keys(rawBody || {}), resolved_keys: Object.keys(body || {}) }, 500);
   }
 });
+
+async function tryPythonScanner({ body, websiteUrl, pathPrefix, scanMode }) {
+  const scannerUrl = String(Deno.env.get("SCANNER_API_URL") || Deno.env.get("PYTHON_SCANNER_API_URL") || Deno.env.get("PYTHON_SCANNER_URL") || Deno.env.get("SCANNER_URL") || Deno.env.get("cloud_api") || Deno.env.get("CLOUD_API") || "").replace(/\/+$/, "");
+  const scannerKey = String(Deno.env.get("SCANNER_API_KEY") || Deno.env.get("PYTHON_SCANNER_API_KEY") || "");
+  if (!scannerUrl) return { ok: false, configured: false, reason: "SCANNER_API_URL/cloud_api is not configured." };
+  if (!scannerKey) return { ok: false, configured: true, reason: "SCANNER_API_KEY is not configured." };
+  try {
+    const response = await fetchWithTimeout(`${scannerUrl}/scan`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-scanner-key": scannerKey },
+      body: JSON.stringify({
+        website_url: websiteUrl,
+        path_prefix: pathPrefix || null,
+        scan_mode: scanMode || "advanced",
+        business_name: body.business_name || body.project_name || "",
+        cms_platform: body.cms_platform || body.platform || "",
+      }),
+    }, PYTHON_TIMEOUT_MS);
+    const text = await response.text();
+    const result = parseJson(text) || { success: false, error: text.slice(0, 400) };
+    if (!response.ok) return { ok: false, configured: true, reason: `Python scanner HTTP ${response.status}: ${String(result.detail || result.error || "request failed").slice(0, 180)}` };
+    if (result.success === false) return { ok: false, configured: true, reason: `Python scanner returned success=false: ${String(result.error || "unknown error").slice(0, 180)}` };
+    if (result.scanner_version !== PYTHON_SCANNER_VERSION) return { ok: false, configured: true, reason: `Python scanner version ${result.scanner_version || "missing"} did not match ${PYTHON_SCANNER_VERSION}.` };
+    return { ok: true, configured: true, result };
+  } catch (error) {
+    return { ok: false, configured: true, reason: `Python scanner request failed: ${String(error?.message || error || "unknown error").slice(0, 180)}` };
+  }
+}
+
+function toPythonAdvancedScanResponse(result, scanMode) {
+  const warnings = Array.isArray(result.crawl_warnings) ? result.crawl_warnings : [];
+  const technical = result.technical_audit_summary && typeof result.technical_audit_summary === "object" ? result.technical_audit_summary : {};
+  return {
+    ...result,
+    success: result.success !== false,
+    version: VERSION,
+    scanner_version: result.scanner_version,
+    advanced_scan_backend: "python_scanner_api",
+    deno_fallback_used: false,
+    scanner_api_url_configured: true,
+    scan_mode: result.scan_mode || scanMode || "advanced",
+    audit_profile: result.audit_profile || result.scan_mode || scanMode || "advanced",
+    technical_audit_summary: {
+      ...technical,
+      scanner_version: result.scanner_version,
+      advanced_scan_backend: "python_scanner_api",
+      deno_fallback_used: false,
+      python_scanner_fallback_reason: "",
+    },
+    crawl_warnings: warnings,
+  };
+}
 
 async function crawlWebsite({ startUrl, budget, pathPrefix, invokeLLM }) {
   const start = new URL(startUrl);
@@ -167,9 +242,7 @@ function parsePolicyResponse(raw) {
     const first = text.indexOf("{");
     const last = text.lastIndexOf("}");
     return first >= 0 && last > first ? JSON.parse(text.slice(first, last + 1)) : DEFAULT_POLICY;
-  } catch {
-    return DEFAULT_POLICY;
-  }
+  } catch { return DEFAULT_POLICY; }
 }
 
 function cleanPolicyPattern(value) {
@@ -192,6 +265,13 @@ async function safeFetchText(url, redirectCount = 0) {
     const text = isHtmlContent(contentType) || contentType.includes("xml") || url.toLowerCase().endsWith(".txt") ? (await response.text()).slice(0, MAX_BODY_CHARS) : "";
     return { ok: response.ok, url, final_url: response.url || url, status, content_type: contentType, text, error: "" };
   } finally { clearTimeout(timer); }
+}
+
+async function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try { return await fetch(url, { ...options, signal: controller.signal }); }
+  finally { clearTimeout(timer); }
 }
 
 async function loadSitemapUrls(origin, limit, pathPrefix = "/", deadline = Infinity, artifactSink = []) {
@@ -318,13 +398,34 @@ function groupFindings(findings) {
     const title = blocked ? "Check pages blocked by rate limiting" : groupTemplateTitle(sample, family);
     const explanation = blocked ? "Several similar pages returned HTTP 429 or rate limiting. Treat this as one crawler-access problem." : "Several similar pages have the same template-level issue. Fix the shared template or pattern instead of creating one task per page.";
     const recommendation = blocked ? "Ask your web person to check server, CDN, firewall, and rate-limit logs. Confirm Googlebot and normal users can access the affected URLs." : "Fix one representative page/template first, then roll out the same rule across the affected group.";
-    direct.push({ ...sample, id: stableId(`group|${key}`), fix_id: stableId(`group|${key}`), page_url: "", issue_title: title, title, plain_english_explanation: explanation, plain_english_summary: explanation, why_it_matters: explanation, recommended_value: recommendation, ai_recommendation: recommendation, priority: blocked ? "high" : sample.priority === "high" ? "medium" : sample.priority, difficulty: blocked ? "developer" : sample.difficulty, requires_developer: blocked || sample.requires_developer, who_can_do_this: blocked ? "your_web_person" : sample.who_can_do_this, affected_pages: affected, page_count: affected.length, source_pages: unique(list.flatMap((f) => f.source_pages || [])), link_text_samples: unique(list.flatMap((f) => f.link_text_samples || [])) });
+    direct.push({ ...sample, id: stableId(`group|${key}`), fix_id: stableId(`group|${key}`), page_url: "", issue_title: title, title, plain_english_explanation: explanation, plain_english_summary: explanation, why_it_matters: explanation, recommended_value: recommendation, recommendation, ai_recommendation: recommendation, priority: blocked ? "high" : sample.priority === "high" ? "medium" : sample.priority, difficulty: blocked ? "developer" : sample.difficulty, requires_developer: blocked || sample.requires_developer, who_can_do_this: blocked ? "your_web_person" : sample.who_can_do_this, affected_pages: affected, page_count: affected.length, source_pages: unique(list.flatMap((f) => f.source_pages || [])), link_text_samples: unique(list.flatMap((f) => f.link_text_samples || [])) });
   }
   return direct;
 }
 
-function groupingKey(finding) { const family = classifyTemplateFamily(finding.page_url || finding.affected_pages?.[0] || ""); if (["rate_limited_page", "server_error", "404_error", "410_error"].includes(finding.rule)) return `failure|${finding.rule}|${family}`; if (["client_rendering", "canonical_missing", "schema", "missing_h1", "image_alt_text", "missing_meta_description"].includes(finding.rule)) return `template|${finding.rule}|${family}`; return ""; }
-function groupTemplateTitle(finding, family) { if (finding.rule === "schema") return `Add structured data to ${humanize(family)} templates`; if (finding.rule === "image_alt_text") return `Batch image descriptions on ${humanize(family)} pages`; if (finding.rule === "missing_meta_description") return `Batch meta descriptions on ${humanize(family)} pages`; return `Fix repeated ${humanize(family)} template issue`; }
+function groupingKey(finding) { const family = classifyTemplateFamily(finding.page_url || finding.affected_pages?.[0] || ""); if (["rate_limited_page", "server_error", "404_error", "410_error", "failed_page"].includes(finding.rule)) return `failure|${finding.rule}|${family}`; if (["client_rendering", "canonical_missing", "schema", "missing_h1", "multiple_h1", "image_alt_text", "missing_meta_description"].includes(finding.rule)) return `template|${finding.rule}|${family}`; return ""; }
+function groupTemplateTitle(finding, family) { if (finding.rule === "schema") return `Add structured data to ${humanize(family)} templates`; if (finding.rule === "image_alt_text") return `Batch image descriptions on ${humanize(family)} pages`; if (finding.rule === "missing_meta_description") return `Batch meta descriptions on ${humanize(family)} pages`; if (finding.rule === "missing_h1") return `Batch page headings on ${humanize(family)} pages`; return `Fix repeated ${humanize(family)} template issue`; }
+
+function detectDuplicateCasingRoutes(pages) {
+  const byLower = new Map();
+  for (const page of pages || []) {
+    const path = cleanPath(page.path || page.final_url || page.url || "").split("?")[0];
+    if (!path) continue;
+    const lower = path.toLowerCase();
+    const variants = byLower.get(lower) || [];
+    if (!variants.includes(path)) variants.push(path);
+    byLower.set(lower, variants);
+  }
+  return Array.from(byLower.entries()).filter(([, variants]) => variants.length > 1).map(([path, variants]) => ({ path, variants })).slice(0, 20);
+}
+
+function duplicateCasingFindings(pages) {
+  return detectDuplicateCasingRoutes(pages).map((item) => {
+    const highRisk = item.variants.some((path) => ["/dashboard", "/account", "/login", "/cart", "/checkout", "/admin"].some((part) => path.toLowerCase().includes(part)));
+    const finding = createFinding({ rule: "duplicate_route_casing", category: "indexability", priority: highRisk ? "high" : "medium", title: "Fix duplicate URL casing variants", pageUrl: "", affectedPages: item.variants, currentValue: item.variants.slice(0, 6).join(", "), explanation: "The crawler found URLs that differ only by uppercase/lowercase letters. These can create duplicate crawlable pages or expose app-route variants.", recommendation: "Ask your web person to choose one canonical casing, redirect the other variants, and make sure internal links use the preferred version.", difficulty: "developer" });
+    return { ...finding, id: stableId(`duplicate_route_casing|${item.variants.join("|")}`), fix_id: stableId(`duplicate_route_casing|${item.variants.join("|")}`), affected_pages: item.variants, page_count: item.variants.length, page_template_family: highRisk ? "route_boundary" : "standard", primary_defect_class: "structural" };
+  });
+}
 
 function extractPageFromHtml({ requestedUrl, fetched, discovery }) {
   const html = fetched.text || "";
@@ -376,6 +477,7 @@ function collectSchemaTypes(value, types) { if (!value) return; if (Array.isArra
 function resolveBudget(body) { const mode = String(body.scan_mode || body.audit_profile || "advanced").toLowerCase(); return MODE_LIMITS[mode] || MODE_LIMITS.advanced; }
 function unwrapRequestBody(raw) { if (!raw || typeof raw !== "object") return {}; if (raw.website_url || raw.url || raw.normalized_url || raw.requested_start_url || raw.start_url || raw.target_url) return raw; if (raw.data && typeof raw.data === "object") return raw.data; if (raw.body && typeof raw.body === "object") return raw.body; if (raw.payload && typeof raw.payload === "object") return raw.payload; if (raw.input && typeof raw.input === "object") return raw.input; if (raw.args && typeof raw.args === "object") return raw.args; return raw; }
 async function safeReadJson(req) { try { return await req.json(); } catch { return {}; } }
+function parseJson(text) { try { return JSON.parse(text || "{}"); } catch { return null; } }
 function jsonResponse(payload, status = 200) { return Response.json(payload, { status, headers: CORS_HEADERS }); }
 function normalizeWebsiteUrl(value) { const raw = String(value || "").trim(); if (!raw) return ""; try { const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`); if (!/^https?:$/i.test(url.protocol) || !url.hostname || url.username || url.password) return ""; url.hash = ""; return url.href; } catch { return ""; } }
 function canonicalizeUrl(value) { try { const url = new URL(String(value || "")); if (!/^https?:$/i.test(url.protocol)) return ""; url.hash = ""; if (url.pathname !== "/") url.pathname = url.pathname.replace(/\/{2,}/g, "/").replace(/\/$/, ""); const params = [...url.searchParams.entries()].filter(([key]) => !/^utm_|^(fbclid|gclid|mc_cid|mc_eid|ref|session|sid)$/i.test(key)); url.search = ""; for (const [key, val] of params.slice(0, 8)) url.searchParams.append(key, val); return url.href; } catch { return ""; } }

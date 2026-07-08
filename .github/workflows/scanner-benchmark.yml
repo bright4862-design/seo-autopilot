@@ -41,13 +41,13 @@ jobs:
 
       - name: Run scanner tests
         working-directory: scanner-api
-        run: pytest
+        run: PYTHONPATH=. python -m pytest tests/
 
       - name: Run benchmark
         working-directory: scanner-api
         run: |
           if [ "${{ github.event.inputs.site }}" = "all" ]; then
-            python benchmark.py
+            PYTHONPATH=. python benchmark.py
           else
-            python benchmark.py "${{ github.event.inputs.site }}"
+            PYTHONPATH=. python benchmark.py "${{ github.event.inputs.site }}"
           fi

@@ -323,6 +323,12 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
     sampled_pages_sent = first_number(deep_get(body, "scan_coverage", "sampled_pages_sent_to_ai"), pages_received)
     route_boundary_count = sum(1 for p in pages if is_route_boundary_candidate(page_evidence_url(p)) or is_internal_app_route(page_evidence_url(p)))
     blocked_access_pages = sum(1 for p in pages if is_blocked_access_page(p))
+    blocked_or_429_pages = max(
+        blocked_access_pages,
+        int_or_zero(deep_get(body, "scan_coverage", "rate_limited_pages")),
+        int_or_zero(deep_get(body, "scan_coverage", "blocked_pages")),
+        int_or_zero(deep_get(body, "technical_audit_summary", "blocked_pages")),
+    )
     host = safe_hostname(website_url)
 
     return {
@@ -348,6 +354,7 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         "route_boundary_count": route_boundary_count,
         "route_boundary_risk": "high" if route_boundary_count >= 4 else "medium" if route_boundary_count else "low",
         "blocked_access_pages": blocked_access_pages,
+        "blocked_or_429_pages": blocked_or_429_pages,
         "free_base44_subdomain": host.endswith(".base44.app"),
         "scoring_model": SCORING_MODEL,
     }
@@ -367,6 +374,7 @@ def review_input_quality(body: dict[str, Any], site_fingerprint: dict[str, Any])
         "has_technical_summary": bool(body.get("technical_audit_summary")),
         "evidence_complete": not incomplete,
         "metadata_without_pages": incomplete,
+        "blocked_or_429_pages": int_or_zero(site_fingerprint.get("blocked_or_429_pages")),
     }
 
 
@@ -378,6 +386,21 @@ def evidence_is_incomplete(site_fingerprint: dict[str, Any]) -> bool:
     )
     sampled = int_or_zero(site_fingerprint.get("sampled_pages_sent_to_ai"))
     return reported > 0 and (received == 0 or sampled == 0)
+
+
+def crawl_is_blocked(site_fingerprint: dict[str, Any]) -> bool:
+    crawled = int_or_zero(site_fingerprint.get("pages_crawled"))
+    received = int_or_zero(site_fingerprint.get("pages_received"))
+    blocked = max(
+        int_or_zero(site_fingerprint.get("blocked_access_pages")),
+        int_or_zero(site_fingerprint.get("blocked_or_429_pages")),
+    )
+    if blocked == 0:
+        return False
+    if crawled <= 1:
+        return True
+    usable = max(received, crawled)
+    return usable > 0 and (blocked / usable) >= 0.5
 
 
 def make_missing_evidence_fix() -> dict[str, Any]:
@@ -663,6 +686,7 @@ def score_fix(fix: dict[str, Any], site_fingerprint: dict[str, Any], body: dict[
 
 def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixes: list[dict[str, Any]], site_fingerprint: dict[str, Any], playbook: dict[str, Any], website_url: str) -> dict[str, Any]:
     incomplete = evidence_is_incomplete(site_fingerprint)
+    blocked = crawl_is_blocked(site_fingerprint)
     quality = review_input_quality(body, site_fingerprint)
     health_score = compute_health_score(fixes, site_fingerprint)
     summary = f"FixList recognized this as {playbook['label']} and used the {playbook['label']} playbook. The scanner reviewed {site_fingerprint['pages_crawled']} pages"
@@ -679,7 +703,7 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
         "health_score": health_score,
         "score": health_score,
         "overall_explanation": summary,
-        "health_grade": "Scan incomplete" if incomplete else "Strong" if health_score >= 90 else "Good" if health_score >= 80 else "Needs work" if health_score >= 65 else "Major issues",
+        "health_grade": "Blocked / incomplete" if blocked else "Scan incomplete" if incomplete else "Strong" if health_score >= 90 else "Good" if health_score >= 80 else "Needs work" if health_score >= 65 else "Major issues",
         "what_is_working": working,
         "top_concerns": top_concerns,
         "quick_wins": quick_wins,
@@ -688,7 +712,7 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
             "This scan is read-only and cannot confirm private analytics, paid search data, conversions, or server logs.",
             "HTTP 429 and connection-verification results need access-log confirmation before being treated as confirmed broken customer pages.",
         ],
-        "next_best_step": "Re-run the scan — page evidence did not reach AI Review." if incomplete else ((fixes[0].get("issue_title") or fixes[0].get("title")) if fixes else "Review the first FixList item."),
+        "next_best_step": "Ask your web person to verify crawler access, rate limits, CDN, firewall, and bot-protection settings." if blocked else "Re-run the scan — page evidence did not reach AI Review." if incomplete else ((fixes[0].get("issue_title") or fixes[0].get("title")) if fixes else "Review the first FixList item."),
     }
     pages_returned = pages[:80]
     return {
@@ -715,6 +739,7 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
         "review_input_quality": quality,
         "review_quality_gate_version": QUALITY_GATE_VERSION,
         "evidence_complete": not incomplete,
+        "scan_status": "blocked_or_incomplete" if blocked else "incomplete_evidence" if incomplete else "complete",
         "archetype_playbook": {
             "label": playbook["label"],
             "priority_pages": playbook["priority_pages"],
@@ -861,6 +886,8 @@ def compute_health_score(fixes: list[dict[str, Any]], site_fingerprint: dict[str
             score -= 4
         else:
             score -= 1
+    if crawl_is_blocked(site_fingerprint):
+        return min(score, 45)
     if evidence_is_incomplete(site_fingerprint):
         return min(score, 55)
     if site_fingerprint.get("pages_crawled") == 0:

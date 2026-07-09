@@ -2,7 +2,70 @@ import re
 from urllib.parse import unquote, urlparse
 
 MAX_ARTIFACT_EVIDENCE = 50
-_BASE64_SEGMENT = re.compile(r"/(?:L2|aHR0|[A-Za-z0-9+/_=-]{36,}={0,2})(?:/|$)")
+ARTIFACT_FILTER_VERSION = "artifact_filter_v2_human_slug_safe"
+
+_ENCODED_URL_MARKERS = ("%2f", "%3a", "http%3a", "https%3a")
+_BASE64_PREFIXES = ("aHR0", "L2", "eyJ", "PHN2", "PD94", "data:")
+_URL_SAFE_TOKEN = re.compile(r"^[A-Za-z0-9+/_=-]+={0,2}$")
+_HUMAN_SLUG_CHUNK = re.compile(r"^[a-z0-9]{1,24}$")
+
+
+def _path_from_url(url: str) -> str:
+    try:
+        return urlparse(url).path or url
+    except Exception:
+        return url
+
+
+def _looks_like_human_slug(segment: str) -> bool:
+    """Return True for normal SEO slugs such as long blog/article/product paths.
+
+    The old artifact filter treated any 32+ char URL-safe segment as encoded data.
+    That accidentally suppressed real sitemap URLs like
+    /blog/benefits-of-using-bridge-loans-for-real-estate-transactions.
+    Human slugs usually contain several hyphen/underscore-separated word chunks;
+    encoded blobs usually do not.
+    """
+    decoded = unquote(str(segment or "")).strip().lower().strip("/")
+    if not decoded:
+        return False
+    if "-" not in decoded and "_" not in decoded:
+        return False
+    chunks = [chunk for chunk in re.split(r"[-_]+", decoded) if chunk]
+    wordish = [chunk for chunk in chunks if _HUMAN_SLUG_CHUNK.fullmatch(chunk) and re.search(r"[a-z]", chunk)]
+    return len(wordish) >= 3
+
+
+def _looks_like_encoded_segment(segment: str) -> bool:
+    raw = str(segment or "").strip().strip("/")
+    if not raw:
+        return False
+    decoded = unquote(raw)
+    lowered = raw.lower()
+
+    # Explicit encoded URLs should still be suppressed.
+    if "%2f" in lowered and ("%3a" in lowered or "http" in decoded.lower()):
+        return True
+
+    # Common base64 / JWT / encoded-HTML prefixes. These are much safer than
+    # classifying every long hyphenated string as encoded data.
+    if raw.startswith(_BASE64_PREFIXES):
+        return True
+
+    # Do not treat normal multi-word SEO slugs as artifacts, even when long.
+    if _looks_like_human_slug(raw):
+        return False
+
+    # Long URL-safe blobs with no human word separators are likely encoded.
+    compact = raw.rstrip("=")
+    if len(compact) >= 48 and _URL_SAFE_TOKEN.fullmatch(raw):
+        has_mixed_case = any(ch.islower() for ch in raw) and any(ch.isupper() for ch in raw)
+        has_digit = any(ch.isdigit() for ch in raw)
+        has_token_chars = any(ch in raw for ch in "+/_=")
+        if has_token_chars or (has_mixed_case and has_digit) or len(compact) >= 80:
+            return True
+
+    return False
 
 
 def is_artifact_url(url: str) -> bool:
@@ -10,25 +73,14 @@ def is_artifact_url(url: str) -> bool:
     if not text:
         return False
 
-    try:
-        path = urlparse(text).path or text
-    except Exception:
-        path = text
+    path = _path_from_url(text)
+    decoded_path = unquote(path)
+    lowered_path = path.lower()
 
-    decoded = unquote(path)
-    lowered = path.lower()
-
-    if _BASE64_SEGMENT.search(path):
+    if "%2f" in lowered_path and ("%3a" in lowered_path or "http" in decoded_path.lower()):
         return True
 
-    if "%2f" in lowered and ("%3a" in lowered or "http" in decoded.lower()):
-        return True
-
-    for segment in [s for s in path.split("/") if s]:
-        if len(segment) >= 32 and re.fullmatch(r"[A-Za-z0-9+/_=-]+={0,2}", segment):
-            return True
-
-    return False
+    return any(_looks_like_encoded_segment(segment) for segment in path.split("/") if segment)
 
 
 def record_artifact(target: list[dict], url: str, discovered_from: str, source_page: str = "", link_text: str = "") -> None:

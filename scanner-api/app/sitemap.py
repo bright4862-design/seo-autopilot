@@ -1,5 +1,5 @@
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -36,7 +36,7 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
             if is_sitemap_url(loc):
                 child_sitemaps.append(loc)
             elif is_same_prefix(loc, path_prefix):
-                urls.append(loc)
+                urls.append(normalize_sitemap_page_url(loc, origin))
 
     for child in rank_child_sitemaps(child_sitemaps, path_prefix):
         if len(fetched) >= MAX_SITEMAP_FETCHES or len(urls) >= limit:
@@ -48,7 +48,7 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
             if len(urls) >= limit:
                 break
             if not is_sitemap_url(loc) and is_same_prefix(loc, path_prefix):
-                urls.append(loc)
+                urls.append(normalize_sitemap_page_url(loc, origin))
 
     return dedupe(urls)[:limit]
 
@@ -90,6 +90,32 @@ def is_same_prefix(url: str, path_prefix: str) -> bool:
         return False
 
 
+def normalize_sitemap_page_url(url: str, origin: str) -> str:
+    """Keep sitemap page URLs on the scanner's accepted origin.
+
+    Many sites redirect apex -> www or www -> apex, while their sitemap uses the
+    canonical host. The scanner's same-origin guard is intentionally strict, so
+    normal sitemap page URLs can be dropped after a harmless www/apex mismatch.
+    When the hosts match after stripping a leading www., rewrite only the scheme
+    and netloc to the scanner origin while preserving path/query/fragment.
+    """
+    try:
+        parsed = urlparse(url)
+        origin_parsed = urlparse(origin)
+        if not parsed.scheme or not parsed.netloc or not origin_parsed.scheme or not origin_parsed.netloc:
+            return url
+        if comparable_host(parsed.hostname or "") == comparable_host(origin_parsed.hostname or ""):
+            return urlunparse(parsed._replace(scheme=origin_parsed.scheme, netloc=origin_parsed.netloc))
+    except Exception:
+        return url
+    return url
+
+
+def comparable_host(host: str) -> str:
+    value = str(host or "").lower().strip(".")
+    return value[4:] if value.startswith("www.") else value
+
+
 def rank_child_sitemaps(children: list[str], path_prefix: str) -> list[str]:
     tokens = [token for token in (path_prefix or "").lower().split("/") if token]
 
@@ -100,8 +126,10 @@ def rank_child_sitemaps(children: list[str], path_prefix: str) -> list[str]:
             value += 40
         elif tokens and any(token in target for token in tokens):
             value += 20
-        if re.search(r"page|product|categor|service|listing|collection|post|article|guide", target):
-            value += 8
+        if re.search(r"page|product|categor|service|listing|collection|loan|location", target):
+            value += 18
+        if re.search(r"post|article|blog|guide", target):
+            value += 4
         if re.search(r"tag|author|archive|image|video", target):
             value -= 15
         return value

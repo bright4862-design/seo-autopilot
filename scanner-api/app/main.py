@@ -4,7 +4,7 @@ from typing import Any
 from fastapi import Body, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-from .review import REVIEW_VERSION, run_review
+from .review_patch import REVIEW_VERSION, run_review
 from .scanner import VERSION, run_scan
 
 SCANNER_API_KEY = os.getenv("SCANNER_API_KEY", "")

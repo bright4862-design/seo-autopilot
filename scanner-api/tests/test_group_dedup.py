@@ -154,3 +154,67 @@ def test_our_grouped_evidence_card_suppresses_per_page_404_duplicates():
     ]
     assert any(len(f["affected_pages"]) >= 3 for f in broken)
     assert all(len(f["affected_pages"]) != 1 for f in broken)
+
+
+def test_duplicate_group_level_canonical_cards_collapse():
+    """Scanner-grouped canonical + our page_pattern canonical for the same pages -> one card, ours kept."""
+    loan = _loan_pages(["dscr", "bridge", "fix-and-flip"])
+    scanner_group = [{
+        "rule": "canonical",
+        "category": "canonical",
+        "title": "Add canonical URLs (scanner group)",
+        "source": "scanner_grouped_findings",
+        "affected_pages": [f"https://csl.com/loans/{s}" for s in ["dscr", "bridge", "fix-and-flip"]],
+    }]
+    r = _run(loan, scanner_group)
+    loan_canon = [
+        f for f in r["cleaned_fixes"]
+        if "canonical" in (f.get("category", "") + " " + f.get("rule", "")).lower()
+        and f.get("page_template_family") == "loan_program"
+    ]
+    assert len(loan_canon) == 1
+    assert loan_canon[0]["source"].startswith("page_pattern:")
+
+
+def test_distinct_family_groups_are_not_collapsed():
+    pages = _loan_pages(["dscr", "bridge"]) + [
+        {
+            "final_url": f"https://csl.com/{s}",
+            "status_code": 200,
+            "h1_count": 1,
+            "meta_description": "x",
+            "canonical": "",
+            "page_template_family": "conversion",
+        }
+        for s in ["apply-now", "request-a-payoff"]
+    ]
+    r = _run(pages, [])
+    fams = {
+        f.get("page_template_family")
+        for f in r["cleaned_fixes"]
+        if "canonical" in (f.get("category", "") + " " + f.get("rule", "")).lower()
+    }
+    assert {"loan_program", "conversion"} <= fams
+
+
+def test_blog_page_does_not_join_money_group():
+    """A blog page, even if scanner-stamped loan_program, reclassifies and stays out of the loan group."""
+    pages = _loan_pages(["dscr", "bridge"]) + [
+        {
+            "final_url": "https://csl.com/blog/fix-and-flip-loans-vs-traditional-mortgages",
+            "status_code": 200,
+            "h1_count": 1,
+            "meta_description": "x",
+            "canonical": "",
+            "page_template_family": "loan_program",
+        }
+    ]
+    r = _run(pages, [])
+    loan_canon = [
+        f for f in r["cleaned_fixes"]
+        if "canonical" in (f.get("category", "") + " " + f.get("rule", "")).lower()
+        and f.get("page_template_family") == "loan_program"
+    ]
+    assert loan_canon, "expected a loan_program canonical group"
+    joined = "\n".join(str(loan_canon[0].get("affected_pages")))
+    assert "/blog/" not in joined

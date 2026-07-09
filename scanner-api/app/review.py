@@ -221,6 +221,7 @@ def run_review(payload: dict[str, Any]) -> dict[str, Any]:
         "review_version": REVIEW_VERSION,
         "ai_review_version": REVIEW_VERSION,
         "ai_review_warning": warning,
+        "review_evidence_contract_version": "review_evidence_contract_v1",
         **review_payload,
     }
 
@@ -534,7 +535,9 @@ def build_page_pattern_findings(pages: list[dict[str, Any]]) -> list[dict[str, A
         url = page_evidence_url(page)
         if not url:
             continue
-        family = str(page.get("page_template_family") or get_template_family(url))
+        if int_or_zero(page.get("status_code") or page.get("status")) >= 400 or is_blocked_access_page(page):
+            continue  # failed/blocked pages are owned by the evidence generator; never fabricate content fixes for them
+        family = normalize_template_family(page.get("page_template_family"), url)
         canonical = clean_str(page.get("canonical") or page.get("canonical_url") or "")
         if not canonical:
             add_bucket(buckets, "canonical_missing", "canonical", family, page, "Add canonical URLs across templates", "The page does not expose a canonical URL.", "Canonical URLs help search engines consolidate duplicate and near-duplicate versions of a page.", "Ask your web person to add self-referencing canonicals to the shared template or affected pages.", "developer")
@@ -565,7 +568,12 @@ def build_page_pattern_findings(pages: list[dict[str, Any]]) -> list[dict[str, A
             affected_pages=affected,
             difficulty="developer" if len(set(map(clean_path, affected))) >= 5 else bucket["difficulty"],
             source=f"page_pattern:{bucket['rule']}:{bucket['family']}",
-            extra={"current_value": bucket["current_value"], "page_template_family": bucket["family"]},
+            extra={
+                "current_value": template_current_value(affected),
+                "defect_summary": bucket["explanation"],
+                "source_pages": dedupe_strings([clean_path(u) for u in affected if clean_path(u)])[:30],
+                "page_template_family": bucket["family"],
+            },
         ))
     return fixes
 
@@ -580,14 +588,14 @@ def add_bucket(buckets: dict[tuple[str, str], dict[str, Any]], rule: str, catego
 def build_strategic_findings(body: dict[str, Any], pages: list[dict[str, Any]], website_url: str, site_fingerprint: dict[str, Any], playbook: dict[str, Any]) -> list[dict[str, Any]]:
     fixes = []
     if safe_hostname(website_url).endswith(".base44.app"):
-        fixes.append(make_fix("free_base44_subdomain", "indexability", "high", "Move production SEO to a custom domain", "The site is on a free Base44 subdomain. That can be crawled, but it is not the strongest production SEO or trust setup.", "A custom domain improves brand trust, shareability, Search Console ownership, and company-specific search signals.", "Connect a branded custom domain before treating this as the long-term production SEO home.", ["/"], "developer", "archetype_strategy_layer"))
+        fixes.append(make_fix("free_base44_subdomain", "indexability", "high", "Move production SEO to a custom domain", "The site is on a free Base44 subdomain. That can be crawled, but it is not the strongest production SEO or trust setup.", "A custom domain improves brand trust, shareability, Search Console ownership, and company-specific search signals.", "Connect a branded custom domain before treating this as the long-term production SEO home.", ["/"], "developer", "archetype_strategy_layer", extra={"current_value": f"Production site served from {safe_hostname(website_url)} (free Base44 subdomain).", "source_pages": ["/"]}))
     route_pages = [page for page in pages if (is_route_boundary_candidate(page_evidence_url(page)) or is_internal_app_route(page_evidence_url(page))) and page_is_indexable(page)]
     if route_pages:
-        fixes.append(make_fix("route_boundary_candidate_indexable", "indexability", "critical", "Keep checkout, login, account, and app routes out of search", "FixList found checkout, login, account, dashboard, billing, cart, admin, or app-like routes that appear crawlable and indexable.", "These pages are usually not useful SEO landing pages. Letting them appear in search can dilute the site, confuse prospects, or expose private product structure.", "Ask your web person to require login, add noindex, or keep these routes out of public search while preserving true public landing, category, product, booking, and help pages.", [page_evidence_url(page) for page in route_pages], "developer", "archetype_route_boundary_layer"))
+        fixes.append(make_fix("route_boundary_candidate_indexable", "indexability", "critical", "Keep checkout, login, account, and app routes out of search", "FixList found checkout, login, account, dashboard, billing, cart, admin, or app-like routes that appear crawlable and indexable.", "These pages are usually not useful SEO landing pages. Letting them appear in search can dilute the site, confuse prospects, or expose private product structure.", "Ask your web person to require login, add noindex, or keep these routes out of public search while preserving true public landing, category, product, booking, and help pages.", [page_evidence_url(page) for page in route_pages], "developer", "archetype_route_boundary_layer", extra={"current_value": "Indexable app/checkout/account routes: " + ", ".join(dedupe_strings([clean_path(page_evidence_url(page)) for page in route_pages])[:6]), "source_pages": dedupe_strings([clean_path(page_evidence_url(page)) for page in route_pages])[:30]}))
     trust_sensitive = site_fingerprint["regulatory_sensitivity"] != "standard" or site_fingerprint["primary_archetype"] == "saas_app_membership"
     has_trust = any(clean_path(page_evidence_url(page)).lower().startswith(tuple(TRUST_PATHS)) for page in pages)
     if trust_sensitive and pages and not has_trust:
-        fixes.append(make_fix("missing_trust_pages", "schema", "high" if site_fingerprint["regulatory_sensitivity"] != "standard" else "medium", "Add public trust pages", f"For a {playbook['label']} site, visitors and crawlers need clear trust, legal, contact, and ownership signals.", "Trust pages help buyers, search engines, and AI systems understand who runs the site and whether it is credible.", "Add or expose clear About, Contact, Privacy, Terms, and Security/Trust pages, then link them from the footer.", ["/"], "moderate", "archetype_trust_layer"))
+        fixes.append(make_fix("missing_trust_pages", "schema", "high" if site_fingerprint["regulatory_sensitivity"] != "standard" else "medium", "Add public trust pages", f"For a {playbook['label']} site, visitors and crawlers need clear trust, legal, contact, and ownership signals.", "Trust pages help buyers, search engines, and AI systems understand who runs the site and whether it is credible.", "Add or expose clear About, Contact, Privacy, Terms, and Security/Trust pages, then link them from the footer.", ["/"], "moderate", "archetype_trust_layer", extra={"current_value": f"No public trust pages (About/Contact/Privacy/Terms) found among {len(pages)} crawled pages.", "source_pages": ["/"]}))
     return fixes
 
 
@@ -661,8 +669,15 @@ def score_fix(fix: dict[str, Any], site_fingerprint: dict[str, Any], body: dict[
     overall = max(0, min(100, overall))
     priority = "critical" if fix.get("priority") == "critical" or overall >= 82 else "high" if overall >= 68 else "medium" if overall >= 44 else "low"
     developer_owned = needs_developer_owner({**fix, "primary_defect_class": defect_class})
+    affected_pages = dedupe_strings([clean_path(u) for u in (fix.get("affected_pages") or [page_url]) if clean_path(u)]) or ["/"]
+    source_pages = dedupe_strings([clean_path(u) for u in (fix.get("source_pages") if isinstance(fix.get("source_pages"), list) else []) if clean_path(u)]) or affected_pages
+    link_text_samples = [clean_str(x) for x in (fix.get("link_text_samples") if isinstance(fix.get("link_text_samples"), list) else []) if clean_str(x)][:12]
     return {
         **fix,
+        "affected_pages": affected_pages[:150],
+        "source_pages": source_pages[:30],
+        "link_text_samples": link_text_samples,
+        "current_value": clean_str(fix.get("current_value")) or template_current_value(affected_pages),
         "priority": priority,
         "page_type": page_value["classification"],
         "page_template_family": fix.get("page_template_family") or get_template_family(page_url),
@@ -797,6 +812,8 @@ def make_fix(rule: str, category: str, priority: str, title: str, explanation: s
         "requires_approval": difficulty != "developer",
         "requires_developer": difficulty == "developer",
         "affected_pages": clean_affected,
+        "source_pages": extra.get("source_pages") or clean_affected,
+        "link_text_samples": extra.get("link_text_samples") or [],
         "page_url": page,
         "confidence_score": extra.get("confidence_score", 92),
         "what_to_do": steps,
@@ -980,31 +997,30 @@ def page_is_indexable(page: dict[str, Any]) -> bool:
     return "noindex" not in robots and page.get("indexable") is not False
 
 
+LEGACY_TEMPLATE_FAMILIES = {"", "standard", "category_listing", "guide", "qa", "product_detail"}
+
+
+def normalize_template_family(stamped: Any, url: Any = "") -> str:
+    value = str(stamped or "").strip()
+    if value and value not in LEGACY_TEMPLATE_FAMILIES:
+        return value
+    return get_template_family(clean_path(url) or "/")
+
+
+def template_current_value(affected_paths: list[Any]) -> str:
+    paths = dedupe_strings([clean_path(u) for u in (affected_paths or []) if clean_path(u)])
+    if not paths:
+        return "No affected pages recorded."
+    count = len(paths)
+    sample = ", ".join(paths[:3])
+    more = f" (+{count - 3} more)" if count > 3 else ""
+    noun = "page" if count == 1 else "pages"
+    return f"{count} affected {noun}: {sample}{more}"
+
+
 def get_template_family(url: str = "") -> str:
-    path = clean_path(url).lower()
-    if re.search(r"/annonce/.*?/voir", path) or "/annonce/" in path:
-        return "activity_detail"
-    if re.search(r"/loans?/|/loan-overview|/apply-now|/request-a-payoff|/document-exchange|/locations/", path):
-        return "conversion"
-    if is_route_boundary_candidate(path):
-        return "route_boundary"
-    if re.search(r"checkout|cart|booking|reservation|ticket_order|gift_voucher|cadeau|coffret", path):
-        return "booking_or_checkout"
-    if re.search(r"/products?/|/p/", path):
-        return "product_page"
-    if re.search(r"/collections?/|/category/|/categorie/|listing|show|marque|brand", path):
-        return "collection_page"
-    if re.search(r"simulation|simulateur|calcul|calculator|comparateur|devis|quote|pricing|demo|tarif|fournisseur|energie|electricite|gaz|pret|credit", path):
-        return "conversion"
-    if "contact" in path:
-        return "contact"
-    if re.search(r"faq|question", path):
-        return "qa"
-    if re.search(r"guide|blog|article", path):
-        return "guide"
-    if re.search(r"privacy|terms|legal|mentions-legales|security|cgv|dmca|ccpa", path):
-        return "legal_info"
-    return "standard"
+    from .extract import classify_template
+    return classify_template(clean_path(url))
 
 
 def family_label(family: str) -> str:
@@ -1064,7 +1080,7 @@ def needs_developer_owner(item: dict[str, Any]) -> bool:
     page_template_family = str(item.get("page_template_family") or "")
     if affected_count >= 5:
         return True
-    if page_template_family in {"activity_detail", "booking_or_checkout", "product_page", "collection_page", "conversion", "route_boundary", "loan_program"} and affected_count >= 2:
+    if page_template_family in {"activity_detail", "booking_or_checkout", "product_page", "collection_page", "conversion", "loan_program", "calculator", "comparison_page", "location_landing", "route_boundary"} and affected_count >= 2:
         return True
     value = " ".join(str(item.get(key, "")) for key in ["rule", "category", "title", "issue_title", "reason", "recommendation", "recommended_value", "who_can_do_this", "primary_defect_class"]).lower()
     if isinstance(item.get("what_to_do_steps"), list):

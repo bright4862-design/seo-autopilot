@@ -1,7 +1,7 @@
 """Polish patch 1: grouped template cards suppress per-page duplicates of the same defect class,
 without collapsing distinct defects or lone single-page fixes."""
 
-from app.review_patch import run_review
+from app.review import run_review
 
 
 def _run(pages, raw):

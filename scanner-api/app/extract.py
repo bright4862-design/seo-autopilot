@@ -145,6 +145,11 @@ def classify_template(path: str) -> str:
         return "route_boundary"
     if any(x in p for x in ["/tag/", "/author/", "/archive/", "/page/"]):
         return "archive"
+    # Support-content paths are guide_article regardless of money keywords in the slug.
+    # Prefix-based (optionally locale-prefixed) so /blog/fix-and-flip-loans-... does NOT become loan_program,
+    # while /pret-immobilier/guide-achat (not a /blog|/guide prefix) still classifies by its money path.
+    if re.match(r"^(/[a-z]{2}(-[a-z]{2})?)?/(blog|guide|guides|article|articles|faq|resources|ressources|news|actualites|conseils|help|support|learn|academy|glossary|glossaire)(/|$)", clean):
+        return "guide_article"
     if re.search(r"/annonce/.*?/voir|/annonce/|/activite|/activité|/activity|/experience|/expérience|/atelier|/stage/|/pilotage", p):
         return "activity_detail"
     if re.search(r"/loans?/|/loan-overview|/fix-and-flip|/bridge|/rental|/dscr|/hard-money|pret|prêt|credit|crédit|immobilier|mortgage|hypotheque|hypothèque|rachat", p):

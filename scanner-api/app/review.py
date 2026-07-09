@@ -11,6 +11,9 @@ QUALITY_GATE_VERSION = base.QUALITY_GATE_VERSION
 INCOMPLETE_REVIEW_WARNING = base.INCOMPLETE_REVIEW_WARNING
 
 
+SUPPORT_RECLASS_FAMILIES = {"loan_program", "conversion", "standard", "guide", "category_listing", "qa", "product_detail", ""}
+
+
 def run_review(payload: dict[str, Any]) -> dict[str, Any]:
     body = base.unwrap_scan_payload(payload)
     website_url = base.clean_str(
@@ -75,6 +78,18 @@ def run_review(payload: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def normalize_template_family(stamped: Any, url: Any = "") -> str:
+    """Trust explicit template stamps except when a support URL was promoted by money keywords."""
+    path = base.clean_path(url) or "/"
+    derived = base.get_template_family(path)
+    value = str(stamped or "").strip()
+    if derived == "guide_article" and value in SUPPORT_RECLASS_FAMILIES:
+        return "guide_article"
+    if value and value not in getattr(base, "LEGACY_TEMPLATE_FAMILIES", {"", "standard", "category_listing", "guide", "qa", "product_detail"}):
+        return value
+    return derived
+
+
 def build_page_pattern_findings(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     buckets: dict[tuple[str, str], dict[str, Any]] = {}
     for page in pages:
@@ -83,7 +98,7 @@ def build_page_pattern_findings(pages: list[dict[str, Any]]) -> list[dict[str, A
             continue
         if base.int_or_zero(page.get("status_code") or page.get("status")) >= 400 or base.is_blocked_access_page(page):
             continue
-        family = base.normalize_template_family(page.get("page_template_family"), url)
+        family = normalize_template_family(page.get("page_template_family"), url)
         canonical = base.clean_str(page.get("canonical") or page.get("canonical_url") or "")
         if not canonical:
             base.add_bucket(buckets, "canonical_missing", "canonical", family, page, "Add canonical URLs across templates", "The page does not expose a canonical URL.", "Canonical URLs help search engines consolidate duplicate and near-duplicate versions of a page.", "Ask your web person to add self-referencing canonicals to the shared template or affected pages.", "developer")
@@ -146,6 +161,48 @@ def fix_dedup_class(fix: dict[str, Any]) -> str:
 GENERATOR_GROUP_SOURCES = ("page_pattern:", "scanner_verified_failed_pages:", "archetype_")
 
 
+def suppress_duplicate_group_cards(fixes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse duplicate grouped cards of the same defect with substantial page overlap."""
+
+    def pages_of(fix: dict[str, Any]) -> set[str]:
+        return {base.clean_path(u) for u in (fix.get("affected_pages") or []) if base.clean_path(u)}
+
+    grouped = [fix for fix in fixes if len(pages_of(fix)) > 1]
+    if len(grouped) < 2:
+        return fixes
+
+    def strength(fix: dict[str, Any]) -> tuple[int, int, int, int]:
+        generator = 1 if str(fix.get("source", "")).startswith(GENERATOR_GROUP_SOURCES) else 0
+        return (
+            generator,
+            len(pages_of(fix)),
+            base.int_or_zero(fix.get("confidence_score")),
+            base.int_or_zero(fix.get("overall_priority_score") or fix.get("overall_score") or fix.get("score")),
+        )
+
+    kept: list[dict[str, Any]] = []
+    dropped: set[int] = set()
+    for fix in sorted(grouped, key=strength, reverse=True):
+        cls = fix_dedup_class(fix)
+        pf = pages_of(fix)
+        duplicate = False
+        for keep in kept:
+            if fix_dedup_class(keep) != cls:
+                continue
+            pk = pages_of(keep)
+            overlap = len(pf & pk) / max(1, min(len(pf), len(pk)))
+            if overlap >= 0.5:
+                duplicate = True
+                break
+        if duplicate:
+            dropped.add(id(fix))
+        else:
+            kept.append(fix)
+    if not dropped:
+        return fixes
+    return [fix for fix in fixes if id(fix) not in dropped]
+
+
 def suppress_group_covered_singletons(fixes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Drop per-page fixes already covered by one of our grouped template/evidence cards of the same defect class."""
 
@@ -180,6 +237,7 @@ def prepare_fixes(raw_fixes: list[dict[str, Any]], site_fingerprint: dict[str, A
     normalized = base.dedupe_fixes([base.normalize_fix(fix, index) for index, fix in enumerate(raw_fixes or []) if isinstance(fix, dict)])
     scored = [base.score_fix(fix, site_fingerprint, body, playbook) for fix in normalized]
     scored = suppress_group_covered_singletons(scored)
+    scored = suppress_duplicate_group_cards(scored)
     return sorted(scored, key=base.fix_sort_key, reverse=True)[:36]
 
 
@@ -190,6 +248,7 @@ def family_label(family: str) -> str:
         "conversion": "conversion",
         "contact": "contact",
         "guide": "guide",
+        "guide_article": "guide/article",
         "legal_info": "legal info",
         "product_page": "product page",
         "collection_page": "collection page",

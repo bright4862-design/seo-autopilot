@@ -43,3 +43,19 @@ def test_marketplace_and_local_page_families():
     assert classify_template("/locations/austin") == "location_landing"
     assert classify_template("/privacy-policy") == "legal_info"
     assert classify_template("/contact") == "contact"
+
+
+def test_blog_slugs_with_money_words_are_guide_article():
+    for path in [
+        "/blog/bridge-loans-vs-traditional-loans-what-is-the-difference",
+        "/blog/fix-and-flip-loans-vs-traditional-mortgages",
+        "/blog/credit-card-use-strategies-for-real-estate-investing",
+        "/fr/blog/simulation-de-pret-immobilier",
+    ]:
+        assert classify_template(path) == "guide_article"
+
+
+def test_money_paths_outside_blog_prefix_are_unaffected():
+    assert classify_template("/pret-immobilier/guide-achat") == "loan_program"
+    assert classify_template("/loans/fix-and-flip") == "loan_program"
+    assert classify_template("/apply-now") == "conversion"

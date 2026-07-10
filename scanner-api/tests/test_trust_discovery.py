@@ -3,7 +3,11 @@ from __future__ import annotations
 import pytest
 
 from app.review import run_review
-from app.trust_discovery import enrich_scan_with_trust_pages, is_trust_candidate
+from app.trust_discovery import (
+    apply_trust_discovery_gate,
+    enrich_scan_with_trust_pages,
+    is_trust_candidate,
+)
 
 
 class FakeResponse:
@@ -62,6 +66,10 @@ def page(path: str):
     }
 
 
+def gated_review(scan):
+    return apply_trust_discovery_gate(run_review(scan), scan)
+
+
 @pytest.mark.asyncio
 async def test_existing_trust_page_is_preserved_and_reported(monkeypatch):
     async def fake_safe_get(_client, url):
@@ -75,6 +83,7 @@ async def test_existing_trust_page_is_preserved_and_reported(monkeypatch):
     assert result["trust_page_discovery"]["attempted"] is True
     assert "/mentions-legales" in result["trust_page_discovery"]["found"]
     assert any(p.get("path") == "/mentions-legales" for p in result["pages"])
+    assert all(fix.get("rule") != "missing_trust_pages" for fix in gated_review(result)["cleaned_fixes"])
 
 
 @pytest.mark.asyncio
@@ -95,9 +104,7 @@ async def test_custom_homepage_trust_link_is_added_to_review_evidence(monkeypatc
 
     assert "/company" in result["trust_page_discovery"]["found"]
     assert any(p.get("path") == "/company" for p in result["pages"])
-
-    review = run_review(result)
-    assert all(fix.get("rule") != "missing_trust_pages" for fix in review["cleaned_fixes"])
+    assert all(fix.get("rule") != "missing_trust_pages" for fix in gated_review(result)["cleaned_fixes"])
 
 
 @pytest.mark.asyncio
@@ -117,6 +124,28 @@ async def test_french_privacy_probe_prevents_sample_false_positive(monkeypatch):
     assert result["trust_page_discovery"]["conclusive"] is True
     assert "/politique-de-confidentialite" in result["trust_page_discovery"]["found"]
     assert result["technical_audit_summary"]["trust_page_discovery"]["found"]
+    assert all(fix.get("rule") != "missing_trust_pages" for fix in gated_review(result)["cleaned_fixes"])
 
-    review = run_review(result)
+
+def test_legacy_review_payload_cannot_assert_missing_trust_without_discovery():
+    scan = base_scan([page("/pret-immobilier")])
+    review = gated_review(scan)
+
     assert all(fix.get("rule") != "missing_trust_pages" for fix in review["cleaned_fixes"])
+    assert review["trust_page_discovery_gate"]["missing_trust_assertion_allowed"] is False
+
+
+def test_conclusive_empty_discovery_allows_discoverability_warning():
+    scan = base_scan([page("/pret-immobilier")])
+    scan["trust_page_discovery"] = {
+        "attempted": True,
+        "conclusive": True,
+        "checked": 20,
+        "responses_received": 20,
+        "found": [],
+        "found_urls": [],
+    }
+    review = gated_review(scan)
+
+    assert any(fix.get("rule") == "missing_trust_pages" for fix in review["cleaned_fixes"])
+    assert review["trust_page_discovery_gate"]["missing_trust_assertion_allowed"] is True

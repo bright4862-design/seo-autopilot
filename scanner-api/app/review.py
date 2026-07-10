@@ -71,7 +71,7 @@ def run_review(payload: dict[str, Any]) -> dict[str, Any]:
         warning = "AI review ran, but no scanner recommendations were provided."
 
     review_payload = base.build_review_payload(body, pages, canonical_fixes, site_fingerprint, playbook, website_url)
-    if no_page_evidence:
+    if no_page_evidence and not base.crawl_is_blocked(site_fingerprint):
         apply_incomplete_evidence_state(review_payload)
     elif no_high_confidence_findings:
         apply_zero_fix_confidence_state(review_payload)

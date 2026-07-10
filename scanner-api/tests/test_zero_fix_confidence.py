@@ -64,3 +64,50 @@ def test_real_fix_keeps_normal_review_state():
     assert result["cleaned_fixes"]
     assert result.get("no_high_confidence_findings") is not True
     assert result["website_health_report"]["health_grade"] != "No issues found in sample"
+
+
+
+def _clean_pretto_pages(count):
+    pages = [
+        {
+            "final_url": f"https://pretto.fr/p{i}",
+            "status_code": 200,
+            "h1_count": 1,
+            "meta_description": "d",
+            "canonical": f"https://pretto.fr/p{i}",
+            "has_schema": True,
+        }
+        for i in range(count)
+    ]
+    pages += [
+        {
+            "final_url": f"https://pretto.fr/{slug}",
+            "status_code": 200,
+            "h1_count": 1,
+            "meta_description": "d",
+            "canonical": f"https://pretto.fr/{slug}",
+            "has_schema": True,
+        }
+        for slug in ["about", "contact", "privacy"]
+    ]
+    return pages
+
+
+def test_pretto_zero_fix_contract_matches_patch_2():
+    result = run_review({
+        "website_url": "https://pretto.fr",
+        "pages": _clean_pretto_pages(18),
+        "scan_coverage": {
+            "pages_found": 172,
+            "pages_crawled": 21,
+            "sampled_pages_sent_to_ai": 21,
+        },
+    })
+
+    assert result["cleaned_fixes"] == []
+    assert result["no_high_confidence_findings"] is True
+    assert result["website_health_report"]["health_grade"] == "No issues found in sample"
+    assert "No high-confidence issues" in result["website_health_report"]["next_best_step"]
+    assert "Review the first FixList item" not in result["website_health_report"]["next_best_step"]
+    assert result["limitation"]
+    assert result["health_score"] == 92

@@ -79,13 +79,13 @@ async def test_existing_trust_page_is_preserved_and_reported(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_custom_homepage_trust_link_is_added_to_review_evidence(monkeypatch):
-    homepage_html = '<html><body><footer><a href="/qui-sommes-nous">Qui sommes-nous</a></footer></body></html>'
+    homepage_html = '<html><body><footer><a href="/company">About us</a></footer></body></html>'
 
     async def fake_safe_get(_client, url):
         if url.rstrip("/") == "https://example.com":
             return FakeResponse("https://example.com/", 200, homepage_html)
-        if url.endswith("/qui-sommes-nous"):
-            return FakeResponse(url, 200, "<html><title>Qui sommes-nous</title><h1>Qui sommes-nous</h1></html>")
+        if url.endswith("/company"):
+            return FakeResponse(url, 200, "<html><title>About us</title><h1>About us</h1></html>")
         return FakeResponse(url, 404, "")
 
     monkeypatch.setattr("app.trust_discovery.is_public_http_url", lambda _url: True)
@@ -93,8 +93,8 @@ async def test_custom_homepage_trust_link_is_added_to_review_evidence(monkeypatc
 
     result = await enrich_scan_with_trust_pages(base_scan([page("/pret-immobilier")]))
 
-    assert "/qui-sommes-nous" in result["trust_page_discovery"]["found"]
-    assert any(p.get("path") == "/qui-sommes-nous" for p in result["pages"])
+    assert "/company" in result["trust_page_discovery"]["found"]
+    assert any(p.get("path") == "/company" for p in result["pages"])
 
     review = run_review(result)
     assert all(fix.get("rule") != "missing_trust_pages" for fix in review["cleaned_fixes"])

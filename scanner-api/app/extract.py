@@ -136,6 +136,28 @@ def is_route_boundary(path: str) -> bool:
     return any(part in lowered for part in ["/login", "/register", "/account", "/dashboard", "/cart", "/checkout", "/billing", "/admin"])
 
 
+SUPPORT_CONTENT_PREFIX_RE = re.compile(
+    r"^(/[a-z]{2}(-[a-z]{2})?)?/(blog|guide|guides|article|articles|faq|resources|ressources|news|actualites|conseils|help|support|learn|academy|glossary|glossaire)(/|$)"
+)
+SUPPORT_CONTENT_NESTED_RE = re.compile(
+    r"^(/[a-z]{2}(-[a-z]{2})?)?/(?:"
+    r"tendance-marche-immobilier(?:/|$)|"
+    r"bien-immobilier/maison-ou-appartement(?:/|$)|"
+    r"acheteur-immobilier/gestion-patrimoine(?:/|$)|"
+    r"proprietaire/taxes-proprietaire(?:/|$)|"
+    r"investissement-locatif/(?:location-immobiliere|loi-immobilier)(?:/|$)|"
+    r"recherche-immobiliere/ou-acheter(?:/|$)|"
+    r"taux-immobilier/historique-taux-immobilier/20\d{2}(?:/|$)|"
+    r"pret-immobilier/(?:conditions-credit-immobilier|remboursement-pret-immobilier)(?:/|$)"
+    r")"
+)
+
+
+def is_support_content_path(path: str) -> bool:
+    clean = str(path or "").lower().split("?")[0].split("#")[0].rstrip("/") or "/"
+    return bool(SUPPORT_CONTENT_PREFIX_RE.match(clean) or SUPPORT_CONTENT_NESTED_RE.match(clean))
+
+
 def classify_template(path: str) -> str:
     p = str(path or "").lower()
     clean = p.split("?")[0].split("#")[0].rstrip("/")
@@ -148,7 +170,7 @@ def classify_template(path: str) -> str:
     # Support-content paths are guide_article regardless of money keywords in the slug.
     # Prefix-based (optionally locale-prefixed) so /blog/fix-and-flip-loans-... does NOT become loan_program,
     # while /pret-immobilier/guide-achat (not a /blog|/guide prefix) still classifies by its money path.
-    if re.match(r"^(/[a-z]{2}(-[a-z]{2})?)?/(blog|guide|guides|article|articles|faq|resources|ressources|news|actualites|conseils|help|support|learn|academy|glossary|glossaire)(/|$)", clean):
+    if is_support_content_path(clean):
         return "guide_article"
     if re.search(r"/annonce/.*?/voir|/annonce/|/activite|/activité|/activity|/experience|/expérience|/atelier|/stage/|/pilotage", p):
         return "activity_detail"
@@ -183,6 +205,8 @@ def estimate_intent(path: str, title: str, h1: str, status_code: int) -> str:
         return "blocked_access" if status_code == 429 else "failed"
     if is_route_boundary(text):
         return "internal_or_auth"
+    if is_support_content_path(path):
+        return "support_content"
     if re.search(r"devis|quote|pricing|tarif|contact|booking|reservation|checkout|product|produit|collection|category|simulation|simulateur|calcul|calculator|comparateur|demo|signup|pret|prêt|credit|crédit|annonce|voir|activite|activité|activity|experience|expérience|billet|ticket|stage|pass|loans?|apply-now|request-a-payoff|document-exchange|fix-and-flip|bridge|dscr|rental", text):
         return "money_or_conversion"
     if re.search(r"privacy|terms|legal|about|contact|security|mentions", text):

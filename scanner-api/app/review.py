@@ -947,6 +947,15 @@ def get_playbook(key: str) -> dict[str, Any]:
 
 
 def detect_business_model(text: str, archetype: str) -> str:
+    # Decisive archetypes must not be overridden by incidental page text.
+    decisive = {
+        "finance_insurance_lead_gen": "regulated_or_trust_lead_generation",
+        "utilities_comparison_lead_gen": "regulated_or_trust_lead_generation",
+        "booking_experiences_marketplace": "booking_or_reservation",
+        "ecommerce_specialty_retail": "catalog_or_ecommerce",
+    }
+    if archetype in decisive:
+        return decisive[archetype]
     if has_any(text, ["/annonce", "/voir", "booking", "reservation", "réservation", "availability", "calendar", "book now", "ticket", "stage", "pass", "cadeau", "loisir"]):
         return "booking_or_reservation"
     if has_any(text, ["/loans", "/loan", "apply-now", "fix-and-flip", "hard money", "bridge loan", "lending", "request-a-payoff"]):
@@ -957,12 +966,6 @@ def detect_business_model(text: str, archetype: str) -> str:
         return "catalog_or_ecommerce"
     if has_any(text, ["login", "dashboard", "subscription", "billing", "admin"]):
         return "saas_or_member_app"
-    if archetype in {"finance_insurance_lead_gen", "utilities_comparison_lead_gen"}:
-        return "regulated_or_trust_lead_generation"
-    if archetype == "booking_experiences_marketplace":
-        return "booking_or_reservation"
-    if archetype == "ecommerce_specialty_retail":
-        return "catalog_or_ecommerce"
     return "content_or_general_business"
 
 

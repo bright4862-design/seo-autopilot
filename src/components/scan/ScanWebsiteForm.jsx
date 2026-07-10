@@ -337,6 +337,11 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
   const aiFixes = getRecommendations(aiData);
   const finalFixes = groupAndSortFixes((aiFixes.length > 0 ? aiFixes : scannerFixes).map(slimFix), { requestedPathPrefix }).slice(0, 120);
   const healthScore = getFirstNumber([aiData?.health_score, aiData?.seo_score, aiData?.website_health_report?.health_score, aiData?.scan_summary?.health_score, scanData?.health_score, scanData?.seo_score, scanData?.scan_summary?.score, scanData?.scan_summary?.health_score]);
+  const noHighConfidenceFindings = aiData?.no_high_confidence_findings === true || finalFixes.length === 0;
+  const healthGrade = aiData?.website_health_report?.health_grade || aiData?.health_grade || (noHighConfidenceFindings ? "No issues found in sample" : scoreLabel(healthScore));
+  const nextBestStep = aiData?.website_health_report?.next_best_step || aiData?.next_best_step || (noHighConfidenceFindings ? "No high-confidence issues were found in this scanned sample. Consider a deeper crawl or manually reviewing key money pages." : "");
+  const reviewLimitations = firstArray([aiData?.website_health_report?.limitations]);
+  const limitation = aiData?.limitation || reviewLimitations[reviewLimitations.length - 1] || "";
   const pagesCrawled = getFirstNumber([scanData?.pages_crawled, scanData?.pages_scanned, scanData?.technical_audit_summary?.pages_crawled, pages.length]);
   const pagesFound = getFirstNumber([scanData?.pages_found, scanData?.pages_discovered, scanData?.technical_audit_summary?.pages_found, pagesCrawled, pages.length]);
   const crawlPolicy = scanData?.crawl_policy || scanData?.technical_audit_summary?.crawl_policy || {};
@@ -360,13 +365,20 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
     pages_found: pagesFound || pages.length || 0,
     customer_summary: summaryText,
     simple_summary: summaryText,
-    cms_action_plan: aiData?.cms_action_plan || aiData?.cms_plan || aiData?.implementation_plan || buildCmsActionPlan(cmsPlatform, cmsName, finalFixes),
+    cms_action_plan: noHighConfidenceFindings ? "No high-confidence fixes were found in the scanned sample. Consider a deeper crawl or a manual review of important business pages." : (aiData?.cms_action_plan || aiData?.cms_plan || aiData?.implementation_plan || buildCmsActionPlan(cmsPlatform, cmsName, finalFixes)),
     review_polish_version: aiData?.review_polish_version || "",
     group_dedup_version: aiData?.group_dedup_version || "",
     scoring_model: aiData?.scoring_model || aiData?.site_fingerprint?.scoring_model || "",
     ai_provider: aiData?.ai_provider || aiData?.provider || aiData?.debug?.provider || "",
     ai_review_backend: aiData?.ai_review_backend || "",
     python_review_fallback_used: Boolean(aiData?.python_review_fallback_used),
+    no_high_confidence_findings: noHighConfidenceFindings,
+    review_confidence_state: aiData?.review_confidence_state || (noHighConfidenceFindings ? "no_high_confidence_findings" : ""),
+    zero_fix_confidence_version: aiData?.zero_fix_confidence_version || "",
+    scan_status: aiData?.scan_status || (noHighConfidenceFindings ? "complete_no_high_confidence_findings" : "complete"),
+    next_best_step: nextBestStep,
+    limitation,
+    health_grade: healthGrade,
     top_recommended_actions: buildTopActions({ finalFixes }).map(slimAction),
     recommendations: finalFixes,
     fixes: finalFixes,
@@ -408,6 +420,13 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
     scoring_model: aiData?.scoring_model || aiData?.site_fingerprint?.scoring_model || "",
     ai_review_backend: aiData?.ai_review_backend || "",
     python_review_fallback_used: Boolean(aiData?.python_review_fallback_used),
+    no_high_confidence_findings: noHighConfidenceFindings,
+    review_confidence_state: aiData?.review_confidence_state || (noHighConfidenceFindings ? "no_high_confidence_findings" : ""),
+    zero_fix_confidence_version: aiData?.zero_fix_confidence_version || "",
+    scan_status: aiData?.scan_status || (noHighConfidenceFindings ? "complete_no_high_confidence_findings" : "complete"),
+    next_best_step: nextBestStep,
+    limitation,
+    health_grade: healthGrade,
       cms_platform: cmsPlatform,
       requested_path_prefix: requestedPathPrefix || "",
       scanner_version: scanData?.version || scanData?.scanner_version || technicalSummary.scanner_version || "",
@@ -509,6 +528,13 @@ function compressScanRecord(record = {}) {
     pages_crawled: record.pages_crawled || 0,
     pages_found: record.pages_found || 0,
     customer_summary: clampText(record.customer_summary || record.simple_summary || record.scan_summary?.plain_english_summary || "", 1200),
+    no_high_confidence_findings: record.no_high_confidence_findings === true,
+    review_confidence_state: record.review_confidence_state || "",
+    zero_fix_confidence_version: record.zero_fix_confidence_version || "",
+    scan_status: record.scan_status || "",
+    next_best_step: record.next_best_step || record.website_health_report?.next_best_step || "",
+    limitation: record.limitation || "",
+    health_grade: record.health_grade || record.website_health_report?.health_grade || "",
     crawl_policy_source: record.crawl_policy_source || record.crawl_policy?.source || record.technical_audit_summary?.crawl_policy_source || "",
     verified_failed_pages: getFirstNumber([record.verified_failed_pages, record.scan_summary?.verified_failed_pages, record.technical_audit_summary?.verified_failed_pages]),
     suspicious_url_artifacts: getFirstNumber([record.suspicious_url_artifacts, record.scan_summary?.suspicious_url_artifacts, record.technical_audit_summary?.suspicious_url_artifacts]),
@@ -589,7 +615,39 @@ function normalizeScanRecordForStorage(record) {
   const fixes = getRecommendations(record).map(slimFix);
   const pages = getPages(record).map(slimPage);
   const healthScore = getHealthScore(record);
-  return { ...record, id: record?.id || `scan_${Date.now()}`, created_at: record?.created_at || new Date().toISOString(), website_url: record?.website_url || "", website_key: normalizeWebsiteKey(record?.website_url || ""), business_name: record?.business_name || "", cms_platform: record?.cms_platform || "custom", cms_name: record?.cms_name || "Custom / Not sure", scan_mode: record?.scan_mode || "quick", health_score: Number(healthScore || 0), seo_score: Number(healthScore || 0), pages_crawled: Number(record?.pages_crawled || pages.length || 0), pages_found: Number(record?.pages_found || pages.length || 0), customer_summary: record?.customer_summary || record?.simple_summary || "", simple_summary: record?.simple_summary || record?.customer_summary || "", recommendations: fixes, fixes, findings: fixes, top_recommended_actions: fixes.slice(0, 5).map(fixToAction).map(slimAction), crawled_pages: pages, pages, scanned_pages: pages };
+  const incomplete = ["incomplete_evidence", "blocked_or_incomplete"].includes(record?.scan_status);
+  const noHighConfidenceFindings = record?.no_high_confidence_findings === true || (fixes.length === 0 && !incomplete);
+  return {
+    ...record,
+    id: record?.id || `scan_${Date.now()}`,
+    created_at: record?.created_at || new Date().toISOString(),
+    website_url: record?.website_url || "",
+    website_key: normalizeWebsiteKey(record?.website_url || ""),
+    business_name: record?.business_name || "",
+    cms_platform: record?.cms_platform || "custom",
+    cms_name: record?.cms_name || "Custom / Not sure",
+    scan_mode: record?.scan_mode || "quick",
+    health_score: Number(healthScore || 0),
+    seo_score: Number(healthScore || 0),
+    health_grade: record?.health_grade || record?.website_health_report?.health_grade || (noHighConfidenceFindings ? "No issues found in sample" : scoreLabel(healthScore)),
+    no_high_confidence_findings: noHighConfidenceFindings,
+    review_confidence_state: record?.review_confidence_state || (noHighConfidenceFindings ? "no_high_confidence_findings" : ""),
+    zero_fix_confidence_version: record?.zero_fix_confidence_version || "",
+    scan_status: record?.scan_status || (noHighConfidenceFindings ? "complete_no_high_confidence_findings" : "complete"),
+    next_best_step: record?.next_best_step || record?.website_health_report?.next_best_step || "",
+    limitation: record?.limitation || "",
+    pages_crawled: Number(record?.pages_crawled || pages.length || 0),
+    pages_found: Number(record?.pages_found || pages.length || 0),
+    customer_summary: record?.customer_summary || record?.simple_summary || "",
+    simple_summary: record?.simple_summary || record?.customer_summary || "",
+    recommendations: fixes,
+    fixes,
+    findings: fixes,
+    top_recommended_actions: fixes.slice(0, 5).map(fixToAction).map(slimAction),
+    crawled_pages: pages,
+    pages,
+    scanned_pages: pages,
+  };
 }
 
 function clearPreviousDashboardScan(activeUrl) {
@@ -654,6 +712,7 @@ function buildCmsInstruction(cmsPlatform) {
 
 function buildCmsActionPlan(cmsPlatform, cmsName, fixes) {
   const count = Array.isArray(fixes) ? fixes.length : 0;
+  if (count === 0) return "No high-confidence fixes were found in the scanned sample. Consider a deeper crawl or a manual review of important business pages.";
   const intro = `This website is marked as ${cmsName}. Start with the highest-impact SEO fixes first, then handle the easier cleanup tasks.`;
   const developerNote = fixes.some((fix) => fix.requires_developer) ? " Some items should go to your web person because they involve rendering, schema, canonicals, redirects, route boundaries, or server/crawl setup." : "";
   return `${intro} There are ${count} recommendations ready for review.${developerNote}`;
@@ -667,7 +726,32 @@ function slimScannerData(scanner = {}) {
 function slimAiData(ai = {}) {
   if (!ai) return null;
   const recommendations = getRecommendations(ai);
-  return { success: ai.success, ai_provider: ai.ai_provider || ai.provider || ai.debug?.provider || "", ai_review_backend: ai.ai_review_backend || "", python_review_fallback_used: Boolean(ai.python_review_fallback_used), review_polish_version: ai.review_polish_version || "", group_dedup_version: ai.group_dedup_version || "", scoring_model: ai.scoring_model || ai.site_fingerprint?.scoring_model || "", ai_review_warning: ai.ai_review_warning || "", health_score: ai.health_score || ai.seo_score || ai.website_health_report?.health_score || ai.website_health_report?.score || 0, customer_summary: ai.customer_summary || ai.plain_english_summary || ai.summary || ai.website_health_report?.overall_explanation || "", website_health_report: slimHealthReport(ai.website_health_report || {}), site_fingerprint: ai.site_fingerprint || ai.scan_summary?.site_fingerprint || {}, archetype_playbook: ai.archetype_playbook || {}, top_recommended_actions: recommendations.slice(0, 5).map(fixToAction).map(slimAction), recommendations_count: recommendations.length, recommendations_preview: recommendations.slice(0, 18).map(slimFix), ai_rewrites_applied: ai.ai_rewrites_applied || 0 };
+  return {
+    success: ai.success,
+    ai_provider: ai.ai_provider || ai.provider || ai.debug?.provider || "",
+    ai_review_backend: ai.ai_review_backend || "",
+    python_review_fallback_used: Boolean(ai.python_review_fallback_used),
+    review_polish_version: ai.review_polish_version || "",
+    group_dedup_version: ai.group_dedup_version || "",
+    scoring_model: ai.scoring_model || ai.site_fingerprint?.scoring_model || "",
+    no_high_confidence_findings: ai.no_high_confidence_findings === true,
+    review_confidence_state: ai.review_confidence_state || "",
+    zero_fix_confidence_version: ai.zero_fix_confidence_version || "",
+    scan_status: ai.scan_status || "",
+    next_best_step: ai.next_best_step || ai.website_health_report?.next_best_step || "",
+    limitation: ai.limitation || "",
+    health_grade: ai.health_grade || ai.website_health_report?.health_grade || "",
+    ai_review_warning: ai.ai_review_warning || "",
+    health_score: ai.health_score || ai.seo_score || ai.website_health_report?.health_score || ai.website_health_report?.score || 0,
+    customer_summary: ai.customer_summary || ai.plain_english_summary || ai.summary || ai.website_health_report?.overall_explanation || "",
+    website_health_report: slimHealthReport(ai.website_health_report || {}),
+    site_fingerprint: ai.site_fingerprint || ai.scan_summary?.site_fingerprint || {},
+    archetype_playbook: ai.archetype_playbook || {},
+    top_recommended_actions: recommendations.slice(0, 5).map(fixToAction).map(slimAction),
+    recommendations_count: recommendations.length,
+    recommendations_preview: recommendations.slice(0, 18).map(slimFix),
+    ai_rewrites_applied: ai.ai_rewrites_applied || 0,
+  };
 }
 
 function slimScanRecord(record = {}) {
@@ -777,7 +861,21 @@ function dedupeFixes(fixes) { const seen = new Set(); const output = []; for (co
 function normalizeCoverageSummary(summary, pagesCrawled) { const text = String(summary || ""); const count = Number(pagesCrawled || 0); if (!count || !text) return text; return text.replace(/The scanner reviewed\s+\d+\s+pages/gi, `The scanner reviewed ${count} pages`).replace(/scanner reviewed\s+\d+\s+pages/gi, `scanner reviewed ${count} pages`); }
 function normalizeSiteFingerprint(fingerprint = {}, pages = []) { const pathText = pages.map((page) => `${page.url || ""} ${page.final_url || ""} ${page.estimated_page_intent || ""}`).join(" ").toLowerCase(); const bookingHits = countIncludes(pathText, "booking") + countIncludes(pathText, "reservation") + countIncludes(pathText, "ticket") + countIncludes(pathText, "checkout") + countIncludes(pathText, "voucher"); const energyHits = countIncludes(pathText, "energie") + countIncludes(pathText, "énergie") + countIncludes(pathText, "electricite") + countIncludes(pathText, "électricité") + countIncludes(pathText, "gaz") + countIncludes(pathText, "fournisseur"); if (energyHits >= 3 && (!fingerprint.primary_archetype || fingerprint.primary_archetype === "finance_insurance_lead_gen" || fingerprint.vertical === "insurance_finance")) return { ...fingerprint, primary_archetype: "utilities_comparison_lead_gen", vertical: "utilities_comparison_lead_gen", archetype_label: "utilities / energy comparison lead generation", vertical_label: "utilities / energy comparison lead generation", business_model: "quote_or_comparison_lead_gen", vertical_confidence: Math.max(Number(fingerprint.vertical_confidence || 0), 0.85) }; if (bookingHits >= 5 && (!fingerprint.vertical || fingerprint.vertical === "ecommerce")) return { ...fingerprint, primary_archetype: "booking_experiences_marketplace", vertical: "travel_booking", archetype_label: "booking / experiences marketplace", vertical_label: "booking / experiences marketplace", business_model: "booking_or_reservation", vertical_confidence: Math.max(Number(fingerprint.vertical_confidence || 0), 0.85) }; return fingerprint; }
 
-function getTemplateGroupTitle(fix = {}, family = "template") { const value = `${fix.rule || ""} ${fix.category || ""} ${fix.title || ""}`.toLowerCase(); const label = String(family || "template").replace(/_/g, " "); if (value.includes("client") || value.includes("javascript") || value.includes("render")) return `Fix crawlable HTML for ${label} pages`; if (value.includes("route") || value.includes("index")) return `Review route-boundary indexing for ${label} pages`; if (value.includes("schema")) return `Add structured data to ${label} templates`; if (value.includes("h1")) return `Fix missing H1 headings on ${label} templates`; if (value.includes("alt")) return `Batch image descriptions on ${label} pages`; if (value.includes("description")) return `Batch meta descriptions on ${label} pages`; return `Fix repeated ${label} template issue`; }
+function getTemplateGroupTitle(fix = {}, family = "template") {
+  const rule = String(fix.rule || "").toLowerCase();
+  const label = String(family || "template").replace(/_/g, " ");
+  if (/rate_limited|blocked|429/.test(rule)) return `Check ${label} pages blocked by rate limiting`;
+  if (/broken_page|404|410|server_error|5\d\d/.test(rule)) return fix.title || fix.issue_title || defaultTitle(fix.category);
+  const value = `${fix.rule || ""} ${fix.category || ""} ${fix.title || ""}`.toLowerCase();
+  if (value.includes("client") || value.includes("javascript") || value.includes("render")) return `Fix crawlable HTML for ${label} pages`;
+  if (value.includes("route") || value.includes("index")) return `Review route-boundary indexing for ${label} pages`;
+  if (value.includes("schema")) return `Add structured data to ${label} templates`;
+  if (value.includes("h1")) return `Fix missing H1 headings on ${label} templates`;
+  if (value.includes("alt")) return `Batch image descriptions on ${label} pages`;
+  if (value.includes("description")) return `Batch meta descriptions on ${label} pages`;
+  return `Fix repeated ${label} template issue`;
+}
+
 function getTemplateGroupExplanation(fix = {}) { if (/client|javascript|render/i.test(`${fix.rule} ${fix.title}`)) return "Several similar business-critical pages appear to rely on JavaScript for their main content. Treat this as one template rendering issue, not many separate page edits."; if (/route|index/i.test(`${fix.rule} ${fix.title}`)) return "Several checkout, login, account, cart, dashboard, or app-like routes need one route-boundary review."; return "Several similar pages have the same template-level issue. Fix the shared template or pattern instead of creating one task per page."; }
 function getTemplateGroupWhy(fix = {}) { if (/client|javascript|render/i.test(`${fix.rule} ${fix.title}`)) return "Search engines and AI crawlers may not see the booking, listing, product, supplier, or comparison content if it only appears after JavaScript runs."; if (/route|index/i.test(`${fix.rule} ${fix.title}`)) return "Private or checkout/app routes in search can create duplicate, low-trust, or sensitive public pages and can confuse crawlers about what should rank."; return "Large sites usually have template problems. Grouping keeps the FixList focused on the highest-impact patterns."; }
 function getTemplateGroupRecommendation(fix = {}) { if (/client|javascript|render/i.test(`${fix.rule} ${fix.title}`)) return "Ask your web person to check whether the main content is visible in page source. Add server-side rendering, pre-rendering, or crawlable fallback HTML for the affected template."; if (/schema/i.test(`${fix.rule} ${fix.title}`)) return "Ask your web person to add the right structured data once at the shared template level, then test a few affected pages."; if (/route|index/i.test(`${fix.rule} ${fix.title}`)) return "Ask your web person to require login, add noindex, or keep private/checkout/account routes out of public search while leaving true public pages crawlable."; return "Fix one representative page/template first, then roll out the same rule across the affected group."; }

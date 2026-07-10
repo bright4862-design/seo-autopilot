@@ -139,6 +139,9 @@ export default function FixList() {
   const cmsLabel = CMS_OPTIONS.find((cms) => cms.value === selectedCms)?.label || "Custom / Not sure";
   const topActions = getTopActions(scanRecord, recommendations);
   const counts = countBuckets(recommendations);
+  const noHighConfidenceFindings = isNoHighConfidenceFindings(scanRecord, recommendations);
+  const healthGrade = getHealthGrade(scanRecord, healthScore, noHighConfidenceFindings);
+  const nextBestStep = getNextBestStep(scanRecord, noHighConfidenceFindings);
   const summary = getBestSummary(scanRecord, healthScore, pagesScanned, recommendations.length);
 
   return (
@@ -148,10 +151,10 @@ export default function FixList() {
 
         {hasUsefulScan ? (
           <>
-            <NextStepCard counts={counts} onReview={() => scrollToRecommendations()} />
+            <NextStepCard counts={counts} onReview={() => scrollToRecommendations()} noHighConfidenceFindings={noHighConfidenceFindings} nextBestStep={nextBestStep} />
 
             <div className="grid gap-6 xl:grid-cols-3">
-              <WebsiteHealthCard healthScore={healthScore} pagesScanned={pagesScanned} createdAt={scanRecord?.created_at} />
+              <WebsiteHealthCard healthScore={healthScore} healthGrade={healthGrade} pagesScanned={pagesScanned} createdAt={scanRecord?.created_at} />
               <BucketOverview counts={counts} />
             </div>
 
@@ -194,7 +197,7 @@ export default function FixList() {
                     <RecommendationCard key={`${recommendation.id}-${index}`} recommendation={recommendation} cms={selectedCms} />
                   ))
                 ) : (
-                  <EmptyFilteredState />
+                  <EmptyFilteredState noHighConfidenceFindings={noHighConfidenceFindings} nextBestStep={nextBestStep} />
                 )}
               </div>
             </section>
@@ -231,7 +234,7 @@ function PageHeader({ hasUsefulScan, onScan }) {
   );
 }
 
-function NextStepCard({ counts, onReview }) {
+function NextStepCard({ counts, onReview, noHighConfidenceFindings = false, nextBestStep = "" }) {
   const activeBucket = BUCKET_ORDER.find((key) => Number(counts[key] || 0) > 0);
   const bucket = activeBucket ? BUCKETS[activeBucket] : null;
   return (
@@ -240,30 +243,34 @@ function NextStepCard({ counts, onReview }) {
         <div>
           <p className="text-sm font-medium text-indigo-600">Your next step</p>
           <h2 className="mt-2 text-xl font-semibold text-slate-950">
-            {bucket ? `Start with ${bucket.title}` : "Your scan has recommendations ready."}
+            {noHighConfidenceFindings ? "No high-confidence issues were found in this scanned sample." : bucket ? `Start with ${bucket.title}` : "Your scan has recommendations ready."}
           </h2>
           <p className="mt-2 text-sm leading-6 text-slate-600">
-            {bucket?.subtitle || "Review the highest-impact items first."}
+            {noHighConfidenceFindings ? (nextBestStep || "Consider a deeper crawl or manually reviewing key money pages.") : (bucket?.subtitle || "Review the highest-impact items first.")}
           </p>
         </div>
-        <Button type="button" onClick={onReview} className="shrink-0 rounded-full bg-indigo-600 px-6 text-sm font-medium text-white shadow-none hover:bg-indigo-700">
-          {bucket?.cta || "Review recommendations"}
-          <ArrowRight className="ml-2 h-4 w-4" />
-        </Button>
+        {!noHighConfidenceFindings ? (
+          <Button type="button" onClick={onReview} className="shrink-0 rounded-full bg-indigo-600 px-6 text-sm font-medium text-white shadow-none hover:bg-indigo-700">
+            {bucket?.cta || "Review recommendations"}
+            <ArrowRight className="ml-2 h-4 w-4" />
+          </Button>
+        ) : null}
       </div>
     </section>
   );
 }
 
-function WebsiteHealthCard({ healthScore, pagesScanned, createdAt }) {
+function WebsiteHealthCard({ healthScore, healthGrade = "", pagesScanned, createdAt }) {
   const band = getScoreBand(healthScore);
+  const displayedGrade = healthGrade || band.label;
+  const gradeClassName = healthGrade && healthGrade !== band.label ? "bg-slate-100 text-slate-700" : band.className;
   return (
     <section className="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-sm">
       <h2 className="text-base font-semibold text-slate-950">Website health</h2>
       <div className="mt-4 space-y-4">
         <div>
           <div className="text-5xl font-bold tracking-tight text-slate-950">{healthScore || "—"}</div>
-          <span className={`mt-3 inline-flex rounded-full px-3 py-1 text-xs font-medium ${band.className}`}>{band.label}</span>
+          <span className={`mt-3 inline-flex rounded-full px-3 py-1 text-xs font-medium ${gradeClassName}`}>{displayedGrade}</span>
         </div>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
           <MiniStat label="Pages checked" value={pagesScanned || 0} icon={FileText} />
@@ -502,11 +509,15 @@ function NoScanState({ onScan }) {
   );
 }
 
-function EmptyFilteredState() {
+function EmptyFilteredState({ noHighConfidenceFindings = false, nextBestStep = "" }) {
   return (
     <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-      <p className="text-sm font-medium text-slate-950">No recommendations match this filter.</p>
-      <p className="mt-1 text-sm text-slate-500">Choose another priority filter to see more items.</p>
+      <p className="text-sm font-medium text-slate-950">
+        {noHighConfidenceFindings ? "No high-confidence recommendations were found in this sample." : "No recommendations match this filter."}
+      </p>
+      <p className="mt-1 text-sm text-slate-500">
+        {noHighConfidenceFindings ? (nextBestStep || "Consider a deeper crawl or manually reviewing key money pages.") : "Choose another priority filter to see more items."}
+      </p>
     </div>
   );
 }
@@ -846,6 +857,25 @@ function getHealthScore(record) {
 function getPagesScanned(record, pages) {
   const count = Number(record?.pages_crawled || record?.pages_scanned || record?.pages_checked || record?.scan_summary?.pages_scanned || record?.technical_audit_summary?.pages_crawled || pages.length || 0);
   return Number.isFinite(count) ? count : 0;
+}
+
+function isNoHighConfidenceFindings(record, recommendations = []) {
+  const scanStatus = String(record?.scan_status || "");
+  if (["incomplete_evidence", "blocked_or_incomplete"].includes(scanStatus)) return false;
+  return record?.no_high_confidence_findings === true
+    || record?.review_confidence_state === "no_high_confidence_findings"
+    || scanStatus === "complete_no_high_confidence_findings"
+    || recommendations.length === 0;
+}
+
+function getHealthGrade(record, healthScore, noHighConfidenceFindings) {
+  return cleanString(record?.website_health_report?.health_grade || record?.health_grade)
+    || (noHighConfidenceFindings ? "No issues found in sample" : getScoreBand(healthScore).label);
+}
+
+function getNextBestStep(record, noHighConfidenceFindings) {
+  return cleanString(record?.website_health_report?.next_best_step || record?.next_best_step)
+    || (noHighConfidenceFindings ? "No high-confidence issues were found in the scanned sample — consider a deeper crawl or manual review of money pages." : "");
 }
 
 function getBestSummary(record, healthScore, pagesScanned, issueCount) {

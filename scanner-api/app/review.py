@@ -51,6 +51,8 @@ def run_review(payload: dict[str, Any]) -> dict[str, Any]:
     canonical_fixes = prepare_fixes(raw_fixes + evidence_fixes + page_pattern_fixes + strategic_fixes, site_fingerprint, body, playbook)
     no_high_confidence_findings = (
         not canonical_fixes
+        and base.int_or_zero(site_fingerprint.get("pages_received")) > 0
+        and base.int_or_zero(site_fingerprint.get("pages_crawled")) > 0
         and not base.evidence_is_incomplete(site_fingerprint)
         and not base.crawl_is_blocked(site_fingerprint)
     )

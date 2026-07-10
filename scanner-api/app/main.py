@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from .review import REVIEW_VERSION, run_review
 from .scanner import VERSION, run_scan
+from .trust_discovery import enrich_scan_with_trust_pages
 
 SCANNER_API_KEY = os.getenv("SCANNER_API_KEY", "")
 
@@ -30,13 +31,14 @@ async def scan(payload: ScanRequest, x_scanner_key: str | None = Header(default=
     if SCANNER_API_KEY and x_scanner_key != SCANNER_API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    return await run_scan(
+    result = await run_scan(
         website_url=payload.website_url,
         path_prefix=payload.path_prefix,
         scan_mode=payload.scan_mode,
         business_name=payload.business_name or "",
         cms_platform=payload.cms_platform or "",
     )
+    return await enrich_scan_with_trust_pages(result)
 
 
 @app.post("/review")

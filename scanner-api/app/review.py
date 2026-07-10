@@ -1346,10 +1346,10 @@ def fix_dedup_class(fix: dict[str, Any]) -> str:
         return "canonical"
     if has_any(text, ["h1", "heading"]):
         return "h1"
-    if has_any(text, ["meta description", "meta_description", "description"]):
-        return "meta_description"
     if has_any(text, ["alt text", "image_alt", "alt_text", "image description"]):
         return "image_alt"
+    if has_any(text, ["meta description", "meta_description"]):
+        return "meta_description"
     if has_any(text, ["schema", "structured data"]):
         return "schema"
     if has_any(text, ["429", "blocked", "rate limit"]):

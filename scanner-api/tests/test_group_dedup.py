@@ -1,7 +1,7 @@
 """Polish patch 1: grouped template cards suppress per-page duplicates of the same defect class,
 without collapsing distinct defects or lone single-page fixes."""
 
-from app.review import run_review
+from app.review import fix_dedup_class, run_review
 
 
 def _run(pages, raw):
@@ -218,3 +218,61 @@ def test_blog_page_does_not_join_money_group():
     assert loan_canon, "expected a loan_program canonical group"
     joined = "\n".join(str(loan_canon[0].get("affected_pages")))
     assert "/blog/" not in joined
+
+
+def test_funbooker_image_descriptions_classify_as_image_alt_and_collapse():
+    """A grouped image-description card must cover matching per-page image-alt cards."""
+
+    urls = [
+        f"https://www.funbooker.com/fr/annonce/activity-{index}/voir"
+        for index in range(3)
+    ]
+    pages = [
+        {
+            "final_url": url,
+            "status_code": 200,
+            "h1_count": 1,
+            "meta_description": "Book this activity.",
+            "canonical": url,
+            "page_template_family": "activity_detail",
+            "image_missing_alt_count": 1,
+        }
+        for url in urls
+    ]
+    raw = [
+        {
+            "rule": "image_alt_text",
+            "category": "image_alt_text",
+            "title": "Add useful image descriptions",
+            "page_url": url,
+            "affected_pages": [url],
+        }
+        for url in urls
+    ]
+
+    assert fix_dedup_class({
+        "rule": "image_alt_text",
+        "category": "image_alt_text",
+        "title": "Batch image descriptions on activity detail pages",
+    }) == "image_alt"
+
+    result = run_review({
+        "website_url": "https://www.funbooker.com/fr/",
+        "pages": pages,
+        "raw_fixes": raw,
+        "scan_coverage": {
+            "pages_found": 1200,
+            "pages_crawled": len(pages),
+            "sampled_pages_sent_to_ai": len(pages),
+        },
+    })
+    image_fixes = [
+        fix
+        for fix in result["cleaned_fixes"]
+        if fix_dedup_class(fix) == "image_alt"
+    ]
+
+    assert len(image_fixes) == 1
+    assert len(image_fixes[0]["affected_pages"]) == 3
+    assert image_fixes[0]["source"].startswith("page_pattern:")
+    assert image_fixes[0]["who_can_do_this"] == "your_web_person"

@@ -38,9 +38,7 @@ TRUST_PATH_CANDIDATES = (
     "/securite",
 )
 
-TRUST_SEGMENTS = {
-    path.strip("/") for path in TRUST_PATH_CANDIDATES
-}
+TRUST_SEGMENTS = {path.strip("/") for path in TRUST_PATH_CANDIDATES}
 TRUST_LINK_TEXT = re.compile(
     r"\b(about|contact|privacy|legal|terms|security|"
     r"a\s+propos|qui\s+sommes[- ]nous|mentions?\s+l[eé]gales?|"
@@ -65,6 +63,15 @@ def is_trust_candidate(url: str, link_text: str = "") -> bool:
 
 def _page_url(page: dict) -> str:
     return str(page.get("final_url") or page.get("url") or page.get("path") or "")
+
+
+def _page_is_trust(page: dict) -> bool:
+    if is_trust_candidate(_page_url(page)):
+        return True
+    return (
+        str(page.get("page_template_family") or "") == "legal_info"
+        or str(page.get("estimated_page_intent") or "") == "trust_or_legal"
+    )
 
 
 def _same_origin(url: str, origin: str) -> bool:
@@ -108,6 +115,7 @@ async def _fetch_page(client: httpx.AsyncClient, url: str, source: str, source_p
             },
         )
         page["trust_discovery_probe"] = True
+        page["_trust_html"] = html
         return page, evidence
     except Exception as exc:
         evidence["error"] = str(exc)[:180]
@@ -131,7 +139,7 @@ async def enrich_scan_with_trust_pages(scan_result: dict) -> dict:
     parsed = urlparse(website_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
     pages = list(scan_result.get("crawled_pages") or scan_result.get("pages") or [])
-    existing_found = [page for page in pages if is_trust_candidate(_page_url(page))]
+    existing_found = [page for page in pages if _page_is_trust(page)]
 
     checked: list[dict] = []
     discovered_pages: list[dict] = []
@@ -142,23 +150,16 @@ async def enrich_scan_with_trust_pages(scan_result: dict) -> dict:
         follow_redirects=False,
         headers={"User-Agent": "Mozilla/5.0 (compatible; FixListTrustDiscovery/1.0)"},
     ) as client:
-        # Read the homepage first so custom trust URLs such as /company or
-        # /politique-confidentialite can be discovered from navigation/footer text.
+        # Read the homepage first so custom trust URLs such as /company can be
+        # discovered from navigation/footer text even when their slug is unusual.
         homepage, homepage_evidence = await _fetch_page(client, origin + "/", "trust_homepage_probe")
         checked.append(homepage_evidence)
-        if homepage:
-            homepage_html = ""
-            try:
-                response = await safe_get(client, origin + "/")
-                if response is not None and 200 <= response.status_code < 400:
-                    homepage_html = response.text
-            except Exception:
-                homepage_html = ""
-            for link in extract_links(homepage_html, origin + "/") if homepage_html else []:
-                href = str(link.get("href") or "")
-                text = str(link.get("text") or "")
-                if _same_origin(href, origin) and is_trust_candidate(href, text):
-                    candidate_urls.append((href, "trust_homepage_link", "/"))
+        homepage_html = homepage.pop("_trust_html", "") if homepage else ""
+        for link in extract_links(homepage_html, origin + "/") if homepage_html else []:
+            href = str(link.get("href") or "")
+            text = str(link.get("text") or "")
+            if _same_origin(href, origin) and is_trust_candidate(href, text):
+                candidate_urls.append((href, "trust_homepage_link", "/"))
 
         for path in TRUST_PATH_CANDIDATES:
             candidate_urls.append((urljoin(origin + "/", path.lstrip("/")), "trust_standard_probe", ""))
@@ -179,7 +180,12 @@ async def enrich_scan_with_trust_pages(scan_result: dict) -> dict:
         ])
         for page, evidence in results:
             checked.append(evidence)
-            if page and is_trust_candidate(_page_url(page)):
+            if not page:
+                continue
+            page.pop("_trust_html", None)
+            # A live URL selected from a trust-labelled homepage link is valid
+            # evidence even when its path is custom, e.g. /company.
+            if evidence.get("source") == "trust_homepage_link" or _page_is_trust(page):
                 discovered_pages.append(page)
 
     combined = list(pages)
@@ -190,7 +196,7 @@ async def enrich_scan_with_trust_pages(scan_result: dict) -> dict:
             seen_pages.add(key)
             combined.append(page)
 
-    found_pages = [page for page in combined if is_trust_candidate(_page_url(page))]
+    found_pages = [page for page in combined if _page_is_trust(page) or page.get("trust_discovery_probe")]
     found_paths = []
     found_urls = []
     for page in found_pages:

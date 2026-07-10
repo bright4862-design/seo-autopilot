@@ -1123,6 +1123,8 @@ def needs_developer_owner(item: dict[str, Any]) -> bool:
     affected = item.get("affected_pages") or []
     affected_count = len(set(map(clean_path, affected))) if isinstance(affected, list) else 0
     page_template_family = str(item.get("page_template_family") or "")
+    if str(item.get("source", "")).startswith("page_pattern:image_alt_text:"):
+        return True  # a template-level image-alt pattern is a developer task even at one sampled page
     if affected_count >= 5:
         return True
     if page_template_family in {"activity_detail", "booking_or_checkout", "product_page", "collection_page", "conversion", "loan_program", "calculator", "comparison_page", "location_landing", "route_boundary"} and affected_count >= 2:
@@ -1282,8 +1284,17 @@ def clean_path(value: Any) -> str:
         return ""
     parsed = urlparse(raw)
     if parsed.scheme and parsed.netloc:
-        return f"{parsed.path or '/'}{('?' + parsed.query) if parsed.query else ''}"
-    return raw if raw.startswith("/") else f"/{raw}"
+        path = parsed.path or "/"
+        query = ("?" + parsed.query) if parsed.query else ""
+    else:
+        path = raw if raw.startswith("/") else f"/{raw}"
+        query = ""
+        if "?" in path:
+            path, rest = path.split("?", 1)
+            query = "?" + rest
+    if len(path) > 1:
+        path = path.rstrip("/") or "/"
+    return f"{path}{query}"
 
 
 def safe_hostname(value: Any) -> str:
@@ -1415,21 +1426,24 @@ def suppress_group_covered_singletons(fixes: list[dict[str, Any]]) -> list[dict[
 
     covered: set[tuple[str, str]] = set()
     for fix in fixes:
-        pages = pages_of(fix)
-        if len(pages) > 1 and is_generator_group(fix):
+        # A generator card is authoritative for its pages regardless of how many were sampled.
+        if is_generator_group(fix):
             cls = fix_dedup_class(fix)
-            for page in pages:
+            for page in pages_of(fix):
                 covered.add((cls, page))
     if not covered:
         return fixes
 
     output = []
     for fix in fixes:
+        if is_generator_group(fix):
+            output.append(fix)  # never suppress a generator card
+            continue
         pages = pages_of(fix)
         if len(pages) <= 1:
             page = pages[0] if pages else clean_path(fix.get("page_url") or "")
             if page and (fix_dedup_class(fix), page) in covered:
-                continue
+                continue  # non-generator singleton already covered by a generator card
         output.append(fix)
     return output
 
@@ -1485,6 +1499,3 @@ def apply_zero_fix_confidence_state(review_payload: dict[str, Any]) -> None:
         "limitation": limitation,
         "scan_status": "complete_no_high_confidence_findings",
     })
-
-
-

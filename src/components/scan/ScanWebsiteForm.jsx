@@ -361,7 +361,13 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
     customer_summary: summaryText,
     simple_summary: summaryText,
     cms_action_plan: aiData?.cms_action_plan || aiData?.cms_plan || aiData?.implementation_plan || buildCmsActionPlan(cmsPlatform, cmsName, finalFixes),
-    top_recommended_actions: buildTopActions({ aiData, finalFixes }).map(slimAction),
+    review_polish_version: aiData?.review_polish_version || "",
+    group_dedup_version: aiData?.group_dedup_version || "",
+    scoring_model: aiData?.scoring_model || aiData?.site_fingerprint?.scoring_model || "",
+    ai_provider: aiData?.ai_provider || aiData?.provider || aiData?.debug?.provider || "",
+    ai_review_backend: aiData?.ai_review_backend || "",
+    python_review_fallback_used: Boolean(aiData?.python_review_fallback_used),
+    top_recommended_actions: buildTopActions({ finalFixes }).map(slimAction),
     recommendations: finalFixes,
     fixes: finalFixes,
     findings: finalFixes,
@@ -397,6 +403,11 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
       scanner_success: scanData?.success !== false,
       ai_success: aiData?.success === true,
       ai_provider: aiData?.provider || aiData?.ai_provider || aiData?.debug?.provider || "",
+      review_polish_version: aiData?.review_polish_version || "",
+    group_dedup_version: aiData?.group_dedup_version || "",
+    scoring_model: aiData?.scoring_model || aiData?.site_fingerprint?.scoring_model || "",
+    ai_review_backend: aiData?.ai_review_backend || "",
+    python_review_fallback_used: Boolean(aiData?.python_review_fallback_used),
       cms_platform: cmsPlatform,
       requested_path_prefix: requestedPathPrefix || "",
       scanner_version: scanData?.version || scanData?.scanner_version || technicalSummary.scanner_version || "",
@@ -514,7 +525,7 @@ function compressScanRecord(record = {}) {
       crawl_policy_source: record.technical_audit_summary.crawl_policy_source || record.technical_audit_summary.crawl_policy?.source || "",
     } : null,
     debug: record.debug || {},
-    top_recommended_actions: firstArray([record.top_recommended_actions]).slice(0, 5),
+    top_recommended_actions: getRecommendations(record).slice(0, 5).map(fixToAction).map(slimAction),
     recommendations_count: getRecommendations(record).length,
     recommendations_preview: recommendations,
     pages_preview_count: pages.length,
@@ -578,7 +589,7 @@ function normalizeScanRecordForStorage(record) {
   const fixes = getRecommendations(record).map(slimFix);
   const pages = getPages(record).map(slimPage);
   const healthScore = getHealthScore(record);
-  return { ...record, id: record?.id || `scan_${Date.now()}`, created_at: record?.created_at || new Date().toISOString(), website_url: record?.website_url || "", website_key: normalizeWebsiteKey(record?.website_url || ""), business_name: record?.business_name || "", cms_platform: record?.cms_platform || "custom", cms_name: record?.cms_name || "Custom / Not sure", scan_mode: record?.scan_mode || "quick", health_score: Number(healthScore || 0), seo_score: Number(healthScore || 0), pages_crawled: Number(record?.pages_crawled || pages.length || 0), pages_found: Number(record?.pages_found || pages.length || 0), customer_summary: record?.customer_summary || record?.simple_summary || "", simple_summary: record?.simple_summary || record?.customer_summary || "", recommendations: fixes, fixes, findings: fixes, crawled_pages: pages, pages, scanned_pages: pages };
+  return { ...record, id: record?.id || `scan_${Date.now()}`, created_at: record?.created_at || new Date().toISOString(), website_url: record?.website_url || "", website_key: normalizeWebsiteKey(record?.website_url || ""), business_name: record?.business_name || "", cms_platform: record?.cms_platform || "custom", cms_name: record?.cms_name || "Custom / Not sure", scan_mode: record?.scan_mode || "quick", health_score: Number(healthScore || 0), seo_score: Number(healthScore || 0), pages_crawled: Number(record?.pages_crawled || pages.length || 0), pages_found: Number(record?.pages_found || pages.length || 0), customer_summary: record?.customer_summary || record?.simple_summary || "", simple_summary: record?.simple_summary || record?.customer_summary || "", recommendations: fixes, fixes, findings: fixes, top_recommended_actions: fixes.slice(0, 5).map(fixToAction).map(slimAction), crawled_pages: pages, pages, scanned_pages: pages };
 }
 
 function clearPreviousDashboardScan(activeUrl) {
@@ -656,14 +667,14 @@ function slimScannerData(scanner = {}) {
 function slimAiData(ai = {}) {
   if (!ai) return null;
   const recommendations = getRecommendations(ai);
-  return { success: ai.success, ai_provider: ai.ai_provider || ai.provider || ai.debug?.provider || "", ai_review_warning: ai.ai_review_warning || "", health_score: ai.health_score || ai.seo_score || ai.website_health_report?.health_score || ai.website_health_report?.score || 0, customer_summary: ai.customer_summary || ai.plain_english_summary || ai.summary || ai.website_health_report?.overall_explanation || "", website_health_report: slimHealthReport(ai.website_health_report || {}), site_fingerprint: ai.site_fingerprint || ai.scan_summary?.site_fingerprint || {}, archetype_playbook: ai.archetype_playbook || {}, top_recommended_actions: firstArray([ai.top_recommended_actions, ai.recommended_actions]).slice(0, 5).map((action) => hydrateActionWithFix(action, findSimilarFix(action, recommendations))), recommendations_count: recommendations.length, recommendations_preview: recommendations.slice(0, 18).map(slimFix), ai_rewrites_applied: ai.ai_rewrites_applied || 0 };
+  return { success: ai.success, ai_provider: ai.ai_provider || ai.provider || ai.debug?.provider || "", ai_review_backend: ai.ai_review_backend || "", python_review_fallback_used: Boolean(ai.python_review_fallback_used), review_polish_version: ai.review_polish_version || "", group_dedup_version: ai.group_dedup_version || "", scoring_model: ai.scoring_model || ai.site_fingerprint?.scoring_model || "", ai_review_warning: ai.ai_review_warning || "", health_score: ai.health_score || ai.seo_score || ai.website_health_report?.health_score || ai.website_health_report?.score || 0, customer_summary: ai.customer_summary || ai.plain_english_summary || ai.summary || ai.website_health_report?.overall_explanation || "", website_health_report: slimHealthReport(ai.website_health_report || {}), site_fingerprint: ai.site_fingerprint || ai.scan_summary?.site_fingerprint || {}, archetype_playbook: ai.archetype_playbook || {}, top_recommended_actions: recommendations.slice(0, 5).map(fixToAction).map(slimAction), recommendations_count: recommendations.length, recommendations_preview: recommendations.slice(0, 18).map(slimFix), ai_rewrites_applied: ai.ai_rewrites_applied || 0 };
 }
 
 function slimScanRecord(record = {}) {
   if (!record) return null;
   const recommendations = getRecommendations(record);
   const pages = getPages(record);
-  return { ...record, id: record.id || `scan_${Date.now()}`, created_at: record.created_at || new Date().toISOString(), website_url: record.website_url || "", website_key: record.website_key || normalizeWebsiteKey(record.website_url || ""), recommendations: recommendations.slice(0, 120).map(slimFix), fixes: recommendations.slice(0, 120).map(slimFix), findings: recommendations.slice(0, 120).map(slimFix), crawled_pages: pages.slice(0, 150).map(slimPage), pages: pages.slice(0, 150).map(slimPage), scanned_pages: pages.slice(0, 150).map(slimPage), top_recommended_actions: firstArray([record.top_recommended_actions]).slice(0, 5).map((action) => hydrateActionWithFix(action, findSimilarFix(action, recommendations))), debug: { ...(record.debug || {}), compact_debug_enabled: true, download_json_enabled: true } };
+  return { ...record, id: record.id || `scan_${Date.now()}`, created_at: record.created_at || new Date().toISOString(), website_url: record.website_url || "", website_key: record.website_key || normalizeWebsiteKey(record.website_url || ""), recommendations: recommendations.slice(0, 120).map(slimFix), fixes: recommendations.slice(0, 120).map(slimFix), findings: recommendations.slice(0, 120).map(slimFix), crawled_pages: pages.slice(0, 150).map(slimPage), pages: pages.slice(0, 150).map(slimPage), scanned_pages: pages.slice(0, 150).map(slimPage), top_recommended_actions: recommendations.slice(0, 5).map(fixToAction).map(slimAction), debug: { ...(record.debug || {}), compact_debug_enabled: true, download_json_enabled: true } };
 }
 
 function slimFix(fix = {}) {
@@ -731,20 +742,9 @@ function applyBusinessPriorityRules(fix = {}, options = {}) {
   return { ...fix, priority, requires_developer: developerOwned || fix.requires_developer, requires_approval: developerOwned ? false : fix.requires_approval, difficulty: developerOwned ? "developer" : fix.difficulty, status: developerOwned ? "needs_developer" : fix.status, who_can_do_this: developerOwned ? "your_web_person" : fix.who_can_do_this, business_importance: important ? "important" : lowValue ? "low_value_archive" : fix.business_importance || "standard", is_low_value_page: lowValue, is_important_business_page: important };
 }
 
-function buildTopActions({ aiData, finalFixes }) {
-  const byId = new Map(finalFixes.map((fix) => [fix.fix_id || fix.id, fix]));
+function buildTopActions({ finalFixes }) {
   const output = [];
   const seen = new Set();
-  const aiActions = firstArray([aiData?.top_recommended_actions, aiData?.recommended_actions]);
-  for (const action of aiActions) {
-    const matchingFix = byId.get(action?.fix_id || action?.id) || findSimilarFix(action, finalFixes);
-    const hydrated = hydrateActionWithFix(action, matchingFix);
-    const key = hydrated.fix_id || hydrated.title;
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    output.push(hydrated);
-    if (output.length >= 5) return output;
-  }
   for (const fix of finalFixes) {
     const key = fix.fix_id || fix.id || fix.title;
     if (!key || seen.has(key)) continue;
@@ -810,7 +810,7 @@ function clampText(value, max) { const text = String(value || "").trim(); return
 function countIncludes(text, keyword) { const haystack = String(text || "").toLowerCase(); const needle = String(keyword || "").toLowerCase(); if (!needle) return 0; return haystack.split(needle).length - 1; }
 function scoreLabel(score) { const number = Number(score || 0); if (number >= 90) return "Excellent"; if (number >= 75) return "Good"; if (number >= 55) return "Fair"; return "Needs work"; }
 function stableId(input) { let hash = 0; const value = String(input || ""); for (let i = 0; i < value.length; i += 1) { hash = (hash << 5) - hash + value.charCodeAt(i); hash |= 0; } return `finding_${Math.abs(hash)}`; }
-function getRecommendations(source = {}) { return firstArray([source?.recommendations, source?.cleaned_fixes, source?.fixes, source?.findings, source?.raw_fixes, source?.grouped_findings, source?.issues]); }
+function getRecommendations(source = {}) { return firstArray([source?.cleaned_fixes, source?.recommendations, source?.fixes, source?.findings, source?.raw_fixes, source?.grouped_findings, source?.issues]); }
 function getPages(source = {}) { return firstArray([source?.crawled_pages, source?.pages, source?.scanned_pages, source?.crawl_pages]); }
 function getHealthScore(source = {}) { return getFirstNumber([source?.health_score, source?.seo_score, source?.scan_summary?.health_score, source?.scan_summary?.score, source?.website_health_report?.health_score, source?.website_health_report?.score]); }
 function buildFallbackSummary({ healthScore, pagesCrawled, finalFixes, cmsName }) { const label = scoreLabel(healthScore); const high = finalFixes.filter((fix) => ["critical", "high"].includes(fix.priority)).length; return `Your website health is currently rated as ${label}. FixList scanned ${pagesCrawled || 0} pages and found ${finalFixes.length} grouped recommendation${finalFixes.length === 1 ? "" : "s"}. ${high > 0 ? `${high} item${high === 1 ? "" : "s"} should be reviewed first.` : "Start with the first recommended fix."} CMS selected: ${cmsName}.`; }

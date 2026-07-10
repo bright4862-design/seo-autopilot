@@ -49,16 +49,19 @@ def run_review(payload: dict[str, Any]) -> dict[str, Any]:
     page_pattern_fixes = build_page_pattern_findings(pages)
     strategic_fixes = base.build_strategic_findings(body, pages, website_url, site_fingerprint, playbook)
     canonical_fixes = prepare_fixes(raw_fixes + evidence_fixes + page_pattern_fixes + strategic_fixes, site_fingerprint, body, playbook)
+    no_page_evidence = (
+        base.int_or_zero(site_fingerprint.get("pages_received")) <= 0
+        or base.int_or_zero(site_fingerprint.get("pages_crawled")) <= 0
+    )
+    evidence_incomplete = base.evidence_is_incomplete(site_fingerprint) or no_page_evidence
     no_high_confidence_findings = (
         not canonical_fixes
-        and base.int_or_zero(site_fingerprint.get("pages_received")) > 0
-        and base.int_or_zero(site_fingerprint.get("pages_crawled")) > 0
-        and not base.evidence_is_incomplete(site_fingerprint)
+        and not evidence_incomplete
         and not base.crawl_is_blocked(site_fingerprint)
     )
 
     warning = ""
-    if base.evidence_is_incomplete(site_fingerprint):
+    if evidence_incomplete:
         warning = INCOMPLETE_REVIEW_WARNING
         if not canonical_fixes:
             canonical_fixes = [base.make_missing_evidence_fix()]
@@ -68,7 +71,9 @@ def run_review(payload: dict[str, Any]) -> dict[str, Any]:
         warning = "AI review ran, but no scanner recommendations were provided."
 
     review_payload = base.build_review_payload(body, pages, canonical_fixes, site_fingerprint, playbook, website_url)
-    if no_high_confidence_findings:
+    if no_page_evidence:
+        apply_incomplete_evidence_state(review_payload)
+    elif no_high_confidence_findings:
         apply_zero_fix_confidence_state(review_payload)
     result = {
         "success": True,
@@ -87,6 +92,25 @@ def run_review(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(result.get("scan_summary"), dict):
         result["scan_summary"]["scoring_model"] = SCORING_MODEL
     return result
+
+
+def apply_incomplete_evidence_state(review_payload: dict[str, Any]) -> None:
+    """Make an empty scan explicit instead of presenting a misleading health grade."""
+    summary = INCOMPLETE_REVIEW_WARNING
+    next_step = "Provide page-level scan evidence, then rerun AI Review."
+    report = review_payload.get("website_health_report")
+    if isinstance(report, dict):
+        report["health_grade"] = "Scan incomplete"
+        report["overall_explanation"] = summary
+        report["next_best_step"] = next_step
+    review_payload.update({
+        "health_grade": "Scan incomplete",
+        "plain_english_summary": summary,
+        "health_explanation": summary,
+        "customer_summary": summary,
+        "next_best_step": next_step,
+        "scan_status": "incomplete_evidence",
+    })
 
 
 def apply_zero_fix_confidence_state(review_payload: dict[str, Any]) -> None:

@@ -1,0 +1,140 @@
+name: Apply FixList frontend dedup patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/patch-fixlist-top-actions.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Patch authoritative top actions and review metadata
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+
+          path = Path('src/components/scan/ScanWebsiteForm.jsx')
+          text = path.read_text(encoding='utf-8')
+
+          replacements = [
+              (
+                  'top_recommended_actions: buildTopActions({ aiData, finalFixes }).map(slimAction),',
+                  'top_recommended_actions: buildTopActions({ finalFixes }).map(slimAction),',
+              ),
+              (
+                  'top_recommended_actions: firstArray([record.top_recommended_actions]).slice(0, 5),',
+                  'top_recommended_actions: getRecommendations(record).slice(0, 5).map(fixToAction).map(slimAction),',
+              ),
+              (
+                  'recommendations: fixes, fixes, findings: fixes, crawled_pages: pages, pages, scanned_pages: pages };',
+                  'recommendations: fixes, fixes, findings: fixes, top_recommended_actions: fixes.slice(0, 5).map(fixToAction).map(slimAction), crawled_pages: pages, pages, scanned_pages: pages };',
+              ),
+              (
+                  'top_recommended_actions: firstArray([ai.top_recommended_actions, ai.recommended_actions]).slice(0, 5).map((action) => hydrateActionWithFix(action, findSimilarFix(action, recommendations)))',
+                  'top_recommended_actions: recommendations.slice(0, 5).map(fixToAction).map(slimAction)',
+              ),
+              (
+                  'top_recommended_actions: firstArray([record.top_recommended_actions]).slice(0, 5).map((action) => hydrateActionWithFix(action, findSimilarFix(action, recommendations)))',
+                  'top_recommended_actions: recommendations.slice(0, 5).map(fixToAction).map(slimAction)',
+              ),
+              (
+                  'function getRecommendations(source = {}) { return firstArray([source?.recommendations, source?.cleaned_fixes, source?.fixes, source?.findings, source?.raw_fixes, source?.grouped_findings, source?.issues]); }',
+                  'function getRecommendations(source = {}) { return firstArray([source?.cleaned_fixes, source?.recommendations, source?.fixes, source?.findings, source?.raw_fixes, source?.grouped_findings, source?.issues]); }',
+              ),
+          ]
+
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f'Expected source fragment not found: {old[:120]}')
+              text = text.replace(old, new, 1)
+
+          old_build = '''function buildTopActions({ aiData, finalFixes }) {
+            const byId = new Map(finalFixes.map((fix) => [fix.fix_id || fix.id, fix]));
+            const output = [];
+            const seen = new Set();
+            const aiActions = firstArray([aiData?.top_recommended_actions, aiData?.recommended_actions]);
+            for (const action of aiActions) {
+              const matchingFix = byId.get(action?.fix_id || action?.id) || findSimilarFix(action, finalFixes);
+              const hydrated = hydrateActionWithFix(action, matchingFix);
+              const key = hydrated.fix_id || hydrated.title;
+              if (!key || seen.has(key)) continue;
+              seen.add(key);
+              output.push(hydrated);
+              if (output.length >= 5) return output;
+            }
+            for (const fix of finalFixes) {
+              const key = fix.fix_id || fix.id || fix.title;
+              if (!key || seen.has(key)) continue;
+              seen.add(key);
+              output.push(fixToAction(fix));
+              if (output.length >= 5) break;
+            }
+            return output;
+          }'''
+          new_build = '''function buildTopActions({ finalFixes }) {
+            const output = [];
+            const seen = new Set();
+            for (const fix of finalFixes) {
+              const key = fix.fix_id || fix.id || fix.title;
+              if (!key || seen.has(key)) continue;
+              seen.add(key);
+              output.push(fixToAction(fix));
+              if (output.length >= 5) break;
+            }
+            return output;
+          }'''
+          if old_build not in text:
+              raise SystemExit('Expected buildTopActions implementation not found')
+          text = text.replace(old_build, new_build, 1)
+
+          root_anchor = '    cms_action_plan: aiData?.cms_action_plan || aiData?.cms_plan || aiData?.implementation_plan || buildCmsActionPlan(cmsPlatform, cmsName, finalFixes),\n'
+          root_fields = root_anchor + '''    review_polish_version: aiData?.review_polish_version || "",
+              group_dedup_version: aiData?.group_dedup_version || "",
+              scoring_model: aiData?.scoring_model || aiData?.site_fingerprint?.scoring_model || "",
+              ai_provider: aiData?.ai_provider || aiData?.provider || aiData?.debug?.provider || "",
+              ai_review_backend: aiData?.ai_review_backend || "",
+              python_review_fallback_used: Boolean(aiData?.python_review_fallback_used),
+          '''
+          if root_anchor not in text:
+              raise SystemExit('Primary save record anchor not found')
+          text = text.replace(root_anchor, root_fields, 1)
+
+          debug_anchor = '      ai_provider: aiData?.provider || aiData?.ai_provider || aiData?.debug?.provider || "",\n'
+          debug_fields = debug_anchor + '''      review_polish_version: aiData?.review_polish_version || "",
+              group_dedup_version: aiData?.group_dedup_version || "",
+              scoring_model: aiData?.scoring_model || aiData?.site_fingerprint?.scoring_model || "",
+              ai_review_backend: aiData?.ai_review_backend || "",
+              python_review_fallback_used: Boolean(aiData?.python_review_fallback_used),
+          '''
+          if debug_anchor not in text:
+              raise SystemExit('Debug metadata anchor not found')
+          text = text.replace(debug_anchor, debug_fields, 1)
+
+          ai_return_anchor = 'return { success: ai.success, ai_provider: ai.ai_provider || ai.provider || ai.debug?.provider || "", ai_review_warning:'
+          ai_return_replacement = 'return { success: ai.success, ai_provider: ai.ai_provider || ai.provider || ai.debug?.provider || "", ai_review_backend: ai.ai_review_backend || "", python_review_fallback_used: Boolean(ai.python_review_fallback_used), review_polish_version: ai.review_polish_version || "", group_dedup_version: ai.group_dedup_version || "", scoring_model: ai.scoring_model || ai.site_fingerprint?.scoring_model || "", ai_review_warning:'
+          if ai_return_anchor not in text:
+              raise SystemExit('slimAiData metadata anchor not found')
+          text = text.replace(ai_return_anchor, ai_return_replacement, 1)
+
+          path.write_text(text, encoding='utf-8')
+
+          workflow = Path('.github/workflows/patch-fixlist-top-actions.yml')
+          workflow.unlink()
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix authoritative top actions and preserve review metadata"
+          git push origin HEAD:main

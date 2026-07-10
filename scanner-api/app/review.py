@@ -1459,10 +1459,7 @@ def apply_zero_fix_confidence_state(review_payload: dict[str, Any]) -> None:
         "FixList found no high-confidence, evidence-backed fixes in the scanned sample. "
         "This does not guarantee that every page or SEO signal on the site is issue-free."
     )
-    next_step = (
-        "Review the scan coverage, then rerun FixList after meaningful site changes "
-        "or with broader coverage."
-    )
+    next_step = "No high-confidence issues found in the scanned sample — consider a deeper crawl or manual review of money pages."
     limitation = (
         "No high-confidence fixes were found in the scanned sample; unscanned pages "
         "or signals outside the crawl may still contain issues."
@@ -1485,6 +1482,7 @@ def apply_zero_fix_confidence_state(review_payload: dict[str, Any]) -> None:
         "health_explanation": summary,
         "customer_summary": summary,
         "next_best_step": next_step,
+        "limitation": limitation,
         "scan_status": "complete_no_high_confidence_findings",
     })
 

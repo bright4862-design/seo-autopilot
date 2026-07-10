@@ -10,6 +10,7 @@ from .extract import extract_links, extract_page
 from .security import is_public_http_url, safe_get
 
 TRUST_DISCOVERY_VERSION = "trust_page_discovery_v1"
+TRUST_FINDING_GATE_VERSION = "trust_page_finding_gate_v1"
 
 # Keep this list intentionally small and high-confidence. These probes are a
 # site-level evidence check, so they may run even when the requested crawl is
@@ -236,3 +237,121 @@ async def enrich_scan_with_trust_pages(scan_result: dict) -> dict:
         technical["trust_page_discovery"] = discovery
 
     return scan_result
+
+
+def _find_trust_discovery(value, depth: int = 0) -> dict:
+    if depth > 6 or not isinstance(value, dict):
+        return {}
+    direct = value.get("trust_page_discovery")
+    if isinstance(direct, dict):
+        return direct
+    technical = value.get("technical_audit_summary")
+    if isinstance(technical, dict) and isinstance(technical.get("trust_page_discovery"), dict):
+        return technical["trust_page_discovery"]
+    for key in ("scan", "data", "payload", "body", "result"):
+        nested = _find_trust_discovery(value.get(key), depth + 1)
+        if nested:
+            return nested
+    return {}
+
+
+def _is_missing_trust_fix(fix: dict) -> bool:
+    return str(fix.get("rule") or "") == "missing_trust_pages"
+
+
+def apply_trust_discovery_gate(review_result: dict, scan_payload: dict) -> dict:
+    """Allow a missing-trust assertion only after conclusive discovery found nothing.
+
+    This API-boundary gate also protects direct/legacy review payloads that did
+    not pass through the enriched Python /scan endpoint.
+    """
+    if not isinstance(review_result, dict):
+        return review_result
+
+    discovery = _find_trust_discovery(scan_payload)
+    found = list(discovery.get("found") or discovery.get("found_urls") or [])
+    keep_missing_assertion = bool(
+        discovery.get("attempted")
+        and discovery.get("conclusive")
+        and not found
+    )
+    if keep_missing_assertion:
+        review_result["trust_page_discovery_gate"] = {
+            "version": TRUST_FINDING_GATE_VERSION,
+            "missing_trust_assertion_allowed": True,
+            "reason": "conclusive_discovery_found_no_trust_pages",
+        }
+        return review_result
+
+    removed_titles: set[str] = set()
+    array_keys = (
+        "top_recommended_actions",
+        "recommended_actions",
+        "cleaned_fixes",
+        "raw_fixes",
+        "fixes",
+        "findings",
+        "recommendations",
+    )
+    for key in array_keys:
+        items = review_result.get(key)
+        if not isinstance(items, list):
+            continue
+        kept = []
+        for item in items:
+            if isinstance(item, dict) and _is_missing_trust_fix(item):
+                removed_titles.add(str(item.get("issue_title") or item.get("title") or "Add public trust pages"))
+                continue
+            kept.append(item)
+        review_result[key] = kept
+
+    cleaned = review_result.get("cleaned_fixes") if isinstance(review_result.get("cleaned_fixes"), list) else []
+    review_result["top_recommended_actions"] = cleaned[:5]
+
+    grouped: dict[str, list[dict]] = {}
+    for fix in cleaned:
+        family = str(fix.get("page_template_family") or "site")
+        grouped.setdefault(family, []).append(fix)
+    review_result["grouped_page_recommendations"] = [
+        {"template_family": family, "count": len(items), "top_recommendations": items[:5]}
+        for family, items in list(grouped.items())[:12]
+    ]
+
+    report = review_result.get("website_health_report")
+    if isinstance(report, dict):
+        for key in ("top_concerns", "quick_wins", "bigger_projects"):
+            values = report.get(key)
+            if isinstance(values, list):
+                report[key] = [value for value in values if str(value) not in removed_titles]
+        if cleaned:
+            report["next_best_step"] = str(cleaned[0].get("issue_title") or cleaned[0].get("title") or "Review the first FixList item.")
+
+    if removed_titles:
+        try:
+            from .review import apply_zero_fix_confidence_state, compute_health_score
+
+            fingerprint = review_result.get("site_fingerprint") if isinstance(review_result.get("site_fingerprint"), dict) else {}
+            score = compute_health_score(cleaned, fingerprint)
+            review_result["health_score"] = score
+            review_result["seo_score"] = score
+            if isinstance(report, dict):
+                report["health_score"] = score
+                report["score"] = score
+            scan_summary = review_result.get("scan_summary")
+            if isinstance(scan_summary, dict):
+                scan_summary["health_score"] = score
+                scan_summary["score"] = score
+            if not cleaned and review_result.get("evidence_complete") is True and review_result.get("scan_status") == "complete":
+                apply_zero_fix_confidence_state(review_result)
+        except Exception:
+            # The evidence gate must never make /review fail. The fix arrays are
+            # already safe even if score/wording synchronization is unavailable.
+            pass
+
+    review_result["trust_page_discovery_gate"] = {
+        "version": TRUST_FINDING_GATE_VERSION,
+        "missing_trust_assertion_allowed": False,
+        "reason": "trust_pages_found" if found else "discovery_missing_or_inconclusive",
+        "found": found,
+    }
+    return review_result

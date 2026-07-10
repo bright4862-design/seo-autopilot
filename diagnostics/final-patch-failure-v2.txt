@@ -1,0 +1,99 @@
+patch=success backend=success frontend=failure
+........................................................................ [ 85%]
+............                                                             [100%]
+=============================== warnings summary ===============================
+tests/test_concurrency.py: 68 warnings
+tests/test_fixtures_regressions.py: 24 warnings
+tests/test_grouping.py: 27 warnings
+tests/test_trust_discovery.py: 6 warnings
+  /home/runner/.local/lib/python3.12/site-packages/bs4/builder/_lxml.py:124: DeprecationWarning: The 'strip_cdata' option of HTMLParser() has never done anything and will eventually be removed.
+    parser = parser(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+84 passed, 125 warnings in 0.61s
+
+> base44-app@0.0.0 typecheck
+> tsc -p ./jsconfig.json
+
+src/components/scan/ScanWebsiteForm.jsx(877,3): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,25): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,221): error TS1005: ';' expected.
+src/components/scan/ScanWebsiteForm.jsx(877,225): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,235): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,244): error TS1005: '(' expected.
+src/components/scan/ScanWebsiteForm.jsx(877,245): error TS1005: ';' expected.
+src/components/scan/ScanWebsiteForm.jsx(877,253): error TS1005: ';' expected.
+src/components/scan/ScanWebsiteForm.jsx(877,325): error TS1005: ')' expected.
+src/components/scan/ScanWebsiteForm.jsx(877,347): error TS1005: ';' expected.
+src/components/scan/ScanWebsiteForm.jsx(877,360): error TS1005: '(' expected.
+src/components/scan/ScanWebsiteForm.jsx(877,361): error TS1005: ';' expected.
+src/components/scan/ScanWebsiteForm.jsx(877,369): error TS1005: ';' expected.
+src/components/scan/ScanWebsiteForm.jsx(877,415): error TS1005: ')' expected.
+src/components/scan/ScanWebsiteForm.jsx(877,419): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,430): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,435): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,438): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,456): error TS1443: Module declaration names may only use ' or " quoted strings.
+src/components/scan/ScanWebsiteForm.jsx(877,493): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,497): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,505): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,508): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,517): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,520): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,538): error TS1443: Module declaration names may only use ' or " quoted strings.
+src/components/scan/ScanWebsiteForm.jsx(877,576): error TS1435: Unknown keyword or identifier. Did you mean 'catch'?
+src/components/scan/ScanWebsiteForm.jsx(877,582): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,588): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,601): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,604): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,618): error TS1443: Module declaration names may only use ' or " quoted strings.
+src/components/scan/ScanWebsiteForm.jsx(877,664): error TS1435: Unknown keyword or identifier. Did you mean 'catch'?
+src/components/scan/ScanWebsiteForm.jsx(877,670): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,675): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,688): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,691): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,705): error TS1443: Module declaration names may only use ' or " quoted strings.
+src/components/scan/ScanWebsiteForm.jsx(877,716): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,720): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,729): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,738): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(877,752): error TS1443: Module declaration names may only use ' or " quoted strings.
+src/components/scan/ScanWebsiteForm.jsx(878,88): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(878,100): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(878,318): error TS1005: ';' expected.
+src/components/scan/ScanWebsiteForm.jsx(878,330): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(879,80): error TS1005: ';' expected.
+src/components/scan/ScanWebsiteForm.jsx(879,92): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(879,291): error TS1005: ';' expected.
+src/components/scan/ScanWebsiteForm.jsx(879,303): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(880,91): error TS1005: ';' expected.
+src/components/scan/ScanWebsiteForm.jsx(880,103): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(880,326): error TS1005: ';' expected.
+src/components/scan/ScanWebsiteForm.jsx(880,338): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(880,509): error TS1005: ';' expected.
+src/components/scan/ScanWebsiteForm.jsx(880,521): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(882,391): error TS1005: ';' expected.
+src/components/scan/ScanWebsiteForm.jsx(882,403): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(883,58): error TS1005: ';' expected.
+src/components/scan/ScanWebsiteForm.jsx(883,77): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(883,100): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(883,120): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(883,146): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(883,167): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(883,196): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(883,228): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(883,294): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(883,324): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(887,120): error TS1005: ';' expected.
+src/components/scan/ScanWebsiteForm.jsx(887,138): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(887,160): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(888,122): error TS1005: ';' expected.
+src/components/scan/ScanWebsiteForm.jsx(888,140): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(888,162): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(888,181): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(890,256): error TS1005: ';' expected.
+src/components/scan/ScanWebsiteForm.jsx(890,312): error TS1443: Module declaration names may only use ' or " quoted strings.
+src/components/scan/ScanWebsiteForm.jsx(892,61): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(892,69): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(892,88): error TS1434: Unexpected keyword or identifier.
+src/components/scan/ScanWebsiteForm.jsx(897,156): error TS1005: ';' expected.

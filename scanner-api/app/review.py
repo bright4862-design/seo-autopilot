@@ -7,6 +7,8 @@ from .review_base import *  # noqa: F401,F403 - preserve the existing public rev
 
 REVIEW_VERSION = base.REVIEW_VERSION
 SCORING_MODEL = "python_review_v2_group_dedup"
+ZERO_FIX_CONFIDENCE_VERSION = "python_review_v3_zero_fix_confidence"
+ZERO_FIX_HEALTH_GRADE = "No issues found in sample"
 QUALITY_GATE_VERSION = base.QUALITY_GATE_VERSION
 INCOMPLETE_REVIEW_WARNING = base.INCOMPLETE_REVIEW_WARNING
 
@@ -47,6 +49,11 @@ def run_review(payload: dict[str, Any]) -> dict[str, Any]:
     page_pattern_fixes = build_page_pattern_findings(pages)
     strategic_fixes = base.build_strategic_findings(body, pages, website_url, site_fingerprint, playbook)
     canonical_fixes = prepare_fixes(raw_fixes + evidence_fixes + page_pattern_fixes + strategic_fixes, site_fingerprint, body, playbook)
+    no_high_confidence_findings = (
+        not canonical_fixes
+        and not base.evidence_is_incomplete(site_fingerprint)
+        and not base.crawl_is_blocked(site_fingerprint)
+    )
 
     warning = ""
     if base.evidence_is_incomplete(site_fingerprint):
@@ -55,10 +62,12 @@ def run_review(payload: dict[str, Any]) -> dict[str, Any]:
             canonical_fixes = [base.make_missing_evidence_fix()]
     elif not website_url:
         warning = "AI review ran, but website_url was missing. Scanner recommendations are shown."
-    elif not canonical_fixes:
+    elif not canonical_fixes and not no_high_confidence_findings:
         warning = "AI review ran, but no scanner recommendations were provided."
 
     review_payload = base.build_review_payload(body, pages, canonical_fixes, site_fingerprint, playbook, website_url)
+    if no_high_confidence_findings:
+        apply_zero_fix_confidence_state(review_payload)
     result = {
         "success": True,
         "ai_provider": "python_review_api",
@@ -76,6 +85,42 @@ def run_review(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(result.get("scan_summary"), dict):
         result["scan_summary"]["scoring_model"] = SCORING_MODEL
     return result
+
+
+def apply_zero_fix_confidence_state(review_payload: dict[str, Any]) -> None:
+    """Present a complete zero-fix review as a bounded sample result, not a site-wide guarantee."""
+    summary = (
+        "FixList found no high-confidence, evidence-backed fixes in the scanned sample. "
+        "This does not guarantee that every page or SEO signal on the site is issue-free."
+    )
+    next_step = (
+        "Review the scan coverage, then rerun FixList after meaningful site changes "
+        "or with broader coverage."
+    )
+    limitation = (
+        "No high-confidence fixes were found in the scanned sample; unscanned pages "
+        "or signals outside the crawl may still contain issues."
+    )
+    report = review_payload.get("website_health_report")
+    if isinstance(report, dict):
+        report["health_grade"] = ZERO_FIX_HEALTH_GRADE
+        report["overall_explanation"] = summary
+        report["next_best_step"] = next_step
+        limitations = report.get("limitations")
+        if isinstance(limitations, list) and limitation not in limitations:
+            limitations.append(limitation)
+
+    review_payload.update({
+        "no_high_confidence_findings": True,
+        "review_confidence_state": "no_high_confidence_findings",
+        "zero_fix_confidence_version": ZERO_FIX_CONFIDENCE_VERSION,
+        "health_grade": ZERO_FIX_HEALTH_GRADE,
+        "plain_english_summary": summary,
+        "health_explanation": summary,
+        "customer_summary": summary,
+        "next_best_step": next_step,
+        "scan_status": "complete_no_high_confidence_findings",
+    })
 
 
 def normalize_template_family(stamped: Any, url: Any = "") -> str:
@@ -127,7 +172,7 @@ def build_page_pattern_findings(pages: list[dict[str, Any]]) -> list[dict[str, A
             why="Large sites usually have template problems. Grouping keeps the FixList focused on the highest-impact patterns." if is_group else bucket["why"],
             recommendation=bucket["recommendation"],
             affected_pages=affected,
-            difficulty="developer" if len(set(map(base.clean_path, affected))) >= 5 else bucket["difficulty"],
+            difficulty="developer" if (is_group and bucket["rule"] == "image_alt_text") or len(set(map(base.clean_path, affected))) >= 5 else bucket["difficulty"],
             source=f"page_pattern:{bucket['rule']}:{bucket['family']}",
             extra={
                 "current_value": base.template_current_value(affected),

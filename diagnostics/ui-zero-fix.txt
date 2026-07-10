@@ -1,0 +1,181 @@
+===== src/api/base44Client.js =====
+0107:   if (value.site_summary && typeof value.site_summary === 'object') value.site_summary.plain_english_summary = message;
+0108:   if (value.website_health_report && typeof value.website_health_report === 'object') {
+0109:     value.website_health_report.overall_explanation = message;
+0110:     value.website_health_report.top_concerns = ['Limited crawl coverage.'];
+0111:     value.website_health_report.quick_wins = ['Expand the scan coverage before changing page content or trust signals.'];
+0112:     value.website_health_report.next_best_step = 'Rerun the scan after confirming sitemap and internal links expose the rest of this section.';
+0113:   }
+0114: }
+0115: 
+0116: function sanitizeRecommendation(item, blockedPageKeys = new Set(), coverage = {}) {
+0117:   if (!item || typeof item !== 'object') return item;
+
+===== src/components/scan/ScanWebsiteForm.jsx =====
+0700: function slimTechnicalSummary(summary = {}, source = {}) {
+0701:   return { ...summary, audit_profile: summary.audit_profile || source?.audit_profile || "", scanner_version: summary.scanner_version || source?.scanner_version || source?.version || "", screaming_frog_lite_enabled: Boolean(summary.screaming_frog_lite_enabled || source?.screaming_frog_lite_enabled), pages_checked: Number(summary.pages_checked || summary.pages_crawled || source?.pages_crawled || 0), pages_crawled: Number(summary.pages_crawled || source?.pages_crawled || 0), pages_found: Number(summary.pages_found || source?.pages_found || 0), failed_pages: Number(summary.failed_pages || 0), verified_failed_pages: Number(summary.verified_failed_pages || source?.verified_failed_pages || source?.scan_summary?.verified_failed_pages || 0), suspicious_url_artifacts: Number(summary.suspicious_url_artifacts || source?.suspicious_url_artifacts || source?.scan_summary?.suspicious_url_artifacts || 0), route_boundary_risk: summary.route_boundary_risk || "", route_boundary_candidates_crawled: Number(summary.route_boundary_candidates_crawled || 0), duplicate_casing_routes: firstArray([summary.duplicate_casing_routes]).slice(0, 20), free_base44_subdomain: Boolean(summary.free_base44_subdomain), crawl_policy: summary.crawl_policy || source?.crawl_policy || {}, crawl_policy_source: source?.crawl_policy_source || summary.crawl_policy?.source || "", url_evidence_summary: summary.url_evidence_summary || source?.url_evidence_summary || {}, crawl_warnings: firstArray([summary.crawl_warnings, source?.crawl_warnings]).slice(0, 20) };
+0702: }
+0703: 
+0704: function slimScanSummary(summary = {}, healthScore = 0, pagesCrawled = 0, fixes = [], source = {}, summaryText = "") {
+0705:   return { ...summary, score: Number(summary.score || summary.health_score || healthScore || 0), health_score: Number(summary.health_score || summary.score || healthScore || 0), status_label: summary.status_label || scoreLabel(healthScore), plain_english_summary: normalizeCoverageSummary(summaryText || summary.plain_english_summary || summary.summary || "", pagesCrawled), pages_scanned: Number(summary.pages_scanned || pagesCrawled || 0), pages_failed: Number(summary.pages_failed || source?.technical_audit_summary?.failed_pages || 0), verified_failed_pages: Number(summary.verified_failed_pages || source?.verified_failed_pages || source?.technical_audit_summary?.verified_failed_pages || 0), suspicious_url_artifacts: Number(summary.suspicious_url_artifacts || source?.suspicious_url_artifacts || source?.technical_audit_summary?.suspicious_url_artifacts || 0), crawl_policy_source: summary.crawl_policy_source || source?.crawl_policy_source || source?.crawl_policy?.source || "", high_priority_count: fixes.filter((fix) => ["critical", "high"].includes(fix.priority)).length, technical_issue_count: fixes.length };
+0706: }
+0707: 
+0708: function slimHealthReport(report = {}, summaryText = "", healthScore = 0) {
+0709:   return { health_score: Number(report.health_score || report.score || healthScore || 0), health_grade: report.health_grade || report.grade || scoreLabel(healthScore), overall_explanation: summaryText || report.overall_explanation || report.summary || "", what_is_working: firstArray([report.what_is_working]).slice(0, 5), top_concerns: firstArray([report.top_concerns]).slice(0, 5), quick_wins: firstArray([report.quick_wins]).slice(0, 5), bigger_projects: firstArray([report.bigger_projects]).slice(0, 5), limitations: firstArray([report.limitations]).slice(0, 5), next_best_step: report.next_best_step || "" };
+0710: }
+
+0704: function slimScanSummary(summary = {}, healthScore = 0, pagesCrawled = 0, fixes = [], source = {}, summaryText = "") {
+0705:   return { ...summary, score: Number(summary.score || summary.health_score || healthScore || 0), health_score: Number(summary.health_score || summary.score || healthScore || 0), status_label: summary.status_label || scoreLabel(healthScore), plain_english_summary: normalizeCoverageSummary(summaryText || summary.plain_english_summary || summary.summary || "", pagesCrawled), pages_scanned: Number(summary.pages_scanned || pagesCrawled || 0), pages_failed: Number(summary.pages_failed || source?.technical_audit_summary?.failed_pages || 0), verified_failed_pages: Number(summary.verified_failed_pages || source?.verified_failed_pages || source?.technical_audit_summary?.verified_failed_pages || 0), suspicious_url_artifacts: Number(summary.suspicious_url_artifacts || source?.suspicious_url_artifacts || source?.technical_audit_summary?.suspicious_url_artifacts || 0), crawl_policy_source: summary.crawl_policy_source || source?.crawl_policy_source || source?.crawl_policy?.source || "", high_priority_count: fixes.filter((fix) => ["critical", "high"].includes(fix.priority)).length, technical_issue_count: fixes.length };
+0706: }
+0707: 
+0708: function slimHealthReport(report = {}, summaryText = "", healthScore = 0) {
+0709:   return { health_score: Number(report.health_score || report.score || healthScore || 0), health_grade: report.health_grade || report.grade || scoreLabel(healthScore), overall_explanation: summaryText || report.overall_explanation || report.summary || "", what_is_working: firstArray([report.what_is_working]).slice(0, 5), top_concerns: firstArray([report.top_concerns]).slice(0, 5), quick_wins: firstArray([report.quick_wins]).slice(0, 5), bigger_projects: firstArray([report.bigger_projects]).slice(0, 5), limitations: firstArray([report.limitations]).slice(0, 5), next_best_step: report.next_best_step || "" };
+0710: }
+0711: 
+0712: function groupAndSortFixes(fixes, options = {}) {
+0713:   const normalized = Array.isArray(fixes) ? fixes.map((fix) => applyBusinessPriorityRules(fix, options)) : [];
+0714:   const groups = new Map();
+
+0806: function getFirstNumber(values) { for (const value of values || []) { const number = Number(value); if (Number.isFinite(number) && number >= 0) return number; } return 0; }
+0807: function unique(values) { return Array.from(new Set((values || []).filter((value) => value !== undefined && value !== null && String(value).trim() !== ""))); }
+0808: function cleanString(value) { return typeof value === "string" && value.trim() ? value.trim() : ""; }
+0809: function clampText(value, max) { const text = String(value || "").trim(); return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1)).trim()}…`; }
+0810: function countIncludes(text, keyword) { const haystack = String(text || "").toLowerCase(); const needle = String(keyword || "").toLowerCase(); if (!needle) return 0; return haystack.split(needle).length - 1; }
+0811: function scoreLabel(score) { const number = Number(score || 0); if (number >= 90) return "Excellent"; if (number >= 75) return "Good"; if (number >= 55) return "Fair"; return "Needs work"; }
+0812: function stableId(input) { let hash = 0; const value = String(input || ""); for (let i = 0; i < value.length; i += 1) { hash = (hash << 5) - hash + value.charCodeAt(i); hash |= 0; } return `finding_${Math.abs(hash)}`; }
+0813: function getRecommendations(source = {}) { return firstArray([source?.cleaned_fixes, source?.recommendations, source?.fixes, source?.findings, source?.raw_fixes, source?.grouped_findings, source?.issues]); }
+0814: function getPages(source = {}) { return firstArray([source?.crawled_pages, source?.pages, source?.scanned_pages, source?.crawl_pages]); }
+0815: function getHealthScore(source = {}) { return getFirstNumber([source?.health_score, source?.seo_score, source?.scan_summary?.health_score, source?.scan_summary?.score, source?.website_health_report?.health_score, source?.website_health_report?.score]); }
+0816: function buildFallbackSummary({ healthScore, pagesCrawled, finalFixes, cmsName }) { const label = scoreLabel(healthScore); const high = finalFixes.filter((fix) => ["critical", "high"].includes(fix.priority)).length; return `Your website health is currently rated as ${label}. FixList scanned ${pagesCrawled || 0} pages and found ${finalFixes.length} grouped recommendation${finalFixes.length === 1 ? "" : "s"}. ${high > 0 ? `${high} item${high === 1 ? "" : "s"} should be reviewed first.` : "Start with the first recommended fix."} CMS selected: ${cmsName}.`; }
+
+0811: function scoreLabel(score) { const number = Number(score || 0); if (number >= 90) return "Excellent"; if (number >= 75) return "Good"; if (number >= 55) return "Fair"; return "Needs work"; }
+0812: function stableId(input) { let hash = 0; const value = String(input || ""); for (let i = 0; i < value.length; i += 1) { hash = (hash << 5) - hash + value.charCodeAt(i); hash |= 0; } return `finding_${Math.abs(hash)}`; }
+0813: function getRecommendations(source = {}) { return firstArray([source?.cleaned_fixes, source?.recommendations, source?.fixes, source?.findings, source?.raw_fixes, source?.grouped_findings, source?.issues]); }
+0814: function getPages(source = {}) { return firstArray([source?.crawled_pages, source?.pages, source?.scanned_pages, source?.crawl_pages]); }
+0815: function getHealthScore(source = {}) { return getFirstNumber([source?.health_score, source?.seo_score, source?.scan_summary?.health_score, source?.scan_summary?.score, source?.website_health_report?.health_score, source?.website_health_report?.score]); }
+0816: function buildFallbackSummary({ healthScore, pagesCrawled, finalFixes, cmsName }) { const label = scoreLabel(healthScore); const high = finalFixes.filter((fix) => ["critical", "high"].includes(fix.priority)).length; return `Your website health is currently rated as ${label}. FixList scanned ${pagesCrawled || 0} pages and found ${finalFixes.length} grouped recommendation${finalFixes.length === 1 ? "" : "s"}. ${high > 0 ? `${high} item${high === 1 ? "" : "s"} should be reviewed first.` : "Start with the first recommended fix."} CMS selected: ${cmsName}.`; }
+
+===== src/lib/appModel.js =====
+0102:   }
+0103: 
+0104:   return { user, project: activeProject };
+0105: }
+0106: 
+0107: export function getScoreBand(score) {
+0108:   if (typeof score !== "number") return null;
+0109:   if (score >= 85) return "Strong foundation";
+0110:   if (score >= 70) return "Good, with cleanup opportunities";
+0111:   if (score >= 50) return "Needs focused improvement";
+0112:   return "Needs attention";
+
+===== src/lib/exportScanReport.js =====
+0050:   line(`Business: ${project.business_name}`, { bold: true, size: 11 });
+0051:   line(`Website: ${project.website_url}`, { size: 11 });
+0052:   line(`Scan date: ${scanDate ? new Date(scanDate).toLocaleDateString() : "—"}`, { size: 11, gap: 4 });
+0053: 
+0054:   heading("At a glance");
+0055:   line(`Website health score: ${project.seo_score ?? crawlJob?.seo_score ?? "—"} / 100`);
+0056:   line(`Pages scanned: ${crawlJob?.pages_crawled ?? "—"}`);
+0057:   line(`Total recommended improvements: ${issues.length}`);
+0058:   line(`Prepared fixes: ${prepared.length}`);
+0059:   line(`Needs your approval: ${approval.length}`);
+0060:   line(`Website improvements: ${developer.length}`);
+
+===== src/lib/friendlyLabels.js =====
+0198:       what: "",
+0199:     }
+0200:   );
+0201: }
+0202: 
+0203: export function getScoreBand(score) {
+0204:   if (typeof score !== "number") return null;
+0205:   if (score >= 85) return { label: "Great", tone: "green" };
+0206:   if (score >= 70) return { label: "Good", tone: "blue" };
+0207:   if (score >= 50) return { label: "Getting there", tone: "amber" };
+0208:   return { label: "Needs work", tone: "red" };
+
+===== src/pages/Dashboard.jsx =====
+0148:         </div>
+0149:       </div>
+0150:     );
+0151:   }
+0152: 
+0153:   const scoreBand = getScoreBand(project.seo_score);
+0154: 
+0155:   // The big blue button is the NEXT ACTION, never "scan again" by default.
+0156:   // Priority mirrors getFirstStep(): approve → decide → delegate → scan.
+0157:   const primaryAction =
+0158:     counts.auto_fixed > 0
+
+===== src/pages/FixList.jsx =====
+0238:     <section className="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-sm sm:p-7">
+0239:       <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+0240:         <div>
+0241:           <p className="text-sm font-medium text-indigo-600">Your next step</p>
+0242:           <h2 className="mt-2 text-xl font-semibold text-slate-950">
+0243:             {bucket ? `Start with ${bucket.title}` : "Your scan has recommendations ready."}
+0244:           </h2>
+0245:           <p className="mt-2 text-sm leading-6 text-slate-600">
+0246:             {bucket?.subtitle || "Review the highest-impact items first."}
+0247:           </p>
+0248:         </div>
+
+0241:           <p className="text-sm font-medium text-indigo-600">Your next step</p>
+0242:           <h2 className="mt-2 text-xl font-semibold text-slate-950">
+0243:             {bucket ? `Start with ${bucket.title}` : "Your scan has recommendations ready."}
+0244:           </h2>
+0245:           <p className="mt-2 text-sm leading-6 text-slate-600">
+0246:             {bucket?.subtitle || "Review the highest-impact items first."}
+0247:           </p>
+0248:         </div>
+0249:         <Button type="button" onClick={onReview} className="shrink-0 rounded-full bg-indigo-600 px-6 text-sm font-medium text-white shadow-none hover:bg-indigo-700">
+0250:           {bucket?.cta || "Review recommendations"}
+0251:           <ArrowRight className="ml-2 h-4 w-4" />
+
+0254:     </section>
+0255:   );
+0256: }
+0257: 
+0258: function WebsiteHealthCard({ healthScore, pagesScanned, createdAt }) {
+0259:   const band = getScoreBand(healthScore);
+0260:   return (
+0261:     <section className="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-sm">
+0262:       <h2 className="text-base font-semibold text-slate-950">Website health</h2>
+0263:       <div className="mt-4 space-y-4">
+0264:         <div>
+
+0257: 
+0258: function WebsiteHealthCard({ healthScore, pagesScanned, createdAt }) {
+0259:   const band = getScoreBand(healthScore);
+0260:   return (
+0261:     <section className="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-sm">
+0262:       <h2 className="text-base font-semibold text-slate-950">Website health</h2>
+0263:       <div className="mt-4 space-y-4">
+0264:         <div>
+0265:           <div className="text-5xl font-bold tracking-tight text-slate-950">{healthScore || "—"}</div>
+0266:           <span className={`mt-3 inline-flex rounded-full px-3 py-1 text-xs font-medium ${band.className}`}>{band.label}</span>
+0267:         </div>
+
+0849: }
+0850: 
+0851: function getBestSummary(record, healthScore, pagesScanned, issueCount) {
+0852:   const summary = cleanString(record?.customer_summary || record?.simple_summary || record?.website_health_report?.overall_explanation || record?.scan_summary?.plain_english_summary || record?.scan_summary?.summary);
+0853:   if (summary) return normalizeCoverageSummary(summary, pagesScanned);
+0854:   const label = getScoreBand(healthScore).label;
+0855:   return `Your website health is ${label.toLowerCase()} with a score of ${healthScore || 0}/100. FixList reviewed ${pagesScanned || 0} pages and found ${issueCount || 0} recommendations. Start with the highest-impact items first.`;
+0856: }
+0857: 
+0858: function countBuckets(recommendations) {
+0859:   return recommendations.reduce((acc, item) => {
+
+0891:   if (priority === "high") return { badge: "bg-orange-50 text-orange-700" };
+0892:   if (priority === "low") return { badge: "bg-slate-100 text-slate-600" };
+0893:   return { badge: "bg-amber-50 text-amber-700" };
+0894: }
+0895: 
+0896: function getScoreBand(score) {
+0897:   const number = Number(score || 0);
+0898:   if (number >= 90) return { label: "Excellent", className: "bg-emerald-50 text-emerald-700" };
+0899:   if (number >= 75) return { label: "Good", className: "bg-emerald-50 text-emerald-700" };
+0900:   if (number >= 55) return { label: "Fair", className: "bg-amber-50 text-amber-700" };
+0901:   return { label: "Needs work", className: "bg-red-50 text-red-700" };

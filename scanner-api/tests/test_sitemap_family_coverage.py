@@ -1,4 +1,9 @@
-from app.sitemap import interleave_by_family, rank_child_sitemaps, sitemap_family_key
+from app.sitemap import (
+    interleave_by_family,
+    interleave_url_families,
+    rank_child_sitemaps,
+    sitemap_family_key,
+)
 
 
 def activity_children(count=20):
@@ -54,3 +59,69 @@ def test_trust_and_booking_sitemaps_are_prioritized():
     ranked = rank_child_sitemaps(children, "/")
     assert ranked.index("https://x.com/sitemap-privacy.xml") < 5
     assert ranked.index("https://x.com/sitemap-booking.xml") < 5
+
+
+# URL-level family diversity before the global discovery cap. Funbooker's live
+# failure had family_totals={"activity_detail": 5000}: one 8,478-URL activity
+# child filled the complete discovery universe before booking or collections.
+DISCOVERY_LIMIT = 5000
+
+
+def _funbooker_family_urls():
+    return {
+        "sitemap-activites": [f"/fr/annonce/a{i}/voir" for i in range(8478)],
+        "sitemap-reservation": [f"/reservation/{i}" for i in range(272)],
+        "sitemap-collections": [f"/collections/c{i}" for i in range(66)],
+        "sitemap-pages": [f"/p{i}" for i in range(20)],
+    }
+
+
+def _family_of(url):
+    if "/annonce/" in url:
+        return "activity_detail"
+    if "/reservation/" in url:
+        return "booking_or_checkout"
+    if "/collections/" in url:
+        return "collection_page"
+    return "standard"
+
+
+def _discovery_universe():
+    urls = interleave_url_families(_funbooker_family_urls())[:DISCOVERY_LIMIT]
+    totals = {}
+    for url in urls:
+        family = _family_of(url)
+        totals[family] = totals.get(family, 0) + 1
+    return urls, totals
+
+
+def test_one_huge_child_sitemap_cannot_consume_the_discovery_limit():
+    urls, totals = _discovery_universe()
+    assert len(urls) == DISCOVERY_LIMIT
+    assert "activity_detail" in totals
+    assert "booking_or_checkout" in totals
+    assert "collection_page" in totals
+    assert "standard" in totals
+
+
+def test_small_families_survive_the_cap_entirely():
+    """Small booking, collection, and page families should survive completely."""
+    _, totals = _discovery_universe()
+    assert totals["booking_or_checkout"] == 272
+    assert totals["collection_page"] == 66
+    assert totals["standard"] == 20
+
+
+def test_dominant_family_still_takes_the_remaining_capacity():
+    _, totals = _discovery_universe()
+    assert totals["activity_detail"] > DISCOVERY_LIMIT * 0.8
+
+
+def test_interleave_url_families_is_deterministic():
+    families = _funbooker_family_urls()
+    assert interleave_url_families(families)[:500] == interleave_url_families(families)[:500]
+
+
+def test_interleave_url_families_handles_empty_input():
+    assert interleave_url_families({}) == []
+    assert interleave_url_families({"a": []}) == []

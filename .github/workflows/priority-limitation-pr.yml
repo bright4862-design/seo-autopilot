@@ -31,11 +31,24 @@ jobs:
         run: python .github/scripts/apply_priority_limitation_patch.py
 
       - name: Install backend dependencies
-        run: pip install -r scanner-api/requirements.txt
+        run: pip install -q -r scanner-api/requirements.txt
 
       - name: Run backend suite
+        id: backend_tests
         working-directory: scanner-api
-        run: pytest tests -q
+        run: |
+          set +e
+          pytest tests -q --tb=short > /tmp/backend-tests.log 2>&1
+          status=$?
+          cat /tmp/backend-tests.log
+          exit $status
+
+      - name: Upload backend test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: priority-backend-test-log
+          path: /tmp/backend-tests.log
 
       - name: Install frontend dependencies
         run: npm ci

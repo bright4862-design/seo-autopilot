@@ -1,3 +1,4 @@
+import gzip
 import re
 from urllib.parse import urlparse, urlunparse
 
@@ -24,30 +25,31 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
 
     roots.append(f"{origin}/sitemap.xml")
 
-    urls: list[str] = []
     child_sitemaps: list[str] = []
     fetched: set[str] = set()
+    family_urls: dict[str, list[str]] = {}
 
+    # Root urlsets are buckets too. Do not let one large direct-root sitemap fill
+    # the global discovery cap before later sitemap indexes and child families are
+    # even fetched.
     for root in dedupe(roots):
-        if len(fetched) >= MAX_SITEMAP_FETCHES or len(urls) >= limit:
+        if len(fetched) >= MAX_SITEMAP_FETCHES:
             break
         locs = await fetch_sitemap_locs(client, root, fetched, artifacts)
+        bucket = family_urls.setdefault(f"root:{sitemap_family_key(root)}", [])
         for loc in locs:
             if is_sitemap_url(loc):
                 child_sitemaps.append(loc)
-            elif is_same_prefix(loc, path_prefix):
-                urls.append(normalize_sitemap_page_url(loc, origin))
+            elif len(bucket) < limit and is_same_prefix(loc, path_prefix):
+                bucket.append(normalize_sitemap_page_url(loc, origin))
 
     # Collect child-sitemap URLs into per-family buckets, then interleave before
     # applying the global limit. Otherwise one huge child sitemap can consume
     # every discovery slot before booking, collection, or trust families appear.
-    family_urls: dict[str, list[str]] = {}
     for child in rank_child_sitemaps(child_sitemaps, path_prefix):
         if len(fetched) >= MAX_SITEMAP_FETCHES:
             break
-        if child.lower().endswith(".gz"):
-            continue
-        bucket = family_urls.setdefault(sitemap_family_key(child), [])
+        bucket = family_urls.setdefault(f"child:{sitemap_family_key(child)}", [])
         locs = await fetch_sitemap_locs(client, child, fetched, artifacts)
         for loc in locs:
             if len(bucket) >= limit:
@@ -55,9 +57,9 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
             if not is_sitemap_url(loc) and is_same_prefix(loc, path_prefix):
                 bucket.append(normalize_sitemap_page_url(loc, origin))
 
-    # Root-level URLs keep priority, followed by child URLs round-robined across
-    # sitemap families so the discovery cap retains a representative universe.
-    return dedupe(urls + interleave_url_families(family_urls))[:limit]
+    # Round-robin root and child urlsets together. Root pages keep deterministic
+    # first position, but cannot starve later child families at the global cap.
+    return dedupe(interleave_url_families(family_urls))[:limit]
 
 
 def interleave_url_families(family_urls: dict[str, list[str]]) -> list[str]:
@@ -88,7 +90,10 @@ async def fetch_sitemap_locs(client: httpx.AsyncClient, sitemap_url: str, fetche
     except Exception:
         return []
 
-    soup = BeautifulSoup(response.text or "", "xml")
+    body = decode_sitemap_body(response, sitemap_url)
+    if not body:
+        return []
+    soup = BeautifulSoup(body, "xml")
     locs: list[str] = []
     for tag in soup.find_all("loc"):
         loc = (tag.get_text() or "").strip()
@@ -99,6 +104,34 @@ async def fetch_sitemap_locs(client: httpx.AsyncClient, sitemap_url: str, fetche
             continue
         locs.append(loc)
     return locs
+
+
+def decode_sitemap_body(response: httpx.Response, sitemap_url: str) -> str:
+    """Decode plain XML and .xml.gz sitemap bodies.
+
+    HTTP clients normally decode Content-Encoding automatically, but many sitemap
+    files use a .gz extension with raw gzip bytes and no Content-Encoding header.
+    Detect both the gzip magic bytes and the URL suffix, while tolerating servers
+    that already decompressed a .gz response.
+    """
+    raw = bytes(getattr(response, "content", b"") or b"")
+    path = urlparse(str(sitemap_url or "")).path.lower()
+    gzip_candidate = raw.startswith(b"\x1f\x8b") or path.endswith(".gz")
+    if gzip_candidate and raw:
+        try:
+            raw = gzip.decompress(raw)
+        except (OSError, EOFError):
+            # A proxy or HTTP Content-Encoding layer may already have decoded a
+            # .gz URL. In that case the bytes are plain XML and can be decoded.
+            pass
+
+    if raw:
+        encoding = getattr(response, "encoding", None) or "utf-8"
+        try:
+            return raw.decode(encoding, errors="replace")
+        except LookupError:
+            return raw.decode("utf-8", errors="replace")
+    return str(getattr(response, "text", "") or "")
 
 
 def is_sitemap_url(url: str) -> bool:

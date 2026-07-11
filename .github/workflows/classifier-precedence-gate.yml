@@ -53,7 +53,7 @@ jobs:
       - name: Run frontend typecheck
         run: npm run typecheck
 
-      - name: Commit verified patch and remove one-shot files
+      - name: Commit verified product patch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -62,9 +62,5 @@ jobs:
             scanner-api/app/review.py \
             scanner-api/tests/test_page_classification.py \
             scanner-api/tests/test_review_presentation_contract.py
-          git rm \
-            .github/scripts/apply_classifier_precedence_patch.py \
-            .github/scripts/adjust_classifier_patch_order.py \
-            .github/workflows/classifier-precedence-gate.yml
           git commit -m "Make page classification evidence-aware"
           git push origin HEAD:${{ github.head_ref || github.ref_name }}

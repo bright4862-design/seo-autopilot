@@ -34,8 +34,23 @@ jobs:
         run: pip install -r scanner-api/requirements.txt
 
       - name: Run sitewide presentation regressions
+        id: sitewide-tests
+        continue-on-error: true
         working-directory: scanner-api
-        run: pytest tests/test_review_presentation_contract.py -q --tb=short
+        run: pytest tests/test_review_presentation_contract.py -q --tb=short > ../sitewide-test.log 2>&1
+
+      - name: Upload sitewide regression log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sitewide-regression-log
+          path: sitewide-test.log
+
+      - name: Stop on sitewide regression failure
+        if: steps.sitewide-tests.outcome == 'failure'
+        run: |
+          cat sitewide-test.log
+          exit 1
 
       - name: Run backend suite
         working-directory: scanner-api

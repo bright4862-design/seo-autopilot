@@ -89,7 +89,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         sitemap_urls = await load_sitemap_urls(client, origin, prefix, SITEMAP_DISCOVERY_LIMIT, artifacts)
         family_of = lambda url: classify_template(urlparse(url).path or "/")
         path_of = lambda url: urlparse(url).path or "/"
-        sampled_sitemap_urls = select_balanced_urls(sitemap_urls, family_of, path_of, max_pages)
+        sampled_sitemap_urls = select_balanced_urls(sitemap_urls, family_of, path_of, max(0, max_pages - 1))
         sampling_evidence = sampling_report(sitemap_urls, sampled_sitemap_urls, family_of, path_of)
         for url in sampled_sitemap_urls:
             enqueue(url, "sitemap", "/sitemap.xml", "")

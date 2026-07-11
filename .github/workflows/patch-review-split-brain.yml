@@ -1,0 +1,54 @@
+name: Patch review classifier split-brain
+
+on:
+  push:
+    paths:
+      - '.github/workflows/patch-review-split-brain.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: patch-review-classifier-split-brain
+  cancel-in-progress: false
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: scanner-api/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r scanner-api/requirements.txt
+
+      - name: Apply bounded classifier patch
+        run: python .github/scripts/patch_review_split_brain.py
+
+      - name: Run full backend suite
+        working-directory: scanner-api
+        run: pytest tests -q
+
+      - name: Commit tested patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scanner-api/app/extract.py scanner-api/app/review.py scanner-api/tests/test_page_classification.py
+          git commit -m "Unify route and legal classification"
+
+      - name: Remove temporary patch mechanism
+        run: |
+          rm .github/scripts/patch_review_split_brain.py
+          rm .github/workflows/patch-review-split-brain.yml
+          git add -A
+          git commit -m "Verify review classifier regressions"
+
+      - name: Push tested commits
+        run: git push origin HEAD:main

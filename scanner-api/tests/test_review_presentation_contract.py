@@ -176,6 +176,9 @@ def test_sitewide_canonical_collapse_preserves_family_evidence():
     assert len(card["source_pages"]) == len(families)
     assert card["sitewide_evidence"]["coverage_ratio"] == 1.0
     assert "global document-head" in card["plain_english_explanation"].lower()
+    steps = " ".join(card["what_to_do_steps"]).lower()
+    assert "every affected family listed in the card" in steps
+    assert "conversion, loan, location" not in steps
 
 
 def test_sitewide_collapse_does_not_overclaim_on_shallow_discovery_coverage():

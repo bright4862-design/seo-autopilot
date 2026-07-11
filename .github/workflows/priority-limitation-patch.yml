@@ -1,0 +1,69 @@
+name: Priority and limitation contract gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/priority-limitation-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Apply product patch
+        run: python .github/scripts/apply_priority_limitation_patch.py
+
+      - name: Install backend dependencies
+        run: pip install -r scanner-api/requirements.txt
+
+      - name: Run backend suite
+        working-directory: scanner-api
+        run: pytest tests -q
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run frontend contract tests
+        run: npm run test:frontend
+
+      - name: Run frontend typecheck
+        run: npm run typecheck
+
+      - name: Run frontend production build
+        run: npm run build
+
+      - name: Commit verified product patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            src/components/scan/ScanWebsiteForm.jsx \
+            src/lib/reviewContract.js \
+            scanner-api/app/review.py \
+            scanner-api/tests/test_review_presentation_contract.py \
+            tests/frontend/review_contract.test.mjs \
+            package.json
+          git commit -m "Preserve action priority and conditional limitations"
+          git push
+
+      - name: Remove temporary patch files
+        run: |
+          git rm .github/scripts/apply_priority_limitation_patch.py .github/workflows/priority-limitation-patch.yml
+          git commit -m "Verify priority and limitation contracts"
+          git push

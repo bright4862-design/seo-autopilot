@@ -17,7 +17,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { base44 } from "@/api/base44Client";
-import { selectFinalReviewFixes } from "@/lib/reviewContract";
+import { normalizeActionPriority, selectFinalReviewFixes } from "@/lib/reviewContract";
 
 const ADVANCED_SCANNER_FUNCTION = "runAdvancedScan";
 const AI_REVIEW_FUNCTION = "aiReviewScan";
@@ -902,7 +902,6 @@ function businessSortScore(fix = {}, options = {}) { let score = Number(fix.over
 function needsDeveloperOwner(item = {}) { const value = `${item.rule || ""} ${item.category || ""} ${item.title || ""} ${item.issue_title || ""} ${item.reason || ""} ${item.recommendation || ""} ${item.recommended_value || ""} ${firstArray([item.what_to_do_steps, item.what_to_do]).join(" ")} ${item.who_can_do_this || ""} ${item.primary_defect_class || ""}`.toLowerCase(); if (item.requires_developer || item.difficulty === "developer" || item.status === "needs_developer" || value.includes("your_web_person")) return true; return /developer|web person|server-side|server side|ssr|pre-render|prerender|javascript|rendering|schema|structured data|canonical|redirect|server|firewall|bot protection|cloudflare|429|500|503|robots|noindex|crawlable html|view source|indexability|route-boundary|route boundary|checkout|login|account|dashboard/.test(value); }
 function normalizeOwner(value) { const owner = String(value || "").toLowerCase(); if (owner.includes("web") || owner.includes("developer") || owner === "your_web_person") return "your_web_person"; return "you"; }
 function normalizeDisplayOwner(value) { return normalizeOwner(value) === "your_web_person" ? "Your web person" : "You"; }
-function normalizeActionPriority(value) { const priority = normalizePriority(value); return priority === "critical" ? "high" : priority; }
 function isCosmeticRule(fix = {}) { return /meta|title|description|thin_content|duplicate|image_alt|alt text|h1/.test(`${fix.rule || ""} ${fix.category || ""} ${fix.title || ""}`.toLowerCase()); }
 function isImageAltTextIssue(fix = {}) { return /image_alt_text|image alt|alt text|missing alt|image description/i.test(`${fix.rule || ""} ${fix.category || ""} ${fix.title || ""} ${fix.issue_title || ""}`); }
 function isLegalPagePath(url = "") { const path = String(url || "").toLowerCase().split("?")[0].split("#")[0]; return LEGAL_PAGE_RE.test(path); }

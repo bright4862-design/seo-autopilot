@@ -1,0 +1,133 @@
+name: Apply sampling metadata fixes
+
+on:
+  push:
+    paths:
+      - .github/workflows/apply-sampling-metadata-fixes.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-and-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Apply targeted fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              return text.replace(old, new, 1)
+
+          sitemap_path = Path("scanner-api/app/sitemap.py")
+          sitemap = sitemap_path.read_text(encoding="utf-8")
+          sitemap = replace_once(
+              sitemap,
+              '    name = re.sub(r"\\\\.xml(?:\\\\.gz)?$", "", name)\n',
+              '    name = re.sub(r"\\.xml(?:\\.gz)?$", "", name)\n',
+              "sitemap extension regex",
+          )
+          sitemap = replace_once(
+              sitemap,
+              '    return re.sub(r"[-_]?\\\\d+$", "", name) or "sitemap"\n',
+              '    return re.sub(r"[-_]?\\d+$", "", name) or "sitemap"\n',
+              "sitemap numeric suffix regex",
+          )
+          sitemap_path.write_text(sitemap, encoding="utf-8")
+
+          form_path = Path("src/components/scan/ScanWebsiteForm.jsx")
+          form = form_path.read_text(encoding="utf-8")
+
+          form = replace_once(
+              form,
+              '    scoring_model: aiData?.scoring_model || aiData?.site_fingerprint?.scoring_model || "",\n    ai_provider: aiData?.ai_provider || aiData?.provider || aiData?.debug?.provider || "",\n',
+              '    scoring_model: aiData?.scoring_model || aiData?.site_fingerprint?.scoring_model || "",\n    sampling_version: scanData?.sampling_version || "",\n    sampling_evidence: scanData?.sampling_evidence || {},\n    ai_provider: aiData?.ai_provider || aiData?.provider || aiData?.debug?.provider || "",\n',
+              "merged scan sampling metadata",
+          )
+
+          form = replace_once(
+              form,
+              '    scoring_model: aiData?.scoring_model || aiData?.site_fingerprint?.scoring_model || "",\n    ai_review_backend: aiData?.ai_review_backend || "",\n',
+              '    scoring_model: aiData?.scoring_model || aiData?.site_fingerprint?.scoring_model || "",\n    sampling_version: scanData?.sampling_version || "",\n    sampling_evidence: scanData?.sampling_evidence || {},\n    ai_review_backend: aiData?.ai_review_backend || "",\n',
+              "debug sampling metadata",
+          )
+
+          form = replace_once(
+              form,
+              '  return {\n    id: record.id || "",\n',
+              '  return {\n    sampling_version: record.sampling_version || "",\n    sampling_evidence: record.sampling_evidence || {},\n    id: record.id || "",\n',
+              "compressed scan sampling metadata",
+          )
+
+          form = replace_once(
+              form,
+              '  return {\n    ...record,\n    id: record?.id || `scan_${Date.now()}`,\n',
+              '  return {\n    ...record,\n    sampling_version: record?.sampling_version || "",\n    sampling_evidence: record?.sampling_evidence || {},\n    id: record?.id || `scan_${Date.now()}`,\n',
+              "storage normalization sampling metadata",
+          )
+
+          form = replace_once(
+              form,
+              '  return { success: scanner.success, version: scanner.version || scanner.scanner_version, website_url: scanner.website_url,',
+              '  return { success: scanner.success, version: scanner.version || scanner.scanner_version, sampling_version: scanner.sampling_version || "", sampling_evidence: scanner.sampling_evidence || {}, website_url: scanner.website_url,',
+              "scanner debug sampling metadata",
+          )
+
+          form = replace_once(
+              form,
+              '  return { ...record, id: record.id || `scan_${Date.now()}`,',
+              '  return { ...record, sampling_version: record.sampling_version || "", sampling_evidence: record.sampling_evidence || {}, id: record.id || `scan_${Date.now()}`,',
+              "slim record sampling metadata",
+          )
+
+          version_keys = len(re.findall(r"\bsampling_version\s*:", form))
+          evidence_keys = len(re.findall(r"\bsampling_evidence\s*:", form))
+          if version_keys != 6 or evidence_keys != 6:
+              raise SystemExit(f"Expected six sampling field sites, found version={version_keys}, evidence={evidence_keys}")
+
+          form_path.write_text(form, encoding="utf-8")
+          PY
+
+      - name: Run backend tests
+        working-directory: scanner-api
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pytest tests -q
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run frontend typecheck
+        run: npm run typecheck
+
+      - name: Run frontend production build
+        run: npm run build
+
+      - name: Commit tested fixes and remove temporary workflow
+        run: |
+          rm .github/workflows/apply-sampling-metadata-fixes.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scanner-api/app/sitemap.py src/components/scan/ScanWebsiteForm.jsx .github/workflows/apply-sampling-metadata-fixes.yml
+          git commit -m "Fix sitemap family grouping and preserve sampling metadata"
+          git push origin main

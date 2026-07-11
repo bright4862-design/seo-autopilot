@@ -137,3 +137,53 @@ def test_cms_legal_pages_are_legal_info_not_archive():
 def test_numbered_pagination_is_still_archive():
     for path in ["/page/2", "/blog/page/3", "/tag/x", "/author/y"]:
         assert classify_template(path) == "archive"
+
+
+# --- Scanner/review split-brain + unbounded-token leaks (Funbooker live scan) ---
+
+def test_locguenole_activity_page_is_not_legal():
+    """Unbounded 'cgu' matched the letters inside 'domaine-de-lo(cgu)enole', demoting a public
+    activity page to legal_info and spawning a 'Batch image descriptions on legal info pages' card."""
+    path = "/fr/annonce/domaine-de-locguenole-a-kervignac-56/voir"
+    assert classify_template(path) == "activity_detail"
+
+
+def test_legal_tokens_must_be_bounded_segments():
+    from app.extract import is_legal_page_path
+    assert is_legal_page_path("/fr/page/cgu")
+    assert is_legal_page_path("/cgv")
+    assert is_legal_page_path("/mentions-legales")
+    assert not is_legal_page_path("/fr/annonce/domaine-de-locguenole-a-kervignac-56/voir")
+    assert not is_legal_page_path("/fr/annonce/legumes-du-terroir/voir")
+
+
+def test_review_route_matcher_delegates_to_canonical_classifier():
+    """review.py kept a second, weaker substring matcher that re-matched /cart inside /carte
+    even after the scanner had correctly classified the page. One classifier, not two."""
+    from app.review import is_route_boundary_candidate
+    assert not is_route_boundary_candidate("/fr/carte-invitation-anniversaire")
+    assert is_route_boundary_candidate("/cart")
+    assert is_route_boundary_candidate("/checkout")
+    assert is_route_boundary_candidate("/login")
+
+
+def test_legal_pages_are_not_low_value_archives():
+    """Generic '/page/' in LOW_VALUE_PATTERNS demoted /fr/page/cgu to a pagination archive."""
+    from app.review import is_low_value_page
+    assert not is_low_value_page("/fr/page/cgu")
+    assert not is_low_value_page("/fr/page/mentions-legales")
+    assert is_low_value_page("/blog/page/3")
+    assert is_low_value_page("/tag/x")
+
+
+def test_scanner_route_boundary_boolean_is_authoritative():
+    """When the scanner supplies route_boundary_candidate, review must not recompute it."""
+    from app.review import run_review
+    pages = [{"final_url": "https://f.com/fr/carte-invitation-anniversaire", "status_code": 200,
+              "h1_count": 1, "meta_description": "d",
+              "canonical": "https://f.com/fr/carte-invitation-anniversaire",
+              "route_boundary_candidate": False, "page_template_family": "standard"}]
+    r = run_review({"website_url": "https://f.com", "pages": pages,
+                    "scan_coverage": {"pages_found": 50, "pages_crawled": 1, "sampled_pages_sent_to_ai": 1}})
+    titles = " ".join(str(f.get("issue_title", "")) for f in r["cleaned_fixes"]).lower()
+    assert "route-boundary" not in titles

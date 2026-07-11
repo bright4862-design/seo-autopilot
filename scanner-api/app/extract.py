@@ -165,6 +165,20 @@ def is_support_content_path(path: str) -> bool:
     return bool(SUPPORT_CONTENT_PREFIX_RE.match(clean) or SUPPORT_CONTENT_NESTED_RE.match(clean))
 
 
+LEGAL_PAGE_RE = re.compile(
+    # Bounded: multi-word legal slugs match anywhere, but short tokens (cgu/cgv/legal/terms)
+    # must be a complete path segment. Unbounded "cgu" matched "domaine-de-lo(cgu)enole".
+    r"(mentions-legales|mentions_legales|politique-de-confidentialite|privacy-policy|privacy_policy"
+    r"|conditions-generales|conditions-generales-de-vente|legal-notice|terms-of-service|terms-and-conditions"
+    r"|terms-of-use|privacy|impressum)"
+    r"|(^|/)(cgu|cgv|legal|terms|mentions|privacite)(/|$)"
+)
+
+
+def is_legal_page_path(path: str) -> bool:
+    return bool(LEGAL_PAGE_RE.search(str(path or "").lower().split("?")[0]))
+
+
 def classify_template(path: str) -> str:
     p = str(path or "").lower()
     clean = p.split("?")[0].split("#")[0].rstrip("/")
@@ -180,9 +194,6 @@ def classify_template(path: str) -> str:
     # while /pret-immobilier/guide-achat (not a /blog|/guide prefix) still classifies by its money path.
     if is_support_content_path(clean):
         return "guide_article"
-    # Trust/legal documents, wherever the CMS puts them (/fr/page/mentions-legales, /cgu).
-    if re.search(r"mentions-legales|mentions_legales|cgu|cgv|privacy|privacite|politique-de-confidentialite|terms|conditions-generales|legal-notice|impressum", clean):
-        return "legal_info"
     # Category/theme/collection LANDING pages win over money-keyword rules: /fr/category/simulateur
     # is a listing of simulator experiences, not a calculator tool; /fr/theme/cadeau is a gift-ideas
     # landing page, not a checkout route.
@@ -190,6 +201,10 @@ def classify_template(path: str) -> str:
         return "collection_page"
     if re.search(r"/annonce/.*?/voir|/annonce/|/activite|/activité|/activity|/experience|/expérience|/atelier|/stage/|/pilotage", p):
         return "activity_detail"
+    # Legal documents (bounded), checked AFTER structural activity routes so an activity slug
+    # containing legal-ish letters (domaine-de-locguenole) is never demoted to legal_info.
+    if is_legal_page_path(clean):
+        return "legal_info"
     if re.search(r"/loans?/|/loan-overview|/fix-and-flip|/bridge|/rental|/dscr|/hard-money|pret|prêt|credit|crédit|immobilier|mortgage|hypotheque|hypothèque|rachat", p):
         return "loan_program"
     if re.search(r"/apply-now|/apply|/request-a-payoff|/document-exchange|/souscription|/devis|/quote|/signup|/demo|/contact-sales", p):

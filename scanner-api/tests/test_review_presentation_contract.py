@@ -213,3 +213,84 @@ def test_authoritative_guide_group_explicitly_stamps_not_low_value():
     assert card["is_low_value_page"] is False
     assert card["business_importance"] == "standard"
 
+
+
+
+def _rate_limited_page(path, family="standard"):
+    return _page(
+        path,
+        family,
+        status_code=429,
+        fetch_error="HTTP 429 Too Many Requests",
+        title="Connection verification",
+        url_confidence="linked_but_failed",
+        source_pages=["/"],
+    )
+
+
+def test_fully_blocked_crawl_is_provisional_and_needs_verification():
+    pages = [
+        _rate_limited_page("/category/one", "collection_page"),
+        _rate_limited_page("/category/two", "collection_page"),
+        _rate_limited_page("/activity/one", "activity_detail"),
+        _rate_limited_page("/activity/two", "activity_detail"),
+        _rate_limited_page("/locations/paris", "location_landing"),
+        _rate_limited_page("/guide/help", "guide_article"),
+    ]
+    result = _run_with_coverage(pages, pages_found=len(pages))
+    rate_cards = [fix for fix in result["cleaned_fixes"] if fix.get("rule") == "rate_limited_page"]
+
+    assert len(rate_cards) == 1
+    card = rate_cards[0]
+    assert card["page_scope"] == "cross_cutting"
+    assert card["page_template_family"] == "mixed"
+    assert card["evidence_status"] == "needs_verification"
+    assert card["verification_state"] == "needs_verification"
+    assert card["limitation_code"] == "rate_limit_requires_log_confirmation"
+    assert card["status_codes"] == [429]
+    assert len(card["affected_pages"]) == len(pages)
+    assert result["scan_status"] == "blocked_or_incomplete"
+    assert result["review_confidence_state"] == "blocked_access_needs_verification"
+    assert result["score_is_provisional"] is True
+    assert result["access_evidence_state"] == "blocked"
+    assert result["website_health_report"]["health_grade"] == "Blocked / incomplete"
+    assert result["health_score"] <= 45
+    assert result["review_input_quality"]["access_evidence_state"] == "blocked"
+    assert result["review_input_quality"]["score_is_provisional"] is True
+    assert "score is provisional" in result["customer_summary"].lower()
+    assert any("HTTP 429" in item for item in result["website_health_report"]["limitations"])
+    assert not any(fix.get("page_scope") == "sitewide" for fix in result["cleaned_fixes"])
+    assert not any(fix.get("rule") in {"canonical_missing", "missing_h1", "missing_meta_description", "image_alt_text"} for fix in result["cleaned_fixes"])
+
+
+def test_partially_blocked_crawl_is_complete_with_access_limitations():
+    pages = [
+        _rate_limited_page("/category/one", "collection_page"),
+        _rate_limited_page("/activity/one", "activity_detail"),
+        _page("/", "homepage"),
+        _page("/contact", "contact"),
+        _page("/guide/one", "guide_article"),
+        _page("/locations/paris", "location_landing"),
+    ]
+    result = _run_with_coverage(pages, pages_found=len(pages))
+    card = _fix(result, "rate_limited_page")
+
+    assert card["page_scope"] == "cross_cutting"
+    assert card["page_template_family"] == "mixed"
+    assert card["evidence_status"] == "needs_verification"
+    assert result["scan_status"] == "complete_with_access_limitations"
+    assert result["review_confidence_state"] == "partial_access_needs_verification"
+    assert result["score_is_provisional"] is True
+    assert result["access_evidence_state"] == "partial_access_limited"
+    assert result["website_health_report"]["health_grade"] != "Blocked / incomplete"
+    assert "score is provisional" in result["customer_summary"].lower()
+    assert any("HTTP 429" in item for item in result["website_health_report"]["limitations"])
+
+
+def test_clean_crawl_is_not_marked_provisional():
+    result = _run_with_coverage([_page("/", "homepage"), _page("/contact", "contact")], pages_found=2)
+
+    assert result["score_is_provisional"] is False
+    assert result["access_evidence_state"] == "complete"
+    assert result["scan_status"] in {"complete", "complete_no_high_confidence_findings"}
+    assert not any("HTTP 429" in item for item in result["website_health_report"]["limitations"])

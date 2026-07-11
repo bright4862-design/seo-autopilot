@@ -534,7 +534,12 @@ def build_scanner_evidence_findings(body: dict[str, Any], pages: list[dict[str, 
                 affected_pages=[page_evidence_url(page) for page in group],
                 difficulty="developer",
                 source="scanner_verified_failed_pages:429",
-                extra=evidence_extra(group),
+                extra={
+                    **evidence_extra(group),
+                    "evidence_status": "needs_verification",
+                    "verification_state": "needs_verification",
+                    "limitation_code": "rate_limit_requires_log_confirmation",
+                },
             ))
             continue
         is_server = bucket == "5xx"
@@ -951,14 +956,35 @@ def has_rate_limit_evidence(fixes: list[dict[str, Any]]) -> bool:
 def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixes: list[dict[str, Any]], site_fingerprint: dict[str, Any], playbook: dict[str, Any], website_url: str) -> dict[str, Any]:
     incomplete = evidence_is_incomplete(site_fingerprint)
     blocked = crawl_is_blocked(site_fingerprint)
+    rate_limited = has_rate_limit_evidence(fixes)
     quality = review_input_quality(body, site_fingerprint)
     health_score = compute_health_score(fixes, site_fingerprint)
+    blocked_count = int_or_zero(site_fingerprint.get("blocked_or_429_pages"))
+    reviewed_count = max(
+        int_or_zero(site_fingerprint.get("pages_received")),
+        int_or_zero(site_fingerprint.get("pages_crawled")),
+    )
+    blocked_ratio = blocked_count / max(1, reviewed_count)
+    material_access_limited = rate_limited and not blocked and blocked_ratio >= 0.10
+
     summary = f"FixList recognized this as {playbook['label']} and used the {playbook['label']} playbook. The scanner reviewed {site_fingerprint['pages_crawled']} pages"
     if site_fingerprint.get("pages_found"):
         summary += f" out of about {site_fingerprint['pages_found']} discovered URLs"
     summary += f". Start with the highest-impact items on {', '.join(playbook['priority_pages'][:3])}."
-    if incomplete:
+    if blocked:
+        summary = (
+            f"FixList could not complete a reliable page-quality review because {blocked_count} of {reviewed_count or blocked_count} reviewed pages "
+            "returned HTTP 429, bot-protection, or connection-verification responses. The score is provisional until server, CDN, "
+            "firewall, or bot-protection logs confirm legitimate crawler access."
+        )
+    elif incomplete:
         summary = INCOMPLETE_REVIEW_WARNING
+    elif rate_limited:
+        summary += (
+            f" {blocked_count or 1} reviewed page{'s' if (blocked_count or 1) != 1 else ''} returned HTTP 429 or an access-verification response. "
+            "The score is provisional until those results are checked in access logs."
+        )
+
     working = [f"FixList detected a {playbook['label']} pattern."] if site_fingerprint["primary_archetype"] != "general" else []
     top_concerns = [fix.get("issue_title") or fix.get("title") for fix in fixes[:3] if fix.get("issue_title") or fix.get("title")]
     quick_wins = [fix.get("issue_title") or fix.get("title") for fix in fixes if fix.get("difficulty") != "developer"][:3]
@@ -966,10 +992,42 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
     limitations = [
         "This scan is read-only and cannot confirm private analytics, paid search data, conversions, or server logs."
     ]
-    if has_rate_limit_evidence(fixes):
+    if rate_limited:
         limitations.append(
             "HTTP 429 and connection-verification results need access-log confirmation before being treated as confirmed broken customer pages."
         )
+
+    access_evidence_state = (
+        "blocked"
+        if blocked
+        else "partial_access_limited"
+        if material_access_limited
+        else "incidental_access_limited"
+        if rate_limited
+        else "complete"
+    )
+    review_confidence_state = (
+        "blocked_access_needs_verification"
+        if blocked
+        else "incomplete_evidence"
+        if incomplete
+        else "partial_access_needs_verification"
+        if material_access_limited
+        else "complete_with_incidental_access_checks"
+        if rate_limited
+        else "complete"
+    )
+    scan_status = (
+        "blocked_or_incomplete"
+        if blocked
+        else "incomplete_evidence"
+        if incomplete
+        else "complete_with_access_limitations"
+        if material_access_limited
+        else "complete"
+    )
+    score_is_provisional = bool(blocked or incomplete or rate_limited)
+
     report = {
         "health_score": health_score,
         "score": health_score,
@@ -981,6 +1039,10 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
         "bigger_projects": bigger_projects,
         "limitations": limitations,
         "next_best_step": "Ask your web person to verify crawler access, rate limits, CDN, firewall, and bot-protection settings." if blocked else "Re-run the scan — page evidence did not reach AI Review." if incomplete else ((fixes[0].get("issue_title") or fixes[0].get("title")) if fixes else "Review the first FixList item."),
+        "scan_status": scan_status,
+        "review_confidence_state": review_confidence_state,
+        "score_is_provisional": score_is_provisional,
+        "access_evidence_state": access_evidence_state,
     }
     pages_returned = pages[:80]
     return {
@@ -1004,10 +1066,13 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
         "pages": pages_returned,
         "health_score": health_score,
         "site_fingerprint": {**site_fingerprint, "review_input_quality": quality},
-        "review_input_quality": quality,
+        "review_input_quality": {**quality, "access_evidence_state": access_evidence_state, "score_is_provisional": score_is_provisional},
         "review_quality_gate_version": QUALITY_GATE_VERSION,
         "evidence_complete": not incomplete,
-        "scan_status": "blocked_or_incomplete" if blocked else "incomplete_evidence" if incomplete else "complete",
+        "scan_status": scan_status,
+        "review_confidence_state": review_confidence_state,
+        "score_is_provisional": score_is_provisional,
+        "access_evidence_state": access_evidence_state,
         "archetype_playbook": {
             "label": playbook["label"],
             "priority_pages": playbook["priority_pages"],
@@ -1032,6 +1097,10 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
             "plain_english_summary": summary,
             "site_fingerprint": site_fingerprint,
             "review_input_quality": quality,
+            "scan_status": scan_status,
+            "review_confidence_state": review_confidence_state,
+            "score_is_provisional": score_is_provisional,
+            "access_evidence_state": access_evidence_state,
         },
         "scoring_model": SCORING_MODEL,
     }

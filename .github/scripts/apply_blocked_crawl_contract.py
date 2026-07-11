@@ -29,9 +29,9 @@ replace_once(
     "                extra=evidence_extra(group),\n",
     "                extra={\n"
     "                    **evidence_extra(group),\n"
-    "                    \\\"evidence_status\\\": \\\"needs_verification\\\",\n"
-    "                    \\\"verification_state\\\": \\\"needs_verification\\\",\n"
-    "                    \\\"limitation_code\\\": \\\"rate_limit_requires_log_confirmation\\\",\n"
+    "                    \"evidence_status\": \"needs_verification\",\n"
+    "                    \"verification_state\": \"needs_verification\",\n"
+    "                    \"limitation_code\": \"rate_limit_requires_log_confirmation\",\n"
     "                },\n",
 )
 

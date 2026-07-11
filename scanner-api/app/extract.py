@@ -131,9 +131,16 @@ def classify_confidence(discovery: dict, status_code: int) -> str:
     return "unknown_discovery"
 
 
+ROUTE_BOUNDARY_RE = re.compile(
+    # Token-bounded: a segment must BE the keyword, not merely start with it.
+    # Unbounded "/cart" matched the French word "carte" (/fr/annonce/carte-all-inclusive.../voir),
+    # flagging public activity pages as private internal routes.
+    r"/(login|signin|sign-in|register|signup|sign-up|account|mon-compte|dashboard|cart|panier|checkout|billing|admin|wp-admin)(?=[/?#\s]|$)"
+)
+
+
 def is_route_boundary(path: str) -> bool:
-    lowered = path.lower()
-    return any(part in lowered for part in ["/login", "/register", "/account", "/dashboard", "/cart", "/checkout", "/billing", "/admin"])
+    return bool(ROUTE_BOUNDARY_RE.search(str(path or "").lower().split("?")[0]))
 
 
 SUPPORT_CONTENT_PREFIX_RE = re.compile(
@@ -165,13 +172,22 @@ def classify_template(path: str) -> str:
         return "homepage"
     if is_route_boundary(p):
         return "route_boundary"
-    if any(x in p for x in ["/tag/", "/author/", "/archive/", "/page/"]):
+    # /page/2 is pagination; /page/mentions-legales is a CMS page slug, not an archive.
+    if any(x in p for x in ["/tag/", "/author/", "/archive/"]) or re.search(r"/page/\d+(/|$)", p):
         return "archive"
     # Support-content paths are guide_article regardless of money keywords in the slug.
     # Prefix-based (optionally locale-prefixed) so /blog/fix-and-flip-loans-... does NOT become loan_program,
     # while /pret-immobilier/guide-achat (not a /blog|/guide prefix) still classifies by its money path.
     if is_support_content_path(clean):
         return "guide_article"
+    # Trust/legal documents, wherever the CMS puts them (/fr/page/mentions-legales, /cgu).
+    if re.search(r"mentions-legales|mentions_legales|cgu|cgv|privacy|privacite|politique-de-confidentialite|terms|conditions-generales|legal-notice|impressum", clean):
+        return "legal_info"
+    # Category/theme/collection LANDING pages win over money-keyword rules: /fr/category/simulateur
+    # is a listing of simulator experiences, not a calculator tool; /fr/theme/cadeau is a gift-ideas
+    # landing page, not a checkout route.
+    if re.search(r"^(/[a-z]{2}(-[a-z]{2})?)?/(category|categorie|catégorie|categories|theme|thème|collection|collections|marque|brand|univers)(/|$)", clean):
+        return "collection_page"
     if re.search(r"/annonce/.*?/voir|/annonce/|/activite|/activité|/activity|/experience|/expérience|/atelier|/stage/|/pilotage", p):
         return "activity_detail"
     if re.search(r"/loans?/|/loan-overview|/fix-and-flip|/bridge|/rental|/dscr|/hard-money|pret|prêt|credit|crédit|immobilier|mortgage|hypotheque|hypothèque|rachat", p):
@@ -203,13 +219,13 @@ def estimate_intent(path: str, title: str, h1: str, status_code: int) -> str:
     text = f"{path} {title} {h1}".lower()
     if status_code >= 400:
         return "blocked_access" if status_code == 429 else "failed"
-    if is_route_boundary(text):
+    if is_route_boundary(path):
         return "internal_or_auth"
     if is_support_content_path(path):
         return "support_content"
     if re.search(r"devis|quote|pricing|tarif|contact|booking|reservation|checkout|product|produit|collection|category|simulation|simulateur|calcul|calculator|comparateur|demo|signup|pret|prêt|credit|crédit|annonce|voir|activite|activité|activity|experience|expérience|billet|ticket|stage|pass|loans?|apply-now|request-a-payoff|document-exchange|fix-and-flip|bridge|dscr|rental", text):
         return "money_or_conversion"
-    if re.search(r"privacy|terms|legal|about|contact|security|mentions", text):
+    if re.search(r"privacy|terms|legal|about|contact|security|mentions|cgu|cgv|conditions-generales|politique-de-confidentialite|impressum", text):
         return "trust_or_legal"
     if re.search(r"faq|guide|blog|article|question|conseils", text):
         return "support_content"

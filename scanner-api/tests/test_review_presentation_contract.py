@@ -201,3 +201,15 @@ def test_content_specific_image_findings_do_not_collapse_sitewide():
     assert len(image_cards) >= 3
     assert not any(fix.get("page_scope") == "sitewide" for fix in image_cards)
 
+
+def test_authoritative_guide_group_explicitly_stamps_not_low_value():
+    pages = [
+        _page(f"/blog/article-{index}", "guide_article", meta_description="")
+        for index in range(3)
+    ]
+    card = _fix(_run(pages), "missing_meta_description")
+
+    assert card["page_template_family"] == "guide_article"
+    assert card["is_low_value_page"] is False
+    assert card["business_importance"] == "standard"
+

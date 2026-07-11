@@ -923,6 +923,8 @@ def score_fix(fix: dict[str, Any], site_fingerprint: dict[str, Any], body: dict[
         "meta_rewrite_allowed": False,
         "meta_regeneration_gate": "not_metadata_primary_gap",
         "business_importance": page_value["classification"],
+        "is_low_value_page": is_low_value_page(page_url),
+        "is_important_business_page": fix.get("is_important_business_page") if isinstance(fix.get("is_important_business_page"), bool) else False,
         "evidence_confidence": evidence_confidence,
         "reach_score": reach_score,
         "overall_priority_score": overall,

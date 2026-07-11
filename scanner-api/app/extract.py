@@ -79,6 +79,7 @@ def extract_page(html: str, url: str, final_url: str, status_code: int, content_
     path = parsed.path or "/"
 
     indexable = 200 <= status_code < 400 and "noindex" not in robots.lower()
+    page_template_family = classify_template(path, title, h1s[0] if h1s else "", schema_types)
 
     return {
         "url": url,
@@ -113,8 +114,10 @@ def extract_page(html: str, url: str, final_url: str, status_code: int, content_
         "has_schema": bool(schema_types),
         "indexable": indexable,
         "client_rendering_suspected": 200 <= status_code < 400 and word_count < 80 and ("id=\"root\"" in html or "id=\"app\"" in html),
-        "page_template_family": classify_template(path),
-        "estimated_page_intent": estimate_intent(path, title, h1s[0] if h1s else "", status_code),
+        "page_template_family": page_template_family,
+        "estimated_page_intent": estimate_intent(
+            path, title, h1s[0] if h1s else "", status_code, page_template_family, schema_types
+        ),
     }
 
 
@@ -179,71 +182,139 @@ def is_legal_page_path(path: str) -> bool:
     return bool(LEGAL_PAGE_RE.search(str(path or "").lower().split("?")[0]))
 
 
-def classify_template(path: str) -> str:
+ARTICLE_SCHEMA_TYPES = {
+    "article",
+    "newsarticle",
+    "blogposting",
+    "report",
+    "scholarlyarticle",
+}
+
+STRONG_LOAN_PATH_RE = re.compile(
+    r"^(/[a-z]{2}(-[a-z]{2})?)?/(?:"
+    r"loans?(?:/|$)|loan-overview(?:/|$)|fix-and-flip(?:/|$)|bridge(?:/|$)|dscr(?:/|$)|hard-money(?:/|$)|"
+    r"pret-immobilier/comparateur-credit-immobilier(?:/|$)|"
+    r"courtier-credit/(?:nos-expertises|courtier-autour-de-moi)(?:/|$)|"
+    r"taux-immobilier/cout-credit-immobilier(?:/|$)"
+    r")"
+)
+BROAD_LOAN_SEGMENT_RE = re.compile(
+    r"(^|/)(pret|prêt|credit|crédit|immobilier|mortgage|hypotheque|hypothèque|rachat)([-_/]|$)"
+)
+BOOKING_SEGMENT_RE = re.compile(
+    r"(^|/)(booking|reservation|réservation|ticket|pass|cadeau|coffret|billet)(/|$)"
+)
+SERVICE_PATH_RE = re.compile(
+    r"^(/[a-z]{2}(-[a-z]{2})?)?/(notre-service|our-service|our-services|services)(/|$)"
+)
+
+
+def has_article_schema(schema_types: list[str] | tuple[str, ...] | set[str] | None) -> bool:
+    return any(str(value or "").lower() in ARTICLE_SCHEMA_TYPES for value in (schema_types or []))
+
+
+def classify_template(
+    path: str,
+    title: str = "",
+    h1: str = "",
+    schema_types: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> str:
+    """Classify structural templates first, then use article schema to break broad keyword ties."""
     p = str(path or "").lower()
-    clean = p.split("?")[0].split("#")[0].rstrip("/")
+    clean = p.split("?")[0].split("#")[0].rstrip("/") or "/"
     if clean in ("", "/") or clean.count("/") == 0:
         return "homepage"
     if is_route_boundary(p):
         return "route_boundary"
-    # /page/2 is pagination; /page/mentions-legales is a CMS page slug, not an archive.
     if any(x in p for x in ["/tag/", "/author/", "/archive/"]) or re.search(r"/page/\d+(/|$)", p):
         return "archive"
-    # Support-content paths are guide_article regardless of money keywords in the slug.
-    # Prefix-based (optionally locale-prefixed) so /blog/fix-and-flip-loans-... does NOT become loan_program,
-    # while /pret-immobilier/guide-achat (not a /blog|/guide prefix) still classifies by its money path.
     if is_support_content_path(clean):
         return "guide_article"
-    # Category/theme/collection LANDING pages win over money-keyword rules: /fr/category/simulateur
-    # is a listing of simulator experiences, not a calculator tool; /fr/theme/cadeau is a gift-ideas
-    # landing page, not a checkout route.
     if re.search(r"^(/[a-z]{2}(-[a-z]{2})?)?/(category|categorie|catégorie|categories|theme|thème|collection|collections|marque|brand|univers)(/|$)", clean):
         return "collection_page"
     if re.search(r"/annonce/.*?/voir|/annonce/|/activite|/activité|/activity|/experience|/expérience|/atelier|/stage/|/pilotage", p):
         return "activity_detail"
-    # Legal documents (bounded), checked AFTER structural activity routes so an activity slug
-    # containing legal-ish letters (domaine-de-locguenole) is never demoted to legal_info.
     if is_legal_page_path(clean):
         return "legal_info"
-    if re.search(r"/loans?/|/loan-overview|/fix-and-flip|/bridge|/rental|/dscr|/hard-money|pret|prêt|credit|crédit|immobilier|mortgage|hypotheque|hypothèque|rachat", p):
+
+    # Strong structural routes win even when their pages also publish Article schema.
+    if STRONG_LOAN_PATH_RE.search(clean):
         return "loan_program"
-    if re.search(r"/apply-now|/apply|/request-a-payoff|/document-exchange|/souscription|/devis|/quote|/signup|/demo|/contact-sales", p):
+    if re.search(r"/apply-now|/apply(?:/|$)|/request-a-payoff|/document-exchange|/souscription|/devis|/quote|/signup|/demo|/contact-sales", p):
         return "conversion"
-    if re.search(r"/calcul|/calculator|/simulateur|/simulation", p):
-        return "calculator"
-    if re.search(r"/comparateur|/compare|/versus|/vs-", p):
+    if re.search(r"/comparateur|/compare|/comparer|/versus|/vs-", p):
         return "comparison_page"
-    if re.search(r"booking|reservation|réservation|ticket_order|gift_voucher|cadeau|coffret|billet|/ticket|/pass", p):
-        return "booking_or_checkout"
     if re.search(r"/products?/|/produit/|/p/", p):
         return "product_page"
     if re.search(r"/collections?/|/category/|/categorie/|/catégorie/|/marque/|/brand/|listing", p):
         return "collection_page"
     if re.search(r"/locations?/|/agence|/ville/|/region/|/store-locator", p):
         return "location_landing"
+    if re.search(r"(^|/)(contact|nous-contacter|contactez-nous)(/|$)", clean):
+        return "contact"
+
+    # Article/NewsArticle is stronger evidence than incidental commercial words in a long editorial slug.
+    if has_article_schema(schema_types):
+        return "guide_article"
+    if BROAD_LOAN_SEGMENT_RE.search(clean):
+        return "loan_program"
+    if re.search(r"/calcul|/calculator|/simulateur|/simulation", p):
+        return "calculator"
+    if BOOKING_SEGMENT_RE.search(clean) or re.search(r"ticket[_-]order|gift[_-]voucher", clean):
+        return "booking_or_checkout"
     if any(x in p for x in ["guide", "blog", "article", "conseils", "actualites", "/faq", "question"]):
         return "guide_article"
-    if any(x in p for x in ["privacy", "terms", "legal", "mentions-legales", "cgv", "conditions"]):
-        return "legal_info"
-    if "contact" in p:
-        return "contact"
     return "standard"
 
 
-def estimate_intent(path: str, title: str, h1: str, status_code: int) -> str:
-    text = f"{path} {title} {h1}".lower()
+MONEY_TEMPLATE_FAMILIES = {
+    "homepage",
+    "activity_detail",
+    "booking_or_checkout",
+    "conversion",
+    "contact",
+    "loan_program",
+    "calculator",
+    "comparison_page",
+    "product_page",
+    "collection_page",
+    "location_landing",
+}
+
+
+def estimate_intent(
+    path: str,
+    title: str,
+    h1: str,
+    status_code: int,
+    page_template_family: str = "",
+    schema_types: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> str:
     if status_code >= 400:
         return "blocked_access" if status_code == 429 else "failed"
     if is_route_boundary(path):
         return "internal_or_auth"
-    if is_support_content_path(path):
+
+    family = page_template_family or classify_template(path, title, h1, schema_types)
+    if family in {"guide_article", "archive"}:
         return "support_content"
-    if re.search(r"devis|quote|pricing|tarif|contact|booking|reservation|checkout|product|produit|collection|category|simulation|simulateur|calcul|calculator|comparateur|demo|signup|pret|prêt|credit|crédit|annonce|voir|activite|activité|activity|experience|expérience|billet|ticket|stage|pass|loans?|apply-now|request-a-payoff|document-exchange|fix-and-flip|bridge|dscr|rental", text):
-        return "money_or_conversion"
-    if re.search(r"privacy|terms|legal|about|contact|security|mentions|cgu|cgv|conditions-generales|politique-de-confidentialite|impressum", text):
+    if family == "legal_info":
         return "trust_or_legal"
-    if re.search(r"faq|guide|blog|article|question|conseils", text):
+    if family in MONEY_TEMPLATE_FAMILIES or SERVICE_PATH_RE.search(str(path or "").lower()):
+        return "money_or_conversion"
+    if has_article_schema(schema_types):
         return "support_content"
+
+    text = f"{path} {title} {h1}".lower()
+    if is_legal_page_path(path) or re.search(r"\b(privacy|terms|legal|about|security|mentions|cgu|cgv|impressum)\b", text):
+        return "trust_or_legal"
+    if is_support_content_path(path) or re.search(r"\b(faq|guide|blog|article|question|conseils|news)\b", text):
+        return "support_content"
+    if re.search(
+        r"\b(devis|quote|pricing|tarif|contact|booking|reservation|checkout|product|produit|simulation|simulateur|calcul|calculator|comparateur|demo|signup|prêt|pret|crédit|credit|loan|loans|apply|bridge|dscr|rental)\b",
+        text,
+    ):
+        return "money_or_conversion"
     return "standard"
 
 

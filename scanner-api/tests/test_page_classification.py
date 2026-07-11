@@ -1,6 +1,6 @@
 """Regression tests for canonical page template classification."""
 
-from app.extract import classify_template, estimate_intent
+from app.extract import classify_template, estimate_intent, extract_page
 
 
 def test_no_funbooker_voir_is_standard():
@@ -187,3 +187,69 @@ def test_scanner_route_boundary_boolean_is_authoritative():
                     "scan_coverage": {"pages_found": 50, "pages_crawled": 1, "sampled_pages_sent_to_ai": 1}})
     titles = " ".join(str(f.get("issue_title", "")) for f in r["cleaned_fixes"]).lower()
     assert "route-boundary" not in titles
+
+
+def _extract_for_classification(path, *, title, h1, schema_type=None):
+    schema = (
+        f'<script type="application/ld+json">{{"@type":"{schema_type}"}}</script>'
+        if schema_type
+        else ""
+    )
+    html = f"<html><head><title>{title}</title>{schema}</head><body><h1>{h1}</h1></body></html>"
+    return extract_page(
+        html,
+        f"https://example.com{path}",
+        f"https://example.com{path}",
+        200,
+        "text/html",
+        {"discovered_from": ["sitemap"], "source_pages": ["/sitemap.xml"]},
+    )
+
+
+def test_pretto_service_page_is_not_legal_because_slug_contains_conditions():
+    page = _extract_for_classification(
+        "/notre-service/garantie-zero-conditions-suspensives",
+        title="La Garantie Zéro Conditions Suspensives de Pretto",
+        h1="La Garantie Zéro Conditions Suspensives, votre alliée pour négocier",
+        schema_type="FAQPage",
+    )
+    assert page["page_template_family"] == "standard"
+    assert page["estimated_page_intent"] == "money_or_conversion"
+
+
+def test_editorial_gift_article_is_not_checkout():
+    page = _extract_for_classification(
+        "/proprietaire/demenagement/cadeaux-noel-proprietaire",
+        title="Les meilleurs cadeaux de Noël pour un futur propriétaire",
+        h1="Les meilleurs cadeaux de Noël pour un futur propriétaire",
+        schema_type="Article",
+    )
+    assert page["page_template_family"] == "guide_article"
+    assert page["estimated_page_intent"] == "support_content"
+
+
+def test_editorial_real_estate_article_schema_beats_broad_immobilier_keyword():
+    page = _extract_for_classification(
+        "/acheteur-immobilier/pourquoi-moins-30-ans-achetent-immobilier",
+        title="Immobilier : pourquoi les moins de 30 ans achètent encore ?",
+        h1="Pourquoi les moins de 30 ans n'ont jamais autant acheté ?",
+        schema_type="Article",
+    )
+    assert page["page_template_family"] == "guide_article"
+    assert page["estimated_page_intent"] == "support_content"
+
+
+def test_strong_finance_route_still_beats_article_schema():
+    page = _extract_for_classification(
+        "/courtier-credit/nos-expertises/pret-sci",
+        title="Comment acheter en SCI en 2026 ?",
+        h1="Comment obtenir un prêt immobilier avec une SCI ?",
+        schema_type="Article",
+    )
+    assert page["page_template_family"] == "loan_program"
+    assert page["estimated_page_intent"] == "money_or_conversion"
+
+
+def test_pretto_brand_name_does_not_make_a_standard_page_money_intent():
+    assert estimate_intent("/equipe", "L'équipe Pretto", "Nos experts", 200) == "standard"
+

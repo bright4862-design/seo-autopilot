@@ -34,3 +34,22 @@ export function normalizeActionPriority(value) {
   const priority = String(value || "").toLowerCase();
   return ["critical", "high", "medium", "low"].includes(priority) ? priority : "medium";
 }
+
+
+export function normalizeReviewScope(fix = {}, fallbackFamily = "") {
+  const explicitScope = String(fix?.page_scope || "").toLowerCase();
+  const affected = Array.isArray(fix?.affected_pages) ? fix.affected_pages : [];
+  const pageScope = ["sitewide", "cross_cutting", "family", "page"].includes(explicitScope)
+    ? explicitScope
+    : fix?.page_template_family === "mixed"
+      ? "cross_cutting"
+      : affected.length > 1
+        ? "family"
+        : "page";
+  return {
+    page_scope: pageScope,
+    page_template_family: pageScope === "sitewide"
+      ? ""
+      : String(fix?.page_template_family || fallbackFamily || ""),
+  };
+}

@@ -1,0 +1,46 @@
+name: Generic sitewide copy gate
+
+on:
+  push:
+    branches: [agent/generic-sitewide-verification-copy]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Apply copy hardening
+        run: python .github/scripts/apply_generic_sitewide_copy.py
+
+      - name: Install backend dependencies
+        run: pip install -r scanner-api/requirements.txt
+
+      - name: Run presentation regressions
+        working-directory: scanner-api
+        run: pytest tests/test_review_presentation_contract.py -q
+
+      - name: Run full backend suite
+        working-directory: scanner-api
+        run: pytest tests -q
+
+      - name: Commit verified patch and remove one-shot files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scanner-api/app/review.py scanner-api/tests/test_review_presentation_contract.py
+          git rm .github/scripts/apply_generic_sitewide_copy.py .github/workflows/generic-sitewide-copy-gate.yml
+          git commit -m "Make site-wide verification copy archetype-safe"
+          git push origin HEAD:${{ github.head_ref || github.ref_name }}

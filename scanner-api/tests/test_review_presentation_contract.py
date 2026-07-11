@@ -96,6 +96,7 @@ def test_cross_cutting_429_card_is_family_neutral():
     card = _fix(_run(pages), "rate_limited_page")
 
     assert card["page_template_family"] == "mixed"
+    assert card["page_scope"] == "cross_cutting"
     assert card["title"] == "Check pages blocked by rate limiting"
     assert len(card["affected_pages"]) == 6
 
@@ -120,4 +121,80 @@ def test_server_error_card_does_not_trigger_rate_limit_caveat():
 
     assert _fix(result, "server_error")
     assert not any("HTTP 429" in limitation for limitation in limitations)
+
+
+def _run_with_coverage(pages, *, pages_found, pages_crawled=None):
+    crawled = len(pages) if pages_crawled is None else pages_crawled
+    return run_review({
+        "website_url": "https://example.com",
+        "pages": pages,
+        "scan_coverage": {
+            "pages_found": pages_found,
+            "pages_crawled": crawled,
+            "sampled_pages_sent_to_ai": len(pages),
+        },
+    })
+
+
+def _sitewide_fixture(*, canonical="", image_missing_alt_count=0):
+    families = {
+        "homepage": 1,
+        "conversion": 4,
+        "loan_program": 5,
+        "location_landing": 8,
+        "guide_article": 6,
+        "legal_info": 2,
+        "contact": 1,
+        "standard": 3,
+    }
+    pages = []
+    for family, count in families.items():
+        for index in range(count):
+            path = "/" if family == "homepage" else f"/{family}/{index}"
+            pages.append(_page(
+                path,
+                family,
+                canonical=canonical or "",
+                image_missing_alt_count=image_missing_alt_count,
+            ))
+    return families, pages
+
+
+def test_sitewide_canonical_collapse_preserves_family_evidence():
+    families, pages = _sitewide_fixture(canonical="")
+    result = _run_with_coverage(pages, pages_found=36)
+    canonical_cards = [fix for fix in result["cleaned_fixes"] if fix.get("rule") == "canonical_missing"]
+
+    assert len(canonical_cards) == 1
+    card = canonical_cards[0]
+    assert card["title"] == "Add canonical URLs across the site"
+    assert card["page_scope"] == "sitewide"
+    assert card["page_template_family"] == ""
+    assert card["page_count"] == len(pages)
+    assert card["family_breakdown"] == families
+    assert set(card["representative_pages_by_family"]) == set(families)
+    assert len(card["source_pages"]) == len(families)
+    assert card["sitewide_evidence"]["coverage_ratio"] == 1.0
+    assert "global document-head" in card["plain_english_explanation"].lower()
+
+
+def test_sitewide_collapse_does_not_overclaim_on_shallow_discovery_coverage():
+    _, pages = _sitewide_fixture(canonical="")
+    result = _run_with_coverage(pages, pages_found=200, pages_crawled=len(pages))
+    canonical_cards = [fix for fix in result["cleaned_fixes"] if fix.get("rule") == "canonical_missing"]
+
+    assert len(canonical_cards) >= 3
+    assert not any(fix.get("page_scope") == "sitewide" for fix in canonical_cards)
+
+
+def test_content_specific_image_findings_do_not_collapse_sitewide():
+    _, pages = _sitewide_fixture(
+        canonical="https://example.com/canonical",
+        image_missing_alt_count=2,
+    )
+    result = _run_with_coverage(pages, pages_found=36)
+    image_cards = [fix for fix in result["cleaned_fixes"] if fix.get("rule") == "image_alt_text"]
+
+    assert len(image_cards) >= 3
+    assert not any(fix.get("page_scope") == "sitewide" for fix in image_cards)
 

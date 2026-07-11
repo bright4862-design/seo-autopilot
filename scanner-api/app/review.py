@@ -206,7 +206,7 @@ def run_review(payload: dict[str, Any]) -> dict[str, Any]:
     evidence_fixes = build_scanner_evidence_findings(body, pages, site_fingerprint)
     page_pattern_fixes = build_page_pattern_findings(pages)
     strategic_fixes = build_strategic_findings(body, pages, website_url, site_fingerprint, playbook)
-    canonical_fixes = prepare_fixes(raw_fixes + evidence_fixes + page_pattern_fixes + strategic_fixes, site_fingerprint, body, playbook)
+    canonical_fixes = prepare_fixes(raw_fixes + evidence_fixes + page_pattern_fixes + strategic_fixes, site_fingerprint, body, playbook, pages)
     no_page_evidence = (
         int_or_zero(site_fingerprint.get("pages_received")) <= 0
         or int_or_zero(site_fingerprint.get("pages_crawled")) <= 0
@@ -647,11 +647,187 @@ def build_strategic_findings(body: dict[str, Any], pages: list[dict[str, Any]], 
     return fixes
 
 
-def prepare_fixes(raw_fixes: list[dict[str, Any]], site_fingerprint: dict[str, Any], body: dict[str, Any], playbook: dict[str, Any]) -> list[dict[str, Any]]:
+SITEWIDE_COLLAPSE_RULES = {"canonical_missing"}
+SITEWIDE_MIN_FAMILIES = 3
+SITEWIDE_MIN_PAGES = 10
+SITEWIDE_MIN_AFFECTED_RATIO = 0.80
+SITEWIDE_MIN_DISCOVERY_COVERAGE = 0.50
+
+
+def sitewide_collapse_evidence_is_sufficient(site_fingerprint: dict[str, Any]) -> bool:
+    """Require a healthy, materially complete crawl before making a site-wide claim."""
+    if evidence_is_incomplete(site_fingerprint) or crawl_is_blocked(site_fingerprint):
+        return False
+    received = int_or_zero(site_fingerprint.get("pages_received"))
+    crawled = int_or_zero(site_fingerprint.get("pages_crawled"))
+    found = int_or_zero(site_fingerprint.get("pages_found"))
+    if received < SITEWIDE_MIN_PAGES:
+        return False
+    if crawled > 0 and (received / crawled) < 0.80:
+        return False
+    if found > 0 and crawled > 0 and (crawled / found) < SITEWIDE_MIN_DISCOVERY_COVERAGE:
+        return False
+    return True
+
+
+def collapse_sitewide_template_findings(
+    fixes: list[dict[str, Any]],
+    pages: list[dict[str, Any]],
+    site_fingerprint: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Collapse one global implementation fault without erasing per-family evidence."""
+    if not sitewide_collapse_evidence_is_sufficient(site_fingerprint):
+        return fixes
+
+    usable_pages = {
+        clean_path(page_evidence_url(page))
+        for page in pages
+        if clean_path(page_evidence_url(page))
+        and not is_blocked_access_page(page)
+        and int_or_zero(page.get("status_code") or page.get("status")) < 400
+        and page_is_indexable(page)
+    }
+    if len(usable_pages) < SITEWIDE_MIN_PAGES:
+        return fixes
+
+    output = list(fixes)
+    for rule in SITEWIDE_COLLAPSE_RULES:
+        candidates = [
+            fix
+            for fix in output
+            if str(fix.get("rule") or "") == rule
+            and str(fix.get("source") or "").startswith("page_pattern:")
+            and str(fix.get("page_scope") or "") not in {"sitewide", "cross_cutting"}
+        ]
+        families = {
+            str(fix.get("page_template_family") or "")
+            for fix in candidates
+            if str(fix.get("page_template_family") or "") not in {"", "mixed", "sitewide"}
+        }
+        affected = dedupe_strings([
+            clean_path(url)
+            for fix in candidates
+            for url in (fix.get("affected_pages") or [])
+            if clean_path(url)
+        ])
+        affected_usable = [url for url in affected if url in usable_pages]
+        coverage_ratio = len(affected_usable) / max(1, len(usable_pages))
+        if (
+            len(families) < SITEWIDE_MIN_FAMILIES
+            or len(affected_usable) < SITEWIDE_MIN_PAGES
+            or coverage_ratio < SITEWIDE_MIN_AFFECTED_RATIO
+        ):
+            continue
+
+        family_breakdown: dict[str, int] = {}
+        representative_pages_by_family: dict[str, list[str]] = {}
+        for fix in candidates:
+            family = str(fix.get("page_template_family") or "standard")
+            family_pages = dedupe_strings([
+                clean_path(url)
+                for url in (fix.get("affected_pages") or [])
+                if clean_path(url) and clean_path(url) in usable_pages
+            ])
+            if not family_pages:
+                continue
+            family_breakdown[family] = family_breakdown.get(family, 0) + len(family_pages)
+            representative_pages_by_family[family] = dedupe_strings(
+                representative_pages_by_family.get(family, []) + family_pages
+            )[:3]
+
+        representative_pages = dedupe_strings([
+            pages_for_family[0]
+            for _, pages_for_family in sorted(representative_pages_by_family.items())
+            if pages_for_family
+        ])
+        base = max(candidates, key=fix_sort_key)
+        collapse_id = stable_id(
+            f"sitewide|{rule}|{','.join(sorted(families))}|{len(affected_usable)}|{len(usable_pages)}"
+        )
+        title = "Add canonical URLs across the site"
+        explanation = (
+            "Canonical URLs are missing across nearly every indexable page in the scanned evidence. "
+            "This points to one global document-head or CMS template implementation issue, not separate page-family problems."
+        )
+        why = (
+            "Without consistent canonical URLs, search engines have a weaker signal for which public URL should represent each page. "
+            "Because the same gap spans multiple page families, one global implementation fix should resolve it."
+        )
+        recommendation = (
+            "Ask your web person to add a self-referencing canonical URL in the global document head or shared layout, "
+            "then verify representative pages from every affected family."
+        )
+        steps = [
+            "Open the global document head, root layout, or shared CMS template that renders canonical tags.",
+            "Add one self-referencing canonical URL based on each page's final public URL.",
+            "Verify at least one representative conversion, loan, location, article, legal, contact, standard, and homepage page.",
+            "Publish the global change and run FixList again to confirm the site-wide canonical gap is resolved.",
+        ]
+        collapsed = {
+            **base,
+            "id": collapse_id,
+            "fix_id": collapse_id,
+            "issue_title": title,
+            "title": title,
+            "plain_english_explanation": explanation,
+            "plain_english_summary": explanation,
+            "why_it_matters": why,
+            "recommendation": recommendation,
+            "recommended_value": recommendation,
+            "ai_recommendation": recommendation,
+            "simple_next_step": recommendation,
+            "current_value": (
+                f"{len(affected_usable)} of {len(usable_pages)} indexable pages in the crawl are missing canonical URLs "
+                f"across {len(family_breakdown)} page families."
+            ),
+            "page_url": representative_pages[0] if representative_pages else affected_usable[0],
+            "affected_pages": affected_usable[:150],
+            "source_pages": representative_pages[:30],
+            "page_count": len(affected_usable),
+            "page_scope": "sitewide",
+            "page_template_family": "",
+            "family_breakdown": dict(sorted(family_breakdown.items())),
+            "representative_pages_by_family": dict(sorted(representative_pages_by_family.items())),
+            "sitewide_evidence": {
+                "affected_indexable_pages": len(affected_usable),
+                "indexable_pages_reviewed": len(usable_pages),
+                "coverage_ratio": round(coverage_ratio, 3),
+                "family_count": len(family_breakdown),
+            },
+            "source": f"review_sitewide_collapse:{rule}",
+            "priority": "critical",
+            "difficulty": "developer",
+            "status": "needs_developer",
+            "requires_developer": True,
+            "requires_approval": False,
+            "can_auto_fix": False,
+            "who_can_do_this": "your_web_person",
+            "what_to_do": steps,
+            "what_to_do_steps": steps,
+            "fix_steps": steps,
+            "page_type": "site_level",
+            "business_importance": "site_level",
+            "is_low_value_page": False,
+            "is_important_business_page": False,
+            "page_value_score": 100,
+            "page_value_label": "Site-wide setup",
+            "primary_defect_class": "structural",
+            "reach_score": 100,
+            "overall_priority_score": max(96, max(int_or_zero(fix.get("overall_priority_score")) for fix in candidates)),
+            "evidence_confidence": max(int_or_zero(fix.get("evidence_confidence")) for fix in candidates),
+        }
+        candidate_ids = {id(fix) for fix in candidates}
+        output = [fix for fix in output if id(fix) not in candidate_ids]
+        output.append(collapsed)
+    return output
+
+
+def prepare_fixes(raw_fixes: list[dict[str, Any]], site_fingerprint: dict[str, Any], body: dict[str, Any], playbook: dict[str, Any], pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized = dedupe_fixes([normalize_fix(fix, index) for index, fix in enumerate(raw_fixes or []) if isinstance(fix, dict)])
     scored = [score_fix(fix, site_fingerprint, body, playbook) for fix in normalized]
     scored = suppress_group_covered_singletons(scored)
     scored = suppress_duplicate_group_cards(scored)
+    scored = collapse_sitewide_template_findings(scored, pages, site_fingerprint)
     return sorted(scored, key=fix_sort_key, reverse=True)[:36]
 
 def normalize_fix(fix: dict[str, Any], index: int) -> dict[str, Any]:
@@ -739,6 +915,7 @@ def score_fix(fix: dict[str, Any], site_fingerprint: dict[str, Any], body: dict[
         "current_value": clean_str(fix.get("current_value")) or template_current_value(affected_pages),
         "priority": priority,
         "page_type": page_value["classification"],
+        "page_scope": "cross_cutting" if is_cross_cutting_evidence(fix) else fix.get("page_scope") or ("family" if len(affected_pages) > 1 else "page"),
         "page_template_family": "mixed" if is_cross_cutting_evidence(fix) else fix.get("page_template_family") or get_template_family(page_url),
         "page_value_score": page_value["score"],
         "page_value_label": page_value["label"],
@@ -1324,7 +1501,9 @@ def default_time(difficulty: str) -> str:
 def group_page_recommendations(fixes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for fix in fixes:
-        groups[str(fix.get("page_template_family") or "site")].append(fix)
+        scope = str(fix.get("page_scope") or "")
+        key = scope if scope in {"sitewide", "cross_cutting"} else str(fix.get("page_template_family") or "site")
+        groups[key].append(fix)
     return [{"template_family": family, "count": len(items), "top_recommendations": items[:5]} for family, items in list(groups.items())[:12]]
 
 

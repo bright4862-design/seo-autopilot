@@ -144,8 +144,8 @@ def sitemap_family_key(url: str) -> str:
         name = (urlparse(url).path.rsplit("/", 1)[-1] or "sitemap").lower()
     except Exception:
         name = str(url or "").lower().rsplit("/", 1)[-1]
-    name = re.sub(r"\\.xml(?:\\.gz)?$", "", name)
-    return re.sub(r"[-_]?\\d+$", "", name) or "sitemap"
+    name = re.sub(r"\.xml(?:\.gz)?$", "", name)
+    return re.sub(r"[-_]?\d+$", "", name) or "sitemap"
 
 
 def interleave_by_family(children: list[str]) -> list[str]:

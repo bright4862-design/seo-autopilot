@@ -369,6 +369,8 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
     review_polish_version: aiData?.review_polish_version || "",
     group_dedup_version: aiData?.group_dedup_version || "",
     scoring_model: aiData?.scoring_model || aiData?.site_fingerprint?.scoring_model || "",
+    sampling_version: scanData?.sampling_version || "",
+    sampling_evidence: scanData?.sampling_evidence || {},
     ai_provider: aiData?.ai_provider || aiData?.provider || aiData?.debug?.provider || "",
     ai_review_backend: aiData?.ai_review_backend || "",
     python_review_fallback_used: Boolean(aiData?.python_review_fallback_used),
@@ -418,6 +420,8 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
       review_polish_version: aiData?.review_polish_version || "",
     group_dedup_version: aiData?.group_dedup_version || "",
     scoring_model: aiData?.scoring_model || aiData?.site_fingerprint?.scoring_model || "",
+    sampling_version: scanData?.sampling_version || "",
+    sampling_evidence: scanData?.sampling_evidence || {},
     ai_review_backend: aiData?.ai_review_backend || "",
     python_review_fallback_used: Boolean(aiData?.python_review_fallback_used),
     no_high_confidence_findings: noHighConfidenceFindings,
@@ -519,6 +523,8 @@ function compressScanRecord(record = {}) {
     url_confidence: page.url_confidence || "",
   }));
   return {
+    sampling_version: record.sampling_version || "",
+    sampling_evidence: record.sampling_evidence || {},
     id: record.id || "",
     created_at: record.created_at || "",
     website_url: record.website_url || "",
@@ -619,6 +625,8 @@ function normalizeScanRecordForStorage(record) {
   const noHighConfidenceFindings = record?.no_high_confidence_findings === true || (fixes.length === 0 && !incomplete);
   return {
     ...record,
+    sampling_version: record?.sampling_version || "",
+    sampling_evidence: record?.sampling_evidence || {},
     id: record?.id || `scan_${Date.now()}`,
     created_at: record?.created_at || new Date().toISOString(),
     website_url: record?.website_url || "",
@@ -720,7 +728,7 @@ function buildCmsActionPlan(cmsPlatform, cmsName, fixes) {
 
 function slimScannerData(scanner = {}) {
   if (!scanner) return null;
-  return { success: scanner.success, version: scanner.version || scanner.scanner_version, website_url: scanner.website_url, scan_mode: scanner.scan_mode, pages_found: scanner.pages_found, pages_crawled: scanner.pages_crawled, queued_remaining: scanner.queued_remaining, health_score: scanner.health_score, seo_score: scanner.seo_score, crawl_policy_source: scanner.crawl_policy_source || scanner.crawl_policy?.source || scanner.technical_audit_summary?.crawl_policy?.source || "", crawl_policy: scanner.crawl_policy || scanner.technical_audit_summary?.crawl_policy || {}, url_evidence_summary: scanner.url_evidence_summary || scanner.technical_audit_summary?.url_evidence_summary || {}, verified_failed_pages: getFirstNumber([scanner.verified_failed_pages, scanner.scan_summary?.verified_failed_pages, scanner.technical_audit_summary?.verified_failed_pages]), suspicious_url_artifacts: getFirstNumber([scanner.suspicious_url_artifacts, scanner.scan_summary?.suspicious_url_artifacts, scanner.technical_audit_summary?.suspicious_url_artifacts]), technical_audit_summary: slimTechnicalSummary(scanner.technical_audit_summary || {}, scanner), crawl_warnings: firstArray([scanner.crawl_warnings]).slice(0, 10), recommendations_count: getRecommendations(scanner).length, pages_preview: getPages(scanner).slice(0, 12).map(slimPage), recommendations_preview: getRecommendations(scanner).slice(0, 18).map(slimFix) };
+  return { success: scanner.success, version: scanner.version || scanner.scanner_version, sampling_version: scanner.sampling_version || "", sampling_evidence: scanner.sampling_evidence || {}, website_url: scanner.website_url, scan_mode: scanner.scan_mode, pages_found: scanner.pages_found, pages_crawled: scanner.pages_crawled, queued_remaining: scanner.queued_remaining, health_score: scanner.health_score, seo_score: scanner.seo_score, crawl_policy_source: scanner.crawl_policy_source || scanner.crawl_policy?.source || scanner.technical_audit_summary?.crawl_policy?.source || "", crawl_policy: scanner.crawl_policy || scanner.technical_audit_summary?.crawl_policy || {}, url_evidence_summary: scanner.url_evidence_summary || scanner.technical_audit_summary?.url_evidence_summary || {}, verified_failed_pages: getFirstNumber([scanner.verified_failed_pages, scanner.scan_summary?.verified_failed_pages, scanner.technical_audit_summary?.verified_failed_pages]), suspicious_url_artifacts: getFirstNumber([scanner.suspicious_url_artifacts, scanner.scan_summary?.suspicious_url_artifacts, scanner.technical_audit_summary?.suspicious_url_artifacts]), technical_audit_summary: slimTechnicalSummary(scanner.technical_audit_summary || {}, scanner), crawl_warnings: firstArray([scanner.crawl_warnings]).slice(0, 10), recommendations_count: getRecommendations(scanner).length, pages_preview: getPages(scanner).slice(0, 12).map(slimPage), recommendations_preview: getRecommendations(scanner).slice(0, 18).map(slimFix) };
 }
 
 function slimAiData(ai = {}) {
@@ -758,7 +766,7 @@ function slimScanRecord(record = {}) {
   if (!record) return null;
   const recommendations = getRecommendations(record);
   const pages = getPages(record);
-  return { ...record, id: record.id || `scan_${Date.now()}`, created_at: record.created_at || new Date().toISOString(), website_url: record.website_url || "", website_key: record.website_key || normalizeWebsiteKey(record.website_url || ""), recommendations: recommendations.slice(0, 120).map(slimFix), fixes: recommendations.slice(0, 120).map(slimFix), findings: recommendations.slice(0, 120).map(slimFix), crawled_pages: pages.slice(0, 150).map(slimPage), pages: pages.slice(0, 150).map(slimPage), scanned_pages: pages.slice(0, 150).map(slimPage), top_recommended_actions: recommendations.slice(0, 5).map(fixToAction).map(slimAction), debug: { ...(record.debug || {}), compact_debug_enabled: true, download_json_enabled: true } };
+  return { ...record, sampling_version: record.sampling_version || "", sampling_evidence: record.sampling_evidence || {}, id: record.id || `scan_${Date.now()}`, created_at: record.created_at || new Date().toISOString(), website_url: record.website_url || "", website_key: record.website_key || normalizeWebsiteKey(record.website_url || ""), recommendations: recommendations.slice(0, 120).map(slimFix), fixes: recommendations.slice(0, 120).map(slimFix), findings: recommendations.slice(0, 120).map(slimFix), crawled_pages: pages.slice(0, 150).map(slimPage), pages: pages.slice(0, 150).map(slimPage), scanned_pages: pages.slice(0, 150).map(slimPage), top_recommended_actions: recommendations.slice(0, 5).map(fixToAction).map(slimAction), debug: { ...(record.debug || {}), compact_debug_enabled: true, download_json_enabled: true } };
 }
 
 function slimFix(fix = {}) {

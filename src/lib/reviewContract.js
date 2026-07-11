@@ -53,3 +53,49 @@ export function normalizeReviewScope(fix = {}, fallbackFamily = "") {
       : String(fix?.page_template_family || fallbackFamily || ""),
   };
 }
+
+
+
+export function normalizeFindingEvidence(fix = {}) {
+  const rule = String(fix?.rule || fix?.issue_type || "").toLowerCase();
+  const source = String(fix?.source || "").toLowerCase();
+  const rateLimited =
+    ["rate_limited_page", "blocked_page", "blocked_page_429", "scanner_blocked"].includes(rule) ||
+    source.startsWith("scanner_verified_failed_pages:429");
+  const explicitEvidence = String(fix?.evidence_status || "").toLowerCase();
+  const evidenceStatus = explicitEvidence || (rateLimited ? "needs_verification" : "confirmed");
+  return {
+    evidence_status: evidenceStatus,
+    verification_state: String(fix?.verification_state || "").toLowerCase() || evidenceStatus,
+    limitation_code: String(fix?.limitation_code || "") || (rateLimited ? "rate_limit_requires_log_confirmation" : ""),
+  };
+}
+
+
+export function normalizeReviewEvidenceState(source = {}) {
+  const report = source?.website_health_report || {};
+  const explicitStatus = String(source?.scan_status || report?.scan_status || "");
+  const blocked = explicitStatus === "blocked_or_incomplete";
+  const partial = explicitStatus === "complete_with_access_limitations";
+  const incomplete = explicitStatus === "incomplete_evidence";
+  const noFindings = source?.no_high_confidence_findings === true || explicitStatus === "complete_no_high_confidence_findings";
+  const scoreIsProvisional = Boolean(source?.score_is_provisional ?? report?.score_is_provisional) || blocked || partial || incomplete;
+  const accessEvidenceState = String(source?.access_evidence_state || report?.access_evidence_state || "") ||
+    (blocked ? "blocked" : partial ? "partial_access_limited" : "");
+  const reviewConfidenceState = String(source?.review_confidence_state || report?.review_confidence_state || "") ||
+    (blocked
+      ? "blocked_access_needs_verification"
+      : partial
+        ? "partial_access_needs_verification"
+        : incomplete
+          ? "incomplete_evidence"
+          : noFindings
+            ? "no_high_confidence_findings"
+            : "");
+  return {
+    scan_status: explicitStatus,
+    review_confidence_state: reviewConfidenceState,
+    score_is_provisional: scoreIsProvisional,
+    access_evidence_state: accessEvidenceState,
+  };
+}

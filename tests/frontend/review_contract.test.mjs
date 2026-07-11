@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { getPriorityLabel } from "../../src/lib/friendlyLabels.js";
-import { normalizeActionPriority, normalizeReviewScope } from "../../src/lib/reviewContract.js";
+import { normalizeActionPriority, normalizeFindingEvidence, normalizeReviewEvidenceState, normalizeReviewScope } from "../../src/lib/reviewContract.js";
 
 test("compact actions preserve critical priority", () => {
   assert.equal(normalizeActionPriority("critical"), "critical");
@@ -42,3 +42,58 @@ test("normal reviewed findings retain their family", () => {
   );
 });
 
+
+
+
+test("rate-limit findings retain a needs-verification contract", () => {
+  assert.deepEqual(
+    normalizeFindingEvidence({ rule: "rate_limited_page", source: "scanner_verified_failed_pages:429" }),
+    {
+      evidence_status: "needs_verification",
+      verification_state: "needs_verification",
+      limitation_code: "rate_limit_requires_log_confirmation",
+    },
+  );
+});
+
+
+test("explicit finding evidence is preserved", () => {
+  assert.deepEqual(
+    normalizeFindingEvidence({ rule: "canonical_missing", evidence_status: "sample_based", verification_state: "sample_based", limitation_code: "sample_only" }),
+    {
+      evidence_status: "sample_based",
+      verification_state: "sample_based",
+      limitation_code: "sample_only",
+    },
+  );
+});
+
+
+test("blocked review state survives frontend record normalization", () => {
+  const state = normalizeReviewEvidenceState({
+    scan_status: "blocked_or_incomplete",
+    review_confidence_state: "blocked_access_needs_verification",
+    score_is_provisional: true,
+    access_evidence_state: "blocked",
+    website_health_report: { health_grade: "Blocked / incomplete" },
+  });
+  assert.deepEqual(state, {
+    scan_status: "blocked_or_incomplete",
+    review_confidence_state: "blocked_access_needs_verification",
+    score_is_provisional: true,
+    access_evidence_state: "blocked",
+  });
+});
+
+
+test("partial access limitations remain provisional in the saved contract", () => {
+  assert.deepEqual(
+    normalizeReviewEvidenceState({ scan_status: "complete_with_access_limitations" }),
+    {
+      scan_status: "complete_with_access_limitations",
+      review_confidence_state: "partial_access_needs_verification",
+      score_is_provisional: true,
+      access_evidence_state: "partial_access_limited",
+    },
+  );
+});

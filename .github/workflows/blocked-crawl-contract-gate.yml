@@ -27,6 +27,9 @@ jobs:
           node-version: "20"
           cache: npm
 
+      - name: Preserve incidental 429 completion semantics
+        run: python .github/scripts/adjust_blocked_crawl_materiality.py
+
       - name: Apply blocked crawl contract patch
         run: python .github/scripts/apply_blocked_crawl_contract.py
 

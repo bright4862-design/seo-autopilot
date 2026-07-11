@@ -8,6 +8,7 @@ import httpx
 
 from .artifact_filter import MAX_ARTIFACT_EVIDENCE, is_artifact_url, record_artifact
 from .extract import classify_template, extract_links, extract_page
+from .sampling import SAMPLING_VERSION, sampling_report, select_balanced_urls
 from .security import is_public_http_url, safe_get
 from .sitemap import load_sitemap_urls
 
@@ -32,6 +33,8 @@ SCAN_BUDGETS = {
     "deep": {"max_pages": 85, "timeout": 75},
     "advanced": {"max_pages": 150, "timeout": 90},
 }
+
+SITEMAP_DISCOVERY_LIMIT = 5000
 
 TRUST_PATHS = ["/about", "/contact", "/privacy", "/terms", "/security", "/legal", "/mentions-legales", "/cgv"]
 
@@ -82,12 +85,16 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         follow_redirects=False,
         headers={"User-Agent": "Mozilla/5.0 (compatible; FixListPythonScanner/1.0)"},
     ) as client:
-        sitemap_urls = await load_sitemap_urls(client, origin, prefix, budget["max_pages"] * 5, artifacts)
-        for url in sitemap_urls:
+        max_pages = budget["max_pages"]
+        sitemap_urls = await load_sitemap_urls(client, origin, prefix, SITEMAP_DISCOVERY_LIMIT, artifacts)
+        family_of = lambda url: classify_template(urlparse(url).path or "/")
+        path_of = lambda url: urlparse(url).path or "/"
+        sampled_sitemap_urls = select_balanced_urls(sitemap_urls, family_of, path_of, max_pages)
+        sampling_evidence = sampling_report(sitemap_urls, sampled_sitemap_urls, family_of, path_of)
+        for url in sampled_sitemap_urls:
             enqueue(url, "sitemap", "/sitemap.xml", "")
 
         deadline = time.monotonic() + budget["timeout"]
-        max_pages = budget["max_pages"]
         state_lock = asyncio.Lock()
         crawl_state = {"claimed": 0, "in_flight": 0}
 
@@ -156,6 +163,8 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         "version": VERSION,
         "scanner_version": VERSION,
         "scanner_profile": "python_screaming_frog_lite_v1",
+        "sampling_version": SAMPLING_VERSION,
+        "sampling_evidence": sampling_evidence,
         "screaming_frog_lite_enabled": True,
         "website_url": start_url,
         "normalized_url": start_url,

@@ -62,3 +62,5 @@ jobs:
           git rm .github/scripts/apply_sitewide_collapse_patch.py .github/workflows/sitewide-collapse-gate.yml
           git commit -m "Collapse verified site-wide template defects"
           git push origin HEAD:${{ github.head_ref || github.ref_name }}
+
+# rerun

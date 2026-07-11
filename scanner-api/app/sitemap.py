@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 from .artifact_filter import is_artifact_url, record_artifact
 from .security import safe_get
 
-MAX_SITEMAP_FETCHES = 20
+MAX_SITEMAP_FETCHES = 60
 
 
 async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix: str, limit: int, artifacts: list[dict]) -> list[str]:
@@ -126,7 +126,7 @@ def rank_child_sitemaps(children: list[str], path_prefix: str) -> list[str]:
             value += 40
         elif tokens and any(token in target for token in tokens):
             value += 20
-        if re.search(r"page|product|categor|service|listing|collection|loan|location", target):
+        if re.search(r"page|product|categor|service|listing|collection|loan|location|reservation|booking|checkout|cart|panier|billet|ticket|devis|quote|apply|contact|trust|legal|privacy|mentions", target):
             value += 18
         if re.search(r"post|article|blog|guide", target):
             value += 4
@@ -134,7 +134,31 @@ def rank_child_sitemaps(children: list[str], path_prefix: str) -> list[str]:
             value -= 15
         return value
 
-    return sorted(dedupe(children), key=score, reverse=True)
+    ranked = sorted(dedupe(children), key=score, reverse=True)
+    return interleave_by_family(ranked)
+
+
+def sitemap_family_key(url: str) -> str:
+    """Collapse numbered sibling sitemap files into one stable family."""
+    try:
+        name = (urlparse(url).path.rsplit("/", 1)[-1] or "sitemap").lower()
+    except Exception:
+        name = str(url or "").lower().rsplit("/", 1)[-1]
+    name = re.sub(r"\\.xml(?:\\.gz)?$", "", name)
+    return re.sub(r"[-_]?\\d+$", "", name) or "sitemap"
+
+
+def interleave_by_family(children: list[str]) -> list[str]:
+    """Round-robin child sitemaps so one large family cannot starve others."""
+    families: dict[str, list[str]] = {}
+    for child in children:
+        families.setdefault(sitemap_family_key(child), []).append(child)
+    output: list[str] = []
+    while any(families.values()):
+        for family in list(families):
+            if families[family]:
+                output.append(families[family].pop(0))
+    return output
 
 
 def dedupe(values: list[str]) -> list[str]:

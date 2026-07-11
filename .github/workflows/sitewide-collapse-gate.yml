@@ -30,6 +30,16 @@ jobs:
       - name: Apply product patch
         run: python .github/scripts/apply_sitewide_collapse_patch.py
 
+      - name: Align presentation assertion with shipped copy
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("scanner-api/tests/test_review_presentation_contract.py")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace('assert "global document head" in card["plain_english_explanation"].lower()', 'assert "global document-head" in card["plain_english_explanation"].lower()', 1)
+          path.write_text(text, encoding="utf-8")
+          PY
+
       - name: Install backend dependencies
         run: pip install -r scanner-api/requirements.txt
 

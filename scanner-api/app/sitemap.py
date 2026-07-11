@@ -38,19 +38,43 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
             elif is_same_prefix(loc, path_prefix):
                 urls.append(normalize_sitemap_page_url(loc, origin))
 
+    # Collect child-sitemap URLs into per-family buckets, then interleave before
+    # applying the global limit. Otherwise one huge child sitemap can consume
+    # every discovery slot before booking, collection, or trust families appear.
+    family_urls: dict[str, list[str]] = {}
     for child in rank_child_sitemaps(child_sitemaps, path_prefix):
-        if len(fetched) >= MAX_SITEMAP_FETCHES or len(urls) >= limit:
+        if len(fetched) >= MAX_SITEMAP_FETCHES:
             break
         if child.lower().endswith(".gz"):
             continue
+        bucket = family_urls.setdefault(sitemap_family_key(child), [])
         locs = await fetch_sitemap_locs(client, child, fetched, artifacts)
         for loc in locs:
-            if len(urls) >= limit:
+            if len(bucket) >= limit:
                 break
             if not is_sitemap_url(loc) and is_same_prefix(loc, path_prefix):
-                urls.append(normalize_sitemap_page_url(loc, origin))
+                bucket.append(normalize_sitemap_page_url(loc, origin))
 
-    return dedupe(urls)[:limit]
+    # Root-level URLs keep priority, followed by child URLs round-robined across
+    # sitemap families so the discovery cap retains a representative universe.
+    return dedupe(urls + interleave_url_families(family_urls))[:limit]
+
+
+def interleave_url_families(family_urls: dict[str, list[str]]) -> list[str]:
+    """Round-robin URLs across sitemap families in deterministic family order."""
+    output: list[str] = []
+    total = sum(len(values) for values in family_urls.values())
+    index = 0
+    while len(output) < total:
+        progressed = False
+        for values in family_urls.values():
+            if index < len(values):
+                output.append(values[index])
+                progressed = True
+        if not progressed:
+            break
+        index += 1
+    return output
 
 
 async def fetch_sitemap_locs(client: httpx.AsyncClient, sitemap_url: str, fetched: set[str], artifacts: list[dict]) -> list[str]:

@@ -760,7 +760,7 @@ def collapse_sitewide_template_findings(
         steps = [
             "Open the global document head, root layout, or shared CMS template that renders canonical tags.",
             "Add one self-referencing canonical URL based on each page's final public URL.",
-            "Verify at least one representative conversion, loan, location, article, legal, contact, standard, and homepage page.",
+            "Verify at least one representative page from every affected family listed in the card.",
             "Publish the global change and run FixList again to confirm the site-wide canonical gap is resolved.",
         ]
         collapsed = {

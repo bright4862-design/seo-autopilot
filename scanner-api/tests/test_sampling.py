@@ -121,3 +121,35 @@ def test_sampling_report_exposes_coverage_evidence():
     assert report["trust_pages_in_sitemap"] >= 10
     assert report["trust_pages_sampled"] >= 1
     assert "legal_info" not in report["families_never_sampled"]
+
+
+def test_locale_prefixed_cms_legal_routes_are_trust_pages():
+    assert is_trust_path("/fr/page/cgu")
+    assert is_trust_path("/fr/page/mentions-legales")
+    assert is_trust_path("/en/pages/privacy-policy")
+    assert is_trust_path("/fr/contact")
+    assert is_trust_path("/de/security")
+    assert not is_trust_path("/fr/annonce/domaine-de-locguenole-a-kervignac-56/voir")
+
+
+def test_funbooker_legal_pages_are_reserved_and_reported():
+    activities = [f"https://x.com/fr/annonce/activity-{index}/voir" for index in range(20)]
+    legal_pages = [
+        "https://x.com/fr/page/cgu",
+        "https://x.com/fr/page/mentions-legales",
+    ]
+    urls = activities + legal_pages
+
+    def family(url):
+        return "legal_info" if url in legal_pages else "activity_detail"
+
+    def path(url):
+        return url.replace("https://x.com", "")
+
+    selected = select_balanced_urls(urls, family, path, 5)
+    report = sampling_report(urls, selected, family, path)
+
+    assert all(url in selected for url in legal_pages)
+    assert report["trust_pages_in_sitemap"] == 2
+    assert report["trust_pages_sampled"] == 2
+    assert report["family_sampled"]["legal_info"] == 2

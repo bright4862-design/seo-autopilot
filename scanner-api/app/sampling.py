@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from typing import Any, Callable, Iterable
+from urllib.parse import urlparse
+
+from .extract import is_legal_page_path
 
 SAMPLING_VERSION = "balanced_sitemap_buckets_v1"
 TRUST_PREFIXES = (
     "/about", "/contact", "/privacy", "/terms", "/legal", "/mentions-legales",
     "/cgv", "/security", "/impressum", "/conditions", "/a-propos",
 )
+TRUST_ROUTE_SEGMENTS = {
+    "about", "about-us", "a-propos", "contact", "contact-us", "security",
+    "trust", "conditions", "privacy", "terms", "legal", "mentions-legales",
+    "cgu", "cgv", "impressum",
+}
+LOCALE_SEGMENT_RE = re.compile(r"^[a-z]{2}(?:-[a-z]{2})?$", re.I)
 MONEY_FAMILIES = {
     "loan_program", "conversion", "product_page", "collection_page",
     "booking_or_checkout", "activity_detail", "location_landing",
@@ -23,7 +33,23 @@ SMALL_BUDGET = 25
 
 
 def is_trust_path(path: str) -> bool:
-    return str(path or "").lower().startswith(TRUST_PREFIXES)
+    value = str(path or "").strip()
+    if "://" in value:
+        value = urlparse(value).path or "/"
+    clean = value.lower().split("?", 1)[0].split("#", 1)[0].rstrip("/") or "/"
+
+    # Use the scanner's canonical, bounded legal-path matcher so locale-prefixed
+    # CMS routes such as /fr/page/cgu and /fr/page/mentions-legales count as trust
+    # pages without reintroducing substring leaks such as lo(cgu)enole.
+    if is_legal_page_path(clean) or clean.startswith(TRUST_PREFIXES):
+        return True
+
+    segments = [segment for segment in clean.split("/") if segment]
+    if segments and LOCALE_SEGMENT_RE.match(segments[0]):
+        segments = segments[1:]
+    if segments and segments[0] in {"page", "pages"}:
+        segments = segments[1:]
+    return bool(segments and segments[0] in TRUST_ROUTE_SEGMENTS)
 
 
 def select_balanced_urls(

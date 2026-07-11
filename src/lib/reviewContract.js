@@ -28,3 +28,9 @@ export function selectFinalReviewFixes({
   if (typeof groupAndSortFixes !== "function") return normalized.slice(0, 120);
   return groupAndSortFixes(normalized, { requestedPathPrefix }).slice(0, 120);
 }
+
+
+export function normalizeActionPriority(value) {
+  const priority = String(value || "").toLowerCase();
+  return ["critical", "high", "medium", "low"].includes(priority) ? priority : "medium";
+}

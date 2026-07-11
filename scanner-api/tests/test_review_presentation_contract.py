@@ -98,3 +98,26 @@ def test_cross_cutting_429_card_is_family_neutral():
     assert card["page_template_family"] == "mixed"
     assert card["title"] == "Check pages blocked by rate limiting"
     assert len(card["affected_pages"]) == 6
+
+def test_clean_review_does_not_emit_rate_limit_caveat():
+    result = _run([_page("/clean")])
+    limitations = result["website_health_report"]["limitations"]
+
+    assert not any("HTTP 429" in limitation for limitation in limitations)
+
+
+def test_rate_limit_card_and_caveat_are_emitted_together():
+    result = _run([_page("/blocked", status_code=429)])
+    limitations = result["website_health_report"]["limitations"]
+
+    assert _fix(result, "rate_limited_page")
+    assert any("HTTP 429" in limitation for limitation in limitations)
+
+
+def test_server_error_card_does_not_trigger_rate_limit_caveat():
+    result = _run([_page("/server-error", status_code=503)])
+    limitations = result["website_health_report"]["limitations"]
+
+    assert _fix(result, "server_error")
+    assert not any("HTTP 429" in limitation for limitation in limitations)
+

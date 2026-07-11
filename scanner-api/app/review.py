@@ -758,6 +758,17 @@ def score_fix(fix: dict[str, Any], site_fingerprint: dict[str, Any], body: dict[
     }
 
 
+RATE_LIMIT_RULES = {"rate_limited_page", "blocked_page"}
+
+
+def has_rate_limit_evidence(fixes: list[dict[str, Any]]) -> bool:
+    return any(
+        str(fix.get("rule") or "") in RATE_LIMIT_RULES
+        or str(fix.get("source") or "").startswith("scanner_verified_failed_pages:429")
+        for fix in fixes
+    )
+
+
 def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixes: list[dict[str, Any]], site_fingerprint: dict[str, Any], playbook: dict[str, Any], website_url: str) -> dict[str, Any]:
     incomplete = evidence_is_incomplete(site_fingerprint)
     blocked = crawl_is_blocked(site_fingerprint)
@@ -773,6 +784,13 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
     top_concerns = [fix.get("issue_title") or fix.get("title") for fix in fixes[:3] if fix.get("issue_title") or fix.get("title")]
     quick_wins = [fix.get("issue_title") or fix.get("title") for fix in fixes if fix.get("difficulty") != "developer"][:3]
     bigger_projects = [fix.get("issue_title") or fix.get("title") for fix in fixes if fix.get("difficulty") == "developer" or fix.get("requires_developer")][:3]
+    limitations = [
+        "This scan is read-only and cannot confirm private analytics, paid search data, conversions, or server logs."
+    ]
+    if has_rate_limit_evidence(fixes):
+        limitations.append(
+            "HTTP 429 and connection-verification results need access-log confirmation before being treated as confirmed broken customer pages."
+        )
     report = {
         "health_score": health_score,
         "score": health_score,
@@ -782,10 +800,7 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
         "top_concerns": top_concerns,
         "quick_wins": quick_wins,
         "bigger_projects": bigger_projects,
-        "limitations": [
-            "This scan is read-only and cannot confirm private analytics, paid search data, conversions, or server logs.",
-            "HTTP 429 and connection-verification results need access-log confirmation before being treated as confirmed broken customer pages.",
-        ],
+        "limitations": limitations,
         "next_best_step": "Ask your web person to verify crawler access, rate limits, CDN, firewall, and bot-protection settings." if blocked else "Re-run the scan — page evidence did not reach AI Review." if incomplete else ((fixes[0].get("issue_title") or fixes[0].get("title")) if fixes else "Review the first FixList item."),
     }
     pages_returned = pages[:80]

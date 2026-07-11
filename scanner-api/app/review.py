@@ -554,6 +554,22 @@ def build_scanner_evidence_findings(body: dict[str, Any], pages: list[dict[str, 
     return fixes
 
 
+
+def page_pattern_title(rule: str, family: str, is_group: bool) -> str:
+    label = family_label(family)
+    if rule == "canonical_missing":
+        return f"Add canonical URLs to {label} pages" if is_group else "Add a canonical URL to the affected page"
+    if rule == "image_alt_text":
+        return f"Add missing image descriptions to {label} pages" if is_group else "Add missing image descriptions to the affected page"
+    if rule == "missing_meta_description":
+        return f"Add meta descriptions to {label} pages" if is_group else "Add a meta description to the affected page"
+    if rule == "missing_h1":
+        return f"Add H1 headings to {label} pages" if is_group else "Add an H1 to the affected page"
+    if rule == "multiple_h1":
+        return f"Use one main heading on {label} pages" if is_group else "Use one main heading on the affected page"
+    return f"Fix the repeated {label} page issue" if is_group else "Fix the affected page issue"
+
+
 def build_page_pattern_findings(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     buckets: dict[tuple[str, str], dict[str, Any]] = {}
     for page in pages:
@@ -581,7 +597,7 @@ def build_page_pattern_findings(pages: list[dict[str, Any]]) -> list[dict[str, A
     for bucket in buckets.values():
         affected = [page_evidence_url(page) for page in bucket["pages"]]
         is_group = len(set(map(clean_path, affected))) > 1
-        title = bucket["title"].replace("templates", f"{family_label(bucket['family'])} templates") if is_group else bucket["title"].replace("templates", "the affected page")
+        title = page_pattern_title(bucket["rule"], bucket["family"], is_group)
         fixes.append(make_fix(
             rule=bucket["rule"],
             category=bucket["category"],
@@ -688,6 +704,16 @@ def normalize_fix(fix: dict[str, Any], index: int) -> dict[str, Any]:
     }
 
 
+
+def is_cross_cutting_evidence(fix: dict[str, Any]) -> bool:
+    """HTTP/crawler-access evidence groups by failure mode, not page template."""
+    source = str(fix.get("source", ""))
+    rule = str(fix.get("rule", ""))
+    if source.startswith("scanner_verified_failed_pages:"):
+        return True
+    return rule in {"rate_limited_page", "broken_page", "server_error", "blocked_page"}
+
+
 def score_fix(fix: dict[str, Any], site_fingerprint: dict[str, Any], body: dict[str, Any], playbook: dict[str, Any]) -> dict[str, Any]:
     page_url = clean_path(fix.get("page_url") or first_value(fix.get("affected_pages")) or "/")
     page_value = score_page_value(page_url, site_fingerprint, body, playbook)
@@ -713,7 +739,7 @@ def score_fix(fix: dict[str, Any], site_fingerprint: dict[str, Any], body: dict[
         "current_value": clean_str(fix.get("current_value")) or template_current_value(affected_pages),
         "priority": priority,
         "page_type": page_value["classification"],
-        "page_template_family": fix.get("page_template_family") or get_template_family(page_url),
+        "page_template_family": "mixed" if is_cross_cutting_evidence(fix) else fix.get("page_template_family") or get_template_family(page_url),
         "page_value_score": page_value["score"],
         "page_value_label": page_value["label"],
         "primary_defect_class": defect_class,
@@ -1131,15 +1157,75 @@ def normalize_steps(fix: dict[str, Any]) -> list[str] | None:
 
 def default_steps(category: str, rule: str, difficulty: str, recommended_value: str) -> list[str]:
     text = f"{category} {rule}"
-    if difficulty == "developer" or re.search(r"429|blocked|rate_limited|server_error|404|410|broken|canonical|redirect|route_boundary|indexability|template", text, re.I):
-        if re.search(r"429|blocked|rate_limited", rule, re.I):
-            return ["Send the grouped affected URLs to your web person.", "Check CDN, firewall, server, and bot-protection logs for HTTP 429 or verification responses.", "Confirm whether Googlebot and normal users can load the pages.", "Adjust rate-limit or bot-protection rules only if legitimate crawlers or users are blocked.", "Run FixList again to confirm the affected pages load."]
-        if re.search(r"404|410|broken", text, re.I):
-            return ["Send the affected URLs and source-page evidence to your web person.", "Decide whether each URL should be restored, redirected, or removed from internal links.", "Update the source links or add 301 redirects to the closest relevant live page.", "Run FixList again to confirm the URLs no longer fail."]
-        return ["Send this recommendation to your web person.", "Update the routing, canonical, schema, indexability, or shared template configuration.", "Publish the change and rerun FixList to verify it."]
-    if category == "image_alt_text":
-        return ["Open the affected page or template.", "Add short, specific alt text to meaningful images.", "Publish the update and run FixList again."]
-    return ["Open the affected page or template.", clean_str(recommended_value) or "Apply the recommended change.", "Publish the update and run FixList again."]
+
+    if category == "image_alt_text" or re.search(r"image_alt|missing_alt|alt_text", rule, re.I):
+        return [
+            "Open one affected page and identify which meaningful images are missing alt text.",
+            "Update the shared image component or CMS image field to output short, specific alt text.",
+            "Check several affected pages to confirm decorative images remain empty and meaningful images are described.",
+            "Publish the change and run FixList again to confirm the missing-alt count has fallen.",
+        ]
+    if re.search(r"canonical_missing|missing_canonical|canonical_to_other", rule, re.I) or category == "canonical":
+        return [
+            "Send the affected URLs to your web person.",
+            "Add or correct self-referencing canonical tags on the affected page or shared template.",
+            "Publish the change and inspect the rendered page source to confirm the canonical URL is correct.",
+            "Run FixList again to confirm the canonical issue is resolved.",
+        ]
+    if re.search(r"missing_h1", rule, re.I):
+        return [
+            "Open the affected page or shared template.",
+            "Add one clear H1 that describes the page's main topic.",
+            "Keep supporting section headings as H2 or H3 headings.",
+            "Publish the change and run FixList again.",
+        ]
+    if re.search(r"multiple_h1", rule, re.I):
+        return [
+            "Open the affected page or shared template.",
+            "Keep the primary page heading as the only H1.",
+            "Change supporting headings to H2 or H3 without altering their visual style.",
+            "Publish the change and run FixList again.",
+        ]
+    if re.search(r"missing_meta_description", rule, re.I) or category == "meta_description":
+        return [
+            "Open the affected page in the CMS or page template.",
+            "Add a concise meta description that accurately explains the page and gives searchers a reason to click.",
+            "Keep the description unique to the page and avoid copying visible boilerplate or HTML markup.",
+            "Publish the update and run FixList again.",
+        ]
+    if re.search(r"429|blocked|rate_limited", rule, re.I):
+        return [
+            "Send the grouped affected URLs to your web person.",
+            "Check CDN, firewall, server, and bot-protection logs for HTTP 429 or verification responses.",
+            "Confirm whether Googlebot and normal users can load the pages.",
+            "Adjust rate-limit or bot-protection rules only if legitimate crawlers or users are blocked.",
+            "Run FixList again to confirm the affected pages load.",
+        ]
+    if re.search(r"404|410|broken", text, re.I):
+        return [
+            "Send the affected URLs and source-page evidence to your web person.",
+            "Decide whether each URL should be restored, redirected, or removed from internal links.",
+            "Update the source links or add 301 redirects to the closest relevant live page.",
+            "Run FixList again to confirm the URLs no longer fail.",
+        ]
+    if re.search(r"server_error|5xx|500|502|503|504", text, re.I):
+        return [
+            "Send the affected URLs and timestamps to your web person.",
+            "Check application, hosting, and reverse-proxy logs for the server error.",
+            "Fix the failing route, dependency, timeout, or infrastructure rule.",
+            "Recheck the URLs directly, then run FixList again.",
+        ]
+    if difficulty == "developer" or re.search(r"redirect|route_boundary|indexability|template|schema|javascript|render", text, re.I):
+        return [
+            "Send this recommendation to your web person.",
+            clean_str(recommended_value) or "Apply the recommended technical change.",
+            "Publish the change and rerun FixList to verify it.",
+        ]
+    return [
+        "Open the affected page or template.",
+        clean_str(recommended_value) or "Apply the recommended change.",
+        "Publish the update and run FixList again.",
+    ]
 
 
 def needs_developer_owner(item: dict[str, Any]) -> bool:

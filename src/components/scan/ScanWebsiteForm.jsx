@@ -17,6 +17,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { base44 } from "@/api/base44Client";
+import { selectFinalReviewFixes } from "@/lib/reviewContract";
 
 const ADVANCED_SCANNER_FUNCTION = "runAdvancedScan";
 const AI_REVIEW_FUNCTION = "aiReviewScan";
@@ -337,7 +338,14 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
   const pages = getPages(scanData).slice(0, 150).map(slimPage);
   const scannerFixes = getRecommendations(scanData);
   const aiFixes = getRecommendations(aiData);
-  const finalFixes = groupAndSortFixes((aiFixes.length > 0 ? aiFixes : scannerFixes).map(slimFix), { requestedPathPrefix }).slice(0, 120);
+  const finalFixes = selectFinalReviewFixes({
+    aiData,
+    aiFixes,
+    scannerFixes,
+    slimFix,
+    groupAndSortFixes,
+    requestedPathPrefix,
+  });
   const healthScore = getFirstNumber([aiData?.health_score, aiData?.seo_score, aiData?.website_health_report?.health_score, aiData?.scan_summary?.health_score, scanData?.health_score, scanData?.seo_score, scanData?.scan_summary?.score, scanData?.scan_summary?.health_score]);
   const noHighConfidenceFindings = aiData?.no_high_confidence_findings === true || finalFixes.length === 0;
   const healthGrade = aiData?.website_health_report?.health_grade || aiData?.health_grade || (noHighConfidenceFindings ? "No issues found in sample" : scoreLabel(healthScore));

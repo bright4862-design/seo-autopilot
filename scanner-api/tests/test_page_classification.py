@@ -61,7 +61,6 @@ def test_money_paths_outside_blog_prefix_are_unaffected():
     assert classify_template("/apply-now") == "conversion"
 
 
-
 def test_pretto_editorial_routes_override_finance_keywords():
     paths = [
         "/tendance-marche-immobilier/marche-immobilier-2026/taux-immobiliers-hausse-2026",
@@ -89,3 +88,52 @@ def test_pretto_money_routes_remain_money_templates():
     for path in paths:
         assert classify_template(path) == "loan_program"
         assert estimate_intent(path, "", "", 200) == "money_or_conversion"
+
+
+# Funbooker live classifier false positives exposed once balanced sampling worked.
+def test_french_carte_is_not_a_cart_route_boundary():
+    """The French word 'carte' must not match the /cart route segment."""
+    for path in [
+        "/fr/annonce/carte-all-inclusive-lyon-city-card-69/voir",
+        "/fr/annonce/carte-1-an-descapades-lyon-city-card-365-69/voir",
+    ]:
+        assert classify_template(path) == "activity_detail"
+        assert estimate_intent(path, "", "", 200) != "internal_or_auth"
+
+
+def test_public_invitation_page_is_not_internal():
+    path = "/fr/carte-invitation-anniversaire"
+    assert classify_template(path) != "route_boundary"
+    assert estimate_intent(path, "", "", 200) != "internal_or_auth"
+
+
+def test_real_cart_and_checkout_routes_still_detected():
+    for path in ["/cart", "/fr/panier", "/checkout", "/login", "/account", "/dashboard", "/admin", "/en/cart/"]:
+        assert classify_template(path) == "route_boundary"
+        assert estimate_intent(path, "", "", 200) == "internal_or_auth"
+
+
+def test_category_landing_pages_are_collections_not_calculators():
+    """Simulator experience categories are listings, not calculator tools."""
+    for path in [
+        "/fr/category/simulateur",
+        "/fr/category/simulateur-de-pilotage",
+        "/fr/category/simulateur-de-vol/lyon",
+    ]:
+        assert classify_template(path) == "collection_page"
+
+
+def test_theme_landing_page_is_a_collection_not_checkout():
+    assert classify_template("/fr/theme/cadeau") == "collection_page"
+
+
+def test_cms_legal_pages_are_legal_info_not_archive():
+    """CMS page slugs must not be swallowed by the numbered pagination rule."""
+    for path in ["/fr/page/mentions-legales", "/fr/page/cgu", "/mentions-legales", "/cgv"]:
+        assert classify_template(path) == "legal_info"
+        assert estimate_intent(path, "", "", 200) == "trust_or_legal"
+
+
+def test_numbered_pagination_is_still_archive():
+    for path in ["/page/2", "/blog/page/3", "/tag/x", "/author/y"]:
+        assert classify_template(path) == "archive"

@@ -28,9 +28,7 @@ def assess_render_evidence_coverage(
     evaluated = _nonnegative_int(evidence.get("pages_evaluated"))
     crawled = _nonnegative_int(pages_crawled)
     found = _nonnegative_int(pages_found)
-    attempted = max(crawled, min(found, crawled) if crawled else 0)
-    if attempted <= 0:
-        attempted = max(crawled, found)
+    attempted = crawled if crawled else found
 
     ratio = round(evaluated / attempted, 4) if attempted else 0.0
     reason = ""

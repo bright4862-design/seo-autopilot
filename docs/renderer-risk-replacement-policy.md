@@ -12,7 +12,7 @@ The renderer-risk study requires ten measurement-eligible sites in each customer
 - A record marked `insufficient_raw_html_evidence` remains auditable but does not count toward calibration, incidence, or measurement completeness.
 - The final report still requires at least ten eligible sites in every stratum and thirty eligible sites overall.
 
-## July 12, 2026 replacements
+## July 12, 2026 first-round replacements
 
 | Removed site | Stratum | Eligibility reason | Preselected replacement |
 |---|---|---|---|
@@ -26,4 +26,16 @@ The renderer-risk study requires ten measurement-eligible sites in each customer
 | Fnac | Ecommerce/marketplace | Insufficient evaluable HTML | Warby Parker |
 | eBay | Ecommerce/marketplace | Insufficient evaluable HTML | Glossier |
 
-The replacements were selected for segment fit and accessible public marketing/catalog pages. Their renderer evidence had not been collected when this mapping was committed.
+## July 12, 2026 second-round replacements
+
+Run #3 retained twenty-five eligible records. Miro, Patagonia, REI, and Back Market produced insufficient evaluable HTML, while GetYourGuide returned repeated HTTP 503 responses. The following replacements were selected using public-page accessibility only, before their renderer evidence was collected.
+
+| Removed first-round replacement | Stratum | Eligibility reason | Preselected replacement |
+|---|---|---|---|
+| Miro | SaaS/JS | Insufficient evaluable HTML | GitLab |
+| Patagonia | Ecommerce/marketplace | Insufficient evaluable HTML | Bellroy |
+| REI | Ecommerce/marketplace | Insufficient evaluable HTML | Cotopaxi |
+| Back Market | Ecommerce/marketplace | Insufficient evaluable HTML | Away |
+| GetYourGuide | Ecommerce/marketplace | Repeated HTTP 503 | Mejuri |
+
+All replacements were selected for segment fit and accessible public marketing or catalog pages. Their renderer evidence had not been collected when each mapping was committed.

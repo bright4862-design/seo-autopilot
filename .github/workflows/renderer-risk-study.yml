@@ -1,0 +1,103 @@
+name: Renderer-risk study
+
+on:
+  workflow_dispatch:
+    inputs:
+      retry_failures:
+        description: "Retry sites recorded as failures in the restored study cache"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    name: Collect stratified render evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install scanner dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scanner-api/requirements.txt
+
+      - name: Validate collector regressions
+        working-directory: scanner-api
+        run: python -m pytest tests/test_render_risk_collection.py tests/test_render_risk_study.py
+
+      - name: Restore resumable study state
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/renderer-risk-study.jsonl
+            data/renderer-risk-study.failures.jsonl
+          key: renderer-risk-study-${{ github.run_id }}
+          restore-keys: |
+            renderer-risk-study-
+
+      - name: Validate balanced manifest
+        run: |
+          python -c 'import collections,json,pathlib; rows=[json.loads(line) for line in pathlib.Path("data/renderer-risk-study-manifest.jsonl").read_text().splitlines() if line.strip()]; counts=collections.Counter(row["stratum"] for row in rows); assert len(rows)==30, counts; assert counts=={"smb_cms":10,"saas_js":10,"ecommerce_marketplace":10}, counts; assert len({row["site"] for row in rows})==30; print({"sites":len(rows),"strata":dict(counts)})'
+
+      - name: Collect scanner-produced render evidence
+        id: collect
+        continue-on-error: true
+        env:
+          SCANNER_API_URL: ${{ secrets.SCANNER_API_URL }}
+          SCANNER_API_KEY: ${{ secrets.SCANNER_API_KEY }}
+        run: |
+          retry_args=()
+          if [ "${{ inputs.retry_failures }}" = "true" ]; then
+            retry_args+=(--retry-failures)
+          fi
+          python scanner-api/scripts/collect_render_risk_study.py \
+            data/renderer-risk-study-manifest.jsonl \
+            data/renderer-risk-study.jsonl \
+            --attempts 2 \
+            --concurrency 1 \
+            --timeout 240 \
+            "${retry_args[@]}"
+
+      - name: Generate current decision report
+        if: always()
+        run: |
+          python scanner-api/scripts/render_risk_study.py \
+            data/renderer-risk-study.jsonl \
+            --format markdown \
+            --output reports/renderer-risk-study.md
+          cat reports/renderer-risk-study.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summarize collection completeness
+        if: always()
+        run: |
+          successes=$(wc -l < data/renderer-risk-study.jsonl)
+          failures=$(wc -l < data/renderer-risk-study.failures.jsonl)
+          echo "Successful sites: $successes" >> "$GITHUB_STEP_SUMMARY"
+          echo "Failed sites: $failures" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$failures" -gt 0 ]; then
+            echo "::warning::$failures sites remain in the separate failure file; rerun with retry_failures after reviewing them."
+          fi
+
+      - name: Upload study evidence and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: renderer-risk-study-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            data/renderer-risk-study-manifest.jsonl
+            data/renderer-risk-study.jsonl
+            data/renderer-risk-study.failures.jsonl
+            reports/renderer-risk-study.md

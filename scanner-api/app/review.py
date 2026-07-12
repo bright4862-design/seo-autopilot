@@ -1213,18 +1213,39 @@ def score_evidence_confidence(fix: dict[str, Any]) -> int:
     return max(0, min(100, round(score)))
 
 
+def _health_score_rule_key(fix: dict[str, Any], index: int) -> str:
+    rule = str(fix.get("rule") or "").strip().lower()
+    aliases = {
+        "missing_canonical": "canonical_missing",
+        "missing_image_alt": "image_alt_text",
+    }
+    if rule:
+        return f"rule:{aliases.get(rule, rule)}"
+
+    identity = str(
+        fix.get("fix_id")
+        or fix.get("id")
+        or fix.get("issue_title")
+        or fix.get("title")
+        or ""
+    ).strip().lower()
+    category = str(fix.get("category") or "uncategorized").strip().lower()
+    return f"card:{category}:{identity or index}"
+
+
 def compute_health_score(fixes: list[dict[str, Any]], site_fingerprint: dict[str, Any]) -> int:
-    score = 92
-    for fix in fixes:
-        priority = fix.get("priority")
-        if priority == "critical":
-            score -= 12
-        elif priority == "high":
-            score -= 8
-        elif priority == "medium":
-            score -= 4
-        else:
-            score -= 1
+    penalties = {"critical": 12, "high": 8, "medium": 4, "low": 1}
+    strongest_penalty_by_rule: dict[str, int] = {}
+
+    for index, fix in enumerate(fixes):
+        if fix.get("non_scoring") is True or fix.get("score_impact") == 0:
+            continue
+        priority = str(fix.get("priority") or "low").lower()
+        penalty = penalties.get(priority, 1)
+        key = _health_score_rule_key(fix, index)
+        strongest_penalty_by_rule[key] = max(strongest_penalty_by_rule.get(key, 0), penalty)
+
+    score = 92 - sum(strongest_penalty_by_rule.values())
     if crawl_is_blocked(site_fingerprint):
         return min(score, 45)
     if evidence_is_incomplete(site_fingerprint):

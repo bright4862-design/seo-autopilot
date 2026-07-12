@@ -1,4 +1,4 @@
-from app.review import run_review
+from app.review import compute_health_score, run_review
 from app.review_calibration import apply_review_evidence_calibration
 
 
@@ -199,6 +199,44 @@ def test_funbooker_narrow_issues_calibrate_to_needs_work_without_score_noise():
             "issue_title": "Verify sitemap-only pages are internally linked",
         },
     ]
+    reviewed["recommendations"].extend(
+        [
+            {
+                "id": "redirect-evidence-card-2",
+                "fix_id": "redirect-evidence-card-2",
+                "rule": "sitemap_redirect",
+                "category": "indexability",
+                "priority": "high",
+                "overall_priority_score": 70,
+                "affected_pages": ["/fr"],
+                "page_count": 1,
+                "current_value": "https://example.com/fr → https://example.com/fr/ — destination HTTP 200 — destination: Indexable",
+                "issue_title": "Review the redirecting sitemap URL evidence",
+            },
+            {
+                "id": "meta-evidence-card-2",
+                "fix_id": "meta-evidence-card-2",
+                "rule": "missing_meta_description",
+                "category": "meta_description",
+                "priority": "high",
+                "overall_priority_score": 66,
+                "affected_pages": ["/fr/annonce/example/voir"],
+                "page_count": 1,
+                "issue_title": "Review the missing description evidence",
+            },
+            {
+                "id": "h1-evidence-card-2",
+                "fix_id": "h1-evidence-card-2",
+                "rule": "missing_h1",
+                "category": "thin_content",
+                "priority": "medium",
+                "overall_priority_score": 52,
+                "affected_pages": ["/fr/review/page"],
+                "page_count": 1,
+                "issue_title": "Review the missing H1 evidence",
+            },
+        ]
+    )
 
     result = apply_review_evidence_calibration(reviewed, body)
     priorities = {fix["rule"]: fix["priority"] for fix in result["recommendations"]}
@@ -212,6 +250,9 @@ def test_funbooker_narrow_issues_calibrate_to_needs_work_without_score_noise():
     assert result["health_grade"] == "Needs work"
     assert result["next_best_step"] == "Add canonical URLs to legal info pages"
     assert result["review_evidence_calibration_version"] == "review_evidence_calibration_v4_legal_page_scope"
+    assert len([fix for fix in result["recommendations"] if fix["rule"] == "sitemap_redirect"]) == 2
+    assert len([fix for fix in result["recommendations"] if fix["rule"] == "missing_meta_description"]) == 2
+    assert len([fix for fix in result["recommendations"] if fix["rule"] == "missing_h1"]) == 2
 
 
 def test_two_commercial_pages_missing_canonicals_remain_high_priority():
@@ -277,3 +318,19 @@ def test_widespread_canonical_and_unsafe_redirect_evidence_are_not_demoted():
 
     assert priorities["canonical_missingcanonical-sitewide"] == "critical"
     assert priorities["sitemap_redirectredirect-loop"] == "critical"
+
+def test_health_score_uses_the_strongest_priority_once_per_rule():
+    fingerprint = {
+        "pages_crawled": 1,
+        "pages_found": 1,
+        "pages_received": 1,
+        "sampled_pages_sent_to_ai": 1,
+    }
+    fixes = [
+        {"id": "h1-medium", "rule": "missing_h1", "priority": "medium"},
+        {"id": "h1-high", "rule": "missing_h1", "priority": "high"},
+        {"id": "verification", "rule": "potential_orphan_pages", "priority": "critical", "non_scoring": True},
+    ]
+
+    assert compute_health_score(fixes, fingerprint) == 84
+

@@ -32,7 +32,7 @@ def scan_result(state="material_client_rendering_risk"):
     }
 
 
-def test_manifest_requires_an_absolute_url_and_valid_stratum():
+def test_manifest_requires_an_absolute_url_valid_stratum_and_known_manual_verdict():
     normalized = normalize_manifest_record(MANIFEST)
     assert normalized["scan_mode"] == "advanced"
     assert normalized["manual_js_disabled_verdict"] == "not_reviewed"
@@ -41,6 +41,8 @@ def test_manifest_requires_an_absolute_url_and_valid_stratum():
         normalize_manifest_record({**MANIFEST, "url": "/relative"})
     with pytest.raises(ValueError, match="stratum"):
         normalize_manifest_record({**MANIFEST, "stratum": "other"})
+    with pytest.raises(ValueError, match="manual_js_disabled_verdict"):
+        normalize_manifest_record({**MANIFEST, "manual_js_disabled_verdict": "maybe"})
 
 
 def test_study_record_preserves_scanner_render_evidence_without_recalculating_it():

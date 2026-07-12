@@ -1,0 +1,34 @@
+name: Apply scan response deadline patch
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    if: github.head_ref == 'agent/bound-scan-response-time'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply response deadline patch
+        run: python .github/scripts/apply_scan_deadline.py
+      - name: Run focused deadline regression
+        run: node --test tests/frontend/scan-response-deadline.test.mjs
+      - name: Remove one-shot files and commit
+        run: |
+          rm -f .github/scripts/apply_scan_deadline.py .github/workflows/apply-scan-deadline.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Bound scan responses below the UI timeout"
+          git push origin HEAD:${{ github.head_ref }}

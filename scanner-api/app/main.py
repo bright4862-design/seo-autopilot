@@ -5,6 +5,7 @@ from fastapi import Body, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
 from .review import REVIEW_VERSION, run_review
+from .review_calibration import CALIBRATION_VERSION, apply_review_evidence_calibration
 from .scanner import VERSION, run_scan
 from .trust_discovery import apply_trust_discovery_gate, enrich_scan_with_trust_pages
 
@@ -23,7 +24,12 @@ class ScanRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": VERSION, "review_version": REVIEW_VERSION}
+    return {
+        "ok": True,
+        "version": VERSION,
+        "review_version": REVIEW_VERSION,
+        "review_evidence_calibration_version": CALIBRATION_VERSION,
+    }
 
 
 @app.post("/scan")
@@ -47,4 +53,5 @@ async def review(payload: dict[str, Any] = Body(default_factory=dict), x_scanner
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     result = run_review(payload)
-    return apply_trust_discovery_gate(result, payload)
+    result = apply_trust_discovery_gate(result, payload)
+    return apply_review_evidence_calibration(result, payload)

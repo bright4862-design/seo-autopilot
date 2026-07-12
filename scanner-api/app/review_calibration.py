@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 
 from .review import compute_health_score, group_page_recommendations, unwrap_scan_payload
 
-CALIBRATION_VERSION = "review_evidence_calibration_v3_narrow_scope_severity"
+CALIBRATION_VERSION = "review_evidence_calibration_v4_legal_page_scope"
 IMAGE_ALT_EVIDENCE_VERSION = "material_image_alt_v1"
 IMAGE_ALT_RULES = {"image_alt_text", "missing_image_alt"}
 VERIFICATION_ONLY_RULES = {"potential_orphan_pages", "indexable_faceted_navigation"}
@@ -18,6 +18,19 @@ CANONICAL_MISSING_RULES = {"canonical_missing", "missing_canonical"}
 SITEMAP_REDIRECT_RULES = {"sitemap_redirect"}
 MISSING_META_DESCRIPTION_RULES = {"missing_meta_description"}
 PRIORITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+LEGAL_TEMPLATE_FAMILIES = {"legal_info", "legal", "terms", "privacy"}
+LEGAL_PATH_MARKERS = (
+    "/mentions-legales",
+    "/mentions_legales",
+    "/cgu",
+    "/cgv",
+    "/conditions-generales",
+    "/conditions_generales",
+    "/legal",
+    "/terms",
+    "/privacy",
+    "/politique-de-confidentialite",
+)
 
 
 def _int(value: Any) -> int:
@@ -251,10 +264,41 @@ def _is_single_healthy_sitemap_redirect(fix: dict[str, Any]) -> bool:
     return status_is_healthy and destination_is_indexable
 
 
+def _is_legal_page_path(value: Any) -> bool:
+    path = _path(value).lower()
+    return bool(path and any(marker in path for marker in LEGAL_PATH_MARKERS))
+
+
+def _is_narrow_legal_canonical_fix(fix: dict[str, Any]) -> bool:
+    if str(fix.get("rule") or "") not in CANONICAL_MISSING_RULES:
+        return False
+    if _affected_page_count(fix) > 5:
+        return False
+    if str(fix.get("page_scope") or "").lower() == "sitewide":
+        return False
+
+    family = str(fix.get("page_template_family") or fix.get("page_type") or "").lower()
+    if family in LEGAL_TEMPLATE_FAMILIES:
+        return True
+
+    affected = fix.get("affected_pages") if isinstance(fix.get("affected_pages"), list) else []
+    if not affected and fix.get("page_url"):
+        affected = [fix.get("page_url")]
+    return bool(affected and all(_is_legal_page_path(value) for value in affected))
+
+
 def _calibrate_scope_sensitive_fix(fix: dict[str, Any]) -> dict[str, Any]:
     rule = str(fix.get("rule") or "")
     affected_count = _affected_page_count(fix)
     page_scope = str(fix.get("page_scope") or "").lower()
+
+    if _is_narrow_legal_canonical_fix(fix):
+        return _cap_priority(
+            fix,
+            "medium",
+            67,
+            "legal_page_missing_canonical_scope",
+        )
 
     if rule in CANONICAL_MISSING_RULES and affected_count <= 2 and page_scope != "sitewide":
         return _cap_priority(

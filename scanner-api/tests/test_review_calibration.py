@@ -203,15 +203,42 @@ def test_funbooker_narrow_issues_calibrate_to_needs_work_without_score_noise():
     result = apply_review_evidence_calibration(reviewed, body)
     priorities = {fix["rule"]: fix["priority"] for fix in result["recommendations"]}
 
-    assert priorities["canonical_missing"] == "high"
+    assert priorities["canonical_missing"] == "medium"
     assert priorities["sitemap_redirect"] == "medium"
     assert priorities["missing_meta_description"] == "medium"
     assert priorities["missing_h1"] == "medium"
     assert priorities["potential_orphan_pages"] == "low"
-    assert result["health_score"] == 72
+    assert result["health_score"] == 76
     assert result["health_grade"] == "Needs work"
     assert result["next_best_step"] == "Add canonical URLs to legal info pages"
-    assert result["review_evidence_calibration_version"] == "review_evidence_calibration_v3_narrow_scope_severity"
+    assert result["review_evidence_calibration_version"] == "review_evidence_calibration_v4_legal_page_scope"
+
+
+def test_two_commercial_pages_missing_canonicals_remain_high_priority():
+    body = payload([page("/fr/fr/p/healthy-product", 4, 0)])
+    reviewed = run_review(body)
+    reviewed["recommendations"] = [
+        {
+            "id": "commercial-canonical",
+            "fix_id": "commercial-canonical",
+            "rule": "canonical_missing",
+            "category": "canonical",
+            "priority": "critical",
+            "overall_priority_score": 78,
+            "affected_pages": ["/fr/annonce/activity-one/voir", "/fr/annonce/activity-two/voir"],
+            "page_count": 2,
+            "page_scope": "family",
+            "page_template_family": "activity_detail",
+            "issue_title": "Add canonical URLs to activity pages",
+        }
+    ]
+
+    result = apply_review_evidence_calibration(reviewed, body)
+    fix = result["recommendations"][0]
+
+    assert fix["priority"] == "high"
+    assert fix["severity_calibration_reason"] == "narrow_missing_canonical_scope"
+    assert result["health_score"] == 84
 
 
 def test_widespread_canonical_and_unsafe_redirect_evidence_are_not_demoted():

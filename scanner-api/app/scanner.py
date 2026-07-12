@@ -9,6 +9,7 @@ import httpx
 from .artifact_filter import MAX_ARTIFACT_EVIDENCE, is_artifact_url, record_artifact
 from .extract import classify_template, extract_links, extract_page
 from .sampling import SAMPLING_VERSION, sampling_report, select_balanced_urls
+from .render_followup import RENDER_FOLLOWUP_VERSION, run_render_followup
 from .security import is_public_http_url, safe_get
 from .sitemap import load_sitemap_urls
 
@@ -159,6 +160,13 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
     health_score = calculate_health_score(pages, grouped)
     pages_found = max(len(pages), len(pages) + len(queue), len(seen) + len(queue))
     render_evidence = build_render_evidence(pages)
+    material_render_risk = render_evidence["evidence_state"] == "material_client_rendering_risk"
+    render_followup = await run_render_followup(
+        pages if material_render_risk else [],
+        render_page=kwargs.get("_render_page") if material_render_risk else None,
+    )
+    render_evidence["browser_followup_version"] = RENDER_FOLLOWUP_VERSION
+    render_evidence["browser_followup"] = render_followup
     crawl_warnings = []
     if render_evidence["evidence_state"] == "material_client_rendering_risk":
         crawl_warnings.append(

@@ -211,3 +211,31 @@ def test_only_repeated_contract_defects_are_reported_as_recurring():
     assert summary["recurring_contract_violations"] == {
         "repeated_problem": ["smb_cms-0", "smb_cms-1"]
     }
+
+
+
+def test_not_redirected_state_is_not_a_redirect_source():
+    scan = _scan()
+    scan["crawled_pages"][0]["redirect_state"] = "not_redirected"
+
+    validation = validate_crawler_contract(scan, _review())
+
+    assert validation["passed"] is True
+    assert "redirect_marked_indexable" not in validation["error_codes"]
+
+
+def test_actual_redirect_state_cannot_remain_indexable_after_final_200():
+    scan = _scan()
+    page = scan["crawled_pages"][0]
+    page.update({
+        "status_code": 200,
+        "redirect_state": "single_redirect",
+        "redirect_hop_count": 1,
+        "indexability_state": "Redirected",
+        "indexable": True,
+    })
+
+    validation = validate_crawler_contract(scan, _review())
+
+    assert validation["passed"] is False
+    assert "redirect_marked_indexable" in validation["error_codes"]

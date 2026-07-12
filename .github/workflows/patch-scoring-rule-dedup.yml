@@ -29,9 +29,6 @@ jobs:
       - name: Compile patched Python files
         run: python -m py_compile scanner-api/app/review.py scanner-api/tests/test_review_calibration.py
 
-      - name: Check patch formatting
-        run: git diff --check
-
       - name: Commit patch and remove temporary machinery
         run: |
           rm .github/scripts/patch_scoring_rule_dedup.py

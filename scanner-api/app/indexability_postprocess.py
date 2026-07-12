@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 from .indexability_quality import (
     annotate_indexability_quality,
     build_indexability_quality_findings,
@@ -22,10 +24,93 @@ SOFT_404_NOISE_RULES = {
     "canonical_missing",
     "schema",
 }
+QUALITY_GROUP_TITLES = {
+    "soft_404": "Return real 404 or 410 responses for missing pages",
+    "robots_directive_conflict": "Resolve conflicting index and noindex directives",
+    "noindex_canonical_conflict": "Choose between noindex and canonical consolidation",
+    "sitemap_canonicalized_url": "Replace canonicalized URLs in the sitemap",
+}
+GROUP_MIN_AFFECTED = 3
 
 
 def _page_path(page: dict) -> str:
     return str(page.get("path") or "/")
+
+
+def _unique(values) -> list[str]:
+    seen: set[str] = set()
+    output: list[str] = []
+    for value in values:
+        cleaned = str(value or "").strip()
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            output.append(cleaned)
+    return output
+
+
+def group_indexability_quality_findings(findings: list[dict]) -> list[dict]:
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for finding in findings:
+        rule = str(finding.get("rule") or "")
+        family = str(finding.get("page_template_family") or "standard")
+        groups.setdefault((rule, family), []).append(finding)
+
+    output: list[dict] = []
+    severity = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+    for (rule, family), members in groups.items():
+        affected = _unique(
+            page
+            for member in members
+            for page in (member.get("affected_pages") or [member.get("page_url")])
+        )[:150]
+        if len(affected) < GROUP_MIN_AFFECTED:
+            output.extend(members)
+            continue
+
+        sample = dict(members[0])
+        group_key = f"indexability-quality|{rule}|{family}"
+        group_id = "finding_" + hashlib.sha1(group_key.encode("utf-8")).hexdigest()[:12]
+        highest_priority = max(
+            (str(member.get("priority") or "low") for member in members),
+            key=lambda value: severity.get(value, 0),
+        )
+        title = QUALITY_GROUP_TITLES.get(rule, str(sample.get("title") or "Fix repeated indexability issue"))
+        sample.update({
+            "id": group_id,
+            "fix_id": group_id,
+            "page_url": "",
+            "title": title,
+            "issue_title": title,
+            "plain_english_explanation": (
+                "Several similar pages share the same indexability problem. Fix the shared template, routing rule, or response behavior instead of treating each URL separately."
+            ),
+            "plain_english_summary": (
+                "Several similar pages share the same indexability problem. Fix the shared template, routing rule, or response behavior instead of treating each URL separately."
+            ),
+            "why_it_matters": (
+                "Repeated indexability defects can waste crawl activity and create inconsistent search-engine signals across a whole page family."
+            ),
+            "recommended_value": (
+                "Fix one representative template or routing rule, verify the result, then apply it across every affected URL."
+            ),
+            "recommendation": (
+                "Fix one representative template or routing rule, verify the result, then apply it across every affected URL."
+            ),
+            "ai_recommendation": (
+                "Fix one representative template or routing rule, verify the result, then apply it across every affected URL."
+            ),
+            "priority": highest_priority,
+            "affected_pages": affected,
+            "page_count": len(affected),
+            "source_pages": _unique(
+                page for member in members for page in (member.get("source_pages") or [])
+            ),
+            "link_text_samples": _unique(
+                text for member in members for text in (member.get("link_text_samples") or [])
+            ),
+        })
+        output.append(sample)
+    return output
 
 
 def apply_indexability_quality_to_result(result: dict) -> dict:
@@ -49,7 +134,7 @@ def apply_indexability_quality_to_result(result: dict) -> dict:
     # construction and does not create an import cycle during app startup.
     from .scanner import calculate_health_score, create_finding, group_findings
 
-    raw_findings = [
+    existing_raw = [
         dict(item)
         for item in (result.get("raw_findings") or [])
         if isinstance(item, dict) and str(item.get("rule") or "") not in QUALITY_RULES
@@ -60,23 +145,25 @@ def apply_indexability_quality_to_result(result: dict) -> dict:
         for page in pages
         if page.get("soft_404_suspected") and not page.get("trust_discovery_probe")
     }
-    raw_findings = [
+    existing_raw = [
         item
-        for item in raw_findings
+        for item in existing_raw
         if not (
             str(item.get("page_url") or "") in soft_404_paths
             and str(item.get("rule") or "") in SOFT_404_NOISE_RULES
         )
     ]
 
+    quality_raw: list[dict] = []
     for page in pages:
         # Trust probes exist to prevent missing-trust false positives; they are not
         # part of the representative SEO sample and should not generate new tasks.
         if page.get("trust_discovery_probe"):
             continue
-        raw_findings.extend(build_indexability_quality_findings(page, create_finding))
+        quality_raw.extend(build_indexability_quality_findings(page, create_finding))
 
-    grouped = group_findings(raw_findings)
+    raw_findings = existing_raw + quality_raw
+    grouped = group_findings(existing_raw) + group_indexability_quality_findings(quality_raw)
     health_score = calculate_health_score(pages, grouped)
     evidence = summarize_indexability_quality(pages)
 

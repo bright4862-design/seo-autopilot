@@ -1,21 +1,21 @@
 name: Apply multimarket scope patch
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/multimarket-scope
-    paths:
-      - '.github/scripts/apply_multimarket_scope.py'
+      - main
 
 permissions:
   contents: write
 
 jobs:
   patch-and-test:
+    if: github.head_ref == 'agent/multimarket-scope'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.head_ref }}
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
@@ -36,4 +36,4 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "Keep multimarket scans inside one market scope"
-          git push
+          git push origin HEAD:${{ github.head_ref }}

@@ -43,4 +43,4 @@ jobs:
           git commit -m "Calibrate image-alt evidence and score summaries"
           git push origin HEAD:agent/ikea-evidence-calibration
 
-# trigger
+# registered trigger

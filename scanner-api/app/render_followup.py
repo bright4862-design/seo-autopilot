@@ -43,11 +43,13 @@ def compare_raw_and_rendered(raw_page: dict, rendered_page: dict) -> dict:
     rendered_schema = set(rendered_page.get("schema_types") or [])
 
     content_recovered = (
-        rendered_words >= max(80, raw_words + 50)
+        (rendered_words >= 80 and rendered_words >= raw_words * 2)
+        or (raw_words < 50 and rendered_words >= 150)
         or (not raw_title and bool(rendered_title))
         or (not raw_h1 and bool(rendered_h1))
         or bool(rendered_schema - raw_schema)
     )
+    render_regression = raw_words >= 150 and rendered_words <= raw_words * 0.5
     return {
         "url": str(raw_page.get("final_url") or raw_page.get("url") or ""),
         "raw_word_count": raw_words,
@@ -57,6 +59,7 @@ def compare_raw_and_rendered(raw_page: dict, rendered_page: dict) -> dict:
         "h1_recovered": not raw_h1 and bool(rendered_h1),
         "schema_types_recovered": sorted(rendered_schema - raw_schema)[:20],
         "content_recovered": content_recovered,
+        "render_regression": render_regression,
     }
 
 
@@ -73,6 +76,7 @@ async def run_render_followup(
         "attempted_pages": 0,
         "successful_pages": 0,
         "content_recovered_pages": 0,
+        "render_regression_pages": 0,
         "results": [],
         "errors": [],
     }
@@ -95,6 +99,7 @@ async def run_render_followup(
             errors.append({"url": url, "error": str(exc)[:180]})
 
     recovered = sum(1 for item in results if item["content_recovered"])
+    regressions = sum(1 for item in results if item["render_regression"])
     status = "rendered_content_recovered" if recovered else (
         "browser_checked_no_material_delta" if results else "browser_followup_failed"
     )
@@ -104,6 +109,7 @@ async def run_render_followup(
         "attempted_pages": len(selected),
         "successful_pages": len(results),
         "content_recovered_pages": recovered,
+        "render_regression_pages": regressions,
         "results": results,
         "errors": errors[:DEFAULT_RENDER_FOLLOWUP_LIMIT],
     }

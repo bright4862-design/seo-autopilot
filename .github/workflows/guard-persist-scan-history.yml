@@ -1,0 +1,66 @@
+name: Guard persisted scan history
+
+on:
+  push:
+    branches:
+      - agent/persist-scan-history
+    paths:
+      - .github/workflows/guard-persist-scan-history.yml
+      - tools/patch_persist_scan_history.py
+      - data/persist-scan-history-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/persist-scan-history
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Apply persistence integration patch
+        run: python tools/patch_persist_scan_history.py
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate persistence contract
+        run: |
+          npm run lint
+          npm run typecheck
+          npm run test:frontend
+          npm run build
+
+      - name: Remove temporary guard files
+        run: |
+          rm -f .github/workflows/guard-persist-scan-history.yml
+          rm -f tools/patch_persist_scan_history.py
+          rm -f data/persist-scan-history-trigger
+
+      - name: Commit validated patch
+        run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add base44/functions/persistScanHistory/entry.ts src/lib/scanHistory.js src/components/scan/ScanWebsiteForm.jsx src/pages/FixList.jsx src/pages/CrawlStatus.jsx tests/frontend/scanHistory.test.mjs tests/frontend/scanPersistenceContract.test.mjs .github/workflows/guard-persist-scan-history.yml tools/patch_persist_scan_history.py data/persist-scan-history-trigger
+          git commit -m "Persist scan history by crawl job"
+          git push origin HEAD:agent/persist-scan-history

@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 
 from .review import compute_health_score, group_page_recommendations, unwrap_scan_payload
 
-CALIBRATION_VERSION = "review_evidence_calibration_v2_verification_only"
+CALIBRATION_VERSION = "review_evidence_calibration_v3_narrow_scope_severity"
 IMAGE_ALT_EVIDENCE_VERSION = "material_image_alt_v1"
 IMAGE_ALT_RULES = {"image_alt_text", "missing_image_alt"}
 VERIFICATION_ONLY_RULES = {"potential_orphan_pages", "indexable_faceted_navigation"}
@@ -14,6 +14,10 @@ VERIFICATION_ONLY_LIMITATION_CODES = {
     "sampled_crawl_cannot_prove_orphan",
     "faceted_navigation_requires_strategy_review",
 }
+CANONICAL_MISSING_RULES = {"canonical_missing", "missing_canonical"}
+SITEMAP_REDIRECT_RULES = {"sitemap_redirect"}
+MISSING_META_DESCRIPTION_RULES = {"missing_meta_description"}
+PRIORITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 
 
 def _int(value: Any) -> int:
@@ -169,11 +173,118 @@ def _calibrate_verification_only_fix(fix: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _fix_sort_key(fix: dict[str, Any]) -> tuple[int, int]:
-    priority_score = {"critical": 4, "high": 3, "medium": 2, "low": 1}.get(
-        str(fix.get("priority") or ""),
-        0,
+def _affected_page_count(fix: dict[str, Any]) -> int:
+    affected = fix.get("affected_pages") if isinstance(fix.get("affected_pages"), list) else []
+    explicit = _int(fix.get("page_count"))
+    fallback = 1 if fix.get("page_url") else 0
+    return max(explicit, len(affected), fallback)
+
+
+def _cap_priority(
+    fix: dict[str, Any],
+    cap: str,
+    max_overall_score: int,
+    reason: str,
+) -> dict[str, Any]:
+    current = str(fix.get("priority") or "low").lower()
+    if PRIORITY_RANK.get(current, 0) <= PRIORITY_RANK[cap]:
+        return fix
+    return {
+        **fix,
+        "priority": cap,
+        "overall_priority_score": min(max_overall_score, _int(fix.get("overall_priority_score")) or max_overall_score),
+        "severity_calibration_reason": reason,
+        "severity_calibration_version": CALIBRATION_VERSION,
+    }
+
+
+def _is_single_healthy_sitemap_redirect(fix: dict[str, Any]) -> bool:
+    if str(fix.get("rule") or "") not in SITEMAP_REDIRECT_RULES:
+        return False
+    if _affected_page_count(fix) != 1:
+        return False
+
+    state = str(fix.get("redirect_state") or "").lower()
+    if state and state not in {"single_redirect", "redirect", "redirected"}:
+        return False
+
+    chain = fix.get("redirect_chain") if isinstance(fix.get("redirect_chain"), list) else []
+    if chain and len(chain) != 2:
+        return False
+    if _int(fix.get("redirect_hop_count")) > 1:
+        return False
+
+    text = " ".join(
+        str(fix.get(key) or "")
+        for key in (
+            "current_value",
+            "redirect_destination_status",
+            "redirect_destination_indexability",
+            "redirect_destination_state",
+        )
+    ).lower()
+    unhealthy_markers = (
+        "loop",
+        "chain",
+        "failed",
+        "failure",
+        "blocked",
+        "noindex",
+        "non-public",
+        "invalid location",
+        "missing location",
+        "too many redirects",
     )
+    if any(marker in text for marker in unhealthy_markers):
+        return False
+
+    status_is_healthy = (
+        "destination http 200" in text
+        or _int(fix.get("redirect_destination_status")) == 200
+        or _int(fix.get("destination_status_code")) == 200
+    )
+    destination_is_indexable = (
+        "destination: indexable" in text
+        or str(fix.get("redirect_destination_indexability") or "").lower() == "indexable"
+        or fix.get("redirect_destination_indexable") is True
+    )
+    return status_is_healthy and destination_is_indexable
+
+
+def _calibrate_scope_sensitive_fix(fix: dict[str, Any]) -> dict[str, Any]:
+    rule = str(fix.get("rule") or "")
+    affected_count = _affected_page_count(fix)
+    page_scope = str(fix.get("page_scope") or "").lower()
+
+    if rule in CANONICAL_MISSING_RULES and affected_count <= 2 and page_scope != "sitewide":
+        return _cap_priority(
+            fix,
+            "high",
+            81,
+            "narrow_missing_canonical_scope",
+        )
+
+    if _is_single_healthy_sitemap_redirect(fix):
+        return _cap_priority(
+            fix,
+            "medium",
+            67,
+            "single_healthy_sitemap_redirect",
+        )
+
+    if rule in MISSING_META_DESCRIPTION_RULES and affected_count == 1:
+        return _cap_priority(
+            fix,
+            "medium",
+            67,
+            "single_page_missing_meta_description",
+        )
+
+    return fix
+
+
+def _fix_sort_key(fix: dict[str, Any]) -> tuple[int, int]:
+    priority_score = PRIORITY_RANK.get(str(fix.get("priority") or ""), 0)
     return (priority_score, _int(fix.get("overall_priority_score")))
 
 
@@ -212,6 +323,8 @@ def apply_review_evidence_calibration(result: dict[str, Any], payload: dict[str,
                 continue
         if _is_verification_only_fix(item):
             item = _calibrate_verification_only_fix(item)
+        else:
+            item = _calibrate_scope_sensitive_fix(item)
         fixes.append(item)
 
     fixes = sorted(fixes, key=_fix_sort_key, reverse=True)

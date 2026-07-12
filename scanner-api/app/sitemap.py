@@ -6,12 +6,19 @@ import httpx
 from bs4 import BeautifulSoup
 
 from .artifact_filter import is_artifact_url, record_artifact
+from .market_scope import market_pair_prefix, path_within_scope
 from .security import safe_get
 
 MAX_SITEMAP_FETCHES = 60
 
 
-async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix: str, limit: int, artifacts: list[dict]) -> list[str]:
+async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix: str, limit: int, artifacts: list[dict], scope_evidence: dict | None = None) -> list[str]:
+    scope_evidence = scope_evidence if scope_evidence is not None else {}
+    scope_evidence.setdefault("sitemap_urls_excluded_outside_scope", 0)
+    scope_evidence.setdefault("market_prefixes_detected", [])
+    scope_evidence.setdefault("multimarket_detected", False)
+    scope_evidence.setdefault("market_scope_required", False)
+
     roots: list[str] = []
     robots_url = f"{origin}/robots.txt"
     try:
@@ -40,8 +47,13 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
         for loc in locs:
             if is_sitemap_url(loc):
                 child_sitemaps.append(loc)
-            elif len(bucket) < limit and is_same_prefix(loc, path_prefix):
-                bucket.append(normalize_sitemap_page_url(loc, origin))
+            elif len(bucket) < limit:
+                normalized = normalize_sitemap_page_url(loc, origin)
+                record_market_prefix(scope_evidence, normalized)
+                if is_same_prefix(normalized, path_prefix):
+                    bucket.append(normalized)
+                else:
+                    scope_evidence["sitemap_urls_excluded_outside_scope"] += 1
 
     # Collect child-sitemap URLs into per-family buckets, then interleave before
     # applying the global limit. Otherwise one huge child sitemap can consume
@@ -54,12 +66,28 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
         for loc in locs:
             if len(bucket) >= limit:
                 break
-            if not is_sitemap_url(loc) and is_same_prefix(loc, path_prefix):
-                bucket.append(normalize_sitemap_page_url(loc, origin))
+            if not is_sitemap_url(loc):
+                normalized = normalize_sitemap_page_url(loc, origin)
+                record_market_prefix(scope_evidence, normalized)
+                if is_same_prefix(normalized, path_prefix):
+                    bucket.append(normalized)
+                else:
+                    scope_evidence["sitemap_urls_excluded_outside_scope"] += 1
 
     # Round-robin root and child urlsets together. Root pages keep deterministic
     # first position, but cannot starve later child families at the global cap.
-    return dedupe(interleave_url_families(family_urls))[:limit]
+    output = dedupe(interleave_url_families(family_urls))
+    detected = sorted(set(scope_evidence.get("market_prefixes_detected", [])))
+    scope_evidence["market_prefixes_detected"] = detected[:50]
+    if (not path_prefix or path_prefix == "/") and len(detected) > 1:
+        market_urls = [url for url in output if market_pair_prefix(url)]
+        scope_evidence["multimarket_detected"] = True
+        scope_evidence["market_scope_required"] = True
+        scope_evidence["sitemap_urls_excluded_outside_scope"] += len(market_urls)
+        output = [url for url in output if not market_pair_prefix(url)]
+    elif len(detected) > 1:
+        scope_evidence["multimarket_detected"] = True
+    return output[:limit]
 
 
 def interleave_url_families(family_urls: dict[str, list[str]]) -> list[str]:
@@ -139,12 +167,16 @@ def is_sitemap_url(url: str) -> bool:
 
 
 def is_same_prefix(url: str, path_prefix: str) -> bool:
-    if not path_prefix or path_prefix == "/":
-        return True
     try:
-        return (urlparse(url).path or "/").startswith(path_prefix.rstrip("/"))
+        return path_within_scope(urlparse(url).path or "/", path_prefix)
     except Exception:
         return False
+
+
+def record_market_prefix(scope_evidence: dict, url: str) -> None:
+    prefix = market_pair_prefix(url)
+    if prefix and prefix not in scope_evidence["market_prefixes_detected"]:
+        scope_evidence["market_prefixes_detected"].append(prefix)
 
 
 def normalize_sitemap_page_url(url: str, origin: str) -> str:

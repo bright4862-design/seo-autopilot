@@ -123,3 +123,53 @@ def test_root_urlset_cannot_starve_later_compressed_child_families(monkeypatch):
     ]
     assert any("/products/" in url for url in urls)
     assert any("/booking/" in url for url in urls)
+
+
+def test_market_scoped_sitemap_excludes_other_country_language_pairs(monkeypatch):
+    origin = "https://www.ikea.com"
+    pages = [
+        f"{origin}/fr/fr/cat/canapes-10661",
+        f"{origin}/de/de/cat/sofas-fu003",
+        f"{origin}/us/en/p/billy-bookcase-00263850",
+    ]
+    responses = {
+        f"{origin}/robots.txt": FakeResponse(status_code=404),
+        f"{origin}/sitemap.xml": FakeResponse(sitemap_xml(pages)),
+    }
+
+    async def fake_safe_get(client, url):
+        return responses.get(url, FakeResponse(status_code=404))
+
+    monkeypatch.setattr(sitemap, "safe_get", fake_safe_get)
+    scope = {}
+    urls = asyncio.run(load_sitemap_urls(object(), origin, "/fr/fr", 20, [], scope_evidence=scope))
+
+    assert urls == [pages[0]]
+    assert scope["sitemap_urls_excluded_outside_scope"] == 2
+    assert scope["multimarket_detected"] is True
+    assert set(scope["market_prefixes_detected"]) == {"/fr/fr", "/de/de", "/us/en"}
+
+
+def test_global_multimarket_root_requires_an_explicit_market(monkeypatch):
+    origin = "https://www.ikea.com"
+    pages = [
+        f"{origin}/fr/fr/cat/canapes-10661",
+        f"{origin}/de/de/cat/sofas-fu003",
+        f"{origin}/us/en/p/billy-bookcase-00263850",
+    ]
+    responses = {
+        f"{origin}/robots.txt": FakeResponse(status_code=404),
+        f"{origin}/sitemap.xml": FakeResponse(sitemap_xml(pages)),
+    }
+
+    async def fake_safe_get(client, url):
+        return responses.get(url, FakeResponse(status_code=404))
+
+    monkeypatch.setattr(sitemap, "safe_get", fake_safe_get)
+    scope = {}
+    urls = asyncio.run(load_sitemap_urls(object(), origin, "/", 20, [], scope_evidence=scope))
+
+    assert urls == []
+    assert scope["multimarket_detected"] is True
+    assert scope["market_scope_required"] is True
+    assert scope["sitemap_urls_excluded_outside_scope"] == 3

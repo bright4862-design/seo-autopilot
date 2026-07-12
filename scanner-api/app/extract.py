@@ -5,6 +5,8 @@ from urllib.parse import urljoin, urldefrag, urlparse
 
 from bs4 import BeautifulSoup
 
+from .market_scope import strip_market_locale_prefix
+
 
 def clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", unescape(str(value or ""))).strip()
@@ -241,47 +243,48 @@ def classify_template(
     """Classify structural templates first, then use article schema to break broad keyword ties."""
     p = str(path or "").lower()
     clean = p.split("?")[0].split("#")[0].rstrip("/") or "/"
-    if clean in ("", "/") or clean.count("/") == 0:
+    localized = strip_market_locale_prefix(clean).rstrip("/") or "/"
+    if localized in ("", "/") or localized.count("/") == 0:
         return "homepage"
     if is_route_boundary(p):
         return "route_boundary"
     if any(x in p for x in ["/tag/", "/author/", "/archive/"]) or re.search(r"/page/\d+(/|$)", p):
         return "archive"
-    if is_support_content_path(clean):
+    if is_support_content_path(localized):
         return "guide_article"
-    if re.search(r"^(/[a-z]{2}(-[a-z]{2})?)?/(category|categorie|catégorie|categories|theme|thème|collection|collections|marque|brand|univers)(/|$)", clean):
+    if re.search(r"^/(category|categorie|catégorie|categories|cat|theme|thème|collection|collections|marque|brand|univers)(/|$)", localized):
         return "collection_page"
-    if re.search(r"/annonce/.*?/voir|/annonce/|/activite|/activité|/activity|/experience|/expérience|/atelier|/stage/|/pilotage", p):
+    if re.search(r"/annonce/.*?/voir|/annonce/|/activite|/activité|/activity|/experience|/expérience|/atelier|/stage/|/pilotage", localized):
         return "activity_detail"
-    if is_legal_page_path(clean):
+    if is_legal_page_path(localized):
         return "legal_info"
 
     # Strong structural routes win even when their pages also publish Article schema.
-    if STRONG_LOAN_PATH_RE.search(clean):
+    if STRONG_LOAN_PATH_RE.search(localized):
         return "loan_program"
-    if re.search(r"/apply-now|/apply(?:/|$)|/request-a-payoff|/document-exchange|/souscription|/devis|/quote|/signup|/demo|/contact-sales", p):
+    if re.search(r"/apply-now|/apply(?:/|$)|/request-a-payoff|/document-exchange|/souscription|/devis|/quote|/signup|/demo|/contact-sales", localized):
         return "conversion"
-    if re.search(r"/comparateur|/compare|/comparer|/versus|/vs-", p):
+    if re.search(r"/comparateur|/compare|/comparer|/versus|/vs-", localized):
         return "comparison_page"
-    if re.search(r"/products?/|/produit/|/p/", p):
+    if re.search(r"/products?/|/produit/|/p/", localized):
         return "product_page"
-    if re.search(r"/collections?/|/category/|/categorie/|/catégorie/|/marque/|/brand/|listing", p):
+    if re.search(r"/collections?/|/category/|/categorie/|/catégorie/|/cat/|/marque/|/brand/|listing", localized):
         return "collection_page"
-    if re.search(r"/locations?/|/agence|/ville/|/region/|/store-locator", p):
+    if re.search(r"/locations?/|/agence|/ville/|/region/|/store-locator", localized):
         return "location_landing"
-    if re.search(r"(^|/)(contact|nous-contacter|contactez-nous)(/|$)", clean):
+    if re.search(r"(^|/)(contact|contact-us|nous-contacter|contactez-nous)(/|$)", localized):
         return "contact"
 
     # Article/NewsArticle is stronger evidence than incidental commercial words in a long editorial slug.
     if has_article_schema(schema_types):
         return "guide_article"
-    if BROAD_LOAN_SEGMENT_RE.search(clean):
+    if BROAD_LOAN_SEGMENT_RE.search(localized):
         return "loan_program"
-    if re.search(r"/calcul|/calculator|/simulateur|/simulation", p):
+    if re.search(r"/calcul|/calculator|/simulateur|/simulation", localized):
         return "calculator"
-    if BOOKING_SEGMENT_RE.search(clean) or re.search(r"ticket[_-]order|gift[_-]voucher", clean):
+    if BOOKING_SEGMENT_RE.search(localized) or re.search(r"ticket[_-]order|gift[_-]voucher", localized):
         return "booking_or_checkout"
-    if any(x in p for x in ["guide", "blog", "article", "conseils", "actualites", "/faq", "question"]):
+    if any(x in localized for x in ["guide", "blog", "article", "conseils", "actualites", "/faq", "question"]):
         return "guide_article"
     return "standard"
 

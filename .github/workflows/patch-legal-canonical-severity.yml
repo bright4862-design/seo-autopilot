@@ -1,0 +1,56 @@
+name: Patch legal canonical severity
+
+on:
+  push:
+    branches:
+      - agent/demote-legal-canonical-severity
+    paths:
+      - .github/scripts/patch_legal_canonical_severity.py
+      - .github/workflows/patch-legal-canonical-severity.yml
+      - .github/patch-legal-canonical-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/demote-legal-canonical-severity
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install scanner dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scanner-api/requirements.txt pytest
+
+      - name: Apply guarded patch
+        run: python .github/scripts/patch_legal_canonical_severity.py
+
+      - name: Run focused calibration regressions
+        run: pytest -q scanner-api/tests/test_review_calibration.py
+
+      - name: Run full scanner suite
+        run: pytest -q scanner-api/tests
+
+      - name: Remove temporary patch machinery
+        run: |
+          rm -f .github/scripts/patch_legal_canonical_severity.py
+          rm -f .github/workflows/patch-legal-canonical-severity.yml
+          rm -f .github/patch-legal-canonical-trigger
+
+      - name: Commit validated patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scanner-api/app/review_calibration.py scanner-api/tests/test_review_calibration.py .github
+          git commit -m "Demote legal-page canonical cleanup to medium" || exit 0
+          git push origin HEAD:agent/demote-legal-canonical-severity

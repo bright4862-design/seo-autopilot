@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from .indexability_postprocess import apply_indexability_quality_to_result
 from .indexability_quality import INDEXABILITY_QUALITY_VERSION
+from .navigation_indexability import NAVIGATION_INDEXABILITY_VERSION
 from .review import REVIEW_VERSION, run_review
 from .review_calibration import CALIBRATION_VERSION, apply_review_evidence_calibration
 from .scanner import VERSION, run_scan
@@ -32,6 +33,7 @@ def health():
         "review_version": REVIEW_VERSION,
         "review_evidence_calibration_version": CALIBRATION_VERSION,
         "indexability_quality_version": INDEXABILITY_QUALITY_VERSION,
+        "navigation_indexability_version": NAVIGATION_INDEXABILITY_VERSION,
     }
 
 

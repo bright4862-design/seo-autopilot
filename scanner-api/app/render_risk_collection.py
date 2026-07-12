@@ -7,7 +7,12 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .render_risk_study import VALID_EVIDENCE_STATES, VALID_STRATA, normalize_record
+from .render_risk_study import (
+    VALID_EVIDENCE_STATES,
+    VALID_MANUAL_VERDICTS,
+    VALID_STRATA,
+    normalize_record,
+)
 
 
 Sleep = Callable[[float], Awaitable[None]]
@@ -35,6 +40,11 @@ def normalize_manifest_record(record: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("scan_mode must be basic, quick, deep, or advanced")
 
     manual_verdict = str(record.get("manual_js_disabled_verdict") or "not_reviewed").strip().lower()
+    if manual_verdict not in VALID_MANUAL_VERDICTS:
+        raise ValueError(
+            f"manual_js_disabled_verdict must be one of {sorted(VALID_MANUAL_VERDICTS)}"
+        )
+
     normalized = {
         **record,
         "site": site,

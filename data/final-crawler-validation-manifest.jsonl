@@ -1,0 +1,9 @@
+{"site":"center-street-lending","url":"https://www.centerstreetlending.com","stratum":"smb_cms","scan_mode":"advanced"}
+{"site":"pretto","url":"https://www.pretto.fr","stratum":"smb_cms","scan_mode":"advanced"}
+{"site":"wpbeginner","url":"https://www.wpbeginner.com","stratum":"smb_cms","scan_mode":"advanced"}
+{"site":"intercom","url":"https://www.intercom.com","stratum":"saas_js","scan_mode":"advanced"}
+{"site":"webflow","url":"https://webflow.com","stratum":"saas_js","scan_mode":"advanced"}
+{"site":"zapier","url":"https://zapier.com","stratum":"saas_js","scan_mode":"advanced"}
+{"site":"funbooker","url":"https://www.funbooker.com/fr/","stratum":"ecommerce_marketplace","scan_mode":"advanced"}
+{"site":"allbirds","url":"https://www.allbirds.com","stratum":"ecommerce_marketplace","scan_mode":"advanced"}
+{"site":"sephora","url":"https://www.sephora.com","stratum":"ecommerce_marketplace","scan_mode":"advanced"}

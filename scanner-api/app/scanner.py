@@ -300,7 +300,15 @@ async def fetch_and_extract(client: httpx.AsyncClient, url: str, discovery: dict
             return extract_page("", url, url, 0, "", discovery, fetch_error="blocked_non_public_redirect")
         content_type = response.headers.get("content-type", "")
         html = response.text if "html" in content_type or "xml" in content_type or not content_type else ""
-        page = extract_page(html, url, str(response.url), response.status_code, content_type, discovery)
+        page = extract_page(
+            html,
+            url,
+            str(response.url),
+            response.status_code,
+            content_type,
+            discovery,
+            response_headers={"x-robots-tag": response.headers.get_list("x-robots-tag")},
+        )
         page["_html"] = html
         return page
     except Exception as exc:

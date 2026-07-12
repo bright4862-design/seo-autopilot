@@ -6,7 +6,7 @@ on:
       retry_failures:
         description: "Retry sites recorded as failures in the restored study cache"
         required: false
-        default: false
+        default: true
         type: boolean
 
 permissions:
@@ -34,7 +34,12 @@ jobs:
 
       - name: Validate collector regressions
         working-directory: scanner-api
-        run: python -m pytest tests/test_render_risk_collection.py tests/test_render_risk_study.py
+        run: |
+          python -m pytest \
+            tests/test_render_risk_collection.py \
+            tests/test_render_risk_study.py \
+            tests/test_render_evidence_quality.py \
+            tests/test_render_study_state.py
 
       - name: Restore resumable study state
         uses: actions/cache@v4
@@ -49,6 +54,13 @@ jobs:
       - name: Validate balanced manifest
         run: |
           python -c 'import collections,json,pathlib; rows=[json.loads(line) for line in pathlib.Path("data/renderer-risk-study-manifest.jsonl").read_text().splitlines() if line.strip()]; counts=collections.Counter(row["stratum"] for row in rows); assert len(rows)==30, counts; assert counts=={"smb_cms":10,"saas_js":10,"ecommerce_marketplace":10}, counts; assert len({row["site"] for row in rows})==30; print({"sites":len(rows),"strata":dict(counts)})'
+
+      - name: Refresh verdicts and prune insufficient cached evidence
+        run: |
+          python scanner-api/scripts/prepare_render_risk_study_state.py \
+            data/renderer-risk-study-manifest.jsonl \
+            data/renderer-risk-study.jsonl \
+            data/renderer-risk-study.failures.jsonl
 
       - name: Collect scanner-produced render evidence
         id: collect

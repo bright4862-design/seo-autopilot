@@ -131,3 +131,122 @@ def test_verification_only_findings_stay_low_non_scoring_and_do_not_outrank_conf
     assert orphan["non_scoring"] is True
     assert result["health_score"] == 84
     assert result["next_best_step"] == "Add a canonical URL"
+
+
+def test_funbooker_narrow_issues_calibrate_to_needs_work_without_score_noise():
+    body = payload([page("/fr/fr/p/healthy-product", 4, 0)])
+    reviewed = run_review(body)
+    reviewed["recommendations"] = [
+        {
+            "id": "canonical",
+            "fix_id": "canonical",
+            "rule": "canonical_missing",
+            "category": "canonical",
+            "priority": "critical",
+            "overall_priority_score": 76,
+            "affected_pages": ["/fr/page/mentions-legales", "/fr/page/cgu"],
+            "page_count": 2,
+            "page_scope": "family",
+            "page_template_family": "legal_info",
+            "issue_title": "Add canonical URLs to legal info pages",
+        },
+        {
+            "id": "redirect",
+            "fix_id": "redirect",
+            "rule": "sitemap_redirect",
+            "category": "indexability",
+            "priority": "high",
+            "overall_priority_score": 74,
+            "affected_pages": ["/fr"],
+            "page_count": 1,
+            "source_pages": ["/sitemap.xml"],
+            "current_value": "https://example.com/fr → https://example.com/fr/ — destination HTTP 200 — destination: Indexable",
+            "issue_title": "Replace a redirecting URL in the sitemap",
+        },
+        {
+            "id": "meta",
+            "fix_id": "meta",
+            "rule": "missing_meta_description",
+            "category": "meta_description",
+            "priority": "high",
+            "overall_priority_score": 69,
+            "affected_pages": ["/fr/annonce/example/voir"],
+            "page_count": 1,
+            "issue_title": "Add a meta description to the affected page",
+        },
+        {
+            "id": "h1",
+            "fix_id": "h1",
+            "rule": "missing_h1",
+            "category": "thin_content",
+            "priority": "medium",
+            "overall_priority_score": 56,
+            "affected_pages": ["/fr/review/page"],
+            "page_count": 1,
+            "issue_title": "Add an H1 to the affected page",
+        },
+        {
+            "id": "orphan",
+            "fix_id": "orphan",
+            "rule": "potential_orphan_pages",
+            "category": "indexability",
+            "priority": "critical",
+            "overall_priority_score": 94,
+            "affected_pages": [f"/fr/item-{index}" for index in range(121)],
+            "evidence_status": "needs_verification",
+            "verification_state": "needs_verification",
+            "limitation_code": "sampled_crawl_cannot_prove_orphan",
+            "issue_title": "Verify sitemap-only pages are internally linked",
+        },
+    ]
+
+    result = apply_review_evidence_calibration(reviewed, body)
+    priorities = {fix["rule"]: fix["priority"] for fix in result["recommendations"]}
+
+    assert priorities["canonical_missing"] == "high"
+    assert priorities["sitemap_redirect"] == "medium"
+    assert priorities["missing_meta_description"] == "medium"
+    assert priorities["missing_h1"] == "medium"
+    assert priorities["potential_orphan_pages"] == "low"
+    assert result["health_score"] == 72
+    assert result["health_grade"] == "Needs work"
+    assert result["next_best_step"] == "Add canonical URLs to legal info pages"
+    assert result["review_evidence_calibration_version"] == "review_evidence_calibration_v3_narrow_scope_severity"
+
+
+def test_widespread_canonical_and_unsafe_redirect_evidence_are_not_demoted():
+    body = payload([page("/fr/fr/p/healthy-product", 4, 0)])
+    reviewed = run_review(body)
+    reviewed["recommendations"] = [
+        {
+            "id": "canonical-sitewide",
+            "fix_id": "canonical-sitewide",
+            "rule": "canonical_missing",
+            "category": "canonical",
+            "priority": "critical",
+            "overall_priority_score": 95,
+            "affected_pages": [f"/product-{index}" for index in range(20)],
+            "page_count": 20,
+            "page_scope": "sitewide",
+            "issue_title": "Fix sitewide missing canonicals",
+        },
+        {
+            "id": "redirect-loop",
+            "fix_id": "redirect-loop",
+            "rule": "sitemap_redirect",
+            "category": "indexability",
+            "priority": "critical",
+            "overall_priority_score": 92,
+            "affected_pages": ["/loop"],
+            "page_count": 1,
+            "redirect_state": "loop",
+            "current_value": "Redirect loop detected before a final destination",
+            "issue_title": "Fix a sitemap redirect loop",
+        },
+    ]
+
+    result = apply_review_evidence_calibration(reviewed, body)
+    priorities = {fix["rule"] + fix["id"]: fix["priority"] for fix in result["recommendations"]}
+
+    assert priorities["canonical_missingcanonical-sitewide"] == "critical"
+    assert priorities["sitemap_redirectredirect-loop"] == "critical"

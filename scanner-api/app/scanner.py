@@ -336,6 +336,26 @@ def build_findings(pages: list[dict]) -> list[dict]:
         path = page.get("path") or "/"
         if page.get("url_confidence") == "crawler_artifact":
             continue
+        if sitemap_indexability_conflict(page):
+            findings.append(create_finding(
+                rule="sitemap_indexability_conflict",
+                category="indexability",
+                priority="medium",
+                title="Remove non-indexable URLs from the sitemap",
+                page_url=path,
+                current_value=str(page.get("indexability_state") or "Not indexable"),
+                explanation=(
+                    "This URL was explicitly listed in a sitemap but the scanner found a "
+                    "noindex directive or a Googlebot robots.txt block."
+                ),
+                recommendation=(
+                    "Remove the URL from the sitemap unless it should be indexable. If it should "
+                    "be indexed, resolve the noindex or Googlebot block first."
+                ),
+                difficulty="developer",
+                source_pages=page.get("source_pages", []),
+                link_text_samples=page.get("link_text_samples", []),
+            ))
         if str(page.get("fetch_error") or "").startswith("blocked_"):
             continue
         status_code = int(page.get("status_code") or 0)
@@ -368,6 +388,15 @@ def build_findings(pages: list[dict]) -> list[dict]:
         if missing_alt > 0:
             findings.append(create_finding("image_alt_text", "image_alt_text", "medium" if missing_alt >= 10 else "low", "Add useful image descriptions", path, current_value=f"{missing_alt} images missing alt text", explanation="Some meaningful images may not have text descriptions.", recommendation="Add short, specific alt text to meaningful images."))
     return findings
+
+
+def sitemap_indexability_conflict(page: dict) -> bool:
+    if "sitemap" not in set(page.get("discovered_from") or []):
+        return False
+    return str(page.get("indexability_state") or "") in {
+        "Noindexed",
+        "Blocked by robots.txt",
+    }
 
 
 def create_finding(rule: str, category: str, priority: str, title: str, page_url: str, current_value: str = "", explanation: str = "", recommendation: str = "", difficulty: str = "easy", source_pages: list[str] | None = None, link_text_samples: list[str] | None = None) -> dict:
@@ -406,7 +435,7 @@ def create_finding(rule: str, category: str, priority: str, title: str, page_url
 
 
 FAILURE_RULES = {"rate_limited_page", "failed_page", "server_error", "404_error", "410_error"}
-TEMPLATE_RULES = {"client_rendering", "canonical_missing", "schema", "missing_h1", "multiple_h1", "image_alt_text", "missing_meta_description"}
+TEMPLATE_RULES = {"client_rendering", "canonical_missing", "schema", "missing_h1", "multiple_h1", "image_alt_text", "missing_meta_description", "sitemap_indexability_conflict"}
 GROUP_MIN_AFFECTED = 3
 
 
@@ -436,6 +465,8 @@ def group_template_title(rule: str, family: str) -> str:
         return f"Batch page headings on {fam} pages"
     if rule == "canonical_missing":
         return f"Add canonical URLs across {fam} templates"
+    if rule == "sitemap_indexability_conflict":
+        return "Remove non-indexable URLs from the sitemap"
     return f"Fix repeated {fam} template issue"
 
 

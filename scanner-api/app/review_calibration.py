@@ -6,9 +6,14 @@ from urllib.parse import urlparse
 
 from .review import compute_health_score, group_page_recommendations, unwrap_scan_payload
 
-CALIBRATION_VERSION = "review_evidence_calibration_v1"
+CALIBRATION_VERSION = "review_evidence_calibration_v2_verification_only"
 IMAGE_ALT_EVIDENCE_VERSION = "material_image_alt_v1"
 IMAGE_ALT_RULES = {"image_alt_text", "missing_image_alt"}
+VERIFICATION_ONLY_RULES = {"potential_orphan_pages", "indexable_faceted_navigation"}
+VERIFICATION_ONLY_LIMITATION_CODES = {
+    "sampled_crawl_cannot_prove_orphan",
+    "faceted_navigation_requires_strategy_review",
+}
 
 
 def _int(value: Any) -> int:
@@ -142,6 +147,36 @@ def _calibrate_image_alt_fix(fix: dict[str, Any], evidence: dict[str, dict[str, 
     return calibrated
 
 
+def _is_verification_only_fix(fix: dict[str, Any]) -> bool:
+    rule = str(fix.get("rule") or "")
+    limitation_code = str(fix.get("limitation_code") or "")
+    return bool(
+        fix.get("non_scoring") is True
+        or rule in VERIFICATION_ONLY_RULES
+        or limitation_code in VERIFICATION_ONLY_LIMITATION_CODES
+    )
+
+
+def _calibrate_verification_only_fix(fix: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **fix,
+        "priority": "low",
+        "overall_priority_score": min(39, _int(fix.get("overall_priority_score")) or 39),
+        "score_impact": 0,
+        "non_scoring": True,
+        "evidence_status": fix.get("evidence_status") or "needs_verification",
+        "verification_state": fix.get("verification_state") or "needs_verification",
+    }
+
+
+def _fix_sort_key(fix: dict[str, Any]) -> tuple[int, int]:
+    priority_score = {"critical": 4, "high": 3, "medium": 2, "low": 1}.get(
+        str(fix.get("priority") or ""),
+        0,
+    )
+    return (priority_score, _int(fix.get("overall_priority_score")))
+
+
 def _health_grade(score: int, scan_status: str) -> str:
     if scan_status == "blocked_or_incomplete":
         return "Blocked / incomplete"
@@ -175,12 +210,17 @@ def apply_review_evidence_calibration(result: dict[str, Any], payload: dict[str,
             item = _calibrate_image_alt_fix(item, evidence)
             if item is None:
                 continue
+        if _is_verification_only_fix(item):
+            item = _calibrate_verification_only_fix(item)
         fixes.append(item)
+
+    fixes = sorted(fixes, key=_fix_sort_key, reverse=True)
+    scoring_fixes = [item for item in fixes if not _is_verification_only_fix(item)]
 
     fingerprint = calibrated_result.get("site_fingerprint")
     if not isinstance(fingerprint, dict):
         fingerprint = {}
-    score = compute_health_score(fixes, fingerprint) if fingerprint else _int(calibrated_result.get("health_score"))
+    score = compute_health_score(scoring_fixes, fingerprint) if fingerprint else _int(calibrated_result.get("health_score"))
     score = max(0, min(100, score))
 
     for key in ("recommended_actions", "cleaned_fixes", "raw_fixes", "fixes", "findings", "recommendations"):

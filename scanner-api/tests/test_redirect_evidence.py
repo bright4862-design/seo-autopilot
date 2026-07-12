@@ -65,6 +65,23 @@ async def test_single_redirect_preserves_source_and_destination_indexability(mon
 
 
 @pytest.mark.asyncio
+async def test_trailing_slash_redirect_is_not_mislabeled_as_a_loop(monkeypatch):
+    monkeypatch.setattr("app.redirect_validation.is_public_http_url", lambda _url: True)
+    client = FakeClient({
+        "https://example.com/fr": _response("https://example.com/fr", 301, location="/fr/"),
+        "https://example.com/fr/": _response("https://example.com/fr/", 200),
+    })
+    policy = RobotsPolicy("https://example.com/robots.txt", "missing", 404)
+
+    page = await fetch_and_extract(client, "https://example.com/fr", DISCOVERY_SITEMAP, robots_policy=policy)
+
+    assert client.calls == ["https://example.com/fr", "https://example.com/fr/"]
+    assert page["redirect_state"] == "single_redirect"
+    assert page["redirect_chain"] == ["https://example.com/fr", "https://example.com/fr/"]
+    assert page["redirect_destination_url"] == "https://example.com/fr/"
+
+
+@pytest.mark.asyncio
 async def test_redirect_chain_and_loop_are_explicit(monkeypatch):
     monkeypatch.setattr("app.redirect_validation.is_public_http_url", lambda _url: True)
     policy = RobotsPolicy("https://example.com/robots.txt", "missing", 404)

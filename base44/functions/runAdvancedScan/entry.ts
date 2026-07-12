@@ -6,7 +6,15 @@ const DENO_FALLBACK_PROFILE = "deno_screaming_frog_lite_fallback_v21";
 const CORS_HEADERS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
 const USER_AGENT = "Mozilla/5.0 (compatible; FixListBot/2.1; +https://base44.app)";
 const FETCH_TIMEOUT_MS = 12000;
-const PYTHON_TIMEOUT_MS = 120000;
+const FUNCTION_RESPONSE_BUDGET_MS = 95000;
+const RESPONSE_RESERVE_MS = 4000;
+const MIN_FALLBACK_CRAWL_MS = 5000;
+const PYTHON_TIMEOUTS_MS = {
+  basic: 45000,
+  quick: 55000,
+  deep: 70000,
+  advanced: 85000,
+};
 const MAX_BODY_CHARS = 1_500_000;
 const MAX_SITEMAP_FETCHES = 12;
 const MAX_ARTIFACT_EVIDENCE = 100;
@@ -22,6 +30,7 @@ const ROUTE_SEGMENTS = ["/login", "/register", "/account", "/my-account", "/dash
 const HARD_SKIP = ["/logout", "/search", "/feed", "/rss", "/wp-admin", "/wp-json", "/preview"];
 
 Deno.serve(async (req) => {
+  const functionStartedAt = Date.now();
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
   if (req.method !== "POST") return jsonResponse({ success: false, version: VERSION, error: "Method not allowed" }, 405);
 
@@ -41,12 +50,34 @@ Deno.serve(async (req) => {
 
     const pathPrefix = body.path_prefix || body.requested_path_prefix || body.crawl_path_prefix || "";
     const scanMode = body.scan_mode || body.audit_profile || "advanced";
-    const pythonAttempt = await tryPythonScanner({ body, websiteUrl, pathPrefix, scanMode });
+    const pythonTimeoutMs = resolvePythonTimeout(scanMode);
+    const pythonAttempt = await tryPythonScanner({ body, websiteUrl, pathPrefix, scanMode, timeoutMs: pythonTimeoutMs });
     if (pythonAttempt.ok) return jsonResponse(toPythonAdvancedScanResponse(pythonAttempt.result, scanMode));
 
-    const invokeLLM = typeof base44.integrations?.Core?.InvokeLLM === "function" ? async (prompt) => await base44.integrations.Core.InvokeLLM({ prompt }) : null;
     const fallbackReason = pythonAttempt.reason || "Python scanner unavailable; used Deno fallback.";
-    const crawlResult = await crawlWebsite({ startUrl: websiteUrl, budget, pathPrefix, invokeLLM });
+    const remainingMs = FUNCTION_RESPONSE_BUDGET_MS - (Date.now() - functionStartedAt);
+    if (remainingMs < MIN_FALLBACK_CRAWL_MS + RESPONSE_RESERVE_MS) {
+      return jsonResponse({
+        success: false,
+        version: VERSION,
+        error: "The Python scanner did not finish in time and there was not enough request time left for a safe fallback scan. Please retry with Quick check.",
+        detail: fallbackReason,
+        retryable: true,
+        scanner_api_url_configured: pythonAttempt.configured,
+        elapsed_ms: Date.now() - functionStartedAt,
+      }, 503);
+    }
+
+    const fallbackBudget = {
+      ...budget,
+      crawl_timeout_ms: Math.min(
+        budget.crawl_timeout_ms,
+        Math.max(MIN_FALLBACK_CRAWL_MS, remainingMs - RESPONSE_RESERVE_MS),
+      ),
+      derive_policy: Boolean(budget.derive_policy && remainingMs >= 25000),
+    };
+    const invokeLLM = typeof base44.integrations?.Core?.InvokeLLM === "function" ? async (prompt) => await base44.integrations.Core.InvokeLLM({ prompt }) : null;
+    const crawlResult = await crawlWebsite({ startUrl: websiteUrl, budget: fallbackBudget, pathPrefix, invokeLLM });
     crawlResult.warnings = unique([...(crawlResult.warnings || []), `Python scanner fallback used: ${fallbackReason}`]);
 
     const rawFindings = [...buildFindings(crawlResult.pages, websiteUrl, budget), ...duplicateCasingFindings(crawlResult.pages)];
@@ -116,7 +147,7 @@ Deno.serve(async (req) => {
   }
 });
 
-async function tryPythonScanner({ body, websiteUrl, pathPrefix, scanMode }) {
+async function tryPythonScanner({ body, websiteUrl, pathPrefix, scanMode, timeoutMs }) {
   const scannerUrl = String(Deno.env.get("SCANNER_API_URL") || Deno.env.get("PYTHON_SCANNER_API_URL") || Deno.env.get("PYTHON_SCANNER_URL") || Deno.env.get("SCANNER_URL") || Deno.env.get("cloud_api") || Deno.env.get("CLOUD_API") || "").replace(/\/+$/, "");
   const scannerKey = String(Deno.env.get("SCANNER_API_KEY") || Deno.env.get("PYTHON_SCANNER_API_KEY") || "");
   if (!scannerUrl) return { ok: false, configured: false, reason: "SCANNER_API_URL/cloud_api is not configured." };
@@ -132,7 +163,7 @@ async function tryPythonScanner({ body, websiteUrl, pathPrefix, scanMode }) {
         business_name: body.business_name || body.project_name || "",
         cms_platform: body.cms_platform || body.platform || "",
       }),
-    }, PYTHON_TIMEOUT_MS);
+    }, Math.max(1000, Number(timeoutMs || PYTHON_TIMEOUTS_MS.advanced)));
     const text = await response.text();
     const result = parseJson(text) || { success: false, error: text.slice(0, 400) };
     if (!response.ok) return { ok: false, configured: true, reason: `Python scanner HTTP ${response.status}: ${String(result.detail || result.error || "request failed").slice(0, 180)}` };
@@ -474,7 +505,9 @@ function extractLinkRel(html, rel) { const re = new RegExp(`<link[^>]+rel=["'][^
 function extractImageStats(html) { let total = 0, missingAlt = 0; for (const img of String(html || "").match(/<img\b[^>]*>/gi) || []) { total += 1; if (!/\salt\s*=\s*["'][^"']+["']/i.test(img)) missingAlt += 1; } return { total, missingAlt }; }
 function extractSchemaTypes(html) { const types = new Set(); const re = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi; let m; while ((m = re.exec(String(html || "")))) { try { collectSchemaTypes(JSON.parse(m[1]), types); } catch {} } return Array.from(types).slice(0, 20); }
 function collectSchemaTypes(value, types) { if (!value) return; if (Array.isArray(value)) return value.forEach((x) => collectSchemaTypes(x, types)); if (typeof value === "object") { const type = value["@type"]; if (Array.isArray(type)) type.forEach((x) => types.add(String(x))); else if (type) types.add(String(type)); collectSchemaTypes(value["@graph"], types); } }
-function resolveBudget(body) { const mode = String(body.scan_mode || body.audit_profile || "advanced").toLowerCase(); return MODE_LIMITS[mode] || MODE_LIMITS.advanced; }
+function normalizeScanMode(value) { const mode = String(value || "advanced").toLowerCase(); if (mode === "standard") return "deep"; if (["full", "full_site", "full-site"].includes(mode)) return "advanced"; return mode; }
+function resolvePythonTimeout(scanMode) { const mode = normalizeScanMode(scanMode); return PYTHON_TIMEOUTS_MS[mode] || PYTHON_TIMEOUTS_MS.advanced; }
+function resolveBudget(body) { const mode = normalizeScanMode(body.scan_mode || body.audit_profile || "advanced"); return MODE_LIMITS[mode] || MODE_LIMITS.advanced; }
 function unwrapRequestBody(raw) { if (!raw || typeof raw !== "object") return {}; if (raw.website_url || raw.url || raw.normalized_url || raw.requested_start_url || raw.start_url || raw.target_url) return raw; if (raw.data && typeof raw.data === "object") return raw.data; if (raw.body && typeof raw.body === "object") return raw.body; if (raw.payload && typeof raw.payload === "object") return raw.payload; if (raw.input && typeof raw.input === "object") return raw.input; if (raw.args && typeof raw.args === "object") return raw.args; return raw; }
 async function safeReadJson(req) { try { return await req.json(); } catch { return {}; } }
 function parseJson(text) { try { return JSON.parse(text || "{}"); } catch { return null; } }

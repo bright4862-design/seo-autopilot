@@ -1,3 +1,3 @@
-final-crawler-validation-v2
-requested_at=2026-07-12T16:58:00+02:00
-reason=correct focused redirect regression path and persist diagnostics
+final-crawler-validation-v3
+requested_at=2026-07-12T17:10:00+02:00
+reason=rerun after correcting not_redirected acceptance classification

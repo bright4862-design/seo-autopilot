@@ -105,7 +105,7 @@ def validate_crawler_contract(scan: dict, review: dict) -> dict[str, Any]:
         for page in pages
         if (
             _str(page.get("indexability_state")) == "Redirected"
-            or bool(page.get("redirect_state"))
+            or _str(page.get("redirect_state")) not in {"", "not_redirected"}
             or 300 <= _int(page.get("status_code")) < 400
         )
         and page.get("indexable") is True

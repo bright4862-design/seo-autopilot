@@ -22,6 +22,18 @@ jobs:
           python-version: '3.12'
       - name: Apply patch
         run: python .github/scripts/apply_multimarket_scope.py
+      - name: Preserve localized contact routes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scanner-api/app/extract.py')
+          text = path.read_text()
+          old = 'r"(^|/)(contact|nous-contacter|contactez-nous)(/|$)", localized'
+          new = 'r"(^|/)(contact|contact-us|nous-contacter|contactez-nous)(/|$)", localized'
+          if old not in text:
+              raise SystemExit('localized contact matcher anchor missing')
+          path.write_text(text.replace(old, new, 1))
+          PY
       - name: Install scanner dependencies
         run: pip install -r scanner-api/requirements.txt
       - name: Run focused regressions

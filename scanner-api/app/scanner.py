@@ -8,6 +8,7 @@ import httpx
 
 from .artifact_filter import MAX_ARTIFACT_EVIDENCE, is_artifact_url, record_artifact
 from .extract import classify_template, extract_links, extract_page
+from .market_scope import market_pair_prefix, path_within_scope
 from .sampling import SAMPLING_VERSION, sampling_report, select_balanced_urls
 from .render_followup import RENDER_FOLLOWUP_VERSION, run_render_followup
 from .security import is_public_http_url, safe_get
@@ -52,6 +53,17 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
     parsed_start = urlparse(start_url)
     origin = f"{parsed_start.scheme}://{parsed_start.netloc}"
     prefix = normalize_prefix(path_prefix or parsed_start.path or "/")
+    prefix_source = "explicit_path_prefix" if path_prefix else ("requested_url_path" if prefix != "/" else "origin_root")
+    scope_evidence = {
+        "requested_path_prefix": normalize_prefix(path_prefix or parsed_start.path or "/"),
+        "effective_path_prefix": prefix,
+        "scope_source": prefix_source,
+        "multimarket_detected": False,
+        "market_scope_required": False,
+        "market_prefixes_detected": [],
+        "sitemap_urls_excluded_outside_scope": 0,
+        "internal_urls_excluded_outside_scope": 0,
+    }
 
     pages: list[dict] = []
     queue: list[str] = []
@@ -71,7 +83,14 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
             return
         if not same_origin(clean, origin):
             return
-        if prefix and prefix != "/" and not (urlparse(clean).path or "/").startswith(prefix):
+        clean_path = urlparse(clean).path or "/"
+        if not path_within_scope(clean_path, prefix):
+            if source == "internal_link":
+                scope_evidence["internal_urls_excluded_outside_scope"] += 1
+            return
+        if prefix == "/" and scope_evidence.get("market_scope_required") and market_pair_prefix(clean_path):
+            if source == "internal_link":
+                scope_evidence["internal_urls_excluded_outside_scope"] += 1
             return
         if clean in queued or clean in seen:
             merge_discovery(discovery.setdefault(clean, empty_discovery()), source, source_page, link_text)
@@ -87,12 +106,28 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         follow_redirects=False,
         headers={"User-Agent": "Mozilla/5.0 (compatible; FixListPythonScanner/1.0)"},
     ) as client:
+        if not path_prefix and prefix == "/":
+            try:
+                landing = await safe_get(client, start_url)
+                final_landing_url = str(getattr(landing, "url", start_url) or start_url) if landing is not None else start_url
+                redirected_market = market_pair_prefix(final_landing_url)
+                if redirected_market:
+                    prefix = redirected_market
+                    scope_evidence["effective_path_prefix"] = prefix
+                    scope_evidence["scope_source"] = "redirect_market_path"
+            except Exception:
+                pass
+
         max_pages = budget["max_pages"]
-        sitemap_urls = await load_sitemap_urls(client, origin, prefix, SITEMAP_DISCOVERY_LIMIT, artifacts)
+        sitemap_urls = await load_sitemap_urls(
+            client, origin, prefix, SITEMAP_DISCOVERY_LIMIT, artifacts, scope_evidence=scope_evidence
+        )
         family_of = lambda url: classify_template(urlparse(url).path or "/")
         path_of = lambda url: urlparse(url).path or "/"
         sampled_sitemap_urls = select_balanced_urls(sitemap_urls, family_of, path_of, max(0, max_pages - 1))
         sampling_evidence = sampling_report(sitemap_urls, sampled_sitemap_urls, family_of, path_of)
+        scope_evidence["effective_path_prefix"] = prefix
+        sampling_evidence["crawl_scope"] = dict(scope_evidence)
         for url in sampled_sitemap_urls:
             enqueue(url, "sitemap", "/sitemap.xml", "")
 
@@ -168,6 +203,10 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
     render_evidence["browser_followup_version"] = RENDER_FOLLOWUP_VERSION
     render_evidence["browser_followup"] = render_followup
     crawl_warnings = []
+    if scope_evidence.get("market_scope_required"):
+        crawl_warnings.append(
+            "Multiple country/language markets were detected on the global root. Submit one market URL, such as /fr/fr/, for a coherent audit."
+        )
     if render_evidence["evidence_state"] == "material_client_rendering_risk":
         crawl_warnings.append(
             f'{render_evidence["client_rendering_suspected_pages"]} successful pages returned thin app-shell HTML; '
@@ -186,6 +225,8 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         "screaming_frog_lite_enabled": True,
         "website_url": start_url,
         "normalized_url": start_url,
+        "requested_path_prefix": scope_evidence.get("requested_path_prefix", "/"),
+        "crawl_scope": dict(scope_evidence),
         "scan_mode": scan_mode,
         "pages_crawled": len(pages),
         "pages_found": pages_found,
@@ -215,6 +256,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
             "url_evidence_summary": build_evidence_summary(pages, len(artifacts)),
             "crawl_policy": DEFAULT_POLICY,
             "crawl_policy_source": DEFAULT_POLICY["source"],
+            "crawl_scope": dict(scope_evidence),
             "render_evidence_version": RENDER_EVIDENCE_VERSION,
             "render_evidence": render_evidence,
             "duplicate_casing_routes": detect_duplicate_casing_routes(pages),

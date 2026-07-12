@@ -17,7 +17,7 @@
 {"site":"vercel","url":"https://vercel.com","stratum":"saas_js"}
 {"site":"webflow","url":"https://webflow.com","stratum":"saas_js"}
 {"site":"zapier","url":"https://zapier.com","stratum":"saas_js","manual_js_disabled_verdict":"content_sufficient","notes":"JavaScript-disabled source review: the homepage heading, AI automation proposition, product navigation, integrations, feature content, and company links remained available; the isolated /partner/iframe/login path is non-primary."}
-{"site":"gitlab","url":"https://about.gitlab.com","stratum":"saas_js","notes":"Access-only replacement for Miro after insufficient evaluable HTML coverage; selected before viewing renderer evidence."}
+{"site":"monday","url":"https://monday.com","stratum":"saas_js","notes":"Access-only replacement for GitLab after insufficient evaluable HTML coverage; selected before viewing renderer evidence."}
 {"site":"funbooker","url":"https://www.funbooker.com/fr/","stratum":"ecommerce_marketplace","manual_js_disabled_verdict":"content_sufficient","notes":"JavaScript-disabled source review: the activity inventory, categories, gift-card proposition, popular activities, editorial links, and primary navigation remained available."}
 {"site":"bellroy","url":"https://bellroy.com","stratum":"ecommerce_marketplace","notes":"Access-only replacement for Patagonia after insufficient evaluable HTML coverage; selected before viewing renderer evidence."}
 {"site":"cotopaxi","url":"https://www.cotopaxi.com","stratum":"ecommerce_marketplace","notes":"Access-only replacement for REI after insufficient evaluable HTML coverage; selected before viewing renderer evidence."}

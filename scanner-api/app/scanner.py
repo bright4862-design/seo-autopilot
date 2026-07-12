@@ -12,7 +12,7 @@ from .sampling import SAMPLING_VERSION, sampling_report, select_balanced_urls
 from .security import is_public_http_url, safe_get
 from .sitemap import load_sitemap_urls
 
-VERSION = "python_scanner_v2_contract_parity"
+VERSION = "python_scanner_v2_contract_parity"\nRENDER_EVIDENCE_VERSION = "render_evidence_v1"
 
 # The Python crawler does not derive an AI crawl policy (no InvokeLLM here), but it
 # still emits the policy contract so AI Review keeps provenance. source="disabled"
@@ -157,6 +157,13 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
     artifacts = dedupe_artifacts(artifacts)[:MAX_ARTIFACT_EVIDENCE]
     health_score = calculate_health_score(pages, grouped)
     pages_found = max(len(pages), len(pages) + len(queue), len(seen) + len(queue))
+    render_evidence = build_render_evidence(pages)
+    crawl_warnings = []
+    if render_evidence["evidence_state"] == "material_client_rendering_risk":
+        crawl_warnings.append(
+            f'{render_evidence["client_rendering_suspected_pages"]} successful pages returned thin app-shell HTML; '
+            "rendered content may need a browser-based follow-up."
+        )
 
     return {
         "success": True,
@@ -165,6 +172,8 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         "scanner_profile": "python_screaming_frog_lite_v1",
         "sampling_version": SAMPLING_VERSION,
         "sampling_evidence": sampling_evidence,
+        "render_evidence_version": RENDER_EVIDENCE_VERSION,
+        "render_evidence": render_evidence,
         "screaming_frog_lite_enabled": True,
         "website_url": start_url,
         "normalized_url": start_url,
@@ -197,10 +206,37 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
             "url_evidence_summary": build_evidence_summary(pages, len(artifacts)),
             "crawl_policy": DEFAULT_POLICY,
             "crawl_policy_source": DEFAULT_POLICY["source"],
+            "render_evidence_version": RENDER_EVIDENCE_VERSION,
+            "render_evidence": render_evidence,
             "duplicate_casing_routes": detect_duplicate_casing_routes(pages),
             "screaming_frog_lite_enabled": True,
         },
-        "crawl_warnings": [],
+        "crawl_warnings": crawl_warnings,
+    }
+
+
+def build_render_evidence(pages: list[dict]) -> dict:
+    successful = [
+        page for page in pages
+        if 200 <= int(page.get("status_code") or 0) < 400 and not page.get("fetch_error")
+    ]
+    suspected = [page for page in successful if page.get("client_rendering_suspected") is True]
+    evaluated = len(successful)
+    ratio = round(len(suspected) / evaluated, 4) if evaluated else 0.0
+    material = len(suspected) >= 2 and ratio >= 0.2
+    return {
+        "version": RENDER_EVIDENCE_VERSION,
+        "pages_evaluated": evaluated,
+        "client_rendering_suspected_pages": len(suspected),
+        "suspected_ratio": ratio,
+        "evidence_state": "material_client_rendering_risk" if material else (
+            "isolated_client_rendering_signal" if suspected else "raw_html_sufficient"
+        ),
+        "rendering_mode": "browser_follow_up_recommended" if material else "raw_html_first",
+        "representative_pages": [
+            page.get("path") or page.get("final_url") or page.get("url") or "/"
+            for page in suspected[:10]
+        ],
     }
 
 

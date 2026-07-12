@@ -32,21 +32,28 @@ jobs:
           pip install -r scanner-api/requirements.txt
 
       - name: Validate acceptance regressions
+        id: regressions
+        continue-on-error: true
         working-directory: scanner-api
         run: |
+          mkdir -p ../reports
+          set -o pipefail
           python -m pytest \
             tests/test_crawler_acceptance.py \
             tests/test_render_evidence_quality.py \
             tests/test_indexability_quality.py \
             tests/test_navigation_indexability.py \
             tests/test_canonical_target_validation.py \
-            tests/test_redirect_validation.py
+            tests/test_redirect_evidence.py \
+            2>&1 | tee ../reports/final-crawler-validation-tests.log
 
       - name: Validate balanced acceptance manifest
+        if: steps.regressions.outcome == 'success'
         run: |
           python -c 'import collections,json,pathlib; rows=[json.loads(line) for line in pathlib.Path("data/final-crawler-validation-manifest.jsonl").read_text().splitlines() if line.strip()]; counts=collections.Counter(row["stratum"] for row in rows); assert len(rows)==9, counts; assert counts=={"smb_cms":3,"saas_js":3,"ecommerce_marketplace":3}, counts; assert len({row["site"] for row in rows})==9; print({"sites":len(rows),"strata":dict(counts)})'
 
       - name: Run current-source crawler acceptance
+        if: steps.regressions.outcome == 'success'
         id: acceptance
         continue-on-error: true
         run: |
@@ -62,6 +69,8 @@ jobs:
         run: |
           if [ -f reports/final-crawler-validation.md ]; then
             cat reports/final-crawler-validation.md >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${{ steps.regressions.outcome }}" != "success" ]; then
+            echo "Acceptance regressions failed before live scanning. Inspect the uploaded pytest log." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "Final validation report was not generated." >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -78,10 +87,15 @@ jobs:
             data/final-crawler-validation.jsonl
             data/final-crawler-validation.failures.jsonl
             reports/final-crawler-validation.md
+            reports/final-crawler-validation-tests.log
 
       - name: Enforce acceptance result
         if: always()
         run: |
+          if [ "${{ steps.regressions.outcome }}" != "success" ]; then
+            echo "Final crawler acceptance regressions failed. Inspect the uploaded pytest log."
+            exit 1
+          fi
           if [ "${{ steps.acceptance.outcome }}" != "success" ]; then
             echo "Final crawler acceptance did not pass. Inspect the uploaded evidence before patching."
             exit 1

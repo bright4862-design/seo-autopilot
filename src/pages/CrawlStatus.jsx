@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { trackEvent } from "@/lib/analytics";
+import { selectFinalReviewFixes } from "@/lib/reviewContract";
 import ScanWebsiteForm from "@/components/scan/ScanWebsiteForm";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, CheckCircle2, Circle, Loader2 } from "lucide-react";
@@ -15,7 +16,7 @@ import { AlertTriangle, CheckCircle2, Circle, Loader2 } from "lucide-react";
  * - scanWebsite
  * - crawlWebsite
  */
-const SCAN_FUNCTION_NAME = "runRealScan";
+const SCAN_FUNCTION_NAME = "runAdvancedScan";
 
 /**
  * If aiReviewScan does not exist, leave this as-is.
@@ -269,7 +270,10 @@ function mapCrawledPageForStorage(page = {}) {
     h1: page.h1 || "",
     canonical_url: page.canonical_url || page.canonical || "",
     word_count: page.word_count || page.wordCount || 0,
-    indexable: !/noindex/i.test(page.robots_meta || ""),
+    indexable:
+      typeof page.indexable === "boolean"
+        ? page.indexable
+        : !/noindex/i.test(page.robots_meta || ""),
     in_sitemap: Boolean(page.in_sitemap),
     rendered_title: "",
     rendered_meta_description: "",
@@ -400,6 +404,28 @@ function normalizeScore(value, fallback = 80) {
   }
 
   return Math.max(45, Math.min(100, Math.round(number)));
+}
+
+function getAuthoritativeHealthScore(source = {}) {
+  const report = source.website_health_report || {};
+  const summary = source.scan_summary || {};
+  const candidates = [
+    source.health_score,
+    source.seo_score,
+    report.health_score,
+    report.score,
+    summary.health_score,
+    summary.score,
+  ];
+
+  for (const value of candidates) {
+    const number = Number(value);
+    if (Number.isFinite(number) && number >= 0 && number <= 100) {
+      return Math.round(number);
+    }
+  }
+
+  return null;
 }
 
 function computeSimpleHealthScore(fixes, scanData = {}) {
@@ -657,7 +683,7 @@ export default function CrawlStatus() {
           competitor_urls: activeProject.competitor_urls || [],
           scan_mode: scanMode,
         }),
-        scanMode === "deep" ? 90000 : 45000,
+        scanMode === "deep" ? 100000 : 70000,
         "Website scan"
       );
 
@@ -677,6 +703,7 @@ export default function CrawlStatus() {
       const mappedSeoIssues = findingsForMapping.map(mapFindingToSeoIssue);
 
       let finalFixes = mappedSeoIssues;
+      let authoritativeHealthScore = getAuthoritativeHealthScore(scanData);
       let topActions = [];
       let aiSummary = "";
       let positiveFindings = Array.isArray(scanData.site_summary?.positives)
@@ -713,18 +740,22 @@ export default function CrawlStatus() {
       try {
         const aiReviewRes = await withTimeout(
           base44.functions.invoke(AI_REVIEW_FUNCTION_NAME, {
-            business_name: activeProject.business_name,
-            business_type: activeProject.business_type,
-            city: activeProject.city,
-            website_url: activeProject.website_url,
-            crawled_pages: crawledPagesData,
-            raw_fixes: mappedSeoIssues,
-            competitor_results: competitorResultsForReview,
-            discovered_competitors: discoveredCompetitors,
-            scan_mode: scanMode,
-            crawl_warnings: scanData.crawl_warnings || [],
+            scan: {
+              ...scanData,
+              business_name: activeProject.business_name,
+              business_type: activeProject.business_type,
+              city: activeProject.city,
+              website_url: activeProject.website_url,
+              project_id: activeProject.id,
+              crawl_job_id: job.id,
+              crawled_pages: crawledPagesData,
+              competitor_results: competitorResultsForReview,
+              discovered_competitors: discoveredCompetitors,
+              scan_mode: scanMode,
+              crawl_warnings: scanData.crawl_warnings || [],
+            },
           }),
-          30000,
+          125000,
           "AI review"
         );
 
@@ -733,8 +764,17 @@ export default function CrawlStatus() {
           ? aiData.cleaned_fixes
           : [];
 
-        if (aiData.success && aiFixes.length > 0) {
-          finalFixes = aiFixes.map(mapFindingToSeoIssue);
+        if (aiData.success) {
+          finalFixes = selectFinalReviewFixes({
+            aiData,
+            aiFixes,
+            scannerFixes: findingsForMapping,
+            slimFix: mapFindingToSeoIssue,
+          });
+
+          const reviewScore = getAuthoritativeHealthScore(aiData);
+          if (reviewScore !== null) authoritativeHealthScore = reviewScore;
+
           topActions = Array.isArray(aiData.top_recommended_actions)
             ? aiData.top_recommended_actions
             : [];
@@ -756,9 +796,6 @@ export default function CrawlStatus() {
         finalFixes = mappedSeoIssues;
       }
 
-      if (mappedSeoIssues.length > 0 && finalFixes.length === 0) {
-        finalFixes = mappedSeoIssues;
-      }
 
       progressRunIdRef.current = 0;
 
@@ -768,7 +805,9 @@ export default function CrawlStatus() {
           : crawledPagesData.length;
 
       const finalSummary = summarizeFixes(finalFixes);
-      const finalHealthScore = computeSimpleHealthScore(finalFixes, scanData);
+      const finalHealthScore =
+        authoritativeHealthScore ??
+        computeSimpleHealthScore(finalFixes, scanData);
 
       if (crawledPagesData.length > 0) {
         await base44.entities.CrawledPage.bulkCreate(

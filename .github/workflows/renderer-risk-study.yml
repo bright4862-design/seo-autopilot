@@ -1,6 +1,11 @@
 name: Renderer-risk study
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - data/renderer-risk-study-trigger
   workflow_dispatch:
     inputs:
       retry_failures:
@@ -70,7 +75,7 @@ jobs:
           SCANNER_API_KEY: ${{ secrets.SCANNER_API_KEY }}
         run: |
           retry_args=()
-          if [ "${{ inputs.retry_failures }}" = "true" ]; then
+          if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.retry_failures }}" = "true" ]; then
             retry_args+=(--retry-failures)
           fi
           python scanner-api/scripts/collect_render_risk_study.py \
@@ -80,6 +85,14 @@ jobs:
             --concurrency 1 \
             --timeout 240 \
             "${retry_args[@]}"
+
+      - name: Revalidate collected evidence
+        if: always()
+        run: |
+          python scanner-api/scripts/prepare_render_risk_study_state.py \
+            data/renderer-risk-study-manifest.jsonl \
+            data/renderer-risk-study.jsonl \
+            data/renderer-risk-study.failures.jsonl
 
       - name: Generate current decision report
         if: always()

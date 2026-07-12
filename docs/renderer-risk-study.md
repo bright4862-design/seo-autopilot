@@ -58,9 +58,44 @@ The study tool applies these rules only after detector calibration and a complet
 
 Do not change these thresholds after viewing the study results.
 
-## JSONL record format
+## Study manifest
 
-Store one JSON object per line:
+Create one JSON object per site with a stable site identifier, the scan URL, and the stratum:
+
+```json
+{"site":"example-saas","url":"https://example.com/app","stratum":"saas_js"}
+```
+
+Optional fields are `path_prefix`, `scan_mode`, `manual_js_disabled_verdict`, and `notes`.
+
+## Collect scanner evidence
+
+Use the Python Cloud Run scanner directly so the Base44 request deadline and Deno fallback cannot contaminate the detector measurement.
+
+```bash
+export SCANNER_API_URL="https://your-python-scanner.run.app"
+export SCANNER_API_KEY="your-scanner-key"
+
+python scanner-api/scripts/collect_render_risk_study.py \
+  data/renderer-risk-study-manifest.jsonl \
+  data/renderer-risk-study.jsonl \
+  --attempts 2 \
+  --concurrency 1
+```
+
+The collector:
+
+- copies `render_evidence` directly from the scanner response;
+- retries transient HTTP 429 and 5xx responses;
+- resumes sites already written to the success file;
+- writes failed scans to `data/renderer-risk-study.failures.jsonl`;
+- never converts a failed or invalid scan into `raw_html_sufficient`.
+
+After correcting a deployment or service failure, rerun with `--retry-failures`.
+
+## JSONL study record format
+
+The success file contains one JSON object per completed scan:
 
 ```json
 {"site":"example-saas","stratum":"saas_js","render_evidence":{"pages_evaluated":30,"client_rendering_suspected_pages":8,"evidence_state":"material_client_rendering_risk"},"manual_js_disabled_verdict":"material_content_missing","notes":"Product dashboard copy disappeared without JavaScript."}

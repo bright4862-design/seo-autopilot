@@ -1,0 +1,44 @@
+name: Apply IKEA evidence calibration
+
+on:
+  push:
+    branches: [agent/ikea-evidence-calibration]
+    paths:
+      - tools/apply_ikea_evidence_patch.py
+      - .github/workflows/apply-ikea-evidence-calibration.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/ikea-evidence-calibration
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apply evidence calibration patch
+        run: python tools/apply_ikea_evidence_patch.py
+      - name: Install scanner dependencies
+        run: |
+          python -m pip install --upgrade pip pytest pytest-asyncio
+          pip install -r scanner-api/requirements.txt
+      - name: Run focused IKEA calibration regressions
+        working-directory: scanner-api
+        run: pytest tests/test_review_ikea_calibration.py
+      - name: Run full scanner API suite
+        working-directory: scanner-api
+        run: pytest tests/
+      - name: Commit final product patch
+        run: |
+          rm tools/apply_ikea_evidence_patch.py
+          rm .github/workflows/apply-ikea-evidence-calibration.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scanner-api/app/review.py scanner-api/tests/test_review_ikea_calibration.py tools/apply_ikea_evidence_patch.py .github/workflows/apply-ikea-evidence-calibration.yml
+          git commit -m "Calibrate image-alt evidence and score summaries"
+          git push origin HEAD:agent/ikea-evidence-calibration

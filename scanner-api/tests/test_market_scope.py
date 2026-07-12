@@ -6,6 +6,8 @@ def test_scope_prefix_is_segment_bounded():
     assert path_within_scope("/fr", "/fr")
     assert path_within_scope("/fr/page", "/fr")
     assert not path_within_scope("/france/page", "/fr")
+    assert path_within_scope("/fr/fr/cat/canapes-10661", "/fr/fr")
+    assert not path_within_scope("/fr/france/cat/canapes-10661", "/fr/fr")
 
 
 def test_market_pair_and_locale_stripping():

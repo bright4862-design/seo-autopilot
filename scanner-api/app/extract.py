@@ -1,6 +1,7 @@
 import json
 import re
 from html import unescape
+from typing import Any, Mapping
 from urllib.parse import urljoin, urldefrag, urlparse
 
 from bs4 import BeautifulSoup
@@ -18,6 +19,17 @@ APP_SHELL_MARKERS = (
     ("next_root", re.compile(r"<[^>]+\bid\s*=\s*(['\"])__next\1", re.I)),
     ("nuxt_root", re.compile(r"<[^>]+\bid\s*=\s*(['\"])__nuxt\1", re.I)),
 )
+
+CRAWLER_ROBOTS_NAMES = {
+    "googlebot",
+    "googlebot-news",
+    "googlebot-image",
+    "bingbot",
+    "slurp",
+    "yandex",
+    "baiduspider",
+    "duckduckbot",
+}
 
 
 def client_rendering_signals(html: str, status_code: int, word_count: int) -> list[str]:
@@ -68,7 +80,16 @@ def extract_schema_types(soup: BeautifulSoup) -> list[str]:
     return sorted(types)[:25]
 
 
-def extract_page(html: str, url: str, final_url: str, status_code: int, content_type: str, discovery: dict, fetch_error: str = "") -> dict:
+def extract_page(
+    html: str,
+    url: str,
+    final_url: str,
+    status_code: int,
+    content_type: str,
+    discovery: dict,
+    fetch_error: str = "",
+    response_headers: Mapping[str, Any] | None = None,
+) -> dict:
     soup = BeautifulSoup(html or "", "lxml")
     title = clean_text(soup.title.string if soup.title else "")
     meta_description = ""
@@ -79,9 +100,18 @@ def extract_page(html: str, url: str, final_url: str, status_code: int, content_
     if meta_desc:
         meta_description = clean_text(meta_desc.get("content", ""))
 
-    meta_robots = soup.find("meta", attrs={"name": re.compile("^robots$", re.I)})
-    if meta_robots:
-        robots = clean_text(meta_robots.get("content", ""))
+    meta_directives: dict[str, list[str]] = {}
+    for meta in soup.find_all("meta", attrs={"name": True}):
+        name = clean_text(meta.get("name", "")).lower()
+        if name != "robots" and name not in CRAWLER_ROBOTS_NAMES:
+            continue
+        directives = parse_robots_directives(meta.get("content", ""))
+        if directives:
+            meta_directives[name] = merge_directives(meta_directives.get(name, []), directives)
+    robots = ", ".join(meta_directives.get("robots", []))
+
+    x_robots_values = header_values(response_headers, "x-robots-tag")
+    x_robots_directives = parse_x_robots_tag(x_robots_values)
 
     canonical_tag = soup.find("link", attrs={"rel": lambda value: value and "canonical" in str(value).lower()})
     if canonical_tag:
@@ -96,7 +126,15 @@ def extract_page(html: str, url: str, final_url: str, status_code: int, content_
     parsed = urlparse(final_url or url)
     path = parsed.path or "/"
 
-    indexable = 200 <= status_code < 400 and "noindex" not in robots.lower()
+    effective_search_directives = merge_directives(
+        meta_directives.get("robots", []),
+        meta_directives.get("googlebot", []),
+        x_robots_directives.get("robots", []),
+        x_robots_directives.get("googlebot", []),
+    )
+    noindexed = "noindex" in effective_search_directives or "none" in effective_search_directives
+    indexable = 200 <= status_code < 300 and not fetch_error and not noindexed
+    indexability_state = classify_indexability_state(status_code, fetch_error, noindexed)
     page_template_family = classify_template(path, title, h1s[0] if h1s else "", schema_types)
 
     rendering_signals = client_rendering_signals(html, status_code, word_count)
@@ -124,7 +162,16 @@ def extract_page(html: str, url: str, final_url: str, status_code: int, content_
         "canonical_status": "self_or_equivalent" if canonical and same_path(final_url or url, canonical) else ("missing" if not canonical else "canonical_to_different_url"),
         "robots": robots,
         "robots_meta": robots,
-        "robots_indexability_status": "indexable" if indexable else "not_indexable",
+        "robots_meta_directives": meta_directives,
+        "googlebot_robots": ", ".join(meta_directives.get("googlebot", [])),
+        "crawler_specific_robots": {
+            name: directives for name, directives in meta_directives.items() if name != "robots"
+        },
+        "x_robots_tag": ", ".join(x_robots_values),
+        "x_robots_tag_directives": x_robots_directives,
+        "effective_search_robots_directives": effective_search_directives,
+        "robots_indexability_status": indexability_state.lower().replace(" ", "_"),
+        "indexability_state": indexability_state,
         "word_count": word_count,
         "html_size": len(html or ""),
         "image_count": len(images),
@@ -140,6 +187,66 @@ def extract_page(html: str, url: str, final_url: str, status_code: int, content_
             path, title, h1s[0] if h1s else "", status_code, page_template_family, schema_types
         ),
     }
+
+
+def parse_robots_directives(value: Any) -> list[str]:
+    directives: list[str] = []
+    for item in re.split(r"[,;]", clean_text(value).lower()):
+        directive = clean_text(item)
+        if directive and directive not in directives:
+            directives.append(directive)
+    return directives
+
+
+def merge_directives(*groups: list[str]) -> list[str]:
+    merged: list[str] = []
+    for group in groups:
+        for directive in group:
+            if directive not in merged:
+                merged.append(directive)
+    return merged
+
+
+def header_values(headers: Mapping[str, Any] | None, name: str) -> list[str]:
+    if not headers:
+        return []
+    wanted = name.lower()
+    value = next((value for key, value in headers.items() if str(key).lower() == wanted), None)
+    if value is None:
+        return []
+    values = value if isinstance(value, (list, tuple)) else [value]
+    return [clean_text(item) for item in values if clean_text(item)]
+
+
+def parse_x_robots_tag(values: list[str]) -> dict[str, list[str]]:
+    parsed: dict[str, list[str]] = {}
+    for value in values:
+        current_agent = "robots"
+        for item in re.split(r"[,;]", clean_text(value)):
+            token = clean_text(item).lower()
+            if not token:
+                continue
+            agent_match = re.match(r"^([a-z][a-z0-9_-]*):\s*(.+)$", token)
+            if agent_match and agent_match.group(1) in CRAWLER_ROBOTS_NAMES | {"robots"}:
+                current_agent = agent_match.group(1)
+                token = clean_text(agent_match.group(2))
+            if token:
+                parsed[current_agent] = merge_directives(parsed.get(current_agent, []), [token])
+    return parsed
+
+
+def classify_indexability_state(status_code: int, fetch_error: str, noindexed: bool) -> str:
+    if fetch_error or status_code <= 0:
+        return "Unknown because of access or rendering limitations"
+    if 300 <= status_code < 400:
+        return "Redirected"
+    if status_code >= 400:
+        return "Failed"
+    if noindexed:
+        return "Noindexed"
+    if 200 <= status_code < 300:
+        return "Indexable"
+    return "Unknown because of access or rendering limitations"
 
 
 def classify_confidence(discovery: dict, status_code: int) -> str:

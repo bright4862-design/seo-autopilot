@@ -1,0 +1,39 @@
+name: Apply multimarket scope patch
+
+on:
+  push:
+    branches:
+      - agent/multimarket-scope
+    paths:
+      - '.github/scripts/apply_multimarket_scope.py'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply patch
+        run: python .github/scripts/apply_multimarket_scope.py
+      - name: Install scanner dependencies
+        run: pip install -r scanner-api/requirements.txt
+      - name: Run focused regressions
+        run: |
+          PYTHONPATH=scanner-api pytest -q scanner-api/tests/test_market_scope.py scanner-api/tests/test_sitemap.py scanner-api/tests/test_page_classification.py
+      - name: Run full scanner suite
+        run: PYTHONPATH=scanner-api pytest -q scanner-api/tests
+      - name: Remove one-shot files and commit
+        run: |
+          rm -f .github/scripts/apply_multimarket_scope.py .github/workflows/apply-multimarket-scope.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Keep multimarket scans inside one market scope"
+          git push

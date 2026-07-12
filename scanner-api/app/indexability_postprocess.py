@@ -7,6 +7,11 @@ from .indexability_quality import (
     build_indexability_quality_findings,
     summarize_indexability_quality,
 )
+from .navigation_indexability import (
+    annotate_navigation_indexability,
+    build_navigation_indexability_findings,
+    summarize_navigation_indexability,
+)
 
 
 QUALITY_RULES = {
@@ -14,6 +19,8 @@ QUALITY_RULES = {
     "robots_directive_conflict",
     "noindex_canonical_conflict",
     "sitemap_canonicalized_url",
+    "potential_orphan_pages",
+    "indexable_faceted_navigation",
 }
 SOFT_404_NOISE_RULES = {
     "missing_title",
@@ -114,11 +121,11 @@ def group_indexability_quality_findings(findings: list[dict]) -> list[dict]:
 
 
 def apply_indexability_quality_to_result(result: dict) -> dict:
-    """Apply bounded indexability-quality evidence to a successful scan response.
+    """Apply bounded indexability and navigation evidence to a scan response.
 
     This runs at the scanner API boundary after bounded trust-page enrichment. It
-    preserves the scanner's existing evidence and only replaces prior quality
-    findings, making the operation safe to run more than once.
+    preserves the scanner's existing evidence and only replaces its own idempotent
+    quality rules, making the operation safe to run more than once.
     """
     if not isinstance(result, dict) or not result.get("success"):
         return result
@@ -129,9 +136,10 @@ def apply_indexability_quality_to_result(result: dict) -> dict:
 
     for page in pages:
         annotate_indexability_quality(page)
+        annotate_navigation_indexability(page)
 
-    # Import lazily so the quality module remains independent of scanner finding
-    # construction and does not create an import cycle during app startup.
+    # Import lazily so the quality modules remain independent of scanner finding
+    # construction and do not create an import cycle during app startup.
     from .scanner import calculate_health_score, create_finding, group_findings
 
     existing_raw = [
@@ -162,10 +170,16 @@ def apply_indexability_quality_to_result(result: dict) -> dict:
             continue
         quality_raw.extend(build_indexability_quality_findings(page, create_finding))
 
-    raw_findings = existing_raw + quality_raw
-    grouped = group_findings(existing_raw) + group_indexability_quality_findings(quality_raw)
+    navigation_raw = build_navigation_indexability_findings(pages, create_finding)
+    raw_findings = existing_raw + quality_raw + navigation_raw
+    grouped = (
+        group_findings(existing_raw)
+        + group_indexability_quality_findings(quality_raw)
+        + navigation_raw
+    )
     health_score = calculate_health_score(pages, grouped)
-    evidence = summarize_indexability_quality(pages)
+    indexability_evidence = summarize_indexability_quality(pages)
+    navigation_evidence = summarize_navigation_indexability(pages)
 
     result["pages"] = pages
     result["crawled_pages"] = pages
@@ -174,7 +188,8 @@ def apply_indexability_quality_to_result(result: dict) -> dict:
     result["findings"] = grouped
     result["recommendations"] = grouped
     result["health_score"] = health_score
-    result["indexability_quality_evidence"] = evidence
+    result["indexability_quality_evidence"] = indexability_evidence
+    result["navigation_indexability_evidence"] = navigation_evidence
 
     summary = result.get("scan_summary")
     if not isinstance(summary, dict):
@@ -187,7 +202,8 @@ def apply_indexability_quality_to_result(result: dict) -> dict:
             1 for item in grouped if item.get("priority") in {"critical", "high"}
         ),
         "technical_issue_count": len(grouped),
-        "indexability_quality_evidence": evidence,
+        "indexability_quality_evidence": indexability_evidence,
+        "navigation_indexability_evidence": navigation_evidence,
     })
 
     technical = result.get("technical_audit_summary")
@@ -195,10 +211,14 @@ def apply_indexability_quality_to_result(result: dict) -> dict:
         technical = {}
         result["technical_audit_summary"] = technical
     technical.update({
-        "indexability_quality_evidence": evidence,
-        "soft_404_pages": evidence.get("soft_404_count", 0),
-        "canonicalized_pages": evidence.get("canonicalized_count", 0),
-        "indexability_conflicts": sum(evidence.get("conflict_counts", {}).values()),
+        "indexability_quality_evidence": indexability_evidence,
+        "navigation_indexability_evidence": navigation_evidence,
+        "soft_404_pages": indexability_evidence.get("soft_404_count", 0),
+        "canonicalized_pages": indexability_evidence.get("canonicalized_count", 0),
+        "indexability_conflicts": sum(indexability_evidence.get("conflict_counts", {}).values()),
+        "potential_orphan_candidates": navigation_evidence.get("potential_orphan_candidates", 0),
+        "pagination_pages": navigation_evidence.get("pagination_pages", 0),
+        "faceted_navigation_pages": navigation_evidence.get("faceted_navigation_pages", 0),
     })
 
     return result

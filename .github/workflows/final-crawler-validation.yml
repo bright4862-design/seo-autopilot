@@ -1,0 +1,88 @@
+name: Final crawler validation
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - data/final-crawler-validation-trigger
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate beta crawler across market segments
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install scanner dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scanner-api/requirements.txt
+
+      - name: Validate acceptance regressions
+        working-directory: scanner-api
+        run: |
+          python -m pytest \
+            tests/test_crawler_acceptance.py \
+            tests/test_render_evidence_quality.py \
+            tests/test_indexability_quality.py \
+            tests/test_navigation_indexability.py \
+            tests/test_canonical_target_validation.py \
+            tests/test_redirect_validation.py
+
+      - name: Validate balanced acceptance manifest
+        run: |
+          python -c 'import collections,json,pathlib; rows=[json.loads(line) for line in pathlib.Path("data/final-crawler-validation-manifest.jsonl").read_text().splitlines() if line.strip()]; counts=collections.Counter(row["stratum"] for row in rows); assert len(rows)==9, counts; assert counts=={"smb_cms":3,"saas_js":3,"ecommerce_marketplace":3}, counts; assert len({row["site"] for row in rows})==9; print({"sites":len(rows),"strata":dict(counts)})'
+
+      - name: Run current-source crawler acceptance
+        id: acceptance
+        continue-on-error: true
+        run: |
+          python scanner-api/scripts/run_final_crawler_validation.py \
+            data/final-crawler-validation-manifest.jsonl \
+            data/final-crawler-validation.jsonl \
+            --failure-output data/final-crawler-validation.failures.jsonl \
+            --report-output reports/final-crawler-validation.md \
+            --timeout 210
+
+      - name: Publish acceptance summary
+        if: always()
+        run: |
+          if [ -f reports/final-crawler-validation.md ]; then
+            cat reports/final-crawler-validation.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Final validation report was not generated." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-crawler-validation-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            data/final-crawler-validation-manifest.jsonl
+            data/final-crawler-validation.jsonl
+            data/final-crawler-validation.failures.jsonl
+            reports/final-crawler-validation.md
+
+      - name: Enforce acceptance result
+        if: always()
+        run: |
+          if [ "${{ steps.acceptance.outcome }}" != "success" ]; then
+            echo "Final crawler acceptance did not pass. Inspect the uploaded evidence before patching."
+            exit 1
+          fi

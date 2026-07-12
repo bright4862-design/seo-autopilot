@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { isRateLimitFinding, shouldUseLegacyRateLimitPresentation } from "@/lib/reviewContract";
 
 const DASHBOARD_LAST_SCAN_KEY = "seo_autopilot:last_scan";
 const DASHBOARD_HISTORY_KEY = "seo_autopilot:scan_history";
@@ -527,18 +528,18 @@ function EmptyFilteredState({ noHighConfidenceFindings = false, nextBestStep = "
 }
 
 function normalizeRecommendation(item = {}, scanRecord = {}) {
-  const evidence = extractRecommendationEvidence(item, scanRecord);
-  const blocked429 = isBlocked429(item);
-  const priority = blocked429 ? blockedPriority(item, evidence) : normalizePriority(item.priority);
+  const legacyBlocked429 = shouldUseLegacyRateLimitPresentation(scanRecord, item);
+  const evidence = legacyBlocked429 ? extractRecommendationEvidence(item, scanRecord) : {};
+  const priority = legacyBlocked429 ? blockedPriority(item, evidence) : normalizePriority(item.priority);
   const category = String(item.category || "other").toLowerCase();
   const affectedPages = firstArray([item.affected_pages, item.pages, item.page_urls]);
   const fallbackPage = item.page_url || item.url || affectedPages[0] || "";
-  const bucket = blocked429 ? "needs_developer" : getIssueBucket(item);
-  const customerCategory = blocked429 ? "Scan coverage" : item.customer_category || CATEGORY_LABELS[category] || humanize(category || "Website improvement");
-  const title = blocked429 ? build429Title(evidence) : cleanString(item.issue_title || item.title || item.name) || buildSpecificTitle(item);
-  const explanation = blocked429 ? build429Explanation(evidence) : cleanString(item.plain_english_explanation || item.plain_english_summary || item.explanation || item.description || item.summary || item.recommendation) || buildSpecificExplanation(item);
-  const whyItMatters = blocked429 ? build429Why(evidence) : cleanString(item.why_it_matters || item.impact || item.reason) || buildSpecificWhy(item);
-  const recommendation = blocked429 ? build429Recommendation(evidence) : cleanString(item.simple_next_step || item.recommended_value || item.recommendation || item.suggested_fix || item.ai_recommendation) || "Review the affected page and make the recommended update.";
+  const bucket = legacyBlocked429 ? "needs_developer" : getIssueBucket(item);
+  const customerCategory = legacyBlocked429 ? "Scan coverage" : item.customer_category || CATEGORY_LABELS[category] || humanize(category || "Website improvement");
+  const title = legacyBlocked429 ? build429Title(evidence) : cleanString(item.issue_title || item.title || item.name) || buildSpecificTitle(item);
+  const explanation = legacyBlocked429 ? build429Explanation(evidence) : cleanString(item.plain_english_explanation || item.plain_english_summary || item.explanation || item.description || item.summary || item.recommendation) || buildSpecificExplanation(item);
+  const whyItMatters = legacyBlocked429 ? build429Why(evidence) : cleanString(item.why_it_matters || item.impact || item.reason) || buildSpecificWhy(item);
+  const recommendation = legacyBlocked429 ? build429Recommendation(evidence) : cleanString(item.simple_next_step || item.recommended_value || item.recommendation || item.suggested_fix || item.ai_recommendation) || "Review the affected page and make the recommended update.";
   const needsHelp = bucket === "needs_developer";
 
   return {
@@ -553,15 +554,17 @@ function normalizeRecommendation(item = {}, scanRecord = {}) {
     whyItMatters,
     recommendation,
     affectedPages: unique([...affectedPages.map(String), ...(fallbackPage ? [fallbackPage] : [])]),
-    currentValue: blocked429 ? "HTTP 429 — crawler was rate-limited or blocked" : cleanString(item.current_value || item.current || item.detected_value),
-    pageType: blocked429 && evidence.scopeRelationship === "sibling_sous_dossier" ? "Sibling sous-dossier" : cleanString(item.page_type || item.page_value_label || item.business_importance),
-    defectClass: blocked429 ? "Rate-limit / crawler access" : cleanString(item.primary_defect_class || item.meta_regeneration_gate),
-    pageValueLabel: blocked429 ? evidence.businessValueLabel : cleanString(item.page_value_label),
-    businessImportance: blocked429 ? evidence.businessImportance : cleanString(item.business_importance),
+    currentValue: legacyBlocked429 ? "HTTP 429 — crawler was rate-limited or blocked" : cleanString(item.current_value || item.current || item.detected_value),
+    pageType: legacyBlocked429 && evidence.scopeRelationship === "sibling_sous_dossier" ? "Sibling sous-dossier" : cleanString(item.page_type || item.page_value_label || item.business_importance),
+    defectClass: legacyBlocked429 ? "Rate-limit / crawler access" : cleanString(item.primary_defect_class || item.meta_regeneration_gate),
+    pageValueLabel: legacyBlocked429 ? evidence.businessValueLabel : cleanString(item.page_value_label),
+    businessImportance: legacyBlocked429 ? evidence.businessImportance : cleanString(item.business_importance),
     metaGate: cleanString(item.meta_regeneration_gate),
-    scopeRelationship: evidence.scopeRelationship,
+    scopeRelationship: legacyBlocked429 ? evidence.scopeRelationship : cleanString(item.scope_relationship),
+    pageScope: cleanString(item.page_scope),
+    evidenceStatus: cleanString(item.evidence_status || item.verification_state),
     needsHelp,
-    generalSteps: blocked429 ? build429Steps(evidence) : buildGeneralSteps(item, recommendation, needsHelp),
+    generalSteps: legacyBlocked429 ? build429Steps(evidence) : buildGeneralSteps(item, recommendation, needsHelp),
   };
 }
 
@@ -589,9 +592,7 @@ function extractRecommendationEvidence(item = {}, scanRecord = {}) {
 }
 
 function isBlocked429(item = {}) {
-  const text = `${item.rule || ""} ${item.category || ""} ${item.title || ""} ${item.issue_title || ""} ${item.current_value || ""} ${item.fetch_error || ""} ${item.recommended_value || ""}`.toLowerCase();
-  const status = getFirstNumber([item.status_code, item.current_status_code, item.http_status, item.evidence?.status_code]);
-  return status === 429 || text.includes("429") || text.includes("rate limit") || text.includes("rate-limit") || text.includes("too many requests") || text.includes("bot protection");
+  return isRateLimitFinding(item);
 }
 
 function build429Title(evidence) {
@@ -764,7 +765,9 @@ function getCmsSteps(cms, recommendation) {
 
 function buildEvidenceItems(recommendation) {
   const items = [];
-  if (recommendation.scopeRelationship) items.push({ label: "Scope", value: humanize(recommendation.scopeRelationship) });
+  if (recommendation.pageScope) items.push({ label: "Scope", value: humanize(recommendation.pageScope) });
+  else if (recommendation.scopeRelationship) items.push({ label: "Scope", value: humanize(recommendation.scopeRelationship) });
+  if (recommendation.evidenceStatus) items.push({ label: "Evidence", value: humanize(recommendation.evidenceStatus) });
   if (recommendation.pageType) items.push({ label: "Page type", value: humanize(recommendation.pageType) });
   if (recommendation.pageValueLabel) items.push({ label: "Business value", value: recommendation.pageValueLabel });
   if (recommendation.defectClass) items.push({ label: "Issue type", value: humanize(recommendation.defectClass) });

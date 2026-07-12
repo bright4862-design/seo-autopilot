@@ -1,6 +1,14 @@
 from app.extract import extract_page
-from app.indexability_quality import annotate_indexability_quality, summarize_indexability_quality
-from app.scanner import build_findings, group_findings
+from app.indexability_postprocess import (
+    apply_indexability_quality_to_result,
+    group_indexability_quality_findings,
+)
+from app.indexability_quality import (
+    annotate_indexability_quality,
+    build_indexability_quality_findings,
+    summarize_indexability_quality,
+)
+from app.scanner import create_finding
 
 
 SITEMAP_DISCOVERY = {
@@ -34,6 +42,10 @@ def _page(
     )
 
 
+def _quality_findings(page):
+    return build_indexability_quality_findings(page, create_finding)
+
+
 def test_high_confidence_200_error_page_becomes_soft_404():
     page = _page(
         "https://example.com/missing-product",
@@ -44,15 +56,13 @@ def test_high_confidence_200_error_page_becomes_soft_404():
     )
 
     annotate_indexability_quality(page)
-    findings = build_findings([page])
-    soft_404 = next(item for item in findings if item["rule"] == "soft_404")
+    soft_404 = next(item for item in _quality_findings(page) if item["rule"] == "soft_404")
 
     assert page["soft_404_suspected"] is True
     assert page["indexable"] is False
     assert page["indexability_state"] == "Soft 404"
     assert soft_404["priority"] == "high"
     assert soft_404["confidence_score"] == 92
-    assert not any(item["rule"] in {"missing_meta_description", "missing_h1"} for item in findings)
 
 
 def test_long_article_about_404_errors_is_not_mislabeled():
@@ -81,7 +91,7 @@ def test_generic_index_and_googlebot_noindex_create_conflict():
     )
 
     annotate_indexability_quality(page)
-    finding = next(item for item in build_findings([page]) if item["rule"] == "robots_directive_conflict")
+    finding = next(item for item in _quality_findings(page) if item["rule"] == "robots_directive_conflict")
 
     assert "robots_directive_conflict" in page["indexability_conflicts"]
     assert finding["priority"] == "high"
@@ -114,11 +124,11 @@ def test_noindex_with_different_canonical_creates_separate_conflict():
     )
 
     annotate_indexability_quality(page)
-    finding = next(item for item in build_findings([page]) if item["rule"] == "noindex_canonical_conflict")
+    finding = next(item for item in _quality_findings(page) if item["rule"] == "noindex_canonical_conflict")
 
     assert "noindex_with_canonical" in page["indexability_conflicts"]
     assert page["indexability_state"] == "Noindexed"
-    assert finding["canonical_target_url"] if "canonical_target_url" in finding else True
+    assert "https://example.com/preferred" in finding["current_value"]
 
 
 def test_validated_canonical_target_classifies_source_as_canonicalized():
@@ -132,7 +142,7 @@ def test_validated_canonical_target_classifies_source_as_canonicalized():
     })
 
     annotate_indexability_quality(page)
-    finding = next(item for item in build_findings([page]) if item["rule"] == "sitemap_canonicalized_url")
+    finding = next(item for item in _quality_findings(page) if item["rule"] == "sitemap_canonicalized_url")
 
     assert page["canonicalized_by_valid_target"] is True
     assert page["indexable"] is False
@@ -156,7 +166,7 @@ def test_broken_canonical_target_does_not_falsely_make_source_nonindexable():
 
 
 def test_repeated_quality_findings_group_by_template():
-    pages = []
+    findings = []
     for index in range(3):
         page = _page(
             f"https://example.com/products/missing-{index}",
@@ -165,13 +175,58 @@ def test_repeated_quality_findings_group_by_template():
             body="This product is unavailable.",
         )
         annotate_indexability_quality(page)
-        pages.append(page)
+        findings.extend(_quality_findings(page))
 
-    grouped = group_findings(build_findings(pages))
+    grouped = group_indexability_quality_findings(findings)
     finding = next(item for item in grouped if item["rule"] == "soft_404")
 
     assert finding["page_count"] == 3
     assert finding["title"] == "Return real 404 or 410 responses for missing pages"
+
+
+def test_postprocess_preserves_existing_findings_and_suppresses_soft_404_noise():
+    page = _page(
+        "https://example.com/missing",
+        title="404 Not Found",
+        h1="Page not found",
+        body="Missing.",
+        discovery=SITEMAP_DISCOVERY,
+    )
+    noisy = create_finding(
+        "missing_meta_description",
+        "meta_description",
+        "medium",
+        "Add a clear search description",
+        "/missing",
+    )
+    retained = create_finding(
+        "internal_link_redirect",
+        "indexability",
+        "low",
+        "Update an internal link",
+        "/old",
+    )
+    result = {
+        "success": True,
+        "pages": [page],
+        "crawled_pages": [page],
+        "raw_findings": [noisy, retained],
+        "grouped_findings": [noisy, retained],
+        "findings": [noisy, retained],
+        "recommendations": [noisy, retained],
+        "health_score": 90,
+        "scan_summary": {},
+        "technical_audit_summary": {},
+    }
+
+    updated = apply_indexability_quality_to_result(result)
+    rules = {item["rule"] for item in updated["raw_findings"]}
+
+    assert "soft_404" in rules
+    assert "missing_meta_description" not in rules
+    assert "internal_link_redirect" in rules
+    assert updated["scan_summary"]["indexability_quality_evidence"]["soft_404_count"] == 1
+    assert updated["technical_audit_summary"]["soft_404_pages"] == 1
 
 
 def test_summary_reports_states_conflicts_and_soft_404s():

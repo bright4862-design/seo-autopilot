@@ -51,6 +51,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add scanner-api/app/scanner.py
-          git rm scripts/apply_indexability_quality_patch.py .github/workflows/indexability-quality-guard.yml
+          git rm scripts/apply_indexability_quality_patch.py .github/workflows/indexability-quality-guard.yml .github/indexability-quality-trigger
           git commit -m "Add soft-404 and indexability conflict evidence"
           git push origin HEAD:agent/indexability-quality

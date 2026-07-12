@@ -7,6 +7,7 @@ from urllib.parse import urldefrag, urlparse
 import httpx
 
 from .artifact_filter import MAX_ARTIFACT_EVIDENCE, is_artifact_url, record_artifact
+from .canonical_validation import validate_canonical_targets
 from .extract import classify_template, extract_links, extract_page
 from .market_scope import market_pair_prefix, path_within_scope
 from .sampling import SAMPLING_VERSION, sampling_report, select_balanced_urls
@@ -200,6 +201,12 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
 
         workers = [asyncio.create_task(worker()) for _ in range(max(1, concurrency))]
         await asyncio.gather(*workers)
+        canonical_target_evidence = await validate_canonical_targets(
+            client,
+            pages,
+            robots_policy,
+            deadline=deadline,
+        )
 
     findings = build_findings(pages)
     findings.extend(duplicate_casing_findings(pages))
@@ -242,6 +249,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         "requested_path_prefix": scope_evidence.get("requested_path_prefix", "/"),
         "crawl_scope": dict(scope_evidence),
         "robots_txt_evidence": robots_policy.evidence(),
+        "canonical_target_evidence": canonical_target_evidence,
         "scan_mode": scan_mode,
         "pages_crawled": len(pages),
         "pages_found": pages_found,
@@ -272,6 +280,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
             "crawl_policy": DEFAULT_POLICY,
             "crawl_policy_source": DEFAULT_POLICY["source"],
             "crawl_scope": dict(scope_evidence),
+            "canonical_target_evidence": canonical_target_evidence,
             "render_evidence_version": RENDER_EVIDENCE_VERSION,
             "render_evidence": render_evidence,
             "duplicate_casing_routes": detect_duplicate_casing_routes(pages),
@@ -356,6 +365,9 @@ def build_findings(pages: list[dict]) -> list[dict]:
                 source_pages=page.get("source_pages", []),
                 link_text_samples=page.get("link_text_samples", []),
             ))
+        canonical_finding = canonical_target_finding(page)
+        if canonical_finding is not None:
+            findings.append(canonical_finding)
         if str(page.get("fetch_error") or "").startswith("blocked_"):
             continue
         status_code = int(page.get("status_code") or 0)
@@ -388,6 +400,109 @@ def build_findings(pages: list[dict]) -> list[dict]:
         if missing_alt > 0:
             findings.append(create_finding("image_alt_text", "image_alt_text", "medium" if missing_alt >= 10 else "low", "Add useful image descriptions", path, current_value=f"{missing_alt} images missing alt text", explanation="Some meaningful images may not have text descriptions.", recommendation="Add short, specific alt text to meaningful images."))
     return findings
+
+
+def canonical_target_finding(page: dict) -> dict | None:
+    state = str(page.get("canonical_target_state") or "")
+    target = str(page.get("canonical_target_url") or page.get("canonical") or "")
+    status_code = int(page.get("canonical_target_status_code") or 0)
+    redirect_location = str(page.get("canonical_target_redirect_location") or "")
+    target_canonical = str(page.get("canonical_target_declared_canonical") or "")
+    mapping = {
+        "target_redirected": (
+            "canonical_target_redirect",
+            "medium",
+            "Update a canonical URL that points to a redirect",
+            "The declared canonical URL redirects instead of resolving directly.",
+            "Point the canonical directly to the final 200-status preferred URL.",
+        ),
+        "target_failed": (
+            "canonical_target_failed",
+            "high",
+            "Fix a canonical URL that points to an unavailable page",
+            "The declared canonical target failed to load or returned an error.",
+            "Choose a live, indexable preferred URL and update the canonical reference.",
+        ),
+        "target_noindexed": (
+            "canonical_target_noindex",
+            "high",
+            "Fix a canonical URL that points to a noindexed page",
+            "The page asks search engines to consolidate signals into a target that is explicitly noindexed.",
+            "Use an indexable preferred URL or remove the conflicting noindex directive from the intended target.",
+        ),
+        "target_blocked_by_robots": (
+            "canonical_target_blocked",
+            "medium",
+            "Review a canonical URL that points to a robots-blocked page",
+            "Googlebot is blocked from crawling the declared canonical target, so the consolidation signal may be hard to verify.",
+            "Confirm the intended preferred URL and allow Googlebot to crawl it when appropriate.",
+        ),
+        "canonical_chain": (
+            "canonical_chain",
+            "medium",
+            "Replace a canonical chain with the final preferred URL",
+            "The declared canonical target itself points to another canonical URL.",
+            "Point the source page directly to the final preferred canonical destination.",
+        ),
+        "canonical_loop": (
+            "canonical_loop",
+            "high",
+            "Remove a canonical loop",
+            "The source and target canonical declarations point back to each other.",
+            "Choose one preferred URL and make every duplicate point directly to it without a loop.",
+        ),
+        "cross_domain_needs_verification": (
+            "canonical_cross_domain",
+            "low",
+            "Verify a cross-domain canonical URL",
+            "This page declares a preferred URL on another domain. That can be intentional, but ownership and matching content require confirmation.",
+            "Confirm both domains are controlled by the same organization and that the external URL is the intended equivalent page.",
+        ),
+        "invalid_target": (
+            "canonical_target_failed",
+            "high",
+            "Fix an invalid canonical target",
+            "The declared canonical target is invalid or does not resolve to a public HTTP URL.",
+            "Replace it with a valid absolute HTTPS URL for the preferred page.",
+        ),
+    }
+    details = mapping.get(state)
+    if details is None:
+        return None
+    rule, priority, title, explanation, recommendation = details
+    current_parts = [target]
+    if status_code:
+        current_parts.append(f"HTTP {status_code}")
+    if redirect_location:
+        current_parts.append(f"redirects to {redirect_location}")
+    if target_canonical:
+        current_parts.append(f"target canonical: {target_canonical}")
+    finding = create_finding(
+        rule=rule,
+        category="canonical",
+        priority=priority,
+        title=title,
+        page_url=page.get("path") or "/",
+        current_value=" — ".join(part for part in current_parts if part),
+        explanation=explanation,
+        recommendation=recommendation,
+        difficulty="developer",
+        source_pages=page.get("source_pages", []),
+        link_text_samples=page.get("link_text_samples", []),
+    )
+    finding.update({
+        "canonical_target_url": target,
+        "canonical_target_state": state,
+        "canonical_target_status_code": status_code,
+        "canonical_target_redirect_location": redirect_location,
+        "canonical_target_declared_canonical": target_canonical,
+        "canonical_target_evidence_source": page.get("canonical_target_evidence_source"),
+        "evidence_status": "needs_verification" if state == "cross_domain_needs_verification" else "confirmed",
+        "verification_state": "needs_verification" if state == "cross_domain_needs_verification" else "verified",
+        "limitation_code": "cross_domain_canonical_requires_confirmation" if state == "cross_domain_needs_verification" else "",
+        "confidence_score": 70 if state == "cross_domain_needs_verification" else 94,
+    })
+    return finding
 
 
 def sitemap_indexability_conflict(page: dict) -> bool:
@@ -435,7 +550,7 @@ def create_finding(rule: str, category: str, priority: str, title: str, page_url
 
 
 FAILURE_RULES = {"rate_limited_page", "failed_page", "server_error", "404_error", "410_error"}
-TEMPLATE_RULES = {"client_rendering", "canonical_missing", "schema", "missing_h1", "multiple_h1", "image_alt_text", "missing_meta_description", "sitemap_indexability_conflict"}
+TEMPLATE_RULES = {"client_rendering", "canonical_missing", "canonical_target_redirect", "canonical_target_failed", "canonical_target_noindex", "canonical_target_blocked", "canonical_chain", "canonical_loop", "canonical_cross_domain", "schema", "missing_h1", "multiple_h1", "image_alt_text", "missing_meta_description", "sitemap_indexability_conflict"}
 GROUP_MIN_AFFECTED = 3
 
 
@@ -465,6 +580,20 @@ def group_template_title(rule: str, family: str) -> str:
         return f"Batch page headings on {fam} pages"
     if rule == "canonical_missing":
         return f"Add canonical URLs across {fam} templates"
+    if rule == "canonical_target_redirect":
+        return "Update canonicals that point to redirects"
+    if rule == "canonical_target_failed":
+        return "Fix canonicals that point to unavailable pages"
+    if rule == "canonical_target_noindex":
+        return "Fix canonicals that point to noindexed pages"
+    if rule == "canonical_target_blocked":
+        return "Review canonicals that point to robots-blocked pages"
+    if rule == "canonical_chain":
+        return "Replace canonical chains with the final preferred URL"
+    if rule == "canonical_loop":
+        return "Remove canonical loops"
+    if rule == "canonical_cross_domain":
+        return "Verify cross-domain canonical URLs"
     if rule == "sitemap_indexability_conflict":
         return "Remove non-indexable URLs from the sitemap"
     return f"Fix repeated {fam} template issue"

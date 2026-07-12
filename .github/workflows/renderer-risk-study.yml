@@ -43,6 +43,7 @@ jobs:
           python -m pytest \
             tests/test_render_risk_collection.py \
             tests/test_render_risk_study.py \
+            tests/test_render_risk_eligibility.py \
             tests/test_render_evidence_quality.py \
             tests/test_render_study_state.py
 

@@ -12,7 +12,8 @@ from .sampling import SAMPLING_VERSION, sampling_report, select_balanced_urls
 from .security import is_public_http_url, safe_get
 from .sitemap import load_sitemap_urls
 
-VERSION = "python_scanner_v2_contract_parity"\nRENDER_EVIDENCE_VERSION = "render_evidence_v1"
+VERSION = "python_scanner_v2_contract_parity"
+RENDER_EVIDENCE_VERSION = "render_evidence_v1"
 
 # The Python crawler does not derive an AI crawl policy (no InvokeLLM here), but it
 # still emits the policy contract so AI Review keeps provenance. source="disabled"

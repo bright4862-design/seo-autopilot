@@ -42,3 +42,5 @@ jobs:
           git add scanner-api/app/review.py scanner-api/tests/test_review_ikea_calibration.py tools/apply_ikea_evidence_patch.py .github/workflows/apply-ikea-evidence-calibration.yml
           git commit -m "Calibrate image-alt evidence and score summaries"
           git push origin HEAD:agent/ikea-evidence-calibration
+
+# trigger

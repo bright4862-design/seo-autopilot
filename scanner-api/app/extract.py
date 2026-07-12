@@ -10,6 +10,22 @@ def clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", unescape(str(value or ""))).strip()
 
 
+APP_SHELL_MARKERS = (
+    ("react_root", re.compile(r"<[^>]+\bid\s*=\s*(['\"])root\1", re.I)),
+    ("generic_app_root", re.compile(r"<[^>]+\bid\s*=\s*(['\"])app\1", re.I)),
+    ("next_root", re.compile(r"<[^>]+\bid\s*=\s*(['\"])__next\1", re.I)),
+    ("nuxt_root", re.compile(r"<[^>]+\bid\s*=\s*(['\"])__nuxt\1", re.I)),
+)
+
+
+def client_rendering_signals(html: str, status_code: int, word_count: int) -> list[str]:
+    """Return bounded structural evidence that a successful page is a thin app shell."""
+    if not (200 <= int(status_code or 0) < 400) or int(word_count or 0) >= 80:
+        return []
+    source = str(html or "")
+    return [label for label, pattern in APP_SHELL_MARKERS if pattern.search(source)][:4]
+
+
 def extract_links(html: str, base_url: str) -> list[dict]:
     soup = BeautifulSoup(html or "", "lxml")
     links: list[dict] = []
@@ -81,6 +97,8 @@ def extract_page(html: str, url: str, final_url: str, status_code: int, content_
     indexable = 200 <= status_code < 400 and "noindex" not in robots.lower()
     page_template_family = classify_template(path, title, h1s[0] if h1s else "", schema_types)
 
+    rendering_signals = client_rendering_signals(html, status_code, word_count)
+
     return {
         "url": url,
         "final_url": final_url or url,
@@ -113,7 +131,8 @@ def extract_page(html: str, url: str, final_url: str, status_code: int, content_
         "schema_types": schema_types,
         "has_schema": bool(schema_types),
         "indexable": indexable,
-        "client_rendering_suspected": 200 <= status_code < 400 and word_count < 80 and ("id=\"root\"" in html or "id=\"app\"" in html),
+        "client_rendering_suspected": bool(rendering_signals),
+        "client_rendering_signals": rendering_signals,
         "page_template_family": page_template_family,
         "estimated_page_intent": estimate_intent(
             path, title, h1s[0] if h1s else "", status_code, page_template_family, schema_types

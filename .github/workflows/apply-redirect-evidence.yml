@@ -1,0 +1,42 @@
+name: Apply redirect evidence patch
+
+on:
+  push:
+    branches:
+      - agent/redirect-evidence
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/redirect-evidence
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply scanner integration
+        run: python scripts/apply_redirect_evidence_patch.py
+      - name: Install scanner dependencies
+        run: pip install -r scanner-api/requirements.txt
+      - name: Run focused redirect and indexability tests
+        working-directory: scanner-api
+        run: python -m pytest tests/test_redirect_evidence.py tests/test_canonical_target_validation.py tests/test_indexability_extraction.py tests/test_robots_policy.py tests/test_sitemap_indexability_conflicts.py
+      - name: Run full Python backend suite
+        working-directory: scanner-api
+        run: python -m pytest
+      - name: Remove temporary patch automation
+        run: rm scripts/apply_redirect_evidence_patch.py .github/workflows/apply-redirect-evidence.yml
+      - name: Commit final product files
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scanner-api/app/scanner.py scanner-api/app/redirect_validation.py scanner-api/tests/test_redirect_evidence.py scripts/apply_redirect_evidence_patch.py .github/workflows/apply-redirect-evidence.yml
+          git commit -m "Add redirect evidence" || exit 0
+          git push origin HEAD:agent/redirect-evidence

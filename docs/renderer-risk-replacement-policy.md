@@ -38,4 +38,12 @@ Run #3 retained twenty-five eligible records. Miro, Patagonia, REI, and Back Mar
 | Back Market | Ecommerce/marketplace | Insufficient evaluable HTML | Away |
 | GetYourGuide | Ecommerce/marketplace | Repeated HTTP 503 | Mejuri |
 
+## July 12, 2026 final SaaS replacement
+
+Run #4 retained twenty-nine eligible records. GitLab produced insufficient evaluable HTML and could not count toward the SaaS/JS incidence denominator. Monday.com was selected for segment fit and accessible public product content before its renderer evidence was collected.
+
+| Removed second-round replacement | Stratum | Eligibility reason | Preselected replacement |
+|---|---|---|---|
+| GitLab | SaaS/JS | Insufficient evaluable HTML | Monday.com |
+
 All replacements were selected for segment fit and accessible public marketing or catalog pages. Their renderer evidence had not been collected when each mapping was committed.

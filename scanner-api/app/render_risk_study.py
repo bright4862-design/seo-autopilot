@@ -4,14 +4,21 @@ from collections import defaultdict
 from typing import Any, Iterable
 
 
-STUDY_VERSION = "render_risk_study_v1"
+STUDY_VERSION = "render_risk_study_v2_coverage_eligible"
 VALID_STRATA = {
     "smb_cms",
     "saas_js",
     "ecommerce_marketplace",
 }
 STRATEGIC_STRATA = {"saas_js", "ecommerce_marketplace"}
+INSUFFICIENT_EVIDENCE_STATE = "insufficient_raw_html_evidence"
 VALID_EVIDENCE_STATES = {
+    "raw_html_sufficient",
+    "isolated_client_rendering_signal",
+    "material_client_rendering_risk",
+    INSUFFICIENT_EVIDENCE_STATE,
+}
+MEASUREMENT_ELIGIBLE_EVIDENCE_STATES = {
     "raw_html_sufficient",
     "isolated_client_rendering_signal",
     "material_client_rendering_risk",
@@ -68,6 +75,32 @@ def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
             f"scanner_evidence_state must be one of {sorted(VALID_EVIDENCE_STATES)}"
         )
 
+    coverage = (
+        record.get("render_evidence_quality")
+        if isinstance(record.get("render_evidence_quality"), dict)
+        else evidence.get("coverage")
+        if isinstance(evidence.get("coverage"), dict)
+        else {}
+    )
+    coverage_sufficient = coverage.get("sufficient")
+    measurement_eligible = bool(
+        evidence_state in MEASUREMENT_ELIGIBLE_EVIDENCE_STATES
+        and successful_pages > 0
+        and coverage_sufficient is not False
+    )
+    exclusion_reason = ""
+    if not measurement_eligible:
+        exclusion_reason = str(
+            coverage.get("reason")
+            or (
+                "insufficient_raw_html_evidence"
+                if evidence_state == INSUFFICIENT_EVIDENCE_STATE
+                else "no_evaluable_html_pages"
+                if successful_pages == 0
+                else "render_evidence_not_measurement_eligible"
+            )
+        ).strip()
+
     manual_verdict = str(record.get("manual_js_disabled_verdict") or "not_reviewed").strip().lower()
     if manual_verdict not in VALID_MANUAL_VERDICTS:
         raise ValueError(
@@ -77,7 +110,10 @@ def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
     suspected_ratio = round(suspected_pages / successful_pages, 4) if successful_pages else 0.0
     detector_material = evidence_state == MATERIAL_EVIDENCE_STATE
     manual_material = manual_verdict == "material_content_missing"
-    conclusive_manual = manual_verdict in {"content_sufficient", "material_content_missing"}
+    conclusive_manual = bool(
+        measurement_eligible
+        and manual_verdict in {"content_sufficient", "material_content_missing"}
+    )
     agreement = detector_material == manual_material if conclusive_manual else None
 
     return {
@@ -87,6 +123,8 @@ def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
         "suspected_pages": suspected_pages,
         "suspected_ratio": suspected_ratio,
         "scanner_evidence_state": evidence_state,
+        "measurement_eligible": measurement_eligible,
+        "measurement_exclusion_reason": exclusion_reason,
         "detector_material": detector_material,
         "manual_js_disabled_verdict": manual_verdict,
         "manual_material": manual_material if conclusive_manual else None,
@@ -99,16 +137,19 @@ def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def summarize_records(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
-    normalized = [normalize_record(record) for record in records]
+    normalized_records = [normalize_record(record) for record in records]
+    eligible_records = [record for record in normalized_records if record["measurement_eligible"]]
+    excluded_records = [record for record in normalized_records if not record["measurement_eligible"]]
+
     by_stratum: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for record in normalized:
+    for record in eligible_records:
         by_stratum[record["stratum"]].append(record)
 
     strata = {
         stratum: _summarize_group(by_stratum.get(stratum, []))
         for stratum in sorted(VALID_STRATA)
     }
-    overall = _summarize_group(normalized)
+    overall = _summarize_group(eligible_records)
 
     calibration_complete = overall["conclusive_manual_reviews"] >= CALIBRATION_MINIMUM
     calibration_passed = bool(
@@ -135,7 +176,18 @@ def summarize_records(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "version": STUDY_VERSION,
+        "records_received": len(normalized_records),
         "site_count": overall["site_count"],
+        "excluded_record_count": len(excluded_records),
+        "excluded_records": [
+            {
+                "site": record["site"],
+                "stratum": record["stratum"],
+                "scanner_evidence_state": record["scanner_evidence_state"],
+                "reason": record["measurement_exclusion_reason"],
+            }
+            for record in excluded_records
+        ],
         "calibration": {
             "required_manual_reviews": CALIBRATION_MINIMUM,
             "conclusive_manual_reviews": overall["conclusive_manual_reviews"],
@@ -149,6 +201,8 @@ def summarize_records(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "measurement": {
             "required_total_sites": MEASUREMENT_MINIMUM_TOTAL,
             "required_sites_per_stratum": MEASUREMENT_MINIMUM_PER_STRATUM,
+            "eligible_sites": overall["site_count"],
+            "excluded_sites": len(excluded_records),
             "complete": measurement_complete,
         },
         "decision_thresholds": {
@@ -158,7 +212,7 @@ def summarize_records(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "overall": overall,
         "strata": strata,
         "decision": decision,
-        "records": normalized,
+        "records": normalized_records,
     }
 
 
@@ -167,13 +221,15 @@ def format_markdown(summary: dict[str, Any]) -> str:
         "# Renderer-risk study",
         "",
         f"- Version: `{summary.get('version', STUDY_VERSION)}`",
-        f"- Sites recorded: {summary.get('site_count', 0)}",
+        f"- Records received: {summary.get('records_received', summary.get('site_count', 0))}",
+        f"- Measurement-eligible sites: {summary.get('site_count', 0)}",
+        f"- Excluded insufficient records: {summary.get('excluded_record_count', 0)}",
         f"- Calibration passed: {'yes' if summary.get('calibration', {}).get('passed') else 'no'}",
         f"- Measurement complete: {'yes' if summary.get('measurement', {}).get('complete') else 'no'}",
         f"- Decision: **{summary.get('decision', {}).get('action', 'unknown')}**",
         f"- Reason: {summary.get('decision', {}).get('reason', '')}",
         "",
-        "| Stratum | Sites | Material-risk incidence | Manual reviews | Agreement |",
+        "| Stratum | Eligible sites | Material-risk incidence | Manual reviews | Agreement |",
         "|---|---:|---:|---:|---:|",
     ]
     for stratum in sorted(VALID_STRATA):
@@ -187,6 +243,13 @@ def format_markdown(summary: dict[str, Any]) -> str:
                 agreement=_percent(values.get("agreement_rate")),
             )
         )
+    excluded = summary.get("excluded_records") or []
+    if excluded:
+        lines.extend(["", "## Excluded insufficient evidence", ""])
+        for record in excluded:
+            lines.append(
+                f"- `{record.get('site', '')}` ({record.get('stratum', '')}): {record.get('reason', '')}"
+            )
     lines.append("")
     return "\n".join(lines)
 
@@ -231,7 +294,7 @@ def _decision(
     if not measurement_complete:
         return {
             "action": "keep_measuring",
-            "reason": "Collect at least ten sites in each stratum and thirty sites overall.",
+            "reason": "Collect at least ten measurement-eligible sites in each stratum and thirty sites overall.",
         }
 
     strategic_material = [

@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   hasAuthoritativePythonReview,
+  isRateLimitFinding,
   selectFinalReviewFixes,
+  shouldUseLegacyRateLimitPresentation,
 } from "../../src/lib/reviewContract.js";
 
 const slimFix = (fix) => ({ ...fix, normalized: true });
@@ -70,4 +72,40 @@ test("fallback and legacy results retain compatibility grouping", () => {
   });
   assert.equal(legacySpy.calls.length, 1);
   assert.match(legacy[0].title, /^rewritten:/);
+});
+
+
+test("authoritative rate-limit findings keep backend presentation", () => {
+  const finding = {
+    rule: "rate_limited_page",
+    source: "scanner_verified_failed_pages:429",
+    priority: "high",
+    title: "Check pages blocked by rate limiting",
+    page_scope: "cross_cutting",
+    page_template_family: "mixed",
+    evidence_status: "needs_verification",
+  };
+
+  assert.equal(isRateLimitFinding(finding), true);
+  assert.equal(
+    shouldUseLegacyRateLimitPresentation(
+      { ai_review_backend: "python_review_api", python_review_fallback_used: false },
+      finding,
+    ),
+    false,
+  );
+});
+
+test("legacy and fallback rate-limit findings retain compatibility presentation", () => {
+  const finding = { status_code: 429, title: "Too Many Requests" };
+
+  assert.equal(shouldUseLegacyRateLimitPresentation({}, finding), true);
+  assert.equal(
+    shouldUseLegacyRateLimitPresentation(
+      { ai_review_backend: "python_review_api", python_review_fallback_used: true },
+      finding,
+    ),
+    true,
+  );
+  assert.equal(shouldUseLegacyRateLimitPresentation({}, { rule: "canonical_missing" }), false);
 });

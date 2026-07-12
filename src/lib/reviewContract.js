@@ -56,12 +56,30 @@ export function normalizeReviewScope(fix = {}, fallbackFamily = "") {
 
 
 
-export function normalizeFindingEvidence(fix = {}) {
+export function isRateLimitFinding(fix = {}) {
   const rule = String(fix?.rule || fix?.issue_type || "").toLowerCase();
   const source = String(fix?.source || "").toLowerCase();
-  const rateLimited =
+  const text = `${rule} ${fix?.category || ""} ${fix?.title || ""} ${fix?.issue_title || ""} ${fix?.current_value || ""} ${fix?.fetch_error || ""}`.toLowerCase();
+  const status = Number(fix?.status_code || fix?.current_status_code || fix?.http_status || fix?.evidence?.status_code || 0);
+  return (
+    status === 429 ||
     ["rate_limited_page", "blocked_page", "blocked_page_429", "scanner_blocked"].includes(rule) ||
-    source.startsWith("scanner_verified_failed_pages:429");
+    source.startsWith("scanner_verified_failed_pages:429") ||
+    text.includes("429") ||
+    text.includes("rate limit") ||
+    text.includes("rate-limit") ||
+    text.includes("too many requests") ||
+    text.includes("bot protection")
+  );
+}
+
+
+export function shouldUseLegacyRateLimitPresentation(scanRecord = {}, fix = {}) {
+  return isRateLimitFinding(fix) && !hasAuthoritativePythonReview(scanRecord);
+}
+
+export function normalizeFindingEvidence(fix = {}) {
+  const rateLimited = isRateLimitFinding(fix);
   const explicitEvidence = String(fix?.evidence_status || "").toLowerCase();
   const evidenceStatus = explicitEvidence || (rateLimited ? "needs_verification" : "confirmed");
   return {

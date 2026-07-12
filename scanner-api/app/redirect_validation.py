@@ -7,7 +7,7 @@ from .robots_policy import SCANNER_USER_AGENT, SEARCH_USER_AGENT
 from .security import REDIRECT_STATUSES, is_public_http_url
 
 
-REDIRECT_EVIDENCE_VERSION = "redirect_evidence_v1"
+REDIRECT_EVIDENCE_VERSION = "redirect_evidence_v2_trailing_slash_identity"
 DEFAULT_MAX_REDIRECTS = 5
 
 
@@ -22,8 +22,6 @@ def _normalize_url(value: str) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return ""
     path = parsed.path or "/"
-    if path != "/":
-        path = path.rstrip("/")
     return parsed._replace(
         scheme=parsed.scheme.lower(),
         netloc=parsed.netloc.lower(),

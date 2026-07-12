@@ -88,3 +88,46 @@ def test_final_review_score_is_authoritative_in_every_summary_contract():
     assert score == result["technical_audit_summary"]["health_score"]
     assert result["site_summary"]["score"] == score
     assert result["technical_audit_summary"]["score"] == score
+
+
+def test_verification_only_findings_stay_low_non_scoring_and_do_not_outrank_confirmed_work():
+    body = payload([page("/fr/fr/p/healthy-product", 4, 0)])
+    reviewed = run_review(body)
+    reviewed["recommendations"] = [
+        {
+            "id": "orphan",
+            "fix_id": "orphan",
+            "rule": "potential_orphan_pages",
+            "category": "indexability",
+            "priority": "critical",
+            "overall_priority_score": 94,
+            "affected_pages": [f"/fr/item-{index}" for index in range(122)],
+            "source_pages": ["/sitemap.xml"],
+            "evidence_status": "needs_verification",
+            "verification_state": "needs_verification",
+            "limitation_code": "sampled_crawl_cannot_prove_orphan",
+            "issue_title": "Verify sitemap-only pages are internally linked",
+        },
+        {
+            "id": "canonical",
+            "fix_id": "canonical",
+            "rule": "canonical_missing",
+            "category": "canonical",
+            "priority": "high",
+            "overall_priority_score": 74,
+            "affected_pages": ["/fr/confirmed"],
+            "source_pages": ["/fr/confirmed"],
+            "issue_title": "Add a canonical URL",
+        },
+    ]
+
+    result = apply_review_evidence_calibration(reviewed, body)
+    orphan = next(fix for fix in result["recommendations"] if fix["rule"] == "potential_orphan_pages")
+
+    assert result["recommendations"][0]["rule"] == "canonical_missing"
+    assert orphan["priority"] == "low"
+    assert orphan["overall_priority_score"] <= 39
+    assert orphan["score_impact"] == 0
+    assert orphan["non_scoring"] is True
+    assert result["health_score"] == 84
+    assert result["next_best_step"] == "Add a canonical URL"

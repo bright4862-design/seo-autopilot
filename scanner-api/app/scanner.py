@@ -11,6 +11,7 @@ from .extract import classify_template, extract_links, extract_page
 from .market_scope import market_pair_prefix, path_within_scope
 from .sampling import SAMPLING_VERSION, sampling_report, select_balanced_urls
 from .render_followup import RENDER_FOLLOWUP_VERSION, run_render_followup
+from .robots_policy import SCANNER_USER_AGENT, annotate_robots_evidence, load_robots_policy
 from .security import is_public_http_url, safe_get
 from .sitemap import load_sitemap_urls
 
@@ -106,6 +107,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         follow_redirects=False,
         headers={"User-Agent": "Mozilla/5.0 (compatible; FixListPythonScanner/1.0)"},
     ) as client:
+        robots_policy = await load_robots_policy(client, origin)
         if not path_prefix and prefix == "/":
             try:
                 landing = await safe_get(client, start_url)
@@ -167,7 +169,19 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
                 page = None
                 discovered = []
                 try:
-                    page = await fetch_and_extract(client, target, snapshot)
+                    if robots_policy.allowed(SCANNER_USER_AGENT, target) is False:
+                        page = extract_page(
+                            "",
+                            target,
+                            target,
+                            0,
+                            "",
+                            snapshot,
+                            fetch_error="blocked_by_robots_txt",
+                        )
+                    else:
+                        page = await fetch_and_extract(client, target, snapshot)
+                    annotate_robots_evidence(page, robots_policy, target)
                     html = page.pop("_html", "")
                     # Parse links OUTSIDE the lock (CPU-bound) so workers don't block each other.
                     discovered = extract_links(html, page.get("final_url") or target) if (page.get("status_code") == 200 and html) else []
@@ -227,6 +241,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         "normalized_url": start_url,
         "requested_path_prefix": scope_evidence.get("requested_path_prefix", "/"),
         "crawl_scope": dict(scope_evidence),
+        "robots_txt_evidence": robots_policy.evidence(),
         "scan_mode": scan_mode,
         "pages_crawled": len(pages),
         "pages_found": pages_found,

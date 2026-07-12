@@ -50,7 +50,38 @@ def test_comparison_reports_content_recovered_without_mutating_raw_page():
     assert result["title_recovered"] is True
     assert result["h1_recovered"] is True
     assert result["schema_types_recovered"] == ["Product"]
+    assert result["render_regression"] is False
     assert raw["word_count"] == 10
+
+
+def test_small_hydration_delta_is_not_reported_as_content_recovery():
+    raw = {**_raw(1), "word_count": 600, "title": "Title", "h1": "Heading"}
+    rendered = {
+        "word_count": 655,
+        "title": "Title",
+        "h1": "Heading",
+        "schema_types": [],
+    }
+
+    result = compare_raw_and_rendered(raw, rendered)
+
+    assert result["content_recovered"] is False
+    assert result["render_regression"] is False
+
+
+def test_large_rendered_content_drop_is_reported_as_regression():
+    raw = {**_raw(1), "word_count": 900, "title": "Title", "h1": "Heading"}
+    rendered = {
+        "word_count": 400,
+        "title": "Title",
+        "h1": "Heading",
+        "schema_types": [],
+    }
+
+    result = compare_raw_and_rendered(raw, rendered)
+
+    assert result["content_recovered"] is False
+    assert result["render_regression"] is True
 
 
 @pytest.mark.asyncio
@@ -75,6 +106,7 @@ async def test_followup_uses_injected_renderer_and_contains_failures():
     assert result["attempted_pages"] == 2
     assert result["successful_pages"] == 1
     assert result["content_recovered_pages"] == 1
+    assert result["render_regression_pages"] == 0
     assert result["errors"] == [
         {"url": "https://example.com/app-2", "error": "browser timeout"}
     ]

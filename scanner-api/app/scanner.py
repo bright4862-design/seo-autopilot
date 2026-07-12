@@ -8,6 +8,7 @@ import httpx
 
 from .artifact_filter import MAX_ARTIFACT_EVIDENCE, is_artifact_url, record_artifact
 from .canonical_validation import validate_canonical_targets
+from .redirect_validation import apply_redirect_evidence, fetch_with_redirect_evidence, summarize_redirect_evidence
 from .extract import classify_template, extract_links, extract_page
 from .market_scope import market_pair_prefix, path_within_scope
 from .sampling import SAMPLING_VERSION, sampling_report, select_balanced_urls
@@ -181,7 +182,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
                             fetch_error="blocked_by_robots_txt",
                         )
                     else:
-                        page = await fetch_and_extract(client, target, snapshot)
+                        page = await fetch_and_extract(client, target, snapshot, robots_policy=robots_policy)
                     annotate_robots_evidence(page, robots_policy, target)
                     html = page.pop("_html", "")
                     # Parse links OUTSIDE the lock (CPU-bound) so workers don't block each other.
@@ -207,6 +208,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
             robots_policy,
             deadline=deadline,
         )
+        redirect_evidence = summarize_redirect_evidence(pages)
 
     findings = build_findings(pages)
     findings.extend(duplicate_casing_findings(pages))
@@ -250,6 +252,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         "crawl_scope": dict(scope_evidence),
         "robots_txt_evidence": robots_policy.evidence(),
         "canonical_target_evidence": canonical_target_evidence,
+        "redirect_evidence": redirect_evidence,
         "scan_mode": scan_mode,
         "pages_crawled": len(pages),
         "pages_found": pages_found,
@@ -273,7 +276,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
             "scanner_version": VERSION,
             "pages_crawled": len(pages),
             "pages_found": pages_found,
-            "failed_pages": sum(1 for page in pages if page.get("status_code", 0) >= 400 or page.get("fetch_error")),
+            "failed_pages": sum(1 for page in pages if is_verified_failed(page)),
             "verified_failed_pages": len(verified_failed),
             "suspicious_url_artifacts": len(artifacts),
             "url_evidence_summary": build_evidence_summary(pages, len(artifacts)),
@@ -281,6 +284,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
             "crawl_policy_source": DEFAULT_POLICY["source"],
             "crawl_scope": dict(scope_evidence),
             "canonical_target_evidence": canonical_target_evidence,
+            "redirect_evidence": redirect_evidence,
             "render_evidence_version": RENDER_EVIDENCE_VERSION,
             "render_evidence": render_evidence,
             "duplicate_casing_routes": detect_duplicate_casing_routes(pages),
@@ -293,7 +297,9 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
 def build_render_evidence(pages: list[dict]) -> dict:
     successful = [
         page for page in pages
-        if 200 <= int(page.get("status_code") or 0) < 400 and not page.get("fetch_error")
+        if 200 <= int(page.get("status_code") or 0) < 400
+        and not page.get("fetch_error")
+        and not page_is_redirect_source(page)
     ]
     suspected = [page for page in successful if page.get("client_rendering_suspected") is True]
     evaluated = len(successful)
@@ -315,13 +321,39 @@ def build_render_evidence(pages: list[dict]) -> dict:
     }
 
 
-async def fetch_and_extract(client: httpx.AsyncClient, url: str, discovery: dict) -> dict:
+async def fetch_and_extract(
+    client: httpx.AsyncClient,
+    url: str,
+    discovery: dict,
+    robots_policy=None,
+) -> dict:
     if not is_public_http_url(url):
         return extract_page("", url, url, 0, "", discovery, fetch_error="blocked_non_public_host")
     try:
-        response = await safe_get(client, url)
-        if response is None:
-            return extract_page("", url, url, 0, "", discovery, fetch_error="blocked_non_public_redirect")
+        redirect_evidence = None
+        if robots_policy is None:
+            response = await safe_get(client, url)
+            if response is None:
+                return extract_page("", url, url, 0, "", discovery, fetch_error="blocked_non_public_redirect")
+        else:
+            response, redirect_evidence = await fetch_with_redirect_evidence(
+                client,
+                url,
+                robots_policy,
+            )
+            if response is None:
+                page = extract_page(
+                    "",
+                    url,
+                    str(redirect_evidence.get("destination_url") or url),
+                    0,
+                    "",
+                    discovery,
+                    fetch_error=str(redirect_evidence.get("fetch_error") or "redirect_validation_failed"),
+                )
+                apply_redirect_evidence(page, redirect_evidence)
+                return page
+
         content_type = response.headers.get("content-type", "")
         html = response.text if "html" in content_type or "xml" in content_type or not content_type else ""
         page = extract_page(
@@ -333,6 +365,8 @@ async def fetch_and_extract(client: httpx.AsyncClient, url: str, discovery: dict
             discovery,
             response_headers={"x-robots-tag": response.headers.get_list("x-robots-tag")},
         )
+        if redirect_evidence is not None:
+            apply_redirect_evidence(page, redirect_evidence)
         page["_html"] = html
         return page
     except Exception as exc:
@@ -344,6 +378,11 @@ def build_findings(pages: list[dict]) -> list[dict]:
     for page in pages:
         path = page.get("path") or "/"
         if page.get("url_confidence") == "crawler_artifact":
+            continue
+        redirect_finding = redirect_finding_for_page(page)
+        if redirect_finding is not None:
+            findings.append(redirect_finding)
+        if page_is_redirect_source(page):
             continue
         if sitemap_indexability_conflict(page):
             findings.append(create_finding(
@@ -401,6 +440,129 @@ def build_findings(pages: list[dict]) -> list[dict]:
             findings.append(create_finding("image_alt_text", "image_alt_text", "medium" if missing_alt >= 10 else "low", "Add useful image descriptions", path, current_value=f"{missing_alt} images missing alt text", explanation="Some meaningful images may not have text descriptions.", recommendation="Add short, specific alt text to meaningful images."))
     return findings
 
+
+
+
+def page_is_redirect_source(page: dict) -> bool:
+    state = str(page.get("redirect_state") or "")
+    return int(page.get("redirect_hop_count") or 0) > 0 or state in {
+        "redirect_loop",
+        "redirect_missing_location",
+        "redirect_invalid_location",
+        "redirect_chain_limit_exceeded",
+        "redirect_destination_blocked_by_robots",
+        "redirect_destination_failed",
+        "blocked_non_public_redirect",
+    }
+
+
+def redirect_finding_for_page(page: dict) -> dict | None:
+    if not page_is_redirect_source(page):
+        return None
+
+    state = str(page.get("redirect_state") or "")
+    sources = set(page.get("discovered_from") or [])
+    source_path = str(page.get("redirect_source_path") or urlparse(str(page.get("url") or "")).path or "/")
+    destination = str(page.get("redirect_destination_url") or page.get("final_url") or "")
+    destination_status = int(page.get("redirect_destination_status_code") or 0)
+    destination_indexability = str(page.get("redirect_destination_indexability_state") or "")
+    chain = [str(item) for item in (page.get("redirect_chain") or []) if str(item)]
+    hop_count = int(page.get("redirect_hop_count") or 0)
+
+    if state == "redirect_loop":
+        details = (
+            "redirect_loop", "high", "Remove a redirect loop",
+            "This URL redirects back to a URL already visited in the same redirect path, so crawlers and visitors cannot reach a final page.",
+            "Choose one final destination and update each redirect so the path ends there without returning to an earlier URL.",
+        )
+    elif state in {"redirect_missing_location", "redirect_invalid_location"}:
+        details = (
+            "redirect_invalid_response", "high", "Fix a redirect with no valid destination",
+            "This URL returned a redirect response without a usable destination URL.",
+            "Add a valid absolute or relative Location header that points directly to the intended final page.",
+        )
+    elif state == "redirect_chain_limit_exceeded":
+        details = (
+            "redirect_chain_limit", "high", "Fix an unresolved redirect chain",
+            "The redirect path exceeded the scanner's bounded hop limit before reaching a final page.",
+            "Replace the chain with one direct redirect to the final live destination.",
+        )
+    elif state in {"redirect_destination_failed", "blocked_non_public_redirect"} or destination_status >= 400 or destination_indexability == "Failed":
+        details = (
+            "redirect_destination_failed", "high", "Fix a redirect that ends on an unavailable page",
+            "The redirect destination failed to load, returned an error, or could not be safely reached.",
+            "Point the source URL directly to a live 200-status destination or restore the intended destination page.",
+        )
+    elif state == "redirect_destination_blocked_by_robots" or destination_indexability == "Blocked by robots.txt":
+        details = (
+            "redirect_destination_blocked", "medium", "Review a redirect to a robots-blocked destination",
+            "The redirect ends on a URL that Googlebot or the scanner is blocked from crawling.",
+            "Confirm the destination is intentional and allow search crawlers to access it when the page should appear in search.",
+        )
+    elif destination_indexability == "Noindexed":
+        details = (
+            "redirect_destination_noindex", "high", "Fix a redirect to a noindexed destination",
+            "The redirect ends on a page that explicitly tells search engines not to index it.",
+            "Use an indexable final destination or remove the noindex directive when the destination should rank.",
+        )
+    elif state == "redirect_chain" or hop_count >= 2:
+        details = (
+            "redirect_chain", "medium", "Shorten a redirect chain",
+            "This URL passes through multiple redirects before reaching the final page.",
+            "Update the first redirect and any links or sitemap entries to point directly to the final destination.",
+        )
+    elif "sitemap" in sources:
+        details = (
+            "sitemap_redirect", "medium", "Replace a redirecting URL in the sitemap",
+            "The sitemap lists a URL that redirects instead of the final indexable destination.",
+            "Replace the sitemap entry with the final 200-status canonical URL.",
+        )
+    elif "internal_link" in sources:
+        details = (
+            "internal_link_redirect", "low", "Update an internal link that passes through a redirect",
+            "An internal link points to an old URL and makes crawlers and visitors take an unnecessary redirect.",
+            "Update the internal link to point directly to the final destination.",
+        )
+    else:
+        return None
+
+    rule, priority, title, explanation, recommendation = details
+    current_parts = []
+    if chain:
+        current_parts.append(" → ".join(chain[:8]))
+    elif destination:
+        current_parts.append(destination)
+    if destination_status:
+        current_parts.append(f"destination HTTP {destination_status}")
+    if destination_indexability:
+        current_parts.append(f"destination: {destination_indexability}")
+
+    finding = create_finding(
+        rule=rule,
+        category="indexability",
+        priority=priority,
+        title=title,
+        page_url=source_path,
+        current_value=" — ".join(current_parts),
+        explanation=explanation,
+        recommendation=recommendation,
+        difficulty="developer",
+        source_pages=page.get("source_pages", []),
+        link_text_samples=page.get("link_text_samples", []),
+    )
+    finding.update({
+        "redirect_state": state,
+        "redirect_hop_count": hop_count,
+        "redirect_chain": chain,
+        "redirect_destination_url": destination,
+        "redirect_destination_status_code": destination_status,
+        "redirect_destination_indexability_state": destination_indexability,
+        "redirect_evidence_version": page.get("redirect_evidence_version"),
+        "evidence_status": "confirmed",
+        "verification_state": "verified",
+        "confidence_score": 94,
+    })
+    return finding
 
 def canonical_target_finding(page: dict) -> dict | None:
     state = str(page.get("canonical_target_state") or "")
@@ -550,7 +712,7 @@ def create_finding(rule: str, category: str, priority: str, title: str, page_url
 
 
 FAILURE_RULES = {"rate_limited_page", "failed_page", "server_error", "404_error", "410_error"}
-TEMPLATE_RULES = {"client_rendering", "canonical_missing", "canonical_target_redirect", "canonical_target_failed", "canonical_target_noindex", "canonical_target_blocked", "canonical_chain", "canonical_loop", "canonical_cross_domain", "schema", "missing_h1", "multiple_h1", "image_alt_text", "missing_meta_description", "sitemap_indexability_conflict"}
+TEMPLATE_RULES = {"client_rendering", "canonical_missing", "canonical_target_redirect", "canonical_target_failed", "canonical_target_noindex", "canonical_target_blocked", "canonical_chain", "canonical_loop", "canonical_cross_domain", "redirect_loop", "redirect_invalid_response", "redirect_chain_limit", "redirect_destination_failed", "redirect_destination_blocked", "redirect_destination_noindex", "redirect_chain", "sitemap_redirect", "internal_link_redirect", "schema", "missing_h1", "multiple_h1", "image_alt_text", "missing_meta_description", "sitemap_indexability_conflict"}
 GROUP_MIN_AFFECTED = 3
 
 
@@ -594,6 +756,22 @@ def group_template_title(rule: str, family: str) -> str:
         return "Remove canonical loops"
     if rule == "canonical_cross_domain":
         return "Verify cross-domain canonical URLs"
+    if rule == "redirect_loop":
+        return "Remove redirect loops"
+    if rule in {"redirect_invalid_response", "redirect_chain_limit"}:
+        return "Fix unresolved redirect paths"
+    if rule == "redirect_destination_failed":
+        return "Fix redirects that end on unavailable pages"
+    if rule == "redirect_destination_blocked":
+        return "Review redirects to robots-blocked pages"
+    if rule == "redirect_destination_noindex":
+        return "Fix redirects to noindexed pages"
+    if rule == "redirect_chain":
+        return "Shorten repeated redirect chains"
+    if rule == "sitemap_redirect":
+        return "Replace redirecting URLs in the sitemap"
+    if rule == "internal_link_redirect":
+        return "Update internal links that pass through redirects"
     if rule == "sitemap_indexability_conflict":
         return "Remove non-indexable URLs from the sitemap"
     return f"Fix repeated {fam} template issue"
@@ -735,11 +913,13 @@ def build_evidence_summary(pages: list[dict], artifact_count: int) -> dict:
 
 
 def page_evidence(page: dict) -> dict:
-    keys = ["url", "final_url", "path", "status_code", "fetch_error", "url_confidence", "url_suspicion_reasons", "discovered_from", "source_pages", "link_text_samples", "page_template_family", "estimated_page_intent", "title", "h1"]
+    keys = ["url", "final_url", "path", "status_code", "fetch_error", "url_confidence", "url_suspicion_reasons", "discovered_from", "source_pages", "link_text_samples", "page_template_family", "estimated_page_intent", "title", "h1", "redirect_state", "redirect_hop_count", "redirect_chain", "redirect_destination_url", "redirect_destination_status_code", "redirect_destination_indexability_state"]
     return {key: page.get(key) for key in keys}
 
 
 def is_verified_failed(page: dict) -> bool:
+    if page_is_redirect_source(page):
+        return False
     if str(page.get("fetch_error") or "").startswith("blocked_"):
         return False
     return bool((int(page.get("status_code") or 0) >= 400 or page.get("fetch_error")) and page.get("url_confidence") != "crawler_artifact")

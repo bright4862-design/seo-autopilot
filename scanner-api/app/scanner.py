@@ -202,6 +202,10 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
 
         workers = [asyncio.create_task(worker()) for _ in range(max(1, concurrency))]
         await asyncio.gather(*workers)
+        # Enforce the selected scan budget again after all concurrent sources finish.
+        # Downstream validation and review must never receive more pages than the mode allows.
+        if len(pages) > max_pages:
+            pages = pages[:max_pages]
         canonical_target_evidence = await validate_canonical_targets(
             client,
             pages,

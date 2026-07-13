@@ -329,6 +329,19 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         score += archetype_boost(key, text, pages)
         scores.append((key, score))
     scores.sort(key=lambda item: item[1], reverse=True)
+    # Require structural evidence before choosing ecommerce. Incidental commerce
+    # words in titles or docs must not override a SaaS or general site's structure.
+    path_text = " ".join(clean_path(page_evidence_url(page)).lower() for page in pages[:220])
+    ecommerce_paths = sum(count_includes(path_text, pattern) for pattern in ("/products/", "/product/", "/collections/", "/collection/", "/cart", "/checkout"))
+    saas_paths = sum(count_includes(path_text, pattern) for pattern in ("/pricing", "/features", "/use-cases", "/solutions", "/login", "/signup", "/docs", "/api"))
+    adjusted_scores = []
+    for key, score in scores:
+        if key == "ecommerce_specialty_retail" and ecommerce_paths < 2:
+            score = min(score, 1.0)
+        if key == "saas_app_membership" and saas_paths >= 2:
+            score += 12
+        adjusted_scores.append((key, score))
+    scores = sorted(adjusted_scores, key=lambda item: item[1], reverse=True)
     primary = scores[0][0] if scores and scores[0][1] > 0 else "general"
     secondary = scores[1][0] if len(scores) > 1 and scores[1][1] > max(3, scores[0][1] * 0.6) else ""
     confidence = min(0.96, 0.45 + (scores[0][1] / max(12, scores[0][1] + (scores[1][1] if len(scores) > 1 else 0)))) if scores and scores[0][1] > 0 else 0.35
@@ -406,12 +419,15 @@ def review_input_quality(body: dict[str, Any], site_fingerprint: dict[str, Any])
 
 def evidence_is_incomplete(site_fingerprint: dict[str, Any]) -> bool:
     received = int_or_zero(site_fingerprint.get("pages_received"))
-    reported = max(
-        int_or_zero(site_fingerprint.get("pages_crawled")),
-        int_or_zero(site_fingerprint.get("pages_found")),
-    )
+    crawled = int_or_zero(site_fingerprint.get("pages_crawled"))
+    found = int_or_zero(site_fingerprint.get("pages_found"))
+    reported = max(crawled, found)
     sampled = int_or_zero(site_fingerprint.get("sampled_pages_sent_to_ai"))
-    return reported > 0 and (received == 0 or sampled == 0)
+    if reported > 0 and (received == 0 or sampled == 0):
+        return True
+    if found >= 100 and received < 20 and received / max(found, 1) < 0.10:
+        return True
+    return False
 
 
 def crawl_is_blocked(site_fingerprint: dict[str, Any]) -> bool:
@@ -1271,6 +1287,7 @@ def detect_business_model(text: str, archetype: str) -> str:
         "utilities_comparison_lead_gen": "regulated_or_trust_lead_generation",
         "booking_experiences_marketplace": "booking_or_reservation",
         "ecommerce_specialty_retail": "catalog_or_ecommerce",
+        "saas_app_membership": "saas_or_member_app",
     }
     if archetype in decisive:
         return decisive[archetype]

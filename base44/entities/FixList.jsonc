@@ -1,0 +1,145 @@
+{
+  "name": "FixList",
+  "type": "object",
+  "properties": {
+    "scan_run_id": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "website_url": {
+      "type": "string"
+    },
+    "ai_review_backend": {
+      "type": "string"
+    },
+    "python_review_fallback_used": {
+      "type": "boolean",
+      "default": false
+    },
+    "is_authoritative": {
+      "type": "boolean",
+      "default": false
+    },
+    "health_score": {
+      "type": "number"
+    },
+    "health_grade": {
+      "type": "string"
+    },
+    "scan_status": {
+      "type": "string"
+    },
+    "score_is_provisional": {
+      "type": "boolean",
+      "default": false
+    },
+    "no_high_confidence_findings": {
+      "type": "boolean",
+      "default": false
+    },
+    "total_fixes": {
+      "type": "number",
+      "default": 0
+    },
+    "critical_count": {
+      "type": "number",
+      "default": 0
+    },
+    "high_count": {
+      "type": "number",
+      "default": 0
+    },
+    "medium_count": {
+      "type": "number",
+      "default": 0
+    },
+    "low_count": {
+      "type": "number",
+      "default": 0
+    },
+    "completed_count": {
+      "type": "number",
+      "default": 0
+    },
+    "top_action_fix_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "owner_user_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "scan_run_id",
+    "project_id"
+  ],
+  "rls": {
+    "create": {
+      "$or": [
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        },
+        {
+          "user_condition": {
+            "role": "user"
+          }
+        }
+      ]
+    },
+    "read": {
+      "$or": [
+        {
+          "data.owner_user_id": "{{user.id}}"
+        },
+        {
+          "created_by_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "data.owner_user_id": "{{user.id}}"
+        },
+        {
+          "created_by_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "$or": [
+        {
+          "data.owner_user_id": "{{user.id}}"
+        },
+        {
+          "created_by_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    }
+  }
+}

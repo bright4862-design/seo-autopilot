@@ -19,6 +19,15 @@ The service exposes:
 - `POST /scan`
 - `POST /review`
 
+## Observability
+
+Every `/scan` and `/review` request emits structured JSON lifecycle events on
+stdout (`app/observability.py`): started/completed with duration, coverage,
+rate-limit counters, and version + beta-revision tracking, plus customer-safe
+error envelopes with a correlated `error_id`. Cloud Run ingests these as
+structured logs; the log-based metrics and alert policies are defined in
+`docs/production-monitoring.md`.
+
 ## Beta acceptance and freeze
 
 Phase 1 of the roadmap closes with three steps: deploy, run acceptance scans,

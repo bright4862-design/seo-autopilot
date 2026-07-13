@@ -12,6 +12,13 @@ from .render_evidence_quality import (
     apply_render_evidence_quality,
 )
 from .beta_revision import live_revision
+from .observability import (
+    OBSERVABILITY_VERSION,
+    RequestTimer,
+    review_metrics,
+    scan_metrics,
+    website_host,
+)
 from .review import REVIEW_VERSION, run_review
 from .review_calibration import CALIBRATION_VERSION, apply_review_evidence_calibration
 from .scanner import VERSION, run_scan
@@ -41,6 +48,7 @@ def health():
         "navigation_indexability_version": NAVIGATION_INDEXABILITY_VERSION,
         "render_evidence_quality_version": RENDER_EVIDENCE_QUALITY_VERSION,
         "beta_revision_fingerprint": live_revision()["fingerprint"],
+        "observability_version": OBSERVABILITY_VERSION,
     }
 
 
@@ -56,16 +64,28 @@ async def scan(payload: ScanRequest, x_scanner_key: str | None = Header(default=
     if SCANNER_API_KEY and x_scanner_key != SCANNER_API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    result = await run_scan(
-        website_url=payload.website_url,
-        path_prefix=payload.path_prefix,
+    timer = RequestTimer(
+        "scan",
+        website_host=website_host(payload.website_url),
         scan_mode=payload.scan_mode,
-        business_name=payload.business_name or "",
-        cms_platform=payload.cms_platform or "",
+        scanner_version=VERSION,
+        beta_revision_fingerprint=live_revision()["fingerprint"],
     )
-    result = await enrich_scan_with_trust_pages(result)
-    result = apply_indexability_quality_to_result(result)
-    return apply_render_evidence_quality(result)
+    try:
+        result = await run_scan(
+            website_url=payload.website_url,
+            path_prefix=payload.path_prefix,
+            scan_mode=payload.scan_mode,
+            business_name=payload.business_name or "",
+            cms_platform=payload.cms_platform or "",
+        )
+        result = await enrich_scan_with_trust_pages(result)
+        result = apply_indexability_quality_to_result(result)
+        result = apply_render_evidence_quality(result)
+    except Exception as exc:  # noqa: BLE001 - customer-safe envelope, full detail logged
+        return timer.failed(exc)
+    timer.completed(**scan_metrics(result))
+    return result
 
 
 @app.post("/review")
@@ -73,6 +93,17 @@ async def review(payload: dict[str, Any] = Body(default_factory=dict), x_scanner
     if SCANNER_API_KEY and x_scanner_key != SCANNER_API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    result = run_review(payload)
-    result = apply_trust_discovery_gate(result, payload)
-    return apply_review_evidence_calibration(result, payload)
+    timer = RequestTimer(
+        "review",
+        website_host=website_host(payload.get("website_url")),
+        review_version=REVIEW_VERSION,
+        beta_revision_fingerprint=live_revision()["fingerprint"],
+    )
+    try:
+        result = run_review(payload)
+        result = apply_trust_discovery_gate(result, payload)
+        result = apply_review_evidence_calibration(result, payload)
+    except Exception as exc:  # noqa: BLE001 - customer-safe envelope, full detail logged
+        return timer.failed(exc)
+    timer.completed(**review_metrics(result))
+    return result

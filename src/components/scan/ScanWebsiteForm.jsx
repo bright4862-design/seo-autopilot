@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { base44 } from "@/api/base44Client";
 import { normalizeActionPriority, normalizeFindingEvidence, normalizeReviewEvidenceState, normalizeReviewScope, selectFinalReviewFixes } from "@/lib/reviewContract";
+import { beginScanRun, completeScanRun, failScanRun, markScanRunReviewing } from "@/lib/scanRuns";
 
 const ADVANCED_SCANNER_FUNCTION = "runAdvancedScan";
 const AI_REVIEW_FUNCTION = "aiReviewScan";
@@ -129,6 +130,9 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
     let mergedFinal = null;
     setSubmitting(true);
     clearPreviousDashboardScan(normalizedUrl);
+    // Durable scan history (ScanRun lifecycle) records in the background; it
+    // resolves to null when persistence is unavailable and never blocks the scan.
+    const scanRunPromise = beginScanRun({ websiteUrl: normalizedUrl, pathPrefix: requestedPathPrefix, scanMode, scanSource: "scan_website_page" }).catch(() => null);
     writeScanDebug({ status: "running", stage: "scan_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix });
     refreshDebugData();
 
@@ -167,6 +171,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       if (scanData?.success === false || scanData?.error) throw new Error(scanData.error || "Website scan failed.");
 
       setActiveStep("Checking SEO issues");
+      scanRunPromise.then((handle) => markScanRunReviewing(handle)).catch(() => {});
       try {
         const aiPayload = buildAiReviewPayload({ scanData, businessName: trimmedBusinessName, websiteUrl: normalizedUrl, cmsPlatform, cmsName, cleanedKeywords, scanMode, requestedPathPrefix });
         writeScanDebug({ status: "running", stage: "ai_review_request_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_payload_summary: { pages_crawled: aiPayload.scan_coverage?.pages_crawled || 0, pages_found: aiPayload.scan_coverage?.pages_found || 0, sampled_pages_sent_to_ai: aiPayload.scan_coverage?.sampled_pages_sent_to_ai || aiPayload.crawled_pages.length, raw_fixes_count: aiPayload.raw_fixes.length, crawl_policy_source: aiPayload.crawl_policy_source, url_evidence_preserved: Boolean(aiPayload.url_evidence_summary), business_priority_rules_enabled: true, coverage_instruction_enabled: true } });
@@ -185,11 +190,14 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       setActiveStep("Saving your FixList");
       mergedFinal = mergeScanAndAiReview({ scanData, aiData, websiteUrl: normalizedUrl, businessName: trimmedBusinessName, cmsPlatform, cmsName, scanMode, requestedPathPrefix });
       saveScanForDashboard(mergedFinal);
+      const durableRecord = normalizeScanRecordForStorage(mergedFinal);
+      scanRunPromise.then((handle) => completeScanRun(handle, durableRecord)).catch(() => {});
       writeScanDebug({ status: "saved", stage: "dashboard_saved", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), compact_debug_available: true, download_available: true });
       refreshDebugData();
       navigate("/dashboard?scan=complete");
     } catch (err) {
       console.error("Website scan failed.", err);
+      scanRunPromise.then((handle) => failScanRun(handle, err)).catch(() => {});
       writeScanDebug({ status: "failed", stage: "scan_failed", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, error: err?.message || String(err), scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), compact_debug_available: true, download_available: true });
       refreshDebugData();
       setError(err?.message || "The website scan failed. Try Quick check first or check the backend function logs.");

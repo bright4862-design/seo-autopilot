@@ -1,0 +1,66 @@
+name: Apply roadmap phases 1-4 patch
+
+on:
+  push:
+    branches:
+      - agent/apply-roadmap-phases-1-4
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/apply-roadmap-phases-1-4
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Reconstruct and apply cumulative patch series
+        run: |
+          cat .github/patches/roadmap-phases-1-4.part*.b64 | base64 --decode | gzip --decompress > /tmp/roadmap-phases-1-4.patch
+          git am --3way /tmp/roadmap-phases-1-4.patch
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: python -m pip install -r scanner-api/requirements.txt
+
+      - name: Run scanner tests
+        run: PYTHONPATH=scanner-api pytest -q scanner-api/tests
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run frontend quality gates
+        run: |
+          npm run lint
+          npm run typecheck
+          node tests/frontend/durableScanModel.test.mjs
+          node tests/frontend/scanRunPersistence.test.mjs
+          npm run build
+
+      - name: Remove temporary patch machinery and push
+        run: |
+          rm -f .github/patches/roadmap-phases-1-4.part*.b64
+          rm -f .github/workflows/apply-roadmap-phases.yml
+          git add -A
+          git commit -m 'Apply roadmap phases 1-4 patches'
+          git push origin HEAD:agent/apply-roadmap-phases-1-4

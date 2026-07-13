@@ -355,6 +355,64 @@ def summarize_acceptance(
     }
 
 
+def summarize_beta_acceptance(
+    records: list[dict[str, Any]],
+    failures: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Summarize the small post-deploy beta acceptance run (Shopify/Signal/Basecamp).
+
+    Unlike ``summarize_acceptance`` this does not require a fixed 9-site,
+    3-per-stratum manifest. It is the gate for freezing a *deployed* beta:
+    every requested site must complete and pass the crawler contract. The
+    returned shape is compatible with ``format_acceptance_markdown``.
+    """
+    passed_records = [record for record in records if _dict(record.get("validation")).get("passed")]
+
+    violation_sites: dict[str, set[str]] = defaultdict(set)
+    warning_sites: dict[str, set[str]] = defaultdict(set)
+    finding_sites: dict[str, set[str]] = defaultdict(set)
+    for record in records:
+        site = _str(record.get("site"))
+        validation = _dict(record.get("validation"))
+        for code in _list(validation.get("error_codes")):
+            violation_sites[_str(code)].add(site)
+        for code in _list(validation.get("warning_codes")):
+            warning_sites[_str(code)].add(site)
+        for rule in _dict(record.get("finding_rules")):
+            finding_sites[_str(rule)].add(site)
+
+    recurring_violations = {
+        code: sorted(sites) for code, sites in sorted(violation_sites.items()) if len(sites) >= 2
+    }
+    recurring_warnings = {
+        code: sorted(sites) for code, sites in sorted(warning_sites.items()) if len(sites) >= 2
+    }
+    recurring_findings = {
+        rule: sorted(sites)
+        for rule, sites in sorted(finding_sites.items(), key=lambda item: (-len(item[1]), item[0]))
+        if len(sites) >= 2
+    }
+
+    complete = bool(records) and not failures
+    acceptance_passed = bool(complete and len(passed_records) == len(records))
+
+    return {
+        "version": CRAWLER_ACCEPTANCE_VERSION,
+        "requested_sites": len(records) + len(failures),
+        "completed_sites": len(records),
+        "failed_sites": len(failures),
+        "contract_passed_sites": len(passed_records),
+        "complete": complete,
+        "acceptance_passed": acceptance_passed,
+        "freeze_recommendation": "freeze_beta_crawler" if acceptance_passed else "patch_or_rerun",
+        "recurring_contract_violations": recurring_violations,
+        "recurring_warnings": recurring_warnings,
+        "recurring_finding_rules": recurring_findings,
+        "records": records,
+        "failures": failures,
+    }
+
+
 def format_acceptance_markdown(summary: dict[str, Any]) -> str:
     lines = [
         "# Final crawler validation",

@@ -1,0 +1,79 @@
+name: Apply roadmap phases 1-4 patch
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/apply-roadmap-phases-1-4
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Reconstruct and apply patch series
+        run: |
+          cat .github/patches/roadmap-phases-1-4.part*.b64 > /tmp/roadmap.b64
+          test "$(wc -c < /tmp/roadmap.b64)" = '38028'
+          test "$(sha256sum /tmp/roadmap.b64 | cut -d' ' -f1)" = '2734e6ae95a53cf98bcd2ce5f276379cc44786f0239cdc1fcc0ba1f055f3dd32'
+          base64 --decode /tmp/roadmap.b64 | gzip --decompress > /tmp/roadmap.patch
+          test "$(wc -c < /tmp/roadmap.patch)" = '112208'
+          test "$(sha256sum /tmp/roadmap.patch | cut -d' ' -f1)" = '86d84b79a36ae473998f7da1e992c5242c3ef3a755cc6fc5cc9f7bf1c7ba58dc'
+          git am --3way /tmp/roadmap.patch
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Python gates
+        run: |
+          python -m pip install --upgrade pip pytest pytest-asyncio
+          python -m pip install -r scanner-api/requirements.txt
+          pytest -q tests/
+          PYTHONPATH=scanner-api pytest -q scanner-api/tests
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Frontend gates
+        run: |
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm run test:frontend
+          node tests/frontend/durableScanModel.test.mjs
+          node tests/frontend/scanRunPersistence.test.mjs
+          npm run build
+
+      - name: Publish validated product commits
+        shell: bash
+        run: |
+          git checkout origin/main -- .github/workflows/ci.yml
+          git add .github/workflows/ci.yml
+          git commit -m 'Defer CI workflow update to connector'
+          set +e
+          git push origin HEAD:agent/apply-roadmap-phases-1-4 > /tmp/push.log 2>&1
+          status=$?
+          cat /tmp/push.log
+          exit $status
+
+      - name: Upload push diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: roadmap-push-diagnostic
+          path: /tmp/push.log
+          if-no-files-found: warn

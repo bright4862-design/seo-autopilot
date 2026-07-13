@@ -1,6 +1,8 @@
 name: Apply roadmap phases 1-4 patch
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches:
       - agent/apply-roadmap-phases-1-4

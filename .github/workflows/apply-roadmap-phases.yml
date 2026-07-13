@@ -27,9 +27,40 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
       - name: Reconstruct and apply cumulative patch series
+        id: apply_patch
+        shell: bash
         run: |
-          cat .github/patches/roadmap-phases-1-4.part*.b64 | base64 --decode | gzip --decompress > /tmp/roadmap-phases-1-4.patch
-          git am --3way /tmp/roadmap-phases-1-4.patch
+          set +e
+          cat .github/patches/roadmap-phases-1-4.part*.b64 | base64 --decode | gzip --decompress > /tmp/roadmap-phases-1-4.patch 2>/tmp/reconstruct-error.log
+          reconstruct_status=$?
+          if [ "$reconstruct_status" -ne 0 ]; then
+            echo "Patch reconstruction failed with status $reconstruct_status" | tee /tmp/patch-diagnostic.log
+            cat /tmp/reconstruct-error.log | tee -a /tmp/patch-diagnostic.log
+            exit "$reconstruct_status"
+          fi
+          {
+            echo "patch_bytes=$(wc -c < /tmp/roadmap-phases-1-4.patch)"
+            echo "patch_sha256=$(sha256sum /tmp/roadmap-phases-1-4.patch | cut -d' ' -f1)"
+            grep '^Subject:' /tmp/roadmap-phases-1-4.patch
+          } | tee /tmp/patch-diagnostic.log
+          git am --3way /tmp/roadmap-phases-1-4.patch > /tmp/git-am.log 2>&1
+          apply_status=$?
+          cat /tmp/git-am.log | tee -a /tmp/patch-diagnostic.log
+          if [ "$apply_status" -ne 0 ]; then
+            echo "git_status:" | tee -a /tmp/patch-diagnostic.log
+            git status --short | tee -a /tmp/patch-diagnostic.log
+            echo "unmerged_files:" | tee -a /tmp/patch-diagnostic.log
+            git diff --name-only --diff-filter=U | tee -a /tmp/patch-diagnostic.log
+            exit "$apply_status"
+          fi
+
+      - name: Upload patch diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: roadmap-patch-diagnostic
+          path: /tmp/patch-diagnostic.log
+          if-no-files-found: warn
 
       - name: Set up Python
         uses: actions/setup-python@v5

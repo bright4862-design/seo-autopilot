@@ -334,3 +334,21 @@ def test_health_score_uses_the_strongest_priority_once_per_rule():
 
     assert compute_health_score(fixes, fingerprint) == 84
 
+
+
+def test_severe_undercoverage_is_incomplete_and_score_limited():
+    from app.review import evidence_is_incomplete
+    fingerprint = {"pages_found": 900, "pages_crawled": 7, "pages_received": 7, "sampled_pages_sent_to_ai": 7, "blocked_access_pages": 0, "blocked_or_429_pages": 0}
+    assert evidence_is_incomplete(fingerprint) is True
+    assert compute_health_score([], fingerprint) == 55
+
+
+def test_incidental_commerce_keywords_do_not_override_saas_structure():
+    body = {"website_url": "https://signal.example", "pages_found": 706, "pages_crawled": 3, "pages": [
+        {"url": "https://signal.example/pricing", "status_code": 200, "title": "Pricing", "h1": "Pricing", "meta_description": "Plans", "page_template_family": "standard"},
+        {"url": "https://signal.example/features", "status_code": 200, "title": "Features", "h1": "Features", "meta_description": "Product features", "page_template_family": "standard"},
+        {"url": "https://signal.example/docs/api", "status_code": 200, "title": "API docs", "h1": "API", "meta_description": "Developer docs with checkout examples", "page_template_family": "guide_article"},
+    ]}
+    result = run_review(body)
+    assert result["site_fingerprint"]["primary_archetype"] == "saas_app_membership"
+    assert result["site_fingerprint"]["business_model"] == "saas_or_member_app"

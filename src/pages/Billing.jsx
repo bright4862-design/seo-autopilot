@@ -2,7 +2,6 @@ import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { trackEvent } from "@/lib/analytics";
-import { Button } from "@/components/ui/button";
 import LeadRequestModal from "@/components/billing/LeadRequestModal";
 import CleanupRequestModal from "@/components/billing/CleanupRequestModal";
 
@@ -37,76 +36,96 @@ export default function Billing() {
     setDeleteMessage("To delete your account and personal data, please contact Base44 support from your account settings. This protects your account from accidental deletion.");
   };
 
+  function planAction(plan) {
+    const isCurrent = plan.id === currentPlan;
+    if (plan.id === "free") {
+      return <PillButton solid onClick={() => navigate("/crawl-status")}>Run free scan</PillButton>;
+    }
+    if (isCurrent) {
+      return <span className="text-[13px] text-ink-faint">Current plan</span>;
+    }
+    if (plan.comingSoon) {
+      return <PillButton onClick={() => setLeadModal({ type: "waitlist", plan: plan.id })}>Join waitlist</PillButton>;
+    }
+    return (
+      <PillButton onClick={() => setLeadModal({ type: plan.id === "done_for_you" ? "cleanup" : "custom_rebuild", plan: plan.id })}>
+        {plan.id === "done_for_you" ? "Request help" : "Contact us"}
+      </PillButton>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-[#F7F8FA]">
-      <div className="mx-auto w-full max-w-4xl px-5 py-10 sm:px-6 lg:py-12">
-        <div className="mb-8">
-          <p className="text-sm font-medium text-blue-600">Plans and help</p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">Billing</h1>
-          <p className="mt-2 text-base leading-7 text-slate-500">Choose a guided plan or request help when you need it.</p>
+    <div className="min-h-screen bg-paper text-ink antialiased">
+      <div className="mx-auto max-w-[680px] px-6 pb-24">
+        <div className="mt-16">
+          <h1 className="text-[26px] font-semibold leading-tight tracking-tight">Billing</h1>
+          <p className="mt-1.5 text-[15px] text-ink-muted">
+            Choose a guided plan or request help when you need it. Payments aren&rsquo;t connected yet — nothing is charged here.
+          </p>
         </div>
 
-        <section className="mb-7 rounded-3xl border border-slate-200/80 bg-white px-5 py-5 shadow-sm sm:px-6">
-          <h2 className="text-base font-semibold text-slate-950">Payments are not connected yet</h2>
-          <p className="mt-2 text-sm leading-6 text-slate-600">You can join the waitlist or request help. Nothing is charged here.</p>
-        </section>
-
-        <div className="space-y-4">
+        <div className="mt-16 flex items-baseline gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Plans</div>
+        <div className="mt-2">
           {plans.map((plan) => {
             const isCurrent = plan.id === currentPlan;
             return (
-              <section key={plan.id} className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-sm">
-                <div className="flex flex-col gap-5 px-5 py-5 sm:flex-row sm:items-start sm:justify-between sm:px-6">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                      <h2 className="text-base font-semibold text-slate-950">{plan.name}</h2>
-                      {isCurrent && <span className="text-xs font-medium text-blue-600">Current plan</span>}
-                    </div>
-                    <p className="mt-2 text-sm leading-6 text-slate-600">{plan.desc}</p>
-                    <div className="mt-4 grid gap-2 sm:grid-cols-3">
-                      {plan.features.map((feature) => <p key={feature} className="text-sm text-slate-500">{feature}</p>)}
-                    </div>
+              <div key={plan.id} className="flex items-start justify-between gap-6 border-b border-hairline-soft py-6">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                    <h2 className="text-[16px] font-medium tracking-tight">{plan.name}</h2>
+                    {isCurrent ? <span className="text-[12px] font-medium text-good">Current</span> : null}
+                    {plan.comingSoon ? <span className="text-[12px] text-ink-faint">Coming soon</span> : null}
                   </div>
-                  <div className="shrink-0 sm:text-right">
-                    <p className="text-lg font-semibold text-slate-950">{plan.price}</p>
-                    {plan.id === "free" ? (
-                      <Button className="mt-4 rounded-full bg-blue-600 px-5 text-sm font-medium text-white shadow-none hover:bg-blue-700" onClick={() => navigate("/crawl-status")}>Run Free Scan</Button>
-                    ) : isCurrent ? (
-                      <Button disabled variant="outline" className="mt-4 rounded-full border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 shadow-none">Current plan</Button>
-                    ) : plan.comingSoon ? (
-                      <Button variant="outline" className="mt-4 rounded-full border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 shadow-none hover:bg-slate-50" onClick={() => setLeadModal({ type: "waitlist", plan: plan.id })}>Join waitlist</Button>
-                    ) : (
-                      <Button variant="outline" className="mt-4 rounded-full border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 shadow-none hover:bg-slate-50" onClick={() => setLeadModal({ type: plan.id === "done_for_you" ? "cleanup" : "custom_rebuild", plan: plan.id })}>{plan.id === "done_for_you" ? "Request help" : "Contact us"}</Button>
-                    )}
-                  </div>
+                  <p className="mt-1 max-w-[52ch] text-[13.5px] text-ink-muted">{plan.desc}</p>
+                  <p className="mt-2 text-[13px] text-ink-faint">{plan.features.join(" · ")}</p>
                 </div>
-              </section>
+                <div className="shrink-0 text-right">
+                  <p className="text-[15px] font-semibold tabular-nums tracking-tight">{plan.price}</p>
+                  <div className="mt-3">{planAction(plan)}</div>
+                </div>
+              </div>
             );
           })}
         </div>
 
-        <section className="mt-7 rounded-3xl border border-red-100 bg-white px-5 py-5 shadow-sm sm:px-6">
-          <h2 className="text-base font-semibold text-slate-950">Account</h2>
-          <p className="mt-2 text-sm leading-6 text-slate-600">
-            Need to remove your account and data? Start here and we’ll show the safest next step.
-          </p>
-          {deleteMessage && (
-            <p className="mt-3 rounded-2xl bg-red-50 px-4 py-3 text-sm leading-6 text-red-700">
-              {deleteMessage}
-            </p>
-          )}
-          <Button
-            variant="outline"
-            className="mt-4 rounded-full border-red-200 bg-white px-5 text-sm font-medium text-red-600 shadow-none hover:bg-red-50 hover:text-red-700"
+        <div className="mt-16 flex items-baseline gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Account</div>
+        <div className="mt-4 max-w-[56ch] text-[14px] text-ink-muted">
+          <p>Need to remove your account and data? Start here and we&rsquo;ll show the safest next step.</p>
+          {deleteMessage ? (
+            <p className="mt-3 border-l-2 border-crit/40 pl-3 text-[13.5px] leading-relaxed">{deleteMessage}</p>
+          ) : null}
+          <button
+            type="button"
             onClick={handleDeleteAccount}
+            className="mt-5 rounded-full border border-hairline px-4 py-1.5 text-[13px] font-medium text-crit transition-colors hover:border-crit/30 hover:bg-crit/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
           >
-            Delete Account
-          </Button>
-        </section>
+            Delete account
+          </button>
+        </div>
+
+        <footer className="mt-24 border-t border-hairline-soft pt-5 text-[12px] leading-relaxed text-ink-faint">
+          Plans unlock as FixList leaves beta. Joining a waitlist never charges you.
+        </footer>
 
         {leadModal?.type === "cleanup" && <CleanupRequestModal onClose={() => setLeadModal(null)} />}
         {leadModal && leadModal.type !== "cleanup" && <LeadRequestModal requestType={leadModal.type} selectedPlan={leadModal.plan} onClose={() => setLeadModal(null)} />}
       </div>
     </div>
+  );
+}
+
+function PillButton({ solid = false, onClick, children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-full px-4 py-1.5 text-[13px] font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink ${
+        solid
+          ? "bg-ink text-paper transition-opacity hover:opacity-80"
+          : "border border-hairline text-ink hover:bg-ink/[0.04]"
+      }`}
+    >
+      {children}
+    </button>
   );
 }

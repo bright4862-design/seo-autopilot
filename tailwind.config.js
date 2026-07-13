@@ -10,6 +10,19 @@ module.exports = {
   			sm: 'calc(var(--radius) - 4px)'
   		},
   		colors: {
+  			paper: '#FAFAF9',
+  			ink: {
+  				DEFAULT: '#1C1917',
+  				muted: '#78716C',
+  				faint: '#A8A29E'
+  			},
+  			good: '#15803D',
+  			warnink: '#B45309',
+  			crit: '#B91C1C',
+  			hairline: {
+  				DEFAULT: 'rgba(28, 25, 23, 0.08)',
+  				soft: 'rgba(28, 25, 23, 0.05)'
+  			},
   			background: 'hsl(var(--background))',
   			foreground: 'hsl(var(--foreground))',
   			card: {

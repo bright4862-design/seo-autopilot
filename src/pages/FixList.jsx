@@ -1,24 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  AlertCircle,
-  ArrowRight,
-  Bug,
-  CheckCircle2,
-  Copy,
-  ExternalLink,
-  FileText,
-  ListChecks,
-  MonitorCog,
-  RefreshCw,
-  Search,
-  Sparkles,
-  Trash2,
-  Wrench,
-} from "lucide-react";
+import { Bug, Copy, ExternalLink, RefreshCw, Trash2 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { isRateLimitFinding, shouldUseLegacyRateLimitPresentation } from "@/lib/reviewContract";
+import { trackEvent } from "@/lib/analytics";
+import ScoreRing from "@/components/fixlist/ScoreRing";
 
 const DASHBOARD_LAST_SCAN_KEY = "seo_autopilot:last_scan";
 const DASHBOARD_HISTORY_KEY = "seo_autopilot:scan_history";
@@ -27,6 +13,7 @@ const LEGACY_HISTORY_KEY = "SEO_AUTOPILOT_SCAN_HISTORY";
 const ACTIVE_SCAN_URL_KEY = "seo_autopilot:active_scan_url";
 const ACTIVE_SCAN_STARTED_AT_KEY = "seo_autopilot:active_scan_started_at";
 const SCAN_DEBUG_KEY = "seo_autopilot:scan_debug";
+const DONE_FIXES_KEY = "seo_autopilot:done_fixes";
 
 const STORAGE_KEYS = [
   DASHBOARD_LAST_SCAN_KEY,
@@ -36,6 +23,7 @@ const STORAGE_KEYS = [
   ACTIVE_SCAN_URL_KEY,
   ACTIVE_SCAN_STARTED_AT_KEY,
   SCAN_DEBUG_KEY,
+  DONE_FIXES_KEY,
 ];
 
 const CMS_OPTIONS = [
@@ -48,14 +36,6 @@ const CMS_OPTIONS = [
   { value: "godaddy", label: "GoDaddy" },
   { value: "joomla", label: "Joomla" },
   { value: "custom", label: "Custom / Not sure" },
-];
-
-const PRIORITY_FILTERS = [
-  { value: "all", label: "All" },
-  { value: "critical", label: "Critical" },
-  { value: "high", label: "High" },
-  { value: "medium", label: "Medium" },
-  { value: "low", label: "Low" },
 ];
 
 const CATEGORY_LABELS = {
@@ -81,39 +61,36 @@ const CATEGORY_LABELS = {
   social_metadata: "Social sharing",
 };
 
-const BUCKETS = {
-  needs_approval: {
-    title: "Your turn",
-    subtitle: "Quick decisions you or your team can review.",
-    cta: "Review now",
-  },
-  auto_fixed: {
-    title: "Prepared for you",
-    subtitle: "Suggested improvements prepared for review.",
-    cta: "See prepared fixes",
-  },
-  needs_developer: {
-    title: "Get help",
-    subtitle: "Technical fixes to send to your web person.",
-    cta: "See technical tasks",
-  },
-};
-
-const BUCKET_ORDER = ["needs_approval", "auto_fixed", "needs_developer"];
 const ENERGY_PATH_HINTS = ["energie", "énergie", "electricite", "électricité", "gaz", "fournisseur", "kwh", "tarif"];
 const CREDIT_PATH_HINTS = ["rachat-de-credits", "rachat-de-credit", "credit", "crédit", "credits", "crédits", "pret", "prêt", "emprunt"];
+
+// Checks the scanner actually runs; a check "passes" when no finding in the
+// scanned sample carries its category. Copy is deliberately sample-scoped —
+// the contract forbids claiming the whole site is perfect.
+const PASSED_CHECK_DEFINITIONS = [
+  { categories: ["404_error", "broken_page"], label: "No broken pages found in the pages we checked" },
+  { categories: ["meta_title"], label: "Search titles look good on the pages we checked" },
+  { categories: ["meta_description"], label: "Search descriptions look good on the pages we checked" },
+  { categories: ["canonical"], label: "Canonical settings look right on the pages we checked" },
+  { categories: ["image_alt_text", "alt_text"], label: "Images have text descriptions on the pages we checked" },
+  { categories: ["schema"], label: "No missing trust signals on the pages we checked" },
+  { categories: ["duplicate_content"], label: "No duplicate search text found in the pages we checked" },
+  { categories: ["internal_link"], label: "No internal link problems found in the pages we checked" },
+  { categories: ["indexability"], label: "Google can index the pages we checked" },
+];
 
 export default function FixList() {
   const navigate = useNavigate();
   const [scanRecord, setScanRecord] = useState(() => readBestScanRecord());
   const [debugData, setDebugData] = useState(() => readScanDebugData());
-  const [priorityFilter, setPriorityFilter] = useState("all");
   const [selectedCms, setSelectedCms] = useState(() => normalizeCmsValue(scanRecord?.cms_platform || "custom"));
+  const [doneIds, setDoneIds] = useState(() => readDoneFixIds(websiteKeyOf(scanRecord)));
 
   function reloadScan() {
     const next = readBestScanRecord();
     setScanRecord(next);
     setDebugData(readScanDebugData());
+    setDoneIds(readDoneFixIds(websiteKeyOf(next)));
     if (next?.cms_platform) setSelectedCms(normalizeCmsValue(next.cms_platform));
   }
 
@@ -128,305 +105,295 @@ export default function FixList() {
   }, []);
 
   const recommendations = useMemo(() => getRecommendations(scanRecord).map((item) => normalizeRecommendation(item, scanRecord)), [scanRecord]);
-  const filteredRecommendations = useMemo(() => {
-    if (priorityFilter === "all") return recommendations;
-    return recommendations.filter((item) => item.priority === priorityFilter);
-  }, [priorityFilter, recommendations]);
-
   const pages = useMemo(() => getPages(scanRecord), [scanRecord]);
   const healthScore = getHealthScore(scanRecord);
   const pagesScanned = getPagesScanned(scanRecord, pages);
   const hasUsefulScan = Boolean(scanRecord && (recommendations.length > 0 || pages.length > 0 || healthScore > 0));
-  const cmsLabel = CMS_OPTIONS.find((cms) => cms.value === selectedCms)?.label || "Custom / Not sure";
-  const topActions = getTopActions(scanRecord, recommendations);
-  const counts = countBuckets(recommendations);
   const noHighConfidenceFindings = isNoHighConfidenceFindings(scanRecord, recommendations);
-  const healthGrade = getHealthGrade(scanRecord, healthScore, noHighConfidenceFindings);
   const nextBestStep = getNextBestStep(scanRecord, noHighConfidenceFindings);
-  const summary = getBestSummary(scanRecord, healthScore, pagesScanned, recommendations.length);
+  const websiteKey = websiteKeyOf(scanRecord);
+  const websiteHost = safeHostname(scanRecord?.website_url) || websiteKey || "";
+
+  const active = recommendations.filter((item) => !doneIds.includes(item.id));
+  const doneItems = recommendations.filter((item) => doneIds.includes(item.id));
+  const fixNow = active.filter((item) => item.priority === "critical" || item.priority === "high");
+  const later = active.filter((item) => item.priority !== "critical" && item.priority !== "high");
+  const passedChecks = hasUsefulScan ? buildPassedChecks(recommendations) : [];
+  const limitationNote = getLimitationNote(scanRecord);
+  const summary = hasUsefulScan ? getBestSummary(scanRecord, healthScore, pagesScanned, recommendations.length) : "";
+  const healthGrade = hasUsefulScan ? getHealthGrade(scanRecord, healthScore, noHighConfidenceFindings) : "";
+
+  function markDone(item) {
+    const next = [...doneIds, item.id];
+    setDoneIds(next);
+    writeDoneFixIds(websiteKey, next);
+    trackEvent("recommendation_marked_reviewed", { fix_id: item.id, category: item.category });
+  }
+
+  function undoDone(item) {
+    const next = doneIds.filter((id) => id !== item.id);
+    setDoneIds(next);
+    writeDoneFixIds(websiteKey, next);
+  }
 
   return (
-    <div className="min-h-screen bg-[#F7F8FA] px-4 py-6 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <PageHeader hasUsefulScan={hasUsefulScan} onScan={() => navigate("/onboarding")} />
+    <div className="min-h-screen bg-paper text-ink antialiased">
+      <div className="mx-auto max-w-[680px] px-6 pb-24">
+        <div className="flex items-center justify-between pt-7">
+          <div className="text-[15px] font-medium tracking-tight text-ink-muted">{websiteHost || ""}</div>
+          <button
+            type="button"
+            onClick={() => navigate("/onboarding")}
+            className="rounded-full bg-ink px-4 py-2 text-[13px] font-medium text-paper transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+          >
+            {hasUsefulScan ? "Scan again" : "Run a scan"}
+          </button>
+        </div>
 
         {hasUsefulScan ? (
           <>
-            <NextStepCard counts={counts} onReview={() => scrollToRecommendations()} noHighConfidenceFindings={noHighConfidenceFindings} nextBestStep={nextBestStep} />
+            <p className="mt-16 text-[13px] text-ink-faint tabular-nums">
+              Scanned {scanRecord?.created_at ? formatDate(scanRecord.created_at) : "recently"} · {pagesScanned} pages checked
+              {passedChecks.length > 0 ? ` · ${passedChecks.length} checks passed` : ""}
+            </p>
 
-            <div className="grid gap-6 xl:grid-cols-3">
-              <WebsiteHealthCard healthScore={healthScore} healthGrade={healthGrade} pagesScanned={pagesScanned} createdAt={scanRecord?.created_at} />
-              <BucketOverview counts={counts} />
+            <div className="mt-4 flex items-center gap-7">
+              <ScoreRing score={healthScore} />
+              <div>
+                <h1 className="text-[26px] font-semibold leading-tight tracking-tight">
+                  {getHeroHeadline({ healthScore, noHighConfidenceFindings, activeCount: active.length, doneCount: doneItems.length })}
+                </h1>
+                <p className="mt-1.5 text-[15px] text-ink-muted tabular-nums">
+                  {getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount: active.length, doneCount: doneItems.length })}
+                </p>
+                {healthGrade ? <p className="mt-1 text-[13px] text-ink-faint">{healthGrade}</p> : null}
+              </div>
             </div>
 
-            <AiActionPlan summary={summary} topActions={topActions} cmsLabel={cmsLabel} />
+            {summary ? (
+              <p className="mt-8 max-w-[56ch] text-[14px] leading-relaxed text-ink-muted">{summary}</p>
+            ) : null}
 
-            <ScanDebugPanel debugData={debugData} onRefresh={reloadScan} onClear={() => { clearAllScanData(); reloadScan(); }} />
+            {limitationNote ? (
+              <p className="mt-6 border-l-2 border-warnink/40 pl-3 text-[13.5px] leading-relaxed text-ink-muted">{limitationNote}</p>
+            ) : null}
 
-            <CmsSelector selectedCms={selectedCms} onChange={setSelectedCms} />
-
-            <section id="recommendations" className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h2 className="text-xl font-bold text-slate-950">Your FixList</h2>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Each card uses scan evidence first: affected page, current value, business importance, route scope, and AI steps.
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  {PRIORITY_FILTERS.map((filter) => (
-                    <button
-                      key={filter.value}
-                      type="button"
-                      onClick={() => setPriorityFilter(filter.value)}
-                      className={`rounded-full px-3 py-1.5 text-sm font-medium transition ${
-                        priorityFilter === filter.value
-                          ? "bg-slate-950 text-white"
-                          : "bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-950"
-                      }`}
-                    >
-                      {filter.label}
-                    </button>
+            {fixNow.length > 0 ? (
+              <>
+                <SectionEyebrow label="Fix now" count={fixNow.length} />
+                <div className="mt-2">
+                  {fixNow.map((item) => (
+                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
                   ))}
                 </div>
-              </div>
+              </>
+            ) : null}
 
-              <div className="mt-5 space-y-4">
-                {filteredRecommendations.length > 0 ? (
-                  filteredRecommendations.map((recommendation, index) => (
-                    <RecommendationCard key={`${recommendation.id}-${index}`} recommendation={recommendation} cms={selectedCms} />
-                  ))
-                ) : (
-                  <EmptyFilteredState noHighConfidenceFindings={noHighConfidenceFindings} nextBestStep={nextBestStep} />
-                )}
+            {later.length > 0 ? (
+              <>
+                <SectionEyebrow label="When you have time" count={later.length} />
+                <div className="mt-2">
+                  {later.map((item) => (
+                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
+                  ))}
+                </div>
+              </>
+            ) : null}
+
+            {active.length === 0 && doneItems.length > 0 ? (
+              <div className="mt-16 py-10">
+                <h2 className="text-[22px] font-semibold tracking-tight">All clear.</h2>
+                <p className="mt-2 max-w-[48ch] text-ink-muted">
+                  Every fix is marked done. Scan again once the changes are live and we&rsquo;ll confirm them.
+                </p>
               </div>
-            </section>
+            ) : null}
+
+            {active.length === 0 && doneItems.length === 0 && noHighConfidenceFindings ? (
+              <div className="mt-16 py-4">
+                <h2 className="text-[22px] font-semibold tracking-tight">Nothing to fix in this sample.</h2>
+                <p className="mt-2 max-w-[48ch] text-ink-muted">
+                  {nextBestStep || "No high-confidence issues were found in the pages we checked."}
+                </p>
+              </div>
+            ) : null}
+
+            {passedChecks.length > 0 ? <PassedChecks checks={passedChecks} /> : null}
+
+            {doneItems.length > 0 ? (
+              <>
+                <SectionEyebrow label="Done" count={doneItems.length} />
+                <div className="mt-2">
+                  {doneItems.map((item) => (
+                    <div key={item.id} className="flex items-baseline justify-between border-b border-hairline-soft py-3.5 text-[14px] text-ink-faint">
+                      <span className="line-through">{item.title}</span>
+                      <button
+                        type="button"
+                        onClick={() => undoDone(item)}
+                        className="shrink-0 pl-4 text-[13px] text-ink-muted transition-colors hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+                      >
+                        Undo
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : null}
+
+            {active.length > 0 ? <CmsPicker selectedCms={selectedCms} onChange={setSelectedCms} /> : null}
           </>
         ) : (
-          <>
-            <NoScanState onScan={() => navigate("/onboarding")} />
-            <ScanDebugPanel debugData={debugData} onRefresh={reloadScan} onClear={() => { clearAllScanData(); reloadScan(); }} />
-          </>
+          <NoScanState onScan={() => navigate("/onboarding")} />
         )}
+
+        <ScanDebugPanel debugData={debugData} onRefresh={reloadScan} onClear={() => { clearAllScanData(); reloadScan(); }} />
+
+        <footer className="mt-24 border-t border-hairline-soft pt-5 text-[12px] leading-relaxed text-ink-faint">
+          {hasUsefulScan
+            ? `FixList checked ${pagesScanned} pages of your site this scan. Some checks depend on how your site behaves for Google over time, so a perfect score isn't the goal — a shorter list is.`
+            : "FixList checks the most important pages of your site and turns what it finds into a short, plain-English list."}
+        </footer>
       </div>
     </div>
   );
 }
 
-function PageHeader({ hasUsefulScan, onScan }) {
+function SectionEyebrow({ label, count }) {
   return (
-    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-      <div>
-        <div className="flex items-center gap-2 text-sm font-medium text-indigo-700">
-          <ListChecks className="h-4 w-4" />
-          Plain-English SEO fixes
-        </div>
-        <h1 className="mt-2 text-3xl font-bold text-slate-950">FixList</h1>
-        <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-          Prioritized recommendations based on page type, business value, route scope, and what the scanner actually found.
-        </p>
-      </div>
-      <Button type="button" onClick={onScan} variant={hasUsefulScan ? "outline" : "default"}>
-        <Search className="mr-2 h-4 w-4" />
-        {hasUsefulScan ? "Run new scan" : "Run my scan"}
-      </Button>
+    <div className="mt-16 flex items-baseline gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
+      {label}
+      {typeof count === "number" ? <span className="font-normal tabular-nums">{count}</span> : null}
     </div>
   );
 }
 
-function NextStepCard({ counts, onReview, noHighConfidenceFindings = false, nextBestStep = "" }) {
-  const activeBucket = BUCKET_ORDER.find((key) => Number(counts[key] || 0) > 0);
-  const bucket = activeBucket ? BUCKETS[activeBucket] : null;
-  return (
-    <section className="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-sm sm:p-7">
-      <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <p className="text-sm font-medium text-indigo-600">Your next step</p>
-          <h2 className="mt-2 text-xl font-semibold text-slate-950">
-            {noHighConfidenceFindings ? "No high-confidence issues were found in this scanned sample." : bucket ? `Start with ${bucket.title}` : "Your scan has recommendations ready."}
-          </h2>
-          <p className="mt-2 text-sm leading-6 text-slate-600">
-            {noHighConfidenceFindings ? (nextBestStep || "Consider a deeper crawl or manually reviewing key money pages.") : (bucket?.subtitle || "Review the highest-impact items first.")}
-          </p>
-        </div>
-        {!noHighConfidenceFindings ? (
-          <Button type="button" onClick={onReview} className="shrink-0 rounded-full bg-indigo-600 px-6 text-sm font-medium text-white shadow-none hover:bg-indigo-700">
-            {bucket?.cta || "Review recommendations"}
-            <ArrowRight className="ml-2 h-4 w-4" />
-          </Button>
-        ) : null}
-      </div>
-    </section>
-  );
-}
+function FixRow({ item, cms, onDone }) {
+  const [open, setOpen] = useState(false);
+  const severe = item.priority === "critical" || item.priority === "high";
+  const cmsSteps = getCmsSteps(cms, item);
+  const evidenceItems = buildEvidenceItems(item).slice(0, 3);
+  const shownPages = item.affectedPages.slice(0, 4);
+  const extraCount = Math.max(0, item.affectedPages.length - shownPages.length);
 
-function WebsiteHealthCard({ healthScore, healthGrade = "", pagesScanned, createdAt }) {
-  const band = getScoreBand(healthScore);
-  const displayedGrade = healthGrade || band.label;
-  const gradeClassName = healthGrade && healthGrade !== band.label ? "bg-slate-100 text-slate-700" : band.className;
   return (
-    <section className="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-sm">
-      <h2 className="text-base font-semibold text-slate-950">Website health</h2>
-      <div className="mt-4 space-y-4">
-        <div>
-          <div className="text-5xl font-bold tracking-tight text-slate-950">{healthScore || "—"}</div>
-          <span className={`mt-3 inline-flex rounded-full px-3 py-1 text-xs font-medium ${gradeClassName}`}>{displayedGrade}</span>
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-          <MiniStat label="Pages checked" value={pagesScanned || 0} icon={FileText} />
-          <MiniStat label="Last scan" value={createdAt ? formatDate(createdAt) : "Recent"} icon={CheckCircle2} />
-        </div>
-      </div>
-    </section>
-  );
-}
+    <div className="border-b border-hairline-soft">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-start gap-3.5 py-5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+      >
+        <span className={`mt-[7px] h-[7px] w-[7px] shrink-0 rounded-full ${severe ? "bg-crit" : "bg-warnink"}`} />
+        <span className="min-w-0 flex-1">
+          <span className="block text-[16px] font-medium tracking-tight">{item.title}</span>
+          <span className="mt-0.5 block text-[13.5px] text-ink-muted">{clampText(item.explanation, 110)}</span>
+        </span>
+        <span className="mt-0.5 flex shrink-0 items-center gap-3">
+          <span className="hidden text-[12px] text-ink-faint sm:block">{item.needsHelp ? "Developer" : "You"}</span>
+          <span className={`text-[12px] leading-none text-ink-faint transition-transform ${open ? "rotate-90" : ""}`}>›</span>
+        </span>
+      </button>
 
-function MiniStat({ label, value, icon: Icon }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-      <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500">
-        <Icon className="h-4 w-4" />
-        {label}
-      </div>
-      <div className="mt-2 text-sm font-semibold text-slate-950">{value}</div>
-    </div>
-  );
-}
+      {open ? (
+        <div className="pb-6 pl-[21px] text-[14px] text-ink-muted">
+          <p className="max-w-[56ch]">{item.whyItMatters}</p>
 
-function BucketOverview({ counts }) {
-  return (
-    <div className="flex flex-col gap-4 xl:col-span-2">
-      {BUCKET_ORDER.map((key) => {
-        const bucket = BUCKETS[key];
-        const count = Number(counts[key] || 0);
-        return (
-          <div key={key} className="flex items-center justify-between gap-4 rounded-3xl border border-slate-200/80 bg-white px-6 py-5 shadow-sm">
-            <div>
-              <p className="text-base font-semibold text-slate-950">{bucket.title}</p>
-              <p className="mt-1 text-sm text-slate-500">{bucket.subtitle}</p>
-            </div>
-            <span className="text-2xl font-semibold text-slate-950">{count}</span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function AiActionPlan({ summary, topActions, cmsLabel }) {
-  return (
-    <section className="rounded-3xl border border-indigo-100 bg-indigo-50 p-5 shadow-sm">
-      <div className="flex items-start gap-3">
-        <div className="rounded-2xl bg-white p-3 text-indigo-700 shadow-sm"><Sparkles className="h-5 w-5" /></div>
-        <div className="min-w-0 flex-1">
-          <h2 className="text-lg font-bold text-slate-950">Plain-English plan</h2>
-          <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-700">{summary}</p>
-          <p className="mt-4 text-sm text-slate-600">Selected CMS: <span className="font-semibold text-slate-950">{cmsLabel}</span></p>
-          {topActions.length > 0 ? (
-            <div className="mt-5 grid gap-3 md:grid-cols-3">
-              {topActions.slice(0, 3).map((action, index) => (
-                <div key={`${action.title || index}`} className="rounded-2xl border border-indigo-100 bg-white p-4">
-                  <div className="text-sm font-bold text-indigo-700">{index + 1}</div>
-                  <p className="mt-2 text-sm font-bold text-slate-950">{action.title || action.issue_title || "Review this item"}</p>
-                  <p className="mt-2 text-sm leading-5 text-slate-600">{action.reason || action.why_it_matters || action.plain_english_summary || "Review the affected pages and make the recommended update."}</p>
-                </div>
-              ))}
-            </div>
+          {evidenceItems.length > 0 ? (
+            <>
+              <div className="mt-4 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Evidence</div>
+              <p className="mt-1 max-w-[56ch] text-[13.5px]">
+                {evidenceItems.map((entry) => `${entry.label}: ${entry.value}`).join(" · ")}
+              </p>
+            </>
           ) : null}
-        </div>
-      </div>
-    </section>
-  );
-}
 
-function CmsSelector({ selectedCms, onChange }) {
-  return (
-    <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-bold text-slate-950">Choose your website builder</h2>
-      <p className="mt-1 text-sm text-slate-500">Switch the instruction style without rerunning the scan.</p>
-      <div className="mt-4 flex flex-wrap gap-2">
-        {CMS_OPTIONS.map((cms) => (
-          <button key={cms.value} type="button" onClick={() => onChange(cms.value)} className={`rounded-full px-4 py-2 text-sm font-medium transition ${selectedCms === cms.value ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-950"}`}>
-            {cms.label}
-          </button>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function RecommendationCard({ recommendation, cms }) {
-  const priorityStyles = getPriorityStyles(recommendation.priority);
-  const bucket = BUCKETS[recommendation.bucket] || BUCKETS.needs_approval;
-  const affectedPages = recommendation.affectedPages.slice(0, 6);
-  const extraCount = Math.max(0, recommendation.affectedPages.length - affectedPages.length);
-  const cmsSteps = getCmsSteps(cms, recommendation);
-  const evidenceItems = buildEvidenceItems(recommendation);
-
-  return (
-    <article className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={`rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide ${priorityStyles.badge}`}>{getPriorityLabel(recommendation.priority)}</span>
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">{recommendation.customerCategory}</span>
-            <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700">{bucket.title}</span>
-            {recommendation.scopeRelationship ? <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">{humanize(recommendation.scopeRelationship)}</span> : null}
-          </div>
-          <h3 className="mt-4 text-xl font-bold text-slate-950">{recommendation.title}</h3>
-          <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-600">{recommendation.explanation}</p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2 rounded-2xl bg-slate-50 px-4 py-3 text-sm font-medium text-slate-600">
-          {recommendation.needsHelp ? <MonitorCog className="h-4 w-4" /> : <Wrench className="h-4 w-4" />}
-          {recommendation.needsHelp ? "Best for your web person" : "Quick review"}
-        </div>
-      </div>
-
-      {evidenceItems.length > 0 ? (
-        <div className="mt-5 rounded-2xl border border-indigo-100 bg-indigo-50/70 p-4">
-          <p className="text-sm font-bold text-slate-950">What FixList noticed</p>
-          <div className="mt-3 grid gap-2 md:grid-cols-2">
-            {evidenceItems.map((item) => (
-              <div key={item.label} className="rounded-xl bg-white px-3 py-2 text-sm">
-                <span className="font-semibold text-slate-950">{item.label}: </span>
-                <span className="text-slate-600">{item.value}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      <div className="mt-5 grid gap-4 lg:grid-cols-2">
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-          <p className="text-sm font-bold text-slate-950">Why this matters</p>
-          <p className="mt-2 text-sm leading-6 text-slate-600">{recommendation.whyItMatters}</p>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-          <p className="text-sm font-bold text-slate-950">What to do next</p>
-          <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm leading-6 text-slate-600">
-            {recommendation.generalSteps.map((step, index) => <li key={`${step}-${index}`}>{step}</li>)}
+          <div className="mt-4 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Where</div>
+          <ol className="mt-1 max-w-[56ch] list-decimal space-y-1 pl-4 text-ink">
+            {cmsSteps.map((step, index) => <li key={`${step}-${index}`}>{step}</li>)}
           </ol>
-        </div>
-      </div>
 
-      <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-        <p className="text-sm font-bold text-slate-950">{CMS_OPTIONS.find((item) => item.value === cms)?.label || "Custom / Not sure"} steps</p>
-        <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm leading-6 text-slate-600">
-          {cmsSteps.map((step, index) => <li key={`${step}-${index}`}>{step}</li>)}
-        </ol>
-      </div>
+          {shownPages.length > 0 ? (
+            <>
+              <div className="mt-4 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Pages</div>
+              <div className="mt-1 space-y-1">
+                {shownPages.map((page, index) => <AffectedPage key={`${page}-${index}`} page={page} />)}
+                {extraCount > 0 ? <p className="text-[13px] text-ink-faint tabular-nums">+{extraCount} more</p> : null}
+              </div>
+            </>
+          ) : null}
 
-      {affectedPages.length > 0 ? (
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-          <p className="text-sm font-bold text-slate-950">Example affected pages</p>
-          <div className="mt-3 space-y-2">
-            {affectedPages.map((page, index) => <AffectedPage key={`${page}-${index}`} page={page} />)}
-            {extraCount > 0 ? <p className="text-sm text-slate-500">Plus {extraCount} more affected pages.</p> : null}
-          </div>
+          <button
+            type="button"
+            onClick={onDone}
+            className="mt-5 rounded-full border border-hairline px-4 py-1.5 text-[13px] font-medium text-ink transition-colors hover:border-good/25 hover:bg-good/[0.07] hover:text-good focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+          >
+            Mark as done
+          </button>
         </div>
       ) : null}
-    </article>
+    </div>
+  );
+}
+
+function PassedChecks({ checks }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <SectionEyebrow label="Already good" />
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="py-3.5 text-[13.5px] text-ink-muted transition-colors hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+      >
+        {checks.length} checks passed — {open ? "hide them" : "show them"}
+      </button>
+      {open ? (
+        <div>
+          {checks.map((check) => (
+            <div key={check} className="flex gap-3.5 py-2.5 text-[14px] text-ink-muted">
+              <span className="mt-px text-[13px] text-good">✓</span>
+              {check}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function CmsPicker({ selectedCms, onChange }) {
+  return (
+    <div className="mt-16 flex items-center gap-3 text-[13.5px] text-ink-muted">
+      <label htmlFor="cms-picker">Instructions written for</label>
+      <select
+        id="cms-picker"
+        value={selectedCms}
+        onChange={(event) => onChange(event.target.value)}
+        className="cursor-pointer rounded-full border border-hairline bg-transparent px-3 py-1.5 text-[13px] font-medium text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+      >
+        {CMS_OPTIONS.map((cmsOption) => (
+          <option key={cmsOption.value} value={cmsOption.value}>{cmsOption.label}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function NoScanState({ onScan }) {
+  return (
+    <div className="mt-24">
+      <h1 className="text-[26px] font-semibold leading-tight tracking-tight">No FixList yet.</h1>
+      <p className="mt-2 max-w-[48ch] text-[15px] text-ink-muted">
+        Run a scan and we&rsquo;ll turn what we find into a short, plain-English list of fixes — each with where to click and who should do it.
+      </p>
+      <button
+        type="button"
+        onClick={onScan}
+        className="mt-6 rounded-full bg-ink px-5 py-2.5 text-[13px] font-medium text-paper transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+      >
+        Run my scan
+      </button>
+    </div>
   );
 }
 
@@ -436,13 +403,15 @@ function AffectedPage({ page }) {
   const showPath = cleanString(path) !== cleanString(label);
 
   return (
-    <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2">
+    <div className="flex items-center gap-2 text-[13px] tabular-nums">
       <div className="min-w-0">
-        <p className="truncate text-sm font-medium text-slate-950">{label}</p>
-        {showPath ? <p className="truncate text-xs text-slate-500">{path}</p> : null}
+        <p className="truncate font-medium text-ink">{label}</p>
+        {showPath ? <p className="truncate text-ink-faint">{path}</p> : null}
       </div>
       {isFullUrl(page) ? (
-        <a href={page} target="_blank" rel="noreferrer" className="shrink-0 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-950" aria-label="Open page"><ExternalLink className="h-4 w-4" /></a>
+        <a href={page} target="_blank" rel="noreferrer" className="shrink-0 p-1 text-ink-faint transition-colors hover:text-ink" aria-label="Open page">
+          <ExternalLink className="h-3.5 w-3.5" />
+        </a>
       ) : null}
     </div>
   );
@@ -464,67 +433,90 @@ function ScanDebugPanel({ debugData, onRefresh, onClear }) {
   }
 
   return (
-    <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h2 className="flex items-center gap-2 text-lg font-bold text-slate-950"><Bug className="h-5 w-5" /> Scan debug</h2>
-          <p className="mt-1 text-sm text-slate-500">Use this to confirm the scan saved and which logic ran.</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" onClick={() => setOpen((value) => !value)}><Bug className="mr-2 h-4 w-4" />{open ? "Hide debug" : "Show debug"}</Button>
-          <Button type="button" variant="outline" onClick={onRefresh}><RefreshCw className="mr-2 h-4 w-4" />Refresh</Button>
-          <Button type="button" variant="outline" onClick={copyJson}><Copy className="mr-2 h-4 w-4" />{copied ? "Copied" : "Copy JSON"}</Button>
-          <Button type="button" variant="outline" onClick={onClear}><Trash2 className="mr-2 h-4 w-4" />Clear scans</Button>
-        </div>
-      </div>
-
-      <div className="mt-5 grid gap-3 md:grid-cols-4">
-        <DebugStat label="Status" value={summary.status || "None"} />
-        <DebugStat label="Website" value={summary.websiteUrl || "None"} />
-        <DebugStat label="Pages" value={summary.pages || "0"} />
-        <DebugStat label="Score" value={summary.score || "None"} />
+    <section className="mt-16 border-t border-hairline-soft pt-4">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[13px] text-ink-faint">
+        <button type="button" onClick={() => setOpen((value) => !value)} className="flex items-center gap-1.5 transition-colors hover:text-ink">
+          <Bug className="h-3.5 w-3.5" />
+          {open ? "Hide scan details" : "Scan details"}
+        </button>
+        <button type="button" onClick={onRefresh} className="flex items-center gap-1.5 transition-colors hover:text-ink">
+          <RefreshCw className="h-3.5 w-3.5" />
+          Refresh
+        </button>
+        <button type="button" onClick={copyJson} className="flex items-center gap-1.5 transition-colors hover:text-ink">
+          <Copy className="h-3.5 w-3.5" />
+          {copied ? "Copied" : "Copy JSON"}
+        </button>
+        <button type="button" onClick={onClear} className="flex items-center gap-1.5 transition-colors hover:text-crit">
+          <Trash2 className="h-3.5 w-3.5" />
+          Clear scans
+        </button>
+        <span className="tabular-nums">
+          {summary.status || "no scan"}{summary.pages ? ` · ${summary.pages} pages` : ""}{summary.score ? ` · score ${summary.score}` : ""}
+        </span>
       </div>
 
       {open ? (
-        <div className="mt-5 overflow-hidden rounded-2xl border border-slate-200 bg-slate-950">
-          <pre className="max-h-[560px] overflow-auto p-4 text-xs leading-5 text-slate-100">{JSON.stringify(debugData, null, 2)}</pre>
-        </div>
+        <pre className="mt-4 max-h-[480px] overflow-auto rounded-lg border border-hairline bg-ink p-4 text-xs leading-5 text-paper">{JSON.stringify(debugData, null, 2)}</pre>
       ) : null}
     </section>
   );
 }
 
-function DebugStat({ label, value }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</div>
-      <div className="mt-2 break-words text-sm font-semibold text-slate-950">{String(value)}</div>
-    </div>
-  );
+function getHeroHeadline({ healthScore, noHighConfidenceFindings, activeCount, doneCount }) {
+  if (noHighConfidenceFindings && activeCount === 0 && doneCount === 0) return "Nothing to fix in this sample.";
+  if (activeCount === 0 && doneCount > 0) return "Nothing left on the list.";
+  if (healthScore >= 85) return "Great shape overall.";
+  if (healthScore >= 70) return "Good shape overall.";
+  if (healthScore >= 50) return "Getting there.";
+  return "Room to improve.";
 }
 
-function NoScanState({ onScan }) {
-  return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm">
-      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-3xl bg-slate-100 text-slate-600"><AlertCircle className="h-6 w-6" /></div>
-      <h2 className="mt-5 text-xl font-bold text-slate-950">No FixList yet.</h2>
-      <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-slate-600">Run a website scan first. Once it finishes, your plain-English action plan will appear here.</p>
-      <Button type="button" onClick={onScan} className="mt-5"><Search className="mr-2 h-4 w-4" />Run my scan</Button>
-    </div>
-  );
+function getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount, doneCount }) {
+  if (noHighConfidenceFindings && activeCount === 0 && doneCount === 0) {
+    return nextBestStep || "No high-confidence issues were found in the pages we checked.";
+  }
+  if (activeCount === 0 && doneCount > 0) return "Score will settle after your next scan.";
+  const word = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"][activeCount] || activeCount;
+  return `${word} fix${activeCount === 1 ? "" : "es"} to work through — start at the top.`;
 }
 
-function EmptyFilteredState({ noHighConfidenceFindings = false, nextBestStep = "" }) {
-  return (
-    <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-      <p className="text-sm font-medium text-slate-950">
-        {noHighConfidenceFindings ? "No high-confidence recommendations were found in this sample." : "No recommendations match this filter."}
-      </p>
-      <p className="mt-1 text-sm text-slate-500">
-        {noHighConfidenceFindings ? (nextBestStep || "Consider a deeper crawl or manually reviewing key money pages.") : "Choose another priority filter to see more items."}
-      </p>
-    </div>
-  );
+function getLimitationNote(record) {
+  const limitation = cleanString(record?.limitation);
+  if (limitation) return limitation;
+  if (record?.score_is_provisional === true) return "Scan coverage was limited, so this score is provisional. Fix what's below, then scan again for a fuller picture.";
+  return "";
+}
+
+function buildPassedChecks(recommendations) {
+  const present = new Set(recommendations.map((item) => String(item.category || "").toLowerCase()));
+  return PASSED_CHECK_DEFINITIONS
+    .filter((check) => check.categories.every((category) => !present.has(category)))
+    .map((check) => check.label);
+}
+
+function websiteKeyOf(record) {
+  const key = cleanString(record?.website_key);
+  if (key) return key;
+  return safeHostname(record?.website_url) || "";
+}
+
+function readDoneFixIds(websiteKey) {
+  if (!websiteKey) return [];
+  const stored = safeParseLocalStorage(DONE_FIXES_KEY);
+  const list = stored && typeof stored === "object" ? stored[websiteKey] : null;
+  return Array.isArray(list) ? list.map(String) : [];
+}
+
+function writeDoneFixIds(websiteKey, ids) {
+  if (!websiteKey || typeof window === "undefined") return;
+  try {
+    const stored = safeParseLocalStorage(DONE_FIXES_KEY) || {};
+    stored[websiteKey] = Array.from(new Set(ids.map(String)));
+    window.localStorage.setItem(DONE_FIXES_KEY, JSON.stringify(stored));
+  } catch (error) {
+    console.warn("Could not save done fixes.", error);
+  }
 }
 
 function normalizeRecommendation(item = {}, scanRecord = {}) {
@@ -844,17 +836,7 @@ function getPages(record) {
   return firstArray([record?.crawled_pages, record?.pages, record?.scanned_pages, record?.raw?.scanner?.pages_preview]);
 }
 
-function getTopActions(record, normalizedRecommendations) {
-  const actions = firstArray([record?.top_recommended_actions, record?.recommended_actions]);
-  if (actions.length > 0) return actions.slice(0, 5).map((action) => sanitizeTopAction(action, normalizedRecommendations));
-  return normalizedRecommendations.slice(0, 5).map((item) => ({ title: item.title, reason: item.whyItMatters, priority: item.priority }));
-}
 
-function sanitizeTopAction(action = {}, normalizedRecommendations = []) {
-  const match = normalizedRecommendations.find((item) => item.id === action.fix_id || item.original?.fix_id === action.fix_id || item.original?.id === action.fix_id);
-  if (match && isBlocked429(match.original)) return { title: match.title, reason: match.whyItMatters, priority: match.priority };
-  return action;
-}
 
 function getHealthScore(record) {
   const score = Number(record?.health_score || record?.seo_score || record?.website_health_report?.health_score || record?.scan_summary?.health_score || record?.scan_summary?.score || 0);
@@ -892,12 +874,6 @@ function getBestSummary(record, healthScore, pagesScanned, issueCount) {
   return `Your website health is ${label.toLowerCase()} with a score of ${healthScore || 0}/100. FixList reviewed ${pagesScanned || 0} pages and found ${issueCount || 0} recommendations. Start with the highest-impact items first.`;
 }
 
-function countBuckets(recommendations) {
-  return recommendations.reduce((acc, item) => {
-    acc[item.bucket] = Number(acc[item.bucket] || 0) + 1;
-    return acc;
-  }, { needs_approval: 0, auto_fixed: 0, needs_developer: 0 });
-}
 
 function getIssueBucket(item = {}) {
   const owner = String(item.who_can_do_this || item.owner || "").toLowerCase();
@@ -916,19 +892,7 @@ function normalizePriority(value) {
   return "medium";
 }
 
-function getPriorityLabel(priority) {
-  if (priority === "critical") return "Critical";
-  if (priority === "high") return "High";
-  if (priority === "low") return "Low";
-  return "Medium";
-}
 
-function getPriorityStyles(priority) {
-  if (priority === "critical") return { badge: "bg-red-50 text-red-700" };
-  if (priority === "high") return { badge: "bg-orange-50 text-orange-700" };
-  if (priority === "low") return { badge: "bg-slate-100 text-slate-600" };
-  return { badge: "bg-amber-50 text-amber-700" };
-}
 
 function getScoreBand(score) {
   const number = Number(score || 0);
@@ -1041,10 +1005,6 @@ function buildDebugSummary(debugData = {}) {
   };
 }
 
-function scrollToRecommendations() {
-  const element = document.getElementById("recommendations");
-  if (element) element.scrollIntoView({ behavior: "smooth", block: "start" });
-}
 
 function formatDate(value) {
   try {

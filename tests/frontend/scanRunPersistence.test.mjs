@@ -1,0 +1,116 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  buildFixItemFields,
+  buildFixListFields,
+  buildScanRunFields,
+  deriveTerminalStatus,
+  fixLineageKey,
+  getFixRecommendations,
+} from "../../src/lib/scanRunModel.js";
+
+test("complete scans persist as complete", () => {
+  assert.equal(deriveTerminalStatus({ scan_status: "complete" }), "complete");
+  assert.equal(deriveTerminalStatus({ scan_status: "complete_no_high_confidence_findings" }), "complete");
+});
+
+test("limited or provisional evidence never persists as complete", () => {
+  assert.equal(deriveTerminalStatus({ scan_status: "complete_with_access_limitations" }), "limited");
+  assert.equal(deriveTerminalStatus({ scan_status: "incomplete_evidence" }), "limited");
+  assert.equal(deriveTerminalStatus({ scan_status: "blocked_or_incomplete" }), "limited");
+  assert.equal(deriveTerminalStatus({ scan_status: "complete", score_is_provisional: true }), "limited");
+});
+
+test("lineage key is stable across scans and distinguishes page-scoped findings", () => {
+  const familyFix = { rule: "missing_title", page_scope: "family", page_template_family: "blog" };
+  assert.equal(fixLineageKey(familyFix), fixLineageKey({ ...familyFix, affected_pages: ["/a", "/b"] }));
+
+  const pageFixA = { rule: "missing_title", page_scope: "page", page_url: "/pricing" };
+  const pageFixB = { rule: "missing_title", page_scope: "page", page_url: "/about" };
+  assert.notEqual(fixLineageKey(pageFixA), fixLineageKey(pageFixB));
+});
+
+test("fix list counts preserve raw priorities without narrowing critical to high", () => {
+  const record = {
+    website_url: "https://example.com",
+    ai_review_backend: "python_review_api",
+    python_review_fallback_used: false,
+    recommendations: [
+      { fix_id: "f1", priority: "critical" },
+      { fix_id: "f2", priority: "high" },
+      { fix_id: "f3", priority: "low" },
+      { fix_id: "f4" },
+    ],
+  };
+  const fields = buildFixListFields(record);
+  assert.equal(fields.total_fixes, 4);
+  assert.equal(fields.critical_count, 1);
+  assert.equal(fields.high_count, 1);
+  assert.equal(fields.medium_count, 1);
+  assert.equal(fields.low_count, 1);
+  assert.equal(fields.is_authoritative, true);
+  assert.deepEqual(fields.top_action_fix_ids, ["f1", "f2", "f3"]);
+});
+
+test("fallback reviews are not marked authoritative", () => {
+  const fields = buildFixListFields({ ai_review_backend: "python_review_api", python_review_fallback_used: true });
+  assert.equal(fields.is_authoritative, false);
+});
+
+test("fix items carry lineage from the previous run", () => {
+  const previousItems = [
+    {
+      rule: "missing_title",
+      page_scope: "family",
+      page_template_family: "blog",
+      scan_run_id: "run_1",
+      first_seen_scan_run_id: "run_0",
+    },
+  ];
+  const carried = buildFixItemFields(
+    { rule: "missing_title", page_scope: "family", page_template_family: "blog", issue_title: "Add titles" },
+    { scanRunId: "run_2", previousItems }
+  );
+  assert.equal(carried.carried_over, true);
+  assert.equal(carried.first_seen_scan_run_id, "run_0");
+
+  const fresh = buildFixItemFields(
+    { rule: "broken_link", page_scope: "page", page_url: "/x", issue_title: "Fix link" },
+    { scanRunId: "run_2", previousItems }
+  );
+  assert.equal(fresh.carried_over, false);
+  assert.equal(fresh.first_seen_scan_run_id, "run_2");
+});
+
+test("fix items keep contract enums valid and preserve the raw finding", () => {
+  const finding = { issue_title: "X", priority: "urgent", page_scope: "galaxy", custom_field: 1 };
+  const fields = buildFixItemFields(finding, { scanRunId: "run_1" });
+  assert.equal(fields.priority, "medium");
+  assert.equal(fields.page_scope, "page");
+  assert.equal(fields.user_status, "open");
+  assert.deepEqual(fields.raw_finding, finding);
+});
+
+test("scan run fields map coverage and evidence state from the merged record", () => {
+  const fields = buildScanRunFields({
+    scan_status: "complete_with_access_limitations",
+    score_is_provisional: true,
+    pages_crawled: 42,
+    pages_found: 80,
+    health_score: 71,
+    limitation: "rate limited",
+  });
+  assert.equal(fields.status, "limited");
+  assert.equal(fields.pages_crawled, 42);
+  assert.equal(fields.health_score, 71);
+  assert.equal(fields.score_is_provisional, true);
+  assert.equal(fields.limitation, "rate limited");
+});
+
+test("recommendations are found under any of the contract array keys", () => {
+  assert.equal(getFixRecommendations({ recommendations: [{ a: 1 }] }).length, 1);
+  assert.equal(getFixRecommendations({ fixes: [{ a: 1 }] }).length, 1);
+  assert.equal(getFixRecommendations({ findings: [{ a: 1 }, null] }).length, 1);
+  assert.equal(getFixRecommendations({}).length, 0);
+});

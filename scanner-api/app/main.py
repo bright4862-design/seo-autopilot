@@ -11,6 +11,7 @@ from .render_evidence_quality import (
     RENDER_EVIDENCE_QUALITY_VERSION,
     apply_render_evidence_quality,
 )
+from .beta_revision import live_revision
 from .review import REVIEW_VERSION, run_review
 from .review_calibration import CALIBRATION_VERSION, apply_review_evidence_calibration
 from .scanner import VERSION, run_scan
@@ -39,7 +40,15 @@ def health():
         "indexability_quality_version": INDEXABILITY_QUALITY_VERSION,
         "navigation_indexability_version": NAVIGATION_INDEXABILITY_VERSION,
         "render_evidence_quality_version": RENDER_EVIDENCE_QUALITY_VERSION,
+        "beta_revision_fingerprint": live_revision()["fingerprint"],
     }
+
+
+@app.get("/revision")
+def revision():
+    """Live beta-revision fingerprint for verifying a deployed scanner against
+    the recorded freeze in data/beta-crawler-revision.json."""
+    return live_revision()
 
 
 @app.post("/scan")

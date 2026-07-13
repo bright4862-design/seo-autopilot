@@ -60,3 +60,7 @@ jobs:
       - name: Run Python scanner-api tests
         working-directory: scanner-api
         run: pytest tests/
+
+      - name: Verify frozen beta revision matches code
+        working-directory: scanner-api
+        run: python scripts/freeze_beta_revision.py --check

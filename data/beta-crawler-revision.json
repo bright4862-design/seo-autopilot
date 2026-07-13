@@ -1,0 +1,26 @@
+{
+  "acceptance_report": "docs/beta-acceptance.md",
+  "component_versions": {
+    "crawler_acceptance_version": "crawler_acceptance_v1",
+    "image_alt_evidence_version": "material_image_alt_v1",
+    "indexability_quality_version": "indexability_quality_v1",
+    "navigation_indexability_version": "navigation_indexability_v1",
+    "quality_gate_version": "review_quality_gate_v1_evidence_complete",
+    "render_evidence_quality_version": "render_evidence_quality_v1",
+    "render_evidence_version": "render_evidence_v1",
+    "render_followup_version": "render_followup_v1",
+    "review_evidence_calibration_version": "review_evidence_calibration_v4_legal_page_scope",
+    "review_version": "python_review_v1_archetype_templates",
+    "sampling_version": "balanced_sitemap_buckets_v1",
+    "scanner_version": "python_scanner_v2_contract_parity",
+    "trust_discovery_version": "trust_page_discovery_v1",
+    "trust_finding_gate_version": "trust_page_finding_gate_v1",
+    "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
+  },
+  "fingerprint": "ad7dbed391208968",
+  "git_commit": "6e2ae11f2d47a4215f0b7550ff14da105459a2fd",
+  "note": "Frozen beta crawler baseline recorded alongside the Shopify/Signal/Basecamp acceptance harness. Update git_commit + re-run --check after redeploy + acceptance pass.",
+  "recorded_at": "2026-07-13T00:00:00+00:00",
+  "schema_version": "beta_crawler_revision_v1",
+  "status": "frozen_beta"
+}

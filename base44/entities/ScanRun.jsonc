@@ -1,0 +1,216 @@
+{
+  "name": "ScanRun",
+  "type": "object",
+  "properties": {
+    "project_id": {
+      "type": "string"
+    },
+    "website_url": {
+      "type": "string"
+    },
+    "path_prefix": {
+      "type": "string"
+    },
+    "scan_mode": {
+      "type": "string",
+      "enum": [
+        "basic",
+        "quick",
+        "deep",
+        "advanced"
+      ],
+      "default": "advanced"
+    },
+    "scan_source": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "crawling",
+        "reviewing",
+        "complete",
+        "limited",
+        "failed",
+        "cancelled"
+      ],
+      "default": "queued"
+    },
+    "status_detail": {
+      "type": "string"
+    },
+    "scanner_version": {
+      "type": "string"
+    },
+    "review_version": {
+      "type": "string"
+    },
+    "beta_revision_fingerprint": {
+      "type": "string"
+    },
+    "pages_found": {
+      "type": "number",
+      "default": 0
+    },
+    "pages_crawled": {
+      "type": "number",
+      "default": 0
+    },
+    "queued_remaining": {
+      "type": "number",
+      "default": 0
+    },
+    "sampling_evidence": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
+    "scan_status": {
+      "type": "string"
+    },
+    "review_confidence_state": {
+      "type": "string"
+    },
+    "score_is_provisional": {
+      "type": "boolean",
+      "default": false
+    },
+    "access_evidence_state": {
+      "type": "string"
+    },
+    "no_high_confidence_findings": {
+      "type": "boolean",
+      "default": false
+    },
+    "limitation": {
+      "type": "string"
+    },
+    "render_evidence": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
+    "health_score": {
+      "type": "number"
+    },
+    "health_grade": {
+      "type": "string"
+    },
+    "customer_summary": {
+      "type": "string"
+    },
+    "next_best_step": {
+      "type": "string"
+    },
+    "fix_list_id": {
+      "type": "string"
+    },
+    "previous_scan_id": {
+      "type": "string"
+    },
+    "rescan_of_scan_id": {
+      "type": "string"
+    },
+    "attempt_count": {
+      "type": "number",
+      "default": 1
+    },
+    "resumable": {
+      "type": "boolean",
+      "default": false
+    },
+    "resume_token": {
+      "type": "string"
+    },
+    "error_code": {
+      "type": "string"
+    },
+    "error_message": {
+      "type": "string"
+    },
+    "cancelled_reason": {
+      "type": "string"
+    },
+    "queued_at": {
+      "type": "string"
+    },
+    "started_at": {
+      "type": "string"
+    },
+    "reviewing_at": {
+      "type": "string"
+    },
+    "completed_at": {
+      "type": "string"
+    },
+    "owner_user_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "website_url"
+  ],
+  "rls": {
+    "create": {
+      "$or": [
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        },
+        {
+          "user_condition": {
+            "role": "user"
+          }
+        }
+      ]
+    },
+    "read": {
+      "$or": [
+        {
+          "data.owner_user_id": "{{user.id}}"
+        },
+        {
+          "created_by_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "data.owner_user_id": "{{user.id}}"
+        },
+        {
+          "created_by_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "$or": [
+        {
+          "data.owner_user_id": "{{user.id}}"
+        },
+        {
+          "created_by_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    }
+  }
+}

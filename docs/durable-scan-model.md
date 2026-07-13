@@ -3,9 +3,16 @@
 Phase 2 of the roadmap makes scans durable. Today a scan behaves like a
 synchronous request and the result lives only in the browser's `localStorage`
 (`seo_autopilot:last_scan`, `seo_autopilot:scan_history`, ...). This document
-defines the persistent data models that replace that transient state. It is the
-"define the persistent scan and status data models" deliverable; wiring the
-runtime (writing these records during a scan) is the follow-on step.
+defines the persistent data models that replace that transient state.
+
+The runtime wiring lives in `src/lib/scanRuns.js` (persistence, best-effort)
+and `src/lib/scanRunModel.js` (pure record mapping, unit-tested). The scan flow
+in `ScanWebsiteForm` records the lifecycle as it runs: `beginScanRun` on
+submit, `markScanRunReviewing` before Python Review, `completeScanRun` (FixList
++ FixItems + lineage) on success, `failScanRun` on error. Durable writes are
+fire-and-forget — a persistence failure logs a warning and never breaks the
+customer's scan, and `localStorage` remains the UI's read path until the
+redesign.
 
 The models are additive Base44 entities. Legacy entities (`CrawlJob`,
 `ScanDiagnostic`, `SeoIssue`, `Report`, `CrawledPage`) are left untouched so the

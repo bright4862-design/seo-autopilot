@@ -31,10 +31,22 @@ jobs:
         shell: bash
         run: |
           set +e
-          cat .github/patches/roadmap-phases-1-4.part*.b64 | base64 --decode | gzip --decompress > /tmp/roadmap-phases-1-4.patch 2>/tmp/reconstruct-error.log
+          : > /tmp/patch-diagnostic.log
+          for part in .github/patches/roadmap-phases-1-4.part*.b64; do
+            echo "$(basename "$part") bytes=$(wc -c < "$part") sha256=$(sha256sum "$part" | cut -d' ' -f1)" | tee -a /tmp/patch-diagnostic.log
+          done
+          expected_00='f7b143506212df685c22a93d1a0bfa9931bd20648a6fd80d761c863a05b02b38'
+          expected_01='d324f8f7b7d092e1d3918fc6c7f49933159dfeb061a40afa78bfc8306579af01'
+          actual_00=$(sha256sum .github/patches/roadmap-phases-1-4.part00.b64 | cut -d' ' -f1)
+          actual_01=$(sha256sum .github/patches/roadmap-phases-1-4.part01.b64 | cut -d' ' -f1)
+          if [ "$actual_00" != "$expected_00" ] || [ "$actual_01" != "$expected_01" ]; then
+            echo "Staged chunk checksum mismatch" | tee -a /tmp/patch-diagnostic.log
+            exit 1
+          fi
+          cat .github/patches/roadmap-phases-1-4.part00.b64 .github/patches/roadmap-phases-1-4.part01.b64 | base64 --decode | gzip --decompress > /tmp/roadmap-phases-1-4.patch 2>/tmp/reconstruct-error.log
           reconstruct_status=$?
           if [ "$reconstruct_status" -ne 0 ]; then
-            echo "Patch reconstruction failed with status $reconstruct_status" | tee /tmp/patch-diagnostic.log
+            echo "Patch reconstruction failed with status $reconstruct_status" | tee -a /tmp/patch-diagnostic.log
             cat /tmp/reconstruct-error.log | tee -a /tmp/patch-diagnostic.log
             exit "$reconstruct_status"
           fi
@@ -42,7 +54,11 @@ jobs:
             echo "patch_bytes=$(wc -c < /tmp/roadmap-phases-1-4.patch)"
             echo "patch_sha256=$(sha256sum /tmp/roadmap-phases-1-4.patch | cut -d' ' -f1)"
             grep '^Subject:' /tmp/roadmap-phases-1-4.patch
-          } | tee /tmp/patch-diagnostic.log
+          } | tee -a /tmp/patch-diagnostic.log
+          if [ "$(sha256sum /tmp/roadmap-phases-1-4.patch | cut -d' ' -f1)" != '86d84b79a36ae473998f7da1e992c5242c3ef3a755cc6fc5cc9f7bf1c7ba58dc' ]; then
+            echo "Reconstructed patch checksum mismatch" | tee -a /tmp/patch-diagnostic.log
+            exit 1
+          fi
           git am --3way /tmp/roadmap-phases-1-4.patch > /tmp/git-am.log 2>&1
           apply_status=$?
           cat /tmp/git-am.log | tee -a /tmp/patch-diagnostic.log

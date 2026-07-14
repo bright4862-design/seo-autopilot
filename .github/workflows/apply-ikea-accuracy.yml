@@ -100,15 +100,29 @@ jobs:
 
       - name: Verify final scope and hygiene
         run: |
-          git diff --check origin/main...HEAD
-          changed="$(git diff --name-only origin/main...HEAD)"
-          echo "$changed"
-          test -z "$(echo "$changed" | grep '^\.github/' || true)"
-          echo "$changed" | grep -qx 'data/beta-crawler-revision.json'
-          echo "$changed" | grep -qx 'scanner-api/app/review.py'
-          echo "$changed" | grep -qx 'scanner-api/app/review_calibration.py'
-          echo "$changed" | grep -qx 'scanner-api/tests/test_review_calibration.py'
-          test "$(echo "$changed" | wc -l | tr -d ' ')" = '4'
+          set +e
+          {
+            git diff --check origin/main...HEAD
+            changed="$(git diff --name-only origin/main...HEAD)"
+            echo 'CHANGED FILES:'
+            echo "$changed"
+            test -z "$(echo "$changed" | grep '^\.github/' || true)"
+            echo "$changed" | grep -qx 'data/beta-crawler-revision.json'
+            echo "$changed" | grep -qx 'scanner-api/app/review.py'
+            echo "$changed" | grep -qx 'scanner-api/app/review_calibration.py'
+            echo "$changed" | grep -qx 'scanner-api/tests/test_review_calibration.py'
+            test "$(echo "$changed" | wc -l | tr -d ' ')" = '4'
+          } > /tmp/ikea-scope.log 2>&1
+          status=$?
+          cat /tmp/ikea-scope.log
+          exit $status
+
+      - name: Upload scope diagnostic
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ikea-scope-failure
+          path: /tmp/ikea-scope.log
 
       - name: Push verified product branch
         run: git push origin HEAD:agent/fix-ikea-accuracy-regressions

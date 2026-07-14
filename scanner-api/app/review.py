@@ -59,6 +59,33 @@ CATEGORY_MAP = {
     "duplicate_meta_description": "duplicate_content",
 }
 
+ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v2_structural_weighting"
+
+# Frequency cap for archetype keyword/pattern counting: template volume
+# (hundreds of /blog/ URLs) must not out-vote company-level evidence.
+KEYWORD_COUNT_CAP = 5
+# Ceiling applied to content_blog when strong structural SaaS/ecommerce
+# evidence exists — big blogs stay secondary, not primary.
+CONTENT_BLOG_STRUCTURAL_CAP = 8.0
+
+# Route patterns that only exist when a business actually operates the model.
+SAAS_STRUCTURAL_PATTERNS = (
+    "/pricing", "/features", "/integrations", "/use-cases", "/solutions",
+    "/customers", "/customer-stories", "/case-studies", "/login", "/signin",
+    "/signup", "/register", "/demo", "/docs", "/api", "/developers",
+    "/platform", "/apps", "/download",
+)
+ECOMMERCE_STRUCTURAL_PATTERNS = (
+    "/products/", "/product/", "/produit/", "/collections/", "/collection/",
+    "/category/", "/categorie/", "/cat/", "/p/", "/cart", "/checkout",
+    "/basket", "/shop/", "/boutique/", "/store/",
+)
+# Listing-detail routes (owned inventory) — the marketplace tell.
+BOOKING_LISTING_PATTERNS = ("/annonce", "/activites/", "/activite/", "/listings/", "/listing/", "/experiences/")
+BOOKING_STRUCTURAL_PATTERNS = BOOKING_LISTING_PATTERNS + (
+    "/booking", "/book/", "/reservation", "/availability", "/tickets", "/billetterie",
+)
+
 PLAYBOOKS = {
     "finance_insurance_lead_gen": {
         "label": "finance / insurance / lead generation",
@@ -123,11 +150,13 @@ PLAYBOOKS = {
         "keywords": [
             "product", "produit", "shop", "boutique", "cart", "panier", "checkout",
             "price", "prix", "sku", "collection", "category", "marque", "brand",
-            "variant", "shipping", "livraison", "shopify",
+            "variant", "shipping", "livraison", "shopify", "add to cart",
+            "add to bag", "in stock", "delivery", "pickup", "store locator",
         ],
         "money_patterns": [
             "/products/", "/product/", "/produit/", "/collections/", "/collection/",
-            "/category/", "/categorie/", "/shop", "/boutique", "/cart", "/checkout", "/marque",
+            "/category/", "/categorie/", "/cat/", "/p/", "/shop", "/boutique",
+            "/cart", "/checkout", "/basket", "/store/", "/marque",
         ],
         "priority_pages": [
             "product pages", "collection/category pages", "brand pages",
@@ -145,7 +174,9 @@ PLAYBOOKS = {
         "keywords": [
             "dashboard", "login", "register", "app", "billing", "admin",
             "workspace", "account", "subscription", "developer", "pricing",
-            "demo", "trial", "api", "report",
+            "demo", "trial", "api", "report", "software", "features",
+            "integrations", "platform", "install", "download",
+            "customer stories", "case studies",
         ],
         "money_patterns": ["/pricing", "/register", "/signup", "/demo", "/contact", "/features", "/use-cases", "/solutions"],
         "priority_pages": ["homepage", "pricing", "demo/signup", "features/use cases", "docs/help pages", "public trust/security pages"],
@@ -319,35 +350,79 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             " ".join(map(str, page.get("schema_types") or [])),
         ])
     text = " ".join(text_parts).lower()
+    # Homepage (shortest-path page) text is company-level evidence: what the
+    # business says it IS, as opposed to what it publishes the most of.
+    homepage_text = ""
+    if pages:
+        homepage = min(pages[:220], key=lambda page: len(clean_path(page_evidence_url(page)) or "/"))
+        homepage_text = " ".join([
+            str(homepage.get("title", "")),
+            str(homepage.get("h1", "")),
+            str(homepage.get("meta_description", "")),
+        ]).lower()
+
     scores = []
     for key, playbook in PLAYBOOKS.items():
         if key == "general":
             continue
-        score = 0.0
-        score += sum(count_includes(text, keyword) for keyword in playbook["keywords"])
-        score += sum(count_includes(text, pattern) for pattern in playbook["money_patterns"]) * 1.8
+        score = float(sum(min(count_includes(text, keyword), KEYWORD_COUNT_CAP) for keyword in playbook["keywords"]))
+        score += sum(min(count_includes(text, pattern), KEYWORD_COUNT_CAP) for pattern in playbook["money_patterns"]) * 1.8
+        score += sum(min(count_includes(homepage_text, keyword), 3) for keyword in playbook["keywords"]) * 2.0
         score += archetype_boost(key, text, pages)
         scores.append((key, score))
-    scores.sort(key=lambda item: item[1], reverse=True)
-    # Require structural evidence before choosing ecommerce. Incidental commerce
-    # words in titles or docs must not override a SaaS or general site's structure.
+
     path_text = " ".join(clean_path(page_evidence_url(page)).lower() for page in pages[:220])
-    ecommerce_paths = sum(count_includes(path_text, pattern) for pattern in ("/products/", "/product/", "/collections/", "/collection/", "/cart", "/checkout", "/itm/", "/sch/", "/b/", "/buy/", "/shop/", "/seller/", "/listing/"))
-    marketplace_signals = sum(count_includes(text, signal) for signal in ("ebay", "buy it now", "auction", "seller", "item number", "shop by category"))
-    saas_paths = sum(count_includes(path_text, pattern) for pattern in ("/pricing", "/features", "/use-cases", "/solutions", "/login", "/signup", "/docs", "/api"))
+    saas_structural = [pattern for pattern in SAAS_STRUCTURAL_PATTERNS if pattern in path_text]
+    ecommerce_structural = [pattern for pattern in ECOMMERCE_STRUCTURAL_PATTERNS if pattern in path_text]
+    booking_structural = [pattern for pattern in BOOKING_STRUCTURAL_PATTERNS if pattern in path_text]
+    ecommerce_marketplace_patterns = ("/itm/", "/sch/", "/b/", "/buy/", "/seller/", "/listing/")
+    ecommerce_structural.extend(
+        pattern for pattern in ecommerce_marketplace_patterns
+        if pattern in path_text and pattern not in ecommerce_structural
+    )
+    marketplace_signals = sum(
+        min(count_includes(text, signal), KEYWORD_COUNT_CAP)
+        for signal in ("ebay", "buy it now", "auction", "seller", "item number", "shop by category")
+    )
+    product_schema_pages = count_schema_pages(pages, ("product", "offer"))
+    software_schema_pages = count_schema_pages(pages, ("softwareapplication", "mobileapplication", "webapplication"))
+    booking_listing_pages = sum(
+        1 for page in pages[:220]
+        if any(pattern in clean_path(page_evidence_url(page)).lower() for pattern in BOOKING_LISTING_PATTERNS)
+    )
+    if product_schema_pages >= 3:
+        ecommerce_structural = ecommerce_structural + ["schema:Product"]
+    if marketplace_signals >= 2:
+        ecommerce_structural = ecommerce_structural + ["marketplace:ecommerce"]
+    if software_schema_pages >= 2:
+        saas_structural = saas_structural + ["schema:SoftwareApplication"]
+
     adjusted_scores = []
     for key, score in scores:
         if key == "ecommerce_specialty_retail":
-            if ecommerce_paths < 2 and marketplace_signals < 2:
+            if len(ecommerce_structural) < 2 and marketplace_signals < 2:
                 score = min(score, 1.0)
             else:
-                score += min(60, ecommerce_paths * 4 + marketplace_signals * 8)
+                score += 10.0 * len(ecommerce_structural)
+        if key == "booking_experiences_marketplace":
+            if len(booking_structural) < 2 and booking_listing_pages < 2:
+                score = min(score, 1.0)
+            else:
+                score += 8.0 * max(len(booking_structural), 1)
         if key == "saas_app_membership":
-            if saas_paths < 2:
+            if len(saas_structural) < 2:
                 score = min(score, 1.0)
             else:
-                score += 12
+                score += 12.0 * len(saas_structural)
         adjusted_scores.append((key, score))
+
+    structural_competitor = len(saas_structural) >= 3 or len(ecommerce_structural) >= 3
+    if structural_competitor:
+        adjusted_scores = [
+            (key, min(score, CONTENT_BLOG_STRUCTURAL_CAP) if key == "content_blog" else score)
+            for key, score in adjusted_scores
+        ]
+
     scores = sorted(adjusted_scores, key=lambda item: item[1], reverse=True)
     primary = scores[0][0] if scores and scores[0][1] > 0 else "general"
     secondary = scores[1][0] if len(scores) > 1 and scores[1][1] > max(3, scores[0][1] * 0.6) else ""
@@ -377,6 +452,55 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
     )
     host = safe_hostname(website_url)
 
+    # Classification confidence is separate from scan completion: one usable
+    # page (eBay) or a mostly rate-limited crawl (Sephora) can complete as a
+    # scan but must not count as strong archetype validation.
+    usable_pages = sum(
+        1 for page in pages
+        if 200 <= int_or_zero(page.get("status_code")) < 300 and not is_blocked_access_page(page)
+    )
+    if usable_pages < 5:
+        evidence_sufficiency = "insufficient_pages"
+    elif blocked_or_429_pages and blocked_or_429_pages / max(usable_pages + blocked_or_429_pages, 1) >= 0.6:
+        evidence_sufficiency = "access_limited"
+    else:
+        evidence_sufficiency = "sufficient"
+    classification_state = "classified" if evidence_sufficiency == "sufficient" else "inconclusive_insufficient_evidence"
+    if classification_state != "classified":
+        confidence = min(confidence, 0.35)
+
+    score_map = dict(scores)
+    runner_up = scores[1] if len(scores) > 1 else ("", 0.0)
+    classification = {
+        "classifier_version": ARCHETYPE_CLASSIFIER_VERSION,
+        "state": classification_state,
+        "evidence_sufficiency": evidence_sufficiency,
+        "usable_pages": usable_pages,
+        "blocked_or_429_pages": blocked_or_429_pages,
+        "scores": [{"archetype": key, "score": round(value, 1)} for key, value in scores[:3]],
+        "structural_signals": {
+            "saas": saas_structural,
+            "ecommerce": ecommerce_structural,
+            "booking": booking_structural,
+            "booking_listing_pages": booking_listing_pages,
+            "product_schema_pages": product_schema_pages,
+            "software_schema_pages": software_schema_pages,
+        },
+        "winning_reason": (
+            f"{primary} scored {round(score_map.get(primary, 0.0), 1)} vs {runner_up[0] or 'none'} "
+            f"{round(runner_up[1], 1)}; structural signals saas={len(saas_structural)}, "
+            f"ecommerce={len(ecommerce_structural)}, booking={len(booking_structural)}; "
+            f"content_blog cap {'applied' if structural_competitor else 'not applied'}."
+        ) if primary != "general" else "No archetype scored above zero; defaulted to general.",
+        "strongest_conflicting_signal": (
+            f"{runner_up[0]} scored {round(runner_up[1], 1)}" if runner_up[0] and runner_up[1] > 0 else ""
+        ),
+        "access_limitation_impact": (
+            f"{blocked_or_429_pages} blocked/rate-limited pages against {usable_pages} usable pages"
+            if blocked_or_429_pages else ""
+        ),
+    }
+
     return {
         "primary_archetype": primary,
         "secondary_archetype": secondary,
@@ -384,6 +508,9 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         "vertical": primary,
         "vertical_label": playbook["label"],
         "vertical_confidence": round(confidence, 2),
+        "classification": classification,
+        "classification_state": classification["state"],
+        "classification_evidence_sufficiency": classification["evidence_sufficiency"],
         "business_model": detect_business_model(text, primary),
         "size_band": "enterprise" if max(pages_found, pages_crawled, pages_received) >= 1000 else "mid_market" if max(pages_found, pages_crawled, pages_received) >= 150 else "smb" if max(pages_found, pages_crawled, pages_received) >= 30 else "micro",
         "pages_found": pages_found,
@@ -509,12 +636,25 @@ def make_missing_evidence_fix() -> dict[str, Any]:
     }
 
 
+def count_schema_pages(pages: list[dict[str, Any]], schema_needles: tuple[str, ...]) -> int:
+    """Pages whose structured data includes one of the given schema types."""
+    count = 0
+    for page in pages[:220]:
+        types = " ".join(map(str, page.get("schema_types") or [])).lower()
+        if any(needle in types for needle in schema_needles):
+            count += 1
+    return count
+
+
 def archetype_boost(key: str, text: str, pages: list[dict[str, Any]]) -> float:
     path_text = " ".join(clean_path(page_evidence_url(page)).lower() for page in pages[:220])
     if key == "booking_experiences_marketplace":
-        score = count_includes(path_text, "/annonce/") * 8
-        score += count_includes(path_text, "/voir") * 5
-        if has_any(text, ["funbooker", "activité", "activite", "cadeau", "coffret", "loisir", "reservation", "réservation"]):
+        score = min(count_includes(path_text, "/annonce/"), KEYWORD_COUNT_CAP) * 8
+        score += min(count_includes(path_text, "/voir"), KEYWORD_COUNT_CAP) * 5
+        # Marketplace vocabulary only counts when the site actually has
+        # listing/booking routes — writing ABOUT reservations is publishing.
+        has_marketplace_routes = any(pattern in path_text for pattern in BOOKING_STRUCTURAL_PATTERNS)
+        if has_marketplace_routes and has_any(text, ["funbooker", "activité", "activite", "cadeau", "coffret", "loisir", "reservation", "réservation"]):
             score += 35
         return score
     if key == "finance_insurance_lead_gen":

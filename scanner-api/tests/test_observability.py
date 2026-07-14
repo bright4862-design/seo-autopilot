@@ -113,6 +113,24 @@ def test_request_timer_emits_started_and_completed_with_duration(capsys):
     assert completed["pages_crawled"] == 3
 
 
+def test_release_marker_endpoints_are_consistent():
+    from app import main
+
+    client = TestClient(main.app)
+    health = client.get("/health").json()
+    revision = client.get("/revision").json()
+
+    assert health["archetype_classifier_version"] == "archetype_classifier_v4_publisher_route_families"
+    assert health["beta_revision_fingerprint"] == "a285acdaeed59e40"
+    assert health["review_version"] == "python_review_v2_structural_marketplace"
+    assert health["review_evidence_calibration_version"] == "review_evidence_calibration_v5_utility_redirect"
+    assert health["scanner_build_revision"] == "hard_page_cap_response_v1"
+    assert revision["fingerprint"] == health["beta_revision_fingerprint"]
+    assert revision["component_versions"]["archetype_classifier_version"] == health["archetype_classifier_version"]
+    assert revision["component_versions"]["review_version"] == health["review_version"]
+    assert revision["component_versions"]["review_evidence_calibration_version"] == health["review_evidence_calibration_version"]
+
+
 def test_scan_endpoint_returns_customer_safe_envelope_on_crash(monkeypatch, capsys):
     from app import main
 
@@ -133,6 +151,25 @@ def test_scan_endpoint_returns_customer_safe_envelope_on_crash(monkeypatch, caps
     assert "request_failed" in events
 
 
+def test_scan_endpoint_returns_beta_revision_fingerprint(monkeypatch, capsys):
+    from app import main
+
+    async def completed_scan(**kwargs):
+        return {"success": True, "pages_crawled": 0, "pages_found": 0, "pages": []}
+
+    async def unchanged_trust(result):
+        return result
+
+    monkeypatch.setattr(main, "run_scan", completed_scan)
+    monkeypatch.setattr(main, "enrich_scan_with_trust_pages", unchanged_trust)
+    client = TestClient(main.app)
+    response = client.post("/scan", json={"website_url": "https://example.com"})
+    assert response.status_code == 200
+    assert response.json()["beta_revision_fingerprint"] == "a285acdaeed59e40"
+    assert response.json()["scanner_build_revision"] == "hard_page_cap_response_v1"
+    read_log_lines(capsys)
+
+
 def test_review_endpoint_logs_completion_metrics(monkeypatch, capsys):
     from app import main
 
@@ -147,6 +184,7 @@ def test_review_endpoint_logs_completion_metrics(monkeypatch, capsys):
     client = TestClient(main.app)
     response = client.post("/review", json={"website_url": "https://example.com"})
     assert response.status_code == 200
+    assert response.json()["beta_revision_fingerprint"] == "a285acdaeed59e40"
     completed = [record for record in read_log_lines(capsys) if record["event"] == "review_completed"]
     assert len(completed) == 1
     assert completed[0]["scan_status"] == "complete"

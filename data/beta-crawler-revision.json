@@ -1,7 +1,7 @@
 {
   "acceptance_report": "docs/beta-acceptance.md",
   "component_versions": {
-    "archetype_classifier_version": "archetype_classifier_v3_mixed_template_dominance",
+    "archetype_classifier_version": "archetype_classifier_v4_publisher_route_families",
     "crawler_acceptance_version": "crawler_acceptance_v1",
     "image_alt_evidence_version": "material_image_alt_v1",
     "indexability_quality_version": "indexability_quality_v1",
@@ -18,10 +18,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "fa1602737697ae98",
-  "git_commit": "9fad1648ba7d53471900c2e310eb2e04421fe290",
-  "note": "Classifier v3 mixed-template dominance after focused regressions. Targeted production acceptance remains required before release acceptance.",
-  "recorded_at": "2026-07-14T23:05:28Z",
+  "fingerprint": "a285acdaeed59e40",
+  "git_commit": "2d49baa575792bf5f1689e4d95dcf60822dcddcb",
+  "note": "Classifier v4 publisher route families after focused production diagnosis. Targeted Nomadic Matt production acceptance remains required before release acceptance.",
+  "recorded_at": "2026-07-14T23:23:40.080907+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "frozen_beta"
 }

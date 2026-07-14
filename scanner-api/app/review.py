@@ -59,7 +59,7 @@ CATEGORY_MAP = {
     "duplicate_meta_description": "duplicate_content",
 }
 
-ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v3_mixed_template_dominance"
+ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v4_publisher_route_families"
 
 # Frequency cap for archetype keyword/pattern counting: template volume
 # (hundreds of /blog/ URLs) must not out-vote company-level evidence.
@@ -84,9 +84,10 @@ PRODUCT_DETAIL_PATTERNS = (
     "/products/", "/product/", "/produit/", "/p/", "/itm/", "/buy/",
 )
 ARTICLE_ROUTE_PATTERNS = (
-    "/blog/", "/travel-blog/", "/article/", "/articles/", "/news/",
-    "/guides/", "/guide/", "/ideas/", "/inspiration/", "/resources/",
-    "/category/",
+    "/blog/", "/travel-blog/", "/travel-blogs/", "/article/", "/articles/",
+    "/news/", "/stories/", "/story/", "/guides/", "/guide/",
+    "/travel-guides/", "/destinations/", "/ideas/", "/inspiration/",
+    "/resources/", "/category/",
 )
 FINANCE_STRUCTURAL_PATTERNS = (
     "/loan", "/loans", "/mortgage", "/credit", "/pret", "/assurance",

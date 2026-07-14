@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { base44 } from "@/api/base44Client";
 import { normalizeActionPriority, normalizeFindingEvidence, normalizeReviewEvidenceState, normalizeReviewScope, selectFinalReviewFixes } from "@/lib/reviewContract";
+import { buildAuthorityMarkers, buildDiagnosticAuthorityMarkers } from "@/lib/scanRunModel";
 import { beginScanRun, completeScanRun, failScanRun, markScanRunReviewing } from "@/lib/scanRuns";
 
 const ADVANCED_SCANNER_FUNCTION = "runAdvancedScan";
@@ -375,6 +376,7 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
   const technicalSummary = slimTechnicalSummary(scanData?.technical_audit_summary || {}, scanData);
   const summaryText = normalizeCoverageSummary(aiData?.customer_summary || aiData?.plain_english_summary || aiData?.summary || aiData?.website_health_report?.overall_explanation || scanData?.scan_summary?.plain_english_summary || buildFallbackSummary({ healthScore, pagesCrawled, finalFixes, cmsName }), pagesCrawled);
   const siteFingerprint = normalizeSiteFingerprint(aiData?.site_fingerprint || aiData?.scan_summary?.site_fingerprint || {}, pages);
+  const authorityMarkers = buildAuthorityMarkers(scanData, aiData);
   return {
     id: scanId || createScanId(),
     scan_id: scanId || "",
@@ -387,6 +389,7 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
     cms_platform: cmsPlatform,
     cms_name: cmsName,
     scan_mode: scanMode,
+    ...authorityMarkers,
     health_score: healthScore || 0,
     seo_score: healthScore || 0,
     pages_crawled: pagesCrawled || pages.length || 0,
@@ -450,6 +453,8 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
       scanner_success: scanData?.success !== false,
       ai_success: aiData?.success === true,
       ai_provider: aiData?.provider || aiData?.ai_provider || aiData?.debug?.provider || "",
+      review_version: aiData?.review_version || aiData?.ai_review_version || "",
+      beta_revision_fingerprint: aiData?.beta_revision_fingerprint || scanData?.beta_revision_fingerprint || "",
       review_polish_version: aiData?.review_polish_version || "",
     group_dedup_version: aiData?.group_dedup_version || "",
     scoring_model: aiData?.scoring_model || aiData?.site_fingerprint?.scoring_model || "",
@@ -558,6 +563,7 @@ function compressScanRecord(record = {}) {
     url_confidence: page.url_confidence || "",
   }));
   return {
+    ...buildDiagnosticAuthorityMarkers(record),
     sampling_version: record.sampling_version || "",
     sampling_evidence: record.sampling_evidence || {},
     id: record.id || "",
@@ -763,7 +769,7 @@ function buildCmsActionPlan(cmsPlatform, cmsName, fixes) {
 
 function slimScannerData(scanner = {}) {
   if (!scanner) return null;
-  return { success: scanner.success, version: scanner.version || scanner.scanner_version, sampling_version: scanner.sampling_version || "", sampling_evidence: scanner.sampling_evidence || {}, website_url: scanner.website_url, scan_mode: scanner.scan_mode, pages_found: scanner.pages_found, pages_crawled: scanner.pages_crawled, queued_remaining: scanner.queued_remaining, health_score: scanner.health_score, seo_score: scanner.seo_score, crawl_policy_source: scanner.crawl_policy_source || scanner.crawl_policy?.source || scanner.technical_audit_summary?.crawl_policy?.source || "", crawl_policy: scanner.crawl_policy || scanner.technical_audit_summary?.crawl_policy || {}, url_evidence_summary: scanner.url_evidence_summary || scanner.technical_audit_summary?.url_evidence_summary || {}, verified_failed_pages: getFirstNumber([scanner.verified_failed_pages, scanner.scan_summary?.verified_failed_pages, scanner.technical_audit_summary?.verified_failed_pages]), suspicious_url_artifacts: getFirstNumber([scanner.suspicious_url_artifacts, scanner.scan_summary?.suspicious_url_artifacts, scanner.technical_audit_summary?.suspicious_url_artifacts]), technical_audit_summary: slimTechnicalSummary(scanner.technical_audit_summary || {}, scanner), crawl_warnings: firstArray([scanner.crawl_warnings]).slice(0, 10), recommendations_count: getRecommendations(scanner).length, pages_preview: getPages(scanner).slice(0, 12).map(slimPage), recommendations_preview: getRecommendations(scanner).slice(0, 18).map(slimFix) };
+  return { success: scanner.success, version: scanner.version || scanner.scanner_version, beta_revision_fingerprint: scanner.beta_revision_fingerprint || "", sampling_version: scanner.sampling_version || "", sampling_evidence: scanner.sampling_evidence || {}, website_url: scanner.website_url, scan_mode: scanner.scan_mode, pages_found: scanner.pages_found, pages_crawled: scanner.pages_crawled, queued_remaining: scanner.queued_remaining, health_score: scanner.health_score, seo_score: scanner.seo_score, crawl_policy_source: scanner.crawl_policy_source || scanner.crawl_policy?.source || scanner.technical_audit_summary?.crawl_policy?.source || "", crawl_policy: scanner.crawl_policy || scanner.technical_audit_summary?.crawl_policy || {}, url_evidence_summary: scanner.url_evidence_summary || scanner.technical_audit_summary?.url_evidence_summary || {}, verified_failed_pages: getFirstNumber([scanner.verified_failed_pages, scanner.scan_summary?.verified_failed_pages, scanner.technical_audit_summary?.verified_failed_pages]), suspicious_url_artifacts: getFirstNumber([scanner.suspicious_url_artifacts, scanner.scan_summary?.suspicious_url_artifacts, scanner.technical_audit_summary?.suspicious_url_artifacts]), technical_audit_summary: slimTechnicalSummary(scanner.technical_audit_summary || {}, scanner), crawl_warnings: firstArray([scanner.crawl_warnings]).slice(0, 10), recommendations_count: getRecommendations(scanner).length, pages_preview: getPages(scanner).slice(0, 12).map(slimPage), recommendations_preview: getRecommendations(scanner).slice(0, 18).map(slimFix) };
 }
 
 function slimAiData(ai = {}) {
@@ -775,6 +781,9 @@ function slimAiData(ai = {}) {
     ai_review_backend: ai.ai_review_backend || "",
     python_review_fallback_used: Boolean(ai.python_review_fallback_used),
     release_gate_eligible: ai.release_gate_eligible === true,
+    review_version: ai.review_version || ai.ai_review_version || "",
+    review_evidence_calibration_version: ai.review_evidence_calibration_version || "",
+    beta_revision_fingerprint: ai.beta_revision_fingerprint || "",
     archetype_classifier_version: ai.archetype_classifier_version || ai.site_fingerprint?.classification?.classifier_version || "",
     review_polish_version: ai.review_polish_version || "",
     group_dedup_version: ai.group_dedup_version || "",

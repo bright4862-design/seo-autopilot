@@ -23,3 +23,9 @@ test("scan results are stored and routed by stable scan ID", () => {
   assert.match(fixList, /searchParams\.get\("scan_id"\)/);
   assert.match(fixList, /readBestScanRecord\(requestedScanId\)/);
 });
+
+test("merged results preserve authoritative durable release markers", () => {
+  assert.match(scannerForm, /const authorityMarkers = buildAuthorityMarkers\(scanData, aiData\)/);
+  assert.match(scannerForm, /\.\.\.authorityMarkers/);
+  assert.match(scannerForm, /\.\.\.buildDiagnosticAuthorityMarkers\(record\)/);
+});

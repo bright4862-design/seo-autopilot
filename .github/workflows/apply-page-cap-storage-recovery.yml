@@ -1,0 +1,718 @@
+name: Apply page cap and storage recovery
+
+on:
+  push:
+    branches:
+      - agent/fix-page-cap-and-browser-storage
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: agent/fix-page-cap-and-browser-storage
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Apply guarded source patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one match, found {count}: {old[:100]!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          def append_once(path, marker, addition):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if marker in text:
+                  return
+              p.write_text(text.rstrip() + '\n\n' + addition.rstrip() + '\n', encoding='utf-8')
+
+          # Python scanner: a new deploy-identifiable revision and one invariant helper
+          # used both after concurrent crawling and immediately before response assembly.
+          replace_once('scanner-api/app/scanner.py',
+              'VERSION = "python_scanner_v3_bounded_request"\nRENDER_EVIDENCE_VERSION = "render_evidence_v1"',
+              'VERSION = "python_scanner_v4_hard_page_cap"\nSCANNER_BUILD_REVISION = "hard_page_cap_storage_recovery_20260714"\nRENDER_EVIDENCE_VERSION = "render_evidence_v1"')
+          replace_once('scanner-api/app/scanner.py',
+              'SITEMAP_DISCOVERY_LIMIT = 5000\n\nTRUST_PATHS',
+              '''SITEMAP_DISCOVERY_LIMIT = 5000
+
+
+def enforce_page_budget(pages: list[dict] | None, max_pages: int) -> list[dict]:
+    """Return a detached page list that can never exceed the selected mode cap."""
+    limit = max(0, int(max_pages or 0))
+    return list(pages or [])[:limit]
+
+
+TRUST_PATHS''')
+          replace_once('scanner-api/app/scanner.py',
+              '''        if len(pages) > max_pages:
+            pages = pages[:max_pages]
+        canonical_target_evidence = await validate_canonical_targets(''',
+              '''        pages = enforce_page_budget(pages, max_pages)
+        canonical_target_evidence = await validate_canonical_targets(''')
+          replace_once('scanner-api/app/scanner.py',
+              '''    findings = build_findings(pages)
+''',
+              '''    # Re-apply the invariant at the response boundary. This protects callers
+    # even if future post-processing adds page evidence after the worker pool.
+    pages = enforce_page_budget(pages, max_pages)
+    findings = build_findings(pages)
+''')
+          replace_once('scanner-api/app/scanner.py',
+              '''        "scanner_version": VERSION,
+        "scanner_profile": "python_screaming_frog_lite_v1",''',
+              '''        "scanner_version": VERSION,
+        "scanner_build_revision": SCANNER_BUILD_REVISION,
+        "scanner_profile": "python_screaming_frog_lite_v1",''')
+
+          # Base44 scanner wrapper: enforce the page cap independently of Cloud Run
+          # and require the new scanner build marker/version.
+          replace_once('base44/functions/runAdvancedScan/entry.ts',
+              'const VERSION = "runAdvancedScan_v22_python_required";\nconst PYTHON_SCANNER_VERSION = "python_scanner_v3_bounded_request";',
+              'const VERSION = "runAdvancedScan_v23_hard_page_cap";\nconst PYTHON_SCANNER_VERSION = "python_scanner_v4_hard_page_cap";')
+          old_wrapper = '''function toPythonAdvancedScanResponse(result, scanMode, scanId = "") {
+  const warnings = Array.isArray(result.crawl_warnings) ? result.crawl_warnings : [];
+  const technical = result.technical_audit_summary && typeof result.technical_audit_summary === "object" ? result.technical_audit_summary : {};
+  return {
+    ...result,
+    success: result.success !== false,
+    version: VERSION,
+    scanner_version: result.scanner_version,
+    advanced_scan_backend: "python_scanner_api",
+    deno_fallback_used: false,
+    scanner_api_url_configured: true,
+    scan_mode: result.scan_mode || scanMode || "advanced",
+    audit_profile: result.audit_profile || result.scan_mode || scanMode || "advanced",
+    scan_id: scanId || result.scan_id || "",
+    release_gate_eligible: true,
+    technical_audit_summary: {
+      ...technical,
+      scanner_version: result.scanner_version,
+      advanced_scan_backend: "python_scanner_api",
+      deno_fallback_used: false,
+      python_scanner_fallback_reason: "",
+    },
+    crawl_warnings: warnings,
+  };
+}'''
+          new_wrapper = '''function toPythonAdvancedScanResponse(result, scanMode, scanId = "") {
+  const warnings = Array.isArray(result.crawl_warnings) ? result.crawl_warnings : [];
+  const technical = result.technical_audit_summary && typeof result.technical_audit_summary === "object" ? result.technical_audit_summary : {};
+  const normalizedMode = String(result.scan_mode || scanMode || "advanced").toLowerCase();
+  const maxPages = MODE_LIMITS[normalizedMode]?.max_pages || MODE_LIMITS.advanced.max_pages;
+  const sourcePages = Array.isArray(result.crawled_pages) ? result.crawled_pages : Array.isArray(result.pages) ? result.pages : [];
+  const cappedPages = sourcePages.slice(0, maxPages);
+  const reportedPages = Number(result.pages_crawled ?? technical.pages_crawled ?? cappedPages.length);
+  const pagesCrawled = Math.min(maxPages, cappedPages.length || (Number.isFinite(reportedPages) ? Math.max(0, reportedPages) : 0));
+  const scanSummary = result.scan_summary && typeof result.scan_summary === "object" ? result.scan_summary : {};
+  return {
+    ...result,
+    success: result.success !== false,
+    version: VERSION,
+    scanner_version: result.scanner_version,
+    scanner_build_revision: result.scanner_build_revision || "",
+    advanced_scan_backend: "python_scanner_api",
+    deno_fallback_used: false,
+    scanner_api_url_configured: true,
+    scan_mode: normalizedMode,
+    audit_profile: result.audit_profile || normalizedMode,
+    scan_id: scanId || result.scan_id || "",
+    release_gate_eligible: true,
+    pages_crawled: pagesCrawled,
+    crawled_pages: cappedPages,
+    pages: cappedPages,
+    scan_summary: { ...scanSummary, pages_scanned: Math.min(maxPages, Number(scanSummary.pages_scanned ?? pagesCrawled)) },
+    technical_audit_summary: {
+      ...technical,
+      scanner_version: result.scanner_version,
+      scanner_build_revision: result.scanner_build_revision || "",
+      advanced_scan_backend: "python_scanner_api",
+      deno_fallback_used: false,
+      pages_crawled: pagesCrawled,
+      python_scanner_fallback_reason: "",
+    },
+    crawl_warnings: warnings,
+  };
+}'''
+          replace_once('base44/functions/runAdvancedScan/entry.ts', old_wrapper, new_wrapper)
+
+          # Frontend: clamp immediately, persist durably before optional browser
+          # caching, preserve all authority markers, and make quota errors non-fatal.
+          replace_once('src/components/scan/ScanWebsiteForm.jsx',
+              '''      scanData = normalizeFunctionResponse(scannerResponse);
+      writeScanDebug({ status: "running", stage: "scanner_complete",''',
+              '''      scanData = normalizeFunctionResponse(scannerResponse);
+      scanData = enforceScanPageCap(scanData, safeScanBudget.max_pages);
+      writeScanDebug({ status: "running", stage: "scanner_complete",''')
+          replace_once('src/components/scan/ScanWebsiteForm.jsx',
+              '''      saveScanForDashboard(mergedFinal, scanId);
+      const durableRecord = normalizeScanRecordForStorage(mergedFinal);
+      await completeScanRun(scanRunHandle, durableRecord).catch(() => null);
+      writeScanDebug({ status: "saved", stage: "dashboard_saved", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), compact_debug_available: true, download_available: true });''',
+              '''      const durableRecord = normalizeScanRecordForStorage(mergedFinal);
+      const durableFixListId = await completeScanRun(scanRunHandle, durableRecord).catch(() => null);
+      const localCacheSaved = saveScanForDashboard(durableRecord, scanId);
+      writeScanDebug({ status: "saved", stage: "dashboard_saved", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), durable_fix_list_id: durableFixListId || "", local_cache_saved: localCacheSaved, compact_debug_available: true, download_available: true });''')
+          replace_once('src/components/scan/ScanWebsiteForm.jsx',
+              '''  const crawledPages = getPages(scanData).slice(0, 150);
+  const rawFixes = getRecommendations(scanData).slice(0, 140);
+  const pagesCrawled = getFirstNumber([scanData?.pages_crawled, scanData?.pages_scanned, scanData?.technical_audit_summary?.pages_crawled, crawledPages.length]);''',
+              '''  const pageLimit = getSafeScanBudget(scanMode).max_pages;
+  const crawledPages = getPages(scanData).slice(0, pageLimit);
+  const rawFixes = getRecommendations(scanData).slice(0, 140);
+  const reportedPagesCrawled = getFirstNumber([scanData?.pages_crawled, scanData?.pages_scanned, scanData?.technical_audit_summary?.pages_crawled, crawledPages.length]);
+  const pagesCrawled = Math.min(pageLimit, crawledPages.length || reportedPagesCrawled);''')
+          replace_once('src/components/scan/ScanWebsiteForm.jsx',
+              '''function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsPlatform, cmsName, scanMode, requestedPathPrefix, scanId, scanRunId }) {
+  const pages = getPages(scanData).slice(0, 150).map(slimPage);''',
+              '''function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsPlatform, cmsName, scanMode, requestedPathPrefix, scanId, scanRunId }) {
+  const pageLimit = getSafeScanBudget(scanMode).max_pages;
+  const pages = getPages(scanData).slice(0, pageLimit).map(slimPage);''')
+          replace_once('src/components/scan/ScanWebsiteForm.jsx',
+              '''  const pagesCrawled = getFirstNumber([scanData?.pages_crawled, scanData?.pages_scanned, scanData?.technical_audit_summary?.pages_crawled, pages.length]);
+  const pagesFound''',
+              '''  const reportedPagesCrawled = getFirstNumber([scanData?.pages_crawled, scanData?.pages_scanned, scanData?.technical_audit_summary?.pages_crawled, pages.length]);
+  const pagesCrawled = Math.min(pageLimit, pages.length || reportedPagesCrawled);
+  const pagesFound''')
+          replace_once('src/components/scan/ScanWebsiteForm.jsx',
+              '''    scan_mode: scanMode,
+    health_score: healthScore || 0,''',
+              '''    scan_mode: scanMode,
+    scanner_version: scanData?.scanner_version || scanData?.version || technicalSummary.scanner_version || "",
+    scanner_build_revision: scanData?.scanner_build_revision || scanData?.technical_audit_summary?.scanner_build_revision || "",
+    advanced_scan_backend: scanData?.advanced_scan_backend || scanData?.technical_audit_summary?.advanced_scan_backend || "",
+    deno_fallback_used: Boolean(scanData?.deno_fallback_used || scanData?.technical_audit_summary?.deno_fallback_used),
+    review_version: aiData?.review_version || aiData?.ai_review_version || "",
+    review_evidence_calibration_version: aiData?.review_evidence_calibration_version || "",
+    ai_review_backend: aiData?.ai_review_backend || "",
+    python_review_fallback_used: Boolean(aiData?.python_review_fallback_used),
+    release_gate_eligible: scanData?.release_gate_eligible === true && scanData?.advanced_scan_backend === "python_scanner_api" && scanData?.deno_fallback_used !== true && aiData?.ai_review_backend === "python_review_api" && aiData?.python_review_fallback_used !== true && Boolean(aiData?.review_version || aiData?.ai_review_version) && Boolean(aiData?.review_evidence_calibration_version),
+    health_score: healthScore || 0,''')
+          # Remove the duplicate authority fields later in the object, leaving the
+          # canonical fields above.
+          replace_once('src/components/scan/ScanWebsiteForm.jsx',
+              '''    ai_provider: aiData?.ai_provider || aiData?.provider || aiData?.debug?.provider || "",
+    ai_review_backend: aiData?.ai_review_backend || "",
+    python_review_fallback_used: Boolean(aiData?.python_review_fallback_used),
+    no_high_confidence_findings:''',
+              '''    ai_provider: aiData?.ai_provider || aiData?.provider || aiData?.debug?.provider || "",
+    no_high_confidence_findings:''')
+
+          old_save = '''function saveScanForDashboard(scanRecord, scanId) {
+  try {
+    const normalizedRecord = slimScanRecord(normalizeScanRecordForStorage({ ...scanRecord, id: scanId || scanRecord?.id }));
+    const serialized = JSON.stringify(normalizedRecord);
+    const stableScanId = normalizedRecord.scan_id || normalizedRecord.scan_run_id || normalizedRecord.id;
+    if (stableScanId) window.localStorage.setItem(`${SCAN_RECORD_PREFIX}${stableScanId}`, serialized);
+    [DASHBOARD_LAST_SCAN_KEY, LEGACY_LAST_SCAN_KEY].forEach((key) => window.localStorage.setItem(key, serialized));
+    [DASHBOARD_HISTORY_KEY, LEGACY_HISTORY_KEY].forEach((key) => {
+      const existingRaw = window.localStorage.getItem(key);
+      const existing = existingRaw ? JSON.parse(existingRaw) : [];
+      const history = Array.isArray(existing) ? existing : [];
+      const nextHistory = [normalizedRecord, ...history.filter((item) => (item?.scan_id || item?.scan_run_id || item?.id) !== stableScanId)].slice(0, 20).map(slimScanRecord);
+      window.localStorage.setItem(key, JSON.stringify(nextHistory));
+    });
+    window.localStorage.removeItem(ACTIVE_SCAN_URL_KEY);
+    window.localStorage.removeItem(ACTIVE_SCAN_STARTED_AT_KEY);
+    window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
+  } catch (storageError) {
+    console.error("Could not save scan for dashboard.", storageError);
+    throw new Error("The scan finished, but FixList could not save the summary. Clear scans and try again.");
+  }
+}'''
+          new_save = '''function saveScanForDashboard(scanRecord, scanId) {
+  const normalizedRecord = slimScanRecord(normalizeScanRecordForStorage({ ...scanRecord, id: scanId || scanRecord?.id, local_cache_complete: true }));
+  const stableScanId = normalizedRecord.scan_id || normalizedRecord.scan_run_id || normalizedRecord.id;
+  const historyEntry = buildScanHistoryEntry(normalizedRecord);
+
+  const writeRecord = (record) => {
+    const serialized = JSON.stringify(record);
+    if (stableScanId) window.localStorage.setItem(`${SCAN_RECORD_PREFIX}${stableScanId}`, serialized);
+    window.localStorage.setItem(DASHBOARD_LAST_SCAN_KEY, JSON.stringify(historyEntry));
+    const existingRaw = window.localStorage.getItem(DASHBOARD_HISTORY_KEY);
+    const existing = existingRaw ? JSON.parse(existingRaw) : [];
+    const history = Array.isArray(existing) ? existing.map(buildScanHistoryEntry) : [];
+    const nextHistory = [historyEntry, ...history.filter((item) => (item?.scan_id || item?.scan_run_id || item?.id) !== stableScanId)].slice(0, 20);
+    window.localStorage.setItem(DASHBOARD_HISTORY_KEY, JSON.stringify(nextHistory));
+    window.localStorage.removeItem(LEGACY_LAST_SCAN_KEY);
+    window.localStorage.removeItem(LEGACY_HISTORY_KEY);
+    window.localStorage.removeItem(ACTIVE_SCAN_URL_KEY);
+    window.localStorage.removeItem(ACTIVE_SCAN_STARTED_AT_KEY);
+    window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
+  };
+
+  try {
+    writeRecord(normalizedRecord);
+    return true;
+  } catch (storageError) {
+    console.warn("Browser scan cache was full; pruning old scan records.", storageError);
+    pruneScanCache(stableScanId);
+    try {
+      writeRecord(normalizedRecord);
+      return true;
+    } catch (retryError) {
+      console.warn("Full browser scan cache is unavailable; durable scan history remains authoritative.", retryError);
+      try {
+        writeRecord(buildEmergencyBrowserRecord(normalizedRecord));
+      } catch (summaryError) {
+        console.warn("Could not write even the emergency scan summary.", summaryError);
+      }
+      return false;
+    }
+  }
+}
+
+function buildScanHistoryEntry(record = {}) {
+  const stableScanId = record.scan_id || record.scan_run_id || record.id || "";
+  return {
+    id: stableScanId,
+    scan_id: stableScanId,
+    scan_run_id: record.scan_run_id || stableScanId,
+    storage_key: stableScanId ? `${SCAN_RECORD_PREFIX}${stableScanId}` : "",
+    created_at: record.created_at || "",
+    website_url: record.website_url || "",
+    business_name: record.business_name || "",
+    scan_mode: record.scan_mode || "",
+    health_score: Number(record.health_score || record.seo_score || 0),
+    health_grade: record.health_grade || "",
+    pages_crawled: Number(record.pages_crawled || 0),
+    pages_found: Number(record.pages_found || 0),
+    scan_status: record.scan_status || "",
+    release_gate_eligible: record.release_gate_eligible === true,
+  };
+}
+
+function buildEmergencyBrowserRecord(record = {}) {
+  return {
+    ...buildScanHistoryEntry(record),
+    local_cache_complete: false,
+    customer_summary: clampText(record.customer_summary || record.simple_summary || "", 800),
+    next_best_step: clampText(record.next_best_step || "", 300),
+    scanner_version: record.scanner_version || "",
+    scanner_build_revision: record.scanner_build_revision || "",
+    advanced_scan_backend: record.advanced_scan_backend || "",
+    deno_fallback_used: Boolean(record.deno_fallback_used),
+    review_version: record.review_version || "",
+    review_evidence_calibration_version: record.review_evidence_calibration_version || "",
+    ai_review_backend: record.ai_review_backend || "",
+    python_review_fallback_used: Boolean(record.python_review_fallback_used),
+    recommendations: getRecommendations(record).slice(0, 12).map(slimFix),
+    pages: getPages(record).slice(0, 12).map(slimPage),
+  };
+}
+
+function pruneScanCache(keepScanId = "") {
+  if (typeof window === "undefined") return;
+  const keepKey = keepScanId ? `${SCAN_RECORD_PREFIX}${keepScanId}` : "";
+  for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
+    const key = window.localStorage.key(index) || "";
+    if (key.startsWith(SCAN_RECORD_PREFIX) && key !== keepKey) window.localStorage.removeItem(key);
+  }
+  [DASHBOARD_LAST_SCAN_KEY, DASHBOARD_HISTORY_KEY, LEGACY_LAST_SCAN_KEY, LEGACY_HISTORY_KEY, SCAN_DEBUG_KEY].forEach((key) => window.localStorage.removeItem(key));
+}'''
+          replace_once('src/components/scan/ScanWebsiteForm.jsx', old_save, new_save)
+
+          old_normalize = '''function normalizeScanRecordForStorage(record) {
+  const fixes = getRecommendations(record).map(slimFix);
+  const pages = getPages(record).map(slimPage);
+  const healthScore = getHealthScore(record);
+  const incomplete = ["incomplete_evidence", "blocked_or_incomplete"].includes(record?.scan_status);
+  const noHighConfidenceFindings = record?.no_high_confidence_findings === true || (fixes.length === 0 && !incomplete);
+  return {
+    ...record,
+    sampling_version: record?.sampling_version || "",
+    sampling_evidence: record?.sampling_evidence || {},
+    id: record?.id || `scan_${Date.now()}`,
+    created_at: record?.created_at || new Date().toISOString(),
+    website_url: record?.website_url || "",
+    website_key: normalizeWebsiteKey(record?.website_url || ""),
+    business_name: record?.business_name || "",
+    cms_platform: record?.cms_platform || "custom",
+    cms_name: record?.cms_name || "Custom / Not sure",
+    scan_mode: record?.scan_mode || "quick",
+    health_score: Number(healthScore || 0),
+    seo_score: Number(healthScore || 0),
+    health_grade: record?.health_grade || record?.website_health_report?.health_grade || (noHighConfidenceFindings ? "No issues found in sample" : scoreLabel(healthScore)),
+    no_high_confidence_findings: noHighConfidenceFindings,
+    review_confidence_state: record?.review_confidence_state || (noHighConfidenceFindings ? "no_high_confidence_findings" : ""),
+    zero_fix_confidence_version: record?.zero_fix_confidence_version || "",
+    scan_status: record?.scan_status || (noHighConfidenceFindings ? "complete_no_high_confidence_findings" : "complete"),
+    next_best_step: record?.next_best_step || record?.website_health_report?.next_best_step || "",
+    limitation: record?.limitation || "",
+    pages_crawled: Number(record?.pages_crawled || pages.length || 0),
+    pages_found: Number(record?.pages_found || pages.length || 0),
+    customer_summary: record?.customer_summary || record?.simple_summary || "",
+    simple_summary: record?.simple_summary || record?.customer_summary || "",
+    recommendations: fixes,
+    fixes,
+    findings: fixes,
+    top_recommended_actions: fixes.slice(0, 5).map(fixToAction).map(slimAction),
+    crawled_pages: pages,
+    pages,
+    scanned_pages: pages,
+  };
+}'''
+          new_normalize = '''function normalizeScanRecordForStorage(record) {
+  const pageLimit = getSafeScanBudget(record?.scan_mode || "advanced").max_pages;
+  const fixes = getRecommendations(record).slice(0, 100).map(slimFix);
+  const pages = getPages(record).slice(0, pageLimit).map(slimPage);
+  const healthScore = getHealthScore(record);
+  const incomplete = ["incomplete_evidence", "blocked_or_incomplete"].includes(record?.scan_status);
+  const noHighConfidenceFindings = record?.no_high_confidence_findings === true || (fixes.length === 0 && !incomplete);
+  const reportedPages = Number(record?.pages_crawled || pages.length || 0);
+  const normalized = {
+    ...record,
+    sampling_version: record?.sampling_version || "",
+    sampling_evidence: record?.sampling_evidence || {},
+    id: record?.id || `scan_${Date.now()}`,
+    created_at: record?.created_at || new Date().toISOString(),
+    website_url: record?.website_url || "",
+    website_key: normalizeWebsiteKey(record?.website_url || ""),
+    business_name: record?.business_name || "",
+    cms_platform: record?.cms_platform || "custom",
+    cms_name: record?.cms_name || "Custom / Not sure",
+    scan_mode: record?.scan_mode || "quick",
+    health_score: Number(healthScore || 0),
+    seo_score: Number(healthScore || 0),
+    health_grade: record?.health_grade || record?.website_health_report?.health_grade || (noHighConfidenceFindings ? "No issues found in sample" : scoreLabel(healthScore)),
+    no_high_confidence_findings: noHighConfidenceFindings,
+    review_confidence_state: record?.review_confidence_state || (noHighConfidenceFindings ? "no_high_confidence_findings" : ""),
+    zero_fix_confidence_version: record?.zero_fix_confidence_version || "",
+    scan_status: record?.scan_status || (noHighConfidenceFindings ? "complete_no_high_confidence_findings" : "complete"),
+    next_best_step: record?.next_best_step || record?.website_health_report?.next_best_step || "",
+    limitation: record?.limitation || "",
+    pages_crawled: Math.min(pageLimit, pages.length || Math.max(0, reportedPages)),
+    pages_found: Number(record?.pages_found || pages.length || 0),
+    customer_summary: record?.customer_summary || record?.simple_summary || "",
+    simple_summary: record?.simple_summary || record?.customer_summary || "",
+    recommendations: fixes,
+    pages,
+    top_recommended_actions: fixes.slice(0, 5).map(fixToAction).map(slimAction),
+  };
+  ["fixes", "findings", "crawled_pages", "scanned_pages", "cleaned_fixes", "raw_fixes", "grouped_findings", "issues", "raw"].forEach((key) => delete normalized[key]);
+  return normalized;
+}'''
+          replace_once('src/components/scan/ScanWebsiteForm.jsx', old_normalize, new_normalize)
+          replace_once('src/components/scan/ScanWebsiteForm.jsx',
+              '''function getSafeScanBudget(scanMode) {
+''',
+              '''function enforceScanPageCap(scanData = {}, maxPages = 150) {
+  const limit = Math.max(0, Number(maxPages || 0));
+  const pages = getPages(scanData).slice(0, limit);
+  const reported = getFirstNumber([scanData?.pages_crawled, scanData?.pages_scanned, scanData?.technical_audit_summary?.pages_crawled, pages.length]);
+  const pagesCrawled = Math.min(limit, pages.length || reported);
+  return {
+    ...scanData,
+    pages_crawled: pagesCrawled,
+    crawled_pages: pages,
+    pages,
+    scanned_pages: pages,
+    technical_audit_summary: { ...(scanData?.technical_audit_summary || {}), pages_crawled: pagesCrawled },
+  };
+}
+
+function getSafeScanBudget(scanMode) {
+''')
+          old_slim = '''function slimScanRecord(record = {}) {
+  if (!record) return null;
+  const recommendations = getRecommendations(record);
+  const pages = getPages(record);
+  return { ...record, sampling_version: record.sampling_version || "", sampling_evidence: record.sampling_evidence || {}, id: record.id || `scan_${Date.now()}`, created_at: record.created_at || new Date().toISOString(), website_url: record.website_url || "", website_key: record.website_key || normalizeWebsiteKey(record.website_url || ""), recommendations: recommendations.slice(0, 120).map(slimFix), fixes: recommendations.slice(0, 120).map(slimFix), findings: recommendations.slice(0, 120).map(slimFix), crawled_pages: pages.slice(0, 150).map(slimPage), pages: pages.slice(0, 150).map(slimPage), scanned_pages: pages.slice(0, 150).map(slimPage), top_recommended_actions: recommendations.slice(0, 5).map(fixToAction).map(slimAction), debug: { ...(record.debug || {}), compact_debug_enabled: true, download_json_enabled: true } };
+}'''
+          new_slim = '''function slimScanRecord(record = {}) {
+  if (!record) return null;
+  const pageLimit = getSafeScanBudget(record.scan_mode || "advanced").max_pages;
+  const recommendations = getRecommendations(record).slice(0, 100).map(slimFix);
+  const pages = getPages(record).slice(0, pageLimit).map(slimPage);
+  const output = { ...record, sampling_version: record.sampling_version || "", sampling_evidence: record.sampling_evidence || {}, id: record.id || `scan_${Date.now()}`, created_at: record.created_at || new Date().toISOString(), website_url: record.website_url || "", website_key: record.website_key || normalizeWebsiteKey(record.website_url || ""), recommendations, pages, pages_crawled: Math.min(pageLimit, pages.length || Number(record.pages_crawled || 0)), top_recommended_actions: recommendations.slice(0, 5).map(fixToAction).map(slimAction), debug: { ...(record.debug || {}), compact_debug_enabled: true, download_json_enabled: true } };
+  ["fixes", "findings", "crawled_pages", "scanned_pages", "cleaned_fixes", "raw_fixes", "grouped_findings", "issues", "raw"].forEach((key) => delete output[key]);
+  return output;
+}'''
+          replace_once('src/components/scan/ScanWebsiteForm.jsx', old_slim, new_slim)
+          replace_once('src/components/scan/ScanWebsiteForm.jsx',
+              '''    [DASHBOARD_LAST_SCAN_KEY, LEGACY_LAST_SCAN_KEY, DASHBOARD_HISTORY_KEY, LEGACY_HISTORY_KEY, ACTIVE_SCAN_URL_KEY, ACTIVE_SCAN_STARTED_AT_KEY, SCAN_DEBUG_KEY].forEach((key) => window.localStorage.removeItem(key));
+    window.dispatchEvent''',
+              '''    [DASHBOARD_LAST_SCAN_KEY, LEGACY_LAST_SCAN_KEY, DASHBOARD_HISTORY_KEY, LEGACY_HISTORY_KEY, ACTIVE_SCAN_URL_KEY, ACTIVE_SCAN_STARTED_AT_KEY, SCAN_DEBUG_KEY].forEach((key) => window.localStorage.removeItem(key));
+    for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
+      const key = window.localStorage.key(index) || "";
+      if (key.startsWith(SCAN_RECORD_PREFIX)) window.localStorage.removeItem(key);
+    }
+    window.dispatchEvent''')
+
+          # FixList: resolve compact history pointers, clear every per-scan key, and
+          # reopen authoritative durable records when browser storage is unavailable.
+          replace_once('src/pages/FixList.jsx',
+              '''import { trackEvent } from "@/lib/analytics";
+import ScoreRing''',
+              '''import { trackEvent } from "@/lib/analytics";
+import { getScanRunWithFixList } from "@/lib/scanRuns";
+import ScoreRing''')
+          old_effect = '''  useEffect(() => {
+    reloadScan();
+    window.addEventListener("seo-autopilot-scan-saved", reloadScan);
+    window.addEventListener("storage", reloadScan);
+    return () => {
+      window.removeEventListener("seo-autopilot-scan-saved", reloadScan);
+      window.removeEventListener("storage", reloadScan);
+    };
+  }, [requestedScanId]);'''
+          new_effect = '''  useEffect(() => {
+    let cancelled = false;
+    const localRecord = readBestScanRecord(requestedScanId);
+    reloadScan();
+    if (requestedScanId && (!isUsefulScanCandidate(localRecord) || localRecord?.local_cache_complete === false)) {
+      getScanRunWithFixList(requestedScanId).then((snapshot) => {
+        if (cancelled || !snapshot) return;
+        const durableRecord = durableSnapshotToScanRecord(snapshot);
+        if (!isUsefulScanCandidate(durableRecord)) return;
+        setScanRecord(durableRecord);
+        setSelectedCms(normalizeCmsValue(durableRecord?.cms_platform || "custom"));
+        setDoneIds(readDoneFixIds(websiteKeyOf(durableRecord)));
+      });
+    }
+    window.addEventListener("seo-autopilot-scan-saved", reloadScan);
+    window.addEventListener("storage", reloadScan);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("seo-autopilot-scan-saved", reloadScan);
+      window.removeEventListener("storage", reloadScan);
+    };
+  }, [requestedScanId]);'''
+          replace_once('src/pages/FixList.jsx', old_effect, new_effect)
+          replace_once('src/pages/FixList.jsx',
+              '''  const valid = candidates.filter(Boolean).map(normalizeStoredScanCandidate).filter(isUsefulScanCandidate).sort''',
+              '''  const valid = candidates.filter(Boolean).map(resolveStoredScanCandidate).map(normalizeStoredScanCandidate).filter(isUsefulScanCandidate).sort''')
+          replace_once('src/pages/FixList.jsx',
+              '''function normalizeStoredScanCandidate(candidate) {
+''',
+              '''function resolveStoredScanCandidate(candidate) {
+  if (!candidate || typeof candidate !== "object") return candidate;
+  const scanId = candidate.scan_id || candidate.scan_run_id || candidate.id || "";
+  const storageKey = candidate.storage_key || (scanId ? `${SCAN_RECORD_PREFIX}${scanId}` : "");
+  return storageKey ? safeParseLocalStorage(storageKey) || candidate : candidate;
+}
+
+function durableSnapshotToScanRecord(snapshot = {}) {
+  const run = snapshot.run || {};
+  const fixList = snapshot.fixList || {};
+  const recommendations = Array.isArray(snapshot.fixItems) ? snapshot.fixItems.map((item) => ({ ...item, id: item.fix_id || item.id, title: item.issue_title || item.title, recommendation: item.recommended_value || item.recommendation })) : [];
+  return {
+    id: run.id || "",
+    scan_id: run.id || "",
+    scan_run_id: run.id || "",
+    created_at: run.completed_at || run.queued_at || "",
+    website_url: run.website_url || fixList.website_url || "",
+    scan_mode: run.scan_mode || "",
+    scanner_version: run.scanner_version || "",
+    scanner_build_revision: run.scanner_build_revision || "",
+    advanced_scan_backend: run.advanced_scan_backend || "",
+    deno_fallback_used: run.deno_fallback_used === true,
+    review_version: run.review_version || "",
+    review_evidence_calibration_version: run.review_evidence_calibration_version || "",
+    ai_review_backend: run.ai_review_backend || fixList.ai_review_backend || "",
+    python_review_fallback_used: run.python_review_fallback_used === true || fixList.python_review_fallback_used === true,
+    release_gate_eligible: run.release_gate_eligible === true,
+    pages_crawled: Number(run.pages_crawled || 0),
+    pages_found: Number(run.pages_found || 0),
+    scan_status: run.scan_status || fixList.scan_status || "",
+    review_confidence_state: run.review_confidence_state || "",
+    score_is_provisional: run.score_is_provisional === true || fixList.score_is_provisional === true,
+    access_evidence_state: run.access_evidence_state || "",
+    no_high_confidence_findings: run.no_high_confidence_findings === true || fixList.no_high_confidence_findings === true,
+    limitation: run.limitation || "",
+    health_score: Number(fixList.health_score ?? run.health_score ?? 0),
+    health_grade: fixList.health_grade || run.health_grade || "",
+    customer_summary: run.customer_summary || "",
+    next_best_step: run.next_best_step || "",
+    recommendations,
+    pages: [],
+    local_cache_complete: false,
+  };
+}
+
+function normalizeStoredScanCandidate(candidate) {
+''')
+          replace_once('src/pages/FixList.jsx',
+              '''    STORAGE_KEYS.forEach((key) => window.localStorage.removeItem(key));
+    window.dispatchEvent''',
+              '''    STORAGE_KEYS.forEach((key) => window.localStorage.removeItem(key));
+    for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
+      const key = window.localStorage.key(index) || "";
+      if (key.startsWith(SCAN_RECORD_PREFIX)) window.localStorage.removeItem(key);
+    }
+    window.dispatchEvent''')
+
+          # Durable ScanRun authority metadata.
+          entity_path = Path('base44/entities/ScanRun.jsonc')
+          entity = json.loads(entity_path.read_text(encoding='utf-8'))
+          props = entity['properties']
+          props.update({
+              'scanner_build_revision': {'type': 'string'},
+              'advanced_scan_backend': {'type': 'string'},
+              'deno_fallback_used': {'type': 'boolean', 'default': False},
+              'review_evidence_calibration_version': {'type': 'string'},
+              'ai_review_backend': {'type': 'string'},
+              'python_review_fallback_used': {'type': 'boolean', 'default': False},
+              'release_gate_eligible': {'type': 'boolean', 'default': False},
+          })
+          entity_path.write_text(json.dumps(entity, indent=2) + '\n', encoding='utf-8')
+
+          replace_once('src/lib/scanRunModel.js',
+              '''export function buildScanRunFields(record = {}, { status } = {}) {
+  return {''',
+              '''export function buildScanRunFields(record = {}, { status } = {}) {
+  const modeLimit = { basic: 25, quick: 40, deep: 85, advanced: 150 }[record.scan_mode] || 150;
+  return {''')
+          replace_once('src/lib/scanRunModel.js',
+              '''    scanner_version: toStr(record.scanner_version || record.technical_audit_summary?.scanner_version),
+    review_version: toStr(record.review_version || record.review_polish_version),
+    pages_found: Number(record.pages_found || 0),
+    pages_crawled: Number(record.pages_crawled || 0),''',
+              '''    scanner_version: toStr(record.scanner_version || record.technical_audit_summary?.scanner_version),
+    scanner_build_revision: toStr(record.scanner_build_revision || record.technical_audit_summary?.scanner_build_revision),
+    advanced_scan_backend: toStr(record.advanced_scan_backend),
+    deno_fallback_used: record.deno_fallback_used === true,
+    review_version: toStr(record.review_version || record.review_polish_version),
+    review_evidence_calibration_version: toStr(record.review_evidence_calibration_version),
+    ai_review_backend: toStr(record.ai_review_backend),
+    python_review_fallback_used: record.python_review_fallback_used === true,
+    release_gate_eligible: record.release_gate_eligible === true,
+    pages_found: Number(record.pages_found || 0),
+    pages_crawled: Math.min(modeLimit, Number(record.pages_crawled || 0)),''')
+
+          # Version contracts and regression coverage.
+          replace_once('tests/frontend/base44-python-compatibility.test.mjs',
+              'PYTHON_SCANNER_VERSION = "python_scanner_v3_bounded_request"',
+              'PYTHON_SCANNER_VERSION = "python_scanner_v4_hard_page_cap"')
+          Path('tests/frontend/production-release-recovery.test.mjs').write_text('''import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+const advanced = readFileSync("base44/functions/runAdvancedScan/entry.ts", "utf8");
+const scannerForm = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
+const fixList = readFileSync("src/pages/FixList.jsx", "utf8");
+const scanModel = readFileSync("src/lib/scanRunModel.js", "utf8");
+
+test("normal scans require Python and do not silently save Deno fallback", () => {
+  assert.match(scannerForm, /require_python_scanner: true/);
+  assert.match(scannerForm, /allow_deno_fallback: false/);
+  assert.match(advanced, /did not save a fallback result/);
+  assert.match(advanced, /python_scanner_failure_code/);
+  assert.match(advanced, /release_gate_eligible: false/);
+});
+
+test("page caps are enforced by Base44 and the frontend persistence boundary", () => {
+  assert.match(advanced, /const cappedPages = sourcePages\.slice\(0, maxPages\)/);
+  assert.match(advanced, /pages_crawled: pagesCrawled/);
+  assert.match(scannerForm, /scanData = enforceScanPageCap\(scanData, safeScanBudget\.max_pages\)/);
+  assert.match(scannerForm, /Math\.min\(pageLimit, pages\.length \|\| reportedPagesCrawled\)/);
+  assert.match(scanModel, /pages_crawled: Math\.min\(modeLimit/);
+});
+
+test("durable persistence completes before optional browser caching", () => {
+  const durableIndex = scannerForm.indexOf("await completeScanRun(scanRunHandle, durableRecord)");
+  const cacheIndex = scannerForm.indexOf("saveScanForDashboard(durableRecord, scanId)");
+  assert.ok(durableIndex >= 0 && cacheIndex > durableIndex);
+  assert.doesNotMatch(scannerForm, /throw new Error\("The scan finished, but FixList could not save the summary/);
+  assert.match(scannerForm, /durable scan history remains authoritative/);
+  assert.match(fixList, /getScanRunWithFixList\(requestedScanId\)/);
+});
+
+test("browser storage uses one canonical record plus compact indexes", () => {
+  assert.match(scannerForm, /function buildScanHistoryEntry/);
+  assert.match(scannerForm, /function pruneScanCache/);
+  assert.match(scannerForm, /delete normalized\[key\]/);
+  assert.match(scannerForm, /key\.startsWith\(SCAN_RECORD_PREFIX\)/);
+  assert.match(fixList, /function resolveStoredScanCandidate/);
+  assert.match(fixList, /key\.startsWith\(SCAN_RECORD_PREFIX\)/);
+});
+
+test("release authority markers survive final persistence", () => {
+  for (const marker of ["scanner_version", "scanner_build_revision", "advanced_scan_backend", "deno_fallback_used", "review_version", "review_evidence_calibration_version", "ai_review_backend", "python_review_fallback_used", "release_gate_eligible"]) {
+    assert.match(scannerForm, new RegExp(`${marker}:`));
+    assert.match(scanModel, new RegExp(`${marker}:`));
+  }
+});
+''', encoding='utf-8')
+
+          replace_once('scanner-api/tests/test_production_release_recovery.py',
+              'from app.scanner import SCAN_BUDGETS, VERSION',
+              'from app.scanner import SCAN_BUDGETS, VERSION, enforce_page_budget')
+          replace_once('scanner-api/tests/test_production_release_recovery.py',
+              'assert VERSION == "python_scanner_v3_bounded_request"',
+              'assert VERSION == "python_scanner_v4_hard_page_cap"')
+          append_once('scanner-api/tests/test_production_release_recovery.py',
+              'def test_hard_page_cap_trims_concurrent_overrun():',
+              '''def test_hard_page_cap_trims_concurrent_overrun():
+    pages = [{"url": f"https://example.com/{index}"} for index in range(151)]
+    capped = enforce_page_budget(pages, 150)
+    assert len(capped) == 150
+    assert capped[-1]["url"].endswith("/149")
+''')
+          PY
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          python -m pip install -r scanner-api/requirements.txt
+
+      - name: Record updated frozen beta revision
+        run: |
+          cd scanner-api
+          python scripts/freeze_beta_revision.py \
+            --git-commit "${GITHUB_SHA}" \
+            --acceptance-report docs/beta-acceptance.md \
+            --note "Release recovery: hard page cap, durable-first persistence, and quota-safe browser cache."
+
+      - name: Validate focused and full gates
+        run: |
+          python -m pytest scanner-api/tests/test_production_release_recovery.py -q
+          python -m pytest scanner-api/tests -q
+          node --test tests/frontend/*.test.mjs
+          npm run lint
+          npm run typecheck
+          npm run build
+          cd scanner-api && python scripts/freeze_beta_revision.py --check
+
+      - name: Commit product patch and remove temporary workflow
+        shell: bash
+        run: |
+          rm -f .github/workflows/apply-page-cap-storage-recovery.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            base44/entities/ScanRun.jsonc \
+            base44/functions/runAdvancedScan/entry.ts \
+            data/beta-crawler-revision.json \
+            scanner-api/app/scanner.py \
+            scanner-api/tests/test_production_release_recovery.py \
+            src/components/scan/ScanWebsiteForm.jsx \
+            src/lib/scanRunModel.js \
+            src/pages/FixList.jsx \
+            tests/frontend/base44-python-compatibility.test.mjs \
+            tests/frontend/production-release-recovery.test.mjs \
+            .github/workflows/apply-page-cap-storage-recovery.yml
+          git commit -m "Fix page caps and quota-safe scan persistence"
+          git push origin HEAD:agent/fix-page-cap-and-browser-storage

@@ -1,7 +1,8 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
-const AI_REVIEW_VERSION = "aiReviewScan_v6_normalized_python_review_input";
-const PYTHON_REVIEW_VERSION = "python_review_v1_archetype_templates";
+const AI_REVIEW_VERSION = "aiReviewScan_v7_current_python_compatibility";
+const PYTHON_REVIEW_VERSION = "python_review_v2_structural_marketplace";
+const PYTHON_REVIEW_CALIBRATION_VERSION = "review_evidence_calibration_v5_utility_redirect";
 const DENO_FALLBACK_PROFILE = "deno_review_safety_fallback_v6";
 const DENO_FALLBACK_EVIDENCE_CONTRACT = "deno_review_fallback_evidence_contract_v1";
 const CORS_HEADERS = {
@@ -82,7 +83,12 @@ async function tryPythonReview(scanBody) {
 
     const reviewVersion = result?.ai_review_version || result?.review_version || "";
     if (reviewVersion !== PYTHON_REVIEW_VERSION) {
-      return { ok: false, configured: true, reason: `Python review version mismatch: ${reviewVersion || "missing"}.` };
+      return { ok: false, configured: true, reason: `Python review version mismatch: ${reviewVersion || "missing"}; expected ${PYTHON_REVIEW_VERSION}.` };
+    }
+
+    const calibrationVersion = result?.review_evidence_calibration_version || "";
+    if (calibrationVersion !== PYTHON_REVIEW_CALIBRATION_VERSION) {
+      return { ok: false, configured: true, reason: `Python review calibration mismatch: ${calibrationVersion || "missing"}; expected ${PYTHON_REVIEW_CALIBRATION_VERSION}.` };
     }
 
     return { ok: true, configured: true, result };

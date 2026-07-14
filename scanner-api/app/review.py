@@ -59,7 +59,7 @@ CATEGORY_MAP = {
     "duplicate_meta_description": "duplicate_content",
 }
 
-ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v2_structural_weighting"
+ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v3_mixed_template_dominance"
 
 # Frequency cap for archetype keyword/pattern counting: template volume
 # (hundreds of /blog/ URLs) must not out-vote company-level evidence.
@@ -77,8 +77,22 @@ SAAS_STRUCTURAL_PATTERNS = (
 )
 ECOMMERCE_STRUCTURAL_PATTERNS = (
     "/products/", "/product/", "/produit/", "/collections/", "/collection/",
-    "/category/", "/categorie/", "/cat/", "/p/", "/cart", "/checkout",
+    "/categorie/", "/cat/", "/p/", "/cart", "/checkout",
     "/basket", "/shop/", "/boutique/", "/store/",
+)
+PRODUCT_DETAIL_PATTERNS = (
+    "/products/", "/product/", "/produit/", "/p/", "/itm/", "/buy/",
+)
+ARTICLE_ROUTE_PATTERNS = (
+    "/blog/", "/travel-blog/", "/article/", "/articles/", "/news/",
+    "/guides/", "/guide/", "/ideas/", "/inspiration/", "/resources/",
+    "/category/",
+)
+FINANCE_STRUCTURAL_PATTERNS = (
+    "/loan", "/loans", "/mortgage", "/credit", "/pret", "/assurance",
+    "/insurance", "/quote", "/devis", "/calculator", "/simulation",
+    "/apply", "/dscr", "/bridge", "/fix-and-flip", "/rental",
+    "/request-a-payoff", "/document-exchange",
 )
 # Listing-detail routes (owned inventory) — the marketplace tell.
 BOOKING_LISTING_PATTERNS = ("/annonce", "/activites/", "/activite/", "/listings/", "/listing/", "/experiences/")
@@ -243,9 +257,13 @@ def run_review(payload: dict[str, Any]) -> dict[str, Any]:
         or int_or_zero(site_fingerprint.get("pages_crawled")) <= 0
     )
     evidence_incomplete = evidence_is_incomplete(site_fingerprint) or no_page_evidence
+    classification_insufficient = (
+        site_fingerprint.get("classification_state") == "inconclusive_insufficient_evidence"
+    )
     no_high_confidence_findings = (
         not canonical_fixes
         and not evidence_incomplete
+        and not classification_insufficient
         and not crawl_is_blocked(site_fingerprint)
     )
 
@@ -254,6 +272,8 @@ def run_review(payload: dict[str, Any]) -> dict[str, Any]:
         warning = INCOMPLETE_REVIEW_WARNING
         if not canonical_fixes:
             canonical_fixes = [make_missing_evidence_fix()]
+    elif classification_insufficient and not crawl_is_blocked(site_fingerprint):
+        warning = "The crawl returned too few usable pages for a reliable site classification or health grade."
     elif not website_url:
         warning = "AI review ran, but website_url was missing. Scanner recommendations are shown."
     elif not canonical_fixes and not no_high_confidence_findings:
@@ -371,10 +391,12 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         score += archetype_boost(key, text, pages)
         scores.append((key, score))
 
-    path_text = " ".join(clean_path(page_evidence_url(page)).lower() for page in pages[:220])
+    page_paths = [clean_path(page_evidence_url(page)).lower() for page in pages[:220]]
+    path_text = " ".join(page_paths)
     saas_structural = [pattern for pattern in SAAS_STRUCTURAL_PATTERNS if pattern in path_text]
     ecommerce_structural = [pattern for pattern in ECOMMERCE_STRUCTURAL_PATTERNS if pattern in path_text]
     booking_structural = [pattern for pattern in BOOKING_STRUCTURAL_PATTERNS if pattern in path_text]
+    finance_structural = [pattern for pattern in FINANCE_STRUCTURAL_PATTERNS if pattern in path_text]
     ecommerce_marketplace_patterns = ("/itm/", "/sch/", "/b/", "/buy/", "/seller/", "/listing/")
     ecommerce_structural.extend(
         pattern for pattern in ecommerce_marketplace_patterns
@@ -385,7 +407,22 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         for signal in ("ebay", "buy it now", "auction", "seller", "item number", "shop by category")
     )
     product_schema_pages = count_schema_pages(pages, ("product", "offer"))
+    article_schema_pages = count_schema_pages(pages, ("article", "blogposting", "newsarticle"))
     software_schema_pages = count_schema_pages(pages, ("softwareapplication", "mobileapplication", "webapplication"))
+    product_route_pages = sum(
+        1 for path in page_paths if any(pattern in path for pattern in PRODUCT_DETAIL_PATTERNS)
+    )
+    article_route_pages = sum(
+        1 for path in page_paths
+        if any(pattern in path for pattern in ARTICLE_ROUTE_PATTERNS)
+        or bool(re.search(r"/20\d{2}/(?:0?[1-9]|1[0-2])/", path))
+    )
+    saas_route_pages = sum(
+        1 for path in page_paths if any(pattern in path for pattern in SAAS_STRUCTURAL_PATTERNS)
+    )
+    finance_route_pages = sum(
+        1 for path in page_paths if any(pattern in path for pattern in FINANCE_STRUCTURAL_PATTERNS)
+    )
     booking_listing_pages = sum(
         1 for page in pages[:220]
         if any(pattern in clean_path(page_evidence_url(page)).lower() for pattern in BOOKING_LISTING_PATTERNS)
@@ -397,13 +434,37 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
     if software_schema_pages >= 2:
         saas_structural = saas_structural + ["schema:SoftwareApplication"]
 
+    finance_homepage_identity = has_any(homepage_text, [
+        "lending", "lender", "mortgage", "insurance", "assurance", "loan provider",
+        "bridge loan", "hard money", "private lending", "credit broker",
+    ])
+    publisher_dominant = bool(
+        article_route_pages >= max(8, product_route_pages * 2)
+        and (article_schema_pages >= 3 or article_route_pages >= 12)
+    )
+    retail_dominant = bool(
+        product_route_pages >= 3
+        or product_schema_pages >= 3
+        or (len(ecommerce_structural) >= 3 and product_route_pages > 0)
+    )
+    saas_dominant = bool(saas_route_pages >= 3 and saas_route_pages >= product_route_pages)
+    finance_dominant = bool(
+        finance_route_pages >= 3
+        or len(finance_structural) >= 2
+        or (finance_homepage_identity and finance_route_pages >= 1)
+    )
+
     adjusted_scores = []
     for key, score in scores:
         if key == "ecommerce_specialty_retail":
-            if len(ecommerce_structural) < 2 and marketplace_signals < 2:
+            if publisher_dominant and not retail_dominant and marketplace_signals < 2:
+                score = min(score, 2.0)
+            elif not retail_dominant and len(ecommerce_structural) < 2 and marketplace_signals < 2:
                 score = min(score, 1.0)
             else:
                 score += 10.0 * len(ecommerce_structural)
+                score += 2.0 * min(product_route_pages, 20)
+                score += 2.0 * min(product_schema_pages, 20)
         if key == "booking_experiences_marketplace":
             if len(booking_structural) < 2 and booking_listing_pages < 2:
                 score = min(score, 1.0)
@@ -414,9 +475,21 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
                 score = min(score, 1.0)
             else:
                 score += 12.0 * len(saas_structural)
+                score += 2.0 * min(saas_route_pages, 15)
+        if key == "finance_insurance_lead_gen":
+            if not finance_dominant:
+                score = min(score, 6.0)
+            else:
+                score += 10.0 * len(finance_structural)
+                score += 2.0 * min(finance_route_pages, 20)
+                if finance_homepage_identity:
+                    score += 20.0
+        if key == "content_blog" and publisher_dominant:
+            score += 2.0 * min(article_route_pages, 25)
+            score += 1.5 * min(article_schema_pages, 20)
         adjusted_scores.append((key, score))
 
-    structural_competitor = len(saas_structural) >= 3 or len(ecommerce_structural) >= 3
+    structural_competitor = saas_dominant or retail_dominant
     if structural_competitor:
         adjusted_scores = [
             (key, min(score, CONTENT_BLOG_STRUCTURAL_CAP) if key == "content_blog" else score)
@@ -459,7 +532,7 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         1 for page in pages
         if 200 <= int_or_zero(page.get("status_code")) < 300 and not is_blocked_access_page(page)
     )
-    if usable_pages < 5:
+    if usable_pages < 4:
         evidence_sufficiency = "insufficient_pages"
     elif blocked_or_429_pages and blocked_or_429_pages / max(usable_pages + blocked_or_429_pages, 1) >= 0.6:
         evidence_sufficiency = "access_limited"
@@ -484,12 +557,23 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             "booking": booking_structural,
             "booking_listing_pages": booking_listing_pages,
             "product_schema_pages": product_schema_pages,
+            "article_schema_pages": article_schema_pages,
             "software_schema_pages": software_schema_pages,
+            "product_route_pages": product_route_pages,
+            "article_route_pages": article_route_pages,
+            "saas_route_pages": saas_route_pages,
+            "finance_route_pages": finance_route_pages,
+            "publisher_dominant": publisher_dominant,
+            "retail_dominant": retail_dominant,
+            "saas_dominant": saas_dominant,
+            "finance": finance_structural,
         },
         "winning_reason": (
             f"{primary} scored {round(score_map.get(primary, 0.0), 1)} vs {runner_up[0] or 'none'} "
             f"{round(runner_up[1], 1)}; structural signals saas={len(saas_structural)}, "
-            f"ecommerce={len(ecommerce_structural)}, booking={len(booking_structural)}; "
+            f"ecommerce={len(ecommerce_structural)}, booking={len(booking_structural)}, "
+            f"finance={len(finance_structural)}; dominance publisher={publisher_dominant}, "
+            f"retail={retail_dominant}, saas={saas_dominant}; "
             f"content_blog cap {'applied' if structural_competitor else 'not applied'}."
         ) if primary != "general" else "No archetype scored above zero; defaulted to general.",
         "strongest_conflicting_signal": (
@@ -535,6 +619,7 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
 
 def review_input_quality(body: dict[str, Any], site_fingerprint: dict[str, Any]) -> dict[str, Any]:
     incomplete = evidence_is_incomplete(site_fingerprint)
+    insufficient = site_fingerprint.get("classification_state") == "inconclusive_insufficient_evidence"
     return {
         "version": QUALITY_GATE_VERSION,
         "pages_received": int_or_zero(site_fingerprint.get("pages_received")),
@@ -545,7 +630,7 @@ def review_input_quality(body: dict[str, Any], site_fingerprint: dict[str, Any])
         "verified_failed_pages_received": count_lists(body.get("verified_failed_pages"), deep_get(body, "technical_audit_summary", "verified_failed_pages"), deep_get(body, "url_evidence_summary", "verified_failed_pages")),
         "suspicious_artifacts_received": count_lists(body.get("suspicious_url_artifacts"), deep_get(body, "technical_audit_summary", "suspicious_url_artifacts"), deep_get(body, "url_evidence_summary", "suspicious_url_artifacts")),
         "has_technical_summary": bool(body.get("technical_audit_summary")),
-        "evidence_complete": not incomplete,
+        "evidence_complete": not (incomplete or insufficient),
         "metadata_without_pages": incomplete,
         "blocked_or_429_pages": int_or_zero(site_fingerprint.get("blocked_or_429_pages")),
     }
@@ -658,15 +743,10 @@ def archetype_boost(key: str, text: str, pages: list[dict[str, Any]]) -> float:
             score += 35
         return score
     if key == "finance_insurance_lead_gen":
-        score = count_includes(path_text, "/loans") * 10
-        score += count_includes(path_text, "/loan") * 6
-        score += count_includes(path_text, "/apply-now") * 18
-        score += count_includes(path_text, "/request-a-payoff") * 18
-        score += count_includes(path_text, "/document-exchange") * 14
-        score += count_includes(path_text, "/locations") * 4
-        if has_any(text, ["centerstreetlending", "center street lending", "fix-and-flip", "fix and flip", "hard money", "bridge loan", "private lending", "real estate investor", "lending"]):
-            score += 55
-        return score
+        # Repeated editorial vocabulary is not proof of a finance business.
+        # Structural routes and homepage identity are applied centrally in
+        # build_site_fingerprint so mixed-template sites cannot self-amplify.
+        return 0
     return 0
 
 
@@ -1119,9 +1199,16 @@ def has_rate_limit_evidence(fixes: list[dict[str, Any]]) -> bool:
 def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixes: list[dict[str, Any]], site_fingerprint: dict[str, Any], playbook: dict[str, Any], website_url: str) -> dict[str, Any]:
     incomplete = evidence_is_incomplete(site_fingerprint)
     blocked = crawl_is_blocked(site_fingerprint)
+    insufficient = bool(
+        site_fingerprint.get("classification_state") == "inconclusive_insufficient_evidence"
+        and not incomplete
+        and not blocked
+    )
     rate_limited = has_rate_limit_evidence(fixes)
     quality = review_input_quality(body, site_fingerprint)
     health_score = compute_health_score(fixes, site_fingerprint)
+    if insufficient:
+        health_score = min(55, health_score)
     blocked_count = int_or_zero(site_fingerprint.get("blocked_or_429_pages"))
     reviewed_count = max(
         int_or_zero(site_fingerprint.get("pages_received")),
@@ -1142,13 +1229,18 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
         )
     elif incomplete:
         summary = INCOMPLETE_REVIEW_WARNING
+    elif insufficient:
+        summary = (
+            f"FixList received only {site_fingerprint.get('classification', {}).get('usable_pages', 0)} usable pages. "
+            "That is not enough evidence to assign a reliable site type or health grade, so this result is provisional."
+        )
     elif rate_limited:
         summary += (
             f" {blocked_count or 1} reviewed page{'s' if (blocked_count or 1) != 1 else ''} returned HTTP 429 or an access-verification response. "
             "The score is provisional until those results are checked in access logs."
         )
 
-    working = [f"FixList detected a {playbook['label']} pattern."] if site_fingerprint["primary_archetype"] != "general" else []
+    working = [f"FixList detected a {playbook['label']} pattern."] if site_fingerprint["primary_archetype"] != "general" and not insufficient else []
     top_concerns = [fix.get("issue_title") or fix.get("title") for fix in fixes[:3] if fix.get("issue_title") or fix.get("title")]
     quick_wins = [fix.get("issue_title") or fix.get("title") for fix in fixes if fix.get("difficulty") != "developer"][:3]
     bigger_projects = [fix.get("issue_title") or fix.get("title") for fix in fixes if fix.get("difficulty") == "developer" or fix.get("requires_developer")][:3]
@@ -1163,6 +1255,8 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
     access_evidence_state = (
         "blocked"
         if blocked
+        else "insufficient_evidence"
+        if insufficient
         else "partial_access_limited"
         if material_access_limited
         else "incidental_access_limited"
@@ -1174,6 +1268,8 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
         if blocked
         else "incomplete_evidence"
         if incomplete
+        else "insufficient_evidence"
+        if insufficient
         else "partial_access_needs_verification"
         if material_access_limited
         else "complete_with_incidental_access_checks"
@@ -1185,27 +1281,31 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
         if blocked
         else "incomplete_evidence"
         if incomplete
+        else "inconclusive_insufficient_evidence"
+        if insufficient
         else "complete_with_access_limitations"
         if material_access_limited
         else "complete"
     )
-    score_is_provisional = bool(blocked or incomplete or rate_limited)
+    score_is_provisional = bool(blocked or incomplete or insufficient or rate_limited)
+    release_gate_eligible = not score_is_provisional
 
     report = {
         "health_score": health_score,
         "score": health_score,
         "overall_explanation": summary,
-        "health_grade": "Blocked / incomplete" if blocked else "Scan incomplete" if incomplete else "Strong" if health_score >= 90 else "Good" if health_score >= 80 else "Needs work" if health_score >= 65 else "Major issues",
+        "health_grade": "Blocked / incomplete" if blocked else "Scan incomplete" if incomplete else "Insufficient evidence" if insufficient else "Strong" if health_score >= 90 else "Good" if health_score >= 80 else "Needs work" if health_score >= 65 else "Major issues",
         "what_is_working": working,
         "top_concerns": top_concerns,
         "quick_wins": quick_wins,
         "bigger_projects": bigger_projects,
         "limitations": limitations,
-        "next_best_step": "Ask your web person to verify crawler access, rate limits, CDN, firewall, and bot-protection settings." if blocked else "Re-run the scan — page evidence did not reach AI Review." if incomplete else ((fixes[0].get("issue_title") or fixes[0].get("title")) if fixes else "Review the first FixList item."),
+        "next_best_step": "Ask your web person to verify crawler access, rate limits, CDN, firewall, and bot-protection settings." if blocked else "Re-run the scan — page evidence did not reach AI Review." if incomplete else "Run a deeper scan or verify crawler access so FixList can review at least four usable pages." if insufficient else ((fixes[0].get("issue_title") or fixes[0].get("title")) if fixes else "Review the first FixList item."),
         "scan_status": scan_status,
         "review_confidence_state": review_confidence_state,
         "score_is_provisional": score_is_provisional,
         "access_evidence_state": access_evidence_state,
+        "release_gate_eligible": release_gate_eligible,
     }
     pages_returned = pages[:80]
     return {
@@ -1231,11 +1331,13 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
         "site_fingerprint": {**site_fingerprint, "review_input_quality": quality},
         "review_input_quality": {**quality, "access_evidence_state": access_evidence_state, "score_is_provisional": score_is_provisional},
         "review_quality_gate_version": QUALITY_GATE_VERSION,
-        "evidence_complete": not incomplete,
+        "evidence_complete": not (incomplete or insufficient),
         "scan_status": scan_status,
         "review_confidence_state": review_confidence_state,
         "score_is_provisional": score_is_provisional,
         "access_evidence_state": access_evidence_state,
+        "release_gate_eligible": release_gate_eligible,
+        "archetype_classifier_version": ARCHETYPE_CLASSIFIER_VERSION,
         "archetype_playbook": {
             "label": playbook["label"],
             "priority_pages": playbook["priority_pages"],
@@ -1264,6 +1366,7 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
             "review_confidence_state": review_confidence_state,
             "score_is_provisional": score_is_provisional,
             "access_evidence_state": access_evidence_state,
+            "release_gate_eligible": release_gate_eligible,
         },
         "scoring_model": SCORING_MODEL,
     }

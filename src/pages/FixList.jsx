@@ -861,7 +861,7 @@ function getPagesScanned(record, pages) {
 
 function isNoHighConfidenceFindings(record, recommendations = []) {
   const scanStatus = String(record?.scan_status || "");
-  if (["incomplete_evidence", "blocked_or_incomplete"].includes(scanStatus)) return false;
+  if (["incomplete_evidence", "inconclusive_insufficient_evidence", "blocked_or_incomplete"].includes(scanStatus)) return false;
   return record?.no_high_confidence_findings === true
     || record?.review_confidence_state === "no_high_confidence_findings"
     || scanStatus === "complete_no_high_confidence_findings"

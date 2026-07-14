@@ -26,6 +26,9 @@ def page(path: str, image_count: int, missing_alt: int, family: str = "product_p
 
 
 def payload(pages: list[dict]) -> dict:
+    pages = list(pages)
+    while len(pages) < 4:
+        pages.append(page(f"/fr/fr/p/healthy-calibration-{len(pages)}", 4, 0))
     return {
         "website_url": "https://www.ikea.com/fr/fr/",
         "requested_path_prefix": "/fr/fr",
@@ -486,4 +489,3 @@ def test_pdf_and_cloudflare_utility_targets_do_not_create_page_semantic_tasks():
     assert fixes[0]["affected_pages"] == ["/global/en/newsroom/subscription"]
     assert fixes[0]["page_url"] == "/global/en/newsroom/subscription"
     assert fixes[0]["non_html_or_utility_pages_suppressed"] == 1
-

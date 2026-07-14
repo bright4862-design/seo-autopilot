@@ -20,7 +20,7 @@ from .observability import (
     scan_metrics,
     website_host,
 )
-from .review import REVIEW_VERSION, run_review
+from .review import ARCHETYPE_CLASSIFIER_VERSION, REVIEW_VERSION, run_review
 from .review_calibration import CALIBRATION_VERSION, apply_review_evidence_calibration
 from .scanner import VERSION, run_scan
 from .trust_discovery import apply_trust_discovery_gate, enrich_scan_with_trust_pages
@@ -95,6 +95,7 @@ def health():
         "version": VERSION,
         "scanner_build_revision": SCANNER_BUILD_REVISION,
         "review_version": REVIEW_VERSION,
+        "archetype_classifier_version": ARCHETYPE_CLASSIFIER_VERSION,
         "review_evidence_calibration_version": CALIBRATION_VERSION,
         "indexability_quality_version": INDEXABILITY_QUALITY_VERSION,
         "navigation_indexability_version": NAVIGATION_INDEXABILITY_VERSION,

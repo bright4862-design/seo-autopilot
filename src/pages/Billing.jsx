@@ -6,7 +6,7 @@ import LeadRequestModal from "@/components/billing/LeadRequestModal";
 import CleanupRequestModal from "@/components/billing/CleanupRequestModal";
 
 const plans = [
-  { id: "free", name: "Free scan", price: "Free", desc: "Start with a simple website scan.", features: ["Website scan", "Simple Fix List", "Plain-English recommendations"] },
+  { id: "free", name: "Free scan", price: "Free", desc: "Start with a simple website scan.", features: ["Website scan", "Simple FixList", "Plain-English recommendations"] },
   { id: "diy", name: "DIY guidance", price: "$20/month", desc: "Coming soon for owners who want guided monthly reviews.", features: ["Monthly website scan", "Prepared recommendations", "Competitor gaps"], comingSoon: true },
   { id: "growth", name: "Growth", price: "$49/month", desc: "Coming soon for deeper ongoing reviews.", features: ["More pages", "More competitors", "Priority recommendations"], comingSoon: true },
   { id: "done_for_you", name: "Done-for-you cleanup", price: "$500 one-time", desc: "Request help applying approved recommendations.", features: ["Review your scan", "Prepare next steps", "Website cleanup support"] },
@@ -56,40 +56,53 @@ export default function Billing() {
 
   return (
     <div className="min-h-screen bg-paper text-ink antialiased">
-      <div className="mx-auto max-w-[680px] px-6 pb-24">
-        <div className="mt-16">
-          <h1 className="text-[26px] font-semibold leading-tight tracking-tight">Billing</h1>
-          <p className="mt-1.5 text-[15px] text-ink-muted">
-            Choose a guided plan or request help when you need it. Payments aren&rsquo;t connected yet — nothing is charged here.
+      <div className="mx-auto max-w-[680px] px-4 pb-24 sm:px-6">
+        <div className="pt-14 sm:pt-16">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Account</p>
+          <h1 className="mt-2 text-[28px] font-semibold leading-tight tracking-[-0.035em]">Billing</h1>
+          <p className="mt-2 max-w-[54ch] text-[15px] leading-relaxed text-ink-muted">
+            Choose the level of help you need. Payments are not connected yet, so nothing is charged here.
           </p>
         </div>
 
-        <div className="mt-16 flex items-baseline gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Plans</div>
+        <section className="mt-12 border-y border-hairline-soft py-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-[12px] font-medium text-ink-faint">Current plan</p>
+              <p className="mt-1 text-[17px] font-medium tracking-tight">{plans.find((plan) => plan.id === currentPlan)?.name || "Free scan"}</p>
+            </div>
+            <PillButton solid onClick={() => navigate("/onboarding")}>Run a new scan</PillButton>
+          </div>
+        </section>
+
+        <div className="mt-14 flex items-baseline gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Plans</div>
         <div className="mt-2">
           {plans.map((plan) => {
             const isCurrent = plan.id === currentPlan;
             return (
-              <div key={plan.id} className="flex items-start justify-between gap-6 border-b border-hairline-soft py-6">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                    <h2 className="text-[16px] font-medium tracking-tight">{plan.name}</h2>
-                    {isCurrent ? <span className="text-[12px] font-medium text-good">Current</span> : null}
-                    {plan.comingSoon ? <span className="text-[12px] text-ink-faint">Coming soon</span> : null}
+              <div key={plan.id} className="border-b border-hairline-soft py-6">
+                <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between sm:gap-8">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                      <h2 className="text-[16px] font-medium tracking-tight">{plan.name}</h2>
+                      {isCurrent ? <span className="text-[12px] font-medium text-good">Current</span> : null}
+                      {plan.comingSoon ? <span className="text-[12px] text-ink-faint">Coming soon</span> : null}
+                    </div>
+                    <p className="mt-1 max-w-[52ch] text-[13.5px] leading-relaxed text-ink-muted">{plan.desc}</p>
+                    <p className="mt-2 text-[13px] leading-relaxed text-ink-faint">{plan.features.join(" · ")}</p>
                   </div>
-                  <p className="mt-1 max-w-[52ch] text-[13.5px] text-ink-muted">{plan.desc}</p>
-                  <p className="mt-2 text-[13px] text-ink-faint">{plan.features.join(" · ")}</p>
-                </div>
-                <div className="shrink-0 text-right">
-                  <p className="text-[15px] font-semibold tabular-nums tracking-tight">{plan.price}</p>
-                  <div className="mt-3">{planAction(plan)}</div>
+                  <div className="flex shrink-0 items-center justify-between gap-4 sm:block sm:text-right">
+                    <p className="text-[15px] font-semibold tabular-nums tracking-tight">{plan.price}</p>
+                    <div className="sm:mt-3">{planAction(plan)}</div>
+                  </div>
                 </div>
               </div>
             );
           })}
         </div>
 
-        <div className="mt-16 flex items-baseline gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Account</div>
-        <div className="mt-4 max-w-[56ch] text-[14px] text-ink-muted">
+        <div className="mt-16 flex items-baseline gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Data and account</div>
+        <div className="mt-4 max-w-[56ch] text-[14px] leading-relaxed text-ink-muted">
           <p>Need to remove your account and data? Start here and we&rsquo;ll show the safest next step.</p>
           {deleteMessage ? (
             <p className="mt-3 border-l-2 border-crit/40 pl-3 text-[13.5px] leading-relaxed">{deleteMessage}</p>

@@ -1,0 +1,76 @@
+name: Run page-cap storage recovery
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Execute guarded transformer
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/apply-page-cap-storage-recovery.yml').read_text(encoding='utf-8')
+          start = "          python - <<'PY'\n"
+          end = "\n          PY\n"
+          if start not in workflow or end not in workflow:
+              raise SystemExit('Could not locate guarded transformer block')
+          script = workflow.split(start, 1)[1].split(end, 1)[0]
+          exec(compile(textwrap.dedent(script), 'page-cap-storage-transformer', 'exec'))
+          PY
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          python -m pip install -r scanner-api/requirements.txt
+
+      - name: Record updated frozen beta revision
+        run: |
+          cd scanner-api
+          python scripts/freeze_beta_revision.py \
+            --git-commit "${GITHUB_SHA}" \
+            --acceptance-report docs/beta-acceptance.md \
+            --note "Release recovery: hard page cap, durable-first persistence, and quota-safe browser cache."
+
+      - name: Validate focused and full gates
+        run: |
+          python -m pytest scanner-api/tests/test_production_release_recovery.py -q
+          python -m pytest scanner-api/tests -q
+          node --test tests/frontend/*.test.mjs
+          npm run lint
+          npm run typecheck
+          npm run build
+          cd scanner-api && python scripts/freeze_beta_revision.py --check
+
+      - name: Commit clean product changes
+        run: |
+          rm -f .github/workflows/apply-page-cap-storage-recovery.yml
+          rm -f .github/workflows/kick-page-cap-storage-recovery.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix page caps and quota-safe scan persistence"
+          git push origin HEAD:${{ github.head_ref }}

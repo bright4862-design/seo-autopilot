@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import re
 from typing import Any
 from urllib.parse import urlparse
 
 from .review import compute_health_score, group_page_recommendations, unwrap_scan_payload
 
-CALIBRATION_VERSION = "review_evidence_calibration_v4_legal_page_scope"
+CALIBRATION_VERSION = "review_evidence_calibration_v5_utility_redirect"
 IMAGE_ALT_EVIDENCE_VERSION = "material_image_alt_v1"
 IMAGE_ALT_RULES = {"image_alt_text", "missing_image_alt"}
 VERIFICATION_ONLY_RULES = {"potential_orphan_pages", "indexable_faceted_navigation"}
@@ -16,7 +17,25 @@ VERIFICATION_ONLY_LIMITATION_CODES = {
 }
 CANONICAL_MISSING_RULES = {"canonical_missing", "missing_canonical"}
 SITEMAP_REDIRECT_RULES = {"sitemap_redirect"}
+TRAILING_SLASH_REDIRECT_RULES = {"sitemap_redirect", "internal_link_redirect"}
 MISSING_META_DESCRIPTION_RULES = {"missing_meta_description"}
+PAGE_SEMANTIC_RULES = {
+    "canonical_missing",
+    "missing_canonical",
+    "missing_h1",
+    "multiple_h1",
+    "missing_meta_description",
+    "missing_title",
+    "image_alt_text",
+    "missing_image_alt",
+}
+PAGE_SEMANTIC_CATEGORIES = {"canonical", "thin_content", "meta_description", "meta_title", "image_alt_text"}
+UTILITY_PATH_MARKERS = ("/cdn-cgi/",)
+NON_HTML_SUFFIXES = (
+    ".pdf", ".xml", ".json", ".csv", ".txt", ".zip",
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".ico",
+    ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+)
 PRIORITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 LEGAL_TEMPLATE_FAMILIES = {"legal_info", "legal", "terms", "privacy"}
 LEGAL_PATH_MARKERS = (
@@ -90,15 +109,95 @@ def image_alt_evidence(page: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _content_type(page: dict[str, Any]) -> str:
+    headers = page.get("headers") if isinstance(page.get("headers"), dict) else {}
+    return str(
+        page.get("content_type")
+        or page.get("mime_type")
+        or headers.get("content-type")
+        or headers.get("Content-Type")
+        or ""
+    ).split(";", 1)[0].strip().lower()
+
+
+def _is_non_html_or_utility_path(value: Any) -> bool:
+    path = _path(value).lower()
+    return bool(
+        path
+        and (
+            any(marker in path for marker in UTILITY_PATH_MARKERS)
+            or path.endswith(NON_HTML_SUFFIXES)
+        )
+    )
+
+
+def _is_non_html_or_utility_page(page: dict[str, Any]) -> bool:
+    values = (page.get("url"), page.get("final_url"), page.get("path"), page.get("page_url"))
+    if any(_is_non_html_or_utility_path(value) for value in values if value):
+        return True
+    content_type = _content_type(page)
+    return bool(content_type and content_type not in {"text/html", "application/xhtml+xml"})
+
+
 def _page_evidence_map(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
     evidence: dict[str, dict[str, Any]] = {}
     for page in _pages_from_payload(payload):
-        stats = image_alt_evidence(page)
+        stats = {
+            **image_alt_evidence(page),
+            "content_type": _content_type(page),
+            "non_html_or_utility": _is_non_html_or_utility_page(page),
+        }
         for value in (page.get("url"), page.get("final_url"), page.get("path"), page.get("page_url")):
             key = _path(value)
             if key:
                 evidence[key] = stats
     return evidence
+
+
+def _is_page_semantic_fix(fix: dict[str, Any]) -> bool:
+    rule = str(fix.get("rule") or "")
+    category = str(fix.get("category") or "")
+    return rule in PAGE_SEMANTIC_RULES or category in PAGE_SEMANTIC_CATEGORIES
+
+
+def _calibrate_page_semantic_fix(
+    fix: dict[str, Any],
+    evidence: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    affected = fix.get("affected_pages") if isinstance(fix.get("affected_pages"), list) else []
+    if not affected:
+        affected = [fix.get("page_url") or "/"]
+
+    retained: list[str] = []
+    suppressed: list[str] = []
+    for value in affected:
+        key = _path(value)
+        if not key:
+            continue
+        stats = evidence.get(key, {})
+        unsupported = bool(stats.get("non_html_or_utility")) or _is_non_html_or_utility_path(key)
+        if unsupported:
+            suppressed.append(key)
+        else:
+            retained.append(key)
+
+    if not retained:
+        return None
+    if not suppressed:
+        return fix
+
+    source_pages = fix.get("source_pages") if isinstance(fix.get("source_pages"), list) else []
+    retained_set = set(retained)
+    filtered_sources = [value for value in source_pages if _path(value) in retained_set]
+    return {
+        **fix,
+        "affected_pages": retained,
+        "page_url": retained[0],
+        "page_count": len(retained),
+        "source_pages": filtered_sources[:30] or retained[:30],
+        "non_html_or_utility_pages_suppressed": len(suppressed),
+        "page_semantic_calibration_version": CALIBRATION_VERSION,
+    }
 
 
 def _calibrate_image_alt_fix(fix: dict[str, Any], evidence: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
@@ -211,6 +310,85 @@ def _cap_priority(
     }
 
 
+def _redirect_endpoint_urls(fix: dict[str, Any]) -> tuple[str, str]:
+    source = str(fix.get("redirect_source_url") or fix.get("source_url") or "").strip()
+    destination = str(fix.get("redirect_destination_url") or fix.get("destination_url") or "").strip()
+    chain = fix.get("redirect_chain") if isinstance(fix.get("redirect_chain"), list) else []
+    if not source and chain:
+        source = str(chain[0] or "").strip()
+    if not destination and len(chain) >= 2:
+        destination = str(chain[-1] or "").strip()
+    if not source or not destination:
+        text = str(fix.get("current_value") or "")
+        urls = [value.rstrip(".,;)") for value in re.findall(r"https?://[^\s→—]+", text)]
+        if not source and urls:
+            source = urls[0]
+        if not destination and len(urls) >= 2:
+            destination = urls[1]
+    return source, destination
+
+
+def _url_identity_without_trailing_slash(value: str) -> tuple[str, str, str, str] | None:
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return None
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    path = parsed.path or "/"
+    normalized_path = path.rstrip("/") or "/"
+    return parsed.scheme.lower(), parsed.netloc.lower(), normalized_path, parsed.query
+
+
+def _is_trailing_slash_only_healthy_redirect(fix: dict[str, Any]) -> bool:
+    if str(fix.get("rule") or "") not in TRAILING_SLASH_REDIRECT_RULES:
+        return False
+    state = str(fix.get("redirect_state") or "").lower()
+    if state and state not in {"single_redirect", "redirect", "redirected"}:
+        return False
+    if _int(fix.get("redirect_hop_count")) > 1:
+        return False
+    chain = fix.get("redirect_chain") if isinstance(fix.get("redirect_chain"), list) else []
+    if chain and len(chain) != 2:
+        return False
+
+    text = " ".join(
+        str(fix.get(key) or "")
+        for key in (
+            "current_value",
+            "redirect_destination_status",
+            "redirect_destination_indexability",
+            "redirect_destination_state",
+        )
+    ).lower()
+    if any(marker in text for marker in (
+        "loop", "chain", "failed", "failure", "blocked", "noindex",
+        "non-public", "invalid location", "missing location", "too many redirects",
+    )):
+        return False
+    status_is_healthy = (
+        "destination http 200" in text
+        or _int(fix.get("redirect_destination_status")) == 200
+        or _int(fix.get("destination_status_code")) == 200
+    )
+    destination_is_indexable = (
+        "destination: indexable" in text
+        or str(fix.get("redirect_destination_indexability") or "").lower() == "indexable"
+        or fix.get("redirect_destination_indexable") is True
+    )
+    if not status_is_healthy or not destination_is_indexable:
+        return False
+
+    source, destination = _redirect_endpoint_urls(fix)
+    source_identity = _url_identity_without_trailing_slash(source)
+    destination_identity = _url_identity_without_trailing_slash(destination)
+    if not source_identity or source_identity != destination_identity:
+        return False
+    source_path = urlparse(source).path or "/"
+    destination_path = urlparse(destination).path or "/"
+    return source_path != destination_path and source_path.rstrip("/") == destination_path.rstrip("/")
+
+
 def _is_single_healthy_sitemap_redirect(fix: dict[str, Any]) -> bool:
     if str(fix.get("rule") or "") not in SITEMAP_REDIRECT_RULES:
         return False
@@ -308,6 +486,14 @@ def _calibrate_scope_sensitive_fix(fix: dict[str, Any]) -> dict[str, Any]:
             "narrow_missing_canonical_scope",
         )
 
+    if _is_trailing_slash_only_healthy_redirect(fix):
+        return _cap_priority(
+            fix,
+            "medium",
+            67,
+            "trailing_slash_only_healthy_redirect",
+        )
+
     if _is_single_healthy_sitemap_redirect(fix):
         return _cap_priority(
             fix,
@@ -361,6 +547,10 @@ def apply_review_evidence_calibration(result: dict[str, Any], payload: dict[str,
         if not isinstance(item, dict):
             continue
         rule = str(item.get("rule") or item.get("category") or "")
+        if _is_page_semantic_fix(item):
+            item = _calibrate_page_semantic_fix(item, evidence)
+            if item is None:
+                continue
         if rule in IMAGE_ALT_RULES or str(item.get("category") or "") == "image_alt_text":
             item = _calibrate_image_alt_fix(item, evidence)
             if item is None:

@@ -9,6 +9,10 @@ const LIMITED_SCAN_STATUSES = new Set([
   "blocked_or_incomplete",
 ]);
 
+const MODE_PAGE_LIMITS = { basic: 25, quick: 40, deep: 85, advanced: 150 };
+const CURRENT_REVIEW_VERSION = "python_review_v2_structural_marketplace";
+const CURRENT_CALIBRATION_VERSION = "review_evidence_calibration_v5_utility_redirect";
+
 export const TERMINAL_SCAN_RUN_STATUSES = new Set(["complete", "limited", "failed", "cancelled"]);
 
 // Python Review decides completeness; the frontend only maps its verdict onto
@@ -25,6 +29,10 @@ function toStr(value) {
 
 function toArr(value) {
   return Array.isArray(value) ? value : [];
+}
+
+function modePageLimit(scanMode) {
+  return MODE_PAGE_LIMITS[toStr(scanMode).toLowerCase()] || MODE_PAGE_LIMITS.advanced;
 }
 
 export function getFixRecommendations(record = {}) {
@@ -44,13 +52,38 @@ export function fixLineageKey(fix = {}) {
 }
 
 export function buildScanRunFields(record = {}, { status } = {}) {
+  const pageLimit = modePageLimit(record.scan_mode);
+  const scannerVersion = toStr(record.scanner_version || record.technical_audit_summary?.scanner_version || record.debug?.scanner_version);
+  const advancedScanBackend = toStr(record.advanced_scan_backend || record.technical_audit_summary?.advanced_scan_backend)
+    || (scannerVersion.startsWith("python_scanner_") ? "python_scanner_api" : "");
+  const denoFallbackUsed = record.deno_fallback_used === true || record.technical_audit_summary?.deno_fallback_used === true;
+  const aiReviewBackend = toStr(record.ai_review_backend || record.debug?.ai_review_backend);
+  const pythonReviewFallbackUsed = record.python_review_fallback_used === true || record.debug?.python_review_fallback_used === true;
+  const reviewVersion = toStr(record.review_version || record.ai_review_version || record.review_polish_version)
+    || (aiReviewBackend === "python_review_api" ? CURRENT_REVIEW_VERSION : "");
+  const calibrationVersion = toStr(record.review_evidence_calibration_version)
+    || (aiReviewBackend === "python_review_api" ? CURRENT_CALIBRATION_VERSION : "");
+  const releaseGateEligible = record.release_gate_eligible === true || (
+    advancedScanBackend === "python_scanner_api"
+    && !denoFallbackUsed
+    && aiReviewBackend === "python_review_api"
+    && !pythonReviewFallbackUsed
+    && Boolean(scannerVersion && reviewVersion && calibrationVersion)
+  );
   return {
     status: status || deriveTerminalStatus(record),
     status_detail: toStr(record.scan_status),
-    scanner_version: toStr(record.scanner_version || record.technical_audit_summary?.scanner_version),
-    review_version: toStr(record.review_version || record.review_polish_version),
+    scanner_version: scannerVersion,
+    scanner_build_revision: toStr(record.scanner_build_revision || record.technical_audit_summary?.scanner_build_revision),
+    advanced_scan_backend: advancedScanBackend,
+    deno_fallback_used: denoFallbackUsed,
+    review_version: reviewVersion,
+    review_evidence_calibration_version: calibrationVersion,
+    ai_review_backend: aiReviewBackend,
+    python_review_fallback_used: pythonReviewFallbackUsed,
+    release_gate_eligible: releaseGateEligible,
     pages_found: Number(record.pages_found || 0),
-    pages_crawled: Number(record.pages_crawled || 0),
+    pages_crawled: Math.min(pageLimit, Number(record.pages_crawled || 0)),
     queued_remaining: Number(record.queued_remaining || 0),
     sampling_evidence: record.sampling_evidence || {},
     scan_status: toStr(record.scan_status),

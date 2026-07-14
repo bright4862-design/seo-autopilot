@@ -2,7 +2,7 @@ import React from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 const navigationItems = [
-  { name: "FixList", href: "/dashboard" },
+  { name: "Dashboard", href: "/dashboard" },
   { name: "New scan", href: "/onboarding" },
   { name: "Billing", href: "/billing" },
 ];
@@ -37,28 +37,35 @@ export default function DashboardLayout() {
 
   return (
     <div className="min-h-screen bg-paper text-ink antialiased">
-      <header className="border-b border-hairline-soft">
-        <div className="mx-auto flex h-14 max-w-[680px] items-center justify-between px-6">
-          <Link to="/dashboard" className="text-[15px] font-semibold tracking-tight text-ink">
+      <header className="sticky top-0 z-40 border-b border-hairline-soft bg-paper/90 backdrop-blur-xl supports-[backdrop-filter]:bg-paper/80">
+        <div className="mx-auto flex h-14 max-w-[680px] items-center gap-4 px-4 sm:px-6">
+          <Link
+            to="/dashboard"
+            className="shrink-0 text-[15px] font-semibold tracking-tight text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ink"
+          >
             FixList
           </Link>
 
-          <nav className="flex items-center gap-5">
-            {navigationItems.map((item) => (
-              <Link
-                key={item.name}
-                to={item.href}
-                className={`text-[13px] font-medium transition-colors ${
-                  isActive(item.href) ? "text-ink" : "text-ink-faint hover:text-ink"
-                }`}
-              >
-                {item.name}
-              </Link>
-            ))}
+          <nav className="ml-auto flex min-w-0 items-center gap-3 overflow-x-auto whitespace-nowrap sm:gap-5" aria-label="Account navigation">
+            {navigationItems.map((item) => {
+              const active = isActive(item.href);
+              return (
+                <Link
+                  key={item.name}
+                  to={item.href}
+                  aria-current={active ? "page" : undefined}
+                  className={`text-[12.5px] font-medium transition-colors sm:text-[13px] ${
+                    active ? "text-ink" : "text-ink-faint hover:text-ink"
+                  }`}
+                >
+                  {item.name}
+                </Link>
+              );
+            })}
             <button
               type="button"
               onClick={handleLogout}
-              className="text-[13px] font-medium text-ink-faint transition-colors hover:text-ink"
+              className="text-[12.5px] font-medium text-ink-faint transition-colors hover:text-ink sm:text-[13px]"
             >
               Log out
             </button>

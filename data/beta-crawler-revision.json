@@ -1,7 +1,7 @@
 {
   "acceptance_report": "docs/beta-acceptance.md",
   "component_versions": {
-    "archetype_classifier_version": "archetype_classifier_v2_structural_weighting",
+    "archetype_classifier_version": "archetype_classifier_v3_mixed_template_dominance",
     "crawler_acceptance_version": "crawler_acceptance_v1",
     "image_alt_evidence_version": "material_image_alt_v1",
     "indexability_quality_version": "indexability_quality_v1",
@@ -18,10 +18,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "d25c8d4a7e42087a",
-  "git_commit": "7105b2c9efc03be19132a7794ba1f5040b32a8b1",
-  "note": "Classifier v2 structural weighting after the 18-site production audit. Infrastructure gate passed; targeted live classification rerun remains required before release acceptance.",
-  "recorded_at": "2026-07-14T22:05:00+00:00",
+  "fingerprint": "fa1602737697ae98",
+  "git_commit": "9fad1648ba7d53471900c2e310eb2e04421fe290",
+  "note": "Classifier v3 mixed-template dominance after focused regressions. Targeted production acceptance remains required before release acceptance.",
+  "recorded_at": "2026-07-14T23:05:28Z",
   "schema_version": "beta_crawler_revision_v1",
   "status": "frozen_beta"
 }

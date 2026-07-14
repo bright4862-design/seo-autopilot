@@ -130,11 +130,14 @@ function authorityFor(record = {}) {
   const calibrationVersion = record.review_evidence_calibration_version
     || latestAuthority.review_evidence_calibration_version
     || (reviewBackend === "python_review_api" ? CURRENT_CALIBRATION_VERSION : "");
-  const releaseGateEligible = scannerBackend === "python_scanner_api"
+  const inferredReleaseGateEligible = scannerBackend === "python_scanner_api"
     && !denoFallback
     && reviewBackend === "python_review_api"
     && !reviewFallback
     && Boolean(scannerVersion && reviewVersion && calibrationVersion);
+  const releaseGateEligible = record.release_gate_eligible === false
+    ? false
+    : record.release_gate_eligible === true || inferredReleaseGateEligible;
   return {
     scanner_version: scannerVersion,
     scanner_build_revision: record.scanner_build_revision

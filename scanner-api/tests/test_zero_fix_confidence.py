@@ -17,11 +17,11 @@ def _clean_page(path="/"):
 def test_complete_zero_fix_review_uses_bounded_confidence_state():
     result = run_review({
         "website_url": "https://example.com",
-        "pages": [_clean_page()],
+        "pages": [_clean_page(f"/page-{index}") for index in range(4)],
         "scan_coverage": {
-            "pages_found": 1,
-            "pages_crawled": 1,
-            "sampled_pages_sent_to_ai": 1,
+            "pages_found": 4,
+            "pages_crawled": 4,
+            "sampled_pages_sent_to_ai": 4,
         },
     })
 

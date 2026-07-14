@@ -523,6 +523,8 @@ def _health_grade(score: int, scan_status: str) -> str:
         return "Blocked / incomplete"
     if scan_status == "incomplete_evidence":
         return "Scan incomplete"
+    if scan_status == "inconclusive_insufficient_evidence":
+        return "Insufficient evidence"
     if score >= 90:
         return "Strong"
     if score >= 80:
@@ -579,6 +581,10 @@ def apply_review_evidence_calibration(result: dict[str, Any], payload: dict[str,
     calibrated_result["review_evidence_calibration_version"] = CALIBRATION_VERSION
 
     scan_status = str(calibrated_result.get("scan_status") or "complete")
+    if scan_status == "inconclusive_insufficient_evidence":
+        score = min(score, 55)
+        calibrated_result["health_score"] = score
+        calibrated_result["seo_score"] = score
     report = calibrated_result.get("website_health_report")
     if not isinstance(report, dict):
         report = {}
@@ -590,7 +596,7 @@ def apply_review_evidence_calibration(result: dict[str, Any], payload: dict[str,
         "top_concerns": [fix.get("issue_title") or fix.get("title") for fix in fixes[:3]],
         "next_best_step": (
             report.get("next_best_step")
-            if scan_status in {"blocked_or_incomplete", "incomplete_evidence"}
+            if scan_status in {"blocked_or_incomplete", "incomplete_evidence", "inconclusive_insufficient_evidence"}
             else ((fixes[0].get("issue_title") or fixes[0].get("title")) if fixes else "No high-confidence fixes were found in the reviewed sample.")
         ),
     }

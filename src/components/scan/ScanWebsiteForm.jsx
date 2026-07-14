@@ -353,6 +353,7 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
   const pages = getPages(scanData).slice(0, 150).map(slimPage);
   const scannerFixes = getRecommendations(scanData);
   const aiFixes = getRecommendations(aiData);
+  const reviewEvidenceState = normalizeReviewEvidenceState(aiData);
   const finalFixes = selectFinalReviewFixes({
     aiData,
     aiFixes,
@@ -362,7 +363,8 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
     requestedPathPrefix,
   });
   const healthScore = getFirstNumber([aiData?.health_score, aiData?.seo_score, aiData?.website_health_report?.health_score, aiData?.scan_summary?.health_score, scanData?.health_score, scanData?.seo_score, scanData?.scan_summary?.score, scanData?.scan_summary?.health_score]);
-  const noHighConfidenceFindings = aiData?.no_high_confidence_findings === true || finalFixes.length === 0;
+  const reviewIsLimited = ["incomplete_evidence", "inconclusive_insufficient_evidence", "blocked_or_incomplete"].includes(reviewEvidenceState.scan_status);
+  const noHighConfidenceFindings = aiData?.no_high_confidence_findings === true || (finalFixes.length === 0 && !reviewIsLimited);
   const healthGrade = aiData?.website_health_report?.health_grade || aiData?.health_grade || (noHighConfidenceFindings ? "No issues found in sample" : scoreLabel(healthScore));
   const nextBestStep = aiData?.website_health_report?.next_best_step || aiData?.next_best_step || (noHighConfidenceFindings ? "No high-confidence issues were found in this scanned sample. Consider a deeper crawl or manually reviewing key money pages." : "");
   const reviewLimitations = firstArray([aiData?.website_health_report?.limitations]);
@@ -373,8 +375,6 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
   const technicalSummary = slimTechnicalSummary(scanData?.technical_audit_summary || {}, scanData);
   const summaryText = normalizeCoverageSummary(aiData?.customer_summary || aiData?.plain_english_summary || aiData?.summary || aiData?.website_health_report?.overall_explanation || scanData?.scan_summary?.plain_english_summary || buildFallbackSummary({ healthScore, pagesCrawled, finalFixes, cmsName }), pagesCrawled);
   const siteFingerprint = normalizeSiteFingerprint(aiData?.site_fingerprint || aiData?.scan_summary?.site_fingerprint || {}, pages);
-  const reviewEvidenceState = normalizeReviewEvidenceState(aiData);
-
   return {
     id: scanId || createScanId(),
     scan_id: scanId || "",
@@ -402,6 +402,9 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
     ai_provider: aiData?.ai_provider || aiData?.provider || aiData?.debug?.provider || "",
     ai_review_backend: aiData?.ai_review_backend || "",
     python_review_fallback_used: Boolean(aiData?.python_review_fallback_used),
+    release_gate_eligible: aiData?.release_gate_eligible === false
+      ? false
+      : scanData?.release_gate_eligible === true && aiData?.release_gate_eligible === true,
     no_high_confidence_findings: noHighConfidenceFindings,
     review_confidence_state: reviewEvidenceState.review_confidence_state || (noHighConfidenceFindings ? "no_high_confidence_findings" : ""),
     score_is_provisional: reviewEvidenceState.score_is_provisional,
@@ -655,7 +658,7 @@ function normalizeScanRecordForStorage(record) {
   const fixes = getRecommendations(record).map(slimFix);
   const pages = getPages(record).map(slimPage);
   const healthScore = getHealthScore(record);
-  const incomplete = ["incomplete_evidence", "blocked_or_incomplete"].includes(record?.scan_status);
+  const incomplete = ["incomplete_evidence", "inconclusive_insufficient_evidence", "blocked_or_incomplete"].includes(record?.scan_status);
   const noHighConfidenceFindings = record?.no_high_confidence_findings === true || (fixes.length === 0 && !incomplete);
   return {
     ...record,
@@ -771,11 +774,12 @@ function slimAiData(ai = {}) {
     ai_provider: ai.ai_provider || ai.provider || ai.debug?.provider || "",
     ai_review_backend: ai.ai_review_backend || "",
     python_review_fallback_used: Boolean(ai.python_review_fallback_used),
+    release_gate_eligible: ai.release_gate_eligible === true,
+    archetype_classifier_version: ai.archetype_classifier_version || ai.site_fingerprint?.classification?.classifier_version || "",
     review_polish_version: ai.review_polish_version || "",
     group_dedup_version: ai.group_dedup_version || "",
     scoring_model: ai.scoring_model || ai.site_fingerprint?.scoring_model || "",
     no_high_confidence_findings: ai.no_high_confidence_findings === true,
-    review_confidence_state: ai.review_confidence_state || "",
     zero_fix_confidence_version: ai.zero_fix_confidence_version || "",
     scan_status: ai.scan_status || "",
     review_confidence_state: ai.review_confidence_state || ai.website_health_report?.review_confidence_state || "",

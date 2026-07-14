@@ -18,6 +18,7 @@ test("complete scans persist as complete", () => {
 test("limited or provisional evidence never persists as complete", () => {
   assert.equal(deriveTerminalStatus({ scan_status: "complete_with_access_limitations" }), "limited");
   assert.equal(deriveTerminalStatus({ scan_status: "incomplete_evidence" }), "limited");
+  assert.equal(deriveTerminalStatus({ scan_status: "inconclusive_insufficient_evidence" }), "limited");
   assert.equal(deriveTerminalStatus({ scan_status: "blocked_or_incomplete" }), "limited");
   assert.equal(deriveTerminalStatus({ scan_status: "complete", score_is_provisional: true }), "limited");
 });
@@ -106,6 +107,19 @@ test("scan run fields map coverage and evidence state from the merged record", (
   assert.equal(fields.health_score, 71);
   assert.equal(fields.score_is_provisional, true);
   assert.equal(fields.limitation, "rate limited");
+});
+
+test("an explicit review veto cannot be inferred back into release eligibility", () => {
+  const fields = buildScanRunFields({
+    release_gate_eligible: false,
+    scanner_version: "python_scanner_v3_bounded_request",
+    advanced_scan_backend: "python_scanner_api",
+    ai_review_backend: "python_review_api",
+    python_review_fallback_used: false,
+    review_version: "python_review_v2_structural_marketplace",
+    review_evidence_calibration_version: "review_evidence_calibration_v5_utility_redirect",
+  });
+  assert.equal(fields.release_gate_eligible, false);
 });
 
 test("recommendations are found under any of the contract array keys", () => {

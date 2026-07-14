@@ -96,10 +96,11 @@ export function normalizeReviewEvidenceState(source = {}) {
   const blocked = explicitStatus === "blocked_or_incomplete";
   const partial = explicitStatus === "complete_with_access_limitations";
   const incomplete = explicitStatus === "incomplete_evidence";
+  const insufficient = explicitStatus === "inconclusive_insufficient_evidence";
   const noFindings = source?.no_high_confidence_findings === true || explicitStatus === "complete_no_high_confidence_findings";
-  const scoreIsProvisional = Boolean(source?.score_is_provisional ?? report?.score_is_provisional) || blocked || partial || incomplete;
+  const scoreIsProvisional = Boolean(source?.score_is_provisional ?? report?.score_is_provisional) || blocked || partial || incomplete || insufficient;
   const accessEvidenceState = String(source?.access_evidence_state || report?.access_evidence_state || "") ||
-    (blocked ? "blocked" : partial ? "partial_access_limited" : "");
+    (blocked ? "blocked" : insufficient ? "insufficient_evidence" : partial ? "partial_access_limited" : "");
   const reviewConfidenceState = String(source?.review_confidence_state || report?.review_confidence_state || "") ||
     (blocked
       ? "blocked_access_needs_verification"
@@ -107,6 +108,8 @@ export function normalizeReviewEvidenceState(source = {}) {
         ? "partial_access_needs_verification"
         : incomplete
           ? "incomplete_evidence"
+          : insufficient
+            ? "insufficient_evidence"
           : noFindings
             ? "no_high_confidence_findings"
             : "");

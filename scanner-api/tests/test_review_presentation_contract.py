@@ -287,10 +287,10 @@ def test_partially_blocked_crawl_is_complete_with_access_limitations():
     assert any("HTTP 429" in item for item in result["website_health_report"]["limitations"])
 
 
-def test_clean_crawl_is_not_marked_provisional():
+def test_two_page_clean_crawl_is_insufficient_evidence():
     result = _run_with_coverage([_page("/", "homepage"), _page("/contact", "contact")], pages_found=2)
 
-    assert result["score_is_provisional"] is False
-    assert result["access_evidence_state"] == "complete"
-    assert result["scan_status"] in {"complete", "complete_no_high_confidence_findings"}
+    assert result["score_is_provisional"] is True
+    assert result["access_evidence_state"] == "insufficient_evidence"
+    assert result["scan_status"] == "inconclusive_insufficient_evidence"
     assert not any("HTTP 429" in item for item in result["website_health_report"]["limitations"])

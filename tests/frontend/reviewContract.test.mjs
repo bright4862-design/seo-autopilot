@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   hasAuthoritativePythonReview,
   isRateLimitFinding,
+  normalizeReviewEvidenceState,
   selectFinalReviewFixes,
   shouldUseLegacyRateLimitPresentation,
 } from "../../src/lib/reviewContract.js";
@@ -108,4 +109,16 @@ test("legacy and fallback rate-limit findings retain compatibility presentation"
     true,
   );
   assert.equal(shouldUseLegacyRateLimitPresentation({}, { rule: "canonical_missing" }), false);
+});
+
+test("insufficient classifier evidence stays provisional in the frontend contract", () => {
+  assert.deepEqual(
+    normalizeReviewEvidenceState({ scan_status: "inconclusive_insufficient_evidence" }),
+    {
+      scan_status: "inconclusive_insufficient_evidence",
+      review_confidence_state: "insufficient_evidence",
+      score_is_provisional: true,
+      access_evidence_state: "insufficient_evidence",
+    },
+  );
 });

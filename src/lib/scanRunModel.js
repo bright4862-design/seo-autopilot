@@ -6,6 +6,7 @@
 const LIMITED_SCAN_STATUSES = new Set([
   "complete_with_access_limitations",
   "incomplete_evidence",
+  "inconclusive_insufficient_evidence",
   "blocked_or_incomplete",
 ]);
 
@@ -63,13 +64,14 @@ export function buildScanRunFields(record = {}, { status } = {}) {
     || (aiReviewBackend === "python_review_api" ? CURRENT_REVIEW_VERSION : "");
   const calibrationVersion = toStr(record.review_evidence_calibration_version)
     || (aiReviewBackend === "python_review_api" ? CURRENT_CALIBRATION_VERSION : "");
-  const releaseGateEligible = record.release_gate_eligible === true || (
-    advancedScanBackend === "python_scanner_api"
+  const inferredReleaseGateEligible = advancedScanBackend === "python_scanner_api"
     && !denoFallbackUsed
     && aiReviewBackend === "python_review_api"
     && !pythonReviewFallbackUsed
-    && Boolean(scannerVersion && reviewVersion && calibrationVersion)
-  );
+    && Boolean(scannerVersion && reviewVersion && calibrationVersion);
+  const releaseGateEligible = record.release_gate_eligible === false
+    ? false
+    : record.release_gate_eligible === true || inferredReleaseGateEligible;
   return {
     status: status || deriveTerminalStatus(record),
     status_detail: toStr(record.scan_status),

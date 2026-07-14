@@ -93,4 +93,11 @@ Artifact evidence is capped at 50 so suspicious URLs cannot dominate the report.
 
 ## Production plan
 
-Deploy this as a container service, then replace the current Base44 scanner with a thin wrapper after fixture scans beat the current Deno scanner.
+The repository-root `cloudbuild.yaml` is the production deployment contract for
+`seo-autopilot-4545`. It preserves the tested Cloud Run resource envelope:
+1 GiB memory, concurrency 1, zero to 20 instances, and a 300-second request
+timeout. Configure the production Cloud Build trigger to use that file; a
+generic Cloud Run source deployment can silently restore platform defaults.
+
+After deployment, verify `/health` exposes the expected scanner, review,
+calibration, and archetype-classifier versions before running live gates.

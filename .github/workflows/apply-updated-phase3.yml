@@ -72,7 +72,7 @@ jobs:
         id: diffcheck
         run: |
           set +e
-          git diff --check main...HEAD > /tmp/diff-check.txt 2>&1
+          git diff --check origin/main...HEAD > /tmp/diff-check.txt 2>&1
           status=$?
           cat /tmp/diff-check.txt
           echo "status=$status" >> "$GITHUB_OUTPUT"

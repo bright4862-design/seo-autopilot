@@ -6,7 +6,7 @@ from collections import defaultdict
 from typing import Any
 from urllib.parse import urlparse
 
-REVIEW_VERSION = "python_review_v1_archetype_templates"
+REVIEW_VERSION = "python_review_v2_structural_marketplace"
 SCORING_MODEL = "python_review_v2_group_dedup"
 ZERO_FIX_CONFIDENCE_VERSION = "python_review_v3_zero_fix_confidence"
 ZERO_FIX_HEALTH_GRADE = "No issues found in sample"
@@ -332,12 +332,16 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
     # Require structural evidence before choosing ecommerce. Incidental commerce
     # words in titles or docs must not override a SaaS or general site's structure.
     path_text = " ".join(clean_path(page_evidence_url(page)).lower() for page in pages[:220])
-    ecommerce_paths = sum(count_includes(path_text, pattern) for pattern in ("/products/", "/product/", "/collections/", "/collection/", "/cart", "/checkout"))
+    ecommerce_paths = sum(count_includes(path_text, pattern) for pattern in ("/products/", "/product/", "/collections/", "/collection/", "/cart", "/checkout", "/itm/", "/sch/", "/b/", "/buy/", "/shop/", "/seller/", "/listing/"))
+    marketplace_signals = sum(count_includes(text, signal) for signal in ("ebay", "buy it now", "auction", "seller", "item number", "shop by category"))
     saas_paths = sum(count_includes(path_text, pattern) for pattern in ("/pricing", "/features", "/use-cases", "/solutions", "/login", "/signup", "/docs", "/api"))
     adjusted_scores = []
     for key, score in scores:
-        if key == "ecommerce_specialty_retail" and ecommerce_paths < 2:
-            score = min(score, 1.0)
+        if key == "ecommerce_specialty_retail":
+            if ecommerce_paths < 2 and marketplace_signals < 2:
+                score = min(score, 1.0)
+            else:
+                score += min(60, ecommerce_paths * 4 + marketplace_signals * 8)
         if key == "saas_app_membership":
             if saas_paths < 2:
                 score = min(score, 1.0)

@@ -1,3 +1,4 @@
+import asyncio
 import os
 from typing import Any
 
@@ -25,6 +26,7 @@ from .scanner import VERSION, run_scan
 from .trust_discovery import apply_trust_discovery_gate, enrich_scan_with_trust_pages
 
 SCANNER_API_KEY = os.getenv("SCANNER_API_KEY", "")
+TRUST_DISCOVERY_TIMEOUTS = {"basic": 2.0, "quick": 3.0, "deep": 5.0, "advanced": 7.0}
 
 app = FastAPI(title="FixList Scanner API", version=VERSION)
 
@@ -79,7 +81,14 @@ async def scan(payload: ScanRequest, x_scanner_key: str | None = Header(default=
             business_name=payload.business_name or "",
             cms_platform=payload.cms_platform or "",
         )
-        result = await enrich_scan_with_trust_pages(result)
+        trust_timeout = TRUST_DISCOVERY_TIMEOUTS.get(str(payload.scan_mode or "advanced").lower(), 7.0)
+        try:
+            result = await asyncio.wait_for(enrich_scan_with_trust_pages(result), timeout=trust_timeout)
+        except asyncio.TimeoutError:
+            warnings = list(result.get("crawl_warnings") or [])
+            warnings.append("Bounded trust-page discovery timed out; existing crawl evidence was preserved.")
+            result["crawl_warnings"] = warnings
+            result["trust_page_discovery"] = {"version": "trust_page_discovery_v1", "attempted": True, "conclusive": False, "timed_out": True, "checked": 0, "responses_received": 0, "found": [], "found_urls": [], "evidence": []}
         result = apply_indexability_quality_to_result(result)
         result = apply_render_evidence_quality(result)
     except Exception as exc:  # noqa: BLE001 - customer-safe envelope, full detail logged

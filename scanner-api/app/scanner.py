@@ -17,7 +17,7 @@ from .robots_policy import SCANNER_USER_AGENT, annotate_robots_evidence, load_ro
 from .security import is_public_http_url, safe_get
 from .sitemap import load_sitemap_urls
 
-VERSION = "python_scanner_v2_contract_parity"
+VERSION = "python_scanner_v3_bounded_request"
 RENDER_EVIDENCE_VERSION = "render_evidence_v1"
 
 # The Python crawler does not derive an AI crawl policy (no InvokeLLM here), but it
@@ -34,10 +34,11 @@ DEFAULT_POLICY = {
 }
 
 SCAN_BUDGETS = {
-    "basic": {"max_pages": 25, "timeout": 35},
-    "quick": {"max_pages": 40, "timeout": 45},
-    "deep": {"max_pages": 85, "timeout": 75},
-    "advanced": {"max_pages": 150, "timeout": 90},
+    # timeout covers robots, sitemap discovery, crawling and post-processing.
+    "basic": {"max_pages": 25, "timeout": 28, "fetch_timeout": 5, "max_sitemap_fetches": 4},
+    "quick": {"max_pages": 40, "timeout": 40, "fetch_timeout": 6, "max_sitemap_fetches": 10},
+    "deep": {"max_pages": 85, "timeout": 58, "fetch_timeout": 8, "max_sitemap_fetches": 24},
+    "advanced": {"max_pages": 150, "timeout": 75, "fetch_timeout": 10, "max_sitemap_fetches": 40},
 }
 
 SITEMAP_DISCOVERY_LIMIT = 5000
@@ -47,6 +48,10 @@ TRUST_PATHS = ["/about", "/contact", "/privacy", "/terms", "/security", "/legal"
 
 async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: str = "advanced", concurrency: int = 8, **kwargs) -> dict:
     budget = SCAN_BUDGETS.get(str(scan_mode or "advanced").lower(), SCAN_BUDGETS["advanced"])
+    fetch_timeout = float(budget.get("fetch_timeout", min(10, max(3, budget["timeout"] / 5))))
+    max_sitemap_fetches = int(budget.get("max_sitemap_fetches", 10))
+    scan_started_at = time.monotonic()
+    deadline = scan_started_at + budget["timeout"]
     start_url = normalize_url(website_url)
     if not start_url:
         return {"success": False, "version": VERSION, "error": "Missing or invalid website_url."}
@@ -105,7 +110,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
     enqueue(start_url, "seed")
 
     async with httpx.AsyncClient(
-        timeout=12,
+        timeout=fetch_timeout,
         follow_redirects=False,
         headers={"User-Agent": "Mozilla/5.0 (compatible; FixListPythonScanner/1.0)"},
     ) as client:
@@ -124,7 +129,9 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
 
         max_pages = budget["max_pages"]
         sitemap_urls = await load_sitemap_urls(
-            client, origin, prefix, SITEMAP_DISCOVERY_LIMIT, artifacts, scope_evidence=scope_evidence
+            client, origin, prefix, SITEMAP_DISCOVERY_LIMIT, artifacts,
+            scope_evidence=scope_evidence, deadline=deadline,
+            max_fetches=max_sitemap_fetches,
         )
         family_of = lambda url: classify_template(urlparse(url).path or "/")
         path_of = lambda url: urlparse(url).path or "/"
@@ -135,7 +142,6 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         for url in sampled_sitemap_urls:
             enqueue(url, "sitemap", "/sitemap.xml", "")
 
-        deadline = time.monotonic() + budget["timeout"]
         state_lock = asyncio.Lock()
         crawl_state = {"claimed": 0, "in_flight": 0}
 
@@ -229,7 +235,11 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
     )
     render_evidence["browser_followup_version"] = RENDER_FOLLOWUP_VERSION
     render_evidence["browser_followup"] = render_followup
+    elapsed_ms = round((time.monotonic() - scan_started_at) * 1000)
+    deadline_reached = time.monotonic() >= deadline
     crawl_warnings = []
+    if deadline_reached:
+        crawl_warnings.append(f"The {scan_mode} scan reached its bounded {budget['timeout']}-second backend budget and returned collected evidence.")
     if scope_evidence.get("market_scope_required"):
         crawl_warnings.append(
             "Multiple country/language markets were detected on the global root. Submit one market URL, such as /fr/fr/, for a coherent audit."
@@ -258,6 +268,9 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         "canonical_target_evidence": canonical_target_evidence,
         "redirect_evidence": redirect_evidence,
         "scan_mode": scan_mode,
+        "scanner_elapsed_ms": elapsed_ms,
+        "scanner_total_budget_seconds": budget["timeout"],
+        "scan_deadline_reached": deadline_reached,
         "pages_crawled": len(pages),
         "pages_found": pages_found,
         "queued_remaining": len(queue),
@@ -278,6 +291,9 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         "url_evidence_summary": build_evidence_summary(pages, len(artifacts)),
         "technical_audit_summary": {
             "scanner_version": VERSION,
+            "scanner_elapsed_ms": elapsed_ms,
+            "scanner_total_budget_seconds": budget["timeout"],
+            "scan_deadline_reached": deadline_reached,
             "pages_crawled": len(pages),
             "pages_found": pages_found,
             "failed_pages": sum(1 for page in pages if is_verified_failed(page)),

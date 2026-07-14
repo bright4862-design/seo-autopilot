@@ -58,10 +58,7 @@ jobs:
       - name: Production build
         run: npm run build
 
-      - name: Diff hygiene
-        run: git diff --check main...HEAD
-
-      - name: Remove staging machinery and push
+      - name: Prepare final product tree
         run: |
           rm -f .github/patches/updated-phase3.part*.b64
           rm -f .github/patches/.phase3-staged
@@ -70,4 +67,9 @@ jobs:
           rm -f .github/workflows/apply-updated-phase3.yml
           git add -A
           git commit -m 'Remove updated Phase 3 staging machinery'
-          git push origin HEAD:agent/apply-updated-phase3-design
+
+      - name: Final diff hygiene
+        run: git diff --check main...HEAD
+
+      - name: Push verified product branch
+        run: git push origin HEAD:agent/apply-updated-phase3-design

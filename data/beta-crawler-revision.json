@@ -10,17 +10,17 @@
     "render_evidence_version": "render_evidence_v1",
     "render_followup_version": "render_followup_v1",
     "review_evidence_calibration_version": "review_evidence_calibration_v5_utility_redirect",
-    "review_version": "python_review_v1_archetype_templates",
+    "review_version": "python_review_v2_structural_marketplace",
     "sampling_version": "balanced_sitemap_buckets_v1",
-    "scanner_version": "python_scanner_v2_contract_parity",
+    "scanner_version": "python_scanner_v3_bounded_request",
     "trust_discovery_version": "trust_page_discovery_v1",
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "7a0ef0c9c9bfdb3a",
-  "git_commit": "0c5af8c7d1837701b920c29e2b1e27e1f8a2c307",
-  "note": "Frozen beta updated after IKEA production evidence: structural SaaS authority, harmless trailing-slash calibration, and non-HTML utility suppression.",
-  "recorded_at": "2026-07-14T14:25:00+00:00",
+  "fingerprint": "2a43171bb3788861",
+  "git_commit": "c7cf545db034c48bb7516c0c31254653a66161b6",
+  "note": "Release-recovery baseline: bounded Python request, Python-required production scans, scan-ID isolation, and marketplace archetype regression.",
+  "recorded_at": "2026-07-14T16:45:00+02:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "frozen_beta"
 }

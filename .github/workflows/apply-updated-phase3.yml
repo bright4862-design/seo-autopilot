@@ -57,6 +57,7 @@ jobs:
       - name: Remove staging machinery and push
         run: |
           rm -f .github/patches/updated-phase3.part*.b64
+          rm -f .github/patches/.phase3-staged
           rm -f .github/workflows/apply-updated-phase3.yml
           git add -A
           git commit -m 'Remove updated Phase 3 staging machinery'

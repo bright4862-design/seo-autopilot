@@ -26,7 +26,19 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
       - name: Apply recovery patch
-        run: python .github/patches/apply-production-release-recovery.py
+        run: |
+          set +e
+          python .github/patches/apply-production-release-recovery.py > /tmp/recovery-apply.log 2>&1
+          status=$?
+          cat /tmp/recovery-apply.log
+          exit $status
+
+      - name: Upload patch failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-recovery-apply-failure
+          path: /tmp/recovery-apply.log
 
       - name: Setup Python
         uses: actions/setup-python@v5

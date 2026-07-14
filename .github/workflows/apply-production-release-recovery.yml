@@ -84,7 +84,19 @@ jobs:
 
       - name: Run full scanner API suite
         working-directory: scanner-api
-        run: pytest tests/
+        run: |
+          set +e
+          pytest tests/ > /tmp/recovery-full-suite.log 2>&1
+          status=$?
+          cat /tmp/recovery-full-suite.log
+          exit $status
+
+      - name: Upload full suite failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-recovery-full-suite-failure
+          path: /tmp/recovery-full-suite.log
 
       - name: Verify frozen beta revision
         working-directory: scanner-api

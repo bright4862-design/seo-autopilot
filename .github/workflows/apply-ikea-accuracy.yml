@@ -61,7 +61,16 @@ jobs:
 
       - name: Run full scanner API suite
         working-directory: scanner-api
-        run: pytest tests/
+        run: |
+          set -o pipefail
+          pytest tests/ 2>&1 | tee /tmp/ikea-full.log
+
+      - name: Upload full-suite failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ikea-full-suite-failure
+          path: /tmp/ikea-full.log
 
       - name: Verify frozen beta revision
         working-directory: scanner-api

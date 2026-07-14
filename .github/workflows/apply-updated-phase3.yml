@@ -37,6 +37,18 @@ jobs:
       - name: Apply updated Phase 3
         run: git am --3way /tmp/updated-phase3.patch
 
+      - name: Normalize Tailwind indentation
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          path = Path('tailwind.config.js')
+          text = path.read_text()
+          text = ''.join(re.sub(r'^ +(?=\t)', '', line) for line in text.splitlines(keepends=True))
+          path.write_text(text)
+          PY
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -66,7 +78,7 @@ jobs:
           rm -f .github/patches/.phase3-pr-ready
           rm -f .github/workflows/apply-updated-phase3.yml
           git add -A
-          git commit -m 'Remove updated Phase 3 staging machinery'
+          git commit -m 'Clean updated Phase 3 product tree'
 
       - name: Capture final diff hygiene
         id: diffcheck

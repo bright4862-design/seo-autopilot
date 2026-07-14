@@ -30,6 +30,7 @@ const LEGACY_HISTORY_KEY = "SEO_AUTOPILOT_SCAN_HISTORY";
 const ACTIVE_SCAN_URL_KEY = "seo_autopilot:active_scan_url";
 const ACTIVE_SCAN_STARTED_AT_KEY = "seo_autopilot:active_scan_started_at";
 const SCAN_DEBUG_KEY = "seo_autopilot:scan_debug";
+const SCAN_RECORD_PREFIX = "seo_autopilot:scan:";
 
 const SCAN_MODES = [
   { value: "quick", label: "Quick check", description: "Fast first scan. Up to 40 pages." },
@@ -128,11 +129,13 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
     let scanData = null;
     let aiData = null;
     let mergedFinal = null;
+    let scanRunHandle = null;
+    const localScanId = createScanId();
+    let scanId = localScanId;
     setSubmitting(true);
-    clearPreviousDashboardScan(normalizedUrl);
-    // Durable scan history (ScanRun lifecycle) records in the background; it
-    // resolves to null when persistence is unavailable and never blocks the scan.
-    const scanRunPromise = beginScanRun({ websiteUrl: normalizedUrl, pathPrefix: requestedPathPrefix, scanMode, scanSource: "scan_website_page" }).catch(() => null);
+    markDashboardScanStarted(normalizedUrl, localScanId);
+    scanRunHandle = await beginScanRun({ websiteUrl: normalizedUrl, pathPrefix: requestedPathPrefix, scanMode, scanSource: "scan_website_page" }).catch(() => null);
+    scanId = scanRunHandle?.id || localScanId;
     writeScanDebug({ status: "running", stage: "scan_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix });
     refreshDebugData();
 
@@ -160,6 +163,10 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         crawl_timeout_ms: safeScanBudget.crawl_timeout_ms,
         source: "scan_website_page",
         requested_at: new Date().toISOString(),
+        scan_id: scanId,
+        scan_run_id: scanRunHandle?.id || "",
+        require_python_scanner: true,
+        allow_deno_fallback: false,
       };
       writeScanDebug({ status: "running", stage: "scanner_request_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, payload_summary: { max_pages: scanPayload.max_pages, max_competitors: 0, max_browser_render_attempts: scanPayload.max_browser_render_attempts, crawl_timeout_ms: scanPayload.crawl_timeout_ms, keyword_count: scanPayload.important_keywords.length } });
       refreshDebugData();
@@ -171,7 +178,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       if (scanData?.success === false || scanData?.error) throw new Error(scanData.error || "Website scan failed.");
 
       setActiveStep("Checking SEO issues");
-      scanRunPromise.then((handle) => markScanRunReviewing(handle)).catch(() => {});
+      markScanRunReviewing(scanRunHandle).catch(() => {});
       try {
         const aiPayload = buildAiReviewPayload({ scanData, businessName: trimmedBusinessName, websiteUrl: normalizedUrl, cmsPlatform, cmsName, cleanedKeywords, scanMode, requestedPathPrefix });
         writeScanDebug({ status: "running", stage: "ai_review_request_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_payload_summary: { pages_crawled: aiPayload.scan_coverage?.pages_crawled || 0, pages_found: aiPayload.scan_coverage?.pages_found || 0, sampled_pages_sent_to_ai: aiPayload.scan_coverage?.sampled_pages_sent_to_ai || aiPayload.crawled_pages.length, raw_fixes_count: aiPayload.raw_fixes.length, crawl_policy_source: aiPayload.crawl_policy_source, url_evidence_preserved: Boolean(aiPayload.url_evidence_summary), business_priority_rules_enabled: true, coverage_instruction_enabled: true } });
@@ -188,16 +195,16 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       }
 
       setActiveStep("Saving your FixList");
-      mergedFinal = mergeScanAndAiReview({ scanData, aiData, websiteUrl: normalizedUrl, businessName: trimmedBusinessName, cmsPlatform, cmsName, scanMode, requestedPathPrefix });
-      saveScanForDashboard(mergedFinal);
+      mergedFinal = mergeScanAndAiReview({ scanData, aiData, websiteUrl: normalizedUrl, businessName: trimmedBusinessName, cmsPlatform, cmsName, scanMode, requestedPathPrefix, scanId, scanRunId: scanRunHandle?.id || "" });
+      saveScanForDashboard(mergedFinal, scanId);
       const durableRecord = normalizeScanRecordForStorage(mergedFinal);
-      scanRunPromise.then((handle) => completeScanRun(handle, durableRecord)).catch(() => {});
+      await completeScanRun(scanRunHandle, durableRecord).catch(() => null);
       writeScanDebug({ status: "saved", stage: "dashboard_saved", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), compact_debug_available: true, download_available: true });
       refreshDebugData();
-      navigate("/dashboard?scan=complete");
+      navigate(`/dashboard?scan=complete&scan_id=${encodeURIComponent(scanId)}`);
     } catch (err) {
       console.error("Website scan failed.", err);
-      scanRunPromise.then((handle) => failScanRun(handle, err)).catch(() => {});
+      failScanRun(scanRunHandle, err).catch(() => {});
       writeScanDebug({ status: "failed", stage: "scan_failed", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, error: err?.message || String(err), scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), compact_debug_available: true, download_available: true });
       refreshDebugData();
       setError(err?.message || "The website scan failed. Try Quick check first or check the backend function logs.");
@@ -342,7 +349,7 @@ function buildAiReviewPayload({ scanData, businessName, websiteUrl, cmsPlatform,
   };
 }
 
-function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsPlatform, cmsName, scanMode, requestedPathPrefix }) {
+function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsPlatform, cmsName, scanMode, requestedPathPrefix, scanId, scanRunId }) {
   const pages = getPages(scanData).slice(0, 150).map(slimPage);
   const scannerFixes = getRecommendations(scanData);
   const aiFixes = getRecommendations(aiData);
@@ -369,7 +376,9 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
   const reviewEvidenceState = normalizeReviewEvidenceState(aiData);
 
   return {
-    id: `scan_${Date.now()}`,
+    id: scanId || createScanId(),
+    scan_id: scanId || "",
+    scan_run_id: scanRunId || "",
     created_at: new Date().toISOString(),
     website_url: websiteUrl,
     website_key: normalizeWebsiteKey(websiteUrl),
@@ -619,16 +628,18 @@ function normalizeFunctionResponse(response) {
   return response;
 }
 
-function saveScanForDashboard(scanRecord) {
+function saveScanForDashboard(scanRecord, scanId) {
   try {
-    const normalizedRecord = slimScanRecord(normalizeScanRecordForStorage(scanRecord));
+    const normalizedRecord = slimScanRecord(normalizeScanRecordForStorage({ ...scanRecord, id: scanId || scanRecord?.id }));
     const serialized = JSON.stringify(normalizedRecord);
+    const stableScanId = normalizedRecord.scan_id || normalizedRecord.scan_run_id || normalizedRecord.id;
+    if (stableScanId) window.localStorage.setItem(`${SCAN_RECORD_PREFIX}${stableScanId}`, serialized);
     [DASHBOARD_LAST_SCAN_KEY, LEGACY_LAST_SCAN_KEY].forEach((key) => window.localStorage.setItem(key, serialized));
     [DASHBOARD_HISTORY_KEY, LEGACY_HISTORY_KEY].forEach((key) => {
       const existingRaw = window.localStorage.getItem(key);
       const existing = existingRaw ? JSON.parse(existingRaw) : [];
       const history = Array.isArray(existing) ? existing : [];
-      const nextHistory = [normalizedRecord, ...history.filter((item) => item?.website_key !== normalizedRecord.website_key)].slice(0, 8).map(slimScanRecord);
+      const nextHistory = [normalizedRecord, ...history.filter((item) => (item?.scan_id || item?.scan_run_id || item?.id) !== stableScanId)].slice(0, 20).map(slimScanRecord);
       window.localStorage.setItem(key, JSON.stringify(nextHistory));
     });
     window.localStorage.removeItem(ACTIVE_SCAN_URL_KEY);
@@ -681,16 +692,14 @@ function normalizeScanRecordForStorage(record) {
   };
 }
 
-function clearPreviousDashboardScan(activeUrl) {
+function markDashboardScanStarted(activeUrl, scanId) {
   try {
-    [DASHBOARD_LAST_SCAN_KEY, LEGACY_LAST_SCAN_KEY, DASHBOARD_HISTORY_KEY, LEGACY_HISTORY_KEY, SCAN_DEBUG_KEY].forEach((key) => window.localStorage.removeItem(key));
-    if (activeUrl) {
-      window.localStorage.setItem(ACTIVE_SCAN_URL_KEY, activeUrl);
-      window.localStorage.setItem(ACTIVE_SCAN_STARTED_AT_KEY, new Date().toISOString());
-    }
+    if (activeUrl) window.localStorage.setItem(ACTIVE_SCAN_URL_KEY, activeUrl);
+    window.localStorage.setItem(ACTIVE_SCAN_STARTED_AT_KEY, new Date().toISOString());
+    if (scanId) window.localStorage.setItem("seo_autopilot:active_scan_id", scanId);
     window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
   } catch (storageError) {
-    console.warn("Could not clear previous dashboard scan.", storageError);
+    console.warn("Could not mark the dashboard scan as started.", storageError);
   }
 }
 
@@ -938,6 +947,10 @@ function defaultTitle(category = "") { const titles = { meta_title: "Improve sea
 function friendlyCustomerCategory(category = "") { const map = { meta_title: "Search appearance", meta_description: "Search appearance", duplicate_content: "Search appearance", canonical: "Website setup", schema: "Trust signals", thin_content: "Page content", "404_error": "Broken page", redirect: "Page redirect", internal_link: "Internal links", performance: "Website performance", web_dev: "Website setup", mobile_setup: "Mobile setup", performance_hint: "Website performance", social_metadata: "Social sharing", indexability: "Indexability", image_alt_text: "Images" }; return map[category] || "Website improvement"; }
 function normalizePriority(value) { const priority = String(value || "").toLowerCase(); if (["critical", "high", "medium", "low"].includes(priority)) return priority; return "medium"; }
 function normalizeCmsValue(value) { const normalized = String(value || "custom").toLowerCase(); return CMS_OPTIONS.some((item) => item.value === normalized) ? normalized : "custom"; }
+function createScanId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `scan_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
 function normalizeWebsiteUrl(value) { const raw = String(value || "").trim(); if (!raw) return ""; try { return new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).href; } catch { return ""; } }
 function normalizeWebsiteKey(value) { try { const url = new URL(value); return `${url.hostname}${url.pathname}`.replace(/\/$/, "").toLowerCase(); } catch { return String(value || "").toLowerCase(); } }
 function getRequestedPathPrefix(value) { try { const path = new URL(value).pathname || "/"; if (!path || path === "/") return ""; return path.replace(/\/$/, ""); } catch { return ""; } }

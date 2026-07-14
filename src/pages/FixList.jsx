@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Bug, Copy, ExternalLink, RefreshCw, Trash2 } from "lucide-react";
 
 import { isRateLimitFinding, shouldUseLegacyRateLimitPresentation } from "@/lib/reviewContract";
@@ -13,6 +13,7 @@ const LEGACY_HISTORY_KEY = "SEO_AUTOPILOT_SCAN_HISTORY";
 const ACTIVE_SCAN_URL_KEY = "seo_autopilot:active_scan_url";
 const ACTIVE_SCAN_STARTED_AT_KEY = "seo_autopilot:active_scan_started_at";
 const SCAN_DEBUG_KEY = "seo_autopilot:scan_debug";
+const SCAN_RECORD_PREFIX = "seo_autopilot:scan:";
 const DONE_FIXES_KEY = "seo_autopilot:done_fixes";
 
 const STORAGE_KEYS = [
@@ -81,13 +82,15 @@ const PASSED_CHECK_DEFINITIONS = [
 
 export default function FixList() {
   const navigate = useNavigate();
-  const [scanRecord, setScanRecord] = useState(() => readBestScanRecord());
+  const [searchParams] = useSearchParams();
+  const requestedScanId = searchParams.get("scan_id") || "";
+  const [scanRecord, setScanRecord] = useState(() => readBestScanRecord(requestedScanId));
   const [debugData, setDebugData] = useState(() => readScanDebugData());
   const [selectedCms, setSelectedCms] = useState(() => normalizeCmsValue(scanRecord?.cms_platform || "custom"));
   const [doneIds, setDoneIds] = useState(() => readDoneFixIds(websiteKeyOf(scanRecord)));
 
   function reloadScan() {
-    const next = readBestScanRecord();
+    const next = readBestScanRecord(requestedScanId);
     setScanRecord(next);
     setDebugData(readScanDebugData());
     setDoneIds(readDoneFixIds(websiteKeyOf(next)));
@@ -102,7 +105,7 @@ export default function FixList() {
       window.removeEventListener("seo-autopilot-scan-saved", reloadScan);
       window.removeEventListener("storage", reloadScan);
     };
-  }, []);
+  }, [requestedScanId]);
 
   const recommendations = useMemo(() => getRecommendations(scanRecord).map((item) => normalizeRecommendation(item, scanRecord)), [scanRecord]);
   const pages = useMemo(() => getPages(scanRecord), [scanRecord]);
@@ -768,7 +771,11 @@ function buildEvidenceItems(recommendation) {
   return items.slice(0, 6);
 }
 
-function readBestScanRecord() {
+function readBestScanRecord(requestedScanId = "") {
+  if (requestedScanId) {
+    const direct = safeParseLocalStorage(`${SCAN_RECORD_PREFIX}${requestedScanId}`);
+    if (isUsefulScanCandidate(direct)) return normalizeStoredScanCandidate(direct);
+  }
   const candidates = [];
   const lastScan = safeParseLocalStorage(DASHBOARD_LAST_SCAN_KEY);
   const legacyLastScan = safeParseLocalStorage(LEGACY_LAST_SCAN_KEY);
@@ -781,6 +788,10 @@ function readBestScanRecord() {
   if (Array.isArray(legacyHistory)) candidates.push(...legacyHistory);
 
   const valid = candidates.filter(Boolean).map(normalizeStoredScanCandidate).filter(isUsefulScanCandidate).sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+  if (requestedScanId) {
+    const exact = valid.find((item) => (item.scan_id || item.scan_run_id || item.id) === requestedScanId);
+    if (exact) return exact;
+  }
   return valid[0] || null;
 }
 

@@ -1,5 +1,7 @@
+import asyncio
 import gzip
 import re
+import time
 from urllib.parse import urlparse, urlunparse
 
 import httpx
@@ -12,17 +14,18 @@ from .security import safe_get
 MAX_SITEMAP_FETCHES = 60
 
 
-async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix: str, limit: int, artifacts: list[dict], scope_evidence: dict | None = None) -> list[str]:
+async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix: str, limit: int, artifacts: list[dict], scope_evidence: dict | None = None, *, deadline: float | None = None, max_fetches: int | None = None) -> list[str]:
     scope_evidence = scope_evidence if scope_evidence is not None else {}
     scope_evidence.setdefault("sitemap_urls_excluded_outside_scope", 0)
     scope_evidence.setdefault("market_prefixes_detected", [])
     scope_evidence.setdefault("multimarket_detected", False)
     scope_evidence.setdefault("market_scope_required", False)
 
+    fetch_limit = max(1, min(MAX_SITEMAP_FETCHES, int(max_fetches or MAX_SITEMAP_FETCHES)))
     roots: list[str] = []
     robots_url = f"{origin}/robots.txt"
     try:
-        robots = await safe_get(client, robots_url)
+        robots = await _safe_get_before_deadline(client, robots_url, deadline)
         if robots is not None:
             for line in robots.text.splitlines():
                 if line.lower().startswith("sitemap:"):
@@ -40,9 +43,9 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
     # the global discovery cap before later sitemap indexes and child families are
     # even fetched.
     for root in dedupe(roots):
-        if len(fetched) >= MAX_SITEMAP_FETCHES:
+        if len(fetched) >= fetch_limit or _deadline_reached(deadline):
             break
-        locs = await fetch_sitemap_locs(client, root, fetched, artifacts)
+        locs = await fetch_sitemap_locs(client, root, fetched, artifacts, deadline=deadline)
         bucket = family_urls.setdefault(f"root:{sitemap_family_key(root)}", [])
         for loc in locs:
             if is_sitemap_url(loc):
@@ -59,10 +62,10 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
     # applying the global limit. Otherwise one huge child sitemap can consume
     # every discovery slot before booking, collection, or trust families appear.
     for child in rank_child_sitemaps(child_sitemaps, path_prefix):
-        if len(fetched) >= MAX_SITEMAP_FETCHES:
+        if len(fetched) >= fetch_limit or _deadline_reached(deadline):
             break
         bucket = family_urls.setdefault(f"child:{sitemap_family_key(child)}", [])
-        locs = await fetch_sitemap_locs(client, child, fetched, artifacts)
+        locs = await fetch_sitemap_locs(client, child, fetched, artifacts, deadline=deadline)
         for loc in locs:
             if len(bucket) >= limit:
                 break
@@ -107,12 +110,12 @@ def interleave_url_families(family_urls: dict[str, list[str]]) -> list[str]:
     return output
 
 
-async def fetch_sitemap_locs(client: httpx.AsyncClient, sitemap_url: str, fetched: set[str], artifacts: list[dict]) -> list[str]:
+async def fetch_sitemap_locs(client: httpx.AsyncClient, sitemap_url: str, fetched: set[str], artifacts: list[dict], *, deadline: float | None = None) -> list[str]:
     if not sitemap_url or sitemap_url in fetched:
         return []
     fetched.add(sitemap_url)
     try:
-        response = await safe_get(client, sitemap_url)
+        response = await _safe_get_before_deadline(client, sitemap_url, deadline)
         if response is None or response.status_code >= 400:
             return []
     except Exception:
@@ -132,6 +135,22 @@ async def fetch_sitemap_locs(client: httpx.AsyncClient, sitemap_url: str, fetche
             continue
         locs.append(loc)
     return locs
+
+
+def _deadline_reached(deadline: float | None) -> bool:
+    return deadline is not None and time.monotonic() >= deadline
+
+
+async def _safe_get_before_deadline(client: httpx.AsyncClient, url: str, deadline: float | None):
+    if deadline is None:
+        return await safe_get(client, url)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return None
+    try:
+        return await asyncio.wait_for(safe_get(client, url), timeout=max(0.05, remaining))
+    except asyncio.TimeoutError:
+        return None
 
 
 def decode_sitemap_body(response: httpx.Response, sitemap_url: str) -> str:

@@ -1,7 +1,7 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
-const VERSION = "runAdvancedScan_v21_python_first";
-const PYTHON_SCANNER_VERSION = "python_scanner_v2_contract_parity";
+const VERSION = "runAdvancedScan_v22_python_required";
+const PYTHON_SCANNER_VERSION = "python_scanner_v3_bounded_request";
 const DENO_FALLBACK_PROFILE = "deno_screaming_frog_lite_fallback_v21";
 const CORS_HEADERS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
 const USER_AGENT = "Mozilla/5.0 (compatible; FixListBot/2.1; +https://base44.app)";
@@ -52,9 +52,13 @@ Deno.serve(async (req) => {
     const scanMode = body.scan_mode || body.audit_profile || "advanced";
     const pythonTimeoutMs = resolvePythonTimeout(scanMode);
     const pythonAttempt = await tryPythonScanner({ body, websiteUrl, pathPrefix, scanMode, timeoutMs: pythonTimeoutMs });
-    if (pythonAttempt.ok) return jsonResponse(toPythonAdvancedScanResponse(pythonAttempt.result, scanMode));
+    if (pythonAttempt.ok) return jsonResponse(toPythonAdvancedScanResponse(pythonAttempt.result, scanMode, body.scan_id || body.scan_run_id || ""));
 
-    const fallbackReason = pythonAttempt.reason || "Python scanner unavailable; used Deno fallback.";
+    const fallbackReason = pythonAttempt.reason || "Python scanner unavailable.";
+    const allowDenoFallback = body.allow_deno_fallback === true && body.require_python_scanner !== true;
+    if (!allowDenoFallback) {
+      return jsonResponse({ success: false, version: VERSION, error: "The Python scanner is unavailable, so FixList did not save a fallback result.", detail: fallbackReason, retryable: true, advanced_scan_backend: "python_scanner_api_unavailable", deno_fallback_used: false, release_gate_eligible: false, scanner_api_url_configured: pythonAttempt.configured, python_scanner_failure_code: pythonAttempt.failureCode || "unknown", scan_id: body.scan_id || body.scan_run_id || "", elapsed_ms: Date.now() - functionStartedAt }, 503);
+    }
     const remainingMs = FUNCTION_RESPONSE_BUDGET_MS - (Date.now() - functionStartedAt);
     if (remainingMs < MIN_FALLBACK_CRAWL_MS + RESPONSE_RESERVE_MS) {
       return jsonResponse({
@@ -95,6 +99,12 @@ Deno.serve(async (req) => {
       screaming_frog_lite_enabled: true,
       advanced_scan_backend: "deno_fallback",
       deno_fallback_used: true,
+      scan_status: "incomplete_evidence",
+      review_confidence_state: "deno_fallback_limited",
+      score_is_provisional: true,
+      release_gate_eligible: false,
+      limitation: "The Python scanner was unavailable. This explicit Deno fallback is a limited diagnostic sample and must not be treated as a completed production audit.",
+      scan_id: body.scan_id || body.scan_run_id || "",
       scanner_api_url_configured: pythonAttempt.configured,
       python_scanner_fallback_reason: fallbackReason,
       website_url: websiteUrl,
@@ -150,8 +160,8 @@ Deno.serve(async (req) => {
 async function tryPythonScanner({ body, websiteUrl, pathPrefix, scanMode, timeoutMs }) {
   const scannerUrl = String(Deno.env.get("SCANNER_API_URL") || Deno.env.get("PYTHON_SCANNER_API_URL") || Deno.env.get("PYTHON_SCANNER_URL") || Deno.env.get("SCANNER_URL") || Deno.env.get("cloud_api") || Deno.env.get("CLOUD_API") || "").replace(/\/+$/, "");
   const scannerKey = String(Deno.env.get("SCANNER_API_KEY") || Deno.env.get("PYTHON_SCANNER_API_KEY") || "");
-  if (!scannerUrl) return { ok: false, configured: false, reason: "SCANNER_API_URL/cloud_api is not configured." };
-  if (!scannerKey) return { ok: false, configured: true, reason: "SCANNER_API_KEY is not configured." };
+  if (!scannerUrl) return { ok: false, configured: false, failureCode: "url_not_configured", reason: "SCANNER_API_URL/cloud_api is not configured." };
+  if (!scannerKey) return { ok: false, configured: true, failureCode: "key_not_configured", reason: "SCANNER_API_KEY is not configured." };
   try {
     const response = await fetchWithTimeout(`${scannerUrl}/scan`, {
       method: "POST",
@@ -166,16 +176,18 @@ async function tryPythonScanner({ body, websiteUrl, pathPrefix, scanMode, timeou
     }, Math.max(1000, Number(timeoutMs || PYTHON_TIMEOUTS_MS.advanced)));
     const text = await response.text();
     const result = parseJson(text) || { success: false, error: text.slice(0, 400) };
-    if (!response.ok) return { ok: false, configured: true, reason: `Python scanner HTTP ${response.status}: ${String(result.detail || result.error || "request failed").slice(0, 180)}` };
-    if (result.success === false) return { ok: false, configured: true, reason: `Python scanner returned success=false: ${String(result.error || "unknown error").slice(0, 180)}` };
-    if (result.scanner_version !== PYTHON_SCANNER_VERSION) return { ok: false, configured: true, reason: `Python scanner version ${result.scanner_version || "missing"} did not match ${PYTHON_SCANNER_VERSION}.` };
+    if (!response.ok) return { ok: false, configured: true, failureCode: `http_${response.status}`, reason: `Python scanner HTTP ${response.status}: ${String(result.detail || result.error || "request failed").slice(0, 180)}` };
+    if (result.success === false) return { ok: false, configured: true, failureCode: "scanner_success_false", reason: `Python scanner returned success=false: ${String(result.error || "unknown error").slice(0, 180)}` };
+    if (result.scanner_version !== PYTHON_SCANNER_VERSION) return { ok: false, configured: true, failureCode: "version_mismatch", reason: `Python scanner version ${result.scanner_version || "missing"} did not match ${PYTHON_SCANNER_VERSION}.` };
     return { ok: true, configured: true, result };
   } catch (error) {
-    return { ok: false, configured: true, reason: `Python scanner request failed: ${String(error?.message || error || "unknown error").slice(0, 180)}` };
+    const message = String(error?.message || error || "unknown error");
+    const failureCode = error?.name === "AbortError" || /abort|timeout/i.test(message) ? "timeout" : "network_error";
+    return { ok: false, configured: true, failureCode, reason: `Python scanner request failed: ${message.slice(0, 180)}` };
   }
 }
 
-function toPythonAdvancedScanResponse(result, scanMode) {
+function toPythonAdvancedScanResponse(result, scanMode, scanId = "") {
   const warnings = Array.isArray(result.crawl_warnings) ? result.crawl_warnings : [];
   const technical = result.technical_audit_summary && typeof result.technical_audit_summary === "object" ? result.technical_audit_summary : {};
   return {
@@ -188,6 +200,8 @@ function toPythonAdvancedScanResponse(result, scanMode) {
     scanner_api_url_configured: true,
     scan_mode: result.scan_mode || scanMode || "advanced",
     audit_profile: result.audit_profile || result.scan_mode || scanMode || "advanced",
+    scan_id: scanId || result.scan_id || "",
+    release_gate_eligible: true,
     technical_audit_summary: {
       ...technical,
       scanner_version: result.scanner_version,

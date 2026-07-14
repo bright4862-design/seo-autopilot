@@ -28,6 +28,7 @@ jobs:
       - name: Apply recovery patch
         run: |
           set +e
+          python .github/patches/fix-production-recovery-script.py
           python .github/patches/apply-production-release-recovery.py > /tmp/recovery-apply.log 2>&1
           status=$?
           cat /tmp/recovery-apply.log
@@ -113,6 +114,7 @@ jobs:
       - name: Remove temporary patch machinery
         run: |
           rm -f .github/patches/apply-production-release-recovery.py
+          rm -f .github/patches/fix-production-recovery-script.py
           rm -f .github/workflows/apply-production-release-recovery.yml
           git add -A
           git commit -m 'Remove temporary release recovery machinery'

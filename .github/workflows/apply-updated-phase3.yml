@@ -68,8 +68,26 @@ jobs:
           git add -A
           git commit -m 'Remove updated Phase 3 staging machinery'
 
-      - name: Final diff hygiene
-        run: git diff --check main...HEAD
+      - name: Capture final diff hygiene
+        id: diffcheck
+        run: |
+          set +e
+          git diff --check main...HEAD > /tmp/diff-check.txt 2>&1
+          status=$?
+          cat /tmp/diff-check.txt
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload diff hygiene diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: updated-phase3-diff-hygiene
+          path: /tmp/diff-check.txt
+          if-no-files-found: error
+
+      - name: Enforce final diff hygiene
+        run: exit "${{ steps.diffcheck.outputs.status }}"
 
       - name: Push verified product branch
         run: git push origin HEAD:agent/apply-updated-phase3-design

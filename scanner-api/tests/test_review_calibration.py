@@ -249,7 +249,7 @@ def test_funbooker_narrow_issues_calibrate_to_needs_work_without_score_noise():
     assert result["health_score"] == 76
     assert result["health_grade"] == "Needs work"
     assert result["next_best_step"] == "Add canonical URLs to legal info pages"
-    assert result["review_evidence_calibration_version"] == "review_evidence_calibration_v4_legal_page_scope"
+    assert result["review_evidence_calibration_version"] == "review_evidence_calibration_v5_utility_redirect"
     assert len([fix for fix in result["recommendations"] if fix["rule"] == "sitemap_redirect"]) == 2
     assert len([fix for fix in result["recommendations"] if fix["rule"] == "missing_meta_description"]) == 2
     assert len([fix for fix in result["recommendations"] if fix["rule"] == "missing_h1"]) == 2
@@ -352,3 +352,138 @@ def test_incidental_commerce_keywords_do_not_override_saas_structure():
     result = run_review(body)
     assert result["site_fingerprint"]["primary_archetype"] == "saas_app_membership"
     assert result["site_fingerprint"]["business_model"] == "saas_or_member_app"
+
+
+def test_ikea_corporate_site_is_not_saas_from_incidental_subscription_and_report_words():
+    pages = [
+        {"url": "https://www.ikea.com/", "status_code": 200, "title": "IKEA", "h1": "IKEA", "meta_description": "Home", "page_template_family": "homepage"},
+        {"url": "https://www.ikea.com/global/en/stories", "status_code": 200, "title": "Stories", "h1": "Stories", "meta_description": "Ideas", "page_template_family": "standard"},
+        {"url": "https://www.ikea.com/global/en/newsroom/subscription", "status_code": 200, "title": "Newsroom subscription", "h1": "Subscribe", "meta_description": "News", "page_template_family": "standard"},
+        {"url": "https://www.ikea.com/global/en/jobs/me-and-ikea", "status_code": 200, "title": "Me and IKEA", "h1": "Jobs", "meta_description": "Careers", "page_template_family": "standard"},
+        {"url": "https://www.ikea.com/global/en/our-business/reports", "status_code": 200, "title": "Business reports", "h1": "Reports", "meta_description": "Company reports", "page_template_family": "guide_article"},
+    ]
+    body = {
+        "website_url": "https://www.ikea.com/",
+        "business_name": "IKEA",
+        "pages_found": 216,
+        "pages_crawled": len(pages),
+        "pages": pages,
+    }
+    result = run_review(body)
+    fingerprint = result["site_fingerprint"]
+    assert fingerprint["primary_archetype"] != "saas_app_membership"
+    assert fingerprint["business_model"] != "saas_or_member_app"
+
+
+def test_large_trailing_slash_internal_redirect_group_is_medium_not_critical():
+    body = payload([page("/global/en/stories", 4, 0, "standard")])
+    reviewed = run_review(body)
+    reviewed["recommendations"] = [
+        {
+            "id": "ikea-slash-redirects",
+            "fix_id": "ikea-slash-redirects",
+            "rule": "internal_link_redirect",
+            "category": "indexability",
+            "priority": "critical",
+            "overall_priority_score": 94,
+            "page_count": 128,
+            "affected_pages": [f"/global/en/story-{index}" for index in range(128)],
+            "redirect_state": "single_redirect",
+            "redirect_hop_count": 1,
+            "redirect_source_url": "https://www.ikea.com/global/en/stories",
+            "redirect_destination_url": "https://www.ikea.com/global/en/stories/",
+            "destination_status_code": 200,
+            "redirect_destination_indexable": True,
+            "current_value": "https://www.ikea.com/global/en/stories → https://www.ikea.com/global/en/stories/ — destination HTTP 200 — destination: Indexable",
+            "issue_title": "Update internal links that pass through redirects",
+        }
+    ]
+    result = apply_review_evidence_calibration(reviewed, body)
+    fix = result["recommendations"][0]
+    assert fix["priority"] == "medium"
+    assert fix["overall_priority_score"] <= 67
+    assert fix["severity_calibration_reason"] == "trailing_slash_only_healthy_redirect"
+    assert result["health_score"] == 88
+
+
+def test_pdf_and_cloudflare_utility_targets_do_not_create_page_semantic_tasks():
+    body = {
+        "website_url": "https://www.ikea.com/",
+        "pages_crawled": 3,
+        "pages_found": 3,
+        "pages": [
+            {
+                "url": "https://www.ikea.com/global/en/images/report.pdf",
+                "final_url": "https://www.ikea.com/global/en/images/report.pdf",
+                "status_code": 200,
+                "content_type": "application/pdf",
+            },
+            {
+                "url": "https://www.ikea.com/cdn-cgi/l/email-protection",
+                "final_url": "https://www.ikea.com/cdn-cgi/l/email-protection",
+                "status_code": 200,
+                "content_type": "text/html",
+            },
+            {
+                "url": "https://www.ikea.com/global/en/newsroom/subscription",
+                "final_url": "https://www.ikea.com/global/en/newsroom/subscription/",
+                "status_code": 200,
+                "content_type": "text/html",
+                "title": "Subscribe",
+                "h1": "Subscribe",
+                "h1_count": 1,
+                "canonical": "https://www.ikea.com/global/en/newsroom/subscription/",
+                "meta_description": "",
+                "image_count": 0,
+                "image_missing_alt_count": 0,
+            },
+        ],
+    }
+    reviewed = run_review(body)
+    reviewed["recommendations"] = [
+        {
+            "id": "canonical-utility",
+            "rule": "canonical_missing",
+            "category": "canonical",
+            "priority": "high",
+            "affected_pages": ["/cdn-cgi/l/email-protection", "/global/en/images/report.pdf"],
+            "page_url": "/cdn-cgi/l/email-protection",
+            "issue_title": "Add canonical URLs to standard pages",
+        },
+        {
+            "id": "h1-utility",
+            "rule": "missing_h1",
+            "category": "thin_content",
+            "priority": "medium",
+            "affected_pages": ["/global/en/images/report.pdf"],
+            "page_url": "/global/en/images/report.pdf",
+            "issue_title": "Add an H1",
+        },
+        {
+            "id": "title-utility",
+            "rule": "missing_title",
+            "category": "meta_title",
+            "priority": "medium",
+            "affected_pages": ["/global/en/images/report.pdf"],
+            "page_url": "/global/en/images/report.pdf",
+            "issue_title": "Add a title",
+        },
+        {
+            "id": "mixed-meta",
+            "rule": "missing_meta_description",
+            "category": "meta_description",
+            "priority": "medium",
+            "affected_pages": ["/global/en/images/report.pdf", "/global/en/newsroom/subscription"],
+            "page_url": "/global/en/images/report.pdf",
+            "source_pages": ["/global/en/images/report.pdf", "/global/en/newsroom/subscription"],
+            "issue_title": "Add meta descriptions",
+        },
+    ]
+    result = apply_review_evidence_calibration(reviewed, body)
+    fixes = result["recommendations"]
+    assert len(fixes) == 1
+    assert fixes[0]["rule"] == "missing_meta_description"
+    assert fixes[0]["affected_pages"] == ["/global/en/newsroom/subscription"]
+    assert fixes[0]["page_url"] == "/global/en/newsroom/subscription"
+    assert fixes[0]["non_html_or_utility_pages_suppressed"] == 1
+

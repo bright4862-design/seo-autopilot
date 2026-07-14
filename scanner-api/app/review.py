@@ -338,8 +338,11 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
     for key, score in scores:
         if key == "ecommerce_specialty_retail" and ecommerce_paths < 2:
             score = min(score, 1.0)
-        if key == "saas_app_membership" and saas_paths >= 2:
-            score += 12
+        if key == "saas_app_membership":
+            if saas_paths < 2:
+                score = min(score, 1.0)
+            else:
+                score += 12
         adjusted_scores.append((key, score))
     scores = sorted(adjusted_scores, key=lambda item: item[1], reverse=True)
     primary = scores[0][0] if scores and scores[0][1] > 0 else "general"
@@ -1288,6 +1291,8 @@ def detect_business_model(text: str, archetype: str) -> str:
         "booking_experiences_marketplace": "booking_or_reservation",
         "ecommerce_specialty_retail": "catalog_or_ecommerce",
         "saas_app_membership": "saas_or_member_app",
+        "content_blog": "content_or_general_business",
+        "general": "content_or_general_business",
     }
     if archetype in decisive:
         return decisive[archetype]

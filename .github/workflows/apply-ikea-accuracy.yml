@@ -43,7 +43,16 @@ jobs:
 
       - name: Run focused IKEA regressions
         working-directory: scanner-api
-        run: pytest tests/test_review_calibration.py -q
+        run: |
+          set -o pipefail
+          pytest tests/test_review_calibration.py -q 2>&1 | tee /tmp/ikea-focused.log
+
+      - name: Upload focused failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ikea-focused-failure
+          path: /tmp/ikea-focused.log
 
       - name: Run root scanner regressions
         run: pytest tests/

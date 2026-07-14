@@ -45,32 +45,33 @@ jobs:
 
       - name: Run focused IKEA regressions
         working-directory: scanner-api
-        run: |
-          set -o pipefail
-          pytest tests/test_review_calibration.py -q 2>&1 | tee /tmp/ikea-focused.log
-
-      - name: Upload focused failure log
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ikea-focused-failure
-          path: /tmp/ikea-focused.log
+        run: pytest tests/test_review_calibration.py -q
 
       - name: Run root scanner regressions
         run: pytest tests/
 
+      - name: Create clean product commit
+        run: |
+          rm -f .github/patches/apply-ikea-accuracy.py
+          rm -f .github/patches/apply-ikea-business-model-hotfix.py
+          rm -f .github/workflows/apply-ikea-accuracy.yml
+          git add -A
+          git commit -m 'Fix IKEA archetype redirect and utility URL accuracy'
+
+      - name: Record updated frozen beta revision
+        run: |
+          product_sha="$(git rev-parse HEAD)"
+          python scanner-api/scripts/freeze_beta_revision.py \
+            --git-commit "$product_sha" \
+            --recorded-at '2026-07-14T14:25:00+00:00' \
+            --acceptance-report 'docs/beta-acceptance.md' \
+            --note 'Frozen beta updated after IKEA production evidence: structural SaaS authority, harmless trailing-slash calibration, and non-HTML utility suppression.'
+          git add data/beta-crawler-revision.json
+          git commit -m 'Record IKEA accuracy beta revision'
+
       - name: Run full scanner API suite
         working-directory: scanner-api
-        run: |
-          set -o pipefail
-          pytest tests/ 2>&1 | tee /tmp/ikea-full.log
-
-      - name: Upload full-suite failure log
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ikea-full-suite-failure
-          path: /tmp/ikea-full.log
+        run: pytest tests/
 
       - name: Verify frozen beta revision
         working-directory: scanner-api
@@ -97,24 +98,17 @@ jobs:
       - name: Production build
         run: npm run build
 
-      - name: Remove temporary patch machinery
-        run: |
-          rm -f .github/patches/apply-ikea-accuracy.py
-          rm -f .github/patches/apply-ikea-business-model-hotfix.py
-          rm -f .github/workflows/apply-ikea-accuracy.yml
-          git add -A
-          git commit -m 'Fix IKEA archetype redirect and utility URL accuracy'
-
       - name: Verify final scope and hygiene
         run: |
           git diff --check origin/main...HEAD
           changed="$(git diff --name-only origin/main...HEAD)"
           echo "$changed"
           test -z "$(echo "$changed" | grep '^\.github/' || true)"
+          echo "$changed" | grep -qx 'data/beta-crawler-revision.json'
           echo "$changed" | grep -qx 'scanner-api/app/review.py'
           echo "$changed" | grep -qx 'scanner-api/app/review_calibration.py'
           echo "$changed" | grep -qx 'scanner-api/tests/test_review_calibration.py'
-          test "$(echo "$changed" | wc -l | tr -d ' ')" = '3'
+          test "$(echo "$changed" | wc -l | tr -d ' ')" = '4'
 
       - name: Push verified product branch
         run: git push origin HEAD:agent/fix-ikea-accuracy-regressions

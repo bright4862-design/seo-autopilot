@@ -27,6 +27,8 @@ from .trust_discovery import apply_trust_discovery_gate, enrich_scan_with_trust_
 
 SCANNER_API_KEY = os.getenv("SCANNER_API_KEY", "")
 TRUST_DISCOVERY_TIMEOUTS = {"basic": 2.0, "quick": 3.0, "deep": 5.0, "advanced": 7.0}
+SCAN_RESPONSE_PAGE_LIMITS = {"basic": 25, "quick": 40, "deep": 85, "advanced": 150}
+SCANNER_BUILD_REVISION = "hard_page_cap_response_v1"
 
 app = FastAPI(title="FixList Scanner API", version=VERSION)
 
@@ -39,11 +41,59 @@ class ScanRequest(BaseModel):
     cms_platform: str | None = None
 
 
+def enforce_scan_response_page_budget(result: dict[str, Any], scan_mode: str) -> dict[str, Any]:
+    """Enforce mode page limits at the final HTTP response boundary.
+
+    The crawler already owns a cap, but this second boundary protects callers from
+    concurrent/post-processing overruns and keeps every count consistent with the
+    actual evidence arrays returned to Base44.
+    """
+    if not isinstance(result, dict):
+        return result
+    mode = str(scan_mode or result.get("scan_mode") or "advanced").lower()
+    limit = SCAN_RESPONSE_PAGE_LIMITS.get(mode, SCAN_RESPONSE_PAGE_LIMITS["advanced"])
+    pages: list[dict[str, Any]] = []
+    for key in ("crawled_pages", "pages", "scanned_pages", "crawl_pages"):
+        value = result.get(key)
+        if isinstance(value, list) and value:
+            pages = value[:limit]
+            break
+    reported = result.get("pages_crawled")
+    try:
+        reported_count = max(0, int(reported or 0))
+    except (TypeError, ValueError):
+        reported_count = 0
+    pages_crawled = min(limit, len(pages) if pages else reported_count)
+    if pages:
+        result["pages"] = pages
+        result["crawled_pages"] = pages
+        if isinstance(result.get("scanned_pages"), list):
+            result["scanned_pages"] = pages
+        if isinstance(result.get("crawl_pages"), list):
+            result["crawl_pages"] = pages
+    result["pages_crawled"] = pages_crawled
+    result["scanner_build_revision"] = SCANNER_BUILD_REVISION
+    technical = result.get("technical_audit_summary")
+    if not isinstance(technical, dict):
+        technical = {}
+        result["technical_audit_summary"] = technical
+    technical["pages_crawled"] = pages_crawled
+    technical["scanner_build_revision"] = SCANNER_BUILD_REVISION
+    summary = result.get("scan_summary")
+    if isinstance(summary, dict):
+        if "pages_scanned" in summary:
+            summary["pages_scanned"] = min(limit, int(summary.get("pages_scanned") or pages_crawled))
+        if "pages_crawled" in summary:
+            summary["pages_crawled"] = min(limit, int(summary.get("pages_crawled") or pages_crawled))
+    return result
+
+
 @app.get("/health")
 def health():
     return {
         "ok": True,
         "version": VERSION,
+        "scanner_build_revision": SCANNER_BUILD_REVISION,
         "review_version": REVIEW_VERSION,
         "review_evidence_calibration_version": CALIBRATION_VERSION,
         "indexability_quality_version": INDEXABILITY_QUALITY_VERSION,
@@ -91,6 +141,7 @@ async def scan(payload: ScanRequest, x_scanner_key: str | None = Header(default=
             result["trust_page_discovery"] = {"version": "trust_page_discovery_v1", "attempted": True, "conclusive": False, "timed_out": True, "checked": 0, "responses_received": 0, "found": [], "found_urls": [], "evidence": []}
         result = apply_indexability_quality_to_result(result)
         result = apply_render_evidence_quality(result)
+        result = enforce_scan_response_page_budget(result, payload.scan_mode)
     except Exception as exc:  # noqa: BLE001 - customer-safe envelope, full detail logged
         return timer.failed(exc)
     timer.completed(**scan_metrics(result))

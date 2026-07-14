@@ -56,4 +56,24 @@ review_replacement = """replace_once(\"scanner-api/app/review.py\", '''    ecomm
         adjusted_scores.append((key, score))''')"""
 text = text[:start] + review_replacement + text[end:]
 
+budget_injected = '''    budget = SCAN_BUDGETS.get(str(scan_mode or "advanced").lower(), SCAN_BUDGETS["advanced"])
+    scan_started_at = time.monotonic()
+    deadline = scan_started_at + budget["timeout"]'''
+budget_compatible = '''    budget = SCAN_BUDGETS.get(str(scan_mode or "advanced").lower(), SCAN_BUDGETS["advanced"])
+    fetch_timeout = float(budget.get("fetch_timeout", min(10, max(3, budget["timeout"] / 5))))
+    max_sitemap_fetches = int(budget.get("max_sitemap_fetches", 10))
+    scan_started_at = time.monotonic()
+    deadline = scan_started_at + budget["timeout"]'''
+if text.count(budget_injected) != 1:
+    raise RuntimeError(f'Expected one injected budget block, found {text.count(budget_injected)}')
+text = text.replace(budget_injected, budget_compatible, 1)
+
+for old, new in (
+    ('        timeout=budget["fetch_timeout"],', '        timeout=fetch_timeout,'),
+    ('            max_fetches=budget["max_sitemap_fetches"],', '            max_fetches=max_sitemap_fetches,'),
+):
+    if text.count(old) != 1:
+        raise RuntimeError(f'Expected one compatibility marker {old!r}, found {text.count(old)}')
+    text = text.replace(old, new, 1)
+
 path.write_text(text, encoding='utf-8')

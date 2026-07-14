@@ -26,7 +26,9 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
       - name: Apply IKEA accuracy patch
-        run: python .github/patches/apply-ikea-accuracy.py
+        run: |
+          python .github/patches/apply-ikea-accuracy.py
+          python .github/patches/apply-ikea-business-model-hotfix.py
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -89,6 +91,7 @@ jobs:
       - name: Remove temporary patch machinery
         run: |
           rm -f .github/patches/apply-ikea-accuracy.py
+          rm -f .github/patches/apply-ikea-business-model-hotfix.py
           rm -f .github/workflows/apply-ikea-accuracy.yml
           git add -A
           git commit -m 'Fix IKEA archetype redirect and utility URL accuracy'

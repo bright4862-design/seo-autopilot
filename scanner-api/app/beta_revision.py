@@ -34,7 +34,12 @@ def collect_component_versions() -> dict[str, str]:
     from .navigation_indexability import NAVIGATION_INDEXABILITY_VERSION
     from .render_evidence_quality import RENDER_EVIDENCE_QUALITY_VERSION
     from .render_followup import RENDER_FOLLOWUP_VERSION
-    from .review import QUALITY_GATE_VERSION, REVIEW_VERSION, ZERO_FIX_CONFIDENCE_VERSION
+    from .review import (
+        ARCHETYPE_CLASSIFIER_VERSION,
+        QUALITY_GATE_VERSION,
+        REVIEW_VERSION,
+        ZERO_FIX_CONFIDENCE_VERSION,
+    )
     from .review_calibration import CALIBRATION_VERSION, IMAGE_ALT_EVIDENCE_VERSION
     from .sampling import SAMPLING_VERSION
     from .scanner import RENDER_EVIDENCE_VERSION, VERSION
@@ -46,6 +51,7 @@ def collect_component_versions() -> dict[str, str]:
         "sampling_version": SAMPLING_VERSION,
         "render_followup_version": RENDER_FOLLOWUP_VERSION,
         "review_version": REVIEW_VERSION,
+        "archetype_classifier_version": ARCHETYPE_CLASSIFIER_VERSION,
         "zero_fix_confidence_version": ZERO_FIX_CONFIDENCE_VERSION,
         "quality_gate_version": QUALITY_GATE_VERSION,
         "review_evidence_calibration_version": CALIBRATION_VERSION,

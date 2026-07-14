@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  buildAuthorityMarkers,
+  buildDiagnosticAuthorityMarkers,
   buildFixItemFields,
   buildFixListFields,
   buildScanRunFields,
@@ -9,6 +12,13 @@ import {
   fixLineageKey,
   getFixRecommendations,
 } from "../../src/lib/scanRunModel.js";
+
+const frozenRevision = JSON.parse(readFileSync("data/beta-crawler-revision.json", "utf8"));
+const EXPECTED_REVIEW_VERSION = "python_review_v2_structural_marketplace";
+const EXPECTED_CALIBRATION_VERSION = "review_evidence_calibration_v5_utility_redirect";
+const EXPECTED_BETA_FINGERPRINT = "a285acdaeed59e40";
+const EXPECTED_CLASSIFIER_VERSION = "archetype_classifier_v4_publisher_route_families";
+const EXPECTED_SCANNER_BUILD = "hard_page_cap_response_v1";
 
 test("complete scans persist as complete", () => {
   assert.equal(deriveTerminalStatus({ scan_status: "complete" }), "complete");
@@ -120,6 +130,63 @@ test("an explicit review veto cannot be inferred back into release eligibility",
     review_evidence_calibration_version: "review_evidence_calibration_v5_utility_redirect",
   });
   assert.equal(fields.release_gate_eligible, false);
+});
+
+test("durable authority markers ignore polish versions and retain the beta fingerprint", () => {
+  assert.equal(frozenRevision.fingerprint, EXPECTED_BETA_FINGERPRINT);
+  const mergedMarkers = buildAuthorityMarkers(
+    {
+      scanner_build_revision: EXPECTED_SCANNER_BUILD,
+      beta_revision_fingerprint: EXPECTED_BETA_FINGERPRINT,
+    },
+    {
+      archetype_classifier_version: EXPECTED_CLASSIFIER_VERSION,
+      review_version: EXPECTED_REVIEW_VERSION,
+      review_evidence_calibration_version: EXPECTED_CALIBRATION_VERSION,
+      beta_revision_fingerprint: EXPECTED_BETA_FINGERPRINT,
+      review_polish_version: "python_review_v2_group_dedup",
+      group_dedup_version: "python_review_v2_group_dedup",
+    }
+  );
+  assert.deepEqual(mergedMarkers, {
+    scanner_build_revision: EXPECTED_SCANNER_BUILD,
+    archetype_classifier_version: EXPECTED_CLASSIFIER_VERSION,
+    review_version: EXPECTED_REVIEW_VERSION,
+    review_evidence_calibration_version: EXPECTED_CALIBRATION_VERSION,
+    beta_revision_fingerprint: EXPECTED_BETA_FINGERPRINT,
+  });
+
+  const fields = buildScanRunFields({
+    ...mergedMarkers,
+    ai_review_backend: "python_review_api",
+    review_polish_version: "python_review_v2_group_dedup",
+    group_dedup_version: "python_review_v2_group_dedup",
+  });
+  assert.equal(fields.review_version, EXPECTED_REVIEW_VERSION);
+  assert.equal(fields.review_evidence_calibration_version, EXPECTED_CALIBRATION_VERSION);
+  assert.equal(fields.beta_revision_fingerprint, EXPECTED_BETA_FINGERPRINT);
+  assert.equal(fields.scanner_build_revision, EXPECTED_SCANNER_BUILD);
+
+  assert.deepEqual(buildDiagnosticAuthorityMarkers(mergedMarkers), mergedMarkers);
+});
+
+test("missing beta fingerprints stay missing across merged, durable, and diagnostic records", () => {
+  const mergedMarkers = buildAuthorityMarkers(
+    { scanner_build_revision: EXPECTED_SCANNER_BUILD },
+    {
+      archetype_classifier_version: EXPECTED_CLASSIFIER_VERSION,
+      review_version: EXPECTED_REVIEW_VERSION,
+      review_evidence_calibration_version: EXPECTED_CALIBRATION_VERSION,
+    }
+  );
+  assert.equal(mergedMarkers.beta_revision_fingerprint, "");
+  assert.notEqual(mergedMarkers.beta_revision_fingerprint, "fa1602737697ae98");
+
+  const fields = buildScanRunFields({ ...mergedMarkers, ai_review_backend: "python_review_api" });
+  assert.equal(fields.beta_revision_fingerprint, "");
+
+  const diagnostic = buildDiagnosticAuthorityMarkers(mergedMarkers);
+  assert.equal(diagnostic.beta_revision_fingerprint, "");
 });
 
 test("recommendations are found under any of the contract array keys", () => {

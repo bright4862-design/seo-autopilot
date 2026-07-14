@@ -1,4 +1,4 @@
-"""Classifier-v3 regressions reproduced from the focused production retest."""
+"""Classifier regressions reproduced from focused production retests."""
 
 from app.review import build_site_fingerprint, run_review
 
@@ -55,7 +55,7 @@ def nomadicmatt_like_pages():
     ]
     for i in range(45):
         pages.append(page(
-            f"https://travelblog.example/travel-blog/how-to-book-cheap-hotels-{i}/",
+            f"https://travelblog.example/travel-blogs/how-to-book-cheap-hotels-{i}/",
             f"How to book cheap hotels and deals {i}",
             "How to find hotel deals",
             "Book hotels, buy travel insurance, best booking sites, seller deals and discounts",
@@ -68,6 +68,35 @@ def nomadicmatt_like_pages():
             "Backpacking guide",
             "A complete guide with itineraries, bookings, and hotel picks",
             schema=["Article"],
+        ))
+    return pages
+
+
+def ikea_global_editorial_pages():
+    """The global corporate portal is editorial, unlike a country retail storefront."""
+    pages = [
+        page(
+            "https://furniture.example/global/en/",
+            "Welcome to the global brand site",
+            "Welcome to our global site",
+            "Stories, newsroom, jobs, our business, design and home inspiration",
+        ),
+    ]
+    for i in range(30):
+        pages.append(page(
+            f"https://furniture.example/global/en/stories/design/story-{i}/",
+            f"Designer story {i}",
+            "Meet the designer",
+            "A story about design, ideas, inspiration and life at home",
+            schema=["Article"],
+        ))
+    for i in range(10):
+        pages.append(page(
+            f"https://furniture.example/global/en/newsroom/article-{i}/",
+            f"Newsroom article {i}",
+            "Company news",
+            "News and information about the business",
+            schema=["NewsArticle"],
         ))
     return pages
 
@@ -128,6 +157,13 @@ def test_publisher_structure_outranks_incidental_shopping_language():
     assert fingerprint["primary_archetype"] == "content_blog", fingerprint["classification"]["winning_reason"]
 
 
+def test_plural_travel_publisher_routes_count_as_article_structure():
+    fingerprint = build_site_fingerprint({}, nomadicmatt_like_pages(), "https://travelblog.example")
+    signals = fingerprint["classification"]["structural_signals"]
+    assert signals["article_route_pages"] >= 45
+    assert signals["publisher_dominant"] is True
+
+
 def test_wordpress_category_archives_are_not_ecommerce_structure():
     pages = [item for item in nomadicmatt_like_pages() if "/shop/" not in item["url"]]
     fingerprint = build_site_fingerprint({}, pages, "https://travelblog.example")
@@ -139,9 +175,15 @@ def test_retail_routes_and_schema_outrank_editorial_content():
     assert fingerprint["primary_archetype"] == "ecommerce_specialty_retail", fingerprint["classification"]["winning_reason"]
 
 
+def test_global_editorial_portal_is_not_forced_to_retail_by_brand_context():
+    fingerprint = build_site_fingerprint({}, ikea_global_editorial_pages(), "https://furniture.example/global/en/")
+    assert fingerprint["primary_archetype"] == "content_blog", fingerprint["classification"]["winning_reason"]
+    assert fingerprint["classification"]["structural_signals"]["retail_dominant"] is False
+
+
 def test_classification_debug_signals_are_exposed():
     classification = build_site_fingerprint({}, ikea_like_pages(), "https://furniture.example")["classification"]
-    assert classification["classifier_version"].startswith("archetype_classifier_v3")
+    assert classification["classifier_version"].startswith("archetype_classifier_v4")
     signals = classification["structural_signals"]
     for key in ("product_route_pages", "article_route_pages", "publisher_dominant", "retail_dominant", "saas_dominant", "finance"):
         assert key in signals

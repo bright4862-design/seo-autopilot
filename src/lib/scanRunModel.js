@@ -42,6 +42,44 @@ export function getFixRecommendations(record = {}) {
   );
 }
 
+// Authority markers are copied from the Python response envelopes before the
+// merged browser record is compacted. Presentation-only polish/dedup versions
+// deliberately do not participate in this mapping.
+export function buildAuthorityMarkers(scanData = {}, aiData = {}) {
+  return {
+    scanner_build_revision: toStr(
+      scanData.scanner_build_revision || scanData.technical_audit_summary?.scanner_build_revision
+    ),
+    archetype_classifier_version: toStr(
+      aiData.archetype_classifier_version
+      || aiData.site_fingerprint?.classification?.classifier_version
+    ),
+    review_version: toStr(aiData.review_version || aiData.ai_review_version),
+    review_evidence_calibration_version: toStr(aiData.review_evidence_calibration_version),
+    beta_revision_fingerprint: toStr(
+      aiData.beta_revision_fingerprint || scanData.beta_revision_fingerprint
+    ),
+  };
+}
+
+// Compact diagnostics and JSON exports use the same marker names as the
+// merged record. Missing markers remain missing; no historical fingerprint is
+// inferred because that would misidentify the code that produced the scan.
+export function buildDiagnosticAuthorityMarkers(record = {}) {
+  return {
+    scanner_build_revision: toStr(
+      record.scanner_build_revision || record.technical_audit_summary?.scanner_build_revision
+    ),
+    archetype_classifier_version: toStr(
+      record.archetype_classifier_version
+      || record.site_fingerprint?.classification?.classifier_version
+    ),
+    review_version: toStr(record.review_version || record.ai_review_version),
+    review_evidence_calibration_version: toStr(record.review_evidence_calibration_version),
+    beta_revision_fingerprint: toStr(record.beta_revision_fingerprint),
+  };
+}
+
 // Stable identity for matching a finding across scans. rule + scope + family
 // covers grouped findings; the representative URL disambiguates page-scoped ones.
 export function fixLineageKey(fix = {}) {
@@ -54,15 +92,16 @@ export function fixLineageKey(fix = {}) {
 
 export function buildScanRunFields(record = {}, { status } = {}) {
   const pageLimit = modePageLimit(record.scan_mode);
+  const authorityMarkers = buildDiagnosticAuthorityMarkers(record);
   const scannerVersion = toStr(record.scanner_version || record.technical_audit_summary?.scanner_version || record.debug?.scanner_version);
   const advancedScanBackend = toStr(record.advanced_scan_backend || record.technical_audit_summary?.advanced_scan_backend)
     || (scannerVersion.startsWith("python_scanner_") ? "python_scanner_api" : "");
   const denoFallbackUsed = record.deno_fallback_used === true || record.technical_audit_summary?.deno_fallback_used === true;
   const aiReviewBackend = toStr(record.ai_review_backend || record.debug?.ai_review_backend);
   const pythonReviewFallbackUsed = record.python_review_fallback_used === true || record.debug?.python_review_fallback_used === true;
-  const reviewVersion = toStr(record.review_version || record.ai_review_version || record.review_polish_version)
+  const reviewVersion = authorityMarkers.review_version
     || (aiReviewBackend === "python_review_api" ? CURRENT_REVIEW_VERSION : "");
-  const calibrationVersion = toStr(record.review_evidence_calibration_version)
+  const calibrationVersion = authorityMarkers.review_evidence_calibration_version
     || (aiReviewBackend === "python_review_api" ? CURRENT_CALIBRATION_VERSION : "");
   const inferredReleaseGateEligible = advancedScanBackend === "python_scanner_api"
     && !denoFallbackUsed
@@ -76,7 +115,7 @@ export function buildScanRunFields(record = {}, { status } = {}) {
     status: status || deriveTerminalStatus(record),
     status_detail: toStr(record.scan_status),
     scanner_version: scannerVersion,
-    scanner_build_revision: toStr(record.scanner_build_revision || record.technical_audit_summary?.scanner_build_revision),
+    scanner_build_revision: authorityMarkers.scanner_build_revision,
     advanced_scan_backend: advancedScanBackend,
     deno_fallback_used: denoFallbackUsed,
     review_version: reviewVersion,
@@ -84,6 +123,7 @@ export function buildScanRunFields(record = {}, { status } = {}) {
     ai_review_backend: aiReviewBackend,
     python_review_fallback_used: pythonReviewFallbackUsed,
     release_gate_eligible: releaseGateEligible,
+    beta_revision_fingerprint: authorityMarkers.beta_revision_fingerprint,
     pages_found: Number(record.pages_found || 0),
     pages_crawled: Math.min(pageLimit, Number(record.pages_crawled || 0)),
     queued_remaining: Number(record.queued_remaining || 0),

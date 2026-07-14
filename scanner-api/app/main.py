@@ -143,6 +143,7 @@ async def scan(payload: ScanRequest, x_scanner_key: str | None = Header(default=
         result = apply_indexability_quality_to_result(result)
         result = apply_render_evidence_quality(result)
         result = enforce_scan_response_page_budget(result, payload.scan_mode)
+        result["beta_revision_fingerprint"] = live_revision()["fingerprint"]
     except Exception as exc:  # noqa: BLE001 - customer-safe envelope, full detail logged
         return timer.failed(exc)
     timer.completed(**scan_metrics(result))
@@ -164,6 +165,7 @@ async def review(payload: dict[str, Any] = Body(default_factory=dict), x_scanner
         result = run_review(payload)
         result = apply_trust_discovery_gate(result, payload)
         result = apply_review_evidence_calibration(result, payload)
+        result["beta_revision_fingerprint"] = live_revision()["fingerprint"]
     except Exception as exc:  # noqa: BLE001 - customer-safe envelope, full detail logged
         return timer.failed(exc)
     timer.completed(**review_metrics(result))

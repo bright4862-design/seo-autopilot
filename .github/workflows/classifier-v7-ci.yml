@@ -47,7 +47,9 @@ jobs:
           python -m pip install --upgrade pip pytest pytest-asyncio
           pip install -r scanner-api/requirements.txt
       - name: Apply classifier v7 patch
-        run: python tools/apply_classifier_v7_patch.py
+        run: |
+          python tools/apply_classifier_v7_patch.py
+          python tools/apply_classifier_v7_test_marker.py
       - name: Run focused v7 evidence regressions
         working-directory: scanner-api
         run: pytest -q --junitxml=classifier-v7-focused.xml tests/test_classifier_v7_html_route_evidence.py tests/test_classifier_v6_saas_weighting.py tests/test_classifier_v3_production_regressions.py
@@ -79,10 +81,13 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
       - name: Apply tested product changes
-        run: python tools/apply_classifier_v7_patch.py
+        run: |
+          python tools/apply_classifier_v7_patch.py
+          python tools/apply_classifier_v7_test_marker.py
       - name: Remove one-shot harness
         run: |
           rm tools/apply_classifier_v7_patch.py
+          rm tools/apply_classifier_v7_test_marker.py
           rm .github/workflows/classifier-v7-ci.yml
       - name: Commit tested source
         shell: bash

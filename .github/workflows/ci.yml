@@ -76,6 +76,18 @@ jobs:
         working-directory: scanner-api
         run: pytest tests/
 
+      - name: Capture scanner failure summary
+        if: failure()
+        working-directory: scanner-api
+        run: pytest tests/ -q --tb=short > ../scanner-failure.txt 2>&1 || true
+
+      - name: Upload scanner failure summary
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: classifier-v6-scanner-failure
+          path: scanner-failure.txt
+
       - name: Verify frozen beta revision matches code
         working-directory: scanner-api
         run: python scripts/freeze_beta_revision.py --check

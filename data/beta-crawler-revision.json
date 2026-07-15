@@ -1,7 +1,7 @@
 {
   "acceptance_report": "docs/beta-acceptance.md",
   "component_versions": {
-    "archetype_classifier_version": "archetype_classifier_v4_publisher_route_families",
+    "archetype_classifier_version": "archetype_classifier_v5_business_representative_pages",
     "crawler_acceptance_version": "crawler_acceptance_v1",
     "image_alt_evidence_version": "material_image_alt_v1",
     "indexability_quality_version": "indexability_quality_v1",
@@ -18,10 +18,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "a285acdaeed59e40",
-  "git_commit": "2d49baa575792bf5f1689e4d95dcf60822dcddcb",
-  "note": "Classifier v4 publisher route families after focused production diagnosis. Targeted Nomadic Matt production acceptance remains required before release acceptance.",
-  "recorded_at": "2026-07-14T23:23:40.080907+00:00",
+  "fingerprint": "188651de922d349c",
+  "git_commit": "2cbdd834284ca8666e6c4ebcf6966c3298318780",
+  "note": "Classifier v5 uses strong business identity plus route-share dominance, nonprofit structure, business-value representative pages, incidental rate-limit handling, and exact release-authority markers. Focused production acceptance remains required after deployment.",
+  "recorded_at": "2026-07-15T13:53:00+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "frozen_beta"
 }

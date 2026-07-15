@@ -32,26 +32,41 @@ jobs:
           import json
           from pathlib import Path
 
-          expected = {
+          health = json.loads(Path("health.json").read_text(encoding="utf-8"))
+          revision = json.loads(Path("revision.json").read_text(encoding="utf-8"))
+          components = revision.get("component_versions") or {}
+          print(json.dumps({"health": health, "revision": revision}, indent=2, sort_keys=True))
+
+          expected_health = {
               "archetype_classifier_version": "archetype_classifier_v6_saas_business_identity",
               "beta_revision_fingerprint": "fa1bfae405d970fa",
               "review_version": "python_review_v2_structural_marketplace",
               "review_evidence_calibration_version": "review_evidence_calibration_v5_utility_redirect",
               "scanner_build_revision": "hard_page_cap_response_v1",
+              "version": "python_scanner_v3_bounded_request",
           }
-
-          payloads = {
-              name: json.loads(Path(f"{name}.json").read_text(encoding="utf-8"))
-              for name in ("health", "revision")
+          expected_components = {
+              "archetype_classifier_version": "archetype_classifier_v6_saas_business_identity",
+              "review_version": "python_review_v2_structural_marketplace",
+              "review_evidence_calibration_version": "review_evidence_calibration_v5_utility_redirect",
+              "scanner_version": "python_scanner_v3_bounded_request",
+              "orphan_asset_evidence_version": "orphan_asset_evidence_v1",
           }
-          print(json.dumps(payloads, indent=2, sort_keys=True))
 
           failures = []
-          for source, payload in payloads.items():
-              for key, value in expected.items():
-                  if payload.get(key) != value:
-                      failures.append(
-                          f"{source}.{key}: expected {value!r}, got {payload.get(key)!r}"
-                      )
+          for key, value in expected_health.items():
+              if health.get(key) != value:
+                  failures.append(f"health.{key}: expected {value!r}, got {health.get(key)!r}")
+          if revision.get("fingerprint") != "fa1bfae405d970fa":
+              failures.append(
+                  "revision.fingerprint: expected 'fa1bfae405d970fa', "
+                  f"got {revision.get('fingerprint')!r}"
+              )
+          for key, value in expected_components.items():
+              if components.get(key) != value:
+                  failures.append(
+                      f"revision.component_versions.{key}: expected {value!r}, "
+                      f"got {components.get(key)!r}"
+                  )
           if failures:
               raise SystemExit("Production markers are not ready:\n" + "\n".join(failures))

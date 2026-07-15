@@ -50,7 +50,14 @@ jobs:
         run: python tools/apply_classifier_v7_patch.py
       - name: Run focused v7 evidence regressions
         working-directory: scanner-api
-        run: pytest -q tests/test_classifier_v7_html_route_evidence.py tests/test_classifier_v6_saas_weighting.py tests/test_classifier_v3_production_regressions.py
+        run: pytest -q --junitxml=classifier-v7-focused.xml tests/test_classifier_v7_html_route_evidence.py tests/test_classifier_v6_saas_weighting.py tests/test_classifier_v3_production_regressions.py
+      - name: Upload focused regression result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: classifier-v7-focused-regression
+          path: scanner-api/classifier-v7-focused.xml
+          if-no-files-found: error
       - name: Run root scanner regressions
         run: pytest tests/
       - name: Run complete scanner-api suite

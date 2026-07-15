@@ -1,0 +1,57 @@
+name: Verify classifier v6 production
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify-production:
+    name: Verify Cloud Run release markers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch production health and revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://seo-autopilot-4545-919035207432.europe-west1.run.app"
+          curl --fail --silent --show-error --location \
+            --retry 12 --retry-all-errors --retry-delay 10 --max-time 30 \
+            "$base/health" | tee health.json
+          echo
+          curl --fail --silent --show-error --location \
+            --retry 12 --retry-all-errors --retry-delay 10 --max-time 30 \
+            "$base/revision" | tee revision.json
+          echo
+
+      - name: Assert classifier v6 markers
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+
+          expected = {
+              "archetype_classifier_version": "archetype_classifier_v6_saas_business_identity",
+              "beta_revision_fingerprint": "fa1bfae405d970fa",
+              "review_version": "python_review_v2_structural_marketplace",
+              "review_evidence_calibration_version": "review_evidence_calibration_v5_utility_redirect",
+              "scanner_build_revision": "hard_page_cap_response_v1",
+          }
+
+          payloads = {
+              name: json.loads(Path(f"{name}.json").read_text(encoding="utf-8"))
+              for name in ("health", "revision")
+          }
+          print(json.dumps(payloads, indent=2, sort_keys=True))
+
+          failures = []
+          for source, payload in payloads.items():
+              for key, value in expected.items():
+                  if payload.get(key) != value:
+                      failures.append(
+                          f"{source}.{key}: expected {value!r}, got {payload.get(key)!r}"
+                      )
+          if failures:
+              raise SystemExit("Production markers are not ready:\n" + "\n".join(failures))

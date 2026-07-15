@@ -1,0 +1,88 @@
+name: Classifier v7 guarded patch
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  frontend:
+    name: Frontend marker and build gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Apply classifier v7 patch
+        run: python tools/apply_classifier_v7_patch.py
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Frontend contract tests
+        run: npm run test:frontend
+      - name: Build
+        run: npm run build
+
+  scanner:
+    name: Scanner and classifier gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip pytest pytest-asyncio
+          pip install -r scanner-api/requirements.txt
+      - name: Apply classifier v7 patch
+        run: python tools/apply_classifier_v7_patch.py
+      - name: Run focused v7 evidence regressions
+        working-directory: scanner-api
+        run: pytest -q tests/test_classifier_v7_html_route_evidence.py tests/test_classifier_v6_saas_weighting.py tests/test_classifier_v3_production_regressions.py
+      - name: Run root scanner regressions
+        run: pytest tests/
+      - name: Run complete scanner-api suite
+        working-directory: scanner-api
+        run: pytest tests/
+      - name: Verify frozen revision
+        working-directory: scanner-api
+        run: python scripts/freeze_beta_revision.py --check
+
+  publish:
+    name: Publish tested direct source changes
+    needs: [frontend, scanner]
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Checkout patch branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Apply tested product changes
+        run: python tools/apply_classifier_v7_patch.py
+      - name: Remove one-shot harness
+        run: |
+          rm tools/apply_classifier_v7_patch.py
+          rm .github/workflows/classifier-v7-ci.yml
+      - name: Commit tested source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix classifier HTML route evidence"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}

@@ -1,0 +1,80 @@
+name: Verify classifier v7 production
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  cloud-run:
+    name: Verify Cloud Run v7 markers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check health and revision
+        shell: python
+        run: |
+          import json
+          import urllib.request
+
+          base = "https://seo-autopilot-4545-919035207432.europe-west1.run.app"
+          headers = {"User-Agent": "SEO-Pilot-Release-Check/1.0"}
+          def fetch(path):
+              request = urllib.request.Request(base + path, headers=headers)
+              with urllib.request.urlopen(request, timeout=45) as response:
+                  return json.loads(response.read().decode("utf-8"))
+
+          health = fetch("/health")
+          revision = fetch("/revision")
+          components = revision.get("component_versions") or {}
+          expected_classifier = "archetype_classifier_v7_html_route_app_distribution"
+          expected_fingerprint = "2dd346f90e64f94b"
+          failures = []
+          if health.get("archetype_classifier_version") != expected_classifier:
+              failures.append(f"health classifier={health.get('archetype_classifier_version')!r}")
+          if health.get("beta_revision_fingerprint") != expected_fingerprint:
+              failures.append(f"health fingerprint={health.get('beta_revision_fingerprint')!r}")
+          if components.get("archetype_classifier_version") != expected_classifier:
+              failures.append(f"revision classifier={components.get('archetype_classifier_version')!r}")
+          if revision.get("fingerprint") != expected_fingerprint:
+              failures.append(f"revision fingerprint={revision.get('fingerprint')!r}")
+          print(json.dumps({"health": health, "revision": revision}, indent=2, sort_keys=True))
+          if failures:
+              raise SystemExit("Cloud Run v7 not ready: " + "; ".join(failures))
+
+  base44:
+    name: Verify published Base44 v7 bundle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect live JavaScript
+        shell: python
+        run: |
+          import re
+          import urllib.request
+          from urllib.parse import urljoin
+
+          base = "https://rich-rank-pilot-flow.base44.app/"
+          headers = {"User-Agent": "Mozilla/5.0 SEO-Pilot-Release-Check/1.0"}
+          def fetch(url):
+              request = urllib.request.Request(url, headers=headers)
+              with urllib.request.urlopen(request, timeout=45) as response:
+                  return response.read().decode("utf-8", errors="replace")
+
+          html = fetch(base + "?release=3f47c52")
+          assets = []
+          for attribute in ("src", "href"):
+              assets.extend(re.findall(rf'{attribute}=["\']([^"\']+\.js(?:\?[^"\']*)?)["\']', html))
+          urls = list(dict.fromkeys(urljoin(base, asset) for asset in assets))
+          combined = html
+          for url in urls:
+              combined += "\n" + fetch(url)
+          print("Published JS assets:")
+          print("\n".join(urls))
+          required = [
+              "archetype_classifier_v7_html_route_app_distribution",
+              "2dd346f90e64f94b",
+          ]
+          missing = [marker for marker in required if marker not in combined]
+          if missing:
+              raise SystemExit("Base44 v7 not ready; missing: " + ", ".join(missing))

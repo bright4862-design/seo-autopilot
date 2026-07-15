@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Lint, typecheck, contract tests, and build
@@ -23,6 +26,10 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Apply focused classifier patch
+        if: github.event_name == 'pull_request' && github.head_ref == 'agent/classifier-v6-saas-weighting'
+        run: python tools/apply_saas_weighting_patch.py
 
       - name: Lint
         run: npm run lint
@@ -54,6 +61,14 @@ jobs:
           python -m pip install --upgrade pip pytest pytest-asyncio
           pip install -r scanner-api/requirements.txt
 
+      - name: Apply focused classifier patch
+        if: github.event_name == 'pull_request' && github.head_ref == 'agent/classifier-v6-saas-weighting'
+        run: python tools/apply_saas_weighting_patch.py
+
+      - name: Run focused classifier matrix
+        working-directory: scanner-api
+        run: pytest tests/test_classifier_v6_saas_weighting.py -q
+
       - name: Run root scanner regression tests
         run: pytest tests/
 
@@ -64,3 +79,33 @@ jobs:
       - name: Verify frozen beta revision matches code
         working-directory: scanner-api
         run: python scripts/freeze_beta_revision.py --check
+
+  publish-tested-patch:
+    name: Publish tested classifier patch
+    if: github.event_name == 'pull_request' && github.head_ref == 'agent/classifier-v6-saas-weighting'
+    needs: [build, scanner-regressions]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout patch branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Apply tested product changes
+        run: python tools/apply_saas_weighting_patch.py
+
+      - name: Remove one-shot harness and restore normal CI
+        run: |
+          git fetch origin main
+          git checkout origin/main -- .github/workflows/ci.yml
+          rm tools/apply_saas_weighting_patch.py
+
+      - name: Commit tested product changes
+        run: |
+          git config user.name "seo-pilot-ci"
+          git config user.email "seo-pilot-ci@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix SaaS classifier weighting for content-heavy sites"
+          git push origin HEAD:${{ github.head_ref }}

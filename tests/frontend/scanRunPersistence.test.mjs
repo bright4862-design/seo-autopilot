@@ -17,7 +17,7 @@ const frozenRevision = JSON.parse(readFileSync("data/beta-crawler-revision.json"
 const EXPECTED_SCANNER_VERSION = "python_scanner_v3_bounded_request";
 const EXPECTED_REVIEW_VERSION = "python_review_v2_structural_marketplace";
 const EXPECTED_CALIBRATION_VERSION = "review_evidence_calibration_v5_utility_redirect";
-const EXPECTED_BETA_FINGERPRINT = "188651de922d349c";
+const EXPECTED_BETA_FINGERPRINT = "7fc00bb6c61a37ed";
 const EXPECTED_CLASSIFIER_VERSION = "archetype_classifier_v5_business_representative_pages";
 const EXPECTED_SCANNER_BUILD = "hard_page_cap_response_v1";
 

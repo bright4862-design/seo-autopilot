@@ -6,6 +6,7 @@
     "image_alt_evidence_version": "material_image_alt_v1",
     "indexability_quality_version": "indexability_quality_v1",
     "navigation_indexability_version": "navigation_indexability_v1",
+    "orphan_asset_evidence_version": "orphan_asset_evidence_v1",
     "quality_gate_version": "review_quality_gate_v1_evidence_complete",
     "render_evidence_quality_version": "render_evidence_quality_v1",
     "render_evidence_version": "render_evidence_v1",
@@ -18,10 +19,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "188651de922d349c",
-  "git_commit": "2cbdd834284ca8666e6c4ebcf6966c3298318780",
-  "note": "Classifier v5 uses strong business identity plus route-share dominance, nonprofit structure, business-value representative pages, incidental rate-limit handling, and exact release-authority markers. Focused production acceptance remains required after deployment.",
-  "recorded_at": "2026-07-15T13:53:00+00:00",
+  "fingerprint": "7fc00bb6c61a37ed",
+  "git_commit": "599bc09d44e67995f486ac22185157889a31132a",
+  "note": "Filter non-HTML asset URLs from orphan/sitemap-only FixItems and suppress asset-only evidence groups. Focused Nomadic Matt acceptance rerun remains required.",
+  "recorded_at": "2026-07-15T14:50:00+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "frozen_beta"
 }

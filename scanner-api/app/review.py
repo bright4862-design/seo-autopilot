@@ -11,6 +11,7 @@ SCORING_MODEL = "python_review_v2_group_dedup"
 ZERO_FIX_CONFIDENCE_VERSION = "python_review_v3_zero_fix_confidence"
 ZERO_FIX_HEALTH_GRADE = "No issues found in sample"
 QUALITY_GATE_VERSION = "review_quality_gate_v1_evidence_complete"
+ORPHAN_ASSET_EVIDENCE_VERSION = "orphan_asset_evidence_v1"
 INCOMPLETE_REVIEW_WARNING = "Review received scan metadata, but no page evidence was passed into AI Review."
 SUPPORT_RECLASS_FAMILIES = {"loan_program", "conversion", "standard", "guide", "category_listing", "qa", "product_detail", ""}
 
@@ -1177,12 +1178,84 @@ ROUTE_BOUNDARY_RULES = {"route_boundary_candidate_indexable", "internal_route_in
 
 
 def is_non_html_page_evidence(page: dict[str, Any]) -> bool:
-    url = clean_path(page_evidence_url(page)).lower()
+    raw_url = str(page_evidence_url(page) or "")
+    url = (urlparse(raw_url).path or clean_path(raw_url)).lower()
     content_type = str(page.get("content_type") or page.get("mime_type") or "").lower()
     if content_type and "html" not in content_type and "xhtml" not in content_type:
         return True
     return any(url.endswith(extension) for extension in NON_HTML_ASSET_EXTENSIONS)
 
+
+
+ORPHAN_FINDING_HINTS = ("orphan", "sitemap_only", "sitemap-only", "sitemap only")
+
+
+def is_orphan_page_finding(fix: dict[str, Any]) -> bool:
+    """Identify orphan/sitemap-only findings without matching every sitemap rule."""
+    evidence = " ".join(
+        str(fix.get(key) or "")
+        for key in (
+            "rule", "type", "issue_type", "source", "issue_title", "title",
+            "plain_english_explanation", "plain_english_summary",
+        )
+    ).lower()
+    return any(hint in evidence for hint in ORPHAN_FINDING_HINTS)
+
+
+def filter_orphan_asset_evidence(
+    fix: dict[str, Any],
+    pages: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Remove non-HTML URLs from orphan findings; suppress asset-only groups."""
+    if not is_orphan_page_finding(fix):
+        return fix
+
+    page_lookup = {
+        clean_path(page_evidence_url(page)): page
+        for page in pages
+        if clean_path(page_evidence_url(page))
+    }
+    affected = dedupe_strings([
+        clean_path(url)
+        for url in (fix.get("affected_pages") or [fix.get("page_url") or "/"])
+        if clean_path(url)
+    ])
+    html_pages = [
+        url for url in affected
+        if not is_non_html_page_evidence({**page_lookup.get(url, {}), "url": url})
+    ]
+    if not html_pages:
+        return None
+
+    def html_only(values: Any, limit: int) -> list[str]:
+        if not isinstance(values, list):
+            return []
+        normalized = dedupe_strings([
+            clean_path(value) for value in values if clean_path(value)
+        ])
+        return [
+            url for url in normalized
+            if not is_non_html_page_evidence({**page_lookup.get(url, {}), "url": url})
+        ][:limit]
+
+    selected_page = clean_path(fix.get("page_url") or "")
+    if selected_page not in html_pages:
+        selected_page = html_pages[0]
+    representative = clean_path(fix.get("representative_page_url") or "")
+    if representative not in html_pages:
+        representative = selected_page
+
+    return {
+        **fix,
+        "page_url": selected_page,
+        "representative_page_url": representative,
+        "affected_pages": html_pages,
+        "source_pages": html_only(fix.get("source_pages"), 30),
+        "supporting_evidence_pages": html_only(fix.get("supporting_evidence_pages"), 20),
+        "page_count": len(html_pages),
+        "asset_urls_excluded": max(0, len(affected) - len(html_pages)),
+        "orphan_asset_evidence_version": ORPHAN_ASSET_EVIDENCE_VERSION,
+    }
 
 def representative_page_score(
     url: str,
@@ -1281,6 +1354,8 @@ def select_representative_page(
 
 def prepare_fixes(raw_fixes: list[dict[str, Any]], site_fingerprint: dict[str, Any], body: dict[str, Any], playbook: dict[str, Any], pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized = dedupe_fixes([normalize_fix(fix, index) for index, fix in enumerate(raw_fixes or []) if isinstance(fix, dict)])
+    filtered = [filter_orphan_asset_evidence(fix, pages) for fix in normalized]
+    normalized = [fix for fix in filtered if fix is not None]
     normalized = [select_representative_page(fix, pages, body, playbook) for fix in normalized]
     scored = [score_fix(fix, site_fingerprint, body, playbook) for fix in normalized]
     scored = suppress_group_covered_singletons(scored)

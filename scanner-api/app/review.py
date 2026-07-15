@@ -60,7 +60,7 @@ CATEGORY_MAP = {
     "duplicate_meta_description": "duplicate_content",
 }
 
-ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v5_business_representative_pages"
+ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v6_saas_business_identity"
 
 # Frequency cap for archetype keyword/pattern counting: template volume
 # (hundreds of /blog/ URLs) must not out-vote company-level evidence.
@@ -71,7 +71,8 @@ CONTENT_BLOG_STRUCTURAL_CAP = 8.0
 
 # Route patterns that only exist when a business actually operates the model.
 SAAS_STRUCTURAL_PATTERNS = (
-    "/pricing", "/features", "/integrations", "/use-cases", "/solutions",
+    "/pricing", "/free-trial", "/trial", "/contact-sales", "/enterprise",
+    "/features", "/integrations", "/use-cases", "/solutions",
     "/customers", "/customer-stories", "/case-studies", "/login", "/signin",
     "/signup", "/register", "/demo", "/docs", "/api", "/developers",
     "/platform", "/apps", "/download",
@@ -92,9 +93,18 @@ ARTICLE_ROUTE_PATTERNS = (
     "/tutorial/", "/tutorials/", "/how-to/",
 )
 SAAS_CORE_IDENTITY_PATTERNS = (
-    "/pricing", "/features", "/integrations", "/use-cases", "/customers",
+    "/pricing", "/free-trial", "/trial", "/contact-sales", "/enterprise",
+    "/features", "/integrations", "/use-cases", "/solutions", "/customers",
     "/customer-stories", "/case-studies", "/login", "/signin", "/signup",
-    "/register", "/demo", "/api", "/developers", "/platform",
+    "/register", "/demo", "/api", "/developers", "/platform", "/apps",
+    "/download",
+)
+SAAS_BUSINESS_FAMILY_PATTERNS = (
+    ("product", ("/features", "/platform", "/apps", "/download")),
+    ("commercial", ("/pricing", "/free-trial", "/trial", "/demo", "/contact-sales", "/enterprise")),
+    ("adoption", ("/integrations", "/use-cases", "/solutions", "/customers", "/customer-stories", "/case-studies")),
+    ("access", ("/login", "/signin", "/signup", "/register")),
+    ("developer", ("/docs", "/api", "/developers")),
 )
 NONPROFIT_STRUCTURAL_PATTERNS = (
     "/donate", "/donation", "/give", "/fundraise", "/fundraiser",
@@ -442,6 +452,11 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
     finance_structural = [pattern for pattern in FINANCE_STRUCTURAL_PATTERNS if pattern in path_text]
     nonprofit_structural = [pattern for pattern in NONPROFIT_STRUCTURAL_PATTERNS if pattern in path_text]
     saas_core_structural = [pattern for pattern in SAAS_CORE_IDENTITY_PATTERNS if pattern in path_text]
+    saas_business_families = [
+        family
+        for family, patterns in SAAS_BUSINESS_FAMILY_PATTERNS
+        if any(pattern in path_text for pattern in patterns)
+    ]
     ecommerce_marketplace_patterns = ("/itm/", "/sch/", "/b/", "/buy/", "/seller/", "/listing/")
     ecommerce_structural.extend(
         pattern for pattern in ecommerce_marketplace_patterns
@@ -483,10 +498,13 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         saas_structural = saas_structural + ["schema:SoftwareApplication"]
 
     saas_homepage_identity = has_any(homepage_text, [
-    "software", "saas", "platform", "app", "application", "workspace",
-    "project management", "customer support", "helpdesk", "messaging",
-    "commerce platform", "free trial", "start your trial",
-])
+        "software", "saas", "platform", "app", "application", "workspace",
+        "project management", "customer support", "helpdesk",
+        "social media management", "messaging app", "private messenger",
+        "secure messaging", "website builder", "visual development",
+        "web experience platform", "design platform", "commerce platform",
+        "free trial", "start your trial",
+    ])
     finance_homepage_identity = has_any(homepage_text, [
         "lending", "lender", "mortgage", "insurance", "assurance", "loan provider",
         "bridge loan", "hard money", "private lending", "credit broker",
@@ -514,18 +532,21 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             and product_route_pages >= max(2, round(article_route_pages * 0.35))
         )
     )
-    saas_dominant = bool(
-    (
-        len(saas_core_structural) >= 2
-        and saas_route_pages >= 3
-        and (
-            saas_route_pages >= max(3, round(article_route_pages * 0.50))
-            or len(saas_core_structural) >= 4
-            or saas_homepage_identity
-        )
+    saas_business_identity = bool(
+        saas_homepage_identity
+        and saas_route_pages >= 1
+        and any(family in {"product", "commercial"} for family in saas_business_families)
     )
-    or software_schema_pages >= 2
-)
+    saas_diverse_structure = bool(
+        len(saas_core_structural) >= 3
+        and len(saas_business_families) >= 2
+        and saas_route_pages >= 3
+    )
+    saas_dominant = bool(
+        saas_business_identity
+        or saas_diverse_structure
+        or software_schema_pages >= 2
+    )
     nonprofit_dominant = bool(
         nonprofit_route_pages >= 3
         and (nonprofit_homepage_identity or nonprofit_route_pages >= 8)
@@ -557,7 +578,10 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
                 score = min(score, 1.0)
             else:
                 score += 12.0 * len(saas_core_structural)
+                score += 8.0 * len(saas_business_families)
                 score += 2.0 * min(saas_route_pages, 15)
+                if saas_homepage_identity:
+                    score += 20.0
         if key == "finance_insurance_lead_gen":
             if not finance_dominant:
                 score = min(score, 6.0)
@@ -652,6 +676,10 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             "product_route_pages": product_route_pages,
             "article_route_pages": article_route_pages,
             "saas_route_pages": saas_route_pages,
+            "saas_business_families": saas_business_families,
+            "saas_homepage_identity": saas_homepage_identity,
+            "saas_business_identity": saas_business_identity,
+            "saas_diverse_structure": saas_diverse_structure,
             "finance_route_pages": finance_route_pages,
             "nonprofit_route_pages": nonprofit_route_pages,
             "publisher_dominant": publisher_dominant,

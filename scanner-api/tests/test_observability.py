@@ -120,8 +120,8 @@ def test_release_marker_endpoints_are_consistent():
     health = client.get("/health").json()
     revision = client.get("/revision").json()
 
-    assert health["archetype_classifier_version"] == "archetype_classifier_v5_business_representative_pages"
-    assert health["beta_revision_fingerprint"] == "7fc00bb6c61a37ed"
+    assert health["archetype_classifier_version"] == "archetype_classifier_v6_saas_business_identity"
+    assert health["beta_revision_fingerprint"] == "fa1bfae405d970fa"
     assert health["review_version"] == "python_review_v2_structural_marketplace"
     assert health["review_evidence_calibration_version"] == "review_evidence_calibration_v5_utility_redirect"
     assert health["scanner_build_revision"] == "hard_page_cap_response_v1"
@@ -165,7 +165,7 @@ def test_scan_endpoint_returns_beta_revision_fingerprint(monkeypatch, capsys):
     client = TestClient(main.app)
     response = client.post("/scan", json={"website_url": "https://example.com"})
     assert response.status_code == 200
-    assert response.json()["beta_revision_fingerprint"] == "7fc00bb6c61a37ed"
+    assert response.json()["beta_revision_fingerprint"] == "fa1bfae405d970fa"
     assert response.json()["scanner_build_revision"] == "hard_page_cap_response_v1"
     read_log_lines(capsys)
 
@@ -184,7 +184,7 @@ def test_review_endpoint_logs_completion_metrics(monkeypatch, capsys):
     client = TestClient(main.app)
     response = client.post("/review", json={"website_url": "https://example.com"})
     assert response.status_code == 200
-    assert response.json()["beta_revision_fingerprint"] == "7fc00bb6c61a37ed"
+    assert response.json()["beta_revision_fingerprint"] == "fa1bfae405d970fa"
     completed = [record for record in read_log_lines(capsys) if record["event"] == "review_completed"]
     assert len(completed) == 1
     assert completed[0]["scan_status"] == "complete"

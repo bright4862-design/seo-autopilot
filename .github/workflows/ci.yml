@@ -40,6 +40,17 @@ jobs:
       - name: Frontend contract tests
         run: npm run test:frontend
 
+      - name: Capture frontend failure summary
+        if: failure()
+        run: npm run test:frontend > frontend-failure.txt 2>&1 || true
+
+      - name: Upload frontend failure summary
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-failure-summary
+          path: frontend-failure.txt
+
       - name: Build
         run: npm run build
 
@@ -71,6 +82,18 @@ jobs:
       - name: Run Python scanner-api tests
         working-directory: scanner-api
         run: pytest tests/
+
+      - name: Capture scanner failure summary
+        if: failure()
+        working-directory: scanner-api
+        run: pytest tests/ -q --tb=short > ../scanner-failure.txt 2>&1 || true
+
+      - name: Upload scanner failure summary
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scanner-failure-summary
+          path: scanner-failure.txt
 
       - name: Verify frozen beta revision matches code
         working-directory: scanner-api

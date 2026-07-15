@@ -29,7 +29,9 @@ jobs:
 
       - name: Apply focused classifier patch
         if: github.event_name == 'pull_request' && github.head_ref == 'agent/classifier-v6-saas-weighting'
-        run: python tools/apply_saas_weighting_patch.py
+        run: |
+          python tools/apply_saas_weighting_patch.py
+          python tools/update_classifier_marker_test.py
 
       - name: Lint
         run: npm run lint
@@ -63,7 +65,9 @@ jobs:
 
       - name: Apply focused classifier patch
         if: github.event_name == 'pull_request' && github.head_ref == 'agent/classifier-v6-saas-weighting'
-        run: python tools/apply_saas_weighting_patch.py
+        run: |
+          python tools/apply_saas_weighting_patch.py
+          python tools/update_classifier_marker_test.py
 
       - name: Run focused classifier matrix
         working-directory: scanner-api
@@ -106,13 +110,16 @@ jobs:
           fetch-depth: 0
 
       - name: Apply tested product changes
-        run: python tools/apply_saas_weighting_patch.py
+        run: |
+          python tools/apply_saas_weighting_patch.py
+          python tools/update_classifier_marker_test.py
 
       - name: Remove one-shot harness and restore normal CI
         run: |
           git fetch origin main
           git checkout origin/main -- .github/workflows/ci.yml
           rm tools/apply_saas_weighting_patch.py
+          rm tools/update_classifier_marker_test.py
 
       - name: Commit tested product changes
         run: |

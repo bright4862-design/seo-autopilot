@@ -59,7 +59,7 @@ CATEGORY_MAP = {
     "duplicate_meta_description": "duplicate_content",
 }
 
-ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v4_publisher_route_families"
+ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v5_business_representative_pages"
 
 # Frequency cap for archetype keyword/pattern counting: template volume
 # (hundreds of /blog/ URLs) must not out-vote company-level evidence.
@@ -87,7 +87,25 @@ ARTICLE_ROUTE_PATTERNS = (
     "/blog/", "/travel-blog/", "/travel-blogs/", "/article/", "/articles/",
     "/news/", "/stories/", "/story/", "/guides/", "/guide/",
     "/travel-guides/", "/destinations/", "/ideas/", "/inspiration/",
-    "/resources/", "/category/",
+    "/resources/", "/category/", "/glossary/", "/beginners-guide/",
+    "/tutorial/", "/tutorials/", "/how-to/",
+)
+SAAS_CORE_IDENTITY_PATTERNS = (
+    "/pricing", "/features", "/integrations", "/use-cases", "/customers",
+    "/customer-stories", "/case-studies", "/login", "/signin", "/signup",
+    "/register", "/demo", "/api", "/developers", "/platform",
+)
+NONPROFIT_STRUCTURAL_PATTERNS = (
+    "/donate", "/donation", "/give", "/fundraise", "/fundraiser",
+    "/fundraising", "/campaign", "/projects/", "/our-projects/", "/impact",
+    "/where-we-work", "/world-changers", "/tiny-heroes", "/the-spring-series/",
+)
+NON_HTML_ASSET_EXTENSIONS = (
+    ".avif", ".bmp", ".css", ".csv", ".doc", ".docx", ".eot", ".gif",
+    ".ico", ".jpeg", ".jpg", ".js", ".json", ".map", ".mp3", ".mp4",
+    ".pdf", ".png", ".ppt", ".pptx", ".svg", ".tif", ".tiff", ".ttf",
+    ".txt", ".wav", ".webm", ".webp", ".woff", ".woff2", ".xls", ".xlsx",
+    ".xml", ".zip",
 )
 FINANCE_STRUCTURAL_PATTERNS = (
     "/loan", "/loans", "/mortgage", "/credit", "/pret", "/assurance",
@@ -198,6 +216,29 @@ PLAYBOOKS = {
         "priority_issues": ["internal/auth route exposure", "custom domain trust", "duplicate casing", "thin app snapshots", "noindex boundaries", "canonicalization"],
         "demote": ["metadata on internal routes", "duplicate app snapshots that should be noindexed", "low-value docs pagination"],
         "owner_rule": "Route boundaries, auth, canonical, app rendering, and noindex rules need your_web_person.",
+    },
+    "nonprofit_fundraising": {
+        "label": "nonprofit / fundraising organization",
+        "keywords": [
+            "nonprofit", "non-profit", "charity", "donate", "donation", "giving",
+            "fundraise", "fundraiser", "fundraising", "campaign", "impact",
+            "clean water", "monthly giving", "support our work", "our projects",
+        ],
+        "money_patterns": [
+            "/donate", "/donation", "/give", "/fundraise", "/fundraiser",
+            "/fundraising", "/campaign", "/projects/", "/our-projects/",
+        ],
+        "priority_pages": [
+            "donation and giving pages", "fundraising campaign pages",
+            "project and impact pages", "about and financial-transparency pages",
+            "stories and supporter trust pages",
+        ],
+        "priority_issues": [
+            "donation-flow reliability", "campaign indexability", "trust and transparency",
+            "project-page templates", "schema", "canonicalization",
+        ],
+        "demote": ["old campaign archives", "supporter utility pages", "account routes", "thank-you pages"],
+        "owner_rule": "Donation flows, campaign templates, redirects, canonicals, schema, and account boundaries usually need your_web_person.",
     },
     "content_blog": {
         "label": "content / blog-heavy site",
@@ -398,6 +439,8 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
     ecommerce_structural = [pattern for pattern in ECOMMERCE_STRUCTURAL_PATTERNS if pattern in path_text]
     booking_structural = [pattern for pattern in BOOKING_STRUCTURAL_PATTERNS if pattern in path_text]
     finance_structural = [pattern for pattern in FINANCE_STRUCTURAL_PATTERNS if pattern in path_text]
+    nonprofit_structural = [pattern for pattern in NONPROFIT_STRUCTURAL_PATTERNS if pattern in path_text]
+    saas_core_structural = [pattern for pattern in SAAS_CORE_IDENTITY_PATTERNS if pattern in path_text]
     ecommerce_marketplace_patterns = ("/itm/", "/sch/", "/b/", "/buy/", "/seller/", "/listing/")
     ecommerce_structural.extend(
         pattern for pattern in ecommerce_marketplace_patterns
@@ -424,6 +467,9 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
     finance_route_pages = sum(
         1 for path in page_paths if any(pattern in path for pattern in FINANCE_STRUCTURAL_PATTERNS)
     )
+    nonprofit_route_pages = sum(
+        1 for path in page_paths if any(pattern in path for pattern in NONPROFIT_STRUCTURAL_PATTERNS)
+    )
     booking_listing_pages = sum(
         1 for page in pages[:220]
         if any(pattern in clean_path(page_evidence_url(page)).lower() for pattern in BOOKING_LISTING_PATTERNS)
@@ -435,20 +481,54 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
     if software_schema_pages >= 2:
         saas_structural = saas_structural + ["schema:SoftwareApplication"]
 
+    saas_homepage_identity = has_any(homepage_text, [
+    "software", "saas", "platform", "app", "application", "workspace",
+    "project management", "customer support", "helpdesk", "messaging",
+    "commerce platform", "free trial", "start your trial",
+])
     finance_homepage_identity = has_any(homepage_text, [
         "lending", "lender", "mortgage", "insurance", "assurance", "loan provider",
         "bridge loan", "hard money", "private lending", "credit broker",
+    ])
+    nonprofit_homepage_identity = has_any(homepage_text, [
+        "nonprofit", "non-profit", "charity", "donate", "donation", "fundraising",
+        "support our work", "monthly giving", "clean water", "our impact",
     ])
     publisher_dominant = bool(
         article_route_pages >= max(8, product_route_pages * 2)
         and (article_schema_pages >= 3 or article_route_pages >= 12)
     )
     retail_dominant = bool(
-        product_route_pages >= 3
-        or product_schema_pages >= 3
-        or (len(ecommerce_structural) >= 3 and product_route_pages > 0)
+        (
+            product_route_pages >= 3
+            and product_route_pages >= max(3, round(article_route_pages * 0.45))
+        )
+        or (
+            product_schema_pages >= 3
+            and product_schema_pages >= max(3, round(article_schema_pages * 0.75))
+        )
+        or (
+            len(ecommerce_structural) >= 3
+            and product_route_pages > 0
+            and product_route_pages >= max(2, round(article_route_pages * 0.35))
+        )
     )
-    saas_dominant = bool(saas_route_pages >= 3 and saas_route_pages >= product_route_pages)
+    saas_dominant = bool(
+    (
+        len(saas_core_structural) >= 2
+        and saas_route_pages >= 3
+        and (
+            saas_route_pages >= max(3, round(article_route_pages * 0.50))
+            or len(saas_core_structural) >= 4
+            or saas_homepage_identity
+        )
+    )
+    or software_schema_pages >= 2
+)
+    nonprofit_dominant = bool(
+        nonprofit_route_pages >= 3
+        and (nonprofit_homepage_identity or nonprofit_route_pages >= 8)
+    )
     finance_dominant = bool(
         finance_route_pages >= 3
         or len(finance_structural) >= 2
@@ -472,10 +552,10 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             else:
                 score += 8.0 * max(len(booking_structural), 1)
         if key == "saas_app_membership":
-            if len(saas_structural) < 2:
+            if not saas_dominant:
                 score = min(score, 1.0)
             else:
-                score += 12.0 * len(saas_structural)
+                score += 12.0 * len(saas_core_structural)
                 score += 2.0 * min(saas_route_pages, 15)
         if key == "finance_insurance_lead_gen":
             if not finance_dominant:
@@ -485,12 +565,20 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
                 score += 2.0 * min(finance_route_pages, 20)
                 if finance_homepage_identity:
                     score += 20.0
+        if key == "nonprofit_fundraising":
+            if not nonprofit_dominant:
+                score = min(score, 4.0)
+            else:
+                score += 10.0 * len(nonprofit_structural)
+                score += 2.0 * min(nonprofit_route_pages, 25)
+                if nonprofit_homepage_identity:
+                    score += 20.0
         if key == "content_blog" and publisher_dominant:
             score += 2.0 * min(article_route_pages, 25)
             score += 1.5 * min(article_schema_pages, 20)
         adjusted_scores.append((key, score))
 
-    structural_competitor = saas_dominant or retail_dominant
+    structural_competitor = saas_dominant or retail_dominant or nonprofit_dominant
     if structural_competitor:
         adjusted_scores = [
             (key, min(score, CONTENT_BLOG_STRUCTURAL_CAP) if key == "content_blog" else score)
@@ -564,17 +652,22 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             "article_route_pages": article_route_pages,
             "saas_route_pages": saas_route_pages,
             "finance_route_pages": finance_route_pages,
+            "nonprofit_route_pages": nonprofit_route_pages,
             "publisher_dominant": publisher_dominant,
             "retail_dominant": retail_dominant,
             "saas_dominant": saas_dominant,
+            "nonprofit_dominant": nonprofit_dominant,
+            "saas_core": saas_core_structural,
             "finance": finance_structural,
+            "nonprofit": nonprofit_structural,
         },
         "winning_reason": (
             f"{primary} scored {round(score_map.get(primary, 0.0), 1)} vs {runner_up[0] or 'none'} "
             f"{round(runner_up[1], 1)}; structural signals saas={len(saas_structural)}, "
             f"ecommerce={len(ecommerce_structural)}, booking={len(booking_structural)}, "
-            f"finance={len(finance_structural)}; dominance publisher={publisher_dominant}, "
-            f"retail={retail_dominant}, saas={saas_dominant}; "
+            f"finance={len(finance_structural)}, nonprofit={len(nonprofit_structural)}; "
+            f"dominance publisher={publisher_dominant}, retail={retail_dominant}, "
+            f"saas={saas_dominant}, nonprofit={nonprofit_dominant}; "
             f"content_blog cap {'applied' if structural_competitor else 'not applied'}."
         ) if primary != "general" else "No archetype scored above zero; defaulted to general.",
         "strongest_conflicting_signal": (
@@ -604,7 +697,7 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         "sampled_pages_sent_to_ai": sampled_pages_sent,
         "localization": detect_localization(pages, website_url),
         "render_mode": "rendered_browser_checked" if deep_get(body, "browser_rendering", "enabled") else "js_heavy_suspected" if sum(1 for page in pages if page.get("client_rendering_suspected")) >= 3 else "raw_html_first",
-        "regulatory_sensitivity": "trust_or_regulated" if primary in {"finance_insurance_lead_gen", "utilities_comparison_lead_gen"} else "standard",
+        "regulatory_sensitivity": "trust_or_regulated" if primary in {"finance_insurance_lead_gen", "utilities_comparison_lead_gen", "nonprofit_fundraising"} else "standard",
         "likely_money_page_patterns": playbook["money_patterns"],
         "archetype_priority_pages": playbook["priority_pages"],
         "archetype_priority_issues": playbook["priority_issues"],
@@ -823,7 +916,7 @@ def build_page_pattern_findings(pages: list[dict[str, Any]]) -> list[dict[str, A
     buckets: dict[tuple[str, str], dict[str, Any]] = {}
     for page in pages:
         url = page_evidence_url(page)
-        if not url:
+        if not url or is_non_html_page_evidence(page):
             continue
         if int_or_zero(page.get("status_code") or page.get("status")) >= 400 or is_blocked_access_page(page):
             continue
@@ -1071,8 +1164,124 @@ def collapse_sitewide_template_findings(
     return output
 
 
+
+REPRESENTATIVE_PAGE_VERSION = "business_representative_page_v1"
+DIRECT_EVIDENCE_RULES = {
+    "broken_page", "404_error", "410_error", "server_error", "rate_limited_page",
+    "blocked_page", "sitemap_redirect", "internal_link_redirect", "redirect_chain",
+    "redirect_destination_noindex", "canonical_loop", "sitemap_indexability_conflict",
+    "sitemap_canonicalized_url", "canonical_to_other_url", "canonical_to_other_domain",
+    "route_boundary_candidate_indexable", "internal_route_indexable",
+}
+ROUTE_BOUNDARY_RULES = {"route_boundary_candidate_indexable", "internal_route_indexable"}
+
+
+def is_non_html_page_evidence(page: dict[str, Any]) -> bool:
+    url = clean_path(page_evidence_url(page)).lower()
+    content_type = str(page.get("content_type") or page.get("mime_type") or "").lower()
+    if content_type and "html" not in content_type and "xhtml" not in content_type:
+        return True
+    return any(url.endswith(extension) for extension in NON_HTML_ASSET_EXTENSIONS)
+
+
+def representative_page_score(
+    url: str,
+    fix: dict[str, Any],
+    page_lookup: dict[str, dict[str, Any]],
+    body: dict[str, Any],
+    playbook: dict[str, Any],
+) -> int:
+    path = clean_path(url) or "/"
+    page = page_lookup.get(path, {})
+    rule = str(fix.get("rule") or "").lower()
+    direct_evidence = rule in DIRECT_EVIDENCE_RULES
+    requested = clean_path(
+        body.get("requested_path_prefix")
+        or body.get("crawl_path_prefix")
+        or body.get("path_prefix")
+        or ""
+    )
+    family = normalize_template_family(
+        page.get("page_template_family") or fix.get("page_template_family"),
+        path,
+    )
+
+    score = 20
+    if path in {"/", "/index.html"}:
+        score += 100
+    if requested and path.rstrip("/") == requested.rstrip("/"):
+        score += 70
+    if any(pattern in path.lower() for pattern in playbook.get("money_patterns", [])):
+        score += 45
+    if family in {
+        "homepage", "loan_program", "conversion", "calculator", "comparison_page",
+        "product_page", "collection_page", "activity_detail", "location_landing",
+        "contact", "guide_article",
+    }:
+        score += 25
+    if clean_str(page.get("title")) or clean_str(page.get("h1")):
+        score += 8
+    if page_is_indexable(page):
+        score += 5
+    if is_low_value_page(path):
+        score -= 55
+    if is_non_html_page_evidence({**page, "url": path}):
+        score -= 120
+    if is_route_boundary_candidate(path) or is_internal_app_route(path):
+        score += 15 if rule in ROUTE_BOUNDARY_RULES else -75
+    status = int_or_zero(page.get("status_code") or page.get("status"))
+    if (status >= 400 or is_blocked_access_page(page)) and not direct_evidence:
+        score -= 60
+    if direct_evidence:
+        score += 10
+    return score
+
+
+def select_representative_page(
+    fix: dict[str, Any],
+    pages: list[dict[str, Any]],
+    body: dict[str, Any],
+    playbook: dict[str, Any],
+) -> dict[str, Any]:
+    affected = dedupe_strings([
+        clean_path(url)
+        for url in (fix.get("affected_pages") or [fix.get("page_url") or "/"])
+        if clean_path(url)
+    ]) or ["/"]
+    page_lookup = {
+        clean_path(page_evidence_url(page)): page
+        for page in pages
+        if clean_path(page_evidence_url(page))
+    }
+    original_position = {url: index for index, url in enumerate(affected)}
+    ranked = sorted(
+        affected,
+        key=lambda url: (
+            representative_page_score(url, fix, page_lookup, body, playbook),
+            -original_position[url],
+        ),
+        reverse=True,
+    )
+    representative = ranked[0]
+    reason = (
+        "Direct issue evidence on the highest-value affected URL."
+        if str(fix.get("rule") or "").lower() in DIRECT_EVIDENCE_RULES
+        else "Highest business-value affected URL; utility, auth, archive, blocked, and asset URLs are retained as supporting evidence."
+    )
+    return {
+        **fix,
+        "page_url": representative,
+        "affected_pages": ranked,
+        "representative_page_url": representative,
+        "representative_page_version": REPRESENTATIVE_PAGE_VERSION,
+        "representative_page_reason": reason,
+        "supporting_evidence_pages": ranked[1:21],
+    }
+
+
 def prepare_fixes(raw_fixes: list[dict[str, Any]], site_fingerprint: dict[str, Any], body: dict[str, Any], playbook: dict[str, Any], pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized = dedupe_fixes([normalize_fix(fix, index) for index, fix in enumerate(raw_fixes or []) if isinstance(fix, dict)])
+    normalized = [select_representative_page(fix, pages, body, playbook) for fix in normalized]
     scored = [score_fix(fix, site_fingerprint, body, playbook) for fix in normalized]
     scored = suppress_group_covered_singletons(scored)
     scored = suppress_duplicate_group_cards(scored)
@@ -1148,10 +1357,19 @@ def score_fix(fix: dict[str, Any], site_fingerprint: dict[str, Any], body: dict[
     structural_boost = 18 if defect_class in {"structural", "crawl_index", "blocked_access"} else 0
     trust_boost = 12 if site_fingerprint["regulatory_sensitivity"] != "standard" and defect_class in {"content_trust", "semantic_schema", "crawl_index", "structural"} else 0
     overall = round(evidence_confidence * 0.22 + page_value["score"] * 0.26 + reach_score * 0.14 + structural_boost + trust_boost + 24)
+    rule = str(fix.get("rule") or "").lower()
     if fix.get("url_confidence") == "crawler_artifact":
         overall = min(overall, 44)
+    if page_value["classification"] == "internal_or_auth_route" and rule in ROUTE_BOUNDARY_RULES:
+        overall = min(overall, 72)
+    if rule in RATE_LIMIT_RULES and fix.get("verification_state") == "needs_verification":
+        overall = min(overall, 72 if page_value["score"] >= 70 else 62)
     overall = max(0, min(100, overall))
     priority = "critical" if fix.get("priority") == "critical" or overall >= 82 else "high" if overall >= 68 else "medium" if overall >= 44 else "low"
+    if page_value["classification"] == "internal_or_auth_route" and rule in ROUTE_BOUNDARY_RULES and priority == "critical":
+        priority = "high"
+    if rule in RATE_LIMIT_RULES and page_value["score"] < 70 and priority in {"critical", "high"}:
+        priority = "medium"
     developer_owned = needs_developer_owner({**fix, "primary_defect_class": defect_class})
     affected_pages = dedupe_strings([clean_path(u) for u in (fix.get("affected_pages") or [page_url]) if clean_path(u)]) or ["/"]
     source_pages = dedupe_strings([clean_path(u) for u in (fix.get("source_pages") if isinstance(fix.get("source_pages"), list) else []) if clean_path(u)]) or affected_pages
@@ -1235,10 +1453,15 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
             f"FixList received only {site_fingerprint.get('classification', {}).get('usable_pages', 0)} usable pages. "
             "That is not enough evidence to assign a reliable site type or health grade, so this result is provisional."
         )
+    elif material_access_limited:
+        summary += (
+            f" {blocked_count or 1} reviewed page{'s' if (blocked_count or 1) != 1 else ''} returned HTTP 429 or an access-verification response. "
+            "The affected share is material, so the score is provisional until those results are checked in access logs."
+        )
     elif rate_limited:
         summary += (
             f" {blocked_count or 1} reviewed page{'s' if (blocked_count or 1) != 1 else ''} returned HTTP 429 or an access-verification response. "
-            "The score is provisional until those results are checked in access logs."
+            "This records what the scanner encountered and does not by itself prove that normal customers see an error."
         )
 
     working = [f"FixList detected a {playbook['label']} pattern."] if site_fingerprint["primary_archetype"] != "general" and not insufficient else []
@@ -1288,7 +1511,7 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
         if material_access_limited
         else "complete"
     )
-    score_is_provisional = bool(blocked or incomplete or insufficient or rate_limited)
+    score_is_provisional = bool(blocked or incomplete or insufficient or material_access_limited)
     release_gate_eligible = not score_is_provisional
 
     report = {
@@ -1434,13 +1657,15 @@ def score_page_value(url: str, site_fingerprint: dict[str, Any], body: dict[str,
     if requested and path in {requested, f"{requested}/", f"{requested}/index.html"}:
         score += 35
     if is_route_boundary_candidate(path) or is_internal_app_route(path):
-        score += 32
+        score -= 20
     if any(pattern in path for pattern in playbook["money_patterns"]):
         score += 24
     if has_any(path, ["contact", "devis", "quote", "simulation", "calculator", "comparateur", "booking", "reservation", "annonce", "voir", "cadeau", "coffret", "loisir", "pricing", "demo", "signup", "product", "products", "collection", "collections", "checkout", "loan", "loans", "apply", "payoff", "document-exchange", "locations", "fix-and-flip"]):
         score += 24
     if is_low_value_page(path):
         score -= 35
+    if any(path.endswith(extension) for extension in NON_HTML_ASSET_EXTENSIONS):
+        score -= 80
     clamped = max(0, min(100, score))
     classification = "internal_or_auth_route" if is_route_boundary_candidate(path) or is_internal_app_route(path) else "money_page" if clamped >= 70 else "low_value" if clamped <= 30 else "standard"
     label = {"internal_or_auth_route": "Route-boundary candidate", "money_page": "Important business page", "low_value": "Lower-priority archive/tag page", "standard": "Standard page"}[classification]
@@ -1539,6 +1764,7 @@ def detect_business_model(text: str, archetype: str) -> str:
         "booking_experiences_marketplace": "booking_or_reservation",
         "ecommerce_specialty_retail": "catalog_or_ecommerce",
         "saas_app_membership": "saas_or_member_app",
+        "nonprofit_fundraising": "nonprofit_or_fundraising",
         "content_blog": "content_or_general_business",
         "general": "content_or_general_business",
     }

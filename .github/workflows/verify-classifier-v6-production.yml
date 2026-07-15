@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  verify-production:
+  verify-cloud-run:
     name: Verify Cloud Run release markers
     runs-on: ubuntu-latest
     steps:
@@ -70,3 +70,50 @@ jobs:
                   )
           if failures:
               raise SystemExit("Production markers are not ready:\n" + "\n".join(failures))
+
+  verify-base44:
+    name: Verify published Base44 bundle markers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect published JavaScript bundle
+        shell: python
+        run: |
+          import re
+          import urllib.request
+          from urllib.parse import urljoin
+
+          base = "https://rich-rank-pilot-flow.base44.app/"
+          headers = {"User-Agent": "Mozilla/5.0 SEO-Pilot-Release-Check/1.0"}
+
+          def fetch(url):
+              request = urllib.request.Request(url, headers=headers)
+              with urllib.request.urlopen(request, timeout=45) as response:
+                  return response.read().decode("utf-8", errors="replace")
+
+          html = fetch(base + "?release=7451383")
+          candidates = []
+          for attribute in ("src", "href"):
+              candidates.extend(re.findall(rf'{attribute}=["\']([^"\']+\.js(?:\?[^"\']*)?)["\']', html))
+          urls = list(dict.fromkeys(urljoin(base, value) for value in candidates))
+          print("Published JS assets:")
+          for url in urls:
+              print(url)
+
+          combined = html
+          for url in urls:
+              try:
+                  combined += "\n" + fetch(url)
+              except Exception as exc:
+                  print(f"Could not fetch {url}: {exc}")
+
+          required = [
+              "archetype_classifier_v6_saas_business_identity",
+              "fa1bfae405d970fa",
+          ]
+          missing = [marker for marker in required if marker not in combined]
+          if missing:
+              raise SystemExit(
+                  "Published Base44 bundle is not on classifier v6; missing: "
+                  + ", ".join(missing)
+              )
+          print("Published Base44 bundle contains classifier v6 and the candidate fingerprint.")

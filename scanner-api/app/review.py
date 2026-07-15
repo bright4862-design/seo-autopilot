@@ -60,7 +60,7 @@ CATEGORY_MAP = {
     "duplicate_meta_description": "duplicate_content",
 }
 
-ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v6_saas_business_identity"
+ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v7_html_route_app_distribution"
 
 # Frequency cap for archetype keyword/pattern counting: template volume
 # (hundreds of /blog/ URLs) must not out-vote company-level evidence.
@@ -105,6 +105,10 @@ SAAS_BUSINESS_FAMILY_PATTERNS = (
     ("adoption", ("/integrations", "/use-cases", "/solutions", "/customers", "/customer-stories", "/case-studies")),
     ("access", ("/login", "/signin", "/signup", "/register")),
     ("developer", ("/docs", "/api", "/developers")),
+)
+APP_DISTRIBUTION_PLATFORM_PATTERNS = (
+    "/download/android", "/download/ios", "/download/windows",
+    "/download/macos", "/download/linux",
 )
 NONPROFIT_STRUCTURAL_PATTERNS = (
     "/donate", "/donation", "/give", "/fundraise", "/fundraiser",
@@ -402,6 +406,12 @@ def looks_like_scan_payload(value: Any) -> bool:
 
 
 def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], website_url: str) -> dict[str, Any]:
+    # Only HTML evidence may define a business route family. Asset filenames such
+    # as signup-form.png or demo-site.png are crawl evidence, not product routes.
+    classifier_pages = [
+        page for page in pages[:220]
+        if not is_non_html_page_evidence(page)
+    ]
     text_parts: list[str] = [
         website_url,
         str(body.get("business_name", "")),
@@ -410,7 +420,7 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         str(body.get("cms_platform", "")),
         str(body.get("scan_mode", "")),
     ]
-    for page in pages[:220]:
+    for page in classifier_pages:
         text_parts.extend([
             str(page.get("url", "")),
             str(page.get("final_url", "")),
@@ -426,8 +436,8 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
     # Homepage (shortest-path page) text is company-level evidence: what the
     # business says it IS, as opposed to what it publishes the most of.
     homepage_text = ""
-    if pages:
-        homepage = min(pages[:220], key=lambda page: len(clean_path(page_evidence_url(page)) or "/"))
+    if classifier_pages:
+        homepage = min(classifier_pages, key=lambda page: len(clean_path(page_evidence_url(page)) or "/"))
         homepage_text = " ".join([
             str(homepage.get("title", "")),
             str(homepage.get("h1", "")),
@@ -444,7 +454,7 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         score += archetype_boost(key, text, pages)
         scores.append((key, score))
 
-    page_paths = [clean_path(page_evidence_url(page)).lower() for page in pages[:220]]
+    page_paths = [clean_path(page_evidence_url(page)).lower() for page in classifier_pages]
     path_text = " ".join(page_paths)
     saas_structural = [pattern for pattern in SAAS_STRUCTURAL_PATTERNS if pattern in path_text]
     ecommerce_structural = [pattern for pattern in ECOMMERCE_STRUCTURAL_PATTERNS if pattern in path_text]
@@ -457,6 +467,11 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         for family, patterns in SAAS_BUSINESS_FAMILY_PATTERNS
         if any(pattern in path_text for pattern in patterns)
     ]
+    app_distribution_platforms = [
+        pattern
+        for pattern in APP_DISTRIBUTION_PLATFORM_PATTERNS
+        if any(pattern in path for path in page_paths)
+    ]
     ecommerce_marketplace_patterns = ("/itm/", "/sch/", "/b/", "/buy/", "/seller/", "/listing/")
     ecommerce_structural.extend(
         pattern for pattern in ecommerce_marketplace_patterns
@@ -466,9 +481,9 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         min(count_includes(text, signal), KEYWORD_COUNT_CAP)
         for signal in ("ebay", "buy it now", "auction", "seller", "item number", "shop by category")
     )
-    product_schema_pages = count_schema_pages(pages, ("product", "offer"))
-    article_schema_pages = count_schema_pages(pages, ("article", "blogposting", "newsarticle"))
-    software_schema_pages = count_schema_pages(pages, ("softwareapplication", "mobileapplication", "webapplication"))
+    product_schema_pages = count_schema_pages(classifier_pages, ("product", "offer"))
+    article_schema_pages = count_schema_pages(classifier_pages, ("article", "blogposting", "newsarticle"))
+    software_schema_pages = count_schema_pages(classifier_pages, ("softwareapplication", "mobileapplication", "webapplication"))
     product_route_pages = sum(
         1 for path in page_paths if any(pattern in path for pattern in PRODUCT_DETAIL_PATTERNS)
     )
@@ -487,7 +502,7 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         1 for path in page_paths if any(pattern in path for pattern in NONPROFIT_STRUCTURAL_PATTERNS)
     )
     booking_listing_pages = sum(
-        1 for page in pages[:220]
+        1 for page in classifier_pages
         if any(pattern in clean_path(page_evidence_url(page)).lower() for pattern in BOOKING_LISTING_PATTERNS)
     )
     if product_schema_pages >= 3:
@@ -542,9 +557,15 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         and len(saas_business_families) >= 2
         and saas_route_pages >= 3
     )
+    saas_app_distribution_identity = bool(
+        "/download" in saas_core_structural
+        and "developer" in saas_business_families
+        and len(app_distribution_platforms) >= 3
+    )
     saas_dominant = bool(
         saas_business_identity
         or saas_diverse_structure
+        or saas_app_distribution_identity
         or software_schema_pages >= 2
     )
     nonprofit_dominant = bool(
@@ -581,6 +602,8 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
                 score += 8.0 * len(saas_business_families)
                 score += 2.0 * min(saas_route_pages, 15)
                 if saas_homepage_identity:
+                    score += 20.0
+                if saas_app_distribution_identity:
                     score += 20.0
         if key == "finance_insurance_lead_gen":
             if not finance_dominant:
@@ -675,11 +698,14 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             "software_schema_pages": software_schema_pages,
             "product_route_pages": product_route_pages,
             "article_route_pages": article_route_pages,
+            "classifier_html_route_pages": len(classifier_pages),
             "saas_route_pages": saas_route_pages,
             "saas_business_families": saas_business_families,
+            "app_distribution_platforms": app_distribution_platforms,
             "saas_homepage_identity": saas_homepage_identity,
             "saas_business_identity": saas_business_identity,
             "saas_diverse_structure": saas_diverse_structure,
+            "saas_app_distribution_identity": saas_app_distribution_identity,
             "finance_route_pages": finance_route_pages,
             "nonprofit_route_pages": nonprofit_route_pages,
             "publisher_dominant": publisher_dominant,
@@ -696,7 +722,8 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             f"ecommerce={len(ecommerce_structural)}, booking={len(booking_structural)}, "
             f"finance={len(finance_structural)}, nonprofit={len(nonprofit_structural)}; "
             f"dominance publisher={publisher_dominant}, retail={retail_dominant}, "
-            f"saas={saas_dominant}, nonprofit={nonprofit_dominant}; "
+            f"saas={saas_dominant}, app_distribution={saas_app_distribution_identity}, "
+            f"nonprofit={nonprofit_dominant}; "
             f"content_blog cap {'applied' if structural_competitor else 'not applied'}."
         ) if primary != "general" else "No archetype scored above zero; defaulted to general.",
         "strongest_conflicting_signal": (

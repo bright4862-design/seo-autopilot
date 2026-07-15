@@ -7,14 +7,14 @@ const authoritativeRecord = {
   scan_mode: "advanced",
   scanner_version: "python_scanner_v3_bounded_request",
   scanner_build_revision: "hard_page_cap_response_v1",
-  archetype_classifier_version: "archetype_classifier_v6_saas_business_identity",
+  archetype_classifier_version: "archetype_classifier_v7_html_route_app_distribution",
   advanced_scan_backend: "python_scanner_api",
   deno_fallback_used: false,
   review_version: "python_review_v2_structural_marketplace",
   review_evidence_calibration_version: "review_evidence_calibration_v5_utility_redirect",
   ai_review_backend: "python_review_api",
   python_review_fallback_used: false,
-  beta_revision_fingerprint: "fa1bfae405d970fa",
+  beta_revision_fingerprint: "2dd346f90e64f94b",
   release_gate_eligible: true,
 };
 

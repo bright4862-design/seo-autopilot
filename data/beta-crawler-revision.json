@@ -1,7 +1,7 @@
 {
   "acceptance_report": "docs/beta-acceptance.md",
   "component_versions": {
-    "archetype_classifier_version": "archetype_classifier_v6_saas_business_identity",
+    "archetype_classifier_version": "archetype_classifier_v7_html_route_app_distribution",
     "crawler_acceptance_version": "crawler_acceptance_v1",
     "image_alt_evidence_version": "material_image_alt_v1",
     "indexability_quality_version": "indexability_quality_v1",
@@ -19,10 +19,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "fa1bfae405d970fa",
-  "git_commit": "319a3d675bb339ccdd8bf516e8f59a3ea9fadaa9",
-  "note": "Classifier v6 candidate: strong SaaS homepage business identity plus product/commercial route families can outweigh large content libraries. Focused Signal, Buffer, Webflow, publisher-control, and SaaS-control acceptance remains required before release freeze.",
-  "recorded_at": "2026-07-15T16:30:00+00:00",
+  "fingerprint": "2dd346f90e64f94b",
+  "git_commit": "5ee02d66416b2265b893a337ebc680e816be59c9",
+  "note": "Classifier v7 candidate: non-HTML assets cannot define route families, and platform-specific app downloads plus developer documentation establish app identity. Focused nine-site production acceptance remains required before release freeze.",
+  "recorded_at": "2026-07-15T22:55:00+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "frozen_beta"
 }

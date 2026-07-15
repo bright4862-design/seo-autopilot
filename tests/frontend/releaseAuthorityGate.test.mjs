@@ -1,0 +1,41 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { buildFixListFields, buildScanRunFields } from "../../src/lib/scanRunModel.js";
+
+const authoritativeRecord = {
+  scan_mode: "advanced",
+  scanner_version: "python_scanner_v3_bounded_request",
+  scanner_build_revision: "hard_page_cap_response_v1",
+  archetype_classifier_version: "archetype_classifier_v5_business_representative_pages",
+  advanced_scan_backend: "python_scanner_api",
+  deno_fallback_used: false,
+  review_version: "python_review_v2_structural_marketplace",
+  review_evidence_calibration_version: "review_evidence_calibration_v5_utility_redirect",
+  ai_review_backend: "python_review_api",
+  python_review_fallback_used: false,
+  beta_revision_fingerprint: "188651de922d349c",
+  release_gate_eligible: true,
+};
+
+test("exact current authority markers pass the durable release gate", () => {
+  assert.equal(buildScanRunFields(authoritativeRecord).release_gate_eligible, true);
+  assert.equal(buildFixListFields(authoritativeRecord).is_authoritative, true);
+});
+
+test("review quality true cannot override missing deployment authority markers", () => {
+  const missingFingerprint = { ...authoritativeRecord, beta_revision_fingerprint: "" };
+  assert.equal(buildScanRunFields(missingFingerprint).release_gate_eligible, false);
+  assert.equal(buildFixListFields(missingFingerprint).is_authoritative, false);
+});
+
+test("stale classifier or explicit review rejection fails the release gate", () => {
+  assert.equal(
+    buildScanRunFields({ ...authoritativeRecord, archetype_classifier_version: "archetype_classifier_v4_publisher_route_families" }).release_gate_eligible,
+    false
+  );
+  assert.equal(
+    buildScanRunFields({ ...authoritativeRecord, release_gate_eligible: false }).release_gate_eligible,
+    false
+  );
+});

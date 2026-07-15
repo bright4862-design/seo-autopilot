@@ -11,8 +11,12 @@ const LIMITED_SCAN_STATUSES = new Set([
 ]);
 
 const MODE_PAGE_LIMITS = { basic: 25, quick: 40, deep: 85, advanced: 150 };
+const CURRENT_SCANNER_VERSION = "python_scanner_v3_bounded_request";
+const CURRENT_SCANNER_BUILD_REVISION = "hard_page_cap_response_v1";
+const CURRENT_ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v5_business_representative_pages";
 const CURRENT_REVIEW_VERSION = "python_review_v2_structural_marketplace";
 const CURRENT_CALIBRATION_VERSION = "review_evidence_calibration_v5_utility_redirect";
+const CURRENT_BETA_REVISION_FINGERPRINT = "188651de922d349c";
 
 export const TERMINAL_SCAN_RUN_STATUSES = new Set(["complete", "limited", "failed", "cancelled"]);
 
@@ -99,18 +103,19 @@ export function buildScanRunFields(record = {}, { status } = {}) {
   const denoFallbackUsed = record.deno_fallback_used === true || record.technical_audit_summary?.deno_fallback_used === true;
   const aiReviewBackend = toStr(record.ai_review_backend || record.debug?.ai_review_backend);
   const pythonReviewFallbackUsed = record.python_review_fallback_used === true || record.debug?.python_review_fallback_used === true;
-  const reviewVersion = authorityMarkers.review_version
-    || (aiReviewBackend === "python_review_api" ? CURRENT_REVIEW_VERSION : "");
-  const calibrationVersion = authorityMarkers.review_evidence_calibration_version
-    || (aiReviewBackend === "python_review_api" ? CURRENT_CALIBRATION_VERSION : "");
+  const reviewVersion = authorityMarkers.review_version;
+  const calibrationVersion = authorityMarkers.review_evidence_calibration_version;
   const inferredReleaseGateEligible = advancedScanBackend === "python_scanner_api"
     && !denoFallbackUsed
+    && scannerVersion === CURRENT_SCANNER_VERSION
+    && authorityMarkers.scanner_build_revision === CURRENT_SCANNER_BUILD_REVISION
+    && authorityMarkers.archetype_classifier_version === CURRENT_ARCHETYPE_CLASSIFIER_VERSION
     && aiReviewBackend === "python_review_api"
     && !pythonReviewFallbackUsed
-    && Boolean(scannerVersion && reviewVersion && calibrationVersion);
-  const releaseGateEligible = record.release_gate_eligible === false
-    ? false
-    : record.release_gate_eligible === true || inferredReleaseGateEligible;
+    && reviewVersion === CURRENT_REVIEW_VERSION
+    && calibrationVersion === CURRENT_CALIBRATION_VERSION
+    && authorityMarkers.beta_revision_fingerprint === CURRENT_BETA_REVISION_FINGERPRINT;
+  const releaseGateEligible = record.release_gate_eligible !== false && inferredReleaseGateEligible;
   return {
     status: status || deriveTerminalStatus(record),
     status_detail: toStr(record.scan_status),
@@ -145,6 +150,7 @@ export function buildScanRunFields(record = {}, { status } = {}) {
 
 export function buildFixListFields(record = {}, fixes = getFixRecommendations(record)) {
   const counts = { critical: 0, high: 0, medium: 0, low: 0 };
+  const releaseGateEligible = buildScanRunFields(record).release_gate_eligible;
   for (const fix of fixes) {
     const priority = toStr(fix.priority).toLowerCase();
     if (priority in counts) counts[priority] += 1;
@@ -154,8 +160,7 @@ export function buildFixListFields(record = {}, fixes = getFixRecommendations(re
     website_url: toStr(record.website_url),
     ai_review_backend: toStr(record.ai_review_backend),
     python_review_fallback_used: record.python_review_fallback_used === true,
-    is_authoritative:
-      record.ai_review_backend === "python_review_api" && record.python_review_fallback_used !== true,
+    is_authoritative: releaseGateEligible,
     health_score: Number(record.health_score || 0),
     health_grade: toStr(record.health_grade),
     scan_status: toStr(record.scan_status),

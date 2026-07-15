@@ -14,10 +14,11 @@ import {
 } from "../../src/lib/scanRunModel.js";
 
 const frozenRevision = JSON.parse(readFileSync("data/beta-crawler-revision.json", "utf8"));
+const EXPECTED_SCANNER_VERSION = "python_scanner_v3_bounded_request";
 const EXPECTED_REVIEW_VERSION = "python_review_v2_structural_marketplace";
 const EXPECTED_CALIBRATION_VERSION = "review_evidence_calibration_v5_utility_redirect";
-const EXPECTED_BETA_FINGERPRINT = "a285acdaeed59e40";
-const EXPECTED_CLASSIFIER_VERSION = "archetype_classifier_v4_publisher_route_families";
+const EXPECTED_BETA_FINGERPRINT = "188651de922d349c";
+const EXPECTED_CLASSIFIER_VERSION = "archetype_classifier_v5_business_representative_pages";
 const EXPECTED_SCANNER_BUILD = "hard_page_cap_response_v1";
 
 test("complete scans persist as complete", () => {
@@ -45,8 +46,16 @@ test("lineage key is stable across scans and distinguishes page-scoped findings"
 test("fix list counts preserve raw priorities without narrowing critical to high", () => {
   const record = {
     website_url: "https://example.com",
+    scanner_version: EXPECTED_SCANNER_VERSION,
+    scanner_build_revision: EXPECTED_SCANNER_BUILD,
+    advanced_scan_backend: "python_scanner_api",
+    deno_fallback_used: false,
+    archetype_classifier_version: EXPECTED_CLASSIFIER_VERSION,
     ai_review_backend: "python_review_api",
     python_review_fallback_used: false,
+    review_version: EXPECTED_REVIEW_VERSION,
+    review_evidence_calibration_version: EXPECTED_CALIBRATION_VERSION,
+    beta_revision_fingerprint: EXPECTED_BETA_FINGERPRINT,
     recommendations: [
       { fix_id: "f1", priority: "critical" },
       { fix_id: "f2", priority: "high" },

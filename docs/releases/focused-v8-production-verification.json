@@ -1,0 +1,37 @@
+{
+  "bundle_checks": {
+    "classifier": false,
+    "fingerprint": false,
+    "page_asset": false,
+    "representative": false
+  },
+  "bundle_path": "/assets/index-B-V4Qg_O.js",
+  "expected": {
+    "archetype_classifier_version": "archetype_classifier_v8_platform_product_routes",
+    "beta_revision_fingerprint": "430813f2b15afa8f",
+    "page_level_asset_evidence_version": "page_level_asset_evidence_v3_markdown",
+    "representative_page_version": "business_representative_page_v3_sitewide_archetype_ranking",
+    "review_version": "python_review_v2_structural_marketplace",
+    "scanner_build_revision": "hard_page_cap_response_v1",
+    "version": "python_scanner_v3_bounded_request"
+  },
+  "health_actual": {
+    "archetype_classifier_version": "archetype_classifier_v7_html_route_app_distribution",
+    "beta_revision_fingerprint": "561db6e131da53a9",
+    "page_level_asset_evidence_version": null,
+    "representative_page_version": null,
+    "review_version": "python_review_v2_structural_marketplace",
+    "scanner_build_revision": "hard_page_cap_response_v1",
+    "version": "python_scanner_v3_bounded_request"
+  },
+  "health_checks": {
+    "archetype_classifier_version": false,
+    "beta_revision_fingerprint": false,
+    "page_level_asset_evidence_version": false,
+    "representative_page_version": false,
+    "review_version": true,
+    "scanner_build_revision": true,
+    "version": true
+  },
+  "passed": false
+}

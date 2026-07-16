@@ -5,3 +5,482 @@ patch_exit=0
 ...                                                                      [100%]
 3 passed in 0.16s
 focused_test_exit=0
+=== root scanner tests ===
+/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/pytest_asyncio/plugin.py:207: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-8.3.4, pluggy-1.6.0
+rootdir: /home/runner/work/seo-autopilot/seo-autopilot
+plugins: anyio-4.14.2, asyncio-0.25.2
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None
+collected 13 items
+
+tests/test_advanced_scan_regressions.py .............                    [100%]
+
+============================== 13 passed in 0.04s ==============================
+root_test_exit=0
+=== full scanner-api tests ===
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-8.3.4, pluggy-1.6.0
+rootdir: /home/runner/work/seo-autopilot/seo-autopilot/scanner-api
+configfile: pytest.ini
+plugins: anyio-4.14.2, asyncio-0.25.2
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=function
+collected 348 items
+
+tests/test_archetype_classification.py ............                      [  3%]
+tests/test_artifact_filter.py .......                                    [  5%]
+tests/test_beta_revision.py .........                                    [  8%]
+tests/test_business_model.py ....                                        [  9%]
+tests/test_business_representative_pages.py ........                     [ 11%]
+tests/test_canonical_target_validation.py ........                       [ 13%]
+tests/test_classifier_v3_production_regressions.py .......F....          [ 17%]
+tests/test_classifier_v6_saas_weighting.py ......                        [ 18%]
+tests/test_classifier_v7_html_route_evidence.py ...                      [ 19%]
+tests/test_client_rendering_signals.py ...                               [ 20%]
+tests/test_concurrency.py .....                                          [ 22%]
+tests/test_contract.py ..............                                    [ 26%]
+tests/test_crawler_acceptance.py .......                                 [ 28%]
+tests/test_fixtures_regressions.py ....                                  [ 29%]
+tests/test_focused_acceptance_followup_v8.py ...                         [ 30%]
+tests/test_group_dedup.py .........                                      [ 32%]
+tests/test_grouping.py ....                                              [ 33%]
+tests/test_image_alt_ownership.py .....                                  [ 35%]
+tests/test_indexability_extraction.py .......                            [ 37%]
+tests/test_indexability_quality.py ..........                            [ 40%]
+tests/test_market_scope.py ...                                           [ 41%]
+tests/test_navigation_indexability.py .......                            [ 43%]
+tests/test_observability.py ...............                              [ 47%]
+tests/test_orphan_asset_evidence.py ......                               [ 49%]
+tests/test_page_classification.py ..........................             [ 56%]
+tests/test_production_release_recovery.py ..                             [ 57%]
+tests/test_redirect_evidence.py ........                                 [ 59%]
+tests/test_render_evidence.py ...                                        [ 60%]
+tests/test_render_evidence_quality.py .....                              [ 61%]
+tests/test_render_followup.py ......                                     [ 63%]
+tests/test_render_risk_collection.py .....                               [ 64%]
+tests/test_render_risk_eligibility.py ...                                [ 65%]
+tests/test_render_risk_study.py ........                                 [ 68%]
+tests/test_render_study_state.py ...                                     [ 68%]
+tests/test_representative_evidence_v8.py .......                         [ 70%]
+tests/test_review_calibration.py ..............                          [ 75%]
+tests/test_review_evidence_contract.py .....                             [ 76%]
+tests/test_review_presentation_contract.py ........F......               [ 80%]
+tests/test_review_scoring_gates.py .....                                 [ 82%]
+tests/test_robots_policy.py ......                                       [ 83%]
+tests/test_sampling.py ....................                              [ 89%]
+tests/test_scan_response_page_budget.py ..                               [ 90%]
+tests/test_sitemap.py ........                                           [ 92%]
+tests/test_sitemap_family_coverage.py ............                       [ 95%]
+tests/test_sitemap_indexability_conflicts.py .....                       [ 97%]
+tests/test_trust_discovery.py .....                                      [ 98%]
+tests/test_zero_fix_confidence.py ....                                   [100%]
+
+=================================== FAILURES ===================================
+________________ test_classification_debug_signals_are_exposed _________________
+
+    def test_classification_debug_signals_are_exposed():
+        classification = build_site_fingerprint({}, ikea_like_pages(), "https://furniture.example")["classification"]
+>       assert classification["classifier_version"].startswith("archetype_classifier_v7")
+E       AssertionError: assert False
+E        +  where False = <built-in method startswith of str object at 0x7f25861e2f10>('archetype_classifier_v7')
+E        +    where <built-in method startswith of str object at 0x7f25861e2f10> = 'archetype_classifier_v8_platform_product_routes'.startswith
+
+tests/test_classifier_v3_production_regressions.py:186: AssertionError
+__________ test_sitewide_canonical_collapse_preserves_family_evidence __________
+
+    def test_sitewide_canonical_collapse_preserves_family_evidence():
+        families, pages = _sitewide_fixture(canonical="")
+        result = _run_with_coverage(pages, pages_found=36)
+        canonical_cards = [fix for fix in result["cleaned_fixes"] if fix.get("rule") == "canonical_missing"]
+    
+        assert len(canonical_cards) == 1
+        card = canonical_cards[0]
+        assert card["title"] == "Add canonical URLs across the site"
+        assert card["page_scope"] == "sitewide"
+        assert card["page_template_family"] == ""
+        assert card["page_count"] == len(pages)
+        assert card["family_breakdown"] == families
+        assert set(card["representative_pages_by_family"]) == set(families)
+>       assert len(card["source_pages"]) == len(families)
+E       AssertionError: assert 12 == 8
+E        +  where 12 = len(['/loan_program/0', '/loan_program/1', '/loan_program/2', '/loan_program/3', '/loan_program/4', '/contact/0', ...])
+E        +  and   8 = len({'contact': 1, 'conversion': 4, 'guide_article': 6, 'homepage': 1, ...})
+
+tests/test_review_presentation_contract.py:176: AssertionError
+=============================== warnings summary ===============================
+tests/test_canonical_target_validation.py: 12 warnings
+tests/test_client_rendering_signals.py: 1 warning
+tests/test_concurrency.py: 57 warnings
+tests/test_contract.py: 1 warning
+tests/test_fixtures_regressions.py: 24 warnings
+tests/test_grouping.py: 24 warnings
+tests/test_indexability_extraction.py: 7 warnings
+tests/test_indexability_quality.py: 13 warnings
+tests/test_navigation_indexability.py: 19 warnings
+tests/test_page_classification.py: 4 warnings
+tests/test_redirect_evidence.py: 11 warnings
+tests/test_robots_policy.py: 5 warnings
+tests/test_trust_discovery.py: 6 warnings
+  /opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/bs4/builder/_lxml.py:124: DeprecationWarning: The 'strip_cdata' option of HTMLParser() has never done anything and will eventually be removed.
+    parser = parser(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_classifier_v3_production_regressions.py::test_classification_debug_signals_are_exposed - AssertionError: assert False
+ +  where False = <built-in method startswith of str object at 0x7f25861e2f10>('archetype_classifier_v7')
+ +    where <built-in method startswith of str object at 0x7f25861e2f10> = 'archetype_classifier_v8_platform_product_routes'.startswith
+FAILED tests/test_review_presentation_contract.py::test_sitewide_canonical_collapse_preserves_family_evidence - AssertionError: assert 12 == 8
+ +  where 12 = len(['/loan_program/0', '/loan_program/1', '/loan_program/2', '/loan_program/3', '/loan_program/4', '/contact/0', ...])
+ +  and   8 = len({'contact': 1, 'conversion': 4, 'guide_article': 6, 'homepage': 1, ...})
+================= 2 failed, 346 passed, 184 warnings in 3.87s ==================
+scanner_test_exit=1
+=== frozen revision ===
+OK: live code matches frozen beta revision 430813f2b15afa8f (commit 82bc4c41aa5b74238fa068f99507b2d0726e1180).
+freeze_exit=0
+=== lint ===
+
+> base44-app@0.0.0 lint
+> eslint . --quiet
+
+lint_exit=0
+=== typecheck ===
+
+> base44-app@0.0.0 typecheck
+> tsc -p ./jsconfig.json
+
+typecheck_exit=0
+=== frontend contracts ===
+
+> base44-app@0.0.0 test:frontend
+> node --test tests/frontend/*.test.mjs
+
+TAP version 13
+# Subtest: relative affected URLs are not printed twice
+ok 1 - relative affected URLs are not printed twice
+  ---
+  duration_ms: 1.520934
+  ...
+# Subtest: Base44 accepts the deployed Python scanner, review, and calibration versions
+ok 2 - Base44 accepts the deployed Python scanner, review, and calibration versions
+  ---
+  duration_ms: 2.094577
+  ...
+# Subtest: Base44 rejects stale or uncalibrated Python review responses
+ok 3 - Base44 rejects stale or uncalibrated Python review responses
+  ---
+  duration_ms: 0.25132
+  ...
+# Subtest: dashboard invokes the frozen Python-first scanner
+ok 4 - dashboard invokes the frozen Python-first scanner
+  ---
+  duration_ms: 1.92565
+  ...
+# Subtest: Python Review receives the complete scanner evidence contract
+ok 5 - Python Review receives the complete scanner evidence contract
+  ---
+  duration_ms: 0.410057
+  ...
+# Subtest: authoritative review results and scores are preserved
+ok 6 - authoritative review results and scores are preserved
+  ---
+  duration_ms: 0.343522
+  ...
+# Subtest: stored crawl pages preserve scanner indexability
+ok 7 - stored crawl pages preserve scanner indexability
+  ---
+  duration_ms: 1.087243
+  ...
+# Subtest: ScanRun encodes the roadmap status lifecycle
+ok 8 - ScanRun encodes the roadmap status lifecycle
+  ---
+  duration_ms: 2.938204
+  ...
+# Subtest: ScanRun carries retry/resume/comparison lineage fields
+ok 9 - ScanRun carries retry/resume/comparison lineage fields
+  ---
+  duration_ms: 0.587098
+  ...
+# Subtest: FixList links to a scan run and tracks priority counts
+ok 10 - FixList links to a scan run and tracks priority counts
+  ---
+  duration_ms: 0.525523
+  ...
+# Subtest: FixItem enums match the review-presentation contract
+ok 11 - FixItem enums match the review-presentation contract
+  ---
+  duration_ms: 1.345837
+  ...
+# Subtest: FixItem preserves finding provenance and completion tracking
+ok 12 - FixItem preserves finding provenance and completion tracking
+  ---
+  duration_ms: 0.440885
+  ...
+# Subtest: all durable entities are owner-scoped and well-formed
+ok 13 - all durable entities are owner-scoped and well-formed
+  ---
+  duration_ms: 0.683979
+  ...
+# Subtest: FixList only rewrites rate-limit presentation for legacy records
+ok 14 - FixList only rewrites rate-limit presentation for legacy records
+  ---
+  duration_ms: 1.368028
+  ...
+# Subtest: scanner uses the shared narrow paper-and-ink surface
+ok 15 - scanner uses the shared narrow paper-and-ink surface
+  ---
+  duration_ms: 1.792312
+  ...
+# Subtest: dashboard shell stays lightweight, sticky, and keyboard-aware
+ok 16 - dashboard shell stays lightweight, sticky, and keyboard-aware
+  ---
+  duration_ms: 0.171971
+  ...
+# Subtest: billing uses responsive rows and a visible current-plan summary
+ok 17 - billing uses responsive rows and a visible current-plan summary
+  ---
+  duration_ms: 0.158056
+  ...
+# Subtest: normal scans require Python and do not silently save Deno fallback
+ok 18 - normal scans require Python and do not silently save Deno fallback
+  ---
+  duration_ms: 2.119013
+  ...
+# Subtest: scan results are stored and routed by stable scan ID
+ok 19 - scan results are stored and routed by stable scan ID
+  ---
+  duration_ms: 0.324577
+  ...
+# Subtest: merged results preserve authoritative durable release markers
+ok 20 - merged results preserve authoritative durable release markers
+  ---
+  duration_ms: 0.725327
+  ...
+# Subtest: scan recovery boundaries load before the application
+ok 21 - scan recovery boundaries load before the application
+  ---
+  duration_ms: 1.355244
+  ...
+# Subtest: browser quota errors cannot invalidate a completed scan
+ok 22 - browser quota errors cannot invalidate a completed scan
+  ---
+  duration_ms: 0.18692
+  ...
+# Subtest: browser scan records use canonical arrays and compact history
+ok 23 - browser scan records use canonical arrays and compact history
+  ---
+  duration_ms: 0.201506
+  ...
+# Subtest: scanner responses are capped by selected mode before consumers receive them
+ok 24 - scanner responses are capped by selected mode before consumers receive them
+  ---
+  duration_ms: 0.229579
+  ...
+# Subtest: durable ScanRun keeps release authority markers and caps pages
+ok 25 - durable ScanRun keeps release authority markers and caps pages
+  ---
+  duration_ms: 1.237824
+  ...
+# Subtest: exact current authority markers pass the durable release gate
+ok 26 - exact current authority markers pass the durable release gate
+  ---
+  duration_ms: 2.557753
+  ...
+# Subtest: review quality true cannot override missing deployment authority markers
+ok 27 - review quality true cannot override missing deployment authority markers
+  ---
+  duration_ms: 0.368199
+  ...
+# Subtest: stale classifier or explicit review rejection fails the release gate
+ok 28 - stale classifier or explicit review rejection fails the release gate
+  ---
+  duration_ms: 0.2782
+  ...
+# Subtest: successful Python Review bypasses frontend regrouping and preserves copy
+ok 29 - successful Python Review bypasses frontend regrouping and preserves copy
+  ---
+  duration_ms: 1.394458
+  ...
+# Subtest: authoritative empty Python Review does not resurrect scanner findings
+ok 30 - authoritative empty Python Review does not resurrect scanner findings
+  ---
+  duration_ms: 0.576639
+  ...
+# Subtest: fallback and legacy results retain compatibility grouping
+ok 31 - fallback and legacy results retain compatibility grouping
+  ---
+  duration_ms: 0.347099
+  ...
+# Subtest: authoritative rate-limit findings keep backend presentation
+ok 32 - authoritative rate-limit findings keep backend presentation
+  ---
+  duration_ms: 0.252922
+  ...
+# Subtest: legacy and fallback rate-limit findings retain compatibility presentation
+ok 33 - legacy and fallback rate-limit findings retain compatibility presentation
+  ---
+  duration_ms: 1.233758
+  ...
+# Subtest: insufficient classifier evidence stays provisional in the frontend contract
+ok 34 - insufficient classifier evidence stays provisional in the frontend contract
+  ---
+  duration_ms: 0.305421
+  ...
+# Subtest: compact actions preserve critical priority
+ok 35 - compact actions preserve critical priority
+  ---
+  duration_ms: 2.817749
+  ...
+# Subtest: unknown compact action priorities fall back safely
+ok 36 - unknown compact action priorities fall back safely
+  ---
+  duration_ms: 0.251371
+  ...
+# Subtest: the customer-facing label contract accepts critical
+ok 37 - the customer-facing label contract accepts critical
+  ---
+  duration_ms: 0.24577
+  ...
+# Subtest: sitewide scope does not masquerade as a template family
+ok 38 - sitewide scope does not masquerade as a template family
+  ---
+  duration_ms: 1.063739
+  ...
+# Subtest: cross-cutting evidence keeps the mixed compatibility marker
+ok 39 - cross-cutting evidence keeps the mixed compatibility marker
+  ---
+  duration_ms: 0.303006
+  ...
+# Subtest: normal reviewed findings retain their family
+ok 40 - normal reviewed findings retain their family
+  ---
+  duration_ms: 0.239499
+  ...
+# Subtest: rate-limit findings retain a needs-verification contract
+ok 41 - rate-limit findings retain a needs-verification contract
+  ---
+  duration_ms: 0.474508
+  ...
+# Subtest: explicit finding evidence is preserved
+ok 42 - explicit finding evidence is preserved
+  ---
+  duration_ms: 0.294261
+  ...
+# Subtest: blocked review state survives frontend record normalization
+ok 43 - blocked review state survives frontend record normalization
+  ---
+  duration_ms: 0.449099
+  ...
+# Subtest: partial access limitations remain provisional in the saved contract
+ok 44 - partial access limitations remain provisional in the saved contract
+  ---
+  duration_ms: 0.446375
+  ...
+# Subtest: runAdvancedScan always budgets below the 105-second UI deadline
+ok 45 - runAdvancedScan always budgets below the 105-second UI deadline
+  ---
+  duration_ms: 1.65817
+  ...
+# Subtest: complete scans persist as complete
+ok 46 - complete scans persist as complete
+  ---
+  duration_ms: 2.070632
+  ...
+# Subtest: limited or provisional evidence never persists as complete
+ok 47 - limited or provisional evidence never persists as complete
+  ---
+  duration_ms: 0.191498
+  ...
+# Subtest: lineage key is stable across scans and distinguishes page-scoped findings
+ok 48 - lineage key is stable across scans and distinguishes page-scoped findings
+  ---
+  duration_ms: 0.242714
+  ...
+# Subtest: fix list counts preserve raw priorities without narrowing critical to high
+ok 49 - fix list counts preserve raw priorities without narrowing critical to high
+  ---
+  duration_ms: 1.228056
+  ...
+# Subtest: fallback reviews are not marked authoritative
+ok 50 - fallback reviews are not marked authoritative
+  ---
+  duration_ms: 0.205354
+  ...
+# Subtest: fix items carry lineage from the previous run
+ok 51 - fix items carry lineage from the previous run
+  ---
+  duration_ms: 0.354073
+  ...
+# Subtest: fix items keep contract enums valid and preserve the raw finding
+ok 52 - fix items keep contract enums valid and preserve the raw finding
+  ---
+  duration_ms: 0.23495
+  ...
+# Subtest: scan run fields map coverage and evidence state from the merged record
+ok 53 - scan run fields map coverage and evidence state from the merged record
+  ---
+  duration_ms: 0.191919
+  ...
+# Subtest: an explicit review veto cannot be inferred back into release eligibility
+ok 54 - an explicit review veto cannot be inferred back into release eligibility
+  ---
+  duration_ms: 0.257021
+  ...
+# Subtest: durable authority markers ignore polish versions and retain the beta fingerprint
+ok 55 - durable authority markers ignore polish versions and retain the beta fingerprint
+  ---
+  duration_ms: 0.397013
+  ...
+# Subtest: missing beta fingerprints stay missing across merged, durable, and diagnostic records
+ok 56 - missing beta fingerprints stay missing across merged, durable, and diagnostic records
+  ---
+  duration_ms: 0.24619
+  ...
+# Subtest: recommendations are found under any of the contract array keys
+ok 57 - recommendations are found under any of the contract array keys
+  ---
+  duration_ms: 0.169127
+  ...
+# Subtest: slimFix preserves authoritative Python workflow fields
+ok 58 - slimFix preserves authoritative Python workflow fields
+  ---
+  duration_ms: 1.473245
+  ...
+# Subtest: slimFix only infers ownership for findings without the review contract
+ok 59 - slimFix only infers ownership for findings without the review contract
+  ---
+  duration_ms: 0.225952
+  ...
+1..59
+# tests 59
+# suites 0
+# pass 59
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 360.493117
+frontend_test_exit=0
+=== production build ===
+
+> base44-app@0.0.0 build
+> vite build
+
+[base44] Proxy not enabled (VITE_BASE44_APP_BASE_URL not set)
+[36mvite v6.4.1 [32mbuilding for production...[36m[39m
+transforming...
+[32m✓[39m 1772 modules transformed.
+rendering chunks...
+computing gzip size...
+[2mdist/[22m[32mindex.html                 [39m[1m[2m  1.74 kB[22m[1m[22m[2m │ gzip:   0.85 kB[22m
+[2mdist/[22m[2massets/[22m[35mindex-DDTZ6wb0.css  [39m[1m[2m 93.70 kB[22m[1m[22m[2m │ gzip:  16.02 kB[22m
+[2mdist/[22m[2massets/[22m[36mindex-BUcfLknv.js   [39m[1m[33m519.24 kB[39m[22m[2m │ gzip: 160.85 kB[22m
+[33m
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+[32m✓ built in 4.34s[39m
+build_exit=0

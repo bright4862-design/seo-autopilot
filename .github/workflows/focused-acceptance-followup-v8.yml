@@ -23,7 +23,7 @@ jobs:
           python -m pip install --upgrade pip pytest pytest-asyncio
           pip install -r scanner-api/requirements.txt
       - name: Apply focused follow-up patch
-        run: python .github/scripts/apply_focused_acceptance_followup_v8.py
+        run: python .github/scripts/run_focused_acceptance_followup_v8.py
       - name: Run focused regressions
         working-directory: scanner-api
         run: pytest tests/test_focused_acceptance_followup_v8.py -q
@@ -50,7 +50,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Apply focused follow-up patch
-        run: python .github/scripts/apply_focused_acceptance_followup_v8.py
+        run: python .github/scripts/run_focused_acceptance_followup_v8.py
       - name: Lint
         run: npm run lint
       - name: Typecheck
@@ -72,11 +72,14 @@ jobs:
           ref: ${{ github.head_ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Apply tested product changes
-        run: python .github/scripts/apply_focused_acceptance_followup_v8.py
-      - name: Remove one-shot harness
+        run: python .github/scripts/run_focused_acceptance_followup_v8.py
+      - name: Remove one-shot harness and temporary markers
         run: |
           rm .github/scripts/apply_focused_acceptance_followup_v8.py
+          rm .github/scripts/run_focused_acceptance_followup_v8.py
           rm .github/workflows/focused-acceptance-followup-v8.yml
+          rm -f docs/releases/.keep docs/releases/.candidate docs/releases/.status docs/releases/.ready docs/releases/.pr
+          rm -f docs/releases/focused-acceptance-followup-v8.txt docs/releases/focused-acceptance-followup-v8.status docs/releases/focused-acceptance-followup-v8.ready docs/releases/focused-acceptance-followup-v8.pr
       - name: Commit tested source
         run: |
           git config user.name "github-actions[bot]"

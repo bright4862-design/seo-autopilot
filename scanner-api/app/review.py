@@ -60,7 +60,7 @@ CATEGORY_MAP = {
     "duplicate_meta_description": "duplicate_content",
 }
 
-ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v7_html_route_app_distribution"
+ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v8_platform_product_routes"
 
 # Frequency cap for archetype keyword/pattern counting: template volume
 # (hundreds of /blog/ URLs) must not out-vote company-level evidence.
@@ -75,7 +75,9 @@ SAAS_STRUCTURAL_PATTERNS = (
     "/features", "/integrations", "/use-cases", "/solutions",
     "/customers", "/customer-stories", "/case-studies", "/login", "/signin",
     "/signup", "/register", "/demo", "/docs", "/api", "/developers",
-    "/platform", "/apps", "/download",
+    "/platform", "/apps", "/download", "/payments", "/billing",
+    "/connect", "/radar", "/terminal", "/issuing", "/treasury",
+    "/tax", "/identity", "/atlas", "/financial-connections",
 )
 ECOMMERCE_STRUCTURAL_PATTERNS = (
     "/products/", "/product/", "/produit/", "/collections/", "/collection/",
@@ -97,10 +99,15 @@ SAAS_CORE_IDENTITY_PATTERNS = (
     "/features", "/integrations", "/use-cases", "/solutions", "/customers",
     "/customer-stories", "/case-studies", "/login", "/signin", "/signup",
     "/register", "/demo", "/api", "/developers", "/platform", "/apps",
-    "/download",
+    "/download", "/payments", "/billing", "/connect", "/radar",
+    "/terminal", "/issuing", "/treasury", "/tax", "/identity",
+    "/atlas", "/financial-connections",
 )
 SAAS_BUSINESS_FAMILY_PATTERNS = (
-    ("product", ("/features", "/platform", "/apps", "/download")),
+    ("product", ("/features", "/platform", "/apps", "/download", "/payments",
+                 "/billing", "/connect", "/radar", "/terminal", "/issuing",
+                 "/treasury", "/tax", "/identity", "/atlas",
+                 "/financial-connections")),
     ("commercial", ("/pricing", "/free-trial", "/trial", "/demo", "/contact-sales", "/enterprise")),
     ("adoption", ("/integrations", "/use-cases", "/solutions", "/customers", "/customer-stories", "/case-studies")),
     ("access", ("/login", "/signin", "/signup", "/register")),
@@ -110,6 +117,11 @@ APP_DISTRIBUTION_PLATFORM_PATTERNS = (
     "/download/android", "/download/ios", "/download/windows",
     "/download/macos", "/download/linux",
 )
+PLATFORM_PRODUCT_PATTERNS = (
+    "/payments", "/billing", "/connect", "/radar", "/terminal",
+    "/issuing", "/treasury", "/tax", "/identity", "/atlas",
+    "/financial-connections",
+)
 NONPROFIT_STRUCTURAL_PATTERNS = (
     "/donate", "/donation", "/give", "/fundraise", "/fundraiser",
     "/fundraising", "/campaign", "/projects/", "/our-projects/", "/impact",
@@ -117,7 +129,7 @@ NONPROFIT_STRUCTURAL_PATTERNS = (
 )
 NON_HTML_ASSET_EXTENSIONS = (
     ".avif", ".bmp", ".css", ".csv", ".doc", ".docx", ".eot", ".gif",
-    ".ico", ".jpeg", ".jpg", ".js", ".json", ".map", ".mp3", ".mp4",
+    ".ico", ".jpeg", ".jpg", ".js", ".json", ".map", ".md", ".markdown", ".mp3", ".mp4",
     ".pdf", ".png", ".ppt", ".pptx", ".svg", ".tif", ".tiff", ".ttf",
     ".txt", ".wav", ".webm", ".webp", ".woff", ".woff2", ".xls", ".xlsx",
     ".xml", ".zip",
@@ -472,6 +484,11 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         for pattern in APP_DISTRIBUTION_PLATFORM_PATTERNS
         if any(pattern in path for path in page_paths)
     ]
+    platform_product_routes = [
+        pattern
+        for pattern in PLATFORM_PRODUCT_PATTERNS
+        if any(path == pattern or path.startswith(pattern + "/") for path in page_paths)
+    ]
     ecommerce_marketplace_patterns = ("/itm/", "/sch/", "/b/", "/buy/", "/seller/", "/listing/")
     ecommerce_structural.extend(
         pattern for pattern in ecommerce_marketplace_patterns
@@ -562,10 +579,16 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         and "developer" in saas_business_families
         and len(app_distribution_platforms) >= 3
     )
+    saas_platform_infrastructure_identity = bool(
+        len(platform_product_routes) >= 3
+        and "developer" in saas_business_families
+        and saas_route_pages >= 4
+    )
     saas_dominant = bool(
         saas_business_identity
         or saas_diverse_structure
         or saas_app_distribution_identity
+        or saas_platform_infrastructure_identity
         or software_schema_pages >= 2
     )
     nonprofit_dominant = bool(
@@ -605,6 +628,8 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
                     score += 20.0
                 if saas_app_distribution_identity:
                     score += 20.0
+                if saas_platform_infrastructure_identity:
+                    score += 24.0
         if key == "finance_insurance_lead_gen":
             if not finance_dominant:
                 score = min(score, 6.0)
@@ -702,6 +727,8 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             "saas_route_pages": saas_route_pages,
             "saas_business_families": saas_business_families,
             "app_distribution_platforms": app_distribution_platforms,
+            "platform_product_routes": platform_product_routes,
+            "saas_platform_infrastructure_identity": saas_platform_infrastructure_identity,
             "saas_homepage_identity": saas_homepage_identity,
             "saas_business_identity": saas_business_identity,
             "saas_diverse_structure": saas_diverse_structure,
@@ -723,6 +750,7 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             f"finance={len(finance_structural)}, nonprofit={len(nonprofit_structural)}; "
             f"dominance publisher={publisher_dominant}, retail={retail_dominant}, "
             f"saas={saas_dominant}, app_distribution={saas_app_distribution_identity}, "
+            f"platform_infrastructure={saas_platform_infrastructure_identity}, "
             f"nonprofit={nonprofit_dominant}; "
             f"content_blog cap {'applied' if structural_competitor else 'not applied'}."
         ) if primary != "general" else "No archetype scored above zero; defaulted to general.",
@@ -1072,6 +1100,8 @@ def collapse_sitewide_template_findings(
     fixes: list[dict[str, Any]],
     pages: list[dict[str, Any]],
     site_fingerprint: dict[str, Any],
+    body: dict[str, Any],
+    playbook: dict[str, Any],
 ) -> list[dict[str, Any]]:
     """Collapse one global implementation fault without erasing per-family evidence."""
     if not sitewide_collapse_evidence_is_sufficient(site_fingerprint):
@@ -1088,6 +1118,11 @@ def collapse_sitewide_template_findings(
     if len(usable_pages) < SITEWIDE_MIN_PAGES:
         return fixes
 
+    page_lookup = {
+        clean_path(page_evidence_url(page)): page
+        for page in pages
+        if clean_path(page_evidence_url(page))
+    }
     output = list(fixes)
     for rule in SITEWIDE_COLLAPSE_RULES:
         candidates = [
@@ -1139,6 +1174,22 @@ def collapse_sitewide_template_findings(
             if pages_for_family
         ])
         base = max(candidates, key=fix_sort_key)
+        original_position = {url: index for index, url in enumerate(affected_usable)}
+        ranked_affected = sorted(
+            affected_usable,
+            key=lambda url: (
+                representative_page_score(url, {**base, "rule": rule}, page_lookup, body, playbook),
+                -original_position[url],
+            ),
+            reverse=True,
+        )
+        ranked_source_pages = sorted(
+            representative_pages,
+            key=lambda url: representative_page_score(
+                url, {**base, "rule": rule}, page_lookup, body, playbook
+            ),
+            reverse=True,
+        )
         collapse_id = stable_id(
             f"sitewide|{rule}|{','.join(sorted(families))}|{len(affected_usable)}|{len(usable_pages)}"
         )
@@ -1178,9 +1229,12 @@ def collapse_sitewide_template_findings(
                 f"{len(affected_usable)} of {len(usable_pages)} indexable pages in the crawl are missing canonical URLs "
                 f"across {len(family_breakdown)} page families."
             ),
-            "page_url": representative_pages[0] if representative_pages else affected_usable[0],
-            "affected_pages": affected_usable[:150],
-            "source_pages": representative_pages[:30],
+            "page_url": ranked_affected[0],
+            "representative_page_url": ranked_affected[0],
+            "representative_page_version": REPRESENTATIVE_PAGE_VERSION,
+            "representative_page_reason": "Highest archetype-aware business-value page in the site-wide affected evidence.",
+            "affected_pages": ranked_affected[:150],
+            "source_pages": ranked_source_pages[:30],
             "page_count": len(affected_usable),
             "page_scope": "sitewide",
             "page_template_family": "",
@@ -1221,8 +1275,8 @@ def collapse_sitewide_template_findings(
 
 
 
-REPRESENTATIVE_PAGE_VERSION = "business_representative_page_v2_archetype_route_families"
-PAGE_LEVEL_ASSET_EVIDENCE_VERSION = "page_level_asset_evidence_v2_html_only"
+REPRESENTATIVE_PAGE_VERSION = "business_representative_page_v3_sitewide_archetype_ranking"
+PAGE_LEVEL_ASSET_EVIDENCE_VERSION = "page_level_asset_evidence_v3_markdown"
 DIRECT_EVIDENCE_RULES = {
     "broken_page", "404_error", "410_error", "server_error", "rate_limited_page",
     "blocked_page", "sitemap_redirect", "internal_link_redirect", "redirect_chain",
@@ -1507,7 +1561,7 @@ def prepare_fixes(raw_fixes: list[dict[str, Any]], site_fingerprint: dict[str, A
     scored = [score_fix(fix, site_fingerprint, body, playbook) for fix in normalized]
     scored = suppress_group_covered_singletons(scored)
     scored = suppress_duplicate_group_cards(scored)
-    scored = collapse_sitewide_template_findings(scored, pages, site_fingerprint)
+    scored = collapse_sitewide_template_findings(scored, pages, site_fingerprint, body, playbook)
     return sorted(scored, key=fix_sort_key, reverse=True)[:36]
 
 def normalize_fix(fix: dict[str, Any], index: int) -> dict[str, Any]:

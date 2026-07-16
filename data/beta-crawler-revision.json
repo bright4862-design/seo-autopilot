@@ -1,18 +1,18 @@
 {
   "acceptance_report": "docs/beta-acceptance.md",
   "component_versions": {
-    "archetype_classifier_version": "archetype_classifier_v7_html_route_app_distribution",
+    "archetype_classifier_version": "archetype_classifier_v8_platform_product_routes",
     "crawler_acceptance_version": "crawler_acceptance_v1",
     "image_alt_evidence_version": "material_image_alt_v1",
     "indexability_quality_version": "indexability_quality_v1",
     "navigation_indexability_version": "navigation_indexability_v1",
     "orphan_asset_evidence_version": "orphan_asset_evidence_v1",
-    "page_level_asset_evidence_version": "page_level_asset_evidence_v2_html_only",
+    "page_level_asset_evidence_version": "page_level_asset_evidence_v3_markdown",
     "quality_gate_version": "review_quality_gate_v1_evidence_complete",
     "render_evidence_quality_version": "render_evidence_quality_v1",
     "render_evidence_version": "render_evidence_v1",
     "render_followup_version": "render_followup_v1",
-    "representative_page_version": "business_representative_page_v2_archetype_route_families",
+    "representative_page_version": "business_representative_page_v3_sitewide_archetype_ranking",
     "review_evidence_calibration_version": "review_evidence_calibration_v5_utility_redirect",
     "review_version": "python_review_v2_structural_marketplace",
     "sampling_version": "balanced_sitemap_buckets_v1",
@@ -21,10 +21,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "561db6e131da53a9",
-  "git_commit": "3f47c52347b02a0f688632db5dbc6bf592e53e66",
-  "note": "Representative evidence v8 candidate: archetype-aware category, collection, product, feature and topic-hub ranking; utility and transaction routes demoted; generic page-level findings restricted to HTML evidence. Focused production acceptance required before freeze.",
-  "recorded_at": "2026-07-16T15:00:00+00:00",
+  "fingerprint": "430813f2b15afa8f",
+  "git_commit": "82bc4c41aa5b74238fa068f99507b2d0726e1180",
+  "note": "Focused v8 acceptance follow-up candidate: platform-product route identity for infrastructure SaaS; Markdown excluded from page-level HTML evidence; site-wide representatives use archetype-aware ranking.",
+  "recorded_at": "2026-07-17T00:00:00+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "frozen_beta"
 }

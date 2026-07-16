@@ -125,7 +125,7 @@ def test_mixed_generic_broken_page_keeps_html_only():
     )
     assert fix["page_url"] == "/news/missing-story"
     assert fix["affected_pages"] == ["/news/missing-story"]
-    assert fix["page_level_asset_evidence_version"] == "page_level_asset_evidence_v2_html_only"
+    assert fix["page_level_asset_evidence_version"] == "page_level_asset_evidence_v3_markdown"
 
 
 def test_classifier_marker_is_unchanged_by_evidence_patch():
@@ -136,4 +136,4 @@ def test_classifier_marker_is_unchanged_by_evidence_patch():
         page("https://saas.example/integrations", family="collection_page"),
     ]
     fingerprint = build_site_fingerprint({}, pages, "https://saas.example")
-    assert fingerprint["classification"]["classifier_version"] == "archetype_classifier_v7_html_route_app_distribution"
+    assert fingerprint["classification"]["classifier_version"] == "archetype_classifier_v8_platform_product_routes"

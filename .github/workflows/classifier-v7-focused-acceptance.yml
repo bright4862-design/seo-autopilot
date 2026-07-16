@@ -1,0 +1,163 @@
+name: Classifier v7 focused production acceptance
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  DEFAULT_SCANNER_API_URL: https://seo-autopilot-4545-919035207432.europe-west1.run.app
+  EXPECTED_CLASSIFIER: archetype_classifier_v7_html_route_app_distribution
+  EXPECTED_FINGERPRINT: 2dd346f90e64f94b
+  EXPECTED_SCANNER: python_scanner_v3_bounded_request
+  EXPECTED_SCANNER_BUILD: hard_page_cap_response_v1
+  EXPECTED_REVIEW: python_review_v2_structural_marketplace
+  EXPECTED_CALIBRATION: review_evidence_calibration_v5_utility_redirect
+
+jobs:
+  focused-acceptance:
+    name: Scan nine focused production controls
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SCANNER_API_KEY: ${{ secrets.SCANNER_API_KEY }}
+      CONFIGURED_SCANNER_API_URL: ${{ secrets.SCANNER_API_URL }}
+    steps:
+      - name: Verify release and run focused scans
+        shell: python
+        run: |
+          import gzip, json, os, time, urllib.error, urllib.parse, urllib.request
+          from pathlib import Path
+
+          base = (os.environ.get('CONFIGURED_SCANNER_API_URL') or os.environ['DEFAULT_SCANNER_API_URL']).rstrip('/')
+          key = os.environ.get('SCANNER_API_KEY', '')
+          if not key:
+              raise SystemExit('SCANNER_API_KEY unavailable; no scans started.')
+
+          expected = {
+              'classifier': os.environ['EXPECTED_CLASSIFIER'],
+              'fingerprint': os.environ['EXPECTED_FINGERPRINT'],
+              'scanner': os.environ['EXPECTED_SCANNER'],
+              'scanner_build': os.environ['EXPECTED_SCANNER_BUILD'],
+              'review': os.environ['EXPECTED_REVIEW'],
+              'calibration': os.environ['EXPECTED_CALIBRATION'],
+          }
+          sites = [
+              ('Signal','https://signal.org/','saas_app_membership'),
+              ('Buffer','https://buffer.com/','saas_app_membership'),
+              ('Webflow','https://webflow.com/','saas_app_membership'),
+              ('Nomadic Matt','https://www.nomadicmatt.com/','content_blog'),
+              ('WPBeginner','https://www.wpbeginner.com/','content_blog'),
+              ('Basecamp','https://basecamp.com/','saas_app_membership'),
+              ('Linear','https://linear.app/','saas_app_membership'),
+              ('Intercom','https://www.intercom.com/','saas_app_membership'),
+              ('Shopify','https://www.shopify.com/','saas_app_membership'),
+          ]
+          assets = {'.avif','.bmp','.css','.csv','.doc','.docx','.eot','.gif','.ico','.jpeg','.jpg','.js','.json','.map','.mp3','.mp4','.pdf','.png','.ppt','.pptx','.svg','.tif','.tiff','.ttf','.txt','.wav','.webm','.webp','.woff','.woff2','.xls','.xlsx','.xml','.zip'}
+
+          def request_json(path, payload=None, timeout=210, attempts=3):
+              data = None if payload is None else json.dumps(payload).encode()
+              headers = {'Accept':'application/json','User-Agent':'SEO-Pilot-Acceptance/1.0'}
+              if data is not None:
+                  headers.update({'Content-Type':'application/json','x-scanner-key':key})
+              for attempt in range(1, attempts + 1):
+                  try:
+                      req = urllib.request.Request(base + path, data=data, headers=headers, method='GET' if data is None else 'POST')
+                      with urllib.request.urlopen(req, timeout=timeout) as response:
+                          return json.loads(response.read().decode())
+                  except urllib.error.HTTPError as exc:
+                      body = exc.read().decode(errors='replace')
+                      if exc.code in {429,500,502,503,504} and attempt < attempts:
+                          time.sleep(10 * attempt); continue
+                      raise RuntimeError(f'{path} HTTP {exc.code}: {body[:400]}') from exc
+                  except (urllib.error.URLError, TimeoutError) as exc:
+                      if attempt < attempts:
+                          time.sleep(10 * attempt); continue
+                      raise RuntimeError(f'{path} request failed: {exc}') from exc
+
+          def is_asset(value):
+              path = urllib.parse.urlparse(str(value or '')).path.lower()
+              return any(path.endswith(ext) for ext in assets)
+
+          health = request_json('/health', timeout=45)
+          health_expected = {
+              'archetype_classifier_version': expected['classifier'],
+              'beta_revision_fingerprint': expected['fingerprint'],
+              'version': expected['scanner'],
+              'scanner_build_revision': expected['scanner_build'],
+              'review_version': expected['review'],
+              'review_evidence_calibration_version': expected['calibration'],
+          }
+          marker_failures = [f'health.{k}: expected {v!r}, got {health.get(k)!r}' for k,v in health_expected.items() if health.get(k) != v]
+          if marker_failures:
+              raise SystemExit('Production marker gate failed before scans:\n' + '\n'.join(marker_failures))
+
+          summaries, raw, failures = [], [], []
+          for index, (name, url, wanted) in enumerate(sites, 1):
+              print(f'[{index}/9] {name}', flush=True)
+              started = time.time()
+              try:
+                  scan = request_json('/scan', {'website_url':url,'scan_mode':'advanced'})
+                  review = request_json('/review', {'scan':scan}, timeout=180)
+                  fp = review.get('site_fingerprint') or scan.get('site_fingerprint') or {}
+                  classification = fp.get('classification') or review.get('classification') or {}
+                  actual = fp.get('primary_archetype') or review.get('primary_archetype') or ''
+                  classifier = review.get('archetype_classifier_version') or classification.get('classifier_version') or ''
+                  fixes = review.get('recommendations') or review.get('fixes') or review.get('findings') or []
+                  asset_urls = []
+                  for fix in fixes:
+                      if not isinstance(fix, dict): continue
+                      for field in ('page_url','representative_page_url'):
+                          if is_asset(fix.get(field)): asset_urls.append(str(fix.get(field)))
+                      for value in fix.get('affected_pages') or []:
+                          if is_asset(value): asset_urls.append(str(value))
+                  checks = {
+                      'classification': (actual, wanted),
+                      'classification_state': (classification.get('state'),'classified'),
+                      'evidence_sufficiency': (classification.get('evidence_sufficiency'),'sufficient'),
+                      'scanner_version': (scan.get('scanner_version') or scan.get('version'), expected['scanner']),
+                      'scanner_build_revision': (scan.get('scanner_build_revision'), expected['scanner_build']),
+                      'scan_fingerprint': (scan.get('beta_revision_fingerprint'), expected['fingerprint']),
+                      'classifier_version': (classifier, expected['classifier']),
+                      'review_version': (review.get('review_version') or review.get('ai_review_version'), expected['review']),
+                      'calibration_version': (review.get('review_evidence_calibration_version'), expected['calibration']),
+                      'review_fingerprint': (review.get('beta_revision_fingerprint'), expected['fingerprint']),
+                      'scan_status': (review.get('scan_status'),'complete'),
+                      'score_is_provisional': (review.get('score_is_provisional'),False),
+                      'release_gate_eligible': (review.get('release_gate_eligible'),True),
+                  }
+                  site_failures = [f'{label}: expected {wanted_value!r}, got {actual_value!r}' for label,(actual_value,wanted_value) in checks.items() if actual_value != wanted_value]
+                  pages = int(scan.get('pages_crawled') or 0)
+                  if not 1 <= pages <= 150: site_failures.append(f'pages_crawled: {pages}')
+                  if scan.get('deno_fallback_used') is True or review.get('python_review_fallback_used') is True: site_failures.append('fallback flag true')
+                  if asset_urls: site_failures.append(f'asset URLs in FixItems: {asset_urls[:10]}')
+                  item = {'name':name,'url':url,'expected_archetype':wanted,'actual_archetype':actual,'pages_found':scan.get('pages_found'),'pages_crawled':pages,'scan_status':review.get('scan_status'),'release_gate_eligible':review.get('release_gate_eligible'),'score_is_provisional':review.get('score_is_provisional'),'fix_count':len(fixes),'asset_url_count':len(asset_urls),'classifier_version':classifier,'fingerprint':review.get('beta_revision_fingerprint'),'classification_state':classification.get('state'),'evidence_sufficiency':classification.get('evidence_sufficiency'),'winning_reason':classification.get('winning_reason'),'structural_signals':classification.get('structural_signals'),'elapsed_seconds':round(time.time()-started,1),'pass':not site_failures,'failures':site_failures}
+                  summaries.append(item); raw.append({'name':name,'url':url,'scan':scan,'review':review})
+                  failures.extend(f'{name}: {failure}' for failure in site_failures)
+                  print(f"{name}: {'PASS' if not site_failures else 'FAIL'} — {actual}, {pages} pages", flush=True)
+              except Exception as exc:
+                  message = str(exc); failures.append(f'{name}: {message}')
+                  summaries.append({'name':name,'url':url,'expected_archetype':wanted,'pass':False,'elapsed_seconds':round(time.time()-started,1),'failures':[message]})
+                  print(f'{name}: ERROR — {message}', flush=True)
+
+          result = {'release':expected,'health':health,'sites':summaries,'passed':sum(1 for x in summaries if x.get('pass')),'total':9,'failures':failures}
+          Path('focused-acceptance-summary.json').write_text(json.dumps(result, indent=2, sort_keys=True))
+          with gzip.open('focused-acceptance-raw.json.gz','wt',encoding='utf-8') as handle: json.dump(raw, handle, separators=(',',':'))
+          lines = ['# Classifier v7 focused production acceptance','',f"Passed: {result['passed']}/9",'','| Site | Expected | Actual | Pages | Status | Gate | Result |','|---|---|---|---:|---|---|---|']
+          for item in summaries:
+              lines.append(f"| {item['name']} | {item['expected_archetype']} | {item.get('actual_archetype','error')} | {item.get('pages_crawled','-')} | {item.get('scan_status','-')} | {item.get('release_gate_eligible','-')} | {'PASS' if item.get('pass') else 'FAIL'} |")
+          if failures: lines += ['', '## Failures', ''] + [f'- {failure}' for failure in failures]
+          Path('focused-acceptance-report.md').write_text('\n'.join(lines) + '\n')
+          if failures: raise SystemExit(f'Focused acceptance failed with {len(failures)} issue(s).')
+      - name: Upload focused acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: classifier-v7-focused-production-acceptance
+          path: |
+            focused-acceptance-summary.json
+            focused-acceptance-report.md
+            focused-acceptance-raw.json.gz
+          if-no-files-found: error

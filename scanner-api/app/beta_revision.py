@@ -37,6 +37,8 @@ def collect_component_versions() -> dict[str, str]:
     from .review import (
         ARCHETYPE_CLASSIFIER_VERSION,
         ORPHAN_ASSET_EVIDENCE_VERSION,
+        PAGE_LEVEL_ASSET_EVIDENCE_VERSION,
+        REPRESENTATIVE_PAGE_VERSION,
         QUALITY_GATE_VERSION,
         REVIEW_VERSION,
         ZERO_FIX_CONFIDENCE_VERSION,
@@ -53,6 +55,8 @@ def collect_component_versions() -> dict[str, str]:
         "render_followup_version": RENDER_FOLLOWUP_VERSION,
         "review_version": REVIEW_VERSION,
         "archetype_classifier_version": ARCHETYPE_CLASSIFIER_VERSION,
+        "representative_page_version": REPRESENTATIVE_PAGE_VERSION,
+        "page_level_asset_evidence_version": PAGE_LEVEL_ASSET_EVIDENCE_VERSION,
         "orphan_asset_evidence_version": ORPHAN_ASSET_EVIDENCE_VERSION,
         "zero_fix_confidence_version": ZERO_FIX_CONFIDENCE_VERSION,
         "quality_gate_version": QUALITY_GATE_VERSION,

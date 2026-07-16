@@ -7,10 +7,12 @@
     "indexability_quality_version": "indexability_quality_v1",
     "navigation_indexability_version": "navigation_indexability_v1",
     "orphan_asset_evidence_version": "orphan_asset_evidence_v1",
+    "page_level_asset_evidence_version": "page_level_asset_evidence_v2_html_only",
     "quality_gate_version": "review_quality_gate_v1_evidence_complete",
     "render_evidence_quality_version": "render_evidence_quality_v1",
     "render_evidence_version": "render_evidence_v1",
     "render_followup_version": "render_followup_v1",
+    "representative_page_version": "business_representative_page_v2_archetype_route_families",
     "review_evidence_calibration_version": "review_evidence_calibration_v5_utility_redirect",
     "review_version": "python_review_v2_structural_marketplace",
     "sampling_version": "balanced_sitemap_buckets_v1",
@@ -19,10 +21,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "2dd346f90e64f94b",
-  "git_commit": "5ee02d66416b2265b893a337ebc680e816be59c9",
-  "note": "Classifier v7 candidate: non-HTML assets cannot define route families, and platform-specific app downloads plus developer documentation establish app identity. Focused nine-site production acceptance remains required before release freeze.",
-  "recorded_at": "2026-07-15T22:55:00+00:00",
+  "fingerprint": "561db6e131da53a9",
+  "git_commit": "3f47c52347b02a0f688632db5dbc6bf592e53e66",
+  "note": "Representative evidence v8 candidate: archetype-aware category, collection, product, feature and topic-hub ranking; utility and transaction routes demoted; generic page-level findings restricted to HTML evidence. Focused production acceptance required before freeze.",
+  "recorded_at": "2026-07-16T15:00:00+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "frozen_beta"
 }

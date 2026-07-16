@@ -1221,7 +1221,8 @@ def collapse_sitewide_template_findings(
 
 
 
-REPRESENTATIVE_PAGE_VERSION = "business_representative_page_v1"
+REPRESENTATIVE_PAGE_VERSION = "business_representative_page_v2_archetype_route_families"
+PAGE_LEVEL_ASSET_EVIDENCE_VERSION = "page_level_asset_evidence_v2_html_only"
 DIRECT_EVIDENCE_RULES = {
     "broken_page", "404_error", "410_error", "server_error", "rate_limited_page",
     "blocked_page", "sitemap_redirect", "internal_link_redirect", "redirect_chain",
@@ -1230,6 +1231,27 @@ DIRECT_EVIDENCE_RULES = {
     "route_boundary_candidate_indexable", "internal_route_indexable",
 }
 ROUTE_BOUNDARY_RULES = {"route_boundary_candidate_indexable", "internal_route_indexable"}
+PAGE_LEVEL_HTML_ONLY_RULES = {
+    "broken_page", "404_error", "410_error", "server_error", "rate_limited_page",
+    "blocked_page", "missing_canonical", "canonical_to_other_url",
+    "canonical_to_other_domain", "canonical_loop", "missing_h1",
+    "missing_meta_description", "duplicate_title", "duplicate_meta_description",
+}
+UTILITY_ROUTE_PATTERNS = (
+    "/contact", "/contact-us", "/about", "/privacy", "/terms", "/cookie",
+    "/legal", "/ccpa", "/login", "/signin", "/signup", "/register",
+    "/account", "/cart", "/checkout", "/basket", "/reservation/edit",
+    "/reservation/manage", "/booking/edit", "/booking/manage",
+)
+ARCHETYPE_REPRESENTATIVE_PATTERNS = {
+    "saas": ("/features", "/pricing", "/product", "/platform", "/integrations", "/use-cases", "/solutions", "/enterprise", "/payments", "/billing", "/connect", "/radar", "/terminal"),
+    "ecommerce": ("/collections/", "/collection/", "/category/", "/categories/", "/shop/", "/products/", "/product/", "/eyeglasses", "/sunglasses", "/contacts"),
+    "publisher": ("/category/", "/categories/", "/topic/", "/topics/", "/guides/", "/reviews/", "/news/", "/resources/"),
+    "finance": ("/mortgage", "/loan", "/loans", "/credit-cards", "/banking", "/insurance", "/calculator"),
+    "nonprofit": ("/projects", "/impact", "/programs", "/donate", "/fundraise"),
+    "education": ("/courses", "/subjects", "/learn", "/math", "/science"),
+    "booking": ("/activities", "/activity", "/experiences", "/events", "/category", "/collections"),
+}
 
 
 def is_non_html_page_evidence(page: dict[str, Any]) -> bool:
@@ -1312,6 +1334,64 @@ def filter_orphan_asset_evidence(
         "orphan_asset_evidence_version": ORPHAN_ASSET_EVIDENCE_VERSION,
     }
 
+def filter_page_level_asset_evidence(
+    fix: dict[str, Any],
+    pages: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Keep generic page-level findings on HTML documents only."""
+    rule = str(fix.get("rule") or "").lower()
+    if rule not in PAGE_LEVEL_HTML_ONLY_RULES:
+        return fix
+    page_lookup = {
+        clean_path(page_evidence_url(page)): page
+        for page in pages
+        if clean_path(page_evidence_url(page))
+    }
+    candidates = dedupe_strings([
+        clean_path(url)
+        for url in (fix.get("affected_pages") or [fix.get("page_url") or "/"])
+        if clean_path(url)
+    ])
+    html_pages = [
+        url for url in candidates
+        if not is_non_html_page_evidence({**page_lookup.get(url, {}), "url": url})
+    ]
+    if not html_pages:
+        return None
+    selected = clean_path(fix.get("page_url") or "")
+    if selected not in html_pages:
+        selected = html_pages[0]
+    return {
+        **fix,
+        "page_url": selected,
+        "representative_page_url": selected,
+        "affected_pages": html_pages,
+        "page_count": len(html_pages),
+        "asset_urls_excluded": int_or_zero(fix.get("asset_urls_excluded")) + max(0, len(candidates) - len(html_pages)),
+        "page_level_asset_evidence_version": PAGE_LEVEL_ASSET_EVIDENCE_VERSION,
+    }
+
+
+def representative_archetype_key(playbook: dict[str, Any]) -> str:
+    label = str(playbook.get("label") or "").lower()
+    if any(token in label for token in ("saas", "software", "app", "platform")):
+        return "saas"
+    if any(token in label for token in ("ecommerce", "retail", "commerce")):
+        return "ecommerce"
+    if any(token in label for token in ("publisher", "content", "blog")):
+        return "publisher"
+    if any(token in label for token in ("finance", "insurance", "lending")):
+        return "finance"
+    if any(token in label for token in ("nonprofit", "fundraising", "charity")):
+        return "nonprofit"
+    if any(token in label for token in ("education", "learning")):
+        return "education"
+    if any(token in label for token in ("booking", "experience", "marketplace")):
+        return "booking"
+    return ""
+
+
+
 def representative_page_score(
     url: str,
     fix: dict[str, Any],
@@ -1320,6 +1400,7 @@ def representative_page_score(
     playbook: dict[str, Any],
 ) -> int:
     path = clean_path(url) or "/"
+    lower = path.lower()
     page = page_lookup.get(path, {})
     rule = str(fix.get("rule") or "").lower()
     direct_evidence = rule in DIRECT_EVIDENCE_RULES
@@ -1333,35 +1414,44 @@ def representative_page_score(
         page.get("page_template_family") or fix.get("page_template_family"),
         path,
     )
+    archetype = representative_archetype_key(playbook)
 
     score = 20
     if path in {"/", "/index.html"}:
-        score += 100
+        score += 75
     if requested and path.rstrip("/") == requested.rstrip("/"):
         score += 70
-    if any(pattern in path.lower() for pattern in playbook.get("money_patterns", [])):
-        score += 45
+    if any(pattern in lower for pattern in playbook.get("money_patterns", [])):
+        score += 35
     if family in {
         "homepage", "loan_program", "conversion", "calculator", "comparison_page",
         "product_page", "collection_page", "activity_detail", "location_landing",
-        "contact", "guide_article",
+        "guide_article",
     }:
         score += 25
+    if family in {"collection_page", "category", "archive"} and archetype in {"ecommerce", "publisher", "booking"}:
+        score += 25
+    for pattern in ARCHETYPE_REPRESENTATIVE_PATTERNS.get(archetype, ()):
+        if pattern in lower:
+            score += 55
+            break
     if clean_str(page.get("title")) or clean_str(page.get("h1")):
         score += 8
     if page_is_indexable(page):
         score += 5
+    if any(pattern in lower for pattern in UTILITY_ROUTE_PATTERNS):
+        score -= 95
     if is_low_value_page(path):
-        score -= 55
+        score -= 65
     if is_non_html_page_evidence({**page, "url": path}):
-        score -= 120
+        score -= 250
     if is_route_boundary_candidate(path) or is_internal_app_route(path):
-        score += 15 if rule in ROUTE_BOUNDARY_RULES else -75
+        score += 15 if rule in ROUTE_BOUNDARY_RULES else -100
     status = int_or_zero(page.get("status_code") or page.get("status"))
-    if (status >= 400 or is_blocked_access_page(page)) and not direct_evidence:
-        score -= 60
-    if direct_evidence:
-        score += 10
+    if status >= 400 or is_blocked_access_page(page):
+        score += 15 if direct_evidence else -60
+    elif direct_evidence:
+        score += 5
     return score
 
 
@@ -1410,6 +1500,8 @@ def select_representative_page(
 def prepare_fixes(raw_fixes: list[dict[str, Any]], site_fingerprint: dict[str, Any], body: dict[str, Any], playbook: dict[str, Any], pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized = dedupe_fixes([normalize_fix(fix, index) for index, fix in enumerate(raw_fixes or []) if isinstance(fix, dict)])
     filtered = [filter_orphan_asset_evidence(fix, pages) for fix in normalized]
+    normalized = [fix for fix in filtered if fix is not None]
+    filtered = [filter_page_level_asset_evidence(fix, pages) for fix in normalized]
     normalized = [fix for fix in filtered if fix is not None]
     normalized = [select_representative_page(fix, pages, body, playbook) for fix in normalized]
     scored = [score_fix(fix, site_fingerprint, body, playbook) for fix in normalized]

@@ -1,4 +1,5 @@
 {
+  "attempt": 3,
   "bundle_checks": {
     "classifier": false,
     "fingerprint": false,

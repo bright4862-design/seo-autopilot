@@ -1,0 +1,6 @@
+=== apply patch ===
+Traceback (most recent call last):
+  File "/home/runner/work/seo-autopilot/seo-autopilot/.github/scripts/run_focused_acceptance_followup_v8.py", line 38, in <module>
+    raise RuntimeError(f"patch-anchor wrapper expected one target, found {text.count(old)}")
+RuntimeError: patch-anchor wrapper expected one target, found 0
+patch_exit=1

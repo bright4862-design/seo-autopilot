@@ -60,6 +60,51 @@ jobs:
       - name: Production build
         run: npm run build
 
+  failure-diagnostic:
+    name: Capture patch failure diagnostic
+    needs: [scanner-gates, frontend-gates]
+    if: ${{ always() && (needs.scanner-gates.result == 'failure' || needs.frontend-gates.result == 'failure') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout patch branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install focused test dependencies
+        run: |
+          python -m pip install --upgrade pip pytest pytest-asyncio
+          pip install -r scanner-api/requirements.txt
+      - name: Capture patch and focused-test output
+        shell: bash
+        run: |
+          set +e
+          {
+            echo "=== apply patch ==="
+            python .github/scripts/run_focused_acceptance_followup_v8.py
+            patch_status=$?
+            echo "patch_exit=$patch_status"
+            if [ "$patch_status" -eq 0 ]; then
+              echo "=== focused tests ==="
+              (cd scanner-api && pytest tests/test_focused_acceptance_followup_v8.py -q)
+              echo "focused_test_exit=$?"
+            fi
+          } > /tmp/focused-v8-diagnostic.txt 2>&1
+          git reset --hard HEAD
+          cp /tmp/focused-v8-diagnostic.txt docs/releases/focused-v8-patch-diagnostic.txt
+      - name: Commit diagnostic only
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/releases/focused-v8-patch-diagnostic.txt
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Record focused patch failure diagnostic"
+          git push origin HEAD:${{ github.head_ref }}
+
   publish-tested-source:
     name: Publish tested direct source changes
     needs: [scanner-gates, frontend-gates]
@@ -80,6 +125,7 @@ jobs:
           rm .github/workflows/focused-acceptance-followup-v8.yml
           rm -f docs/releases/.keep docs/releases/.candidate docs/releases/.status docs/releases/.ready docs/releases/.pr
           rm -f docs/releases/focused-acceptance-followup-v8.txt docs/releases/focused-acceptance-followup-v8.status docs/releases/focused-acceptance-followup-v8.ready docs/releases/focused-acceptance-followup-v8.pr
+          rm -f docs/releases/focused-v8-patch-diagnostic.txt
       - name: Commit tested source
         run: |
           git config user.name "github-actions[bot]"

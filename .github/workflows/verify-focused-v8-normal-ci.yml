@@ -1,0 +1,69 @@
+name: Verify focused v8 normal CI
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  frontend:
+    name: Normal frontend CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test:frontend
+      - run: npm run build
+
+  scanner:
+    name: Normal scanner CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python -m pip install --upgrade pip pytest pytest-asyncio
+          pip install -r scanner-api/requirements.txt
+      - run: pytest tests/
+      - working-directory: scanner-api
+        run: pytest tests/
+      - working-directory: scanner-api
+        run: python scripts/freeze_beta_revision.py --check
+
+  record-success:
+    name: Record verified normal CI
+    needs: [frontend, scanner]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Record and remove verifier
+        run: |
+          rm .github/workflows/verify-focused-v8-normal-ci.yml
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('docs/releases/focused-acceptance-followup-v8.md')
+          text = path.read_text()
+          note = '\nIndependent normal-CI verification passed on the clean direct-source branch.\n'
+          if note.strip() not in text:
+              path.write_text(text.rstrip() + note)
+          PY
+      - name: Commit verification record
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Record focused v8 normal CI verification"
+          git push origin HEAD:${{ github.head_ref }}

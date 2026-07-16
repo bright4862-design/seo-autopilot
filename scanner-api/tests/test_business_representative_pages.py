@@ -184,7 +184,7 @@ def test_representative_page_demotes_auth_archive_and_asset_urls():
     assert fixes[0]["page_url"] == "/blog/important-guide"
     assert fixes[0]["affected_pages"][0] == "/blog/important-guide"
     assert "/account/login" in fixes[0]["supporting_evidence_pages"]
-    assert fixes[0]["representative_page_version"] == "business_representative_page_v2_archetype_route_families"
+    assert fixes[0]["representative_page_version"] == "business_representative_page_v3_sitewide_archetype_ranking"
 
 
 def test_non_html_assets_do_not_generate_template_findings():

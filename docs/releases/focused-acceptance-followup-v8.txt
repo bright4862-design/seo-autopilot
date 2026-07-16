@@ -1,4 +1,0 @@
-classifier=archetype_classifier_v8_platform_product_routes
-representative=business_representative_page_v3_sitewide_archetype_ranking
-page_level_asset=page_level_asset_evidence_v3_markdown
-fingerprint=430813f2b15afa8f

@@ -32,3 +32,29 @@ if text.count(insert_after) != 1:
 text = text.replace(insert_after, insert_after + core_block, 1)
 script.write_text(text, encoding="utf-8")
 runpy.run_path(str(script), run_name="__main__")
+
+root = Path(__file__).resolve().parents[2]
+review_path = root / "scanner-api/app/review.py"
+review = review_path.read_text(encoding="utf-8")
+old_source_ranking = '        ranked_source_pages = dedupe_strings(ranked_affected[:5] + representative_pages)\n'
+new_source_ranking = (
+    '        ranked_source_pages = sorted(\n'
+    '            representative_pages,\n'
+    '            key=lambda url: representative_page_score(\n'
+    '                url, {**base, "rule": rule}, page_lookup, body, playbook\n'
+    '            ),\n'
+    '            reverse=True,\n'
+    '        )\n'
+)
+if review.count(old_source_ranking) != 1:
+    raise RuntimeError(f"expected one sitewide source-ranking anchor, found {review.count(old_source_ranking)}")
+review_path.write_text(review.replace(old_source_ranking, new_source_ranking, 1), encoding="utf-8")
+
+for test_path in (root / "scanner-api/tests").rglob("*.py"):
+    test_text = test_path.read_text(encoding="utf-8")
+    updated = test_text.replace(
+        'startswith("archetype_classifier_v7")',
+        'startswith("archetype_classifier_v8")',
+    )
+    if updated != test_text:
+        test_path.write_text(updated, encoding="utf-8")

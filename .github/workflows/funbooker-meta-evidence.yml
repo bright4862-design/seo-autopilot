@@ -1,0 +1,55 @@
+name: Funbooker meta evidence gate
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  diagnostic:
+    if: github.head_ref == 'diagnostic/funbooker-meta-evidence'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install diagnostic dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install httpx beautifulsoup4 playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Run seven-page evidence gate
+        run: |
+          python scripts/diagnostics/funbooker_meta_evidence.py \
+            --manifest data/funbooker-meta-diagnostic-manifest.json \
+            --output funbooker-meta-evidence
+
+      - name: Upload evidence artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: funbooker-meta-evidence-${{ github.run_id }}
+          path: funbooker-meta-evidence
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Record report on diagnostic issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "Diagnostic run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            cat funbooker-meta-evidence/report.md
+          } > /tmp/issue-comment.md
+          gh issue comment 79 --body-file /tmp/issue-comment.md

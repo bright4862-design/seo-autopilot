@@ -1,0 +1,70 @@
+[
+  {
+    "id": "fixlist_flagged_1",
+    "url": "https://www.funbooker.com/fr/annonce/best-western-plus-hotel-divona-cahors-46/voir",
+    "control_role": "fixlist_flagged_missing",
+    "fixlist_state": "missing",
+    "siteguru_state": "not_provided",
+    "template_family": "activity_detail",
+    "discovery_source": "sitemap",
+    "saved_artifact_id": 8420116219
+  },
+  {
+    "id": "fixlist_flagged_2",
+    "url": "https://www.funbooker.com/fr/annonce/team-building-atelier-lettre-fleurie-a-strasbourg-67/voir",
+    "control_role": "fixlist_flagged_missing",
+    "fixlist_state": "missing",
+    "siteguru_state": "not_provided",
+    "template_family": "activity_detail",
+    "discovery_source": "sitemap",
+    "saved_artifact_id": 8420116219
+  },
+  {
+    "id": "fixlist_flagged_3",
+    "url": "https://www.funbooker.com/fr/annonce/anniversaire-dinosaures-4-7-ans-a-domicile-33/voir",
+    "control_role": "fixlist_flagged_missing",
+    "fixlist_state": "missing",
+    "siteguru_state": "not_provided",
+    "template_family": "activity_detail",
+    "discovery_source": "sitemap",
+    "saved_artifact_id": 8420116219
+  },
+  {
+    "id": "siteguru_missing_1",
+    "url": "https://www.funbooker.com/fr/annonce/anniversaire-escape-game-5-11-ans-princesses-a-puteaux/voir",
+    "control_role": "siteguru_confirmed_missing",
+    "fixlist_state": "not_in_saved_sample",
+    "siteguru_state": "missing",
+    "template_family": "activity_detail",
+    "discovery_source": "siteguru_audit_2026-07-12"
+  },
+  {
+    "id": "siteguru_missing_2",
+    "url": "https://www.funbooker.com/fr/annonce/anniversaire-jeu-de-piste-super-heros-7-14-ans-a-clichy-92/voir",
+    "control_role": "siteguru_confirmed_missing",
+    "fixlist_state": "not_in_saved_sample",
+    "siteguru_state": "missing",
+    "template_family": "activity_detail",
+    "discovery_source": "siteguru_audit_2026-07-12"
+  },
+  {
+    "id": "fixlist_valid_control_1",
+    "url": "https://www.funbooker.com/fr/annonce/stage-permis-bateau-a-saint-leonard-de-noblat-87/voir",
+    "control_role": "saved_fixlist_valid_control",
+    "fixlist_state": "present_valid",
+    "siteguru_state": "not_provided",
+    "template_family": "activity_detail",
+    "discovery_source": "sitemap",
+    "saved_artifact_id": 8420116219
+  },
+  {
+    "id": "fixlist_valid_control_2",
+    "url": "https://www.funbooker.com/fr/annonce/team-building-randonnee-en-quad-a-puget-ville-83/voir",
+    "control_role": "saved_fixlist_valid_control",
+    "fixlist_state": "present_valid",
+    "siteguru_state": "not_provided",
+    "template_family": "activity_detail",
+    "discovery_source": "sitemap",
+    "saved_artifact_id": 8420116219
+  }
+]

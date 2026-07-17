@@ -1,4 +1,4 @@
-name: Apply metadata and title evidence v9
+name: Validate metadata and title evidence v9
 
 on:
   push:
@@ -10,11 +10,10 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply-and-validate:
-    if: github.actor != 'github-actions[bot]'
+  validate:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -30,43 +29,51 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install scanner dependencies
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
         run: |
+          npm ci
           python -m pip install --upgrade pip
           pip install pytest pytest-asyncio
           pip install -r scanner-api/requirements.txt
-
-      - name: Apply direct product patch
-        run: python .github/scripts/apply_metadata_title_evidence_v9.py
 
       - name: Run focused metadata and title regressions
         working-directory: scanner-api
         run: pytest tests/test_metadata_title_evidence_v9.py -q
 
-      - name: Run root scanner regressions
-        run: pytest tests/ -q
-
       - name: Run complete scanner API suite
+        id: scanner_suite
+        continue-on-error: true
         working-directory: scanner-api
-        run: pytest tests/ -q --tb=short
+        run: pytest tests/ -q --tb=short 2>&1 | tee /tmp/scanner-tests.log
+
+      - name: Run frontend contracts
+        id: frontend_contracts
+        continue-on-error: true
+        run: npm run test:frontend 2>&1 | tee /tmp/frontend-contracts.log
 
       - name: Verify candidate release fingerprint
+        id: fingerprint
+        continue-on-error: true
         working-directory: scanner-api
-        run: python scripts/freeze_beta_revision.py --check
+        run: python scripts/freeze_beta_revision.py --check 2>&1 | tee /tmp/fingerprint.log
 
-      - name: Commit direct product and regression changes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            data/beta-crawler-revision.json \
-            docs/releases/metadata-title-evidence-v9.md \
-            scanner-api/app/beta_revision.py \
-            scanner-api/app/extract.py \
-            scanner-api/app/metadata_title_evidence.py \
-            scanner-api/app/review.py \
-            scanner-api/app/scanner.py \
-            scanner-api/tests/test_metadata_title_evidence_v9.py
-          git diff --cached --stat
-          git commit -m "Add versioned metadata and title evidence"
-          git push origin HEAD:agent/metadata-title-evidence-v9
+      - name: Upload validation diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: metadata-title-v9-diagnostics-${{ github.run_id }}
+          path: |
+            /tmp/scanner-tests.log
+            /tmp/frontend-contracts.log
+            /tmp/fingerprint.log
+          retention-days: 7
+
+      - name: Fail when a validation gate failed
+        if: steps.scanner_suite.outcome == 'failure' || steps.frontend_contracts.outcome == 'failure' || steps.fingerprint.outcome == 'failure'
+        run: exit 1

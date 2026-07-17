@@ -1,0 +1,183 @@
+name: Deployed production 20-site validation
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/deployed-production-20-site-validation.yml
+      - data/production-20-site-validation-manifest.json
+      - scripts/ops/run_deployed_production_validation.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+concurrency:
+  group: deployed-production-20-site-validation
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    name: Collect deployed production evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate temporary integration files
+        run: |
+          python -m py_compile scripts/ops/run_deployed_production_validation.py
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path("data/production-20-site-validation-manifest.json").read_text())
+          assert manifest["scan_mode"] == "advanced"
+          assert len(manifest["sites"]) == 20
+          assert [row["order"] for row in manifest["sites"]] == list(range(1, 21))
+          assert len({row["site"] for row in manifest["sites"]}) == 20
+          assert len({row["url"] for row in manifest["sites"]}) == 20
+          print("Temporary integration manifest and runner are structurally valid.")
+          PY
+
+      - name: Run authenticated sequential production collection
+        id: collection
+        continue-on-error: true
+        env:
+          SCANNER_API_URL: ${{ secrets.SCANNER_API_URL }}
+          SCANNER_API_KEY: ${{ secrets.SCANNER_API_KEY }}
+        run: |
+          python scripts/ops/run_deployed_production_validation.py \
+            data/production-20-site-validation-manifest.json \
+            evidence/production-20-site-validation
+
+      - name: Upload complete sanitized evidence
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployed-production-20-site-validation-${{ github.run_id }}
+          retention-days: 30
+          if-no-files-found: error
+          compression-level: 6
+          path: evidence/production-20-site-validation
+
+      - name: Publish exact run and artifact handoff
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HANDOFF_ISSUE: "71"
+          COLLECTION_OUTCOME: ${{ steps.collection.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}")"
+          workflow_id="$(jq -r '.workflow_id // "unavailable"' <<<"$run_json")"
+          workflow_name="$(jq -r '.name // "Deployed production 20-site validation"' <<<"$run_json")"
+          head_sha="$(jq -r '.head_sha // "unavailable"' <<<"$run_json")"
+
+          artifact_name="unavailable"
+          artifact_size="unavailable"
+          artifact_created="unavailable"
+          artifact_expires="unavailable"
+          artifact_archive_url="unavailable"
+          artifact_expired="unavailable"
+
+          if [ -n "${ARTIFACT_ID:-}" ]; then
+            artifact_json=""
+            for attempt in 1 2 3 4 5; do
+              if artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}" 2>/dev/null)"; then
+                break
+              fi
+              sleep $((attempt * 2))
+            done
+            if [ -n "$artifact_json" ]; then
+              artifact_name="$(jq -r '.name // "unavailable"' <<<"$artifact_json")"
+              artifact_size="$(jq -r '.size_in_bytes // "unavailable"' <<<"$artifact_json")"
+              artifact_created="$(jq -r '.created_at // "unavailable"' <<<"$artifact_json")"
+              artifact_expires="$(jq -r '.expires_at // "unavailable"' <<<"$artifact_json")"
+              artifact_archive_url="$(jq -r '.archive_download_url // "unavailable"' <<<"$artifact_json")"
+              artifact_expired="$(jq -r '.expired // "unavailable"' <<<"$artifact_json")"
+            fi
+          fi
+
+          summary_path="evidence/production-20-site-validation/summary.json"
+          authority="unavailable"
+          site_records="unavailable"
+          failures="unavailable"
+          secret_flags="unavailable"
+          if [ -f "$summary_path" ]; then
+            authority="$(jq -r '.authority_gate.passed // false' "$summary_path")"
+            site_records="$(jq -r '.site_records // 0' "$summary_path")"
+            failures="$(jq -r '.failure_count // 0' "$summary_path")"
+            secret_flags="$(jq -r '.raw_output_secret_leakage_count // 0' "$summary_path")"
+            cat evidence/production-20-site-validation/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          cat > /tmp/production-validation-handoff.md <<EOF
+          ## Deployed production 20-site validation run
+
+          Integration collection completed. Codex owns independent artifact inspection and pass/fail determination.
+
+          ### Workflow
+          - Workflow: \`${workflow_name}\`
+          - Workflow ID: \`${workflow_id}\`
+          - Run ID: \`${GITHUB_RUN_ID}\`
+          - Run number: \`${GITHUB_RUN_NUMBER}\`
+          - Run URL: ${run_url}
+          - Trigger commit: \`${head_sha}\`
+          - Collection step outcome: \`${COLLECTION_OUTCOME}\`
+          - Upload step outcome: \`${UPLOAD_OUTCOME}\`
+
+          ### Authority and collection
+          - Pre-scan authority gate passed: \`${authority}\`
+          - Sanitized site records: \`${site_records}\`
+          - Failure records: \`${failures}\`
+          - Raw-output secret leakage flags: \`${secret_flags}\`
+
+          ### Artifact
+          - Artifact ID: \`${ARTIFACT_ID:-unavailable}\`
+          - Artifact name: \`${artifact_name}\`
+          - Artifact URL: ${ARTIFACT_URL:-unavailable}
+          - Archive download URL: ${artifact_archive_url}
+          - Digest: \`${ARTIFACT_DIGEST:-unavailable}\`
+          - Size in bytes: \`${artifact_size}\`
+          - Created: \`${artifact_created}\`
+          - Expires: \`${artifact_expires}\`
+          - Expired: \`${artifact_expired}\`
+
+          The artifact contains the immutable manifest, authority-gate evidence, per-site sanitized scan/review records, failures JSONL, summary JSON/Markdown, integration state, and test log. No secret values are included in this comment.
+          EOF
+
+          gh issue comment "$HANDOFF_ISSUE" --body-file /tmp/production-validation-handoff.md
+
+      - name: Enforce integration execution result
+        if: always()
+        env:
+          COLLECTION_OUTCOME: ${{ steps.collection.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        run: |
+          if [ "$COLLECTION_OUTCOME" != "success" ]; then
+            echo "Collection integration failed or the authority gate aborted before scanning."
+            exit 1
+          fi
+          if [ "$UPLOAD_OUTCOME" != "success" ]; then
+            echo "Evidence artifact upload failed."
+            exit 1
+          fi
+          echo "Integration execution completed. Site-level findings remain for Codex validation."

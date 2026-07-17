@@ -210,7 +210,7 @@ def request_json(
             return last_result, {"attempts": attempts, "final_outcome": "success"}
 
         retryable = (
-            error_taxonomy in {"timeout", "network", "infrastructure_invalid_json"}
+            error_taxonomy in {"timeout", "network"}
             or status_code in RETRYABLE_HTTP
         )
         if not retryable or attempt_number >= max_attempts:
@@ -291,6 +291,54 @@ def extract_bool_flags(value: Any, tokens: tuple[str, ...]) -> dict[str, bool]:
     return flags
 
 
+def collect_access_evidence_states(value: Any) -> dict[str, Any]:
+    exact_states: dict[str, str] = {}
+    for path, item in walk(value):
+        if not isinstance(item, dict):
+            continue
+        for key, candidate in item.items():
+            lower = str(key).strip().lower()
+            is_access_state = (
+                lower == "access_evidence_state"
+                or lower == "evidence_sufficiency"
+                or ("access" in lower and ("state" in lower or "sufficiency" in lower))
+            )
+            if not is_access_state:
+                continue
+            if isinstance(candidate, str) and candidate.strip():
+                exact_states[f"{path}.{key}"] = candidate.strip()
+            elif isinstance(candidate, list):
+                values = [str(entry).strip() for entry in candidate if str(entry).strip()]
+                if values:
+                    exact_states[f"{path}.{key}"] = "|".join(values)
+
+    normalized = [state.lower() for state in exact_states.values()]
+    incidental = any(
+        "incidental_access_limited" in state or "incidental access limited" in state
+        for state in normalized
+    )
+    material_or_partial_or_blocked = any(
+        any(token in state for token in (
+            "partial_access_limited", "material_access_limited", "blocked",
+            "access_denied", "severe_access_limited", "insufficient_access",
+        ))
+        for state in normalized
+    )
+    access_limited = any(
+        "access_limited" in state
+        or "access limited" in state
+        or "access_denied" in state
+        or "blocked" in state
+        for state in normalized
+    )
+    return {
+        "exact_states": exact_states,
+        "incidental_access_limited": incidental,
+        "material_partial_or_blocked": material_or_partial_or_blocked,
+        "access_limited": access_limited,
+    }
+
+
 def find_primary_archetype(scan: Any, review: Any) -> str:
     preferred_keys = {
         "primary_archetype", "site_archetype", "archetype",
@@ -323,8 +371,11 @@ def candidate_fixitems(review: Any) -> list[dict[str, Any]]:
             continue
         keys = {str(key).lower() for key in value}
         looks_like_fix = bool(
-            keys.intersection({"stable_id", "rule", "page_url", "affected_pages", "priority", "severity"})
-            and keys.intersection({"title", "recommendation", "current_value", "page_url", "affected_pages"})
+            keys.intersection({"stable_id", "rule"})
+            and keys.intersection({
+                "title", "recommendation", "current_value", "page_url",
+                "affected_pages", "priority", "severity",
+            })
         )
         if not looks_like_fix:
             continue
@@ -493,6 +544,24 @@ def summarize_site(
         **extract_bool_flags(scan, ("access_limited", "access-limited", "accesslimited")),
         **extract_bool_flags(review, ("access_limited", "access-limited", "accesslimited")),
     }
+    scan_access_evidence = collect_access_evidence_states(scan)
+    review_access_evidence = collect_access_evidence_states(review)
+    access_evidence = {
+        "scan": scan_access_evidence,
+        "review": review_access_evidence,
+        "incidental_access_limited": (
+            scan_access_evidence["incidental_access_limited"]
+            or review_access_evidence["incidental_access_limited"]
+        ),
+        "material_partial_or_blocked": (
+            scan_access_evidence["material_partial_or_blocked"]
+            or review_access_evidence["material_partial_or_blocked"]
+        ),
+        "access_limited": (
+            scan_access_evidence["access_limited"]
+            or review_access_evidence["access_limited"]
+        ),
+    }
     incomplete_flags = {
         **extract_bool_flags(scan, ("incomplete",)),
         **extract_bool_flags(review, ("incomplete",)),
@@ -555,8 +624,15 @@ def summarize_site(
         "scan_status": scan_status or None,
         "provisional": any(provisional_flags.values()) or "provisional" in status_lower,
         "provisional_flags": provisional_flags,
-        "access_limited": any(access_flags.values()) or "limited" in status_lower,
+        "access_limited": (
+            any(access_flags.values())
+            or access_evidence["access_limited"]
+            or "limited" in status_lower
+        ),
         "access_limited_flags": access_flags,
+        "access_evidence": access_evidence,
+        "incidental_access_limited": access_evidence["incidental_access_limited"],
+        "material_partial_or_blocked_access": access_evidence["material_partial_or_blocked"],
         "incomplete": any(incomplete_flags.values()) or "incomplete" in status_lower,
         "incomplete_flags": incomplete_flags,
         "fallback_used": any(fallback_flags.values()),
@@ -628,6 +704,10 @@ def markdown_summary(summary: dict[str, Any]) -> str:
         ):
             if record.get(key):
                 flags.append(key)
+        if record.get("incidental_access_limited"):
+            flags.append("incidental_access_limited")
+        if record.get("material_partial_or_blocked_access"):
+            flags.append("material_partial_or_blocked_access")
         if not record.get("hard_cap_compliant", True):
             flags.append("page_cap")
         if record.get("non_html_fixitem_evidence"):
@@ -742,21 +822,21 @@ def main() -> int:
                 "archetype_classifier_version": health.get("archetype_classifier_version") if isinstance(health, dict) else None,
                 "beta_revision_fingerprint": (
                     health.get("beta_revision_fingerprint") if isinstance(health, dict) else None
-                ) or (revision.get("fingerprint") if isinstance(revision, dict) else None),
+                ),
+                "optional_revision_fingerprint": (
+                    revision.get("fingerprint") if isinstance(revision, dict) else None
+                ),
                 "commit_candidates": commit_candidates,
                 "commit_marker_available": commit_available,
             },
             "raw_output_secret_leakage": health_leak,
         }
+        authority_gate["revision_optional"] = True
         authority_gate["passed"] = bool(
             health_transport.get("final_outcome") == "success"
-            and revision_transport.get("final_outcome") == "success"
             and isinstance(health, dict)
             and health.get("archetype_classifier_version") == EXPECTED_CLASSIFIER
-            and (
-                health.get("beta_revision_fingerprint") == EXPECTED_FINGERPRINT
-                or (isinstance(revision, dict) and revision.get("fingerprint") == EXPECTED_FINGERPRINT)
-            )
+            and health.get("beta_revision_fingerprint") == EXPECTED_FINGERPRINT
             and commit_matches
             and not health_leak
         )
@@ -929,6 +1009,12 @@ def main() -> int:
             "incomplete": sum(bool(item.get("incomplete")) for item in site_summaries),
             "provisional": sum(bool(item.get("provisional")) for item in site_summaries),
             "access_limited": sum(bool(item.get("access_limited")) for item in site_summaries),
+            "incidental_access_limited": sum(
+                bool(item.get("incidental_access_limited")) for item in site_summaries
+            ),
+            "material_partial_or_blocked_access": sum(
+                bool(item.get("material_partial_or_blocked_access")) for item in site_summaries
+            ),
             "page_cap_exceeded": sum(not bool(item.get("hard_cap_compliant")) for item in site_summaries),
             "non_html_fixitem_evidence": sum(bool(item.get("non_html_fixitem_evidence")) for item in site_summaries),
             "center_street_contact_canonical": sum(bool(item.get("center_street_contact_canonical_flags")) for item in site_summaries),

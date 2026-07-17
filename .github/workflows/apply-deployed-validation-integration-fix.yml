@@ -1,0 +1,54 @@
+name: Apply deployed validation integration corrections
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - scripts/ops/apply_deployed_validation_integration_fix.py
+      - .github/workflows/apply-deployed-validation-integration-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'ops/fix-deployed-20-site-validation-integration'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout integration branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply deterministic integration corrections
+        run: python scripts/ops/apply_deployed_validation_integration_fix.py
+
+      - name: Validate corrected integration runner
+        run: |
+          python -m py_compile scripts/ops/run_deployed_production_validation.py
+          python - <<'PY'
+          from pathlib import Path
+
+          text = Path("scripts/ops/run_deployed_production_validation.py").read_text()
+          assert 'revision_transport.get("final_outcome") == "success"' not in text
+          assert '"infrastructure_invalid_json"}' not in text
+          assert 'collect_access_evidence_states' in text
+          assert 'incidental_access_limited' in text
+          assert 'material_partial_or_blocked_access' in text
+          assert 'health.get("beta_revision_fingerprint") == EXPECTED_FINGERPRINT' in text
+          PY
+
+      - name: Remove temporary patch machinery
+        run: |
+          rm scripts/ops/apply_deployed_validation_integration_fix.py
+          rm .github/workflows/apply-deployed-validation-integration-fix.yml
+
+      - name: Publish direct integration change
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Correct deployed production validation integration"
+          git push origin HEAD:${{ github.head_ref }}

@@ -11,6 +11,15 @@ from .canonical_validation import validate_canonical_targets
 from .redirect_validation import apply_redirect_evidence, fetch_with_redirect_evidence, summarize_redirect_evidence
 from .extract import classify_template, extract_links, extract_page
 from .market_scope import market_pair_prefix, path_within_scope
+from .metadata_title_evidence import (
+    METADATA_EVIDENCE_VERSION,
+    TITLE_EVIDENCE_VERSION,
+    classify_duplicate_title_context,
+    is_generic_fallback_title,
+    is_html_page_evidence,
+    normalize_title_key,
+    relative_evidence_url,
+)
 from .sampling import SAMPLING_VERSION, sampling_report, select_balanced_urls
 from .render_followup import RENDER_FOLLOWUP_VERSION, run_render_followup
 from .robots_policy import SCANNER_USER_AGENT, annotate_robots_evidence, load_robots_policy
@@ -221,6 +230,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         redirect_evidence = summarize_redirect_evidence(pages)
 
     findings = build_findings(pages)
+    findings.extend(duplicate_title_findings(pages))
     findings.extend(duplicate_casing_findings(pages))
     grouped = group_findings(findings)
     verified_failed = [page_evidence(page) for page in pages if is_verified_failed(page)]
@@ -255,6 +265,8 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         "version": VERSION,
         "scanner_version": VERSION,
         "scanner_profile": "python_screaming_frog_lite_v1",
+        "metadata_evidence_version": METADATA_EVIDENCE_VERSION,
+        "title_evidence_version": TITLE_EVIDENCE_VERSION,
         "sampling_version": SAMPLING_VERSION,
         "sampling_evidence": sampling_evidence,
         "render_evidence_version": RENDER_EVIDENCE_VERSION,
@@ -291,6 +303,8 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         "url_evidence_summary": build_evidence_summary(pages, len(artifacts)),
         "technical_audit_summary": {
             "scanner_version": VERSION,
+            "metadata_evidence_version": METADATA_EVIDENCE_VERSION,
+            "title_evidence_version": TITLE_EVIDENCE_VERSION,
             "scanner_elapsed_ms": elapsed_ms,
             "scanner_total_budget_seconds": budget["timeout"],
             "scan_deadline_reached": deadline_reached,
@@ -447,8 +461,49 @@ def build_findings(pages: list[dict]) -> list[dict]:
             continue
         if not page.get("title"):
             findings.append(create_finding("missing_title", "meta_title", "medium", "Add a clear search title", path, explanation="This page is missing a title.", recommendation="Add a short, specific page title."))
-        if not page.get("meta_description") and page.get("estimated_page_intent") != "internal_or_auth":
-            findings.append(create_finding("missing_meta_description", "meta_description", "medium", "Add a clear search description", path, explanation="This page is missing a meta description.", recommendation="Add a short description that explains the page and why someone should click."))
+        else:
+            if page.get("title_is_generic_fallback") or is_generic_fallback_title(page.get("title")):
+                finding = create_finding(
+                    "generic_fallback_title",
+                    "meta_title",
+                    "medium",
+                    "Replace a generic fallback search title",
+                    path,
+                    current_value=str(page.get("title") or ""),
+                    explanation="This page uses a generic CMS or fallback title instead of describing the page.",
+                    recommendation="Replace the fallback with a specific title generated from the page or shared template.",
+                )
+                finding.update({"title_evidence_version": TITLE_EVIDENCE_VERSION, "non_scoring": True, "score_impact": 0})
+                findings.append(finding)
+            if page.get("title_width_state") == "over_pixel_limit":
+                finding = create_finding(
+                    "title_over_pixel_limit",
+                    "meta_title",
+                    "low",
+                    "Shorten a search title likely to truncate",
+                    path,
+                    current_value=f"{page.get('title_pixel_width_estimate', 0)} estimated pixels: {page.get('title', '')}",
+                    explanation="The title is likely wider than the common search-result display area.",
+                    recommendation="Shorten the title while preserving the main topic and commercial intent.",
+                )
+                finding.update({"title_evidence_version": TITLE_EVIDENCE_VERSION, "non_scoring": True, "score_impact": 0})
+                findings.append(finding)
+        metadata_state = str(page.get("meta_description_state") or "")
+        if not metadata_state:
+            metadata_state = "present_valid" if page.get("meta_description") else "missing"
+        if page.get("estimated_page_intent") != "internal_or_auth":
+            if metadata_state == "missing":
+                finding = create_finding("missing_meta_description", "meta_description", "medium", "Add a clear search description", path, explanation="This page has no standard meta-description element.", recommendation="Add a short description that explains the page and why someone should click.")
+                finding.update({"metadata_evidence_version": METADATA_EVIDENCE_VERSION, "meta_description_state": metadata_state})
+                findings.append(finding)
+            elif metadata_state == "present_empty":
+                finding = create_finding("empty_meta_description", "meta_description", "medium", "Fill an empty search description", path, explanation="A meta-description element exists, but its content value is empty.", recommendation="Populate the existing description field with a concise, page-specific summary.")
+                finding.update({"metadata_evidence_version": METADATA_EVIDENCE_VERSION, "meta_description_state": metadata_state})
+                findings.append(finding)
+            elif metadata_state == "malformed":
+                finding = create_finding("malformed_meta_description", "meta_description", "medium", "Fix malformed meta-description markup", path, explanation="A meta-description element exists without a usable content attribute.", recommendation="Output one valid meta name=\"description\" element with a non-empty content value.")
+                finding.update({"metadata_evidence_version": METADATA_EVIDENCE_VERSION, "meta_description_state": metadata_state})
+                findings.append(finding)
         if page.get("h1_count", 0) == 0 and page.get("estimated_page_intent") != "internal_or_auth":
             findings.append(create_finding("missing_h1", "thin_content", "medium", "Add one clear page heading", path, explanation="The page does not have a clear H1 heading.", recommendation="Add one main heading that matches the page purpose."))
         if page.get("h1_count", 0) > 1:
@@ -732,7 +787,7 @@ def create_finding(rule: str, category: str, priority: str, title: str, page_url
 
 
 FAILURE_RULES = {"rate_limited_page", "failed_page", "server_error", "404_error", "410_error"}
-TEMPLATE_RULES = {"client_rendering", "canonical_missing", "canonical_target_redirect", "canonical_target_failed", "canonical_target_noindex", "canonical_target_blocked", "canonical_chain", "canonical_loop", "canonical_cross_domain", "redirect_loop", "redirect_invalid_response", "redirect_chain_limit", "redirect_destination_failed", "redirect_destination_blocked", "redirect_destination_noindex", "redirect_chain", "sitemap_redirect", "internal_link_redirect", "schema", "missing_h1", "multiple_h1", "image_alt_text", "missing_meta_description", "sitemap_indexability_conflict"}
+TEMPLATE_RULES = {"client_rendering", "canonical_missing", "canonical_target_redirect", "canonical_target_failed", "canonical_target_noindex", "canonical_target_blocked", "canonical_chain", "canonical_loop", "canonical_cross_domain", "redirect_loop", "redirect_invalid_response", "redirect_chain_limit", "redirect_destination_failed", "redirect_destination_blocked", "redirect_destination_noindex", "redirect_chain", "sitemap_redirect", "internal_link_redirect", "schema", "missing_h1", "multiple_h1", "image_alt_text", "missing_meta_description", "empty_meta_description", "malformed_meta_description", "title_over_pixel_limit", "generic_fallback_title", "sitemap_indexability_conflict"}
 GROUP_MIN_AFFECTED = 3
 
 
@@ -757,7 +812,13 @@ def group_template_title(rule: str, family: str) -> str:
     if rule == "image_alt_text":
         return f"Batch image descriptions on {fam} pages"
     if rule == "missing_meta_description":
-        return f"Batch meta descriptions on {fam} pages"
+        return f"Add missing meta descriptions on {fam} pages"
+    if rule == "empty_meta_description":
+        return f"Fill empty meta descriptions on {fam} pages"
+    if rule == "malformed_meta_description":
+        return f"Fix malformed meta descriptions on {fam} pages"
+    if rule == "title_over_pixel_limit":
+        return f"Shorten overwide search titles on {fam} pages"
     if rule == "missing_h1":
         return f"Batch page headings on {fam} pages"
     if rule == "canonical_missing":
@@ -862,6 +923,83 @@ def _unique_nonempty(values: list) -> list:
     return out
 
 
+
+def duplicate_title_findings(pages: list[dict]) -> list[dict]:
+    buckets: dict[str, list[dict]] = {}
+    for page in pages:
+        status = int(page.get("status_code") or 0)
+        title = str(page.get("title") or "").strip()
+        if not title or not (200 <= status < 300) or page.get("indexable") is False:
+            continue
+        if not is_html_page_evidence(page):
+            continue
+        buckets.setdefault(normalize_title_key(title), []).append(page)
+
+    findings: list[dict] = []
+    for members in buckets.values():
+        urls = _unique_nonempty([relative_evidence_url(page) for page in members])
+        if len(urls) < 2:
+            continue
+        title = str(members[0].get("title") or "").strip()
+        context = classify_duplicate_title_context(title, urls)
+        details = {
+            "localized_pages": (
+                "duplicate_title_localized",
+                "low",
+                "Review repeated titles across localized pages",
+                "The same title appears across multiple locale or country paths.",
+                "Verify each market has the intended language, a self-referencing canonical, and correct hreflang relationships before deciding whether titles need localization.",
+            ),
+            "query_parameter_variants": (
+                "duplicate_title_query_variants",
+                "medium",
+                "Consolidate duplicate titles on parameter variants",
+                "The same title appears on clean and query-parameter versions of one path.",
+                "Confirm the preferred URL is canonical and non-preferred parameter variants do not create separate indexable pages.",
+            ),
+            "generic_fallback": (
+                "generic_fallback_title",
+                "medium",
+                "Replace a repeated generic fallback title",
+                "Multiple unrelated pages use the same generic CMS fallback title.",
+                "Fix the shared title template so each public page receives a specific descriptive title.",
+            ),
+            "true_template_duplicates": (
+                "duplicate_title_template",
+                "medium",
+                "Differentiate repeated titles across templates",
+                "Multiple distinct pages use the same title without a locale or parameter relationship.",
+                "Update the shared title template or page fields so each indexable page has a distinct, useful title.",
+            ),
+        }[context]
+        rule, priority, issue_title, explanation, recommendation = details
+        finding = create_finding(
+            rule,
+            "meta_title" if context == "generic_fallback" else "duplicate_content",
+            priority,
+            issue_title,
+            urls[0],
+            current_value=f"{len(urls)} pages share: {title}",
+            explanation=explanation,
+            recommendation=recommendation,
+            difficulty="developer" if context in {"query_parameter_variants", "generic_fallback"} else "moderate",
+        )
+        finding.update({
+            "affected_pages": urls,
+            "duplicate_title_urls": urls,
+            "page_count": len(urls),
+            "duplicate_title_context": context,
+            "title_value": title,
+            "title_evidence_version": TITLE_EVIDENCE_VERSION,
+            "non_scoring": True,
+            "score_impact": 0,
+            "evidence_status": "confirmed",
+            "verification_state": "needs_verification" if context == "localized_pages" else "verified",
+        })
+        findings.append(finding)
+    return findings
+
+
 def detect_duplicate_casing_routes(pages: list[dict]) -> list[dict]:
     by_lower: dict[str, list[str]] = {}
     for page in pages:
@@ -933,7 +1071,7 @@ def build_evidence_summary(pages: list[dict], artifact_count: int) -> dict:
 
 
 def page_evidence(page: dict) -> dict:
-    keys = ["url", "final_url", "path", "status_code", "fetch_error", "url_confidence", "url_suspicion_reasons", "discovered_from", "source_pages", "link_text_samples", "page_template_family", "estimated_page_intent", "title", "h1", "redirect_state", "redirect_hop_count", "redirect_chain", "redirect_destination_url", "redirect_destination_status_code", "redirect_destination_indexability_state"]
+    keys = ["url", "final_url", "path", "status_code", "fetch_error", "url_confidence", "url_suspicion_reasons", "discovered_from", "source_pages", "link_text_samples", "page_template_family", "estimated_page_intent", "title", "title_pixel_width_estimate", "title_width_state", "title_is_generic_fallback", "title_evidence_version", "meta_description", "meta_description_state", "meta_description_element_count", "meta_description_values", "meta_description_duplicate", "metadata_evidence_version", "h1", "redirect_state", "redirect_hop_count", "redirect_chain", "redirect_destination_url", "redirect_destination_status_code", "redirect_destination_indexability_state"]
     return {key: page.get(key) for key in keys}
 
 
@@ -948,8 +1086,18 @@ def is_verified_failed(page: dict) -> bool:
 def calculate_health_score(pages: list[dict], findings: list[dict]) -> int:
     score = 92
     score -= min(35, sum(1 for page in pages if is_verified_failed(page)) * 8)
+    metadata_penalties: dict[str, int] = {}
     for finding in findings:
-        score -= {"critical": 10, "high": 6, "medium": 2}.get(finding.get("priority"), 0)
+        if finding.get("non_scoring") is True or finding.get("score_impact") == 0:
+            continue
+        penalty = {"critical": 10, "high": 6, "medium": 2}.get(finding.get("priority"), 0)
+        rule = str(finding.get("rule") or "")
+        if rule in {"missing_meta_description", "empty_meta_description", "malformed_meta_description"}:
+            family = str(finding.get("page_template_family") or "standard")
+            metadata_penalties[family] = max(metadata_penalties.get(family, 0), penalty)
+        else:
+            score -= penalty
+    score -= sum(metadata_penalties.values())
     return max(20, min(98, round(score)))
 
 
@@ -1013,6 +1161,7 @@ def friendly_category(category: str) -> str:
     return {
         "meta_title": "Search appearance",
         "meta_description": "Search appearance",
+        "duplicate_content": "Search appearance",
         "canonical": "Website setup",
         "schema": "Trust signals",
         "thin_content": "Page content",

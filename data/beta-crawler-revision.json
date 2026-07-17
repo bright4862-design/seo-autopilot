@@ -5,6 +5,7 @@
     "crawler_acceptance_version": "crawler_acceptance_v1",
     "image_alt_evidence_version": "material_image_alt_v1",
     "indexability_quality_version": "indexability_quality_v1",
+    "metadata_evidence_version": "metadata_evidence_v1_description_states",
     "navigation_indexability_version": "navigation_indexability_v1",
     "orphan_asset_evidence_version": "orphan_asset_evidence_v1",
     "page_level_asset_evidence_version": "page_level_asset_evidence_v3_markdown",
@@ -17,14 +18,15 @@
     "review_version": "python_review_v2_structural_marketplace",
     "sampling_version": "balanced_sitemap_buckets_v1",
     "scanner_version": "python_scanner_v3_bounded_request",
+    "title_evidence_version": "title_evidence_v1_contextual_duplicates",
     "trust_discovery_version": "trust_page_discovery_v1",
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "430813f2b15afa8f",
-  "git_commit": "6904c6376f8bcffeafb3fe87e72ce03a3d6c6be9",
-  "note": "Frozen production baseline accepted from authenticated 20-site validation run 29613925642 and independently verified artifact 8420116219; IKEA classification and repeated redirect/sitemap consolidation remain non-blocking follow-ups.",
-  "recorded_at": "2026-07-17T21:30:01Z",
+  "fingerprint": "52348dd1f3b77700",
+  "git_commit": "dab274d00972218d9d8b54dd76c808edde193256",
+  "note": "Metadata/title evidence v9 candidate: absent, empty and malformed meta descriptions are distinct; duplicate titles are contextualized as localized, query-variant, generic fallback or true template duplicates; title-width and fallback-title evidence is non-scoring. Funbooker and Sephora focused acceptance required.",
+  "recorded_at": "2026-07-18T00:00:00Z",
   "schema_version": "beta_crawler_revision_v1",
   "status": "frozen_beta"
 }

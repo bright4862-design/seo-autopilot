@@ -1,5 +1,6 @@
 {
   "validation_id": "deployed-production-20-v8-2026-07-17",
+  "integration_revision": "optional-revision-strict-retry-access-states-v2",
   "scan_mode": "advanced",
   "expected_authority": {
     "archetype_classifier_version": "archetype_classifier_v8_platform_product_routes",

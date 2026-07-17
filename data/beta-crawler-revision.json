@@ -22,9 +22,9 @@
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
   "fingerprint": "430813f2b15afa8f",
-  "git_commit": "82bc4c41aa5b74238fa068f99507b2d0726e1180",
-  "note": "Focused v8 acceptance follow-up candidate: platform-product route identity for infrastructure SaaS; Markdown excluded from page-level HTML evidence; site-wide representatives use archetype-aware ranking.",
-  "recorded_at": "2026-07-17T00:00:00+00:00",
+  "git_commit": "6904c6376f8bcffeafb3fe87e72ce03a3d6c6be9",
+  "note": "Frozen production baseline accepted from authenticated 20-site validation run 29613925642 and independently verified artifact 8420116219; IKEA classification and repeated redirect/sitemap consolidation remain non-blocking follow-ups.",
+  "recorded_at": "2026-07-17T21:30:01Z",
   "schema_version": "beta_crawler_revision_v1",
   "status": "frozen_beta"
 }

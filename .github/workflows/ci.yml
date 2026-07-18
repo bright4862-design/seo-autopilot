@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   build:
@@ -111,11 +112,52 @@ jobs:
           npm run build
 
       - name: Validate scanner and revision
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          pytest tests/
-          cd scanner-api
-          pytest tests/
-          python scripts/freeze_beta_revision.py --check
+          set +e
+          pytest tests/ > /tmp/root-tests.log 2>&1
+          root_status=$?
+          (
+            cd scanner-api
+            pytest tests/ > /tmp/scanner-tests.log 2>&1
+          )
+          scanner_status=$?
+          (
+            cd scanner-api
+            python scripts/freeze_beta_revision.py --check > /tmp/revision-check.log 2>&1
+          )
+          revision_status=$?
+
+          if [ "$root_status" -ne 0 ] || [ "$scanner_status" -ne 0 ] || [ "$revision_status" -ne 0 ]; then
+            {
+              echo '## Page evidence gate validation failure'
+              echo
+              echo '### Root tests'
+              echo '```text'
+              grep -n -B 6 -A 18 -E 'FAILED|ERROR|AssertionError|E +assert|short test summary' /tmp/root-tests.log || tail -n 80 /tmp/root-tests.log
+              echo '```'
+              echo
+              echo '### Scanner tests'
+              echo '```text'
+              grep -n -B 6 -A 22 -E 'FAILED|ERROR|AssertionError|E +assert|short test summary' /tmp/scanner-tests.log || tail -n 120 /tmp/scanner-tests.log
+              echo '```'
+              echo
+              echo '### Revision check'
+              echo '```text'
+              cat /tmp/revision-check.log
+              echo '```'
+            } > /tmp/evidence-gate-failure.md
+            gh pr comment 84 --body-file /tmp/evidence-gate-failure.md
+          else
+            cat /tmp/root-tests.log
+            cat /tmp/scanner-tests.log
+            cat /tmp/revision-check.log
+          fi
+
+          if [ "$root_status" -ne 0 ] || [ "$scanner_status" -ne 0 ] || [ "$revision_status" -ne 0 ]; then
+            exit 1
+          fi
 
       - name: Commit validated product source
         run: |

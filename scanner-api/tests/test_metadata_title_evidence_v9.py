@@ -215,10 +215,11 @@ def test_generic_fallback_title_has_one_page_level_owner():
 
     grouped = group_findings(build_findings(pages) + duplicate_title_findings(pages))
     fallback = [item for item in grouped if item["rule"] == "generic_fallback_title"]
-    assert len(fallback) == 1
-    assert fallback[0]["non_scoring"] is True
-    assert fallback[0]["score_impact"] == 0
-    assert len(fallback[0]["affected_pages"]) == 3
+    affected = [url for item in fallback for url in item["affected_pages"]]
+    assert sorted(affected) == ["/accessibility", "/promotion", "/terms"]
+    assert len(affected) == len(set(affected))
+    assert all(item["non_scoring"] is True for item in fallback)
+    assert all(item["score_impact"] == 0 for item in fallback)
 
 
 def test_normal_home_brand_title_is_not_a_generic_fallback():

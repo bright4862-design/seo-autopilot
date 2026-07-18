@@ -936,12 +936,17 @@ def duplicate_title_findings(pages: list[dict]) -> list[dict]:
         buckets.setdefault(normalize_title_key(title), []).append(page)
 
     findings: list[dict] = []
-    for members in buckets.values():
-        urls = _unique_nonempty([relative_evidence_url(page) for page in members])
+    for title_key in sorted(buckets):
+        members = buckets[title_key]
+        urls = sorted(_unique_nonempty([relative_evidence_url(page) for page in members]))
         if len(urls) < 2:
             continue
         title = str(members[0].get("title") or "").strip()
         context = classify_duplicate_title_context(title, urls)
+        # Generic fallback titles are owned by build_findings so one affected page
+        # still produces evidence and repeated pages do not create a second bucket card.
+        if context == "generic_fallback":
+            continue
         details = {
             "localized_pages": (
                 "duplicate_title_localized",

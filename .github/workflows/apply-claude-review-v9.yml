@@ -46,8 +46,24 @@ jobs:
         run: python .github/scripts/apply-claude-review-v9.py
 
       - name: Run focused v9 regressions
+        id: focused
+        continue-on-error: true
         working-directory: scanner-api
-        run: pytest tests/test_metadata_title_evidence_v9.py -q
+        run: |
+          set -o pipefail
+          pytest tests/test_metadata_title_evidence_v9.py -q --tb=short 2>&1 | tee /tmp/focused-v9.log
+
+      - name: Upload focused diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: focused-v9-review-${{ github.run_id }}
+          path: /tmp/focused-v9.log
+          retention-days: 7
+
+      - name: Stop after focused failure
+        if: steps.focused.outcome == 'failure'
+        run: exit 1
 
       - name: Run complete scanner API suite
         working-directory: scanner-api

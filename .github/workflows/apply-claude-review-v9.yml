@@ -46,24 +46,8 @@ jobs:
         run: python .github/scripts/apply-claude-review-v9.py
 
       - name: Run focused v9 regressions
-        id: focused
-        continue-on-error: true
         working-directory: scanner-api
-        run: |
-          set -o pipefail
-          pytest tests/test_metadata_title_evidence_v9.py -q --tb=short 2>&1 | tee /tmp/focused-v9.log
-
-      - name: Upload focused diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: focused-v9-review-${{ github.run_id }}
-          path: /tmp/focused-v9.log
-          retention-days: 7
-
-      - name: Stop after focused failure
-        if: steps.focused.outcome == 'failure'
-        run: exit 1
+        run: pytest tests/test_metadata_title_evidence_v9.py -q
 
       - name: Run complete scanner API suite
         working-directory: scanner-api
@@ -85,11 +69,11 @@ jobs:
         working-directory: scanner-api
         run: python scripts/freeze_beta_revision.py --check
 
-      - name: Commit direct scanner correction
+      - name: Commit direct review corrections
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "4189826+github-actions[bot]@users.noreply.github.com"
-          git add scanner-api/app/scanner.py
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scanner-api/app/scanner.py scanner-api/tests/test_metadata_title_evidence_v9.py
           git diff --cached --stat
           git commit -m "Address independent v9 review findings"
           git push origin HEAD:agent/metadata-title-evidence-v9

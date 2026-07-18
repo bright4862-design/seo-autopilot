@@ -19,9 +19,8 @@ _GENERIC_TITLES = {
 }
 _GENERIC_TITLE_PATTERNS = (
     re.compile(r"^sites?[-_].+[-_]site$", re.I),
-    re.compile(r"^(home|homepage|welcome)\s*[-|:]\s*.+$", re.I),
 )
-_LOCALE_SEGMENT_RE = re.compile(r"^[a-z]{2}(?:[-_][a-z]{2})?$", re.I)
+_LOCALE_PAIR_RE = re.compile(r"^[a-z]{2}[-_][a-z]{2}$", re.I)
 _MARKET_SEGMENTS = {
     "us", "uk", "gb", "fr", "de", "es", "it", "nl", "be", "ca", "au", "nz",
     "pt", "br", "mx", "jp", "kr", "cn", "hk", "sg", "in", "ie", "ch", "at",
@@ -66,12 +65,17 @@ def is_generic_fallback_title(value: str) -> bool:
 
 
 def describe_meta_description(soup, html: str, status_code: int, content_type: str, fetch_error: str) -> dict:
-    """Return an explicit, mutually exclusive existence state."""
+    """Return an explicit, mutually exclusive existence state.
+
+    Metadata claims are made only for a successful final HTTP 200 HTML response.
+    Redirect, partial-content, empty-body, blocked and non-HTML records remain
+    inconclusive rather than being converted into missing-tag findings.
+    """
     status = int(status_code or 0)
     content_type_lower = str(content_type or "").lower()
     source = str(html or "")
 
-    if fetch_error or status <= 0 or status >= 400:
+    if fetch_error or status != 200:
         state, elements = "access_inconclusive", []
     elif content_type_lower and "html" not in content_type_lower and "xhtml" not in content_type_lower:
         state, elements = "access_inconclusive", []
@@ -107,6 +111,7 @@ def describe_meta_description(soup, html: str, status_code: int, content_type: s
         "element_count": len(elements),
         "values": values[:8],
         "duplicate": len(elements) > 1,
+        "head_parse_boundary_has_description": state == "head_parse_boundary" and bool(elements),
     }
 
 
@@ -135,7 +140,7 @@ def _locale_parts(value: str) -> tuple[str, str]:
     if not segments:
         return "", "/"
     first = segments[0].lower()
-    if _LOCALE_SEGMENT_RE.match(first) or first in _MARKET_SEGMENTS:
+    if first in _MARKET_SEGMENTS or _LOCALE_PAIR_RE.fullmatch(first):
         stripped = "/" + "/".join(segments[1:])
         return first, stripped or "/"
     return "", path

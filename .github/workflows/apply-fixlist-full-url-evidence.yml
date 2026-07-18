@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   apply-and-validate:
@@ -57,7 +58,25 @@ jobs:
         run: npm run typecheck
 
       - name: Frontend contract tests
-        run: npm run test:frontend
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          npm run test:frontend > /tmp/fixlist-contracts.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            {
+              echo '## FixList URL evidence contract failure'
+              echo
+              echo '```text'
+              tail -n 180 /tmp/fixlist-contracts.log
+              echo '```'
+            } > /tmp/fixlist-contracts-comment.md
+            gh pr comment 83 --body-file /tmp/fixlist-contracts-comment.md
+          else
+            cat /tmp/fixlist-contracts.log
+          fi
+          exit "$status"
 
       - name: Production build
         run: npm run build

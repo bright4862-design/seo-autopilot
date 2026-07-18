@@ -995,7 +995,7 @@ def page_pattern_title(rule: str, family: str, is_group: bool) -> str:
     if rule == "image_alt_text":
         return f"Add missing image descriptions to {label} pages" if is_group else "Add missing image descriptions to the affected page"
     if rule == "missing_meta_description":
-        return f"Add missing meta descriptions to {label} pages" if is_group else "Add a missing meta description to the affected page"
+        return f"Add missing meta descriptions to {label} pages" if is_group else "Add a meta description to the affected page"
     if rule == "empty_meta_description":
         return f"Fill empty meta descriptions on {label} pages" if is_group else "Fill the empty meta description on the affected page"
     if rule == "malformed_meta_description":

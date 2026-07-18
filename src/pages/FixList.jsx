@@ -110,8 +110,9 @@ export default function FixList() {
   const recommendations = useMemo(() => getRecommendations(scanRecord).map((item) => normalizeRecommendation(item, scanRecord)), [scanRecord]);
   const pages = useMemo(() => getPages(scanRecord), [scanRecord]);
   const healthScore = getHealthScore(scanRecord);
+  const scoreUnavailable = isHealthScoreUnavailable(scanRecord);
   const pagesScanned = getPagesScanned(scanRecord, pages);
-  const hasUsefulScan = Boolean(scanRecord && (recommendations.length > 0 || pages.length > 0 || healthScore > 0));
+  const hasUsefulScan = Boolean(scanRecord && (recommendations.length > 0 || pages.length > 0 || (healthScore !== null && healthScore > 0)));
   const noHighConfidenceFindings = isNoHighConfidenceFindings(scanRecord, recommendations);
   const nextBestStep = getNextBestStep(scanRecord, noHighConfidenceFindings);
   const websiteKey = websiteKeyOf(scanRecord);
@@ -121,7 +122,7 @@ export default function FixList() {
   const doneItems = recommendations.filter((item) => doneIds.includes(item.id));
   const fixNow = active.filter((item) => item.priority === "critical" || item.priority === "high");
   const later = active.filter((item) => item.priority !== "critical" && item.priority !== "high");
-  const passedChecks = hasUsefulScan ? buildPassedChecks(recommendations) : [];
+  const passedChecks = hasUsefulScan && !scoreUnavailable ? buildPassedChecks(recommendations) : [];
   const limitationNote = getLimitationNote(scanRecord);
   const summary = hasUsefulScan ? getBestSummary(scanRecord, healthScore, pagesScanned, recommendations.length) : "";
   const healthGrade = hasUsefulScan ? getHealthGrade(scanRecord, healthScore, noHighConfidenceFindings) : "";
@@ -161,10 +162,10 @@ export default function FixList() {
             </p>
 
             <div className="mt-4 flex items-center gap-7">
-              <ScoreRing score={healthScore} />
+              <ScoreRing score={healthScore} unavailable={scoreUnavailable} />
               <div>
                 <h1 className="text-[26px] font-semibold leading-tight tracking-tight">
-                  {getHeroHeadline({ healthScore, noHighConfidenceFindings, activeCount: active.length, doneCount: doneItems.length })}
+                  {getHeroHeadline({ healthScore, scoreUnavailable, noHighConfidenceFindings, activeCount: active.length, doneCount: doneItems.length })}
                 </h1>
                 <p className="mt-1.5 text-[15px] text-ink-muted tabular-nums">
                   {getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount: active.length, doneCount: doneItems.length })}
@@ -586,7 +587,8 @@ function ScanDebugPanel({ debugData, onRefresh, onClear }) {
   );
 }
 
-function getHeroHeadline({ healthScore, noHighConfidenceFindings, activeCount, doneCount }) {
+function getHeroHeadline({ healthScore, scoreUnavailable, noHighConfidenceFindings, activeCount, doneCount }) {
+  if (scoreUnavailable) return "Score unavailable.";
   if (noHighConfidenceFindings && activeCount === 0 && doneCount === 0) return "Nothing to fix in this sample.";
   if (activeCount === 0 && doneCount > 0) return "Nothing left on the list.";
   if (healthScore >= 85) return "Great shape overall.";
@@ -605,6 +607,7 @@ function getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount, doneC
 }
 
 function getLimitationNote(record) {
+  if (isHealthScoreUnavailable(record)) return "We couldn't verify enough usable pages to calculate a reliable score. The access item below describes the scan limitation, not a confirmed on-page SEO defect.";
   const limitation = cleanString(record?.limitation);
   if (limitation) return limitation;
   if (record?.score_is_provisional === true) return "Scan coverage was limited, so this score is provisional. Fix what's below, then scan again for a fuller picture.";
@@ -1057,9 +1060,28 @@ function getPages(record) {
 
 
 
+function isHealthScoreUnavailable(record) {
+  const status = cleanString(
+    record?.health_score_status
+      || record?.website_health_report?.health_score_status
+      || record?.scan_summary?.health_score_status,
+  );
+  if (status === "insufficient_evidence") return true;
+  return record?.health_score === null && record?.seo_score === null;
+}
+
 function getHealthScore(record) {
-  const score = Number(record?.health_score || record?.seo_score || record?.website_health_report?.health_score || record?.scan_summary?.health_score || record?.scan_summary?.score || 0);
-  return Number.isFinite(score) ? Math.round(score) : 0;
+  if (isHealthScoreUnavailable(record)) return null;
+  const candidates = [
+    record?.health_score,
+    record?.seo_score,
+    record?.website_health_report?.health_score,
+    record?.scan_summary?.health_score,
+    record?.scan_summary?.score,
+  ];
+  const raw = candidates.find((value) => value !== null && value !== undefined && value !== "");
+  const score = Number(raw);
+  return Number.isFinite(score) ? Math.round(score) : null;
 }
 
 function getPagesScanned(record, pages) {
@@ -1089,6 +1111,9 @@ function getNextBestStep(record, noHighConfidenceFindings) {
 function getBestSummary(record, healthScore, pagesScanned, issueCount) {
   const summary = cleanString(record?.customer_summary || record?.simple_summary || record?.website_health_report?.overall_explanation || record?.scan_summary?.plain_english_summary || record?.scan_summary?.summary);
   if (summary) return normalizeCoverageSummary(summary, pagesScanned);
+  if (isHealthScoreUnavailable(record)) {
+    return `FixList could not verify enough usable pages to calculate a reliable score. It retained ${issueCount || 0} access or verification item${issueCount === 1 ? "" : "s"} from this scan.`;
+  }
   const label = getScoreBand(healthScore).label;
   return `Your website health is ${label.toLowerCase()} with a score of ${healthScore || 0}/100. FixList reviewed ${pagesScanned || 0} pages and found ${issueCount || 0} recommendations. Start with the highest-impact items first.`;
 }

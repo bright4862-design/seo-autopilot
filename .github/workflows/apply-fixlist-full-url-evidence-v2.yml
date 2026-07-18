@@ -4,12 +4,17 @@ on:
   push:
     branches:
       - feature/fixlist-full-url-evidence
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 jobs:
   apply:
+    if: github.event_name == 'push' || github.head_ref == 'feature/fixlist-full-url-evidence'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -89,7 +94,7 @@ jobs:
             scripts/ops/apply_fixlist_full_url_evidence.py \
             docs/.fixlist-full-url-evidence-trigger
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "4189822+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "Show all affected URLs and clarify FixList steps"
           git push origin HEAD:feature/fixlist-full-url-evidence

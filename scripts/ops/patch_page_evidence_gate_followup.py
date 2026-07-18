@@ -69,4 +69,14 @@ text = replace_once(
 )
 write(path, text)
 
+path = "scanner-api/tests/test_review_presentation_contract.py"
+text = read(path)
+text = replace_once(
+    text,
+    '    assert result["health_score"] <= 45\n    assert result["review_input_quality"]["access_evidence_state"] == "blocked"\n',
+    '    assert result["health_score"] is None\n    assert result["health_score_status"] == "insufficient_evidence"\n    assert result["review_input_quality"]["access_evidence_state"] == "blocked"\n',
+    "fully blocked score contract",
+)
+write(path, text)
+
 print("Aligned evidence-gate compatibility contracts")

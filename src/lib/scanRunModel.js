@@ -40,6 +40,10 @@ function modePageLimit(scanMode) {
   return MODE_PAGE_LIMITS[toStr(scanMode).toLowerCase()] || MODE_PAGE_LIMITS.advanced;
 }
 
+function firstPageEvidence(record = {}) {
+  return toArr(record.crawled_pages || record.pages || record.scanned_pages || record.crawl_pages)[0] || {};
+}
+
 export function getFixRecommendations(record = {}) {
   return toArr(record.recommendations || record.fixes || record.findings).filter(
     (item) => item && typeof item === "object"
@@ -50,6 +54,7 @@ export function getFixRecommendations(record = {}) {
 // merged browser record is compacted. Presentation-only polish/dedup versions
 // deliberately do not participate in this mapping.
 export function buildAuthorityMarkers(scanData = {}, aiData = {}) {
+  const firstPage = firstPageEvidence(scanData);
   return {
     scanner_build_revision: toStr(
       scanData.scanner_build_revision || scanData.technical_audit_summary?.scanner_build_revision
@@ -63,6 +68,18 @@ export function buildAuthorityMarkers(scanData = {}, aiData = {}) {
     beta_revision_fingerprint: toStr(
       aiData.beta_revision_fingerprint || scanData.beta_revision_fingerprint
     ),
+    metadata_evidence_version: toStr(
+      aiData.metadata_evidence_version
+      || scanData.metadata_evidence_version
+      || scanData.component_versions?.metadata_evidence_version
+      || firstPage.metadata_evidence_version
+    ),
+    title_evidence_version: toStr(
+      aiData.title_evidence_version
+      || scanData.title_evidence_version
+      || scanData.component_versions?.title_evidence_version
+      || firstPage.title_evidence_version
+    ),
   };
 }
 
@@ -70,6 +87,7 @@ export function buildAuthorityMarkers(scanData = {}, aiData = {}) {
 // merged record. Missing markers remain missing; no historical fingerprint is
 // inferred because that would misidentify the code that produced the scan.
 export function buildDiagnosticAuthorityMarkers(record = {}) {
+  const firstPage = firstPageEvidence(record);
   return {
     scanner_build_revision: toStr(
       record.scanner_build_revision || record.technical_audit_summary?.scanner_build_revision
@@ -81,6 +99,16 @@ export function buildDiagnosticAuthorityMarkers(record = {}) {
     review_version: toStr(record.review_version || record.ai_review_version),
     review_evidence_calibration_version: toStr(record.review_evidence_calibration_version),
     beta_revision_fingerprint: toStr(record.beta_revision_fingerprint),
+    metadata_evidence_version: toStr(
+      record.metadata_evidence_version
+      || record.component_versions?.metadata_evidence_version
+      || firstPage.metadata_evidence_version
+    ),
+    title_evidence_version: toStr(
+      record.title_evidence_version
+      || record.component_versions?.title_evidence_version
+      || firstPage.title_evidence_version
+    ),
   };
 }
 
@@ -105,6 +133,14 @@ export function buildScanRunFields(record = {}, { status } = {}) {
   const pythonReviewFallbackUsed = record.python_review_fallback_used === true || record.debug?.python_review_fallback_used === true;
   const reviewVersion = authorityMarkers.review_version;
   const calibrationVersion = authorityMarkers.review_evidence_calibration_version;
+  const pagesCrawled = Math.min(pageLimit, Number(record.pages_crawled || 0));
+  const pagesRetained = Math.min(
+    pageLimit,
+    Number(record.pages_retained || record.technical_audit_summary?.pages_retained || toArr(record.pages).length || 0)
+  );
+  const localCacheComplete = typeof record.local_cache_complete === "boolean"
+    ? record.local_cache_complete
+    : pagesRetained >= pagesCrawled;
   const inferredReleaseGateEligible = advancedScanBackend === "python_scanner_api"
     && !denoFallbackUsed
     && scannerVersion === CURRENT_SCANNER_VERSION
@@ -123,14 +159,19 @@ export function buildScanRunFields(record = {}, { status } = {}) {
     scanner_build_revision: authorityMarkers.scanner_build_revision,
     advanced_scan_backend: advancedScanBackend,
     deno_fallback_used: denoFallbackUsed,
+    archetype_classifier_version: authorityMarkers.archetype_classifier_version,
     review_version: reviewVersion,
     review_evidence_calibration_version: calibrationVersion,
     ai_review_backend: aiReviewBackend,
     python_review_fallback_used: pythonReviewFallbackUsed,
     release_gate_eligible: releaseGateEligible,
     beta_revision_fingerprint: authorityMarkers.beta_revision_fingerprint,
+    metadata_evidence_version: authorityMarkers.metadata_evidence_version,
+    title_evidence_version: authorityMarkers.title_evidence_version,
     pages_found: Number(record.pages_found || 0),
-    pages_crawled: Math.min(pageLimit, Number(record.pages_crawled || 0)),
+    pages_crawled: pagesCrawled,
+    pages_retained: pagesRetained,
+    local_cache_complete: localCacheComplete,
     queued_remaining: Number(record.queued_remaining || 0),
     sampling_evidence: record.sampling_evidence || {},
     scan_status: toStr(record.scan_status),

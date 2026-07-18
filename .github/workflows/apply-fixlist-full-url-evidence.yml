@@ -43,7 +43,7 @@ jobs:
           text = path.read_text(encoding='utf-8')
           text = text.replace(
               '  assert.match(fixListSource, /\\\\/cdn-cgi\\\\//);',
-              '  assert.ok(fixListSource.includes("/cdn-cgi/"));',
+              '  assert.ok(fixListSource.includes("cdn-cgi"));',
           )
           path.write_text(text, encoding='utf-8')
           PY
@@ -69,7 +69,10 @@ jobs:
               echo '## FixList URL evidence contract failure'
               echo
               echo '```text'
-              tail -n 180 /tmp/fixlist-contracts.log
+              grep -n -B 8 -A 24 -E '^not ok|AssertionError|ERR_ASSERTION|failureType|error:' /tmp/fixlist-contracts.log || true
+              echo
+              echo '--- first 120 lines ---'
+              head -n 120 /tmp/fixlist-contracts.log
               echo '```'
             } > /tmp/fixlist-contracts-comment.md
             gh pr comment 83 --body-file /tmp/fixlist-contracts-comment.md

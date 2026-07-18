@@ -20,6 +20,8 @@ const EXPECTED_CALIBRATION_VERSION = "review_evidence_calibration_v5_utility_red
 const EXPECTED_BETA_FINGERPRINT = "52348dd1f3b77700";
 const EXPECTED_CLASSIFIER_VERSION = "archetype_classifier_v8_platform_product_routes";
 const EXPECTED_SCANNER_BUILD = "hard_page_cap_response_v1";
+const EXPECTED_METADATA_VERSION = "metadata_evidence_v1_description_states";
+const EXPECTED_TITLE_VERSION = "title_evidence_v1_contextual_duplicates";
 
 test("complete scans persist as complete", () => {
   assert.equal(deriveTerminalStatus({ scan_status: "complete" }), "complete");
@@ -117,12 +119,16 @@ test("scan run fields map coverage and evidence state from the merged record", (
     scan_status: "complete_with_access_limitations",
     score_is_provisional: true,
     pages_crawled: 42,
+    pages_retained: 12,
+    local_cache_complete: false,
     pages_found: 80,
     health_score: 71,
     limitation: "rate limited",
   });
   assert.equal(fields.status, "limited");
   assert.equal(fields.pages_crawled, 42);
+  assert.equal(fields.pages_retained, 12);
+  assert.equal(fields.local_cache_complete, false);
   assert.equal(fields.health_score, 71);
   assert.equal(fields.score_is_provisional, true);
   assert.equal(fields.limitation, "rate limited");
@@ -141,12 +147,14 @@ test("an explicit review veto cannot be inferred back into release eligibility",
   assert.equal(fields.release_gate_eligible, false);
 });
 
-test("durable authority markers ignore polish versions and retain the beta fingerprint", () => {
+test("durable authority markers ignore polish versions and retain v9 evidence provenance", () => {
   assert.equal(frozenRevision.fingerprint, EXPECTED_BETA_FINGERPRINT);
   const mergedMarkers = buildAuthorityMarkers(
     {
       scanner_build_revision: EXPECTED_SCANNER_BUILD,
       beta_revision_fingerprint: EXPECTED_BETA_FINGERPRINT,
+      metadata_evidence_version: EXPECTED_METADATA_VERSION,
+      title_evidence_version: EXPECTED_TITLE_VERSION,
     },
     {
       archetype_classifier_version: EXPECTED_CLASSIFIER_VERSION,
@@ -163,6 +171,8 @@ test("durable authority markers ignore polish versions and retain the beta finge
     review_version: EXPECTED_REVIEW_VERSION,
     review_evidence_calibration_version: EXPECTED_CALIBRATION_VERSION,
     beta_revision_fingerprint: EXPECTED_BETA_FINGERPRINT,
+    metadata_evidence_version: EXPECTED_METADATA_VERSION,
+    title_evidence_version: EXPECTED_TITLE_VERSION,
   });
 
   const fields = buildScanRunFields({
@@ -175,6 +185,8 @@ test("durable authority markers ignore polish versions and retain the beta finge
   assert.equal(fields.review_evidence_calibration_version, EXPECTED_CALIBRATION_VERSION);
   assert.equal(fields.beta_revision_fingerprint, EXPECTED_BETA_FINGERPRINT);
   assert.equal(fields.scanner_build_revision, EXPECTED_SCANNER_BUILD);
+  assert.equal(fields.metadata_evidence_version, EXPECTED_METADATA_VERSION);
+  assert.equal(fields.title_evidence_version, EXPECTED_TITLE_VERSION);
 
   assert.deepEqual(buildDiagnosticAuthorityMarkers(mergedMarkers), mergedMarkers);
 });

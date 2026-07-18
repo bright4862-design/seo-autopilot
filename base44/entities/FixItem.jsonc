@@ -144,6 +144,27 @@
     },
     "owner_user_id": {
       "type": "string"
+    },
+    "page_count": {
+      "type": "number",
+      "default": 0
+    },
+    "family_breakdown": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
+    "representative_pages_by_family": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
+    "what_to_do_steps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
     }
   },
   "required": [

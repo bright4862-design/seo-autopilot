@@ -7,14 +7,17 @@ const source = await readFile(
   "utf8",
 );
 
-const start = source.indexOf("function AffectedPage({ page })");
+const start = Math.max(
+  source.indexOf("function AffectedPage({ page })"),
+  source.indexOf("function AffectedPage({ page, websiteUrl, index })"),
+);
 const end = source.indexOf("function ScanDebugPanel", start);
 const affectedPageSource = source.slice(start, end);
 
 test("relative affected URLs are not printed twice", () => {
   assert.ok(start >= 0 && end > start);
-  assert.match(affectedPageSource, /const label = formatPageLabel\(page\)/);
-  assert.match(affectedPageSource, /const path = formatPagePath\(page\)/);
+  assert.match(affectedPageSource, /const (?:resolvedPage = toAbsolutePageUrl\(page, websiteUrl\);\s+)?label = formatPageLabel\((?:resolvedPage|page)\)/);
+  assert.match(affectedPageSource, /const path = formatPagePath\((?:resolvedPage|page)\)/);
   assert.match(
     affectedPageSource,
     /const showPath = cleanString\(path\) !== cleanString\(label\)/,
@@ -25,6 +28,6 @@ test("relative affected URLs are not printed twice", () => {
   );
   assert.doesNotMatch(
     affectedPageSource,
-    /<p[^>]*>\{formatPagePath\(page\)\}<\/p>/,
+    /<p[^>]*>\{formatPagePath\((?:resolvedPage|page)\)\}<\/p>/,
   );
 });

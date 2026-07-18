@@ -254,7 +254,8 @@ def test_fully_blocked_crawl_is_provisional_and_needs_verification():
     assert result["score_is_provisional"] is True
     assert result["access_evidence_state"] == "blocked"
     assert result["website_health_report"]["health_grade"] == "Blocked / incomplete"
-    assert result["health_score"] <= 45
+    assert result["health_score"] is None
+    assert result["health_score_status"] == "insufficient_evidence"
     assert result["review_input_quality"]["access_evidence_state"] == "blocked"
     assert result["review_input_quality"]["score_is_provisional"] is True
     assert "score is provisional" in result["customer_summary"].lower()

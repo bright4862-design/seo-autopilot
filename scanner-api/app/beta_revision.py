@@ -33,6 +33,7 @@ def collect_component_versions() -> dict[str, str]:
     from .indexability_quality import INDEXABILITY_QUALITY_VERSION
     from .navigation_indexability import NAVIGATION_INDEXABILITY_VERSION
     from .metadata_title_evidence import METADATA_EVIDENCE_VERSION, TITLE_EVIDENCE_VERSION
+    from .page_evidence_gate import PAGE_EVIDENCE_GATE_VERSION
     from .render_evidence_quality import RENDER_EVIDENCE_QUALITY_VERSION
     from .render_followup import RENDER_FOLLOWUP_VERSION
     from .review import (
@@ -67,6 +68,7 @@ def collect_component_versions() -> dict[str, str]:
         "navigation_indexability_version": NAVIGATION_INDEXABILITY_VERSION,
         "metadata_evidence_version": METADATA_EVIDENCE_VERSION,
         "title_evidence_version": TITLE_EVIDENCE_VERSION,
+        "page_evidence_gate_version": PAGE_EVIDENCE_GATE_VERSION,
         "render_evidence_quality_version": RENDER_EVIDENCE_QUALITY_VERSION,
         "trust_discovery_version": TRUST_DISCOVERY_VERSION,
         "trust_finding_gate_version": TRUST_FINDING_GATE_VERSION,

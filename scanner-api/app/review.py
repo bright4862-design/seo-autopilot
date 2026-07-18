@@ -6,6 +6,12 @@ from collections import defaultdict
 from typing import Any
 from urllib.parse import urlparse
 
+from .page_evidence_gate import (
+    PAGE_EVIDENCE_GATE_VERSION,
+    page_evidence_class,
+    page_has_usable_html,
+)
+
 REVIEW_VERSION = "python_review_v2_structural_marketplace"
 SCORING_MODEL = "python_review_v2_group_dedup"
 ZERO_FIX_CONFIDENCE_VERSION = "python_review_v3_zero_fix_confidence"
@@ -39,6 +45,7 @@ CATEGORY_MAP = {
     "blocked_page_429": "web_dev",
     "scanner_blocked": "web_dev",
     "rate_limited_page": "web_dev",
+    "site_access_limited": "web_dev",
     "canonical_missing": "canonical",
     "missing_canonical": "canonical",
     "canonical_to_other_domain": "canonical",
@@ -697,10 +704,7 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
     # Classification confidence is separate from scan completion: one usable
     # page (eBay) or a mostly rate-limited crawl (Sephora) can complete as a
     # scan but must not count as strong archetype validation.
-    usable_pages = sum(
-        1 for page in pages
-        if 200 <= int_or_zero(page.get("status_code")) < 300 and not is_blocked_access_page(page)
-    )
+    usable_pages = sum(1 for page in pages if page_has_usable_html(page))
     if usable_pages < 4:
         evidence_sufficiency = "insufficient_pages"
     elif blocked_or_429_pages and blocked_or_429_pages / max(usable_pages + blocked_or_429_pages, 1) >= 0.6:
@@ -942,7 +946,7 @@ def build_scanner_evidence_findings(body: dict[str, Any], pages: list[dict[str, 
             deep_get(body, "technical_audit_summary", "verified_failed_pages"),
             deep_get(body, "url_evidence_summary", "verified_failed_pages"),
         )
-        + [page for page in pages if is_failed_page(page) or is_blocked_access_page(page)]
+        + [page for page in pages if is_failed_page(page) or is_blocked_access_page(page) or page_evidence_class(page) == "failed_access"]
     )
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for page in evidence_pages:
@@ -950,6 +954,31 @@ def build_scanner_evidence_findings(body: dict[str, Any], pages: list[dict[str, 
 
     fixes = []
     for bucket, group in grouped.items():
+        if bucket == "access":
+            fixes.append(make_fix(
+                rule="site_access_limited",
+                category="web_dev",
+                priority="medium",
+                title="We could not fully check your site this time",
+                explanation="The site redirected or responded in a way the scanner could not safely verify. This is a scan limitation, not proof of an SEO defect.",
+                why="Without usable HTML, FixList cannot confirm titles, headings, canonical tags, metadata, schema, content, or image descriptions.",
+                recommendation="Try again later. If it keeps happening, ask your web person to check hosting, CDN, firewall, bot-protection, DNS, and redirect logs.",
+                affected_pages=[page_evidence_url(page) for page in group],
+                difficulty="developer",
+                source="scanner_access_evidence",
+                extra={
+                    **evidence_extra(group),
+                    "evidence_status": "needs_verification",
+                    "verification_state": "needs_verification",
+                    "limitation_code": "site_access_requires_retry_or_log_confirmation",
+                    "non_scoring": True,
+                    "score_impact": 0,
+                    "page_evidence_class": "failed_access",
+                    "evidence_gate_version": PAGE_EVIDENCE_GATE_VERSION,
+                    "confidence_score": 70,
+                },
+            ))
+            continue
         if bucket == "429":
             fixes.append(make_fix(
                 rule="rate_limited_page",
@@ -1011,9 +1040,7 @@ def build_page_pattern_findings(pages: list[dict[str, Any]]) -> list[dict[str, A
     buckets: dict[tuple[str, str], dict[str, Any]] = {}
     for page in pages:
         url = page_evidence_url(page)
-        if not url or is_non_html_page_evidence(page):
-            continue
-        if int_or_zero(page.get("status_code") or page.get("status")) >= 400 or is_blocked_access_page(page):
+        if not url or is_non_html_page_evidence(page) or not page_has_usable_html(page):
             continue
         family = normalize_template_family(page.get("page_template_family"), url)
         canonical = clean_str(page.get("canonical") or page.get("canonical_url") or "")
@@ -1569,8 +1596,31 @@ def select_representative_page(
     }
 
 
+HTML_DEPENDENT_RULES = {
+    "canonical_missing", "missing_canonical", "missing_title", "generic_fallback_title",
+    "title_over_pixel_limit", "duplicate_title", "duplicate_title_localized",
+    "duplicate_title_query_variants", "duplicate_title_template",
+    "missing_meta_description", "empty_meta_description", "malformed_meta_description",
+    "duplicate_meta_description", "missing_h1", "multiple_h1", "schema",
+    "structured_data", "thin_content", "image_alt_text", "missing_image_alt",
+}
+
+
+def filter_html_dependent_fix_evidence(fix: dict[str, Any], pages: list[dict[str, Any]]) -> dict[str, Any] | None:
+    rule = str(fix.get("rule") or "").lower()
+    if rule not in HTML_DEPENDENT_RULES:
+        return fix
+    lookup = {clean_path(page_evidence_url(page)): page for page in pages if clean_path(page_evidence_url(page))}
+    affected = dedupe_strings([clean_path(url) for url in (fix.get("affected_pages") or [fix.get("page_url") or "/"]) if clean_path(url)])
+    usable = [url for url in affected if page_has_usable_html(lookup.get(url, {}))]
+    if not usable:
+        return None
+    return {**fix, "affected_pages": usable, "page_url": usable[0], "page_count": len(usable), "evidence_gate_version": PAGE_EVIDENCE_GATE_VERSION}
+
+
 def prepare_fixes(raw_fixes: list[dict[str, Any]], site_fingerprint: dict[str, Any], body: dict[str, Any], playbook: dict[str, Any], pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized = dedupe_fixes([normalize_fix(fix, index) for index, fix in enumerate(raw_fixes or []) if isinstance(fix, dict)])
+    normalized = [candidate for fix in normalized if (candidate := filter_html_dependent_fix_evidence(fix, pages)) is not None]
     filtered = [filter_orphan_asset_evidence(fix, pages) for fix in normalized]
     normalized = [fix for fix in filtered if fix is not None]
     filtered = [filter_page_level_asset_evidence(fix, pages) for fix in normalized]
@@ -1719,8 +1769,10 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
     )
     rate_limited = has_rate_limit_evidence(fixes)
     quality = review_input_quality(body, site_fingerprint)
-    health_score = compute_health_score(fixes, site_fingerprint)
-    if insufficient:
+    usable_page_count = int_or_zero(site_fingerprint.get("classification", {}).get("usable_pages"))
+    health_score_status = "available" if usable_page_count >= 4 else "insufficient_evidence"
+    health_score = compute_health_score(fixes, site_fingerprint) if health_score_status == "available" else None
+    if insufficient and health_score is not None:
         health_score = min(55, health_score)
     blocked_count = int_or_zero(site_fingerprint.get("blocked_or_429_pages"))
     reviewed_count = max(
@@ -1812,7 +1864,9 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
         "health_score": health_score,
         "score": health_score,
         "overall_explanation": summary,
-        "health_grade": "Blocked / incomplete" if blocked else "Scan incomplete" if incomplete else "Insufficient evidence" if insufficient else "Strong" if health_score >= 90 else "Good" if health_score >= 80 else "Needs work" if health_score >= 65 else "Major issues",
+        "health_grade": "Blocked / incomplete" if blocked else "Scan incomplete" if incomplete else "Insufficient evidence" if insufficient else "Score unavailable" if health_score is None else "Strong" if health_score >= 90 else "Good" if health_score >= 80 else "Needs work" if health_score >= 65 else "Major issues",
+        "health_score_status": health_score_status,
+        "usable_page_count": usable_page_count,
         "what_is_working": working,
         "top_concerns": top_concerns,
         "quick_wins": quick_wins,
@@ -1846,6 +1900,9 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
         "crawled_pages": pages_returned,
         "pages": pages_returned,
         "health_score": health_score,
+        "health_score_status": health_score_status,
+        "usable_page_count": usable_page_count,
+        "page_evidence_gate_version": PAGE_EVIDENCE_GATE_VERSION,
         "site_fingerprint": {**site_fingerprint, "review_input_quality": quality},
         "review_input_quality": {**quality, "access_evidence_state": access_evidence_state, "score_is_provisional": score_is_provisional},
         "review_quality_gate_version": QUALITY_GATE_VERSION,
@@ -1876,6 +1933,8 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
         "scan_summary": {
             "health_score": health_score,
             "score": health_score,
+            "health_score_status": health_score_status,
+            "usable_page_count": usable_page_count,
             "pages_scanned": site_fingerprint["pages_crawled"],
             "plain_english_summary": summary,
             "site_fingerprint": site_fingerprint,
@@ -2105,6 +2164,8 @@ def is_blocked_access_page(page: dict[str, Any]) -> bool:
 
 def status_bucket_from_page(page: dict[str, Any]) -> str:
     status = int_or_zero(page.get("status_code") or page.get("status"))
+    if page_evidence_class(page) == "failed_access" and status not in {404, 410, 429} and status < 500:
+        return "access"
     if status == 429 or is_blocked_access_page(page):
         return "429"
     if status >= 500:

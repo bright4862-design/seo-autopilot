@@ -1,5 +1,5 @@
 {
-  "acceptance_report": "docs/releases/metadata-title-evidence-v9.md",
+  "acceptance_report": "docs/releases/page-evidence-gate-v1.md",
   "component_versions": {
     "archetype_classifier_version": "archetype_classifier_v8_platform_product_routes",
     "crawler_acceptance_version": "crawler_acceptance_v1",
@@ -8,6 +8,7 @@
     "metadata_evidence_version": "metadata_evidence_v1_description_states",
     "navigation_indexability_version": "navigation_indexability_v1",
     "orphan_asset_evidence_version": "orphan_asset_evidence_v1",
+    "page_evidence_gate_version": "page_evidence_gate_v1",
     "page_level_asset_evidence_version": "page_level_asset_evidence_v3_markdown",
     "quality_gate_version": "review_quality_gate_v1_evidence_complete",
     "render_evidence_quality_version": "render_evidence_quality_v1",
@@ -23,9 +24,9 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "52348dd1f3b77700",
+  "fingerprint": "4a560c34a3d68c6b",
   "git_commit": "",
-  "note": "Metadata/title evidence v9 candidate pending focused Funbooker and Sephora production acceptance. The actual deployed merge commit, acceptance timestamp, run IDs and artifact digests must be recorded before this revision is frozen.",
+  "note": "Page-evidence gate candidate: inaccessible, redirected, non-HTML and incomplete pages cannot create confirmed HTML-element findings; insufficient usable evidence produces no numeric health score.",
   "recorded_at": "2026-07-18T00:00:00Z",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"

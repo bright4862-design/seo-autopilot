@@ -5,6 +5,9 @@ This candidate prevents fetch failures, redirects, non-HTML responses and incomp
 - HTML-dependent findings require `page_evidence_class: usable_html`.
 - A failed seed request emits one non-scoring `site_access_limited` finding with `needs_verification`.
 - Fewer than four usable HTML pages produces `health_score: null`.
+- Existing evidence-state labels remain unchanged when the numeric score is unavailable.
 - Candidate fingerprint: `4a560c34a3d68c6b`.
+
+Validation passed for frontend checks, scanner regressions, the scanner API suite and revision consistency.
 
 Deployment order: Cloud Run first, verify `/health` and `/revision`, then publish Base44 and rerun Funbooker plus a successful control.

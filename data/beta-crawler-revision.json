@@ -1,5 +1,5 @@
 {
-  "acceptance_report": "docs/beta-acceptance.md",
+  "acceptance_report": "docs/releases/metadata-title-evidence-v9.md",
   "component_versions": {
     "archetype_classifier_version": "archetype_classifier_v8_platform_product_routes",
     "crawler_acceptance_version": "crawler_acceptance_v1",
@@ -24,9 +24,9 @@
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
   "fingerprint": "52348dd1f3b77700",
-  "git_commit": "dab274d00972218d9d8b54dd76c808edde193256",
-  "note": "Metadata/title evidence v9 candidate: absent, empty and malformed meta descriptions are distinct; duplicate titles are contextualized as localized, query-variant, generic fallback or true template duplicates; title-width and fallback-title evidence is non-scoring. Funbooker and Sephora focused acceptance required.",
+  "git_commit": "",
+  "note": "Metadata/title evidence v9 candidate pending focused Funbooker and Sephora production acceptance. The actual deployed merge commit, acceptance timestamp, run IDs and artifact digests must be recorded before this revision is frozen.",
   "recorded_at": "2026-07-18T00:00:00Z",
   "schema_version": "beta_crawler_revision_v1",
-  "status": "frozen_beta"
+  "status": "candidate"
 }

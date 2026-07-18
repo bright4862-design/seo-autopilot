@@ -70,12 +70,12 @@ jobs:
               echo
               echo '```text'
               grep -n -B 8 -A 24 -E '^not ok|AssertionError|ERR_ASSERTION|failureType|error:' /tmp/fixlist-contracts.log || true
-              echo
-              echo '--- first 120 lines ---'
-              head -n 120 /tmp/fixlist-contracts.log
               echo '```'
             } > /tmp/fixlist-contracts-comment.md
-            gh pr comment 83 --body-file /tmp/fixlist-contracts-comment.md
+            gh api \
+              --method PATCH \
+              repos/bright4862-design/seo-autopilot/issues/comments/5009383801 \
+              --raw-field body="$(cat /tmp/fixlist-contracts-comment.md)"
           else
             cat /tmp/fixlist-contracts.log
           fi

@@ -7,6 +7,14 @@ from urllib.parse import urljoin, urldefrag, urlparse
 from bs4 import BeautifulSoup
 
 from .market_scope import strip_market_locale_prefix
+from .metadata_title_evidence import (
+    METADATA_EVIDENCE_VERSION,
+    TITLE_EVIDENCE_VERSION,
+    describe_meta_description,
+    estimate_title_pixel_width,
+    is_generic_fallback_title,
+    title_width_state,
+)
 
 
 def clean_text(value: str) -> str:
@@ -92,13 +100,12 @@ def extract_page(
 ) -> dict:
     soup = BeautifulSoup(html or "", "lxml")
     title = clean_text(soup.title.string if soup.title else "")
-    meta_description = ""
+    metadata_evidence = describe_meta_description(
+        soup, html, status_code, content_type, fetch_error
+    )
+    meta_description = clean_text(metadata_evidence.get("selected_value", ""))
     robots = ""
     canonical = ""
-
-    meta_desc = soup.find("meta", attrs={"name": re.compile("^description$", re.I)})
-    if meta_desc:
-        meta_description = clean_text(meta_desc.get("content", ""))
 
     meta_directives: dict[str, list[str]] = {}
     for meta in soup.find_all("meta", attrs={"name": True}):
@@ -154,7 +161,16 @@ def extract_page(
         "fetch_error": fetch_error,
         "content_type": content_type,
         "title": title,
+        "title_pixel_width_estimate": estimate_title_pixel_width(title),
+        "title_width_state": title_width_state(title),
+        "title_is_generic_fallback": is_generic_fallback_title(title),
+        "title_evidence_version": TITLE_EVIDENCE_VERSION,
         "meta_description": meta_description,
+        "meta_description_state": metadata_evidence.get("state"),
+        "meta_description_element_count": metadata_evidence.get("element_count", 0),
+        "meta_description_values": metadata_evidence.get("values", []),
+        "meta_description_duplicate": metadata_evidence.get("duplicate", False),
+        "metadata_evidence_version": METADATA_EVIDENCE_VERSION,
         "h1": h1s[0] if h1s else "",
         "h1_count": len(h1s),
         "canonical": canonical,

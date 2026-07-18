@@ -55,6 +55,13 @@ CATEGORY_MAP = {
     "missing_h1": "thin_content",
     "multiple_h1": "thin_content",
     "missing_meta_description": "meta_description",
+    "empty_meta_description": "meta_description",
+    "malformed_meta_description": "meta_description",
+    "title_over_pixel_limit": "meta_title",
+    "generic_fallback_title": "meta_title",
+    "duplicate_title_localized": "duplicate_content",
+    "duplicate_title_query_variants": "duplicate_content",
+    "duplicate_title_template": "duplicate_content",
     "missing_title": "meta_title",
     "duplicate_title": "duplicate_content",
     "duplicate_meta_description": "duplicate_content",
@@ -988,7 +995,11 @@ def page_pattern_title(rule: str, family: str, is_group: bool) -> str:
     if rule == "image_alt_text":
         return f"Add missing image descriptions to {label} pages" if is_group else "Add missing image descriptions to the affected page"
     if rule == "missing_meta_description":
-        return f"Add meta descriptions to {label} pages" if is_group else "Add a meta description to the affected page"
+        return f"Add missing meta descriptions to {label} pages" if is_group else "Add a meta description to the affected page"
+    if rule == "empty_meta_description":
+        return f"Fill empty meta descriptions on {label} pages" if is_group else "Fill the empty meta description on the affected page"
+    if rule == "malformed_meta_description":
+        return f"Fix malformed meta descriptions on {label} pages" if is_group else "Fix malformed meta-description markup"
     if rule == "missing_h1":
         return f"Add H1 headings to {label} pages" if is_group else "Add an H1 to the affected page"
     if rule == "multiple_h1":
@@ -1016,8 +1027,15 @@ def build_page_pattern_findings(pages: list[dict[str, Any]]) -> list[dict[str, A
         missing_alt = int_or_zero(page.get("image_missing_alt_count") or page.get("missing_alt_image_count"))
         if missing_alt > 0:
             add_bucket(buckets, "image_alt_text", "image_alt_text", family, page, "Batch image descriptions on templates", f"{missing_alt} images missing alt text", "Repeated image-alt gaps are usually a shared template or CMS pattern, especially on listing or detail pages.", "Fix one representative page/template first, then roll out the same rule across the affected group.", "developer" if missing_alt >= 8 else "easy")
-        if not clean_str(page.get("meta_description")):
-            add_bucket(buckets, "missing_meta_description", "meta_description", family, page, "Batch meta descriptions on templates", "The page is missing a meta description.", "Search descriptions can improve how pages appear in search results.", "Add a short description that explains the page and why someone should click.", "easy")
+        metadata_state = clean_str(page.get("meta_description_state"))
+        if not metadata_state:
+            metadata_state = "present_valid" if clean_str(page.get("meta_description")) else "missing"
+        if metadata_state == "missing":
+            add_bucket(buckets, "missing_meta_description", "meta_description", family, page, "Batch missing meta descriptions on templates", "The page has no standard meta-description element.", "Search descriptions can improve how pages appear in search results.", "Add a short description that explains the page and why someone should click.", "easy")
+        elif metadata_state == "present_empty":
+            add_bucket(buckets, "empty_meta_description", "meta_description", family, page, "Batch empty meta descriptions on templates", "A meta-description element exists, but its content value is empty.", "An empty description gives search engines no page-specific summary to use.", "Populate the existing description field with a concise, page-specific summary.", "easy")
+        elif metadata_state == "malformed":
+            add_bucket(buckets, "malformed_meta_description", "meta_description", family, page, "Fix malformed meta descriptions on templates", "A meta-description element exists without a usable content attribute.", "Malformed metadata may be ignored by search engines and auditing tools.", "Output one valid meta name=\"description\" element with a non-empty content value.", "developer")
 
     fixes = []
     for bucket in buckets.values():
@@ -1986,6 +2004,8 @@ def _health_score_rule_key(fix: dict[str, Any], index: int) -> str:
     aliases = {
         "missing_canonical": "canonical_missing",
         "missing_image_alt": "image_alt_text",
+        "empty_meta_description": "missing_meta_description",
+        "malformed_meta_description": "missing_meta_description",
     }
     if rule:
         return f"rule:{aliases.get(rule, rule)}"

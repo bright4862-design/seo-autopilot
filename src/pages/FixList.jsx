@@ -107,7 +107,7 @@ export default function FixList() {
     };
   }, [requestedScanId]);
 
-  const recommendations = useMemo(() => getRecommendations(scanRecord).map((item) => normalizeRecommendation(item, scanRecord)), [scanRecord]);
+  const recommendations = useMemo(() => mergeMetaDescriptionRecommendations(getRecommendations(scanRecord).map((item) => normalizeRecommendation(item, scanRecord))), [scanRecord]);
   const pages = useMemo(() => getPages(scanRecord), [scanRecord]);
   const healthScore = getHealthScore(scanRecord);
   const scoreUnavailable = isHealthScoreUnavailable(scanRecord);
@@ -341,6 +341,13 @@ function FixRow({ item, cms, onDone }) {
               <p className="mt-1 max-w-[56ch] text-[13.5px]">
                 {evidenceItems.map((entry) => `${entry.label}: ${entry.value}`).join(" · ")}
               </p>
+            </>
+          ) : null}
+
+          {item.groupingExplanation ? (
+            <>
+              <div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Why these URLs are grouped</div>
+              <p className="mt-1 max-w-[56ch] text-[13.5px]">{item.groupingExplanation}</p>
             </>
           ) : null}
 
@@ -689,9 +696,114 @@ function normalizeRecommendation(item = {}, scanRecord = {}) {
     scopeRelationship: legacyBlocked429 ? evidence.scopeRelationship : cleanString(item.scope_relationship),
     pageScope: cleanString(item.page_scope),
     evidenceStatus: cleanString(item.evidence_status || item.verification_state),
+    metadataStateCounts: normalizeMetadataStateCounts(item.metadata_state_counts),
+    combinedRules: firstArray([item.combined_rules]).map(String),
+    groupingExplanation: cleanString(item.grouping_explanation),
     needsHelp,
     generalSteps: legacyBlocked429 ? build429Steps(evidence) : buildGeneralSteps(item, recommendation, needsHelp),
   };
+}
+
+const META_DESCRIPTION_GAP_RULES = new Set(["missing_meta_description", "empty_meta_description", "malformed_meta_description", "meta_description_unusable"]);
+const META_DESCRIPTION_STATE_BY_RULE = {
+  missing_meta_description: "missing",
+  empty_meta_description: "empty",
+  malformed_meta_description: "malformed",
+};
+
+function normalizeMetadataStateCounts(value = {}) {
+  const input = value && typeof value === "object" ? value : {};
+  return {
+    missing: Math.max(0, Number(input.missing || 0)),
+    empty: Math.max(0, Number(input.empty || input.present_empty || 0)),
+    malformed: Math.max(0, Number(input.malformed || 0)),
+  };
+}
+
+function metadataStateCountsForRecommendation(item = {}) {
+  const existing = normalizeMetadataStateCounts(item.metadataStateCounts);
+  if (existing.missing + existing.empty + existing.malformed > 0) return existing;
+  const state = META_DESCRIPTION_STATE_BY_RULE[String(item.rule || "").toLowerCase()];
+  if (!state) return existing;
+  const count = Math.max(Number(item.pageCount || 0), item.affectedPages?.length || 0, 1);
+  return { ...existing, [state]: count };
+}
+
+function addMetadataStateCounts(left = {}, right = {}) {
+  const a = normalizeMetadataStateCounts(left);
+  const b = normalizeMetadataStateCounts(right);
+  return { missing: a.missing + b.missing, empty: a.empty + b.empty, malformed: a.malformed + b.malformed };
+}
+
+function metadataStateCountTotal(value = {}) {
+  const counts = normalizeMetadataStateCounts(value);
+  return counts.missing + counts.empty + counts.malformed;
+}
+
+function strongestPriority(left, right) {
+  const rank = { critical: 4, high: 3, medium: 2, low: 1 };
+  const a = normalizePriority(left);
+  const b = normalizePriority(right);
+  return (rank[b] || 0) > (rank[a] || 0) ? b : a;
+}
+
+function metaDescriptionFamilyLabel(family) {
+  return String(family || "template").replace(/^activity_detail$/, "activity/detail").replace(/_/g, " ");
+}
+
+function metaDescriptionCopy(family) {
+  const label = metaDescriptionFamilyLabel(family);
+  return {
+    title: `Add usable meta descriptions to ${label} pages`,
+    explanation: "Some pages are missing the meta-description tag, while others output a blank or invalid value. Because these pages use the same page pattern, fix the shared template rather than editing every URL one by one.",
+    why: "Meta descriptions often appear beneath page titles in search results. When one is missing or blank, search engines must create their own snippet from page content. That snippet may be less specific or persuasive, giving the site less control over how each page is presented and potentially reducing qualified clicks. Fixing the shared template improves many pages at once.",
+    recommendation: "Repair the shared metadata template so every affected page outputs exactly one non-empty, page-specific, plain-text meta description, with a reliable fallback when the dedicated SEO field is blank.",
+    grouping: `All affected URLs use the ${label} page pattern. One template correction may resolve the problem across the entire group.`,
+  };
+}
+
+function mergeMetaDescriptionRecommendations(items = []) {
+  const output = [];
+  const groups = new Map();
+  for (const item of items) {
+    if (!META_DESCRIPTION_GAP_RULES.has(String(item.rule || "").toLowerCase())) {
+      output.push(item);
+      continue;
+    }
+    const family = item.templateFamily || "template";
+    const key = `meta_description_unusable|${family}`;
+    const copy = metaDescriptionCopy(family);
+    const found = groups.get(key);
+    if (!found) {
+      const counts = metadataStateCountsForRecommendation(item);
+      const merged = {
+        ...item,
+        id: stableId(key),
+        rule: "meta_description_unusable",
+        title: copy.title,
+        explanation: copy.explanation,
+        whyItMatters: copy.why,
+        recommendation: copy.recommendation,
+        groupingExplanation: copy.grouping,
+        metadataStateCounts: counts,
+        combinedRules: unique([...(item.combinedRules || []), item.rule].filter(Boolean)),
+        pageCount: Math.max(item.affectedPages.length, metadataStateCountTotal(counts)),
+      };
+      groups.set(key, { index: output.length, item: merged });
+      output.push(merged);
+      continue;
+    }
+    const merged = found.item;
+    merged.affectedPages = unique([...merged.affectedPages, ...item.affectedPages]);
+    merged.sourcePages = unique([...merged.sourcePages, ...item.sourcePages]);
+    merged.priority = strongestPriority(merged.priority, item.priority);
+    merged.metadataStateCounts = addMetadataStateCounts(merged.metadataStateCounts, metadataStateCountsForRecommendation(item));
+    merged.combinedRules = unique([...merged.combinedRules, ...(item.combinedRules || []), item.rule].filter(Boolean));
+    merged.pageCount = Math.max(merged.affectedPages.length, metadataStateCountTotal(merged.metadataStateCounts));
+    merged.needsHelp = merged.needsHelp || item.needsHelp;
+    output[found.index] = merged;
+  }
+  return output;
 }
 
 function extractRecommendationEvidence(item = {}, scanRecord = {}) {
@@ -931,11 +1043,12 @@ function getRuleSpecificSteps(recommendation) {
     "Inspect rendered page source on representative URLs from every affected family and confirm exactly one correct canonical is present.",
     "Publish and run FixList again.",
   ];
-  if (/missing_meta_description|empty_meta_description|malformed_meta_description/.test(rule) || category === "meta_description") return [
-    "Export the affected URLs and group them by page template or CMS collection.",
-    "Add a page-specific description field or repair the shared template so every affected page outputs one non-empty, plain-text meta description.",
-    "Open representative page source from each group and confirm the description is present once and contains the expected text.",
-    "Publish and run FixList again.",
+  if (/missing_meta_description|empty_meta_description|malformed_meta_description|meta_description_unusable/.test(rule) || category === "meta_description") return [
+    "Use the status breakdown and URL export below to confirm which page groups are missing the tag, outputting an empty value, or using invalid markup.",
+    "In the shared <head> metadata template, identify the source field used for each page's description, such as a dedicated SEO field, activity summary, category, or database value.",
+    "Output exactly one non-empty, page-specific, plain-text meta description. When the dedicated SEO field is blank, build a reliable fallback from the page title or activity name, category, location, and main benefit.",
+    "Strip HTML, placeholder text, line breaks, and repeated whitespace, and make sure the description appears in the initial server-rendered page source.",
+    "Check a representative URL from each reported status, publish the change, and run FixList again.",
   ];
   if (/title/.test(rule) || category === "meta_title") return [
     "Export the affected URLs and group pages that share the same title template.",
@@ -971,6 +1084,8 @@ function getCmsOpeningStep(cms, recommendation) {
 
 function buildEvidenceItems(recommendation) {
   const items = [];
+  const metadataBreakdown = formatMetadataStateBreakdown(recommendation.metadataStateCounts);
+  if (metadataBreakdown) items.push({ label: "Description status", value: metadataBreakdown });
   if (recommendation.pageScope) items.push({ label: "Scope", value: humanize(recommendation.pageScope) });
   else if (recommendation.scopeRelationship) items.push({ label: "Scope", value: humanize(recommendation.scopeRelationship) });
   if (recommendation.evidenceStatus) items.push({ label: "Evidence", value: humanize(recommendation.evidenceStatus) });
@@ -980,6 +1095,15 @@ function buildEvidenceItems(recommendation) {
   if (recommendation.metaGate) items.push({ label: "Meta gate", value: humanize(recommendation.metaGate) });
   if (recommendation.currentValue) items.push({ label: "Current value", value: clampText(recommendation.currentValue, 180) });
   return items.slice(0, 6);
+}
+
+function formatMetadataStateBreakdown(value = {}) {
+  const counts = normalizeMetadataStateCounts(value);
+  return [
+    counts.missing > 0 ? `${counts.missing} missing` : "",
+    counts.empty > 0 ? `${counts.empty} empty` : "",
+    counts.malformed > 0 ? `${counts.malformed} malformed` : "",
+  ].filter(Boolean).join(" · ");
 }
 
 function readBestScanRecord(requestedScanId = "") {

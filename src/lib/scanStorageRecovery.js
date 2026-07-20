@@ -78,6 +78,15 @@ function compactFix(fix = {}) {
     confidence_score: finiteNumber(fix.confidence_score),
     page_scope: fix.page_scope || "",
     page_template_family: fix.page_template_family || "",
+    metadata_state_counts: fix.metadata_state_counts && typeof fix.metadata_state_counts === "object"
+      ? {
+          missing: finiteNumber(fix.metadata_state_counts.missing),
+          empty: finiteNumber(fix.metadata_state_counts.empty, fix.metadata_state_counts.present_empty),
+          malformed: finiteNumber(fix.metadata_state_counts.malformed),
+        }
+      : {},
+    combined_rules: firstArray(fix, ["combined_rules"]).map(String).slice(0, 8),
+    grouping_explanation: String(fix.grouping_explanation || "").slice(0, 600),
     page_count: finiteNumber(fix.page_count, affectedPages.length),
   };
 }

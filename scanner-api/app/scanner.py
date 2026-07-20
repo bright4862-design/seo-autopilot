@@ -11,6 +11,11 @@ from .canonical_validation import validate_canonical_targets
 from .redirect_validation import apply_redirect_evidence, fetch_with_redirect_evidence, summarize_redirect_evidence
 from .extract import classify_template, extract_links, extract_page
 from .market_scope import market_pair_prefix, path_within_scope
+from .page_evidence_gate import (
+    PAGE_EVIDENCE_GATE_VERSION,
+    page_evidence_class,
+    page_has_usable_html,
+)
 from .metadata_title_evidence import (
     METADATA_EVIDENCE_VERSION,
     TITLE_EVIDENCE_VERSION,
@@ -267,6 +272,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         "scanner_profile": "python_screaming_frog_lite_v1",
         "metadata_evidence_version": METADATA_EVIDENCE_VERSION,
         "title_evidence_version": TITLE_EVIDENCE_VERSION,
+        "page_evidence_gate_version": PAGE_EVIDENCE_GATE_VERSION,
         "sampling_version": SAMPLING_VERSION,
         "sampling_evidence": sampling_evidence,
         "render_evidence_version": RENDER_EVIDENCE_VERSION,
@@ -305,6 +311,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
             "scanner_version": VERSION,
             "metadata_evidence_version": METADATA_EVIDENCE_VERSION,
             "title_evidence_version": TITLE_EVIDENCE_VERSION,
+            "page_evidence_gate_version": PAGE_EVIDENCE_GATE_VERSION,
             "scanner_elapsed_ms": elapsed_ms,
             "scanner_total_budget_seconds": budget["timeout"],
             "scan_deadline_reached": deadline_reached,
@@ -444,20 +451,38 @@ def build_findings(pages: list[dict]) -> list[dict]:
         if str(page.get("fetch_error") or "").startswith("blocked_"):
             continue
         status_code = int(page.get("status_code") or 0)
-        if status_code >= 400 or page.get("fetch_error"):
-            findings.append(create_finding(
-                rule="rate_limited_page" if status_code == 429 else "failed_page",
-                category="web_dev" if status_code == 429 else "404_error",
-                priority="high" if status_code == 429 or status_code >= 500 else "medium",
-                title="Check pages blocked by rate limiting" if status_code == 429 else "Fix pages that are not loading",
+        evidence_class = page_evidence_class(page)
+        if evidence_class == "failed_access":
+            is_seed = "seed" in set(page.get("discovered_from") or [])
+            rule = "site_access_limited" if is_seed else ("rate_limited_page" if status_code == 429 else "failed_page")
+            title = "We could not fully check your site this time" if is_seed else ("Check pages blocked by rate limiting" if status_code == 429 else "Verify a page that did not load during the scan")
+            explanation = ("Your site redirected or responded in a way the scanner could not safely verify. This does not necessarily mean anything is wrong for visitors or Google." if is_seed else "The scanner could not retrieve usable HTML for this URL. This is access evidence, not proof that page elements are missing.")
+            recommendation = ("Try again later. If it keeps happening, ask your web person to check hosting, CDN, firewall, bot-protection, DNS, and redirect logs." if is_seed else "Check server, CDN, firewall, bot-protection, and redirect logs before changing page content.")
+            finding = create_finding(
+                rule=rule,
+                category="web_dev",
+                priority="medium" if is_seed or status_code == 0 else "high" if status_code == 429 or status_code >= 500 else "medium",
+                title=title,
                 page_url=path,
                 current_value=page.get("fetch_error") or f"HTTP {status_code}",
-                explanation="The page did not load cleanly during the scan and has a real discovery source.",
-                recommendation="Check whether the page should exist, redirect it, or fix the server/access issue.",
+                explanation=explanation,
+                recommendation=recommendation,
                 difficulty="developer",
                 source_pages=page.get("source_pages", []),
                 link_text_samples=page.get("link_text_samples", []),
-            ))
+            )
+            finding.update({
+                "evidence_status": "needs_verification" if status_code in {0, 429} or is_seed else "confirmed",
+                "verification_state": "needs_verification",
+                "non_scoring": True,
+                "score_impact": 0,
+                "page_evidence_class": evidence_class,
+                "evidence_gate_version": PAGE_EVIDENCE_GATE_VERSION,
+                "confidence_score": 70 if status_code in {0, 429} or is_seed else 92,
+            })
+            findings.append(finding)
+            continue
+        if not page_has_usable_html(page):
             continue
         if not page.get("title"):
             findings.append(create_finding("missing_title", "meta_title", "medium", "Add a clear search title", path, explanation="This page is missing a title.", recommendation="Add a short, specific page title."))
@@ -929,7 +954,7 @@ def duplicate_title_findings(pages: list[dict]) -> list[dict]:
     for page in pages:
         status = int(page.get("status_code") or 0)
         title = str(page.get("title") or "").strip()
-        if not title or not (200 <= status < 300) or page.get("indexable") is False:
+        if not title or page.get("indexable") is False or not page_has_usable_html(page):
             continue
         if not is_html_page_evidence(page):
             continue
@@ -1050,7 +1075,7 @@ def duplicate_casing_findings(pages: list[dict]) -> list[dict]:
     return findings
 
 
-def build_scan_summary(pages: list[dict], findings: list[dict], health_score: int, pages_found: int, artifact_count: int) -> dict:
+def build_scan_summary(pages: list[dict], findings: list[dict], health_score: int | None, pages_found: int, artifact_count: int) -> dict:
     return {
         "health_score": health_score,
         "score": health_score,
@@ -1062,7 +1087,9 @@ def build_scan_summary(pages: list[dict], findings: list[dict], health_score: in
         "high_priority_count": sum(1 for item in findings if item.get("priority") in ["critical", "high"]),
         "technical_issue_count": len(findings),
         "duplicate_casing_routes": detect_duplicate_casing_routes(pages),
-        "status_label": "Good" if health_score >= 75 else "Fair" if health_score >= 55 else "Needs work",
+        "status_label": "Score unavailable" if health_score is None else "Good" if health_score >= 75 else "Fair" if health_score >= 55 else "Needs work",
+        "health_score_status": "available" if health_score is not None else "insufficient_evidence",
+        "usable_page_count": sum(1 for page in pages if page_has_usable_html(page)),
         "plain_english_summary": f"The Python scanner reviewed {len(pages)} pages and found {len(findings)} evidence-based issues.",
     }
 
@@ -1076,7 +1103,7 @@ def build_evidence_summary(pages: list[dict], artifact_count: int) -> dict:
 
 
 def page_evidence(page: dict) -> dict:
-    keys = ["url", "final_url", "path", "status_code", "fetch_error", "url_confidence", "url_suspicion_reasons", "discovered_from", "source_pages", "link_text_samples", "page_template_family", "estimated_page_intent", "title", "title_pixel_width_estimate", "title_width_state", "title_is_generic_fallback", "title_evidence_version", "meta_description", "meta_description_state", "meta_description_element_count", "meta_description_values", "meta_description_duplicate", "metadata_evidence_version", "h1", "redirect_state", "redirect_hop_count", "redirect_chain", "redirect_destination_url", "redirect_destination_status_code", "redirect_destination_indexability_state"]
+    keys = ["url", "final_url", "path", "status_code", "fetch_error", "page_evidence_class", "evidence_gate_version", "url_confidence", "url_suspicion_reasons", "discovered_from", "source_pages", "link_text_samples", "page_template_family", "estimated_page_intent", "title", "title_pixel_width_estimate", "title_width_state", "title_is_generic_fallback", "title_evidence_version", "meta_description", "meta_description_state", "meta_description_element_count", "meta_description_values", "meta_description_duplicate", "metadata_evidence_version", "h1", "redirect_state", "redirect_hop_count", "redirect_chain", "redirect_destination_url", "redirect_destination_status_code", "redirect_destination_indexability_state"]
     return {key: page.get(key) for key in keys}
 
 
@@ -1088,7 +1115,9 @@ def is_verified_failed(page: dict) -> bool:
     return bool((int(page.get("status_code") or 0) >= 400 or page.get("fetch_error")) and page.get("url_confidence") != "crawler_artifact")
 
 
-def calculate_health_score(pages: list[dict], findings: list[dict]) -> int:
+def calculate_health_score(pages: list[dict], findings: list[dict]) -> int | None:
+    if sum(1 for page in pages if page_has_usable_html(page)) < 4:
+        return None
     score = 92
     score -= min(35, sum(1 for page in pages if is_verified_failed(page)) * 8)
     metadata_penalties: dict[str, int] = {}

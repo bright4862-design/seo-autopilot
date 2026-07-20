@@ -7,6 +7,7 @@ from urllib.parse import urljoin, urldefrag, urlparse
 from bs4 import BeautifulSoup
 
 from .market_scope import strip_market_locale_prefix
+from .page_evidence_gate import PAGE_EVIDENCE_GATE_VERSION, classify_page_evidence
 from .metadata_title_evidence import (
     METADATA_EVIDENCE_VERSION,
     TITLE_EVIDENCE_VERSION,
@@ -145,6 +146,12 @@ def extract_page(
     page_template_family = classify_template(path, title, h1s[0] if h1s else "", schema_types)
 
     rendering_signals = client_rendering_signals(html, status_code, word_count)
+    page_evidence_class = classify_page_evidence(
+        status_code=status_code,
+        content_type=content_type,
+        fetch_error=fetch_error,
+        html=html,
+    )
 
     return {
         "url": url,
@@ -160,6 +167,8 @@ def extract_page(
         "status_code": status_code,
         "fetch_error": fetch_error,
         "content_type": content_type,
+        "page_evidence_class": page_evidence_class,
+        "evidence_gate_version": PAGE_EVIDENCE_GATE_VERSION,
         "title": title,
         "title_pixel_width_estimate": estimate_title_pixel_width(title),
         "title_width_state": title_width_state(title),

@@ -39,7 +39,8 @@ def test_metadata_without_pages_is_scan_incomplete():
 
     assert result["scan_status"] == "incomplete_evidence"
     assert result["website_health_report"]["health_grade"] == "Scan incomplete"
-    assert result["health_score"] <= 55
+    assert result["health_score"] is None
+    assert result["health_score_status"] == "insufficient_evidence"
     assert result["evidence_complete"] is False
     assert len(result["cleaned_fixes"]) >= 1
     assert result["cleaned_fixes"][0]["who_can_do_this"] == "your_web_person"
@@ -54,7 +55,8 @@ def test_blocked_crawl_from_page_evidence_is_capped():
 
     assert result["scan_status"] == "blocked_or_incomplete"
     assert result["website_health_report"]["health_grade"] == "Blocked / incomplete"
-    assert result["health_score"] <= 45
+    assert result["health_score"] is None
+    assert result["health_score_status"] == "insufficient_evidence"
     assert result["site_fingerprint"]["blocked_or_429_pages"] == 1
 
 
@@ -73,7 +75,8 @@ def test_metadata_only_block_is_flagged():
     assert result["scan_status"] == "blocked_or_incomplete"
     assert result["website_health_report"]["health_grade"] == "Blocked / incomplete"
     assert result["site_fingerprint"]["blocked_or_429_pages"] == 1
-    assert result["health_score"] <= 45
+    assert result["health_score"] is None
+    assert result["health_score_status"] == "insufficient_evidence"
 
 
 def test_healthy_crawl_with_incidental_blocks_is_not_capped():

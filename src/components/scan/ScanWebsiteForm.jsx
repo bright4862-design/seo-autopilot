@@ -364,7 +364,8 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
     groupAndSortFixes,
     requestedPathPrefix,
   });
-  const healthScore = getFirstNumber([aiData?.health_score, aiData?.seo_score, aiData?.website_health_report?.health_score, aiData?.scan_summary?.health_score, scanData?.health_score, scanData?.seo_score, scanData?.scan_summary?.score, scanData?.scan_summary?.health_score]);
+  const healthScoreStatus = aiData?.health_score_status || aiData?.website_health_report?.health_score_status || aiData?.scan_summary?.health_score_status || scanData?.health_score_status || scanData?.scan_summary?.health_score_status || "available";
+  const healthScore = healthScoreStatus === "insufficient_evidence" ? null : getFirstNumber([aiData?.health_score, aiData?.seo_score, aiData?.website_health_report?.health_score, aiData?.scan_summary?.health_score, scanData?.health_score, scanData?.seo_score, scanData?.scan_summary?.score, scanData?.scan_summary?.health_score]);
   const reviewIsLimited = ["incomplete_evidence", "inconclusive_insufficient_evidence", "blocked_or_incomplete"].includes(reviewEvidenceState.scan_status);
   const noHighConfidenceFindings = aiData?.no_high_confidence_findings === true || (finalFixes.length === 0 && !reviewIsLimited);
   const healthGrade = aiData?.website_health_report?.health_grade || aiData?.health_grade || (noHighConfidenceFindings ? "No issues found in sample" : scoreLabel(healthScore));
@@ -391,8 +392,10 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
     cms_name: cmsName,
     scan_mode: scanMode,
     ...authorityMarkers,
-    health_score: healthScore || 0,
-    seo_score: healthScore || 0,
+    health_score: healthScore,
+    seo_score: healthScore,
+    health_score_status: healthScoreStatus,
+    usable_page_count: getFirstNumber([aiData?.usable_page_count, aiData?.website_health_report?.usable_page_count, aiData?.scan_summary?.usable_page_count, scanData?.usable_page_count, scanData?.scan_summary?.usable_page_count]),
     pages_crawled: pagesCrawled || pages.length || 0,
     pages_found: pagesFound || pages.length || 0,
     customer_summary: summaryText,

@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import Body, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
+from .evidence_quality import EVIDENCE_QUALITY_GATE_VERSION, apply_evidence_quality_gate
 from .indexability_postprocess import apply_indexability_quality_to_result
 from .indexability_quality import INDEXABILITY_QUALITY_VERSION
 from .navigation_indexability import NAVIGATION_INDEXABILITY_VERSION
@@ -100,6 +101,7 @@ def health():
         "indexability_quality_version": INDEXABILITY_QUALITY_VERSION,
         "navigation_indexability_version": NAVIGATION_INDEXABILITY_VERSION,
         "render_evidence_quality_version": RENDER_EVIDENCE_QUALITY_VERSION,
+        "evidence_quality_gate_version": EVIDENCE_QUALITY_GATE_VERSION,
         "beta_revision_fingerprint": live_revision()["fingerprint"],
         "observability_version": OBSERVABILITY_VERSION,
     }
@@ -165,6 +167,7 @@ async def review(payload: dict[str, Any] = Body(default_factory=dict), x_scanner
         result = run_review(payload)
         result = apply_trust_discovery_gate(result, payload)
         result = apply_review_evidence_calibration(result, payload)
+        result = apply_evidence_quality_gate(result, payload)
         result["beta_revision_fingerprint"] = live_revision()["fingerprint"]
     except Exception as exc:  # noqa: BLE001 - customer-safe envelope, full detail logged
         return timer.failed(exc)

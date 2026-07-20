@@ -1,10 +1,11 @@
 {
-  "acceptance_report": "docs/releases/grouped-recommendation-evidence-v1.md",
+  "acceptance_report": "docs/releases/evidence-quality-gate-v1.md",
   "component_versions": {
     "archetype_classifier_version": "archetype_classifier_v8_platform_product_routes",
     "artifact_filter_version": "artifact_filter_v3_non_html_resources",
     "canonical_target_evidence_version": "canonical_target_evidence_v2_origin_alias_equivalence",
     "crawler_acceptance_version": "crawler_acceptance_v1",
+    "evidence_quality_gate_version": "evidence_quality_gate_v1_default_route_dominance",
     "grouped_recommendation_evidence_version": "grouped_recommendation_evidence_v1_metadata_states",
     "image_alt_evidence_version": "material_image_alt_v1",
     "indexability_quality_version": "indexability_quality_v1",
@@ -28,9 +29,9 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "d478fe98569c1405",
+  "fingerprint": "5e7d2591c53427df",
   "git_commit": "",
-  "note": "Grouped recommendation evidence candidate: exact metadata-state counts, rule provenance, grouping rationale, and durable FixItem columns.",
+  "note": "Evidence quality candidate: default-route-dominated narrow crawls are provisional while meaningful one-page and representative small sites remain supported.",
   "recorded_at": "2026-07-20T00:00:00Z",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"

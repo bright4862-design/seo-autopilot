@@ -121,7 +121,7 @@ def test_release_marker_endpoints_are_consistent():
     revision = client.get("/revision").json()
 
     assert health["archetype_classifier_version"] == "archetype_classifier_v8_platform_product_routes"
-    assert health["beta_revision_fingerprint"] == "d478fe98569c1405"
+    assert health["beta_revision_fingerprint"] == "5e7d2591c53427df"
     assert health["review_version"] == "python_review_v2_structural_marketplace"
     assert health["review_evidence_calibration_version"] == "review_evidence_calibration_v5_utility_redirect"
     assert health["scanner_build_revision"] == "hard_page_cap_response_v1"
@@ -167,7 +167,7 @@ def test_scan_endpoint_returns_beta_revision_fingerprint(monkeypatch, capsys):
     client = TestClient(main.app)
     response = client.post("/scan", json={"website_url": "https://example.com"})
     assert response.status_code == 200
-    assert response.json()["beta_revision_fingerprint"] == "d478fe98569c1405"
+    assert response.json()["beta_revision_fingerprint"] == "5e7d2591c53427df"
     assert response.json()["scanner_build_revision"] == "hard_page_cap_response_v1"
     read_log_lines(capsys)
 
@@ -183,10 +183,11 @@ def test_review_endpoint_logs_completion_metrics(monkeypatch, capsys):
     })
     monkeypatch.setattr(main, "apply_trust_discovery_gate", lambda result, payload: result)
     monkeypatch.setattr(main, "apply_review_evidence_calibration", lambda result, payload: result)
+    monkeypatch.setattr(main, "apply_evidence_quality_gate", lambda result, payload: result)
     client = TestClient(main.app)
     response = client.post("/review", json={"website_url": "https://example.com"})
     assert response.status_code == 200
-    assert response.json()["beta_revision_fingerprint"] == "d478fe98569c1405"
+    assert response.json()["beta_revision_fingerprint"] == "5e7d2591c53427df"
     completed = [record for record in read_log_lines(capsys) if record["event"] == "review_completed"]
     assert len(completed) == 1
     assert completed[0]["scan_status"] == "complete"

@@ -1,0 +1,377 @@
+name: Apply canonical origin-alias patch
+
+on:
+  push:
+    branches:
+      - agent/canonical-origin-alias-equivalence
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/canonical-origin-alias-equivalence
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Apply scoped patch and regenerate revision
+        shell: bash
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          from pathlib import Path
+
+          OLD_VERSION = "canonical_target_evidence_v1"
+          NEW_VERSION = "canonical_target_evidence_v2_origin_alias_equivalence"
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one replacement, found {count}: {old!r}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          canonical_path = "scanner-api/app/canonical_validation.py"
+          replace_once(
+              canonical_path,
+              "from .robots_policy import SCANNER_USER_AGENT, SEARCH_USER_AGENT, annotate_robots_evidence\nfrom .security import is_public_http_url",
+              "from .redirect_validation import _comparable_origin_key\nfrom .robots_policy import SCANNER_USER_AGENT, SEARCH_USER_AGENT, annotate_robots_evidence\nfrom .security import is_public_http_url",
+          )
+          replace_once(
+              canonical_path,
+              f'CANONICAL_TARGET_EVIDENCE_VERSION = "{OLD_VERSION}"',
+              f'CANONICAL_TARGET_EVIDENCE_VERSION = "{NEW_VERSION}"',
+          )
+          replace_once(
+              canonical_path,
+              '''def _origin_key(value: str) -> tuple[str, int | None]:
+              parsed = urlparse(str(value or ""))
+              return ((parsed.hostname or "").lower(), parsed.port)
+
+
+          def _page_identity_urls(page: dict) -> set[str]:''',
+              '''def _origin_key(value: str) -> tuple[str, int | None]:
+              parsed = urlparse(str(value or ""))
+              return ((parsed.hostname or "").lower(), parsed.port)
+
+
+          def _same_canonical_origin(source: str, target: str) -> bool:
+              """Treat only same-scheme exact hosts or apex/www aliases as one origin."""
+              source_parsed = urlparse(str(source or ""))
+              target_parsed = urlparse(str(target or ""))
+              if not source_parsed.hostname or not target_parsed.hostname:
+                  return False
+              if source_parsed.scheme.lower() != target_parsed.scheme.lower():
+                  return False
+              if _origin_key(source) == _origin_key(target):
+                  return True
+              return _comparable_origin_key(source) == _comparable_origin_key(target)
+
+
+          def _is_www_origin_alias(source: str, target: str) -> bool:
+              if not _same_canonical_origin(source, target):
+                  return False
+              source_host = (urlparse(str(source or "")).hostname or "").lower().strip(".")
+              target_host = (urlparse(str(target or "")).hostname or "").lower().strip(".")
+              if not source_host or not target_host or source_host == target_host:
+                  return False
+              source_base = source_host[4:] if source_host.startswith("www.") else source_host
+              target_base = target_host[4:] if target_host.startswith("www.") else target_host
+              return source_base == target_base and (
+                  source_host.startswith("www.") or target_host.startswith("www.")
+              )
+
+
+          def _page_identity_urls(page: dict) -> set[str]:''',
+          )
+          replace_once(
+              canonical_path,
+              '''    same_origin_sources: dict[str, list[dict]] = {}
+              declaration_count = 0''',
+              '''    same_origin_sources: dict[str, list[dict]] = {}
+              declaration_count = 0
+              origin_alias_declaration_count = 0''',
+          )
+          replace_once(
+              canonical_path,
+              '''        source_url = _normalize_url(page.get("final_url") or page.get("url"))
+              if not source_url or _origin_key(source_url) != _origin_key(target):
+                  _apply_evidence(page, target, {
+                      "state": "cross_domain_needs_verification",
+                      "target_url": target,
+                      "status_code": 0,
+                      "indexability_state": "Unknown",
+                      "fetch_error": "",
+                      "location": "",
+                      "target_canonical": "",
+                      "evidence_source": "declaration_only",
+                  })
+                  continue
+              same_origin_sources.setdefault(target, []).append(page)''',
+              '''        source_url = _normalize_url(page.get("final_url") or page.get("url"))
+              if not source_url or not _same_canonical_origin(source_url, target):
+                  _apply_evidence(page, target, {
+                      "state": "cross_domain_needs_verification",
+                      "target_url": target,
+                      "status_code": 0,
+                      "indexability_state": "Unknown",
+                      "fetch_error": "",
+                      "location": "",
+                      "target_canonical": "",
+                      "evidence_source": "declaration_only",
+                  })
+                  continue
+              if _is_www_origin_alias(source_url, target):
+                  page.update({
+                      "canonical_origin_alias": True,
+                      "canonical_origin_alias_source_url": source_url,
+                      "canonical_origin_alias_target_url": target,
+                  })
+                  origin_alias_declaration_count += 1
+              same_origin_sources.setdefault(target, []).append(page)''',
+          )
+          replace_once(
+              canonical_path,
+              '''        "pages_declaring_other_canonical": declaration_count,
+              "unique_same_origin_targets": len(same_origin_sources),''',
+              '''        "pages_declaring_other_canonical": declaration_count,
+              "origin_alias_declarations": origin_alias_declaration_count,
+              "unique_same_origin_targets": len(same_origin_sources),''',
+          )
+
+          beta_path = "scanner-api/app/beta_revision.py"
+          replace_once(
+              beta_path,
+              '''    from .artifact_filter import ARTIFACT_FILTER_VERSION
+              from .crawler_acceptance import CRAWLER_ACCEPTANCE_VERSION''',
+              '''    from .artifact_filter import ARTIFACT_FILTER_VERSION
+              from .canonical_validation import CANONICAL_TARGET_EVIDENCE_VERSION
+              from .crawler_acceptance import CRAWLER_ACCEPTANCE_VERSION''',
+          )
+          replace_once(
+              beta_path,
+              '''        "artifact_filter_version": ARTIFACT_FILTER_VERSION,
+              "redirect_evidence_version": REDIRECT_EVIDENCE_VERSION,''',
+              '''        "artifact_filter_version": ARTIFACT_FILTER_VERSION,
+              "canonical_target_evidence_version": CANONICAL_TARGET_EVIDENCE_VERSION,
+              "redirect_evidence_version": REDIRECT_EVIDENCE_VERSION,''',
+          )
+
+          test_path = Path("scanner-api/tests/test_canonical_origin_alias_equivalence.py")
+          test_path.write_text('''import httpx
+          import pytest
+
+          from app.canonical_validation import validate_canonical_targets
+          from app.extract import extract_page
+          from app.robots_policy import RobotsPolicy
+          from app.scanner import build_findings
+
+
+          DISCOVERY = {"discovered_from": ["sitemap"], "source_pages": ["/sitemap.xml"], "link_text_samples": []}
+
+
+          def _page(url: str, *, canonical: str = "", robots: str = ""):
+              canonical_tag = f'<link rel="canonical" href="{canonical}">' if canonical else ""
+              robots_tag = f'<meta name="robots" content="{robots}">' if robots else ""
+              return extract_page(
+                  f"<html><head><title>Page</title>{canonical_tag}{robots_tag}</head><body><h1>Page</h1></body></html>",
+                  url,
+                  url,
+                  200,
+                  "text/html",
+                  DISCOVERY,
+              )
+
+
+          class FakeClient:
+              def __init__(self, responses=None):
+                  self.responses = responses or {}
+                  self.calls = []
+
+              async def get(self, url):
+                  self.calls.append(url)
+                  return self.responses[url]
+
+
+          @pytest.mark.asyncio
+          async def test_apex_to_www_canonical_is_valid_origin_alias_not_cross_domain():
+              source = _page(
+                  "https://hartzlerdairy.com/chocolate-milk",
+                  canonical="https://www.hartzlerdairy.com/chocolate-milk",
+              )
+              target = _page(
+                  "https://www.hartzlerdairy.com/chocolate-milk",
+                  canonical="https://www.hartzlerdairy.com/chocolate-milk",
+              )
+              client = FakeClient()
+
+              summary = await validate_canonical_targets(
+                  client,
+                  [source, target],
+                  RobotsPolicy("https://hartzlerdairy.com/robots.txt", "missing", 404),
+              )
+
+              assert client.calls == []
+              assert source["canonical_target_state"] == "valid"
+              assert source["canonical_origin_alias"] is True
+              assert source["canonical_origin_alias_source_url"] == "https://hartzlerdairy.com/chocolate-milk"
+              assert source["canonical_origin_alias_target_url"] == "https://www.hartzlerdairy.com/chocolate-milk"
+              assert summary["origin_alias_declarations"] == 1
+              assert not any(item["rule"] == "canonical_cross_domain" for item in build_findings([source, target]))
+
+
+          @pytest.mark.asyncio
+          async def test_origin_alias_does_not_suppress_noindex_target_warning():
+              source = _page(
+                  "https://example.com/source",
+                  canonical="https://www.example.com/preferred",
+              )
+              target = _page(
+                  "https://www.example.com/preferred",
+                  canonical="https://www.example.com/preferred",
+                  robots="noindex",
+              )
+
+              await validate_canonical_targets(
+                  FakeClient(),
+                  [source, target],
+                  RobotsPolicy("https://example.com/robots.txt", "missing", 404),
+              )
+
+              assert source["canonical_origin_alias"] is True
+              assert source["canonical_target_state"] == "target_noindexed"
+              assert any(item["rule"] == "canonical_target_noindex" for item in build_findings([source, target]))
+
+
+          @pytest.mark.asyncio
+          async def test_http_to_https_www_change_is_not_treated_as_origin_alias():
+              source = _page(
+                  "http://example.com/source",
+                  canonical="https://www.example.com/source",
+              )
+              client = FakeClient()
+
+              await validate_canonical_targets(
+                  client,
+                  [source],
+                  RobotsPolicy("http://example.com/robots.txt", "missing", 404),
+              )
+
+              assert client.calls == []
+              assert source.get("canonical_origin_alias") is not True
+              assert source["canonical_target_state"] == "cross_domain_needs_verification"
+              assert any(item["rule"] == "canonical_cross_domain" for item in build_findings([source]))
+          ''', encoding="utf-8")
+
+          doc_path = Path("docs/releases/canonical-origin-alias-equivalence-v2.md")
+          doc_path.write_text('''# Canonical origin-alias equivalence v2
+
+          ## Scope
+
+          Canonical validation now uses the same apex/`www` host equivalence as redirect validation when the scheme and port are unchanged.
+
+          ## Safety boundaries
+
+          - Genuine external domains still produce `canonical_cross_domain` verification tasks.
+          - HTTP-to-HTTPS changes are not treated as transport aliases by this rule.
+          - Redirected, failed, noindexed, robots-blocked, chained, looped, and malformed canonical targets keep their existing findings.
+          - Alias provenance remains attached to page evidence through `canonical_origin_alias_*` fields.
+
+          ## Production acceptance
+
+          1. Hartzler Dairy must no longer emit `canonical_cross_domain` solely for apex-to-`www` canonical declarations.
+          2. Funbooker must remain complete and authoritative.
+          ''', encoding="utf-8")
+
+          revision_path = Path("data/beta-crawler-revision.json")
+          revision = json.loads(revision_path.read_text(encoding="utf-8"))
+          old_fingerprint = str(revision["fingerprint"])
+          components = dict(revision["component_versions"])
+          components["canonical_target_evidence_version"] = NEW_VERSION
+          payload = json.dumps(components, sort_keys=True, separators=(",", ":"))
+          new_fingerprint = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+          revision.update({
+              "acceptance_report": "docs/releases/canonical-origin-alias-equivalence-v2.md",
+              "component_versions": dict(sorted(components.items())),
+              "fingerprint": new_fingerprint,
+              "git_commit": "",
+              "note": "Canonical evidence candidate: same-scheme apex/www declarations reuse the approved transport-origin equivalence while genuine cross-domain and invalid-target findings remain unchanged.",
+              "recorded_at": "2026-07-20T00:00:00Z",
+              "status": "candidate",
+          })
+          revision_path.write_text(json.dumps(revision, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+          fingerprint_files = [
+              "src/lib/scanRunModel.js",
+              "tests/frontend/releaseAuthorityGate.test.mjs",
+              "tests/frontend/scanRunPersistence.test.mjs",
+              "scanner-api/tests/test_observability.py",
+          ]
+          for file_name in fingerprint_files:
+              target = Path(file_name)
+              text = target.read_text(encoding="utf-8")
+              if old_fingerprint not in text:
+                  raise SystemExit(f"{file_name}: old fingerprint {old_fingerprint} not found")
+              target.write_text(text.replace(old_fingerprint, new_fingerprint), encoding="utf-8")
+
+          print(f"old fingerprint: {old_fingerprint}")
+          print(f"new fingerprint: {new_fingerprint}")
+          PY
+
+      - name: Install Python dependencies
+        run: python -m pip install -r scanner-api/requirements.txt
+
+      - name: Run focused scanner tests
+        env:
+          PYTHONPATH: scanner-api
+        run: |
+          pytest -q \
+            scanner-api/tests/test_canonical_target_validation.py \
+            scanner-api/tests/test_canonical_origin_alias_equivalence.py \
+            scanner-api/tests/test_redirect_evidence.py \
+            scanner-api/tests/test_beta_revision.py \
+            scanner-api/tests/test_observability.py
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run frontend contracts and production build
+        run: |
+          npm run test:frontend
+          npm run build
+
+      - name: Commit direct patch and remove temporary workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/apply-canonical-origin-alias-patch.yml
+          git add \
+            scanner-api/app/canonical_validation.py \
+            scanner-api/app/beta_revision.py \
+            scanner-api/tests/test_canonical_origin_alias_equivalence.py \
+            scanner-api/tests/test_observability.py \
+            data/beta-crawler-revision.json \
+            docs/releases/canonical-origin-alias-equivalence-v2.md \
+            src/lib/scanRunModel.js \
+            tests/frontend/releaseAuthorityGate.test.mjs \
+            tests/frontend/scanRunPersistence.test.mjs
+          git commit -m "Treat apex and www canonicals as one origin"
+          git push origin HEAD:agent/canonical-origin-alias-equivalence

@@ -1,0 +1,44 @@
+name: Inspect grouped recommendation evidence
+
+on:
+  pull_request:
+    branches:
+      - agent/persist-authoritative-browser-record
+    types:
+      - opened
+      - reopened
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Capture grouped-evidence code paths
+        shell: bash
+        run: |
+          {
+            echo '=== review.py relevant symbols ==='
+            grep -n -C 18 -E 'metadata_state_counts|grouping_explanation|combined_rules|cleaned_fixes|group.*fix|dedup.*fix|template.*group' scanner-api/app/review.py || true
+            echo
+            echo '=== scanRunModel durable mapping ==='
+            grep -n -C 10 -E 'metadata_state_counts|grouping_explanation|combined_rules|buildFixItemFields' src/lib/scanRunModel.js || true
+            echo
+            echo '=== FixItem schema ==='
+            grep -n -C 5 -E 'metadata_state_counts|grouping_explanation|combined_rules|raw_finding' base44/entities/FixItem.jsonc || true
+            echo
+            echo '=== grouped evidence tests ==='
+            grep -R -n -C 8 -E 'metadata_state_counts|grouping_explanation|combined_rules' scanner-api/tests tests/frontend || true
+          } > grouped-evidence-inspection.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grouped-evidence-inspection
+          path: grouped-evidence-inspection.txt
+          if-no-files-found: error

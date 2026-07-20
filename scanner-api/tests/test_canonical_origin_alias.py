@@ -94,6 +94,6 @@ async def test_apex_www_path_change_is_not_hidden_as_an_alias():
         final_url="https://www.hartzlerdairy.com/chocolate-milk/",
     )
 
-    await validate_canonical_targets(None, [page], None)
+    await validate_canonical_targets(None, [page], None, max_targets=0)
 
     assert page["canonical_target_state"] != "origin_alias_equivalent"

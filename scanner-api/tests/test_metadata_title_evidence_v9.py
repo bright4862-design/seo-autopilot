@@ -122,16 +122,27 @@ def test_empty_successful_html_and_head_boundary_remain_excluded_states():
     assert description_rules([incomplete, implied_head]) == set()
 
 
-def test_scanner_and_review_emit_separate_absent_empty_and_malformed_rules():
+def test_scanner_preserves_description_states_and_review_combines_the_family_task():
     missing = extracted("<html><head><title>Missing</title></head><body><h1>Page</h1></body></html>", "https://example.com/missing")
     empty = extracted('<html><head><title>Empty</title><meta name="description" content=""></head><body><h1>Page</h1></body></html>', "https://example.com/empty")
     malformed = extracted('<html><head><title>Malformed</title><meta name="description"></head><body><h1>Page</h1></body></html>', "https://example.com/malformed")
 
     scanner_rules = {item["rule"] for item in build_findings([missing, empty, malformed])}
-    review_rules = {item["rule"] for item in build_page_pattern_findings([missing, empty, malformed])}
+    review_fixes = [
+        item for item in build_page_pattern_findings([missing, empty, malformed])
+        if item.get("category") == "meta_description"
+    ]
 
     assert DESCRIPTION_RULES <= scanner_rules
-    assert DESCRIPTION_RULES <= review_rules
+    assert len(review_fixes) == 1
+    [review_fix] = review_fixes
+    assert review_fix["rule"] == "meta_description_unusable"
+    assert review_fix["combined_rules"] == [
+        "missing_meta_description",
+        "empty_meta_description",
+        "malformed_meta_description",
+    ]
+    assert review_fix["metadata_state_counts"] == {"missing": 1, "empty": 1, "malformed": 1}
 
 
 def test_description_state_split_keeps_existing_health_score_calibration():

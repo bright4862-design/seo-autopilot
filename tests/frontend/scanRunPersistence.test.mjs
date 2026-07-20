@@ -17,7 +17,7 @@ const frozenRevision = JSON.parse(readFileSync("data/beta-crawler-revision.json"
 const EXPECTED_SCANNER_VERSION = "python_scanner_v3_bounded_request";
 const EXPECTED_REVIEW_VERSION = "python_review_v2_structural_marketplace";
 const EXPECTED_CALIBRATION_VERSION = "review_evidence_calibration_v5_utility_redirect";
-const EXPECTED_BETA_FINGERPRINT = "3849179005a25302";
+const EXPECTED_BETA_FINGERPRINT = "d478fe98569c1405";
 const EXPECTED_CLASSIFIER_VERSION = "archetype_classifier_v8_platform_product_routes";
 const EXPECTED_SCANNER_BUILD = "hard_page_cap_response_v1";
 const EXPECTED_METADATA_VERSION = "metadata_evidence_v1_description_states";
@@ -215,4 +215,22 @@ test("recommendations are found under any of the contract array keys", () => {
   assert.equal(getFixRecommendations({ fixes: [{ a: 1 }] }).length, 1);
   assert.equal(getFixRecommendations({ findings: [{ a: 1 }, null] }).length, 1);
   assert.equal(getFixRecommendations({}).length, 0);
+});
+
+
+test("grouped metadata evidence persists as first-class FixItem fields", () => {
+  const fields = buildFixItemFields({
+    issue_title: "Add usable meta descriptions",
+    rule: "meta_description_unusable",
+    page_scope: "family",
+    page_template_family: "activity_detail",
+    affected_pages: ["/a", "/b", "/c"],
+    metadata_state_counts: { missing: 1, empty: 2, malformed: 0 },
+    combined_rules: ["missing_meta_description", "empty_meta_description"],
+    grouping_explanation: "These URLs use the activity/detail page pattern.",
+  }, { scanRunId: "run_grouped" });
+
+  assert.deepEqual(fields.metadata_state_counts, { missing: 1, empty: 2, malformed: 0 });
+  assert.deepEqual(fields.combined_rules, ["missing_meta_description", "empty_meta_description"]);
+  assert.equal(fields.grouping_explanation, "These URLs use the activity/detail page pattern.");
 });

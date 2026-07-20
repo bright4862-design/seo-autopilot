@@ -98,9 +98,20 @@ jobs:
         run: python -m pip install -r scanner-api/requirements.txt
 
       - name: Test grouped metadata evidence
+        shell: bash
         env:
           PYTHONPATH: scanner-api
-        run: pytest -q scanner-api/tests/test_grouped_metadata_evidence.py
+        run: |
+          set -o pipefail
+          pytest -q scanner-api/tests/test_grouped_metadata_evidence.py 2>&1 | tee grouped-metadata-test-output.txt
+
+      - name: Upload grouped metadata test failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: grouped-metadata-test-output
+          path: grouped-metadata-test-output.txt
+          if-no-files-found: error
 
       - name: Run scanner API regression suite
         env:

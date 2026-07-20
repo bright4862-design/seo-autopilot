@@ -268,8 +268,18 @@ async def validate_canonical_targets(
         if not target:
             continue
         declaration_count += 1
-        source_url = _normalize_url(page.get("final_url") or page.get("url"))
-        if _is_transport_origin_alias(source_url, target):
+        requested_url = _normalize_url(page.get("url"))
+        final_url = _normalize_url(page.get("final_url"))
+        source_url = final_url or requested_url
+        origin_alias_equivalent = (
+            _is_transport_origin_alias(requested_url, target)
+            or (
+                bool(final_url)
+                and target == final_url
+                and _is_transport_origin_alias(requested_url, final_url)
+            )
+        )
+        if origin_alias_equivalent:
             _apply_evidence(page, target, {
                 "state": "origin_alias_equivalent",
                 "target_url": target,

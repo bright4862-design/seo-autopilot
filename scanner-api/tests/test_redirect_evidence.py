@@ -82,6 +82,45 @@ async def test_trailing_slash_redirect_is_not_mislabeled_as_a_loop(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_apex_www_identity_redirect_preserves_final_html_indexability(monkeypatch):
+    monkeypatch.setattr("app.redirect_validation.is_public_http_url", lambda _url: True)
+    client = FakeClient({
+        "https://example.com/products/widget": _response(
+            "https://example.com/products/widget",
+            301,
+            location="https://www.example.com/products/widget",
+        ),
+        "https://www.example.com/products/widget": _response(
+            "https://www.example.com/products/widget",
+            200,
+        ),
+    })
+    policy = RobotsPolicy("https://example.com/robots.txt", "missing", 404)
+
+    page = await fetch_and_extract(
+        client,
+        "https://example.com/products/widget",
+        DISCOVERY_SITEMAP,
+        robots_policy=policy,
+    )
+    summary = summarize_redirect_evidence([page])
+    rules = {item["rule"] for item in build_findings([page])}
+
+    assert page["redirect_state"] == "not_redirected"
+    assert page["redirect_hop_count"] == 0
+    assert page["origin_alias_redirect"] is True
+    assert page["origin_alias_redirect_hop_count"] == 1
+    assert page["origin_alias_destination_url"] == "https://www.example.com/products/widget"
+    assert page["indexability_state"] == "Indexable"
+    assert page["indexable"] is True
+    assert summary["redirected_pages"] == 0
+    assert summary["origin_alias_redirects"] == 1
+    assert "sitemap_redirect" not in rules
+    assert "internal_link_redirect" not in rules
+    assert "redirect_chain" not in rules
+
+
+@pytest.mark.asyncio
 async def test_redirect_chain_and_loop_are_explicit(monkeypatch):
     monkeypatch.setattr("app.redirect_validation.is_public_http_url", lambda _url: True)
     policy = RobotsPolicy("https://example.com/robots.txt", "missing", 404)
@@ -160,6 +199,7 @@ async def test_summary_counts_redirect_sources(monkeypatch):
     assert summary["redirected_pages"] == 2
     assert summary["sitemap_redirects"] == 1
     assert summary["internal_link_redirects"] == 1
+    assert summary["origin_alias_redirects"] == 0
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,52 @@ jobs:
           node-version: '22'
           cache: npm
 
+      - name: Align compatibility expectations
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path(".github/scripts/apply_local_business_classifier_v9.py")
+          text = path.read_text(encoding="utf-8")
+
+          version_anchor = '''for path in version_files:
+              replace_expected(path, OLD_VERSION, NEW_VERSION, 1)
+
+          release_doc = "docs/releases/local-business-classifier-v9.md"'''
+          version_replacement = '''for path in version_files:
+              replace_expected(path, OLD_VERSION, NEW_VERSION, 1)
+
+          replace_expected(
+              "scanner-api/tests/test_classifier_v3_production_regressions.py",
+              "archetype_classifier_v8",
+              "archetype_classifier_v9",
+              1,
+          )
+
+          release_doc = "docs/releases/local-business-classifier-v9.md"'''
+          if text.count(version_anchor) != 1:
+              raise SystemExit(f"expected one version compatibility anchor, found {text.count(version_anchor)}")
+          text = text.replace(version_anchor, version_replacement, 1)
+
+          fingerprint_anchor = '''revision_path.write_text(json.dumps(revision, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+
+          for path in ['''
+          fingerprint_replacement = '''revision_path.write_text(json.dumps(revision, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+
+          replace_expected(
+              "scanner-api/tests/test_observability.py",
+              "664cceb4873e81a1",
+              fingerprint,
+              3,
+          )
+
+          for path in ['''
+          if text.count(fingerprint_anchor) != 1:
+              raise SystemExit(f"expected one fingerprint compatibility anchor, found {text.count(fingerprint_anchor)}")
+          path.write_text(text.replace(fingerprint_anchor, fingerprint_replacement, 1), encoding="utf-8")
+          PY
+
       - name: Apply scoped classifier patch
         shell: bash
         run: |
@@ -108,6 +154,7 @@ jobs:
             git add \
               scanner-api/app/review.py \
               scanner-api/tests/test_classifier_v9_local_business.py \
+              scanner-api/tests/test_classifier_v3_production_regressions.py \
               scanner-api/tests/test_classifier_v7_html_route_evidence.py \
               scanner-api/tests/test_observability.py \
               scanner-api/tests/test_representative_evidence_v8.py \

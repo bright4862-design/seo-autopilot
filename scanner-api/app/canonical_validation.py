@@ -10,7 +10,7 @@ from .robots_policy import SCANNER_USER_AGENT, SEARCH_USER_AGENT, annotate_robot
 from .security import is_public_http_url
 
 
-CANONICAL_TARGET_EVIDENCE_VERSION = "canonical_target_evidence_v1"
+CANONICAL_TARGET_EVIDENCE_VERSION = "canonical_target_evidence_v2_origin_alias"
 DEFAULT_MAX_TARGETS = 20
 DEFAULT_CONCURRENCY = 4
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 8.0
@@ -35,6 +35,32 @@ def _normalize_url(value: str) -> str:
 def _origin_key(value: str) -> tuple[str, int | None]:
     parsed = urlparse(str(value or ""))
     return ((parsed.hostname or "").lower(), parsed.port)
+
+
+def _comparable_host(value: str) -> str:
+    host = str(value or "").lower().strip(".")
+    return host[4:] if host.startswith("www.") else host
+
+
+def _is_transport_origin_alias(source: str, target: str) -> bool:
+    """Return True only for a same-page, same-scheme apex/www identity alias."""
+    source_url = _normalize_url(source)
+    target_url = _normalize_url(target)
+    if not source_url or not target_url:
+        return False
+    source_parsed = urlparse(source_url)
+    target_parsed = urlparse(target_url)
+    source_host = (source_parsed.hostname or "").lower()
+    target_host = (target_parsed.hostname or "").lower()
+    if not source_host or not target_host or source_host == target_host:
+        return False
+    return (
+        source_parsed.scheme == target_parsed.scheme
+        and source_parsed.port == target_parsed.port
+        and _comparable_host(source_host) == _comparable_host(target_host)
+        and (source_parsed.path or "/") == (target_parsed.path or "/")
+        and source_parsed.query == target_parsed.query
+    )
 
 
 def _page_identity_urls(page: dict) -> set[str]:
@@ -243,6 +269,18 @@ async def validate_canonical_targets(
             continue
         declaration_count += 1
         source_url = _normalize_url(page.get("final_url") or page.get("url"))
+        if _is_transport_origin_alias(source_url, target):
+            _apply_evidence(page, target, {
+                "state": "origin_alias_equivalent",
+                "target_url": target,
+                "status_code": int(page.get("status_code") or 0),
+                "indexability_state": str(page.get("indexability_state") or "Indexable"),
+                "fetch_error": "",
+                "location": "",
+                "target_canonical": "",
+                "evidence_source": "origin_alias_contract",
+            })
+            continue
         if not source_url or _origin_key(source_url) != _origin_key(target):
             _apply_evidence(page, target, {
                 "state": "cross_domain_needs_verification",
@@ -322,6 +360,7 @@ async def validate_canonical_targets(
         "version": CANONICAL_TARGET_EVIDENCE_VERSION,
         "pages_declaring_other_canonical": declaration_count,
         "unique_same_origin_targets": len(same_origin_sources),
+        "origin_alias_equivalent_count": int(states.get("origin_alias_equivalent", 0)),
         "targets_fetched": sum(1 for evidence in target_evidence.values() if evidence.get("evidence_source") == "validation"),
         "state_counts": dict(sorted(states.items())),
         "representative_issues": [

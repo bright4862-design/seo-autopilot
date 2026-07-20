@@ -33,50 +33,62 @@ jobs:
       - name: Harden applicator locators
         shell: bash
         run: |
-          python - <<'PY'
+          set -o pipefail
+          python - <<'PY' 2>&1 | tee sitemap-time-harden-output.txt
           from pathlib import Path
 
           path = Path(".github/scripts/apply_sitemap_time_reservation.py")
           text = path.read_text(encoding="utf-8")
 
-          old_assertion = '    assert captured["sitemap_deadline"] < result["crawl_timing"]["crawl_started_at"] or captured["sitemap_deadline"] > 0'
-          new_assertion = '    assert captured["sitemap_deadline"] > 0\n    assert result["crawl_timing"]["crawl_started_at"]'
-          if text.count(old_assertion) != 1:
-              raise SystemExit(f"expected one timing assertion locator, found {text.count(old_assertion)}")
-          text = text.replace(old_assertion, new_assertion, 1)
+          replacements = [
+              (
+                  '    assert captured["sitemap_deadline"] < result["crawl_timing"]["crawl_started_at"] or captured["sitemap_deadline"] > 0',
+                  '    assert captured["sitemap_deadline"] > 0\n    assert result["crawl_timing"]["crawl_started_at"]',
+                  1,
+                  "timing assertion",
+              ),
+              (
+                  "from .review import REVIEW_VERSION, run_review",
+                  "from .review import ARCHETYPE_CLASSIFIER_VERSION, REVIEW_VERSION, run_review",
+                  2,
+                  "review imports",
+              ),
+              (
+                  "    from .robots_policy import ROBOTS_POLICY_VERSION\n    from .sampling import SAMPLING_VERSION",
+                  "    from .sampling import SAMPLING_VERSION",
+                  2,
+                  "beta imports",
+              ),
+              (
+                  '        "sampling_version": SAMPLING_VERSION,\n        "render_evidence_version": RENDER_EVIDENCE_VERSION,',
+                  '        "sampling_version": SAMPLING_VERSION,\n        "render_followup_version": RENDER_FOLLOWUP_VERSION,',
+                  1,
+                  "beta old output anchor",
+              ),
+              (
+                  '        "sampling_version": SAMPLING_VERSION,\n        "sitemap_time_reservation_version": SITEMAP_TIME_RESERVATION_VERSION,\n        "render_evidence_version": RENDER_EVIDENCE_VERSION,',
+                  '        "sampling_version": SAMPLING_VERSION,\n        "sitemap_time_reservation_version": SITEMAP_TIME_RESERVATION_VERSION,\n        "render_followup_version": RENDER_FOLLOWUP_VERSION,',
+                  1,
+                  "beta new output anchor",
+              ),
+          ]
 
-          old_import = "from .review import REVIEW_VERSION, run_review"
-          new_import = "from .review import ARCHETYPE_CLASSIFIER_VERSION, REVIEW_VERSION, run_review"
-          if text.count(old_import) != 2:
-              raise SystemExit(f"expected two main review import locators, found {text.count(old_import)}")
-          text = text.replace(old_import, new_import)
+          for old, new, expected, label in replacements:
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(f"{label}: expected {expected}, found {count}")
+              text = text.replace(old, new)
 
-          old_beta_import_block = '''    ''' + "'''" + '''    from .robots_policy import ROBOTS_POLICY_VERSION
-              from .sampling import SAMPLING_VERSION''' + "'''" + ''',
-              ''' + "'''" + '''    from .robots_policy import ROBOTS_POLICY_VERSION
-              from .sampling import SAMPLING_VERSION
-              from .scan_timing import SITEMAP_TIME_RESERVATION_VERSION''' + "'''" + ''','''
-          new_beta_import_block = '''    ''' + "'''" + '''    from .sampling import SAMPLING_VERSION''' + "'''" + ''',
-              ''' + "'''" + '''    from .sampling import SAMPLING_VERSION
-              from .scan_timing import SITEMAP_TIME_RESERVATION_VERSION''' + "'''" + ''','''
-          if text.count(old_beta_import_block) != 1:
-              raise SystemExit(f"expected one beta import block, found {text.count(old_beta_import_block)}")
-          text = text.replace(old_beta_import_block, new_beta_import_block, 1)
-
-          old_beta_output_block = '''    ''' + "'''" + '''        "sampling_version": SAMPLING_VERSION,
-              "render_evidence_version": RENDER_EVIDENCE_VERSION,''' + "'''" + ''',
-              ''' + "'''" + '''        "sampling_version": SAMPLING_VERSION,
-              "sitemap_time_reservation_version": SITEMAP_TIME_RESERVATION_VERSION,
-              "render_evidence_version": RENDER_EVIDENCE_VERSION,''' + "'''" + ''','''
-          new_beta_output_block = '''    ''' + "'''" + '''        "sampling_version": SAMPLING_VERSION,
-              "render_followup_version": RENDER_FOLLOWUP_VERSION,''' + "'''" + ''',
-              ''' + "'''" + '''        "sampling_version": SAMPLING_VERSION,
-              "sitemap_time_reservation_version": SITEMAP_TIME_RESERVATION_VERSION,
-              "render_followup_version": RENDER_FOLLOWUP_VERSION,''' + "'''" + ''','''
-          if text.count(old_beta_output_block) != 1:
-              raise SystemExit(f"expected one beta output block, found {text.count(old_beta_output_block)}")
-          path.write_text(text.replace(old_beta_output_block, new_beta_output_block, 1), encoding="utf-8")
+          path.write_text(text, encoding="utf-8")
           PY
+
+      - name: Upload preflight failure output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sitemap-time-harden-output
+          path: sitemap-time-harden-output.txt
+          if-no-files-found: ignore
 
       - name: Apply scoped patch
         shell: bash

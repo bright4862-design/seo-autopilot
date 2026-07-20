@@ -47,9 +47,9 @@ jobs:
 
           old_import = "from .review import REVIEW_VERSION, run_review"
           new_import = "from .review import ARCHETYPE_CLASSIFIER_VERSION, REVIEW_VERSION, run_review"
-          if text.count(old_import) != 1:
-              raise SystemExit(f"expected one main review import locator, found {text.count(old_import)}")
-          path.write_text(text.replace(old_import, new_import, 1), encoding="utf-8")
+          if text.count(old_import) != 2:
+              raise SystemExit(f"expected two main review import locators, found {text.count(old_import)}")
+          path.write_text(text.replace(old_import, new_import), encoding="utf-8")
           PY
 
       - name: Apply scoped patch

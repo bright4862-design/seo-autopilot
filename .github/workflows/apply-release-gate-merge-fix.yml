@@ -1,0 +1,10 @@
+name: Temporary release gate cleanup placeholder
+
+on:
+  workflow_dispatch:
+
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "This placeholder is removed by the PR cleanup job."

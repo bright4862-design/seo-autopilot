@@ -64,7 +64,7 @@ def test_signal_shaped_app_distribution_is_saas_without_homepage_software_words(
     result = fingerprint(pages)
     signals = result["classification"]["structural_signals"]
 
-    assert ARCHETYPE_CLASSIFIER_VERSION == "archetype_classifier_v8_platform_product_routes"
+    assert ARCHETYPE_CLASSIFIER_VERSION == "archetype_classifier_v9_local_business_hospitality"
     assert result["primary_archetype"] == "saas_app_membership", result["classification"]["winning_reason"]
     assert signals["saas_homepage_identity"] is False
     assert signals["saas_app_distribution_identity"] is True

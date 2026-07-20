@@ -13,10 +13,10 @@ const LIMITED_SCAN_STATUSES = new Set([
 const MODE_PAGE_LIMITS = { basic: 25, quick: 40, deep: 85, advanced: 150 };
 const CURRENT_SCANNER_VERSION = "python_scanner_v3_bounded_request";
 const CURRENT_SCANNER_BUILD_REVISION = "hard_page_cap_response_v1";
-const CURRENT_ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v8_platform_product_routes";
+const CURRENT_ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v9_local_business_hospitality";
 const CURRENT_REVIEW_VERSION = "python_review_v2_structural_marketplace";
 const CURRENT_CALIBRATION_VERSION = "review_evidence_calibration_v5_utility_redirect";
-const CURRENT_BETA_REVISION_FINGERPRINT = "664cceb4873e81a1";
+const CURRENT_BETA_REVISION_FINGERPRINT = "db8b916f3bd6d09c";
 
 export const TERMINAL_SCAN_RUN_STATUSES = new Set(["complete", "limited", "failed", "cancelled"]);
 

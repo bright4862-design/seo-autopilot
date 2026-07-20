@@ -136,4 +136,4 @@ def test_classifier_marker_is_unchanged_by_evidence_patch():
         page("https://saas.example/integrations", family="collection_page"),
     ]
     fingerprint = build_site_fingerprint({}, pages, "https://saas.example")
-    assert fingerprint["classification"]["classifier_version"] == "archetype_classifier_v8_platform_product_routes"
+    assert fingerprint["classification"]["classifier_version"] == "archetype_classifier_v9_local_business_hospitality"

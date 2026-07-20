@@ -16,7 +16,7 @@ const CURRENT_SCANNER_BUILD_REVISION = "hard_page_cap_response_v1";
 const CURRENT_ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v8_platform_product_routes";
 const CURRENT_REVIEW_VERSION = "python_review_v2_structural_marketplace";
 const CURRENT_CALIBRATION_VERSION = "review_evidence_calibration_v5_utility_redirect";
-const CURRENT_BETA_REVISION_FINGERPRINT = "5e7d2591c53427df";
+const CURRENT_BETA_REVISION_FINGERPRINT = "664cceb4873e81a1";
 
 export const TERMINAL_SCAN_RUN_STATUSES = new Set(["complete", "limited", "failed", "cancelled"]);
 
@@ -187,6 +187,7 @@ export function buildScanRunFields(record = {}, { status } = {}) {
     local_cache_complete: localCacheComplete,
     queued_remaining: Number(record.queued_remaining || 0),
     sampling_evidence: record.sampling_evidence || {},
+    crawl_timing: record.crawl_timing || record.technical_audit_summary?.crawl_timing || {},
     scan_status: toStr(record.scan_status),
     review_confidence_state: toStr(record.review_confidence_state),
     score_is_provisional: record.score_is_provisional === true,

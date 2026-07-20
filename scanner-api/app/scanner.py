@@ -26,6 +26,12 @@ from .metadata_title_evidence import (
     relative_evidence_url,
 )
 from .sampling import SAMPLING_VERSION, sampling_report, select_balanced_urls
+from .scan_timing import (
+    SITEMAP_TIME_RESERVATION_VERSION,
+    allocate_scan_time_budget,
+    build_crawl_failure_buckets,
+    utc_now_iso,
+)
 from .render_followup import RENDER_FOLLOWUP_VERSION, run_render_followup
 from .robots_policy import SCANNER_USER_AGENT, annotate_robots_evidence, load_robots_policy
 from .security import is_public_http_url, safe_get
@@ -65,6 +71,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
     fetch_timeout = float(budget.get("fetch_timeout", min(10, max(3, budget["timeout"] / 5))))
     max_sitemap_fetches = int(budget.get("max_sitemap_fetches", 10))
     scan_started_at = time.monotonic()
+    scan_started_wall_clock = utc_now_iso()
     deadline = scan_started_at + budget["timeout"]
     start_url = normalize_url(website_url)
     if not start_url:
@@ -142,11 +149,27 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
                 pass
 
         max_pages = budget["max_pages"]
+        timing_budget = allocate_scan_time_budget(
+            scan_started_at,
+            budget["timeout"],
+            fetch_timeout,
+            now=time.monotonic(),
+        )
+        sitemap_diagnostics = {
+            "version": SITEMAP_TIME_RESERVATION_VERSION,
+            "sitemap_started_at": utc_now_iso(),
+            "sitemap_budget_seconds": round(timing_budget["sitemap_budget_seconds"], 3),
+            "crawl_reserved_seconds": round(timing_budget["crawl_reserved_seconds"], 3),
+            "response_reserved_seconds": round(timing_budget["response_reserved_seconds"], 3),
+        }
+        sitemap_started_monotonic = time.monotonic()
         sitemap_urls = await load_sitemap_urls(
             client, origin, prefix, SITEMAP_DISCOVERY_LIMIT, artifacts,
-            scope_evidence=scope_evidence, deadline=deadline,
-            max_fetches=max_sitemap_fetches,
+            scope_evidence=scope_evidence, deadline=timing_budget["sitemap_deadline"],
+            max_fetches=max_sitemap_fetches, diagnostics=sitemap_diagnostics,
         )
+        sitemap_diagnostics["sitemap_elapsed_ms"] = round((time.monotonic() - sitemap_started_monotonic) * 1000)
+        sitemap_diagnostics["sitemap_urls_discovered"] = len(sitemap_urls)
         family_of = lambda url: classify_template(urlparse(url).path or "/")
         path_of = lambda url: urlparse(url).path or "/"
         sampled_sitemap_urls = select_balanced_urls(sitemap_urls, family_of, path_of, max(0, max_pages - 1))
@@ -156,6 +179,9 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         for url in sampled_sitemap_urls:
             enqueue(url, "sitemap", "/sitemap.xml", "")
 
+        crawl_started_at = utc_now_iso()
+        crawl_started_monotonic = time.monotonic()
+        initial_queue_size = len(queue)
         state_lock = asyncio.Lock()
         crawl_state = {"claimed": 0, "in_flight": 0}
 
@@ -164,7 +190,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
                 target = None
                 snapshot = None
                 async with state_lock:
-                    if time.monotonic() >= deadline or crawl_state["claimed"] >= max_pages:
+                    if time.monotonic() >= timing_budget["crawl_deadline"] or crawl_state["claimed"] >= max_pages:
                         return
                     while queue:
                         candidate = queue.pop(0)
@@ -222,6 +248,8 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
 
         workers = [asyncio.create_task(worker()) for _ in range(max(1, concurrency))]
         await asyncio.gather(*workers)
+        crawl_elapsed_ms = round((time.monotonic() - crawl_started_monotonic) * 1000)
+        final_queue_size = len(queue)
         # Enforce the selected scan budget again after all concurrent sources finish.
         # Downstream validation and review must never receive more pages than the mode allows.
         if len(pages) > max_pages:
@@ -230,7 +258,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
             client,
             pages,
             robots_policy,
-            deadline=deadline,
+            deadline=timing_budget["crawl_deadline"],
         )
         redirect_evidence = summarize_redirect_evidence(pages)
 
@@ -252,9 +280,30 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
     render_evidence["browser_followup"] = render_followup
     elapsed_ms = round((time.monotonic() - scan_started_at) * 1000)
     deadline_reached = time.monotonic() >= deadline
+    crawl_deadline_reached = time.monotonic() >= timing_budget["crawl_deadline"]
+    failure_reason_buckets = build_crawl_failure_buckets(pages)
+    failed_fetch_count = sum(failure_reason_buckets.values())
+    crawl_timing = {
+        **sitemap_diagnostics,
+        "version": SITEMAP_TIME_RESERVATION_VERSION,
+        "scan_started_at": scan_started_wall_clock,
+        "crawl_started_at": crawl_started_at,
+        "crawl_elapsed_ms": crawl_elapsed_ms,
+        "initial_queue_size": initial_queue_size,
+        "final_queue_size": final_queue_size,
+        "crawl_deadline_reached": crawl_deadline_reached,
+        "queue_exhausted": final_queue_size == 0 and len(pages) < max_pages and not crawl_deadline_reached,
+        "failed_fetch_count": failed_fetch_count,
+        "failure_reason_buckets": failure_reason_buckets,
+    }
     crawl_warnings = []
     if deadline_reached:
         crawl_warnings.append(f"The {scan_mode} scan reached its bounded {budget['timeout']}-second backend budget and returned collected evidence.")
+    if sitemap_diagnostics.get("sitemap_budget_exhausted"):
+        crawl_warnings.append(
+            f"Sitemap discovery reached its reserved {sitemap_diagnostics.get('sitemap_budget_seconds', 0)}-second budget; "
+            f"page crawling continued with {len(sitemap_urls)} discovered sitemap URLs."
+        )
     if scope_evidence.get("market_scope_required"):
         crawl_warnings.append(
             "Multiple country/language markets were detected on the global root. Submit one market URL, such as /fr/fr/, for a coherent audit."
@@ -275,6 +324,8 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         "page_evidence_gate_version": PAGE_EVIDENCE_GATE_VERSION,
         "sampling_version": SAMPLING_VERSION,
         "sampling_evidence": sampling_evidence,
+        "sitemap_time_reservation_version": SITEMAP_TIME_RESERVATION_VERSION,
+        "crawl_timing": crawl_timing,
         "render_evidence_version": RENDER_EVIDENCE_VERSION,
         "render_evidence": render_evidence,
         "screaming_frog_lite_enabled": True,
@@ -312,6 +363,8 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
             "metadata_evidence_version": METADATA_EVIDENCE_VERSION,
             "title_evidence_version": TITLE_EVIDENCE_VERSION,
             "page_evidence_gate_version": PAGE_EVIDENCE_GATE_VERSION,
+            "sitemap_time_reservation_version": SITEMAP_TIME_RESERVATION_VERSION,
+            "crawl_timing": crawl_timing,
             "scanner_elapsed_ms": elapsed_ms,
             "scanner_total_budget_seconds": budget["timeout"],
             "scan_deadline_reached": deadline_reached,

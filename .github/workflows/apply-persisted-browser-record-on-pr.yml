@@ -45,7 +45,17 @@ jobs:
         run: node --test tests/frontend/releaseAuthorityGate.test.mjs
 
       - name: Run remaining frontend tests
-        run: npm run test:frontend
+        run: |
+          set -o pipefail
+          npm run test:frontend 2>&1 | tee frontend-test-output.txt
+
+      - name: Upload failed frontend test output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: persisted-browser-record-test-output
+          path: frontend-test-output.txt
+          if-no-files-found: error
 
       - name: Build production frontend
         run: npm run build

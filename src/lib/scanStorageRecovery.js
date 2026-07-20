@@ -9,7 +9,7 @@ const SCAN_DEBUG_KEY = "seo_autopilot:scan_debug";
 
 const CURRENT_SCANNER_VERSION = "python_scanner_v3_bounded_request";
 const CURRENT_SCANNER_BUILD_REVISION = "hard_page_cap_response_v1";
-const CURRENT_ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v8_platform_product_routes";
+const CURRENT_ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v9_local_business_hospitality";
 const CURRENT_REVIEW_VERSION = "python_review_v2_structural_marketplace";
 const CURRENT_CALIBRATION_VERSION = "review_evidence_calibration_v5_utility_redirect";
 const CURRENT_BETA_REVISION_FINGERPRINT = "52348dd1f3b77700";

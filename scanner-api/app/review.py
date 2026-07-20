@@ -76,7 +76,7 @@ CATEGORY_MAP = {
     "duplicate_meta_description": "duplicate_content",
 }
 
-ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v8_platform_product_routes"
+ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v9_local_business_hospitality"
 
 # Frequency cap for archetype keyword/pattern counting: template volume
 # (hundreds of /blog/ URLs) must not out-vote company-level evidence.
@@ -160,6 +160,21 @@ FINANCE_STRUCTURAL_PATTERNS = (
 BOOKING_LISTING_PATTERNS = ("/annonce", "/activites/", "/activite/", "/listings/", "/listing/", "/experiences/")
 BOOKING_STRUCTURAL_PATTERNS = BOOKING_LISTING_PATTERNS + (
     "/booking", "/book/", "/reservation", "/availability", "/tickets", "/billetterie",
+)
+LOCAL_BUSINESS_ROUTE_PATTERNS = (
+    "/menu", "/menus", "/visit", "/tasting", "/tastings", "/wine-club",
+    "/our-club", "/vineyard", "/hours", "/directions", "/catering",
+    "/private-events", "/order-online", "/reservations", "/reserve-a-table",
+    "/find-us", "/locations",
+)
+LOCAL_HOMEPAGE_IDENTITY_PATTERNS = (
+    r"\bbakery\b", r"\brestaurant\b", r"\bwinery\b", r"\bvineyard\b",
+    r"\btasting room\b", r"\bwine club\b", r"\bdairy\b", r"\bcreamery\b",
+    r"\bcaf[eé]\b", r"\bcoffee shop\b", r"\bbistro\b", r"\bpizzeria\b",
+)
+LOCAL_PUBLISHER_IDENTITY_TERMS = (
+    "industry news", "trade publication", "magazine", "journal", "media company",
+    "editorial publication", "industry insights",
 )
 
 PLAYBOOKS = {
@@ -282,6 +297,30 @@ PLAYBOOKS = {
         ],
         "demote": ["old campaign archives", "supporter utility pages", "account routes", "thank-you pages"],
         "owner_rule": "Donation flows, campaign templates, redirects, canonicals, schema, and account boundaries usually need your_web_person.",
+    },
+    "local_business_hospitality": {
+        "label": "local business / food / hospitality",
+        "keywords": [
+            "bakery", "restaurant", "winery", "vineyard", "tasting room", "wine club",
+            "dairy", "creamery", "cafe", "café", "coffee shop", "bistro", "pizzeria",
+            "family owned", "locally owned", "estate wines", "farmstead", "artisan bread",
+            "pastry", "menu", "catering", "private events", "visit us", "opening hours",
+        ],
+        "money_patterns": [
+            "/menu", "/visit", "/tasting", "/wine-club", "/our-club", "/hours",
+            "/directions", "/catering", "/private-events", "/order-online",
+            "/reservations", "/reserve-a-table", "/find-us", "/locations",
+        ],
+        "priority_pages": [
+            "homepage", "menu or product overview", "visit, hours, and location pages",
+            "reservation or tasting pages", "about/our-story pages", "contact and trust pages",
+        ],
+        "priority_issues": [
+            "local discoverability", "location and opening-hours accuracy", "menu/product indexability",
+            "reservation or visit-path reliability", "LocalBusiness schema", "metadata on key conversion pages",
+        ],
+        "demote": ["default WordPress archives", "old news posts", "tag pages", "utility account routes"],
+        "owner_rule": "Local schema, redirects, canonicals, reservation paths, and repeated template issues usually need your_web_person.",
     },
     "content_blog": {
         "label": "content / blog-heavy site",
@@ -517,6 +556,10 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
     product_schema_pages = count_schema_pages(classifier_pages, ("product", "offer"))
     article_schema_pages = count_schema_pages(classifier_pages, ("article", "blogposting", "newsarticle"))
     software_schema_pages = count_schema_pages(classifier_pages, ("softwareapplication", "mobileapplication", "webapplication"))
+    local_schema_pages = count_schema_pages(
+        classifier_pages,
+        ("localbusiness", "restaurant", "winery", "bakery", "foodestablishment", "cafeorcoffeeshop"),
+    )
     product_route_pages = sum(
         1 for path in page_paths if any(pattern in path for pattern in PRODUCT_DETAIL_PATTERNS)
     )
@@ -533,6 +576,9 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
     )
     nonprofit_route_pages = sum(
         1 for path in page_paths if any(pattern in path for pattern in NONPROFIT_STRUCTURAL_PATTERNS)
+    )
+    local_route_pages = sum(
+        1 for path in page_paths if any(pattern in path for pattern in LOCAL_BUSINESS_ROUTE_PATTERNS)
     )
     booking_listing_pages = sum(
         1 for page in classifier_pages
@@ -561,6 +607,11 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         "nonprofit", "non-profit", "charity", "donate", "donation", "fundraising",
         "support our work", "monthly giving", "clean water", "our impact",
     ])
+    local_publisher_identity = has_any(homepage_text, LOCAL_PUBLISHER_IDENTITY_TERMS)
+    local_homepage_identity = bool(
+        any(re.search(pattern, homepage_text, re.I) for pattern in LOCAL_HOMEPAGE_IDENTITY_PATTERNS)
+        and not local_publisher_identity
+    )
     publisher_dominant = bool(
         article_route_pages >= max(8, product_route_pages * 2)
         and (article_schema_pages >= 3 or article_route_pages >= 12)
@@ -580,6 +631,13 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             and product_route_pages >= max(2, round(article_route_pages * 0.35))
         )
     )
+    local_dominant = bool(
+        local_schema_pages >= 1
+        or local_route_pages >= 3
+        or (local_homepage_identity and not publisher_dominant)
+    )
+    if retail_dominant and local_schema_pages == 0 and local_route_pages == 0:
+        local_dominant = False
     saas_business_identity = bool(
         saas_homepage_identity
         and saas_route_pages >= 1
@@ -662,12 +720,21 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
                 score += 2.0 * min(nonprofit_route_pages, 25)
                 if nonprofit_homepage_identity:
                     score += 20.0
+        if key == "local_business_hospitality":
+            if not local_dominant:
+                score = min(score, 3.0)
+            else:
+                score += 24.0
+                score += 5.0 * min(local_schema_pages, 4)
+                score += 3.0 * min(local_route_pages, 10)
+                if local_homepage_identity:
+                    score += 24.0
         if key == "content_blog" and publisher_dominant:
             score += 2.0 * min(article_route_pages, 25)
             score += 1.5 * min(article_schema_pages, 20)
         adjusted_scores.append((key, score))
 
-    structural_competitor = saas_dominant or retail_dominant or nonprofit_dominant
+    structural_competitor = saas_dominant or retail_dominant or nonprofit_dominant or local_dominant
     if structural_competitor:
         adjusted_scores = [
             (key, min(score, CONTENT_BLOG_STRUCTURAL_CAP) if key == "content_blog" else score)
@@ -734,6 +801,11 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             "product_schema_pages": product_schema_pages,
             "article_schema_pages": article_schema_pages,
             "software_schema_pages": software_schema_pages,
+            "local_schema_pages": local_schema_pages,
+            "local_route_pages": local_route_pages,
+            "local_homepage_identity": local_homepage_identity,
+            "local_publisher_identity": local_publisher_identity,
+            "local_dominant": local_dominant,
             "product_route_pages": product_route_pages,
             "article_route_pages": article_route_pages,
             "classifier_html_route_pages": len(classifier_pages),
@@ -760,8 +832,9 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             f"{primary} scored {round(score_map.get(primary, 0.0), 1)} vs {runner_up[0] or 'none'} "
             f"{round(runner_up[1], 1)}; structural signals saas={len(saas_structural)}, "
             f"ecommerce={len(ecommerce_structural)}, booking={len(booking_structural)}, "
-            f"finance={len(finance_structural)}, nonprofit={len(nonprofit_structural)}; "
-            f"dominance publisher={publisher_dominant}, retail={retail_dominant}, "
+            f"finance={len(finance_structural)}, nonprofit={len(nonprofit_structural)}, "
+            f"local_routes={local_route_pages}, local_schema={local_schema_pages}; "
+            f"dominance publisher={publisher_dominant}, retail={retail_dominant}, local={local_dominant}, "
             f"saas={saas_dominant}, app_distribution={saas_app_distribution_identity}, "
             f"platform_infrastructure={saas_platform_infrastructure_identity}, "
             f"nonprofit={nonprofit_dominant}; "
@@ -2249,6 +2322,7 @@ def detect_business_model(text: str, archetype: str) -> str:
         "ecommerce_specialty_retail": "catalog_or_ecommerce",
         "saas_app_membership": "saas_or_member_app",
         "nonprofit_fundraising": "nonprofit_or_fundraising",
+        "local_business_hospitality": "local_service_or_hospitality",
         "content_blog": "content_or_general_business",
         "general": "content_or_general_business",
     }

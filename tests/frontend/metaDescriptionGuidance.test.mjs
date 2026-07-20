@@ -5,6 +5,7 @@ import test from "node:test";
 const scanFormSource = readFileSync(new URL("../../src/components/scan/ScanWebsiteForm.jsx", import.meta.url), "utf8");
 const fixListSource = readFileSync(new URL("../../src/pages/FixList.jsx", import.meta.url), "utf8");
 const recoverySource = readFileSync(new URL("../../src/lib/scanStorageRecovery.js", import.meta.url), "utf8");
+const fixItemEntity = JSON.parse(readFileSync(new URL("../../base44/entities/FixItem.jsonc", import.meta.url), "utf8"));
 
 test("missing, empty, and malformed descriptions become one customer task", () => {
   assert.match(scanFormSource, /META_DESCRIPTION_GAP_RULES/);
@@ -34,4 +35,11 @@ test("fix instructions include template fallback and rendered-source verificatio
   assert.match(fixListSource, /build a reliable fallback/);
   assert.match(fixListSource, /initial server-rendered page source/);
   assert.match(fixListSource, /representative URL from each reported status/);
+});
+
+
+test("FixItem stores grouped recommendation evidence as durable columns", () => {
+  for (const field of ["metadata_state_counts", "combined_rules", "grouping_explanation"]) {
+    assert.ok(fixItemEntity.properties[field], `FixItem missing ${field}`);
+  }
 });

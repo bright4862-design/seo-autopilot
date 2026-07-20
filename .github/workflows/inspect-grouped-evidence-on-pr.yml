@@ -1,4 +1,4 @@
-name: Inspect grouped recommendation evidence
+name: Apply grouped recommendation evidence patch
 
 on:
   pull_request:
@@ -9,10 +9,11 @@ on:
       - reopened
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  inspect:
+  patch-and-test:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,25 +21,65 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
-      - name: Capture grouped-evidence code paths
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Apply scoped patch
+        run: python .github/scripts/apply_grouped_recommendation_evidence.py
+
+      - name: Install Python dependencies
+        run: python -m pip install -r scanner-api/requirements.txt
+
+      - name: Test grouped metadata evidence
+        env:
+          PYTHONPATH: scanner-api
+        run: pytest -q scanner-api/tests/test_grouped_metadata_evidence.py
+
+      - name: Run scanner API regression suite
+        env:
+          PYTHONPATH: scanner-api
+        run: pytest -q scanner-api/tests
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Lint frontend
+        run: npm run lint
+
+      - name: Typecheck frontend
+        run: npm run typecheck
+
+      - name: Run frontend contract tests
+        run: npm run test:frontend
+
+      - name: Build production frontend
+        run: npm run build
+
+      - name: Commit direct patch and remove temporary applicators
         shell: bash
         run: |
-          {
-            echo '=== review.py relevant symbols ==='
-            grep -n -C 18 -E 'metadata_state_counts|grouping_explanation|combined_rules|cleaned_fixes|group.*fix|dedup.*fix|template.*group' scanner-api/app/review.py || true
-            echo
-            echo '=== scanRunModel durable mapping ==='
-            grep -n -C 10 -E 'metadata_state_counts|grouping_explanation|combined_rules|buildFixItemFields' src/lib/scanRunModel.js || true
-            echo
-            echo '=== FixItem schema ==='
-            grep -n -C 5 -E 'metadata_state_counts|grouping_explanation|combined_rules|raw_finding' base44/entities/FixItem.jsonc || true
-            echo
-            echo '=== grouped evidence tests ==='
-            grep -R -n -C 8 -E 'metadata_state_counts|grouping_explanation|combined_rules' scanner-api/tests tests/frontend || true
-          } > grouped-evidence-inspection.txt
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: grouped-evidence-inspection
-          path: grouped-evidence-inspection.txt
-          if-no-files-found: error
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm \
+            .github/scripts/apply_grouped_recommendation_evidence.py \
+            .github/workflows/inspect-grouped-evidence-on-pr.yml
+          git add \
+            scanner-api/app/review.py \
+            scanner-api/app/beta_revision.py \
+            scanner-api/tests/test_grouped_metadata_evidence.py \
+            scanner-api/tests/test_observability.py \
+            base44/entities/FixItem.jsonc \
+            src/lib/scanRunModel.js \
+            tests/frontend/metaDescriptionGuidance.test.mjs \
+            tests/frontend/scanRunPersistence.test.mjs \
+            tests/frontend/releaseAuthorityGate.test.mjs \
+            data/beta-crawler-revision.json \
+            docs/releases/grouped-recommendation-evidence-v1.md
+          git commit -m "Persist grouped recommendation evidence"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}

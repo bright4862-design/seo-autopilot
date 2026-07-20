@@ -115,12 +115,21 @@ export async function completeScanRun(handle, mergedRecord) {
       );
     }
 
-    await base44.entities.ScanRun.update(handle.id, {
+    const completedAt = new Date().toISOString();
+    const scanRunFields = {
       ...buildScanRunFields(mergedRecord, { status: deriveTerminalStatus(mergedRecord) }),
       fix_list_id: fixList.id,
-      completed_at: new Date().toISOString(),
-    });
-    return fixList.id;
+      completed_at: completedAt,
+    };
+    const updatedRun = await base44.entities.ScanRun.update(handle.id, scanRunFields);
+    return {
+      fixListId: fixList.id,
+      scanRun: {
+        id: handle.id,
+        ...scanRunFields,
+        ...(updatedRun || {}),
+      },
+    };
   } catch (error) {
     console.warn("Durable scan history: could not save scan result.", error);
     return null;

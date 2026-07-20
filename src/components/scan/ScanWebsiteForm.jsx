@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { base44 } from "@/api/base44Client";
 import { normalizeActionPriority, normalizeFindingEvidence, normalizeReviewEvidenceState, normalizeReviewScope, selectFinalReviewFixes } from "@/lib/reviewContract";
+import { mergePersistedScanRunRecord } from "@/lib/persistedScanRecord";
 import { buildAuthorityMarkers, buildDiagnosticAuthorityMarkers, buildScanRunFields } from "@/lib/scanRunModel";
 import { beginScanRun, completeScanRun, failScanRun, markScanRunReviewing } from "@/lib/scanRuns";
 
@@ -198,9 +199,17 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       setActiveStep("Saving your FixList");
       mergedFinal = mergeScanAndAiReview({ scanData, aiData, websiteUrl: normalizedUrl, businessName: trimmedBusinessName, cmsPlatform, cmsName, scanMode, requestedPathPrefix, scanId, scanRunId: scanRunHandle?.id || "" });
       const durableRecord = normalizeScanRecordForStorage(mergedFinal);
-      const fixListId = await completeScanRun(scanRunHandle, durableRecord).catch(() => null);
-      if (fixListId) mergedFinal = { ...mergedFinal, fix_list_id: fixListId };
-      saveScanForDashboard(mergedFinal, scanId);
+      const completion = await completeScanRun(scanRunHandle, durableRecord).catch(() => null);
+      if (completion?.scanRun) {
+        mergedFinal = mergePersistedScanRunRecord(
+          mergedFinal,
+          completion.scanRun,
+          completion.fixListId,
+        );
+      } else if (completion?.fixListId) {
+        mergedFinal = { ...mergedFinal, fix_list_id: completion.fixListId };
+      }
+      saveScanForDashboard(mergedFinal, mergedFinal?.scan_id || scanId);
       writeScanDebug({ status: "saved", stage: "dashboard_saved", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), compact_debug_available: true, download_available: true });
       refreshDebugData();
       navigate(`/dashboard?scan=complete&scan_id=${encodeURIComponent(scanId)}`);

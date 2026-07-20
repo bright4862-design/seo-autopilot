@@ -83,4 +83,6 @@ test("the frontend re-evaluates the completed record instead of AND-ing the scan
     source,
     /scanData\?\.release_gate_eligible === true && aiData\?\.release_gate_eligible === true/
   );
+  assert.match(source, /mergePersistedScanRunRecord\(/);
+  assert.match(source, /saveScanForDashboard\(mergedFinal, mergedFinal\?\.scan_id \|\| scanId\)/);
 });

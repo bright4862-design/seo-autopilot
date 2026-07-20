@@ -54,9 +54,10 @@ test("FixItem entity stores URL counts, family evidence, and fix steps", () => {
   }
 });
 
-test("returned durable fix_list_id is written into the browser scan record", () => {
-  assert.match(scanFormSource, /const fixListId = await completeScanRun/);
-  assert.match(scanFormSource, /fix_list_id: fixListId/);
+test("returned durable ScanRun authority is written into the browser scan record", () => {
+  assert.match(scanFormSource, /const completion = await completeScanRun/);
+  assert.match(scanFormSource, /mergePersistedScanRunRecord\(/);
+  assert.match(scanFormSource, /completion\.fixListId/);
   assert.match(scanFormSource, /meta_description_state/);
   assert.match(scanFormSource, /metadata_evidence_version/);
   assert.match(scanFormSource, /title_evidence_version/);

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { buildFixListFields, buildScanRunFields } from "../../src/lib/scanRunModel.js";
@@ -37,5 +38,22 @@ test("stale classifier or explicit review rejection fails the release gate", () 
   assert.equal(
     buildScanRunFields({ ...authoritativeRecord, release_gate_eligible: false }).release_gate_eligible,
     false
+  );
+});
+
+test("the frontend re-evaluates the completed record instead of AND-ing the scanner-stage gate", () => {
+  const source = readFileSync(
+    new URL("../../src/components/scan/ScanWebsiteForm.jsx", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(source, /const mergedRecord = \{/);
+  assert.match(
+    source,
+    /release_gate_eligible: buildScanRunFields\(mergedRecord\)\.release_gate_eligible/
+  );
+  assert.doesNotMatch(
+    source,
+    /scanData\?\.release_gate_eligible === true && aiData\?\.release_gate_eligible === true/
   );
 });

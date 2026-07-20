@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { base44 } from "@/api/base44Client";
 import { normalizeActionPriority, normalizeFindingEvidence, normalizeReviewEvidenceState, normalizeReviewScope, selectFinalReviewFixes } from "@/lib/reviewContract";
-import { buildAuthorityMarkers, buildDiagnosticAuthorityMarkers } from "@/lib/scanRunModel";
+import { buildAuthorityMarkers, buildDiagnosticAuthorityMarkers, buildScanRunFields } from "@/lib/scanRunModel";
 import { beginScanRun, completeScanRun, failScanRun, markScanRunReviewing } from "@/lib/scanRuns";
 
 const ADVANCED_SCANNER_FUNCTION = "runAdvancedScan";
@@ -379,7 +379,7 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
   const summaryText = normalizeCoverageSummary(aiData?.customer_summary || aiData?.plain_english_summary || aiData?.summary || aiData?.website_health_report?.overall_explanation || scanData?.scan_summary?.plain_english_summary || buildFallbackSummary({ healthScore, pagesCrawled, finalFixes, cmsName }), pagesCrawled);
   const siteFingerprint = normalizeSiteFingerprint(aiData?.site_fingerprint || aiData?.scan_summary?.site_fingerprint || {}, pages);
   const authorityMarkers = buildAuthorityMarkers(scanData, aiData);
-  return {
+  const mergedRecord = {
     id: scanId || createScanId(),
     scan_id: scanId || "",
     scan_run_id: scanRunId || "",
@@ -409,9 +409,9 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
     ai_provider: aiData?.ai_provider || aiData?.provider || aiData?.debug?.provider || "",
     ai_review_backend: aiData?.ai_review_backend || "",
     python_review_fallback_used: Boolean(aiData?.python_review_fallback_used),
-    release_gate_eligible: aiData?.release_gate_eligible === false
-      ? false
-      : scanData?.release_gate_eligible === true && aiData?.release_gate_eligible === true,
+    // Scanner-stage eligibility is provisional because review authority markers do not exist yet.
+    // Preserve only an explicit Python Review rejection, then validate the completed record below.
+    release_gate_eligible: aiData?.release_gate_eligible !== false,
     no_high_confidence_findings: noHighConfidenceFindings,
     review_confidence_state: reviewEvidenceState.review_confidence_state || (noHighConfidenceFindings ? "no_high_confidence_findings" : ""),
     score_is_provisional: reviewEvidenceState.score_is_provisional,
@@ -492,6 +492,10 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
       scan_coverage_pages_found: pagesFound,
     },
     raw: { scanner: slimScannerData(scanData), ai_review: slimAiData(aiData) },
+  };
+  return {
+    ...mergedRecord,
+    release_gate_eligible: buildScanRunFields(mergedRecord).release_gate_eligible,
   };
 }
 

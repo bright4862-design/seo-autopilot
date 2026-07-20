@@ -11,21 +11,44 @@ from .artifact_filter import is_artifact_url, record_artifact
 from .market_scope import market_pair_prefix, path_within_scope
 from .security import safe_get
 
+SITEMAP_DISCOVERY_VERSION = "sitemap_discovery_v2_crawl_reserve"
 MAX_SITEMAP_FETCHES = 60
+DEFAULT_CRAWL_RESERVE_RATIO = 0.40
+MIN_CRAWL_RESERVE_SECONDS = 8.0
+MAX_CRAWL_RESERVE_SECONDS = 30.0
 
 
-async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix: str, limit: int, artifacts: list[dict], scope_evidence: dict | None = None, *, deadline: float | None = None, max_fetches: int | None = None) -> list[str]:
+async def load_sitemap_urls(
+    client: httpx.AsyncClient,
+    origin: str,
+    path_prefix: str,
+    limit: int,
+    artifacts: list[dict],
+    scope_evidence: dict | None = None,
+    *,
+    deadline: float | None = None,
+    max_fetches: int | None = None,
+    crawl_reserve_seconds: float | None = None,
+) -> list[str]:
     scope_evidence = scope_evidence if scope_evidence is not None else {}
     scope_evidence.setdefault("sitemap_urls_excluded_outside_scope", 0)
     scope_evidence.setdefault("market_prefixes_detected", [])
     scope_evidence.setdefault("multimarket_detected", False)
     scope_evidence.setdefault("market_scope_required", False)
 
+    discovery_started_at = time.monotonic()
+    sitemap_deadline, reserved_seconds = _sitemap_deadline(deadline, crawl_reserve_seconds)
     fetch_limit = max(1, min(MAX_SITEMAP_FETCHES, int(max_fetches or MAX_SITEMAP_FETCHES)))
+    scope_evidence.update({
+        "sitemap_discovery_version": SITEMAP_DISCOVERY_VERSION,
+        "sitemap_fetch_limit": fetch_limit,
+        "sitemap_crawl_reserve_seconds": round(reserved_seconds, 3),
+    })
+
     roots: list[str] = []
     robots_url = f"{origin}/robots.txt"
     try:
-        robots = await _safe_get_before_deadline(client, robots_url, deadline)
+        robots = await _safe_get_before_deadline(client, robots_url, sitemap_deadline)
         if robots is not None:
             for line in robots.text.splitlines():
                 if line.lower().startswith("sitemap:"):
@@ -43,9 +66,9 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
     # the global discovery cap before later sitemap indexes and child families are
     # even fetched.
     for root in dedupe(roots):
-        if len(fetched) >= fetch_limit or _deadline_reached(deadline):
+        if len(fetched) >= fetch_limit or _deadline_reached(sitemap_deadline):
             break
-        locs = await fetch_sitemap_locs(client, root, fetched, artifacts, deadline=deadline)
+        locs = await fetch_sitemap_locs(client, root, fetched, artifacts, deadline=sitemap_deadline)
         bucket = family_urls.setdefault(f"root:{sitemap_family_key(root)}", [])
         for loc in locs:
             if is_sitemap_url(loc):
@@ -61,11 +84,12 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
     # Collect child-sitemap URLs into per-family buckets, then interleave before
     # applying the global limit. Otherwise one huge child sitemap can consume
     # every discovery slot before booking, collection, or trust families appear.
-    for child in rank_child_sitemaps(child_sitemaps, path_prefix):
-        if len(fetched) >= fetch_limit or _deadline_reached(deadline):
+    ranked_children = rank_child_sitemaps(child_sitemaps, path_prefix)
+    for child in ranked_children:
+        if len(fetched) >= fetch_limit or _deadline_reached(sitemap_deadline):
             break
         bucket = family_urls.setdefault(f"child:{sitemap_family_key(child)}", [])
-        locs = await fetch_sitemap_locs(client, child, fetched, artifacts, deadline=deadline)
+        locs = await fetch_sitemap_locs(client, child, fetched, artifacts, deadline=sitemap_deadline)
         for loc in locs:
             if len(bucket) >= limit:
                 break
@@ -90,7 +114,43 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
         output = [url for url in output if not market_pair_prefix(url)]
     elif len(detected) > 1:
         scope_evidence["multimarket_detected"] = True
+
+    sitemap_deadline_reached = _deadline_reached(sitemap_deadline)
+    global_deadline_reached = _deadline_reached(deadline)
+    scope_evidence.update({
+        "sitemap_discovery_elapsed_ms": round((time.monotonic() - discovery_started_at) * 1000),
+        "sitemap_fetches_attempted": len(fetched),
+        "sitemap_root_count": len(dedupe(roots)),
+        "sitemap_child_count": len(dedupe(child_sitemaps)),
+        "sitemap_urls_discovered": len(output[:limit]),
+        "sitemap_deadline_reached": sitemap_deadline_reached,
+        "sitemap_stopped_for_crawl_reserve": bool(
+            deadline is not None
+            and sitemap_deadline_reached
+            and not global_deadline_reached
+            and reserved_seconds > 0
+        ),
+    })
     return output[:limit]
+
+
+def _sitemap_deadline(deadline: float | None, crawl_reserve_seconds: float | None) -> tuple[float | None, float]:
+    """Return a discovery deadline that preserves part of the global budget for pages."""
+    if deadline is None:
+        return None, 0.0
+    now = time.monotonic()
+    remaining = max(0.0, deadline - now)
+    if crawl_reserve_seconds is None:
+        reserve = max(
+            MIN_CRAWL_RESERVE_SECONDS,
+            min(MAX_CRAWL_RESERVE_SECONDS, remaining * DEFAULT_CRAWL_RESERVE_RATIO),
+        )
+    else:
+        reserve = max(0.0, float(crawl_reserve_seconds))
+    # Always leave a small sitemap window for robots/root discovery, even when
+    # very little of the outer request budget remains.
+    reserve = min(reserve, max(0.0, remaining - 0.25))
+    return max(now, deadline - reserve), reserve
 
 
 def interleave_url_families(family_urls: dict[str, list[str]]) -> list[str]:

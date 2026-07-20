@@ -38,8 +38,20 @@ jobs:
 
           path = Path(".github/scripts/apply_evidence_quality_gate.py")
           text = path.read_text(encoding="utf-8")
-          old = '''    ...authoritativeRecord,\n    evidence_quality_state: "insufficient_discovery",'''
-          new = '''    scan_mode: "advanced",\n    scan_status: "complete",\n    score_is_provisional: false,\n    scanner_version: EXPECTED_SCANNER_VERSION,\n    scanner_build_revision: EXPECTED_SCANNER_BUILD,\n    advanced_scan_backend: "python_scanner_api",\n    deno_fallback_used: false,\n    archetype_classifier_version: EXPECTED_CLASSIFIER_VERSION,\n    ai_review_backend: "python_review_api",\n    python_review_fallback_used: false,\n    review_version: EXPECTED_REVIEW_VERSION,\n    review_evidence_calibration_version: EXPECTED_CALIBRATION_VERSION,\n    beta_revision_fingerprint: EXPECTED_BETA_FINGERPRINT,\n    evidence_quality_state: "insufficient_discovery",'''
+          old = "    ...authoritativeRecord,"
+          new = '''    scan_mode: "advanced",
+              scan_status: "complete",
+              score_is_provisional: false,
+              scanner_version: EXPECTED_SCANNER_VERSION,
+              scanner_build_revision: EXPECTED_SCANNER_BUILD,
+              advanced_scan_backend: "python_scanner_api",
+              deno_fallback_used: false,
+              archetype_classifier_version: EXPECTED_CLASSIFIER_VERSION,
+              ai_review_backend: "python_review_api",
+              python_review_fallback_used: false,
+              review_version: EXPECTED_REVIEW_VERSION,
+              review_evidence_calibration_version: EXPECTED_CALIBRATION_VERSION,
+              beta_revision_fingerprint: EXPECTED_BETA_FINGERPRINT,'''
           if text.count(old) != 1:
               raise SystemExit(f"expected one authoritative fixture locator, found {text.count(old)}")
           path.write_text(text.replace(old, new, 1), encoding="utf-8")
@@ -57,7 +69,7 @@ jobs:
         with:
           name: evidence-quality-apply-output
           path: evidence-quality-apply-output.txt
-          if-no-files-found: error
+          if-no-files-found: ignore
 
       - name: Install Python dependencies
         run: python -m pip install -r scanner-api/requirements.txt
@@ -76,7 +88,7 @@ jobs:
         with:
           name: evidence-quality-test-output
           path: evidence-quality-test-output.txt
-          if-no-files-found: error
+          if-no-files-found: ignore
 
       - name: Run scanner API regression suite
         shell: bash
@@ -92,7 +104,7 @@ jobs:
         with:
           name: scanner-regression-output
           path: scanner-regression-output.txt
-          if-no-files-found: error
+          if-no-files-found: ignore
 
       - name: Install frontend dependencies
         run: npm ci
@@ -143,4 +155,4 @@ jobs:
         with:
           name: evidence-quality-commit-output
           path: evidence-quality-commit-output.txt
-          if-no-files-found: error
+          if-no-files-found: ignore

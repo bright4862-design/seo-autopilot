@@ -30,7 +30,7 @@ jobs:
           node-version: '22'
           cache: npm
 
-      - name: Harden grouping block locator
+      - name: Harden applicator locators
         shell: bash
         run: |
           python - <<'PY'
@@ -38,8 +38,9 @@ jobs:
 
           path = Path(".github/scripts/apply_grouped_recommendation_evidence.py")
           text = path.read_text(encoding="utf-8")
-          old = "replace_once(review_path, old_grouping, new_grouping)"
-          new = '''target = Path(review_path)
+
+          old_group_locator = "replace_once(review_path, old_grouping, new_grouping)"
+          new_group_locator = '''target = Path(review_path)
           review_text = target.read_text(encoding="utf-8")
           start_marker = "def build_page_pattern_findings(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:"
           end_marker = "\\ndef build_strategic_findings"
@@ -49,9 +50,34 @@ jobs:
               review_text[:start_index] + new_grouping.rstrip() + "\\n\\n" + review_text[end_index + 1:],
               encoding="utf-8",
           )'''
-          if text.count(old) != 1:
-              raise SystemExit(f"expected one grouping locator, found {text.count(old)}")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          if text.count(old_group_locator) != 1:
+              raise SystemExit(f"expected one grouping locator, found {text.count(old_group_locator)}")
+          text = text.replace(old_group_locator, new_group_locator, 1)
+
+          old_response_locator = '''replace_once(
+              review_path,
+              ''' + "'''" + '''        "scoring_model": SCORING_MODEL,
+              }''' + "'''" + ''',
+              ''' + "'''" + '''        "scoring_model": SCORING_MODEL,
+                  "grouped_recommendation_evidence_version": GROUPED_RECOMMENDATION_EVIDENCE_VERSION,
+              }''' + "'''" + ''',
+          )'''
+          new_response_locator = '''target = Path(review_path)
+          review_text = target.read_text(encoding="utf-8")
+          response_anchor = '        "scoring_model": SCORING_MODEL,\\n'
+          response_count = review_text.count(response_anchor)
+          if response_count < 1:
+              raise SystemExit("review response scoring_model anchor not found")
+          target.write_text(
+              review_text.replace(
+                  response_anchor,
+                  response_anchor + '        "grouped_recommendation_evidence_version": GROUPED_RECOMMENDATION_EVIDENCE_VERSION,\\n',
+              ),
+              encoding="utf-8",
+          )'''
+          if text.count(old_response_locator) != 1:
+              raise SystemExit(f"expected one review response locator, found {text.count(old_response_locator)}")
+          path.write_text(text.replace(old_response_locator, new_response_locator, 1), encoding="utf-8")
           PY
 
       - name: Apply scoped patch

@@ -38,7 +38,13 @@ jobs:
       - name: Typecheck frontend
         run: npm run typecheck
 
-      - name: Run frontend persistence tests
+      - name: Test pure persisted-record merge
+        run: node --test tests/frontend/persistedBrowserRecord.test.mjs
+
+      - name: Test release authority source contract
+        run: node --test tests/frontend/releaseAuthorityGate.test.mjs
+
+      - name: Run remaining frontend tests
         run: npm run test:frontend
 
       - name: Build production frontend

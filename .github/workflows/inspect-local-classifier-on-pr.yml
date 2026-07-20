@@ -1,0 +1,44 @@
+name: Inspect local business classifier
+
+on:
+  pull_request:
+    branches:
+      - agent/sitemap-time-reservation
+    types:
+      - opened
+      - reopened
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Capture classifier code and tests
+        shell: bash
+        run: |
+          {
+            echo '=== classifier constants and playbooks ==='
+            grep -n -C 15 -E 'ARCHETYPE_CLASSIFIER_VERSION|PLAYBOOKS =|content_blog|ecommerce_specialty_retail|booking_experiences_marketplace' scanner-api/app/review.py || true
+            echo
+            echo '=== classifier function ==='
+            grep -n -C 35 -E 'def build_site_fingerprint|adjusted_scores|structural_competitor|winning_reason|def archetype_boost' scanner-api/app/review.py || true
+            echo
+            echo '=== classifier tests ==='
+            grep -R -n -C 15 -E 'ARCHETYPE_CLASSIFIER_VERSION|primary_archetype|archetype_label|content_blog|ecommerce_specialty_retail|booking_experiences_marketplace' scanner-api/tests tests/frontend || true
+            echo
+            echo '=== revision markers ==='
+            grep -R -n -C 5 'archetype_classifier_v8_platform_product_routes' scanner-api src tests data || true
+          } > local-classifier-inspection.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: local-classifier-inspection
+          path: local-classifier-inspection.txt
+          if-no-files-found: error

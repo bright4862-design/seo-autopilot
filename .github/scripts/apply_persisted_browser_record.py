@@ -234,3 +234,24 @@ replace_once(
   assert.match(source, /saveScanForDashboard\(mergedFinal, mergedFinal\?\.scan_id \|\| scanId\)/);
 });''',
 )
+
+# Update the existing durable FixList UX source contract to the new return envelope.
+ux_test_path = "tests/frontend/fixListEvidenceUx.test.mjs"
+replace_once(
+    ux_test_path,
+    '''test("returned durable fix_list_id is written into the browser scan record", () => {
+  assert.match(scanFormSource, /const fixListId = await completeScanRun/);
+  assert.match(scanFormSource, /fix_list_id: fixListId/);
+  assert.match(scanFormSource, /meta_description_state/);
+  assert.match(scanFormSource, /metadata_evidence_version/);
+  assert.match(scanFormSource, /title_evidence_version/);
+});''',
+    '''test("returned durable ScanRun authority is written into the browser scan record", () => {
+  assert.match(scanFormSource, /const completion = await completeScanRun/);
+  assert.match(scanFormSource, /mergePersistedScanRunRecord\(/);
+  assert.match(scanFormSource, /completion\.fixListId/);
+  assert.match(scanFormSource, /meta_description_state/);
+  assert.match(scanFormSource, /metadata_evidence_version/);
+  assert.match(scanFormSource, /title_evidence_version/);
+});''',
+)

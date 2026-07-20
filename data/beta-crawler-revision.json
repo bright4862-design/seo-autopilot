@@ -1,7 +1,8 @@
 {
-  "acceptance_report": "docs/releases/page-evidence-gate-v1.md",
+  "acceptance_report": "docs/releases/evidence-integrity-origin-alias-v1.md",
   "component_versions": {
     "archetype_classifier_version": "archetype_classifier_v8_platform_product_routes",
+    "artifact_filter_version": "artifact_filter_v3_non_html_resources",
     "crawler_acceptance_version": "crawler_acceptance_v1",
     "image_alt_evidence_version": "material_image_alt_v1",
     "indexability_quality_version": "indexability_quality_v1",
@@ -11,6 +12,7 @@
     "page_evidence_gate_version": "page_evidence_gate_v1",
     "page_level_asset_evidence_version": "page_level_asset_evidence_v3_markdown",
     "quality_gate_version": "review_quality_gate_v1_evidence_complete",
+    "redirect_evidence_version": "redirect_evidence_v3_origin_alias_identity",
     "render_evidence_quality_version": "render_evidence_quality_v1",
     "render_evidence_version": "render_evidence_v1",
     "render_followup_version": "render_followup_v1",
@@ -24,10 +26,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "4a560c34a3d68c6b",
+  "fingerprint": "1f69eef0e2cd418b",
   "git_commit": "",
-  "note": "Page-evidence gate candidate: inaccessible, redirected, non-HTML and incomplete pages cannot create confirmed HTML-element findings; insufficient usable evidence produces no numeric health score.",
-  "recorded_at": "2026-07-18T00:00:00Z",
+  "note": "Evidence-integrity candidate: known non-HTML resources are removed before queueing, while one-hop apex/www identity redirects preserve final HTML indexability and remain separately observable.",
+  "recorded_at": "2026-07-20T00:00:00Z",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

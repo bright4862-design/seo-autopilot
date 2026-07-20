@@ -7,7 +7,7 @@ from .robots_policy import SCANNER_USER_AGENT, SEARCH_USER_AGENT
 from .security import REDIRECT_STATUSES, is_public_http_url
 
 
-REDIRECT_EVIDENCE_VERSION = "redirect_evidence_v2_trailing_slash_identity"
+REDIRECT_EVIDENCE_VERSION = "redirect_evidence_v3_origin_alias_identity"
 DEFAULT_MAX_REDIRECTS = 5
 
 
@@ -33,6 +33,47 @@ def _normalize_url(value: str) -> str:
 def _origin_key(value: str) -> tuple[str, int | None]:
     parsed = urlparse(str(value or ""))
     return ((parsed.hostname or "").lower(), parsed.port)
+
+
+def _comparable_origin_key(value: str) -> tuple[str, int | None]:
+    parsed = urlparse(str(value or ""))
+    host = (parsed.hostname or "").lower().strip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    return host, parsed.port
+
+
+def _identity_path_query(value: str) -> tuple[str, str]:
+    parsed = urlparse(str(value or ""))
+    path = (parsed.path or "/").rstrip("/") or "/"
+    return path, parsed.query or ""
+
+
+def _is_origin_alias_identity_redirect(evidence: dict) -> bool:
+    """True only for one-hop apex/www aliases preserving scheme, path and query.
+
+    Sitemap normalization can intentionally request the submitted apex host even
+    when the validated canonical host is `www` (or the reverse). That transport
+    alias must retain provenance, but it must not make the final HTML page appear
+    non-indexable or create one redirect FixItem per sitemap URL.
+    """
+    if str(evidence.get("state") or "") != "single_redirect":
+        return False
+    if int(evidence.get("hop_count") or 0) != 1:
+        return False
+    source = str(evidence.get("source_url") or "")
+    destination = str(evidence.get("destination_url") or "")
+    source_parsed = urlparse(source)
+    destination_parsed = urlparse(destination)
+    if not source_parsed.hostname or not destination_parsed.hostname:
+        return False
+    if source_parsed.scheme != destination_parsed.scheme:
+        return False
+    if _comparable_origin_key(source) != _comparable_origin_key(destination):
+        return False
+    if (source_parsed.hostname or "").lower() == (destination_parsed.hostname or "").lower():
+        return False
+    return _identity_path_query(source) == _identity_path_query(destination)
 
 
 def _policy_applies(robots_policy, url: str) -> bool:
@@ -197,8 +238,11 @@ async def fetch_with_redirect_evidence(
 
 
 def apply_redirect_evidence(page: dict, evidence: dict) -> dict:
-    state = str(evidence.get("state") or "not_redirected")
-    hop_count = int(evidence.get("hop_count") or 0)
+    raw_state = str(evidence.get("state") or "not_redirected")
+    raw_hop_count = int(evidence.get("hop_count") or 0)
+    origin_alias_redirect = _is_origin_alias_identity_redirect(evidence)
+    state = "not_redirected" if origin_alias_redirect else raw_state
+    hop_count = 0 if origin_alias_redirect else raw_hop_count
     redirected = hop_count > 0 or state in {
         "redirect_loop",
         "redirect_missing_location",
@@ -214,10 +258,10 @@ def apply_redirect_evidence(page: dict, evidence: dict) -> dict:
     if evidence.get("destination_googlebot_blocked") is True:
         destination_state = "Blocked by robots.txt"
         destination_indexable = False
-    elif state == "redirect_destination_blocked_by_robots":
+    elif raw_state == "redirect_destination_blocked_by_robots":
         destination_state = "Blocked by robots.txt"
         destination_indexable = False
-    elif state in {
+    elif raw_state in {
         "redirect_loop",
         "redirect_missing_location",
         "redirect_invalid_location",
@@ -243,6 +287,11 @@ def apply_redirect_evidence(page: dict, evidence: dict) -> dict:
         "redirect_destination_scanner_blocked": evidence.get("destination_scanner_blocked") is True,
         "redirect_fetch_error": str(evidence.get("fetch_error") or ""),
         "redirect_chain_truncated": evidence.get("truncated") is True,
+        "origin_alias_redirect": origin_alias_redirect,
+        "origin_alias_redirect_hop_count": raw_hop_count if origin_alias_redirect else 0,
+        "origin_alias_redirect_chain": list(evidence.get("chain") or []) if origin_alias_redirect else [],
+        "origin_alias_destination_url": str(evidence.get("destination_url") or "") if origin_alias_redirect else "",
+        "origin_alias_destination_indexability_state": destination_state if origin_alias_redirect else "",
     })
     if redirected:
         page["indexable"] = False
@@ -257,10 +306,12 @@ def summarize_redirect_evidence(pages: list[dict]) -> dict:
         if int(page.get("redirect_hop_count") or 0) > 0
         or str(page.get("redirect_state") or "") not in {"", "not_redirected"}
     ]
+    origin_aliases = [page for page in pages if page.get("origin_alias_redirect") is True]
     states = Counter(str(page.get("redirect_state") or "unknown") for page in redirected)
     return {
         "version": REDIRECT_EVIDENCE_VERSION,
         "redirected_pages": len(redirected),
+        "origin_alias_redirects": len(origin_aliases),
         "state_counts": dict(sorted(states.items())),
         "sitemap_redirects": sum(
             1 for page in redirected if "sitemap" in set(page.get("discovered_from") or [])
@@ -276,5 +327,13 @@ def summarize_redirect_evidence(pages: list[dict]) -> dict:
                 "hop_count": page.get("redirect_hop_count"),
             }
             for page in redirected[:20]
+        ],
+        "representative_origin_aliases": [
+            {
+                "source": page.get("redirect_source_url") or page.get("url"),
+                "destination": page.get("origin_alias_destination_url") or page.get("final_url"),
+                "hop_count": page.get("origin_alias_redirect_hop_count"),
+            }
+            for page in origin_aliases[:20]
         ],
     }

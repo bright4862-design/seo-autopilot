@@ -1,8 +1,9 @@
 {
-  "acceptance_report": "docs/releases/evidence-integrity-origin-alias-v1.md",
+  "acceptance_report": "docs/releases/canonical-origin-alias-equivalence-v2.md",
   "component_versions": {
     "archetype_classifier_version": "archetype_classifier_v8_platform_product_routes",
     "artifact_filter_version": "artifact_filter_v3_non_html_resources",
+    "canonical_target_evidence_version": "canonical_target_evidence_v2_origin_alias_equivalence",
     "crawler_acceptance_version": "crawler_acceptance_v1",
     "image_alt_evidence_version": "material_image_alt_v1",
     "indexability_quality_version": "indexability_quality_v1",
@@ -26,9 +27,9 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "1f69eef0e2cd418b",
+  "fingerprint": "3849179005a25302",
   "git_commit": "",
-  "note": "Evidence-integrity candidate: known non-HTML resources are removed before queueing, while one-hop apex/www identity redirects preserve final HTML indexability and remain separately observable.",
+  "note": "Canonical evidence candidate: same-scheme apex/www declarations reuse the approved transport-origin equivalence while genuine cross-domain and invalid-target findings remain unchanged.",
   "recorded_at": "2026-07-20T00:00:00Z",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"

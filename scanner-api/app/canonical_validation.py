@@ -6,11 +6,12 @@ from collections import Counter
 from urllib.parse import urldefrag, urljoin, urlparse
 
 from .extract import extract_page
+from .redirect_validation import _comparable_origin_key
 from .robots_policy import SCANNER_USER_AGENT, SEARCH_USER_AGENT, annotate_robots_evidence
 from .security import is_public_http_url
 
 
-CANONICAL_TARGET_EVIDENCE_VERSION = "canonical_target_evidence_v1"
+CANONICAL_TARGET_EVIDENCE_VERSION = "canonical_target_evidence_v2_origin_alias_equivalence"
 DEFAULT_MAX_TARGETS = 20
 DEFAULT_CONCURRENCY = 4
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 8.0
@@ -35,6 +36,33 @@ def _normalize_url(value: str) -> str:
 def _origin_key(value: str) -> tuple[str, int | None]:
     parsed = urlparse(str(value or ""))
     return ((parsed.hostname or "").lower(), parsed.port)
+
+
+def _same_canonical_origin(source: str, target: str) -> bool:
+    """Treat only same-scheme exact hosts or apex/www aliases as one origin."""
+    source_parsed = urlparse(str(source or ""))
+    target_parsed = urlparse(str(target or ""))
+    if not source_parsed.hostname or not target_parsed.hostname:
+        return False
+    if source_parsed.scheme.lower() != target_parsed.scheme.lower():
+        return False
+    if _origin_key(source) == _origin_key(target):
+        return True
+    return _comparable_origin_key(source) == _comparable_origin_key(target)
+
+
+def _is_www_origin_alias(source: str, target: str) -> bool:
+    if not _same_canonical_origin(source, target):
+        return False
+    source_host = (urlparse(str(source or "")).hostname or "").lower().strip(".")
+    target_host = (urlparse(str(target or "")).hostname or "").lower().strip(".")
+    if not source_host or not target_host or source_host == target_host:
+        return False
+    source_base = source_host[4:] if source_host.startswith("www.") else source_host
+    target_base = target_host[4:] if target_host.startswith("www.") else target_host
+    return source_base == target_base and (
+        source_host.startswith("www.") or target_host.startswith("www.")
+    )
 
 
 def _page_identity_urls(page: dict) -> set[str]:
@@ -235,6 +263,7 @@ async def validate_canonical_targets(
 
     same_origin_sources: dict[str, list[dict]] = {}
     declaration_count = 0
+    origin_alias_declaration_count = 0
     for page in pages:
         if str(page.get("canonical_status") or "") != "canonical_to_different_url":
             continue
@@ -243,7 +272,7 @@ async def validate_canonical_targets(
             continue
         declaration_count += 1
         source_url = _normalize_url(page.get("final_url") or page.get("url"))
-        if not source_url or _origin_key(source_url) != _origin_key(target):
+        if not source_url or not _same_canonical_origin(source_url, target):
             _apply_evidence(page, target, {
                 "state": "cross_domain_needs_verification",
                 "target_url": target,
@@ -255,6 +284,13 @@ async def validate_canonical_targets(
                 "evidence_source": "declaration_only",
             })
             continue
+        if _is_www_origin_alias(source_url, target):
+            page.update({
+                "canonical_origin_alias": True,
+                "canonical_origin_alias_source_url": source_url,
+                "canonical_origin_alias_target_url": target,
+            })
+            origin_alias_declaration_count += 1
         same_origin_sources.setdefault(target, []).append(page)
 
     target_evidence: dict[str, dict] = {}
@@ -321,6 +357,7 @@ async def validate_canonical_targets(
     return {
         "version": CANONICAL_TARGET_EVIDENCE_VERSION,
         "pages_declaring_other_canonical": declaration_count,
+        "origin_alias_declarations": origin_alias_declaration_count,
         "unique_same_origin_targets": len(same_origin_sources),
         "targets_fetched": sum(1 for evidence in target_evidence.values() if evidence.get("evidence_source") == "validation"),
         "state_counts": dict(sorted(states.items())),

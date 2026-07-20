@@ -141,7 +141,10 @@ export function buildScanRunFields(record = {}, { status } = {}) {
   const localCacheComplete = typeof record.local_cache_complete === "boolean"
     ? record.local_cache_complete
     : pagesRetained >= pagesCrawled;
-  const inferredReleaseGateEligible = advancedScanBackend === "python_scanner_api"
+  const terminalStatus = deriveTerminalStatus(record);
+  const inferredReleaseGateEligible = terminalStatus === "complete"
+    && record.score_is_provisional !== true
+    && advancedScanBackend === "python_scanner_api"
     && !denoFallbackUsed
     && scannerVersion === CURRENT_SCANNER_VERSION
     && authorityMarkers.scanner_build_revision === CURRENT_SCANNER_BUILD_REVISION
@@ -151,9 +154,9 @@ export function buildScanRunFields(record = {}, { status } = {}) {
     && reviewVersion === CURRENT_REVIEW_VERSION
     && calibrationVersion === CURRENT_CALIBRATION_VERSION
     && authorityMarkers.beta_revision_fingerprint === CURRENT_BETA_REVISION_FINGERPRINT;
-  const releaseGateEligible = record.release_gate_eligible !== false && inferredReleaseGateEligible;
+  const releaseGateEligible = inferredReleaseGateEligible;
   return {
-    status: status || deriveTerminalStatus(record),
+    status: status || terminalStatus,
     status_detail: toStr(record.scan_status),
     scanner_version: scannerVersion,
     scanner_build_revision: authorityMarkers.scanner_build_revision,

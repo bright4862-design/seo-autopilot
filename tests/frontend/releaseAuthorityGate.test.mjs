@@ -6,6 +6,8 @@ import { buildFixListFields, buildScanRunFields } from "../../src/lib/scanRunMod
 
 const authoritativeRecord = {
   scan_mode: "advanced",
+  scan_status: "complete",
+  score_is_provisional: false,
   scanner_version: "python_scanner_v3_bounded_request",
   scanner_build_revision: "hard_page_cap_response_v1",
   archetype_classifier_version: "archetype_classifier_v8_platform_product_routes",
@@ -30,13 +32,37 @@ test("review quality true cannot override missing deployment authority markers",
   assert.equal(buildFixListFields(missingFingerprint).is_authoritative, false);
 });
 
-test("stale classifier or explicit review rejection fails the release gate", () => {
+test("stale classifier fails the release gate", () => {
   assert.equal(
     buildScanRunFields({ ...authoritativeRecord, archetype_classifier_version: "archetype_classifier_v4_publisher_route_families" }).release_gate_eligible,
     false
   );
+});
+
+test("a complete authoritative record overrides an inherited stale false", () => {
+  const staleFalse = { ...authoritativeRecord, release_gate_eligible: false };
+  assert.equal(buildScanRunFields(staleFalse).release_gate_eligible, true);
+  assert.equal(buildFixListFields(staleFalse).is_authoritative, true);
+});
+
+test("provisional or limited Python Review results fail the release gate", () => {
   assert.equal(
-    buildScanRunFields({ ...authoritativeRecord, release_gate_eligible: false }).release_gate_eligible,
+    buildScanRunFields({ ...authoritativeRecord, score_is_provisional: true }).release_gate_eligible,
+    false
+  );
+  assert.equal(
+    buildScanRunFields({ ...authoritativeRecord, scan_status: "incomplete_evidence" }).release_gate_eligible,
+    false
+  );
+});
+
+test("scanner or review fallback fails the release gate", () => {
+  assert.equal(
+    buildScanRunFields({ ...authoritativeRecord, deno_fallback_used: true }).release_gate_eligible,
+    false
+  );
+  assert.equal(
+    buildScanRunFields({ ...authoritativeRecord, python_review_fallback_used: true }).release_gate_eligible,
     false
   );
 });

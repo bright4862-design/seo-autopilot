@@ -1,0 +1,78 @@
+name: Apply canonical origin-alias patch on PR
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Apply scoped patch
+        run: python .github/scripts/apply_canonical_origin_alias.py
+
+      - name: Install Python dependencies
+        run: python -m pip install -r scanner-api/requirements.txt
+
+      - name: Run focused scanner tests
+        env:
+          PYTHONPATH: scanner-api
+        run: |
+          pytest -q \
+            scanner-api/tests/test_canonical_target_validation.py \
+            scanner-api/tests/test_canonical_origin_alias_equivalence.py \
+            scanner-api/tests/test_redirect_evidence.py \
+            scanner-api/tests/test_beta_revision.py \
+            scanner-api/tests/test_observability.py
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run frontend contracts and production build
+        run: |
+          npm run test:frontend
+          npm run build
+
+      - name: Commit direct patch and remove temporary applicators
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm \
+            .github/scripts/apply_canonical_origin_alias.py \
+            .github/workflows/apply-canonical-origin-alias-patch.yml \
+            .github/workflows/apply-canonical-origin-alias-on-pr.yml
+          git add \
+            scanner-api/app/canonical_validation.py \
+            scanner-api/app/beta_revision.py \
+            scanner-api/tests/test_canonical_origin_alias_equivalence.py \
+            scanner-api/tests/test_observability.py \
+            data/beta-crawler-revision.json \
+            docs/releases/canonical-origin-alias-equivalence-v2.md \
+            src/lib/scanRunModel.js \
+            tests/frontend/releaseAuthorityGate.test.mjs \
+            tests/frontend/scanRunPersistence.test.mjs
+          git commit -m "Treat apex and www canonicals as one origin"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}

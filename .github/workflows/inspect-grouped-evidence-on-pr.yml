@@ -30,6 +30,30 @@ jobs:
           node-version: '22'
           cache: npm
 
+      - name: Harden grouping block locator
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path(".github/scripts/apply_grouped_recommendation_evidence.py")
+          text = path.read_text(encoding="utf-8")
+          old = "replace_once(review_path, old_grouping, new_grouping)"
+          new = '''target = Path(review_path)
+          review_text = target.read_text(encoding="utf-8")
+          start_marker = "def build_page_pattern_findings(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:"
+          end_marker = "\\ndef build_strategic_findings"
+          start_index = review_text.index(start_marker)
+          end_index = review_text.index(end_marker, start_index)
+          target.write_text(
+              review_text[:start_index] + new_grouping.rstrip() + "\\n\\n" + review_text[end_index + 1:],
+              encoding="utf-8",
+          )'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one grouping locator, found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+
       - name: Apply scoped patch
         shell: bash
         run: |

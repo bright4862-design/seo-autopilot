@@ -1,0 +1,101 @@
+name: Rebuild Patch 6 on main
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild-and-test:
+    if: github.event.pull_request.head.ref == 'agent/local-business-classifier-calibration-rebased'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Restore tested Patch 6 files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin agent/local-business-classifier-calibration
+          git checkout 8bd21f2772418163593e1ffec992fb13d867d3f8 -- \
+            data/beta-crawler-revision.json \
+            docs/releases/local-business-classifier-v9.md \
+            scanner-api/app/review.py \
+            scanner-api/tests/test_classifier_v3_production_regressions.py \
+            scanner-api/tests/test_classifier_v7_html_route_evidence.py \
+            scanner-api/tests/test_classifier_v9_local_business.py \
+            scanner-api/tests/test_observability.py \
+            scanner-api/tests/test_representative_evidence_v8.py \
+            src/lib/scanRunModel.js \
+            src/lib/scanStorageRecovery.js \
+            tests/frontend/releaseAuthorityGate.test.mjs \
+            tests/frontend/scanRunPersistence.test.mjs
+
+      - name: Install Python dependencies
+        run: python -m pip install -r scanner-api/requirements.txt
+
+      - name: Run focused classifier tests
+        env:
+          PYTHONPATH: scanner-api
+        run: pytest -q scanner-api/tests/test_classifier_v9_local_business.py
+
+      - name: Run scanner regression suite
+        env:
+          PYTHONPATH: scanner-api
+        run: pytest -q scanner-api/tests
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Lint frontend
+        run: npm run lint
+
+      - name: Typecheck frontend
+        run: npm run typecheck
+
+      - name: Run frontend contract tests
+        run: npm run test:frontend
+
+      - name: Build production frontend
+        run: npm run build
+
+      - name: Commit direct Patch 6 files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/rebuild-patch6-on-main.yml
+          git add \
+            data/beta-crawler-revision.json \
+            docs/releases/local-business-classifier-v9.md \
+            scanner-api/app/review.py \
+            scanner-api/tests/test_classifier_v3_production_regressions.py \
+            scanner-api/tests/test_classifier_v7_html_route_evidence.py \
+            scanner-api/tests/test_classifier_v9_local_business.py \
+            scanner-api/tests/test_observability.py \
+            scanner-api/tests/test_representative_evidence_v8.py \
+            src/lib/scanRunModel.js \
+            src/lib/scanStorageRecovery.js \
+            tests/frontend/releaseAuthorityGate.test.mjs \
+            tests/frontend/scanRunPersistence.test.mjs
+          git commit -m "Calibrate local business and hospitality classification"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}

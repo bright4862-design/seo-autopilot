@@ -10,14 +10,14 @@ const authoritativeRecord = {
   score_is_provisional: false,
   scanner_version: "python_scanner_v3_bounded_request",
   scanner_build_revision: "hard_page_cap_response_v1",
-  archetype_classifier_version: "archetype_classifier_v8_platform_product_routes",
+  archetype_classifier_version: "archetype_classifier_v9_local_business_hospitality",
   advanced_scan_backend: "python_scanner_api",
   deno_fallback_used: false,
   review_version: "python_review_v2_structural_marketplace",
   review_evidence_calibration_version: "review_evidence_calibration_v5_utility_redirect",
   ai_review_backend: "python_review_api",
   python_review_fallback_used: false,
-  beta_revision_fingerprint: "664cceb4873e81a1",
+  beta_revision_fingerprint: "db8b916f3bd6d09c",
   release_gate_eligible: true,
 };
 

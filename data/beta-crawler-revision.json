@@ -1,7 +1,7 @@
 {
-  "acceptance_report": "docs/releases/sitemap-time-reservation-v1.md",
+  "acceptance_report": "docs/releases/local-business-classifier-v9.md",
   "component_versions": {
-    "archetype_classifier_version": "archetype_classifier_v8_platform_product_routes",
+    "archetype_classifier_version": "archetype_classifier_v9_local_business_hospitality",
     "artifact_filter_version": "artifact_filter_v3_non_html_resources",
     "canonical_target_evidence_version": "canonical_target_evidence_v2_origin_alias_equivalence",
     "crawler_acceptance_version": "crawler_acceptance_v1",
@@ -30,9 +30,9 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "664cceb4873e81a1",
+  "fingerprint": "db8b916f3bd6d09c",
   "git_commit": "",
-  "note": "Sitemap timing candidate: bounded sitemap expansion preserves a majority crawl reserve and returns partial discovery with durable diagnostics.",
+  "note": "Local-business classifier candidate: homepage identity, LocalBusiness-family schema and operating routes override incidental blog, booking and shop vocabulary while preserving publisher and catalog controls.",
   "recorded_at": "2026-07-20T00:00:00Z",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"

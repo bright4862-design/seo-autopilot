@@ -16,7 +16,7 @@ const CURRENT_SCANNER_BUILD_REVISION = "hard_page_cap_response_v1";
 const CURRENT_ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v8_platform_product_routes";
 const CURRENT_REVIEW_VERSION = "python_review_v2_structural_marketplace";
 const CURRENT_CALIBRATION_VERSION = "review_evidence_calibration_v5_utility_redirect";
-const CURRENT_BETA_REVISION_FINGERPRINT = "1f69eef0e2cd418b";
+const CURRENT_BETA_REVISION_FINGERPRINT = "3849179005a25302";
 
 export const TERMINAL_SCAN_RUN_STATUSES = new Set(["complete", "limited", "failed", "cancelled"]);
 

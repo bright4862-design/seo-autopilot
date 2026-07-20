@@ -17,7 +17,7 @@ const authoritativeRecord = {
   review_evidence_calibration_version: "review_evidence_calibration_v5_utility_redirect",
   ai_review_backend: "python_review_api",
   python_review_fallback_used: false,
-  beta_revision_fingerprint: "1f69eef0e2cd418b",
+  beta_revision_fingerprint: "3849179005a25302",
   release_gate_eligible: true,
 };
 

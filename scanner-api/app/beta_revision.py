@@ -30,6 +30,7 @@ def collect_component_versions() -> dict[str, str]:
     FastAPI app or paying for heavier imports at module load time.
     """
     from .artifact_filter import ARTIFACT_FILTER_VERSION
+    from .canonical_validation import CANONICAL_TARGET_EVIDENCE_VERSION
     from .crawler_acceptance import CRAWLER_ACCEPTANCE_VERSION
     from .indexability_quality import INDEXABILITY_QUALITY_VERSION
     from .navigation_indexability import NAVIGATION_INDEXABILITY_VERSION
@@ -55,6 +56,7 @@ def collect_component_versions() -> dict[str, str]:
     return {
         "scanner_version": VERSION,
         "artifact_filter_version": ARTIFACT_FILTER_VERSION,
+        "canonical_target_evidence_version": CANONICAL_TARGET_EVIDENCE_VERSION,
         "redirect_evidence_version": REDIRECT_EVIDENCE_VERSION,
         "render_evidence_version": RENDER_EVIDENCE_VERSION,
         "sampling_version": SAMPLING_VERSION,

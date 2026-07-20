@@ -36,6 +36,7 @@
     "local_cache_complete": { "type": "boolean", "default": false },
     "queued_remaining": { "type": "number", "default": 0 },
     "sampling_evidence": { "type": "object", "additionalProperties": true, "default": {} },
+    "crawl_timing": { "type": "object", "additionalProperties": true, "default": {} },
     "scan_status": { "type": "string" },
     "review_confidence_state": { "type": "string" },
     "score_is_provisional": { "type": "boolean", "default": false },

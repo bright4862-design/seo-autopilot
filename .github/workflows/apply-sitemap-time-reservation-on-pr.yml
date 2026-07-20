@@ -49,7 +49,33 @@ jobs:
           new_import = "from .review import ARCHETYPE_CLASSIFIER_VERSION, REVIEW_VERSION, run_review"
           if text.count(old_import) != 2:
               raise SystemExit(f"expected two main review import locators, found {text.count(old_import)}")
-          path.write_text(text.replace(old_import, new_import), encoding="utf-8")
+          text = text.replace(old_import, new_import)
+
+          old_beta_import_block = '''    ''' + "'''" + '''    from .robots_policy import ROBOTS_POLICY_VERSION
+              from .sampling import SAMPLING_VERSION''' + "'''" + ''',
+              ''' + "'''" + '''    from .robots_policy import ROBOTS_POLICY_VERSION
+              from .sampling import SAMPLING_VERSION
+              from .scan_timing import SITEMAP_TIME_RESERVATION_VERSION''' + "'''" + ''','''
+          new_beta_import_block = '''    ''' + "'''" + '''    from .sampling import SAMPLING_VERSION''' + "'''" + ''',
+              ''' + "'''" + '''    from .sampling import SAMPLING_VERSION
+              from .scan_timing import SITEMAP_TIME_RESERVATION_VERSION''' + "'''" + ''','''
+          if text.count(old_beta_import_block) != 1:
+              raise SystemExit(f"expected one beta import block, found {text.count(old_beta_import_block)}")
+          text = text.replace(old_beta_import_block, new_beta_import_block, 1)
+
+          old_beta_output_block = '''    ''' + "'''" + '''        "sampling_version": SAMPLING_VERSION,
+              "render_evidence_version": RENDER_EVIDENCE_VERSION,''' + "'''" + ''',
+              ''' + "'''" + '''        "sampling_version": SAMPLING_VERSION,
+              "sitemap_time_reservation_version": SITEMAP_TIME_RESERVATION_VERSION,
+              "render_evidence_version": RENDER_EVIDENCE_VERSION,''' + "'''" + ''','''
+          new_beta_output_block = '''    ''' + "'''" + '''        "sampling_version": SAMPLING_VERSION,
+              "render_followup_version": RENDER_FOLLOWUP_VERSION,''' + "'''" + ''',
+              ''' + "'''" + '''        "sampling_version": SAMPLING_VERSION,
+              "sitemap_time_reservation_version": SITEMAP_TIME_RESERVATION_VERSION,
+              "render_followup_version": RENDER_FOLLOWUP_VERSION,''' + "'''" + ''','''
+          if text.count(old_beta_output_block) != 1:
+              raise SystemExit(f"expected one beta output block, found {text.count(old_beta_output_block)}")
+          path.write_text(text.replace(old_beta_output_block, new_beta_output_block, 1), encoding="utf-8")
           PY
 
       - name: Apply scoped patch

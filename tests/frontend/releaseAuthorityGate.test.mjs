@@ -41,6 +41,7 @@ test("stale classifier or explicit review rejection fails the release gate", () 
   );
 });
 
+// Regression: scanner-stage eligibility is provisional until Python Review adds its authority markers.
 test("the frontend re-evaluates the completed record instead of AND-ing the scanner-stage gate", () => {
   const source = readFileSync(
     new URL("../../src/components/scan/ScanWebsiteForm.jsx", import.meta.url),

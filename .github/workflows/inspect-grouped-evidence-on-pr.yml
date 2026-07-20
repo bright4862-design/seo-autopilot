@@ -199,23 +199,35 @@ jobs:
       - name: Commit direct patch and remove temporary applicators
         shell: bash
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm \
-            .github/scripts/apply_grouped_recommendation_evidence.py \
-            .github/workflows/inspect-grouped-evidence-on-pr.yml
-          git add \
-            scanner-api/app/review.py \
-            scanner-api/app/beta_revision.py \
-            scanner-api/tests/test_grouped_metadata_evidence.py \
-            scanner-api/tests/test_metadata_title_evidence_v9.py \
-            scanner-api/tests/test_observability.py \
-            base44/entities/FixItem.jsonc \
-            src/lib/scanRunModel.js \
-            tests/frontend/metaDescriptionGuidance.test.mjs \
-            tests/frontend/scanRunPersistence.test.mjs \
-            tests/frontend/releaseAuthorityGate.test.mjs \
-            data/beta-crawler-revision.json \
-            docs/releases/grouped-recommendation-evidence-v1.md
-          git commit -m "Persist grouped recommendation evidence"
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          set -o pipefail
+          {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git rm \
+              .github/scripts/apply_grouped_recommendation_evidence.py \
+              .github/workflows/inspect-grouped-evidence-on-pr.yml
+            git add \
+              scanner-api/app/review.py \
+              scanner-api/app/beta_revision.py \
+              scanner-api/tests/test_grouped_metadata_evidence.py \
+              scanner-api/tests/test_metadata_title_evidence_v9.py \
+              scanner-api/tests/test_observability.py \
+              base44/entities/FixItem.jsonc \
+              src/lib/scanRunModel.js \
+              tests/frontend/metaDescriptionGuidance.test.mjs \
+              tests/frontend/scanRunPersistence.test.mjs \
+              tests/frontend/releaseAuthorityGate.test.mjs \
+              data/beta-crawler-revision.json \
+              docs/releases/grouped-recommendation-evidence-v1.md
+            git status --short
+            git commit -m "Persist grouped recommendation evidence"
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          } 2>&1 | tee grouped-evidence-commit-output.txt
+
+      - name: Upload grouped evidence commit failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: grouped-evidence-commit-output
+          path: grouped-evidence-commit-output.txt
+          if-no-files-found: error

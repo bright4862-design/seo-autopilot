@@ -16,7 +16,7 @@ const CURRENT_SCANNER_BUILD_REVISION = "hard_page_cap_response_v1";
 const CURRENT_ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v8_platform_product_routes";
 const CURRENT_REVIEW_VERSION = "python_review_v2_structural_marketplace";
 const CURRENT_CALIBRATION_VERSION = "review_evidence_calibration_v5_utility_redirect";
-const CURRENT_BETA_REVISION_FINGERPRINT = "3849179005a25302";
+const CURRENT_BETA_REVISION_FINGERPRINT = "d478fe98569c1405";
 
 export const TERMINAL_SCAN_RUN_STATUSES = new Set(["complete", "limited", "failed", "cancelled"]);
 
@@ -34,6 +34,15 @@ function toStr(value) {
 
 function toArr(value) {
   return Array.isArray(value) ? value : [];
+}
+
+function normalizeMetadataStateCounts(value = {}) {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    missing: Math.max(0, Number(source.missing || 0)),
+    empty: Math.max(0, Number(source.empty || 0)),
+    malformed: Math.max(0, Number(source.malformed || 0)),
+  };
 }
 
 function modePageLimit(scanMode) {
@@ -251,6 +260,9 @@ export function buildFixItemFields(fix = {}, { scanRunId = "", previousItems = [
     family_breakdown: fix.family_breakdown && typeof fix.family_breakdown === "object" ? fix.family_breakdown : {},
     representative_pages_by_family: fix.representative_pages_by_family && typeof fix.representative_pages_by_family === "object" ? fix.representative_pages_by_family : {},
     what_to_do_steps: toArr(fix.what_to_do_steps || fix.what_to_do || fix.fix_steps).map(toStr).slice(0, 8),
+    metadata_state_counts: normalizeMetadataStateCounts(fix.metadata_state_counts),
+    combined_rules: toArr(fix.combined_rules).map(toStr).filter(Boolean).slice(0, 8),
+    grouping_explanation: toStr(fix.grouping_explanation),
     evidence_status: toStr(fix.evidence_status),
     verification_state: toStr(fix.verification_state),
     limitation_code: toStr(fix.limitation_code),

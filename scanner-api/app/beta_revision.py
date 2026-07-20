@@ -41,6 +41,7 @@ def collect_component_versions() -> dict[str, str]:
     from .render_followup import RENDER_FOLLOWUP_VERSION
     from .review import (
         ARCHETYPE_CLASSIFIER_VERSION,
+        GROUPED_RECOMMENDATION_EVIDENCE_VERSION,
         ORPHAN_ASSET_EVIDENCE_VERSION,
         PAGE_LEVEL_ASSET_EVIDENCE_VERSION,
         REPRESENTATIVE_PAGE_VERSION,
@@ -62,6 +63,7 @@ def collect_component_versions() -> dict[str, str]:
         "sampling_version": SAMPLING_VERSION,
         "render_followup_version": RENDER_FOLLOWUP_VERSION,
         "review_version": REVIEW_VERSION,
+        "grouped_recommendation_evidence_version": GROUPED_RECOMMENDATION_EVIDENCE_VERSION,
         "archetype_classifier_version": ARCHETYPE_CLASSIFIER_VERSION,
         "representative_page_version": REPRESENTATIVE_PAGE_VERSION,
         "page_level_asset_evidence_version": PAGE_LEVEL_ASSET_EVIDENCE_VERSION,

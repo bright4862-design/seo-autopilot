@@ -165,6 +165,25 @@
         "type": "string"
       },
       "default": []
+    },
+    "metadata_state_counts": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {
+        "missing": 0,
+        "empty": 0,
+        "malformed": 0
+      }
+    },
+    "combined_rules": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "grouping_explanation": {
+      "type": "string"
     }
   },
   "required": [

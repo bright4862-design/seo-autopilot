@@ -17,6 +17,7 @@ SCORING_MODEL = "python_review_v2_group_dedup"
 ZERO_FIX_CONFIDENCE_VERSION = "python_review_v3_zero_fix_confidence"
 ZERO_FIX_HEALTH_GRADE = "No issues found in sample"
 QUALITY_GATE_VERSION = "review_quality_gate_v1_evidence_complete"
+GROUPED_RECOMMENDATION_EVIDENCE_VERSION = "grouped_recommendation_evidence_v1_metadata_states"
 ORPHAN_ASSET_EVIDENCE_VERSION = "orphan_asset_evidence_v1"
 INCOMPLETE_REVIEW_WARNING = "Review received scan metadata, but no page evidence was passed into AI Review."
 SUPPORT_RECLASS_FAMILIES = {"loan_program", "conversion", "standard", "guide", "category_listing", "qa", "product_detail", ""}
@@ -64,6 +65,7 @@ CATEGORY_MAP = {
     "missing_meta_description": "meta_description",
     "empty_meta_description": "meta_description",
     "malformed_meta_description": "meta_description",
+    "meta_description_unusable": "meta_description",
     "title_over_pixel_limit": "meta_title",
     "generic_fallback_title": "meta_title",
     "duplicate_title_localized": "duplicate_content",
@@ -803,6 +805,7 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         "blocked_or_429_pages": blocked_or_429_pages,
         "free_base44_subdomain": host.endswith(".base44.app"),
         "scoring_model": SCORING_MODEL,
+        "grouped_recommendation_evidence_version": GROUPED_RECOMMENDATION_EVIDENCE_VERSION,
     }
 
 
@@ -1036,6 +1039,100 @@ def page_pattern_title(rule: str, family: str, is_group: bool) -> str:
     return f"Fix the repeated {label} page issue" if is_group else "Fix the affected page issue"
 
 
+META_DESCRIPTION_STATE_CONFIG = {
+    "missing": {
+        "rule": "missing_meta_description",
+        "count_key": "missing",
+        "count_label": "missing tags",
+        "explanation": "The page has no standard meta-description element.",
+        "why": "Search descriptions can improve how pages appear in search results.",
+        "recommendation": "Add a short description that explains the page and why someone should click.",
+    },
+    "present_empty": {
+        "rule": "empty_meta_description",
+        "count_key": "empty",
+        "count_label": "empty values",
+        "explanation": "A meta-description element exists, but its content value is empty.",
+        "why": "An empty description gives search engines no page-specific summary to use.",
+        "recommendation": "Populate the existing description field with a concise, page-specific summary.",
+    },
+    "malformed": {
+        "rule": "malformed_meta_description",
+        "count_key": "malformed",
+        "count_label": "malformed elements",
+        "explanation": "A meta-description element exists without a usable content attribute.",
+        "why": "Malformed metadata may be ignored by search engines and auditing tools.",
+        "recommendation": 'Output one valid meta name="description" element with a non-empty content value.',
+    },
+}
+META_DESCRIPTION_RULE_ORDER = (
+    "missing_meta_description",
+    "empty_meta_description",
+    "malformed_meta_description",
+)
+
+
+def add_metadata_bucket(buckets: dict[tuple[str, str], dict[str, Any]], family: str, page: dict[str, Any], state: str) -> None:
+    config = META_DESCRIPTION_STATE_CONFIG[state]
+    key = ("meta_description_unusable", family)
+    if key not in buckets:
+        buckets[key] = {
+            "rule": "meta_description_unusable",
+            "category": "meta_description",
+            "family": family,
+            "pages": [],
+            "difficulty": "easy",
+            "metadata_state_counts": {"missing": 0, "empty": 0, "malformed": 0},
+            "metadata_rules": [],
+        }
+    bucket = buckets[key]
+    bucket["pages"].append(page)
+    bucket["metadata_state_counts"][config["count_key"]] += 1
+    if config["rule"] not in bucket["metadata_rules"]:
+        bucket["metadata_rules"].append(config["rule"])
+
+
+def metadata_state_summary(counts: dict[str, Any]) -> str:
+    labels = {"missing": "missing tags", "empty": "empty values", "malformed": "malformed elements"}
+    return ", ".join(
+        f"{int_or_zero(counts.get(key))} {label}"
+        for key, label in labels.items()
+        if int_or_zero(counts.get(key)) > 0
+    )
+
+
+def metadata_bucket_copy(bucket: dict[str, Any], is_group: bool) -> dict[str, Any]:
+    family = bucket["family"]
+    label = family_label(family)
+    counts = dict(bucket.get("metadata_state_counts") or {})
+    total = sum(int_or_zero(counts.get(key)) for key in ("missing", "empty", "malformed"))
+    rules = [rule for rule in META_DESCRIPTION_RULE_ORDER if rule in set(bucket.get("metadata_rules") or [])]
+    output_rule = "meta_description_unusable" if len(rules) > 1 else (rules[0] if rules else "missing_meta_description")
+    if not is_group:
+        state_config = next((item for item in META_DESCRIPTION_STATE_CONFIG.values() if item["rule"] == output_rule), META_DESCRIPTION_STATE_CONFIG["missing"])
+        return {
+            "rule": output_rule,
+            "title": page_pattern_title(output_rule, family, False),
+            "explanation": state_config["explanation"],
+            "why": state_config["why"],
+            "recommendation": state_config["recommendation"],
+            "grouping_explanation": "",
+            "combined_rules": [],
+        }
+
+    state_summary = metadata_state_summary(counts)
+    title = f"Add usable meta descriptions to {label} pages" if len(rules) > 1 else page_pattern_title(output_rule, family, True)
+    return {
+        "rule": output_rule,
+        "title": title,
+        "explanation": f"FixList found {state_summary} across {total} {label} pages. These URLs use the same page pattern, so repair the shared metadata output instead of editing every URL separately.",
+        "why": "Meta descriptions can appear beneath page titles in search results. Missing, empty, or malformed output leaves search engines to create their own snippet, which can be less specific or persuasive. Fixing the shared template improves the whole affected group.",
+        "recommendation": "Repair the shared metadata template so every affected page outputs exactly one non-empty, page-specific, plain-text meta description, with a reliable fallback when the dedicated SEO field is blank.",
+        "grouping_explanation": f"These {total} URLs use the {label} page pattern. One shared template correction can resolve the reported metadata states across the group.",
+        "combined_rules": rules if len(rules) > 1 else [],
+    }
+
+
 def build_page_pattern_findings(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     buckets: dict[tuple[str, str], dict[str, Any]] = {}
     for page in pages:
@@ -1057,44 +1154,74 @@ def build_page_pattern_findings(pages: list[dict[str, Any]]) -> list[dict[str, A
         metadata_state = clean_str(page.get("meta_description_state"))
         if not metadata_state:
             metadata_state = "present_valid" if clean_str(page.get("meta_description")) else "missing"
-        if metadata_state == "missing":
-            add_bucket(buckets, "missing_meta_description", "meta_description", family, page, "Batch missing meta descriptions on templates", "The page has no standard meta-description element.", "Search descriptions can improve how pages appear in search results.", "Add a short description that explains the page and why someone should click.", "easy")
-        elif metadata_state == "present_empty":
-            add_bucket(buckets, "empty_meta_description", "meta_description", family, page, "Batch empty meta descriptions on templates", "A meta-description element exists, but its content value is empty.", "An empty description gives search engines no page-specific summary to use.", "Populate the existing description field with a concise, page-specific summary.", "easy")
-        elif metadata_state == "malformed":
-            add_bucket(buckets, "malformed_meta_description", "meta_description", family, page, "Fix malformed meta descriptions on templates", "A meta-description element exists without a usable content attribute.", "Malformed metadata may be ignored by search engines and auditing tools.", "Output one valid meta name=\"description\" element with a non-empty content value.", "developer")
+        if metadata_state in META_DESCRIPTION_STATE_CONFIG:
+            add_metadata_bucket(buckets, family, page, metadata_state)
 
     fixes = []
     for bucket in buckets.values():
         affected = [page_evidence_url(page) for page in bucket["pages"]]
-        is_group = len(set(map(clean_path, affected))) > 1
-        title = page_pattern_title(bucket["rule"], bucket["family"], is_group)
+        affected_count = len(set(map(clean_path, affected)))
+        is_group = affected_count > 1
+        metadata_counts = bucket.get("metadata_state_counts")
+        if isinstance(metadata_counts, dict):
+            copy = metadata_bucket_copy(bucket, is_group)
+            output_rule = copy["rule"]
+            title = copy["title"]
+            explanation = copy["explanation"]
+            why = copy["why"]
+            recommendation = copy["recommendation"]
+            grouping_explanation = copy["grouping_explanation"]
+            combined_rules = copy["combined_rules"]
+        else:
+            output_rule = bucket["rule"]
+            title = page_pattern_title(output_rule, bucket["family"], is_group)
+            explanation = (
+                f"FixList found the same issue on {affected_count} {family_label(bucket['family'])} pages: {bucket['explanation']} Fix the shared template or pattern instead of editing each URL separately."
+                if is_group else bucket["explanation"]
+            )
+            why = (
+                f"{bucket['why']} Because the issue repeats across one page pattern, a shared correction has broader impact than isolated page edits."
+                if is_group else bucket["why"]
+            )
+            recommendation = bucket["recommendation"]
+            grouping_explanation = (
+                f"These {affected_count} URLs use the {family_label(bucket['family'])} page pattern. One shared template correction may resolve the issue across the group."
+                if is_group else ""
+            )
+            combined_rules = []
+            metadata_counts = {"missing": 0, "empty": 0, "malformed": 0}
+
         fixes.append(make_fix(
-            rule=bucket["rule"],
+            rule=output_rule,
             category=bucket["category"],
             priority="critical" if bucket["category"] == "canonical" else "high" if len(bucket["pages"]) >= 8 else "medium",
             title=title,
-            explanation="Several similar pages have the same template-level issue. Fix the shared template or pattern instead of creating one task per page." if is_group else bucket["explanation"],
-            why="Large sites usually have template problems. Grouping keeps the FixList focused on the highest-impact patterns." if is_group else bucket["why"],
-            recommendation=bucket["recommendation"],
+            explanation=explanation,
+            why=why,
+            recommendation=recommendation,
             affected_pages=affected,
-            difficulty="developer" if (is_group and bucket["rule"] == "image_alt_text") or len(set(map(clean_path, affected))) >= 5 else bucket["difficulty"],
-            source=f"page_pattern:{bucket['rule']}:{bucket['family']}",
+            difficulty="developer" if (is_group and output_rule == "image_alt_text") or affected_count >= 5 else bucket["difficulty"],
+            source=f"page_pattern:{output_rule}:{bucket['family']}",
             extra={
-                "current_value": template_current_value(affected),
-                "defect_summary": bucket["explanation"],
+                "current_value": metadata_state_summary(metadata_counts) if any(int_or_zero(metadata_counts.get(key)) for key in ("missing", "empty", "malformed")) else template_current_value(affected),
+                "defect_summary": explanation,
                 "source_pages": dedupe_strings([clean_path(u) for u in affected if clean_path(u)])[:30],
                 "page_template_family": bucket["family"],
+                "page_count": affected_count,
+                "metadata_state_counts": metadata_counts,
+                "combined_rules": combined_rules,
+                "grouping_explanation": grouping_explanation,
+                "grouped_recommendation_evidence_version": GROUPED_RECOMMENDATION_EVIDENCE_VERSION,
             },
         ))
     return fixes
+
 
 def add_bucket(buckets: dict[tuple[str, str], dict[str, Any]], rule: str, category: str, family: str, page: dict[str, Any], title: str, explanation: str, why: str, recommendation: str, difficulty: str) -> None:
     key = (rule, family)
     if key not in buckets:
         buckets[key] = {"rule": rule, "category": category, "family": family, "pages": [], "title": title, "explanation": explanation, "why": why, "recommendation": recommendation, "difficulty": difficulty, "current_value": explanation}
     buckets[key]["pages"].append(page)
-
 
 def build_strategic_findings(body: dict[str, Any], pages: list[dict[str, Any]], website_url: str, site_fingerprint: dict[str, Any], playbook: dict[str, Any]) -> list[dict[str, Any]]:
     fixes = []
@@ -1601,7 +1728,7 @@ HTML_DEPENDENT_RULES = {
     "title_over_pixel_limit", "duplicate_title", "duplicate_title_localized",
     "duplicate_title_query_variants", "duplicate_title_template",
     "missing_meta_description", "empty_meta_description", "malformed_meta_description",
-    "duplicate_meta_description", "missing_h1", "multiple_h1", "schema",
+    "meta_description_unusable", "duplicate_meta_description", "missing_h1", "multiple_h1", "schema",
     "structured_data", "thin_content", "image_alt_text", "missing_image_alt",
 }
 
@@ -1946,6 +2073,7 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
             "release_gate_eligible": release_gate_eligible,
         },
         "scoring_model": SCORING_MODEL,
+        "grouped_recommendation_evidence_version": GROUPED_RECOMMENDATION_EVIDENCE_VERSION,
     }
 
 
@@ -2065,6 +2193,7 @@ def _health_score_rule_key(fix: dict[str, Any], index: int) -> str:
         "missing_image_alt": "image_alt_text",
         "empty_meta_description": "missing_meta_description",
         "malformed_meta_description": "missing_meta_description",
+        "meta_description_unusable": "missing_meta_description",
     }
     if rule:
         return f"rule:{aliases.get(rule, rule)}"

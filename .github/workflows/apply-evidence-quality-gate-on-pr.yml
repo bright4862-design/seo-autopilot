@@ -71,6 +71,21 @@ jobs:
           path: evidence-quality-apply-output.txt
           if-no-files-found: ignore
 
+      - name: Update observability endpoint mock
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("scanner-api/tests/test_observability.py")
+          text = path.read_text(encoding="utf-8")
+          old = '    monkeypatch.setattr(main, "apply_review_evidence_calibration", lambda result, payload: result)\n    client = TestClient(main.app)'
+          new = '    monkeypatch.setattr(main, "apply_review_evidence_calibration", lambda result, payload: result)\n    monkeypatch.setattr(main, "apply_evidence_quality_gate", lambda result, payload: result)\n    client = TestClient(main.app)'
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one review endpoint mock locator, found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+
       - name: Install Python dependencies
         run: python -m pip install -r scanner-api/requirements.txt
 

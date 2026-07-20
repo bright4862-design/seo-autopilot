@@ -203,7 +203,7 @@ jobs:
           {
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git rm \
+            git rm -f \
               .github/scripts/apply_grouped_recommendation_evidence.py \
               .github/workflows/inspect-grouped-evidence-on-pr.yml
             git add \

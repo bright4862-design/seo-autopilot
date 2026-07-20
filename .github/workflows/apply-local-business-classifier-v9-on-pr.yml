@@ -1,0 +1,131 @@
+name: Apply local business classifier v9
+
+on:
+  pull_request:
+    branches:
+      - agent/sitemap-time-reservation
+    types:
+      - opened
+      - reopened
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Apply scoped classifier patch
+        shell: bash
+        run: |
+          set -o pipefail
+          python .github/scripts/apply_local_business_classifier_v9.py 2>&1 | tee classifier-apply-output.txt
+
+      - name: Upload applicator failure output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-classifier-apply-output
+          path: classifier-apply-output.txt
+          if-no-files-found: ignore
+
+      - name: Install Python dependencies
+        run: python -m pip install -r scanner-api/requirements.txt
+
+      - name: Run focused local business classifier tests
+        shell: bash
+        env:
+          PYTHONPATH: scanner-api
+        run: |
+          set -o pipefail
+          pytest -q scanner-api/tests/test_classifier_v9_local_business.py 2>&1 | tee classifier-focused-output.txt
+
+      - name: Upload focused test failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-classifier-focused-output
+          path: classifier-focused-output.txt
+          if-no-files-found: ignore
+
+      - name: Run scanner API regression suite
+        shell: bash
+        env:
+          PYTHONPATH: scanner-api
+        run: |
+          set -o pipefail
+          pytest -q scanner-api/tests 2>&1 | tee classifier-regression-output.txt
+
+      - name: Upload scanner regression failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-classifier-regression-output
+          path: classifier-regression-output.txt
+          if-no-files-found: ignore
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Lint frontend
+        run: npm run lint
+
+      - name: Typecheck frontend
+        run: npm run typecheck
+
+      - name: Run frontend contract tests
+        run: npm run test:frontend
+
+      - name: Build production frontend
+        run: npm run build
+
+      - name: Commit direct patch and remove temporary applicators
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git rm -f \
+              .github/scripts/apply_local_business_classifier_v9.py \
+              .github/workflows/apply-local-business-classifier-v9-on-pr.yml \
+              .github/workflows/inspect-local-classifier-on-pr.yml
+            git add \
+              scanner-api/app/review.py \
+              scanner-api/tests/test_classifier_v9_local_business.py \
+              scanner-api/tests/test_classifier_v7_html_route_evidence.py \
+              scanner-api/tests/test_observability.py \
+              scanner-api/tests/test_representative_evidence_v8.py \
+              src/lib/scanStorageRecovery.js \
+              src/lib/scanRunModel.js \
+              tests/frontend/scanRunPersistence.test.mjs \
+              tests/frontend/releaseAuthorityGate.test.mjs \
+              data/beta-crawler-revision.json \
+              docs/releases/local-business-classifier-v9.md
+            git status --short
+            git commit -m "Calibrate local business and hospitality classification"
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          } 2>&1 | tee classifier-commit-output.txt
+
+      - name: Upload commit failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-classifier-commit-output
+          path: classifier-commit-output.txt
+          if-no-files-found: ignore

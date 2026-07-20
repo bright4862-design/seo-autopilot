@@ -17,7 +17,7 @@ const frozenRevision = JSON.parse(readFileSync("data/beta-crawler-revision.json"
 const EXPECTED_SCANNER_VERSION = "python_scanner_v3_bounded_request";
 const EXPECTED_REVIEW_VERSION = "python_review_v2_structural_marketplace";
 const EXPECTED_CALIBRATION_VERSION = "review_evidence_calibration_v5_utility_redirect";
-const EXPECTED_BETA_FINGERPRINT = "d478fe98569c1405";
+const EXPECTED_BETA_FINGERPRINT = "5e7d2591c53427df";
 const EXPECTED_CLASSIFIER_VERSION = "archetype_classifier_v8_platform_product_routes";
 const EXPECTED_SCANNER_BUILD = "hard_page_cap_response_v1";
 const EXPECTED_METADATA_VERSION = "metadata_evidence_v1_description_states";
@@ -233,4 +233,42 @@ test("grouped metadata evidence persists as first-class FixItem fields", () => {
   assert.deepEqual(fields.metadata_state_counts, { missing: 1, empty: 2, malformed: 0 });
   assert.deepEqual(fields.combined_rules, ["missing_meta_description", "empty_meta_description"]);
   assert.equal(fields.grouping_explanation, "These URLs use the activity/detail page pattern.");
+});
+
+
+test("evidence quality fields persist and block release authority defensively", () => {
+  const fields = buildScanRunFields({
+    scan_mode: "advanced",
+    scan_status: "complete",
+    score_is_provisional: false,
+    scanner_version: EXPECTED_SCANNER_VERSION,
+    scanner_build_revision: EXPECTED_SCANNER_BUILD,
+    advanced_scan_backend: "python_scanner_api",
+    deno_fallback_used: false,
+    archetype_classifier_version: EXPECTED_CLASSIFIER_VERSION,
+    ai_review_backend: "python_review_api",
+    python_review_fallback_used: false,
+    review_version: EXPECTED_REVIEW_VERSION,
+    review_evidence_calibration_version: EXPECTED_CALIBRATION_VERSION,
+    beta_revision_fingerprint: EXPECTED_BETA_FINGERPRINT,
+    evidence_quality_state: "insufficient_discovery",
+    evidence_quality_score: 35,
+    evidence_quality_reasons: ["default_route_dominance"],
+    discovery_quality_state: "default_route_dominated",
+    representative_html_page_count: 2,
+    usable_html_page_count: 5,
+    default_route_page_count: 3,
+    evidence_quality_blocking: true,
+    evidence_quality_gate_version: "evidence_quality_gate_v1_default_route_dominance",
+  });
+
+  assert.equal(fields.release_gate_eligible, false);
+  assert.equal(fields.evidence_quality_state, "insufficient_discovery");
+  assert.equal(fields.evidence_quality_score, 35);
+  assert.deepEqual(fields.evidence_quality_reasons, ["default_route_dominance"]);
+  assert.equal(fields.discovery_quality_state, "default_route_dominated");
+  assert.equal(fields.representative_html_page_count, 2);
+  assert.equal(fields.usable_html_page_count, 5);
+  assert.equal(fields.default_route_page_count, 3);
+  assert.equal(fields.evidence_quality_blocking, true);
 });

@@ -32,6 +32,7 @@ def collect_component_versions() -> dict[str, str]:
     from .artifact_filter import ARTIFACT_FILTER_VERSION
     from .canonical_validation import CANONICAL_TARGET_EVIDENCE_VERSION
     from .crawler_acceptance import CRAWLER_ACCEPTANCE_VERSION
+    from .evidence_quality import EVIDENCE_QUALITY_GATE_VERSION
     from .indexability_quality import INDEXABILITY_QUALITY_VERSION
     from .navigation_indexability import NAVIGATION_INDEXABILITY_VERSION
     from .metadata_title_evidence import METADATA_EVIDENCE_VERSION, TITLE_EVIDENCE_VERSION
@@ -81,6 +82,7 @@ def collect_component_versions() -> dict[str, str]:
         "trust_discovery_version": TRUST_DISCOVERY_VERSION,
         "trust_finding_gate_version": TRUST_FINDING_GATE_VERSION,
         "crawler_acceptance_version": CRAWLER_ACCEPTANCE_VERSION,
+        "evidence_quality_gate_version": EVIDENCE_QUALITY_GATE_VERSION,
     }
 
 

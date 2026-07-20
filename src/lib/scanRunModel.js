@@ -16,7 +16,7 @@ const CURRENT_SCANNER_BUILD_REVISION = "hard_page_cap_response_v1";
 const CURRENT_ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v8_platform_product_routes";
 const CURRENT_REVIEW_VERSION = "python_review_v2_structural_marketplace";
 const CURRENT_CALIBRATION_VERSION = "review_evidence_calibration_v5_utility_redirect";
-const CURRENT_BETA_REVISION_FINGERPRINT = "d478fe98569c1405";
+const CURRENT_BETA_REVISION_FINGERPRINT = "5e7d2591c53427df";
 
 export const TERMINAL_SCAN_RUN_STATUSES = new Set(["complete", "limited", "failed", "cancelled"]);
 
@@ -162,6 +162,7 @@ export function buildScanRunFields(record = {}, { status } = {}) {
     && !pythonReviewFallbackUsed
     && reviewVersion === CURRENT_REVIEW_VERSION
     && calibrationVersion === CURRENT_CALIBRATION_VERSION
+    && record.evidence_quality_blocking !== true
     && authorityMarkers.beta_revision_fingerprint === CURRENT_BETA_REVISION_FINGERPRINT;
   const releaseGateEligible = inferredReleaseGateEligible;
   return {
@@ -190,6 +191,15 @@ export function buildScanRunFields(record = {}, { status } = {}) {
     review_confidence_state: toStr(record.review_confidence_state),
     score_is_provisional: record.score_is_provisional === true,
     access_evidence_state: toStr(record.access_evidence_state),
+    evidence_quality_state: toStr(record.evidence_quality_state),
+    evidence_quality_score: Number(record.evidence_quality_score || 0),
+    evidence_quality_reasons: toArr(record.evidence_quality_reasons).map(toStr).filter(Boolean).slice(0, 12),
+    discovery_quality_state: toStr(record.discovery_quality_state),
+    representative_html_page_count: Number(record.representative_html_page_count || 0),
+    usable_html_page_count: Number(record.usable_html_page_count || 0),
+    default_route_page_count: Number(record.default_route_page_count || 0),
+    evidence_quality_blocking: record.evidence_quality_blocking === true,
+    evidence_quality_gate_version: toStr(record.evidence_quality_gate_version),
     no_high_confidence_findings: record.no_high_confidence_findings === true,
     limitation: toStr(record.limitation),
     render_evidence: record.render_evidence || {},

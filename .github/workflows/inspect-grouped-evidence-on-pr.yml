@@ -77,7 +77,13 @@ jobs:
           )'''
           if text.count(old_response_locator) != 1:
               raise SystemExit(f"expected one review response locator, found {text.count(old_response_locator)}")
-          path.write_text(text.replace(old_response_locator, new_response_locator, 1), encoding="utf-8")
+          text = text.replace(old_response_locator, new_response_locator, 1)
+
+          unsafe_recommendation = '        "recommendation": "Output one valid meta name=\\"description\\" element with a non-empty content value.",'
+          safe_recommendation = '        "recommendation": \'Output one valid meta name="description" element with a non-empty content value.\','
+          if text.count(unsafe_recommendation) != 1:
+              raise SystemExit(f"expected one escaped recommendation, found {text.count(unsafe_recommendation)}")
+          path.write_text(text.replace(unsafe_recommendation, safe_recommendation, 1), encoding="utf-8")
           PY
 
       - name: Apply scoped patch

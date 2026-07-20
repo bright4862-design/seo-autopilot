@@ -1,5 +1,5 @@
 {
-  "acceptance_report": "docs/releases/evidence-quality-gate-v1.md",
+  "acceptance_report": "docs/releases/sitemap-time-reservation-v1.md",
   "component_versions": {
     "archetype_classifier_version": "archetype_classifier_v8_platform_product_routes",
     "artifact_filter_version": "artifact_filter_v3_non_html_resources",
@@ -24,14 +24,15 @@
     "review_version": "python_review_v2_structural_marketplace",
     "sampling_version": "balanced_sitemap_buckets_v1",
     "scanner_version": "python_scanner_v3_bounded_request",
+    "sitemap_time_reservation_version": "sitemap_time_reservation_v1_crawl_first",
     "title_evidence_version": "title_evidence_v1_contextual_duplicates",
     "trust_discovery_version": "trust_page_discovery_v1",
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "5e7d2591c53427df",
+  "fingerprint": "664cceb4873e81a1",
   "git_commit": "",
-  "note": "Evidence quality candidate: default-route-dominated narrow crawls are provisional while meaningful one-page and representative small sites remain supported.",
+  "note": "Sitemap timing candidate: bounded sitemap expansion preserves a majority crawl reserve and returns partial discovery with durable diagnostics.",
   "recorded_at": "2026-07-20T00:00:00Z",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"

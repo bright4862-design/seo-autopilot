@@ -14,8 +14,13 @@ from .security import safe_get
 MAX_SITEMAP_FETCHES = 60
 
 
-async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix: str, limit: int, artifacts: list[dict], scope_evidence: dict | None = None, *, deadline: float | None = None, max_fetches: int | None = None) -> list[str]:
+async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix: str, limit: int, artifacts: list[dict], scope_evidence: dict | None = None, *, deadline: float | None = None, max_fetches: int | None = None, diagnostics: dict | None = None) -> list[str]:
     scope_evidence = scope_evidence if scope_evidence is not None else {}
+    diagnostics = diagnostics if diagnostics is not None else {}
+    diagnostics.setdefault("sitemap_fetch_count", 0)
+    diagnostics.setdefault("sitemap_fetch_limit_reached", False)
+    diagnostics.setdefault("sitemap_budget_exhausted", False)
+    diagnostics.setdefault("sitemap_failure_reason_buckets", {})
     scope_evidence.setdefault("sitemap_urls_excluded_outside_scope", 0)
     scope_evidence.setdefault("market_prefixes_detected", [])
     scope_evidence.setdefault("multimarket_detected", False)
@@ -43,9 +48,9 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
     # the global discovery cap before later sitemap indexes and child families are
     # even fetched.
     for root in dedupe(roots):
-        if len(fetched) >= fetch_limit or _deadline_reached(deadline):
+        if _stop_sitemap_discovery(fetched, fetch_limit, deadline, diagnostics):
             break
-        locs = await fetch_sitemap_locs(client, root, fetched, artifacts, deadline=deadline)
+        locs = await fetch_sitemap_locs(client, root, fetched, artifacts, deadline=deadline, diagnostics=diagnostics)
         bucket = family_urls.setdefault(f"root:{sitemap_family_key(root)}", [])
         for loc in locs:
             if is_sitemap_url(loc):
@@ -62,10 +67,10 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
     # applying the global limit. Otherwise one huge child sitemap can consume
     # every discovery slot before booking, collection, or trust families appear.
     for child in rank_child_sitemaps(child_sitemaps, path_prefix):
-        if len(fetched) >= fetch_limit or _deadline_reached(deadline):
+        if _stop_sitemap_discovery(fetched, fetch_limit, deadline, diagnostics):
             break
         bucket = family_urls.setdefault(f"child:{sitemap_family_key(child)}", [])
-        locs = await fetch_sitemap_locs(client, child, fetched, artifacts, deadline=deadline)
+        locs = await fetch_sitemap_locs(client, child, fetched, artifacts, deadline=deadline, diagnostics=diagnostics)
         for loc in locs:
             if len(bucket) >= limit:
                 break
@@ -90,7 +95,11 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
         output = [url for url in output if not market_pair_prefix(url)]
     elif len(detected) > 1:
         scope_evidence["multimarket_detected"] = True
-    return output[:limit]
+    output = output[:limit]
+    diagnostics["sitemap_fetch_count"] = len(fetched)
+    diagnostics["sitemap_urls_discovered"] = len(output)
+    diagnostics["sitemap_child_url_count"] = len(dedupe(child_sitemaps))
+    return output
 
 
 def interleave_url_families(family_urls: dict[str, list[str]]) -> list[str]:
@@ -110,19 +119,61 @@ def interleave_url_families(family_urls: dict[str, list[str]]) -> list[str]:
     return output
 
 
-async def fetch_sitemap_locs(client: httpx.AsyncClient, sitemap_url: str, fetched: set[str], artifacts: list[dict], *, deadline: float | None = None) -> list[str]:
+def _record_sitemap_failure(diagnostics: dict | None, reason: str) -> None:
+    if diagnostics is None:
+        return
+    buckets = diagnostics.setdefault("sitemap_failure_reason_buckets", {})
+    buckets[reason] = int(buckets.get(reason, 0)) + 1
+
+
+def _stop_sitemap_discovery(fetched: set[str], fetch_limit: int, deadline: float | None, diagnostics: dict | None) -> bool:
+    if len(fetched) >= fetch_limit:
+        if diagnostics is not None:
+            diagnostics["sitemap_fetch_limit_reached"] = True
+        return True
+    if _deadline_reached(deadline):
+        if diagnostics is not None:
+            diagnostics["sitemap_budget_exhausted"] = True
+        _record_sitemap_failure(diagnostics, "sitemap_deadline_reached")
+        return True
+    return False
+
+
+async def fetch_sitemap_locs(client: httpx.AsyncClient, sitemap_url: str, fetched: set[str], artifacts: list[dict], *, deadline: float | None = None, diagnostics: dict | None = None) -> list[str]:
     if not sitemap_url or sitemap_url in fetched:
         return []
+    if _deadline_reached(deadline):
+        if diagnostics is not None:
+            diagnostics["sitemap_budget_exhausted"] = True
+        _record_sitemap_failure(diagnostics, "sitemap_deadline_reached")
+        return []
     fetched.add(sitemap_url)
+    if diagnostics is not None:
+        diagnostics["sitemap_fetch_count"] = len(fetched)
     try:
         response = await _safe_get_before_deadline(client, sitemap_url, deadline)
-        if response is None or response.status_code >= 400:
+        if response is None:
+            if _deadline_reached(deadline) and diagnostics is not None:
+                diagnostics["sitemap_budget_exhausted"] = True
+                _record_sitemap_failure(diagnostics, "sitemap_deadline_reached")
+            else:
+                _record_sitemap_failure(diagnostics, "no_response")
             return []
+        if response.status_code >= 400:
+            _record_sitemap_failure(diagnostics, f"http_{response.status_code}")
+            return []
+    except asyncio.TimeoutError:
+        if diagnostics is not None:
+            diagnostics["sitemap_budget_exhausted"] = True
+        _record_sitemap_failure(diagnostics, "sitemap_timeout")
+        return []
     except Exception:
+        _record_sitemap_failure(diagnostics, "sitemap_fetch_exception")
         return []
 
     body = decode_sitemap_body(response, sitemap_url)
     if not body:
+        _record_sitemap_failure(diagnostics, "empty_sitemap_body")
         return []
     soup = BeautifulSoup(body, "xml")
     locs: list[str] = []

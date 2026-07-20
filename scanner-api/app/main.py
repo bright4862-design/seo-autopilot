@@ -23,6 +23,7 @@ from .observability import (
 )
 from .review import ARCHETYPE_CLASSIFIER_VERSION, REVIEW_VERSION, run_review
 from .review_calibration import CALIBRATION_VERSION, apply_review_evidence_calibration
+from .scan_timing import SITEMAP_TIME_RESERVATION_VERSION
 from .scanner import VERSION, run_scan
 from .trust_discovery import apply_trust_discovery_gate, enrich_scan_with_trust_pages
 
@@ -102,6 +103,7 @@ def health():
         "navigation_indexability_version": NAVIGATION_INDEXABILITY_VERSION,
         "render_evidence_quality_version": RENDER_EVIDENCE_QUALITY_VERSION,
         "evidence_quality_gate_version": EVIDENCE_QUALITY_GATE_VERSION,
+        "sitemap_time_reservation_version": SITEMAP_TIME_RESERVATION_VERSION,
         "beta_revision_fingerprint": live_revision()["fingerprint"],
         "observability_version": OBSERVABILITY_VERSION,
     }

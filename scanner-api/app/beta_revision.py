@@ -52,6 +52,7 @@ def collect_component_versions() -> dict[str, str]:
     )
     from .review_calibration import CALIBRATION_VERSION, IMAGE_ALT_EVIDENCE_VERSION
     from .sampling import SAMPLING_VERSION
+    from .scan_timing import SITEMAP_TIME_RESERVATION_VERSION
     from .scanner import RENDER_EVIDENCE_VERSION, VERSION
     from .trust_discovery import TRUST_DISCOVERY_VERSION, TRUST_FINDING_GATE_VERSION
 
@@ -62,6 +63,7 @@ def collect_component_versions() -> dict[str, str]:
         "redirect_evidence_version": REDIRECT_EVIDENCE_VERSION,
         "render_evidence_version": RENDER_EVIDENCE_VERSION,
         "sampling_version": SAMPLING_VERSION,
+        "sitemap_time_reservation_version": SITEMAP_TIME_RESERVATION_VERSION,
         "render_followup_version": RENDER_FOLLOWUP_VERSION,
         "review_version": REVIEW_VERSION,
         "grouped_recommendation_evidence_version": GROUPED_RECOMMENDATION_EVIDENCE_VERSION,

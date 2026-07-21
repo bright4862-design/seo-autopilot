@@ -1,0 +1,98 @@
+name: Apply release blockers v1
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    if: github.event.pull_request.head.ref == 'agent/fix-release-authority-canonical-resolution'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Apply scoped blocker patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/scripts/apply_release_blockers_v1.py
+
+      - name: Install Python dependencies
+        run: python -m pip install -r scanner-api/requirements.txt
+
+      - name: Run focused canonical regressions
+        env:
+          PYTHONPATH: scanner-api
+        run: pytest -q scanner-api/tests/test_canonical_origin_alias_equivalence.py
+
+      - name: Run scanner regression suite
+        env:
+          PYTHONPATH: scanner-api
+        run: pytest -q scanner-api/tests
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Lint frontend
+        run: npm run lint
+
+      - name: Typecheck frontend
+        run: npm run typecheck
+
+      - name: Run frontend contract tests
+        run: npm run test:frontend
+
+      - name: Build production frontend
+        run: npm run build
+
+      - name: Verify no stale compact authority fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R "52348dd1f3b77700" -n src tests
+          grep -n "RELEASE_AUTHORITY_CONTRACT" src/lib/scanStorageRecovery.js
+          grep -n "canonical_href_resolution_version" data/beta-crawler-revision.json
+
+      - name: Commit direct patch and remove temporary applicators
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -f \
+            .github/scripts/apply_release_blockers_v1.py \
+            .github/workflows/apply-release-blockers-v1-on-pr.yml
+          git add \
+            data/beta-crawler-revision.json \
+            docs/releases/release-authority-canonical-resolution-v1.md \
+            scanner-api/app/beta_revision.py \
+            scanner-api/app/extract.py \
+            scanner-api/tests/test_canonical_origin_alias_equivalence.py \
+            scanner-api/tests/test_observability.py \
+            src/lib/scanRunModel.js \
+            src/lib/scanStorageRecovery.js \
+            tests/frontend/releaseAuthorityContract.test.mjs \
+            tests/frontend/releaseAuthorityGate.test.mjs \
+            tests/frontend/scanRunPersistence.test.mjs
+          git status --short
+          git commit -m "Fix compact authority and canonical href resolution"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}

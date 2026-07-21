@@ -18,7 +18,7 @@ from .metadata_title_evidence import (
 )
 
 
-CANONICAL_HREF_RESOLUTION_VERSION = "canonical_href_resolution_v1_hostless_same_path"
+CANONICAL_HREF_RESOLUTION_VERSION = "canonical_href_resolution_v2_absolute_single_label_same_path"
 
 
 def _canonical_path_key(value: str) -> str:
@@ -26,34 +26,52 @@ def _canonical_path_key(value: str) -> str:
     return path.rstrip("/") or "/"
 
 
-def resolve_canonical_href(base_url: str, href: str) -> str:
-    """Resolve canonical hrefs without turning a same-path slug into a fake host.
+def _repair_single_label_same_path(base_url: str, raw: str) -> str:
+    """Return the final page URL for a malformed single-label same-page href."""
+    candidate = urlparse(raw)
+    base = urlparse(str(base_url or ""))
+    hostname = (candidate.hostname or "").lower().strip(".")
+    if not hostname or "." in hostname:
+        return ""
+    if candidate.username or candidate.password or candidate.port is not None:
+        return ""
+    if candidate.netloc.lower().strip(".") != hostname:
+        return ""
+    if candidate.scheme and candidate.scheme.lower() not in {"http", "https"}:
+        return ""
+    if candidate.scheme and candidate.path not in {"", "/"}:
+        return ""
+    reconstructed_path = f"/{hostname}{candidate.path or ''}"
+    if candidate.query != base.query:
+        return ""
+    if _canonical_path_key(reconstructed_path) != _canonical_path_key(base.path or "/"):
+        return ""
+    return base._replace(
+        path=base.path or "/",
+        query=base.query,
+        fragment=candidate.fragment,
+    ).geturl()
 
-    Some HTML generators emit a root-relative canonical as ``//slug/``. URL
-    joining normally interprets that as a scheme-relative host. We only repair
-    the value when the authority is a single label and rebuilding it as a path
-    exactly matches the final page path. Genuine scheme-relative domains keep
-    normal URL semantics and remain eligible for cross-domain validation.
+
+def resolve_canonical_href(base_url: str, href: str) -> str:
+    """Resolve canonicals while repairing only exact same-page malformed hosts.
+
+    Two malformed forms have appeared in production: ``//slug/`` and
+    ``http://slug``. Both normally parse as a host. They are repaired only when
+    the host is a plain single label and rebuilding it as a path exactly matches
+    the final page path. Dotted or different-path external domains retain normal
+    URL semantics and remain eligible for cross-domain validation.
     """
     raw = str(href or "").strip()
     if not raw:
         return ""
-    if raw.startswith("//"):
-        candidate = urlparse(raw)
-        base = urlparse(str(base_url or ""))
-        hostname = (candidate.hostname or "").lower().strip(".")
-        reconstructed_path = f"/{hostname}{candidate.path or ''}"
-        is_plain_single_label = bool(hostname) and "." not in hostname and candidate.netloc.lower() == hostname
-        if (
-            is_plain_single_label
-            and candidate.query == base.query
-            and _canonical_path_key(reconstructed_path) == _canonical_path_key(base.path or "/")
-        ):
-            return base._replace(
-                path=reconstructed_path,
-                query=candidate.query,
-                fragment=candidate.fragment,
-            ).geturl()
+    candidate = urlparse(raw)
+    is_scheme_relative = raw.startswith("//")
+    is_absolute_http = candidate.scheme.lower() in {"http", "https"} and bool(candidate.netloc)
+    if is_scheme_relative or is_absolute_http:
+        repaired = _repair_single_label_same_path(base_url, raw)
+        if repaired:
+            return repaired
     return urljoin(base_url, raw)
 
 

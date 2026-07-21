@@ -115,7 +115,7 @@ def test_hostless_scheme_relative_same_path_canonical_uses_final_origin():
 
     assert page["canonical"] == "https://www.hartzlerdairy.com/chocolate-milk/"
     assert page["canonical_status"] == "self_or_equivalent"
-    assert page["canonical_href_resolution_version"] == "canonical_href_resolution_v1_hostless_same_path"
+    assert page["canonical_href_resolution_version"] == "canonical_href_resolution_v2_absolute_single_label_same_path"
     assert not any(item["rule"] == "canonical_cross_domain" for item in build_findings([page]))
 
 
@@ -132,6 +132,65 @@ async def test_real_scheme_relative_external_domain_remains_cross_domain():
 
     assert page["canonical"] == "https://canonical.example/chocolate-milk/"
     assert page["canonical_status"] == "canonical_to_different_url"
+    await validate_canonical_targets(
+        FakeClient(),
+        [page],
+        RobotsPolicy("https://www.hartzlerdairy.com/robots.txt", "missing", 404),
+    )
+    assert page["canonical_target_state"] == "cross_domain_needs_verification"
+    assert any(item["rule"] == "canonical_cross_domain" for item in build_findings([page]))
+
+
+
+def test_absolute_single_label_same_path_canonical_uses_final_origin():
+    page = extract_page(
+        '<html><head><title>Chocolate Milk</title><link rel="canonical" href="http://chocolate-milk"></head><body><h1>Chocolate Milk</h1></body></html>',
+        "https://hartzlerdairy.com/chocolate-milk",
+        "https://www.hartzlerdairy.com/chocolate-milk/",
+        200,
+        "text/html",
+        DISCOVERY,
+    )
+
+    assert page["canonical"] == "https://www.hartzlerdairy.com/chocolate-milk/"
+    assert page["canonical_status"] == "self_or_equivalent"
+    assert page["canonical_href_resolution_version"] == "canonical_href_resolution_v2_absolute_single_label_same_path"
+    assert not any(item["rule"] == "canonical_cross_domain" for item in build_findings([page]))
+
+
+@pytest.mark.asyncio
+async def test_absolute_dotted_external_domain_remains_cross_domain():
+    page = extract_page(
+        '<html><head><title>Page</title><link rel="canonical" href="http://canonical.example/chocolate-milk/"></head><body><h1>Page</h1></body></html>',
+        "https://www.hartzlerdairy.com/chocolate-milk/",
+        "https://www.hartzlerdairy.com/chocolate-milk/",
+        200,
+        "text/html",
+        DISCOVERY,
+    )
+
+    assert page["canonical"] == "http://canonical.example/chocolate-milk/"
+    await validate_canonical_targets(
+        FakeClient(),
+        [page],
+        RobotsPolicy("https://www.hartzlerdairy.com/robots.txt", "missing", 404),
+    )
+    assert page["canonical_target_state"] == "cross_domain_needs_verification"
+    assert any(item["rule"] == "canonical_cross_domain" for item in build_findings([page]))
+
+
+@pytest.mark.asyncio
+async def test_absolute_single_label_different_path_remains_cross_domain():
+    page = extract_page(
+        '<html><head><title>Page</title><link rel="canonical" href="http://other-page"></head><body><h1>Page</h1></body></html>',
+        "https://www.hartzlerdairy.com/chocolate-milk/",
+        "https://www.hartzlerdairy.com/chocolate-milk/",
+        200,
+        "text/html",
+        DISCOVERY,
+    )
+
+    assert page["canonical"] == "http://other-page"
     await validate_canonical_targets(
         FakeClient(),
         [page],

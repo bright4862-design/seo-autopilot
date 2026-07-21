@@ -19,6 +19,10 @@
 - Canonical href resolution: `canonical_href_resolution_v2_absolute_single_label_same_path`
 - Fingerprint: `d69d625dbeaee154`
 
+## Validation
+
+The guarded workflow confirmed the exact live canonical, passed the focused canonical regressions, the full scanner suite, frontend lint and typecheck, all frontend contract tests, the production build, and frozen-marker checks.
+
 ## Production acceptance
 
 1. Hartzler `/chocolate-milk` has no `canonical_cross_domain` finding.

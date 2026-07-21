@@ -37,6 +37,25 @@ jobs:
           set -euo pipefail
           python .github/scripts/apply_release_blockers_v1.py
 
+      - name: Update quota-safe authority contract expectation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("tests/frontend/quotaSafeScanStorage.test.mjs")
+          text = path.read_text(encoding="utf-8")
+          old = '  assert.match(recovery, /CURRENT_BETA_REVISION_FINGERPRINT = "52348dd1f3b77700"/);\n'
+          new = (
+              '  assert.match(recovery, /import { RELEASE_AUTHORITY_CONTRACT } from "@\\/lib\\/scanRunModel"/);\n'
+              '  assert.match(recovery, /betaRevisionFingerprint: CURRENT_BETA_REVISION_FINGERPRINT/);\n'
+              '  assert.doesNotMatch(recovery, /const CURRENT_BETA_REVISION_FINGERPRINT =/);\n'
+          )
+          if text.count(old) != 1:
+              raise SystemExit("quotaSafeScanStorage.test.mjs: obsolete fingerprint assertion locator mismatch")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+
       - name: Install Python dependencies
         run: python -m pip install -r scanner-api/requirements.txt
 
@@ -102,6 +121,7 @@ jobs:
             scanner-api/tests/test_observability.py \
             src/lib/scanRunModel.js \
             src/lib/scanStorageRecovery.js \
+            tests/frontend/quotaSafeScanStorage.test.mjs \
             tests/frontend/releaseAuthorityContract.test.mjs \
             tests/frontend/releaseAuthorityGate.test.mjs \
             tests/frontend/scanRunPersistence.test.mjs

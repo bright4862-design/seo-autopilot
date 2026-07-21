@@ -33,6 +33,7 @@ def collect_component_versions() -> dict[str, str]:
     from .canonical_validation import CANONICAL_TARGET_EVIDENCE_VERSION
     from .crawler_acceptance import CRAWLER_ACCEPTANCE_VERSION
     from .evidence_quality import EVIDENCE_QUALITY_GATE_VERSION
+    from .extract import CANONICAL_HREF_RESOLUTION_VERSION
     from .indexability_quality import INDEXABILITY_QUALITY_VERSION
     from .navigation_indexability import NAVIGATION_INDEXABILITY_VERSION
     from .metadata_title_evidence import METADATA_EVIDENCE_VERSION, TITLE_EVIDENCE_VERSION
@@ -60,6 +61,7 @@ def collect_component_versions() -> dict[str, str]:
         "scanner_version": VERSION,
         "artifact_filter_version": ARTIFACT_FILTER_VERSION,
         "canonical_target_evidence_version": CANONICAL_TARGET_EVIDENCE_VERSION,
+        "canonical_href_resolution_version": CANONICAL_HREF_RESOLUTION_VERSION,
         "redirect_evidence_version": REDIRECT_EVIDENCE_VERSION,
         "render_evidence_version": RENDER_EVIDENCE_VERSION,
         "sampling_version": SAMPLING_VERSION,

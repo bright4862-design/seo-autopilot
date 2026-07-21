@@ -1,8 +1,9 @@
 {
-  "acceptance_report": "docs/releases/local-business-classifier-v9.md",
+  "acceptance_report": "docs/releases/release-authority-canonical-resolution-v1.md",
   "component_versions": {
     "archetype_classifier_version": "archetype_classifier_v9_local_business_hospitality",
     "artifact_filter_version": "artifact_filter_v3_non_html_resources",
+    "canonical_href_resolution_version": "canonical_href_resolution_v1_hostless_same_path",
     "canonical_target_evidence_version": "canonical_target_evidence_v2_origin_alias_equivalence",
     "crawler_acceptance_version": "crawler_acceptance_v1",
     "evidence_quality_gate_version": "evidence_quality_gate_v1_default_route_dominance",
@@ -30,9 +31,9 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "db8b916f3bd6d09c",
+  "fingerprint": "6fe5526e10adf27d",
   "git_commit": "",
-  "note": "Local-business classifier candidate: homepage identity, LocalBusiness-family schema and operating routes override incidental blog, booking and shop vocabulary while preserving publisher and catalog controls.",
+  "note": "Release-blocker candidate: compact browser authority imports the shared release contract, and hostless scheme-relative canonicals are repaired only when they reconstruct the same final page path.",
   "recorded_at": "2026-07-20T00:00:00Z",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"

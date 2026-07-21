@@ -60,7 +60,9 @@ test("browser evidence retains v9 metadata and title states", () => {
 });
 
 test("release eligibility requires exact v9 authority markers", () => {
-  assert.match(recovery, /CURRENT_BETA_REVISION_FINGERPRINT = "52348dd1f3b77700"/);
+  assert.match(recovery, /import { RELEASE_AUTHORITY_CONTRACT } from "@\/lib\/scanRunModel"/);
+  assert.match(recovery, /betaRevisionFingerprint: CURRENT_BETA_REVISION_FINGERPRINT/);
+  assert.doesNotMatch(recovery, /const CURRENT_BETA_REVISION_FINGERPRINT =/);
   assert.match(recovery, /classifierVersion === CURRENT_ARCHETYPE_CLASSIFIER_VERSION/);
   assert.match(recovery, /betaRevisionFingerprint === CURRENT_BETA_REVISION_FINGERPRINT/);
   assert.match(recovery, /beta_revision_fingerprint: betaRevisionFingerprint/);

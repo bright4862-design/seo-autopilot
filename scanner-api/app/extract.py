@@ -18,6 +18,45 @@ from .metadata_title_evidence import (
 )
 
 
+CANONICAL_HREF_RESOLUTION_VERSION = "canonical_href_resolution_v1_hostless_same_path"
+
+
+def _canonical_path_key(value: str) -> str:
+    path = str(value or "/").split("?", 1)[0].split("#", 1)[0]
+    return path.rstrip("/") or "/"
+
+
+def resolve_canonical_href(base_url: str, href: str) -> str:
+    """Resolve canonical hrefs without turning a same-path slug into a fake host.
+
+    Some HTML generators emit a root-relative canonical as ``//slug/``. URL
+    joining normally interprets that as a scheme-relative host. We only repair
+    the value when the authority is a single label and rebuilding it as a path
+    exactly matches the final page path. Genuine scheme-relative domains keep
+    normal URL semantics and remain eligible for cross-domain validation.
+    """
+    raw = str(href or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("//"):
+        candidate = urlparse(raw)
+        base = urlparse(str(base_url or ""))
+        hostname = (candidate.hostname or "").lower().strip(".")
+        reconstructed_path = f"/{hostname}{candidate.path or ''}"
+        is_plain_single_label = bool(hostname) and "." not in hostname and candidate.netloc.lower() == hostname
+        if (
+            is_plain_single_label
+            and candidate.query == base.query
+            and _canonical_path_key(reconstructed_path) == _canonical_path_key(base.path or "/")
+        ):
+            return base._replace(
+                path=reconstructed_path,
+                query=candidate.query,
+                fragment=candidate.fragment,
+            ).geturl()
+    return urljoin(base_url, raw)
+
+
 def clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", unescape(str(value or ""))).strip()
 
@@ -123,7 +162,7 @@ def extract_page(
 
     canonical_tag = soup.find("link", attrs={"rel": lambda value: value and "canonical" in str(value).lower()})
     if canonical_tag:
-        canonical = urljoin(final_url, canonical_tag.get("href", ""))
+        canonical = resolve_canonical_href(final_url, canonical_tag.get("href", ""))
 
     h1s = [clean_text(h.get_text(" ")) for h in soup.find_all("h1") if clean_text(h.get_text(" "))]
     images = soup.find_all("img")
@@ -184,6 +223,7 @@ def extract_page(
         "h1_count": len(h1s),
         "canonical": canonical,
         "canonical_url": canonical,
+        "canonical_href_resolution_version": CANONICAL_HREF_RESOLUTION_VERSION,
         "canonical_status": "self_or_equivalent" if canonical and same_path(final_url or url, canonical) else ("missing" if not canonical else "canonical_to_different_url"),
         "robots": robots,
         "robots_meta": robots,

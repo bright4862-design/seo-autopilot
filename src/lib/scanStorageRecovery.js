@@ -1,4 +1,5 @@
 import { base44 } from "@/api/base44Client";
+import { RELEASE_AUTHORITY_CONTRACT } from "@/lib/scanRunModel";
 
 const SCAN_RECORD_PREFIX = "seo_autopilot:scan:";
 const DASHBOARD_LAST_SCAN_KEY = "seo_autopilot:last_scan";
@@ -7,12 +8,14 @@ const LEGACY_LAST_SCAN_KEY = "SEO_AUTOPILOT_LAST_SCAN";
 const LEGACY_HISTORY_KEY = "SEO_AUTOPILOT_SCAN_HISTORY";
 const SCAN_DEBUG_KEY = "seo_autopilot:scan_debug";
 
-const CURRENT_SCANNER_VERSION = "python_scanner_v3_bounded_request";
-const CURRENT_SCANNER_BUILD_REVISION = "hard_page_cap_response_v1";
-const CURRENT_ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v9_local_business_hospitality";
-const CURRENT_REVIEW_VERSION = "python_review_v2_structural_marketplace";
-const CURRENT_CALIBRATION_VERSION = "review_evidence_calibration_v5_utility_redirect";
-const CURRENT_BETA_REVISION_FINGERPRINT = "52348dd1f3b77700";
+const {
+  scannerVersion: CURRENT_SCANNER_VERSION,
+  scannerBuildRevision: CURRENT_SCANNER_BUILD_REVISION,
+  archetypeClassifierVersion: CURRENT_ARCHETYPE_CLASSIFIER_VERSION,
+  reviewVersion: CURRENT_REVIEW_VERSION,
+  calibrationVersion: CURRENT_CALIBRATION_VERSION,
+  betaRevisionFingerprint: CURRENT_BETA_REVISION_FINGERPRINT,
+} = RELEASE_AUTHORITY_CONTRACT;
 const PAGE_LIMITS = { basic: 25, quick: 40, deep: 85, advanced: 150 };
 const SCAN_CACHE_KEYS = new Set([
   DASHBOARD_LAST_SCAN_KEY,

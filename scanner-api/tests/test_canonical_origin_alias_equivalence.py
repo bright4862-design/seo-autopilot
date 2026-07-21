@@ -100,3 +100,42 @@ async def test_http_to_https_www_change_is_not_treated_as_origin_alias():
     assert source.get("canonical_origin_alias") is not True
     assert source["canonical_target_state"] == "cross_domain_needs_verification"
     assert any(item["rule"] == "canonical_cross_domain" for item in build_findings([source]))
+
+
+
+def test_hostless_scheme_relative_same_path_canonical_uses_final_origin():
+    page = extract_page(
+        '<html><head><title>Chocolate Milk</title><link rel="canonical" href="//chocolate-milk/"></head><body><h1>Chocolate Milk</h1></body></html>',
+        "https://hartzlerdairy.com/chocolate-milk",
+        "https://www.hartzlerdairy.com/chocolate-milk/",
+        200,
+        "text/html",
+        DISCOVERY,
+    )
+
+    assert page["canonical"] == "https://www.hartzlerdairy.com/chocolate-milk/"
+    assert page["canonical_status"] == "self_or_equivalent"
+    assert page["canonical_href_resolution_version"] == "canonical_href_resolution_v1_hostless_same_path"
+    assert not any(item["rule"] == "canonical_cross_domain" for item in build_findings([page]))
+
+
+@pytest.mark.asyncio
+async def test_real_scheme_relative_external_domain_remains_cross_domain():
+    page = extract_page(
+        '<html><head><title>Page</title><link rel="canonical" href="//canonical.example/chocolate-milk/"></head><body><h1>Page</h1></body></html>',
+        "https://www.hartzlerdairy.com/chocolate-milk/",
+        "https://www.hartzlerdairy.com/chocolate-milk/",
+        200,
+        "text/html",
+        DISCOVERY,
+    )
+
+    assert page["canonical"] == "https://canonical.example/chocolate-milk/"
+    assert page["canonical_status"] == "canonical_to_different_url"
+    await validate_canonical_targets(
+        FakeClient(),
+        [page],
+        RobotsPolicy("https://www.hartzlerdairy.com/robots.txt", "missing", 404),
+    )
+    assert page["canonical_target_state"] == "cross_domain_needs_verification"
+    assert any(item["rule"] == "canonical_cross_domain" for item in build_findings([page]))

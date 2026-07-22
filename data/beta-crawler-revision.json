@@ -1,8 +1,8 @@
 {
-  "acceptance_report": "docs/releases/hartzler-absolute-single-label-canonical-v2.md",
+  "acceptance_report": "docs/releases/wordpress-route-noise-v1.md",
   "component_versions": {
     "archetype_classifier_version": "archetype_classifier_v9_local_business_hospitality",
-    "artifact_filter_version": "artifact_filter_v3_non_html_resources",
+    "artifact_filter_version": "artifact_filter_v4_wordpress_route_noise",
     "canonical_href_resolution_version": "canonical_href_resolution_v2_absolute_single_label_same_path",
     "canonical_target_evidence_version": "canonical_target_evidence_v2_origin_alias_equivalence",
     "crawler_acceptance_version": "crawler_acceptance_v1",
@@ -31,10 +31,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "d69d625dbeaee154",
+  "fingerprint": "a375c7d739ba9adc",
   "git_commit": "",
-  "note": "Hartzler release-blocker candidate: repair an absolute http(s) single-label canonical only when it reconstructs the exact final page path; preserve genuine external domains.",
-  "recorded_at": "2026-07-21T00:00:00Z",
+  "note": "Suppress high-confidence WordPress utility, feed, login, and exact starter-content routes before sitemap or queue admission while preserving legitimate public CMS content.",
+  "recorded_at": "2026-07-22T00:00:00Z",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

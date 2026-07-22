@@ -1,0 +1,58 @@
+name: Apply WordPress route-noise markers
+
+on:
+  push:
+    branches:
+      - agent/wordpress-route-noise
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout patch branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/wordpress-route-noise
+          fetch-depth: 0
+
+      - name: Apply release marker updates
+        run: python .github/scripts/patch_wordpress_route_noise_markers.py
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install scanner test dependencies
+        run: |
+          python -m pip install --upgrade pip pytest pytest-asyncio
+          pip install -r scanner-api/requirements.txt
+
+      - name: Run focused scanner regressions
+        working-directory: scanner-api
+        run: pytest tests/test_artifact_filter.py tests/test_wordpress_route_noise.py tests/test_observability.py
+
+      - name: Verify frozen candidate revision
+        working-directory: scanner-api
+        run: python scripts/freeze_beta_revision.py --check
+
+      - name: Run frontend authority regressions
+        run: node --test tests/frontend/releaseAuthorityGate.test.mjs tests/frontend/scanRunPersistence.test.mjs
+
+      - name: Commit direct patch files only
+        run: |
+          git rm .github/workflows/apply-wordpress-route-noise.yml
+          git rm .github/scripts/patch_wordpress_route_noise_markers.py
+          git add scanner-api/tests/test_observability.py
+          git add src/lib/scanRunModel.js
+          git add tests/frontend/releaseAuthorityGate.test.mjs
+          git add tests/frontend/scanRunPersistence.test.mjs
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Align WordPress route-noise release authority"
+          git push origin HEAD:agent/wordpress-route-noise

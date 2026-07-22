@@ -121,7 +121,7 @@ def test_release_marker_endpoints_are_consistent():
     revision = client.get("/revision").json()
 
     assert health["archetype_classifier_version"] == "archetype_classifier_v9_local_business_hospitality"
-    assert health["beta_revision_fingerprint"] == "d69d625dbeaee154"
+    assert health["beta_revision_fingerprint"] == "a375c7d739ba9adc"
     assert health["review_version"] == "python_review_v2_structural_marketplace"
     assert health["review_evidence_calibration_version"] == "review_evidence_calibration_v5_utility_redirect"
     assert health["scanner_build_revision"] == "hard_page_cap_response_v1"
@@ -129,7 +129,7 @@ def test_release_marker_endpoints_are_consistent():
     assert revision["component_versions"]["archetype_classifier_version"] == health["archetype_classifier_version"]
     assert revision["component_versions"]["review_version"] == health["review_version"]
     assert revision["component_versions"]["review_evidence_calibration_version"] == health["review_evidence_calibration_version"]
-    assert revision["component_versions"]["artifact_filter_version"] == "artifact_filter_v3_non_html_resources"
+    assert revision["component_versions"]["artifact_filter_version"] == "artifact_filter_v4_wordpress_route_noise"
     assert revision["component_versions"]["redirect_evidence_version"] == "redirect_evidence_v3_origin_alias_identity"
 
 
@@ -167,7 +167,7 @@ def test_scan_endpoint_returns_beta_revision_fingerprint(monkeypatch, capsys):
     client = TestClient(main.app)
     response = client.post("/scan", json={"website_url": "https://example.com"})
     assert response.status_code == 200
-    assert response.json()["beta_revision_fingerprint"] == "d69d625dbeaee154"
+    assert response.json()["beta_revision_fingerprint"] == "a375c7d739ba9adc"
     assert response.json()["scanner_build_revision"] == "hard_page_cap_response_v1"
     read_log_lines(capsys)
 
@@ -187,7 +187,7 @@ def test_review_endpoint_logs_completion_metrics(monkeypatch, capsys):
     client = TestClient(main.app)
     response = client.post("/review", json={"website_url": "https://example.com"})
     assert response.status_code == 200
-    assert response.json()["beta_revision_fingerprint"] == "d69d625dbeaee154"
+    assert response.json()["beta_revision_fingerprint"] == "a375c7d739ba9adc"
     completed = [record for record in read_log_lines(capsys) if record["event"] == "review_completed"]
     assert len(completed) == 1
     assert completed[0]["scan_status"] == "complete"

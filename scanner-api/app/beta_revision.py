@@ -33,7 +33,7 @@ def collect_component_versions() -> dict[str, str]:
     from .canonical_validation import CANONICAL_TARGET_EVIDENCE_VERSION
     from .crawler_acceptance import CRAWLER_ACCEPTANCE_VERSION
     from .evidence_quality import EVIDENCE_QUALITY_GATE_VERSION
-    from .extract import CANONICAL_HREF_RESOLUTION_VERSION
+    from .extract import CANONICAL_HREF_RESOLUTION_VERSION, ROUTE_BOUNDARY_CLASSIFIER_VERSION
     from .indexability_quality import INDEXABILITY_QUALITY_VERSION
     from .navigation_indexability import NAVIGATION_INDEXABILITY_VERSION
     from .metadata_title_evidence import METADATA_EVIDENCE_VERSION, TITLE_EVIDENCE_VERSION
@@ -54,12 +54,14 @@ def collect_component_versions() -> dict[str, str]:
     from .review_calibration import CALIBRATION_VERSION, IMAGE_ALT_EVIDENCE_VERSION
     from .sampling import SAMPLING_VERSION
     from .scan_timing import SITEMAP_TIME_RESERVATION_VERSION
-    from .scanner import RENDER_EVIDENCE_VERSION, VERSION
+    from .scanner import FINAL_URL_DEDUP_VERSION, RENDER_EVIDENCE_VERSION, VERSION
     from .trust_discovery import TRUST_DISCOVERY_VERSION, TRUST_FINDING_GATE_VERSION
 
     return {
         "scanner_version": VERSION,
         "artifact_filter_version": ARTIFACT_FILTER_VERSION,
+        "route_boundary_classifier_version": ROUTE_BOUNDARY_CLASSIFIER_VERSION,
+        "final_url_dedup_version": FINAL_URL_DEDUP_VERSION,
         "canonical_target_evidence_version": CANONICAL_TARGET_EVIDENCE_VERSION,
         "canonical_href_resolution_version": CANONICAL_HREF_RESOLUTION_VERSION,
         "redirect_evidence_version": REDIRECT_EVIDENCE_VERSION,

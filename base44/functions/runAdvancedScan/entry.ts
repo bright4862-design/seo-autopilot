@@ -2,7 +2,9 @@ import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 
 const VERSION = "runAdvancedScan_v22_python_required";
 const PYTHON_SCANNER_VERSION = "python_scanner_v3_bounded_request";
-const DENO_FALLBACK_PROFILE = "deno_screaming_frog_lite_fallback_v21";
+const DENO_FALLBACK_PROFILE = "deno_screaming_frog_lite_fallback_v22_final_url_dedup";
+const ROUTE_BOUNDARY_CLASSIFIER_VERSION = "route_boundary_classifier_v2_wordpress_author_archives";
+const FINAL_URL_DEDUP_VERSION = "final_url_dedup_v1_normalized_identity";
 const CORS_HEADERS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
 const USER_AGENT = "Mozilla/5.0 (compatible; FixListBot/2.1; +https://base44.app)";
 const FETCH_TIMEOUT_MS = 12000;
@@ -143,6 +145,10 @@ Deno.serve(async (req) => {
         verified_failed_pages: verifiedFailedPages.length,
         suspicious_url_artifacts: suspiciousUrlArtifacts.length,
         route_boundary_candidates_crawled: crawlResult.pages.filter((page) => page.route_boundary_candidate).length,
+        route_boundary_classifier_version: ROUTE_BOUNDARY_CLASSIFIER_VERSION,
+        final_url_dedup_version: crawlResult.final_url_dedup_version || FINAL_URL_DEDUP_VERSION,
+        final_url_duplicates_deduped: Number(crawlResult.final_url_duplicates_deduped || 0),
+        final_url_duplicate_examples: crawlResult.final_url_duplicate_examples || [],
         duplicate_casing_routes: detectDuplicateCasingRoutes(crawlResult.pages),
         crawl_policy: crawlResult.crawl_policy,
         crawl_policy_source: crawlResult.crawl_policy?.source || "default",
@@ -218,7 +224,9 @@ async function crawlWebsite({ startUrl, budget, pathPrefix, invokeLLM }) {
   const origin = start.origin;
   const normalizedPrefix = normalizePathPrefix(pathPrefix || start.pathname || "/");
   const policy = await deriveCrawlPolicy({ origin, start, budget, invokeLLM });
-  const queue = [], seen = new Set(), discoveryMap = new Map(), pages = [], warnings = [], artifacts = [];
+  const queue = [], seen = new Set(), finalPages = new Map(), discoveryMap = new Map(), pages = [], warnings = [], artifacts = [];
+  let finalUrlDuplicatesDeduped = 0;
+  const finalUrlDuplicateExamples = [];
   const startedAt = Date.now();
   if (policy?.source === "failed" && policy?.error) warnings.push(`Crawl policy fell back to default: ${policy.error}`);
   enqueueUrl({ queue, discoveryMap, url: start.href, discoveredFrom: "seed", sourcePage: "", linkText: "", artifactSink: artifacts, policy });
@@ -239,7 +247,16 @@ async function crawlWebsite({ startUrl, budget, pathPrefix, invokeLLM }) {
     const discovery = discoveryMap.get(clean) || emptyDiscovery("unknown");
     const fetched = await safeFetchText(clean).catch((error) => ({ ok: false, url: clean, final_url: clean, status: 0, content_type: "", text: "", error: error?.message || "Fetch failed" }));
     const page = extractPageFromHtml({ requestedUrl: clean, fetched, discovery });
-    pages.push(page);
+    const identity = finalUrlIdentity(page.final_url || page.url || "");
+    const retained = identity ? finalPages.get(identity) : null;
+    if (retained) {
+      mergeDuplicatePageEvidence(retained, page);
+      finalUrlDuplicatesDeduped += 1;
+      if (finalUrlDuplicateExamples.length < 10) finalUrlDuplicateExamples.push({ requested_url: page.url || "", final_url: page.final_url || page.url || "", retained_url: retained.url || "" });
+    } else {
+      pages.push(page);
+      if (identity) finalPages.set(identity, page);
+    }
     if (fetched.text && isHtmlContent(fetched.content_type) && fetched.status >= 200 && fetched.status < 400) {
       for (const link of extractLinks(fetched.text, fetched.final_url || clean)) {
         if (queue.length + seen.size >= budget.max_pages * 6) break;
@@ -248,7 +265,7 @@ async function crawlWebsite({ startUrl, budget, pathPrefix, invokeLLM }) {
       }
     }
   }
-  return { pages, pages_found: Math.max(seen.size + queue.length, pages.length), queued_remaining: queue.length, warnings, crawl_policy: policy, suspicious_url_artifacts: uniqueArtifacts(artifacts) };
+  return { pages, pages_found: Math.max(seen.size + queue.length, pages.length), queued_remaining: queue.length, warnings, crawl_policy: policy, suspicious_url_artifacts: uniqueArtifacts(artifacts), final_url_dedup_version: FINAL_URL_DEDUP_VERSION, final_url_duplicates_deduped: finalUrlDuplicatesDeduped, final_url_duplicate_examples: finalUrlDuplicateExamples };
 }
 
 async function deriveCrawlPolicy({ origin, start, budget, invokeLLM }) {
@@ -507,7 +524,10 @@ function statusRule(status) { if (status === 429) return "rate_limited_page"; if
 function friendlyCategory(category) { return ({ meta_title: "Search appearance", meta_description: "Search appearance", duplicate_content: "Search appearance", canonical: "Website setup", schema: "Trust signals", thin_content: "Page content", "404_error": "Broken page", web_dev: "Website setup", image_alt_text: "Images", indexability: "Indexability" })[category] || "Website improvement"; }
 function classifyTemplateFamily(url = "") { const p = cleanPath(url).toLowerCase(); if (isEncodedArtifactPath(p)) return "crawler_artifact"; if (isRouteBoundaryCandidate(p)) return "route_boundary"; if (isLowValuePage(p)) return "archive"; if (/checkout|booking|reservation|ticket_order|gift_voucher/.test(p)) return "booking_or_checkout"; if (/\/products?\/|\/p\//.test(p)) return "product_detail"; if (/\/collections?\/|\/category\/|\/categorie\/|listing|show|marque|brand/.test(p)) return "category_listing"; if (/simulation|simulateur|calcul|calculator|comparateur|devis|quote|pricing|demo|tarif|fournisseur|energie|electricite|gaz/.test(p)) return "conversion"; if (/contact/.test(p)) return "contact"; if (/faq|question/.test(p)) return "qa"; if (/guide|blog|article/.test(p)) return "guide"; if (/privacy|terms|legal|mentions-legales|security|cgv/.test(p)) return "legal_info"; return "standard"; }
 function estimatePageIntent(path = "", { title = "", h1 = "", robots = "", status = 200 }) { const t = `${path} ${title} ${h1}`.toLowerCase(); if (isEncodedArtifactPath(t)) return "crawler_artifact"; if (status >= 400 || t.includes("429")) return status === 429 ? "blocked_access" : "failed"; if (robots.toLowerCase().includes("noindex")) return "not_indexed"; if (isRouteBoundaryCandidate(t)) return "internal_or_auth"; if (/devis|quote|pricing|tarif|contact|booking|reservation|checkout|ticket|voucher|pass|show|listing|product|produit|collection|category|simulation|simulateur|calcul|calculator|comparateur|demo|signup|energie|electricite|gaz|fournisseur/.test(t)) return "money_or_conversion"; if (/privacy|terms|legal|about|contact|security/.test(t)) return "trust_or_legal"; if (/faq|guide|blog|article|question/.test(t)) return "support_content"; if (isLowValuePage(t)) return "archive"; return "standard"; }
-function isRouteBoundaryCandidate(url = "") { const p = cleanPath(url).toLowerCase(); return ROUTE_SEGMENTS.some((s) => p.includes(s)); }
+function isWordPressAuthorArchive(url = "") { const p = cleanPath(url).toLowerCase().split("?")[0].split("#")[0]; return /^\/author\/[^/?#]+(?:\/page\/\d+)?\/?$/.test(p); }
+function isRouteBoundaryCandidate(url = "") { const p = cleanPath(url).toLowerCase(); if (isWordPressAuthorArchive(p)) return false; return ROUTE_SEGMENTS.some((s) => p.includes(s)); }
+function finalUrlIdentity(value = "") { try { const url = new URL(String(value || "")); url.hash = ""; if (!url.pathname) url.pathname = "/"; return url.toString(); } catch { return ""; } }
+function mergeDuplicatePageEvidence(retained, duplicate) { for (const key of ["discovered_from", "source_pages", "link_text_samples"]) retained[key] = unique([...(retained[key] || []), ...(duplicate[key] || [])]).slice(0, key === "link_text_samples" ? 8 : 50); const sources = new Set(retained.discovered_from || []); retained.url_confidence = sources.has("seed") ? "confirmed_seed" : sources.has("sitemap") && sources.has("internal_link") ? "confirmed_sitemap_and_linked" : sources.has("sitemap") ? "sitemap_listed" : sources.has("internal_link") ? (Number(retained.status_code || 0) >= 400 ? "linked_but_failed" : "internally_linked") : retained.url_confidence; }
 function isLowValuePage(url = "") { const p = cleanPath(url).toLowerCase(); if (/\/(20\d{2})([-/]\d{1,2}|\/|$)/.test(p)) return true; return ["/tag/", "/tags/", "/author/", "/archive/", "/archives/", "/feed/", "/rss/", "/page/"].some((s) => p.includes(s)); }
 function isEncodedArtifactPath(value = "") { const p = cleanPath(value).split("?")[0]; return p.split("/").filter(Boolean).some((segment) => { const decoded = safeDecodeURIComponent(segment); if (/^(L2|aHR0c|aHR0p|eyJ|PGE|PHN)[A-Za-z0-9+/_-]{10,}={0,2}$/.test(segment)) return true; if (/^[A-Za-z0-9+/_-]{24,}={1,2}$/.test(segment)) return true; if (/%2f/i.test(segment) && /%3a|%2f/i.test(segment)) return true; if (/^https?:/i.test(decoded) || decoded.startsWith("/")) return true; return false; }); }
 function safeDecodeURIComponent(value) { try { return decodeURIComponent(String(value || "")); } catch { return String(value || ""); } }

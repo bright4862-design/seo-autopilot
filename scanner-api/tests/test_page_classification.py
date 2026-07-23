@@ -253,3 +253,19 @@ def test_strong_finance_route_still_beats_article_schema():
 def test_pretto_brand_name_does_not_make_a_standard_page_money_intent():
     assert estimate_intent("/equipe", "L'équipe Pretto", "Nos experts", 200) == "standard"
 
+
+
+def test_wordpress_author_admin_archive_is_public_archive_not_route_boundary():
+    from app.extract import is_route_boundary, is_wordpress_author_archive
+    from app.review import is_internal_app_route, is_route_boundary_candidate
+
+    for path in ["/author/admin", "/author/admin/", "/author/admin/page/2/"]:
+        assert is_wordpress_author_archive(path)
+        assert not is_route_boundary(path)
+        assert not is_route_boundary_candidate(path)
+        assert not is_internal_app_route(path)
+        assert classify_template(path) == "archive"
+        assert estimate_intent(path, "Admin archive", "", 200) == "support_content"
+
+    for path in ["/admin", "/wp-admin", "/account/admin", "/author/admin/settings"]:
+        assert is_route_boundary(path)

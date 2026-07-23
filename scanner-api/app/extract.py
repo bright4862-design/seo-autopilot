@@ -345,16 +345,26 @@ def classify_confidence(discovery: dict, status_code: int) -> str:
     return "unknown_discovery"
 
 
+ROUTE_BOUNDARY_CLASSIFIER_VERSION = "route_boundary_classifier_v2_wordpress_author_archives"
 ROUTE_BOUNDARY_RE = re.compile(
     # Token-bounded: a segment must BE the keyword, not merely start with it.
     # Unbounded "/cart" matched the French word "carte" (/fr/annonce/carte-all-inclusive.../voir),
     # flagging public activity pages as private internal routes.
     r"/(login|signin|sign-in|register|signup|sign-up|account|mon-compte|dashboard|cart|panier|checkout|billing|admin|wp-admin)(?=[/?#\s]|$)"
 )
+WORDPRESS_AUTHOR_ARCHIVE_RE = re.compile(r"^/author/[^/?#]+(?:/page/\d+)?/?$")
+
+
+def is_wordpress_author_archive(path: str) -> bool:
+    clean = str(path or "").lower().split("?")[0].split("#")[0]
+    return bool(WORDPRESS_AUTHOR_ARCHIVE_RE.fullmatch(clean))
 
 
 def is_route_boundary(path: str) -> bool:
-    return bool(ROUTE_BOUNDARY_RE.search(str(path or "").lower().split("?")[0]))
+    clean = str(path or "").lower().split("?")[0].split("#")[0]
+    if is_wordpress_author_archive(clean):
+        return False
+    return bool(ROUTE_BOUNDARY_RE.search(clean))
 
 
 SUPPORT_CONTENT_PREFIX_RE = re.compile(

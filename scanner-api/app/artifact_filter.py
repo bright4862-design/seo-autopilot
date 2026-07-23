@@ -1,13 +1,36 @@
 import re
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qsl, unquote, urlparse
 
 MAX_ARTIFACT_EVIDENCE = 50
-ARTIFACT_FILTER_VERSION = "artifact_filter_v3_non_html_resources"
+ARTIFACT_FILTER_VERSION = "artifact_filter_v4_wordpress_route_noise"
+WORDPRESS_ROUTE_NOISE_VERSION = "wordpress_route_noise_v1_default_utility_routes"
 
 _ENCODED_URL_MARKERS = ("%2f", "%3a", "http%3a", "https%3a")
 _BASE64_PREFIXES = ("aHR0", "L2", "eyJ", "PHN2", "PD94", "data:")
 _URL_SAFE_TOKEN = re.compile(r"^[A-Za-z0-9+/_=-]+={0,2}$")
 _HUMAN_SLUG_CHUNK = re.compile(r"^[a-z0-9]{1,24}$")
+
+# Exact WordPress technical endpoints that cannot provide public page-level SEO
+# evidence. Keep this list deliberately narrow: public categories, tags, authors,
+# posts, products, and other CMS routes remain crawlable.
+_WORDPRESS_TECHNICAL_EXACT_PATHS = {
+    "/wp-login.php",
+    "/wp-comments-post.php",
+    "/wp-cron.php",
+    "/wp-signup.php",
+    "/wp-activate.php",
+    "/xmlrpc.php",
+}
+_WORDPRESS_DEFAULT_CONTENT_PATHS = {
+    "/hello-world",
+    "/sample-page",
+    "/category/uncategorized",
+}
+_WORDPRESS_NOISE_QUERY_KEYS = {
+    "feed",
+    "replytocom",
+    "rest_route",
+}
 
 # XML and XML.GZ are deliberately excluded: they can be sitemap indexes or URL sets.
 # These suffixes represent resources that must never become page-level SEO evidence.
@@ -65,6 +88,49 @@ def _path_from_url(url: str) -> str:
         return urlparse(url).path or url
     except Exception:
         return url
+
+
+def _normalized_route_parts(url: str) -> tuple[str, set[str]]:
+    try:
+        parsed = urlparse(str(url or "").strip())
+    except Exception:
+        return "", set()
+    path = unquote(parsed.path or "/").lower()
+    path = re.sub(r"/+", "/", path)
+    if len(path) > 1:
+        path = path.rstrip("/")
+    query_keys = {
+        str(key or "").strip().lower()
+        for key, _ in parse_qsl(parsed.query or "", keep_blank_values=True)
+        if str(key or "").strip()
+    }
+    return path or "/", query_keys
+
+
+def is_wordpress_route_noise_url(url: str) -> bool:
+    """Return True only for high-confidence WordPress utility/default routes.
+
+    These URLs can be linked by themes, starter content, feeds, login redirects,
+    Jetpack, or REST endpoints, but they should not consume page slots or create
+    canonical, redirect, metadata, or content findings. Legitimate public archive
+    and content routes are intentionally outside this filter.
+    """
+    path, query_keys = _normalized_route_parts(url)
+    if not path:
+        return False
+    if path in _WORDPRESS_TECHNICAL_EXACT_PATHS:
+        return True
+    if path in _WORDPRESS_DEFAULT_CONTENT_PATHS:
+        return True
+    if path == "/wp-admin" or path.startswith("/wp-admin/"):
+        return True
+    if path == "/wp-json" or path.startswith("/wp-json/"):
+        return True
+    if path == "/feed" or path.endswith("/feed"):
+        return True
+    if path == "/trackback" or path.endswith("/trackback"):
+        return True
+    return bool(query_keys & _WORDPRESS_NOISE_QUERY_KEYS)
 
 
 def is_non_html_resource_url(url: str) -> bool:
@@ -138,6 +204,8 @@ def is_artifact_url(url: str) -> bool:
 
     if is_non_html_resource_url(text):
         return True
+    if is_wordpress_route_noise_url(text):
+        return True
 
     path = _path_from_url(text)
     decoded_path = unquote(path)
@@ -152,7 +220,12 @@ def is_artifact_url(url: str) -> bool:
 def record_artifact(target: list[dict], url: str, discovered_from: str, source_page: str = "", link_text: str = "") -> None:
     if len(target) >= MAX_ARTIFACT_EVIDENCE:
         return
-    reason = "non_html_resource_path" if is_non_html_resource_url(url) else "encoded_or_base64_like_path"
+    if is_non_html_resource_url(url):
+        reason = "non_html_resource_path"
+    elif is_wordpress_route_noise_url(url):
+        reason = "wordpress_route_noise"
+    else:
+        reason = "encoded_or_base64_like_path"
     target.append({
         "url": str(url or "")[:500],
         "path": urlparse(str(url or "")).path[:500],

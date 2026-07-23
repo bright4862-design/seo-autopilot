@@ -1,5 +1,5 @@
 {
-  "acceptance_report": "docs/releases/wordpress-route-noise-v1.md",
+  "acceptance_report": "docs/releases/wordpress-author-archive-final-url-dedup-v1.md",
   "component_versions": {
     "archetype_classifier_version": "archetype_classifier_v9_local_business_hospitality",
     "artifact_filter_version": "artifact_filter_v4_wordpress_route_noise",
@@ -7,6 +7,7 @@
     "canonical_target_evidence_version": "canonical_target_evidence_v2_origin_alias_equivalence",
     "crawler_acceptance_version": "crawler_acceptance_v1",
     "evidence_quality_gate_version": "evidence_quality_gate_v1_default_route_dominance",
+    "final_url_dedup_version": "final_url_dedup_v1_normalized_identity",
     "grouped_recommendation_evidence_version": "grouped_recommendation_evidence_v1_metadata_states",
     "image_alt_evidence_version": "material_image_alt_v1",
     "indexability_quality_version": "indexability_quality_v1",
@@ -23,6 +24,7 @@
     "representative_page_version": "business_representative_page_v3_sitewide_archetype_ranking",
     "review_evidence_calibration_version": "review_evidence_calibration_v5_utility_redirect",
     "review_version": "python_review_v2_structural_marketplace",
+    "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",
     "sampling_version": "balanced_sitemap_buckets_v1",
     "scanner_version": "python_scanner_v3_bounded_request",
     "sitemap_time_reservation_version": "sitemap_time_reservation_v1_crawl_first",
@@ -31,10 +33,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "a375c7d739ba9adc",
+  "fingerprint": "ab4f34bb0477c989",
   "git_commit": "",
-  "note": "Suppress high-confidence WordPress utility, feed, login, and exact starter-content routes before sitemap or queue admission while preserving legitimate public CMS content.",
-  "recorded_at": "2026-07-22T00:00:00Z",
+  "note": "Preserve legitimate WordPress author archives while excluding true route noise, and deduplicate pages by normalized final-URL identity before page accounting.",
+  "recorded_at": "2026-07-23T14:35:00Z",
   "schema_version": "beta_crawler_revision_v1",
-  "status": "candidate"
+  "status": "frozen_beta"
 }

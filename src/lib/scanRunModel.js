@@ -17,7 +17,7 @@ export const RELEASE_AUTHORITY_CONTRACT = Object.freeze({
   archetypeClassifierVersion: "archetype_classifier_v9_local_business_hospitality",
   reviewVersion: "python_review_v2_structural_marketplace",
   calibrationVersion: "review_evidence_calibration_v5_utility_redirect",
-  betaRevisionFingerprint: "a375c7d739ba9adc",
+  betaRevisionFingerprint: "ab4f34bb0477c989",
 });
 
 const {

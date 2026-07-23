@@ -39,6 +39,7 @@ from .sitemap import load_sitemap_urls
 
 VERSION = "python_scanner_v3_bounded_request"
 RENDER_EVIDENCE_VERSION = "render_evidence_v1"
+FINAL_URL_DEDUP_VERSION = "final_url_dedup_v1_normalized_identity"
 
 # The Python crawler does not derive an AI crawl policy (no InvokeLLM here), but it
 # still emits the policy contract so AI Review keeps provenance. source="disabled"
@@ -98,6 +99,7 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
     queue: list[str] = []
     queued: set[str] = set()
     seen: set[str] = set()
+    final_pages: dict[str, dict] = {}
     discovery: dict[str, dict] = {}
     artifacts: list[dict] = []
 
@@ -183,14 +185,23 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         crawl_started_monotonic = time.monotonic()
         initial_queue_size = len(queue)
         state_lock = asyncio.Lock()
-        crawl_state = {"claimed": 0, "in_flight": 0}
+        crawl_state = {
+            "claimed": 0,
+            "in_flight": 0,
+            "final_url_duplicates_deduped": 0,
+            "final_url_duplicate_examples": [],
+        }
 
         async def worker() -> None:
             while True:
                 target = None
                 snapshot = None
                 async with state_lock:
-                    if time.monotonic() >= timing_budget["crawl_deadline"] or crawl_state["claimed"] >= max_pages:
+                    if (
+                        time.monotonic() >= timing_budget["crawl_deadline"]
+                        or len(pages) + crawl_state["in_flight"] >= max_pages
+                        or crawl_state["claimed"] >= max_pages * 8
+                    ):
                         return
                     while queue:
                         candidate = queue.pop(0)
@@ -239,7 +250,21 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
                 finally:
                     async with state_lock:
                         if page is not None:
-                            pages.append(page)
+                            identity = final_url_identity(page.get("final_url") or page.get("url") or "")
+                            retained = final_pages.get(identity) if identity else None
+                            if retained is not None:
+                                merge_duplicate_page_evidence(retained, page)
+                                crawl_state["final_url_duplicates_deduped"] += 1
+                                if len(crawl_state["final_url_duplicate_examples"]) < 10:
+                                    crawl_state["final_url_duplicate_examples"].append({
+                                        "requested_url": page.get("url") or "",
+                                        "final_url": page.get("final_url") or page.get("url") or "",
+                                        "retained_url": retained.get("url") or "",
+                                    })
+                            else:
+                                pages.append(page)
+                                if identity:
+                                    final_pages[identity] = page
                         crawl_state["in_flight"] -= 1
                         for link in discovered:
                             if len(queue) + len(seen) >= max_pages * 8:
@@ -295,6 +320,9 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
         "queue_exhausted": final_queue_size == 0 and len(pages) < max_pages and not crawl_deadline_reached,
         "failed_fetch_count": failed_fetch_count,
         "failure_reason_buckets": failure_reason_buckets,
+        "final_url_dedup_version": FINAL_URL_DEDUP_VERSION,
+        "final_url_duplicates_deduped": crawl_state["final_url_duplicates_deduped"],
+        "final_url_duplicate_examples": crawl_state["final_url_duplicate_examples"],
     }
     crawl_warnings = []
     if deadline_reached:
@@ -364,6 +392,9 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
             "title_evidence_version": TITLE_EVIDENCE_VERSION,
             "page_evidence_gate_version": PAGE_EVIDENCE_GATE_VERSION,
             "sitemap_time_reservation_version": SITEMAP_TIME_RESERVATION_VERSION,
+            "final_url_dedup_version": FINAL_URL_DEDUP_VERSION,
+            "final_url_duplicates_deduped": crawl_state["final_url_duplicates_deduped"],
+            "final_url_duplicate_examples": crawl_state["final_url_duplicate_examples"],
             "crawl_timing": crawl_timing,
             "scanner_elapsed_ms": elapsed_ms,
             "scanner_total_budget_seconds": budget["timeout"],
@@ -1187,6 +1218,43 @@ def calculate_health_score(pages: list[dict], findings: list[dict]) -> int | Non
     score -= sum(metadata_penalties.values())
     return max(20, min(98, round(score)))
 
+
+
+def final_url_identity(value: str) -> str:
+    """Stable identity for a fetched final URL without collapsing distinct path variants."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return ""
+        scheme = parsed.scheme.lower()
+        host = parsed.hostname.lower()
+        port = parsed.port
+        if port and not ((scheme == "http" and port == 80) or (scheme == "https" and port == 443)):
+            host = f"{host}:{port}"
+        path = parsed.path or "/"
+        query = f"?{parsed.query}" if parsed.query else ""
+        return f"{scheme}://{host}{path}{query}"
+    except Exception:
+        return ""
+
+
+def merge_duplicate_page_evidence(retained: dict, duplicate: dict) -> None:
+    for key, limit in (("discovered_from", None), ("source_pages", None), ("link_text_samples", 8)):
+        merged = list(dict.fromkeys([*(retained.get(key) or []), *(duplicate.get(key) or [])]))
+        retained[key] = merged[:limit] if limit else merged
+    sources = set(retained.get("discovered_from") or [])
+    status_code = int(retained.get("status_code") or 0)
+    if "seed" in sources:
+        retained["url_confidence"] = "confirmed_seed"
+    elif "sitemap" in sources and "internal_link" in sources:
+        retained["url_confidence"] = "confirmed_sitemap_and_linked"
+    elif "sitemap" in sources:
+        retained["url_confidence"] = "sitemap_listed"
+    elif "internal_link" in sources:
+        retained["url_confidence"] = "linked_but_failed" if status_code >= 400 else "internally_linked"
 
 def normalize_url(value: str) -> str:
     raw = str(value or "").strip()

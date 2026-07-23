@@ -216,6 +216,62 @@ def test_few_usable_pages_is_inconclusive_even_with_200s():
     assert result["release_gate_eligible"] is False
 
 
+def test_complete_three_page_inventory_with_final_url_dedup_is_authoritative():
+    pages = [
+        page("https://tinysite.example/", "Home", h1="Tiny Site"),
+        page("https://tinysite.example/merch", "Merch", h1="Merch"),
+        page("https://tinysite.example/author/admin", "Author archive", h1="Author archive", family="archive"),
+    ]
+    result = run_review({
+        "website_url": "https://tinysite.example/",
+        "pages_found": 4,
+        "pages_crawled": 3,
+        "queued_remaining": 0,
+        "crawl_timing": {
+            "queue_exhausted": True,
+            "crawl_deadline_reached": False,
+            "failed_fetch_count": 0,
+            "final_url_duplicates_deduped": 1,
+        },
+        "crawled_pages": pages,
+    })
+    classification = result["site_fingerprint"]["classification"]
+    assert classification["state"] == "classified"
+    assert classification["evidence_sufficiency"] == "complete_small_site_inventory"
+    assert classification["complete_small_site_inventory"] is True
+    assert classification["small_site_inventory_accounting"]["final_url_duplicates_deduped"] == 1
+    assert result["scan_status"] == "complete"
+    assert result["score_is_provisional"] is False
+    assert result["release_gate_eligible"] is True
+    assert result["health_score_status"] == "available"
+    assert result["health_score"] is not None
+
+
+def test_three_pages_without_complete_inventory_accounting_stays_inconclusive():
+    pages = [
+        page("https://tinysite.example/", "Home"),
+        page("https://tinysite.example/about", "About"),
+        page("https://tinysite.example/contact", "Contact"),
+    ]
+    result = run_review({
+        "website_url": "https://tinysite.example/",
+        "pages_found": 4,
+        "pages_crawled": 3,
+        "queued_remaining": 0,
+        "crawl_timing": {
+            "queue_exhausted": True,
+            "crawl_deadline_reached": False,
+            "failed_fetch_count": 0,
+            "final_url_duplicates_deduped": 0,
+        },
+        "crawled_pages": pages,
+    })
+    assert result["site_fingerprint"]["classification"]["complete_small_site_inventory"] is False
+    assert result["scan_status"] == "inconclusive_insufficient_evidence"
+    assert result["score_is_provisional"] is True
+    assert result["release_gate_eligible"] is False
+
+
 def test_healthy_mixed_retail_crawl_stays_complete():
     pages = ikea_like_pages()
     result = run_review({

@@ -16,7 +16,7 @@ REVIEW_VERSION = "python_review_v2_structural_marketplace"
 SCORING_MODEL = "python_review_v2_group_dedup"
 ZERO_FIX_CONFIDENCE_VERSION = "python_review_v3_zero_fix_confidence"
 ZERO_FIX_HEALTH_GRADE = "No issues found in sample"
-QUALITY_GATE_VERSION = "review_quality_gate_v1_evidence_complete"
+QUALITY_GATE_VERSION = "review_quality_gate_v2_complete_small_site_inventory"
 GROUPED_RECOMMENDATION_EVIDENCE_VERSION = "grouped_recommendation_evidence_v1_metadata_states"
 ORPHAN_ASSET_EVIDENCE_VERSION = "orphan_asset_evidence_v1"
 INCOMPLETE_REVIEW_WARNING = "Review received scan metadata, but no page evidence was passed into AI Review."
@@ -770,19 +770,39 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
     )
     host = safe_hostname(website_url)
 
-    # Classification confidence is separate from scan completion: one usable
-    # page (eBay) or a mostly rate-limited crawl (Sephora) can complete as a
-    # scan but must not count as strong archetype validation.
+    # Classification confidence is separate from scan completion. Fewer than
+    # four usable pages normally stays inconclusive, unless the crawler proves
+    # that it exhausted a genuinely small inventory with every discovered URL
+    # accounted for by a retained page or a normalized final-URL duplicate.
     usable_pages = sum(1 for page in pages if page_has_usable_html(page))
-    if usable_pages < 4:
+    crawl_timing = body.get("crawl_timing") if isinstance(body.get("crawl_timing"), dict) else {}
+    if not crawl_timing:
+        nested_timing = deep_get(body, "technical_audit_summary", "crawl_timing")
+        crawl_timing = nested_timing if isinstance(nested_timing, dict) else {}
+    final_url_duplicates_deduped = max(
+        int_or_zero(crawl_timing.get("final_url_duplicates_deduped")),
+        int_or_zero(deep_get(body, "technical_audit_summary", "final_url_duplicates_deduped")),
+    )
+    complete_small_site_inventory = bool(
+        1 <= usable_pages < 4
+        and pages_crawled == usable_pages
+        and pages_found <= pages_crawled + final_url_duplicates_deduped
+        and crawl_timing.get("queue_exhausted") is True
+        and crawl_timing.get("crawl_deadline_reached") is not True
+        and int_or_zero(crawl_timing.get("failed_fetch_count")) == 0
+        and int_or_zero(body.get("queued_remaining")) == 0
+    )
+    if usable_pages < 4 and not complete_small_site_inventory:
         evidence_sufficiency = "insufficient_pages"
     elif blocked_or_429_pages and blocked_or_429_pages / max(usable_pages + blocked_or_429_pages, 1) >= 0.6:
         evidence_sufficiency = "access_limited"
     else:
-        evidence_sufficiency = "sufficient"
-    classification_state = "classified" if evidence_sufficiency == "sufficient" else "inconclusive_insufficient_evidence"
+        evidence_sufficiency = "complete_small_site_inventory" if complete_small_site_inventory else "sufficient"
+    classification_state = "classified" if evidence_sufficiency in {"sufficient", "complete_small_site_inventory"} else "inconclusive_insufficient_evidence"
     if classification_state != "classified":
         confidence = min(confidence, 0.35)
+    elif complete_small_site_inventory:
+        confidence = min(confidence, 0.65)
 
     score_map = dict(scores)
     runner_up = scores[1] if len(scores) > 1 else ("", 0.0)
@@ -792,6 +812,15 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         "evidence_sufficiency": evidence_sufficiency,
         "usable_pages": usable_pages,
         "blocked_or_429_pages": blocked_or_429_pages,
+        "complete_small_site_inventory": complete_small_site_inventory,
+        "small_site_inventory_accounting": {
+            "pages_found": pages_found,
+            "pages_crawled": pages_crawled,
+            "usable_pages": usable_pages,
+            "final_url_duplicates_deduped": final_url_duplicates_deduped,
+            "queue_exhausted": crawl_timing.get("queue_exhausted") is True,
+            "failed_fetch_count": int_or_zero(crawl_timing.get("failed_fetch_count")),
+        },
         "scores": [{"archetype": key, "score": round(value, 1)} for key, value in scores[:3]],
         "structural_signals": {
             "saas": saas_structural,
@@ -1970,7 +1999,8 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
     rate_limited = has_rate_limit_evidence(fixes)
     quality = review_input_quality(body, site_fingerprint)
     usable_page_count = int_or_zero(site_fingerprint.get("classification", {}).get("usable_pages"))
-    health_score_status = "available" if usable_page_count >= 4 else "insufficient_evidence"
+    complete_small_site_inventory = bool(site_fingerprint.get("classification", {}).get("complete_small_site_inventory"))
+    health_score_status = "available" if usable_page_count >= 4 or complete_small_site_inventory else "insufficient_evidence"
     health_score = compute_health_score(fixes, site_fingerprint) if health_score_status == "available" else None
     if insufficient and health_score is not None:
         health_score = min(55, health_score)

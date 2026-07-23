@@ -2474,7 +2474,11 @@ def is_route_boundary_candidate(url: str = "") -> bool:
 
 
 def is_internal_app_route(url: str = "") -> bool:
+    from .extract import is_wordpress_author_archive
+
     path = clean_path(url).lower()
+    if is_wordpress_author_archive(path):
+        return False
     return any(pattern in path for pattern in INTERNAL_ROUTE_PATTERNS)
 
 

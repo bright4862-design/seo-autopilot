@@ -13,6 +13,8 @@ jobs:
     defaults:
       run:
         working-directory: hf-space
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
     steps:
       - name: Check out repository
@@ -27,11 +29,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest
+          python -m pip install --quiet --upgrade pip
+          pip install --quiet -r requirements.txt pytest
 
       - name: Compile application
         run: python -m py_compile app.py
 
       - name: Run tests
-        run: pytest -q
+        run: pytest -q --tb=short

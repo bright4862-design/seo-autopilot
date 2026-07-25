@@ -36,4 +36,23 @@ jobs:
         run: python -m py_compile app.py
 
       - name: Run tests
-        run: pytest -q --tb=short
+        id: pytest
+        continue-on-error: true
+        run: pytest -q --tb=short > pytest.log 2>&1
+
+      - name: Upload pytest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fixlist-space-pytest
+          path: hf-space/pytest.log
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Report test result
+        if: always()
+        env:
+          PYTEST_OUTCOME: ${{ steps.pytest.outcome }}
+        run: |
+          cat pytest.log
+          test "$PYTEST_OUTCOME" = "success"

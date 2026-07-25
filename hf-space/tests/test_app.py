@@ -1,4 +1,13 @@
-from app import DEMO_SCAN, build_grounded_prompt, demo_answer, extract_output_text
+import pytest
+
+from app import (
+    DEMO_SCAN,
+    build_grounded_prompt,
+    extract_output_text,
+    guided_answer,
+    normalize_scan_result,
+    validate_public_website_url,
+)
 
 
 def test_extract_output_text_from_responses_api():
@@ -21,7 +30,58 @@ def test_prompt_contains_authority_rules_and_evidence():
     assert "What should I fix first?" in prompt
 
 
-def test_demo_answer_is_grounded():
-    answer = demo_answer("What should I fix first?", DEMO_SCAN)
+def test_guided_answer_is_grounded():
+    answer = guided_answer("What should I fix first?", DEMO_SCAN)
     assert "redirected internal links" in answer.lower()
     assert "18 pages" in answer
+
+
+def test_validate_public_website_url_normalizes_domain():
+    assert validate_public_website_url("example.com") == "https://example.com"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://localhost:8000",
+        "http://127.0.0.1",
+        "http://10.0.0.5",
+        "http://169.254.169.254",
+    ],
+)
+def test_validate_public_website_url_blocks_private_targets(url):
+    with pytest.raises(ValueError):
+        validate_public_website_url(url)
+
+
+def test_normalize_scan_result_preserves_authority_and_priorities():
+    scan = {
+        "website_url": "https://example.com",
+        "pages_found": 12,
+        "pages_crawled": 10,
+        "crawled_pages": [{"url": f"https://example.com/{index}"} for index in range(10)],
+        "beta_revision_fingerprint": "fingerprint-v1",
+    }
+    review = {
+        "scan_status": "complete",
+        "health_score": 74,
+        "release_gate_eligible": True,
+        "score_is_provisional": False,
+        "recommendations": [
+            {
+                "title": "Fix canonical tags",
+                "priority": "high",
+                "affected_urls": ["/a", "/b"],
+                "description": "Two pages point to the wrong canonical URL.",
+            }
+        ],
+    }
+
+    result = normalize_scan_result("https://example.com", scan, review)
+
+    assert result["source"] == "live"
+    assert result["score"] == 74
+    assert result["release_gate_eligible"] is True
+    assert result["pages_retained"] == 10
+    assert result["priorities"][0]["affected_pages"] == 2
+    assert result["priorities"][0]["owner"] == "Web developer"

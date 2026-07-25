@@ -15,6 +15,7 @@ jobs:
         working-directory: hf-space
     env:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONPATH: "."
 
     steps:
       - name: Check out repository

@@ -124,7 +124,7 @@ def test_release_marker_endpoints_are_consistent():
     assert health["beta_revision_fingerprint"] == "f9bac4b89ec7c1d8"
     assert health["review_version"] == "python_review_v2_structural_marketplace"
     assert health["review_evidence_calibration_version"] == "review_evidence_calibration_v5_utility_redirect"
-    assert health["scanner_build_revision"] == "hard_page_cap_response_v1"
+    assert health["scanner_build_revision"] == "leaf_seed_grok_proxy_v1"
     assert revision["fingerprint"] == health["beta_revision_fingerprint"]
     assert revision["component_versions"]["archetype_classifier_version"] == health["archetype_classifier_version"]
     assert revision["component_versions"]["review_version"] == health["review_version"]
@@ -168,7 +168,7 @@ def test_scan_endpoint_returns_beta_revision_fingerprint(monkeypatch, capsys):
     response = client.post("/scan", json={"website_url": "https://example.com"})
     assert response.status_code == 200
     assert response.json()["beta_revision_fingerprint"] == "f9bac4b89ec7c1d8"
-    assert response.json()["scanner_build_revision"] == "hard_page_cap_response_v1"
+    assert response.json()["scanner_build_revision"] == "leaf_seed_grok_proxy_v1"
     read_log_lines(capsys)
 
 

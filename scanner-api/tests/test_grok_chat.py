@@ -30,6 +30,8 @@ def test_grounded_prompt_contains_evidence_and_authority_rules():
     assert "What should I fix first?" in prompt
     assert "Never use an owner label" in prompt
     assert "help them do it" in prompt
+    assert "Never construct, complete, modify, or guess a URL" in prompt
+    assert "status_code 200" in prompt
 
 
 def test_grounded_prompt_preserves_follow_up_context():

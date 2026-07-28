@@ -57,8 +57,36 @@ jobs:
         run: hf auth whoami
 
       - name: Deploy Docker Space
+        shell: bash
         run: |
-          hf upload milo2455555/fixlist-ai ./hf-space . \
+          set -Eeuo pipefail
+
+          if hf upload milo2455555/fixlist-ai ./hf-space . \
             --repo-type space \
             --delete "*" \
-            --commit-message "Deploy ${GITHUB_SHA::7} from GitHub"
+            --commit-message "Deploy ${GITHUB_SHA::7} from GitHub"; then
+            exit 0
+          fi
+
+          echo "::warning::Hugging Face CLI could not resolve the private Space; retrying through authenticated Git."
+          HF_GIT_AUTH="$(printf 'hf_token:%s' "$HF_TOKEN" | base64 -w0)"
+          echo "::add-mask::$HF_GIT_AUTH"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=http.https://huggingface.co/.extraheader
+          export GIT_CONFIG_VALUE_0="Authorization: Basic $HF_GIT_AUTH"
+
+          DEPLOY_DIR="$(mktemp -d)"
+          git clone --depth 1 https://huggingface.co/spaces/milo2455555/fixlist-ai "$DEPLOY_DIR"
+          rsync -a --delete --exclude=.git/ ./hf-space/ "$DEPLOY_DIR/"
+
+          git -C "$DEPLOY_DIR" config user.name "FixList AI Deploy"
+          git -C "$DEPLOY_DIR" config user.email "actions@users.noreply.github.com"
+          git -C "$DEPLOY_DIR" add -A
+
+          if git -C "$DEPLOY_DIR" diff --cached --quiet; then
+            echo "Hugging Face Space is already up to date."
+            exit 0
+          fi
+
+          git -C "$DEPLOY_DIR" commit -m "Deploy ${GITHUB_SHA::7} from GitHub"
+          git -C "$DEPLOY_DIR" push origin HEAD:main

@@ -1,4 +1,4 @@
-name: Deploy FixList AI to Hugging Face
+name: Sync FixList AI to Hugging Face
 
 on:
   push:
@@ -12,15 +12,24 @@ permissions:
   contents: read
 
 concurrency:
-  group: fixlist-hugging-face-deploy
+  group: fixlist-hugging-face-sync
   cancel-in-progress: true
 
+env:
+  HF_REPO_ID: milo2455555/fixlist-ai
+
 jobs:
-  deploy:
+  sync-and-verify:
+    name: Upload and verify Space revision
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
+      - name: Check out GitHub source
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Validate redesigned Space bundle
         run: |
@@ -34,51 +43,104 @@ jobs:
           grep -Fq 'Start a new scan' hf-space/app_redesign.py
           grep -Fq 'Run website scan' hf-space/app_redesign.py
 
-      - name: Configure Hugging Face credentials
+      - name: Install Hugging Face Hub client
+        run: python -m pip install --upgrade "huggingface_hub>=0.30"
+
+      - name: Upload Space root and verify remote main
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$HF_TOKEN"
-          python -m pip install --upgrade "huggingface_hub>=0.30"
-          hf auth login --token "$HF_TOKEN" --add-to-git-credential
+          printf '%s\n' "$GITHUB_SHA" > hf-space/GITHUB_DEPLOYMENT_SHA
 
-      - name: Force-publish hf-space as the Space root
-        run: |
-          set -euo pipefail
-          export GIT_LFS_SKIP_SMUDGE=1
+          python <<'PY'
+          from __future__ import annotations
 
-          rm -rf /tmp/fixlist-space-publish
-          mkdir -p /tmp/fixlist-space-publish
-          rsync -a --delete hf-space/ /tmp/fixlist-space-publish/
-          cd /tmp/fixlist-space-publish
+          import os
+          import time
+          from pathlib import Path
 
-          printf '%s\n' "${GITHUB_SHA}" > GITHUB_DEPLOYMENT_SHA
-          git init
-          git checkout -b main
-          git config user.name "FixList AI Deploy"
-          git config user.email "actions@users.noreply.github.com"
-          git add -A
-          git commit -m "Deploy redesigned FixList AI from GitHub ${GITHUB_SHA}"
-          git remote add origin https://huggingface.co/spaces/milo2455555/fixlist-ai
-          git push --force origin main
+          from huggingface_hub import HfApi, hf_hub_download
 
-      - name: Re-clone and verify the exact remote files
-        run: |
-          set -euo pipefail
-          export GIT_LFS_SKIP_SMUDGE=1
+          repo_id = os.environ["HF_REPO_ID"]
+          token = os.environ["HF_TOKEN"]
+          github_sha = os.environ["GITHUB_SHA"]
+          source_dir = Path("hf-space")
 
-          rm -rf /tmp/fixlist-space-verify
-          git clone --depth 1 \
-            https://huggingface.co/spaces/milo2455555/fixlist-ai \
-            /tmp/fixlist-space-verify
-          cd /tmp/fixlist-space-verify
+          api = HfApi(token=token)
+          commit = api.upload_folder(
+              repo_id=repo_id,
+              repo_type="space",
+              folder_path=source_dir,
+              path_in_repo=".",
+              revision="main",
+              delete_patterns="*",
+              commit_message=f"Sync FixList AI from GitHub {github_sha}",
+              token=token,
+          )
 
-          grep -Fq 'CMD ["python", "app_redesign.py"]' Dockerfile
-          grep -Fq 'SYSTEM STATUS' app_redesign.py
-          grep -Fq 'Start a new scan' app_redesign.py
-          grep -Fq 'Run website scan' app_redesign.py
-          test "$(cat GITHUB_DEPLOYMENT_SHA)" = "${GITHUB_SHA}"
+          remote_info = None
+          for attempt in range(1, 13):
+              remote_info = api.space_info(repo_id=repo_id, token=token)
+              if remote_info.sha == commit.oid:
+                  break
+              if attempt == 12:
+                  raise RuntimeError(
+                      f"Remote main did not advance to uploaded commit. "
+                      f"Expected {commit.oid}, got {remote_info.sha}."
+                  )
+              time.sleep(5)
 
-          echo "Verified Hugging Face Space commit: $(git rev-parse HEAD)"
-          echo "Verified GitHub deployment SHA: $(cat GITHUB_DEPLOYMENT_SHA)"
+          revision = remote_info.sha
+          required_files = {
+              "Dockerfile",
+              "app.py",
+              "app_redesign.py",
+              "requirements.txt",
+              "GITHUB_DEPLOYMENT_SHA",
+          }
+          remote_files = set(
+              api.list_repo_files(
+                  repo_id=repo_id,
+                  repo_type="space",
+                  revision=revision,
+                  token=token,
+              )
+          )
+          missing = required_files - remote_files
+          if missing:
+              raise RuntimeError(f"Remote Space is missing required files: {sorted(missing)}")
+
+          downloaded: dict[str, str] = {}
+          for filename in ("Dockerfile", "app_redesign.py", "GITHUB_DEPLOYMENT_SHA"):
+              path = hf_hub_download(
+                  repo_id=repo_id,
+                  repo_type="space",
+                  revision=revision,
+                  filename=filename,
+                  token=token,
+              )
+              downloaded[filename] = Path(path).read_text(encoding="utf-8")
+
+          dockerfile = downloaded["Dockerfile"]
+          redesigned_app = downloaded["app_redesign.py"]
+          deployed_github_sha = downloaded["GITHUB_DEPLOYMENT_SHA"].strip()
+
+          checks = {
+              "Docker launches app_redesign.py": 'CMD ["python", "app_redesign.py"]' in dockerfile,
+              "Remote UI has SYSTEM STATUS": "SYSTEM STATUS" in redesigned_app,
+              "Remote UI has scan launcher": "Start a new scan" in redesigned_app,
+              "Remote UI has run button": "Run website scan" in redesigned_app,
+              "Remote manifest matches GitHub": deployed_github_sha == github_sha,
+          }
+          failed = [name for name, passed in checks.items() if not passed]
+          if failed:
+              raise RuntimeError("Remote verification failed: " + "; ".join(failed))
+
+          print(f"GitHub source SHA: {github_sha}")
+          print(f"Hugging Face Space SHA: {revision}")
+          print(f"Hub commit URL: {commit.commit_url}")
+          for name in checks:
+              print(f"VERIFIED: {name}")
+          PY

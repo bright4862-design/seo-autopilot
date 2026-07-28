@@ -140,8 +140,8 @@ button.primary:hover { background: var(--accent-strong) !important; }
 .chat-compose { margin-top: 10px; gap: 9px !important; align-items: stretch !important; }
 .chat-input textarea { min-height: 56px !important; border-radius: 14px !important; }
 .secondary-action button { background: #fff !important; border-color: var(--line) !important; color: var(--muted) !important; }
-.prompt-chips { margin-top: 8px; }
-.prompt-chips button { border-radius: 999px !important; font-size: 12px !important; }
+#prompt-chips { margin-top: 8px; }
+#prompt-chips button { border-radius: 999px !important; font-size: 12px !important; }
 .panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .eyebrow { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .14em; }
 .summary h2 { margin: 7px 0 0; font-size: 15px; letter-spacing: -.02em; word-break: break-word; }
@@ -215,16 +215,7 @@ footer { display: none !important; }
 scanner_state_label = "Connected" if SETTINGS.live_scan_enabled else "Setup needed"
 ai_state_label = "Grok" if SETTINGS.live_grok_enabled else "Guided"
 
-with gr.Blocks(
-    title="FixList AI",
-    css=CSS,
-    theme=gr.themes.Base(
-        primary_hue="green",
-        neutral_hue="gray",
-        radius_size="lg",
-        spacing_size="md",
-    ),
-) as demo:
+with gr.Blocks(title="FixList AI") as demo:
     current_scan = gr.State(DEMO_SCAN)
 
     with gr.Row(elem_classes="app-shell"):
@@ -309,6 +300,7 @@ with gr.Blocks(
             )
             chatbot = gr.Chatbot(
                 type="messages",
+                allow_tags=False,
                 height=455,
                 placeholder=(
                     "Run a scan or ask about the current result.\n\n"
@@ -343,7 +335,7 @@ with gr.Blocks(
                 ],
                 inputs=chat_input,
                 label="Suggested questions",
-                elem_classes="prompt-chips",
+                elem_id="prompt-chips",
             )
 
         with gr.Column(scale=3, min_width=290, elem_classes=["surface", "insights"]):
@@ -380,6 +372,13 @@ with gr.Blocks(
 
 if __name__ == "__main__":
     demo.queue(default_concurrency_limit=4).launch(
+        theme=gr.themes.Base(
+            primary_hue="green",
+            neutral_hue="gray",
+            radius_size="lg",
+            spacing_size="md",
+        ),
+        css=CSS,
         server_name=os.getenv("GRADIO_SERVER_NAME", "0.0.0.0"),
         server_port=int(os.getenv("GRADIO_SERVER_PORT", "7860")),
         show_error=True,

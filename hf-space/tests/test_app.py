@@ -81,8 +81,29 @@ def test_normalize_scan_result_preserves_authority_and_priorities():
     scan = {
         "website_url": "https://example.com",
         "pages_found": 12,
-        "pages_crawled": 10,
-        "crawled_pages": [{"url": f"https://example.com/{index}"} for index in range(10)],
+        "pages_crawled": 4,
+        "crawled_pages": [
+            {
+                "url": "https://example.com/a",
+                "final_url": "https://example.com/a",
+                "status_code": 404,
+            },
+            {
+                "url": "https://example.com/b",
+                "final_url": "https://example.com/live-b",
+                "status_code": 200,
+            },
+            {
+                "url": "https://example.com/c",
+                "final_url": "https://example.com/c",
+                "status_code": 200,
+            },
+            {
+                "url": "https://example.com/error",
+                "final_url": "https://example.com/error",
+                "status_code": 500,
+            },
+        ],
         "beta_revision_fingerprint": "fingerprint-v1",
     }
     review = {
@@ -94,7 +115,7 @@ def test_normalize_scan_result_preserves_authority_and_priorities():
             {
                 "title": "Fix canonical tags",
                 "priority": "high",
-                "affected_urls": ["/a", "/b"],
+                "affected_urls": ["/a", "/b", "/not-crawled"],
                 "description": "Two pages point to the wrong canonical URL.",
             }
         ],
@@ -105,9 +126,42 @@ def test_normalize_scan_result_preserves_authority_and_priorities():
     assert result["source"] == "live"
     assert result["score"] == 74
     assert result["release_gate_eligible"] is True
-    assert result["pages_retained"] == 10
-    assert result["priorities"][0]["affected_pages"] == 2
+    assert result["pages_retained"] == 4
+    assert result["priorities"][0]["affected_pages"] == 3
     assert result["priorities"][0]["owner"] == "Web developer"
+    assert result["priorities"][0]["verified_urls"] == [
+        "https://example.com/live-b"
+    ]
+    assert result["priorities"][0]["url_evidence"][0]["status_code"] == 200
+    assert "https://example.com/a" not in result["priorities"][0]["verified_urls"]
+    assert "https://example.com/not-crawled" not in result["priorities"][0]["verified_urls"]
+
+
+def test_priority_without_crawl_match_never_constructs_a_url():
+    scan = {
+        "website_url": "https://example.com",
+        "pages_crawled": 1,
+        "pages": [
+            {
+                "url": "https://example.com/real",
+                "final_url": "https://example.com/real",
+                "status_code": 200,
+            }
+        ],
+    }
+    review = {
+        "recommendations": [
+            {
+                "title": "Fix missing descriptions",
+                "affected_pages": ["/guessed-from-template"],
+            }
+        ]
+    }
+
+    result = normalize_scan_result("https://example.com", scan, review)
+
+    assert result["priorities"][0]["verified_urls"] == []
+    assert result["priorities"][0]["url_evidence_status"] == "no_verified_example"
 
 
 def test_scanner_connection_enables_cloud_run_grok_proxy():

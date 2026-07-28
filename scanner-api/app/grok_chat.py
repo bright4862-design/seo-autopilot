@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from typing import Any
 
@@ -9,10 +10,89 @@ import httpx
 from google.auth import default as google_auth_default
 from google.auth.transport.requests import Request as GoogleAuthRequest
 
-GROK_CHAT_VERSION = "grok_chat_proxy_v1"
+GROK_CHAT_VERSION = "grok_chat_proxy_v2"
 GROK_MODEL_ID = os.getenv("GROK_MODEL_ID", "xai/grok-4.20-non-reasoning").strip()
 GROK_LOCATION = os.getenv("VERTEX_LOCATION", "global").strip() or "global"
 GROK_TIMEOUT_SECONDS = max(10, int(os.getenv("GROK_TIMEOUT_SECONDS", "90")))
+GROK_MAX_ATTEMPTS = max(1, min(4, int(os.getenv("GROK_MAX_ATTEMPTS", "3"))))
+RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+
+LOGGER = logging.getLogger(__name__)
+
+
+class GrokUpstreamError(RuntimeError):
+    def __init__(
+        self,
+        status_code: int | None,
+        error_code: str,
+        upstream_message: str,
+        *,
+        retryable: bool,
+    ) -> None:
+        self.status_code = status_code
+        self.error_code = error_code or "UNKNOWN"
+        self.upstream_message = upstream_message
+        self.retryable = retryable
+        super().__init__(self.public_detail)
+
+    @property
+    def public_detail(self) -> str:
+        status = str(self.status_code) if self.status_code is not None else "network"
+        suffix = f"{status}/{self.error_code}"
+        if self.status_code in {401, 403}:
+            return (
+                f"Vertex AI denied the Cloud Run service identity ({suffix}). "
+                "Grant the service account used by seo-autopilot-4545 the "
+                "Agent Platform User role (roles/aiplatform.user)."
+            )
+        if self.status_code == 404:
+            return (
+                f"Grok 4.20 is not enabled or available for this Google Cloud project "
+                f"({suffix}). Enable the model in Model Garden for the same project."
+            )
+        if self.status_code == 429:
+            return (
+                f"Vertex AI has no available Grok quota ({suffix}). Check the project's "
+                "global Grok QPM and token quotas."
+            )
+        if self.status_code in {500, 502, 503, 504} or self.status_code is None:
+            return (
+                f"Vertex AI's Grok endpoint is temporarily unavailable ({suffix}) "
+                f"after {GROK_MAX_ATTEMPTS} attempts."
+            )
+        if self.status_code == 400:
+            detail = _single_line(self.upstream_message)[:180]
+            return (
+                f"Vertex AI rejected the Grok request ({suffix})."
+                + (f" {detail}" if detail else "")
+            )
+        return f"Vertex AI rejected the Grok request ({suffix})."
+
+
+def _single_line(value: Any) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _response_error(response: httpx.Response) -> GrokUpstreamError:
+    error_code = "HTTP_ERROR"
+    upstream_message = ""
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict):
+            error_code = _single_line(error.get("status")) or error_code
+            upstream_message = _single_line(error.get("message"))
+        elif isinstance(body.get("detail"), str):
+            upstream_message = _single_line(body.get("detail"))
+    return GrokUpstreamError(
+        response.status_code,
+        error_code,
+        upstream_message,
+        retryable=response.status_code in RETRYABLE_STATUS_CODES,
+    )
 
 
 def build_grounded_prompt(message: str, scan: dict[str, Any]) -> str:
@@ -83,18 +163,48 @@ async def run_grok_chat(message: str, scan: dict[str, Any]) -> str:
         "input": build_grounded_prompt(message, scan),
         "max_output_tokens": 900,
         "stream": False,
+        "store": False,
     }
+
+    last_error: GrokUpstreamError | None = None
     async with httpx.AsyncClient(timeout=GROK_TIMEOUT_SECONDS) as client:
-        response = await client.post(
-            endpoint,
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-    response.raise_for_status()
-    body = response.json()
-    if not isinstance(body, dict):
-        raise RuntimeError("Grok returned an unexpected response shape.")
-    return extract_output_text(body)
+        for attempt in range(1, GROK_MAX_ATTEMPTS + 1):
+            try:
+                response = await client.post(
+                    endpoint,
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+            except httpx.RequestError as exc:
+                last_error = GrokUpstreamError(
+                    None,
+                    "NETWORK_ERROR",
+                    str(exc),
+                    retryable=True,
+                )
+            else:
+                if response.is_success:
+                    body = response.json()
+                    if not isinstance(body, dict):
+                        raise RuntimeError("Grok returned an unexpected response shape.")
+                    return extract_output_text(body)
+                last_error = _response_error(response)
+
+            LOGGER.warning(
+                "grok_upstream_error status=%s code=%s retryable=%s attempt=%s/%s",
+                last_error.status_code,
+                last_error.error_code,
+                last_error.retryable,
+                attempt,
+                GROK_MAX_ATTEMPTS,
+            )
+            if not last_error.retryable or attempt >= GROK_MAX_ATTEMPTS:
+                raise last_error
+            await asyncio.sleep(0.5 * (2 ** (attempt - 1)))
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Grok request ended without a response.")

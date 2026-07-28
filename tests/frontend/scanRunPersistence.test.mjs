@@ -19,7 +19,7 @@ const EXPECTED_REVIEW_VERSION = "python_review_v2_structural_marketplace";
 const EXPECTED_CALIBRATION_VERSION = "review_evidence_calibration_v5_utility_redirect";
 const EXPECTED_BETA_FINGERPRINT = "f9bac4b89ec7c1d8";
 const EXPECTED_CLASSIFIER_VERSION = "archetype_classifier_v9_local_business_hospitality";
-const EXPECTED_SCANNER_BUILD = "hard_page_cap_response_v1";
+const EXPECTED_SCANNER_BUILD = "leaf_seed_grok_proxy_v1";
 const EXPECTED_METADATA_VERSION = "metadata_evidence_v1_description_states";
 const EXPECTED_TITLE_VERSION = "title_evidence_v1_contextual_duplicates";
 

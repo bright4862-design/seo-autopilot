@@ -30,7 +30,7 @@ from .trust_discovery import apply_trust_discovery_gate, enrich_scan_with_trust_
 SCANNER_API_KEY = os.getenv("SCANNER_API_KEY", "")
 TRUST_DISCOVERY_TIMEOUTS = {"basic": 2.0, "quick": 3.0, "deep": 5.0, "advanced": 7.0}
 SCAN_RESPONSE_PAGE_LIMITS = {"basic": 25, "quick": 40, "deep": 85, "advanced": 150}
-SCANNER_BUILD_REVISION = "hard_page_cap_response_v1"
+SCANNER_BUILD_REVISION = "leaf_seed_full_site_v1"
 
 app = FastAPI(title="FixList Scanner API", version=VERSION)
 

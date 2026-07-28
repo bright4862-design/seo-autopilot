@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import Body, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
+from .beta_revision import live_revision
 from .evidence_quality import EVIDENCE_QUALITY_GATE_VERSION, apply_evidence_quality_gate
 from .grok_chat import (
     GROK_CHAT_VERSION,
@@ -15,11 +16,6 @@ from .grok_chat import (
 from .indexability_postprocess import apply_indexability_quality_to_result
 from .indexability_quality import INDEXABILITY_QUALITY_VERSION
 from .navigation_indexability import NAVIGATION_INDEXABILITY_VERSION
-from .render_evidence_quality import (
-    RENDER_EVIDENCE_QUALITY_VERSION,
-    apply_render_evidence_quality,
-)
-from .beta_revision import live_revision
 from .observability import (
     OBSERVABILITY_VERSION,
     RequestTimer,
@@ -27,11 +23,16 @@ from .observability import (
     scan_metrics,
     website_host,
 )
+from .render_evidence_quality import (
+    RENDER_EVIDENCE_QUALITY_VERSION,
+    apply_render_evidence_quality,
+)
 from .review import ARCHETYPE_CLASSIFIER_VERSION, REVIEW_VERSION, run_review
 from .review_calibration import CALIBRATION_VERSION, apply_review_evidence_calibration
 from .scan_timing import SITEMAP_TIME_RESERVATION_VERSION
 from .scanner import VERSION, run_scan
 from .trust_discovery import apply_trust_discovery_gate, enrich_scan_with_trust_pages
+from .url_evidence import URL_EVIDENCE_VERSION, apply_verified_url_contract
 
 SCANNER_API_KEY = os.getenv("SCANNER_API_KEY", "")
 TRUST_DISCOVERY_TIMEOUTS = {"basic": 2.0, "quick": 3.0, "deep": 5.0, "advanced": 7.0}
@@ -100,7 +101,7 @@ def enforce_scan_response_page_budget(result: dict[str, Any], scan_mode: str) ->
             summary["pages_scanned"] = min(limit, int(summary.get("pages_scanned") or pages_crawled))
         if "pages_crawled" in summary:
             summary["pages_crawled"] = min(limit, int(summary.get("pages_crawled") or pages_crawled))
-    return result
+    return apply_verified_url_contract(result)
 
 
 @app.get("/health")
@@ -113,6 +114,7 @@ def health():
         "grok_error_detail_version": GROK_ERROR_DETAIL_VERSION,
         "grok_model_id": GROK_MODEL_ID,
         "grok_proxy_enabled": True,
+        "url_evidence_version": URL_EVIDENCE_VERSION,
         "review_version": REVIEW_VERSION,
         "archetype_classifier_version": ARCHETYPE_CLASSIFIER_VERSION,
         "review_evidence_calibration_version": CALIBRATION_VERSION,

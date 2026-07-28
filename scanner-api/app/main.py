@@ -53,6 +53,7 @@ class ScanRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     scan: dict[str, Any] = Field(default_factory=dict)
+    history: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def enforce_scan_response_page_budget(result: dict[str, Any], scan_mode: str) -> dict[str, Any]:
@@ -144,7 +145,11 @@ async def chat(payload: ChatRequest, x_scanner_key: str | None = Header(default=
         raise HTTPException(status_code=400, detail="Question is too long.")
 
     try:
-        answer = await run_grok_chat(message, payload.scan if isinstance(payload.scan, dict) else {})
+        answer = await run_grok_chat(
+            message,
+            payload.scan if isinstance(payload.scan, dict) else {},
+            payload.history if isinstance(payload.history, list) else [],
+        )
     except GrokUpstreamError as exc:
         raise HTTPException(status_code=502, detail=exc.public_detail) from exc
     except Exception as exc:

@@ -2,6 +2,7 @@ import pytest
 
 from app import (
     DEMO_SCAN,
+    Settings,
     build_grounded_prompt,
     extract_output_text,
     guided_answer,
@@ -85,3 +86,16 @@ def test_normalize_scan_result_preserves_authority_and_priorities():
     assert result["pages_retained"] == 10
     assert result["priorities"][0]["affected_pages"] == 2
     assert result["priorities"][0]["owner"] == "Web developer"
+
+
+def test_scanner_connection_enables_cloud_run_grok_proxy():
+    settings = Settings(
+        project_id="",
+        service_account_json="",
+        scanner_api_url="https://scanner.example.run.app",
+        scanner_api_key="private-key",
+    )
+
+    assert settings.live_scan_enabled is True
+    assert settings.live_grok_enabled is True
+    assert settings.model_id == "xai/grok-4.20-non-reasoning"

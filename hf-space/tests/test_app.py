@@ -1,5 +1,4 @@
 import pytest
-
 from app import (
     DEMO_SCAN,
     Settings,
@@ -29,12 +28,35 @@ def test_prompt_contains_authority_rules_and_evidence():
     assert "Never invent URLs" in prompt
     assert '"release_gate_eligible":true' in prompt
     assert "What should I fix first?" in prompt
+    assert "developer-labelled fix themselves" in prompt
+
+
+def test_prompt_includes_recent_follow_up_context():
+    prompt = build_grounded_prompt(
+        "Can I do this myself?",
+        DEMO_SCAN,
+        [
+            {"role": "user", "content": "How do I fix redirected links?"},
+            {"role": "assistant", "content": "Start with the shared navigation."},
+        ],
+    )
+
+    assert "Can I do this myself?" in prompt
+    assert "How do I fix redirected links?" in prompt
+    assert "Start with the shared navigation." in prompt
 
 
 def test_guided_answer_is_grounded():
     answer = guided_answer("What should I fix first?", DEMO_SCAN)
     assert "redirected internal links" in answer.lower()
     assert "18 pages" in answer
+
+
+def test_guided_answer_still_supports_diy():
+    answer = guided_answer("Can I do this myself?", DEMO_SCAN)
+    assert "yes, with care" in answer.lower()
+    assert "backup" in answer.lower()
+    assert "exact clicks or code" in answer.lower()
 
 
 def test_validate_public_website_url_normalizes_domain():

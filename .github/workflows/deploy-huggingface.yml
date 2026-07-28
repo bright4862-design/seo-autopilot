@@ -37,9 +37,26 @@ jobs:
           curl -LsSf https://hf.co/cli/install.sh | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Deploy Docker Space
+      - name: Exchange GitHub OIDC token
         env:
           HF_OIDC_RESOURCE: spaces/milo2455555/fixlist-ai
+        run: |
+          HF_TOKEN="$("$HOME/.hf-cli/venv/bin/python" - <<'PY'
+          from huggingface_hub import get_token
+
+          token = get_token()
+          if not token:
+              raise SystemExit("Hugging Face OIDC did not return a token.")
+          print(token)
+          PY
+          )"
+          echo "::add-mask::$HF_TOKEN"
+          echo "HF_TOKEN=$HF_TOKEN" >> "$GITHUB_ENV"
+
+      - name: Verify Hugging Face authentication
+        run: hf auth whoami
+
+      - name: Deploy Docker Space
         run: |
           hf upload milo2455555/fixlist-ai ./hf-space . \
             --repo-type space \

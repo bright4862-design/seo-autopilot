@@ -3,7 +3,7 @@ import os
 from typing import Any
 
 from fastapi import Body, FastAPI, Header, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .evidence_quality import EVIDENCE_QUALITY_GATE_VERSION, apply_evidence_quality_gate
 from .grok_chat import GROK_CHAT_VERSION, GROK_MODEL_ID, run_grok_chat
@@ -46,7 +46,7 @@ class ScanRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
-    scan: dict[str, Any] = {}
+    scan: dict[str, Any] = Field(default_factory=dict)
 
 
 def enforce_scan_response_page_budget(result: dict[str, Any], scan_mode: str) -> dict[str, Any]:

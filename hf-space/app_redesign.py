@@ -1,366 +1,375 @@
 from __future__ import annotations
 
+import html
 import os
+from typing import Any
+from urllib.parse import urlparse
 
 import gradio as gr
 
 from app import (
     DEMO_SCAN,
     SETTINGS,
-    priority_markdown,
-    run_scan_from_ui,
-    scan_markdown,
+    run_scan_from_ui as run_scan_pipeline_ui,
     submit_chat,
 )
 
 
+def _text(value: Any, fallback: str = "") -> str:
+    rendered = str(value if value not in (None, "") else fallback)
+    return html.escape(rendered)
+
+
+def _number(value: Any, fallback: int = 0) -> int:
+    try:
+        return max(0, int(float(value)))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _priorities(scan: dict[str, Any]) -> list[dict[str, Any]]:
+    value = scan.get("priorities")
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _gate_label(scan: dict[str, Any]) -> str:
+    if scan.get("release_gate_eligible"):
+        return "Authoritative"
+    if scan.get("score_is_provisional"):
+        return "Provisional"
+    return "Limited"
+
+
+def _hostname(scan: dict[str, Any]) -> str:
+    raw = str(scan.get("website") or "No scan selected")
+    try:
+        parsed = urlparse(raw)
+        return parsed.netloc or parsed.path or raw
+    except ValueError:
+        return raw
+
+
+def _verdict(score: int) -> str:
+    if score >= 85:
+        return "Looking strong."
+    if score >= 65:
+        return "A solid foundation."
+    if score >= 40:
+        return "Room to improve."
+    return "Needs attention."
+
+
+def dashboard_markup(scan: dict[str, Any]) -> str:
+    score = min(100, _number(scan.get("score")))
+    pages_found = _number(scan.get("pages_found"))
+    pages_crawled = _number(scan.get("pages_crawled"))
+    pages_retained = _number(scan.get("pages_retained"), pages_crawled)
+    fixes = _priorities(scan)
+    source = "Live scan" if scan.get("source") == "live" else "Preview result"
+    first_fix = str(fixes[0].get("title") or "") if fixes else ""
+    checked_phrase = (
+        f"We checked <b>{pages_retained}</b> of the "
+        f"<b>~{max(pages_found, pages_retained)}</b> pages we found"
+    )
+    if first_fix:
+        summary = (
+            f"{checked_phrase}. Start with <b>{_text(first_fix)}</b>, "
+            "then work down the list by impact."
+        )
+    else:
+        summary = (
+            f"{checked_phrase}. The available crawl evidence did not produce "
+            "a grouped priority list."
+        )
+    if scan.get("score_is_provisional") or not scan.get("release_gate_eligible"):
+        caveat = (
+            "This result is limited or provisional. Treat the findings as a "
+            "diagnostic starting point until a complete evidence set is available."
+        )
+    else:
+        caveat = (
+            "This scan is read-only, so it cannot see private analytics, ad "
+            "performance, server logs, or content behind a login."
+        )
+
+    return f"""
+<section class="result-head" aria-label="Latest scan summary">
+  <div class="site-row">
+    <div class="site">
+      <h2>{_text(_hostname(scan))}</h2>
+      <p>{source} · {pages_crawled} pages checked · {_gate_label(scan)}</p>
+    </div>
+    <div class="result-badges">
+      <span class="status-pill scanner">Scanner connected</span>
+      <span class="status-pill grok">Grok connected</span>
+    </div>
+  </div>
+
+  <div class="verdict">
+    <span class="score-ring" style="--v:{score}" aria-label="Health score {score} out of 100">
+      {score}
+    </span>
+    <div class="verdict-copy">
+      <h1>{_verdict(score)}</h1>
+      <p>{len(fixes)} grouped fixes to work through — start at the top.</p>
+      <span>{pages_crawled} crawled · {pages_retained} retained</span>
+    </div>
+  </div>
+
+  <p class="result-summary">{summary}</p>
+  <p class="result-caveat">{_text(caveat)}</p>
+</section>
+"""
+
+
+def issues_markup(scan: dict[str, Any]) -> str:
+    priorities = _priorities(scan)
+    if not priorities:
+        return """
+<section class="fix-section">
+  <div class="section-label">Fix now <span>0</span></div>
+  <div class="issues">
+    <p class="empty-fixes">No grouped fixes were returned for this scan.</p>
+  </div>
+</section>
+"""
+
+    rows: list[str] = []
+    for item in priorities[:10]:
+        title = _text(item.get("title"), "Review confirmed finding")
+        why = _text(
+            item.get("why"),
+            "Confirmed crawl evidence supports reviewing and correcting this pattern.",
+        )
+        affected = _number(item.get("affected_pages"))
+        priority = str(item.get("priority") or "Medium").lower()
+        owner = str(item.get("owner") or "SEO team")
+        is_developer = any(
+            term in owner.lower()
+            for term in ("developer", "web person", "engineer", "technical")
+        )
+        dot_class = "high" if priority in {"critical", "high"} else "medium"
+        tag_class = "developer" if is_developer else "you"
+        owner_label = _text(owner)
+        scope = (
+            f"Affects {affected} page{'s' if affected != 1 else ''}"
+            if affected
+            else "Sitewide or grouped pattern"
+        )
+        rows.append(
+            f"""
+    <article class="issue">
+      <span class="issue-dot {dot_class}" aria-hidden="true"></span>
+      <div class="issue-main">
+        <h3>{title}</h3>
+        <p>{why}</p>
+        <span>{scope}</span>
+      </div>
+      <span class="owner-tag {tag_class}">{owner_label}</span>
+    </article>
+"""
+        )
+
+    return f"""
+<section class="fix-section">
+  <div class="section-label">Fix now <span>{len(priorities)}</span></div>
+  <div class="issues">
+    {''.join(rows)}
+  </div>
+</section>
+"""
+
+
+def run_dashboard_scan(
+    website_url: str,
+    scan_mode: str,
+    current_scan: dict[str, Any] | None,
+    history: list[dict[str, Any]] | None,
+    progress: gr.Progress = gr.Progress(),
+) -> tuple[
+    dict[str, Any],
+    str,
+    str,
+    str,
+    list[dict[str, Any]],
+]:
+    scan, _, _, status, messages = run_scan_pipeline_ui(
+        website_url,
+        scan_mode,
+        current_scan,
+        history,
+        progress,
+    )
+    return (
+        scan,
+        dashboard_markup(scan),
+        issues_markup(scan),
+        status,
+        messages,
+    )
+
+
 CSS = """
 :root {
-  --canvas: #f5f5f7;
-  --surface: rgba(255, 255, 255, 0.88);
-  --surface-solid: #ffffff;
-  --surface-muted: #f8f8fa;
-  --ink: #1d1d1f;
-  --ink-soft: #3a3a3c;
-  --muted: #737378;
-  --muted-light: #a1a1a6;
-  --line: rgba(60, 60, 67, 0.12);
-  --line-strong: rgba(60, 60, 67, 0.18);
-  --green: #147a50;
-  --green-strong: #0b6741;
-  --green-soft: #e8f5ee;
-  --green-wash: #f2faf6;
-  --blue-soft: #eef5ff;
-  --shadow:
-    0 1px 2px rgba(0, 0, 0, 0.03),
-    0 18px 50px rgba(0, 0, 0, 0.055);
-  --font:
-    -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
-    "Helvetica Neue", Inter, ui-sans-serif, system-ui, sans-serif;
+  --bg: #f7f7f5;
+  --surface: #ffffff;
+  --ink: #1a1a18;
+  --soft: #6e6e68;
+  --faint: #a3a39c;
+  --line: #e8e7e2;
+  --ring: #c25e32;
+  --ring-track: #ebeae5;
+  --good: #3d7a46;
+  --good-bg: #edf3ec;
+  --dev: #8c5a17;
+  --dev-bg: #f6eedf;
+  --high: #b4442c;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+    Helvetica, Arial, sans-serif;
 }
 
 * {
   box-sizing: border-box;
 }
 
-html,
-body {
-  margin: 0;
-  min-height: 100%;
-  background: var(--canvas) !important;
+html {
+  font-size: 17px;
 }
 
+html,
 body,
 .gradio-container {
+  margin: 0 !important;
+  min-height: 100%;
   color: var(--ink) !important;
+  background: var(--bg) !important;
   font-family: var(--font) !important;
   -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-}
-
-body::before {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  content: "";
-  pointer-events: none;
-  background:
-    radial-gradient(circle at 16% 0%, rgba(20, 122, 80, 0.065), transparent 30rem),
-    radial-gradient(circle at 92% 12%, rgba(75, 126, 206, 0.04), transparent 28rem);
+  letter-spacing: -0.008em;
+  line-height: 1.5;
 }
 
 .gradio-container {
   width: 100% !important;
-  max-width: 1710px !important;
-  margin: 0 auto !important;
-  padding: 16px !important;
-  background: transparent !important;
+  max-width: none !important;
+  padding: 0 0 100px !important;
 }
 
-.app-shell {
-  min-height: calc(100dvh - 32px);
-  align-items: stretch !important;
-  gap: 14px !important;
+button,
+input,
+textarea {
+  font-family: var(--font) !important;
 }
 
-.surface {
-  min-width: 0;
-  overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.84);
-  border-radius: 26px;
-  background: var(--surface);
-  box-shadow: var(--shadow);
-  backdrop-filter: saturate(150%) blur(28px);
-  -webkit-backdrop-filter: saturate(150%) blur(28px);
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--ink) !important;
+  outline-offset: 2px !important;
 }
 
-.sidebar {
-  display: flex !important;
-  min-height: calc(100dvh - 32px);
-  padding: 20px 14px 16px;
-  flex-direction: column !important;
+.topbar {
+  width: 100%;
+  border-bottom: 1px solid var(--line);
+  background: rgba(247, 247, 245, 0.9);
+  backdrop-filter: saturate(150%) blur(20px);
+  -webkit-backdrop-filter: saturate(150%) blur(20px);
 }
 
-.workspace {
-  min-height: calc(100dvh - 32px);
-  padding: clamp(24px, 2.7vw, 40px);
-}
-
-.insights {
-  min-height: calc(100dvh - 32px);
-  padding: 24px 22px;
-}
-
-.brand {
+.nav-shell {
   display: flex;
-  align-items: center;
-  gap: 11px;
-  margin: 1px 7px 28px;
-}
-
-.brand-mark {
-  display: grid;
-  width: 38px;
-  height: 38px;
-  flex: 0 0 38px;
-  place-items: center;
-  border-radius: 12px;
-  color: #fff;
-  background: linear-gradient(145deg, #1b8c5e, #0a633d);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.24),
-    0 8px 20px rgba(20, 122, 80, 0.2);
-  font-size: 17px;
-  font-weight: 760;
-  letter-spacing: -0.04em;
-}
-
-.brand-name {
-  color: var(--ink);
-  font-size: 17px;
-  font-weight: 720;
-  letter-spacing: -0.035em;
-}
-
-.brand-meta {
-  display: block;
-  margin-top: 1px;
-  color: var(--muted-light);
-  font-size: 10px;
-  font-weight: 560;
-  letter-spacing: 0.01em;
-}
-
-.nav-label,
-.eyebrow {
-  color: var(--muted-light);
-  font-size: 10px;
-  font-weight: 720;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.nav-label {
-  margin: 0 12px 8px;
-}
-
-.nav-list {
-  display: grid;
-  gap: 4px;
-}
-
-.nav-item {
-  display: flex;
-  min-height: 42px;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 11px;
-  border: 1px solid transparent;
-  border-radius: 12px;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 580;
-  transition:
-    color 150ms ease,
-    background 150ms ease,
-    border-color 150ms ease,
-    transform 150ms ease;
-}
-
-.nav-item:hover {
-  color: var(--ink);
-  background: rgba(118, 118, 128, 0.065);
-}
-
-.nav-item.active {
-  color: var(--green-strong);
-  border-color: rgba(20, 122, 80, 0.08);
-  background: var(--green-soft);
-  font-weight: 680;
-}
-
-.nav-icon {
-  display: grid;
-  width: 19px;
-  height: 19px;
-  flex: 0 0 19px;
-  place-items: center;
-}
-
-.nav-icon svg {
-  width: 17px;
-  height: 17px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.7;
-}
-
-.connection-card {
-  margin-top: auto;
-  padding: 13px;
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: rgba(248, 248, 250, 0.72);
-}
-
-.connection-head {
-  display: flex;
+  width: min(100%, 820px);
+  height: 60px;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  gap: 20px;
+  margin: 0 auto;
+  padding: 0 24px;
 }
 
-.live-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--green-strong);
-  font-size: 10px;
-  font-weight: 690;
+.logo {
+  color: var(--ink);
+  font-size: 1.05rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
 }
 
-.live-pill::before,
-.connection-value::before {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: #30b06c;
-  box-shadow: 0 0 0 3px rgba(48, 176, 108, 0.11);
-  content: "";
-}
-
-.connection-row {
+.nav-links {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 0;
-  color: var(--muted);
-  font-size: 11px;
+  gap: 25px;
+  color: var(--faint);
+  font-size: 0.88rem;
 }
 
-.connection-value {
+.nav-link {
+  transition: color 150ms ease;
+}
+
+.nav-link:hover,
+.nav-link.active {
+  color: var(--ink);
+}
+
+.nav-link.active {
+  font-weight: 520;
+}
+
+.system-indicator {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--ink-soft);
-  font-weight: 620;
 }
 
-.hero {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 22px;
-}
-
-.hero-kicker {
-  display: block;
-  margin-bottom: 8px;
-  color: var(--green);
-  font-size: 11px;
-  font-weight: 680;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.hero-copy h1 {
-  max-width: 720px;
-  margin: 0 0 9px !important;
-  color: var(--ink);
-  font-size: clamp(31px, 3vw, 43px) !important;
-  font-weight: 720 !important;
-  letter-spacing: -0.055em;
-  line-height: 1.02 !important;
-}
-
-.hero-copy p {
-  max-width: 660px;
-  margin: 0 !important;
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1.55;
-}
-
-.hero-badge {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 7px;
-  margin-top: 4px;
-  padding: 8px 11px;
-  border: 1px solid rgba(20, 122, 80, 0.12);
-  border-radius: 999px;
-  color: var(--green-strong);
-  background: var(--green-wash);
-  font-size: 10px;
-  font-weight: 670;
-  letter-spacing: 0.01em;
-}
-
-.hero-badge::before {
+.system-indicator::before {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #30b06c;
+  background: var(--good);
   content: "";
 }
 
+.page-shell {
+  width: min(100%, 820px);
+  margin: 0 auto;
+  padding: 40px 24px 0;
+}
+
 .scan-launcher {
-  margin: 0 0 22px;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 20px;
-  background: rgba(248, 248, 250, 0.86);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  margin: 0 0 42px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 .scan-header {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
-  padding: 3px 4px 10px;
+  gap: 16px;
+  margin-bottom: 10px;
 }
 
-.scan-title {
-  color: var(--ink-soft);
-  font-size: 12px;
-  font-weight: 680;
+.scan-header h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 1.15rem;
+  font-weight: 620;
+  letter-spacing: -0.015em;
 }
 
-.scan-limit {
-  color: var(--muted-light);
-  font-size: 10px;
-  font-weight: 540;
+.scan-header span {
+  color: var(--faint);
+  font-size: 0.78rem;
 }
 
 .scan-controls {
   align-items: stretch !important;
-  gap: 8px !important;
+  gap: 9px !important;
 }
 
 #website-url,
@@ -373,52 +382,45 @@ body::before {
 
 #website-url .wrap,
 #scan-depth .wrap {
+  min-height: 44px !important;
   border: 1px solid var(--line) !important;
-  border-radius: 13px !important;
-  background: var(--surface-solid) !important;
+  border-radius: 999px !important;
+  background: var(--surface) !important;
   box-shadow: none !important;
 }
 
 #website-url input,
 #website-url textarea,
 #scan-depth input {
-  min-height: 46px !important;
+  min-height: 42px !important;
+  padding-inline: 17px !important;
   color: var(--ink) !important;
   background: transparent !important;
-  font-family: var(--font) !important;
-  font-size: 13px !important;
+  font-size: 0.88rem !important;
 }
 
 #website-url input::placeholder,
 #website-url textarea::placeholder {
-  color: var(--muted-light) !important;
+  color: var(--faint) !important;
 }
 
 #run-scan {
-  min-width: 148px !important;
-  min-height: 46px !important;
-  border: 0 !important;
-  border-radius: 13px !important;
-  color: white !important;
-  background: linear-gradient(180deg, #198457, #106d47) !important;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.18),
-    0 7px 18px rgba(20, 122, 80, 0.18) !important;
-  font-family: var(--font) !important;
-  font-size: 12px !important;
-  font-weight: 680 !important;
-  transition:
-    transform 150ms ease,
-    box-shadow 150ms ease,
-    filter 150ms ease;
+  min-width: 120px !important;
+  min-height: 44px !important;
+  padding: 10px 20px !important;
+  border: 1px solid var(--ink) !important;
+  border-radius: 999px !important;
+  color: #fff !important;
+  background: var(--ink) !important;
+  box-shadow: none !important;
+  font-size: 0.88rem !important;
+  font-weight: 540 !important;
+  transition: background 150ms ease, transform 150ms ease;
 }
 
 #run-scan:hover {
-  filter: brightness(0.98);
+  background: #333 !important;
   transform: translateY(-1px);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.18),
-    0 9px 22px rgba(20, 122, 80, 0.22) !important;
 }
 
 #run-scan:active {
@@ -426,136 +428,304 @@ body::before {
 }
 
 #run-scan:disabled {
-  color: var(--muted) !important;
-  background: #e8e8ed !important;
-  box-shadow: none !important;
+  border-color: var(--line) !important;
+  color: var(--faint) !important;
+  background: #efefec !important;
 }
 
 .scan-status {
   min-height: 20px;
   margin-top: 7px;
   padding: 0 5px;
-  color: var(--muted);
-  font-size: 10px;
+  color: var(--faint);
+  font-size: 0.76rem;
 }
 
 .scan-status p {
   margin: 0 !important;
 }
 
-.chat-card {
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 20px;
-  background: var(--surface-solid);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.025);
+.result-head {
+  margin-bottom: 55px;
 }
 
-.chat-card-head {
+.site-row {
   display: flex;
-  min-height: 55px;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 14px;
-  padding: 14px 17px;
-  border-bottom: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.88);
+  gap: 18px;
+  margin-bottom: 42px;
 }
 
-.assistant-identity {
+.site h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 1.15rem;
+  font-weight: 620;
+  letter-spacing: -0.015em;
+}
+
+.site p {
+  margin: 2px 0 0;
+  color: var(--faint);
+  font-size: 0.78rem;
+}
+
+.result-badges {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.status-pill {
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  color: var(--good);
+  background: var(--good-bg);
+  font-size: 0.7rem;
+  font-weight: 520;
+  white-space: nowrap;
 }
 
-.assistant-avatar {
-  position: relative;
-  display: grid;
-  width: 29px;
-  height: 29px;
-  flex: 0 0 29px;
-  place-items: center;
-  border-radius: 10px;
-  color: var(--green-strong);
-  background: var(--green-soft);
-  font-size: 12px;
-  font-weight: 760;
-}
-
-.assistant-avatar::after {
-  position: absolute;
-  right: -1px;
-  bottom: -1px;
-  width: 7px;
-  height: 7px;
-  border: 2px solid #fff;
+.status-pill::before {
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  background: #30b06c;
+  background: currentColor;
   content: "";
 }
 
-.assistant-title {
-  display: block;
+.verdict {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  margin-bottom: 27px;
+}
+
+.score-ring {
+  display: grid;
+  width: 118px;
+  height: 118px;
+  flex: 0 0 118px;
+  place-items: center;
+  border-radius: 50%;
   color: var(--ink);
-  font-size: 12px;
-  font-weight: 680;
+  background:
+    radial-gradient(closest-side, var(--bg) 86%, transparent 87% 100%),
+    conic-gradient(var(--ring) calc(var(--v) * 1%), var(--ring-track) 0);
+  font-size: 2.2rem;
+  font-weight: 720;
+  letter-spacing: -0.04em;
 }
 
-.assistant-subtitle {
+.verdict-copy h1 {
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(1.7rem, 4vw, 2.3rem);
+  font-weight: 710;
+  letter-spacing: -0.035em;
+  line-height: 1.08;
+}
+
+.verdict-copy p {
+  margin: 6px 0 0;
+  color: var(--soft);
+  font-size: 1rem;
+}
+
+.verdict-copy span {
   display: block;
-  margin-top: 1px;
-  color: var(--muted-light);
-  font-size: 9px;
-  font-weight: 520;
+  margin-top: 9px;
+  color: var(--faint);
+  font-size: 0.76rem;
+  font-feature-settings: "tnum";
 }
 
-.grounded-label {
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 560;
+.result-summary {
+  max-width: 56ch;
+  margin: 0 0 13px;
+  color: var(--soft);
+  font-size: 0.98rem;
+}
+
+.result-summary b {
+  color: var(--ink);
+  font-weight: 610;
+}
+
+.result-caveat {
+  max-width: 56ch;
+  margin: 0;
+  padding-left: 14px;
+  border-left: 2px solid var(--line);
+  color: var(--faint);
+  font-size: 0.78rem;
+}
+
+.fix-section {
+  margin-bottom: 58px;
+}
+
+.section-label {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin-bottom: 4px;
+  color: var(--soft);
+  font-size: 0.74rem;
+  font-weight: 640;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.section-label span {
+  color: var(--faint);
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.issues {
+  border-top: 1px solid var(--line);
+}
+
+.issue {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding: 20px 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.issue-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  align-self: center;
+  border-radius: 50%;
+}
+
+.issue-dot.high {
+  background: var(--high);
+}
+
+.issue-dot.medium {
+  background: var(--ring);
+}
+
+.issue-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.issue-main h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 1rem;
+  font-weight: 620;
+  letter-spacing: -0.015em;
+}
+
+.issue-main p {
+  max-width: 60ch;
+  margin: 3px 0 0;
+  color: var(--soft);
+  font-size: 0.85rem;
+}
+
+.issue-main span {
+  display: block;
+  margin-top: 5px;
+  color: var(--faint);
+  font-size: 0.75rem;
+  font-feature-settings: "tnum";
+}
+
+.owner-tag {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 530;
+  white-space: nowrap;
+}
+
+.owner-tag.you {
+  color: var(--good);
+  background: var(--good-bg);
+}
+
+.owner-tag.developer {
+  color: var(--dev);
+  background: var(--dev-bg);
+}
+
+.empty-fixes {
+  margin: 0;
+  padding: 24px 2px;
+  border-bottom: 1px solid var(--line);
+  color: var(--soft);
+  font-size: 0.88rem;
+}
+
+.assistant-shell {
+  margin-top: 12px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+.assistant-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 15px;
+  margin-bottom: 10px;
+}
+
+.assistant-heading h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 1.12rem;
+  font-weight: 620;
+}
+
+.assistant-heading span {
+  color: var(--faint);
+  font-size: 0.76rem;
 }
 
 .chatbot {
-  min-height: 378px !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  background:
-    linear-gradient(180deg, rgba(248, 248, 250, 0.78), rgba(255, 255, 255, 0.98)) !important;
+  min-height: 300px !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 18px !important;
+  background: var(--surface) !important;
   box-shadow: none !important;
 }
 
 .chatbot .message {
-  max-width: 84% !important;
-  border: 1px solid var(--line) !important;
-  border-radius: 16px !important;
-  color: var(--ink-soft) !important;
-  background: #fff !important;
-  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.035) !important;
-  font-family: var(--font) !important;
-  font-size: 13px !important;
+  border: 0 !important;
+  border-radius: 15px !important;
+  color: var(--ink) !important;
+  background: #f2f2ef !important;
+  box-shadow: none !important;
+  font-size: 0.85rem !important;
   line-height: 1.55 !important;
 }
 
 .chatbot .message.user {
-  border-color: rgba(20, 122, 80, 0.15) !important;
-  color: #16432f !important;
-  background: var(--green-wash) !important;
-}
-
-.chatbot .message p {
-  margin-top: 0.4em !important;
-  margin-bottom: 0.4em !important;
-}
-
-.compose-shell {
-  padding: 10px 11px 11px;
-  border-top: 1px solid var(--line);
-  background: rgba(248, 248, 250, 0.72);
+  color: #fff !important;
+  background: var(--ink) !important;
 }
 
 .chat-compose {
   align-items: stretch !important;
   gap: 8px !important;
+  margin-top: 9px;
 }
 
 .chat-input {
@@ -566,445 +736,104 @@ body::before {
 }
 
 .chat-input .wrap {
+  min-height: 44px !important;
   border: 1px solid var(--line) !important;
-  border-radius: 14px !important;
-  background: #fff !important;
+  border-radius: 999px !important;
+  background: var(--surface) !important;
   box-shadow: none !important;
 }
 
 .chat-input textarea {
-  min-height: 46px !important;
+  min-height: 42px !important;
+  padding: 11px 17px !important;
   color: var(--ink) !important;
   background: transparent !important;
-  font-family: var(--font) !important;
-  font-size: 12px !important;
-}
-
-.chat-input textarea::placeholder {
-  color: var(--muted-light) !important;
+  font-size: 0.85rem !important;
 }
 
 #send-message,
-#clear-chat {
-  min-height: 46px !important;
-  border-radius: 13px !important;
-  font-family: var(--font) !important;
-  font-size: 11px !important;
-  font-weight: 660 !important;
+#clear-chat,
+.question-chip {
+  min-height: 44px !important;
+  border-radius: 999px !important;
+  box-shadow: none !important;
+  font-size: 0.8rem !important;
+  font-weight: 530 !important;
 }
 
 #send-message {
-  min-width: 82px !important;
-  border-color: var(--green) !important;
+  min-width: 80px !important;
+  border-color: var(--ink) !important;
   color: #fff !important;
-  background: var(--green) !important;
-  box-shadow: 0 6px 14px rgba(20, 122, 80, 0.14) !important;
+  background: var(--ink) !important;
 }
 
 #clear-chat {
-  min-width: 66px !important;
+  min-width: 70px !important;
   border-color: var(--line) !important;
-  color: var(--muted) !important;
-  background: #fff !important;
-  box-shadow: none !important;
+  color: var(--soft) !important;
+  background: var(--surface) !important;
 }
 
-.suggestion-wrap {
-  margin-top: 10px;
-}
-
-.suggestion-label {
-  margin-bottom: 6px;
-  padding-left: 2px;
-  color: var(--muted-light);
-  font-size: 9px;
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.question-chips {
+.suggestion-row {
   flex-wrap: wrap !important;
   gap: 6px !important;
+  margin-top: 8px;
 }
 
 .question-chip {
   width: auto !important;
   min-width: 0 !important;
   flex: 0 1 auto !important;
-  padding: 6px 10px !important;
-  border: 1px solid var(--line) !important;
-  border-radius: 999px !important;
-  color: var(--muted) !important;
-  background: rgba(255, 255, 255, 0.82) !important;
-  box-shadow: none !important;
-  font-family: var(--font) !important;
-  font-size: 9px !important;
-  font-weight: 570 !important;
+  min-height: 34px !important;
+  padding: 6px 11px !important;
+  border-color: var(--line) !important;
+  color: var(--soft) !important;
+  background: transparent !important;
 }
 
 .question-chip:hover {
-  border-color: rgba(20, 122, 80, 0.16) !important;
-  color: var(--green-strong) !important;
-  background: var(--green-wash) !important;
+  color: var(--ink) !important;
+  border-color: #cfcec8 !important;
 }
 
-.rail-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 22px;
-}
-
-.rail-head h2 {
-  margin: 4px 0 0;
-  color: var(--ink);
-  font-size: 17px;
-  font-weight: 690;
-  letter-spacing: -0.035em;
-}
-
-.rail-icon {
-  display: grid;
-  width: 32px;
-  height: 32px;
-  place-items: center;
-  border: 1px solid var(--line);
-  border-radius: 11px;
-  color: var(--muted);
-  background: var(--surface-muted);
-}
-
-.rail-icon svg {
-  width: 15px;
-  height: 15px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.7;
-}
-
-.panel-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.summary h2 {
-  overflow: hidden;
-  margin: 11px 0 0;
-  color: var(--ink-soft);
-  font-size: 13px;
-  font-weight: 610;
-  letter-spacing: -0.02em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.status {
-  padding: 5px 8px;
-  border: 1px solid rgba(20, 122, 80, 0.12);
-  border-radius: 999px;
-  color: var(--green-strong);
-  background: var(--green-wash);
-  font-size: 9px;
-  font-weight: 680;
-}
-
-.score-row {
-  margin: 20px 0 15px;
-}
-
-.score {
-  color: var(--ink);
-  font-size: 47px;
-  font-weight: 720;
-  letter-spacing: -0.075em;
-  line-height: 1;
-}
-
-.score + .muted {
-  margin-left: 4px;
-  font-size: 11px;
-}
-
-.muted {
-  color: var(--muted);
-}
-
-.metric-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.metric-grid div {
-  display: flex;
-  min-height: 64px;
-  flex-direction: column;
-  justify-content: center;
-  gap: 3px;
-  padding: 10px 11px;
-  border: 1px solid var(--line);
-  border-radius: 13px;
-  background: var(--surface-muted);
-}
-
-.metric-grid strong {
-  color: var(--ink-soft);
-  font-size: 16px;
-  font-weight: 680;
-}
-
-.metric-grid span {
-  color: var(--muted-light);
-  font-size: 9px;
-  font-weight: 560;
-}
-
-.priority-section {
-  margin-top: 25px;
-}
-
-.priority {
-  display: flex;
-  gap: 10px;
-  padding: 13px 0;
-  border-bottom: 1px solid var(--line);
-}
-
-.priority:first-of-type {
-  margin-top: 7px;
-  border-top: 1px solid var(--line);
-}
-
-.priority-index {
-  display: grid;
-  width: 24px;
-  height: 24px;
-  flex: 0 0 24px;
-  place-items: center;
-  border-radius: 8px;
-  color: var(--green-strong);
-  background: var(--green-soft);
-  font-size: 9px;
-  font-weight: 720;
-}
-
-.priority-copy {
-  min-width: 0;
-  flex: 1;
-}
-
-.priority-copy strong {
-  display: block;
-  color: var(--ink-soft);
-  font-size: 11px;
-  font-weight: 650;
-  line-height: 1.35;
-}
-
-.priority-copy p,
-.empty-copy {
-  margin: 4px 0 0;
-  color: var(--muted);
-  font-size: 9px;
-  line-height: 1.45;
-}
-
-.insight-note {
-  margin-top: 20px;
-  padding: 12px 13px;
-  border: 1px solid rgba(20, 122, 80, 0.1);
-  border-radius: 14px;
-  color: #537064;
-  background: var(--green-wash);
-  font-size: 9px;
-  line-height: 1.55;
-}
-
-.insight-note strong {
-  display: block;
-  margin-bottom: 3px;
-  color: var(--green-strong);
-  font-size: 10px;
+.footnote {
+  margin: 50px 0 0;
+  color: var(--faint);
+  font-size: 0.76rem;
+  text-align: center;
 }
 
 footer {
   display: none !important;
 }
 
-@media (max-width: 1180px) {
-  .gradio-container {
-    padding: 12px !important;
+@media (max-width: 700px) {
+  .nav-shell {
+    height: auto;
+    min-height: 58px;
+    padding: 12px 18px;
   }
 
-  .app-shell {
-    display: grid !important;
-    grid-template-columns: minmax(0, 1fr) 290px !important;
-    min-height: auto;
+  .nav-links {
+    gap: 15px;
+    font-size: 0.76rem;
   }
 
-  .sidebar {
-    display: grid !important;
-    grid-column: 1 / -1;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    min-height: auto;
-    align-items: center;
-    gap: 18px;
-    padding: 11px 13px;
-  }
-
-  .brand {
-    margin: 0;
-  }
-
-  .brand-meta,
-  .nav-label,
-  .connection-card .eyebrow,
-  .connection-row {
+  .system-indicator {
     display: none;
   }
 
-  .nav-list {
-    display: flex;
-    justify-content: center;
-    gap: 3px;
+  .page-shell {
+    padding: 31px 18px 0;
   }
 
-  .nav-item {
-    min-height: 38px;
-    padding: 8px 10px;
+  .scan-launcher {
+    margin-bottom: 34px !important;
   }
 
-  .connection-card {
-    margin: 0;
-    padding: 8px 10px;
-    border-radius: 12px;
-  }
-
-  .connection-head {
-    margin: 0;
-  }
-
-  .workspace {
-    grid-column: 1;
-    min-height: auto;
-  }
-
-  .insights {
-    grid-column: 2;
-    min-height: auto;
-  }
-}
-
-@media (max-width: 820px) {
-  .app-shell {
-    display: block !important;
-  }
-
-  .sidebar,
-  .workspace,
-  .insights {
-    min-height: auto;
-    margin-bottom: 10px;
-  }
-
-  .sidebar {
-    display: flex !important;
-    overflow-x: auto;
-    flex-direction: row !important;
-  }
-
-  .brand {
-    flex: 0 0 auto;
-    margin-right: 6px;
-  }
-
-  .brand-mark {
-    width: 34px;
-    height: 34px;
-    flex-basis: 34px;
-  }
-
-  .brand-meta,
-  .brand-name,
-  .connection-card,
-  .nav-label {
+  .scan-header span {
     display: none;
-  }
-
-  .nav-list {
-    min-width: max-content;
-    justify-content: flex-start;
-  }
-
-  .workspace,
-  .insights {
-    padding: 20px;
-  }
-
-  .hero {
-    display: block;
-  }
-
-  .hero-badge {
-    margin-top: 13px;
-  }
-
-  .insights {
-    display: grid !important;
-    grid-template-columns: 1fr 1fr;
-    gap: 18px;
-  }
-
-  .rail-head,
-  .insight-note {
-    grid-column: 1 / -1;
-  }
-
-  .priority-section {
-    margin-top: 0;
-  }
-}
-
-@media (max-width: 600px) {
-  .gradio-container {
-    padding: 8px !important;
-  }
-
-  .surface {
-    border-radius: 20px;
-  }
-
-  .sidebar {
-    padding: 9px 10px;
-  }
-
-  .nav-item {
-    min-height: 35px;
-    padding: 7px 9px;
-    font-size: 11px;
-  }
-
-  .nav-icon {
-    display: none;
-  }
-
-  .workspace,
-  .insights {
-    padding: 17px;
-  }
-
-  .hero-copy h1 {
-    font-size: 29px !important;
-  }
-
-  .hero-copy p {
-    font-size: 12px;
   }
 
   .scan-controls,
@@ -1022,33 +851,65 @@ footer {
     min-width: 0 !important;
   }
 
-  .grounded-label,
-  .scan-limit {
+  .site-row {
+    margin-bottom: 32px;
+  }
+
+  .result-badges {
     display: none;
   }
 
-  .chatbot {
-    min-height: 335px !important;
+  .verdict {
+    gap: 20px;
   }
 
-  .insights {
-    display: block !important;
+  .score-ring {
+    width: 96px;
+    height: 96px;
+    flex-basis: 96px;
+    font-size: 1.8rem;
   }
 
-  .priority-section {
-    margin-top: 24px;
+  .issue {
+    flex-wrap: wrap;
+  }
+
+  .owner-tag {
+    order: 3;
+    margin-left: 22px;
+  }
+}
+
+@media (max-width: 470px) {
+  .nav-link.grok-nav {
+    display: none;
+  }
+
+  .verdict-copy h1 {
+    font-size: 1.55rem;
+  }
+
+  .verdict-copy p {
+    font-size: 0.88rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
   }
 }
 """
+
 
 scanner_state_label = "Connected" if SETTINGS.live_scan_enabled else "Setup needed"
 ai_state_label = "Grok" if SETTINGS.live_grok_enabled else "Guided"
 
 with gr.Blocks(
-    title="FixList AI",
+    title="FixList",
     css=CSS,
     theme=gr.themes.Base(
-        primary_hue="green",
+        primary_hue="orange",
         neutral_hue="gray",
         radius_size="lg",
         spacing_size="md",
@@ -1056,182 +917,116 @@ with gr.Blocks(
 ) as demo:
     current_scan = gr.State(DEMO_SCAN)
 
-    with gr.Row(elem_classes="app-shell"):
-        with gr.Column(scale=2, min_width=180, elem_classes=["surface", "sidebar"]):
-            gr.HTML(
-                """
-                <div class="brand">
-                  <span class="brand-mark">F</span>
-                  <span>
-                    <span class="brand-name">FixList AI</span>
-                    <span class="brand-meta">SEO workspace</span>
-                  </span>
-                </div>
-                """
-            )
-            gr.HTML(
-                """
-                <div class="nav-label">Workspace</div>
-                <div class="nav-list">
-                  <div class="nav-item active">
-                    <span class="nav-icon">
-                      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5"/></svg>
-                    </span>
-                    Scan
-                  </div>
-                  <div class="nav-item">
-                    <span class="nav-icon">
-                      <svg viewBox="0 0 24 24"><rect x="4.5" y="5" width="15" height="14" rx="3"/><path d="M8 9h8M8 13h5"/></svg>
-                    </span>
-                    Projects
-                  </div>
-                  <div class="nav-item">
-                    <span class="nav-icon">
-                      <svg viewBox="0 0 24 24"><path d="M5 8v-4m0 0h4M5 4l3.2 3.2A7 7 0 1 1 6 15.5"/></svg>
-                    </span>
-                    History
-                  </div>
-                  <div class="nav-item">
-                    <span class="nav-icon">
-                      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.5 1A7 7 0 0 0 14.7 6L14.3 3h-4.1L9.8 6a7 7 0 0 0-1.7 1L5.6 6 3.5 9.5l2 1.5a7 7 0 0 0 0 2l-2 1.5L5.6 18l2.5-1a7 7 0 0 0 1.7 1l.4 3h4.1l.4-3a7 7 0 0 0 1.7-1l2.5 1 2-3.5-2-1.5c.1-.3.1-.7.1-1Z"/></svg>
-                    </span>
-                    Settings
-                  </div>
-                </div>
-                """
-            )
-            gr.HTML(
-                f"""
-                <div class="connection-card">
-                  <div class="connection-head">
-                    <span class="eyebrow">System</span>
-                    <span class="live-pill">Live</span>
-                  </div>
-                  <div class="connection-row">
-                    <span>Scanner</span>
-                    <span class="connection-value">{scanner_state_label}</span>
-                  </div>
-                  <div class="connection-row">
-                    <span>Assistant</span>
-                    <span class="connection-value">{ai_state_label}</span>
-                  </div>
-                </div>
-                """
-            )
+    gr.HTML(
+        f"""
+        <header class="topbar">
+          <div class="nav-shell">
+            <span class="logo">FixList</span>
+            <nav class="nav-links" aria-label="Main">
+              <span class="nav-link active">Dashboard</span>
+              <span class="nav-link">New scan</span>
+              <span class="nav-link grok-nav">Grok</span>
+              <span class="nav-link system-indicator">
+                {scanner_state_label} · {ai_state_label}
+              </span>
+            </nav>
+          </div>
+        </header>
+        """
+    )
 
-        with gr.Column(scale=8, min_width=500, elem_classes=["surface", "workspace"]):
+    with gr.Column(elem_classes="page-shell"):
+        with gr.Group(elem_classes="scan-launcher"):
             gr.HTML(
                 """
-                <div class="hero">
-                  <div class="hero-copy">
-                    <span class="hero-kicker">Technical SEO, clarified</span>
-                    <h1>Fix the signal.<br>Lose the noise.</h1>
-                    <p>Scan your site, verify the evidence, and turn every finding into a prioritized action your team can ship.</p>
-                  </div>
-                  <span class="hero-badge">Evidence verified</span>
+                <div class="scan-header">
+                  <h2>Scan a website</h2>
+                  <span>Advanced mode reviews up to 150 pages</span>
                 </div>
                 """
             )
-
-            with gr.Group(elem_classes="scan-launcher"):
-                gr.HTML(
-                    """
-                    <div class="scan-header">
-                      <span class="scan-title">New website scan</span>
-                      <span class="scan-limit">Advanced mode reviews up to 150 pages</span>
-                    </div>
-                    """
-                )
-                with gr.Row(elem_classes="scan-controls"):
-                    website_input = gr.Textbox(
-                        label="Website URL",
-                        placeholder="Enter a domain or URL",
-                        show_label=False,
-                        container=False,
-                        scale=7,
-                        elem_id="website-url",
-                    )
-                    scan_mode = gr.Dropdown(
-                        choices=["advanced", "deep", "quick", "basic"],
-                        value="advanced",
-                        label="Scan depth",
-                        show_label=False,
-                        container=False,
-                        scale=2,
-                        elem_id="scan-depth",
-                    )
-                    run_scan_button = gr.Button(
-                        "Run scan",
-                        variant="primary",
-                        scale=2,
-                        interactive=SETTINGS.live_scan_enabled,
-                        elem_id="run-scan",
-                    )
-                scan_status = gr.Markdown(
-                    (
-                        "Ready for a new 150-page scan."
-                        if SETTINGS.live_scan_enabled
-                        else "Add the `SCANNER_API_KEY` Space secret to enable new scans."
-                    ),
-                    elem_classes="scan-status",
-                )
-
-            with gr.Group(elem_classes="chat-card"):
-                gr.HTML(
-                    """
-                    <div class="chat-card-head">
-                      <div class="assistant-identity">
-                        <span class="assistant-avatar">AI</span>
-                        <span>
-                          <span class="assistant-title">FixList consultant</span>
-                          <span class="assistant-subtitle">Evidence-grounded guidance</span>
-                        </span>
-                      </div>
-                      <span class="grounded-label">Answers use the current crawl</span>
-                    </div>
-                    """
-                )
-                chatbot = gr.Chatbot(
-                    type="messages",
-                    allow_tags=False,
-                    height=378,
+            with gr.Row(elem_classes="scan-controls"):
+                website_input = gr.Textbox(
+                    label="Website URL",
+                    placeholder="https://example.com",
                     show_label=False,
                     container=False,
-                    placeholder=(
-                        "Run a scan, then ask what matters most.\n\n"
-                        "Try: What should I fix first?"
-                    ),
-                    elem_classes="chatbot",
+                    scale=7,
+                    elem_id="website-url",
+                )
+                scan_mode = gr.Dropdown(
+                    choices=["advanced", "deep", "quick", "basic"],
+                    value="advanced",
+                    label="Scan depth",
+                    show_label=False,
+                    container=False,
+                    scale=2,
+                    elem_id="scan-depth",
+                )
+                run_scan_button = gr.Button(
+                    "Run scan",
+                    variant="primary",
+                    scale=2,
+                    interactive=SETTINGS.live_scan_enabled,
+                    elem_id="run-scan",
+                )
+            scan_status = gr.Markdown(
+                (
+                    "Ready for a new 150-page scan."
+                    if SETTINGS.live_scan_enabled
+                    else "Add the `SCANNER_API_KEY` Space secret to enable new scans."
+                ),
+                elem_classes="scan-status",
+            )
+
+        dashboard_panel = gr.HTML(dashboard_markup(DEMO_SCAN))
+        issues_panel = gr.HTML(issues_markup(DEMO_SCAN))
+
+        with gr.Group(elem_classes="assistant-shell"):
+            gr.HTML(
+                f"""
+                <div class="assistant-heading">
+                  <h2>Ask Grok about this scan</h2>
+                  <span>{ai_state_label} · answers stay grounded in crawl evidence</span>
+                </div>
+                """
+            )
+            chatbot = gr.Chatbot(
+                type="messages",
+                allow_tags=False,
+                height=300,
+                show_label=False,
+                container=False,
+                placeholder=(
+                    "Run a scan, then ask what matters most.\n\n"
+                    "Try: What should I fix first?"
+                ),
+                elem_classes="chatbot",
+            )
+            with gr.Row(elem_classes="chat-compose"):
+                chat_input = gr.Textbox(
+                    placeholder="Ask what to fix, why it matters, or who should own it…",
+                    show_label=False,
+                    container=False,
+                    lines=1,
+                    max_lines=4,
+                    scale=9,
+                    elem_classes="chat-input",
+                )
+                send_button = gr.Button(
+                    "Send",
+                    variant="primary",
+                    scale=1,
+                    elem_id="send-message",
+                )
+                clear_button = gr.Button(
+                    "Clear",
+                    variant="secondary",
+                    scale=1,
+                    elem_id="clear-chat",
                 )
 
-                with gr.Group(elem_classes="compose-shell"):
-                    with gr.Row(elem_classes="chat-compose"):
-                        chat_input = gr.Textbox(
-                            placeholder="Ask what to fix, why it matters, or who should own it…",
-                            show_label=False,
-                            container=False,
-                            lines=1,
-                            max_lines=4,
-                            scale=9,
-                            elem_classes="chat-input",
-                        )
-                        send_button = gr.Button(
-                            "Send",
-                            variant="primary",
-                            scale=1,
-                            elem_id="send-message",
-                        )
-                        clear_button = gr.Button(
-                            "Clear",
-                            variant="secondary",
-                            scale=1,
-                            elem_id="clear-chat",
-                        )
-
-            gr.HTML(
-                '<div class="suggestion-wrap"><div class="suggestion-label">Suggested</div></div>'
-            )
-            with gr.Row(elem_classes="question-chips"):
+            with gr.Row(elem_classes="suggestion-row"):
                 first_chip = gr.Button(
                     "What should I fix first?",
                     variant="secondary",
@@ -1253,35 +1048,25 @@ with gr.Blocks(
                     elem_classes="question-chip",
                 )
 
-        with gr.Column(scale=3, min_width=280, elem_classes=["surface", "insights"]):
-            gr.HTML(
-                """
-                <div class="rail-head">
-                  <div>
-                    <span class="eyebrow">Current result</span>
-                    <h2>Scan brief</h2>
-                  </div>
-                  <span class="rail-icon">
-                    <svg viewBox="0 0 24 24"><path d="M4 19V9m6 10V5m6 14v-7m4 7H2"/></svg>
-                  </span>
-                </div>
-                """
-            )
-            summary_panel = gr.HTML(scan_markdown(DEMO_SCAN))
-            priority_panel = gr.HTML(priority_markdown(DEMO_SCAN))
-            gr.HTML(
-                """
-                <div class="insight-note">
-                  <strong>Evidence comes first</strong>
-                  Provisional or limited scans stay clearly labeled and are never presented as authoritative.
-                </div>
-                """
-            )
+        gr.HTML(
+            """
+            <p class="footnote">
+              FixList scans public website evidence only. Export or share confirmed
+              fixes with the person responsible for the work.
+            </p>
+            """
+        )
 
     run_scan_button.click(
-        fn=run_scan_from_ui,
+        fn=run_dashboard_scan,
         inputs=[website_input, scan_mode, current_scan, chatbot],
-        outputs=[current_scan, summary_panel, priority_panel, scan_status, chatbot],
+        outputs=[
+            current_scan,
+            dashboard_panel,
+            issues_panel,
+            scan_status,
+            chatbot,
+        ],
         api_name="run_scan",
         concurrency_limit=1,
     )
@@ -1298,22 +1083,10 @@ with gr.Blocks(
     )
     clear_button.click(fn=lambda: ("", []), outputs=[chat_input, chatbot])
 
-    first_chip.click(
-        fn=lambda: "What should I fix first?",
-        outputs=chat_input,
-    )
-    score_chip.click(
-        fn=lambda: "Why did I get this score?",
-        outputs=chat_input,
-    )
-    owner_chip.click(
-        fn=lambda: "Who should own each fix?",
-        outputs=chat_input,
-    )
-    pages_chip.click(
-        fn=lambda: "How many pages are affected?",
-        outputs=chat_input,
-    )
+    first_chip.click(fn=lambda: "What should I fix first?", outputs=chat_input)
+    score_chip.click(fn=lambda: "Why did I get this score?", outputs=chat_input)
+    owner_chip.click(fn=lambda: "Who should own each fix?", outputs=chat_input)
+    pages_chip.click(fn=lambda: "How many pages are affected?", outputs=chat_input)
 
 
 if __name__ == "__main__":

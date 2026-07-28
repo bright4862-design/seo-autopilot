@@ -22,14 +22,6 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install Hugging Face CLI
-        run: python -m pip install --upgrade "huggingface_hub>=0.30"
-
       - name: Validate Space bundle
         run: |
           test -f hf-space/Dockerfile
@@ -38,21 +30,37 @@ jobs:
           test -f hf-space/requirements.txt
           grep -q 'CMD \["python", "app_redesign.py"\]' hf-space/Dockerfile
 
-      - name: Upload hf-space to the Space root
+      - name: Mirror hf-space into Hugging Face Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
+          set -euo pipefail
           test -n "$HF_TOKEN"
-          hf upload milo2455555/fixlist-ai hf-space . \
-            --repo-type space \
-            --token "$HF_TOKEN" \
-            --delete "*" \
-            --commit-message "Deploy FixList AI from GitHub ${GITHUB_SHA}"
+          export GIT_LFS_SKIP_SMUDGE=1
 
-      - name: Verify remote Space revision
+          git clone --depth 1 \
+            "https://oauth2:${HF_TOKEN}@huggingface.co/spaces/milo2455555/fixlist-ai" \
+            /tmp/fixlist-ai-space
+
+          rsync -a --delete --exclude='.git/' hf-space/ /tmp/fixlist-ai-space/
+
+          cd /tmp/fixlist-ai-space
+          git config user.name "FixList AI Deploy"
+          git config user.email "actions@users.noreply.github.com"
+          printf '%s\n' "${GITHUB_SHA}" > GITHUB_DEPLOYMENT_SHA
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "Hugging Face Space is already current."
+          else
+            git commit -m "Deploy FixList AI from GitHub ${GITHUB_SHA}"
+            git push origin HEAD:main
+          fi
+
+      - name: Show deployed Space revision
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          hf spaces info milo2455555/fixlist-ai \
-            --token "$HF_TOKEN" \
-            --expand sdk,runtime,sha,lastModified
+          git ls-remote \
+            "https://oauth2:${HF_TOKEN}@huggingface.co/spaces/milo2455555/fixlist-ai" \
+            refs/heads/main

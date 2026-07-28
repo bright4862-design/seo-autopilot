@@ -6,7 +6,7 @@ from fastapi import Body, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from .evidence_quality import EVIDENCE_QUALITY_GATE_VERSION, apply_evidence_quality_gate
-from .grok_chat import GROK_CHAT_VERSION, GROK_MODEL_ID, run_grok_chat
+from .grok_chat import (\n    GROK_CHAT_VERSION,\n    GROK_MODEL_ID,\n    GrokUpstreamError,\n    run_grok_chat,\n)
 from .indexability_postprocess import apply_indexability_quality_to_result
 from .indexability_quality import INDEXABILITY_QUALITY_VERSION
 from .navigation_indexability import NAVIGATION_INDEXABILITY_VERSION
@@ -138,7 +138,7 @@ async def chat(payload: ChatRequest, x_scanner_key: str | None = Header(default=
 
     try:
         answer = await run_grok_chat(message, payload.scan if isinstance(payload.scan, dict) else {})
-    except Exception as exc:
+    except GrokUpstreamError as exc:\n        raise HTTPException(status_code=502, detail=exc.public_detail) from exc\n    except Exception as exc:
         raise HTTPException(
             status_code=502,
             detail=f"Grok is temporarily unavailable ({type(exc).__name__}).",

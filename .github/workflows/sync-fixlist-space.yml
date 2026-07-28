@@ -22,13 +22,17 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Validate Space bundle
+      - name: Validate redesigned Space bundle
         run: |
+          set -euo pipefail
           test -f hf-space/Dockerfile
           test -f hf-space/app.py
           test -f hf-space/app_redesign.py
           test -f hf-space/requirements.txt
-          grep -q 'CMD \["python", "app_redesign.py"\]' hf-space/Dockerfile
+          grep -Fq 'CMD ["python", "app_redesign.py"]' hf-space/Dockerfile
+          grep -Fq 'SYSTEM STATUS' hf-space/app_redesign.py
+          grep -Fq 'Start a new scan' hf-space/app_redesign.py
+          grep -Fq 'Run website scan' hf-space/app_redesign.py
 
       - name: Configure Hugging Face credentials
         env:
@@ -39,29 +43,42 @@ jobs:
           python -m pip install --upgrade "huggingface_hub>=0.30"
           hf auth login --token "$HF_TOKEN" --add-to-git-credential
 
-      - name: Mirror hf-space into Hugging Face Space
+      - name: Force-publish hf-space as the Space root
         run: |
           set -euo pipefail
           export GIT_LFS_SKIP_SMUDGE=1
 
-          git clone --depth 1 \
-            https://huggingface.co/spaces/milo2455555/fixlist-ai \
-            /tmp/fixlist-ai-space
+          rm -rf /tmp/fixlist-space-publish
+          mkdir -p /tmp/fixlist-space-publish
+          rsync -a --delete hf-space/ /tmp/fixlist-space-publish/
+          cd /tmp/fixlist-space-publish
 
-          rsync -a --delete --exclude='.git/' hf-space/ /tmp/fixlist-ai-space/
-
-          cd /tmp/fixlist-ai-space
+          printf '%s\n' "${GITHUB_SHA}" > GITHUB_DEPLOYMENT_SHA
+          git init
+          git checkout -b main
           git config user.name "FixList AI Deploy"
           git config user.email "actions@users.noreply.github.com"
-          printf '%s\n' "${GITHUB_SHA}" > GITHUB_DEPLOYMENT_SHA
           git add -A
+          git commit -m "Deploy redesigned FixList AI from GitHub ${GITHUB_SHA}"
+          git remote add origin https://huggingface.co/spaces/milo2455555/fixlist-ai
+          git push --force origin main
 
-          if git diff --cached --quiet; then
-            echo "Hugging Face Space is already current."
-          else
-            git commit -m "Deploy FixList AI from GitHub ${GITHUB_SHA}"
-            git push origin HEAD:main
-          fi
+      - name: Re-clone and verify the exact remote files
+        run: |
+          set -euo pipefail
+          export GIT_LFS_SKIP_SMUDGE=1
 
-      - name: Show deployed Space revision
-        run: git ls-remote https://huggingface.co/spaces/milo2455555/fixlist-ai refs/heads/main
+          rm -rf /tmp/fixlist-space-verify
+          git clone --depth 1 \
+            https://huggingface.co/spaces/milo2455555/fixlist-ai \
+            /tmp/fixlist-space-verify
+          cd /tmp/fixlist-space-verify
+
+          grep -Fq 'CMD ["python", "app_redesign.py"]' Dockerfile
+          grep -Fq 'SYSTEM STATUS' app_redesign.py
+          grep -Fq 'Start a new scan' app_redesign.py
+          grep -Fq 'Run website scan' app_redesign.py
+          test "$(cat GITHUB_DEPLOYMENT_SHA)" = "${GITHUB_SHA}"
+
+          echo "Verified Hugging Face Space commit: $(git rev-parse HEAD)"
+          echo "Verified GitHub deployment SHA: $(cat GITHUB_DEPLOYMENT_SHA)"

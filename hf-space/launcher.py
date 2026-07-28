@@ -8,6 +8,13 @@ from urllib.parse import urlparse
 import requests
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
 def scanner_base_url(raw_url: str) -> str:
     base = (raw_url or "").strip().rstrip("/")
     for suffix in ("/scan", "/review", "/chat", "/health", "/health/auth", "/revision"):
@@ -29,18 +36,37 @@ def verify_scanner_connection() -> tuple[bool, str]:
         return False, "SCANNER_API_KEY is missing."
 
     endpoint = f"{base}/health/auth"
+    rollout_attempts = _env_int("SCANNER_VERIFY_ATTEMPTS", 30)
+    retry_delay = _env_int("SCANNER_VERIFY_DELAY_SECONDS", 10)
+    request_timeout = _env_int("SCANNER_VERIFY_TIMEOUT_SECONDS", 12)
+    transport_attempt_limit = min(rollout_attempts, 6)
     last_error = "Scanner verification did not complete."
-    for attempt in range(1, 4):
+
+    for attempt in range(1, rollout_attempts + 1):
         try:
             response = requests.get(
                 endpoint,
                 headers={"X-Scanner-Key": key},
-                timeout=20,
+                timeout=request_timeout,
             )
             if response.status_code == 401:
                 return False, "SCANNER_API_KEY was rejected by Cloud Run."
             if response.status_code == 404:
-                return False, "Cloud Run is missing the authenticated health endpoint."
+                last_error = "Cloud Run has not published the authenticated health endpoint yet."
+                if attempt < rollout_attempts:
+                    print(
+                        f"[FixList launcher] Waiting for scanner rollout "
+                        f"({attempt}/{rollout_attempts}).",
+                        flush=True,
+                    )
+                    time.sleep(retry_delay)
+                    continue
+                return False, last_error
+            if response.status_code >= 500:
+                last_error = f"Cloud Run health probe returned {response.status_code}."
+                if attempt < rollout_attempts:
+                    time.sleep(retry_delay)
+                    continue
             response.raise_for_status()
             payload = response.json()
             if not isinstance(payload, dict) or payload.get("authenticated") is not True:
@@ -49,8 +75,10 @@ def verify_scanner_connection() -> tuple[bool, str]:
             return True, f"Scanner authenticated ({revision})."
         except (requests.RequestException, ValueError) as exc:
             last_error = f"Scanner verification failed: {type(exc).__name__}: {str(exc)[:180]}"
-            if attempt < 3:
-                time.sleep(attempt * 2)
+            if attempt < transport_attempt_limit:
+                time.sleep(retry_delay)
+                continue
+            return False, last_error
 
     return False, last_error
 

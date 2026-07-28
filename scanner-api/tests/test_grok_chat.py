@@ -1,13 +1,17 @@
+import httpx
+
 from app.grok_chat import (
     GROK_CHAT_VERSION,
     GROK_MODEL_ID,
+    GrokUpstreamError,
+    _response_error,
     build_grounded_prompt,
     extract_output_text,
 )
 
 
 def test_grok_proxy_uses_non_reasoning_model_by_default():
-    assert GROK_CHAT_VERSION == "grok_chat_proxy_v1"
+    assert GROK_CHAT_VERSION == "grok_chat_proxy_v2"
     assert GROK_MODEL_ID == "xai/grok-4.20-non-reasoning"
 
 
@@ -44,3 +48,50 @@ def test_extract_output_text_supports_nested_response_shape():
     }
 
     assert extract_output_text(payload) == "First paragraph.\n\nSecond paragraph."
+
+
+def test_permission_error_identifies_cloud_run_role_fix():
+    request = httpx.Request("POST", "https://aiplatform.googleapis.com/test")
+    response = httpx.Response(
+        403,
+        request=request,
+        json={
+            "error": {
+                "status": "PERMISSION_DENIED",
+                "message": "Permission aiplatform.endpoints.predict denied.",
+            }
+        },
+    )
+
+    error = _response_error(response)
+
+    assert error.retryable is False
+    assert "roles/aiplatform.user" in error.public_detail
+    assert "403/PERMISSION_DENIED" in error.public_detail
+
+
+def test_quota_error_is_retryable_and_actionable():
+    request = httpx.Request("POST", "https://aiplatform.googleapis.com/test")
+    response = httpx.Response(
+        429,
+        request=request,
+        json={"error": {"status": "RESOURCE_EXHAUSTED", "message": "Quota exceeded."}},
+    )
+
+    error = _response_error(response)
+
+    assert error.retryable is True
+    assert "global Grok QPM and token quotas" in error.public_detail
+
+
+def test_bad_request_exposes_only_bounded_upstream_detail():
+    error = GrokUpstreamError(
+        400,
+        "INVALID_ARGUMENT",
+        "Invalid model field.\n" + ("x" * 300),
+        retryable=False,
+    )
+
+    assert "400/INVALID_ARGUMENT" in error.public_detail
+    assert "\n" not in error.public_detail
+    assert len(error.public_detail) < 260

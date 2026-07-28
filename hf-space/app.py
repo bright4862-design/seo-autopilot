@@ -7,7 +7,7 @@ import os
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import gradio as gr
 import requests
@@ -118,6 +118,131 @@ def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _page_records(scan: dict[str, Any]) -> list[dict[str, Any]]:
+    for key in ("crawled_pages", "pages", "scanned_pages", "crawl_pages"):
+        value = scan.get(key)
+        if isinstance(value, list):
+            pages = [page for page in value if isinstance(page, dict)]
+            if pages:
+                return pages
+    return []
+
+
+def _absolute_url(value: Any, website_url: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    absolute = urljoin(website_url, raw)
+    parsed = urlparse(absolute)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return ""
+    return parsed._replace(fragment="").geturl()
+
+
+def _url_key(value: Any, website_url: str) -> str:
+    absolute = _absolute_url(value, website_url)
+    if not absolute:
+        return ""
+    parsed = urlparse(absolute)
+    path = parsed.path.rstrip("/") or "/"
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{path}"
+
+
+def _verified_page_lookup(
+    scan: dict[str, Any],
+    website_url: str,
+) -> dict[str, dict[str, Any]]:
+    lookup: dict[str, dict[str, Any]] = {}
+    for page in _page_records(scan):
+        try:
+            status_code = int(page.get("status_code") or page.get("http_status") or 0)
+        except (TypeError, ValueError):
+            status_code = 0
+        if status_code != 200 or str(page.get("fetch_error") or "").strip():
+            continue
+
+        requested_url = _absolute_url(
+            _first_present(page.get("url"), page.get("requested_url"), page.get("path")),
+            website_url,
+        )
+        final_url = _absolute_url(
+            _first_present(
+                page.get("verified_final_url"),
+                page.get("final_url"),
+                requested_url,
+            ),
+            website_url,
+        )
+        if not final_url:
+            continue
+
+        evidence = {
+            "url": final_url,
+            "status_code": 200,
+            "verification": "crawler_final_200",
+        }
+        if requested_url and requested_url != final_url:
+            evidence["observed_url"] = requested_url
+
+        for candidate in (
+            requested_url,
+            final_url,
+            page.get("path"),
+        ):
+            key = _url_key(candidate, website_url)
+            if key:
+                lookup[key] = evidence
+    return lookup
+
+
+def _priority_url_candidates(item: dict[str, Any]) -> list[Any]:
+    candidates: list[Any] = []
+    for key in (
+        "affected_pages",
+        "affected_urls",
+        "urls",
+        "page_urls",
+        "evidence_urls",
+        "page_url",
+        "source_pages",
+    ):
+        value = item.get(key)
+        if isinstance(value, list):
+            candidates.extend(value)
+        elif value:
+            candidates.append(value)
+    return candidates
+
+
+def _verified_priority_urls(
+    item: dict[str, Any],
+    verified_pages: dict[str, dict[str, Any]],
+    website_url: str,
+    *,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    evidence: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for candidate in _priority_url_candidates(item):
+        if isinstance(candidate, dict):
+            candidate = _first_present(
+                candidate.get("final_url"),
+                candidate.get("url"),
+                candidate.get("path"),
+            )
+        match = verified_pages.get(_url_key(candidate, website_url))
+        if not match:
+            continue
+        final_url = str(match.get("url") or "")
+        if not final_url or final_url in seen:
+            continue
+        seen.add(final_url)
+        evidence.append(dict(match))
+        if len(evidence) >= limit:
+            break
+    return evidence
+
+
 def _humanize(value: Any) -> str:
     text = str(value or "").strip().replace("_", " ").replace("-", " ")
     return " ".join(part for part in text.split() if part).capitalize()
@@ -189,7 +314,11 @@ def _priority_label(value: Any) -> str:
     return "Medium"
 
 
-def _normalize_priority(item: Any) -> dict[str, Any] | None:
+def _normalize_priority(
+    item: Any,
+    verified_pages: dict[str, dict[str, Any]] | None = None,
+    website_url: str = "",
+) -> dict[str, Any] | None:
     if isinstance(item, str):
         title = item.strip()
         if not title:
@@ -233,6 +362,11 @@ def _normalize_priority(item: Any) -> dict[str, Any] | None:
         )
     ).strip()
 
+    url_evidence = _verified_priority_urls(
+        item,
+        verified_pages or {},
+        website_url,
+    )
     return {
         "title": _humanize(title) if title == title.lower() else title,
         "priority": _priority_label(
@@ -241,6 +375,11 @@ def _normalize_priority(item: Any) -> dict[str, Any] | None:
         "owner": _infer_owner(item, title),
         "affected_pages": _affected_count(item),
         "why": why,
+        "verified_urls": [entry["url"] for entry in url_evidence],
+        "url_evidence": url_evidence,
+        "url_evidence_status": (
+            "verified_final_200" if url_evidence else "no_verified_example"
+        ),
     }
 
 
@@ -270,13 +409,7 @@ def _candidate_recommendation_lists(review: dict[str, Any]) -> list[list[Any]]:
 
 
 def _derive_page_priorities(scan: dict[str, Any]) -> list[dict[str, Any]]:
-    pages: list[dict[str, Any]] = []
-    for key in ("crawled_pages", "pages", "scanned_pages", "crawl_pages"):
-        value = scan.get(key)
-        if isinstance(value, list):
-            pages = [page for page in value if isinstance(page, dict)]
-            if pages:
-                break
+    pages = _page_records(scan)
 
     counts: Counter[str] = Counter()
     descriptions: dict[str, str] = {}
@@ -332,8 +465,20 @@ def _derive_page_priorities(scan: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def extract_priorities(scan: dict[str, Any], review: dict[str, Any]) -> list[dict[str, Any]]:
+    website_url = str(
+        _first_present(
+            review.get("website_url"),
+            scan.get("website_url"),
+            scan.get("final_url"),
+            default="",
+        )
+    )
+    verified_pages = _verified_page_lookup(scan, website_url)
     for candidate_list in _candidate_recommendation_lists(review):
-        normalized = [_normalize_priority(item) for item in candidate_list]
+        normalized = [
+            _normalize_priority(item, verified_pages, website_url)
+            for item in candidate_list
+        ]
         priorities = [item for item in normalized if item]
         if priorities:
             return priorities[:5]
@@ -643,14 +788,17 @@ def build_grounded_prompt(
 Rules:
 1. Treat the supplied scan evidence as authoritative only when release_gate_eligible is true.
 2. Never invent URLs, counts, findings, or scan outcomes.
-3. Never claim a limited or provisional scan is authoritative.
-4. Sound natural, direct, warm, and useful. Answer the question first and avoid canned scan recaps.
-5. Distinguish confirmed crawl evidence from general recommendations.
-6. You may answer broader SEO, CMS, website, and implementation questions using general expertise.
-7. If the user wants to make a developer-labelled fix themselves, keep helping: explain the safest DIY route, exact steps or code pattern, verification, and rollback where useful.
-8. Adapt to the detected CMS. If it is unknown, give concise platform variants or ask one short clarifying question.
-9. Use the conversation context to understand follow-ups such as "Can I do this myself?" and "How?"
-10. Do not expose hidden reasoning or chain-of-thought.
+3. A clickable example URL is verified only when it appears exactly in a finding's verified_urls or url_evidence with status_code 200. Never construct, complete, modify, or guess a URL from a page title, template, path pattern, hostname, or conversation.
+4. If a finding has no verified URL, say that the current crawl did not return a verified live example. Do not substitute a plausible URL.
+5. Never present a 404/410 URL as a live page to edit. If discussing a confirmed broken-URL finding, label the URL as broken rather than as a working example.
+6. Never claim a limited or provisional scan is authoritative.
+7. Sound natural, direct, warm, and useful. Answer the question first and avoid canned scan recaps.
+8. Distinguish confirmed crawl evidence from general recommendations.
+9. You may answer broader SEO, CMS, website, and implementation questions using general expertise.
+10. If the user wants to make a developer-labelled fix themselves, keep helping: explain the safest DIY route, exact steps or code pattern, verification, and rollback where useful.
+11. Adapt to the detected CMS. If it is unknown, give concise platform variants or ask one short clarifying question.
+12. Use the conversation context to understand follow-ups such as "Can I do this myself?" and "How?"
+13. Do not expose hidden reasoning or chain-of-thought.
 
 CONVERSATION_CONTEXT:
 {conversation}

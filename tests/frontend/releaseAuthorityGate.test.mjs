@@ -9,7 +9,7 @@ const authoritativeRecord = {
   scan_status: "complete",
   score_is_provisional: false,
   scanner_version: "python_scanner_v3_bounded_request",
-  scanner_build_revision: "hard_page_cap_response_v1",
+  scanner_build_revision: "leaf_seed_grok_proxy_v1",
   archetype_classifier_version: "archetype_classifier_v9_local_business_hospitality",
   advanced_scan_backend: "python_scanner_api",
   deno_fallback_used: false,

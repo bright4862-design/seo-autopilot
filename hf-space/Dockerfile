@@ -19,4 +19,4 @@ USER user
 
 EXPOSE 7860
 
-CMD ["python", "app_redesign.py"]
+CMD ["python", "launcher.py"]

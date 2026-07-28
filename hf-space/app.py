@@ -616,19 +616,44 @@ def priority_markdown(scan: dict[str, Any]) -> str:
     )
 
 
-def build_grounded_prompt(message: str, scan: dict[str, Any]) -> str:
+def _conversation_context(history: list[dict[str, Any]] | None) -> str:
+    turns: list[dict[str, str]] = []
+    for item in (history or [])[-10:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        content = item.get("content")
+        if role not in {"user", "assistant"} or not isinstance(content, str):
+            continue
+        clean_content = content.strip()
+        if clean_content:
+            turns.append({"role": role, "content": clean_content[:2_000]})
+    return json.dumps(turns, ensure_ascii=False, separators=(",", ":"))[:12_000]
+
+
+def build_grounded_prompt(
+    message: str,
+    scan: dict[str, Any],
+    history: list[dict[str, Any]] | None = None,
+) -> str:
     evidence = json.dumps(scan, ensure_ascii=False, separators=(",", ":"))
-    return f"""You are FixList AI, an evidence-grounded SEO consultant.
+    conversation = _conversation_context(history)
+    return f"""You are Grok inside FixList, a practical SEO consultant.
 
 Rules:
 1. Treat the supplied scan evidence as authoritative only when release_gate_eligible is true.
 2. Never invent URLs, counts, findings, or scan outcomes.
 3. Never claim a limited or provisional scan is authoritative.
-4. Explain technical SEO in plain language.
-5. Distinguish confirmed crawl evidence from recommendations.
-6. Keep answers concise and organized.
-7. When useful, state who should perform the fix.
-8. Do not expose hidden reasoning or chain-of-thought.
+4. Sound natural, direct, warm, and useful. Answer the question first and avoid canned scan recaps.
+5. Distinguish confirmed crawl evidence from general recommendations.
+6. You may answer broader SEO, CMS, website, and implementation questions using general expertise.
+7. If the user wants to make a developer-labelled fix themselves, keep helping: explain the safest DIY route, exact steps or code pattern, verification, and rollback where useful.
+8. Adapt to the detected CMS. If it is unknown, give concise platform variants or ask one short clarifying question.
+9. Use the conversation context to understand follow-ups such as "Can I do this myself?" and "How?"
+10. Do not expose hidden reasoning or chain-of-thought.
+
+CONVERSATION_CONTEXT:
+{conversation}
 
 SCAN_EVIDENCE:
 {evidence}
@@ -667,12 +692,16 @@ def extract_output_text(payload: dict[str, Any]) -> str:
     raise RuntimeError("Grok returned no readable text output.")
 
 
-def call_grok(message: str, scan: dict[str, Any]) -> str:
+def call_grok(
+    message: str,
+    scan: dict[str, Any],
+    history: list[dict[str, Any]] | None = None,
+) -> str:
     if SETTINGS.live_scan_enabled:
         response = requests.post(
             f"{_scanner_base_url()}/chat",
             headers=_scanner_headers(),
-            json={"message": message, "scan": scan},
+            json={"message": message, "scan": scan, "history": list(history or [])[-10:]},
             timeout=SETTINGS.grok_timeout_seconds,
         )
         try:
@@ -705,8 +734,8 @@ def call_grok(message: str, scan: dict[str, Any]) -> str:
         },
         json={
             "model": SETTINGS.model_id,
-            "input": build_grounded_prompt(message, scan),
-            "max_output_tokens": 900,
+            "input": build_grounded_prompt(message, scan, history),
+            "max_output_tokens": 1_600,
             "stream": False,
         },
         timeout=SETTINGS.grok_timeout_seconds,
@@ -745,7 +774,29 @@ def guided_answer(message: str, scan: dict[str, Any]) -> str:
             f"**{int(scan.get('pages_retained') or 0)} retained pages**."
         )
 
-    if "myself" in normalized or "developer" in normalized or "who" in normalized:
+    if "myself" in normalized or "do it myself" in normalized:
+        if not priorities:
+            return (
+                "You may be able to do it yourself, but I need a confirmed finding to "
+                "give you safe steps. Run a complete scan, then tell me which fix you "
+                "want to tackle and what platform the site uses."
+            )
+        fix = priorities[0]
+        return (
+            f"**Yes, with care.** The first place to start is "
+            f"**{fix.get('title', 'the highest-priority finding')}**. A developer label "
+            "usually means the change may affect a shared template—not that you cannot "
+            "learn to do it.\n\n"
+            "1. Make a backup or use a staging copy.\n"
+            "2. Identify the CMS, theme, plugin, or shared template controlling the affected pages.\n"
+            "3. Change one example first, then verify the page still loads and the SEO signal is correct.\n"
+            "4. Apply the same fix to the shared template only after that test passes.\n"
+            "5. Rerun the scan to confirm the issue count falls.\n\n"
+            "Tell me whether the site uses WordPress, Shopify, or custom code and I’ll "
+            "turn that into exact clicks or code."
+        )
+
+    if "developer" in normalized or "who" in normalized:
         if not priorities:
             return "There are no grouped priorities available to assign yet."
         assignments = [
@@ -773,14 +824,18 @@ def guided_answer(message: str, scan: dict[str, Any]) -> str:
     )
 
 
-def answer_question(message: str, scan: dict[str, Any]) -> str:
+def answer_question(
+    message: str,
+    scan: dict[str, Any],
+    history: list[dict[str, Any]] | None = None,
+) -> str:
     clean_message = (message or "").strip()
     if not clean_message:
         return "Ask a question about the current scan."
 
     if SETTINGS.live_grok_enabled:
         try:
-            return call_grok(clean_message, scan)
+            return call_grok(clean_message, scan, history)
         except Exception as exc:
             return (
                 "Live Grok could not complete this request, so I answered from the structured "
@@ -800,8 +855,9 @@ def submit_chat(
     messages = list(history or [])
     if not clean_message:
         return "", messages
+    answer = answer_question(clean_message, current_scan, messages)
     messages.append({"role": "user", "content": clean_message})
-    messages.append({"role": "assistant", "content": answer_question(clean_message, current_scan)})
+    messages.append({"role": "assistant", "content": answer})
     return "", messages
 
 

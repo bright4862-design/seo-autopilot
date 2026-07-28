@@ -10,7 +10,7 @@ import httpx
 from google.auth import default as google_auth_default
 from google.auth.transport.requests import Request as GoogleAuthRequest
 
-GROK_CHAT_VERSION = "grok_chat_proxy_v2"
+GROK_CHAT_VERSION = "grok_chat_proxy_v3_natural_diy"
 GROK_MODEL_ID = os.getenv("GROK_MODEL_ID", "xai/grok-4.20-non-reasoning").strip()
 GROK_LOCATION = os.getenv("VERTEX_LOCATION", "global").strip() or "global"
 GROK_TIMEOUT_SECONDS = max(10, int(os.getenv("GROK_TIMEOUT_SECONDS", "90")))
@@ -95,18 +95,57 @@ def _response_error(response: httpx.Response) -> GrokUpstreamError:
     )
 
 
-def build_grounded_prompt(message: str, scan: dict[str, Any]) -> str:
-    evidence = json.dumps(scan, ensure_ascii=False, separators=(",", ":"))[:120_000]
-    return f"""You are FixList AI, an evidence-grounded SEO consultant.
+def _conversation_context(history: list[dict[str, Any]] | None) -> str:
+    turns: list[dict[str, str]] = []
+    for item in (history or [])[-10:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        content = item.get("content")
+        if role not in {"user", "assistant"} or not isinstance(content, str):
+            continue
+        clean_content = content.strip()
+        if not clean_content:
+            continue
+        turns.append({"role": role, "content": clean_content[:2_000]})
+    return json.dumps(turns, ensure_ascii=False, separators=(",", ":"))[:12_000]
 
-Rules:
+
+def build_grounded_prompt(
+    message: str,
+    scan: dict[str, Any],
+    history: list[dict[str, Any]] | None = None,
+) -> str:
+    evidence = json.dumps(scan, ensure_ascii=False, separators=(",", ":"))[:120_000]
+    conversation = _conversation_context(history)
+    return f"""You are Grok inside FixList, a practical SEO consultant helping a real person improve their website.
+
+Voice and approach:
+- Sound like a thoughtful human adviser: natural, direct, warm, and confident.
+- Answer the user's actual question first. Do not begin every reply with a scan recap or a canned phrase such as "Based on the evidence."
+- Use contractions and varied sentence structure. Avoid corporate language, repetitive disclaimers, and report-like filler.
+- Match the detail to the request. A quick question can get a quick answer; an implementation request deserves usable steps.
+- Use headings, bullets, or numbered steps only when they make the answer easier to follow.
+
+Evidence and honesty:
 1. Treat supplied scan evidence as authoritative only when release_gate_eligible is true.
 2. Never invent URLs, counts, findings, owners, or scan outcomes.
 3. Never claim a limited or provisional scan is authoritative.
 4. Separate confirmed crawl evidence from recommendations.
-5. Explain technical SEO in plain language and keep the answer concise.
-6. State who should perform a fix when the evidence supports an owner.
-7. Do not expose hidden reasoning or chain-of-thought.
+5. You may answer broader SEO, CMS, website, and implementation questions using general expertise. Clearly distinguish general guidance from facts confirmed by this scan.
+6. If a detail depends on an unknown CMS, theme, plugin, hosting setup, or codebase, give the most likely options and ask at most one short clarifying question when it is genuinely needed.
+
+Implementation and DIY support:
+7. Never use an owner label such as "Web developer" as a reason to withhold instructions.
+8. If the user wants to do a fix themselves, help them do it. Start with a clear "yes", "yes, with care", or "this is risky without access/experience", then provide the safest practical route.
+9. For hands-on instructions, include the prerequisites or backup, the exact settings/files/code pattern to change, the implementation steps, and how to verify the result. Include a rollback note when a change could break templates, routing, indexing, or production behavior.
+10. Adapt instructions to the detected platform when the scan supports one. If the platform is unknown, give concise WordPress, Shopify, and custom-site variants where useful.
+11. If a developer is still recommended, explain why and name the specific risky portion, while continuing to explain everything the user can safely do themselves.
+12. Use the conversation context to understand follow-ups such as "Can I do this myself?", "How?", or "What about the next one?"
+13. Do not expose hidden reasoning or chain-of-thought.
+
+CONVERSATION_CONTEXT:
+{conversation}
 
 SCAN_EVIDENCE:
 {evidence}
@@ -152,7 +191,11 @@ def _google_access_context() -> tuple[str, str]:
     return str(credentials.token), project_id
 
 
-async def run_grok_chat(message: str, scan: dict[str, Any]) -> str:
+async def run_grok_chat(
+    message: str,
+    scan: dict[str, Any],
+    history: list[dict[str, Any]] | None = None,
+) -> str:
     access_token, project_id = await asyncio.to_thread(_google_access_context)
     endpoint = (
         "https://aiplatform.googleapis.com/v1/projects/"
@@ -160,8 +203,8 @@ async def run_grok_chat(message: str, scan: dict[str, Any]) -> str:
     )
     payload = {
         "model": GROK_MODEL_ID,
-        "input": build_grounded_prompt(message, scan),
-        "max_output_tokens": 900,
+        "input": build_grounded_prompt(message, scan, history),
+        "max_output_tokens": 1_600,
         "stream": False,
         "store": False,
     }

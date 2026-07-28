@@ -82,10 +82,10 @@ async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: 
 
     parsed_start = urlparse(start_url)
     origin = f"{parsed_start.scheme}://{parsed_start.netloc}"
-    prefix = normalize_prefix(path_prefix or parsed_start.path or "/")
-    prefix_source = "explicit_path_prefix" if path_prefix else ("requested_url_path" if prefix != "/" else "origin_root")
+    prefix, prefix_source, requested_seed_path = resolve_crawl_scope(path_prefix, parsed_start.path)
     scope_evidence = {
-        "requested_path_prefix": normalize_prefix(path_prefix or parsed_start.path or "/"),
+        "requested_path_prefix": prefix,
+        "requested_seed_path": requested_seed_path,
         "effective_path_prefix": prefix,
         "scope_source": prefix_source,
         "multimarket_detected": False,
@@ -1255,6 +1255,23 @@ def merge_duplicate_page_evidence(retained: dict, duplicate: dict) -> None:
         retained["url_confidence"] = "sitemap_listed"
     elif "internal_link" in sources:
         retained["url_confidence"] = "linked_but_failed" if status_code >= 400 else "internally_linked"
+
+def resolve_crawl_scope(path_prefix: str | None, requested_path: str) -> tuple[str, str, str]:
+    """Resolve the crawl boundary without treating a leaf seed URL as a subtree.
+
+    An explicit API path_prefix remains authoritative. Without one, a recognized
+    country/language pair such as /fr/fr/ stays market-scoped; every other seed
+    crawls from the origin root so /section/page.html can discover the site.
+    """
+    requested_seed_path = normalize_prefix(requested_path or "/")
+    explicit_prefix = str(path_prefix or "").strip()
+    if explicit_prefix:
+        return normalize_prefix(explicit_prefix), "explicit_path_prefix", requested_seed_path
+    requested_market = market_pair_prefix(requested_seed_path)
+    if requested_market:
+        return requested_market, "requested_market_path", requested_seed_path
+    return "/", "origin_root", requested_seed_path
+
 
 def normalize_url(value: str) -> str:
     raw = str(value or "").strip()

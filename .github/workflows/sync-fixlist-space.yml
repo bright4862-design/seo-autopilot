@@ -35,10 +35,13 @@ jobs:
         run: |
           set -euo pipefail
           test -f hf-space/Dockerfile
+          test -f hf-space/launcher.py
           test -f hf-space/app.py
           test -f hf-space/app_redesign.py
           test -f hf-space/requirements.txt
-          grep -Fq 'CMD ["python", "app_redesign.py"]' hf-space/Dockerfile
+          grep -Fq 'CMD ["python", "launcher.py"]' hf-space/Dockerfile
+          grep -Fq '/health/auth' hf-space/launcher.py
+          grep -Fq 'SCANNER_CONNECTION_VERIFIED' hf-space/launcher.py
           grep -Fq 'run_scan_from_ui as run_scan_pipeline_ui' hf-space/app_redesign.py
           grep -Fq 'current_scan = gr.State({})' hf-space/app_redesign.py
           grep -Fq 'interactive=SETTINGS.live_scan_enabled' hf-space/app_redesign.py
@@ -136,6 +139,7 @@ jobs:
 
           required_files = {
               "Dockerfile",
+              "launcher.py",
               "app.py",
               "app_redesign.py",
               "requirements.txt",
@@ -154,7 +158,12 @@ jobs:
               raise RuntimeError(f"Uploaded Space commit is missing files: {sorted(missing)}")
 
           downloaded = {}
-          for filename in ("Dockerfile", "app_redesign.py", "GITHUB_DEPLOYMENT_SHA"):
+          for filename in (
+              "Dockerfile",
+              "launcher.py",
+              "app_redesign.py",
+              "GITHUB_DEPLOYMENT_SHA",
+          ):
               path = hf_hub_download(
                   repo_id=repo_id,
                   repo_type="space",
@@ -166,8 +175,11 @@ jobs:
               downloaded[filename] = Path(path).read_text(encoding="utf-8")
 
           redesigned_app = downloaded["app_redesign.py"]
+          launcher = downloaded["launcher.py"]
           checks = {
-              "Docker launches app_redesign.py": 'CMD ["python", "app_redesign.py"]' in downloaded["Dockerfile"],
+              "Docker launches authenticated verifier": 'CMD ["python", "launcher.py"]' in downloaded["Dockerfile"],
+              "Launcher checks authenticated health": "/health/auth" in launcher and "X-Scanner-Key" in launcher,
+              "Launcher disables rejected credentials": 'os.environ["SCANNER_API_KEY"] = ""' in launcher,
               "Remote UI calls scanner pipeline": "run_scan_from_ui as run_scan_pipeline_ui" in redesigned_app,
               "Remote UI starts without demo data": "current_scan = gr.State({})" in redesigned_app and "gr.State(DEMO_SCAN)" not in redesigned_app,
               "Remote scan button follows live configuration": "interactive=SETTINGS.live_scan_enabled" in redesigned_app,

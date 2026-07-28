@@ -27,7 +27,7 @@ def _env_int(name: str, default: int) -> int:
 class Settings:
     project_id: str = os.getenv("GOOGLE_CLOUD_PROJECT", "").strip()
     location: str = os.getenv("VERTEX_LOCATION", "global").strip() or "global"
-    model_id: str = os.getenv("GROK_MODEL_ID", "xai/grok-4.20-reasoning").strip()
+    model_id: str = os.getenv("GROK_MODEL_ID", "xai/grok-4.20-non-reasoning").strip()
     service_account_json: str = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
     scanner_api_url: str = os.getenv(
         "SCANNER_API_URL",
@@ -39,7 +39,10 @@ class Settings:
 
     @property
     def live_grok_enabled(self) -> bool:
-        return bool(self.project_id and self.service_account_json)
+        return bool(
+            self.live_scan_enabled
+            or (self.project_id and self.service_account_json)
+        )
 
     @property
     def live_scan_enabled(self) -> bool:
@@ -665,6 +668,29 @@ def extract_output_text(payload: dict[str, Any]) -> str:
 
 
 def call_grok(message: str, scan: dict[str, Any]) -> str:
+    if SETTINGS.live_scan_enabled:
+        response = requests.post(
+            f"{_scanner_base_url()}/chat",
+            headers=_scanner_headers(),
+            json={"message": message, "scan": scan},
+            timeout=SETTINGS.grok_timeout_seconds,
+        )
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Grok proxy returned an unreadable response ({response.status_code})."
+            ) from exc
+        if not response.ok:
+            detail = body.get("detail") if isinstance(body, dict) else None
+            raise RuntimeError(
+                f"Grok proxy failed ({response.status_code}): {detail or 'Unknown error'}"
+            )
+        answer = body.get("answer") if isinstance(body, dict) else None
+        if not isinstance(answer, str) or not answer.strip():
+            raise RuntimeError("Grok proxy returned no readable answer.")
+        return answer.strip()
+
     credentials = load_google_credentials()
     credentials.refresh(GoogleAuthRequest())
     endpoint = (

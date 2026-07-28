@@ -43,56 +43,90 @@ jobs:
           grep -Fq 'Start a new scan' hf-space/app_redesign.py
           grep -Fq 'Run website scan' hf-space/app_redesign.py
 
-      - name: Install Hugging Face Hub client
-        run: python -m pip install --upgrade "huggingface_hub>=0.30"
-
-      - name: Upload Space root and verify remote main
+      - name: Confirm HF_TOKEN secret exists
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -euo pipefail
-          test -n "$HF_TOKEN"
+          if [ -z "${HF_TOKEN:-}" ]; then
+            echo "::error title=Missing HF_TOKEN::Add a GitHub Actions secret named HF_TOKEN with write access to milo2455555/fixlist-ai."
+            exit 1
+          fi
+          echo "HF_TOKEN is configured (${#HF_TOKEN} characters)."
+
+      - name: Install Hugging Face Hub client
+        run: python -m pip install --upgrade "huggingface_hub>=0.30"
+
+      - name: Verify Hugging Face identity and Space access
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          python <<'PY'
+          import os
+          from huggingface_hub import HfApi
+
+          repo_id = os.environ["HF_REPO_ID"]
+          token = os.environ["HF_TOKEN"]
+          api = HfApi(token=token)
+
+          identity = api.whoami(token=token)
+          info = api.space_info(repo_id=repo_id, token=token)
+
+          print(f"Authenticated Hugging Face account: {identity.get('name', 'unknown')}")
+          print(f"Accessible Space: {repo_id}")
+          print(f"Current Space main SHA: {info.sha}")
+          PY
+
+      - name: Upload redesigned Space root
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
           printf '%s\n' "$GITHUB_SHA" > hf-space/GITHUB_DEPLOYMENT_SHA
 
           python <<'PY'
-          from __future__ import annotations
-
           import os
-          import time
-          from pathlib import Path
-
-          from huggingface_hub import HfApi, hf_hub_download
+          from huggingface_hub import HfApi
 
           repo_id = os.environ["HF_REPO_ID"]
           token = os.environ["HF_TOKEN"]
           github_sha = os.environ["GITHUB_SHA"]
-          source_dir = Path("hf-space")
-
           api = HfApi(token=token)
+
           commit = api.upload_folder(
               repo_id=repo_id,
               repo_type="space",
-              folder_path=source_dir,
-              path_in_repo=".",
+              folder_path="hf-space",
               revision="main",
               delete_patterns="*",
               commit_message=f"Sync FixList AI from GitHub {github_sha}",
               token=token,
           )
 
-          remote_info = None
-          for attempt in range(1, 13):
-              remote_info = api.space_info(repo_id=repo_id, token=token)
-              if remote_info.sha == commit.oid:
-                  break
-              if attempt == 12:
-                  raise RuntimeError(
-                      f"Remote main did not advance to uploaded commit. "
-                      f"Expected {commit.oid}, got {remote_info.sha}."
-                  )
-              time.sleep(5)
+          print(f"Uploaded Hugging Face commit: {commit.oid}")
+          print(f"Hub commit URL: {commit.commit_url}")
+          with open("/tmp/hf_uploaded_commit", "w", encoding="utf-8") as handle:
+              handle.write(commit.oid)
+          PY
 
-          revision = remote_info.sha
+      - name: Verify exact uploaded files and branch
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          python <<'PY'
+          import os
+          import time
+          from pathlib import Path
+          from huggingface_hub import HfApi, hf_hub_download
+
+          repo_id = os.environ["HF_REPO_ID"]
+          token = os.environ["HF_TOKEN"]
+          github_sha = os.environ["GITHUB_SHA"]
+          uploaded_commit = Path("/tmp/hf_uploaded_commit").read_text(encoding="utf-8").strip()
+          api = HfApi(token=token)
+
           required_files = {
               "Dockerfile",
               "app.py",
@@ -104,43 +138,50 @@ jobs:
               api.list_repo_files(
                   repo_id=repo_id,
                   repo_type="space",
-                  revision=revision,
+                  revision=uploaded_commit,
                   token=token,
               )
           )
           missing = required_files - remote_files
           if missing:
-              raise RuntimeError(f"Remote Space is missing required files: {sorted(missing)}")
+              raise RuntimeError(f"Uploaded Space commit is missing files: {sorted(missing)}")
 
-          downloaded: dict[str, str] = {}
+          downloaded = {}
           for filename in ("Dockerfile", "app_redesign.py", "GITHUB_DEPLOYMENT_SHA"):
               path = hf_hub_download(
                   repo_id=repo_id,
                   repo_type="space",
-                  revision=revision,
+                  revision=uploaded_commit,
                   filename=filename,
                   token=token,
+                  force_download=True,
               )
               downloaded[filename] = Path(path).read_text(encoding="utf-8")
 
-          dockerfile = downloaded["Dockerfile"]
-          redesigned_app = downloaded["app_redesign.py"]
-          deployed_github_sha = downloaded["GITHUB_DEPLOYMENT_SHA"].strip()
-
           checks = {
-              "Docker launches app_redesign.py": 'CMD ["python", "app_redesign.py"]' in dockerfile,
-              "Remote UI has SYSTEM STATUS": "SYSTEM STATUS" in redesigned_app,
-              "Remote UI has scan launcher": "Start a new scan" in redesigned_app,
-              "Remote UI has run button": "Run website scan" in redesigned_app,
-              "Remote manifest matches GitHub": deployed_github_sha == github_sha,
+              "Docker launches app_redesign.py": 'CMD ["python", "app_redesign.py"]' in downloaded["Dockerfile"],
+              "Remote UI has SYSTEM STATUS": "SYSTEM STATUS" in downloaded["app_redesign.py"],
+              "Remote UI has scan launcher": "Start a new scan" in downloaded["app_redesign.py"],
+              "Remote UI has run button": "Run website scan" in downloaded["app_redesign.py"],
+              "Remote manifest matches GitHub": downloaded["GITHUB_DEPLOYMENT_SHA"].strip() == github_sha,
           }
           failed = [name for name, passed in checks.items() if not passed]
           if failed:
-              raise RuntimeError("Remote verification failed: " + "; ".join(failed))
+              raise RuntimeError("Remote file verification failed: " + "; ".join(failed))
+
+          branch_sha = None
+          for _ in range(12):
+              branch_sha = api.space_info(repo_id=repo_id, token=token).sha
+              if branch_sha == uploaded_commit:
+                  break
+              time.sleep(5)
+          if branch_sha != uploaded_commit:
+              raise RuntimeError(
+                  f"Space main did not advance to uploaded commit. Expected {uploaded_commit}, got {branch_sha}."
+              )
 
           print(f"GitHub source SHA: {github_sha}")
-          print(f"Hugging Face Space SHA: {revision}")
-          print(f"Hub commit URL: {commit.commit_url}")
+          print(f"Verified Hugging Face main SHA: {branch_sha}")
           for name in checks:
               print(f"VERIFIED: {name}")
           PY

@@ -16,19 +16,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  sync:
+  deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
-      - name: Sync hf-space to Hugging Face
-        uses: huggingface/hub-sync@v0.1.0
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          github_repo_id: ${{ github.repository }}
-          huggingface_repo_id: milo2455555/fixlist-ai
-          hf_token: ${{ secrets.HF_TOKEN }}
-          repo_type: space
-          space_sdk: docker
-          private: true
-          subdirectory: hf-space
+          python-version: "3.12"
+
+      - name: Install Hugging Face CLI
+        run: python -m pip install --upgrade "huggingface_hub>=0.30"
+
+      - name: Validate Space bundle
+        run: |
+          test -f hf-space/Dockerfile
+          test -f hf-space/app.py
+          test -f hf-space/app_redesign.py
+          test -f hf-space/requirements.txt
+          grep -q 'CMD \["python", "app_redesign.py"\]' hf-space/Dockerfile
+
+      - name: Upload hf-space to the Space root
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          test -n "$HF_TOKEN"
+          hf upload milo2455555/fixlist-ai hf-space . \
+            --repo-type space \
+            --token "$HF_TOKEN" \
+            --delete "*" \
+            --commit-message "Deploy FixList AI from GitHub ${GITHUB_SHA}"
+
+      - name: Verify remote Space revision
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          hf spaces info milo2455555/fixlist-ai \
+            --token "$HF_TOKEN" \
+            --expand sdk,runtime,sha,lastModified

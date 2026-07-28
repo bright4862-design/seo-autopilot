@@ -30,16 +30,22 @@ jobs:
           test -f hf-space/requirements.txt
           grep -q 'CMD \["python", "app_redesign.py"\]' hf-space/Dockerfile
 
-      - name: Mirror hf-space into Hugging Face Space
+      - name: Configure Hugging Face credentials
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$HF_TOKEN"
+          python -m pip install --upgrade "huggingface_hub>=0.30"
+          hf auth login --token "$HF_TOKEN" --add-to-git-credential
+
+      - name: Mirror hf-space into Hugging Face Space
+        run: |
+          set -euo pipefail
           export GIT_LFS_SKIP_SMUDGE=1
 
           git clone --depth 1 \
-            "https://oauth2:${HF_TOKEN}@huggingface.co/spaces/milo2455555/fixlist-ai" \
+            https://huggingface.co/spaces/milo2455555/fixlist-ai \
             /tmp/fixlist-ai-space
 
           rsync -a --delete --exclude='.git/' hf-space/ /tmp/fixlist-ai-space/
@@ -58,9 +64,4 @@ jobs:
           fi
 
       - name: Show deployed Space revision
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          git ls-remote \
-            "https://oauth2:${HF_TOKEN}@huggingface.co/spaces/milo2455555/fixlist-ai" \
-            refs/heads/main
+        run: git ls-remote https://huggingface.co/spaces/milo2455555/fixlist-ai refs/heads/main

@@ -37,6 +37,7 @@ SCANNER_API_KEY = os.getenv("SCANNER_API_KEY", "")
 TRUST_DISCOVERY_TIMEOUTS = {"basic": 2.0, "quick": 3.0, "deep": 5.0, "advanced": 7.0}
 SCAN_RESPONSE_PAGE_LIMITS = {"basic": 25, "quick": 40, "deep": 85, "advanced": 150}
 SCANNER_BUILD_REVISION = "leaf_seed_grok_proxy_v1"
+GROK_ERROR_DETAIL_VERSION = "grok_upstream_detail_v1"
 
 app = FastAPI(title="FixList Scanner API", version=VERSION)
 
@@ -108,6 +109,7 @@ def health():
         "version": VERSION,
         "scanner_build_revision": SCANNER_BUILD_REVISION,
         "grok_chat_version": GROK_CHAT_VERSION,
+        "grok_error_detail_version": GROK_ERROR_DETAIL_VERSION,
         "grok_model_id": GROK_MODEL_ID,
         "grok_proxy_enabled": True,
         "review_version": REVIEW_VERSION,

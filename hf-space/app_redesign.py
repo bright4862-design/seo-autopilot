@@ -215,7 +215,16 @@ footer { display: none !important; }
 scanner_state_label = "Connected" if SETTINGS.live_scan_enabled else "Setup needed"
 ai_state_label = "Grok" if SETTINGS.live_grok_enabled else "Guided"
 
-with gr.Blocks(title="FixList AI") as demo:
+with gr.Blocks(
+    title="FixList AI",
+    css=CSS,
+    theme=gr.themes.Base(
+        primary_hue="green",
+        neutral_hue="gray",
+        radius_size="lg",
+        spacing_size="md",
+    ),
+) as demo:
     current_scan = gr.State(DEMO_SCAN)
 
     with gr.Row(elem_classes="app-shell"):
@@ -372,13 +381,6 @@ with gr.Blocks(title="FixList AI") as demo:
 
 if __name__ == "__main__":
     demo.queue(default_concurrency_limit=4).launch(
-        theme=gr.themes.Base(
-            primary_hue="green",
-            neutral_hue="gray",
-            radius_size="lg",
-            spacing_size="md",
-        ),
-        css=CSS,
         server_name=os.getenv("GRADIO_SERVER_NAME", "0.0.0.0"),
         server_port=int(os.getenv("GRADIO_SERVER_PORT", "7860")),
         show_error=True,

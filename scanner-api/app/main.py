@@ -37,7 +37,7 @@ from .url_evidence import URL_EVIDENCE_VERSION, apply_verified_url_contract
 SCANNER_API_KEY = os.getenv("SCANNER_API_KEY", "")
 TRUST_DISCOVERY_TIMEOUTS = {"basic": 2.0, "quick": 3.0, "deep": 5.0, "advanced": 7.0}
 SCAN_RESPONSE_PAGE_LIMITS = {"basic": 25, "quick": 40, "deep": 85, "advanced": 150}
-SCANNER_BUILD_REVISION = "leaf_seed_grok_proxy_v1"
+SCANNER_BUILD_REVISION = "authenticated_health_probe_v1"
 GROK_ERROR_DETAIL_VERSION = "grok_upstream_detail_v1"
 
 app = FastAPI(title="FixList Scanner API", version=VERSION)
@@ -104,8 +104,7 @@ def enforce_scan_response_page_budget(result: dict[str, Any], scan_mode: str) ->
     return apply_verified_url_contract(result)
 
 
-@app.get("/health")
-def health():
+def health_payload() -> dict[str, Any]:
     return {
         "ok": True,
         "version": VERSION,
@@ -125,6 +124,23 @@ def health():
         "sitemap_time_reservation_version": SITEMAP_TIME_RESERVATION_VERSION,
         "beta_revision_fingerprint": live_revision()["fingerprint"],
         "observability_version": OBSERVABILITY_VERSION,
+    }
+
+
+@app.get("/health")
+def health():
+    return health_payload()
+
+
+@app.get("/health/auth")
+def authenticated_health(x_scanner_key: str | None = Header(default=None)):
+    """Verify both scanner reachability and the caller's shared scanner key."""
+    if SCANNER_API_KEY and x_scanner_key != SCANNER_API_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return {
+        **health_payload(),
+        "authenticated": True,
+        "key_required": bool(SCANNER_API_KEY),
     }
 
 

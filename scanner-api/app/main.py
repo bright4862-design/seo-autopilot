@@ -6,6 +6,7 @@ from fastapi import Body, FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
 from .evidence_quality import EVIDENCE_QUALITY_GATE_VERSION, apply_evidence_quality_gate
+from .grok_chat import GROK_CHAT_VERSION, GROK_MODEL_ID, run_grok_chat
 from .indexability_postprocess import apply_indexability_quality_to_result
 from .indexability_quality import INDEXABILITY_QUALITY_VERSION
 from .navigation_indexability import NAVIGATION_INDEXABILITY_VERSION
@@ -30,7 +31,7 @@ from .trust_discovery import apply_trust_discovery_gate, enrich_scan_with_trust_
 SCANNER_API_KEY = os.getenv("SCANNER_API_KEY", "")
 TRUST_DISCOVERY_TIMEOUTS = {"basic": 2.0, "quick": 3.0, "deep": 5.0, "advanced": 7.0}
 SCAN_RESPONSE_PAGE_LIMITS = {"basic": 25, "quick": 40, "deep": 85, "advanced": 150}
-SCANNER_BUILD_REVISION = "leaf_seed_full_site_v1"
+SCANNER_BUILD_REVISION = "leaf_seed_grok_proxy_v1"
 
 app = FastAPI(title="FixList Scanner API", version=VERSION)
 
@@ -41,6 +42,11 @@ class ScanRequest(BaseModel):
     scan_mode: str = "advanced"
     business_name: str | None = None
     cms_platform: str | None = None
+
+
+class ChatRequest(BaseModel):
+    message: str
+    scan: dict[str, Any] = {}
 
 
 def enforce_scan_response_page_budget(result: dict[str, Any], scan_mode: str) -> dict[str, Any]:
@@ -96,6 +102,9 @@ def health():
         "ok": True,
         "version": VERSION,
         "scanner_build_revision": SCANNER_BUILD_REVISION,
+        "grok_chat_version": GROK_CHAT_VERSION,
+        "grok_model_id": GROK_MODEL_ID,
+        "grok_proxy_enabled": True,
         "review_version": REVIEW_VERSION,
         "archetype_classifier_version": ARCHETYPE_CLASSIFIER_VERSION,
         "review_evidence_calibration_version": CALIBRATION_VERSION,
@@ -114,6 +123,32 @@ def revision():
     """Live beta-revision fingerprint for verifying a deployed scanner against
     the recorded freeze in data/beta-crawler-revision.json."""
     return live_revision()
+
+
+@app.post("/chat")
+async def chat(payload: ChatRequest, x_scanner_key: str | None = Header(default=None)):
+    if SCANNER_API_KEY and x_scanner_key != SCANNER_API_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    message = str(payload.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Enter a question about the current scan.")
+    if len(message) > 4000:
+        raise HTTPException(status_code=400, detail="Question is too long.")
+
+    try:
+        answer = await run_grok_chat(message, payload.scan if isinstance(payload.scan, dict) else {})
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Grok is temporarily unavailable ({type(exc).__name__}).",
+        ) from exc
+    return {
+        "success": True,
+        "answer": answer,
+        "model": GROK_MODEL_ID,
+        "grok_chat_version": GROK_CHAT_VERSION,
+    }
 
 
 @app.post("/scan")

@@ -31,7 +31,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Validate redesigned Space bundle
+      - name: Validate current Space bundle
         run: |
           set -euo pipefail
           test -f hf-space/Dockerfile
@@ -39,9 +39,16 @@ jobs:
           test -f hf-space/app_redesign.py
           test -f hf-space/requirements.txt
           grep -Fq 'CMD ["python", "app_redesign.py"]' hf-space/Dockerfile
-          grep -Fq 'SYSTEM STATUS' hf-space/app_redesign.py
-          grep -Fq 'Start a new scan' hf-space/app_redesign.py
-          grep -Fq 'Run website scan' hf-space/app_redesign.py
+          grep -Fq 'run_scan_from_ui as run_scan_pipeline_ui' hf-space/app_redesign.py
+          grep -Fq 'current_scan = gr.State({})' hf-space/app_redesign.py
+          grep -Fq 'interactive=SETTINGS.live_scan_enabled' hf-space/app_redesign.py
+          grep -Fq 'api_name="run_scan"' hf-space/app_redesign.py
+          grep -Fq 'Debug JSON' hf-space/app_redesign.py
+          grep -Fq 'Ready for a new scan' hf-space/app_redesign.py
+          if grep -Fq 'gr.State(DEMO_SCAN)' hf-space/app_redesign.py; then
+            echo "::error title=Demo state detected::The deployed redesign must start with an empty scan state."
+            exit 1
+          fi
 
       - name: Confirm HF_TOKEN secret exists
         env:
@@ -158,11 +165,14 @@ jobs:
               )
               downloaded[filename] = Path(path).read_text(encoding="utf-8")
 
+          redesigned_app = downloaded["app_redesign.py"]
           checks = {
               "Docker launches app_redesign.py": 'CMD ["python", "app_redesign.py"]' in downloaded["Dockerfile"],
-              "Remote UI has SYSTEM STATUS": "SYSTEM STATUS" in downloaded["app_redesign.py"],
-              "Remote UI has scan launcher": "Start a new scan" in downloaded["app_redesign.py"],
-              "Remote UI has run button": "Run website scan" in downloaded["app_redesign.py"],
+              "Remote UI calls scanner pipeline": "run_scan_from_ui as run_scan_pipeline_ui" in redesigned_app,
+              "Remote UI starts without demo data": "current_scan = gr.State({})" in redesigned_app and "gr.State(DEMO_SCAN)" not in redesigned_app,
+              "Remote scan button follows live configuration": "interactive=SETTINGS.live_scan_enabled" in redesigned_app,
+              "Remote run_scan API is registered": 'api_name="run_scan"' in redesigned_app,
+              "Remote debug evidence panel exists": "Debug JSON" in redesigned_app,
               "Remote manifest matches GitHub": downloaded["GITHUB_DEPLOYMENT_SHA"].strip() == github_sha,
           }
           failed = [name for name, passed in checks.items() if not passed]

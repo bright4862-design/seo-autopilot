@@ -13,7 +13,7 @@ const LIMITED_SCAN_STATUSES = new Set([
 const MODE_PAGE_LIMITS = { basic: 25, quick: 40, deep: 85, advanced: 150 };
 export const RELEASE_AUTHORITY_CONTRACT = Object.freeze({
   scannerVersion: "python_scanner_v3_bounded_request",
-  scannerBuildRevision: "hard_page_cap_response_v1",
+  scannerBuildRevision: "leaf_seed_grok_proxy_v1",
   archetypeClassifierVersion: "archetype_classifier_v9_local_business_hospitality",
   reviewVersion: "python_review_v2_structural_marketplace",
   calibrationVersion: "review_evidence_calibration_v5_utility_redirect",

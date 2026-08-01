@@ -1,0 +1,90 @@
+# REVIEW ONLY. This file documents the proposed Premium 5,000 infrastructure.
+# It is intentionally not a directly deployable gcloud export or Terraform module.
+# Security/Cloud review must replace every placeholder and approve IAM before any apply.
+apiVersion: fixlist.ai/v1alpha1
+kind: PremiumDeploymentReview
+metadata:
+  name: premium-5000-disabled-review
+  annotations:
+    review.fixlist.ai/apply: "false"
+    review.fixlist.ai/customer-ready: "false"
+spec:
+  region: europe-west1
+  isolation:
+    standard150Unchanged: true
+    separateService: true
+    separateQueue: true
+    separateRuntimeDependencies: true
+  worker:
+    serviceName: seo-autopilot-premium-5000-worker
+    serviceAccount: premium-5000-worker@PROJECT_ID.iam.gserviceaccount.com
+    ingress: internal-and-cloud-load-balancing
+    authentication: required
+    containerConcurrency: 1
+    minInstances: 0
+    maxInstances: 1
+    timeoutSeconds: 900
+    environment:
+      PREMIUM_5000_ENABLED: "false"
+      PREMIUM_5000_KILL_SWITCH: "true"
+      PREMIUM_5000_GLOBAL_ACTIVE_LIMIT: "1"
+      PREMIUM_5000_TENANT_ACTIVE_LIMIT: "1"
+      PREMIUM_5000_BATCH_SIZE: "10"
+      PREMIUM_5000_PAGE_CAP: "5000"
+      PREMIUM_5000_TASK_AUDIENCE: "https://PREMIUM_WORKER_URL/internal/premium-5000/tasks"
+      PREMIUM_5000_TASK_SERVICE_ACCOUNT: "premium-5000-tasks@PROJECT_ID.iam.gserviceaccount.com"
+  queue:
+    name: premium-5000-batches
+    location: europe-west1
+    state: PAUSED
+    maxConcurrentDispatches: 1
+    maxDispatchesPerSecond: 1
+    retryConfig:
+      maxAttempts: 5
+      maxRetryDurationSeconds: 3600
+      minBackoffSeconds: 10
+      maxBackoffSeconds: 300
+      maxDoublings: 4
+    oidc:
+      serviceAccount: premium-5000-tasks@PROJECT_ID.iam.gserviceaccount.com
+      audience: "https://PREMIUM_WORKER_URL/internal/premium-5000/tasks"
+  recovery:
+    schedulerName: premium-5000-recovery
+    state: PAUSED
+    cadence: "*/5 * * * *"
+    target: "https://PREMIUM_WORKER_URL/internal/premium-5000/recovery"
+    oidcServiceAccount: premium-5000-recovery@PROJECT_ID.iam.gserviceaccount.com
+  persistence:
+    firestoreCollectionsPrefix: premium
+    evidenceBucket: gs://PREMIUM_PRIVATE_BUCKET
+    publicAccessPrevention: enforced
+    uniformBucketLevelAccess: true
+  iamReview:
+    prohibitedPrincipals:
+      - allUsers
+      - allAuthenticatedUsers
+    prohibitedPrimitiveRoles:
+      - roles/owner
+      - roles/editor
+    proposedBindings:
+      - principal: premium-5000-worker@PROJECT_ID.iam.gserviceaccount.com
+        roles:
+          - roles/datastore.user
+          - roles/storage.objectCreator
+          - roles/storage.objectViewer
+      - principal: premium-5000-coordinator@PROJECT_ID.iam.gserviceaccount.com
+        roles:
+          - roles/cloudtasks.enqueuer
+          - roles/datastore.user
+      - principal: premium-5000-tasks@PROJECT_ID.iam.gserviceaccount.com
+        roles:
+          - roles/run.invoker
+      - principal: premium-5000-recovery@PROJECT_ID.iam.gserviceaccount.com
+        roles:
+          - roles/run.invoker
+    reviewNotes:
+      - Replace PROJECT_ID, URLs, bucket and immutable image digests before review.
+      - Validate whether objectCreator plus objectViewer can be narrowed for the final artifact flow.
+      - Grant service-account token creation only where Cloud Tasks OIDC requires it.
+      - Do not bind any Premium identity to the Standard scanner service.
+      - Do not apply this review document directly.

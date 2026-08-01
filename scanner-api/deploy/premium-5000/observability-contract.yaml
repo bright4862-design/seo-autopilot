@@ -1,0 +1,81 @@
+apiVersion: fixlist.ai/v1alpha1
+kind: PremiumObservabilityContract
+metadata:
+  name: premium-5000-observability
+  annotations:
+    review.fixlist.ai/apply: "false"
+spec:
+  structuredLogVersion: premium-5000-log/1
+  requiredFields:
+    - severity
+    - event
+    - timestamp
+    - request_id
+    - scan_id
+    - batch_id
+    - task_name
+    - attempt
+    - lease_generation
+    - state_version
+    - duration_ms
+    - release_identity
+    - error_id
+    - outcome
+  optionalCounters:
+    - discovered
+    - eligible
+    - scheduled
+    - fetch_attempted
+    - fetched_ok
+    - fetch_failed
+    - retried
+    - redirected
+    - canonical_unique
+    - retained
+    - deduplicated
+    - robots_excluded
+    - scope_excluded
+    - rate_limited
+    - batches_total
+    - batches_completed
+  privacy:
+    hashOrTokenize:
+      - tenant_id
+      - owner_id
+      - project_id
+      - lease_owner
+    redact:
+      - authorization
+      - cookie
+      - set-cookie
+      - idempotency_key
+      - oidc_token
+      - raw_page_body
+      - request_headers
+      - response_headers
+      - url_query
+      - url_fragment
+    maximumUrlLogForm: scheme_host_path_without_query
+  metrics:
+    - premium_queue_oldest_task_age_seconds
+    - premium_pages_per_minute
+    - premium_batch_attempts_total
+    - premium_batch_retries_total
+    - premium_batch_failures_total
+    - premium_stale_leases_total
+    - premium_recovery_actions_total
+    - premium_cancellation_latency_seconds
+    - premium_scan_outcomes_total
+    - premium_pages_fetched_total
+    - premium_bytes_downloaded_total
+    - premium_firestore_writes_total
+    - premium_task_dispatches_total
+  alertReview:
+    - condition: queue_oldest_task_age_seconds > 600
+      action: pause queue and inspect worker health
+    - condition: stale_leases_total increases in two consecutive sweeps
+      action: keep kill switch on and reconcile leases
+    - condition: cancellation_latency_seconds > 120
+      action: pause queue and inspect heartbeat/cancellation checks
+    - condition: any Standard route regression
+      action: stop Premium review and restore Standard isolation

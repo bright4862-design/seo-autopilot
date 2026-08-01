@@ -1,0 +1,5 @@
+# Premium 5,000 worker/coordinator dependencies only.
+# Do not merge these pins into scanner-api/requirements.txt or the Standard 150 image.
+google-cloud-firestore==2.28.0
+google-cloud-tasks==2.23.0
+google-auth[requests]==2.56.2

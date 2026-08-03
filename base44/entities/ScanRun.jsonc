@@ -2,8 +2,15 @@
   "name": "ScanRun",
   "type": "object",
   "properties": {
+    "request_id": { "type": "string", "description": "Owner-scoped request identity used for replay protection." },
+    "idempotency_key": { "type": "string", "description": "Must equal request_id for the Standard scan path." },
+    "request_fingerprint": { "type": "string", "description": "Normalized scan mode and target used to reject conflicting replays." },
+    "scan_id": { "type": "string", "description": "Canonical scan identity; set to this entity record's server-generated id." },
     "project_id": { "type": "string" },
     "website_url": { "type": "string" },
+    "submitted_url": { "type": "string" },
+    "final_url": { "type": "string" },
+    "normalized_domain": { "type": "string" },
     "path_prefix": { "type": "string" },
     "scan_mode": {
       "type": "string",
@@ -19,6 +26,8 @@
     "status_detail": { "type": "string" },
     "scanner_version": { "type": "string" },
     "scanner_build_revision": { "type": "string" },
+    "scanner_wrapper_version": { "type": "string" },
+    "release_id": { "type": "string", "description": "Composite scanner version/build/beta fingerprint identity." },
     "advanced_scan_backend": { "type": "string" },
     "deno_fallback_used": { "type": "boolean", "default": false },
     "archetype_classifier_version": { "type": "string" },
@@ -66,18 +75,41 @@
     "error_code": { "type": "string" },
     "error_message": { "type": "string" },
     "cancelled_reason": { "type": "string" },
+    "respect_robots_txt": { "type": "boolean", "default": true },
     "queued_at": { "type": "string" },
     "started_at": { "type": "string" },
     "reviewing_at": { "type": "string" },
     "completed_at": { "type": "string" },
-    "owner_user_id": { "type": "string" }
+    "authority_seal_version": {
+      "type": "string",
+      "description": "Server-only HMAC evidence contract version. Browser-created scans remain unsealed.",
+      "rls": { "write": { "user_condition": { "role": "admin" } } }
+    },
+    "authority_sealed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Time the trusted review snapshot was persisted by persistScanAuthority.",
+      "rls": { "write": { "user_condition": { "role": "admin" } } }
+    },
+    "authority_proof": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "HMAC-SHA256 proof binding the ScanRun, FixList, and FixItems consumed by Grok.",
+      "rls": { "write": { "user_condition": { "role": "admin" } } }
+    },
+    "owner_user_id": {
+      "type": "string",
+      "rls": { "update": { "user_condition": { "role": "admin" } } }
+    }
   },
   "required": ["project_id", "website_url"],
   "rls": {
     "create": {
       "$or": [
         { "user_condition": { "role": "admin" } },
-        { "user_condition": { "role": "user" } }
+        { "data.owner_user_id": "{{user.id}}" }
       ]
     },
     "read": {

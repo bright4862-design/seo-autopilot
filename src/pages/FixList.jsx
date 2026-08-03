@@ -4,28 +4,9 @@ import { Bug, Copy, Download, ExternalLink, RefreshCw, Trash2 } from "lucide-rea
 
 import { isRateLimitFinding, shouldUseLegacyRateLimitPresentation } from "@/lib/reviewContract";
 import { trackEvent } from "@/lib/analytics";
+import { getScanRunWithFixList } from "@/lib/scanRuns";
+import { CUSTOMER_BOUNDARY_EVENT } from "@/lib/customerBrowserCache";
 import ScoreRing from "@/components/fixlist/ScoreRing";
-
-const DASHBOARD_LAST_SCAN_KEY = "seo_autopilot:last_scan";
-const DASHBOARD_HISTORY_KEY = "seo_autopilot:scan_history";
-const LEGACY_LAST_SCAN_KEY = "SEO_AUTOPILOT_LAST_SCAN";
-const LEGACY_HISTORY_KEY = "SEO_AUTOPILOT_SCAN_HISTORY";
-const ACTIVE_SCAN_URL_KEY = "seo_autopilot:active_scan_url";
-const ACTIVE_SCAN_STARTED_AT_KEY = "seo_autopilot:active_scan_started_at";
-const SCAN_DEBUG_KEY = "seo_autopilot:scan_debug";
-const SCAN_RECORD_PREFIX = "seo_autopilot:scan:";
-const DONE_FIXES_KEY = "seo_autopilot:done_fixes";
-
-const STORAGE_KEYS = [
-  DASHBOARD_LAST_SCAN_KEY,
-  LEGACY_LAST_SCAN_KEY,
-  DASHBOARD_HISTORY_KEY,
-  LEGACY_HISTORY_KEY,
-  ACTIVE_SCAN_URL_KEY,
-  ACTIVE_SCAN_STARTED_AT_KEY,
-  SCAN_DEBUG_KEY,
-  DONE_FIXES_KEY,
-];
 
 const CMS_OPTIONS = [
   { value: "wordpress", label: "WordPress" },
@@ -84,35 +65,75 @@ export default function FixList() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const requestedScanId = searchParams.get("scan_id") || "";
-  const [scanRecord, setScanRecord] = useState(() => readBestScanRecord(requestedScanId));
-  const [debugData, setDebugData] = useState(() => readScanDebugData());
-  const [selectedCms, setSelectedCms] = useState(() => normalizeCmsValue(scanRecord?.cms_platform || "custom"));
-  const [doneIds, setDoneIds] = useState(() => readDoneFixIds(websiteKeyOf(scanRecord)));
+  const [scanRecord, setScanRecord] = useState(null);
+  const [requestedScanState, setRequestedScanState] = useState(requestedScanId ? "loading" : "idle");
+  const [reloadToken, setReloadToken] = useState(0);
+  const [debugData, setDebugData] = useState(() => buildAuthoritativeDebugData(null));
+  const [selectedCms, setSelectedCms] = useState("custom");
+  const [doneIds, setDoneIds] = useState([]);
 
   function reloadScan() {
-    const next = readBestScanRecord(requestedScanId);
-    setScanRecord(next);
-    setDebugData(readScanDebugData());
-    setDoneIds(readDoneFixIds(websiteKeyOf(next)));
-    if (next?.cms_platform) setSelectedCms(normalizeCmsValue(next.cms_platform));
+    setReloadToken((value) => value + 1);
   }
 
   useEffect(() => {
-    reloadScan();
-    window.addEventListener("seo-autopilot-scan-saved", reloadScan);
-    window.addEventListener("storage", reloadScan);
+    let cancelled = false;
+
+    function applyRecord(next) {
+      if (cancelled) return;
+      setScanRecord(next);
+      setDebugData(buildAuthoritativeDebugData(next));
+      setDoneIds([]);
+      if (next?.cms_platform) setSelectedCms(normalizeCmsValue(next.cms_platform));
+    }
+
+    async function loadRequestedScan() {
+      applyRecord(null);
+
+      if (!requestedScanId) {
+        setRequestedScanState("idle");
+        return;
+      }
+
+      setRequestedScanState("loading");
+      const durableBundle = await getScanRunWithFixList(requestedScanId);
+      if (cancelled) return;
+      if (durableBundle?.run) {
+        applyRecord(normalizeDurableScanBundle(durableBundle));
+        setRequestedScanState("loaded");
+      } else {
+        applyRecord(null);
+        setRequestedScanState("not_found");
+      }
+    }
+
+    function clearProtectedView() {
+      cancelled = true;
+      setScanRecord(null);
+      setDebugData(buildAuthoritativeDebugData(null));
+      setDoneIds([]);
+      setRequestedScanState(requestedScanId ? "not_found" : "idle");
+    }
+
+    loadRequestedScan();
+    window.addEventListener(CUSTOMER_BOUNDARY_EVENT, clearProtectedView);
     return () => {
-      window.removeEventListener("seo-autopilot-scan-saved", reloadScan);
-      window.removeEventListener("storage", reloadScan);
+      cancelled = true;
+      window.removeEventListener(CUSTOMER_BOUNDARY_EVENT, clearProtectedView);
     };
-  }, [requestedScanId]);
+  }, [requestedScanId, reloadToken]);
 
   const recommendations = useMemo(() => mergeMetaDescriptionRecommendations(getRecommendations(scanRecord).map((item) => normalizeRecommendation(item, scanRecord))), [scanRecord]);
   const pages = useMemo(() => getPages(scanRecord), [scanRecord]);
   const healthScore = getHealthScore(scanRecord);
   const scoreUnavailable = isHealthScoreUnavailable(scanRecord);
   const pagesScanned = getPagesScanned(scanRecord, pages);
-  const hasUsefulScan = Boolean(scanRecord && (recommendations.length > 0 || pages.length > 0 || (healthScore !== null && healthScore > 0)));
+  const hasUsefulScan = Boolean(scanRecord && (
+    recommendations.length > 0
+    || pages.length > 0
+    || (healthScore !== null && healthScore > 0)
+    || (scanRecord.status === "complete" && scanRecord.is_authoritative === true)
+  ));
   const noHighConfidenceFindings = isNoHighConfidenceFindings(scanRecord, recommendations);
   const nextBestStep = getNextBestStep(scanRecord, noHighConfidenceFindings);
   const websiteKey = websiteKeyOf(scanRecord);
@@ -130,14 +151,12 @@ export default function FixList() {
   function markDone(item) {
     const next = [...doneIds, item.id];
     setDoneIds(next);
-    writeDoneFixIds(websiteKey, next);
     trackEvent("recommendation_marked_reviewed", { fix_id: item.id, category: item.category });
   }
 
   function undoDone(item) {
     const next = doneIds.filter((id) => id !== item.id);
     setDoneIds(next);
-    writeDoneFixIds(websiteKey, next);
   }
 
   return (
@@ -154,7 +173,16 @@ export default function FixList() {
           </button>
         </div>
 
-        {hasUsefulScan ? (
+        {requestedScanId && requestedScanState === "loading" && !scanRecord ? (
+          <RequestedScanState title="Loading this scan…" detail="FixList is reopening the exact saved scan from your account." />
+        ) : requestedScanId && requestedScanState === "not_found" ? (
+          <RequestedScanState title="Scan not found" detail="This scan does not exist or is not available to this signed-in account. No other scan has been substituted." />
+        ) : scanRecord && !hasUsefulScan ? (
+          <RequestedScanState
+            title={getDurableScanStateTitle(scanRecord.status)}
+            detail={getDurableScanStateDetail(scanRecord.status)}
+          />
+        ) : hasUsefulScan ? (
           <>
             <p className="mt-16 text-[13px] text-ink-faint tabular-nums">
               Scanned {scanRecord?.created_at ? formatDate(scanRecord.created_at) : "recently"} · {pagesScanned} pages checked
@@ -250,7 +278,7 @@ export default function FixList() {
           <NoScanState onScan={() => navigate("/onboarding")} />
         )}
 
-        <ScanDebugPanel debugData={debugData} onRefresh={reloadScan} onClear={() => { clearAllScanData(); reloadScan(); }} />
+        <ScanDebugPanel debugData={debugData} onRefresh={reloadScan} onClear={() => setDebugData(buildAuthoritativeDebugData(scanRecord))} />
 
         <footer className="mt-24 border-t border-hairline-soft pt-5 text-[12px] leading-relaxed text-ink-faint">
           {hasUsefulScan
@@ -267,6 +295,15 @@ function SectionEyebrow({ label, count }) {
     <div className="mt-16 flex items-baseline gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
       {label}
       {typeof count === "number" ? <span className="font-normal tabular-nums">{count}</span> : null}
+    </div>
+  );
+}
+
+function RequestedScanState({ title, detail }) {
+  return (
+    <div className="mt-16 rounded-2xl border border-hairline-soft bg-white p-6">
+      <h1 className="text-[22px] font-semibold tracking-tight">{title}</h1>
+      <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{detail}</p>
     </div>
   );
 }
@@ -632,24 +669,6 @@ function websiteKeyOf(record) {
   const key = cleanString(record?.website_key);
   if (key) return key;
   return safeHostname(record?.website_url) || "";
-}
-
-function readDoneFixIds(websiteKey) {
-  if (!websiteKey) return [];
-  const stored = safeParseLocalStorage(DONE_FIXES_KEY);
-  const list = stored && typeof stored === "object" ? stored[websiteKey] : null;
-  return Array.isArray(list) ? list.map(String) : [];
-}
-
-function writeDoneFixIds(websiteKey, ids) {
-  if (!websiteKey || typeof window === "undefined") return;
-  try {
-    const stored = safeParseLocalStorage(DONE_FIXES_KEY) || {};
-    stored[websiteKey] = Array.from(new Set(ids.map(String)));
-    window.localStorage.setItem(DONE_FIXES_KEY, JSON.stringify(stored));
-  } catch (error) {
-    console.warn("Could not save done fixes.", error);
-  }
 }
 
 function normalizeRecommendation(item = {}, scanRecord = {}) {
@@ -1106,72 +1125,23 @@ function formatMetadataStateBreakdown(value = {}) {
   ].filter(Boolean).join(" · ");
 }
 
-function readBestScanRecord(requestedScanId = "") {
-  if (requestedScanId) {
-    const direct = safeParseLocalStorage(`${SCAN_RECORD_PREFIX}${requestedScanId}`);
-    if (isUsefulScanCandidate(direct)) return normalizeStoredScanCandidate(direct);
-  }
-  const candidates = [];
-  const lastScan = safeParseLocalStorage(DASHBOARD_LAST_SCAN_KEY);
-  const legacyLastScan = safeParseLocalStorage(LEGACY_LAST_SCAN_KEY);
-  if (lastScan) candidates.push(lastScan);
-  if (legacyLastScan) candidates.push(legacyLastScan);
-
-  const history = safeParseLocalStorage(DASHBOARD_HISTORY_KEY);
-  const legacyHistory = safeParseLocalStorage(LEGACY_HISTORY_KEY);
-  if (Array.isArray(history)) candidates.push(...history);
-  if (Array.isArray(legacyHistory)) candidates.push(...legacyHistory);
-
-  const valid = candidates.filter(Boolean).map(normalizeStoredScanCandidate).filter(isUsefulScanCandidate).sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
-  if (requestedScanId) {
-    const exact = valid.find((item) => (item.scan_id || item.scan_run_id || item.id) === requestedScanId);
-    if (exact) return exact;
-  }
-  return valid[0] || null;
-}
-
-function normalizeStoredScanCandidate(candidate) {
-  if (!candidate || typeof candidate !== "object") return null;
-  const pages = getPages(candidate);
-  const recommendations = getRecommendations(candidate);
-  const score = getHealthScore(candidate);
-  return { ...candidate, pages, crawled_pages: pages, recommendations, fixes: recommendations, findings: recommendations, health_score: score, seo_score: score };
-}
-
-function isUsefulScanCandidate(candidate) {
-  if (!candidate) return false;
-  return Boolean(candidate.website_url || candidate.raw?.scanner?.website_url) && (getPages(candidate).length > 0 || getRecommendations(candidate).length > 0 || getHealthScore(candidate) > 0);
-}
-
-function readScanDebugData() {
-  if (typeof window === "undefined") return { raw: {}, parsed: {} };
-  const raw = {};
-  const parsed = {};
-  STORAGE_KEYS.forEach((key) => {
-    const value = window.localStorage.getItem(key);
-    raw[key] = value;
-    try { parsed[key] = value ? JSON.parse(value) : null; } catch { parsed[key] = value; }
-  });
-  return { read_at: new Date().toISOString(), raw, parsed };
-}
-
-function clearAllScanData() {
-  try {
-    STORAGE_KEYS.forEach((key) => window.localStorage.removeItem(key));
-    window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
-  } catch (error) {
-    console.warn("Could not clear scan data.", error);
-  }
-}
-
-function safeParseLocalStorage(key) {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
+function buildAuthoritativeDebugData(record) {
+  if (!record) return { source: "authoritative_server", scan_id: "", identity: null };
+  return {
+    source: "authoritative_server",
+    scan_id: record.scan_id || record.scan_run_id || record.id || "",
+    identity: {
+      owner_user_id: record.owner_user_id || "",
+      project_id: record.project_id || "",
+      request_id: record.request_id || "",
+      scan_id: record.scan_id || record.scan_run_id || record.id || "",
+      normalized_domain: record.normalized_domain || safeHostname(record.website_url),
+      canonical_mode: record.scan_mode || "advanced",
+      release_identity: record.beta_revision_fingerprint || "",
+    },
+    status: record.status || record.scan_status || "",
+    release_gate_eligible: record.release_gate_eligible === true,
+  };
 }
 
 function getRecommendations(record) {

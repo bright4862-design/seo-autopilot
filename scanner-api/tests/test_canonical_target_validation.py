@@ -1,4 +1,5 @@
 import time
+import socket
 
 import httpx
 import pytest
@@ -30,12 +31,25 @@ class FakeClient:
         self.responses = responses
         self.calls = []
 
-    async def get(self, url):
-        self.calls.append(url)
-        response = self.responses[url]
+    async def get(self, url, *, headers=None, extensions=None):
+        pinned = httpx.URL(url)
+        logical_url = f"{pinned.scheme}://{(headers or {}).get('Host', '')}{pinned.raw_path.decode('ascii')}"
+        self.calls.append(logical_url)
+        response = self.responses[logical_url]
         if isinstance(response, Exception):
             raise response
         return response
+
+
+@pytest.fixture(autouse=True)
+def deterministic_public_dns(monkeypatch):
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda _host, port, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", port))
+        ],
+    )
 
 
 def _response(url: str, status: int, *, body="<html><head><title>Target</title></head><body><h1>Target</h1></body></html>", headers=None):

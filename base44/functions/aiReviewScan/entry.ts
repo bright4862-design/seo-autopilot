@@ -1,4 +1,10 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
+import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
+import {
+  REVIEW_ATTESTATION_VERSION,
+  buildAuthoritySnapshot,
+  isAuthorityEligible,
+} from "./authoritySnapshot.js";
 
 const AI_REVIEW_VERSION = "aiReviewScan_v7_current_python_compatibility";
 const PYTHON_REVIEW_VERSION = "python_review_v2_structural_marketplace";
@@ -14,6 +20,7 @@ const CORS_HEADERS = {
 const REVIEW_TIMEOUT_MS = Number(Deno.env.get("PYTHON_REVIEW_TIMEOUT_MS") || 120000);
 const MAX_FIXES = Number(Deno.env.get("MAX_AI_FIXES") || 36);
 const MAX_PAGES_RETURNED = Number(Deno.env.get("MAX_REVIEW_PAGES_RETURNED") || 80);
+const SCAN_ATTESTATION_VERSION = "standard_scan_result_hmac_v1";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -25,11 +32,16 @@ Deno.serve(async (req) => {
     if (!user) return jsonResponse({ success: false, ai_review_version: AI_REVIEW_VERSION, error: "Unauthorized" }, 401);
 
     const rawBody = await req.json().catch(() => ({}));
-    const scanBody = unwrapScanPayload(rawBody);
+    const requestBody = unwrapRequestContainer(rawBody);
+    const trustedScan = await resolveTrustedScan({ base44, user, requestBody });
+    if (trustedScan.problem) return jsonResponse(trustedScan.problem.body, trustedScan.problem.status);
+    const scanBody = trustedScan.verified
+      ? mergeTrustedScanWithClientContext(trustedScan.result, requestBody.client_context)
+      : unwrapScanPayload(requestBody);
     const pythonAttempt = await tryPythonReview(scanBody);
 
     if (pythonAttempt.ok) {
-      return jsonResponse({
+      const result = {
         ...pythonAttempt.result,
         success: true,
         ai_review_version: pythonAttempt.result.ai_review_version || PYTHON_REVIEW_VERSION,
@@ -40,7 +52,8 @@ Deno.serve(async (req) => {
         python_review_api_url_configured: true,
         ai_review_input_normalized: true,
         ai_review_input_was_wrapped: scanBody !== rawBody,
-      });
+      };
+      return jsonResponse(await attachReviewAttestation({ result, trustedScan, user }));
     }
 
     return jsonResponse(buildDenoSafetyFallback(scanBody, pythonAttempt.reason, pythonAttempt.configured, scanBody !== rawBody));
@@ -49,6 +62,168 @@ Deno.serve(async (req) => {
     return jsonResponse({ success: false, ai_review_version: AI_REVIEW_VERSION, error: "aiReviewScan failed. Please try again.", detail: String(error?.message || error || "unknown").slice(0, 220) }, 500);
   }
 });
+
+async function resolveTrustedScan({ base44, user, requestBody }) {
+  const authoritativeScan = requestBody?.authoritative_scan;
+  if (!authoritativeScan) return { verified: false, result: null, identity: null, problem: null };
+  if (!authoritativeScan || typeof authoritativeScan !== "object" || Array.isArray(authoritativeScan)) {
+    return authorityProblem(400, "scan_attestation_invalid", "The server scan attestation is invalid.");
+  }
+
+  const attestation = authoritativeScan.authority_scan_attestation;
+  if (!attestation || attestation.version !== SCAN_ATTESTATION_VERSION) {
+    return authorityProblem(409, "scan_attestation_missing", "The scan was not attested by the server.");
+  }
+  const secret = String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || "");
+  if (!secret) {
+    return authorityProblem(503, "scan_authority_not_configured", "Server scan authority is not configured.");
+  }
+
+  const result = withoutScanAttestation(authoritativeScan);
+  const identity = {
+    version: SCAN_ATTESTATION_VERSION,
+    owner_user_id: String(attestation.owner_user_id || "").trim(),
+    scan_id: String(attestation.scan_id || "").trim(),
+    project_id: String(attestation.project_id || "").trim(),
+    normalized_domain: normalizeAuthorityDomain(attestation.normalized_domain),
+  };
+  const document = { ...identity, result };
+  if (
+    !identity.owner_user_id
+    || identity.owner_user_id !== String(user.id)
+    || !identity.scan_id
+    || !identity.project_id
+    || !identity.normalized_domain
+    || !await verifyAuthoritySeal(document, secret, attestation.proof)
+  ) {
+    return authorityProblem(409, "scan_attestation_invalid", "The server scan attestation could not be verified.");
+  }
+
+  try {
+    const scan = await base44.entities.ScanRun.get(identity.scan_id);
+    const project = await base44.entities.BusinessProject.get(identity.project_id);
+    if (!scan || !project || !recordOwnedBy(scan, user) || !recordOwnedBy(project, user)) {
+      return authorityProblem(404, "scan_not_found", "The attested scan was not found.");
+    }
+    if (
+      String(scan.project_id || "").trim() !== identity.project_id
+      || normalizeAuthorityDomain(scan.website_url || scan.submitted_url) !== identity.normalized_domain
+      || normalizeAuthorityDomain(project.website_url) !== identity.normalized_domain
+      || String(result.scan_id || result.scan_run_id || "").trim() !== identity.scan_id
+      || normalizeAuthorityDomain(result.final_url || result.website_url) !== identity.normalized_domain
+    ) {
+      return authorityProblem(409, "scan_identity_mismatch", "The attested scan no longer matches this project.");
+    }
+  } catch {
+    return authorityProblem(404, "scan_not_found", "The attested scan was not found.");
+  }
+  return { verified: true, result, identity, problem: null };
+}
+
+function mergeTrustedScanWithClientContext(result, context) {
+  const source = context && typeof context === "object" && !Array.isArray(context) ? context : {};
+  return {
+    ...result,
+    business_name: boundedText(source.business_name, 300),
+    cms_platform: boundedText(source.cms_platform, 120),
+    cms_name: boundedText(source.cms_name, 120),
+    important_keywords: cleanTextArray(source.important_keywords, 30, 120),
+    requested_path_prefix: boundedText(source.requested_path_prefix, 500),
+    coverage_instruction: boundedText(source.coverage_instruction, 1_000),
+    ai_review_goal: boundedText(source.ai_review_goal, 1_000),
+    cms_instruction: boundedText(source.cms_instruction, 1_000),
+    business_priority_instruction: cleanPlainObject(source.business_priority_instruction),
+    output_requirements: cleanPlainObject(source.output_requirements),
+  };
+}
+
+async function attachReviewAttestation({ result, trustedScan, user }) {
+  if (!trustedScan.verified) {
+    return { ...result, authority_review_attestation: null, authority_attestation_status: "scan_not_server_attested" };
+  }
+  const secret = String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || "");
+  if (!secret || !isAuthorityEligible(trustedScan.result, result)) {
+    return { ...result, authority_review_attestation: null, authority_attestation_status: "release_contract_not_eligible" };
+  }
+
+  const snapshot = buildAuthoritySnapshot({
+    scan: trustedScan.result,
+    review: result,
+    identity: trustedScan.identity,
+    userId: user.id,
+  });
+  const proof = await createAuthoritySeal(snapshot, secret);
+  return {
+    ...result,
+    authority_attestation_status: "server_attested",
+    authority_review_attestation: {
+      version: REVIEW_ATTESTATION_VERSION,
+      snapshot,
+      proof,
+    },
+  };
+}
+
+function withoutScanAttestation(value) {
+  const {
+    authority_scan_attestation: _authorityScanAttestation,
+    authority_attestation_status: _authorityAttestationStatus,
+    ...result
+  } = value || {};
+  return result;
+}
+
+function unwrapRequestContainer(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  if (value.authoritative_scan || looksLikeScanPayload(value)) return value;
+  for (const key of ["data", "body", "payload", "input", "args"]) {
+    const nested = value[key];
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) return nested;
+  }
+  return value;
+}
+
+function authorityProblem(status, code, message) {
+  return {
+    verified: false,
+    result: null,
+    identity: null,
+    problem: { status, body: { success: false, ai_review_version: AI_REVIEW_VERSION, error_code: code, error: message } },
+  };
+}
+
+function recordOwnedBy(record, user) {
+  const userId = String(user?.id || "").trim();
+  const userEmail = String(user?.email || "").trim().toLowerCase();
+  return Boolean(userId && (
+    String(record?.owner_user_id || "").trim() === userId
+    || String(record?.created_by_id || "").trim() === userId
+    || (userEmail && String(record?.created_by || "").trim().toLowerCase() === userEmail)
+  ));
+}
+
+function normalizeAuthorityDomain(value) {
+  const raw = boundedText(value, 2_000);
+  if (!raw) return "";
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    return ["http:", "https:"].includes(parsed.protocol) ? parsed.hostname.toLowerCase().replace(/^www\./, "").replace(/\.$/, "") : "";
+  } catch {
+    return "";
+  }
+}
+
+function boundedText(value, limit) {
+  return typeof value === "string" ? value.trim().slice(0, limit) : "";
+}
+
+function cleanTextArray(value, limit, itemLimit) {
+  return Array.isArray(value) ? value.slice(0, limit).map((item) => boundedText(item, itemLimit)).filter(Boolean) : [];
+}
+
+function cleanPlainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
 
 async function tryPythonReview(scanBody) {
   const scannerUrl = String(

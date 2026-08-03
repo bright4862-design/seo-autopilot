@@ -5,6 +5,7 @@ import ipaddress
 import json
 import os
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -112,6 +113,12 @@ def _number(*values: Any, default: int | float | None = None) -> int | float | N
         except (TypeError, ValueError):
             continue
     return default
+
+
+def page_count_phrase(value: Any) -> str:
+    """Render customer-facing page counts with correct singular grammar."""
+    count = int(_number(value, default=0) or 0)
+    return f"{count} page{'s' if count != 1 else ''}"
 
 
 def _safe_list(value: Any) -> list[Any]:
@@ -705,7 +712,13 @@ def scan_markdown(scan: dict[str, Any]) -> str:
     score = scan.get("score")
     score_html = "—" if score is None else html.escape(str(score))
     website = html.escape(str(scan.get("website") or "No scan selected"))
-    source = "Live scan" if scan.get("source") == "live" else "Demo scan"
+    source = (
+        "Live scan"
+        if scan.get("source") == "live"
+        else "Demo scan"
+        if scan.get("source") == "demo"
+        else "No scan"
+    )
 
     return f"""
 <div class="summary">
@@ -749,7 +762,7 @@ def priority_markdown(scan: dict[str, Any]) -> str:
   <div class="priority-index">{index}</div>
   <div class="priority-copy">
     <strong>{title}</strong>
-    <p>{priority} · {owner} · {affected} pages</p>
+    <p>{priority} · {owner} · {page_count_phrase(affected)}</p>
   </div>
 </div>
 """
@@ -904,7 +917,7 @@ def guided_answer(message: str, scan: dict[str, Any]) -> str:
         affected = int(_number(fix.get("affected_pages"), default=0) or 0)
         return (
             f"Start with **{fix.get('title', 'the first confirmed issue')}**.\n\n"
-            f"It affects **{affected} pages** and should go to your "
+            f"It affects **{page_count_phrase(affected)}** and should go to your "
             f"**{str(fix.get('owner') or 'SEO team').lower()}**. "
             f"{fix.get('why') or 'It is the highest-priority confirmed pattern in this scan.'}"
         )
@@ -919,7 +932,7 @@ def guided_answer(message: str, scan: dict[str, Any]) -> str:
         return (
             f"{prefix} score is **{score}/100** and the result is **{_gate_label(scan).lower()}**. "
             f"The review grouped **{int(scan.get('grouped_fixes') or 0)} fixes** from "
-            f"**{int(scan.get('pages_retained') or 0)} retained pages**."
+            f"**{page_count_phrase(scan.get('pages_retained'))} retained**."
         )
 
     if "myself" in normalized or "do it myself" in normalized:
@@ -956,16 +969,16 @@ def guided_answer(message: str, scan: dict[str, Any]) -> str:
     if "affected" in normalized or "pages" in normalized:
         if not priorities:
             return (
-                f"{prefix} retained **{int(scan.get('pages_retained') or 0)} pages**, "
+                f"{prefix} retained **{page_count_phrase(scan.get('pages_retained'))}**, "
                 "with no grouped priority counts returned."
             )
         return "\n".join(
-            f"- **{fix.get('title')}**: {int(_number(fix.get('affected_pages'), default=0) or 0)} pages"
+            f"- **{fix.get('title')}**: {page_count_phrase(fix.get('affected_pages'))}"
             for fix in priorities[:5]
         )
 
     return (
-        f"{prefix} retained **{int(scan.get('pages_retained') or 0)} pages** and produced "
+        f"{prefix} retained **{page_count_phrase(scan.get('pages_retained'))}** and produced "
         f"**{int(scan.get('grouped_fixes') or 0)} grouped fixes**. The result is "
         f"**{_gate_label(scan).lower()}**. Ask what to fix first, why the score changed, "
         "or who should own the work."
@@ -1014,7 +1027,7 @@ def scan_opening_message(scan: dict[str, Any]) -> str:
     priorities = _safe_list(scan.get("priorities"))
     lead = priorities[0].get("title") if priorities else None
     message = (
-        f"**Scan complete.** I reviewed **{int(scan.get('pages_retained') or 0)} pages**. "
+        f"**Scan complete.** I reviewed **{page_count_phrase(scan.get('pages_retained'))}**. "
         f"The health score is **{score}** and the result is **{_gate_label(scan).lower()}**."
     )
     if lead:
@@ -1029,8 +1042,10 @@ def run_scan_from_ui(
     history: list[dict[str, Any]] | None,
     progress: gr.Progress = gr.Progress(),
 ) -> tuple[dict[str, Any], str, str, str, list[dict[str, Any]]]:
-    previous_scan = current_scan if isinstance(current_scan, dict) else DEMO_SCAN
-    previous_history = list(history or [])
+    # A submission starts a new evidence boundary. Never reuse the prior site's
+    # scan or conversation if validation, transport, or review fails.
+    del current_scan, history
+    empty_scan: dict[str, Any] = {}
 
     if not SETTINGS.live_scan_enabled:
         status = (
@@ -1038,11 +1053,11 @@ def run_scan_from_ui(
             "then restart the Space."
         )
         return (
-            previous_scan,
-            scan_markdown(previous_scan),
-            priority_markdown(previous_scan),
+            empty_scan,
+            scan_markdown(empty_scan),
+            priority_markdown(empty_scan),
             status,
-            previous_history,
+            [],
         )
 
     try:
@@ -1053,7 +1068,7 @@ def run_scan_from_ui(
         progress(0.95, desc="Preparing results")
         opening_history = [{"role": "assistant", "content": scan_opening_message(scan)}]
         status = (
-            f"✅ **Scan complete** · {int(scan.get('pages_crawled') or 0)} pages crawled · "
+            f"✅ **Scan complete** · {page_count_phrase(scan.get('pages_crawled'))} crawled · "
             f"{_gate_label(scan)}"
         )
         progress(1.0, desc="Complete")
@@ -1061,12 +1076,57 @@ def run_scan_from_ui(
     except Exception as exc:
         status = f"❌ **Scan failed:** {html.escape(str(exc)[:260])}"
         return (
-            previous_scan,
-            scan_markdown(previous_scan),
-            priority_markdown(previous_scan),
+            empty_scan,
+            scan_markdown(empty_scan),
+            priority_markdown(empty_scan),
             status,
-            previous_history,
+            [],
         )
+
+
+def run_scan_ui_transitions(
+    website_url: str,
+    scan_mode: str,
+    current_scan: dict[str, Any] | None,
+    history: list[dict[str, Any]] | None,
+    progress: gr.Progress = gr.Progress(),
+) -> Iterator[tuple[Any, ...]]:
+    """Reset the legacy workspace immediately, then emit a terminal state."""
+    del current_scan, history
+    empty_scan: dict[str, Any] = {}
+    yield (
+        empty_scan,
+        scan_markdown(empty_scan),
+        priority_markdown(empty_scan),
+        "⏳ **Scanning…** Previous results and Grok context were cleared.",
+        [],
+        "",
+        gr.update(value="Scanning…", interactive=False),
+    )
+
+    try:
+        terminal = run_scan_from_ui(
+            website_url,
+            scan_mode,
+            {},
+            [],
+            progress,
+        )
+    except Exception as exc:  # Defensive: run_scan_from_ui normally handles errors.
+        status = f"❌ **Scan failed:** {html.escape(str(exc)[:260])}"
+        terminal = (
+            empty_scan,
+            scan_markdown(empty_scan),
+            priority_markdown(empty_scan),
+            status,
+            [],
+        )
+
+    yield (
+        *terminal,
+        "",
+        gr.update(value="Run scan", interactive=SETTINGS.live_scan_enabled),
+    )
 
 
 CSS = """
@@ -1144,6 +1204,7 @@ body, .gradio-container { background: var(--background) !important; }
   margin: 10px 0 12px;
 }
 .scan-status { min-height: 28px; color: var(--muted); font-size: 13px; }
+.scan-plan-note { margin: 4px 0 0 !important; color: var(--muted); font-size: 12px; text-align: right; }
 .chatbot {
   border: 1px solid var(--line) !important;
   border-radius: 14px !important;
@@ -1262,9 +1323,9 @@ with gr.Blocks(
                         container=False,
                     )
                     scan_mode = gr.Dropdown(
-                        choices=["advanced", "deep", "quick", "basic"],
+                        choices=[("Standard · 150", "advanced")],
                         value="advanced",
-                        label="Scan size",
+                        label="Plan",
                         scale=2,
                     )
                     run_scan_button = gr.Button(
@@ -1273,6 +1334,10 @@ with gr.Blocks(
                         scale=2,
                         interactive=SETTINGS.live_scan_enabled,
                     )
+                gr.Markdown(
+                    "Premium · 5,000 — coming soon",
+                    elem_classes="scan-plan-note",
+                )
                 scan_status = gr.Markdown(
                     (
                         "Ready for a new 150-page scan."
@@ -1325,11 +1390,21 @@ with gr.Blocks(
             priority_panel = gr.HTML(priority_markdown(DEMO_SCAN))
 
     run_scan_button.click(
-        fn=run_scan_from_ui,
+        fn=run_scan_ui_transitions,
         inputs=[website_input, scan_mode, current_scan, chatbot],
-        outputs=[current_scan, summary_panel, priority_panel, scan_status, chatbot],
+        outputs=[
+            current_scan,
+            summary_panel,
+            priority_panel,
+            scan_status,
+            chatbot,
+            chat_input,
+            run_scan_button,
+        ],
         api_name="run_scan",
         concurrency_limit=1,
+        trigger_mode="once",
+        show_progress="minimal",
     )
     send_button.click(
         fn=submit_chat,

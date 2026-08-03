@@ -1,0 +1,156 @@
+import ipaddress
+import socket
+
+import httpx
+import pytest
+
+from app.security import resolve_public_http_url, safe_get, safe_get_once
+
+
+def _answer(address: str, port: int):
+    parsed = ipaddress.ip_address(address)
+    family = socket.AF_INET if parsed.version == 4 else socket.AF_INET6
+    sockaddr = (address, port) if family == socket.AF_INET else (address, port, 0, 0)
+    return (family, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", sockaddr)
+
+
+@pytest.mark.asyncio
+async def test_fetch_uses_the_single_validated_dns_snapshot_not_a_rebind(monkeypatch):
+    resolutions = 0
+    observed = {}
+
+    def rebinding_dns(_host, port, **_kwargs):
+        nonlocal resolutions
+        resolutions += 1
+        address = "93.184.216.34" if resolutions == 1 else "169.254.169.254"
+        return [_answer(address, port)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed["url"] = str(request.url)
+        observed["host"] = request.headers.get("host")
+        return httpx.Response(200, text="ok")
+
+    monkeypatch.setattr(socket, "getaddrinfo", rebinding_dns)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=False) as client:
+        response = await safe_get_once(client, "https://public.example/path")
+
+    assert response is not None
+    assert resolutions == 1
+    assert observed == {"url": "https://93.184.216.34/path", "host": "public.example"}
+    assert str(response.url) == "https://public.example/path"
+
+
+@pytest.mark.asyncio
+async def test_mixed_public_private_dns_answers_reject_the_entire_hop(monkeypatch):
+    requests = 0
+
+    def mixed_dns(_host, port, **_kwargs):
+        return [_answer("93.184.216.34", port), _answer("10.0.0.7", port)]
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(200)
+
+    monkeypatch.setattr(socket, "getaddrinfo", mixed_dns)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        response = await safe_get_once(client, "https://mixed.example/")
+
+    assert response is None
+    assert requests == 0
+
+
+@pytest.mark.asyncio
+async def test_https_pinning_preserves_host_sni_and_logical_response_url(monkeypatch):
+    observed = {}
+
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda _host, port, **_kwargs: [_answer("93.184.216.34", port)],
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.update({
+            "url": str(request.url),
+            "host": request.headers.get("host"),
+            "connection": request.headers.get("connection"),
+            "sni": request.extensions.get("sni_hostname"),
+        })
+        return httpx.Response(200, text="secure")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=False) as client:
+        response = await safe_get_once(client, "https://secure.example:8443/report?q=1")
+
+    assert observed == {
+        "url": "https://93.184.216.34:8443/report?q=1",
+        "host": "secure.example:8443",
+        "connection": "close",
+        "sni": "secure.example",
+    }
+    assert isinstance(observed["sni"], str)  # required by installed httpcore/AnyIO backend
+    assert str(response.url) == "https://secure.example:8443/report?q=1"
+
+
+@pytest.mark.asyncio
+async def test_every_redirect_hop_is_resolved_and_private_destination_is_never_fetched(monkeypatch):
+    resolved_hosts = []
+    fetched_hosts = []
+
+    def dns(host, port, **_kwargs):
+        resolved_hosts.append(host)
+        address = "93.184.216.34" if host == "public.example" else "192.168.1.20"
+        return [_answer(address, port)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        fetched_hosts.append(request.headers.get("host"))
+        return httpx.Response(302, headers={"location": "http://private.example/admin"})
+
+    monkeypatch.setattr(socket, "getaddrinfo", dns)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=False) as client:
+        response = await safe_get(client, "https://public.example/start")
+
+    assert response is None
+    assert resolved_hosts == ["public.example", "private.example"]
+    assert fetched_hosts == ["public.example"]
+
+
+@pytest.mark.asyncio
+async def test_public_ipv6_answer_is_pinned_with_bracketed_transport_url(monkeypatch):
+    observed = {}
+    public_v6 = "2606:4700:4700::1111"
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda _host, port, **_kwargs: [_answer(public_v6, port)],
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed["url"] = str(request.url)
+        observed["host"] = request.headers.get("host")
+        observed["sni"] = request.extensions.get("sni_hostname")
+        return httpx.Response(200)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        response = await safe_get_once(client, "https://ipv6.example/v6")
+
+    assert response is not None
+    assert observed == {
+        "url": "https://[2606:4700:4700::1111]/v6",
+        "host": "ipv6.example",
+        "sni": "ipv6.example",
+    }
+
+
+def test_non_public_ipv6_and_mixed_family_answers_are_rejected(monkeypatch):
+    def private_v6(_host, port, **_kwargs):
+        return [_answer("2001:db8::1", port)]
+
+    monkeypatch.setattr(socket, "getaddrinfo", private_v6)
+    assert resolve_public_http_url("https://private-v6.example/") is None
+
+    def mixed_family(_host, port, **_kwargs):
+        return [_answer("93.184.216.34", port), _answer("fd00::1", port)]
+
+    monkeypatch.setattr(socket, "getaddrinfo", mixed_family)
+    assert resolve_public_http_url("https://mixed-family.example/") is None

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import os
+from collections.abc import Iterator
 from typing import Any
 from urllib.parse import urlparse
 
@@ -13,6 +14,9 @@ from app import (
 from app import (
     run_scan_from_ui as run_scan_pipeline_ui,
 )
+
+STANDARD_SCAN_MODE = "advanced"
+SCAN_MODE_CHOICES = [("Standard · 150", STANDARD_SCAN_MODE)]
 
 
 def _text(value: Any, fallback: str = "") -> str:
@@ -132,11 +136,14 @@ def run_workspace_scan(
     list[dict[str, Any]],
     dict[str, Any],
 ]:
+    # Each request is a new site boundary. The reset transition has already
+    # cleared the browser, and the backend must not receive stale scan/chat data.
+    del current_scan, history
     scan, _, _, status, messages = run_scan_pipeline_ui(
         website_url,
         scan_mode,
-        current_scan,
-        history,
+        {},
+        [],
         progress,
     )
     return (
@@ -147,6 +154,58 @@ def run_workspace_scan(
         status,
         messages,
         scan,
+    )
+
+
+def run_workspace_scan_transitions(
+    website_url: str,
+    scan_mode: str,
+    current_scan: dict[str, Any] | None,
+    history: list[dict[str, Any]] | None,
+    progress: gr.Progress = gr.Progress(),  # noqa: B008 - Gradio injects progress
+) -> Iterator[tuple[Any, ...]]:
+    """Yield an immediate reset followed by one terminal workspace state."""
+    del current_scan, history
+    empty_scan: dict[str, Any] = {}
+    yield (
+        empty_scan,
+        site_markup(empty_scan),
+        score_markup(empty_scan),
+        context_markup(empty_scan),
+        "⏳ **Scanning…** Previous results and Grok context were cleared.",
+        [],
+        empty_scan,
+        "",
+        gr.update(value="Scanning…", interactive=False),
+    )
+
+    try:
+        terminal = run_workspace_scan(
+            website_url,
+            scan_mode,
+            {},
+            [],
+            progress,
+        )
+    except Exception as exc:  # Defensive: the pipeline normally returns failures.
+        status = f"❌ **Scan failed:** {html.escape(str(exc)[:260])}"
+        terminal = (
+            empty_scan,
+            site_markup(empty_scan),
+            score_markup(empty_scan),
+            context_markup(empty_scan),
+            status,
+            [],
+            empty_scan,
+        )
+
+    yield (
+        *terminal,
+        "",
+        gr.update(
+            value="Run scan",
+            interactive=SETTINGS.live_scan_enabled,
+        ),
     )
 
 
@@ -473,6 +532,13 @@ textarea:focus-visible {
   margin: 0 !important;
 }
 
+.premium-note {
+  margin: 7px 4px 0;
+  color: var(--faint);
+  font-size: 0.72rem;
+  text-align: right;
+}
+
 .assistant-card {
   min-height: 510px;
   padding: 22px 34px 14px !important;
@@ -539,7 +605,8 @@ textarea:focus-visible {
   padding: 0 !important;
 }
 
-.chatbot .message {
+.chatbot .message.user,
+.chatbot .message.bot {
   max-width: 72% !important;
   padding: 16px 24px !important;
   border: 0 !important;
@@ -549,6 +616,16 @@ textarea:focus-visible {
   box-shadow: none !important;
   font-size: 0.94rem !important;
   line-height: 1.55 !important;
+}
+
+.chatbot .message .message {
+  width: 100% !important;
+  max-width: none !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 .chatbot .message.user {
@@ -779,7 +856,8 @@ footer {
     margin-top: 12px;
   }
 
-  .chatbot .message {
+  .chatbot .message.user,
+  .chatbot .message.bot {
     max-width: 90% !important;
   }
 
@@ -882,13 +960,8 @@ with gr.Blocks(
                     elem_id="website-url",
                 )
                 scan_mode = gr.Dropdown(
-                    choices=[
-                        ("Advanced · 150", "advanced"),
-                        ("Deep · 85", "deep"),
-                        ("Quick · 40", "quick"),
-                        ("Basic · 25", "basic"),
-                    ],
-                    value="advanced",
+                    choices=SCAN_MODE_CHOICES,
+                    value=STANDARD_SCAN_MODE,
                     show_label=False,
                     container=False,
                     scale=2,
@@ -901,6 +974,9 @@ with gr.Blocks(
                     interactive=SETTINGS.live_scan_enabled,
                     elem_id="run-scan",
                 )
+            gr.HTML(
+                '<p class="premium-note">Premium · 5,000 — coming soon</p>'
+            )
             scan_status = gr.Markdown(
                 (
                     ""
@@ -981,7 +1057,7 @@ with gr.Blocks(
     export_button.click(fn=None, js="() => window.print()")
 
     run_scan_button.click(
-        fn=run_workspace_scan,
+        fn=run_workspace_scan_transitions,
         inputs=[website_input, scan_mode, current_scan, chatbot],
         outputs=[
             current_scan,
@@ -991,9 +1067,13 @@ with gr.Blocks(
             scan_status,
             chatbot,
             debug_json,
+            chat_input,
+            run_scan_button,
         ],
         api_name="run_scan",
         concurrency_limit=1,
+        trigger_mode="once",
+        show_progress="minimal",
     )
     send_button.click(
         fn=submit_chat,

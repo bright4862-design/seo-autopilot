@@ -1,5 +1,6 @@
 import httpx
 import pytest
+import socket
 
 from app.robots_policy import (
     RobotsPolicy,
@@ -13,8 +14,19 @@ class _Client:
     def __init__(self, response):
         self.response = response
 
-    async def get(self, _url):
+    async def get(self, _url, **_kwargs):
         return self.response
+
+
+@pytest.fixture(autouse=True)
+def deterministic_public_dns(monkeypatch):
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda _host, port, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", port))
+        ],
+    )
 
 
 def _response(status, text=""):

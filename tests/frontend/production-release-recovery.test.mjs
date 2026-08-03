@@ -14,14 +14,17 @@ test("normal scans require Python and do not silently save Deno fallback", () =>
   assert.match(advanced, /release_gate_eligible: false/);
 });
 
-test("scan results are stored and routed by stable scan ID", () => {
-  assert.match(scannerForm, /const SCAN_RECORD_PREFIX = "seo_autopilot:scan:"/);
+test("scan results route by exact durable scan ID without browser-result fallback", () => {
   assert.match(scannerForm, /scan_id: scanId/);
   assert.match(scannerForm, /scan_id=\$\{encodeURIComponent\(scanId\)\}/);
-  assert.match(scannerForm, /localStorage\.setItem\(`\$\{SCAN_RECORD_PREFIX\}\$\{stableScanId\}`/);
-  assert.doesNotMatch(scannerForm, /function clearPreviousDashboardScan/);
+  assert.match(scannerForm, /submitLockRef\.current/);
+  assert.match(scannerForm, /assertCurrentScanSession\(/);
+  assert.doesNotMatch(scannerForm, /localStorage\.(?:getItem|setItem)/);
   assert.match(fixList, /searchParams\.get\("scan_id"\)/);
-  assert.match(fixList, /readBestScanRecord\(requestedScanId\)/);
+  assert.match(fixList, /getScanRunWithFixList\(requestedScanId\)/);
+  assert.match(fixList, /normalizeDurableScanBundle\(durableBundle\)/);
+  assert.match(fixList, /No other scan has been substituted/);
+  assert.doesNotMatch(fixList, /readBestScanRecord|loaded_local|localStorage\.(?:getItem|setItem)/);
 });
 
 test("merged results preserve authoritative durable release markers", () => {

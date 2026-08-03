@@ -9,7 +9,7 @@ const authoritativeRecord = {
   scan_status: "complete",
   score_is_provisional: false,
   scanner_version: "python_scanner_v3_bounded_request",
-  scanner_build_revision: "leaf_seed_grok_proxy_v1",
+  scanner_build_revision: "authenticated_health_probe_v1",
   archetype_classifier_version: "archetype_classifier_v9_local_business_hospitality",
   advanced_scan_backend: "python_scanner_api",
   deno_fallback_used: false,
@@ -17,13 +17,27 @@ const authoritativeRecord = {
   review_evidence_calibration_version: "review_evidence_calibration_v5_utility_redirect",
   ai_review_backend: "python_review_api",
   python_review_fallback_used: false,
-  beta_revision_fingerprint: "f9bac4b89ec7c1d8",
+  beta_revision_fingerprint: "51c813a6219b4e70",
   release_gate_eligible: true,
 };
 
 test("exact current authority markers pass the durable release gate", () => {
   assert.equal(buildScanRunFields(authoritativeRecord).release_gate_eligible, true);
   assert.equal(buildFixListFields(authoritativeRecord).is_authoritative, true);
+});
+
+test("unknown and legacy scanner build markers fail the durable release gate", () => {
+  for (const scanner_build_revision of ["unknown_build", "leaf_seed_grok_proxy_v1"]) {
+    const mismatchedRecord = { ...authoritativeRecord, scanner_build_revision };
+    assert.equal(buildScanRunFields(mismatchedRecord).release_gate_eligible, false);
+    assert.equal(buildFixListFields(mismatchedRecord).is_authoritative, false);
+  }
+});
+
+test("the current scanner marker with a stale frozen fingerprint fails closed", () => {
+  const staleFingerprint = { ...authoritativeRecord, beta_revision_fingerprint: "f9bac4b89ec7c1d8" };
+  assert.equal(buildScanRunFields(staleFingerprint).release_gate_eligible, false);
+  assert.equal(buildFixListFields(staleFingerprint).is_authoritative, false);
 });
 
 test("review quality true cannot override missing deployment authority markers", () => {
@@ -84,5 +98,6 @@ test("the frontend re-evaluates the completed record instead of AND-ing the scan
     /scanData\?\.release_gate_eligible === true && aiData\?\.release_gate_eligible === true/
   );
   assert.match(source, /mergePersistedScanRunRecord\(/);
-  assert.match(source, /saveScanForDashboard\(mergedFinal, mergedFinal\?\.scan_id \|\| scanId\)/);
+  assert.match(source, /navigate\(`\/dashboard\?scan=complete&scan_id=\$\{encodeURIComponent\(scanId\)\}`\)/);
+  assert.doesNotMatch(source, /saveScanForDashboard|localStorage\.setItem/);
 });

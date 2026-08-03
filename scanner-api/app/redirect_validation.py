@@ -4,7 +4,7 @@ from collections import Counter
 from urllib.parse import urldefrag, urljoin, urlparse
 
 from .robots_policy import SCANNER_USER_AGENT, SEARCH_USER_AGENT
-from .security import REDIRECT_STATUSES, is_public_http_url
+from .security import REDIRECT_STATUSES, is_public_http_url, safe_get_once
 
 
 REDIRECT_EVIDENCE_VERSION = "redirect_evidence_v3_origin_alias_identity"
@@ -108,7 +108,7 @@ async def fetch_with_redirect_evidence(
 ):
     source = _normalize_url(url)
     evidence = _base_evidence(source or str(url or ""))
-    if not source or not is_public_http_url(source):
+    if not source:
         evidence.update({
             "state": "blocked_non_public_redirect",
             "fetch_error": "blocked_non_public_host",
@@ -122,17 +122,6 @@ async def fetch_with_redirect_evidence(
     hops: list[dict] = []
 
     for _ in range(max(0, int(max_redirects)) + 1):
-        if not is_public_http_url(current):
-            evidence.update({
-                "state": "blocked_non_public_redirect",
-                "hop_count": len(hops),
-                "hops": hops,
-                "chain": chain,
-                "destination_url": current,
-                "fetch_error": "blocked_non_public_redirect",
-            })
-            return None, evidence
-
         scanner_allowed = None
         googlebot_allowed = None
         if robots_policy is not None and _policy_applies(robots_policy, current):
@@ -152,7 +141,17 @@ async def fetch_with_redirect_evidence(
                 return None, evidence
 
         try:
-            response = await client.get(current)
+            response = await safe_get_once(client, current)
+            if response is None:
+                evidence.update({
+                    "state": "blocked_non_public_redirect",
+                    "hop_count": len(hops),
+                    "hops": hops,
+                    "chain": chain,
+                    "destination_url": current,
+                    "fetch_error": "blocked_non_public_redirect" if hops else "blocked_non_public_host",
+                })
+                return None, evidence
         except Exception as exc:
             evidence.update({
                 "state": "redirect_destination_failed" if hops else "fetch_failed",

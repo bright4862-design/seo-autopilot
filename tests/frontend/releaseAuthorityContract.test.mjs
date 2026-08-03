@@ -9,6 +9,7 @@ const recoverySource = readFileSync(new URL("../../src/lib/scanStorageRecovery.j
 
 test("compact recovery and durable persistence share one release authority contract", () => {
   assert.equal(RELEASE_AUTHORITY_CONTRACT.betaRevisionFingerprint, revision.fingerprint);
+  assert.equal(RELEASE_AUTHORITY_CONTRACT.scannerBuildRevision, revision.component_versions.scanner_build_revision);
   assert.equal(RELEASE_AUTHORITY_CONTRACT.archetypeClassifierVersion, revision.component_versions.archetype_classifier_version);
   assert.match(recoverySource, /import { RELEASE_AUTHORITY_CONTRACT } from "@\/lib\/scanRunModel"/);
   assert.match(recoverySource, /betaRevisionFingerprint: CURRENT_BETA_REVISION_FINGERPRINT/);

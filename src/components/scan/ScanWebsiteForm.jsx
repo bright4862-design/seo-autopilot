@@ -21,6 +21,7 @@ import { normalizeActionPriority, normalizeFindingEvidence, normalizeReviewEvide
 import { mergePersistedScanRunRecord } from "@/lib/persistedScanRecord";
 import { buildAuthorityMarkers, buildDiagnosticAuthorityMarkers, buildScanRunFields } from "@/lib/scanRunModel";
 import { beginScanRun, completeScanRun, failScanRun, markScanRunReviewing } from "@/lib/scanRuns";
+import { loadAccess, recordScanUsed, UNLOCK_PRICE_LABEL } from "@/lib/access";
 
 const ADVANCED_SCANNER_FUNCTION = "runAdvancedScan";
 const AI_REVIEW_FUNCTION = "aiReviewScan";
@@ -130,6 +131,12 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
     if (!normalizedUrl) { setError("Enter a valid website URL."); return; }
     if (!trimmedBusinessName) { setError("Enter the business or website name."); return; }
 
+    const access = await loadAccess();
+    if (!access.canScan) {
+      setError(`You've used your free test scan. Unlock full access for ${UNLOCK_PRICE_LABEL} on the Billing page to run more scans and see every result.`);
+      return;
+    }
+
     let scanData = null;
     let aiData = null;
     let mergedFinal = null;
@@ -212,6 +219,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         mergedFinal = { ...mergedFinal, fix_list_id: completion.fixListId };
       }
       saveScanForDashboard(mergedFinal, mergedFinal?.scan_id || scanId);
+      await recordScanUsed().catch(() => {});
       writeScanDebug({ status: "saved", stage: "dashboard_saved", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), compact_debug_available: true, download_available: true });
       refreshDebugData();
       navigate(`/dashboard?scan=complete&scan_id=${encodeURIComponent(scanId)}`);

@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { trackEvent } from "@/lib/analytics";
 import LeadRequestModal from "@/components/billing/LeadRequestModal";
+import UnlockAccessButton from "@/components/billing/UnlockAccessButton";
+import { loadAccess, UNLOCK_PRICE_LABEL } from "@/lib/access";
 
 const plans = [
   { id: "free", name: "Free scan", price: "Free", desc: "Start with a simple website scan.", features: ["Website scan", "Simple FixList", "Plain-English recommendations"] },
@@ -16,6 +18,11 @@ export default function Billing() {
   const [currentPlan, setCurrentPlan] = useState("free");
   const [leadModal, setLeadModal] = useState(null);
   const [deleteMessage, setDeleteMessage] = useState("");
+  const [access, setAccess] = useState(null);
+
+  useEffect(() => {
+    loadAccess().then(setAccess).catch(() => {});
+  }, []);
 
   useEffect(() => {
     trackEvent("billing_viewed");
@@ -71,6 +78,27 @@ export default function Billing() {
             </div>
             <PillButton solid onClick={() => navigate("/onboarding")}>Run a new scan</PillButton>
           </div>
+        </section>
+
+        <section className="mt-12 rounded-2xl border border-hairline bg-white/60 p-6">
+          {access?.fullAccess ? (
+            <>
+              <h2 className="text-[18px] font-semibold tracking-tight">Full access is active</h2>
+              <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">
+                You can run unlimited scans and see every result in your FixList.
+              </p>
+            </>
+          ) : (
+            <>
+              <h2 className="text-[18px] font-semibold tracking-tight">Unlock full access — {UNLOCK_PRICE_LABEL}</h2>
+              <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">
+                Everyone gets one free test scan with a short preview of the results. A one-time {UNLOCK_PRICE_LABEL} payment unlocks unlimited scans and the complete FixList — every fix, every affected page, and all passed checks.
+              </p>
+              <div className="mt-5">
+                <UnlockAccessButton />
+              </div>
+            </>
+          )}
         </section>
 
         <div className="mt-14 flex items-baseline gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Plans</div>

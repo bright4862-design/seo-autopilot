@@ -5,6 +5,8 @@ import { Bug, Copy, Download, ExternalLink, RefreshCw, Trash2 } from "lucide-rea
 import { isRateLimitFinding, shouldUseLegacyRateLimitPresentation } from "@/lib/reviewContract";
 import { trackEvent } from "@/lib/analytics";
 import ScoreRing from "@/components/fixlist/ScoreRing";
+import UnlockAccessButton from "@/components/billing/UnlockAccessButton";
+import { loadAccess, FREE_PREVIEW_FIX_COUNT, UNLOCK_PRICE_LABEL } from "@/lib/access";
 
 const DASHBOARD_LAST_SCAN_KEY = "seo_autopilot:last_scan";
 const DASHBOARD_HISTORY_KEY = "seo_autopilot:scan_history";
@@ -88,6 +90,15 @@ export default function FixList() {
   const [debugData, setDebugData] = useState(() => readScanDebugData());
   const [selectedCms, setSelectedCms] = useState(() => normalizeCmsValue(scanRecord?.cms_platform || "custom"));
   const [doneIds, setDoneIds] = useState(() => readDoneFixIds(websiteKeyOf(scanRecord)));
+  const [locked, setLocked] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    loadAccess()
+      .then((access) => { if (active) setLocked(!access.fullAccess); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   function reloadScan() {
     const next = readBestScanRecord(requestedScanId);
@@ -122,7 +133,10 @@ export default function FixList() {
   const doneItems = recommendations.filter((item) => doneIds.includes(item.id));
   const fixNow = active.filter((item) => item.priority === "critical" || item.priority === "high");
   const later = active.filter((item) => item.priority !== "critical" && item.priority !== "high");
-  const passedChecks = hasUsefulScan && !scoreUnavailable ? buildPassedChecks(recommendations) : [];
+  const shownFixNow = locked ? active.slice(0, FREE_PREVIEW_FIX_COUNT) : fixNow;
+  const shownLater = locked ? [] : later;
+  const hiddenCount = locked ? Math.max(0, active.length - shownFixNow.length) : 0;
+  const passedChecks = hasUsefulScan && !scoreUnavailable && !locked ? buildPassedChecks(recommendations) : [];
   const limitationNote = getLimitationNote(scanRecord);
   const summary = hasUsefulScan ? getBestSummary(scanRecord, healthScore, pagesScanned, recommendations.length) : "";
   const healthGrade = hasUsefulScan ? getHealthGrade(scanRecord, healthScore, noHighConfidenceFindings) : "";
@@ -174,7 +188,7 @@ export default function FixList() {
               </div>
             </div>
 
-            {summary ? (
+            {summary && !locked ? (
               <p className="mt-8 max-w-[56ch] text-[14px] leading-relaxed text-ink-muted">{summary}</p>
             ) : null}
 
@@ -182,22 +196,36 @@ export default function FixList() {
               <p className="mt-6 border-l-2 border-warnink/40 pl-3 text-[13.5px] leading-relaxed text-ink-muted">{limitationNote}</p>
             ) : null}
 
-            {fixNow.length > 0 ? (
+            {shownFixNow.length > 0 ? (
               <>
-                <SectionEyebrow label="Fix now" count={fixNow.length} />
+                <SectionEyebrow label={locked ? "Preview" : "Fix now"} count={shownFixNow.length} />
                 <div className="mt-2">
-                  {fixNow.map((item) => (
+                  {shownFixNow.map((item) => (
                     <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
                   ))}
                 </div>
               </>
             ) : null}
 
-            {later.length > 0 ? (
+            {locked ? (
+              <div className="mt-10 rounded-2xl border border-hairline bg-white/60 p-6">
+                <h2 className="text-[18px] font-semibold tracking-tight">
+                  {hiddenCount > 0 ? `${hiddenCount} more ${hiddenCount === 1 ? "fix is" : "fixes are"} hidden` : "Full results are hidden"}
+                </h2>
+                <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">
+                  This is your free test scan, so we only show a couple of items. Unlock full access for {UNLOCK_PRICE_LABEL} to see every fix, the affected pages, the passed checks, and to run more scans.
+                </p>
+                <div className="mt-5">
+                  <UnlockAccessButton />
+                </div>
+              </div>
+            ) : null}
+
+            {shownLater.length > 0 ? (
               <>
-                <SectionEyebrow label="When you have time" count={later.length} />
+                <SectionEyebrow label="When you have time" count={shownLater.length} />
                 <div className="mt-2">
-                  {later.map((item) => (
+                  {shownLater.map((item) => (
                     <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
                   ))}
                 </div>

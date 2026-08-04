@@ -3,14 +3,12 @@ import { useNavigate } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { trackEvent } from "@/lib/analytics";
 import LeadRequestModal from "@/components/billing/LeadRequestModal";
-import CleanupRequestModal from "@/components/billing/CleanupRequestModal";
 
 const plans = [
   { id: "free", name: "Free scan", price: "Free", desc: "Start with a simple website scan.", features: ["Website scan", "Simple FixList", "Plain-English recommendations"] },
-  { id: "diy", name: "DIY guidance", price: "$20/month", desc: "Coming soon for owners who want guided monthly reviews.", features: ["Monthly website scan", "Prepared recommendations", "Competitor gaps"], comingSoon: true },
-  { id: "growth", name: "Growth", price: "$49/month", desc: "Coming soon for deeper ongoing reviews.", features: ["More pages", "More competitors", "Priority recommendations"], comingSoon: true },
-  { id: "done_for_you", name: "Done-for-you cleanup", price: "$500 one-time", desc: "Request help applying approved recommendations.", features: ["Review your scan", "Prepare next steps", "Website cleanup support"] },
-  { id: "rebuild", name: "Website rebuild", price: "Custom quote", desc: "For larger website structure or migration projects.", features: ["Site structure planning", "Safe migration plan", "Post-launch review"] },
+  { id: "rebuild", name: "Website rebuild", price: "$300", desc: "For larger website structure or migration projects.", features: ["Site structure planning", "Safe migration plan", "Post-launch review"] },
+  { id: "grok_ai_helper", name: "Grok AI helper", price: "Coming soon", desc: "An AI helper that answers questions about your scan and walks you through each fix.", features: ["Ask about any fix", "Step-by-step guidance", "Grounded in your scan"], comingSoon: true },
+  { id: "premium_scanner", name: "Premium 5,000 page scanner", price: "Coming soon", desc: "Deep scans for large websites, up to 5,000 pages per run.", features: ["Up to 5,000 pages", "Full-site coverage", "Priority scan queue"], comingSoon: true },
 ];
 
 export default function Billing() {
@@ -48,8 +46,8 @@ export default function Billing() {
       return <PillButton onClick={() => setLeadModal({ type: "waitlist", plan: plan.id })}>Join waitlist</PillButton>;
     }
     return (
-      <PillButton onClick={() => setLeadModal({ type: plan.id === "done_for_you" ? "cleanup" : "custom_rebuild", plan: plan.id })}>
-        {plan.id === "done_for_you" ? "Request help" : "Contact us"}
+      <PillButton onClick={() => setLeadModal({ type: "custom_rebuild", plan: plan.id })}>
+        Contact us
       </PillButton>
     );
   }
@@ -120,8 +118,7 @@ export default function Billing() {
           Plans unlock as FixList leaves beta. Joining a waitlist never charges you.
         </footer>
 
-        {leadModal?.type === "cleanup" && <CleanupRequestModal onClose={() => setLeadModal(null)} />}
-        {leadModal && leadModal.type !== "cleanup" && <LeadRequestModal requestType={leadModal.type} selectedPlan={leadModal.plan} onClose={() => setLeadModal(null)} />}
+        {leadModal && <LeadRequestModal requestType={leadModal.type} selectedPlan={leadModal.plan} onClose={() => setLeadModal(null)} />}
       </div>
     </div>
   );

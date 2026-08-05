@@ -329,9 +329,15 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       const reviewAttestation = aiData?.authority_review_attestation;
       const usingAuthorityPersistence = Boolean(reviewAttestation);
       if (aiData?.release_gate_eligible === true && !usingAuthorityPersistence) {
-        throw Object.assign(new Error("The review finished, but its server authority attestation was missing."), {
-          code: "scan_authority_attestation_missing",
-          scan_record: { ...mergedFinal, release_gate_eligible: false, is_authoritative: false },
+        // A missing attestation is an internal release-authority gap, not a bad
+        // scan. Throwing here destroyed a completed crawl and left the customer
+        // with nothing. The record is saved through the unsigned path instead,
+        // where buildScanRunFields refuses release authority without a seal --
+        // so the result is durable and truthful rather than discarded.
+        // Status strings only: never the attestation, snapshot, or proof.
+        logScanBoundary("scan_authority_attestation_missing", identityDebug(), {
+          scan_attestation_status: String(scanData?.authority_attestation_status || "absent"),
+          review_attestation_status: String(aiData?.authority_attestation_status || "absent"),
         });
       }
       logScanBoundary("persistence_start", identityDebug(), { authority_persistence: usingAuthorityPersistence });

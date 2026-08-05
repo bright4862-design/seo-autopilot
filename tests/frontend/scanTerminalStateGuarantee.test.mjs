@@ -190,3 +190,30 @@ test("boundary instrumentation records identity only, never evidence or secrets"
   const sealIndex = scanFormSource.indexOf("scan_authority_persistence_failed");
   assert.ok(navIndex > sealIndex, "navigation must follow the durable authority seal check");
 });
+
+// Regression: a missing server attestation used to throw
+// scan_authority_attestation_missing, discarding a completed 150-page crawl and
+// leaving the customer with nothing on screen. Runs 6a739c23b61d5dd3a417c06e and
+// 6a73a16e78af1125c3395104 both died this way after the review had finished.
+// The gap is an internal release-authority concern, not a bad scan.
+test("a missing attestation downgrades the record instead of discarding the scan", () => {
+  const form = readFileSync(
+    new URL("../../src/components/scan/ScanWebsiteForm.jsx", import.meta.url),
+    "utf8",
+  );
+  const branch = form.match(/if \(aiData\?\.release_gate_eligible === true && !usingAuthorityPersistence\) \{[\s\S]*?\n {6}\}/);
+  assert.ok(branch, "the attestation-gap branch is missing");
+  assert.doesNotMatch(branch[0], /throw /, "a missing attestation must not destroy a completed scan");
+  assert.match(branch[0], /logScanBoundary\("scan_authority_attestation_missing"/);
+  // Diagnosis carries status strings only -- never the attestation or proof.
+  // Comments may name what is excluded; code may not reference it.
+  const branchCode = branch[0]
+    .split("\n")
+    .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+    .join("\n");
+  assert.match(branchCode, /scan_attestation_status/);
+  assert.match(branchCode, /review_attestation_status/);
+  assert.doesNotMatch(branchCode, /reviewAttestation\.|\.proof|snapshot/);
+  // The unsigned path still refuses to claim authority.
+  assert.match(form, /release_gate_eligible: false, is_authoritative: false/);
+});

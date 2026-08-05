@@ -240,6 +240,12 @@ test("only trusted server scan and review results can enter the authority persis
   assert.match(scanFormSource, /authority_scan_attestation: scanData\.authority_scan_attestation/);
   assert.doesNotMatch(scanFormSource, /authoritative_scan: scanData,/);
   assert.match(scanFormSource, /"persistScanAuthority"/);
+  assert.match(scanFormSource, /scan_authority_persistence_failed/);
+  assert.match(scanFormSource, /\^\[a-f0-9\]\{64\}\$/);
+  assert.match(scanFormSource, /completion\.scanRun\.authority_seal_version/);
+  assert.match(scanFormSource, /completion\.scanRun\.authority_sealed_at/);
+  assert.match(scanFormSource, /completion\.scanRun\.release_gate_eligible === true/);
+  assert.match(scanFormSource, /Boolean\(completion\.fixListId\)/);
   assert.match(functionSource, /await assertServerAuthoritySeal\(\{ scan, fixList, fixItems, user \}\)/);
   assert.match(functionSource, /verifyAuthoritySeal\(snapshot, secret, scan\.authority_proof\)/);
   assert.ok(functionSource.indexOf("await assertServerAuthoritySeal") < functionSource.indexOf("await callScannerChat"));

@@ -298,7 +298,8 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       setActiveStep("Saving your FixList");
       mergedFinal = mergeScanAndAiReview({ scanData, aiData, websiteUrl: normalizedUrl, submittedUrl, businessName: trimmedBusinessName, cmsPlatform, cmsName, scanMode, requestedPathPrefix, requestId, idempotencyKey, scanId, scanRunId: scanId });
       const durableRecord = mergedFinal;
-      const completion = aiData?.authority_review_attestation
+      const usingAuthorityPersistence = Boolean(aiData?.authority_review_attestation);
+      const completion = usingAuthorityPersistence
         ? normalizeFunctionResponse(await callBase44Function("persistScanAuthority", {
           scan_id: scanId,
           attestation: aiData.authority_review_attestation,
@@ -312,6 +313,20 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         });
       await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
       if (!completion?.scanRun) throw Object.assign(new Error("The scan finished, but its durable FixList record could not be saved."), { code: "scan_persistence_failed", scan_record: durableRecord });
+      if (usingAuthorityPersistence) {
+        const proof = String(completion.scanRun.authority_proof || "").trim().toLowerCase();
+        const sealed = /^[a-f0-9]{64}$/.test(proof)
+          && Boolean(completion.scanRun.authority_seal_version)
+          && Boolean(completion.scanRun.authority_sealed_at)
+          && completion.scanRun.release_gate_eligible === true
+          && Boolean(completion.fixListId);
+        if (!sealed) {
+          throw Object.assign(new Error("The scan finished, but its server authority seal was not saved."), {
+            code: "scan_authority_persistence_failed",
+            scan_record: durableRecord,
+          });
+        }
+      }
       if (completion?.scanRun) {
         mergedFinal = mergePersistedScanRunRecord(
           mergedFinal,

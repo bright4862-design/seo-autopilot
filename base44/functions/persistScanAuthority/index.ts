@@ -1,4 +1,4 @@
-import { createClientFromRequest } from "npm:@base44/sdk";
+import { createClient, createClientFromRequest } from "npm:@base44/sdk";
 import { verifyAuthoritySeal } from "./authoritySeal.js";
 import { authorityRowsFromSnapshot, missingAuthorityFixRows } from "./authorityRows.js";
 
@@ -24,6 +24,8 @@ Deno.serve(async (req) => {
   if (!user?.id) return problemResponse(new RequestProblem(401, "unauthorized", "Sign in before saving a scan."));
 
   try {
+    const serviceBase44 = createServiceOnlyClient(req);
+    const serviceEntities = serviceBase44.asServiceRole.entities;
     const body = await req.json().catch(() => ({}));
     const scanId = cleanId(body?.scan_id || body?.scan_run_id);
     const attestation = body?.attestation;
@@ -59,13 +61,13 @@ Deno.serve(async (req) => {
       ownerUserId: user.id,
       proof: attestation.proof,
     });
-    const existingFixLists = await base44.asServiceRole.entities.FixList.filter({
+    const existingFixLists = await serviceEntities.FixList.filter({
       scan_run_id: scanId,
       owner_user_id: String(user.id),
       authority_proof: String(attestation.proof).toLowerCase(),
     }, "-created_date", 2);
     const fixList = existingFixLists?.[0]
-      || await base44.asServiceRole.entities.FixList.create(unsignedRows.fixList);
+      || await serviceEntities.FixList.create(unsignedRows.fixList);
     if (!fixList?.id) throw new RequestProblem(500, "authority_persistence_failed", "The authoritative FixList could not be saved.");
 
     if (snapshot.recommendations.length > 0) {
@@ -74,12 +76,12 @@ Deno.serve(async (req) => {
         ownerUserId: user.id,
         proof: attestation.proof,
       });
-      const existingItems = await base44.asServiceRole.entities.FixItem.filter({
+      const existingItems = await serviceEntities.FixItem.filter({
         fix_list_id: fixList.id,
         authority_proof: String(attestation.proof).toLowerCase(),
       }, "created_date", MAX_FIX_ITEMS);
       const missingItems = missingAuthorityFixRows(rows.fixItems, existingItems);
-      if (missingItems.length > 0) await base44.asServiceRole.entities.FixItem.bulkCreate(missingItems);
+      if (missingItems.length > 0) await serviceEntities.FixItem.bulkCreate(missingItems);
     }
 
     const authorityFields = authorityRowsFromSnapshot(snapshot, {
@@ -87,14 +89,39 @@ Deno.serve(async (req) => {
       ownerUserId: user.id,
       proof: attestation.proof,
     }).scanRun;
-    const updated = await base44.asServiceRole.entities.ScanRun.update(scanId, authorityFields);
+    await serviceEntities.ScanRun.update(scanId, authorityFields);
+
+    const expectedProof = String(attestation.proof).toLowerCase();
+    const persistedScan = await serviceEntities.ScanRun.get(scanId);
+    const persistedFixList = await serviceEntities.FixList.get(fixList.id);
+    const persistedItems = snapshot.recommendations.length > 0
+      ? await serviceEntities.FixItem.filter({
+        fix_list_id: fixList.id,
+        authority_proof: expectedProof,
+      }, "created_date", MAX_FIX_ITEMS)
+      : [];
+    const authorityPersisted = Boolean(
+      persistedScan?.authority_proof === expectedProof
+      && persistedScan?.authority_seal_version === snapshot.version
+      && persistedScan?.authority_sealed_at === snapshot.sealed_at
+      && persistedScan?.fix_list_id === fixList.id
+      && persistedScan?.release_gate_eligible === true
+      && persistedFixList?.authority_proof === expectedProof
+      && persistedFixList?.is_authoritative === true
+      && persistedItems.length === snapshot.recommendations.length
+      && persistedItems.every((item) => item?.authority_proof === expectedProof)
+    );
+    if (!authorityPersisted) {
+      throw new RequestProblem(500, "authority_persistence_incomplete", "The server authority seal was not durably stored.");
+    }
+
     return Response.json({
       success: true,
       replayed,
       requestId: cleanId(scan.request_id),
       scanId,
       fixListId: fixList.id,
-      scanRun: { id: scanId, ...authorityFields, ...(updated || {}) },
+      scanRun: persistedScan,
     });
   } catch (error) {
     if (error instanceof RequestProblem) return problemResponse(error);
@@ -102,6 +129,25 @@ Deno.serve(async (req) => {
     return problemResponse(new RequestProblem(500, "authority_persistence_failed", "The authoritative scan could not be saved."));
   }
 });
+
+
+function createServiceOnlyClient(req: Request) {
+  const serviceAuthorization = String(req.headers.get("Base44-Service-Authorization") || "");
+  const appId = cleanId(req.headers.get("Base44-App-Id"));
+  if (!appId || !serviceAuthorization.startsWith("Bearer ") || serviceAuthorization.split(" ").length !== 2) {
+    throw new RequestProblem(500, "authority_service_role_unavailable", "Server authority storage is unavailable.");
+  }
+  const dataEnv = String(req.headers.get("X-Data-Env") || "");
+  const headers: Record<string, string> = {};
+  if (dataEnv === "dev" || dataEnv === "prod") headers["X-Data-Env"] = dataEnv;
+  return createClient({
+    serverUrl: req.headers.get("Base44-Api-Url") || "https://base44.app",
+    appId,
+    serviceToken: serviceAuthorization.slice("Bearer ".length),
+    functionsVersion: req.headers.get("Base44-Functions-Version") || undefined,
+    headers,
+  });
+}
 
 function validateSnapshot(value, { scanId, user }) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {

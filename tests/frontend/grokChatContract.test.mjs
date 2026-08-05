@@ -228,11 +228,19 @@ test("only trusted server scan and review results can enter the authority persis
   assert.match(reviewFunctionSource, /buildAuthoritySnapshot\(\{[\s\S]*scan: trustedScan\.result,[\s\S]*review: result/);
 
   assert.match(persistenceFunctionSource, /verifyAuthoritySeal\(attestation\.snapshot, secret, attestation\.proof\)/);
-  assert.match(persistenceFunctionSource, /base44\.asServiceRole\.entities\.FixList\.create/);
-  assert.match(persistenceFunctionSource, /base44\.asServiceRole\.entities\.FixItem\.bulkCreate/);
-  assert.match(persistenceFunctionSource, /base44\.asServiceRole\.entities\.ScanRun\.update/);
+  assert.match(persistenceFunctionSource, /createServiceOnlyClient\(req\)/);
+  assert.match(persistenceFunctionSource, /Base44-Service-Authorization/);
+  assert.match(persistenceFunctionSource, /serviceToken: serviceAuthorization\.slice/);
+  assert.match(persistenceFunctionSource, /serviceEntities\.FixList\.create/);
+  assert.match(persistenceFunctionSource, /serviceEntities\.FixItem\.bulkCreate/);
+  assert.match(persistenceFunctionSource, /serviceEntities\.ScanRun\.update/);
+  assert.doesNotMatch(persistenceFunctionSource, /base44\.asServiceRole\.entities/);
   assert.match(persistenceFunctionSource, /authority_proof: String\(attestation\.proof\)\.toLowerCase\(\)/);
   assert.match(persistenceFunctionSource, /missingAuthorityFixRows\(rows\.fixItems, existingItems\)/);
+  assert.match(persistenceFunctionSource, /const persistedScan = await serviceEntities\.ScanRun\.get\(scanId\)/);
+  assert.match(persistenceFunctionSource, /const persistedFixList = await serviceEntities\.FixList\.get\(fixList\.id\)/);
+  assert.match(persistenceFunctionSource, /authority_persistence_incomplete/);
+  assert.match(persistenceFunctionSource, /persistedItems\.length === snapshot\.recommendations\.length/);
   assert.doesNotMatch(persistenceFunctionSource, /createAuthoritySeal/);
 
   assert.match(scanFormSource, /authoritative_scan: \{/);

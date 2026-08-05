@@ -241,6 +241,9 @@ test("only trusted server scan and review results can enter the authority persis
   assert.doesNotMatch(scanFormSource, /authoritative_scan: scanData,/);
   assert.match(scanFormSource, /"persistScanAuthority"/);
   assert.match(scanFormSource, /scan_authority_persistence_failed/);
+  assert.match(scanFormSource, /scan_authority_attestation_missing/);
+  assert.match(scanFormSource, /aiData\?\.release_gate_eligible === true && !usingAuthorityPersistence/);
+  assert.match(scanFormSource, /release_gate_eligible: false, is_authoritative: false/);
   assert.match(scanFormSource, /\^\[a-f0-9\]\{64\}\$/);
   assert.match(scanFormSource, /completion\.scanRun\.authority_seal_version/);
   assert.match(scanFormSource, /completion\.scanRun\.authority_sealed_at/);

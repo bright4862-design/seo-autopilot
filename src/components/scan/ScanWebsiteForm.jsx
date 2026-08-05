@@ -297,12 +297,21 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
 
       setActiveStep("Saving your FixList");
       mergedFinal = mergeScanAndAiReview({ scanData, aiData, websiteUrl: normalizedUrl, submittedUrl, businessName: trimmedBusinessName, cmsPlatform, cmsName, scanMode, requestedPathPrefix, requestId, idempotencyKey, scanId, scanRunId: scanId });
-      const durableRecord = mergedFinal;
-      const usingAuthorityPersistence = Boolean(aiData?.authority_review_attestation);
+      const reviewAttestation = aiData?.authority_review_attestation;
+      const usingAuthorityPersistence = Boolean(reviewAttestation);
+      if (aiData?.release_gate_eligible === true && !usingAuthorityPersistence) {
+        throw Object.assign(new Error("The review finished, but its server authority attestation was missing."), {
+          code: "scan_authority_attestation_missing",
+          scan_record: { ...mergedFinal, release_gate_eligible: false, is_authoritative: false },
+        });
+      }
+      const durableRecord = usingAuthorityPersistence
+        ? mergedFinal
+        : { ...mergedFinal, release_gate_eligible: false, is_authoritative: false };
       const completion = usingAuthorityPersistence
         ? normalizeFunctionResponse(await callBase44Function("persistScanAuthority", {
           scan_id: scanId,
-          attestation: aiData.authority_review_attestation,
+          attestation: reviewAttestation,
         }).catch((persistenceError) => {
           if (clearCustomerAuthBoundary(persistenceError)) throw persistenceError;
           return null;
@@ -598,7 +607,7 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, submittedUrl, busi
     python_review_fallback_used: Boolean(aiData?.python_review_fallback_used),
     // Scanner-stage eligibility is provisional because review authority markers do not exist yet.
     // Preserve only an explicit Python Review rejection, then validate the completed record below.
-    release_gate_eligible: aiData?.release_gate_eligible !== false,
+    release_gate_eligible: aiData?.release_gate_eligible === true && Boolean(aiData?.authority_review_attestation),
     no_high_confidence_findings: noHighConfidenceFindings,
     review_confidence_state: reviewEvidenceState.review_confidence_state || (noHighConfidenceFindings ? "no_high_confidence_findings" : ""),
     score_is_provisional: reviewEvidenceState.score_is_provisional,

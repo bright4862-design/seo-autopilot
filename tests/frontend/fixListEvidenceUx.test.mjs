@@ -58,6 +58,9 @@ test("returned durable ScanRun authority is written into the browser scan record
   assert.match(scanFormSource, /const usingAuthorityPersistence = Boolean\(aiData\?\.authority_review_attestation\)/);
   assert.match(scanFormSource, /const completion = usingAuthorityPersistence/);
   assert.match(scanFormSource, /scan_authority_persistence_failed/);
+  assert.match(scanFormSource, /scan_authority_attestation_missing/);
+  assert.match(scanFormSource, /aiData\?\.release_gate_eligible === true && !usingAuthorityPersistence/);
+  assert.match(scanFormSource, /release_gate_eligible: false, is_authoritative: false/);
   assert.match(scanFormSource, /completion\.scanRun\.authority_seal_version/);
   assert.match(scanFormSource, /completion\.scanRun\.authority_sealed_at/);
   assert.match(scanFormSource, /"persistScanAuthority"/);

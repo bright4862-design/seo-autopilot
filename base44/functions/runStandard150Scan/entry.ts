@@ -6,7 +6,10 @@ const PUBLIC_SCAN_MODE = "standard_150";
 const PYTHON_COMPATIBILITY_MODE = "advanced";
 const PYTHON_SCANNER_VERSION = "python_scanner_v3_bounded_request";
 const MAX_PAGES = 150;
-const UPSTREAM_TIMEOUT_MS = 85_000;
+const FUNCTION_RESPONSE_BUDGET_MS = 95_000;
+const RESPONSE_RESERVE_MS = 5_000;
+const UPSTREAM_RESPONSE_RESERVE_MS = 4_000;
+const STANDARD_CRAWL_TIMEOUT_MS = 85_000;
 const SCAN_ATTESTATION_VERSION = "standard_scan_result_hmac_v1";
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -55,6 +58,16 @@ Deno.serve(async (req) => {
       return unavailable({ identity, startedAt, failureCode: !scannerUrl ? "url_not_configured" : "key_not_configured" });
     }
 
+    const remainingMs = FUNCTION_RESPONSE_BUDGET_MS - (Date.now() - startedAt);
+    const upstreamTimeoutMs = remainingMs - RESPONSE_RESERVE_MS;
+    if (upstreamTimeoutMs <= UPSTREAM_RESPONSE_RESERVE_MS + 5_000) {
+      return unavailable({ identity, startedAt, failureCode: "insufficient_gateway_budget" });
+    }
+    const upstreamCrawlTimeoutMs = Math.min(
+      STANDARD_CRAWL_TIMEOUT_MS,
+      upstreamTimeoutMs - UPSTREAM_RESPONSE_RESERVE_MS,
+    );
+
     const upstreamPayload = {
       website_url: websiteUrl,
       path_prefix: body.path_prefix || body.requested_path_prefix || body.crawl_path_prefix || null,
@@ -68,13 +81,14 @@ Deno.serve(async (req) => {
       submitted_url: identity.fields.submitted_url || websiteUrl,
       normalized_domain: identity.fields.normalized_domain,
       respect_robots_txt: true,
+      crawl_timeout_ms: upstreamCrawlTimeoutMs,
     };
 
     const response = await fetchWithTimeout(`${scannerUrl}/scan`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-scanner-key": scannerKey },
       body: JSON.stringify(upstreamPayload),
-    }, UPSTREAM_TIMEOUT_MS);
+    }, upstreamTimeoutMs);
 
     const text = await response.text();
     const upstream = parseJson(text);

@@ -17,10 +17,11 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const REVIEW_TIMEOUT_MS = Number(Deno.env.get("PYTHON_REVIEW_TIMEOUT_MS") || 120000);
+const REVIEW_TIMEOUT_MS = Math.min(45_000, Math.max(5_000, Number(Deno.env.get("PYTHON_REVIEW_TIMEOUT_MS") || 45_000)));
 const MAX_FIXES = Number(Deno.env.get("MAX_AI_FIXES") || 36);
 const MAX_PAGES_RETURNED = Number(Deno.env.get("MAX_REVIEW_PAGES_RETURNED") || 80);
-const SCAN_ATTESTATION_VERSION = "standard_scan_result_hmac_v1";
+const SCAN_ATTESTATION_VERSION = "standard_scan_review_payload_hmac_v2";
+const LEGACY_SCAN_ATTESTATION_VERSION = "standard_scan_result_hmac_v1";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -71,7 +72,8 @@ async function resolveTrustedScan({ base44, user, requestBody }) {
   }
 
   const attestation = authoritativeScan.authority_scan_attestation;
-  if (!attestation || attestation.version !== SCAN_ATTESTATION_VERSION) {
+  const attestationVersion = String(attestation?.version || "");
+  if (!attestation || ![SCAN_ATTESTATION_VERSION, LEGACY_SCAN_ATTESTATION_VERSION].includes(attestationVersion)) {
     return authorityProblem(409, "scan_attestation_missing", "The scan was not attested by the server.");
   }
   const secret = String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || "");
@@ -79,9 +81,14 @@ async function resolveTrustedScan({ base44, user, requestBody }) {
     return authorityProblem(503, "scan_authority_not_configured", "Server scan authority is not configured.");
   }
 
-  const result = withoutScanAttestation(authoritativeScan);
+  const result = attestationVersion === SCAN_ATTESTATION_VERSION
+    ? authoritativeScan.authority_review_payload
+    : withoutScanAttestation(authoritativeScan);
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return authorityProblem(409, "scan_attestation_invalid", "The signed scan review payload is missing.");
+  }
   const identity = {
-    version: SCAN_ATTESTATION_VERSION,
+    version: attestationVersion,
     owner_user_id: String(attestation.owner_user_id || "").trim(),
     scan_id: String(attestation.scan_id || "").trim(),
     project_id: String(attestation.project_id || "").trim(),
@@ -166,6 +173,7 @@ async function attachReviewAttestation({ result, trustedScan, user }) {
 
 function withoutScanAttestation(value) {
   const {
+    authority_review_payload: _authorityReviewPayload,
     authority_scan_attestation: _authorityScanAttestation,
     authority_attestation_status: _authorityAttestationStatus,
     ...result

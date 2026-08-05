@@ -235,7 +235,10 @@ test("only trusted server scan and review results can enter the authority persis
   assert.match(persistenceFunctionSource, /missingAuthorityFixRows\(rows\.fixItems, existingItems\)/);
   assert.doesNotMatch(persistenceFunctionSource, /createAuthoritySeal/);
 
-  assert.match(scanFormSource, /authoritative_scan: scanData/);
+  assert.match(scanFormSource, /authoritative_scan: \{/);
+  assert.match(scanFormSource, /authority_review_payload: scanData\.authority_review_payload/);
+  assert.match(scanFormSource, /authority_scan_attestation: scanData\.authority_scan_attestation/);
+  assert.doesNotMatch(scanFormSource, /authoritative_scan: scanData,/);
   assert.match(scanFormSource, /"persistScanAuthority"/);
   assert.match(functionSource, /await assertServerAuthoritySeal\(\{ scan, fixList, fixItems, user \}\)/);
   assert.match(functionSource, /verifyAuthoritySeal\(snapshot, secret, scan\.authority_proof\)/);

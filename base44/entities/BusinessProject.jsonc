@@ -81,11 +81,7 @@
     "owner_user_id": {
       "type": "string",
       "rls": {
-        "update": {
-          "user_condition": {
-            "role": "admin"
-          }
-        }
+        "update": { "user_condition": { "role": "admin" } }
       }
     }
   },
@@ -101,9 +97,7 @@
             "role": "admin"
           }
         },
-        {
-          "data.owner_user_id": "{{user.id}}"
-        }
+        { "data.owner_user_id": "{{user.id}}" }
       ]
     },
     "read": {

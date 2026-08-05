@@ -1,4 +1,5 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
+import { createAuthoritySeal } from "./authoritySeal.js";
 
 const VERSION = "runAdvancedScan_v22_python_required";
 const PYTHON_SCANNER_VERSION = "python_scanner_v3_bounded_request";
@@ -20,6 +21,7 @@ const PYTHON_TIMEOUTS_MS = {
 const MAX_BODY_CHARS = 1_500_000;
 const MAX_SITEMAP_FETCHES = 12;
 const MAX_ARTIFACT_EVIDENCE = 100;
+const SCAN_ATTESTATION_VERSION = "standard_scan_result_hmac_v1";
 const DEFAULT_POLICY = { rendering_mode: "unknown", platform_guess: "", priority_boost_patterns: [], priority_deprioritize_patterns: [], skip_patterns: [], source: "default", error: "" };
 const MODE_LIMITS = {
   basic: { max_pages: 25, crawl_timeout_ms: 35000, use_sitemap: false, derive_policy: false },
@@ -44,22 +46,27 @@ Deno.serve(async (req) => {
 
     rawBody = await safeReadJson(req);
     body = unwrapRequestBody(rawBody);
+    const requestIdentity = resolveRequestIdentity(body);
+    if (requestIdentity.conflict) return jsonResponse({ success: false, version: VERSION, error: "request_id and idempotency_key must match.", ...requestIdentity.fields }, 409);
     const budget = resolveBudget(body);
     const websiteUrl = normalizeWebsiteUrl(body.website_url || body.url || body.normalized_url || body.requested_start_url || body.start_url || body.target_url || "");
-    if (!websiteUrl) return jsonResponse({ success: false, version: VERSION, error: "Missing or invalid website_url.", received_keys: Object.keys(rawBody || {}), resolved_keys: Object.keys(body || {}) }, 400);
+    if (!websiteUrl) return jsonResponse({ success: false, version: VERSION, error: "Missing or invalid website_url.", ...requestIdentity.fields, received_keys: Object.keys(rawBody || {}), resolved_keys: Object.keys(body || {}) }, 400);
     const safety = await validatePublicHttpUrl(websiteUrl);
-    if (!safety.ok) return jsonResponse({ success: false, version: VERSION, error: safety.reason, received_keys: Object.keys(rawBody || {}), resolved_keys: Object.keys(body || {}) }, 400);
+    if (!safety.ok) return jsonResponse({ success: false, version: VERSION, error: safety.reason, ...requestIdentity.fields, received_keys: Object.keys(rawBody || {}), resolved_keys: Object.keys(body || {}) }, 400);
 
     const pathPrefix = body.path_prefix || body.requested_path_prefix || body.crawl_path_prefix || "";
     const scanMode = body.scan_mode || body.audit_profile || "advanced";
     const pythonTimeoutMs = resolvePythonTimeout(scanMode);
     const pythonAttempt = await tryPythonScanner({ body, websiteUrl, pathPrefix, scanMode, timeoutMs: pythonTimeoutMs });
-    if (pythonAttempt.ok) return jsonResponse(toPythonAdvancedScanResponse(pythonAttempt.result, scanMode, body.scan_id || body.scan_run_id || ""));
+    if (pythonAttempt.ok) {
+      const result = toPythonAdvancedScanResponse(pythonAttempt.result, scanMode, requestIdentity.fields);
+      return jsonResponse(await attachScanAttestation({ base44, user, result, websiteUrl }));
+    }
 
     const fallbackReason = pythonAttempt.reason || "Python scanner unavailable.";
     const allowDenoFallback = body.allow_deno_fallback === true && body.require_python_scanner !== true;
     if (!allowDenoFallback) {
-      return jsonResponse({ success: false, version: VERSION, error: "The Python scanner is unavailable, so FixList did not save a fallback result.", detail: fallbackReason, retryable: true, advanced_scan_backend: "python_scanner_api_unavailable", deno_fallback_used: false, release_gate_eligible: false, scanner_api_url_configured: pythonAttempt.configured, python_scanner_failure_code: pythonAttempt.failureCode || "unknown", scan_id: body.scan_id || body.scan_run_id || "", elapsed_ms: Date.now() - functionStartedAt }, 503);
+      return jsonResponse({ success: false, version: VERSION, error: "The Python scanner is unavailable, so FixList did not save a fallback result.", detail: fallbackReason, retryable: true, advanced_scan_backend: "python_scanner_api_unavailable", deno_fallback_used: false, release_gate_eligible: false, scanner_api_url_configured: pythonAttempt.configured, python_scanner_failure_code: pythonAttempt.failureCode || "unknown", ...requestIdentity.fields, elapsed_ms: Date.now() - functionStartedAt }, 503);
     }
     const remainingMs = FUNCTION_RESPONSE_BUDGET_MS - (Date.now() - functionStartedAt);
     if (remainingMs < MIN_FALLBACK_CRAWL_MS + RESPONSE_RESERVE_MS) {
@@ -70,6 +77,7 @@ Deno.serve(async (req) => {
         detail: fallbackReason,
         retryable: true,
         scanner_api_url_configured: pythonAttempt.configured,
+        ...requestIdentity.fields,
         elapsed_ms: Date.now() - functionStartedAt,
       }, 503);
     }
@@ -106,7 +114,7 @@ Deno.serve(async (req) => {
       score_is_provisional: true,
       release_gate_eligible: false,
       limitation: "The Python scanner was unavailable. This explicit Deno fallback is a limited diagnostic sample and must not be treated as a completed production audit.",
-      scan_id: body.scan_id || body.scan_run_id || "",
+      ...requestIdentity.fields,
       scanner_api_url_configured: pythonAttempt.configured,
       python_scanner_fallback_reason: fallbackReason,
       website_url: websiteUrl,
@@ -159,9 +167,101 @@ Deno.serve(async (req) => {
     });
   } catch (error) {
     console.error("runAdvancedScan failed", error);
-    return jsonResponse({ success: false, version: VERSION, error: "Advanced scan failed. Please try again.", detail: String(error?.message || error || "unknown error").slice(0, 240), received_keys: Object.keys(rawBody || {}), resolved_keys: Object.keys(body || {}) }, 500);
+    return jsonResponse({ success: false, version: VERSION, error: "Advanced scan failed. Please try again.", detail: String(error?.message || error || "unknown error").slice(0, 240), ...resolveRequestIdentity(body).fields, received_keys: Object.keys(rawBody || {}), resolved_keys: Object.keys(body || {}) }, 500);
   }
 });
+
+async function attachScanAttestation({ base44, user, result, websiteUrl }) {
+  const secret = String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || "");
+  if (!secret) {
+    return {
+      ...result,
+      authority_scan_attestation: null,
+      authority_attestation_status: "signing_key_not_configured",
+    };
+  }
+
+  const scanId = String(result.scan_id || result.scan_run_id || "").trim();
+  if (!scanId) return unsignedScanResult(result, "scan_identity_missing");
+
+  let scan;
+  let project;
+  try {
+    scan = await base44.entities.ScanRun.get(scanId);
+    if (!scan || !recordOwnedBy(scan, user)) return unsignedScanResult(result, "scan_not_owned");
+    const projectId = String(scan.project_id || "").trim();
+    if (!projectId) return unsignedScanResult(result, "project_identity_missing");
+    project = await base44.entities.BusinessProject.get(projectId);
+    if (!project || !recordOwnedBy(project, user)) return unsignedScanResult(result, "project_not_owned");
+  } catch {
+    return unsignedScanResult(result, "scan_context_unavailable");
+  }
+
+  const scanDomain = authorityDomain(scan.website_url || scan.submitted_url || "");
+  const projectDomain = authorityDomain(project.website_url || "");
+  const resultDomain = authorityDomain(result.final_url || result.website_url || websiteUrl);
+  if (!scanDomain || scanDomain !== projectDomain || scanDomain !== resultDomain) {
+    return unsignedScanResult(result, "project_domain_mismatch");
+  }
+
+  const unsignedResult = withoutAuthorityAttestation(result);
+  const document = {
+    version: SCAN_ATTESTATION_VERSION,
+    owner_user_id: String(user.id),
+    scan_id: scanId,
+    project_id: String(scan.project_id),
+    normalized_domain: scanDomain,
+    result: unsignedResult,
+  };
+  const proof = await createAuthoritySeal(document, secret);
+  return {
+    ...unsignedResult,
+    authority_attestation_status: "server_attested",
+    authority_scan_attestation: {
+      version: SCAN_ATTESTATION_VERSION,
+      owner_user_id: String(user.id),
+      scan_id: scanId,
+      project_id: String(scan.project_id),
+      normalized_domain: scanDomain,
+      proof,
+    },
+  };
+}
+
+function unsignedScanResult(result, status) {
+  return {
+    ...withoutAuthorityAttestation(result),
+    authority_scan_attestation: null,
+    authority_attestation_status: status,
+  };
+}
+
+function withoutAuthorityAttestation(result) {
+  const {
+    authority_scan_attestation: _authorityScanAttestation,
+    authority_attestation_status: _authorityAttestationStatus,
+    ...unsigned
+  } = result || {};
+  return unsigned;
+}
+
+function recordOwnedBy(record, user) {
+  const userId = String(user?.id || "").trim();
+  const userEmail = String(user?.email || "").trim().toLowerCase();
+  return Boolean(
+    userId
+    && (
+      String(record?.owner_user_id || "").trim() === userId
+      || String(record?.created_by_id || "").trim() === userId
+      || (userEmail && String(record?.created_by || "").trim().toLowerCase() === userEmail)
+    )
+  );
+}
+
+function authorityDomain(value) {
+  const domain = normalizedDomain(value);
+  return domain.replace(/^www\./, "");
+}
 
 async function tryPythonScanner({ body, websiteUrl, pathPrefix, scanMode, timeoutMs }) {
   const scannerUrl = String(Deno.env.get("SCANNER_API_URL") || Deno.env.get("PYTHON_SCANNER_API_URL") || Deno.env.get("PYTHON_SCANNER_URL") || Deno.env.get("SCANNER_URL") || Deno.env.get("cloud_api") || Deno.env.get("CLOUD_API") || "").replace(/\/+$/, "");
@@ -178,6 +278,13 @@ async function tryPythonScanner({ body, websiteUrl, pathPrefix, scanMode, timeou
         scan_mode: scanMode || "advanced",
         business_name: body.business_name || body.project_name || "",
         cms_platform: body.cms_platform || body.platform || "",
+        request_id: body.request_id || body.idempotency_key || "",
+        idempotency_key: body.idempotency_key || body.request_id || "",
+        scan_id: body.scan_id || body.scan_run_id || "",
+        scan_run_id: body.scan_run_id || body.scan_id || "",
+        submitted_url: body.submitted_url || body.requested_start_url || websiteUrl,
+        normalized_domain: body.normalized_domain || normalizedDomain(websiteUrl),
+        respect_robots_txt: true,
       }),
     }, Math.max(1000, Number(timeoutMs || PYTHON_TIMEOUTS_MS.advanced)));
     const text = await response.text();
@@ -193,7 +300,7 @@ async function tryPythonScanner({ body, websiteUrl, pathPrefix, scanMode, timeou
   }
 }
 
-function toPythonAdvancedScanResponse(result, scanMode, scanId = "") {
+function toPythonAdvancedScanResponse(result, scanMode, requestIdentity = {}) {
   const warnings = Array.isArray(result.crawl_warnings) ? result.crawl_warnings : [];
   const technical = result.technical_audit_summary && typeof result.technical_audit_summary === "object" ? result.technical_audit_summary : {};
   return {
@@ -206,7 +313,10 @@ function toPythonAdvancedScanResponse(result, scanMode, scanId = "") {
     scanner_api_url_configured: true,
     scan_mode: result.scan_mode || scanMode || "advanced",
     audit_profile: result.audit_profile || result.scan_mode || scanMode || "advanced",
-    scan_id: scanId || result.scan_id || "",
+    ...requestIdentity,
+    final_url: result.final_url || result.resolved_start_url || result.pages?.[0]?.final_url || result.normalized_url || result.website_url || "",
+    normalized_domain: result.normalized_domain || requestIdentity.normalized_domain || normalizedDomain(result.final_url || result.website_url),
+    scanner_wrapper_version: VERSION,
     release_gate_eligible: true,
     technical_audit_summary: {
       ...technical,
@@ -547,6 +657,25 @@ async function safeReadJson(req) { try { return await req.json(); } catch { retu
 function parseJson(text) { try { return JSON.parse(text || "{}"); } catch { return null; } }
 function jsonResponse(payload, status = 200) { return Response.json(payload, { status, headers: CORS_HEADERS }); }
 function normalizeWebsiteUrl(value) { const raw = String(value || "").trim(); if (!raw) return ""; try { const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`); if (!/^https?:$/i.test(url.protocol) || !url.hostname || url.username || url.password) return ""; url.hash = ""; return url.href; } catch { return ""; } }
+function normalizedDomain(value) { try { return new URL(normalizeWebsiteUrl(value)).hostname.toLowerCase().replace(/\.$/, ""); } catch { return ""; } }
+function resolveRequestIdentity(body = {}) {
+  const requestId = String(body.request_id || body.idempotency_key || "").trim();
+  const idempotencyKey = String(body.idempotency_key || requestId).trim();
+  const scanId = String(body.scan_id || body.scan_run_id || "").trim();
+  const submittedUrl = String(body.submitted_url || body.requested_start_url || body.website_url || "").trim();
+  return {
+    conflict: Boolean(requestId && idempotencyKey && requestId !== idempotencyKey),
+    fields: {
+      request_id: requestId,
+      idempotency_key: idempotencyKey,
+      scan_id: scanId,
+      scan_run_id: scanId,
+      submitted_url: submittedUrl,
+      normalized_domain: String(body.normalized_domain || normalizedDomain(body.website_url || submittedUrl)),
+      respect_robots_txt: true,
+    },
+  };
+}
 function canonicalizeUrl(value) { try { const url = new URL(String(value || "")); if (!/^https?:$/i.test(url.protocol)) return ""; url.hash = ""; if (url.pathname !== "/") url.pathname = url.pathname.replace(/\/{2,}/g, "/").replace(/\/$/, ""); const params = [...url.searchParams.entries()].filter(([key]) => !/^utm_|^(fbclid|gclid|mc_cid|mc_eid|ref|session|sid)$/i.test(key)); url.search = ""; for (const [key, val] of params.slice(0, 8)) url.searchParams.append(key, val); return url.href; } catch { return ""; } }
 function cleanPath(value) { const raw = String(value || "").trim(); if (!raw) return ""; try { const url = new URL(raw); return `${url.pathname || "/"}${url.search || ""}` || "/"; } catch { return raw.startsWith("/") ? raw : `/${raw}`; } }
 function normalizePathPrefix(value) { const path = cleanPath(value || "/").split("?")[0] || "/"; return path === "/" ? "" : path.replace(/\/$/, ""); }

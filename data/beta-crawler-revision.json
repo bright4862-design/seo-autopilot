@@ -1,5 +1,5 @@
 {
-  "acceptance_report": "docs/releases/complete-small-site-inventory-v1.md",
+  "acceptance_report": "",
   "component_versions": {
     "archetype_classifier_version": "archetype_classifier_v9_local_business_hospitality",
     "artifact_filter_version": "artifact_filter_v4_wordpress_route_noise",
@@ -26,6 +26,7 @@
     "review_version": "python_review_v2_structural_marketplace",
     "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",
     "sampling_version": "balanced_sitemap_buckets_v1",
+    "scanner_build_revision": "authenticated_health_probe_v1",
     "scanner_version": "python_scanner_v3_bounded_request",
     "sitemap_time_reservation_version": "sitemap_time_reservation_v1_crawl_first",
     "title_evidence_version": "title_evidence_v1_contextual_duplicates",
@@ -33,10 +34,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "f9bac4b89ec7c1d8",
+  "fingerprint": "51c813a6219b4e70",
   "git_commit": "",
-  "note": "Recognize only fully-accounted one-to-three-page inventories after normalized final-URL dedup while preserving the global evidence threshold.",
-  "recorded_at": "2026-07-23T16:21:58.377081+00:00",
+  "note": "Standard 150 beta candidate; production acceptance, deployed commit, workflow runs and artifact digests are pending.",
+  "recorded_at": "2026-08-01T16:32:12Z",
   "schema_version": "beta_crawler_revision_v1",
-  "status": "frozen_beta"
+  "status": "candidate"
 }

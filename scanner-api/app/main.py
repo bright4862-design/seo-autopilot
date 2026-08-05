@@ -1,11 +1,12 @@
 import asyncio
 import os
+import secrets
 from typing import Any
 
 from fastapi import Body, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from .beta_revision import live_revision
+from .beta_revision import SCANNER_BUILD_REVISION, live_revision
 from .evidence_quality import EVIDENCE_QUALITY_GATE_VERSION, apply_evidence_quality_gate
 from .grok_chat import (
     GROK_CHAT_VERSION,
@@ -35,12 +36,24 @@ from .trust_discovery import apply_trust_discovery_gate, enrich_scan_with_trust_
 from .url_evidence import URL_EVIDENCE_VERSION, apply_verified_url_contract
 
 SCANNER_API_KEY = os.getenv("SCANNER_API_KEY", "")
+GROK_PROXY_ENABLED = os.getenv("GROK_PROXY_ENABLED", "").strip().lower() == "true"
 TRUST_DISCOVERY_TIMEOUTS = {"basic": 2.0, "quick": 3.0, "deep": 5.0, "advanced": 7.0}
 SCAN_RESPONSE_PAGE_LIMITS = {"basic": 25, "quick": 40, "deep": 85, "advanced": 150}
-SCANNER_BUILD_REVISION = "authenticated_health_probe_v1"
 GROK_ERROR_DETAIL_VERSION = "grok_upstream_detail_v1"
 
 app = FastAPI(title="FixList Scanner API", version=VERSION)
+
+
+def require_scanner_api_key(x_scanner_key: str | None) -> None:
+    """Fail closed unless a configured scanner key matches the request key."""
+    expected_key = str(SCANNER_API_KEY or "")
+    supplied_key = str(x_scanner_key or "")
+    if (
+        not expected_key
+        or not supplied_key
+        or not secrets.compare_digest(supplied_key, expected_key)
+    ):
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 class ScanRequest(BaseModel):
@@ -49,6 +62,13 @@ class ScanRequest(BaseModel):
     scan_mode: str = "advanced"
     business_name: str | None = None
     cms_platform: str | None = None
+    request_id: str | None = None
+    idempotency_key: str | None = None
+    scan_id: str | None = None
+    scan_run_id: str | None = None
+    submitted_url: str | None = None
+    normalized_domain: str | None = None
+    respect_robots_txt: bool = True
 
 
 class ChatRequest(BaseModel):
@@ -107,12 +127,13 @@ def enforce_scan_response_page_budget(result: dict[str, Any], scan_mode: str) ->
 def health_payload() -> dict[str, Any]:
     return {
         "ok": True,
+        "key_required": True,
         "version": VERSION,
         "scanner_build_revision": SCANNER_BUILD_REVISION,
         "grok_chat_version": GROK_CHAT_VERSION,
         "grok_error_detail_version": GROK_ERROR_DETAIL_VERSION,
         "grok_model_id": GROK_MODEL_ID,
-        "grok_proxy_enabled": True,
+        "grok_proxy_enabled": GROK_PROXY_ENABLED,
         "url_evidence_version": URL_EVIDENCE_VERSION,
         "review_version": REVIEW_VERSION,
         "archetype_classifier_version": ARCHETYPE_CLASSIFIER_VERSION,
@@ -135,12 +156,10 @@ def health():
 @app.get("/health/auth")
 def authenticated_health(x_scanner_key: str | None = Header(default=None)):
     """Verify both scanner reachability and the caller's shared scanner key."""
-    if SCANNER_API_KEY and x_scanner_key != SCANNER_API_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    require_scanner_api_key(x_scanner_key)
     return {
         **health_payload(),
         "authenticated": True,
-        "key_required": bool(SCANNER_API_KEY),
     }
 
 
@@ -153,8 +172,9 @@ def revision():
 
 @app.post("/chat")
 async def chat(payload: ChatRequest, x_scanner_key: str | None = Header(default=None)):
-    if SCANNER_API_KEY and x_scanner_key != SCANNER_API_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    require_scanner_api_key(x_scanner_key)
+    if not GROK_PROXY_ENABLED:
+        raise HTTPException(status_code=503, detail="Grok is unavailable.")
 
     message = str(payload.message or "").strip()
     if not message:
@@ -185,8 +205,24 @@ async def chat(payload: ChatRequest, x_scanner_key: str | None = Header(default=
 
 @app.post("/scan")
 async def scan(payload: ScanRequest, x_scanner_key: str | None = Header(default=None)):
-    if SCANNER_API_KEY and x_scanner_key != SCANNER_API_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    require_scanner_api_key(x_scanner_key)
+
+    request_id = str(payload.request_id or payload.idempotency_key or "").strip()
+    idempotency_key = str(payload.idempotency_key or request_id).strip()
+    scan_id = str(payload.scan_id or payload.scan_run_id or "").strip()
+    identity = {
+        "request_id": request_id,
+        "idempotency_key": idempotency_key,
+        "scan_id": scan_id,
+        "scan_run_id": scan_id,
+        "submitted_url": str(payload.submitted_url or payload.website_url),
+        "normalized_domain": website_host(payload.website_url),
+        "respect_robots_txt": True,
+    }
+    if request_id and idempotency_key and request_id != idempotency_key:
+        raise HTTPException(status_code=409, detail="request_id and idempotency_key must match.")
+    if payload.respect_robots_txt is not True:
+        raise HTTPException(status_code=400, detail="Standard scans must respect robots.txt.")
 
     timer = RequestTimer(
         "scan",
@@ -194,6 +230,10 @@ async def scan(payload: ScanRequest, x_scanner_key: str | None = Header(default=
         scan_mode=payload.scan_mode,
         scanner_version=VERSION,
         beta_revision_fingerprint=live_revision()["fingerprint"],
+        request_id=request_id,
+        idempotency_key=idempotency_key,
+        scan_id=scan_id,
+        scan_run_id=scan_id,
     )
     try:
         result = await run_scan(
@@ -215,16 +255,35 @@ async def scan(payload: ScanRequest, x_scanner_key: str | None = Header(default=
         result = apply_render_evidence_quality(result)
         result = enforce_scan_response_page_budget(result, payload.scan_mode)
         result["beta_revision_fingerprint"] = live_revision()["fingerprint"]
+        pages = result.get("crawled_pages") or result.get("pages") or []
+        first_page = pages[0] if isinstance(pages, list) and pages else {}
+        final_url = str(
+            result.get("final_url")
+            or result.get("resolved_start_url")
+            or (first_page.get("final_url") if isinstance(first_page, dict) else "")
+            or result.get("normalized_url")
+            or result.get("website_url")
+            or payload.website_url
+        )
+        result.update({
+            **identity,
+            "final_url": final_url,
+            "normalized_domain": website_host(final_url) or identity["normalized_domain"],
+            "release_id": ":".join(filter(None, [
+                str(result.get("scanner_version") or VERSION),
+                SCANNER_BUILD_REVISION,
+                str(result.get("beta_revision_fingerprint") or ""),
+            ])),
+        })
     except Exception as exc:  # noqa: BLE001 - customer-safe envelope, full detail logged
-        return timer.failed(exc)
+        return {**timer.failed(exc), **identity}
     timer.completed(**scan_metrics(result))
     return result
 
 
 @app.post("/review")
 async def review(payload: dict[str, Any] = Body(default_factory=dict), x_scanner_key: str | None = Header(default=None)):
-    if SCANNER_API_KEY and x_scanner_key != SCANNER_API_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    require_scanner_api_key(x_scanner_key)
 
     timer = RequestTimer(
         "review",

@@ -1,61 +1,160 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
 import ipaddress
 import socket
-from urllib.parse import urlparse
+
+import httpx
 
 
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+DEFAULT_MAX_REDIRECTS = 5
+
+
+@dataclass(frozen=True)
+class ResolvedHTTPHop:
+    """A logical URL and the public address selected from one DNS snapshot."""
+
+    logical_url: httpx.URL
+    connect_url: httpx.URL
+    hostname: str
+    host_header: str
+    ip_address: str
+
+
+def _is_public_ip(value: str) -> bool:
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    # ``is_global`` alone is not sufficient on every supported Python release
+    # (multicast has historically been classified as global). Keep the explicit
+    # deny list as defence in depth for metadata, loopback and special-use space.
+    return bool(
+        address.is_global
+        and not address.is_private
+        and not address.is_loopback
+        and not address.is_link_local
+        and not address.is_reserved
+        and not address.is_multicast
+        and not address.is_unspecified
+    )
+
+
+def resolve_public_http_url(url: str) -> ResolvedHTTPHop | None:
+    """Resolve one HTTP(S) hop once and pin it to an exclusively public result.
+
+    All answers from the DNS snapshot must be public. Rejecting the complete hop
+    when even one answer is private prevents an attacker from hiding a metadata
+    or RFC1918 address among otherwise public A/AAAA records.
+    """
+    try:
+        logical_url = httpx.URL(str(url or ""))
+    except (TypeError, ValueError):
+        return None
+
+    if logical_url.scheme not in ("http", "https") or not logical_url.raw_host:
+        return None
+    if logical_url.username or logical_url.password:
+        return None
+
+    try:
+        # HTTPX already IDNA-normalizes raw_host, which is also the exact ASCII
+        # hostname needed for TLS SNI and the HTTP Host header.
+        hostname = logical_url.raw_host.decode("ascii")
+        port = logical_url.port or (443 if logical_url.scheme == "https" else 80)
+        infos = socket.getaddrinfo(
+            hostname,
+            port,
+            family=socket.AF_UNSPEC,
+            type=socket.SOCK_STREAM,
+            proto=socket.IPPROTO_TCP,
+        )
+    except (socket.gaierror, UnicodeError, ValueError, OSError):
+        return None
+
+    addresses: list[str] = []
+    for info in infos:
+        try:
+            candidate = str(ipaddress.ip_address(info[4][0]))
+        except (IndexError, TypeError, ValueError):
+            return None
+        if candidate not in addresses:
+            addresses.append(candidate)
+
+    if not addresses or any(not _is_public_ip(candidate) for candidate in addresses):
+        return None
+
+    # Prefer IPv4 when both families are available. This is deterministic and
+    # avoids selecting an unusable IPv6 route on hosts without IPv6 egress. The
+    # full answer set above has already been validated before selecting either.
+    selected_ip = next(
+        (candidate for candidate in addresses if ipaddress.ip_address(candidate).version == 4),
+        addresses[0],
+    )
+    host_header = hostname
+    if ":" in hostname:
+        host_header = f"[{hostname}]"
+    if logical_url.port is not None:
+        host_header = f"{host_header}:{logical_url.port}"
+
+    return ResolvedHTTPHop(
+        logical_url=logical_url,
+        connect_url=logical_url.copy_with(host=selected_ip),
+        hostname=hostname,
+        host_header=host_header,
+        ip_address=selected_ip,
+    )
 
 
 def is_public_http_url(url: str) -> bool:
-    """True only if url is http(s) and its host resolves exclusively to public IPs.
+    """True only when an HTTP(S) URL resolves exclusively to public IPs."""
+    return resolve_public_http_url(url) is not None
 
-    Blocks SSRF vectors: loopback, private ranges, link-local (incl. cloud
-    metadata 169.254.169.254), reserved, multicast, and unspecified addresses.
+
+async def safe_get_once(client, url: str):
+    """Fetch one URL through its validated IP without a second DNS lookup.
+
+    The socket connects to ``connect_url`` (the validated numeric address), while
+    Host and TLS SNI retain the original hostname. HTTPX/httpcore therefore keeps
+    normal certificate verification against the requested public hostname.
     """
-    try:
-        parsed = urlparse(str(url or ""))
-    except Exception:
-        return False
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        return False
-    try:
-        infos = socket.getaddrinfo(parsed.hostname, None)
-    except (socket.gaierror, UnicodeError, ValueError, OSError):
-        return False
-    if not infos:
-        return False
-    for info in infos:
-        try:
-            ip = ipaddress.ip_address(info[4][0])
-        except ValueError:
-            return False
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_reserved
-            or ip.is_multicast
-            or ip.is_unspecified
-        ):
-            return False
-    return True
+    resolved = resolve_public_http_url(url)
+    if resolved is None:
+        return None
+
+    response = await client.get(
+        resolved.connect_url,
+        headers={
+            "Host": resolved.host_header,
+            # A numeric-IP connection pool must never be reused for another
+            # virtual host sharing that IP. Closing each pinned hop also prevents
+            # an earlier SNI session from crossing logical host boundaries.
+            "Connection": "close",
+        },
+        extensions={"sni_hostname": resolved.hostname},
+    )
+
+    # Callers and evidence contracts must continue to see the requested URL,
+    # not the transport-only numeric address. The network request has completed,
+    # so this cannot influence routing or trigger another resolution.
+    request = getattr(response, "request", None)
+    if request is not None:
+        request.url = resolved.logical_url
+    return response
 
 
-async def safe_get(client, url: str, max_redirects: int = 5):
-    """GET that validates every redirect hop against SSRF before touching it.
+async def safe_get(client, url: str, max_redirects: int = DEFAULT_MAX_REDIRECTS):
+    """GET with pinned DNS validation on every bounded redirect hop.
 
-    Requires the client to NOT auto-follow redirects (follow_redirects=False),
-    otherwise httpx would fetch the internal target before we can block it.
-    Returns the final httpx.Response, or None if a hop is non-public or the
-    redirect chain is too long.
+    The supplied client must have ``follow_redirects=False``. Returns the final
+    response, or ``None`` for an unsafe/malformed hop or an overlong chain.
     """
-    import httpx
-
     current = str(url or "")
-    for _ in range(max_redirects + 1):
-        if not is_public_http_url(current):
+    for _ in range(max(0, int(max_redirects)) + 1):
+        response = await safe_get_once(client, current)
+        if response is None:
             return None
-        response = await client.get(current)
         if response.status_code in REDIRECT_STATUSES:
             location = response.headers.get("location")
             if not location:

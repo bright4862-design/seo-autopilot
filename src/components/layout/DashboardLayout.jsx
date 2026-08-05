@@ -1,15 +1,18 @@
 import React from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useAuth } from "@/lib/AuthContext";
 
 const navigationItems = [
   { name: "Dashboard", href: "/dashboard" },
   { name: "New scan", href: "/onboarding" },
+  { name: "Ask Grok", href: "/assistant" },
   { name: "Billing", href: "/billing" },
 ];
 
 export default function DashboardLayout() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { logout } = useAuth();
 
   function isActive(href) {
     if (href === "/dashboard") {
@@ -31,8 +34,14 @@ export default function DashboardLayout() {
     return location.pathname === href || location.pathname.startsWith(`${href}/`);
   }
 
-  function handleLogout() {
-    navigate("/login");
+  async function handleLogout() {
+    try {
+      await logout(false);
+    } catch (error) {
+      console.error("Logout failed:", error);
+    } finally {
+      navigate("/login", { replace: true });
+    }
   }
 
   return (

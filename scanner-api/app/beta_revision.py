@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 BETA_REVISION_SCHEMA_VERSION = "beta_crawler_revision_v1"
+SCANNER_BUILD_REVISION = "authenticated_health_probe_v1"
 
 # Repo-root/data/beta-crawler-revision.json, resolved from this file's location
 # (app/ -> scanner-api/ -> repo root).
@@ -59,6 +60,7 @@ def collect_component_versions() -> dict[str, str]:
 
     return {
         "scanner_version": VERSION,
+        "scanner_build_revision": SCANNER_BUILD_REVISION,
         "artifact_filter_version": ARTIFACT_FILTER_VERSION,
         "route_boundary_classifier_version": ROUTE_BOUNDARY_CLASSIFIER_VERSION,
         "final_url_dedup_version": FINAL_URL_DEDUP_VERSION,

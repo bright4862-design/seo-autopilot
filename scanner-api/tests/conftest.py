@@ -7,6 +7,7 @@ test_contract.py, which does NOT install this stub.
 """
 import httpx
 import pytest
+import socket
 
 # Capture the real class before any test monkeypatches httpx.AsyncClient.
 _REAL_ASYNC_CLIENT = httpx.AsyncClient
@@ -19,7 +20,12 @@ def install_mock_network(monkeypatch, routes: dict):
     """
 
     def handler(request: httpx.Request) -> httpx.Response:
-        entry = routes.get(str(request.url)) or routes.get(request.url.path)
+        # Production connects to the validated numeric IP. Rebuild the logical
+        # fixture URL from the preserved Host header without changing that
+        # transport behavior in application code.
+        authority = request.headers.get("host", "")
+        logical_url = f"{request.url.scheme}://{authority}{request.url.raw_path.decode('ascii')}"
+        entry = routes.get(logical_url) or routes.get(request.url.path)
         if entry is None:
             return httpx.Response(404, text="")
         return httpx.Response(
@@ -36,9 +42,15 @@ def install_mock_network(monkeypatch, routes: dict):
         return _REAL_ASYNC_CLIENT(*args, follow_redirects=False, **kwargs)
 
     monkeypatch.setattr("httpx.AsyncClient", factory)
-    # Fixture hosts don't resolve in DNS; treat them as public for these tests.
-    monkeypatch.setattr("app.scanner.is_public_http_url", lambda url: True)
-    monkeypatch.setattr("app.security.is_public_http_url", lambda url: True)
+    # Fixture hosts don't resolve in DNS. Supply one deterministic public DNS
+    # snapshot so the same IP-pinning path runs under tests.
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda _host, port, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", port))
+        ],
+    )
 
 
 @pytest.fixture

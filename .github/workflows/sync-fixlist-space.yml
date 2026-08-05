@@ -1,19 +1,17 @@
 name: Sync FixList AI to Hugging Face
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "hf-space/**"
-      - ".github/workflows/sync-fixlist-space.yml"
+  # Release is coordinated manually after the exact main SHA passes CI and the
+  # matching Cloud Run and Base44 revisions are verified.
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: fixlist-hugging-face-sync
-  cancel-in-progress: true
+  group: fixlist-hugging-face-deploy
+  cancel-in-progress: false
 
 env:
   HF_REPO_ID: milo2455555/fixlist-ai
@@ -25,6 +23,18 @@ jobs:
     steps:
       - name: Check out GitHub source
         uses: actions/checkout@v4
+
+      - name: Require exact main SHA with successful CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          successful_runs="$(gh api \
+            "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&status=completed&per_page=100" \
+            --jq '[.workflow_runs[] | select(.conclusion == "success")] | length')"
+          test "$successful_runs" -ge 1
 
       - name: Set up Python
         uses: actions/setup-python@v5

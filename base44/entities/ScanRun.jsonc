@@ -14,8 +14,9 @@
     "path_prefix": { "type": "string" },
     "scan_mode": {
       "type": "string",
-      "enum": ["basic", "quick", "deep", "advanced"],
-      "default": "advanced"
+      "enum": ["standard_150", "basic", "quick", "deep", "advanced"],
+      "default": "standard_150",
+      "description": "New customer scans use standard_150. Legacy values remain valid so historical scan records stay readable."
     },
     "scan_source": { "type": "string" },
     "status": {

@@ -10,7 +10,7 @@ const LIMITED_SCAN_STATUSES = new Set([
   "blocked_or_incomplete",
 ]);
 
-const MODE_PAGE_LIMITS = { basic: 25, quick: 40, deep: 85, advanced: 150 };
+const MODE_PAGE_LIMITS = { standard_150: 150, advanced: 150 };
 export const RELEASE_AUTHORITY_CONTRACT = Object.freeze({
   scannerVersion: "python_scanner_v3_bounded_request",
   scannerBuildRevision: "leaf_seed_grok_proxy_v1",
@@ -57,7 +57,7 @@ function normalizeMetadataStateCounts(value = {}) {
 }
 
 function modePageLimit(scanMode) {
-  return MODE_PAGE_LIMITS[toStr(scanMode).toLowerCase()] || MODE_PAGE_LIMITS.advanced;
+  return MODE_PAGE_LIMITS[toStr(scanMode).toLowerCase()] || MODE_PAGE_LIMITS.standard_150;
 }
 
 function firstPageEvidence(record = {}) {

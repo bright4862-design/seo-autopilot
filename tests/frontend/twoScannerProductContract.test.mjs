@@ -16,6 +16,10 @@ const scanRunsSource = readFileSync(
   new URL("../../src/lib/scanRuns.js", import.meta.url),
   "utf8",
 );
+const scanRunSchema = JSON.parse(readFileSync(
+  new URL("../../base44/entities/ScanRun.jsonc", import.meta.url),
+  "utf8",
+));
 
 test("exactly one customer scanner is presented, and it is Standard 150", () => {
   assert.match(scanFormSource, /Standard · 150/);
@@ -58,6 +62,15 @@ test("standard_150 is the persisted and canonical customer mode", () => {
   assert.match(scanRunIdentitySource, /mode === "advanced" \? STANDARD_SCAN_MODE : mode/);
   assert.match(scanRunsSource, /scan_mode: normalizeScanMode\(run\.scan_mode\)/);
   assert.doesNotMatch(scanRunsSource, /scan_mode: run\.scan_mode \|\| "advanced"/);
+});
+
+test("the durable schema accepts new Standard 150 scans without breaking legacy history", () => {
+  const modeSchema = scanRunSchema.properties.scan_mode;
+  assert.equal(modeSchema.default, "standard_150");
+  assert.ok(modeSchema.enum.includes("standard_150"));
+  for (const legacyMode of ["basic", "quick", "deep", "advanced"]) {
+    assert.ok(modeSchema.enum.includes(legacyMode));
+  }
 });
 
 test("historical non-advanced records stay readable as their original mode", () => {

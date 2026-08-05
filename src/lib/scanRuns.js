@@ -24,6 +24,9 @@ import {
   scanReleaseIdentity,
 } from "@/lib/scanRunIdentity";
 
+// Terminal states that already carry persisted evidence. Recovery and
+// gateway-observed failures must never overwrite these.
+const PROTECTED_SCAN_STATUSES = new Set(["complete", "limited"]);
 const MAX_FIX_ITEMS = 100;
 const MAX_REPLAY_CANDIDATES = 50;
 const pendingBeginsByRequest = new Map();
@@ -75,17 +78,30 @@ async function resolveProjectId(projectId) {
   throw new Error("A website project is required before starting a durable scan.");
 }
 
+// A run whose browser died mid-scan never reaches a terminal state on its own.
+// These rows are failed truthfully -- no result is fabricated and no scanner
+// identity is backfilled -- so the request key is free for a clean retry.
+const STALE_RUN_STATUS_DETAIL =
+  "This scan stopped before it finished and no results were saved. You can run it again.";
+
 async function terminalizeStaleScanRuns(runs = []) {
   const completedAt = new Date().toISOString();
   const uniqueRuns = [...new Map(
-    (runs || []).filter((run) => run?.id).map((run) => [run.id, run]),
+    (runs || [])
+      .filter((run) => run?.id)
+      // Defensive: a run that already reached complete/limited carries persisted
+      // evidence and must never be overwritten by recovery.
+      .filter((run) => !PROTECTED_SCAN_STATUSES.has(String(run.status || "").toLowerCase()))
+      .map((run) => [run.id, run]),
   ).values()];
   await Promise.allSettled(uniqueRuns.map((run) =>
     base44.entities.ScanRun.update(run.id, {
       status: "failed",
-      error_code: "stale_active_scan",
-      error_message: `Standard scan exceeded the ${STANDARD_ACTIVE_SCAN_TTL_MS / 60000}-minute active recovery window.`,
+      status_detail: STALE_RUN_STATUS_DETAIL,
+      error_code: "orphaned_no_terminal_state",
+      error_message: `Standard scan exceeded the ${STANDARD_ACTIVE_SCAN_TTL_MS / 60000}-minute active recovery window without reaching a terminal state.`,
       completed_at: completedAt,
+      release_gate_eligible: false,
     }),
   ));
 }

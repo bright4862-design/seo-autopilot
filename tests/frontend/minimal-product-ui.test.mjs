@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+const app = readFileSync("src/App.jsx", "utf8");
 const onboarding = readFileSync("src/pages/Onboarding.jsx", "utf8");
 const scannerCss = readFileSync("src/styles/scanner-minimal.css", "utf8");
 const layout = readFileSync("src/components/layout/DashboardLayout.jsx", "utf8");
@@ -32,4 +33,9 @@ test("billing uses responsive rows and a visible current-plan summary", () => {
   assert.match(billing, /flex-col gap-5 sm:flex-row/);
   assert.match(billing, /border-hairline-soft/);
   assert.match(billing, /Payments are not connected yet/);
+});
+
+test("legacy scanner URL redirects to the Standard 150 onboarding route", () => {
+  assert.match(app, /path="\/ScanWebsite" element=\{<Navigate to="\/onboarding" replace \/>\}/);
+  assert.match(app, /path="\/onboarding" element=\{<Onboarding \/>\}/);
 });

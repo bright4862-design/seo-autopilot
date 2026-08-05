@@ -49,7 +49,7 @@ export async function beginScanRun({ projectId, websiteUrl, pathPrefix, scanMode
       project_id: projectId || "",
       website_url: websiteUrl,
       path_prefix: pathPrefix || "",
-      scan_mode: scanMode || "advanced",
+      scan_mode: scanMode === "standard_150" ? "standard_150" : "standard_150",
       scan_source: scanSource || "scan_website_page",
       status: "crawling",
       previous_scan_id: previousScanId,

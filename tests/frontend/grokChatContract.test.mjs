@@ -33,8 +33,11 @@ const assistantSource = readFileSync("src/pages/Assistant.jsx", "utf8");
 const scanFormSource = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
 const appSource = readFileSync("src/App.jsx", "utf8");
 const layoutSource = readFileSync("src/components/layout/DashboardLayout.jsx", "utf8");
-const conversationSchema = JSON.parse(readFileSync("base44/entities/grok-conversation.jsonc", "utf8"));
-const messageSchema = JSON.parse(readFileSync("base44/entities/grok-message.jsonc", "utf8"));
+// Canonical declarations. The identical grok-conversation/grok-message copies
+// were removed: two files declaring the same entity name made every Base44 CLI
+// command fail validation, including the site-only deploy.
+const conversationSchema = JSON.parse(readFileSync("base44/entities/GrokConversation.jsonc", "utf8"));
+const messageSchema = JSON.parse(readFileSync("base44/entities/GrokMessage.jsonc", "utf8"));
 const scanRunSchema = JSON.parse(readFileSync("base44/entities/ScanRun.jsonc", "utf8"));
 const fixListSchema = JSON.parse(readFileSync("base44/entities/FixList.jsonc", "utf8"));
 const fixItemSchema = JSON.parse(readFileSync("base44/entities/FixItem.jsonc", "utf8"));

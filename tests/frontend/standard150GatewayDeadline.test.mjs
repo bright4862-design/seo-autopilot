@@ -32,11 +32,11 @@ function upstreamTimeoutFor(elapsedMs) {
   return FUNCTION_RESPONSE_BUDGET_MS - elapsedMs - RESPONSE_RESERVE_MS;
 }
 
-test("1. Standard stays 150 pages while the authenticated request cap is 40 seconds", () => {
+test("1. Standard stays 150 pages with the proven 75-second Python crawl cap", () => {
   const advanced = pythonScanner.match(/"advanced":\s*\{[^}]*"max_pages":\s*(\d+)[^}]*"timeout":\s*(\d+)/);
   assert.equal(Number(advanced?.[1]), 150, "Standard/advanced page maximum must remain 150");
   assert.equal(Number(advanced?.[2]), 75, "the normal standalone advanced timeout remains 75s");
-  assert.equal(PYTHON_CRAWL_BUDGET_MS, 40_000, "gateway must use the Base44-safe request cap");
+  assert.equal(PYTHON_CRAWL_BUDGET_MS, 75_000, "gateway must restore the proven advanced crawl cap");
 
   const scanRequest = pythonMain.match(/class ScanRequest\(BaseModel\):([\s\S]*?)\n\n/)?.[1] || "";
   assert.ok(scanRequest.length > 0, "ScanRequest model not found");
@@ -54,7 +54,7 @@ test("2. gateway timeout leaves headroom before the browser's 105s deadline", ()
   const formPad = Number(form.match(/crawl_timeout_ms \|\| 30000\) \+ (\d+)/)?.[1]);
   assert.equal(formCrawlTimeout + formPad, BROWSER_DEADLINE_MS);
 
-  assert.equal(FUNCTION_RESPONSE_BUDGET_MS, 55_000);
+  assert.equal(FUNCTION_RESPONSE_BUDGET_MS, 95_000);
   for (const elapsed of [0, 1_000, 4_000]) {
     const upstream = upstreamTimeoutFor(elapsed);
     // Inner inequality: we outlast Python's fixed budget plus its serialization.

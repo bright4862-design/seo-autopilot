@@ -125,6 +125,11 @@ export default function FixList() {
       if (durableBundle?.run) {
         applyRecord(normalizeDurableScanBundle(durableBundle));
         setRequestedScanState("loaded");
+        if (ACTIVE_SCAN_RUN_STATUSES.has(String(durableBundle.run.status || ""))) {
+          window.setTimeout(() => {
+            if (!cancelled) setReloadToken((value) => value + 1);
+          }, 2500);
+        }
       } else {
         applyRecord(null);
         setRequestedScanState("not_found");
@@ -1217,7 +1222,7 @@ function getDurableScanStateTitle(status) {
 
 function getDurableScanStateDetail(status) {
   if (["queued", "crawling", "reviewing"].includes(status)) {
-    return "FixList is still working through this scan. Check back in a minute or run a fresh scan.";
+    return "FixList is still working. This page refreshes automatically and will show your saved result as soon as it is ready.";
   }
   if (status === "failed") {
     return "Something interrupted this scan before results could be saved. Run a fresh scan to get a complete FixList.";

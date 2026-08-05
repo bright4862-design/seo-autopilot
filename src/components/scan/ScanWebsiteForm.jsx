@@ -21,7 +21,7 @@ import { normalizeActionPriority, normalizeFindingEvidence, normalizeReviewEvide
 import { mergePersistedScanRunRecord } from "@/lib/persistedScanRecord";
 import { RELEASE_AUTHORITY_CONTRACT, buildAuthorityMarkers, buildDiagnosticAuthorityMarkers, buildScanRunFields } from "@/lib/scanRunModel";
 import { createScanRequestId, normalizedScanDomain, scanReleaseIdentity } from "@/lib/scanRunIdentity";
-import { beginScanRun, cancelScanRun, completeScanRun, failScanRun, markScanRunReviewing, recoverOrphanedScanRuns } from "@/lib/scanRuns";
+import { beginScanRun, cancelScanRun, completeScanRun, failScanRun, getScanRunWithFixList, markScanRunReviewing, recoverOrphanedScanRuns } from "@/lib/scanRuns";
 import { UNLOCK_PRICE_LABEL, loadAccess, recordScanUsed } from "@/lib/access";
 import {
   CUSTOMER_BOUNDARY_EVENT,
@@ -60,6 +60,7 @@ const WORDPRESS_AUTHOR_ARCHIVE_RE = /^\/author\/[^/?#]+(?:\/page\/\d+)?\/?$/i;
 const isRouteBoundaryPath = (value = "") => { const path = String(value || "").split("?")[0].split("#")[0]; return !WORDPRESS_AUTHOR_ARCHIVE_RE.test(path) && ROUTE_BOUNDARY_RE.test(path); };
 const MONEY_PAGE_PATTERNS = ["devis", "quote", "pricing", "tarif", "contact", "booking", "reservation", "checkout", "ticket", "voucher", "pass", "show", "listing", "product", "produit", "collection", "category", "simulation", "simulateur", "calcul", "calculator", "comparateur", "demo", "signup", "energie", "énergie", "electricite", "électricité", "gaz", "fournisseur"];
 const TEMPLATE_RULES = new Set(["client_rendering", "js_rendering", "canonical_missing", "canonical_to_other_url", "schema", "missing_h1", "image_alt_text", "missing_meta_description", "empty_meta_description", "malformed_meta_description", "meta_description_unusable", "route_boundary_candidate_indexable", "internal_route_indexable"]);
+const SCAN_PROGRESS_STEPS = ["Reading pages", "Checking issues", "Writing fixes", "Saving result"];
 
 export default function ScanWebsiteForm({ project = null, saving = false }) {
   const navigate = useNavigate();
@@ -71,6 +72,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   const [optionalOpen, setOptionalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [activeStep, setActiveStep] = useState("");
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [error, setError] = useState("");
   const [debugOpen, setDebugOpen] = useState(false);
   const [urlError, setUrlError] = useState("");
@@ -89,6 +91,20 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   const selectedCms = CMS_OPTIONS.find((item) => item.value === cmsPlatform);
   const displayedDebugData = debugCompressed ? compressDebugData(debugData) : debugData;
   const displayedDebugText = JSON.stringify(displayedDebugData, null, debugCompressed ? 0 : 2);
+  const progressIndex = scanProgressIndex(activeStep);
+
+  useEffect(() => {
+    if (!isLoading) {
+      setElapsedSeconds(0);
+      return undefined;
+    }
+    const startedAt = Date.now();
+    setElapsedSeconds(0);
+    const timer = window.setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [isLoading]);
 
   function recordDebug(data) {
     const next = runtimeDebug(data);
@@ -338,7 +354,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       const durableRecord = usingAuthorityPersistence
         ? mergedFinal
         : { ...mergedFinal, release_gate_eligible: false, is_authoritative: false };
-      const completion = usingAuthorityPersistence
+      let completion = usingAuthorityPersistence
         ? normalizeFunctionResponse(await callBase44Function("persistScanAuthority", {
           scan_id: scanId,
           attestation: reviewAttestation,
@@ -352,6 +368,10 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         });
       logScanBoundary("persistence_response", identityDebug(), { persisted: Boolean(completion?.scanRun) });
       await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
+      if (!completion?.scanRun) {
+        completion = await recoverPersistedCompletion(scanId);
+        logScanBoundary("persistence_recovery", identityDebug(), { persisted: Boolean(completion?.scanRun) });
+      }
       if (!completion?.scanRun) throw Object.assign(new Error("The scan finished, but its durable FixList record could not be saved."), { code: "scan_persistence_failed", scan_record: durableRecord });
       if (usingAuthorityPersistence) {
         const proof = String(completion.scanRun.authority_proof || "").trim().toLowerCase();
@@ -395,6 +415,15 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       if (abandoned) {
         logScanBoundary("scan_abandoned", identityDebug(), { reason: err?.code || err?.name || "session_changed" });
         await cancelScanRun(scanRunHandle, err).catch(() => {});
+        return;
+      }
+      const recoveredCompletion = scanId
+        ? await recoverPersistedCompletion(scanId, 3).catch(() => null)
+        : null;
+      if (recoveredCompletion?.scanRun?.status === "complete" && recoveredCompletion?.fixListId) {
+        logScanBoundary("browser_recovered_saved_result", identityDebug(), { status: "complete" });
+        await recordScanUsed().catch(() => {});
+        navigate(`/dashboard?scan=complete&scan_id=${encodeURIComponent(scanId)}`);
         return;
       }
       console.error("Website scan failed.", err);
@@ -493,7 +522,32 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         </div>
 
         {error ? <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"><div className="flex items-start gap-2"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span>{error}</span></div></div> : null}
-        {isLoading ? <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-4 text-sm text-indigo-950"><div className="flex items-center gap-3"><Loader2 className="h-4 w-4 animate-spin" /><span>{activeStep || "Running scan..."}</span></div></div> : null}
+        {isLoading ? (
+          <div className="rounded-2xl border border-indigo-100 bg-indigo-50 p-5 text-indigo-950" aria-live="polite">
+            <div className="flex items-start gap-3">
+              <Loader2 className="mt-0.5 h-5 w-5 shrink-0 animate-spin" />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline justify-between gap-3">
+                  <p className="font-semibold">{activeStep || "Starting your scan"}</p>
+                  <span className="shrink-0 text-xs tabular-nums text-indigo-700">{formatElapsed(elapsedSeconds)}</span>
+                </div>
+                <p className="mt-1 text-sm text-indigo-800">
+                  {elapsedSeconds >= 30
+                    ? "Still working — larger or slower sites can take a little longer."
+                    : "FixList is actively working. Your result will open automatically when it is saved."}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-4 gap-2" aria-label="Scan progress">
+              {SCAN_PROGRESS_STEPS.map((label, index) => (
+                <div key={label} className="min-w-0">
+                  <div className={`h-1.5 rounded-full ${index <= progressIndex ? "bg-indigo-600" : "bg-indigo-200"}`} />
+                  <p className={`mt-1 truncate text-[11px] ${index <= progressIndex ? "text-indigo-900" : "text-indigo-500"}`}>{label}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         <div className="flex flex-col gap-3">
           <Button type="submit" disabled={isLoading} className="h-11 w-full bg-indigo-600 text-white hover:bg-indigo-700 sm:w-auto sm:self-start sm:px-6">{isLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Building FixList...</> : <><Search className="mr-2 h-4 w-4" />Create FixList</>}</Button>
@@ -889,6 +943,35 @@ function compressScanRecord(record = {}) {
     pages_preview_count: pages.length,
     pages_preview: pages,
   };
+}
+
+async function recoverPersistedCompletion(scanId, attempts = 5) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const bundle = await getScanRunWithFixList(scanId).catch(() => null);
+    const run = bundle?.run || null;
+    const fixListId = bundle?.fixList?.id || bundle?.fix_list_id || run?.fix_list_id || "";
+    if (run?.status === "complete" && fixListId) {
+      return { scanRun: run, fixListId, fixItems: bundle?.fixItems || [] };
+    }
+    if (["failed", "cancelled"].includes(String(run?.status || ""))) return null;
+    if (attempt < attempts - 1) await new Promise((resolve) => window.setTimeout(resolve, 1500));
+  }
+  return null;
+}
+
+function scanProgressIndex(step = "") {
+  const normalized = String(step || "").toLowerCase();
+  if (normalized.includes("saving")) return 3;
+  if (normalized.includes("writing")) return 2;
+  if (normalized.includes("checking") || normalized.includes("review")) return 1;
+  return 0;
+}
+
+function formatElapsed(seconds = 0) {
+  const safe = Math.max(0, Number(seconds) || 0);
+  const minutes = Math.floor(safe / 60);
+  const remainder = safe % 60;
+  return minutes > 0 ? `${minutes}:${String(remainder).padStart(2, "0")}` : `${remainder}s`;
 }
 
 async function callBase44Function(functionName, payload) {

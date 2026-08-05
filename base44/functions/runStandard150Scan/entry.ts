@@ -14,14 +14,12 @@ const MAX_PAGES = 150;
 //     < FUNCTION_RESPONSE_BUDGET_MS
 //     < BROWSER_DEADLINE_MS
 //
-// Python's normal Standard/advanced cap remains 75 seconds and 150 pages. The
-// authenticated gateway now supplies a smaller per-request runtime cap so the
-// scanner returns whatever evidence it collected before Base44's function
-// lifetime can kill the request. This changes time, never the 150-page maximum.
-const PYTHON_CRAWL_BUDGET_MS = 40_000;
-// Browser deadline remains 105s; the gateway must finish much earlier.
+// Standard 150 uses the Python scanner's proven 75-second advanced crawl cap.
+// Base44 retains response reserve for serialization and still returns before
+// the browser's 105-second deadline. The 150-page maximum is unchanged.
+const PYTHON_CRAWL_BUDGET_MS = 75_000;
 const BROWSER_DEADLINE_MS = 105_000;
-const FUNCTION_RESPONSE_BUDGET_MS = 55_000;
+const FUNCTION_RESPONSE_BUDGET_MS = 95_000;
 const RESPONSE_RESERVE_MS = 5_000;
 const UPSTREAM_RESPONSE_RESERVE_MS = 4_000;
 const REVIEW_PAGE_SAMPLE_LIMIT = 60;

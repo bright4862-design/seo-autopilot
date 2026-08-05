@@ -62,12 +62,12 @@ test("returned durable ScanRun authority is written into the browser scan record
   assert.match(scanFormSource, /scan_authority_attestation_missing/);
   assert.match(scanFormSource, /aiData\?\.release_gate_eligible === true && !usingAuthorityPersistence/);
   assert.match(scanFormSource, /release_gate_eligible: false, is_authoritative: false/);
-  assert.match(scanFormSource, /completion\.scanRun\.authority_seal_version/);
-  assert.match(scanFormSource, /completion\.scanRun\.authority_sealed_at/);
+  assert.match(scanFormSource, /persistedCompletion\.scanRun\.authority_seal_version/);
+  assert.match(scanFormSource, /persistedCompletion\.scanRun\.authority_sealed_at/);
   assert.match(scanFormSource, /"persistScanAuthority"/);
   assert.match(scanFormSource, /await completeScanRun\(scanRunHandle, durableRecord\)/);
   assert.match(scanFormSource, /mergePersistedScanRunRecord\(/);
-  assert.match(scanFormSource, /completion\.fixListId/);
+  assert.match(scanFormSource, /persistedCompletion\.fixListId/);
   assert.match(scanFormSource, /meta_description_state/);
   assert.match(scanFormSource, /metadata_evidence_version/);
   assert.match(scanFormSource, /title_evidence_version/);

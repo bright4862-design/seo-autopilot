@@ -1,4 +1,5 @@
 export const ACTIVE_SCAN_RUN_STATUSES = new Set(["queued", "crawling", "reviewing"]);
+export const STANDARD_SCAN_MODE = "standard_150";
 
 // The Standard scanner request deadline is under 105 seconds. Ten minutes is a
 // deliberately conservative recovery window that covers scanner + review/UI
@@ -14,7 +15,8 @@ export class ScanRunConflictError extends Error {
 }
 
 export function normalizeScanMode(value) {
-  return String(value || "advanced").trim().toLowerCase() || "advanced";
+  const mode = String(value || STANDARD_SCAN_MODE).trim().toLowerCase() || STANDARD_SCAN_MODE;
+  return mode === "advanced" ? STANDARD_SCAN_MODE : mode;
 }
 
 export function normalizeScanTarget(value) {
@@ -53,13 +55,14 @@ export function buildScanRequestIdentity({ websiteUrl, scanMode, requestId, idem
     throw new ScanRunConflictError("request_id and idempotency_key must match.");
   }
   if (!normalizedTarget) throw new Error("A valid website URL is required before starting a durable scan.");
+  if (normalizedMode !== STANDARD_SCAN_MODE) throw new Error("Only the Standard 150 scan is available.");
   return {
     request_id: stableRequestId,
     idempotency_key: stableIdempotencyKey,
     normalized_target: normalizedTarget,
     normalized_domain: normalizedScanDomain(normalizedTarget),
-    scan_mode: normalizedMode,
-    request_fingerprint: `${normalizedMode}|${normalizedTarget}`,
+    scan_mode: STANDARD_SCAN_MODE,
+    request_fingerprint: `${STANDARD_SCAN_MODE}|${normalizedTarget}`,
   };
 }
 

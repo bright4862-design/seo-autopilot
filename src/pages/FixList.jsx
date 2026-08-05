@@ -1174,6 +1174,47 @@ function buildAuthoritativeDebugData(record) {
   };
 }
 
+// Converts a durable {run, fixList, fixItems} bundle into the flat record
+// shape this page reads from.
+function normalizeDurableScanBundle(bundle = {}) {
+  const run = bundle.run || {};
+  const fixList = bundle.fixList || {};
+  return {
+    ...run,
+    id: run.id || bundle.scan_id || "",
+    scan_id: run.scan_id || run.id || bundle.scan_id || "",
+    fix_list_id: fixList.id || run.fix_list_id || "",
+    is_authoritative: fixList.is_authoritative === true,
+    health_score: run.health_score ?? fixList.health_score ?? null,
+    health_grade: run.health_grade || fixList.health_grade || "",
+    scan_status: run.scan_status || fixList.scan_status || "",
+    score_is_provisional: run.score_is_provisional === true || fixList.score_is_provisional === true,
+    no_high_confidence_findings: run.no_high_confidence_findings === true || fixList.no_high_confidence_findings === true,
+    created_at: run.completed_at || run.created_date || run.queued_at || "",
+    recommendations: Array.isArray(bundle.fixItems) ? bundle.fixItems : [],
+  };
+}
+
+function getDurableScanStateTitle(status) {
+  if (["queued", "crawling", "reviewing"].includes(status)) return "This scan is still running";
+  if (status === "failed") return "This scan didn't finish";
+  if (status === "cancelled") return "This scan was cancelled";
+  return "No results saved for this scan";
+}
+
+function getDurableScanStateDetail(status) {
+  if (["queued", "crawling", "reviewing"].includes(status)) {
+    return "FixList is still working through this scan. Check back in a minute or run a fresh scan.";
+  }
+  if (status === "failed") {
+    return "Something interrupted this scan before results could be saved. Run a fresh scan to get a complete FixList.";
+  }
+  if (status === "cancelled") {
+    return "This scan was stopped before it finished, so no results were saved. Run a fresh scan when you're ready.";
+  }
+  return "This scan finished without any saved results to show. Run a fresh scan to get an up-to-date FixList.";
+}
+
 function getRecommendations(record) {
   return firstArray([record?.recommendations, record?.fixes, record?.findings, record?.cleaned_fixes, record?.raw_fixes, record?.issues]);
 }
@@ -1362,14 +1403,11 @@ function stableId(input) {
 }
 
 function buildDebugSummary(debugData = {}) {
-  const parsed = debugData.parsed || {};
-  const debug = parsed[SCAN_DEBUG_KEY] || {};
-  const lastScan = parsed[DASHBOARD_LAST_SCAN_KEY] || parsed[LEGACY_LAST_SCAN_KEY] || debug.final_record || {};
   return {
-    status: debug.status || debug.stage || "saved",
-    websiteUrl: lastScan.website_url || debug.website_url || parsed[ACTIVE_SCAN_URL_KEY] || "",
-    pages: lastScan.pages_crawled || debug.final_record?.pages_crawled || debug.scanner?.pages_crawled || 0,
-    score: lastScan.health_score || debug.final_record?.health_score || debug.ai_review?.health_score || debug.scanner?.health_score || "",
+    status: debugData.status || "",
+    websiteUrl: debugData.identity?.normalized_domain || "",
+    pages: 0,
+    score: "",
   };
 }
 

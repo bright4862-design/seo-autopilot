@@ -1,0 +1,104 @@
+{
+  "type": "object",
+  "name": "GrokConversation",
+  "properties": {
+    "owner_user_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "scan_run_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "normalized_domain": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253
+    },
+    "release_fingerprint": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 120
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "archived"
+      ],
+      "default": "active"
+    },
+    "last_message_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "message_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000,
+      "default": 0
+    },
+    "model": {
+      "type": "string",
+      "maxLength": 160
+    },
+    "grok_chat_version": {
+      "type": "string",
+      "maxLength": 160
+    }
+  },
+  "required": [
+    "owner_user_id",
+    "project_id",
+    "scan_run_id",
+    "normalized_domain",
+    "release_fingerprint"
+  ],
+  "rls": {
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "read": {
+      "$or": [
+        {
+          "data.owner_user_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "$or": [
+        {
+          "data.owner_user_id": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      ]
+    }
+  }
+}

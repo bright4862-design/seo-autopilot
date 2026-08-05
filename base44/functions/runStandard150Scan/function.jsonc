@@ -1,0 +1,4 @@
+{
+  "name": "runStandard150Scan",
+  "entry": "base44/functions/runStandard150Scan/entry.ts"
+}

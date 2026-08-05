@@ -32,3 +32,25 @@ test("merged results preserve authoritative durable release markers", () => {
   assert.match(scannerForm, /\.\.\.authorityMarkers/);
   assert.match(scannerForm, /\.\.\.buildDiagnosticAuthorityMarkers\(record\)/);
 });
+
+
+test("a missed browser response recovers the durable saved result before failing", () => {
+  assert.match(scannerForm, /getScanRunWithFixList/);
+  assert.match(scannerForm, /async function recoverPersistedCompletion/);
+  assert.match(scannerForm, /browser_recovered_saved_result/);
+  const catchBlock = scannerForm.match(/const recoveredCompletion = scanId[\s\S]*?console\.error\("Website scan failed\.", err\);/)?.[0] || "";
+  assert.ok(catchBlock, "durable recovery must run in the catch path");
+  assert.ok(
+    catchBlock.indexOf("recoverPersistedCompletion") < catchBlock.indexOf('console.error("Website scan failed.", err)'),
+    "the durable reread must happen before the UI declares failure",
+  );
+  assert.match(catchBlock, /navigate\(`\/dashboard\?scan=complete&scan_id=/);
+});
+
+test("active result pages poll automatically until the saved FixList is ready", () => {
+  assert.match(fixList, /ACTIVE_SCAN_RUN_STATUSES\.has\(String\(durableBundle\.run\.status/);
+  assert.match(fixList, /setReloadToken\(\(value\) => value \+ 1\)/);
+  assert.match(fixList, /}, 2500\);/);
+  assert.match(fixList, /This page refreshes automatically/);
+  assert.doesNotMatch(fixList, /Check back in a minute or run a fresh scan/);
+});

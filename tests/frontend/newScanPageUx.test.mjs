@@ -105,3 +105,12 @@ test("the page is a centred column of about 640px", () => {
   assert.match(onboarding, /mx-auto/);
   assert.match(scanForm, /mx-auto w-full max-w-\[640px\]/);
 });
+
+
+test("the loading state shows visible progress and reassures the customer", () => {
+  assert.match(scanForm, /SCAN_PROGRESS_STEPS/);
+  assert.match(scanForm, /aria-label="Scan progress"/);
+  assert.match(scanForm, /formatElapsed\(elapsedSeconds\)/);
+  assert.match(scanForm, /Your result will open automatically when it is saved/);
+  assert.match(scanForm, /Still working — larger or slower sites can take a little longer/);
+});

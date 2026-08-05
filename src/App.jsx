@@ -51,6 +51,7 @@ export default function App() {
         <Route path="/issues" element={<Navigate to="/dashboard" replace />} />
         <Route path="/fix-list" element={<Navigate to="/dashboard" replace />} />
         <Route path="/scan" element={<Navigate to="/onboarding" replace />} />
+        <Route path="/ScanWebsite" element={<Navigate to="/onboarding" replace />} />
         <Route
           path="/crawl-status"
           element={<Navigate to="/onboarding" replace />}

@@ -435,9 +435,15 @@ function buildAiReviewPayload({ scanData, businessName, websiteUrl, cmsPlatform,
   const pagesCrawled = getFirstNumber([scanData?.pages_crawled, scanData?.pages_scanned, scanData?.technical_audit_summary?.pages_crawled, crawledPages.length]);
   const pagesFound = getFirstNumber([scanData?.pages_found, scanData?.pages_discovered, scanData?.technical_audit_summary?.pages_found, pagesCrawled, crawledPages.length]);
   const scanCoverage = { pages_crawled: pagesCrawled, pages_found: pagesFound, sampled_pages_sent_to_ai: crawledPages.length, sampled_findings_sent_to_ai: rawFixes.length, sample_limit: 150 };
-  if (scanData?.authority_scan_attestation) {
+  if (scanData?.authority_scan_attestation && scanData?.authority_review_payload) {
     return {
-      authoritative_scan: scanData,
+      // Send only the server-signed bounded review envelope. Reposting the full
+      // 150-page browser result can exceed the Base44 function request boundary.
+      authoritative_scan: {
+        authority_review_payload: scanData.authority_review_payload,
+        authority_scan_attestation: scanData.authority_scan_attestation,
+        authority_attestation_status: scanData.authority_attestation_status || "server_attested",
+      },
       client_context: {
         business_name: businessName,
         cms_platform: cmsPlatform,

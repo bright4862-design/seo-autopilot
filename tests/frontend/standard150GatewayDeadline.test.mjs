@@ -91,6 +91,14 @@ test("2c. authority review uses a bounded signed envelope instead of the full sc
   assert.match(gateway, /standard_scan_review_payload_hmac_v2/);
   assert.match(gateway, /result: reviewPayload/);
   assert.match(gateway, /authority_review_payload: reviewPayload/);
+  const compactBuilder = gateway.match(/function buildAuthorityReviewPayload[\s\S]*?\n\}/)?.[0] || "";
+  assert.ok(compactBuilder, "compact review payload builder not found");
+  assert.match(compactBuilder, /crawled_pages: pages/);
+  assert.match(compactBuilder, /grouped_findings: findings/);
+  assert.doesNotMatch(compactBuilder, /^\s*pages,/m);
+  assert.doesNotMatch(compactBuilder, /^\s*(raw_findings|findings|recommendations):?\s*findings/m);
+  assert.match(gateway, /boundedArray\(result\.verified_failed_pages, 25\)/);
+  assert.match(gateway, /boundedArray\(result\.suspicious_url_artifacts, 25\)/);
   assert.match(form, /authority_review_payload: scanData\.authority_review_payload/);
   assert.doesNotMatch(form, /authoritative_scan: scanData,/);
   assert.match(aiReview, /authoritativeScan\.authority_review_payload/);

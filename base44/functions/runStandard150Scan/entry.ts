@@ -295,19 +295,19 @@ function buildAuthorityReviewPayload(result = {}) {
     crawl_policy: result.crawl_policy || technical.crawl_policy || {},
     crawl_policy_source: result.crawl_policy_source || technical.crawl_policy_source || "",
     url_evidence_summary: result.url_evidence_summary || technical.url_evidence_summary || {},
-    verified_failed_pages: result.verified_failed_pages || [],
-    suspicious_url_artifacts: result.suspicious_url_artifacts || [],
+    verified_failed_pages: boundedArray(result.verified_failed_pages, 25),
+    suspicious_url_artifacts: boundedArray(result.suspicious_url_artifacts, 25),
     health_score: Number(result.health_score || 0),
     scan_summary: scanSummary,
     technical_audit_summary: technical,
     crawl_warnings: Array.isArray(result.crawl_warnings) ? result.crawl_warnings.slice(0, 12) : [],
-    pages,
     crawled_pages: pages,
-    raw_findings: findings,
     grouped_findings: findings,
-    findings,
-    recommendations: findings,
   };
+}
+
+function boundedArray(value, limit) {
+  return Array.isArray(value) ? value.slice(0, limit) : [];
 }
 
 function firstFindingArray(result = {}) {

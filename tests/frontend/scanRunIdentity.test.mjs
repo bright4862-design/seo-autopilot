@@ -145,7 +145,9 @@ test("form ensures an owner-bound domain project before creating the ScanRun", (
   assert.match(activeProject, /BusinessProject\.create\(projectFields\)/);
   assert.match(activeProject, /normalizedScanDomain\(candidate\.website_url\) === domain/);
   assert.match(scanRuns, /if \(!String\(projectId \|\| ""\)\.trim\(\)\)/);
-  assert.match(scanRuns, /error_code: "stale_active_scan"/);
+  // Renamed from stale_active_scan: the code now states what actually happened,
+  // which is that the run never reached a terminal state.
+  assert.match(scanRuns, /error_code: "orphaned_no_terminal_state"/);
 });
 
 test("active replays reopen the exact durable scan instead of a nonexistent history view", () => {

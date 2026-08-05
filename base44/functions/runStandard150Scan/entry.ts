@@ -6,10 +6,25 @@ const PUBLIC_SCAN_MODE = "standard_150";
 const PYTHON_COMPATIBILITY_MODE = "advanced";
 const PYTHON_SCANNER_VERSION = "python_scanner_v3_bounded_request";
 const MAX_PAGES = 150;
+// Deadline model, outermost to innermost:
+//
+//   PYTHON_CRAWL_BUDGET_MS + UPSTREAM_RESPONSE_RESERVE_MS
+//     < upstreamTimeoutMs
+//     < upstreamTimeoutMs + RESPONSE_RESERVE_MS
+//     < BROWSER_DEADLINE_MS
+//
+// The Python service pins the advanced/standard_150 crawl budget at 75s in
+// scanner-api/app/scanner.py (SCAN_BUDGETS["advanced"]["timeout"]). Its
+// ScanRequest model does NOT declare crawl_timeout_ms, so any value the gateway
+// sends is dropped by pydantic. The gateway therefore cannot cap Python; it can
+// only guarantee it waits longer than Python's own fixed budget plus the time
+// Python needs to serialize up to 150 pages.
+const PYTHON_CRAWL_BUDGET_MS = 75_000;
+// Browser deadline is crawl_timeout_ms (90_000) + 15_000 in ScanWebsiteForm.
+const BROWSER_DEADLINE_MS = 105_000;
 const FUNCTION_RESPONSE_BUDGET_MS = 95_000;
 const RESPONSE_RESERVE_MS = 5_000;
 const UPSTREAM_RESPONSE_RESERVE_MS = 4_000;
-const STANDARD_CRAWL_TIMEOUT_MS = 85_000;
 const SCAN_ATTESTATION_VERSION = "standard_scan_result_hmac_v1";
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -23,8 +38,11 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return jsonResponse({ success: false, version: VERSION, error: "Method not allowed." }, 405);
 
   let body = {};
+  let context = null;
+  // Hoisted so the catch-all can still write the terminal ScanRun state.
+  let base44 = null;
   try {
-    const base44 = createClientFromRequest(req);
+    base44 = createClientFromRequest(req);
     const user = await base44.auth.me().catch(() => null);
     if (!user?.id) return jsonResponse({ success: false, version: VERSION, error: "Unauthorized." }, 401);
 
@@ -49,24 +67,22 @@ Deno.serve(async (req) => {
     const safety = validatePublicHttpUrl(websiteUrl);
     if (!safety.ok) return jsonResponse({ success: false, version: VERSION, error: safety.reason, ...identity.fields }, 400);
 
-    const context = await loadOwnedScanContext({ base44, user, identity, websiteUrl });
+    context = await loadOwnedScanContext({ base44, user, identity, websiteUrl });
     if (!context.ok) return jsonResponse({ success: false, version: VERSION, error: context.error, ...identity.fields }, context.status);
 
     const scannerUrl = scannerApiUrl();
     const scannerKey = scannerApiKey();
     if (!scannerUrl || !scannerKey) {
-      return unavailable({ identity, startedAt, failureCode: !scannerUrl ? "url_not_configured" : "key_not_configured" });
+      return await unavailable({ base44, context, identity, startedAt, failureCode: !scannerUrl ? "url_not_configured" : "key_not_configured" });
     }
 
     const remainingMs = FUNCTION_RESPONSE_BUDGET_MS - (Date.now() - startedAt);
     const upstreamTimeoutMs = remainingMs - RESPONSE_RESERVE_MS;
-    if (upstreamTimeoutMs <= UPSTREAM_RESPONSE_RESERVE_MS + 5_000) {
-      return unavailable({ identity, startedAt, failureCode: "insufficient_gateway_budget" });
+    // We must outlast Python's own fixed crawl budget plus its response
+    // serialization, or we abort a scan that was going to succeed.
+    if (upstreamTimeoutMs <= PYTHON_CRAWL_BUDGET_MS + UPSTREAM_RESPONSE_RESERVE_MS) {
+      return await unavailable({ base44, context, identity, startedAt, failureCode: "insufficient_gateway_budget" });
     }
-    const upstreamCrawlTimeoutMs = Math.min(
-      STANDARD_CRAWL_TIMEOUT_MS,
-      upstreamTimeoutMs - UPSTREAM_RESPONSE_RESERVE_MS,
-    );
 
     const upstreamPayload = {
       website_url: websiteUrl,
@@ -81,7 +97,10 @@ Deno.serve(async (req) => {
       submitted_url: identity.fields.submitted_url || websiteUrl,
       normalized_domain: identity.fields.normalized_domain,
       respect_robots_txt: true,
-      crawl_timeout_ms: upstreamCrawlTimeoutMs,
+      // ADVISORY ONLY. scanner-api's ScanRequest does not declare this field, so
+      // pydantic drops it and Python continues to use its own 75s budget. Sent
+      // for forward compatibility and log correlation; it caps nothing today.
+      advisory_crawl_timeout_ms: PYTHON_CRAWL_BUDGET_MS,
     };
 
     const response = await fetchWithTimeout(`${scannerUrl}/scan`, {
@@ -93,19 +112,22 @@ Deno.serve(async (req) => {
     const text = await response.text();
     const upstream = parseJson(text);
     if (!response.ok || !upstream || upstream.success === false) {
-      return unavailable({ identity, startedAt, failureCode: response.ok ? "scanner_success_false" : `http_${response.status}` });
+      const failureCode = !response.ok
+        ? `http_${response.status}`
+        : (upstream ? "scanner_success_false" : "parse_failure");
+      return await unavailable({ base44, context, identity, startedAt, failureCode });
     }
     if (upstream.scanner_version !== PYTHON_SCANNER_VERSION) {
-      return unavailable({ identity, startedAt, failureCode: "version_mismatch" });
+      return await unavailable({ base44, context, identity, startedAt, failureCode: "version_mismatch" });
     }
     if (!matchesUpstreamIdentity(upstream, identity.fields)) {
-      return unavailable({ identity, startedAt, failureCode: "identity_mismatch" });
+      return await unavailable({ base44, context, identity, startedAt, failureCode: "identity_mismatch" });
     }
 
     const pages = firstPageArray(upstream).slice(0, MAX_PAGES);
     const reportedPages = nonNegativeInteger(upstream.pages_crawled);
     if (reportedPages > MAX_PAGES || firstPageArray(upstream).length > MAX_PAGES) {
-      return unavailable({ identity, startedAt, failureCode: "page_cap_violation" });
+      return await unavailable({ base44, context, identity, startedAt, failureCode: "page_cap_violation" });
     }
 
     const result = canonicalizeResult({ upstream, pages, identity: identity.fields, elapsedMs: Date.now() - startedAt });
@@ -118,7 +140,13 @@ Deno.serve(async (req) => {
       request_id: identity.fields.request_id,
       scan_id: identity.fields.scan_id,
     });
-    return unavailable({ identity, startedAt, failureCode: isTimeoutError(error) ? "timeout" : "gateway_error" });
+    return await unavailable({
+      base44,
+      context,
+      identity,
+      startedAt,
+      failureCode: isTimeoutError(error) ? "timeout" : "gateway_error",
+    });
   }
 });
 
@@ -270,8 +298,67 @@ function firstPageArray(result = {}) {
   return [];
 }
 
-function unavailable({ identity, startedAt, failureCode }) {
+// Terminal states the gateway must never overwrite. A run that already reached
+// complete/limited carries persisted evidence; a late gateway failure must not
+// destroy it.
+const PROTECTED_SCAN_STATUSES = new Set(["complete", "limited"]);
+
+// Customer-safe explanations. Never surface internal failure codes, upstream
+// bodies, secrets, or attestation material to the customer.
+const CUSTOMER_STATUS_DETAIL = {
+  url_not_configured: "The scanner is not configured yet. No pages were scanned and nothing was charged.",
+  key_not_configured: "The scanner is not configured yet. No pages were scanned and nothing was charged.",
+  insufficient_gateway_budget: "The scan could not be started in the time available. Please try again.",
+  timeout: "The scan took longer than the time allowed and was stopped. Please try again.",
+  scanner_success_false: "The scanner could not complete this website. Please try again.",
+  version_mismatch: "The scanner is being updated. Please try again shortly.",
+  identity_mismatch: "This scan could not be matched to your request. Please start a new scan.",
+  page_cap_violation: "The scan returned more pages than Standard 150 allows and was rejected.",
+  parse_failure: "The scanner returned a response FixList could not read. Please try again.",
+  gateway_error: "The scan stopped unexpectedly. No partial result was saved. Please try again.",
+};
+
+function customerStatusDetail(failureCode) {
+  return CUSTOMER_STATUS_DETAIL[failureCode]
+    || "The scan did not complete. No partial result was saved. Please try again.";
+}
+
+// The browser is not the only actor that can fail a ScanRun. Once ownership is
+// proven, every gateway-observed failure writes a terminal state so a lost or
+// closed browser cannot orphan the row.
+async function failOwnedScanRun({ base44, context, identity, failureCode }) {
+  if (!context?.ok || !context.scan?.id) return { attempted: false, ok: false };
+  if (PROTECTED_SCAN_STATUSES.has(String(context.scan.status || "").toLowerCase())) {
+    return { attempted: false, ok: false, skipped: "protected_status" };
+  }
+  try {
+    await base44.entities.ScanRun.update(context.scan.id, {
+      status: "failed",
+      status_detail: customerStatusDetail(failureCode),
+      error_code: failureCode,
+      error_message: customerStatusDetail(failureCode),
+      completed_at: new Date().toISOString(),
+      release_gate_eligible: false,
+    });
+    return { attempted: true, ok: true };
+  } catch (error) {
+    // Log identity and the update failure only. Never secrets or authority proofs.
+    console.error("runStandard150Scan terminal write failed", {
+      request_id: identity?.fields?.request_id,
+      scan_id: identity?.fields?.scan_id,
+      failure_code: failureCode,
+      update_error: String(error?.message || error || "unknown error").slice(0, 180),
+    });
+    return { attempted: true, ok: false };
+  }
+}
+
+async function unavailable({ base44, context, identity, startedAt, failureCode }) {
+  const terminal = base44
+    ? await failOwnedScanRun({ base44, context, identity, failureCode })
+    : { attempted: false, ok: false };
   return jsonResponse({
+    scan_run_failed: terminal.ok === true,
     success: false,
     version: VERSION,
     error: "The Standard 150 scanner is temporarily unavailable. Please try again.",

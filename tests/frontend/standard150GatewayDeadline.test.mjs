@@ -33,21 +33,19 @@ function upstreamTimeoutFor(elapsedMs) {
   return FUNCTION_RESPONSE_BUDGET_MS - elapsedMs - RESPONSE_RESERVE_MS;
 }
 
-test("1. Python's real crawl budget is 75 seconds and is not caller-controlled", () => {
-  const advanced = pythonScanner.match(/"advanced":\s*\{[^}]*"timeout":\s*(\d+)/)?.[1];
-  assert.equal(Number(advanced), 75, "scanner.py advanced timeout must be 75s");
-  assert.equal(PYTHON_CRAWL_BUDGET_MS, 75_000, "gateway must model Python's real budget");
+test("1. Standard stays 150 pages while the authenticated request cap is 40 seconds", () => {
+  const advanced = pythonScanner.match(/"advanced":\s*\{[^}]*"max_pages":\s*(\d+)[^}]*"timeout":\s*(\d+)/);
+  assert.equal(Number(advanced?.[1]), 150, "Standard/advanced page maximum must remain 150");
+  assert.equal(Number(advanced?.[2]), 75, "the normal standalone advanced timeout remains 75s");
+  assert.equal(PYTHON_CRAWL_BUDGET_MS, 40_000, "gateway must use the Base44-safe request cap");
 
-  // The gateway must not claim to cap Python while ScanRequest lacks the field.
   const scanRequest = pythonMain.match(/class ScanRequest\(BaseModel\):([\s\S]*?)\n\n/)?.[1] || "";
   assert.ok(scanRequest.length > 0, "ScanRequest model not found");
-  const pythonAcceptsCrawlTimeout = /crawl_timeout_ms/.test(scanRequest);
-  assert.equal(
-    pythonAcceptsCrawlTimeout,
-    false,
-    "ScanRequest now declares crawl_timeout_ms - revisit the advisory-only comment and the cap model",
-  );
-  assert.doesNotMatch(gateway, /^\s*crawl_timeout_ms:/m);
+  assert.match(scanRequest, /advisory_crawl_timeout_ms/);
+  assert.match(gateway, /advisory_crawl_timeout_ms: PYTHON_CRAWL_BUDGET_MS/);
+  assert.match(pythonMain, /timeout_seconds=request_timeout_seconds/);
+  assert.match(pythonScanner, /def resolve_scan_budget/);
+  assert.match(pythonScanner, /max\(20\.0, min\(float\(base\["timeout"\]\), requested\)\)/);
 });
 
 test("2. gateway timeout leaves headroom before the browser's 105s deadline", () => {
@@ -57,7 +55,8 @@ test("2. gateway timeout leaves headroom before the browser's 105s deadline", ()
   const formPad = Number(form.match(/crawl_timeout_ms \|\| 30000\) \+ (\d+)/)?.[1]);
   assert.equal(formCrawlTimeout + formPad, BROWSER_DEADLINE_MS);
 
-  for (const elapsed of [0, 1_000, 5_000, 10_000]) {
+  assert.equal(FUNCTION_RESPONSE_BUDGET_MS, 55_000);
+  for (const elapsed of [0, 1_000, 4_000]) {
     const upstream = upstreamTimeoutFor(elapsed);
     // Inner inequality: we outlast Python's fixed budget plus its serialization.
     assert.ok(
@@ -82,6 +81,22 @@ test("2b. the budget guard rejects rather than starting a doomed scan", () => {
   const breakEven = FUNCTION_RESPONSE_BUDGET_MS - RESPONSE_RESERVE_MS
     - (PYTHON_CRAWL_BUDGET_MS + UPSTREAM_RESPONSE_RESERVE_MS);
   assert.ok(breakEven > 0 && breakEven < FUNCTION_RESPONSE_BUDGET_MS);
+});
+
+
+
+test("2c. authority review uses a bounded signed envelope instead of the full scan", () => {
+  const aiReview = fs.readFileSync("base44/functions/aiReviewScan/entry.ts", "utf8");
+  assert.match(gateway, /const REVIEW_PAGE_SAMPLE_LIMIT = 60/);
+  assert.match(gateway, /const REVIEW_FINDING_LIMIT = 100/);
+  assert.match(gateway, /standard_scan_review_payload_hmac_v2/);
+  assert.match(gateway, /result: reviewPayload/);
+  assert.match(gateway, /authority_review_payload: reviewPayload/);
+  assert.match(form, /authority_review_payload: scanData\.authority_review_payload/);
+  assert.doesNotMatch(form, /authoritative_scan: scanData,/);
+  assert.match(aiReview, /authoritativeScan\.authority_review_payload/);
+  assert.match(aiReview, /standard_scan_review_payload_hmac_v2/);
+  assert.match(aiReview, /Math\.min\(45_000/);
 });
 
 test("3. every gateway-observed failure persists ScanRun as failed", () => {

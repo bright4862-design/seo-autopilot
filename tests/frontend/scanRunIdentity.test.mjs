@@ -154,7 +154,7 @@ test("active replays reopen the exact durable scan instead of a nonexistent hist
 });
 
 test("form persists identity before network work and Standard always respects robots", () => {
-  assert.ok(scanForm.indexOf("await beginScanRun") < scanForm.indexOf("callBase44Function(ADVANCED_SCANNER_FUNCTION"));
+  assert.ok(scanForm.indexOf("await beginScanRun") < scanForm.indexOf("callBase44Function(STANDARD_SCANNER_FUNCTION"));
   assert.match(scanForm, /const requestId = createScanRequestId\(\)/);
   assert.match(scanForm, /request_id: requestId/);
   assert.match(scanForm, /idempotency_key: idempotencyKey/);

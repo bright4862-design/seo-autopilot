@@ -29,13 +29,14 @@ import {
   readCustomerActiveProject,
 } from "@/lib/customerBrowserCache";
 
-const ADVANCED_SCANNER_FUNCTION = "runAdvancedScan";
+const STANDARD_SCANNER_FUNCTION = "runStandard150Scan";
 const AI_REVIEW_FUNCTION = "aiReviewScan";
 
-const SCAN_MODES = [
-  { value: "advanced", label: "Standard · 150", description: "A complete, prioritized scan of up to 150 pages." },
-  { value: "premium_5000", label: "Premium · 5,000", description: "A durable large-site scan. Coming soon.", disabled: true },
-];
+// Standard 150 is the only customer scan. There is no scan-size selector and no
+// customer-controlled scanner budget. The gateway owns the Python compatibility
+// translation, so the frontend never sends "advanced" as the customer mode.
+const STANDARD_SCAN_MODE = "standard_150";
+const STANDARD_SCAN_BUDGET = Object.freeze({ max_pages: 150, max_browser_render_attempts: 1, crawl_timeout_ms: 90000 });
 
 const CMS_OPTIONS = [
   { value: "wordpress", label: "WordPress" },
@@ -63,7 +64,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   const [businessName, setBusinessName] = useState(project?.business_name || "");
   const [cmsPlatform, setCmsPlatform] = useState(normalizeCmsValue(project?.cms_platform || "custom"));
   const [keywordsText, setKeywordsText] = useState(Array.isArray(project?.important_keywords) ? project.important_keywords.join("\n") : "");
-  const [scanMode, setScanMode] = useState("advanced");
+  const scanMode = STANDARD_SCAN_MODE;
   const [optionalOpen, setOptionalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [activeStep, setActiveStep] = useState("");
@@ -217,7 +218,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         return;
       }
 
-      const safeScanBudget = getSafeScanBudget(scanMode);
+      const safeScanBudget = STANDARD_SCAN_BUDGET;
       setActiveStep("Reading your pages");
       const scanPayload = {
         website_url: normalizedUrl,
@@ -252,7 +253,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       recordDebug({ ...identityDebug(), status: "running", stage: "scanner_request_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, payload_summary: { max_pages: scanPayload.max_pages, max_competitors: 0, max_browser_render_attempts: scanPayload.max_browser_render_attempts, crawl_timeout_ms: scanPayload.crawl_timeout_ms, keyword_count: scanPayload.important_keywords.length, respect_robots_txt: scanPayload.respect_robots_txt } });
       refreshDebugData();
 
-      const scannerResponse = await callBase44Function(ADVANCED_SCANNER_FUNCTION, scanPayload);
+      const scannerResponse = await callBase44Function(STANDARD_SCANNER_FUNCTION, scanPayload);
       await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
       scanData = normalizeFunctionResponse(scannerResponse);
       assertServerScanIdentity(scanData, identityDebug());
@@ -380,19 +381,9 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
             <div><label className="text-sm font-medium text-slate-700">Business or website name</label><Input value={businessName} onChange={(event) => setBusinessName(event.target.value)} placeholder="Example Business" disabled={isLoading} className="mt-2" /></div>
           </div>
 
-          <div>
-            <label className="text-sm font-medium text-slate-700">Scan size</label>
-            <div className="mt-2 grid gap-3 md:grid-cols-2">
-              {SCAN_MODES.map((mode) => {
-                const active = scanMode === mode.value;
-                return (
-                  <button key={mode.value} type="button" disabled={isLoading || mode.disabled} onClick={() => setScanMode(mode.value)} className={`rounded-2xl border p-4 text-left transition ${active ? "border-indigo-500 bg-indigo-50 text-slate-950 ring-2 ring-indigo-100" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"} disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400`}>
-                    <div className="flex items-center gap-2"><CheckCircle2 className={`h-4 w-4 ${active ? "text-indigo-600" : "text-slate-300"}`} /><span className="font-semibold">{mode.label}</span>{mode.disabled ? <span className="ml-auto rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">Coming soon</span> : null}</div>
-                    <p className="mt-2 text-xs leading-5 text-slate-500">{mode.description}</p>
-                  </button>
-                );
-              })}
-            </div>
+          <div className="rounded-2xl border border-indigo-500 bg-indigo-50 p-4 ring-2 ring-indigo-100">
+            <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-indigo-600" /><span className="font-semibold text-slate-950">Standard · 150</span></div>
+            <p className="mt-2 text-xs leading-5 text-slate-600">A complete, prioritized scan of up to 150 pages.</p>
           </div>
 
           <button type="button" onClick={() => setOptionalOpen((value) => !value)} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-100">{optionalOpen ? "Hide optional settings" : "Optional: personalize your FixList"}</button>
@@ -619,7 +610,7 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, submittedUrl, busi
       idempotency_key: idempotencyKey || requestId || "",
       scan_id: scanId || "",
       scan_run_id: scanRunId || scanId || "",
-      scanner_function: ADVANCED_SCANNER_FUNCTION,
+      scanner_function: STANDARD_SCANNER_FUNCTION,
       ai_function: AI_REVIEW_FUNCTION,
       screaming_frog_lite_enabled: true,
       scanner_success: scanData?.success !== false,
@@ -785,14 +776,8 @@ function compressScanRecord(record = {}) {
   };
 }
 
-function getSafeScanBudget(scanMode) {
-  if (scanMode === "advanced") return { max_pages: 150, max_browser_render_attempts: 1, crawl_timeout_ms: 90000 };
-  if (scanMode === "deep") return { max_pages: 85, max_browser_render_attempts: 1, crawl_timeout_ms: 75000 };
-  return { max_pages: 40, max_browser_render_attempts: 1, crawl_timeout_ms: 45000 };
-}
-
 async function callBase44Function(functionName, payload) {
-  const timeoutMs = functionName === ADVANCED_SCANNER_FUNCTION ? Number(payload?.crawl_timeout_ms || 30000) + 15000 : 70000;
+  const timeoutMs = functionName === STANDARD_SCANNER_FUNCTION ? Number(payload?.crawl_timeout_ms || 30000) + 15000 : 70000;
   return await Promise.race([
     callBase44FunctionWithoutTimeout(functionName, payload),
     new Promise((_, reject) => window.setTimeout(() => reject(new Error(`${functionName} did not return within ${Math.round(timeoutMs / 1000)} seconds. The scan may have timed out before saving results.`)), timeoutMs)),

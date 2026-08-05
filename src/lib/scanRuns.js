@@ -17,6 +17,7 @@ import {
   ScanRunConflictError,
   buildScanRequestIdentity,
   buildStaleScanRetryFields,
+  normalizeScanMode,
   normalizeScanTarget,
   normalizedScanDomain,
   resolveScanRunReplay,
@@ -49,7 +50,9 @@ function scanRunHandle(run, { replayed = false, replayReason = "", retried = fal
     website_url: run.website_url || "",
     submitted_url: run.submitted_url || run.website_url || "",
     normalized_domain: run.normalized_domain || normalizedScanDomain(run.website_url),
-    scan_mode: run.scan_mode || "advanced",
+    // Legacy quick/basic/deep records stay readable as their original mode;
+    // only the retired "advanced" alias resolves to the canonical customer mode.
+    scan_mode: normalizeScanMode(run.scan_mode),
     previous_scan_id: run.previous_scan_id || "",
     fix_list_id: run.fix_list_id || "",
     status: run.status || "queued",

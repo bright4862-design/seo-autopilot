@@ -76,11 +76,12 @@ test("Grok conversations and pending responses bind owner, project, scan, domain
   assert.match(assistant, /clearCustomerAuthBoundary\(sendError\)/);
 });
 
-test("review scope leaves hidden legacy pages unbundled while Standard and Premium boundaries remain unchanged", () => {
+test("review scope leaves hidden legacy pages unbundled while the Standard 150 boundary remains unchanged", () => {
   assert.match(app, /path="\/reports" element=\{<Navigate to="\/dashboard" replace \/>\}/);
   assert.match(app, /path="\/crawl-status"[\s\S]*<Navigate to="\/onboarding" replace \/>/);
   assert.match(scanForm, /Standard · 150/);
-  assert.match(scanForm, /Premium · 5,000/);
-  assert.match(scanForm, /disabled: true/);
+  // Standard 150 is the only customer scan; Premium is not selectable today.
+  assert.doesNotMatch(scanForm, /Premium · 5,000/);
+  assert.doesNotMatch(scanForm, /premium_5000/);
   assert.match(activeCustomerSources.join("\n"), /releaseIdentity|release_identity/);
 });

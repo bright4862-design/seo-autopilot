@@ -12,6 +12,9 @@ const rawBase44 = createClient({
   appBaseUrl
 });
 
+const LEGACY_STANDARD_SCAN_FUNCTION = 'runAdvancedScan';
+const STANDARD_SCAN_FUNCTION = 'runStandard150Scan';
+const STANDARD_SCAN_MODE = 'standard_150';
 const RECOMMENDATION_ARRAY_KEYS = ['recommendations', 'cleaned_fixes', 'fixes', 'findings', 'raw_fixes', 'raw_findings', 'grouped_findings', 'issues'];
 const PAGE_ARRAY_KEYS = ['pages', 'crawled_pages', 'scanned_pages', 'crawl_pages'];
 
@@ -61,14 +64,25 @@ function decorateFunctionError(error) {
   return wrapped;
 }
 
+function resolveInvokedFunctionName(functionName) {
+  return functionName === LEGACY_STANDARD_SCAN_FUNCTION ? STANDARD_SCAN_FUNCTION : functionName;
+}
+
 function sanitizeFunctionPayload(functionName, payload) {
-  if (functionName !== 'runAdvancedScan' || !payload || typeof payload !== 'object') return payload;
-  const { max_pages, max_browser_render_attempts, crawl_timeout_ms, ...cleanPayload } = payload;
-  return cleanPayload;
+  if (![LEGACY_STANDARD_SCAN_FUNCTION, STANDARD_SCAN_FUNCTION].includes(functionName) || !payload || typeof payload !== 'object') return payload;
+  const { max_pages, max_browser_render_attempts, crawl_timeout_ms, enable_screaming_frog_lite, ...cleanPayload } = payload;
+  return {
+    ...cleanPayload,
+    scan_mode: STANDARD_SCAN_MODE,
+    canonical_mode: STANDARD_SCAN_MODE,
+    respect_robots_txt: true,
+    require_python_scanner: true,
+    allow_deno_fallback: false,
+  };
 }
 
 function sanitizeFunctionResponse(functionName, response) {
-  if (!['runAdvancedScan', 'aiReviewScan'].includes(functionName) || !response || typeof response !== 'object') return response;
+  if (![LEGACY_STANDARD_SCAN_FUNCTION, STANDARD_SCAN_FUNCTION, 'aiReviewScan'].includes(functionName) || !response || typeof response !== 'object') return response;
   sanitizeResponseContainer(response);
   return response;
 }
@@ -337,9 +351,10 @@ if (rawBase44?.functions?.invoke) {
   const originalInvoke = rawBase44.functions.invoke.bind(rawBase44.functions);
   rawBase44.functions.invoke = async (...args) => {
     const [functionName, payload, ...rest] = args;
+    const invokedFunctionName = resolveInvokedFunctionName(functionName);
     try {
-      const response = await originalInvoke(functionName, sanitizeFunctionPayload(functionName, payload), ...rest);
-      return sanitizeFunctionResponse(functionName, response);
+      const response = await originalInvoke(invokedFunctionName, sanitizeFunctionPayload(functionName, payload), ...rest);
+      return sanitizeFunctionResponse(invokedFunctionName, response);
     } catch (error) {
       throw decorateFunctionError(error);
     }

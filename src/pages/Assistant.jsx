@@ -1,407 +1,376 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
-import { trackEvent } from "@/lib/analytics";
+import MessageBubble from "@/components/agent/MessageBubble";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import MessageBubble from "@/components/agent/MessageBubble";
+import { getActiveProject } from "@/lib/activeProject";
+import { trackEvent } from "@/lib/analytics";
+import { CUSTOMER_BOUNDARY_EVENT, clearCustomerAuthBoundary } from "@/lib/customerBrowserCache";
 import {
-  Send,
-  Plus,
-  MessageSquare,
-  Loader2,
-  Bot,
-  Sparkles,
+  GROK_MAX_MESSAGE_LENGTH,
+  conversationMatchesGrokScan,
+  createGrokSendGuard,
+  grokWorkspaceIdentity,
+  grokWorkspaceMatches,
+  normalizeGrokDomain,
+  resolveActiveGrokConversationId,
+  selectGrokConversationForScan,
+  selectLatestAuthoritativeGrokScan,
+  sortGrokMessages,
+} from "@/lib/grokChat";
+import {
   AlertTriangle,
+  Bot,
+  Loader2,
+  MessageSquare,
+  Plus,
+  Send,
+  ShieldCheck,
 } from "lucide-react";
-
-const AGENT_NAME = "seo_assistant";
 
 const SUGGESTIONS = [
   "What should I do first?",
-  "Explain my recommendations in simple language.",
-  "Which items may need help?",
-  "Write a short action plan for my website.",
+  "Explain the highest-impact recommendation in simple language.",
+  "Which fixes can I safely do myself?",
+  "Write a short action plan for this FixList.",
 ];
 
-function getStatusLabel(status) {
-  if (status === "auto_fixed") return "Prepared";
-  if (status === "needs_approval") return "Needs review";
-  if (status === "needs_developer") return "May need help";
-  if (status === "approved") return "Approved";
-  if (status === "completed") return "Completed";
-  return "Recommended";
-}
-
-function getPriorityLabel(priority) {
-  if (priority === "critical" || priority === "high") return "High impact";
-  if (priority === "medium") return "Medium impact";
-  return "Lower impact";
-}
-
-function compactIssue(issue) {
-  return {
-    title: issue.issue_title,
-    page: issue.page_url,
-    status: getStatusLabel(issue.status),
-    priority: getPriorityLabel(issue.priority),
-    category: issue.customer_category,
-    what_we_found: issue.plain_english_explanation,
-    why_it_matters: issue.why_it_matters,
-    recommended_next_step: issue.ai_recommendation || issue.recommended_value,
-    affected_pages: issue.affected_pages || [],
-  };
-}
-
-function buildAssistantContext({ project, issues, improvements, insights, reports }) {
-  const prepared = issues.filter((issue) => issue.status === "auto_fixed");
-  const needsReview = issues.filter((issue) => issue.status === "needs_approval");
-  const mayNeedHelp = issues.filter(
-    (issue) => issue.status === "needs_developer" || issue.requires_developer
-  );
-
-  return {
-    instruction:
-      "Answer as SEO Autopilot's plain-English SEO assistant for a small business owner. Use the user's actual scan data below. Do not use technical jargon unless you explain it. Do not promise rankings. Do not say anything was fixed or published. Use calm, simple, Apple-like language. Keep answers practical and step-by-step.",
-    project: project
-      ? {
-          business_name: project.business_name,
-          website_url: project.website_url,
-          business_type: project.business_type,
-          city: project.city,
-          seo_score: project.seo_score,
-          last_scan: project.last_crawl_at,
-        }
-      : null,
-    counts: {
-      prepared: prepared.length,
-      needs_review: needsReview.length,
-      may_need_help: mayNeedHelp.length,
-      total_recommendations: issues.length,
-    },
-    top_recommendations: issues.slice(0, 10).map(compactIssue),
-    website_improvements: improvements.slice(0, 8).map((item) => ({
-      title: item.title,
-      description: item.description,
-      priority: item.priority,
-      suggested_package: item.recommended_package,
-      business_impact: item.business_impact,
-    })),
-    competitor_opportunities: insights.slice(0, 8).map((item) => ({
-      title: item.insight_title,
-      explanation: item.explanation,
-      recommended_action: item.recommended_action,
-      impact: item.impact,
-    })),
-    latest_reports: reports.slice(0, 3).map((report) => ({
-      summary: report.summary,
-      next_steps: report.next_steps,
-      seo_score: report.seo_score,
-    })),
-  };
-}
-
 export default function Assistant() {
+  const [project, setProject] = useState(null);
+  const [scanRun, setScanRun] = useState(null);
   const [conversations, setConversations] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
-
-  const [project, setProject] = useState(null);
-  const [issues, setIssues] = useState([]);
-  const [improvements, setImprovements] = useState([]);
-  const [insights, setInsights] = useState([]);
-  const [reports, setReports] = useState([]);
-
-  const [loadingConversations, setLoadingConversations] = useState(true);
-  const [loadingContext, setLoadingContext] = useState(true);
+  const [loadingWorkspace, setLoadingWorkspace] = useState(true);
+  const [loadingMessages, setLoadingMessages] = useState(false);
   const [sending, setSending] = useState(false);
-  const [creating, setCreating] = useState(false);
   const [error, setError] = useState(null);
+  const [refreshToken, setRefreshToken] = useState(0);
 
+  const activeIdRef = useRef(null);
+  const scanRunRef = useRef(null);
+  const workspaceIdentityRef = useRef(null);
+  const workspaceEpochRef = useRef(0);
   const messagesEndRef = useRef(null);
+  const sendGuardRef = useRef(null);
+  if (!sendGuardRef.current) sendGuardRef.current = createGrokSendGuard();
 
-  const assistantContext = useMemo(
-    () => buildAssistantContext({ project, issues, improvements, insights, reports }),
-    [project, issues, improvements, insights, reports]
+  const activeConversation = useMemo(
+    () => conversations.find((conversation) => conversation.id === activeId) || null,
+    [activeId, conversations]
   );
+  const scanIdentity = scanRun
+    ? `${scanRun.id}|${normalizeGrokDomain(scanRun.website_url)}|${scanRun.beta_revision_fingerprint}`
+    : "";
 
   useEffect(() => {
-    trackEvent("assistant_opened");
-    loadInitialData();
+    activeIdRef.current = activeId;
+  }, [activeId]);
+
+  useEffect(() => {
+    scanRunRef.current = scanRun;
+    workspaceIdentityRef.current = scanRun ? grokWorkspaceIdentity({ scanRun }) : null;
+  }, [scanRun]);
+
+  useEffect(() => {
+    function clearCustomerWorkspace() {
+      workspaceEpochRef.current += 1;
+      workspaceIdentityRef.current = null;
+      sendGuardRef.current.reset();
+      setSending(false);
+      setLoadingWorkspace(false);
+      setLoadingMessages(false);
+      setInput("");
+      setError(null);
+      clearWorkspace(setProject, setScanRun, setConversations, setActiveId, setMessages);
+    }
+    window.addEventListener(CUSTOMER_BOUNDARY_EVENT, clearCustomerWorkspace);
+    return () => window.removeEventListener(CUSTOMER_BOUNDARY_EVENT, clearCustomerWorkspace);
   }, []);
 
   useEffect(() => {
-    if (!activeId) return;
-
+    trackEvent("assistant_opened");
     let unsubscribe;
-
     try {
-      const conversation = base44.agents.getConversation(activeId);
-      setMessages(conversation?.messages || []);
-
-      unsubscribe = base44.agents.subscribeToConversation(activeId, (data) => {
-        setMessages(data?.messages || []);
+      unsubscribe = base44.entities.ScanRun.subscribe(() => {
+        setRefreshToken((value) => value + 1);
       });
-    } catch (err) {
-      console.warn("Could not subscribe to conversation.", err);
+    } catch {
+      // Refresh persistence still works without realtime subscriptions.
     }
-
     return () => {
       if (typeof unsubscribe === "function") unsubscribe();
     };
-  }, [activeId]);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadWorkspace() {
+      const loadEpoch = workspaceEpochRef.current;
+      setLoadingWorkspace(true);
+      setError(null);
+      try {
+        const { user, project: activeProject } = await getActiveProject();
+        if (cancelled || loadEpoch !== workspaceEpochRef.current) return;
+        if (!user?.id || !activeProject?.id) {
+          clearWorkspace(setProject, setScanRun, setConversations, setActiveId, setMessages);
+          return;
+        }
+
+        const runs = await base44.entities.ScanRun.filter(
+          { project_id: activeProject.id, owner_user_id: user.id },
+          "-completed_at",
+          30
+        );
+        const selectedScan = selectLatestAuthoritativeGrokScan(runs, activeProject);
+        if (cancelled || loadEpoch !== workspaceEpochRef.current) return;
+
+        setProject(activeProject);
+        if (!selectedScan) {
+          setScanRun(null);
+          setConversations([]);
+          setActiveId(null);
+          setMessages([]);
+          return;
+        }
+
+        const loadedConversations = await base44.entities.GrokConversation.filter(
+          {
+            project_id: activeProject.id,
+            scan_run_id: selectedScan.id,
+            owner_user_id: user.id,
+            normalized_domain: normalizeGrokDomain(selectedScan.website_url),
+            release_fingerprint: selectedScan.beta_revision_fingerprint,
+          },
+          "-last_message_at",
+          50
+        );
+        if (cancelled || loadEpoch !== workspaceEpochRef.current) return;
+
+        const validConversations = (loadedConversations || []).filter((conversation) => (
+          conversationMatchesGrokScan(conversation, selectedScan)
+        ));
+        const current = validConversations.find((conversation) => conversation.id === activeIdRef.current);
+        const candidate = selectGrokConversationForScan(validConversations, selectedScan);
+        const nextActiveId = resolveActiveGrokConversationId({
+          currentConversation: current,
+          candidateConversation: candidate,
+          scanRun: selectedScan,
+        });
+        const previousScan = scanRunRef.current;
+        if (!previousScan || previousScan.id !== selectedScan.id) setMessages([]);
+        setScanRun(selectedScan);
+        setConversations(validConversations);
+        setActiveId(nextActiveId);
+      } catch (loadError) {
+        if (cancelled || loadEpoch !== workspaceEpochRef.current) return;
+        if (clearCustomerAuthBoundary(loadError)) return;
+        console.error("Could not load Grok workspace.", loadError);
+        clearWorkspace(setProject, setScanRun, setConversations, setActiveId, setMessages);
+        setError("Grok is unavailable right now. Your scans and FixLists are unchanged.");
+      } finally {
+        if (!cancelled && loadEpoch === workspaceEpochRef.current) setLoadingWorkspace(false);
+      }
+    }
+
+    loadWorkspace();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshToken]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadEpoch = workspaceEpochRef.current;
+    if (!activeId || !scanRun) {
+      setMessages([]);
+      setLoadingMessages(false);
+      return undefined;
+    }
+
+    const conversation = conversations.find((item) => item.id === activeId);
+    if (!conversationMatchesGrokScan(conversation, scanRun)) {
+      setActiveId(null);
+      setMessages([]);
+      return undefined;
+    }
+
+    setMessages([]);
+    setLoadingMessages(true);
+    fetchConversationMessages(conversation, scanRun)
+      .then((storedMessages) => {
+        if (!cancelled && loadEpoch === workspaceEpochRef.current) setMessages(storedMessages);
+      })
+      .catch((loadError) => {
+        if (cancelled || loadEpoch !== workspaceEpochRef.current) return;
+        if (clearCustomerAuthBoundary(loadError)) return;
+        console.error("Could not load Grok messages.", loadError);
+        setMessages([]);
+        setError("This Grok conversation could not be loaded. Your FixList is unchanged.");
+      })
+      .finally(() => {
+        if (!cancelled && loadEpoch === workspaceEpochRef.current) setLoadingMessages(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeId, conversations, scanIdentity]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, sending]);
 
-  const loadInitialData = async () => {
-    await Promise.all([loadConversations(), loadProjectContext()]);
+  const startNewConversation = () => {
+    if (sending || !scanRun) return;
+    setActiveId(null);
+    setMessages([]);
+    setInput("");
+    setError(null);
   };
 
-  const loadConversations = async () => {
-    setLoadingConversations(true);
+  const handleSend = async (value) => {
+    const content = String(value ?? input).trim();
+    if (!content || !scanRun || content.length > GROK_MAX_MESSAGE_LENGTH) return;
+    if (!sendGuardRef.current.tryAcquire()) return;
 
-    try {
-      const list = await base44.agents.listConversations({
-        agent_name: AGENT_NAME,
-      });
-
-      setConversations(list || []);
-
-      if (list?.length > 0) {
-        setActiveId(list[0].id);
-      }
-    } catch (err) {
-      console.error("Failed to load conversations.", err);
-      setError("Could not load assistant conversations.");
-    } finally {
-      setLoadingConversations(false);
-    }
-  };
-
-  const loadProjectContext = async () => {
-    setLoadingContext(true);
-
-    try {
-      const user = await base44.auth.me();
-      const activeProjectId = window.localStorage.getItem("active_project_id");
-      let activeProject = null;
-
-      if (activeProjectId) {
-        try {
-          activeProject = await base44.entities.BusinessProject.get(activeProjectId);
-        } catch {}
-      }
-
-      if (!activeProject) {
-        const projects = await base44.entities.BusinessProject.list("-last_crawl_at", 10);
-        activeProject =
-          projects.find(
-            (item) => item.owner_user_id === user.id || item.created_by_id === user.id
-          ) ||
-          projects[0] ||
-          null;
-      }
-
-      if (!activeProject) {
-        setProject(null);
-        setIssues([]);
-        setImprovements([]);
-        setInsights([]);
-        setReports([]);
-        return;
-      }
-
-      setProject(activeProject);
-      window.localStorage.setItem("active_project_id", activeProject.id);
-
-      const [issueData, improvementData, insightData, reportData] = await Promise.all([
-        base44.entities.SeoIssue.filter({
-          project_id: activeProject.id,
-          owner_user_id: user.id,
-        }),
-        base44.entities.DeveloperRecommendation.filter({
-          project_id: activeProject.id,
-          owner_user_id: user.id,
-        }),
-        base44.entities.CompetitorInsight.filter({
-          project_id: activeProject.id,
-          owner_user_id: user.id,
-        }),
-        base44.entities.Report.filter({
-          project_id: activeProject.id,
-          owner_user_id: user.id,
-        }),
-      ]);
-
-      const activeIssues = (issueData || []).filter(
-        (issue) =>
-          !["approved", "rejected", "completed"].includes(issue.status)
-      );
-
-      setIssues(activeIssues);
-      setImprovements(improvementData || []);
-      setInsights(insightData || []);
-      setReports(reportData || []);
-    } catch (err) {
-      console.error("Failed to load assistant context.", err);
-      setError("Could not load your website scan context.");
-    } finally {
-      setLoadingContext(false);
-    }
-  };
-
-  const createConversation = async () => {
-    setCreating(true);
-
-    try {
-      const conversation = await base44.agents.createConversation({
-        agent_name: AGENT_NAME,
-        metadata: {
-          name: project?.business_name
-            ? `${project.business_name} SEO help`
-            : "SEO help",
-          description: "Plain-English SEO assistance",
-        },
-      });
-
-      setConversations((previous) => [conversation, ...previous]);
-      setActiveId(conversation.id);
-
-      return conversation;
-    } catch (err) {
-      console.error("Failed to create conversation.", err);
-      setError("Could not start a new assistant conversation.");
-      return null;
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  const getActiveConversation = async () => {
-    if (activeId) {
-      const existing = base44.agents.getConversation(activeId);
-      if (existing) return existing;
-      return { id: activeId };
-    }
-
-    return await createConversation();
-  };
-
-  const buildMessageWithContext = (content) => {
-    return [
-      content,
-      "",
-      "Website context for this answer:",
-      "```json",
-      JSON.stringify(assistantContext, null, 2),
-      "```",
-    ].join("\n");
-  };
-
-  const handleSend = async (text) => {
-    const content = String(text ?? input).trim();
-
-    if (!content || sending) return;
-
+    const workspaceAtSend = grokWorkspaceIdentity({ scanRun });
+    const conversationAtSend = conversationMatchesGrokScan(activeConversation, scanRun)
+      ? activeConversation
+      : null;
+    const optimisticId = `pending_${Date.now()}`;
     setInput("");
     setSending(true);
     setError(null);
+    setMessages((previous) => [
+      ...previous.filter((message) => message.id !== optimisticId),
+      { id: optimisticId, role: "user", content, sequence: Number.MAX_SAFE_INTEGER },
+    ]);
 
     try {
-      let conversation = await getActiveConversation();
+      const payload = { message: content, scan_id: scanRun.id };
+      if (conversationAtSend?.id) payload.conversation_id = conversationAtSend.id;
+      const result = await base44.functions.invoke("grokChat", payload);
+      assertCurrentGrokWorkspace(workspaceAtSend, workspaceIdentityRef.current);
+      const returnedConversationId = String(result?.conversation_id || "");
 
-      if (!conversation?.id) {
-        throw new Error("Could not start a conversation.");
+      if (!returnedConversationId) {
+        setMessages((previous) => previous.filter((message) => message.id !== optimisticId));
+        setError(result?.error || "Grok is unavailable right now. Please try again.");
+        return;
       }
 
-      const contextualMessage = buildMessageWithContext(content);
+      const returnedConversation = await base44.entities.GrokConversation.get(returnedConversationId);
+      assertCurrentGrokWorkspace(workspaceAtSend, workspaceIdentityRef.current);
+      if (!conversationMatchesGrokScan(returnedConversation, scanRun)) {
+        throw new Error("Grok returned a conversation for a different scan.");
+      }
 
-      await base44.agents.addMessage(conversation, {
-        role: "user",
-        content: contextualMessage,
-      });
+      const nextConversations = mergeConversations(conversations, returnedConversation)
+        .filter((conversation) => conversationMatchesGrokScan(conversation, scanRun));
+      const storedMessages = await fetchConversationMessages(returnedConversation, scanRun);
+      assertCurrentGrokWorkspace(workspaceAtSend, workspaceIdentityRef.current);
+      setConversations(nextConversations);
+      setActiveId(returnedConversation.id);
+      setMessages(storedMessages);
 
       trackEvent("assistant_message_sent", {
-        conversation_id: conversation.id,
+        conversation_id: returnedConversation.id,
+        scan_run_id: scanRun.id,
         message_length: content.length,
-        has_project_context: Boolean(project),
-        recommendation_count: issues.length,
+        grok_chat_version: result?.grok_chat_version || "",
       });
-    } catch (err) {
-      console.error("Failed to send message.", err);
-      setError("Could not send your message. Please try again.");
-      setInput(content);
+
+      if (result?.success !== true) {
+        setError(result?.error || "Grok is temporarily unavailable. Your conversation is still saved.");
+      }
+    } catch (sendError) {
+      if (
+        sendError?.code === "stale_grok_workspace"
+        || !grokWorkspaceMatches(workspaceAtSend, workspaceIdentityRef.current)
+      ) {
+        setMessages((previous) => previous.filter((message) => message.id !== optimisticId));
+        return;
+      }
+      if (clearCustomerAuthBoundary(sendError)) return;
+      console.error("Could not send Grok message.", sendError);
+      const preservedId = resolveActiveGrokConversationId({
+        currentConversation: conversationAtSend,
+        candidateConversation: null,
+        scanRun,
+      });
+      setActiveId(preservedId);
+      if (preservedId && conversationAtSend) {
+        try {
+          setMessages(await fetchConversationMessages(conversationAtSend, scanRun));
+        } catch {
+          setMessages((previous) => previous.filter((message) => message.id !== optimisticId));
+        }
+      } else {
+        setMessages([]);
+      }
+      setError("Grok could not send that message. Your current FixList conversation was not switched.");
     } finally {
-      setSending(false);
+      sendGuardRef.current.release();
+      if (grokWorkspaceMatches(workspaceAtSend, workspaceIdentityRef.current)) setSending(false);
     }
   };
 
   const hasProject = Boolean(project);
-  const hasIssues = issues.length > 0;
-  const isLoading = loadingConversations || loadingContext;
+  const hasAuthoritativeScan = Boolean(scanRun);
+  const canSend = hasAuthoritativeScan && !loadingWorkspace && !loadingMessages && !sending;
+  const domain = normalizeGrokDomain(scanRun?.website_url);
 
   return (
     <div className="min-h-screen bg-[#F7F8FA]">
       <div className="mx-auto flex h-[calc(100vh-7rem)] w-full max-w-5xl flex-col px-5 py-8 sm:px-6 lg:py-10">
         <div className="mb-6 flex flex-col items-start justify-between gap-4 sm:flex-row">
           <div>
-            <p className="text-sm font-medium text-blue-600">Plain-English help</p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
-              Ask AI
-            </h1>
+            <p className="text-sm font-medium text-blue-600">Grok in FixList</p>
+            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">Ask Grok</h1>
             <p className="mt-2 max-w-2xl text-base leading-7 text-slate-500">
-              SEO Autopilot scans your website, reviews important pages, looks for competitor opportunities when possible, and prepares a simple Fix List.
+              Ask questions about your latest authoritative FixList. Grok can explain and plan, but it never changes your website or marks fixes complete.
             </p>
+            {domain && (
+              <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
+                <ShieldCheck className="h-3.5 w-3.5 text-blue-600" />
+                Grounded in {domain}
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-3">
-            <Button
-              asChild
-              variant="outline"
-              className="rounded-full border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 shadow-none hover:bg-slate-50"
-            >
+            <Button asChild variant="outline" className="rounded-full border-slate-200 bg-white px-5 text-sm font-medium text-slate-700 shadow-none hover:bg-slate-50">
               <Link to="/dashboard">View Fix List</Link>
             </Button>
-
-            <Button
-              onClick={createConversation}
-              disabled={creating}
-              className="rounded-full bg-blue-600 px-5 text-sm font-medium text-white shadow-none hover:bg-blue-700"
-            >
-              {creating ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Plus className="mr-2 h-4 w-4" />
-              )}
+            <Button onClick={startNewConversation} disabled={!hasAuthoritativeScan || sending} className="rounded-full bg-blue-600 px-5 text-sm font-medium text-white shadow-none hover:bg-blue-700">
+              <Plus className="mr-2 h-4 w-4" />
               New chat
             </Button>
           </div>
         </div>
 
         {error && (
-          <div className="mb-5 rounded-3xl border border-red-100 bg-white p-4 shadow-sm">
+          <div className="mb-5 rounded-3xl border border-amber-100 bg-white p-4 shadow-sm">
             <div className="flex items-start gap-3">
-              <AlertTriangle className="mt-0.5 h-4 w-4 text-red-500" />
+              <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-500" />
               <p className="text-sm leading-6 text-slate-600">{error}</p>
             </div>
           </div>
         )}
 
-        {!hasProject && !loadingContext && (
+        {!loadingWorkspace && !hasAuthoritativeScan && (
           <div className="mb-5 rounded-3xl border border-slate-200/80 bg-white p-5 shadow-sm">
             <p className="text-sm font-medium text-slate-950">
-              No website scan found yet.
+              {hasProject ? "No authoritative FixList scan is ready." : "No website project was found."}
             </p>
             <p className="mt-1 text-sm leading-6 text-slate-600">
-              Scan a website first so the assistant can answer using your actual recommendations.
+              Complete a successful Standard 150 scan first. Grok does not use provisional, limited, failed, or mismatched scan data.
             </p>
-            <Button
-              asChild
-              className="mt-4 rounded-full bg-blue-600 px-5 text-sm font-medium text-white shadow-none hover:bg-blue-700"
-            >
+            <Button asChild className="mt-4 rounded-full bg-blue-600 px-5 text-sm font-medium text-white shadow-none hover:bg-blue-700">
               <Link to="/crawl-status">Scan Website</Link>
             </Button>
           </div>
@@ -409,158 +378,113 @@ export default function Assistant() {
 
         <div className="grid min-h-0 flex-1 gap-5 md:grid-cols-[240px_1fr]">
           <aside className="hidden min-h-0 rounded-3xl border border-slate-200/80 bg-white p-3 shadow-sm md:flex md:flex-col">
-            <Button
-              onClick={createConversation}
-              disabled={creating}
-              className="mb-3 rounded-full bg-blue-600 text-sm font-medium text-white shadow-none hover:bg-blue-700"
-              size="sm"
-            >
-              {creating ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Plus className="mr-2 h-4 w-4" />
-              )}
+            <Button onClick={startNewConversation} disabled={!hasAuthoritativeScan || sending} className="mb-3 rounded-full bg-blue-600 text-sm font-medium text-white shadow-none hover:bg-blue-700" size="sm">
+              <Plus className="mr-2 h-4 w-4" />
               New chat
             </Button>
 
-            <div className="min-h-0 flex-1 overflow-y-auto space-y-1">
-              {isLoading ? (
+            <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
+              {loadingWorkspace ? (
                 <div className="flex justify-center py-6">
                   <Loader2 className="h-5 w-5 animate-spin text-slate-300" />
                 </div>
               ) : conversations.length === 0 ? (
-                <p className="px-3 py-6 text-center text-xs text-slate-400">
-                  No chats yet
-                </p>
-              ) : (
-                conversations.map((conversation) => (
-                  <button
-                    key={conversation.id}
-                    onClick={() => setActiveId(conversation.id)}
-                    className={`flex w-full items-center gap-2 rounded-2xl px-3 py-2.5 text-left text-sm transition ${
-                      activeId === conversation.id
-                        ? "bg-slate-100 text-slate-950"
-                        : "text-slate-500 hover:bg-slate-50 hover:text-slate-950"
-                    }`}
-                  >
-                    <MessageSquare className="h-3.5 w-3.5 shrink-0" />
-                    <span className="truncate">
-                      {conversation.metadata?.name || "SEO help"}
-                    </span>
-                  </button>
-                ))
-              )}
+                <p className="px-3 py-6 text-center text-xs text-slate-400">No saved Grok chats for this scan</p>
+              ) : conversations.map((conversation) => (
+                <button
+                  key={conversation.id}
+                  type="button"
+                  onClick={() => setActiveId(conversation.id)}
+                  className={`flex w-full items-center gap-2 rounded-2xl px-3 py-2.5 text-left text-sm transition ${
+                    activeId === conversation.id
+                      ? "bg-slate-100 text-slate-950"
+                      : "text-slate-500 hover:bg-slate-50 hover:text-slate-950"
+                  }`}
+                >
+                  <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">{conversation.title || `${domain} Grok help`}</span>
+                </button>
+              ))}
             </div>
           </aside>
 
           <main className="flex min-h-0 flex-col overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-sm">
-            {!activeId ? (
+            {!hasAuthoritativeScan ? (
               <div className="flex flex-1 flex-col items-center justify-center p-8 text-center">
-                <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-3xl bg-slate-100">
-                  <Bot className="h-7 w-7 text-blue-600" />
-                </div>
-
-                <h2 className="text-lg font-semibold text-slate-950">
-                  Ask about your website.
-                </h2>
-
-                <p className="mt-2 max-w-sm text-sm leading-6 text-slate-600">
-                  I can explain your recommendations and turn them into simple next steps.
-                </p>
-
-                <Button
-                  onClick={createConversation}
-                  disabled={creating}
-                  className="mt-6 rounded-full bg-blue-600 px-5 text-sm font-medium text-white shadow-none hover:bg-blue-700"
-                >
-                  {creating ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Sparkles className="mr-2 h-4 w-4" />
-                  )}
-                  Start chat
-                </Button>
+                {loadingWorkspace ? (
+                  <Loader2 className="h-7 w-7 animate-spin text-blue-600" />
+                ) : (
+                  <Bot className="h-8 w-8 text-slate-300" />
+                )}
+                <h2 className="mt-4 text-lg font-semibold text-slate-950">Grok needs an authoritative scan.</h2>
+                <p className="mt-2 max-w-sm text-sm leading-6 text-slate-600">Your browser never sends scan evidence or chat history. The secure backend loads both from your Base44 records.</p>
               </div>
             ) : (
               <>
                 <div className="min-h-0 flex-1 overflow-y-auto p-5">
-                  {messages.length === 0 && (
+                  {loadingMessages ? (
+                    <div className="flex h-full items-center justify-center">
+                      <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
+                    </div>
+                  ) : messages.length === 0 ? (
                     <div className="mx-auto max-w-2xl">
                       <div className="mb-5 rounded-3xl bg-slate-50 p-5">
-                        <p className="text-sm font-medium text-slate-950">
-                          {hasIssues
-                            ? `${issues.length} recommendations loaded`
-                            : "Ready to help"}
-                        </p>
-                        <p className="mt-1 text-sm leading-6 text-slate-600">
-                          {hasIssues
-                            ? "Ask what to do first, what needs help, or how to explain a recommendation."
-                            : "Ask a question, or scan your website to get more personalized answers."}
-                        </p>
+                        <p className="text-sm font-medium text-slate-950">Authoritative FixList loaded</p>
+                        <p className="mt-1 text-sm leading-6 text-slate-600">Ask what to do first, how to implement a recommendation, or which work needs extra care.</p>
                       </div>
-
-                      <p className="mb-3 text-sm text-slate-400">
-                        Try one of these:
-                      </p>
-
+                      <p className="mb-3 text-sm text-slate-400">Try one of these:</p>
                       <div className="space-y-2">
                         {SUGGESTIONS.map((suggestion) => (
                           <button
                             key={suggestion}
+                            type="button"
                             onClick={() => handleSend(suggestion)}
-                            disabled={sending}
-                            className="block w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left text-sm text-slate-700 transition hover:bg-slate-50"
+                            disabled={!canSend}
+                            className="block w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left text-sm text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             {suggestion}
                           </button>
                         ))}
                       </div>
                     </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {messages.map((message) => <MessageBubble key={message.id} message={message} />)}
+                    </div>
                   )}
 
-                  <div className="space-y-4">
-                    {messages.map((message, index) => (
-                      <MessageBubble key={index} message={message} />
-                    ))}
-
-                    {sending && (
-                      <div className="flex items-center gap-2 text-sm text-slate-400">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Thinking…
-                      </div>
-                    )}
-
-                    <div ref={messagesEndRef} />
-                  </div>
+                  {sending && (
+                    <div className="mt-4 flex items-center gap-2 text-sm text-slate-400">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Grok is thinking…
+                    </div>
+                  )}
+                  <div ref={messagesEndRef} />
                 </div>
 
                 <div className="border-t border-slate-100 p-3">
                   <div className="flex gap-2">
                     <Input
                       value={input}
-                      onChange={(event) => setInput(event.target.value)}
+                      onChange={(event) => setInput(event.target.value.slice(0, GROK_MAX_MESSAGE_LENGTH))}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" && !event.shiftKey) {
                           event.preventDefault();
                           handleSend();
                         }
                       }}
-                      placeholder="Ask what to do next…"
-                      disabled={sending}
+                      maxLength={GROK_MAX_MESSAGE_LENGTH}
+                      placeholder="Ask Grok what to do next…"
+                      disabled={!canSend}
                       className="h-11 rounded-full border-slate-200 bg-slate-50 px-4 shadow-none focus-visible:ring-blue-600"
                     />
-
-                    <Button
-                      onClick={() => handleSend()}
-                      disabled={sending || !input.trim()}
-                      className="h-11 rounded-full bg-blue-600 px-4 text-white shadow-none hover:bg-blue-700"
-                    >
-                      {sending ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Send className="h-4 w-4" />
-                      )}
+                    <Button onClick={() => handleSend()} disabled={!canSend || !input.trim()} className="h-11 rounded-full bg-blue-600 px-4 text-white shadow-none hover:bg-blue-700">
+                      {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                     </Button>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between px-2 text-[11px] text-slate-400">
+                    <span>Advice only — Grok cannot apply fixes.</span>
+                    <span>{input.length}/{GROK_MAX_MESSAGE_LENGTH}</span>
                   </div>
                 </div>
               </>
@@ -570,4 +494,42 @@ export default function Assistant() {
       </div>
     </div>
   );
+}
+
+function assertCurrentGrokWorkspace(expected, current) {
+  if (!grokWorkspaceMatches(expected, current)) {
+    throw Object.assign(new Error("The signed-in owner, project, scan, domain, or release changed."), {
+      code: "stale_grok_workspace",
+    });
+  }
+}
+
+async function fetchConversationMessages(conversation, scanRun) {
+  if (!conversationMatchesGrokScan(conversation, scanRun)) return [];
+  const user = await base44.auth.me();
+  const records = await base44.entities.GrokMessage.filter(
+    {
+      conversation_id: conversation.id,
+      owner_user_id: user.id,
+      project_id: scanRun.project_id,
+      scan_run_id: scanRun.id,
+      normalized_domain: normalizeGrokDomain(scanRun.website_url),
+      release_fingerprint: scanRun.beta_revision_fingerprint,
+    },
+    "created_date",
+    200
+  );
+  return sortGrokMessages(records).filter((message) => ["user", "assistant"].includes(message.role));
+}
+
+function mergeConversations(conversations, conversation) {
+  return [conversation, ...(conversations || []).filter((item) => item.id !== conversation.id)];
+}
+
+function clearWorkspace(setProject, setScanRun, setConversations, setActiveId, setMessages) {
+  setProject(null);
+  setScanRun(null);
+  setConversations([]);
+  setActiveId(null);
+  setMessages([]);
 }

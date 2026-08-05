@@ -1,7 +1,27 @@
 import pytest
+import ipaddress
+import socket
+import httpx
 
 from app.scanner import run_scan, stable_id
 from app.security import is_public_http_url
+
+
+@pytest.fixture(autouse=True)
+def deterministic_dns(monkeypatch):
+    def fake_getaddrinfo(host, port, **_kwargs):
+        if str(host).lower().rstrip(".") == "localhost":
+            value = "127.0.0.1"
+            return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (value, port))]
+        try:
+            value = str(ipaddress.ip_address(host))
+        except ValueError:
+            value = "93.184.216.34"
+        family = socket.AF_INET6 if ":" in value else socket.AF_INET
+        sockaddr = (value, port, 0, 0) if family == socket.AF_INET6 else (value, port)
+        return [(family, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", sockaddr)]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
 
 
 @pytest.mark.asyncio
@@ -72,7 +92,7 @@ async def test_safe_get_blocks_malformed_redirect_location(monkeypatch):
         def __init__(self):
             self.fetched = []
 
-        async def get(self, url):
+        async def get(self, url, **_kwargs):
             self.fetched.append(url)
             return _FakeResponse(302, {"location": "ht!tp://[::bad::]/\x00"}, url)
 
@@ -140,11 +160,13 @@ class _FakeRedirectClient:
         self.location = location
         self.fetched = []
 
-    async def get(self, url):
-        self.fetched.append(url)
-        if url == "http://pub.example.com/":
-            return _FakeResponse(302, {"location": self.location}, url)
-        return _FakeResponse(200, {"content-type": "text/html"}, url, "<html></html>")
+    async def get(self, url, *, headers=None, extensions=None):
+        pinned = httpx.URL(url)
+        logical_url = f"{pinned.scheme}://{(headers or {}).get('Host', '')}{pinned.raw_path.decode('ascii')}"
+        self.fetched.append(logical_url)
+        if logical_url == "http://pub.example.com/":
+            return _FakeResponse(302, {"location": self.location}, logical_url)
+        return _FakeResponse(200, {"content-type": "text/html"}, logical_url, "<html></html>")
 
 
 @pytest.mark.asyncio

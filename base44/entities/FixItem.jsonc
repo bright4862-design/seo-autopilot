@@ -143,7 +143,10 @@
       "default": {}
     },
     "owner_user_id": {
-      "type": "string"
+      "type": "string",
+      "rls": {
+        "update": { "user_condition": { "role": "admin" } }
+      }
     },
     "page_count": {
       "type": "number",
@@ -184,6 +187,13 @@
     },
     "grouping_explanation": {
       "type": "string"
+    },
+    "authority_proof": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[a-f0-9]{64}$",
+      "rls": { "write": { "user_condition": { "role": "admin" } } }
     }
   },
   "required": [
@@ -200,11 +210,7 @@
             "role": "admin"
           }
         },
-        {
-          "user_condition": {
-            "role": "user"
-          }
-        }
+        { "data.owner_user_id": "{{user.id}}" }
       ]
     },
     "read": {

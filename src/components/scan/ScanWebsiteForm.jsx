@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   AlertCircle,
   Bug,
+  CheckCircle2,
   Copy,
   Download,
   FileJson,
@@ -16,24 +17,27 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { base44 } from "@/api/base44Client";
+import { ensureScanProject } from "@/lib/activeProject";
 import { normalizeActionPriority, normalizeFindingEvidence, normalizeReviewEvidenceState, normalizeReviewScope, selectFinalReviewFixes } from "@/lib/reviewContract";
 import { mergePersistedScanRunRecord } from "@/lib/persistedScanRecord";
-import { buildAuthorityMarkers, buildDiagnosticAuthorityMarkers, buildScanRunFields } from "@/lib/scanRunModel";
+import { RELEASE_AUTHORITY_CONTRACT, buildAuthorityMarkers, buildDiagnosticAuthorityMarkers, buildScanRunFields } from "@/lib/scanRunModel";
+import { createScanRequestId, normalizedScanDomain, scanReleaseIdentity } from "@/lib/scanRunIdentity";
 import { beginScanRun, completeScanRun, failScanRun, markScanRunReviewing } from "@/lib/scanRuns";
-import { loadAccess, recordScanUsed, UNLOCK_PRICE_LABEL } from "@/lib/access";
+import { UNLOCK_PRICE_LABEL, loadAccess, recordScanUsed } from "@/lib/access";
+import {
+  CUSTOMER_BOUNDARY_EVENT,
+  clearCustomerAuthBoundary,
+  readCustomerActiveProject,
+} from "@/lib/customerBrowserCache";
 
 const STANDARD_SCANNER_FUNCTION = "runStandard150Scan";
-const STANDARD_SCAN_MODE = "standard_150";
 const AI_REVIEW_FUNCTION = "aiReviewScan";
 
-const DASHBOARD_LAST_SCAN_KEY = "seo_autopilot:last_scan";
-const DASHBOARD_HISTORY_KEY = "seo_autopilot:scan_history";
-const LEGACY_LAST_SCAN_KEY = "SEO_AUTOPILOT_LAST_SCAN";
-const LEGACY_HISTORY_KEY = "SEO_AUTOPILOT_SCAN_HISTORY";
-const ACTIVE_SCAN_URL_KEY = "seo_autopilot:active_scan_url";
-const ACTIVE_SCAN_STARTED_AT_KEY = "seo_autopilot:active_scan_started_at";
-const SCAN_DEBUG_KEY = "seo_autopilot:scan_debug";
-const SCAN_RECORD_PREFIX = "seo_autopilot:scan:";
+// Standard 150 is the only customer scan. There is no scan-size selector and no
+// customer-controlled scanner budget. The gateway owns the Python compatibility
+// translation, so the frontend never sends "advanced" as the customer mode.
+const STANDARD_SCAN_MODE = "standard_150";
+const STANDARD_SCAN_BUDGET = Object.freeze({ max_pages: 150, max_browser_render_attempts: 1, crawl_timeout_ms: 90000 });
 
 const CMS_OPTIONS = [
   { value: "wordpress", label: "WordPress" },
@@ -67,7 +71,10 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   const [activeStep, setActiveStep] = useState("");
   const [error, setError] = useState("");
   const [debugOpen, setDebugOpen] = useState(false);
-  const [debugData, setDebugData] = useState(() => readScanDebugData());
+  const [debugData, setDebugData] = useState(() => emptyRuntimeDebug());
+  const debugDataRef = useRef(debugData);
+  const submitLockRef = useRef(false);
+  const requestEpochRef = useRef(0);
   const [debugCopied, setDebugCopied] = useState(false);
   const [debugCompressed, setDebugCompressed] = useState(true);
 
@@ -77,18 +84,41 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   const displayedDebugData = debugCompressed ? compressDebugData(debugData) : debugData;
   const displayedDebugText = JSON.stringify(displayedDebugData, null, debugCompressed ? 0 : 2);
 
+  function recordDebug(data) {
+    const next = runtimeDebug(data);
+    debugDataRef.current = next;
+    setDebugData(next);
+  }
+
   function refreshDebugData() {
-    setDebugData(readScanDebugData());
+    setDebugData(debugDataRef.current);
   }
 
   function clearDebugScanData() {
-    clearAllDashboardScanData();
-    refreshDebugData();
+    const next = emptyRuntimeDebug();
+    debugDataRef.current = next;
+    setDebugData(next);
   }
+
+  useEffect(() => {
+    function invalidatePendingRequest() {
+      requestEpochRef.current += 1;
+      submitLockRef.current = false;
+      setSubmitting(false);
+      setActiveStep("");
+      clearDebugScanData();
+    }
+    window.addEventListener(CUSTOMER_BOUNDARY_EVENT, invalidatePendingRequest);
+    return () => {
+      requestEpochRef.current += 1;
+      submitLockRef.current = false;
+      window.removeEventListener(CUSTOMER_BOUNDARY_EVENT, invalidatePendingRequest);
+    };
+  }, []);
 
   async function copyDebugData(compact = debugCompressed) {
     try {
-      const snapshot = readScanDebugData();
+      const snapshot = debugDataRef.current;
       const payload = compact ? compressDebugData(snapshot) : snapshot;
       await navigator.clipboard.writeText(JSON.stringify(payload, null, compact ? 0 : 2));
       setDebugCopied(true);
@@ -99,9 +129,9 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   }
 
   function downloadDebugData(compact = true) {
-    const snapshot = readScanDebugData();
+    const snapshot = debugDataRef.current;
     const payload = compact ? compressDebugData(snapshot) : snapshot;
-    const website = snapshot?.parsed?.[DASHBOARD_LAST_SCAN_KEY]?.website_url || snapshot?.parsed?.[LEGACY_LAST_SCAN_KEY]?.website_url || websiteUrl || "fixlist";
+    const website = snapshot?.parsed?.runtime?.website_url || websiteUrl || "fixlist";
     const host = safeHostname(website) || "fixlist";
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const blob = new Blob([JSON.stringify(payload, null, compact ? 0 : 2)], { type: "application/json;charset=utf-8" });
@@ -117,7 +147,10 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
 
   async function handleSubmit(event) {
     event.preventDefault();
+    if (submitLockRef.current || saving) return;
+    let requestEpoch = requestEpochRef.current;
     setError("");
+    const submittedUrl = String(websiteUrl || "").trim();
     const normalizedUrl = normalizeWebsiteUrl(websiteUrl);
     const requestedPathPrefix = getRequestedPathPrefix(normalizedUrl);
     const trimmedBusinessName = businessName.trim();
@@ -125,27 +158,76 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
     if (!normalizedUrl) { setError("Enter a valid website URL."); return; }
     if (!trimmedBusinessName) { setError("Enter the business or website name."); return; }
 
+    // Access gate runs before any durable scan identity is created, so a blocked
+    // customer never consumes a request_id or leaves a queued ScanRun behind.
     const access = await loadAccess();
     if (!access.canScan) {
       setError(`You've used your free test scan. Unlock full access for ${UNLOCK_PRICE_LABEL} on the Billing page to run more scans and see every result.`);
       return;
     }
+    submitLockRef.current = true;
 
     let scanData = null;
     let aiData = null;
     let mergedFinal = null;
     let scanRunHandle = null;
-    const localScanId = createScanId();
-    let scanId = localScanId;
+    let sessionIdentity = null;
+    const requestId = createScanRequestId();
+    const idempotencyKey = requestId;
+    let scanId = "";
+    const identityDebug = () => ({
+      request_id: scanRunHandle?.request_id || requestId,
+      idempotency_key: scanRunHandle?.idempotency_key || idempotencyKey,
+      scan_id: scanRunHandle?.id || scanId,
+      scan_run_id: scanRunHandle?.id || scanId,
+      submitted_url: submittedUrl,
+      normalized_domain: normalizedScanDomain(normalizedUrl),
+    });
     setSubmitting(true);
-    markDashboardScanStarted(normalizedUrl, localScanId);
-    scanRunHandle = await beginScanRun({ websiteUrl: normalizedUrl, pathPrefix: requestedPathPrefix, scanMode, scanSource: "scan_website_page" }).catch(() => null);
-    scanId = scanRunHandle?.id || localScanId;
-    writeScanDebug({ status: "running", stage: "scan_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix });
-    refreshDebugData();
 
     try {
-      const safeScanBudget = getSafeScanBudget();
+      const { user: scanOwner, project: scanProject } = await ensureScanProject({
+        projectId: project?.id,
+        websiteUrl: normalizedUrl,
+        businessName: trimmedBusinessName,
+        cmsPlatform,
+        importantKeywords: cleanedKeywords,
+      });
+      submitLockRef.current = true;
+      requestEpoch = requestEpochRef.current + 1;
+      requestEpochRef.current = requestEpoch;
+      scanRunHandle = await beginScanRun({
+        projectId: scanProject.id,
+        websiteUrl: normalizedUrl,
+        submittedUrl,
+        pathPrefix: requestedPathPrefix,
+        scanMode,
+        scanSource: "scan_website_page",
+        requestId,
+        idempotencyKey,
+      });
+      scanId = scanRunHandle.id;
+      sessionIdentity = {
+        ownerId: scanOwner.id,
+        projectId: scanProject.id,
+        requestId,
+        scanId,
+        normalizedDomain: normalizedScanDomain(normalizedUrl),
+        canonicalMode: scanMode,
+        releaseIdentity: RELEASE_AUTHORITY_CONTRACT.betaRevisionFingerprint,
+      };
+      await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
+      recordDebug({ ...identityDebug(), status: "running", stage: "scan_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix });
+      refreshDebugData();
+
+      if (scanRunHandle.replayed) {
+        recordDebug({ ...identityDebug(), status: scanRunHandle.status, stage: scanRunHandle.replay_reason, website_url: normalizedUrl, scan_mode: scanMode });
+        refreshDebugData();
+        navigate(`/dashboard?scan_id=${encodeURIComponent(scanId)}`);
+        return;
+      }
+
+      const safeScanBudget = STANDARD_SCAN_BUDGET;
       setActiveStep("Reading your pages");
       const scanPayload = {
         website_url: normalizedUrl,
@@ -159,7 +241,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         important_keywords: cleanedKeywords,
         competitor_urls: [],
         scan_mode: scanMode,
-        canonical_mode: STANDARD_SCAN_MODE,
+        enable_screaming_frog_lite: true,
         force_internal_crawl: true,
         respect_robots_txt: true,
         max_pages: safeScanBudget.max_pages,
@@ -168,41 +250,68 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         crawl_timeout_ms: safeScanBudget.crawl_timeout_ms,
         source: "scan_website_page",
         requested_at: new Date().toISOString(),
+        request_id: requestId,
+        idempotency_key: idempotencyKey,
         scan_id: scanId,
-        scan_run_id: scanRunHandle?.id || "",
+        scan_run_id: scanId,
+        submitted_url: submittedUrl,
+        normalized_domain: normalizedScanDomain(normalizedUrl),
         require_python_scanner: true,
         allow_deno_fallback: false,
       };
-      writeScanDebug({ status: "running", stage: "scanner_request_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, payload_summary: { max_pages: scanPayload.max_pages, max_competitors: 0, max_browser_render_attempts: scanPayload.max_browser_render_attempts, crawl_timeout_ms: scanPayload.crawl_timeout_ms, keyword_count: scanPayload.important_keywords.length } });
+      recordDebug({ ...identityDebug(), status: "running", stage: "scanner_request_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, payload_summary: { max_pages: scanPayload.max_pages, max_competitors: 0, max_browser_render_attempts: scanPayload.max_browser_render_attempts, crawl_timeout_ms: scanPayload.crawl_timeout_ms, keyword_count: scanPayload.important_keywords.length, respect_robots_txt: scanPayload.respect_robots_txt } });
       refreshDebugData();
 
       const scannerResponse = await callBase44Function(STANDARD_SCANNER_FUNCTION, scanPayload);
+      await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
       scanData = normalizeFunctionResponse(scannerResponse);
-      writeScanDebug({ status: "running", stage: "scanner_complete", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData) });
+      assertServerScanIdentity(scanData, identityDebug());
+      recordDebug({ ...identityDebug(), status: "running", stage: "scanner_complete", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData) });
       refreshDebugData();
       if (scanData?.success === false || scanData?.error) throw new Error(scanData.error || "Website scan failed.");
 
       setActiveStep("Checking SEO issues");
-      markScanRunReviewing(scanRunHandle).catch(() => {});
+      markScanRunReviewing(scanRunHandle).catch((reviewingError) => {
+        clearCustomerAuthBoundary(reviewingError);
+      });
       try {
-        const aiPayload = buildAiReviewPayload({ scanData, businessName: trimmedBusinessName, websiteUrl: normalizedUrl, cmsPlatform, cmsName, cleanedKeywords, scanMode, requestedPathPrefix });
-        writeScanDebug({ status: "running", stage: "ai_review_request_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_payload_summary: { pages_crawled: aiPayload.scan_coverage?.pages_crawled || 0, pages_found: aiPayload.scan_coverage?.pages_found || 0, sampled_pages_sent_to_ai: aiPayload.scan_coverage?.sampled_pages_sent_to_ai || aiPayload.crawled_pages.length, raw_fixes_count: aiPayload.raw_fixes.length, crawl_policy_source: aiPayload.crawl_policy_source, url_evidence_preserved: Boolean(aiPayload.url_evidence_summary), business_priority_rules_enabled: true, coverage_instruction_enabled: true } });
+        const aiPayload = buildAiReviewPayload({ scanData, businessName: trimmedBusinessName, websiteUrl: normalizedUrl, cmsPlatform, cmsName, cleanedKeywords, scanMode, requestedPathPrefix, ...identityDebug() });
+        recordDebug({ ...identityDebug(), status: "running", stage: "ai_review_request_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_payload_summary: { pages_crawled: aiPayload.scan_coverage?.pages_crawled || aiPayload.authoritative_scan?.pages_crawled || 0, pages_found: aiPayload.scan_coverage?.pages_found || aiPayload.authoritative_scan?.pages_found || 0, sampled_pages_sent_to_ai: aiPayload.scan_coverage?.sampled_pages_sent_to_ai || aiPayload.crawled_pages?.length || aiPayload.authoritative_scan?.crawled_pages?.length || 0, raw_fixes_count: aiPayload.raw_fixes?.length || getRecommendations(aiPayload.authoritative_scan).length, crawl_policy_source: aiPayload.crawl_policy_source || aiPayload.authoritative_scan?.crawl_policy_source || "", url_evidence_preserved: Boolean(aiPayload.url_evidence_summary || aiPayload.authoritative_scan?.url_evidence_summary), business_priority_rules_enabled: true, coverage_instruction_enabled: true } });
         refreshDebugData();
         setActiveStep("Writing your FixList");
         const aiResponse = await callBase44Function(AI_REVIEW_FUNCTION, aiPayload);
-        aiData = normalizeFunctionResponse(aiResponse);
-        writeScanDebug({ status: "running", stage: "ai_review_complete", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData) });
+        await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
+        aiData = { ...normalizeFunctionResponse(aiResponse), ...identityDebug() };
+        recordDebug({ ...identityDebug(), status: "running", stage: "ai_review_complete", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData) });
         refreshDebugData();
       } catch (aiError) {
+        if (
+          aiError?.code === "stale_customer_session"
+          || clearCustomerAuthBoundary(aiError)
+        ) throw aiError;
         console.warn("AI review was skipped or failed.", aiError);
-        writeScanDebug({ status: "running", stage: "ai_review_failed_but_continuing", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), ai_error: aiError?.message || String(aiError) });
+        aiData = { success: false, ...identityDebug(), error: aiError?.message || String(aiError) };
+        recordDebug({ ...identityDebug(), status: "running", stage: "ai_review_failed_but_continuing", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), ai_error: aiError?.message || String(aiError) });
         refreshDebugData();
       }
 
       setActiveStep("Saving your FixList");
-      mergedFinal = mergeScanAndAiReview({ scanData, aiData, websiteUrl: normalizedUrl, businessName: trimmedBusinessName, cmsPlatform, cmsName, scanMode, requestedPathPrefix, scanId, scanRunId: scanRunHandle?.id || "" });
+      mergedFinal = mergeScanAndAiReview({ scanData, aiData, websiteUrl: normalizedUrl, submittedUrl, businessName: trimmedBusinessName, cmsPlatform, cmsName, scanMode, requestedPathPrefix, requestId, idempotencyKey, scanId, scanRunId: scanId });
       const durableRecord = normalizeScanRecordForStorage(mergedFinal);
-      const completion = await completeScanRun(scanRunHandle, durableRecord).catch(() => null);
+      const completion = aiData?.authority_review_attestation
+        ? normalizeFunctionResponse(await callBase44Function("persistScanAuthority", {
+          scan_id: scanId,
+          attestation: aiData.authority_review_attestation,
+        }).catch((persistenceError) => {
+          if (clearCustomerAuthBoundary(persistenceError)) throw persistenceError;
+          return null;
+        }))
+        : await completeScanRun(scanRunHandle, durableRecord).catch((persistenceError) => {
+          if (clearCustomerAuthBoundary(persistenceError)) throw persistenceError;
+          return null;
+        });
+      await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
+      if (!completion?.scanRun) throw Object.assign(new Error("The scan finished, but its durable FixList record could not be saved."), { code: "scan_persistence_failed", scan_record: durableRecord });
       if (completion?.scanRun) {
         mergedFinal = mergePersistedScanRunRecord(
           mergedFinal,
@@ -212,20 +321,30 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       } else if (completion?.fixListId) {
         mergedFinal = { ...mergedFinal, fix_list_id: completion.fixListId };
       }
-      saveScanForDashboard(mergedFinal, mergedFinal?.scan_id || scanId);
+      // Only a durably persisted scan consumes the customer's allowance.
       await recordScanUsed().catch(() => {});
-      writeScanDebug({ status: "saved", stage: "dashboard_saved", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), compact_debug_available: true, download_available: true });
+      recordDebug({ ...identityDebug(), status: "saved", stage: "dashboard_saved", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), compact_debug_available: true, download_available: true });
       refreshDebugData();
       navigate(`/dashboard?scan=complete&scan_id=${encodeURIComponent(scanId)}`);
     } catch (err) {
+      if (
+        err?.code === "stale_customer_session"
+        || requestEpochRef.current !== requestEpoch
+        || clearCustomerAuthBoundary(err)
+      ) return;
       console.error("Website scan failed.", err);
-      failScanRun(scanRunHandle, err).catch(() => {});
-      writeScanDebug({ status: "failed", stage: "scan_failed", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, error: err?.message || String(err), scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), compact_debug_available: true, download_available: true });
+      if (err && typeof err === "object" && !err.scan_record) err.scanData = mergedFinal || scanData || {};
+      const failure = await failScanRun(scanRunHandle, err).catch(() => null);
+      const failureRecord = failure?.scanRun || { ...identityDebug(), status: "failed", error_code: err?.code || err?.name || "scan_failed", error_message: err?.message || String(err) };
+      recordDebug({ ...identityDebug(), status: "failed", stage: "scan_failed", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, error: err?.message || String(err), scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal || failureRecord), compact_debug_available: true, download_available: true });
       refreshDebugData();
-      setError(err?.message || "The Standard 150 scan failed. Please try again or check the scanner status.");
+      setError(err?.message || "The website scan failed. Try again or check the backend function logs.");
     } finally {
-      setActiveStep("");
-      setSubmitting(false);
+      if (requestEpochRef.current === requestEpoch) {
+        submitLockRef.current = false;
+        setActiveStep("");
+        setSubmitting(false);
+      }
     }
   }
 
@@ -250,7 +369,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h3 className="font-bold text-slate-950">Scan debug</h3>
-                <p className="mt-1 text-xs text-slate-500">Compact mode removes raw localStorage strings and limits previews so the JSON is small enough to share.</p>
+                <p className="mt-1 text-xs text-slate-500">Compact mode limits runtime previews so the JSON is small enough to share. No customer scan data is read from browser storage.</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button type="button" variant="outline" onClick={refreshDebugData}><RefreshCw className="mr-2 h-4 w-4" />Refresh</Button>
@@ -273,14 +392,9 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
             <div><label className="text-sm font-medium text-slate-700">Business or website name</label><Input value={businessName} onChange={(event) => setBusinessName(event.target.value)} placeholder="Example Business" disabled={isLoading} className="mt-2" /></div>
           </div>
 
-          <div className="rounded-2xl border border-indigo-100 bg-indigo-50 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold text-slate-950">Standard 150 scan</p>
-                <p className="mt-1 text-xs leading-5 text-slate-600">FixList checks up to 150 pages with the Python scanner and turns the evidence into one prioritized FixList.</p>
-              </div>
-              <span className="shrink-0 rounded-full bg-white px-3 py-1 text-xs font-semibold text-indigo-700">Up to 150 pages</span>
-            </div>
+          <div className="rounded-2xl border border-indigo-500 bg-indigo-50 p-4 ring-2 ring-indigo-100">
+            <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-indigo-600" /><span className="font-semibold text-slate-950">Standard · 150</span></div>
+            <p className="mt-2 text-xs leading-5 text-slate-600">A complete, prioritized scan of up to 150 pages.</p>
           </div>
 
           <button type="button" onClick={() => setOptionalOpen((value) => !value)} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-100">{optionalOpen ? "Hide optional settings" : "Optional: personalize your FixList"}</button>
@@ -308,20 +422,51 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
 
         <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <Button type="submit" disabled={isLoading} className="bg-indigo-600 text-white hover:bg-indigo-700">{isLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Building FixList...</> : <><Search className="mr-2 h-4 w-4" />Create FixList</>}</Button>
-          <p className="text-xs text-slate-500">FixList runs one Standard 150 scan. Most sites finish in a few minutes.</p>
+          <p className="text-xs text-slate-500">Standard scans up to 150 pages. Premium large-site scans will be enabled after production benchmarking.</p>
         </div>
       </form>
     </div>
   );
 }
 
-function buildAiReviewPayload({ scanData, businessName, websiteUrl, cmsPlatform, cmsName, cleanedKeywords, scanMode, requestedPathPrefix }) {
+function buildAiReviewPayload({ scanData, businessName, websiteUrl, cmsPlatform, cmsName, cleanedKeywords, scanMode, requestedPathPrefix, request_id, idempotency_key, scan_id, scan_run_id, submitted_url, normalized_domain }) {
   const crawledPages = getPages(scanData).slice(0, 150);
   const rawFixes = getRecommendations(scanData).slice(0, 140);
   const pagesCrawled = getFirstNumber([scanData?.pages_crawled, scanData?.pages_scanned, scanData?.technical_audit_summary?.pages_crawled, crawledPages.length]);
   const pagesFound = getFirstNumber([scanData?.pages_found, scanData?.pages_discovered, scanData?.technical_audit_summary?.pages_found, pagesCrawled, crawledPages.length]);
   const scanCoverage = { pages_crawled: pagesCrawled, pages_found: pagesFound, sampled_pages_sent_to_ai: crawledPages.length, sampled_findings_sent_to_ai: rawFixes.length, sample_limit: 150 };
+  if (scanData?.authority_scan_attestation) {
+    return {
+      authoritative_scan: scanData,
+      client_context: {
+        business_name: businessName,
+        cms_platform: cmsPlatform,
+        cms_name: cmsName,
+        important_keywords: cleanedKeywords,
+        requested_path_prefix: requestedPathPrefix || "",
+        coverage_instruction: "Use the server-attested scan page counts. Do not describe a sample sent to review as the total scan size.",
+        ai_review_goal: "Create a customer-friendly FixList that prioritizes business-important pages first. Preserve URL evidence, group template-level problems, and do not treat suspicious crawler artifacts as confirmed broken links.",
+        cms_instruction: buildCmsInstruction(cmsPlatform),
+        business_priority_instruction: {
+          rule: "Prioritize by business importance, not just technical severity.",
+          requested_path_prefix: requestedPathPrefix || "",
+        },
+        output_requirements: {
+          keep_language_simple: true,
+          group_similar_issues: true,
+          preserve_url_evidence_fields: true,
+          use_scan_coverage_for_page_counts: true,
+        },
+      },
+    };
+  }
   return {
+    request_id,
+    idempotency_key,
+    scan_id,
+    scan_run_id,
+    submitted_url,
+    normalized_domain,
     business_name: businessName,
     website_url: websiteUrl,
     cms_platform: cmsPlatform,
@@ -359,7 +504,7 @@ function buildAiReviewPayload({ scanData, businessName, websiteUrl, cmsPlatform,
   };
 }
 
-function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsPlatform, cmsName, scanMode, requestedPathPrefix, scanId, scanRunId }) {
+function mergeScanAndAiReview({ scanData, aiData, websiteUrl, submittedUrl, businessName, cmsPlatform, cmsName, scanMode, requestedPathPrefix, requestId, idempotencyKey, scanId, scanRunId }) {
   const pages = getPages(scanData).slice(0, 150).map(slimPage);
   const scannerFixes = getRecommendations(scanData);
   const aiFixes = getRecommendations(aiData);
@@ -387,12 +532,24 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
   const summaryText = normalizeCoverageSummary(aiData?.customer_summary || aiData?.plain_english_summary || aiData?.summary || aiData?.website_health_report?.overall_explanation || scanData?.scan_summary?.plain_english_summary || buildFallbackSummary({ healthScore, pagesCrawled, finalFixes, cmsName }), pagesCrawled);
   const siteFingerprint = normalizeSiteFingerprint(aiData?.site_fingerprint || aiData?.scan_summary?.site_fingerprint || {}, pages);
   const authorityMarkers = buildAuthorityMarkers(scanData, aiData);
+  const finalUrl = normalizeWebsiteUrl(scanData?.final_url || scanData?.resolved_start_url || pages[0]?.final_url || scanData?.normalized_url || scanData?.website_url || websiteUrl);
+  const releaseIdentity = scanReleaseIdentity({
+    ...scanData,
+    ...authorityMarkers,
+    scanner_wrapper_version: scanData?.scanner_wrapper_version || scanData?.wrapper_version || scanData?.version || "",
+  });
   const mergedRecord = {
     id: scanId || createScanId(),
     scan_id: scanId || "",
     scan_run_id: scanRunId || "",
+    request_id: requestId || scanData?.request_id || "",
+    idempotency_key: idempotencyKey || scanData?.idempotency_key || requestId || "",
     created_at: new Date().toISOString(),
     website_url: websiteUrl,
+    submitted_url: submittedUrl || websiteUrl,
+    final_url: finalUrl || websiteUrl,
+    normalized_domain: normalizedScanDomain(finalUrl || websiteUrl),
+    respect_robots_txt: true,
     website_key: normalizeWebsiteKey(websiteUrl),
     requested_path_prefix: requestedPathPrefix || "",
     business_name: businessName,
@@ -400,6 +557,7 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
     cms_name: cmsName,
     scan_mode: scanMode,
     ...authorityMarkers,
+    ...releaseIdentity,
     health_score: healthScore,
     seo_score: healthScore,
     health_score_status: healthScoreStatus,
@@ -459,7 +617,11 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
     competitor_opportunities: [],
     crawl_warnings: firstArray([scanData?.crawl_warnings, aiData?.crawl_warnings]).slice(0, 10),
     debug: {
-      scanner_function: ADVANCED_SCANNER_FUNCTION,
+      request_id: requestId || "",
+      idempotency_key: idempotencyKey || requestId || "",
+      scan_id: scanId || "",
+      scan_run_id: scanRunId || scanId || "",
+      scanner_function: STANDARD_SCANNER_FUNCTION,
       ai_function: AI_REVIEW_FUNCTION,
       screaming_frog_lite_enabled: true,
       scanner_success: scanData?.success !== false,
@@ -508,30 +670,22 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, businessName, cmsP
 }
 
 function compressDebugData(snapshot = {}) {
-  const parsed = snapshot?.parsed || {};
-  const debug = parsed[SCAN_DEBUG_KEY] || {};
-  const lastScan = parsed[DASHBOARD_LAST_SCAN_KEY] || parsed[LEGACY_LAST_SCAN_KEY] || debug.final_record || null;
-  const history = firstArray([parsed[DASHBOARD_HISTORY_KEY], parsed[LEGACY_HISTORY_KEY]]).slice(0, 3);
-  const compressed = {
+  const debug = snapshot?.parsed?.runtime || {};
+  return {
     compressed: true,
     read_at: snapshot?.read_at || new Date().toISOString(),
-    keys: {
-      last_scan: DASHBOARD_LAST_SCAN_KEY,
-      history: DASHBOARD_HISTORY_KEY,
-      debug: SCAN_DEBUG_KEY,
-    },
-    active_scan_url: parsed[ACTIVE_SCAN_URL_KEY] || "",
-    active_scan_started_at: parsed[ACTIVE_SCAN_STARTED_AT_KEY] || "",
+    storage: "memory_only",
     debug: compressDebugRecord(debug),
-    latest_scan: compressScanRecord(lastScan),
-    history: history.map(compressScanRecord),
   };
-  return compressed;
 }
 
 function compressDebugRecord(debug = {}) {
   if (!debug || typeof debug !== "object") return null;
   return {
+    request_id: debug.request_id || "",
+    idempotency_key: debug.idempotency_key || "",
+    scan_id: debug.scan_id || debug.scan_run_id || "",
+    scan_run_id: debug.scan_run_id || debug.scan_id || "",
     status: debug.status || "",
     stage: debug.stage || "",
     updated_at: debug.updated_at || "",
@@ -580,6 +734,15 @@ function compressScanRecord(record = {}) {
   }));
   return {
     ...buildDiagnosticAuthorityMarkers(record),
+    request_id: record.request_id || "",
+    idempotency_key: record.idempotency_key || record.request_id || "",
+    scan_id: record.scan_id || record.scan_run_id || record.id || "",
+    scan_run_id: record.scan_run_id || record.scan_id || record.id || "",
+    submitted_url: record.submitted_url || record.website_url || "",
+    final_url: record.final_url || record.website_url || "",
+    normalized_domain: record.normalized_domain || normalizedScanDomain(record.final_url || record.website_url),
+    scanner_wrapper_version: record.scanner_wrapper_version || "",
+    release_id: record.release_id || "",
     sampling_version: record.sampling_version || "",
     sampling_evidence: record.sampling_evidence || {},
     crawl_timing: record.crawl_timing || record.technical_audit_summary?.crawl_timing || {},
@@ -624,12 +787,8 @@ function compressScanRecord(record = {}) {
   };
 }
 
-function getSafeScanBudget() {
-  return { max_pages: 150, max_browser_render_attempts: 1, crawl_timeout_ms: 85000 };
-}
-
 async function callBase44Function(functionName, payload) {
-  const timeoutMs = functionName === STANDARD_SCANNER_FUNCTION ? Number(payload?.crawl_timeout_ms || 85000) + 10000 : 70000;
+  const timeoutMs = functionName === STANDARD_SCANNER_FUNCTION ? Number(payload?.crawl_timeout_ms || 30000) + 15000 : 70000;
   return await Promise.race([
     callBase44FunctionWithoutTimeout(functionName, payload),
     new Promise((_, reject) => window.setTimeout(() => reject(new Error(`${functionName} did not return within ${Math.round(timeoutMs / 1000)} seconds. The scan may have timed out before saving results.`)), timeoutMs)),
@@ -653,111 +812,32 @@ function normalizeFunctionResponse(response) {
   return response;
 }
 
-function saveScanForDashboard(scanRecord, scanId) {
-  try {
-    const normalizedRecord = slimScanRecord(normalizeScanRecordForStorage({ ...scanRecord, id: scanId || scanRecord?.id }));
-    const serialized = JSON.stringify(normalizedRecord);
-    const stableScanId = normalizedRecord.scan_id || normalizedRecord.scan_run_id || normalizedRecord.id;
-    if (stableScanId) window.localStorage.setItem(`${SCAN_RECORD_PREFIX}${stableScanId}`, serialized);
-    [DASHBOARD_LAST_SCAN_KEY, LEGACY_LAST_SCAN_KEY].forEach((key) => window.localStorage.setItem(key, serialized));
-    [DASHBOARD_HISTORY_KEY, LEGACY_HISTORY_KEY].forEach((key) => {
-      const existingRaw = window.localStorage.getItem(key);
-      const existing = existingRaw ? JSON.parse(existingRaw) : [];
-      const history = Array.isArray(existing) ? existing : [];
-      const nextHistory = [normalizedRecord, ...history.filter((item) => (item?.scan_id || item?.scan_run_id || item?.id) !== stableScanId)].slice(0, 20).map(slimScanRecord);
-      window.localStorage.setItem(key, JSON.stringify(nextHistory));
-    });
-    window.localStorage.removeItem(ACTIVE_SCAN_URL_KEY);
-    window.localStorage.removeItem(ACTIVE_SCAN_STARTED_AT_KEY);
-    window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
-  } catch (storageError) {
-    console.error("Could not save scan for dashboard.", storageError);
-    throw new Error("The scan finished, but FixList could not save the summary. Clear scans and try again.");
+function assertServerScanIdentity(response, expected) {
+  for (const field of ["request_id", "idempotency_key", "scan_id", "scan_run_id"]) {
+    if (String(response?.[field] || "") !== String(expected?.[field] || "")) {
+      throw new Error("The scanner response did not match this durable scan request.");
+    }
   }
 }
 
-function normalizeScanRecordForStorage(record) {
-  const fixes = getRecommendations(record).map(slimFix);
-  const pages = getPages(record).map(slimPage);
-  const healthScore = getHealthScore(record);
-  const incomplete = ["incomplete_evidence", "inconclusive_insufficient_evidence", "blocked_or_incomplete"].includes(record?.scan_status);
-  const noHighConfidenceFindings = record?.no_high_confidence_findings === true || (fixes.length === 0 && !incomplete);
+function emptyRuntimeDebug() {
+  return { read_at: new Date().toISOString(), raw: {}, parsed: { runtime: null } };
+}
+
+function runtimeDebug(data) {
   return {
-    ...record,
-    sampling_version: record?.sampling_version || "",
-    sampling_evidence: record?.sampling_evidence || {},
-    id: record?.id || `scan_${Date.now()}`,
-    created_at: record?.created_at || new Date().toISOString(),
-    website_url: record?.website_url || "",
-    website_key: normalizeWebsiteKey(record?.website_url || ""),
-    business_name: record?.business_name || "",
-    cms_platform: record?.cms_platform || "custom",
-    cms_name: record?.cms_name || "Custom / Not sure",
-    scan_mode: record?.scan_mode || "quick",
-    health_score: Number(healthScore || 0),
-    seo_score: Number(healthScore || 0),
-    health_grade: record?.health_grade || record?.website_health_report?.health_grade || (noHighConfidenceFindings ? "No issues found in sample" : scoreLabel(healthScore)),
-    no_high_confidence_findings: noHighConfidenceFindings,
-    review_confidence_state: record?.review_confidence_state || (noHighConfidenceFindings ? "no_high_confidence_findings" : ""),
-    zero_fix_confidence_version: record?.zero_fix_confidence_version || "",
-    scan_status: record?.scan_status || (noHighConfidenceFindings ? "complete_no_high_confidence_findings" : "complete"),
-    next_best_step: record?.next_best_step || record?.website_health_report?.next_best_step || "",
-    limitation: record?.limitation || "",
-    pages_crawled: Number(record?.pages_crawled || pages.length || 0),
-    pages_found: Number(record?.pages_found || pages.length || 0),
-    customer_summary: record?.customer_summary || record?.simple_summary || "",
-    simple_summary: record?.simple_summary || record?.customer_summary || "",
-    recommendations: fixes,
-    fixes,
-    findings: fixes,
-    top_recommended_actions: fixes.slice(0, 5).map(fixToAction).map(slimAction),
-    crawled_pages: pages,
-    pages,
-    scanned_pages: pages,
+    read_at: new Date().toISOString(),
+    raw: {},
+    parsed: { runtime: { ...data, updated_at: new Date().toISOString() } },
   };
 }
 
-function markDashboardScanStarted(activeUrl, scanId) {
-  try {
-    if (activeUrl) window.localStorage.setItem(ACTIVE_SCAN_URL_KEY, activeUrl);
-    window.localStorage.setItem(ACTIVE_SCAN_STARTED_AT_KEY, new Date().toISOString());
-    if (scanId) window.localStorage.setItem("seo_autopilot:active_scan_id", scanId);
-    window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
-  } catch (storageError) {
-    console.warn("Could not mark the dashboard scan as started.", storageError);
-  }
-}
-
-function clearAllDashboardScanData() {
-  try {
-    [DASHBOARD_LAST_SCAN_KEY, LEGACY_LAST_SCAN_KEY, DASHBOARD_HISTORY_KEY, LEGACY_HISTORY_KEY, ACTIVE_SCAN_URL_KEY, ACTIVE_SCAN_STARTED_AT_KEY, SCAN_DEBUG_KEY].forEach((key) => window.localStorage.removeItem(key));
-    window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
-  } catch (storageError) {
-    console.warn("Could not clear scan data.", storageError);
-  }
-}
-
-function writeScanDebug(data) {
-  try {
-    const fullDebug = { ...data, updated_at: new Date().toISOString(), local_storage_keys: { last_scan: DASHBOARD_LAST_SCAN_KEY, history: DASHBOARD_HISTORY_KEY, debug: SCAN_DEBUG_KEY }, compact_debug_enabled: true, download_json_enabled: true };
-    window.localStorage.setItem(SCAN_DEBUG_KEY, JSON.stringify(fullDebug));
-    window.dispatchEvent(new Event("seo-autopilot-scan-saved"));
-  } catch (storageError) {
-    console.warn("Could not write scan debug data.", storageError);
-  }
-}
-
-function readScanDebugData() {
-  if (typeof window === "undefined") return { raw: {}, parsed: {} };
-  const keys = [DASHBOARD_LAST_SCAN_KEY, LEGACY_LAST_SCAN_KEY, DASHBOARD_HISTORY_KEY, LEGACY_HISTORY_KEY, ACTIVE_SCAN_URL_KEY, ACTIVE_SCAN_STARTED_AT_KEY, SCAN_DEBUG_KEY];
-  const raw = {};
-  const parsed = {};
-  keys.forEach((key) => {
-    const value = window.localStorage.getItem(key);
-    raw[key] = value;
-    try { parsed[key] = value ? JSON.parse(value) : null; } catch { parsed[key] = value; }
-  });
-  return { read_at: new Date().toISOString(), raw, parsed };
+async function assertCurrentScanSession(identity, epoch, epochRef) {
+  const stale = () => Object.assign(new Error("The signed-in customer or project changed while this request was active."), { code: "stale_customer_session" });
+  if (!identity || epochRef.current !== epoch) throw stale();
+  const currentUser = await base44.auth.me();
+  if (String(currentUser?.id || "") !== String(identity.ownerId || "")) throw stale();
+  if (readCustomerActiveProject(currentUser.id) !== String(identity.projectId || "")) throw stale();
 }
 
 function buildCmsInstruction(cmsPlatform) {
@@ -785,13 +865,17 @@ function buildCmsActionPlan(cmsPlatform, cmsName, fixes) {
 
 function slimScannerData(scanner = {}) {
   if (!scanner) return null;
-  return { success: scanner.success, version: scanner.version || scanner.scanner_version, beta_revision_fingerprint: scanner.beta_revision_fingerprint || "", sampling_version: scanner.sampling_version || "", sampling_evidence: scanner.sampling_evidence || {}, website_url: scanner.website_url, scan_mode: scanner.scan_mode, pages_found: scanner.pages_found, pages_crawled: scanner.pages_crawled, queued_remaining: scanner.queued_remaining, health_score: scanner.health_score, seo_score: scanner.seo_score, crawl_policy_source: scanner.crawl_policy_source || scanner.crawl_policy?.source || scanner.technical_audit_summary?.crawl_policy?.source || "", crawl_policy: scanner.crawl_policy || scanner.technical_audit_summary?.crawl_policy || {}, url_evidence_summary: scanner.url_evidence_summary || scanner.technical_audit_summary?.url_evidence_summary || {}, verified_failed_pages: getFirstNumber([scanner.verified_failed_pages, scanner.scan_summary?.verified_failed_pages, scanner.technical_audit_summary?.verified_failed_pages]), suspicious_url_artifacts: getFirstNumber([scanner.suspicious_url_artifacts, scanner.scan_summary?.suspicious_url_artifacts, scanner.technical_audit_summary?.suspicious_url_artifacts]), technical_audit_summary: slimTechnicalSummary(scanner.technical_audit_summary || {}, scanner), crawl_warnings: firstArray([scanner.crawl_warnings]).slice(0, 10), recommendations_count: getRecommendations(scanner).length, pages_preview: getPages(scanner).slice(0, 12).map(slimPage), recommendations_preview: getRecommendations(scanner).slice(0, 18).map(slimFix) };
+  return { request_id: scanner.request_id || "", idempotency_key: scanner.idempotency_key || scanner.request_id || "", scan_id: scanner.scan_id || scanner.scan_run_id || "", scan_run_id: scanner.scan_run_id || scanner.scan_id || "", submitted_url: scanner.submitted_url || scanner.website_url || "", final_url: scanner.final_url || scanner.website_url || "", normalized_domain: scanner.normalized_domain || normalizedScanDomain(scanner.final_url || scanner.website_url), release_id: scanner.release_id || "", success: scanner.success, version: scanner.version || scanner.scanner_version, beta_revision_fingerprint: scanner.beta_revision_fingerprint || "", sampling_version: scanner.sampling_version || "", sampling_evidence: scanner.sampling_evidence || {}, website_url: scanner.website_url, scan_mode: scanner.scan_mode, pages_found: scanner.pages_found, pages_crawled: scanner.pages_crawled, queued_remaining: scanner.queued_remaining, health_score: scanner.health_score, seo_score: scanner.seo_score, crawl_policy_source: scanner.crawl_policy_source || scanner.crawl_policy?.source || scanner.technical_audit_summary?.crawl_policy?.source || "", crawl_policy: scanner.crawl_policy || scanner.technical_audit_summary?.crawl_policy || {}, url_evidence_summary: scanner.url_evidence_summary || scanner.technical_audit_summary?.url_evidence_summary || {}, verified_failed_pages: getFirstNumber([scanner.verified_failed_pages, scanner.scan_summary?.verified_failed_pages, scanner.technical_audit_summary?.verified_failed_pages]), suspicious_url_artifacts: getFirstNumber([scanner.suspicious_url_artifacts, scanner.scan_summary?.suspicious_url_artifacts, scanner.technical_audit_summary?.suspicious_url_artifacts]), technical_audit_summary: slimTechnicalSummary(scanner.technical_audit_summary || {}, scanner), crawl_warnings: firstArray([scanner.crawl_warnings]).slice(0, 10), recommendations_count: getRecommendations(scanner).length, pages_preview: getPages(scanner).slice(0, 12).map(slimPage), recommendations_preview: getRecommendations(scanner).slice(0, 18).map(slimFix) };
 }
 
 function slimAiData(ai = {}) {
   if (!ai) return null;
   const recommendations = getRecommendations(ai);
   return {
+    request_id: ai.request_id || "",
+    idempotency_key: ai.idempotency_key || ai.request_id || "",
+    scan_id: ai.scan_id || ai.scan_run_id || "",
+    scan_run_id: ai.scan_run_id || ai.scan_id || "",
     success: ai.success,
     ai_provider: ai.ai_provider || ai.provider || ai.debug?.provider || "",
     ai_review_backend: ai.ai_review_backend || "",

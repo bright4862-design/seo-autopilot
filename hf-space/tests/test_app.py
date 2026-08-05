@@ -1,3 +1,4 @@
+import app
 import pytest
 from app import (
     DEMO_SCAN,
@@ -6,8 +7,29 @@ from app import (
     extract_output_text,
     guided_answer,
     normalize_scan_result,
+    page_count_phrase,
+    run_scan_from_ui,
     validate_public_website_url,
 )
+
+
+def _live_scan(website: str, *, pages: int = 1) -> dict:
+    return {
+        "source": "live",
+        "website": website,
+        "status": "complete",
+        "score": 91,
+        "pages_crawled": pages,
+        "pages_retained": pages,
+        "grouped_fixes": 0,
+        "release_gate_eligible": True,
+        "score_is_provisional": False,
+        "priorities": [],
+    }
+
+
+def _ignore_progress(*args, **kwargs) -> None:
+    del args, kwargs
 
 
 def test_extract_output_text_from_responses_api():
@@ -175,3 +197,103 @@ def test_scanner_connection_enables_cloud_run_grok_proxy():
     assert settings.live_scan_enabled is True
     assert settings.live_grok_enabled is True
     assert settings.model_id == "xai/grok-4.20-non-reasoning"
+
+
+def test_page_count_phrase_uses_singular_only_for_one():
+    assert page_count_phrase(0) == "0 pages"
+    assert page_count_phrase(1) == "1 page"
+    assert page_count_phrase(2) == "2 pages"
+
+
+def test_success_then_failure_clears_previous_domain_and_grok_context(monkeypatch):
+    monkeypatch.setattr(
+        app,
+        "SETTINGS",
+        Settings(
+            scanner_api_url="https://scanner.example.run.app",
+            scanner_api_key="private-key",
+        ),
+    )
+
+    def fake_pipeline(website_url: str, scan_mode: str) -> dict:
+        assert scan_mode == "advanced"
+        if website_url == "https://alpha.example":
+            return _live_scan(website_url)
+        raise RuntimeError("beta transport failed")
+
+    monkeypatch.setattr(app, "run_scan_pipeline", fake_pipeline)
+
+    success = run_scan_from_ui(
+        "https://alpha.example",
+        "advanced",
+        {},
+        [],
+        _ignore_progress,
+    )
+    assert success[0]["website"] == "https://alpha.example"
+    assert "Authoritative" in success[3]
+    assert "1 page crawled" in success[3]
+    assert "1 page" in success[4][0]["content"]
+
+    failure = run_scan_from_ui(
+        "https://beta.example",
+        "advanced",
+        success[0],
+        success[4],
+        _ignore_progress,
+    )
+    assert failure[0] == {}
+    assert failure[4] == []
+    assert "beta transport failed" in failure[3]
+    assert "alpha.example" not in "".join(map(str, failure))
+    assert "No scan selected" in failure[1]
+
+
+def test_failure_then_success_loads_only_the_new_domain(monkeypatch):
+    monkeypatch.setattr(
+        app,
+        "SETTINGS",
+        Settings(
+            scanner_api_url="https://scanner.example.run.app",
+            scanner_api_key="private-key",
+        ),
+    )
+    attempts = iter(
+        [
+            RuntimeError("alpha scan failed"),
+            _live_scan("https://gamma.example", pages=2),
+        ]
+    )
+
+    def fake_pipeline(website_url: str, scan_mode: str) -> dict:
+        del website_url
+        assert scan_mode == "advanced"
+        result = next(attempts)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(app, "run_scan_pipeline", fake_pipeline)
+
+    failure = run_scan_from_ui(
+        "https://alpha.example",
+        "advanced",
+        _live_scan("https://stale.example"),
+        [{"role": "assistant", "content": "stale answer"}],
+        _ignore_progress,
+    )
+    assert failure[0] == {}
+    assert failure[4] == []
+
+    success = run_scan_from_ui(
+        "https://gamma.example",
+        "advanced",
+        failure[0],
+        failure[4],
+        _ignore_progress,
+    )
+    assert success[0]["website"] == "https://gamma.example"
+    assert "gamma.example" in success[1]
+    assert "stale.example" not in "".join(map(str, success))
+    assert "alpha.example" not in "".join(map(str, success))
+    assert "Authoritative" in success[3]

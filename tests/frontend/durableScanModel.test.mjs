@@ -40,6 +40,10 @@ test("ScanRun encodes the roadmap status lifecycle", () => {
   ]);
   assert.equal(scanRun.properties.status.default, "queued");
   assert.deepEqual(scanRun.required, ["project_id", "website_url"]);
+  // Existing production rows may contain an empty project_id. Enforce a
+  // nonblank id in the new-write path until a measured backfill makes a
+  // schema-level minLength migration safe.
+  assert.equal(Object.hasOwn(scanRun.properties.project_id, "minLength"), false);
 });
 
 test("ScanRun carries retry/resume/comparison lineage fields", () => {
@@ -110,5 +114,19 @@ test("all durable entities are owner-scoped and well-formed", () => {
     assert.equal(entity.type, "object");
     assert.ok(entity.properties.owner_user_id, `${name} must have owner_user_id`);
     assertOwnerScopedRls(entity);
+  }
+});
+
+test("tenant-owned entities bind creates to the caller and freeze owner reassignment", () => {
+  for (const name of ["BusinessProject", "ScanRun", "FixList", "FixItem"]) {
+    const entity = loadEntity(name);
+    const createRules = JSON.stringify(entity.rls.create);
+    assert.match(createRules, /data\.owner_user_id/, `${name} create must bind owner_user_id`);
+    assert.match(createRules, /\{\{user\.id\}\}/, `${name} create must bind the caller id`);
+    assert.equal(
+      entity.properties.owner_user_id.rls.update.user_condition.role,
+      "admin",
+      `${name}.owner_user_id must be immutable to customer clients`,
+    );
   }
 });

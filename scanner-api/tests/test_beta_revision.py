@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from app.beta_revision import (
+    SCANNER_BUILD_REVISION,
     build_revision_record,
     collect_component_versions,
     diff_versions,
@@ -34,6 +35,7 @@ def test_live_revision_shape():
     # Every component version must be a non-empty string.
     for key, value in revision["component_versions"].items():
         assert isinstance(value, str) and value, key
+    assert revision["component_versions"]["scanner_build_revision"] == SCANNER_BUILD_REVISION
 
 
 def test_fingerprint_is_order_independent():
@@ -49,6 +51,20 @@ def test_diff_versions_detects_change():
     drift = diff_versions(recorded, live)
     assert "scanner_version" in drift
     assert drift["scanner_version"]["live"] == "changed"
+
+
+def test_scanner_build_revision_participates_in_frozen_fingerprint():
+    recorded = build_revision_record()
+    live = build_revision_record()
+    live["component_versions"]["scanner_build_revision"] = "unknown_build"
+
+    drift = diff_versions(recorded, live)
+
+    assert fingerprint(recorded["component_versions"]) != fingerprint(live["component_versions"])
+    assert drift["scanner_build_revision"] == {
+        "recorded": SCANNER_BUILD_REVISION,
+        "live": "unknown_build",
+    }
 
 
 def test_beta_acceptance_manifest_wellformed():

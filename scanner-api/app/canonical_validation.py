@@ -8,7 +8,7 @@ from urllib.parse import urldefrag, urljoin, urlparse
 from .extract import extract_page
 from .redirect_validation import _comparable_origin_key
 from .robots_policy import SCANNER_USER_AGENT, SEARCH_USER_AGENT, annotate_robots_evidence
-from .security import is_public_http_url
+from .security import safe_get_once
 
 
 CANONICAL_TARGET_EVIDENCE_VERSION = "canonical_target_evidence_v2_origin_alias_equivalence"
@@ -108,18 +108,6 @@ def _evidence_from_page(page: dict, target: str, source: str = "crawl") -> dict:
 
 
 async def _fetch_target(client, target: str, robots_policy, deadline: float | None) -> dict:
-    if not is_public_http_url(target):
-        return {
-            "state": "invalid_target",
-            "target_url": target,
-            "status_code": 0,
-            "indexability_state": "Unknown",
-            "fetch_error": "invalid_or_non_public_canonical_target",
-            "location": "",
-            "target_canonical": "",
-            "evidence_source": "validation",
-        }
-
     googlebot_allowed = robots_policy.allowed(SEARCH_USER_AGENT, target)
     scanner_allowed = robots_policy.allowed(SCANNER_USER_AGENT, target)
     if googlebot_allowed is False:
@@ -160,7 +148,18 @@ async def _fetch_target(client, target: str, robots_policy, deadline: float | No
 
     timeout = DEFAULT_REQUEST_TIMEOUT_SECONDS if remaining is None else max(0.1, min(DEFAULT_REQUEST_TIMEOUT_SECONDS, remaining))
     try:
-        response = await asyncio.wait_for(client.get(target), timeout=timeout)
+        response = await asyncio.wait_for(safe_get_once(client, target), timeout=timeout)
+        if response is None:
+            return {
+                "state": "invalid_target",
+                "target_url": target,
+                "status_code": 0,
+                "indexability_state": "Unknown",
+                "fetch_error": "invalid_or_non_public_canonical_target",
+                "location": "",
+                "target_canonical": "",
+                "evidence_source": "validation",
+            }
     except Exception as exc:
         return {
             "state": "target_failed",

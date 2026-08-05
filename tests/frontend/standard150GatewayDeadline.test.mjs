@@ -3,9 +3,8 @@
 // The gateway and scanRuns.js cannot be imported under `node --test` (Deno
 // globals, "@/" aliases, browser boundaries), so the numeric constants are
 // extracted and the deadline inequalities are *computed*, not string-matched.
-// A previous version of this file asserted `crawl_timeout_ms` was forwarded to
-// Python, which was a fictional guarantee: scanner-api's ScanRequest never
-// declared that field, so pydantic dropped it.
+// The request-scoped timeout is now an authenticated, bounded scanner input;
+// the normal Standard 150 page cap and standalone 75s budget remain unchanged.
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";

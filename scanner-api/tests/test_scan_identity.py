@@ -94,3 +94,41 @@ def test_scan_rejects_conflicting_key_and_robots_bypass(monkeypatch):
         "respect_robots_txt": False,
     }, headers={"X-Scanner-Key": "test-scanner-key"})
     assert bypass.status_code == 400
+
+
+def test_scan_passes_request_scoped_timeout_to_scanner(monkeypatch, capsys):
+    from app import main
+
+    captured = {}
+
+    async def completed_scan(**kwargs):
+        captured.update(kwargs)
+        return {
+            "success": True,
+            "scanner_version": "python_scanner_v3_bounded_request",
+            "pages_crawled": 1,
+            "pages_found": 1,
+            "pages": [{"url": "https://example.com", "final_url": "https://example.com/"}],
+        }
+
+    async def unchanged_trust(result):
+        return result
+
+    monkeypatch.setattr(main, "run_scan", completed_scan)
+    monkeypatch.setattr(main, "enrich_scan_with_trust_pages", unchanged_trust)
+    monkeypatch.setattr(main, "SCANNER_API_KEY", "test-scanner-key")
+    response = TestClient(main.app).post(
+        "/scan",
+        json={
+            "website_url": "https://example.com",
+            "request_id": "req-budget",
+            "idempotency_key": "req-budget",
+            "scan_id": "scan-budget",
+            "advisory_crawl_timeout_ms": 40_000,
+        },
+        headers={"X-Scanner-Key": "test-scanner-key"},
+    )
+    assert response.status_code == 200
+    assert captured["timeout_seconds"] == 40.0
+    assert response.json()["requested_crawl_timeout_ms"] == 40_000
+    _events(capsys)

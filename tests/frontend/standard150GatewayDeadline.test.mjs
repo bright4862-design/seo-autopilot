@@ -111,9 +111,27 @@ test("3. every gateway-observed failure persists ScanRun as failed", () => {
 
 test("4. a complete or limited ScanRun is never overwritten", () => {
   assert.match(gateway, /PROTECTED_SCAN_STATUSES = new Set\(\["complete", "limited"\]\)/);
-  assert.match(gateway, /if \(PROTECTED_SCAN_STATUSES\.has\(String\(context\.scan\.status/);
   assert.match(scanRuns, /PROTECTED_SCAN_STATUSES = new Set\(\["complete", "limited"\]\)/);
   assert.match(scanRuns, /!PROTECTED_SCAN_STATUSES\.has\(String\(run\.status/);
+});
+
+test("4b. the terminal write re-reads status instead of trusting the stale snapshot", () => {
+  const fn = gateway.match(/async function failOwnedScanRun\([\s\S]*?\n\}/)?.[0] || "";
+  assert.ok(fn, "failOwnedScanRun not found");
+
+  // persistScanAuthority sets status "complete" from a separate invocation via
+  // asServiceRole, so context.scan.status (read up to ~90s earlier) is a TOCTOU.
+  const rereadIndex = fn.indexOf("ScanRun.get(context.scan.id)");
+  const guardIndex = fn.search(/PROTECTED_SCAN_STATUSES\.has\(currentStatus\)/);
+  const writeIndex = fn.indexOf("ScanRun.update(context.scan.id");
+  assert.ok(rereadIndex > -1, "must re-read ScanRun before the terminal write");
+  assert.ok(guardIndex > rereadIndex, "protected-status guard must use the re-read value");
+  assert.ok(writeIndex > guardIndex, "the write must happen after the guard");
+
+  // The guard must not be decided from the stale snapshot.
+  assert.doesNotMatch(fn, /PROTECTED_SCAN_STATUSES\.has\(String\(context\.scan\.status/);
+  // A failed re-read must refuse to write rather than clobber.
+  assert.match(fn, /skipped: "recheck_failed"/);
 });
 
 test("5. a stale active run becomes failed and frees the key for retry", () => {

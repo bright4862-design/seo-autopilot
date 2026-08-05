@@ -328,7 +328,25 @@ function customerStatusDetail(failureCode) {
 // closed browser cannot orphan the row.
 async function failOwnedScanRun({ base44, context, identity, failureCode }) {
   if (!context?.ok || !context.scan?.id) return { attempted: false, ok: false };
-  if (PROTECTED_SCAN_STATUSES.has(String(context.scan.status || "").toLowerCase())) {
+  // context.scan was read before the upstream call and can be ~90s stale by now.
+  // persistScanAuthority writes status "complete" from a separate invocation
+  // using asServiceRole, so the snapshot is not a safe basis for this decision.
+  // Re-read immediately before writing; if the re-read fails, refuse to write
+  // rather than risk clobbering a completed run.
+  let current = null;
+  try {
+    current = await base44.entities.ScanRun.get(context.scan.id);
+  } catch (error) {
+    console.error("runStandard150Scan terminal recheck failed", {
+      request_id: identity?.fields?.request_id,
+      scan_id: identity?.fields?.scan_id,
+      failure_code: failureCode,
+      update_error: String(error?.message || error || "unknown error").slice(0, 180),
+    });
+    return { attempted: false, ok: false, skipped: "recheck_failed" };
+  }
+  const currentStatus = String(current?.status ?? context.scan.status ?? "").toLowerCase();
+  if (!current || PROTECTED_SCAN_STATUSES.has(currentStatus)) {
     return { attempted: false, ok: false, skipped: "protected_status" };
   }
   try {

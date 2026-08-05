@@ -22,12 +22,30 @@ const scanRunSchema = JSON.parse(readFileSync(
 ));
 
 test("exactly one customer scanner is presented, and it is Standard 150", () => {
-  assert.match(scanFormSource, /Standard · 150/);
-  assert.equal(scanFormSource.match(/Standard · 150/g).length, 1);
+  // The selection card is gone: with a single scanner there is nothing to
+  // select, and a highlighted "chosen" card implied a choice that never
+  // existed. Scope is now stated once, as plain text.
+  assert.match(scanFormSource, /Scan depth: up to 150 pages · respects robots\.txt · read-only/);
+  assert.equal(scanFormSource.match(/SCAN_SPEC_LINE/g).length, 2); // definition + single render
+  assert.doesNotMatch(scanFormSource, /Standard · 150/);
   // No picker: no mode list, no mode array, no mode setter.
   assert.doesNotMatch(scanFormSource, /const SCAN_MODES/);
   assert.doesNotMatch(scanFormSource, /Scan size/);
   assert.doesNotMatch(scanFormSource, /setScanMode/);
+});
+
+test("no selectable scan-size control exists in the rendered DOM", () => {
+  // The only <select> on the page is the optional CMS field.
+  assert.equal((scanFormSource.match(/<select/g) || []).length, 1);
+  assert.match(scanFormSource, /id="fixlist-cms"/);
+  assert.doesNotMatch(scanFormSource, /type="range"|role="slider"|<Slider/);
+  for (const legacy of ["Quick", "Basic", "Deep", "Advanced", "Full Site"]) {
+    assert.doesNotMatch(
+      scanFormSource,
+      new RegExp(`>\\s*${legacy}\\b|"${legacy}"\\s*[,}\\]]`),
+      `legacy scan-size string must not render: ${legacy}`,
+    );
+  }
 });
 
 test("Premium 5,000 is not a selectable scan mode", () => {

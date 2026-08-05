@@ -374,7 +374,7 @@ export async function completeScanRun(handle, mergedRecord) {
     const fixList = savedFixList || await base44.entities.FixList.create({
         scan_run_id: handle.id,
         project_id: handle.project_id || "",
-        ...buildFixListFields(mergedRecord, fixes),
+        ...buildFixListFields(mergedRecord, fixes, { requireAuthorityProof: true }),
         ...owner,
       });
 
@@ -400,7 +400,13 @@ export async function completeScanRun(handle, mergedRecord) {
 
     const completedAt = new Date().toISOString();
     const scanRunFields = {
-      ...buildScanRunFields(mergedRecord, { status: deriveTerminalStatus(mergedRecord) }),
+      // This is the unsigned path: persistScanAuthority owns every sealed
+      // write. Without a verified proof the durable row must not advertise
+      // release authority, however current the scanner/review versions are.
+      ...buildScanRunFields(mergedRecord, {
+        status: deriveTerminalStatus(mergedRecord),
+        requireAuthorityProof: true,
+      }),
       ...identityFields,
       fix_list_id: fixList.id,
       completed_at: completedAt,

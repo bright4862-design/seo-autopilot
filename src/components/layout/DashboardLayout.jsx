@@ -2,10 +2,13 @@ import React from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/AuthContext";
 
+// Grok is disabled and unreachable for customers. The entry stays visible as
+// inert text so the navigation does not appear to lose a feature, but it is not
+// a link and exposes no route.
 const navigationItems = [
   { name: "Dashboard", href: "/dashboard" },
   { name: "New scan", href: "/onboarding" },
-  { name: "Ask Grok", href: "/assistant" },
+  { name: "Ask Grok · Coming soon", href: "", disabled: true },
   { name: "Billing", href: "/billing" },
 ];
 
@@ -57,6 +60,17 @@ export default function DashboardLayout() {
 
           <nav className="ml-auto flex min-w-0 items-center gap-3 overflow-x-auto whitespace-nowrap sm:gap-5" aria-label="Account navigation">
             {navigationItems.map((item) => {
+              if (item.disabled) {
+                return (
+                  <span
+                    key={item.name}
+                    aria-disabled="true"
+                    className="cursor-default text-[12.5px] font-medium text-ink-faint/60 sm:text-[13px]"
+                  >
+                    {item.name}
+                  </span>
+                );
+              }
               const active = isActive(item.href);
               return (
                 <Link

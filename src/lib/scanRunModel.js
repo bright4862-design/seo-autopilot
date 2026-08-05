@@ -142,7 +142,22 @@ export function fixLineageKey(fix = {}) {
     .toLowerCase();
 }
 
-export function buildScanRunFields(record = {}, { status } = {}) {
+const AUTHORITY_PROOF_RE = /^[a-f0-9]{64}$/;
+
+// A durable seal written by persistScanAuthority, which verifies a signed
+// review attestation and re-reads every row before reporting success.
+// Checked as stored, not normalised: the contract is 64 lowercase hex, so an
+// uppercase or mixed-case value is a proof this pipeline did not write and
+// must not be silently accepted.
+export function hasAuthorityProof(record = {}) {
+  return AUTHORITY_PROOF_RE.test(toStr(record.authority_proof));
+}
+
+// requireAuthorityProof: pass true on any path that writes the durable record.
+// The version markers below are computed in the browser from response fields,
+// so they are a necessary precondition for release authority but prove nothing
+// on their own -- only the server seal does.
+export function buildScanRunFields(record = {}, { status, requireAuthorityProof = false } = {}) {
   const pageLimit = modePageLimit(record.scan_mode);
   const authorityMarkers = buildDiagnosticAuthorityMarkers(record);
   const scannerVersion = toStr(record.scanner_version || record.technical_audit_summary?.scanner_version || record.debug?.scanner_version);
@@ -175,7 +190,13 @@ export function buildScanRunFields(record = {}, { status } = {}) {
     && calibrationVersion === CURRENT_CALIBRATION_VERSION
     && record.evidence_quality_blocking !== true
     && authorityMarkers.beta_revision_fingerprint === CURRENT_BETA_REVISION_FINGERPRINT;
-  const releaseGateEligible = inferredReleaseGateEligible;
+  // Durable writes must never claim release authority the server has not
+  // sealed. ScanRun 6a7378546447b124a1afd2d5 was written release_gate_eligible
+  // with authority_proof null because this value was re-inferred from version
+  // strings, silently discarding the explicit false the caller had set.
+  const releaseGateEligible = requireAuthorityProof
+    ? inferredReleaseGateEligible && hasAuthorityProof(record)
+    : inferredReleaseGateEligible;
   return {
     status: status || terminalStatus,
     status_detail: toStr(record.scan_status),
@@ -223,9 +244,9 @@ export function buildScanRunFields(record = {}, { status } = {}) {
   };
 }
 
-export function buildFixListFields(record = {}, fixes = getFixRecommendations(record)) {
+export function buildFixListFields(record = {}, fixes = getFixRecommendations(record), { requireAuthorityProof = false } = {}) {
   const counts = { critical: 0, high: 0, medium: 0, low: 0 };
-  const releaseGateEligible = buildScanRunFields(record).release_gate_eligible;
+  const releaseGateEligible = buildScanRunFields(record, { requireAuthorityProof }).release_gate_eligible;
   for (const fix of fixes) {
     const priority = toStr(fix.priority).toLowerCase();
     if (priority in counts) counts[priority] += 1;

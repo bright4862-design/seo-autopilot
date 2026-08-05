@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import {
   AlertCircle,
   Bug,
-  CheckCircle2,
   Copy,
   Download,
   FileJson,
@@ -37,6 +36,9 @@ const AI_REVIEW_FUNCTION = "aiReviewScan";
 // customer-controlled scanner budget. The gateway owns the Python compatibility
 // translation, so the frontend never sends "advanced" as the customer mode.
 const STANDARD_SCAN_MODE = "standard_150";
+// The single customer-facing statement of scan scope. There is no scanner-size
+// selector and no selectable scan-size control anywhere in the DOM.
+const SCAN_SPEC_LINE = "Scan depth: up to 150 pages · respects robots.txt · read-only";
 const STANDARD_SCAN_BUDGET = Object.freeze({ max_pages: 150, max_browser_render_attempts: 1, crawl_timeout_ms: 90000 });
 
 const CMS_OPTIONS = [
@@ -71,6 +73,10 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   const [activeStep, setActiveStep] = useState("");
   const [error, setError] = useState("");
   const [debugOpen, setDebugOpen] = useState(false);
+  const [urlError, setUrlError] = useState("");
+  // Debug tooling is internal-only. Customers never see it unless they opt in
+  // explicitly via ?debug=1 or an internal build flag.
+  const debugVisible = useMemo(() => isDebugRequested(), []);
   const [debugData, setDebugData] = useState(() => emptyRuntimeDebug());
   const debugDataRef = useRef(debugData);
   const submitLockRef = useRef(false);
@@ -120,6 +126,17 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
     };
   }, []);
 
+  // Accepts "example.com" and normalises it to a full https:// URL on blur, so
+  // the customer sees exactly what will be scanned before they submit.
+  function handleWebsiteUrlBlur() {
+    const raw = String(websiteUrl || "").trim();
+    if (!raw) { setUrlError(""); return; }
+    const normalized = normalizeWebsiteUrl(raw);
+    if (!normalized) { setUrlError(INVALID_URL_MESSAGE); return; }
+    setWebsiteUrl(normalized);
+    setUrlError("");
+  }
+
   async function copyDebugData(compact = debugCompressed) {
     try {
       const snapshot = debugDataRef.current;
@@ -157,10 +174,14 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
     const submittedUrl = String(websiteUrl || "").trim();
     const normalizedUrl = normalizeWebsiteUrl(websiteUrl);
     const requestedPathPrefix = getRequestedPathPrefix(normalizedUrl);
-    const trimmedBusinessName = businessName.trim();
+    // Optional field: fall back to the site's hostname so downstream project
+    // identity and review context always have a usable name.
+    const trimmedBusinessName = businessName.trim() || safeHostname(normalizedUrl).replace(/^www\./, "");
     const cmsName = selectedCms?.label || "Custom / Not sure";
-    if (!normalizedUrl) { setError("Enter a valid website URL."); return; }
-    if (!trimmedBusinessName) { setError("Enter the business or website name."); return; }
+    // Inline validation runs before any network work: no access check, no
+    // ScanRun, and no request_id is spent on an invalid URL.
+    if (!normalizedUrl) { setUrlError(INVALID_URL_MESSAGE); return; }
+    setUrlError("");
 
     // Access gate runs before any durable scan identity is created, so a blocked
     // customer never consumes a request_id or leaves a queued ScanRun behind.
@@ -393,22 +414,24 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   }
 
   return (
-    <div className="space-y-6">
-      <form onSubmit={handleSubmit} className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="flex items-start gap-3">
-            <div className="rounded-2xl bg-indigo-50 p-3 text-indigo-600"><Search className="h-6 w-6" /></div>
-            <div>
-              <p className="text-sm font-medium text-slate-500">FixList scan</p>
-              <h2 className="mt-1 text-2xl font-bold text-slate-950">Create your FixList</h2>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">Enter a website URL and we’ll turn the scan into a plain-English list of what to fix, what matters most, and what may need a developer.</p>
-              <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600"><ShieldCheck className="h-3.5 w-3.5 text-indigo-600" />Read-only scan — FixList never logs in or changes your website.</div>
-            </div>
+    <div className="mx-auto w-full max-w-[640px]">
+      <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-8">
+        <div className="flex flex-col gap-3">
+          <h1 className="text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">Create your FixList</h1>
+          <p className="text-base leading-7 text-slate-600">Enter a website URL and we’ll turn the scan into a plain-English list of what to fix, what matters most, and what may need a developer.</p>
+          <div className="inline-flex w-fit items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600">
+            <ShieldCheck className="h-3.5 w-3.5 text-indigo-600" />
+            Read-only scan — FixList never logs in or changes your website.
           </div>
-          <Button type="button" variant="outline" onClick={() => { refreshDebugData(); setDebugOpen((value) => !value); }} className="shrink-0"><Bug className="mr-2 h-4 w-4" />{debugOpen ? "Hide debug" : "Show debug"}</Button>
         </div>
 
-        {debugOpen ? (
+        {debugVisible ? (
+          <div className="flex justify-end">
+            <Button type="button" variant="outline" onClick={() => { refreshDebugData(); setDebugOpen((value) => !value); }} className="shrink-0"><Bug className="mr-2 h-4 w-4" />{debugOpen ? "Hide debug" : "Show debug"}</Button>
+          </div>
+        ) : null}
+
+        {debugVisible && debugOpen ? (
           <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
@@ -430,43 +453,74 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
           </div>
         ) : null}
 
-        <div className="mt-6 grid gap-5">
-          <div className="grid gap-5 lg:grid-cols-2">
-            <div><label className="text-sm font-medium text-slate-700">Website URL</label><Input value={websiteUrl} onChange={(event) => setWebsiteUrl(event.target.value)} placeholder="https://www.example.com/" disabled={isLoading} className="mt-2" /></div>
-            <div><label className="text-sm font-medium text-slate-700">Business or website name</label><Input value={businessName} onChange={(event) => setBusinessName(event.target.value)} placeholder="Example Business" disabled={isLoading} className="mt-2" /></div>
+        <div className="flex flex-col gap-6">
+          <div>
+            <label htmlFor="fixlist-website-url" className="text-sm font-medium text-slate-700">Website URL</label>
+            <Input
+              id="fixlist-website-url"
+              value={websiteUrl}
+              onChange={(event) => { setWebsiteUrl(event.target.value); if (urlError) setUrlError(""); }}
+              onBlur={handleWebsiteUrlBlur}
+              placeholder="example.com"
+              inputMode="url"
+              autoComplete="url"
+              aria-invalid={Boolean(urlError)}
+              aria-describedby={urlError ? "fixlist-website-url-error" : undefined}
+              disabled={isLoading}
+              className={`mt-2 h-11 rounded-lg border bg-white px-3 text-slate-950 shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 ${urlError ? "border-red-400 focus-visible:ring-red-300" : "border-slate-300 focus-visible:border-indigo-500 focus-visible:ring-indigo-200"}`}
+            />
+            {urlError ? (
+              <p id="fixlist-website-url-error" className="mt-2 flex items-start gap-1.5 text-sm text-red-700">
+                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{urlError}
+              </p>
+            ) : null}
           </div>
 
-          <div className="rounded-2xl border border-indigo-500 bg-indigo-50 p-4 ring-2 ring-indigo-100">
-            <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-indigo-600" /><span className="font-semibold text-slate-950">Standard · 150</span></div>
-            <p className="mt-2 text-xs leading-5 text-slate-600">A complete, prioritized scan of up to 150 pages.</p>
+          <div>
+            <label htmlFor="fixlist-business-name" className="text-sm font-medium text-slate-700">Business or website name (optional)</label>
+            <Input
+              id="fixlist-business-name"
+              value={businessName}
+              onChange={(event) => setBusinessName(event.target.value)}
+              placeholder="Example Business"
+              autoComplete="organization"
+              disabled={isLoading}
+              className="mt-2 h-11 rounded-lg border border-slate-300 bg-white px-3 text-slate-950 shadow-sm transition focus-visible:border-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200 focus-visible:ring-offset-1"
+            />
           </div>
 
-          <button type="button" onClick={() => setOptionalOpen((value) => !value)} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-100">{optionalOpen ? "Hide optional settings" : "Optional: personalize your FixList"}</button>
+          <p className="text-sm text-slate-500">{SCAN_SPEC_LINE}</p>
+        </div>
 
+        {error ? <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"><div className="flex items-start gap-2"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span>{error}</span></div></div> : null}
+        {isLoading ? <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-4 text-sm text-indigo-950"><div className="flex items-center gap-3"><Loader2 className="h-4 w-4 animate-spin" /><span>{activeStep || "Running scan..."}</span></div></div> : null}
+
+        <div className="flex flex-col gap-3">
+          <Button type="submit" disabled={isLoading} className="h-11 w-full bg-indigo-600 text-white hover:bg-indigo-700 sm:w-auto sm:self-start sm:px-6">{isLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Building FixList...</> : <><Search className="mr-2 h-4 w-4" />Create FixList</>}</Button>
+          <p className="text-sm text-slate-600">Takes about 2–4 minutes. You can leave this page — we’ll save your list.</p>
+          <p className="text-xs text-slate-500">Scans up to 150 pages. Larger sites coming soon.</p>
+        </div>
+
+        <div className="border-t border-slate-200 pt-6">
+          <button type="button" onClick={() => setOptionalOpen((value) => !value)} aria-expanded={optionalOpen} className="text-sm font-medium text-slate-600 underline-offset-4 transition hover:text-slate-900 hover:underline">
+            {optionalOpen ? "Hide optional settings" : "Optional: personalize your FixList"}
+          </button>
           {optionalOpen ? (
-            <div className="grid gap-5 rounded-3xl border border-slate-200 bg-slate-50 p-4 lg:grid-cols-2">
+            <div className="mt-6 flex flex-col gap-6">
               <div>
-                <label className="text-sm font-medium text-slate-700">CMS / website builder</label>
-                <select value={cmsPlatform} onChange={(event) => setCmsPlatform(event.target.value)} disabled={isLoading} className="mt-2 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-950 shadow-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:bg-slate-50">
+                <label htmlFor="fixlist-cms" className="text-sm font-medium text-slate-700">CMS / website builder</label>
+                <select id="fixlist-cms" value={cmsPlatform} onChange={(event) => setCmsPlatform(event.target.value)} disabled={isLoading} className="mt-2 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-950 shadow-sm outline-none transition focus-visible:border-indigo-500 focus-visible:ring-2 focus-visible:ring-indigo-200 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:bg-slate-50">
                   {CMS_OPTIONS.map((cms) => <option key={cms.value} value={cms.value}>{cms.label}</option>)}
                 </select>
-                <p className="mt-1 text-xs text-slate-500">We’ll tailor every fix to your CMS — where to click and what to change.</p>
+                <p className="mt-2 text-xs text-slate-500">We’ll tailor every fix to your CMS — where to click and what to change.</p>
               </div>
               <div>
-                <label className="text-sm font-medium text-slate-700">Important keywords</label>
-                <textarea value={keywordsText} onChange={(event) => setKeywordsText(event.target.value)} placeholder={"local service\nbest product\nnear me"} disabled={isLoading} rows={4} className="mt-2 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:bg-slate-50" />
-                <p className="mt-1 text-xs text-slate-500">Optional. We’ll check whether your pages clearly target these searches.</p>
+                <label htmlFor="fixlist-keywords" className="text-sm font-medium text-slate-700">Important keywords</label>
+                <textarea id="fixlist-keywords" value={keywordsText} onChange={(event) => setKeywordsText(event.target.value)} placeholder={"local service\nbest product\nnear me"} disabled={isLoading} rows={4} className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 shadow-sm outline-none transition placeholder:text-slate-400 focus-visible:border-indigo-500 focus-visible:ring-2 focus-visible:ring-indigo-200 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:bg-slate-50" />
+                <p className="mt-2 text-xs text-slate-500">Optional. We’ll check whether your pages clearly target these searches.</p>
               </div>
             </div>
           ) : null}
-        </div>
-
-        {error ? <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800"><div className="flex items-start gap-2"><AlertCircle className="mt-0.5 h-4 w-4" /><span>{error}</span></div></div> : null}
-        {isLoading ? <div className="mt-6 rounded-2xl border border-indigo-100 bg-indigo-50 p-4 text-sm text-indigo-950"><div className="flex items-center gap-3"><Loader2 className="h-4 w-4 animate-spin" /><span>{activeStep || "Running scan..."}</span></div></div> : null}
-
-        <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <Button type="submit" disabled={isLoading} className="bg-indigo-600 text-white hover:bg-indigo-700">{isLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Building FixList...</> : <><Search className="mr-2 h-4 w-4" />Create FixList</>}</Button>
-          <p className="text-xs text-slate-500">Standard scans up to 150 pages. Premium large-site scans will be enabled after production benchmarking.</p>
         </div>
       </form>
     </div>
@@ -1209,6 +1263,18 @@ function createScanId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
   return `scan_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
+const INVALID_URL_MESSAGE = "Enter a valid website address, like example.com";
+
+// Debug tooling stays internal: ?debug=1 in the URL, or an internal build flag.
+function isDebugRequested() {
+  try {
+    if (import.meta.env?.VITE_INTERNAL_DEBUG === "1") return true;
+    return new URLSearchParams(globalThis.location?.search || "").get("debug") === "1";
+  } catch {
+    return false;
+  }
+}
+
 function normalizeWebsiteUrl(value) { const raw = String(value || "").trim(); if (!raw) return ""; try { return new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).href; } catch { return ""; } }
 function normalizeWebsiteKey(value) { try { const url = new URL(value); return `${url.hostname}${url.pathname}`.replace(/\/$/, "").toLowerCase(); } catch { return String(value || "").toLowerCase(); } }
 function getRequestedPathPrefix(value) { try { const path = new URL(value).pathname || "/"; if (!path || path === "/") return ""; return path.replace(/\/$/, ""); } catch { return ""; } }

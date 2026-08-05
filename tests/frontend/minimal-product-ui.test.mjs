@@ -4,17 +4,29 @@ import test from "node:test";
 
 const app = readFileSync("src/App.jsx", "utf8");
 const onboarding = readFileSync("src/pages/Onboarding.jsx", "utf8");
-const scannerCss = readFileSync("src/styles/scanner-minimal.css", "utf8");
 const layout = readFileSync("src/components/layout/DashboardLayout.jsx", "utf8");
 const billing = readFileSync("src/pages/Billing.jsx", "utf8");
+const scanForm = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
 
-test("scanner uses the shared narrow paper-and-ink surface", () => {
-  assert.match(onboarding, /scanner-minimal\.css/);
-  assert.match(onboarding, /className="scanner-minimal"/);
-  assert.match(scannerCss, /max-width:\s*680px/);
-  assert.match(scannerCss, /background:\s*transparent\s*!important/);
-  assert.match(scannerCss, /button\[type="submit"\]/);
-  assert.match(scannerCss, /border-bottom:\s*1px solid rgba\(28, 25, 23/);
+// scanner-minimal.css was deleted. It restyled the form through positional
+// selectors (`form > div:first-child > div:first-child > div:first-child`),
+// which stripped the input borders and left the selection-card thumb behind
+// once the card itself was removed. Layout now lives with the markup.
+test("the New Scan page owns its own centred layout, with no override stylesheet", () => {
+  // Comments may explain why the stylesheet is gone; code may not import it.
+  const onboardingCode = onboarding
+    .split("\n")
+    .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+    .join("\n");
+  assert.doesNotMatch(onboardingCode, /scanner-minimal/);
+  assert.match(onboarding, /max-w-\[640px\]/);
+  assert.match(scanForm, /max-w-\[640px\]/);
+});
+
+test("inputs are bordered and expose a visible focus ring", () => {
+  assert.match(scanForm, /border-slate-300/);
+  assert.match(scanForm, /focus-visible:ring-2/);
+  assert.match(scanForm, /focus-visible:ring-indigo-200/);
 });
 
 test("dashboard shell stays lightweight, sticky, and keyboard-aware", () => {

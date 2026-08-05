@@ -101,3 +101,57 @@ test("the frontend re-evaluates the completed record instead of AND-ing the scan
   assert.match(source, /navigate\(`\/dashboard\?scan=complete&scan_id=\$\{encodeURIComponent\(scanId\)\}`\)/);
   assert.doesNotMatch(source, /saveScanForDashboard|localStorage\.setItem/);
 });
+
+// Regression: ScanRun 6a7378546447b124a1afd2d5 was written with
+// release_gate_eligible true and is_authoritative true while authority_proof
+// was null on the run, its FixList, and all 18 FixItems. The durable write
+// re-inferred eligibility from version strings, discarding the explicit false
+// the caller had already set. Version markers are a precondition; only the
+// server seal from persistScanAuthority is authority.
+test("a durable write cannot claim release authority without a server seal", () => {
+  assert.equal(
+    buildScanRunFields(authoritativeRecord, { requireAuthorityProof: true }).release_gate_eligible,
+    false
+  );
+  assert.equal(
+    buildFixListFields(authoritativeRecord, undefined, { requireAuthorityProof: true }).is_authoritative,
+    false
+  );
+});
+
+test("a durable write with a valid 64-hex seal keeps release authority", () => {
+  const sealed = { ...authoritativeRecord, authority_proof: "a".repeat(64) };
+  assert.equal(buildScanRunFields(sealed, { requireAuthorityProof: true }).release_gate_eligible, true);
+  assert.equal(
+    buildFixListFields(sealed, undefined, { requireAuthorityProof: true }).is_authoritative,
+    true
+  );
+});
+
+test("malformed or truncated proofs are not accepted as a seal", () => {
+  for (const authority_proof of ["", "not-a-proof", "A".repeat(64), "a".repeat(63), "a".repeat(65)]) {
+    assert.equal(
+      buildScanRunFields({ ...authoritativeRecord, authority_proof }, { requireAuthorityProof: true }).release_gate_eligible,
+      false,
+      `proof must be rejected: ${JSON.stringify(authority_proof)}`
+    );
+  }
+});
+
+test("a seal cannot rescue a record that fails the version preconditions", () => {
+  const sealedButStale = {
+    ...authoritativeRecord,
+    authority_proof: "a".repeat(64),
+    beta_revision_fingerprint: "f9bac4b89ec7c1d8",
+  };
+  assert.equal(
+    buildScanRunFields(sealedButStale, { requireAuthorityProof: true }).release_gate_eligible,
+    false
+  );
+});
+
+test("the unsigned durable write path requires the seal", () => {
+  const scanRuns = readFileSync(new URL("../../src/lib/scanRuns.js", import.meta.url), "utf8");
+  assert.match(scanRuns, /buildScanRunFields\(mergedRecord, \{[\s\S]*?requireAuthorityProof: true,?[\s\S]*?\}\)/);
+  assert.match(scanRuns, /buildFixListFields\(mergedRecord, fixes, \{ requireAuthorityProof: true \}\)/);
+});

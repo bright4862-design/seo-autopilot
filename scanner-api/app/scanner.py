@@ -67,8 +67,44 @@ SITEMAP_DISCOVERY_LIMIT = 5000
 TRUST_PATHS = ["/about", "/contact", "/privacy", "/terms", "/security", "/legal", "/mentions-legales", "/cgv"]
 
 
-async def run_scan(website_url: str, path_prefix: str | None = None, scan_mode: str = "advanced", concurrency: int = 8, **kwargs) -> dict:
-    budget = SCAN_BUDGETS.get(str(scan_mode or "advanced").lower(), SCAN_BUDGETS["advanced"])
+def resolve_scan_budget(scan_mode: str, timeout_seconds: float | None = None) -> dict:
+    """Return a per-request copy of the mode budget.
+
+    Standard 150 normally owns a 75-second backend ceiling. A trusted gateway may
+    request a shorter ceiling so the scanner can return collected evidence before
+    the gateway platform kills the request. The override can only reduce runtime;
+    it never raises the mode limit or page cap.
+    """
+    base = SCAN_BUDGETS.get(str(scan_mode or "advanced").lower(), SCAN_BUDGETS["advanced"])
+    budget = dict(base)
+    if timeout_seconds is None:
+        return budget
+    try:
+        requested = float(timeout_seconds)
+    except (TypeError, ValueError):
+        return budget
+    bounded = max(20.0, min(float(base["timeout"]), requested))
+    budget["timeout"] = bounded
+    budget["fetch_timeout"] = min(
+        float(base.get("fetch_timeout", 10)),
+        max(3.0, min(6.0, bounded / 8.0)),
+    )
+    budget["max_sitemap_fetches"] = min(
+        int(base.get("max_sitemap_fetches", 10)),
+        max(6, int(bounded // 2)),
+    )
+    return budget
+
+
+async def run_scan(
+    website_url: str,
+    path_prefix: str | None = None,
+    scan_mode: str = "advanced",
+    concurrency: int = 8,
+    timeout_seconds: float | None = None,
+    **kwargs,
+) -> dict:
+    budget = resolve_scan_budget(scan_mode, timeout_seconds)
     fetch_timeout = float(budget.get("fetch_timeout", min(10, max(3, budget["timeout"] / 5))))
     max_sitemap_fetches = int(budget.get("max_sitemap_fetches", 10))
     scan_started_at = time.monotonic()

@@ -69,6 +69,9 @@ class ScanRequest(BaseModel):
     submitted_url: str | None = None
     normalized_domain: str | None = None
     respect_robots_txt: bool = True
+    # Trusted-gateway runtime cap. This may only reduce the scanner's normal
+    # advanced budget; scanner.py clamps it to the safe 20s..75s range.
+    advisory_crawl_timeout_ms: int | None = Field(default=None, ge=20_000, le=75_000)
 
 
 class ChatRequest(BaseModel):
@@ -236,14 +239,23 @@ async def scan(payload: ScanRequest, x_scanner_key: str | None = Header(default=
         scan_run_id=scan_id,
     )
     try:
+        request_timeout_seconds = (
+            float(payload.advisory_crawl_timeout_ms) / 1000.0
+            if payload.advisory_crawl_timeout_ms is not None
+            else None
+        )
         result = await run_scan(
             website_url=payload.website_url,
             path_prefix=payload.path_prefix,
             scan_mode=payload.scan_mode,
             business_name=payload.business_name or "",
             cms_platform=payload.cms_platform or "",
+            timeout_seconds=request_timeout_seconds,
         )
         trust_timeout = TRUST_DISCOVERY_TIMEOUTS.get(str(payload.scan_mode or "advanced").lower(), 7.0)
+        if request_timeout_seconds is not None:
+            # Keep post-crawl trust enrichment inside the gateway-safe envelope.
+            trust_timeout = min(trust_timeout, 3.0)
         try:
             result = await asyncio.wait_for(enrich_scan_with_trust_pages(result), timeout=trust_timeout)
         except asyncio.TimeoutError:
@@ -255,6 +267,8 @@ async def scan(payload: ScanRequest, x_scanner_key: str | None = Header(default=
         result = apply_render_evidence_quality(result)
         result = enforce_scan_response_page_budget(result, payload.scan_mode)
         result["beta_revision_fingerprint"] = live_revision()["fingerprint"]
+        if payload.advisory_crawl_timeout_ms is not None:
+            result["requested_crawl_timeout_ms"] = int(payload.advisory_crawl_timeout_ms)
         pages = result.get("crawled_pages") or result.get("pages") or []
         first_page = pages[0] if isinstance(pages, list) and pages else {}
         final_url = str(

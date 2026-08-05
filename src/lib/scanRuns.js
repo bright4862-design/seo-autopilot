@@ -22,7 +22,7 @@ async function currentOwner() {
 
 // Starts durable tracking for a scan. Returns a handle ({ id, project_id,
 // owner_user_id, previous_scan_id }) or null when persistence is unavailable.
-export async function beginScanRun({ projectId, websiteUrl, pathPrefix, scanMode, scanSource }) {
+export async function beginScanRun({ projectId, websiteUrl, pathPrefix, scanSource }) {
   try {
     const owner = await currentOwner();
     if (!projectId) {
@@ -49,7 +49,7 @@ export async function beginScanRun({ projectId, websiteUrl, pathPrefix, scanMode
       project_id: projectId || "",
       website_url: websiteUrl,
       path_prefix: pathPrefix || "",
-      scan_mode: scanMode === "standard_150" ? "standard_150" : "standard_150",
+      scan_mode: "standard_150",
       scan_source: scanSource || "scan_website_page",
       status: "crawling",
       previous_scan_id: previousScanId,

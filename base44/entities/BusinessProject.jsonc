@@ -79,7 +79,14 @@
       "default": "free"
     },
     "owner_user_id": {
-      "type": "string"
+      "type": "string",
+      "rls": {
+        "update": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
     }
   },
   "required": [
@@ -95,9 +102,7 @@
           }
         },
         {
-          "user_condition": {
-            "role": "user"
-          }
+          "data.owner_user_id": "{{user.id}}"
         }
       ]
     },

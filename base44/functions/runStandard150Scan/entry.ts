@@ -11,21 +11,22 @@ const MAX_PAGES = 150;
 //   PYTHON_CRAWL_BUDGET_MS + UPSTREAM_RESPONSE_RESERVE_MS
 //     < upstreamTimeoutMs
 //     < upstreamTimeoutMs + RESPONSE_RESERVE_MS
+//     < FUNCTION_RESPONSE_BUDGET_MS
 //     < BROWSER_DEADLINE_MS
 //
-// The Python service pins the advanced/standard_150 crawl budget at 75s in
-// scanner-api/app/scanner.py (SCAN_BUDGETS["advanced"]["timeout"]). Its
-// ScanRequest model does NOT declare crawl_timeout_ms, so any value the gateway
-// sends is dropped by pydantic. The gateway therefore cannot cap Python; it can
-// only guarantee it waits longer than Python's own fixed budget plus the time
-// Python needs to serialize up to 150 pages.
-const PYTHON_CRAWL_BUDGET_MS = 75_000;
-// Browser deadline is crawl_timeout_ms (90_000) + 15_000 in ScanWebsiteForm.
+// Python's normal Standard/advanced cap remains 75 seconds and 150 pages. The
+// authenticated gateway now supplies a smaller per-request runtime cap so the
+// scanner returns whatever evidence it collected before Base44's function
+// lifetime can kill the request. This changes time, never the 150-page maximum.
+const PYTHON_CRAWL_BUDGET_MS = 40_000;
+// Browser deadline remains 105s; the gateway must finish much earlier.
 const BROWSER_DEADLINE_MS = 105_000;
-const FUNCTION_RESPONSE_BUDGET_MS = 95_000;
+const FUNCTION_RESPONSE_BUDGET_MS = 55_000;
 const RESPONSE_RESERVE_MS = 5_000;
 const UPSTREAM_RESPONSE_RESERVE_MS = 4_000;
-const SCAN_ATTESTATION_VERSION = "standard_scan_result_hmac_v1";
+const REVIEW_PAGE_SAMPLE_LIMIT = 60;
+const REVIEW_FINDING_LIMIT = 100;
+const SCAN_ATTESTATION_VERSION = "standard_scan_review_payload_hmac_v2";
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -78,8 +79,8 @@ Deno.serve(async (req) => {
 
     const remainingMs = FUNCTION_RESPONSE_BUDGET_MS - (Date.now() - startedAt);
     const upstreamTimeoutMs = remainingMs - RESPONSE_RESERVE_MS;
-    // We must outlast Python's own fixed crawl budget plus its response
-    // serialization, or we abort a scan that was going to succeed.
+    // We must outlast the request-scoped Python budget plus serialization,
+    // while still returning before Base44 can kill the function.
     if (upstreamTimeoutMs <= PYTHON_CRAWL_BUDGET_MS + UPSTREAM_RESPONSE_RESERVE_MS) {
       return await unavailable({ base44, context, identity, startedAt, failureCode: "insufficient_gateway_budget" });
     }
@@ -97,9 +98,8 @@ Deno.serve(async (req) => {
       submitted_url: identity.fields.submitted_url || websiteUrl,
       normalized_domain: identity.fields.normalized_domain,
       respect_robots_txt: true,
-      // ADVISORY ONLY. scanner-api's ScanRequest does not declare this field, so
-      // pydantic drops it and Python continues to use its own 75s budget. Sent
-      // for forward compatibility and log correlation; it caps nothing today.
+      // Authenticated request-scoped cap. Python clamps this to 20s..75s and
+      // preserves the Standard 150 page maximum.
       advisory_crawl_timeout_ms: PYTHON_CRAWL_BUDGET_MS,
     };
 
@@ -220,17 +220,19 @@ async function attachScanAttestation({ base44, user, result, context }) {
   if (!secret) return unsignedResult(result, "signing_key_not_configured");
   try {
     const unsigned = withoutAuthorityAttestation(result);
+    const reviewPayload = buildAuthorityReviewPayload(unsigned);
     const document = {
       version: SCAN_ATTESTATION_VERSION,
       owner_user_id: String(user.id),
       scan_id: String(context.scan.id),
       project_id: String(context.scan.project_id),
       normalized_domain: context.expectedDomain,
-      result: unsigned,
+      result: reviewPayload,
     };
     const proof = await createAuthoritySeal(document, secret);
     return {
       ...unsigned,
+      authority_review_payload: reviewPayload,
       authority_attestation_status: "server_attested",
       authority_scan_attestation: {
         version: SCAN_ATTESTATION_VERSION,
@@ -246,17 +248,92 @@ async function attachScanAttestation({ base44, user, result, context }) {
   }
 }
 
+function buildAuthorityReviewPayload(result = {}) {
+  const pages = firstPageArray(result).slice(0, REVIEW_PAGE_SAMPLE_LIMIT);
+  const findings = firstFindingArray(result).slice(0, REVIEW_FINDING_LIMIT);
+  const technical = result.technical_audit_summary && typeof result.technical_audit_summary === "object"
+    ? result.technical_audit_summary
+    : {};
+  const scanSummary = result.scan_summary && typeof result.scan_summary === "object"
+    ? result.scan_summary
+    : {};
+  return {
+    success: true,
+    review_payload_version: SCAN_ATTESTATION_VERSION,
+    scanner_version: result.scanner_version,
+    scanner_build_revision: result.scanner_build_revision || technical.scanner_build_revision,
+    scanner_wrapper_version: result.scanner_wrapper_version,
+    beta_revision_fingerprint: result.beta_revision_fingerprint,
+    advanced_scan_backend: result.advanced_scan_backend,
+    deno_fallback_used: false,
+    scan_mode: PUBLIC_SCAN_MODE,
+    canonical_mode: PUBLIC_SCAN_MODE,
+    request_id: result.request_id,
+    idempotency_key: result.idempotency_key,
+    scan_id: result.scan_id,
+    scan_run_id: result.scan_run_id,
+    submitted_url: result.submitted_url,
+    website_url: result.website_url,
+    final_url: result.final_url,
+    normalized_domain: result.normalized_domain,
+    respect_robots_txt: true,
+    pages_crawled: nonNegativeInteger(result.pages_crawled),
+    pages_found: nonNegativeInteger(result.pages_found),
+    queued_remaining: nonNegativeInteger(result.queued_remaining),
+    sampled_pages_sent_to_review: pages.length,
+    sampled_findings_sent_to_review: findings.length,
+    page_sample_truncated: nonNegativeInteger(result.pages_crawled) > pages.length,
+    scanner_elapsed_ms: nonNegativeInteger(result.scanner_elapsed_ms),
+    scanner_total_budget_seconds: Number(result.scanner_total_budget_seconds || 0),
+    scan_deadline_reached: result.scan_deadline_reached === true,
+    requested_crawl_timeout_ms: nonNegativeInteger(result.requested_crawl_timeout_ms),
+    metadata_evidence_version: result.metadata_evidence_version || technical.metadata_evidence_version || "",
+    title_evidence_version: result.title_evidence_version || technical.title_evidence_version || "",
+    sampling_evidence: result.sampling_evidence || {},
+    crawl_timing: result.crawl_timing || technical.crawl_timing || {},
+    crawl_scope: result.crawl_scope || technical.crawl_scope || {},
+    crawl_policy: result.crawl_policy || technical.crawl_policy || {},
+    crawl_policy_source: result.crawl_policy_source || technical.crawl_policy_source || "",
+    url_evidence_summary: result.url_evidence_summary || technical.url_evidence_summary || {},
+    verified_failed_pages: result.verified_failed_pages || [],
+    suspicious_url_artifacts: result.suspicious_url_artifacts || [],
+    health_score: Number(result.health_score || 0),
+    scan_summary: scanSummary,
+    technical_audit_summary: technical,
+    crawl_warnings: Array.isArray(result.crawl_warnings) ? result.crawl_warnings.slice(0, 12) : [],
+    pages,
+    crawled_pages: pages,
+    raw_findings: findings,
+    grouped_findings: findings,
+    findings,
+    recommendations: findings,
+  };
+}
+
+function firstFindingArray(result = {}) {
+  for (const key of ["grouped_findings", "recommendations", "findings", "raw_findings", "fixes"]) {
+    if (Array.isArray(result[key])) return result[key];
+  }
+  return [];
+}
+
 function unsignedResult(result, status) {
   return {
     ...withoutAuthorityAttestation(result),
     release_gate_eligible: false,
+    authority_review_payload: null,
     authority_scan_attestation: null,
     authority_attestation_status: status,
   };
 }
 
 function withoutAuthorityAttestation(result = {}) {
-  const { authority_scan_attestation: _attestation, authority_attestation_status: _status, ...unsigned } = result;
+  const {
+    authority_review_payload: _reviewPayload,
+    authority_scan_attestation: _attestation,
+    authority_attestation_status: _status,
+    ...unsigned
+  } = result;
   return unsigned;
 }
 

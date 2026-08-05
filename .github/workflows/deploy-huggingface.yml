@@ -1,16 +1,13 @@
-name: Deploy FixList AI to Hugging Face
+name: Manual fallback deploy FixList AI to Hugging Face
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "hf-space/**"
-      - ".github/workflows/deploy-huggingface.yml"
+  # The verified HF_TOKEN workflow is the primary coordinated deployment path.
+  # Keep this OIDC fallback manual so two delete-all uploads can never race.
   workflow_dispatch:
 
 concurrency:
-  group: deploy-fixlist-ai-hugging-face
-  cancel-in-progress: true
+  group: fixlist-hugging-face-deploy
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -20,10 +17,23 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      actions: read
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Require exact main SHA with successful CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          successful_runs="$(gh api \
+            "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&status=completed&per_page=100" \
+            --jq '[.workflow_runs[] | select(.conclusion == "success")] | length')"
+          test "$successful_runs" -ge 1
 
       - name: Validate Space bundle
         run: |
@@ -60,6 +70,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          printf '%s\n' "$GITHUB_SHA" > hf-space/GITHUB_DEPLOYMENT_SHA
 
           if hf upload milo2455555/fixlist-ai ./hf-space . \
             --repo-type space \

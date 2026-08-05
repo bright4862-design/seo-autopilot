@@ -2,6 +2,7 @@ import React from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import DashboardLayout from "@/components/layout/DashboardLayout";
+import ProtectedRoute from "@/components/ProtectedRoute";
 
 import Landing from "@/pages/Landing";
 import Login from "@/pages/Login";
@@ -12,6 +13,7 @@ import ResetPassword from "@/pages/ResetPassword";
 import FixList from "@/pages/FixList";
 import Onboarding from "@/pages/Onboarding";
 import Billing from "@/pages/Billing";
+import Assistant from "@/pages/Assistant";
 
 export default function App() {
   return (
@@ -24,11 +26,20 @@ export default function App() {
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<ResetPassword />} />
 
-        {/* Main app */}
-        <Route element={<DashboardLayout />}>
-          <Route path="/dashboard" element={<FixList />} />
-          <Route path="/onboarding" element={<Onboarding />} />
-          <Route path="/billing" element={<Billing />} />
+        {/* Authenticated app */}
+        <Route
+          element={
+            <ProtectedRoute
+              unauthenticatedElement={<Navigate to="/login" replace />}
+            />
+          }
+        >
+          <Route element={<DashboardLayout />}>
+            <Route path="/dashboard" element={<FixList />} />
+            <Route path="/onboarding" element={<Onboarding />} />
+            <Route path="/assistant" element={<Assistant />} />
+            <Route path="/billing" element={<Billing />} />
+          </Route>
         </Route>
 
         {/* Hidden / old pages */}

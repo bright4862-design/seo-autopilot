@@ -119,6 +119,7 @@ def test_run_scan_continues_to_page_workers_after_sitemap_budget(monkeypatch):
         return {"attempted": 0}
 
     monkeypatch.setattr(scanner, "load_robots_policy", fake_load_robots_policy)
+    monkeypatch.setattr(scanner, "is_public_http_url", lambda _url: True)
     monkeypatch.setattr(scanner, "safe_get", fake_safe_get)
     monkeypatch.setattr(scanner, "load_sitemap_urls", fake_load_sitemap_urls)
     monkeypatch.setattr(scanner, "fetch_and_extract", fake_fetch_and_extract)

@@ -1,5 +1,6 @@
 import httpx
 import pytest
+import socket
 
 from app.redirect_validation import fetch_with_redirect_evidence, summarize_redirect_evidence
 from app.robots_policy import RobotsPolicy
@@ -14,12 +15,26 @@ class FakeClient:
         self.responses = responses
         self.calls = []
 
-    async def get(self, url):
-        self.calls.append(url)
-        response = self.responses[url]
+    async def get(self, url, *, headers=None, extensions=None):
+        pinned = httpx.URL(url)
+        authority = (headers or {}).get("Host", "")
+        logical_url = f"{pinned.scheme}://{authority}{pinned.raw_path.decode('ascii')}"
+        self.calls.append(logical_url)
+        response = self.responses[logical_url]
         if isinstance(response, Exception):
             raise response
         return response
+
+
+@pytest.fixture(autouse=True)
+def deterministic_public_dns(monkeypatch):
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda _host, port, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", port))
+        ],
+    )
 
 
 class SelectivePolicy:

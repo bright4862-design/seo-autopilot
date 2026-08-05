@@ -121,14 +121,15 @@ def test_release_marker_endpoints_are_consistent():
     revision = client.get("/revision").json()
 
     assert health["archetype_classifier_version"] == "archetype_classifier_v9_local_business_hospitality"
-    assert health["beta_revision_fingerprint"] == "f9bac4b89ec7c1d8"
+    assert health["beta_revision_fingerprint"] == "51c813a6219b4e70"
     assert health["review_version"] == "python_review_v2_structural_marketplace"
     assert health["review_evidence_calibration_version"] == "review_evidence_calibration_v5_utility_redirect"
-    assert health["scanner_build_revision"] == "leaf_seed_grok_proxy_v1"
+    assert health["scanner_build_revision"] == "authenticated_health_probe_v1"
     assert revision["fingerprint"] == health["beta_revision_fingerprint"]
     assert revision["component_versions"]["archetype_classifier_version"] == health["archetype_classifier_version"]
     assert revision["component_versions"]["review_version"] == health["review_version"]
     assert revision["component_versions"]["review_evidence_calibration_version"] == health["review_evidence_calibration_version"]
+    assert revision["component_versions"]["scanner_build_revision"] == health["scanner_build_revision"]
     assert revision["component_versions"]["artifact_filter_version"] == "artifact_filter_v4_wordpress_route_noise"
     assert revision["component_versions"]["redirect_evidence_version"] == "redirect_evidence_v3_origin_alias_identity"
 
@@ -140,8 +141,13 @@ def test_scan_endpoint_returns_customer_safe_envelope_on_crash(monkeypatch, caps
         raise RuntimeError("internal stack detail the customer must not see")
 
     monkeypatch.setattr(main, "run_scan", exploding_scan)
+    monkeypatch.setattr(main, "SCANNER_API_KEY", "test-scanner-key")
     client = TestClient(main.app)
-    response = client.post("/scan", json={"website_url": "https://example.com"})
+    response = client.post(
+        "/scan",
+        json={"website_url": "https://example.com"},
+        headers={"X-Scanner-Key": "test-scanner-key"},
+    )
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is False
@@ -164,11 +170,16 @@ def test_scan_endpoint_returns_beta_revision_fingerprint(monkeypatch, capsys):
 
     monkeypatch.setattr(main, "run_scan", completed_scan)
     monkeypatch.setattr(main, "enrich_scan_with_trust_pages", unchanged_trust)
+    monkeypatch.setattr(main, "SCANNER_API_KEY", "test-scanner-key")
     client = TestClient(main.app)
-    response = client.post("/scan", json={"website_url": "https://example.com"})
+    response = client.post(
+        "/scan",
+        json={"website_url": "https://example.com"},
+        headers={"X-Scanner-Key": "test-scanner-key"},
+    )
     assert response.status_code == 200
-    assert response.json()["beta_revision_fingerprint"] == "f9bac4b89ec7c1d8"
-    assert response.json()["scanner_build_revision"] == "leaf_seed_grok_proxy_v1"
+    assert response.json()["beta_revision_fingerprint"] == "51c813a6219b4e70"
+    assert response.json()["scanner_build_revision"] == "authenticated_health_probe_v1"
     read_log_lines(capsys)
 
 
@@ -184,10 +195,15 @@ def test_review_endpoint_logs_completion_metrics(monkeypatch, capsys):
     monkeypatch.setattr(main, "apply_trust_discovery_gate", lambda result, payload: result)
     monkeypatch.setattr(main, "apply_review_evidence_calibration", lambda result, payload: result)
     monkeypatch.setattr(main, "apply_evidence_quality_gate", lambda result, payload: result)
+    monkeypatch.setattr(main, "SCANNER_API_KEY", "test-scanner-key")
     client = TestClient(main.app)
-    response = client.post("/review", json={"website_url": "https://example.com"})
+    response = client.post(
+        "/review",
+        json={"website_url": "https://example.com"},
+        headers={"X-Scanner-Key": "test-scanner-key"},
+    )
     assert response.status_code == 200
-    assert response.json()["beta_revision_fingerprint"] == "f9bac4b89ec7c1d8"
+    assert response.json()["beta_revision_fingerprint"] == "51c813a6219b4e70"
     completed = [record for record in read_log_lines(capsys) if record["event"] == "review_completed"]
     assert len(completed) == 1
     assert completed[0]["scan_status"] == "complete"

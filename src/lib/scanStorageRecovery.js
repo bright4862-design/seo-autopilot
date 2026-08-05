@@ -16,7 +16,14 @@ const {
   calibrationVersion: CURRENT_CALIBRATION_VERSION,
   betaRevisionFingerprint: CURRENT_BETA_REVISION_FINGERPRINT,
 } = RELEASE_AUTHORITY_CONTRACT;
-const PAGE_LIMITS = { basic: 25, quick: 40, deep: 85, advanced: 150 };
+// standard_150 is the canonical customer mode. The legacy keys are retained so
+// historical Quick/Deep/Advanced records still cap correctly when they are read
+// back; they are no longer producible by the customer path.
+const PAGE_LIMITS = { standard_150: 150, basic: 25, quick: 40, deep: 85, advanced: 150 };
+// The customer path invokes runStandard150Scan. runAdvancedScan is still
+// accepted here because the old gateway remains deployed, so an in-flight
+// response from it must stay capped and keep feeding release authority.
+const SCAN_GATEWAY_FUNCTIONS = new Set(["runStandard150Scan", "runAdvancedScan"]);
 const SCAN_CACHE_KEYS = new Set([
   DASHBOARD_LAST_SCAN_KEY,
   DASHBOARD_HISTORY_KEY,
@@ -29,7 +36,7 @@ let latestAuthority = {};
 let installed = false;
 
 function pageLimit(scanMode) {
-  return PAGE_LIMITS[String(scanMode || "advanced").toLowerCase()] || PAGE_LIMITS.advanced;
+  return PAGE_LIMITS[String(scanMode || "standard_150").toLowerCase()] || PAGE_LIMITS.standard_150;
 }
 
 function firstArray(source, keys) {
@@ -448,7 +455,7 @@ function installFunctionBoundary() {
   const originalInvoke = base44.functions.invoke.bind(base44.functions);
   const wrappedInvoke = async (functionName, payload, ...rest) => {
     const response = await originalInvoke(functionName, payload, ...rest);
-    if (functionName === "runAdvancedScan") {
+    if (SCAN_GATEWAY_FUNCTIONS.has(functionName)) {
       const limit = pageLimit(payload?.scan_mode);
       capScannerContainer(response, limit);
       const scan = findPayload(response, (value) => Boolean(value.scanner_version || value.advanced_scan_backend));

@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import {
   AlertCircle,
   Bug,
-  CheckCircle2,
   Copy,
   Download,
   FileJson,
@@ -23,7 +22,8 @@ import { buildAuthorityMarkers, buildDiagnosticAuthorityMarkers, buildScanRunFie
 import { beginScanRun, completeScanRun, failScanRun, markScanRunReviewing } from "@/lib/scanRuns";
 import { loadAccess, recordScanUsed, UNLOCK_PRICE_LABEL } from "@/lib/access";
 
-const ADVANCED_SCANNER_FUNCTION = "runAdvancedScan";
+const STANDARD_SCANNER_FUNCTION = "runStandard150Scan";
+const STANDARD_SCAN_MODE = "standard_150";
 const AI_REVIEW_FUNCTION = "aiReviewScan";
 
 const DASHBOARD_LAST_SCAN_KEY = "seo_autopilot:last_scan";
@@ -34,12 +34,6 @@ const ACTIVE_SCAN_URL_KEY = "seo_autopilot:active_scan_url";
 const ACTIVE_SCAN_STARTED_AT_KEY = "seo_autopilot:active_scan_started_at";
 const SCAN_DEBUG_KEY = "seo_autopilot:scan_debug";
 const SCAN_RECORD_PREFIX = "seo_autopilot:scan:";
-
-const SCAN_MODES = [
-  { value: "quick", label: "Quick check", description: "Fast first scan. Up to 40 pages." },
-  { value: "deep", label: "Standard", description: "Right for most sites. Up to 85 pages." },
-  { value: "advanced", label: "Full site", description: "Larger scan. Up to 150 pages." },
-];
 
 const CMS_OPTIONS = [
   { value: "wordpress", label: "WordPress" },
@@ -67,7 +61,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   const [businessName, setBusinessName] = useState(project?.business_name || "");
   const [cmsPlatform, setCmsPlatform] = useState(normalizeCmsValue(project?.cms_platform || "custom"));
   const [keywordsText, setKeywordsText] = useState(Array.isArray(project?.important_keywords) ? project.important_keywords.join("\n") : "");
-  const [scanMode, setScanMode] = useState(project?.scan_mode || "quick");
+  const scanMode = STANDARD_SCAN_MODE;
   const [optionalOpen, setOptionalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [activeStep, setActiveStep] = useState("");
@@ -151,7 +145,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
     refreshDebugData();
 
     try {
-      const safeScanBudget = getSafeScanBudget(scanMode);
+      const safeScanBudget = getSafeScanBudget();
       setActiveStep("Reading your pages");
       const scanPayload = {
         website_url: normalizedUrl,
@@ -165,9 +159,9 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         important_keywords: cleanedKeywords,
         competitor_urls: [],
         scan_mode: scanMode,
-        enable_screaming_frog_lite: true,
+        canonical_mode: STANDARD_SCAN_MODE,
         force_internal_crawl: true,
-        respect_robots_txt: false,
+        respect_robots_txt: true,
         max_pages: safeScanBudget.max_pages,
         max_competitors: 0,
         max_browser_render_attempts: safeScanBudget.max_browser_render_attempts,
@@ -182,7 +176,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       writeScanDebug({ status: "running", stage: "scanner_request_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, payload_summary: { max_pages: scanPayload.max_pages, max_competitors: 0, max_browser_render_attempts: scanPayload.max_browser_render_attempts, crawl_timeout_ms: scanPayload.crawl_timeout_ms, keyword_count: scanPayload.important_keywords.length } });
       refreshDebugData();
 
-      const scannerResponse = await callBase44Function(ADVANCED_SCANNER_FUNCTION, scanPayload);
+      const scannerResponse = await callBase44Function(STANDARD_SCANNER_FUNCTION, scanPayload);
       scanData = normalizeFunctionResponse(scannerResponse);
       writeScanDebug({ status: "running", stage: "scanner_complete", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData) });
       refreshDebugData();
@@ -228,7 +222,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       failScanRun(scanRunHandle, err).catch(() => {});
       writeScanDebug({ status: "failed", stage: "scan_failed", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, error: err?.message || String(err), scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), compact_debug_available: true, download_available: true });
       refreshDebugData();
-      setError(err?.message || "The website scan failed. Try Quick check first or check the backend function logs.");
+      setError(err?.message || "The Standard 150 scan failed. Please try again or check the scanner status.");
     } finally {
       setActiveStep("");
       setSubmitting(false);
@@ -279,18 +273,13 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
             <div><label className="text-sm font-medium text-slate-700">Business or website name</label><Input value={businessName} onChange={(event) => setBusinessName(event.target.value)} placeholder="Example Business" disabled={isLoading} className="mt-2" /></div>
           </div>
 
-          <div>
-            <label className="text-sm font-medium text-slate-700">Scan size</label>
-            <div className="mt-2 grid gap-3 md:grid-cols-3">
-              {SCAN_MODES.map((mode) => {
-                const active = scanMode === mode.value;
-                return (
-                  <button key={mode.value} type="button" disabled={isLoading} onClick={() => setScanMode(mode.value)} className={`rounded-2xl border p-4 text-left transition ${active ? "border-indigo-500 bg-indigo-50 text-slate-950 ring-2 ring-indigo-100" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}>
-                    <div className="flex items-center gap-2"><CheckCircle2 className={`h-4 w-4 ${active ? "text-indigo-600" : "text-slate-300"}`} /><span className="font-semibold">{mode.label}</span></div>
-                    <p className="mt-2 text-xs leading-5 text-slate-500">{mode.description}</p>
-                  </button>
-                );
-              })}
+          <div className="rounded-2xl border border-indigo-100 bg-indigo-50 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-slate-950">Standard 150 scan</p>
+                <p className="mt-1 text-xs leading-5 text-slate-600">FixList checks up to 150 pages with the Python scanner and turns the evidence into one prioritized FixList.</p>
+              </div>
+              <span className="shrink-0 rounded-full bg-white px-3 py-1 text-xs font-semibold text-indigo-700">Up to 150 pages</span>
             </div>
           </div>
 
@@ -319,7 +308,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
 
         <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <Button type="submit" disabled={isLoading} className="bg-indigo-600 text-white hover:bg-indigo-700">{isLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Building FixList...</> : <><Search className="mr-2 h-4 w-4" />Create FixList</>}</Button>
-          <p className="text-xs text-slate-500">Most scans take 1–2 minutes. Start with Quick check, then use Standard or Full site if needed.</p>
+          <p className="text-xs text-slate-500">FixList runs one Standard 150 scan. Most sites finish in a few minutes.</p>
         </div>
       </form>
     </div>
@@ -635,14 +624,12 @@ function compressScanRecord(record = {}) {
   };
 }
 
-function getSafeScanBudget(scanMode) {
-  if (scanMode === "advanced") return { max_pages: 150, max_browser_render_attempts: 1, crawl_timeout_ms: 90000 };
-  if (scanMode === "deep") return { max_pages: 85, max_browser_render_attempts: 1, crawl_timeout_ms: 75000 };
-  return { max_pages: 40, max_browser_render_attempts: 1, crawl_timeout_ms: 45000 };
+function getSafeScanBudget() {
+  return { max_pages: 150, max_browser_render_attempts: 1, crawl_timeout_ms: 85000 };
 }
 
 async function callBase44Function(functionName, payload) {
-  const timeoutMs = functionName === ADVANCED_SCANNER_FUNCTION ? Number(payload?.crawl_timeout_ms || 30000) + 15000 : 70000;
+  const timeoutMs = functionName === STANDARD_SCANNER_FUNCTION ? Number(payload?.crawl_timeout_ms || 85000) + 10000 : 70000;
   return await Promise.race([
     callBase44FunctionWithoutTimeout(functionName, payload),
     new Promise((_, reject) => window.setTimeout(() => reject(new Error(`${functionName} did not return within ${Math.round(timeoutMs / 1000)} seconds. The scan may have timed out before saving results.`)), timeoutMs)),

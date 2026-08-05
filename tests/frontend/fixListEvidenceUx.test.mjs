@@ -55,7 +55,8 @@ test("FixItem entity stores URL counts, family evidence, and fix steps", () => {
 });
 
 test("returned durable ScanRun authority is written into the browser scan record", () => {
-  assert.match(scanFormSource, /const usingAuthorityPersistence = Boolean\(aiData\?\.authority_review_attestation\)/);
+  assert.match(scanFormSource, /const reviewAttestation = aiData\?\.authority_review_attestation/);
+  assert.match(scanFormSource, /const usingAuthorityPersistence = Boolean\(reviewAttestation\)/);
   assert.match(scanFormSource, /const completion = usingAuthorityPersistence/);
   assert.match(scanFormSource, /scan_authority_persistence_failed/);
   assert.match(scanFormSource, /scan_authority_attestation_missing/);

@@ -22,7 +22,7 @@ import { normalizeActionPriority, normalizeFindingEvidence, normalizeReviewEvide
 import { mergePersistedScanRunRecord } from "@/lib/persistedScanRecord";
 import { RELEASE_AUTHORITY_CONTRACT, buildAuthorityMarkers, buildDiagnosticAuthorityMarkers, buildScanRunFields } from "@/lib/scanRunModel";
 import { createScanRequestId, normalizedScanDomain, scanReleaseIdentity } from "@/lib/scanRunIdentity";
-import { beginScanRun, completeScanRun, failScanRun, markScanRunReviewing } from "@/lib/scanRuns";
+import { beginScanRun, cancelScanRun, completeScanRun, failScanRun, markScanRunReviewing, recoverOrphanedScanRuns } from "@/lib/scanRuns";
 import { UNLOCK_PRICE_LABEL, loadAccess, recordScanUsed } from "@/lib/access";
 import {
   CUSTOMER_BOUNDARY_EVENT,
@@ -109,6 +109,10 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       clearDebugScanData();
     }
     window.addEventListener(CUSTOMER_BOUNDARY_EVENT, invalidatePendingRequest);
+    // Close abandoned runs as soon as the customer reaches the scan form,
+    // rather than waiting for their next submission. A row past the orphan
+    // threshold has no owner left to finish it.
+    recoverOrphanedScanRuns({ projectId: project?.id || "" }).catch(() => {});
     return () => {
       requestEpochRef.current += 1;
       submitLockRef.current = false;
@@ -262,7 +266,9 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       recordDebug({ ...identityDebug(), status: "running", stage: "scanner_request_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, payload_summary: { max_pages: scanPayload.max_pages, max_competitors: 0, max_browser_render_attempts: scanPayload.max_browser_render_attempts, crawl_timeout_ms: scanPayload.crawl_timeout_ms, keyword_count: scanPayload.important_keywords.length, respect_robots_txt: scanPayload.respect_robots_txt } });
       refreshDebugData();
 
+      logScanBoundary("scanner_function_start", identityDebug(), { function_name: STANDARD_SCANNER_FUNCTION });
       const scannerResponse = await callBase44Function(STANDARD_SCANNER_FUNCTION, scanPayload);
+      logScanBoundary("scanner_function_response", identityDebug(), { function_name: STANDARD_SCANNER_FUNCTION });
       await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
       scanData = normalizeFunctionResponse(scannerResponse);
       assertServerScanIdentity(scanData, identityDebug());
@@ -279,7 +285,9 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         recordDebug({ ...identityDebug(), status: "running", stage: "ai_review_request_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_payload_summary: { pages_crawled: aiPayload.scan_coverage?.pages_crawled || aiPayload.authoritative_scan?.pages_crawled || 0, pages_found: aiPayload.scan_coverage?.pages_found || aiPayload.authoritative_scan?.pages_found || 0, sampled_pages_sent_to_ai: aiPayload.scan_coverage?.sampled_pages_sent_to_ai || aiPayload.crawled_pages?.length || aiPayload.authoritative_scan?.crawled_pages?.length || 0, raw_fixes_count: aiPayload.raw_fixes?.length || getRecommendations(aiPayload.authoritative_scan).length, crawl_policy_source: aiPayload.crawl_policy_source || aiPayload.authoritative_scan?.crawl_policy_source || "", url_evidence_preserved: Boolean(aiPayload.url_evidence_summary || aiPayload.authoritative_scan?.url_evidence_summary), business_priority_rules_enabled: true, coverage_instruction_enabled: true } });
         refreshDebugData();
         setActiveStep("Writing your FixList");
+        logScanBoundary("review_function_start", identityDebug(), { function_name: AI_REVIEW_FUNCTION });
         const aiResponse = await callBase44Function(AI_REVIEW_FUNCTION, aiPayload);
+        logScanBoundary("review_function_response", identityDebug(), { function_name: AI_REVIEW_FUNCTION });
         await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
         aiData = { ...normalizeFunctionResponse(aiResponse), ...identityDebug() };
         recordDebug({ ...identityDebug(), status: "running", stage: "ai_review_complete", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData) });
@@ -305,6 +313,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
           scan_record: { ...mergedFinal, release_gate_eligible: false, is_authoritative: false },
         });
       }
+      logScanBoundary("persistence_start", identityDebug(), { authority_persistence: usingAuthorityPersistence });
       const durableRecord = usingAuthorityPersistence
         ? mergedFinal
         : { ...mergedFinal, release_gate_eligible: false, is_authoritative: false };
@@ -320,6 +329,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
           if (clearCustomerAuthBoundary(persistenceError)) throw persistenceError;
           return null;
         });
+      logScanBoundary("persistence_response", identityDebug(), { persisted: Boolean(completion?.scanRun) });
       await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
       if (!completion?.scanRun) throw Object.assign(new Error("The scan finished, but its durable FixList record could not be saved."), { code: "scan_persistence_failed", scan_record: durableRecord });
       if (usingAuthorityPersistence) {
@@ -349,13 +359,23 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       await recordScanUsed().catch(() => {});
       recordDebug({ ...identityDebug(), status: "saved", stage: "dashboard_saved", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), compact_debug_available: true, download_available: true });
       refreshDebugData();
+      // Navigation happens only after a durable terminal result exists.
+      logScanBoundary("browser_navigation", identityDebug(), { status: "complete" });
       navigate(`/dashboard?scan=complete&scan_id=${encodeURIComponent(scanId)}`);
     } catch (err) {
-      if (
-        err?.code === "stale_customer_session"
+      // Every attempt must reach a terminal state. This branch used to return
+      // without writing one, which is exactly what left ScanRun rows stuck at
+      // "crawling" with zero pages and no error -- the permanent "still
+      // running" screen. The request is abandoned for UI purposes, but the
+      // durable row is still closed truthfully as cancelled before returning.
+      const abandoned = err?.code === "stale_customer_session"
         || requestEpochRef.current !== requestEpoch
-        || clearCustomerAuthBoundary(err)
-      ) return;
+        || clearCustomerAuthBoundary(err);
+      if (abandoned) {
+        logScanBoundary("scan_abandoned", identityDebug(), { reason: err?.code || err?.name || "session_changed" });
+        await cancelScanRun(scanRunHandle, err).catch(() => {});
+        return;
+      }
       console.error("Website scan failed.", err);
       if (err && typeof err === "object" && !err.scan_record) err.scanData = mergedFinal || scanData || {};
       const failure = await failScanRun(scanRunHandle, err).catch(() => null);
@@ -866,8 +886,27 @@ async function assertCurrentScanSession(identity, epoch, epochRef) {
   const stale = () => Object.assign(new Error("The signed-in customer or project changed while this request was active."), { code: "stale_customer_session" });
   if (!identity || epochRef.current !== epoch) throw stale();
   const currentUser = await base44.auth.me();
+  // The signed-in owner is server authority and a mismatch always aborts.
   if (String(currentUser?.id || "") !== String(identity.ownerId || "")) throw stale();
-  if (readCustomerActiveProject(currentUser.id) !== String(identity.projectId || "")) throw stale();
+  // The active-project pointer is only a browser cache. Private-mode storage,
+  // an evicted key, or a boundary event that cleared caches all read back as
+  // "" -- which is not evidence that the customer switched project, and must
+  // never abandon a durable scan the server still owns. Only a pointer that
+  // actively names a different project proves a real switch.
+  const activeProjectId = readCustomerActiveProject(currentUser.id);
+  if (activeProjectId && activeProjectId !== String(identity.projectId || "")) throw stale();
+}
+
+// Boundary instrumentation. Identity only -- never payloads, evidence,
+// attestations, proofs, or tokens.
+function logScanBoundary(boundary, identity, extra = {}) {
+  console.info("[fixlist.scan]", {
+    boundary,
+    request_id: identity?.request_id || "",
+    scan_id: identity?.scan_id || "",
+    at: new Date().toISOString(),
+    ...extra,
+  });
 }
 
 function buildCmsInstruction(cmsPlatform) {

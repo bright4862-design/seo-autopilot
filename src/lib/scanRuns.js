@@ -13,10 +13,13 @@ import {
   getFixRecommendations,
 } from "@/lib/scanRunModel";
 import {
+  ACTIVE_SCAN_RUN_STATUSES,
   STANDARD_ACTIVE_SCAN_TTL_MS,
+  STANDARD_ORPHAN_RECOVERY_TTL_MS,
   ScanRunConflictError,
   buildScanRequestIdentity,
   buildStaleScanRetryFields,
+  isStaleActiveScanRun,
   normalizeScanMode,
   normalizeScanTarget,
   normalizedScanDomain,
@@ -84,7 +87,7 @@ async function resolveProjectId(projectId) {
 const STALE_RUN_STATUS_DETAIL =
   "This scan stopped before it finished and no results were saved. You can run it again.";
 
-async function terminalizeStaleScanRuns(runs = []) {
+async function terminalizeStaleScanRuns(runs = [], { ttlMs = STANDARD_ACTIVE_SCAN_TTL_MS } = {}) {
   const completedAt = new Date().toISOString();
   const uniqueRuns = [...new Map(
     (runs || [])
@@ -99,11 +102,71 @@ async function terminalizeStaleScanRuns(runs = []) {
       status: "failed",
       status_detail: STALE_RUN_STATUS_DETAIL,
       error_code: "orphaned_no_terminal_state",
-      error_message: `Standard scan exceeded the ${STANDARD_ACTIVE_SCAN_TTL_MS / 60000}-minute active recovery window without reaching a terminal state.`,
+      error_message: `Standard scan exceeded the ${Math.round(ttlMs / 60000)}-minute active recovery window without reaching a terminal state.`,
       completed_at: completedAt,
       release_gate_eligible: false,
     }),
   ));
+  return uniqueRuns.map((run) => run.id);
+}
+
+// A scan the browser abandoned mid-flight -- the customer signed out, switched
+// account or project, or the request was superseded. The row is closed
+// truthfully as cancelled: no result is fabricated, no scanner identity is
+// backfilled, and because the allowance is only recorded after a durable
+// success, a cancelled attempt never consumes it.
+const CANCELLED_RUN_STATUS_DETAIL =
+  "This scan was stopped before it finished, so no results were saved. You can run it again.";
+
+export async function cancelScanRun(handle, error) {
+  if (!handle?.id) return null;
+  try {
+    const cancelledFields = {
+      status: "cancelled",
+      status_detail: CANCELLED_RUN_STATUS_DETAIL,
+      cancelled_reason: String(error?.code || error?.name || "customer_session_changed").slice(0, 120),
+      completed_at: new Date().toISOString(),
+      release_gate_eligible: false,
+    };
+    const updatedRun = await base44.entities.ScanRun.update(handle.id, cancelledFields);
+    return {
+      requestId: handle.request_id || "",
+      scanId: handle.id,
+      scanRun: { id: handle.id, ...cancelledFields, ...(updatedRun || {}) },
+    };
+  } catch (cancelError) {
+    // An expired session cannot write its own terminal state. recoverOrphanedScanRuns
+    // is the backstop that closes the row on the next authenticated page load.
+    console.warn("Durable scan history: could not mark ScanRun cancelled.", cancelError);
+    return null;
+  }
+}
+
+// Closes rows that are still "active" but can no longer be finished by anyone.
+// This runs when a customer opens the scan form or a result route -- not only on
+// the next submission -- so an abandoned run cannot present a permanent "still
+// running" screen. Only rows past the orphan threshold are touched, so a live
+// scan in another tab is never interrupted.
+export async function recoverOrphanedScanRuns({ projectId = "", now = Date.now() } = {}) {
+  try {
+    const owner = await currentOwner();
+    const scope = String(projectId || "").trim();
+    const candidates = await base44.entities.ScanRun.filter(
+      { ...(scope ? { project_id: scope } : {}), ...owner },
+      "-queued_at",
+      MAX_REPLAY_CANDIDATES,
+    );
+    const orphans = (candidates || []).filter((run) =>
+      ACTIVE_SCAN_RUN_STATUSES.has(String(run?.status || ""))
+      && isStaleActiveScanRun(run, { now, activeTtlMs: STANDARD_ORPHAN_RECOVERY_TTL_MS }),
+    );
+    if (orphans.length === 0) return [];
+    return await terminalizeStaleScanRuns(orphans, { ttlMs: STANDARD_ORPHAN_RECOVERY_TTL_MS });
+  } catch (error) {
+    clearCustomerAuthBoundary(error);
+    console.warn("Durable scan history: could not recover orphaned ScanRuns.", error);
+    return [];
+  }
 }
 
 async function restartStaleRequestRun(run, identity) {

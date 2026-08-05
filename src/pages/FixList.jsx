@@ -4,7 +4,8 @@ import { Bug, Copy, Download, ExternalLink, RefreshCw, Trash2 } from "lucide-rea
 
 import { isRateLimitFinding, shouldUseLegacyRateLimitPresentation } from "@/lib/reviewContract";
 import { trackEvent } from "@/lib/analytics";
-import { getScanRunWithFixList } from "@/lib/scanRuns";
+import { getScanRunWithFixList, recoverOrphanedScanRuns } from "@/lib/scanRuns";
+import { ACTIVE_SCAN_RUN_STATUSES } from "@/lib/scanRunIdentity";
 import { FREE_PREVIEW_FIX_COUNT, UNLOCK_PRICE_LABEL, loadAccess } from "@/lib/access";
 import UnlockAccessButton from "@/components/billing/UnlockAccessButton";
 import { CUSTOMER_BOUNDARY_EVENT } from "@/lib/customerBrowserCache";
@@ -107,8 +108,20 @@ export default function FixList() {
       }
 
       setRequestedScanState("loading");
-      const durableBundle = await getScanRunWithFixList(requestedScanId);
+      let durableBundle = await getScanRunWithFixList(requestedScanId);
       if (cancelled) return;
+      // A run still shown as active may have been abandoned by a browser that
+      // never wrote a terminal state. Recover it here rather than leaving the
+      // customer on a permanent "still running" screen, then re-read so the
+      // page shows the truthful terminal status instead of a stale one.
+      if (ACTIVE_SCAN_RUN_STATUSES.has(String(durableBundle?.run?.status || ""))) {
+        const recovered = await recoverOrphanedScanRuns({ projectId: durableBundle.run.project_id || "" });
+        if (cancelled) return;
+        if (recovered.includes(requestedScanId)) {
+          durableBundle = await getScanRunWithFixList(requestedScanId) || durableBundle;
+          if (cancelled) return;
+        }
+      }
       if (durableBundle?.run) {
         applyRecord(normalizeDurableScanBundle(durableBundle));
         setRequestedScanState("loaded");

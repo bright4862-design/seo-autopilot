@@ -354,7 +354,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       const durableRecord = usingAuthorityPersistence
         ? mergedFinal
         : { ...mergedFinal, release_gate_eligible: false, is_authoritative: false };
-      let completion = usingAuthorityPersistence
+      const completion = usingAuthorityPersistence
         ? normalizeFunctionResponse(await callBase44Function("persistScanAuthority", {
           scan_id: scanId,
           attestation: reviewAttestation,
@@ -368,18 +368,20 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         });
       logScanBoundary("persistence_response", identityDebug(), { persisted: Boolean(completion?.scanRun) });
       await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
+      const persistedCompletion = completion?.scanRun
+        ? completion
+        : await recoverPersistedCompletion(scanId);
       if (!completion?.scanRun) {
-        completion = await recoverPersistedCompletion(scanId);
-        logScanBoundary("persistence_recovery", identityDebug(), { persisted: Boolean(completion?.scanRun) });
+        logScanBoundary("persistence_recovery", identityDebug(), { persisted: Boolean(persistedCompletion?.scanRun) });
       }
-      if (!completion?.scanRun) throw Object.assign(new Error("The scan finished, but its durable FixList record could not be saved."), { code: "scan_persistence_failed", scan_record: durableRecord });
+      if (!persistedCompletion?.scanRun) throw Object.assign(new Error("The scan finished, but its durable FixList record could not be saved."), { code: "scan_persistence_failed", scan_record: durableRecord });
       if (usingAuthorityPersistence) {
-        const proof = String(completion.scanRun.authority_proof || "").trim().toLowerCase();
+        const proof = String(persistedCompletion.scanRun.authority_proof || "").trim().toLowerCase();
         const sealed = /^[a-f0-9]{64}$/.test(proof)
-          && Boolean(completion.scanRun.authority_seal_version)
-          && Boolean(completion.scanRun.authority_sealed_at)
-          && completion.scanRun.release_gate_eligible === true
-          && Boolean(completion.fixListId);
+          && Boolean(persistedCompletion.scanRun.authority_seal_version)
+          && Boolean(persistedCompletion.scanRun.authority_sealed_at)
+          && persistedCompletion.scanRun.release_gate_eligible === true
+          && Boolean(persistedCompletion.fixListId);
         if (!sealed) {
           throw Object.assign(new Error("The scan finished, but its server authority seal was not saved."), {
             code: "scan_authority_persistence_failed",
@@ -387,14 +389,14 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
           });
         }
       }
-      if (completion?.scanRun) {
+      if (persistedCompletion?.scanRun) {
         mergedFinal = mergePersistedScanRunRecord(
           mergedFinal,
-          completion.scanRun,
-          completion.fixListId,
+          persistedCompletion.scanRun,
+          persistedCompletion.fixListId,
         );
-      } else if (completion?.fixListId) {
-        mergedFinal = { ...mergedFinal, fix_list_id: completion.fixListId };
+      } else if (persistedCompletion?.fixListId) {
+        mergedFinal = { ...mergedFinal, fix_list_id: persistedCompletion.fixListId };
       }
       // Only a durably persisted scan consumes the customer's allowance.
       await recordScanUsed().catch(() => {});

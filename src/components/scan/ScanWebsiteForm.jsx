@@ -297,7 +297,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
 
       setActiveStep("Saving your FixList");
       mergedFinal = mergeScanAndAiReview({ scanData, aiData, websiteUrl: normalizedUrl, submittedUrl, businessName: trimmedBusinessName, cmsPlatform, cmsName, scanMode, requestedPathPrefix, requestId, idempotencyKey, scanId, scanRunId: scanId });
-      const durableRecord = normalizeScanRecordForStorage(mergedFinal);
+      const durableRecord = mergedFinal;
       const completion = aiData?.authority_review_attestation
         ? normalizeFunctionResponse(await callBase44Function("persistScanAuthority", {
           scan_id: scanId,

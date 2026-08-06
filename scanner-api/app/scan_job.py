@@ -1,38 +1,29 @@
-"""Durable Standard 150 job worker.
+"""Durable Standard 150 job worker helpers.
 
 Base44 functions are reaped once the HTTP response returns, so a crawl started
-with waitUntil() dies mid-flight: ScanRun 6a748d5f9e8a27963ae678dc logged
-worker_scan_start and then produced nothing for 247s until the watchdog closed
-it as orphaned_no_terminal_state.
+with waitUntil() dies mid-flight. Cloud Tasks now delivers one durable request
+to a private Cloud Run worker. The worker crawls and reviews locally, then sends
+one signed completion envelope to the service-only Base44 persistence boundary.
 
-Cloud Run holds a request for up to 300s (--timeout=300 in cloudbuild.yaml), so
-the crawl runs here instead. Cloud Tasks delivers the job with an OIDC token,
-retries safely, and the exact ScanRun carries the result.
-
-Split of responsibility:
-  Base44 startStandardScanJob  -> authenticate, verify the owner-bound ScanRun,
-                                  enqueue the task, answer immediately.
-  Cloud Run   /scan-job        -> crawl (the slow part), seal the result, then
-                                  drive the EXISTING aiReviewScan and
-                                  persistScanAuthority functions against the
-                                  same ScanRun.
-
-Idempotency is keyed on the existing scan_id: the task name is derived from it,
-and this worker refuses to run against a ScanRun that already reached a terminal
-state, so a Cloud Tasks retry can never produce a second FixList or a second
-allowance charge.
+Idempotency is keyed on the existing scan_id. A terminal run is never scanned
+twice, permanent failures close the exact ScanRun, and transient persistence
+failures raise so Cloud Tasks retries the same durable request.
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import os
 from typing import Any
 
 import httpx
 
 WORKER_VERSION = "scan_job_worker_v1_cloud_tasks"
+COMPLETION_VERSION = "durable_standard150_completion_v1"
 
-# Cloud Run allows 300s; leave room to hand off the result and write a terminal
+# Cloud Run allows 300s; leave room to review, persist, and write a terminal
 # state before the platform closes the request.
 CRAWL_BUDGET_SECONDS = 210.0
 HANDOFF_TIMEOUT_SECONDS = 60.0
@@ -53,10 +44,13 @@ def base44_service_token() -> str:
 
 
 def _service_headers() -> dict[str, str]:
+    token = base44_service_token().strip()
+    authorization = token if token.startswith("Bearer ") else (f"Bearer {token}" if token else "")
     return {
         "content-type": "application/json",
-        "Base44-Service-Authorization": base44_service_token(),
+        "Base44-Service-Authorization": authorization,
         "Base44-App-Id": base44_app_id(),
+        "X-FixList-Worker": WORKER_VERSION,
     }
 
 
@@ -134,7 +128,7 @@ async def invoke_function(
     payload: dict[str, Any],
     timeout: float = HANDOFF_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
-    """Call an existing Base44 function with the service role."""
+    """Call a Base44 function with the service role and worker identity."""
     try:
         response = await client.post(
             _function_url(name), headers=_service_headers(), json=payload, timeout=timeout
@@ -151,15 +145,8 @@ async def invoke_function(
 
 
 # ---------------------------------------------------------------- authority --
-#
-# The worker must hand aiReviewScan a scan attestation it will verify, so the
-# canonical serialisation below must match authoritySeal.js byte for byte:
-# object keys sorted, undefined/function/symbol dropped, non-finite numbers
-# nulled, no whitespace.
-
-import hashlib
-import hmac
-import json
+# Canonical serialisation must match authoritySeal.js byte for byte: object
+# keys sorted, unsupported values dropped/nulled, and no whitespace.
 
 SCAN_ATTESTATION_VERSION = "standard_scan_review_payload_hmac_v2"
 REVIEW_PAGE_SAMPLE_LIMIT = 60
@@ -195,10 +182,10 @@ def _first_list(result: dict[str, Any], keys: tuple[str, ...]) -> list:
 
 
 def build_authority_review_payload(result: dict[str, Any]) -> dict[str, Any]:
-    """Bounded review envelope. Mirrors buildAuthorityReviewPayload in entry.ts.
+    """Bounded review envelope retained for compatibility evidence.
 
-    pages_found carries the FULL discovery inventory; only the page sample sent
-    to review is bounded. The 150-page crawl cap never truncates discovery.
+    pages_found carries the full discovery inventory; only the review page
+    sample is bounded. The 150-page crawl cap never truncates discovery.
     """
     pages = _first_list(result, ("crawled_pages", "pages", "scanned_pages", "crawl_pages"))[:REVIEW_PAGE_SAMPLE_LIMIT]
     findings = _first_list(result, ("grouped_findings", "recommendations", "findings", "raw_findings", "fixes"))[:REVIEW_FINDING_LIMIT]
@@ -240,13 +227,6 @@ def build_authority_review_payload(result: dict[str, Any]) -> dict[str, Any]:
         "title_evidence_version": result.get("title_evidence_version") or technical.get("title_evidence_version") or "",
         "sampling_evidence": result.get("sampling_evidence") or {},
         "crawl_timing": result.get("crawl_timing") or technical.get("crawl_timing") or {},
-        "crawl_scope": result.get("crawl_scope") or technical.get("crawl_scope") or {},
-        "crawl_policy": result.get("crawl_policy") or technical.get("crawl_policy") or {},
-        "crawl_policy_source": result.get("crawl_policy_source") or technical.get("crawl_policy_source") or "",
-        "url_evidence_summary": result.get("url_evidence_summary") or technical.get("url_evidence_summary") or {},
-        "verified_failed_pages": (result.get("verified_failed_pages") or [])[:25] if isinstance(result.get("verified_failed_pages"), list) else [],
-        "suspicious_url_artifacts": (result.get("suspicious_url_artifacts") or [])[:25] if isinstance(result.get("suspicious_url_artifacts"), list) else [],
-        "health_score": float(result.get("health_score") or 0),
         "scan_summary": scan_summary,
         "technical_audit_summary": technical,
         "crawl_warnings": (result.get("crawl_warnings") or [])[:12] if isinstance(result.get("crawl_warnings"), list) else [],
@@ -256,6 +236,7 @@ def build_authority_review_payload(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_scan_attestation(result: dict[str, Any], scan: dict[str, Any], signing_key: str) -> dict[str, Any]:
+    """Legacy compatibility helper retained for release-pinned tests."""
     review_payload = build_authority_review_payload(result)
     identity = {
         "version": SCAN_ATTESTATION_VERSION,
@@ -271,6 +252,29 @@ def build_scan_attestation(result: dict[str, Any], scan: dict[str, Any], signing
     }
 
 
+def build_completion_envelope(
+    scan: dict[str, Any],
+    result: dict[str, Any],
+    review: dict[str, Any],
+    signing_key: str,
+) -> dict[str, Any]:
+    identity = {
+        "owner_user_id": str(scan.get("owner_user_id") or ""),
+        "scan_id": str(scan.get("id") or ""),
+        "project_id": str(scan.get("project_id") or ""),
+        "request_id": str(scan.get("request_id") or result.get("request_id") or ""),
+        "idempotency_key": str(scan.get("idempotency_key") or result.get("idempotency_key") or ""),
+        "normalized_domain": str(result.get("normalized_domain") or "").lower().removeprefix("www."),
+    }
+    signed = {
+        "version": COMPLETION_VERSION,
+        "identity": identity,
+        "scan": result,
+        "review": review,
+    }
+    return {**signed, "proof": create_authority_seal(signed, signing_key)}
+
+
 def fix_list_belongs_to_scan(fix_list: dict[str, Any], scan: dict[str, Any]) -> bool:
     """A FixList may only be accepted for the exact owner, project and ScanRun."""
     return (
@@ -280,89 +284,29 @@ def fix_list_belongs_to_scan(fix_list: dict[str, Any], scan: dict[str, Any]) -> 
     )
 
 
-async def record_allowance_once(client: httpx.AsyncClient, owner_email: str) -> bool:
-    """Charge the customer's free-scan allowance at most once.
-
-    Called only after the authority seal is verified, and only on a ScanRun that
-    was not already terminal, so a Cloud Tasks retry cannot double-charge.
-    """
-    if not owner_email:
-        return False
-    base = f"{base44_api_url()}/api/apps/{base44_app_id()}/entities/Access"
-    try:
-        listing = await client.get(
-            base, headers=_service_headers(), params={"user_email": owner_email}, timeout=20.0
-        )
-        rows = listing.json() if listing.status_code == 200 else []
-    except (httpx.HTTPError, ValueError):
-        return False
-    row = rows[0] if isinstance(rows, list) and rows else None
-    if isinstance(row, dict) and row.get("has_full_access") is True:
-        return True  # nothing to charge
-    try:
-        if isinstance(row, dict) and row.get("id"):
-            used = int(row.get("scans_used") or 0)
-            response = await client.put(
-                f"{base}/{row['id']}", headers=_service_headers(),
-                json={"scans_used": used + 1}, timeout=20.0,
-            )
-        else:
-            response = await client.post(
-                base, headers=_service_headers(),
-                json={"user_email": owner_email, "scans_used": 1, "has_full_access": False},
-                timeout=20.0,
-            )
-    except httpx.HTTPError:
-        return False
-    return response.status_code < 300
-
-
 async def complete_authority(
     client: httpx.AsyncClient,
     scan: dict[str, Any],
     result: dict[str, Any],
+    review: dict[str, Any],
     signing_key: str,
 ) -> dict[str, Any]:
-    """Seal -> aiReviewScan -> persistScanAuthority, all on the same ScanRun.
-
-    Returns {ok, failure_code, transient, fix_list_id, authority_proof}.
-    `transient` asks the caller to raise so Cloud Tasks retries; the ScanRun is
-    left untouched in that case.
-    """
-    attested = build_scan_attestation(result, scan, signing_key)
-
-    review = await invoke_function(client, "aiReviewScan", {
-        "authoritative_scan": {
-            "authority_review_payload": attested["authority_review_payload"],
-            "authority_scan_attestation": attested["authority_scan_attestation"],
-            "authority_attestation_status": "server_attested",
-        },
-        "client_context": {
-            "business_name": str(result.get("business_name") or ""),
-            "cms_platform": str(result.get("cms_platform") or ""),
-            "important_keywords": [],
-            "requested_path_prefix": "",
-        },
-    })
-    if review["status_code"] >= 500:
-        return {"ok": False, "transient": True, "failure_code": "review_unavailable"}
-    attestation = review["body"].get("authority_review_attestation")
-    if review["status_code"] >= 400 or review["body"].get("success") is False or not attestation:
-        return {"ok": False, "transient": False, "failure_code": "review_attestation_missing"}
-
-    persisted = await invoke_function(client, "persistScanAuthority", {
-        "scan_id": str(scan.get("id") or ""),
-        "attestation": attestation,
-    })
+    """Persist one signed scan+review completion through the service boundary."""
+    envelope = build_completion_envelope(scan, result, review, signing_key)
+    persisted = await invoke_function(client, "persistDurableScanAuthority", envelope)
     if persisted["status_code"] >= 500:
         return {"ok": False, "transient": True, "failure_code": "persistence_unavailable"}
     scan_run = persisted["body"].get("scanRun") if isinstance(persisted["body"].get("scanRun"), dict) else {}
     fix_list_id = str(persisted["body"].get("fixListId") or scan_run.get("fix_list_id") or "")
-    if persisted["status_code"] >= 400 or not has_authority_proof(scan_run) or not fix_list_id:
+    if persisted["status_code"] >= 400 or persisted["body"].get("success") is False:
+        return {
+            "ok": False,
+            "transient": False,
+            "failure_code": str(persisted["body"].get("error_code") or "authority_persistence_failed"),
+        }
+    if not has_authority_proof(scan_run) or not fix_list_id:
         return {"ok": False, "transient": False, "failure_code": "authority_persistence_failed"}
 
-    # Re-read the FixList and require it to belong to this exact owner, project
-    # and ScanRun before anything is treated as authoritative or charged.
     try:
         fetched = await client.get(
             f"{base44_api_url()}/api/apps/{base44_app_id()}/entities/FixList/{fix_list_id}",
@@ -376,7 +320,6 @@ async def complete_authority(
     if str(fix_list.get("authority_proof") or "") != str(scan_run.get("authority_proof") or ""):
         return {"ok": False, "transient": False, "failure_code": "fix_list_proof_mismatch"}
 
-    await record_allowance_once(client, str(scan.get("created_by") or scan.get("owner_email") or ""))
     return {
         "ok": True,
         "transient": False,

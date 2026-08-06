@@ -17,6 +17,14 @@ export function taskNameForScan(queuePath, scanId) {
   return `${queuePath}/tasks/standard150-${safeId}`;
 }
 
+export function audienceForWorkerUrl(workerUrl) {
+  const parsed = new URL(String(workerUrl || ""));
+  if (parsed.protocol !== "https:" || !parsed.hostname) throw new Error("Invalid Cloud Run worker URL.");
+  // Cloud Run validates aud against the service URL (scheme + hostname), even
+  // when the request itself targets a route such as /scan-job.
+  return parsed.origin;
+}
+
 async function accessToken() {
   // A direct token is retained only for short-lived diagnostic use. Normal
   // operation uses the service-account key to mint a fresh OAuth token.
@@ -38,6 +46,13 @@ export async function enqueueScanJob({ queuePath, workerUrl, invokerServiceAccou
   const token = await accessToken();
   if (!token) return { ok: false, failureCode: "tasks_credentials_not_configured" };
 
+  let workerAudience;
+  try {
+    workerAudience = audienceForWorkerUrl(workerUrl);
+  } catch {
+    return { ok: false, failureCode: "invalid_worker_url" };
+  }
+
   const body = {
     task: {
       name: taskNameForScan(queuePath, scanId),
@@ -48,7 +63,7 @@ export async function enqueueScanJob({ queuePath, workerUrl, invokerServiceAccou
         body: btoa(JSON.stringify(payload)),
         // Cloud Run is deployed --no-allow-unauthenticated; Cloud Tasks mints
         // an OIDC token for this service account and the worker checks it.
-        oidcToken: { serviceAccountEmail: invokerServiceAccount, audience: workerUrl },
+        oidcToken: { serviceAccountEmail: invokerServiceAccount, audience: workerAudience },
       },
     },
   };

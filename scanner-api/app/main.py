@@ -69,9 +69,13 @@ class ScanRequest(BaseModel):
     submitted_url: str | None = None
     normalized_domain: str | None = None
     respect_robots_txt: bool = True
-    # Trusted-gateway runtime cap. This may only reduce the scanner's normal
-    # advanced budget; scanner.py clamps it to the safe 20s..75s range.
-    advisory_crawl_timeout_ms: int | None = Field(default=None, ge=20_000, le=75_000)
+    # Trusted-gateway runtime cap. Synchronous requests stay clamped to the
+    # safe 20s..75s range; only an asynchronous durable job may use the
+    # 120-second ceiling. The 150-page cap is never affected.
+    advisory_crawl_timeout_ms: int | None = Field(default=None, ge=20_000, le=120_000)
+    # Set by the Base44 async job gateway. Unlocks only the longer crawl
+    # ceiling in scanner.py (job_mode); every other budget rule is unchanged.
+    async_job: bool = False
 
 
 class ChatRequest(BaseModel):
@@ -251,6 +255,7 @@ async def scan(payload: ScanRequest, x_scanner_key: str | None = Header(default=
             business_name=payload.business_name or "",
             cms_platform=payload.cms_platform or "",
             timeout_seconds=request_timeout_seconds,
+            job_mode=bool(payload.async_job),
         )
         trust_timeout = TRUST_DISCOVERY_TIMEOUTS.get(str(payload.scan_mode or "advanced").lower(), 7.0)
         if request_timeout_seconds is not None:

@@ -87,7 +87,13 @@ def compute_pages_found(
     )
 
 
-def resolve_scan_budget(scan_mode: str, timeout_seconds: float | None = None) -> dict:
+# Asynchronous durable jobs are not bounded by the Base44 gateway's
+# synchronous response window, so a trusted gateway may authorise a longer
+# crawl. Page caps and robots enforcement are never affected by this ceiling.
+ASYNC_JOB_TIMEOUT_CEILING = 120.0
+
+
+def resolve_scan_budget(scan_mode: str, timeout_seconds: float | None = None, *, job_mode: bool = False) -> dict:
     """Return a per-request copy of the mode budget.
 
     Standard 150 normally owns a 75-second backend ceiling. A trusted gateway may
@@ -103,7 +109,10 @@ def resolve_scan_budget(scan_mode: str, timeout_seconds: float | None = None) ->
         requested = float(timeout_seconds)
     except (TypeError, ValueError):
         return budget
-    bounded = max(20.0, min(float(base["timeout"]), requested))
+    if job_mode:
+        bounded = max(20.0, min(ASYNC_JOB_TIMEOUT_CEILING, requested))
+    else:
+        bounded = max(20.0, min(float(base["timeout"]), requested))
     budget["timeout"] = bounded
     budget["fetch_timeout"] = min(
         float(base.get("fetch_timeout", 10)),
@@ -122,9 +131,10 @@ async def run_scan(
     scan_mode: str = "advanced",
     concurrency: int = 8,
     timeout_seconds: float | None = None,
+    job_mode: bool = False,
     **kwargs,
 ) -> dict:
-    budget = resolve_scan_budget(scan_mode, timeout_seconds)
+    budget = resolve_scan_budget(scan_mode, timeout_seconds, job_mode=job_mode)
     fetch_timeout = float(budget.get("fetch_timeout", min(10, max(3, budget["timeout"] / 5))))
     max_sitemap_fetches = int(budget.get("max_sitemap_fetches", 10))
     scan_started_at = time.monotonic()

@@ -98,7 +98,7 @@ export default function FixList() {
 
     // A background reread must never blank the view. Polling used to call
     // applyRecord(null) on every tick, so an active scan visibly alternated
-    // between its real status and "Loading this scan..." with a "no scan" debug
+    // between its real status and "Loading this scan…" with a "no scan" debug
     // footer every 2.5 seconds. The record is now cleared only when the scan
     // being viewed actually changes, when there is no scan id, or when the
     // customer/auth boundary is cleared.
@@ -126,7 +126,7 @@ export default function FixList() {
         setRequestedScanState("idle");
         return;
       }
-      // "Loading this scan..." is an initial-load state only.
+      // "Loading this scan…" is an initial-load state only.
       if (!isBackgroundRead) {
         clearRecord();
         setRequestedScanState("loading");

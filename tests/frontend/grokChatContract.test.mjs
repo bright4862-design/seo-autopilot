@@ -149,6 +149,8 @@ test("server review snapshot survives the actual persistence and Grok reconstruc
       beta_revision_fingerprint: "51c813a6219b4e70",
       metadata_evidence_version: "metadata_v1",
       title_evidence_version: "title_v1",
+      submitted_url: "https://www.example.com/",
+      website_url: "https://www.example.com/",
       final_url: "https://www.example.com/final",
       pages_found: 9,
       pages_crawled: 7,
@@ -189,6 +191,8 @@ test("server review snapshot survives the actual persistence and Grok reconstruc
   assert.equal(snapshot.scan.completed_at, now);
   assert.equal(snapshot.fix_list.generated_at, now);
   assert.equal(snapshot.normalized_domain, "example.com");
+  assert.equal(snapshot.scan.website_url, "https://www.example.com/");
+  assert.equal(snapshot.fix_list.website_url, "https://www.example.com/");
 
   const proof = await createAuthoritySeal(snapshot, secret);
   const rows = authorityRowsFromSnapshot(snapshot, {

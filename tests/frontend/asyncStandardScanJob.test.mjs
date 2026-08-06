@@ -9,6 +9,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { corsHeaders, jsonResponse } from "../../base44/functions/startStandardScanJob/httpResponse.js";
 
 const job = fs.readFileSync("base44/functions/startStandardScanJob/entry.ts", "utf8");
 const gateway = fs.readFileSync("base44/functions/runStandard150Scan/entry.ts", "utf8");
@@ -35,10 +36,11 @@ test("1. a scan longer than 50 seconds cannot produce a browser 503", () => {
   // accepted — before any crawl work — so crawl duration cannot reach it.
   const acceptIndex = form.indexOf("jobData?.accepted === true");
   const navigateIndex = form.indexOf("navigate(`/dashboard?scan_id=${encodeURIComponent(scanId)}`)", acceptIndex);
-  const syncFallbackIndex = form.indexOf('callBase44Function(STANDARD_SCANNER_FUNCTION');
   assert.ok(acceptIndex > -1, "form must check the accepted job response");
   assert.ok(navigateIndex > acceptIndex, "accepted job must navigate immediately");
-  assert.ok(syncFallbackIndex > navigateIndex, "the synchronous path must come after (fallback only)");
+  assert.match(form, /const SYNC_FALLBACK_ENABLED = false;/);
+  assert.match(form, /async_job_rejected_no_fallback/);
+  assert.match(form, /No fallback scan was started and nothing was charged/);
 });
 
 test("2. the worker owns a 60-120 second crawl budget; sync fallback keeps 28s", () => {

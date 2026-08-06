@@ -34,6 +34,9 @@ from .review_calibration import CALIBRATION_VERSION, apply_review_evidence_calib
 from .scan_timing import SITEMAP_TIME_RESERVATION_VERSION
 from .scan_job import (
     CRAWL_BUDGET_SECONDS,
+    current_attempt,
+    is_superseded_attempt,
+    normalize_attempt,
     WORKER_VERSION,
     already_terminal,
     complete_authority,
@@ -336,6 +339,9 @@ class ScanJobRequest(BaseModel):
 
     scan_id: str
     request_id: str
+    # The attempt this task was minted for. Bound end to end so a task from an
+    # earlier attempt cannot crawl, fail, finalise or charge a newer one.
+    attempt_count: int = 1
     idempotency_key: str | None = None
     project_id: str | None = None
     owner_user_id: str | None = None
@@ -399,6 +405,7 @@ async def scan_job(
         raise HTTPException(status_code=400, detail="Standard scans must respect robots.txt.")
 
     job = payload.model_dump()
+    job_attempt = normalize_attempt(payload.attempt_count)
 
     async with httpx.AsyncClient() as client:
         scan = await read_scan_run(client, scan_id)
@@ -409,8 +416,21 @@ async def scan_job(
             await write_terminal_failure(
                 client, scan_id, "scan_identity_mismatch",
                 "This scan could not be matched to your request. Please start a new scan.",
+                attempt_count=job_attempt,
             )
             return {"success": False, "worker_version": WORKER_VERSION, "error_code": "scan_identity_mismatch"}
+        # A superseded task must do nothing at all: no crawl, no failure write,
+        # no persistence, no charge. It is not an error -- the newer attempt
+        # owns the row -- so return 200 and let Cloud Tasks drop the task.
+        if is_superseded_attempt(scan, job_attempt):
+            return {
+                "success": True,
+                "worker_version": WORKER_VERSION,
+                "skipped": "superseded_attempt",
+                "scan_id": scan_id,
+                "task_attempt": job_attempt,
+                "current_attempt": current_attempt(scan),
+            }
         # Idempotency: a retry after a completed run must not scan again.
         if already_terminal(scan):
             return {
@@ -450,6 +470,7 @@ async def scan_job(
             await write_terminal_failure(
                 client, scan_id, "scanner_failed",
                 "The scan stopped unexpectedly. No partial result was saved. Please try again.",
+                attempt_count=job_attempt,
             )
             return {"success": False, "worker_version": WORKER_VERSION, "error_code": "scanner_failed"}
 
@@ -461,10 +482,20 @@ async def scan_job(
         if outcome.get("transient"):
             # ScanRun untouched: Cloud Tasks retries the same scan_id safely.
             raise HTTPException(status_code=503, detail="Authority persistence is unavailable.")
+        if outcome.get("superseded"):
+            # A newer attempt owns the row: write nothing, charge nothing.
+            return {
+                "success": True,
+                "worker_version": WORKER_VERSION,
+                "skipped": "superseded_attempt",
+                "scan_id": scan_id,
+                "task_attempt": job_attempt,
+            }
         if not outcome.get("ok"):
             await write_terminal_failure(
                 client, scan_id, str(outcome.get("failure_code") or "authority_persistence_failed"),
                 "The scan finished, but its result could not be saved. Please try again.",
+                attempt_count=job_attempt,
             )
             return {"success": False, "worker_version": WORKER_VERSION, "error_code": outcome.get("failure_code")}
 

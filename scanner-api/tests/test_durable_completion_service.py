@@ -148,7 +148,12 @@ def test_authority_is_verified_before_allowance_and_terminal_completion():
     stage_index = source.index("await entities.ScanRun.update(identity.scan_id, stagedScanFields)")
     verify_index = source.index("const authorityStaged = Boolean(")
     allowance_index = source.index("await ensureAllowanceConsumed")
-    terminal_index = source.index("await entities.ScanRun.update(identity.scan_id, rows.scanRun)")
+    # B4: the terminal write must NOT use rows.scanRun, which carries
+    # attempt_count. Writing it back would let a slow task resurrect an old
+    # attempt number onto a row that has already moved on.
+    assert "await entities.ScanRun.update(identity.scan_id, rows.scanRun)" not in source
+    assert "const { attempt_count: _stagedAttempt, ...scanRunFields } = rows.scanRun" in source
+    terminal_index = source.index("await entities.ScanRun.update(identity.scan_id, scanRunFields)")
     assert stage_index < verify_index < allowance_index < terminal_index
     assert 'status: "reviewing"' in source
     assert 'release_gate_eligible: false' in source

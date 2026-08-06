@@ -130,10 +130,13 @@ test("orphan recovery closes abandoned runs well before the replay TTL", () => {
     STANDARD_ORPHAN_RECOVERY_TTL_MS < STANDARD_ACTIVE_SCAN_TTL_MS,
     "recovery must be faster than the conservative replay window",
   );
-  // The whole synchronous request is bounded by the 105s browser deadline.
-  assert.ok(STANDARD_ORPHAN_RECOVERY_TTL_MS > 105_000);
+  // Recovery must never fail a live durable worker. The worker envelope is
+  // 210s crawl + 60s review/persist = 270s, plus queue delivery and cold
+  // start, so the threshold sits well above it.
+  assert.ok(STANDARD_ORPHAN_RECOVERY_TTL_MS > 270_000);
 
-  const now = Date.parse("2026-08-05T19:35:00.000Z");
+  // Ten minutes after the last write: past the recovery threshold.
+  const now = Date.parse("2026-08-05T19:38:30.000Z");
   const orphan = {
     status: "crawling",
     queued_at: "2026-08-05T19:28:04.195Z",
@@ -143,6 +146,7 @@ test("orphan recovery closes abandoned runs well before the replay TTL", () => {
   assert.equal(isStaleActiveScanRun(orphan, { now, activeTtlMs: STANDARD_ORPHAN_RECOVERY_TTL_MS }), true);
 
   // A scan that is genuinely still running in another tab must be left alone.
+  // A durable worker mid-crawl writes nothing for minutes; it must survive.
   const live = { status: "crawling", queued_at: "2026-08-05T19:34:30.000Z", started_at: "2026-08-05T19:34:30.000Z" };
   assert.equal(isStaleActiveScanRun(live, { now, activeTtlMs: STANDARD_ORPHAN_RECOVERY_TTL_MS }), false);
 

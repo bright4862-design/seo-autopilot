@@ -1,6 +1,13 @@
 import { createClientFromRequest } from "npm:@base44/sdk";
 import { verifyAuthoritySeal } from "./authoritySeal.js";
 
+// Attempts are 1-based; anything unparseable is attempt 1.
+function normalizeAttempt(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(1, Math.trunc(parsed)) : 1;
+}
+
+
 const WORKER_VERSION = "scan_job_worker_v1_cloud_tasks";
 const CONTROL_VERSION = "durable_standard150_control_v1";
 const TERMINAL_STATUSES = new Set(["complete", "limited", "failed", "cancelled"]);
@@ -74,6 +81,14 @@ Deno.serve(async (req) => {
     if (!scan || !project) throw new RequestProblem(404, "worker_record_not_found", "The durable scan project was not found.");
     validateBoundIdentity({ scan, project, identity });
 
+    // Attempt binding. A control call minted for an earlier attempt must not
+    // write a failure over the attempt that currently owns the row.
+    const claimedAttempt = normalizeAttempt(identity.attempt_count);
+    const rowAttempt = normalizeAttempt(scan.attempt_count);
+    if (claimedAttempt !== rowAttempt) {
+      throw new RequestProblem(409, "superseded_attempt", "A newer attempt owns this scan.");
+    }
+
     if (TERMINAL_STATUSES.has(String(scan.status || "").toLowerCase())) {
       return Response.json({
         success: true,
@@ -128,6 +143,9 @@ function normalizeIdentity(value) {
     request_id: cleanId(source.request_id),
     idempotency_key: cleanId(source.idempotency_key),
     normalized_domain: normalizeDomain(source.normalized_domain),
+    // Signed by the worker. Without it the attempt guard would compare
+    // undefined and silently pass, so a superseded task could still write.
+    attempt_count: normalizeAttempt(source.attempt_count),
   };
 }
 

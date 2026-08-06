@@ -3,6 +3,14 @@ import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
 import { authorityRowsFromSnapshot } from "./authorityRows.js";
 import { buildAuthoritySnapshot, isAuthorityEligible } from "./authoritySnapshot.js";
 
+// Attempts are 1-based; anything unparseable is attempt 1. Mirrors
+// normalize_attempt in scanner-api/app/scan_job.py.
+function normalizeAttempt(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(1, Math.trunc(parsed)) : 1;
+}
+
+
 const WORKER_VERSION = "scan_job_worker_v1_cloud_tasks";
 const COMPLETION_VERSION = "durable_standard150_completion_v1";
 const MAX_FIX_ITEMS = 100;
@@ -67,8 +75,34 @@ Deno.serve(async (req) => {
       now: stableSealedAt,
     });
     const authorityProof = await createAuthoritySeal(snapshot, secret);
+    // Attempt binding. The signed identity carries the attempt this worker was
+    // minted for; the durable row carries the attempt that currently owns it.
+    // A task from an earlier attempt must not persist, finalise or charge.
+    const claimedAttempt = normalizeAttempt(identity.attempt_count);
+    const rowAttempt = normalizeAttempt(scan.attempt_count);
+    if (claimedAttempt !== rowAttempt) {
+      throw new RequestProblem(409, "superseded_attempt", "A newer attempt owns this scan.");
+    }
+
+    // A terminal seal is immutable: once a run is complete and sealed, no
+    // further persistence may replace it, not even by the same attempt.
+    const scanIsTerminallySealed = scan.status === "complete" && Boolean(scan.authority_proof);
+    if (scanIsTerminallySealed && scan.authority_proof !== authorityProof) {
+      throw new RequestProblem(409, "authority_immutable", "This scan is already sealed with a different authority proof.");
+    }
+    // A proof staged by THIS attempt while the row is still non-terminal is a
+    // resumable partial persistence, not a conflict -- that is exactly the
+    // state a Cloud Tasks retry finds after an interrupted finalisation. A
+    // proof staged by a different attempt is superseded.
     if (scan.authority_proof && scan.authority_proof !== authorityProof) {
-      throw new RequestProblem(409, "authority_conflict", "This scan already has a different authority seal.");
+      if (scanIsTerminallySealed) {
+        throw new RequestProblem(409, "authority_immutable", "This scan is already sealed.");
+      }
+      if (normalizeAttempt(scan.authority_attempt_count ?? rowAttempt) !== claimedAttempt) {
+        throw new RequestProblem(409, "superseded_attempt", "A different attempt staged this authority.");
+      }
+      // Same attempt, different proof: the earlier partial stage is superseded
+      // by this one and is safely overwritten below while still non-terminal.
     }
     const replayed = scan.authority_proof === authorityProof;
 
@@ -89,8 +123,12 @@ Deno.serve(async (req) => {
     // Stage the exact authority proof while the run remains non-terminal. This
     // makes retries safe and lets us verify every authoritative row before any
     // allowance is consumed.
+    // attempt_count belongs to the browser/dispatcher lifecycle, never to an
+    // authority row. Writing it back here would let a slow task resurrect an
+    // old attempt number onto a row that has already moved on.
+    const { attempt_count: _stagedAttempt, ...scanRunFields } = rows.scanRun;
     const stagedScanFields = {
-      ...rows.scanRun,
+      ...scanRunFields,
       status: "reviewing",
       status_detail: "Authority verified; finalizing this scan.",
       release_gate_eligible: false,
@@ -131,7 +169,7 @@ Deno.serve(async (req) => {
 
     // Only after authority and allowance are both verified does the ScanRun
     // become a terminal, release-eligible result.
-    await entities.ScanRun.update(identity.scan_id, rows.scanRun);
+    await entities.ScanRun.update(identity.scan_id, scanRunFields);
     const persistedScan = await entities.ScanRun.get(identity.scan_id);
     const authorityPersisted = Boolean(
       persistedScan?.status === "complete"
@@ -177,6 +215,9 @@ function normalizeIdentity(value) {
     request_id: cleanId(source.request_id),
     idempotency_key: cleanId(source.idempotency_key),
     normalized_domain: normalizeDomain(source.normalized_domain),
+    // Signed by the worker. Without it the attempt guard would compare
+    // undefined and silently pass, so a superseded task could still write.
+    attempt_count: normalizeAttempt(source.attempt_count),
   };
 }
 

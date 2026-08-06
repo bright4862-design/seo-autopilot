@@ -128,6 +128,29 @@ def build_control_envelope(
     return {**signed, "proof": create_authority_seal(signed, signing_key)}
 
 
+def normalize_attempt(value: Any) -> int:
+    """Attempts are 1-based; anything unparseable is attempt 1."""
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return 1
+
+
+def current_attempt(scan: dict[str, Any]) -> int:
+    return normalize_attempt(scan.get("attempt_count"))
+
+
+def is_superseded_attempt(scan: dict[str, Any], job_attempt: Any) -> bool:
+    """True when the durable row has moved on past the task's attempt.
+
+    Cloud Tasks can deliver a task minted for attempt 1 long after the browser
+    restarted the row as attempt 2. That task must not crawl, write a failure,
+    persist authority, charge allowance or finalise -- the newer attempt owns
+    the row. A task ahead of the row is also refused: it cannot be legitimate.
+    """
+    return normalize_attempt(job_attempt) != current_attempt(scan)
+
+
 def _scan_identity(scan: dict[str, Any]) -> dict[str, str]:
     website = str(scan.get("normalized_domain") or scan.get("website_url") or scan.get("submitted_url") or "")
     return {
@@ -137,6 +160,9 @@ def _scan_identity(scan: dict[str, Any]) -> dict[str, str]:
         "request_id": str(scan.get("request_id") or ""),
         "idempotency_key": str(scan.get("idempotency_key") or scan.get("request_id") or ""),
         "normalized_domain": _normalize_domain(website),
+        # Signed into every control/completion envelope so Base44 can refuse a
+        # superseded attempt even if the worker were compromised or replayed.
+        "attempt_count": str(current_attempt(scan)),
     }
 
 
@@ -167,6 +193,8 @@ async def write_terminal_failure(
     scan_id: str,
     failure_code: str,
     detail: str,
+    *,
+    attempt_count: Any = None,
 ) -> bool:
     """Close the exact ScanRun or raise so Cloud Tasks retries safely."""
     signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
@@ -178,6 +206,11 @@ async def write_terminal_failure(
     identity = _scan_identity(scan)
     if not all(identity.values()):
         raise RuntimeError("The durable ScanRun identity is incomplete.")
+    # Re-read immediately before writing: if the row advanced to a newer
+    # attempt while this task ran, the failure belongs to nobody and must not
+    # be written over the live attempt.
+    if attempt_count is not None and is_superseded_attempt(scan, attempt_count):
+        return False
     envelope = build_control_envelope(
         "fail",
         signing_key,
@@ -348,7 +381,29 @@ async def complete_authority(
     signing_key: str,
     review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Review locally and persist one signed completion through Base44."""
+    """Review locally and persist one signed completion through Base44.
+
+    `scan` was read before a crawl that may have run for minutes. Re-read the
+    row and refuse if a newer attempt has taken over, so a superseded task can
+    never finalise, overwrite a seal, or trigger an allowance charge.
+    """
+    fresh = await read_scan_run(client, str(scan.get("id") or ""))
+    if not isinstance(fresh, dict):
+        return {"ok": False, "transient": True, "failure_code": "scan_unreadable"}
+    if is_superseded_attempt(fresh, current_attempt(scan)):
+        return {"ok": False, "transient": False, "failure_code": "superseded_attempt", "superseded": True}
+    if already_terminal(fresh) and has_authority_proof(fresh):
+        # Terminal authority is immutable. A retry that finds a sealed row
+        # reports the existing result rather than persisting a second one.
+        return {
+            "ok": True,
+            "transient": False,
+            "failure_code": "",
+            "already_sealed": True,
+            "fix_list_id": str(fresh.get("fix_list_id") or ""),
+            "authority_proof": str(fresh.get("authority_proof") or ""),
+        }
+    scan = fresh
     try:
         reviewed = review if isinstance(review, dict) else build_local_review(result)
     except Exception:

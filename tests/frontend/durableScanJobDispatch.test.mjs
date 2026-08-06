@@ -31,17 +31,21 @@ test("the dispatcher performs no post-response background work", () => {
 
 test("task identity is derived deterministically from the existing scan_id", () => {
   const queue = "projects/seo-autopilot-501517/locations/europe-west1/queues/standard150-scans";
-  const first = taskNameForScan(queue, "6a748d5f9e8a27963ae678dc");
-  const second = taskNameForScan(queue, "6a748d5f9e8a27963ae678dc");
+  // Task identity is now (scan_id, attempt): a retry must not collide with the
+  // tombstoned name from the previous attempt. Same scan + same attempt is
+  // still stable, which is what keeps a duplicate submission idempotent.
+  const first = taskNameForScan(queue, "6a748d5f9e8a27963ae678dc", 1);
+  const second = taskNameForScan(queue, "6a748d5f9e8a27963ae678dc", 1);
   assert.equal(first, second, "the same scan must always map to the same task");
-  assert.equal(first, `${queue}/tasks/standard150-6a748d5f9e8a27963ae678dc`);
-  assert.notEqual(first, taskNameForScan(queue, "6a744c8220780ec729e20724"));
+  assert.equal(first, `${queue}/tasks/standard150-6a748d5f9e8a27963ae678dc-a1`);
+  assert.notEqual(first, taskNameForScan(queue, "6a744c8220780ec729e20724", 1));
+  assert.notEqual(first, taskNameForScan(queue, "6a748d5f9e8a27963ae678dc", 2));
 });
 
 test("task names cannot be injected through the scan id", () => {
   const queue = "projects/p/locations/l/queues/q";
-  assert.equal(taskNameForScan(queue, "../../evil"), `${queue}/tasks/standard150-evil`);
-  assert.equal(taskNameForScan(queue, "a/b?c=d"), `${queue}/tasks/standard150-abcd`);
+  assert.equal(taskNameForScan(queue, "../../evil", 1), `${queue}/tasks/standard150-evil-a1`);
+  assert.equal(taskNameForScan(queue, "a/b?c=d", 2), `${queue}/tasks/standard150-abcd-a2`);
 });
 
 test("Cloud Task bodies preserve Unicode business names and URLs", () => {

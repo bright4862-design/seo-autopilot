@@ -1,7 +1,7 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 import { waitUntil } from "base44:runtime";
 import { createAuthoritySeal } from "./authoritySeal.js";
-import { enqueueScanJob } from "./cloudTasks.js";
+import { enqueueScanJob, normalizeAttemptCount } from "./cloudTasks.js";
 
 // Defined inline rather than imported. The bundler emitted a _bundled.mjs in
 // which the ./httpResponse.js bindings were not defined at runtime, so every
@@ -152,13 +152,20 @@ export default async function (req: Request): Promise<Response> {
       }, 503);
     }
 
+    // The attempt the browser already recorded on the durable row. Task
+    // identity, worker validation and every control envelope are bound to it,
+    // so a task minted for an earlier attempt cannot act on a newer one.
+    const attemptCount = normalizeAttemptCount(context.scan?.attempt_count);
+
     const enqueued = await enqueueScanJob({
       queuePath,
       workerUrl,
       invokerServiceAccount,
       scanId: identity.fields.scan_id,
+      attemptCount,
       payload: {
         scan_id: identity.fields.scan_id,
+        attempt_count: attemptCount,
         request_id: identity.fields.request_id,
         idempotency_key: identity.fields.idempotency_key,
         project_id: String(context.scan?.project_id || ""),
@@ -182,7 +189,7 @@ export default async function (req: Request): Promise<Response> {
         error: "The scan job could not be queued. Nothing was charged.", ...identity.fields,
       }, 503);
     }
-    logBoundary("async_job_accepted", { ...identity.fields, task_name: enqueued.taskName, deduplicated: enqueued.deduplicated === true });
+    logBoundary("async_job_accepted", { ...identity.fields, attempt_count: attemptCount, task_name: enqueued.taskName, deduplicated: enqueued.deduplicated === true });
     return jsonResponse({
       success: true,
       accepted: true,

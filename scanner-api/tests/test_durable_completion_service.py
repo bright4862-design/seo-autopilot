@@ -1,18 +1,22 @@
-"""Regression contract for the service-only durable completion boundary."""
+"""Regression contract for the signed durable worker boundaries."""
 
 from pathlib import Path
 
 from app.scan_job import (
     COMPLETION_VERSION,
+    CONTROL_VERSION,
     WORKER_VERSION,
     _service_headers,
     build_completion_envelope,
+    build_control_envelope,
     create_authority_seal,
 )
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SERVICE_SOURCE = REPO_ROOT / "base44/functions/persistDurableScanAuthority/index.ts"
+CONTROL_SOURCE = REPO_ROOT / "base44/functions/durableScanWorkerControl/index.ts"
+WORKER_SOURCE = REPO_ROOT / "scanner-api/app/scan_job.py"
 
 
 def _scan_result() -> dict:
@@ -87,22 +91,53 @@ def test_review_changes_the_completion_proof():
     assert first["proof"] != second["proof"]
 
 
-def test_base44_service_token_is_normalized_and_worker_marked(monkeypatch):
-    monkeypatch.setenv("BASE44_SERVICE_TOKEN", "service-token")
-    monkeypatch.setenv("BASE44_APP_ID", "app-1")
+def test_control_envelopes_bind_action_scan_and_failure():
+    read = build_control_envelope("read", "secret", scan_id="scan-1")
+    assert read["version"] == CONTROL_VERSION
+    assert read["action"] == "read"
+    assert read["scan_id"] == "scan-1"
+    assert len(read["proof"]) == 64
+
+    identity = {
+        "owner_user_id": "owner-1",
+        "scan_id": "scan-1",
+        "project_id": "project-1",
+        "request_id": "req-1",
+        "idempotency_key": "req-1",
+        "normalized_domain": "big.example",
+    }
+    failure = build_control_envelope(
+        "fail", "secret", identity=identity,
+        failure={"code": "scanner_failed", "detail": "Stopped."},
+    )
+    changed = build_control_envelope(
+        "fail", "secret", identity=identity,
+        failure={"code": "scanner_failed", "detail": "Different."},
+    )
+    assert failure["proof"] != changed["proof"]
+
+
+def test_worker_function_headers_do_not_claim_external_service_role():
     headers = _service_headers()
-    assert headers["Base44-Service-Authorization"] == "Bearer service-token"
-    assert headers["Base44-App-Id"] == "app-1"
     assert headers["X-FixList-Worker"] == WORKER_VERSION
+    assert headers["content-type"] == "application/json"
+    assert "Base44-Service-Authorization" not in headers
+    assert "Base44-App-Id" not in headers
+    assert "authorization" not in headers
 
 
-def test_service_function_does_not_depend_on_browser_auth():
-    source = SERVICE_SOURCE.read_text(encoding="utf-8")
-    assert "auth.me" not in source
-    assert 'X-FixList-Worker' in source
-    assert 'Base44-Service-Authorization' in source
-    assert 'verifyAuthoritySeal(signedDocument' in source
-    assert 'validateCurrentIdentity' in source
+def test_hosted_functions_use_supported_service_role_and_signed_envelopes():
+    persistence = SERVICE_SOURCE.read_text(encoding="utf-8")
+    control = CONTROL_SOURCE.read_text(encoding="utf-8")
+    for source in (persistence, control):
+        assert "auth.me" not in source
+        assert "createClientFromRequest(req)" in source
+        assert ".asServiceRole.entities" in source
+        assert "Base44-Service-Authorization" not in source
+        assert 'X-FixList-Worker' in source
+        assert "verifyAuthoritySeal" in source
+    assert "validateCurrentIdentity" in persistence
+    assert "validateBoundIdentity" in control
 
 
 def test_authority_is_verified_before_allowance_and_terminal_completion():
@@ -118,11 +153,16 @@ def test_authority_is_verified_before_allowance_and_terminal_completion():
     assert 'status: "reviewing"' in source
     assert 'release_gate_eligible: false' in source
     assert 'persistedScan?.status === "complete"' in source
+    assert "fixListVerified: true" in source
 
 
-def test_worker_uses_new_service_boundary_not_user_functions():
-    source = (REPO_ROOT / "scanner-api/app/scan_job.py").read_text(encoding="utf-8")
+def test_worker_uses_only_signed_hosted_boundaries():
+    source = WORKER_SOURCE.read_text(encoding="utf-8")
     assert 'invoke_function(client, "persistDurableScanAuthority", envelope)' in source
+    assert 'invoke_function(client, "durableScanWorkerControl", envelope' in source
+    assert "/entities/" not in source
+    assert "Base44-Service-Authorization" not in source
     assert 'invoke_function(client, "aiReviewScan"' not in source
     assert 'invoke_function(client, "persistScanAuthority"' not in source
     assert "build_local_review" in source
+    assert 'get("fixListVerified") is not True' in source

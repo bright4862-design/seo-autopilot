@@ -217,14 +217,28 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
     if (!normalizedUrl) { setUrlError(INVALID_URL_MESSAGE); return; }
     setUrlError("");
 
-    // Access gate runs before any durable scan identity is created, so a blocked
-    // customer never consumes a request_id or leaves a queued ScanRun behind.
-    const access = await loadAccess();
+    // Show unmistakable progress immediately on click. The access check still
+    // runs before any durable scan identity or network scan work is created.
+    submitLockRef.current = true;
+    setSubmitting(true);
+    setActiveStep("Starting your scan");
+    let access = null;
+    try {
+      access = await loadAccess();
+    } catch {
+      submitLockRef.current = false;
+      setSubmitting(false);
+      setActiveStep("");
+      setError("FixList could not start the scan. Please refresh and try again.");
+      return;
+    }
     if (!access.canScan) {
+      submitLockRef.current = false;
+      setSubmitting(false);
+      setActiveStep("");
       setError(`You've used your free test scan. Unlock full access for ${UNLOCK_PRICE_LABEL} on the Billing page to run more scans and see every result.`);
       return;
     }
-    submitLockRef.current = true;
 
     let scanData = null;
     let aiData = null;
@@ -242,7 +256,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       submitted_url: submittedUrl,
       normalized_domain: normalizedScanDomain(normalizedUrl),
     });
-    setSubmitting(true);
 
     try {
       const { user: scanOwner, project: scanProject } = await ensureScanProject({
@@ -466,7 +479,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
 
   return (
     <div className="mx-auto w-full max-w-[640px]">
-      <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-8">
+      <form onSubmit={handleSubmit} noValidate aria-busy={isLoading} className="flex flex-col gap-8">
         <div className="flex flex-col gap-3">
           <h1 className="text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">Create your FixList</h1>
           <p className="text-base leading-7 text-slate-600">Enter a website URL and we’ll turn the scan into a plain-English list of what to fix, what matters most, and what may need a developer.</p>
@@ -545,11 +558,17 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
 
         {error ? <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"><div className="flex items-start gap-2"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span>{error}</span></div></div> : null}
         {isLoading ? (
-          <div className="rounded-2xl border border-indigo-100 bg-indigo-50 p-5 text-indigo-950" aria-live="polite">
+          <div
+            role="status"
+            aria-live="assertive"
+            aria-atomic="true"
+            className="fixed left-1/2 top-4 z-[100] w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 rounded-2xl border border-indigo-200 bg-white p-5 text-indigo-950 shadow-2xl ring-1 ring-indigo-100"
+          >
             <div className="flex items-start gap-3">
-              <Loader2 className="mt-0.5 h-5 w-5 shrink-0 animate-spin" />
+              <Loader2 className="mt-0.5 h-6 w-6 shrink-0 animate-spin text-indigo-600" />
               <div className="min-w-0 flex-1">
-                <div className="flex items-baseline justify-between gap-3">
+                <p className="text-xs font-bold uppercase tracking-[0.12em] text-indigo-600">Scan running</p>
+                <div className="mt-1 flex items-baseline justify-between gap-3">
                   <p className="font-semibold">{activeStep || "Starting your scan"}</p>
                   <span className="shrink-0 text-xs tabular-nums text-indigo-700">{formatElapsed(elapsedSeconds)}</span>
                 </div>

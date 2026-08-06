@@ -67,13 +67,17 @@ test("a bare domain is accepted and normalised to https on blur", () => {
 });
 
 test("validation is inline and fires before any network work", () => {
-  const submit = scanForm.match(/async function handleSubmit[\s\S]*?const access = await loadAccess\(\);/);
+  const submit = scanForm.match(/async function handleSubmit[\s\S]*?access = await loadAccess\(\);/);
   assert.ok(submit, "could not read the pre-flight section of handleSubmit");
   assert.match(submit[0], /if \(!normalizedUrl\) \{ setUrlError\(INVALID_URL_MESSAGE\); return; \}/);
   // The access gate and every request must sit after the URL check.
   assert.ok(
     submit[0].indexOf("setUrlError(INVALID_URL_MESSAGE)") < submit[0].indexOf("loadAccess"),
     "URL validation must run before the access check",
+  );
+  assert.ok(
+    submit[0].indexOf('setSubmitting(true)') < submit[0].indexOf("loadAccess"),
+    "the visible loader must start before the access check",
   );
   assert.match(scanForm, /aria-invalid=\{Boolean\(urlError\)\}/);
   assert.match(scanForm, /id="fixlist-website-url-error"/);
@@ -110,6 +114,11 @@ test("the page is a centred column of about 640px", () => {
 test("the loading state shows visible progress and reassures the customer", () => {
   assert.match(scanForm, /SCAN_PROGRESS_STEPS/);
   assert.match(scanForm, /aria-label="Scan progress"/);
+  assert.match(scanForm, /role="status"/);
+  assert.match(scanForm, /aria-live="assertive"/);
+  assert.match(scanForm, /aria-busy=\{isLoading\}/);
+  assert.match(scanForm, /fixed left-1\/2 top-4 z-\[100\]/);
+  assert.match(scanForm, />Scan running<\/p>/);
   assert.match(scanForm, /formatElapsed\(elapsedSeconds\)/);
   assert.match(scanForm, /Your result will open automatically when it is saved/);
   assert.match(scanForm, /Still working — larger or slower sites can take a little longer/);

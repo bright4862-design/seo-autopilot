@@ -4,7 +4,7 @@
 // globals, "@/" aliases, browser boundaries), so the numeric constants are
 // extracted and the deadline inequalities are *computed*, not string-matched.
 // The request-scoped timeout is now an authenticated, bounded scanner input;
-// the normal Standard 150 page cap and standalone 75s budget remain unchanged.
+// the normal Standard 150 page cap and standalone 75s scanner ceiling remain unchanged.
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -32,11 +32,11 @@ function upstreamTimeoutFor(elapsedMs) {
   return FUNCTION_RESPONSE_BUDGET_MS - elapsedMs - RESPONSE_RESERVE_MS;
 }
 
-test("1. Standard stays 150 pages with the proven 75-second Python crawl cap", () => {
+test("1. Standard stays capped at 150 pages with a 28-second gateway crawl budget", () => {
   const advanced = pythonScanner.match(/"advanced":\s*\{[^}]*"max_pages":\s*(\d+)[^}]*"timeout":\s*(\d+)/);
   assert.equal(Number(advanced?.[1]), 150, "Standard/advanced page maximum must remain 150");
   assert.equal(Number(advanced?.[2]), 75, "the normal standalone advanced timeout remains 75s");
-  assert.equal(PYTHON_CRAWL_BUDGET_MS, 75_000, "gateway must restore the proven advanced crawl cap");
+  assert.equal(PYTHON_CRAWL_BUDGET_MS, 28_000, "gateway must preserve serialization headroom for large root-domain scans");
 
   const scanRequest = pythonMain.match(/class ScanRequest\(BaseModel\):([\s\S]*?)\n\n/)?.[1] || "";
   assert.ok(scanRequest.length > 0, "ScanRequest model not found");
@@ -54,7 +54,7 @@ test("2. gateway timeout leaves headroom before the browser's 105s deadline", ()
   const formPad = Number(form.match(/crawl_timeout_ms \|\| 30000\) \+ (\d+)/)?.[1]);
   assert.equal(formCrawlTimeout + formPad, BROWSER_DEADLINE_MS);
 
-  assert.equal(FUNCTION_RESPONSE_BUDGET_MS, 95_000);
+  assert.equal(FUNCTION_RESPONSE_BUDGET_MS, 55_000);
   for (const elapsed of [0, 1_000, 4_000]) {
     const upstream = upstreamTimeoutFor(elapsed);
     // Inner inequality: we outlast Python's fixed budget plus its serialization.

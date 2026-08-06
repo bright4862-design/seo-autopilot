@@ -1,6 +1,7 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 import { waitUntil } from "base44:runtime";
 import { createAuthoritySeal } from "./authoritySeal.js";
+import { corsHeaders, jsonResponse } from "./httpResponse.js";
 
 // Asynchronous durable Standard 150 job gateway.
 //

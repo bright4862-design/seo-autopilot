@@ -284,15 +284,46 @@ def fix_list_belongs_to_scan(fix_list: dict[str, Any], scan: dict[str, Any]) -> 
     )
 
 
+def build_local_review(result: dict[str, Any]) -> dict[str, Any]:
+    """Run the exact Python review pipeline inside the durable worker.
+
+    This deliberately bypasses the browser-authenticated Base44 review wrapper;
+    the signed service-only persistence function still verifies every owner,
+    project, ScanRun, release marker, and authority invariant.
+    """
+    from .beta_revision import live_revision
+    from .evidence_quality import apply_evidence_quality_gate
+    from .review import run_review
+    from .review_calibration import apply_review_evidence_calibration
+    from .trust_discovery import apply_trust_discovery_gate
+
+    review = run_review(result)
+    review = apply_trust_discovery_gate(review, result)
+    review = apply_review_evidence_calibration(review, result)
+    review = apply_evidence_quality_gate(review, result)
+    review.update({
+        "success": True,
+        "ai_review_backend": "python_review_api",
+        "python_review_fallback_used": False,
+        "beta_revision_fingerprint": live_revision()["fingerprint"],
+    })
+    return review
+
+
 async def complete_authority(
     client: httpx.AsyncClient,
     scan: dict[str, Any],
     result: dict[str, Any],
-    review: dict[str, Any],
     signing_key: str,
+    review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Persist one signed scan+review completion through the service boundary."""
-    envelope = build_completion_envelope(scan, result, review, signing_key)
+    """Review locally and persist one signed completion through Base44."""
+    try:
+        reviewed = review if isinstance(review, dict) else build_local_review(result)
+    except Exception:
+        return {"ok": False, "transient": False, "failure_code": "review_failed"}
+
+    envelope = build_completion_envelope(scan, result, reviewed, signing_key)
     persisted = await invoke_function(client, "persistDurableScanAuthority", envelope)
     if persisted["status_code"] >= 500:
         return {"ok": False, "transient": True, "failure_code": "persistence_unavailable"}

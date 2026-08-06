@@ -135,9 +135,9 @@ export default function FixList() {
       let durableBundle = await getScanRunWithFixList(requestedScanId);
       if (cancelled) return;
       // A run still shown as active may have been abandoned by a browser that
-      // never wrote a terminal state. Recover it here rather than leaving the
-      // customer on a permanent "still running" screen, then re-read so the
-      // page shows the truthful terminal status instead of a stale one.
+      // never wrote a terminal state. Recovery runs at most once per scan and
+      // only once the row is genuinely past the orphan threshold -- never on
+      // every 2.5-second poll, which would hammer writes against a live scan.
       if (
         recoveryAttemptedForRef.current !== requestedScanId
         && durableBundle?.run

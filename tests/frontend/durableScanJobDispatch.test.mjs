@@ -8,7 +8,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { taskNameForScan } from "../../base44/functions/startStandardScanJob/cloudTasks.js";
+import {
+  audienceForWorkerUrl,
+  taskNameForScan,
+} from "../../base44/functions/startStandardScanJob/cloudTasks.js";
 
 const dispatcher = readFileSync(
   new URL("../../base44/functions/startStandardScanJob/entry.ts", import.meta.url),
@@ -47,8 +50,16 @@ test("a duplicate submission for one ScanRun is deduplicated, not re-run", () =>
   assert.match(tasks, /ok: true, deduplicated: true/);
 });
 
+test("the worker route and Cloud Run OIDC audience are kept separate", () => {
+  const workerUrl = "https://fixlist-worker-abc-ew.a.run.app/scan-job";
+  assert.equal(audienceForWorkerUrl(workerUrl), "https://fixlist-worker-abc-ew.a.run.app");
+  assert.match(tasks, /url: workerUrl/);
+  assert.match(tasks, /audience: workerAudience/);
+  assert.throws(() => audienceForWorkerUrl("http://localhost:8080/scan-job"));
+});
+
 test("the worker is invoked with OIDC, never anonymously", () => {
-  assert.match(tasks, /oidcToken: \{ serviceAccountEmail: invokerServiceAccount, audience: workerUrl \}/);
+  assert.match(tasks, /oidcToken: \{ serviceAccountEmail: invokerServiceAccount, audience: workerAudience \}/);
 });
 
 test("a failed enqueue closes the ScanRun truthfully and charges nothing", () => {

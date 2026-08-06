@@ -1,11 +1,11 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Bug, Copy, Download, ExternalLink, RefreshCw, Trash2 } from "lucide-react";
 
 import { isRateLimitFinding, shouldUseLegacyRateLimitPresentation } from "@/lib/reviewContract";
 import { trackEvent } from "@/lib/analytics";
 import { getScanRunWithFixList, recoverOrphanedScanRuns } from "@/lib/scanRuns";
-import { ACTIVE_SCAN_RUN_STATUSES } from "@/lib/scanRunIdentity";
+import { ACTIVE_SCAN_RUN_STATUSES, STANDARD_ORPHAN_RECOVERY_TTL_MS, isStaleActiveScanRun } from "@/lib/scanRunIdentity";
 import { FREE_PREVIEW_FIX_COUNT, UNLOCK_PRICE_LABEL, loadAccess } from "@/lib/access";
 import UnlockAccessButton from "@/components/billing/UnlockAccessButton";
 import { CUSTOMER_BOUNDARY_EVENT } from "@/lib/customerBrowserCache";
@@ -71,6 +71,11 @@ export default function FixList() {
   const [scanRecord, setScanRecord] = useState(null);
   const [requestedScanState, setRequestedScanState] = useState(requestedScanId ? "loading" : "idle");
   const [reloadToken, setReloadToken] = useState(0);
+  // Survive effect re-runs: a poll re-runs the effect, so "have we already
+  // loaded this exact scan?" cannot live in the effect's own scope.
+  const loadedScanIdRef = useRef("");
+  const recoveryAttemptedForRef = useRef("");
+  const pollTimerRef = useRef(0);
   const [debugData, setDebugData] = useState(() => buildAuthoritativeDebugData(null));
   const [selectedCms, setSelectedCms] = useState("custom");
   const [doneIds, setDoneIds] = useState([]);
@@ -91,23 +96,42 @@ export default function FixList() {
   useEffect(() => {
     let cancelled = false;
 
+    // A background reread must never blank the view. Polling used to call
+    // applyRecord(null) on every tick, so an active scan visibly alternated
+    // between its real status and "Loading this scan..." with a "no scan" debug
+    // footer every 2.5 seconds. The record is now cleared only when the scan
+    // being viewed actually changes, when there is no scan id, or when the
+    // customer/auth boundary is cleared.
+    const isBackgroundRead = loadedScanIdRef.current === requestedScanId && Boolean(requestedScanId);
+
     function applyRecord(next) {
       if (cancelled) return;
       setScanRecord(next);
       setDebugData(buildAuthoritativeDebugData(next));
-      setDoneIds([]);
       if (next?.cms_platform) setSelectedCms(normalizeCmsValue(next.cms_platform));
     }
 
-    async function loadRequestedScan() {
-      applyRecord(null);
+    function clearRecord() {
+      if (cancelled) return;
+      loadedScanIdRef.current = "";
+      setScanRecord(null);
+      setDebugData(buildAuthoritativeDebugData(null));
+      // Completed-fix ticks belong to the scan being cleared, not the next one.
+      setDoneIds([]);
+    }
 
+    async function loadRequestedScan() {
       if (!requestedScanId) {
+        clearRecord();
         setRequestedScanState("idle");
         return;
       }
+      // "Loading this scan..." is an initial-load state only.
+      if (!isBackgroundRead) {
+        clearRecord();
+        setRequestedScanState("loading");
+      }
 
-      setRequestedScanState("loading");
       let durableBundle = await getScanRunWithFixList(requestedScanId);
       if (cancelled) return;
       // A run still shown as active may have been abandoned by a browser that

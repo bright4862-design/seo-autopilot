@@ -138,7 +138,13 @@ export default function FixList() {
       // never wrote a terminal state. Recover it here rather than leaving the
       // customer on a permanent "still running" screen, then re-read so the
       // page shows the truthful terminal status instead of a stale one.
-      if (ACTIVE_SCAN_RUN_STATUSES.has(String(durableBundle?.run?.status || ""))) {
+      if (
+        recoveryAttemptedForRef.current !== requestedScanId
+        && durableBundle?.run
+        && ACTIVE_SCAN_RUN_STATUSES.has(String(durableBundle.run.status || ""))
+        && isStaleActiveScanRun(durableBundle.run, { activeTtlMs: STANDARD_ORPHAN_RECOVERY_TTL_MS })
+      ) {
+        recoveryAttemptedForRef.current = requestedScanId;
         const recovered = await recoverOrphanedScanRuns({ projectId: durableBundle.run.project_id || "" });
         if (cancelled) return;
         if (recovered.includes(requestedScanId)) {
@@ -146,22 +152,38 @@ export default function FixList() {
           if (cancelled) return;
         }
       }
-      if (durableBundle?.run) {
+
+      // Never substitute another scan for the one that was requested.
+      const isExactScan = String(durableBundle?.run?.id || "") === String(requestedScanId);
+      if (durableBundle?.run && isExactScan) {
+        loadedScanIdRef.current = requestedScanId;
         applyRecord(normalizeDurableScanBundle(durableBundle));
         setRequestedScanState("loaded");
+        // Polling stops as soon as the run reaches a terminal state.
         if (ACTIVE_SCAN_RUN_STATUSES.has(String(durableBundle.run.status || ""))) {
-          window.setTimeout(() => {
+          pollTimerRef.current = window.setTimeout(() => {
             if (!cancelled) setReloadToken((value) => value + 1);
           }, 2500);
         }
-      } else {
-        applyRecord(null);
-        setRequestedScanState("not_found");
+        return;
       }
+
+      // A transient null or read error during polling must not erase a scan we
+      // already hold. Keep the exact record on screen and try again.
+      if (isBackgroundRead && loadedScanIdRef.current === requestedScanId) {
+        pollTimerRef.current = window.setTimeout(() => {
+          if (!cancelled) setReloadToken((value) => value + 1);
+        }, 2500);
+        return;
+      }
+      clearRecord();
+      setRequestedScanState("not_found");
     }
 
     function clearProtectedView() {
       cancelled = true;
+      window.clearTimeout(pollTimerRef.current);
+      loadedScanIdRef.current = "";
       setScanRecord(null);
       setDebugData(buildAuthoritativeDebugData(null));
       setDoneIds([]);
@@ -172,6 +194,7 @@ export default function FixList() {
     window.addEventListener(CUSTOMER_BOUNDARY_EVENT, clearProtectedView);
     return () => {
       cancelled = true;
+      window.clearTimeout(pollTimerRef.current);
       window.removeEventListener(CUSTOMER_BOUNDARY_EVENT, clearProtectedView);
     };
   }, [requestedScanId, reloadToken]);

@@ -37,13 +37,18 @@ test("1. Standard stays 150 pages within the platform's real crawl ceiling", () 
   assert.equal(Number(advanced?.[1]), 150, "Standard/advanced page maximum must remain 150");
   assert.equal(Number(advanced?.[2]), 75, "Python's standalone advanced timeout remains 75s");
   // The gateway supplies a SMALLER request-scoped cap than Python's standalone
-  // 75s. Production evidence for why: with a 95s function budget (~90s upstream
-  // timer) scan 6a74441e23b1bf178afd41a2 still aborted at 51.6s with
-  // AbortError -- the Base44 function platform kills the outbound fetch at
-  // roughly 50s no matter what we configure. A 75s gateway budget authorises a
-  // crawl the platform cannot deliver, producing a guaranteed 503 on any site
-  // that uses it. 40s is the value every sealed production run was produced on.
-  assert.equal(PYTHON_CRAWL_BUDGET_MS, 40_000, "gateway crawl cap must fit the ~50s platform ceiling");
+  // 75s, and that cap must also leave room for serialising a 150-page payload.
+  // Production evidence: at 75s, scans died with AbortError; at 40s, large-site
+  // root scans still landed at 50.9-52.7s against a 50s upstream timer
+  // (funbooker.com/, jackssurfboards.com/), while small sites and narrow
+  // path-prefixed scans passed. The crawl cap is therefore bounded by the
+  // response reserve, not just by the upstream timer.
+  assert.equal(PYTHON_CRAWL_BUDGET_MS, 28_000, "crawl cap must leave room to serialise the response");
+  const responseHeadroomMs = upstreamTimeoutFor(0) - PYTHON_CRAWL_BUDGET_MS;
+  assert.ok(
+    responseHeadroomMs >= 20_000,
+    `only ${responseHeadroomMs}ms left to serialise and transfer a 150-page payload; needs >= 20000ms`,
+  );
 
   const scanRequest = pythonMain.match(/class ScanRequest\(BaseModel\):([\s\S]*?)\n\n/)?.[1] || "";
   assert.ok(scanRequest.length > 0, "ScanRequest model not found");

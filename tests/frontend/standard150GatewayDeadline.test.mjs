@@ -32,11 +32,18 @@ function upstreamTimeoutFor(elapsedMs) {
   return FUNCTION_RESPONSE_BUDGET_MS - elapsedMs - RESPONSE_RESERVE_MS;
 }
 
-test("1. Standard stays 150 pages with the proven 75-second Python crawl cap", () => {
+test("1. Standard stays 150 pages within the platform's real crawl ceiling", () => {
   const advanced = pythonScanner.match(/"advanced":\s*\{[^}]*"max_pages":\s*(\d+)[^}]*"timeout":\s*(\d+)/);
   assert.equal(Number(advanced?.[1]), 150, "Standard/advanced page maximum must remain 150");
-  assert.equal(Number(advanced?.[2]), 75, "the normal standalone advanced timeout remains 75s");
-  assert.equal(PYTHON_CRAWL_BUDGET_MS, 75_000, "gateway must restore the proven advanced crawl cap");
+  assert.equal(Number(advanced?.[2]), 75, "Python's standalone advanced timeout remains 75s");
+  // The gateway supplies a SMALLER request-scoped cap than Python's standalone
+  // 75s. Production evidence for why: with a 95s function budget (~90s upstream
+  // timer) scan 6a74441e23b1bf178afd41a2 still aborted at 51.6s with
+  // AbortError -- the Base44 function platform kills the outbound fetch at
+  // roughly 50s no matter what we configure. A 75s gateway budget authorises a
+  // crawl the platform cannot deliver, producing a guaranteed 503 on any site
+  // that uses it. 40s is the value every sealed production run was produced on.
+  assert.equal(PYTHON_CRAWL_BUDGET_MS, 40_000, "gateway crawl cap must fit the ~50s platform ceiling");
 
   const scanRequest = pythonMain.match(/class ScanRequest\(BaseModel\):([\s\S]*?)\n\n/)?.[1] || "";
   assert.ok(scanRequest.length > 0, "ScanRequest model not found");
@@ -54,7 +61,15 @@ test("2. gateway timeout leaves headroom before the browser's 105s deadline", ()
   const formPad = Number(form.match(/crawl_timeout_ms \|\| 30000\) \+ (\d+)/)?.[1]);
   assert.equal(formCrawlTimeout + formPad, BROWSER_DEADLINE_MS);
 
-  assert.equal(FUNCTION_RESPONSE_BUDGET_MS, 95_000);
+  assert.equal(FUNCTION_RESPONSE_BUDGET_MS, 55_000);
+  // The whole gateway attempt must fit inside the platform's observed ~50s
+  // abort ceiling, otherwise our own timers never get a chance to fire and the
+  // customer sees an opaque 503 instead of a bounded failure.
+  const PLATFORM_ABORT_CEILING_MS = 50_000;
+  assert.ok(
+    upstreamTimeoutFor(0) <= PLATFORM_ABORT_CEILING_MS,
+    `upstream timer ${upstreamTimeoutFor(0)}ms must not exceed the ~${PLATFORM_ABORT_CEILING_MS}ms platform ceiling`,
+  );
   for (const elapsed of [0, 1_000, 4_000]) {
     const upstream = upstreamTimeoutFor(elapsed);
     // Inner inequality: we outlast Python's fixed budget plus its serialization.

@@ -14,12 +14,22 @@ const MAX_PAGES = 150;
 //     < FUNCTION_RESPONSE_BUDGET_MS
 //     < BROWSER_DEADLINE_MS
 //
-// Standard 150 uses the Python scanner's proven 75-second advanced crawl cap.
-// Base44 retains response reserve for serialization and still returns before
-// the browser's 105-second deadline. The 150-page maximum is unchanged.
-const PYTHON_CRAWL_BUDGET_MS = 75_000;
+// These budgets are bounded by the Base44 function platform, not by our own
+// timers. Production evidence: with a 95s function budget (~90s upstream timer)
+// scan 6a74441e23b1bf178afd41a2 still died at 51.6s with
+// AbortError "The operation was aborted" -- the platform aborts the outbound
+// fetch at roughly 50 seconds regardless of what we configure. A 75s Python
+// budget therefore authorises a crawl the platform will kill before it can
+// respond, which is a guaranteed 503 for any site that uses the full budget.
+//
+// 40s/55s is the configuration every sealed production run was produced on
+// (funbooker 149 pages, centerstreetlending 150 pages, all with valid authority
+// proofs). Raise these only with evidence that the platform ceiling has moved.
+// The 150-page maximum, robots enforcement and Python-only operation are
+// unaffected: this changes time, never scope.
+const PYTHON_CRAWL_BUDGET_MS = 40_000;
 const BROWSER_DEADLINE_MS = 105_000;
-const FUNCTION_RESPONSE_BUDGET_MS = 95_000;
+const FUNCTION_RESPONSE_BUDGET_MS = 55_000;
 const RESPONSE_RESERVE_MS = 5_000;
 const UPSTREAM_RESPONSE_RESERVE_MS = 4_000;
 const REVIEW_PAGE_SAMPLE_LIMIT = 60;

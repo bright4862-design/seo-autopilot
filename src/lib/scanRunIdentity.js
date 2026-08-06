@@ -133,6 +133,7 @@ export function buildStaleScanRetryFields(run = {}, identity = {}, { now = Date.
     status: "crawling",
     status_detail: "Restarted after the prior Standard attempt expired.",
     attempt_count: currentAttempt + 1,
+    release_gate_eligible: false,
     queued_at: restartedAt,
     started_at: restartedAt,
     reviewing_at: "",

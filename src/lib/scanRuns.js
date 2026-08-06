@@ -30,10 +30,41 @@ import {
 // Terminal states that already carry persisted evidence. Recovery and
 // gateway-observed failures must never overwrite these.
 const PROTECTED_SCAN_STATUSES = new Set(["complete", "limited"]);
+const DURABLE_WORKER_SCAN_SOURCE = "durable_cloud_tasks_standard150";
 const MAX_FIX_ITEMS = 100;
 const MAX_REPLAY_CANDIDATES = 50;
 const pendingBeginsByRequest = new Map();
 const pendingBeginsByTarget = new Map();
+
+
+function positiveAttempt(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(1, Math.trunc(number)) : 1;
+}
+
+function hasAuthorityProof(run) {
+  return /^[a-f0-9]{64}$/.test(String(run?.authority_proof || "").trim().toLowerCase());
+}
+
+function isProtectedRun(run) {
+  return PROTECTED_SCAN_STATUSES.has(String(run?.status || "").toLowerCase())
+    || hasAuthorityProof(run);
+}
+
+function isDurableWorkerOwned(run) {
+  return String(run?.scan_source || "") === DURABLE_WORKER_SCAN_SOURCE;
+}
+
+async function readBrowserWritableAttempt(handle) {
+  const current = await base44.entities.ScanRun.get(handle.id).catch(() => null);
+  if (
+    !current
+    || isProtectedRun(current)
+    || isDurableWorkerOwned(current)
+    || positiveAttempt(current.attempt_count) !== positiveAttempt(handle.attempt_count)
+  ) return null;
+  return current;
+}
 
 async function currentOwner() {
   const user = await base44.auth.me();
@@ -62,6 +93,8 @@ function scanRunHandle(run, { replayed = false, replayReason = "", retried = fal
     previous_scan_id: run.previous_scan_id || "",
     fix_list_id: run.fix_list_id || "",
     status: run.status || "queued",
+    attempt_count: positiveAttempt(run.attempt_count),
+    scan_source: run.scan_source || "",
     replayed,
     replay_reason: replayReason,
     retried,
@@ -92,22 +125,34 @@ async function terminalizeStaleScanRuns(runs = [], { ttlMs = STANDARD_ACTIVE_SCA
   const uniqueRuns = [...new Map(
     (runs || [])
       .filter((run) => run?.id)
-      // Defensive: a run that already reached complete/limited carries persisted
-      // evidence and must never be overwritten by recovery.
-      .filter((run) => !PROTECTED_SCAN_STATUSES.has(String(run.status || "").toLowerCase()))
       .map((run) => [run.id, run]),
   ).values()];
-  await Promise.allSettled(uniqueRuns.map((run) =>
-    base44.entities.ScanRun.update(run.id, {
+  const terminalized = [];
+  await Promise.allSettled(uniqueRuns.map(async (candidate) => {
+    // Browser age is not authority for a Cloud Tasks job. Queue delay and retry
+    // backoff can legitimately outlast the UI threshold, so only the server
+    // worker/watchdog may close those rows.
+    if (isDurableWorkerOwned(candidate)) return;
+    const current = await base44.entities.ScanRun.get(candidate.id).catch(() => null);
+    if (
+      !current
+      || isProtectedRun(current)
+      || isDurableWorkerOwned(current)
+      || positiveAttempt(current.attempt_count) !== positiveAttempt(candidate.attempt_count)
+      || !ACTIVE_SCAN_RUN_STATUSES.has(String(current.status || ""))
+      || !isStaleActiveScanRun(current, { activeTtlMs: ttlMs })
+    ) return;
+    await base44.entities.ScanRun.update(candidate.id, {
       status: "failed",
       status_detail: STALE_RUN_STATUS_DETAIL,
       error_code: "orphaned_no_terminal_state",
       error_message: `Standard scan exceeded the ${Math.round(ttlMs / 60000)}-minute active recovery window without reaching a terminal state.`,
       completed_at: completedAt,
       release_gate_eligible: false,
-    }),
-  ));
-  return uniqueRuns.map((run) => run.id);
+    });
+    terminalized.push(candidate.id);
+  }));
+  return terminalized;
 }
 
 // A scan the browser abandoned mid-flight -- the customer signed out, switched
@@ -121,6 +166,8 @@ const CANCELLED_RUN_STATUS_DETAIL =
 export async function cancelScanRun(handle, error) {
   if (!handle?.id) return null;
   try {
+    const current = await readBrowserWritableAttempt(handle);
+    if (!current) return null;
     const cancelledFields = {
       status: "cancelled",
       status_detail: CANCELLED_RUN_STATUS_DETAIL,
@@ -128,7 +175,7 @@ export async function cancelScanRun(handle, error) {
       completed_at: new Date().toISOString(),
       release_gate_eligible: false,
     };
-    const updatedRun = await base44.entities.ScanRun.update(handle.id, cancelledFields);
+    const updatedRun = await base44.entities.ScanRun.update(current.id, cancelledFields);
     return {
       requestId: handle.request_id || "",
       scanId: handle.id,
@@ -199,6 +246,12 @@ async function beginPersistedScanRun({ projectId, submittedUrl, pathPrefix, scan
   ]);
   const replay = resolveScanRunReplay({ requestRuns, activeRuns, identity });
   if (replay.action === "retry_same_run") {
+    if (isDurableWorkerOwned(replay.run)) {
+      return scanRunHandle(replay.run, {
+        replayed: true,
+        replayReason: "durable_worker_recovery_pending",
+      });
+    }
     return restartStaleRequestRun(replay.run, identity);
   }
   if (replay.staleRuns?.length) await terminalizeStaleScanRuns(replay.staleRuns);
@@ -431,6 +484,8 @@ export async function completeScanRun(handle, mergedRecord) {
 export async function failScanRun(handle, error) {
   if (!handle?.id) return null;
   try {
+    const current = await readBrowserWritableAttempt(handle);
+    if (!current) return null;
     const identityFields = durableIdentityFields(handle, error?.scan_record || error?.scanData || {});
     const failedFields = {
       status: "failed",
@@ -439,7 +494,7 @@ export async function failScanRun(handle, error) {
       ...identityFields,
       completed_at: new Date().toISOString(),
     };
-    const updatedRun = await base44.entities.ScanRun.update(handle.id, failedFields);
+    const updatedRun = await base44.entities.ScanRun.update(current.id, failedFields);
     return {
       requestId: identityFields.request_id,
       scanId: handle.id,

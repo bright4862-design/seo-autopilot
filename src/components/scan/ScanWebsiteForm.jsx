@@ -278,7 +278,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         submittedUrl,
         pathPrefix: requestedPathPrefix,
         scanMode,
-        scanSource: "scan_website_page",
+        scanSource: "durable_cloud_tasks_standard150",
         requestId,
         idempotencyKey,
       });

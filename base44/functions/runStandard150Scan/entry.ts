@@ -37,15 +37,14 @@ const MAX_PAGES = 150;
 // This trades page coverage for completion; restoring full coverage on large
 // sites needs asynchronous orchestration, not a larger timer.
 //
-// 2026-08-06: at 28s, heavy sites still failed intermittently. Production
-// evidence: scan 6a74517de39c3eaf54ed18a0 (jackssurfboards.com) died at ~52s
-// -- crawl + 150-page serialization/transfer still crossed the ~50s platform
-// abort. 20s leaves ~30s for the response so slow sites with large evidence
-// payloads return a smaller sealed result instead of a timeout.
+// 2026-08-06: this synchronous path is now the TEMPORARY FALLBACK only. The
+// primary customer path is startStandardScanJob, which submits the scan and
+// returns immediately while the durable ScanRun carries the result. Per the
+// release-coordination record the fallback keeps its verified 28s budget.
 //
 // The 150-page maximum, robots enforcement and Python-only operation are
 // unaffected: this changes time, never scope.
-const PYTHON_CRAWL_BUDGET_MS = 20_000;
+const PYTHON_CRAWL_BUDGET_MS = 28_000;
 const BROWSER_DEADLINE_MS = 105_000;
 const FUNCTION_RESPONSE_BUDGET_MS = 55_000;
 const RESPONSE_RESERVE_MS = 5_000;

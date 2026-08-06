@@ -17,6 +17,7 @@ const credentials = {
   private_key: String(privateKey),
   token_uri: "https://oauth2.googleapis.com/token",
 };
+const normalizedCredentials = { ...credentials, private_key: credentials.private_key.trim() };
 
 function decodeBase64Url(value) {
   const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
@@ -24,9 +25,9 @@ function decodeBase64Url(value) {
 }
 
 test("service-account configuration accepts JSON or base64-encoded JSON", () => {
-  assert.deepEqual(parseServiceAccountKey(JSON.stringify(credentials)), credentials);
+  assert.deepEqual(parseServiceAccountKey(JSON.stringify(credentials)), normalizedCredentials);
   const encoded = Buffer.from(JSON.stringify(credentials), "utf8").toString("base64");
-  assert.deepEqual(parseServiceAccountKey(encoded), credentials);
+  assert.deepEqual(parseServiceAccountKey(encoded), normalizedCredentials);
 });
 
 test("the Google OAuth assertion is RS256-signed with bounded claims", async () => {

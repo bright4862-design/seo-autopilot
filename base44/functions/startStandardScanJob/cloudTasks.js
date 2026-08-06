@@ -17,14 +17,21 @@ export function taskNameForScan(queuePath, scanId) {
   return `${queuePath}/tasks/standard150-${safeId}`;
 }
 
-// Metadata-server token for the Cloud Run / Base44 runtime identity.
 async function accessToken() {
-  const direct = String(Deno.env.get("GCP_ACCESS_TOKEN") || "");
+  // A direct token is retained only for short-lived diagnostic use. Normal
+  // operation uses the service-account key to mint a fresh OAuth token.
+  const direct = String(Deno.env.get("GCP_ACCESS_TOKEN") || "").trim();
   if (direct) return direct;
+
   const key = String(Deno.env.get("GCP_SERVICE_ACCOUNT_KEY") || "");
   if (!key) return "";
-  const { createSignedJwtAssertion } = await import("./gcpAuth.js");
-  return await createSignedJwtAssertion(key);
+
+  try {
+    const { createServiceAccountAccessToken } = await import("./gcpAuth.js");
+    return await createServiceAccountAccessToken(key);
+  } catch {
+    return "";
+  }
 }
 
 export async function enqueueScanJob({ queuePath, workerUrl, invokerServiceAccount, scanId, payload }) {

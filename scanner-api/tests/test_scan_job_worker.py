@@ -120,3 +120,102 @@ def test_crawl_budget_fits_inside_the_cloud_run_request_timeout():
 
 def test_worker_version_is_pinned():
     assert WORKER_VERSION == "scan_job_worker_v1_cloud_tasks"
+
+
+# ------------------------------------------------- discovery vs crawl cap --
+#
+# Hard compatibility contract: the 150-page cap bounds fetch/analyse ONLY. On a
+# large site the scanner must still enumerate more than 1,000 in-scope URLs and
+# report them in pages_found. The old crawler did this (Funbooker: 1,200 found /
+# 150 crawled) and the durable path must not regress it.
+
+def _large_site_result(found: int = 1_247, crawled: int = 150) -> dict:
+    return {
+        "pages_crawled": crawled,
+        "pages_found": found,
+        "queued_remaining": found - crawled,
+        "crawled_pages": [{"url": f"https://big.example/p{i}"} for i in range(crawled)],
+        "grouped_findings": [{"rule": f"r{i}"} for i in range(12)],
+        "scanner_version": "python_scanner_v3_bounded_request",
+        "scan_id": "scan-1", "scan_run_id": "scan-1", "request_id": "req-1",
+        "normalized_domain": "big.example",
+    }
+
+
+def test_discovery_exceeds_1000_while_crawl_stays_at_150():
+    from app.scan_job import build_authority_review_payload
+
+    payload = build_authority_review_payload(_large_site_result())
+    assert payload["pages_found"] > 1_000, "discovery must not be truncated by the crawl cap"
+    assert payload["pages_crawled"] == 150
+    assert payload["pages_found"] > payload["pages_crawled"]
+    assert payload["queued_remaining"] > 0
+
+
+def test_review_sampling_never_shrinks_reported_discovery():
+    from app.scan_job import REVIEW_PAGE_SAMPLE_LIMIT, build_authority_review_payload
+
+    payload = build_authority_review_payload(_large_site_result())
+    # Only the sample sent to review is bounded.
+    assert len(payload["crawled_pages"]) == REVIEW_PAGE_SAMPLE_LIMIT
+    assert payload["page_sample_truncated"] is True
+    # The evidence counts stay whole.
+    assert payload["pages_found"] == 1_247
+    assert payload["pages_crawled"] == 150
+
+
+def test_the_crawl_cap_is_enforced_server_side():
+    from app.main import enforce_scan_response_page_budget
+
+    over = _large_site_result(found=5_000, crawled=400)
+    over["crawled_pages"] = [{"url": f"https://big.example/p{i}"} for i in range(400)]
+    capped = enforce_scan_response_page_budget(over, "advanced")
+    pages = capped.get("crawled_pages") or capped.get("pages") or []
+    assert len(pages) <= 150, "the worker must not return more than 150 analysed pages"
+
+
+# ------------------------------------------------------------ seal contract --
+
+def test_canonical_serialisation_matches_the_javascript_seal():
+    from app.scan_job import stable_serialize
+
+    # Keys sorted, no whitespace, non-finite nulled -- authoritySeal.js parity.
+    assert stable_serialize({"b": 1, "a": {"z": None, "y": [3, "x"]}}) == '{"a":{"y":[3,"x"],"z":null},"b":1}'
+    assert stable_serialize({"n": float("inf")}) == '{"n":null}'
+
+
+def test_seal_is_64_lowercase_hex_and_key_dependent():
+    from app.scan_job import create_authority_seal
+
+    a = create_authority_seal({"scan_id": "s1"}, "key-a")
+    b = create_authority_seal({"scan_id": "s1"}, "key-b")
+    assert len(a) == 64 and a == a.lower() and a != b
+
+
+def test_attestation_binds_owner_project_and_scan():
+    from app.scan_job import build_scan_attestation
+
+    scan = {"id": "scan-1", "project_id": "proj-1", "owner_user_id": "owner-1"}
+    attested = build_scan_attestation(_large_site_result(), scan, "k")
+    att = attested["authority_scan_attestation"]
+    assert att["scan_id"] == "scan-1" and att["project_id"] == "proj-1" and att["owner_user_id"] == "owner-1"
+    assert len(att["proof"]) == 64
+    # A different ScanRun must not verify with the same proof.
+    other = build_scan_attestation(_large_site_result(), {**scan, "id": "scan-2"}, "k")
+    assert other["authority_scan_attestation"]["proof"] != att["proof"]
+
+
+# --------------------------------------------------------- FixList binding --
+
+def test_fix_list_must_belong_to_the_exact_owner_project_and_scan():
+    from app.scan_job import fix_list_belongs_to_scan
+
+    scan = {"id": "scan-1", "project_id": "proj-1", "owner_user_id": "owner-1"}
+    good = {"scan_run_id": "scan-1", "project_id": "proj-1", "owner_user_id": "owner-1"}
+    assert fix_list_belongs_to_scan(good, scan) is True
+    for bad in (
+        {**good, "scan_run_id": "scan-2"},
+        {**good, "project_id": "proj-2"},
+        {**good, "owner_user_id": "owner-2"},
+    ):
+        assert fix_list_belongs_to_scan(bad, scan) is False

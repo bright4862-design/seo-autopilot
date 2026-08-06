@@ -36,7 +36,7 @@ from .scan_job import (
     CRAWL_BUDGET_SECONDS,
     WORKER_VERSION,
     already_terminal,
-    hand_off_result,
+    complete_authority,
     identity_matches,
     read_scan_run,
     write_terminal_failure,
@@ -453,16 +453,20 @@ async def scan_job(
             )
             return {"success": False, "worker_version": WORKER_VERSION, "error_code": "scanner_failed"}
 
-        handoff = await hand_off_result(client, job, result)
-        if handoff["status_code"] >= 500:
-            # Transient downstream: retry is safe, the ScanRun is untouched.
+        signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
+        if not signing_key:
+            raise HTTPException(status_code=503, detail="Authority signing is not configured.")
+
+        outcome = await complete_authority(client, scan, result, signing_key)
+        if outcome.get("transient"):
+            # ScanRun untouched: Cloud Tasks retries the same scan_id safely.
             raise HTTPException(status_code=503, detail="Authority persistence is unavailable.")
-        if handoff["status_code"] >= 400 or handoff["body"].get("success") is False:
+        if not outcome.get("ok"):
             await write_terminal_failure(
-                client, scan_id, "authority_persistence_failed",
+                client, scan_id, str(outcome.get("failure_code") or "authority_persistence_failed"),
                 "The scan finished, but its result could not be saved. Please try again.",
             )
-            return {"success": False, "worker_version": WORKER_VERSION, "error_code": "authority_persistence_failed"}
+            return {"success": False, "worker_version": WORKER_VERSION, "error_code": outcome.get("failure_code")}
 
         return {
             "success": True,
@@ -470,6 +474,6 @@ async def scan_job(
             "scan_id": scan_id,
             "pages_crawled": result.get("pages_crawled"),
             "pages_found": result.get("pages_found"),
-            "fix_list_id": handoff["body"].get("fix_list_id"),
-            "authority_proof_present": bool(handoff["body"].get("authority_proof")),
+            "fix_list_id": outcome.get("fix_list_id"),
+            "authority_proof_present": len(str(outcome.get("authority_proof") or "")) == 64,
         }

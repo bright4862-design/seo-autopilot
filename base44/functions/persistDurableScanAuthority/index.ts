@@ -85,27 +85,30 @@ Deno.serve(async (req) => {
     });
     await reconcileFixItems(entities, fixList.id, rows.fixItems);
 
-    // Consume the current one-free-scan allowance idempotently before the
-    // ScanRun becomes terminal. A retry may repeat this set-to-at-least-one
-    // operation, but can never increment twice.
-    const allowance = await ensureAllowanceConsumed(entities, scan);
-    if (!allowance.ok) {
-      throw new RequestProblem(500, "allowance_persistence_failed", "The scan result was saved but its allowance state could not be verified.");
-    }
+    // Stage the exact authority proof while the run remains non-terminal. This
+    // makes retries safe and lets us verify every authoritative row before any
+    // allowance is consumed.
+    const stagedScanFields = {
+      ...rows.scanRun,
+      status: "reviewing",
+      status_detail: "Authority verified; finalizing this scan.",
+      release_gate_eligible: false,
+      completed_at: "",
+    };
+    await entities.ScanRun.update(identity.scan_id, stagedScanFields);
 
-    await entities.ScanRun.update(identity.scan_id, rows.scanRun);
-
-    const persistedScan = await entities.ScanRun.get(identity.scan_id);
+    const stagedScan = await entities.ScanRun.get(identity.scan_id);
     const persistedFixList = await entities.FixList.get(fixList.id);
     const persistedItems = rows.fixItems.length > 0
       ? await entities.FixItem.filter({ fix_list_id: fixList.id }, "created_date", MAX_FIX_ITEMS)
       : [];
-    const authorityPersisted = Boolean(
-      persistedScan?.authority_proof === authorityProof
-      && persistedScan?.authority_seal_version === snapshot.version
-      && persistedScan?.authority_sealed_at === snapshot.sealed_at
-      && persistedScan?.fix_list_id === fixList.id
-      && persistedScan?.release_gate_eligible === true
+    const authorityStaged = Boolean(
+      stagedScan?.status === "reviewing"
+      && stagedScan?.authority_proof === authorityProof
+      && stagedScan?.authority_seal_version === snapshot.version
+      && stagedScan?.authority_sealed_at === snapshot.sealed_at
+      && stagedScan?.fix_list_id === fixList.id
+      && stagedScan?.release_gate_eligible === false
       && persistedFixList?.authority_proof === authorityProof
       && persistedFixList?.is_authoritative === true
       && String(persistedFixList?.scan_run_id || "") === identity.scan_id
@@ -114,8 +117,31 @@ Deno.serve(async (req) => {
       && persistedItems.length === rows.fixItems.length
       && persistedItems.every((item) => item?.authority_proof === authorityProof)
     );
+    if (!authorityStaged) {
+      throw new RequestProblem(500, "authority_persistence_incomplete", "The durable authority rows were not completely staged.");
+    }
+
+    // The current product has one free scan. Set the allowance to at least one
+    // rather than incrementing it, so a retry cannot charge twice.
+    const allowance = await ensureAllowanceConsumed(entities, scan);
+    if (!allowance.ok) {
+      throw new RequestProblem(500, "allowance_persistence_failed", "The authoritative result was staged but its allowance state could not be verified.");
+    }
+
+    // Only after authority and allowance are both verified does the ScanRun
+    // become a terminal, release-eligible result.
+    await entities.ScanRun.update(identity.scan_id, rows.scanRun);
+    const persistedScan = await entities.ScanRun.get(identity.scan_id);
+    const authorityPersisted = Boolean(
+      persistedScan?.status === "complete"
+      && persistedScan?.authority_proof === authorityProof
+      && persistedScan?.authority_seal_version === snapshot.version
+      && persistedScan?.authority_sealed_at === snapshot.sealed_at
+      && persistedScan?.fix_list_id === fixList.id
+      && persistedScan?.release_gate_eligible === true
+    );
     if (!authorityPersisted) {
-      throw new RequestProblem(500, "authority_persistence_incomplete", "The durable authority seal was not completely stored.");
+      throw new RequestProblem(500, "authority_terminal_update_failed", "The authoritative scan could not be finalized.");
     }
 
     return Response.json({

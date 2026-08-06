@@ -1,5 +1,5 @@
 from app.main import SCANNER_BUILD_REVISION, ScanRequest, enforce_scan_response_page_budget
-from app.scanner import resolve_scan_budget
+from app.scanner import compute_pages_found, resolve_scan_budget
 
 
 def test_advanced_response_hard_caps_concurrent_overrun():
@@ -50,3 +50,13 @@ def test_request_budget_cannot_raise_the_default_advanced_timeout():
 def test_scan_request_accepts_the_authenticated_gateway_cap():
     payload = ScanRequest(website_url="https://example.com", advisory_crawl_timeout_ms=40_000)
     assert payload.advisory_crawl_timeout_ms == 40_000
+
+
+def test_standard_150_reports_full_sitemap_discovery_beyond_crawl_cap():
+    pages = [{"url": f"https://example.com/page-{index}"} for index in range(150)]
+    sitemap_urls = [f"https://example.com/page-{index}" for index in range(1200)]
+    queue = []
+    seen = {page["url"] for page in pages}
+
+    assert compute_pages_found(pages, queue, seen, sitemap_urls) == 1200
+    assert len(pages) == 150

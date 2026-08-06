@@ -67,6 +67,26 @@ SITEMAP_DISCOVERY_LIMIT = 5000
 TRUST_PATHS = ["/about", "/contact", "/privacy", "/terms", "/security", "/legal", "/mentions-legales", "/cgv"]
 
 
+def compute_pages_found(
+    pages: list[dict],
+    queue: list[str],
+    seen: set[str],
+    sitemap_urls: list[str],
+) -> int:
+    """Report the broad discovery inventory independently of the crawl sample.
+
+    Standard 150 caps fetched/analyzed pages, not URL discovery. A large sitemap
+    may expose thousands of valid URLs even though only 150 representative pages
+    enter the crawl and review pipeline.
+    """
+    return max(
+        len(pages),
+        len(sitemap_urls),
+        len(pages) + len(queue),
+        len(seen) + len(queue),
+    )
+
+
 def resolve_scan_budget(scan_mode: str, timeout_seconds: float | None = None) -> dict:
     """Return a per-request copy of the mode budget.
 
@@ -330,7 +350,7 @@ async def run_scan(
     verified_failed = [page_evidence(page) for page in pages if is_verified_failed(page)]
     artifacts = dedupe_artifacts(artifacts)[:MAX_ARTIFACT_EVIDENCE]
     health_score = calculate_health_score(pages, grouped)
-    pages_found = max(len(pages), len(pages) + len(queue), len(seen) + len(queue))
+    pages_found = compute_pages_found(pages, queue, seen, sitemap_urls)
     render_evidence = build_render_evidence(pages)
     material_render_risk = render_evidence["evidence_state"] == "material_client_rendering_risk"
     render_followup = await run_render_followup(

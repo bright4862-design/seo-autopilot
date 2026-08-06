@@ -2,7 +2,7 @@ import { base44 } from "@/api/base44Client";
 
 export const UNLIMITED_EMAILS = ["bright4862@gmail.com", "londonparisandbrussels@gmail.com"];
 export const FREE_SCAN_LIMIT = 1;
-export const UNLOCK_PRICE_LABEL = "€28";
+export const UNLOCK_PRICE_LABEL = "$75";
 export const FREE_PREVIEW_FIX_COUNT = 2;
 
 export async function loadAccess() {

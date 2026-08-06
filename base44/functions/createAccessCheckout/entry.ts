@@ -2,8 +2,12 @@ import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import Stripe from "npm:stripe@17.5.0";
 import { secrets } from "base44:runtime";
 
-// One-time €28 full-access price.
-const PRICE_ID = "price_1U0k4ERRvKpXFLOzl8rAl99N";
+// One-time $75 full-access payment, defined inline on the checkout session.
+const PRICE_DATA = {
+  currency: "usd",
+  unit_amount: 7500,
+  product: "prod_V0lLfb5lSwxOxh",
+};
 
 export default async function (req) {
   try {
@@ -18,7 +22,7 @@ export default async function (req) {
     const stripe = new Stripe(secrets.get("STRIPE_SECRET_KEY"));
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
-      line_items: [{ price: PRICE_ID, quantity: 1 }],
+      line_items: [{ price_data: PRICE_DATA, quantity: 1 }],
       customer_email: user.email,
       success_url: `${origin}/billing?paid=1`,
       cancel_url: `${origin}/billing`,

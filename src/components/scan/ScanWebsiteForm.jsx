@@ -245,6 +245,11 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
     let mergedFinal = null;
     let scanRunHandle = null;
     let sessionIdentity = null;
+    // Once the async dispatcher request begins, the browser no longer owns
+    // terminal state for this attempt. A lost response may still mean Cloud
+    // Tasks accepted the job, so browser failure/cancellation writes would
+    // race and overwrite the durable worker.
+    let asyncDispatcherStarted = false;
     const requestId = createScanRequestId();
     const idempotencyKey = requestId;
     let scanId = "";
@@ -339,6 +344,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       // page polls the durable ScanRun and opens the sealed result when saved.
       setActiveStep("Starting your scan");
       logScanBoundary("async_job_submit", identityDebug(), { function_name: ASYNC_SCAN_JOB_FUNCTION });
+      asyncDispatcherStarted = true;
       const jobData = normalizeFunctionResponse(
         await callBase44Function(ASYNC_SCAN_JOB_FUNCTION, scanPayload).catch((jobError) => {
           if (jobError?.code === "stale_customer_session" || clearCustomerAuthBoundary(jobError)) throw jobError;
@@ -482,8 +488,16 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         || requestEpochRef.current !== requestEpoch
         || clearCustomerAuthBoundary(err);
       if (abandoned) {
-        logScanBoundary("scan_abandoned", identityDebug(), { reason: err?.code || err?.name || "session_changed" });
-        await cancelScanRun(scanRunHandle, err).catch(() => {});
+        logScanBoundary("scan_abandoned", identityDebug(), {
+          reason: err?.code || err?.name || "session_changed",
+          durable_worker_owned: asyncDispatcherStarted,
+        });
+        // A session change after dispatch must not cancel a Cloud Task that may
+        // already be running. Server-side worker/control boundaries own the
+        // terminal state from this point forward.
+        if (!asyncDispatcherStarted) {
+          await cancelScanRun(scanRunHandle, err).catch(() => {});
+        }
         return;
       }
       const recoveredCompletion = scanId
@@ -497,6 +511,22 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       }
       console.error("Website scan failed.", err);
       if (err && typeof err === "object" && !err.scan_record) err.scanData = mergedFinal || scanData || {};
+      if (asyncDispatcherStarted) {
+        logScanBoundary("async_job_browser_error_no_terminal_write", identityDebug(), {
+          reason: err?.code || err?.name || "browser_transport_error",
+        });
+        recordDebug({
+          ...identityDebug(),
+          status: "running",
+          stage: "async_job_browser_error_no_terminal_write",
+          website_url: normalizedUrl,
+          scan_mode: scanMode,
+          error: err?.message || String(err),
+        });
+        refreshDebugData();
+        setError("The scan job may still be running. Open the dashboard to check this exact scan before starting another one.");
+        return;
+      }
       const failure = await failScanRun(scanRunHandle, err).catch(() => null);
       const failureRecord = failure?.scanRun || { ...identityDebug(), status: "failed", error_code: err?.code || err?.name || "scan_failed", error_message: err?.message || String(err) };
       recordDebug({ ...identityDebug(), status: "failed", stage: "scan_failed", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, error: err?.message || String(err), scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal || failureRecord), compact_debug_available: true, download_available: true });

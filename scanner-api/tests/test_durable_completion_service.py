@@ -105,14 +105,19 @@ def test_service_function_does_not_depend_on_browser_auth():
     assert 'validateCurrentIdentity' in source
 
 
-def test_allowance_is_idempotent_and_precedes_terminal_scan_update():
+def test_authority_is_verified_before_allowance_and_terminal_completion():
     source = SERVICE_SOURCE.read_text(encoding="utf-8")
     assert "Math.max(FREE_SCAN_CONSUMED_VALUE" in source
     assert "scans_used: used" in source
     assert "scans_used + 1" not in source
+    stage_index = source.index("await entities.ScanRun.update(identity.scan_id, stagedScanFields)")
+    verify_index = source.index("const authorityStaged = Boolean(")
     allowance_index = source.index("await ensureAllowanceConsumed")
     terminal_index = source.index("await entities.ScanRun.update(identity.scan_id, rows.scanRun)")
-    assert allowance_index < terminal_index
+    assert stage_index < verify_index < allowance_index < terminal_index
+    assert 'status: "reviewing"' in source
+    assert 'release_gate_eligible: false' in source
+    assert 'persistedScan?.status === "complete"' in source
 
 
 def test_worker_uses_new_service_boundary_not_user_functions():

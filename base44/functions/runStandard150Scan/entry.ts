@@ -22,12 +22,24 @@ const MAX_PAGES = 150;
 // budget therefore authorises a crawl the platform will kill before it can
 // respond, which is a guaranteed 503 for any site that uses the full budget.
 //
-// 40s/55s is the configuration every sealed production run was produced on
-// (funbooker 149 pages, centerstreetlending 150 pages, all with valid authority
-// proofs). Raise these only with evidence that the platform ceiling has moved.
+// The crawl budget must also leave room for what happens AFTER crawling.
+// Python honours its deadline (sitemap discovery and crawl both sit inside
+// scan_started_at + budget["timeout"]), but serialising and transferring a
+// 150-page evidence payload then costs another ~10s. At a 40s crawl budget the
+// total landed at 49.8-52.7s against a 50s upstream timer, so large-site root
+// scans were a coin flip: funbooker.com/ and jackssurfboards.com/ failed at
+// 50.9s, 51.6s, 51.9s while small sites (11-16s) and narrow path-prefixed
+// scans always passed.
+//
+// 28s leaves roughly 22s for the response instead of 10s. On a slow site the
+// crawl now stops earlier and Python returns what it collected with
+// scan_deadline_reached true -- a smaller sealed result rather than a 503.
+// This trades page coverage for completion; restoring full coverage on large
+// sites needs asynchronous orchestration, not a larger timer.
+//
 // The 150-page maximum, robots enforcement and Python-only operation are
 // unaffected: this changes time, never scope.
-const PYTHON_CRAWL_BUDGET_MS = 40_000;
+const PYTHON_CRAWL_BUDGET_MS = 28_000;
 const BROWSER_DEADLINE_MS = 105_000;
 const FUNCTION_RESPONSE_BUDGET_MS = 55_000;
 const RESPONSE_RESERVE_MS = 5_000;

@@ -155,8 +155,13 @@ test("orphan recovery closes abandoned runs well before the replay TTL", () => {
 test("recovery runs on view, not only on the next submission", () => {
   // The scan form recovers on mount.
   assert.match(scanFormSource, /recoverOrphanedScanRuns\(\{ projectId: project\?\.id \|\| "" \}\)/);
-  // The result route recovers before showing a non-terminal state, then re-reads.
-  assert.match(fixListSource, /ACTIVE_SCAN_RUN_STATUSES\.has\(String\(durableBundle\?\.run\?\.status \|\| ""\)\)/);
+  // The result route recovers before showing a non-terminal state, then
+  // re-reads. Recovery is now additionally gated on the row actually being
+  // past the orphan threshold and on not having been attempted already, so a
+  // 2.5s poll cannot issue recovery writes against a live scan.
+  assert.match(fixListSource, /ACTIVE_SCAN_RUN_STATUSES\.has\(String\(durableBundle\.run\.status \|\| ""\)\)/);
+  assert.match(fixListSource, /recoveryAttemptedForRef\.current !== requestedScanId/);
+  assert.match(fixListSource, /isStaleActiveScanRun\(durableBundle\.run, \{ activeTtlMs: STANDARD_ORPHAN_RECOVERY_TTL_MS \}\)/);
   assert.match(fixListSource, /await recoverOrphanedScanRuns\(\{ projectId: durableBundle\.run\.project_id \|\| "" \}\)/);
   assert.match(fixListSource, /durableBundle = await getScanRunWithFixList\(requestedScanId\)/);
 

@@ -1,11 +1,11 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Bug, Copy, Download, ExternalLink, RefreshCw, Trash2 } from "lucide-react";
 
 import { isRateLimitFinding, shouldUseLegacyRateLimitPresentation } from "@/lib/reviewContract";
 import { trackEvent } from "@/lib/analytics";
 import { getScanRunWithFixList, recoverOrphanedScanRuns } from "@/lib/scanRuns";
-import { ACTIVE_SCAN_RUN_STATUSES } from "@/lib/scanRunIdentity";
+import { ACTIVE_SCAN_RUN_STATUSES, STANDARD_ORPHAN_RECOVERY_TTL_MS, isStaleActiveScanRun } from "@/lib/scanRunIdentity";
 import { FREE_PREVIEW_FIX_COUNT, UNLOCK_PRICE_LABEL, loadAccess } from "@/lib/access";
 import UnlockAccessButton from "@/components/billing/UnlockAccessButton";
 import { CUSTOMER_BOUNDARY_EVENT } from "@/lib/customerBrowserCache";
@@ -71,6 +71,11 @@ export default function FixList() {
   const [scanRecord, setScanRecord] = useState(null);
   const [requestedScanState, setRequestedScanState] = useState(requestedScanId ? "loading" : "idle");
   const [reloadToken, setReloadToken] = useState(0);
+  // Survive effect re-runs: a poll re-runs the effect, so "have we already
+  // loaded this exact scan?" cannot live in the effect's own scope.
+  const loadedScanIdRef = useRef("");
+  const recoveryAttemptedForRef = useRef("");
+  const pollTimerRef = useRef(0);
   const [debugData, setDebugData] = useState(() => buildAuthoritativeDebugData(null));
   const [selectedCms, setSelectedCms] = useState("custom");
   const [doneIds, setDoneIds] = useState([]);
@@ -91,30 +96,55 @@ export default function FixList() {
   useEffect(() => {
     let cancelled = false;
 
+    // A background reread must never blank the view. Polling used to call
+    // applyRecord(null) on every tick, so an active scan visibly alternated
+    // between its real status and "Loading this scan…" with a "no scan" debug
+    // footer every 2.5 seconds. The record is now cleared only when the scan
+    // being viewed actually changes, when there is no scan id, or when the
+    // customer/auth boundary is cleared.
+    const isBackgroundRead = loadedScanIdRef.current === requestedScanId && Boolean(requestedScanId);
+
     function applyRecord(next) {
       if (cancelled) return;
       setScanRecord(next);
       setDebugData(buildAuthoritativeDebugData(next));
-      setDoneIds([]);
       if (next?.cms_platform) setSelectedCms(normalizeCmsValue(next.cms_platform));
     }
 
-    async function loadRequestedScan() {
-      applyRecord(null);
+    function clearRecord() {
+      if (cancelled) return;
+      loadedScanIdRef.current = "";
+      setScanRecord(null);
+      setDebugData(buildAuthoritativeDebugData(null));
+      // Completed-fix ticks belong to the scan being cleared, not the next one.
+      setDoneIds([]);
+    }
 
+    async function loadRequestedScan() {
       if (!requestedScanId) {
+        clearRecord();
         setRequestedScanState("idle");
         return;
       }
+      // "Loading this scan…" is an initial-load state only.
+      if (!isBackgroundRead) {
+        clearRecord();
+        setRequestedScanState("loading");
+      }
 
-      setRequestedScanState("loading");
       let durableBundle = await getScanRunWithFixList(requestedScanId);
       if (cancelled) return;
       // A run still shown as active may have been abandoned by a browser that
-      // never wrote a terminal state. Recover it here rather than leaving the
-      // customer on a permanent "still running" screen, then re-read so the
-      // page shows the truthful terminal status instead of a stale one.
-      if (ACTIVE_SCAN_RUN_STATUSES.has(String(durableBundle?.run?.status || ""))) {
+      // never wrote a terminal state. Recovery runs at most once per scan and
+      // only once the row is genuinely past the orphan threshold -- never on
+      // every 2.5-second poll, which would hammer writes against a live scan.
+      if (
+        recoveryAttemptedForRef.current !== requestedScanId
+        && durableBundle?.run
+        && ACTIVE_SCAN_RUN_STATUSES.has(String(durableBundle.run.status || ""))
+        && isStaleActiveScanRun(durableBundle.run, { activeTtlMs: STANDARD_ORPHAN_RECOVERY_TTL_MS })
+      ) {
+        recoveryAttemptedForRef.current = requestedScanId;
         const recovered = await recoverOrphanedScanRuns({ projectId: durableBundle.run.project_id || "" });
         if (cancelled) return;
         if (recovered.includes(requestedScanId)) {
@@ -122,22 +152,38 @@ export default function FixList() {
           if (cancelled) return;
         }
       }
-      if (durableBundle?.run) {
+
+      // Never substitute another scan for the one that was requested.
+      const isExactScan = String(durableBundle?.run?.id || "") === String(requestedScanId);
+      if (durableBundle?.run && isExactScan) {
+        loadedScanIdRef.current = requestedScanId;
         applyRecord(normalizeDurableScanBundle(durableBundle));
         setRequestedScanState("loaded");
+        // Polling stops as soon as the run reaches a terminal state.
         if (ACTIVE_SCAN_RUN_STATUSES.has(String(durableBundle.run.status || ""))) {
-          window.setTimeout(() => {
+          pollTimerRef.current = window.setTimeout(() => {
             if (!cancelled) setReloadToken((value) => value + 1);
           }, 2500);
         }
-      } else {
-        applyRecord(null);
-        setRequestedScanState("not_found");
+        return;
       }
+
+      // A transient null or read error during polling must not erase a scan we
+      // already hold. Keep the exact record on screen and try again.
+      if (isBackgroundRead && loadedScanIdRef.current === requestedScanId) {
+        pollTimerRef.current = window.setTimeout(() => {
+          if (!cancelled) setReloadToken((value) => value + 1);
+        }, 2500);
+        return;
+      }
+      clearRecord();
+      setRequestedScanState("not_found");
     }
 
     function clearProtectedView() {
       cancelled = true;
+      window.clearTimeout(pollTimerRef.current);
+      loadedScanIdRef.current = "";
       setScanRecord(null);
       setDebugData(buildAuthoritativeDebugData(null));
       setDoneIds([]);
@@ -148,6 +194,7 @@ export default function FixList() {
     window.addEventListener(CUSTOMER_BOUNDARY_EVENT, clearProtectedView);
     return () => {
       cancelled = true;
+      window.clearTimeout(pollTimerRef.current);
       window.removeEventListener(CUSTOMER_BOUNDARY_EVENT, clearProtectedView);
     };
   }, [requestedScanId, reloadToken]);

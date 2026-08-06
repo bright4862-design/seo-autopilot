@@ -3,7 +3,8 @@
 Base44 functions are reaped once the HTTP response returns, so a crawl started
 with waitUntil() dies mid-flight. Cloud Tasks now delivers one durable request
 to a private Cloud Run worker. The worker crawls and reviews locally, then sends
-one signed completion envelope to the service-only Base44 persistence boundary.
+signed control and completion envelopes to Base44-hosted functions. Only those
+hosted functions use Base44 service-role entity access.
 
 Idempotency is keyed on the existing scan_id. A terminal run is never scanned
 twice, permanent failures close the exact ScanRun, and transient persistence
@@ -17,10 +18,12 @@ import hmac
 import json
 import os
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
 WORKER_VERSION = "scan_job_worker_v1_cloud_tasks"
+CONTROL_VERSION = "durable_standard150_control_v1"
 COMPLETION_VERSION = "durable_standard150_completion_v1"
 
 # Cloud Run allows 300s; leave room to review, persist, and write a terminal
@@ -39,17 +42,15 @@ def base44_app_id() -> str:
     return str(os.getenv("BASE44_APP_ID") or "")
 
 
-def base44_service_token() -> str:
-    return str(os.getenv("BASE44_SERVICE_TOKEN") or "")
-
-
 def _service_headers() -> dict[str, str]:
-    token = base44_service_token().strip()
-    authorization = token if token.startswith("Bearer ") else (f"Bearer {token}" if token else "")
+    """Headers for signed Base44 function calls.
+
+    Service-role entity access is intentionally not attempted from Cloud Run.
+    The Base44-hosted function verifies the HMAC envelope and then uses
+    createClientFromRequest(req).asServiceRole internally.
+    """
     return {
         "content-type": "application/json",
-        "Base44-Service-Authorization": authorization,
-        "Base44-App-Id": base44_app_id(),
         "X-FixList-Worker": WORKER_VERSION,
     }
 
@@ -58,77 +59,13 @@ def _function_url(name: str) -> str:
     return f"{base44_api_url()}/api/apps/{base44_app_id()}/functions/{name}"
 
 
-async def read_scan_run(client: httpx.AsyncClient, scan_id: str) -> dict[str, Any] | None:
-    """Read the exact ScanRun through the service-role entity API."""
-    url = f"{base44_api_url()}/api/apps/{base44_app_id()}/entities/ScanRun/{scan_id}"
-    try:
-        response = await client.get(url, headers=_service_headers(), timeout=20.0)
-    except httpx.HTTPError:
-        return None
-    if response.status_code != 200:
-        return None
-    try:
-        body = response.json()
-    except ValueError:
-        return None
-    return body if isinstance(body, dict) else None
-
-
-async def write_terminal_failure(
-    client: httpx.AsyncClient,
-    scan_id: str,
-    failure_code: str,
-    detail: str,
-) -> bool:
-    """Close the exact ScanRun truthfully. Never fabricates evidence."""
-    url = f"{base44_api_url()}/api/apps/{base44_app_id()}/entities/ScanRun/{scan_id}"
-    payload = {
-        "status": "failed",
-        "status_detail": detail,
-        "error_code": failure_code,
-        "error_message": detail,
-        "completed_at": _now_iso(),
-        "release_gate_eligible": False,
-    }
-    try:
-        response = await client.put(url, headers=_service_headers(), json=payload, timeout=20.0)
-    except httpx.HTTPError:
-        return False
-    return response.status_code < 300
-
-
-def _now_iso() -> str:
-    from datetime import datetime, timezone
-
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def identity_matches(scan: dict[str, Any], job: dict[str, Any]) -> bool:
-    """The task must name the same durable request the ScanRun was created for."""
-    for field in ("request_id", "idempotency_key", "project_id"):
-        stored = str(scan.get(field) or "").strip()
-        claimed = str(job.get(field) or "").strip()
-        if stored and claimed and stored != claimed:
-            return False
-    return True
-
-
-def already_terminal(scan: dict[str, Any]) -> bool:
-    return str(scan.get("status") or "").lower() in TERMINAL_STATUSES
-
-
-def has_authority_proof(record: dict[str, Any]) -> bool:
-    proof = str(record.get("authority_proof") or "")
-    return len(proof) == 64 and all(c in "0123456789abcdef" for c in proof)
-
-
 async def invoke_function(
     client: httpx.AsyncClient,
     name: str,
     payload: dict[str, Any],
     timeout: float = HANDOFF_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
-    """Call a Base44 function with the service role and worker identity."""
+    """Call one Base44-hosted function with a signed worker envelope."""
     try:
         response = await client.post(
             _function_url(name), headers=_service_headers(), json=payload, timeout=timeout
@@ -171,6 +108,103 @@ def stable_serialize(value: Any) -> str:
 
 def create_authority_seal(payload: Any, secret: str) -> str:
     return hmac.new(secret.encode(), stable_serialize(payload).encode(), hashlib.sha256).hexdigest()
+
+
+def build_control_envelope(
+    action: str,
+    signing_key: str,
+    *,
+    scan_id: str | None = None,
+    identity: dict[str, Any] | None = None,
+    failure: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    signed = {
+        "version": CONTROL_VERSION,
+        "action": action,
+        "scan_id": scan_id,
+        "identity": identity,
+        "failure": failure,
+    }
+    return {**signed, "proof": create_authority_seal(signed, signing_key)}
+
+
+def _scan_identity(scan: dict[str, Any]) -> dict[str, str]:
+    website = str(scan.get("normalized_domain") or scan.get("website_url") or scan.get("submitted_url") or "")
+    return {
+        "owner_user_id": str(scan.get("owner_user_id") or scan.get("created_by_id") or ""),
+        "scan_id": str(scan.get("id") or ""),
+        "project_id": str(scan.get("project_id") or ""),
+        "request_id": str(scan.get("request_id") or ""),
+        "idempotency_key": str(scan.get("idempotency_key") or scan.get("request_id") or ""),
+        "normalized_domain": _normalize_domain(website),
+    }
+
+
+def _normalize_domain(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    return str(parsed.hostname or "").lower().removeprefix("www.").rstrip(".")
+
+
+async def read_scan_run(client: httpx.AsyncClient, scan_id: str) -> dict[str, Any] | None:
+    """Read the exact ScanRun through a signed Base44-hosted control function."""
+    signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
+    clean_scan_id = str(scan_id or "").strip()
+    if not signing_key or not clean_scan_id:
+        return None
+    envelope = build_control_envelope("read", signing_key, scan_id=clean_scan_id)
+    response = await invoke_function(client, "durableScanWorkerControl", envelope, timeout=20.0)
+    if response["status_code"] != 200 or response["body"].get("success") is not True:
+        return None
+    scan = response["body"].get("scanRun")
+    return scan if isinstance(scan, dict) else None
+
+
+async def write_terminal_failure(
+    client: httpx.AsyncClient,
+    scan_id: str,
+    failure_code: str,
+    detail: str,
+) -> bool:
+    """Close the exact ScanRun through the signed hosted control boundary."""
+    signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
+    if not signing_key:
+        return False
+    scan = await read_scan_run(client, scan_id)
+    if not isinstance(scan, dict):
+        return False
+    identity = _scan_identity(scan)
+    if not all(identity.values()):
+        return False
+    envelope = build_control_envelope(
+        "fail",
+        signing_key,
+        identity=identity,
+        failure={"code": str(failure_code or "scan_failed"), "detail": str(detail or "")},
+    )
+    response = await invoke_function(client, "durableScanWorkerControl", envelope, timeout=20.0)
+    return response["status_code"] < 300 and response["body"].get("success") is True
+
+
+def identity_matches(scan: dict[str, Any], job: dict[str, Any]) -> bool:
+    """The task must name the same durable request the ScanRun was created for."""
+    for field in ("request_id", "idempotency_key", "project_id"):
+        stored = str(scan.get(field) or "").strip()
+        claimed = str(job.get(field) or "").strip()
+        if stored and claimed and stored != claimed:
+            return False
+    return True
+
+
+def already_terminal(scan: dict[str, Any]) -> bool:
+    return str(scan.get("status") or "").lower() in TERMINAL_STATUSES
+
+
+def has_authority_proof(record: dict[str, Any]) -> bool:
+    proof = str(record.get("authority_proof") or "")
+    return len(proof) == 64 and all(c in "0123456789abcdef" for c in proof)
 
 
 def _first_list(result: dict[str, Any], keys: tuple[str, ...]) -> list:
@@ -285,12 +319,7 @@ def fix_list_belongs_to_scan(fix_list: dict[str, Any], scan: dict[str, Any]) -> 
 
 
 def build_local_review(result: dict[str, Any]) -> dict[str, Any]:
-    """Run the exact Python review pipeline inside the durable worker.
-
-    This deliberately bypasses the browser-authenticated Base44 review wrapper;
-    the signed service-only persistence function still verifies every owner,
-    project, ScanRun, release marker, and authority invariant.
-    """
+    """Run the exact Python review pipeline inside the durable worker."""
     from .beta_revision import live_revision
     from .evidence_quality import apply_evidence_quality_gate
     from .review import run_review
@@ -335,21 +364,12 @@ async def complete_authority(
             "transient": False,
             "failure_code": str(persisted["body"].get("error_code") or "authority_persistence_failed"),
         }
-    if not has_authority_proof(scan_run) or not fix_list_id:
+    if (
+        not has_authority_proof(scan_run)
+        or not fix_list_id
+        or persisted["body"].get("fixListVerified") is not True
+    ):
         return {"ok": False, "transient": False, "failure_code": "authority_persistence_failed"}
-
-    try:
-        fetched = await client.get(
-            f"{base44_api_url()}/api/apps/{base44_app_id()}/entities/FixList/{fix_list_id}",
-            headers=_service_headers(), timeout=20.0,
-        )
-        fix_list = fetched.json() if fetched.status_code == 200 else {}
-    except (httpx.HTTPError, ValueError):
-        return {"ok": False, "transient": True, "failure_code": "fix_list_unreadable"}
-    if not isinstance(fix_list, dict) or not fix_list_belongs_to_scan(fix_list, scan):
-        return {"ok": False, "transient": False, "failure_code": "fix_list_ownership_mismatch"}
-    if str(fix_list.get("authority_proof") or "") != str(scan_run.get("authority_proof") or ""):
-        return {"ok": False, "transient": False, "failure_code": "fix_list_proof_mismatch"}
 
     return {
         "ok": True,

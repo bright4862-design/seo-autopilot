@@ -31,6 +31,7 @@ import {
 } from "@/lib/customerBrowserCache";
 
 const STANDARD_SCANNER_FUNCTION = "runStandard150Scan";
+const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJob";
 const AI_REVIEW_FUNCTION = "aiReviewScan";
 
 // Standard 150 is the only customer scan. There is no scan-size selector and no
@@ -217,28 +218,14 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
     if (!normalizedUrl) { setUrlError(INVALID_URL_MESSAGE); return; }
     setUrlError("");
 
-    // Show unmistakable progress immediately on click. The access check still
-    // runs before any durable scan identity or network scan work is created.
-    submitLockRef.current = true;
-    setSubmitting(true);
-    setActiveStep("Starting your scan");
-    let access = null;
-    try {
-      access = await loadAccess();
-    } catch {
-      submitLockRef.current = false;
-      setSubmitting(false);
-      setActiveStep("");
-      setError("FixList could not start the scan. Please refresh and try again.");
-      return;
-    }
+    // Access gate runs before any durable scan identity is created, so a blocked
+    // customer never consumes a request_id or leaves a queued ScanRun behind.
+    const access = await loadAccess();
     if (!access.canScan) {
-      submitLockRef.current = false;
-      setSubmitting(false);
-      setActiveStep("");
       setError(`You've used your free test scan. Unlock full access for ${UNLOCK_PRICE_LABEL} on the Billing page to run more scans and see every result.`);
       return;
     }
+    submitLockRef.current = true;
 
     let scanData = null;
     let aiData = null;
@@ -256,6 +243,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       submitted_url: submittedUrl,
       normalized_domain: normalizedScanDomain(normalizedUrl),
     });
+    setSubmitting(true);
 
     try {
       const { user: scanOwner, project: scanProject } = await ensureScanProject({
@@ -332,6 +320,34 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         require_python_scanner: true,
         allow_deno_fallback: false,
       };
+
+      // PRIMARY PATH — asynchronous durable job. The owner-bound ScanRun
+      // already exists; the job gateway verifies it, submits the authenticated
+      // Python job with its 120-second worker budget, and returns this exact
+      // scan_id immediately. The browser never waits for Cloud Run: the result
+      // page polls the durable ScanRun and opens the sealed result when saved.
+      setActiveStep("Starting your scan");
+      logScanBoundary("async_job_submit", identityDebug(), { function_name: ASYNC_SCAN_JOB_FUNCTION });
+      const jobData = normalizeFunctionResponse(
+        await callBase44Function(ASYNC_SCAN_JOB_FUNCTION, scanPayload).catch((jobError) => {
+          if (jobError?.code === "stale_customer_session" || clearCustomerAuthBoundary(jobError)) throw jobError;
+          return null;
+        }),
+      );
+      await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
+      if (jobData?.accepted === true && String(jobData.scan_id || "") === String(scanId)) {
+        // Exact identity only — never a substitute scan.
+        logScanBoundary("async_job_accepted", identityDebug(), { status: "async" });
+        recordDebug({ ...identityDebug(), status: "running", stage: "async_job_accepted", website_url: normalizedUrl, scan_mode: scanMode });
+        refreshDebugData();
+        navigate(`/dashboard?scan_id=${encodeURIComponent(scanId)}`);
+        return;
+      }
+      // TEMPORARY FALLBACK — the verified synchronous 28-second path, kept
+      // until the async job flow is verified per the release-coordination
+      // record. The allowance on this path is still recorded only after the
+      // durable result is saved (below).
+      logScanBoundary("async_job_unavailable_sync_fallback", identityDebug(), {});
       recordDebug({ ...identityDebug(), status: "running", stage: "scanner_request_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, payload_summary: { max_pages: scanPayload.max_pages, max_competitors: 0, max_browser_render_attempts: scanPayload.max_browser_render_attempts, crawl_timeout_ms: scanPayload.crawl_timeout_ms, keyword_count: scanPayload.important_keywords.length, respect_robots_txt: scanPayload.respect_robots_txt } });
       refreshDebugData();
 
@@ -479,7 +495,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
 
   return (
     <div className="mx-auto w-full max-w-[640px]">
-      <form onSubmit={handleSubmit} noValidate aria-busy={isLoading} className="flex flex-col gap-8">
+      <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-8">
         <div className="flex flex-col gap-3">
           <h1 className="text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">Create your FixList</h1>
           <p className="text-base leading-7 text-slate-600">Enter a website URL and we’ll turn the scan into a plain-English list of what to fix, what matters most, and what may need a developer.</p>
@@ -558,17 +574,11 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
 
         {error ? <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"><div className="flex items-start gap-2"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span>{error}</span></div></div> : null}
         {isLoading ? (
-          <div
-            role="status"
-            aria-live="assertive"
-            aria-atomic="true"
-            className="fixed left-1/2 top-4 z-[100] w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 rounded-2xl border border-indigo-200 bg-white p-5 text-indigo-950 shadow-2xl ring-1 ring-indigo-100"
-          >
+          <div className="rounded-2xl border border-indigo-100 bg-indigo-50 p-5 text-indigo-950" aria-live="polite">
             <div className="flex items-start gap-3">
-              <Loader2 className="mt-0.5 h-6 w-6 shrink-0 animate-spin text-indigo-600" />
+              <Loader2 className="mt-0.5 h-5 w-5 shrink-0 animate-spin" />
               <div className="min-w-0 flex-1">
-                <p className="text-xs font-bold uppercase tracking-[0.12em] text-indigo-600">Scan running</p>
-                <div className="mt-1 flex items-baseline justify-between gap-3">
+                <div className="flex items-baseline justify-between gap-3">
                   <p className="font-semibold">{activeStep || "Starting your scan"}</p>
                   <span className="shrink-0 text-xs tabular-nums text-indigo-700">{formatElapsed(elapsedSeconds)}</span>
                 </div>

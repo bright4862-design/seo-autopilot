@@ -1,4 +1,4 @@
-import { createClient } from "npm:@base44/sdk";
+import { createClientFromRequest } from "npm:@base44/sdk";
 import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
 import { authorityRowsFromSnapshot } from "./authorityRows.js";
 import { buildAuthoritySnapshot, isAuthorityEligible } from "./authoritySnapshot.js";
@@ -25,7 +25,8 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const serviceBase44 = createServiceOnlyClient(req);
+    assertWorkerHeader(req);
+    const serviceBase44 = createClientFromRequest(req);
     const entities = serviceBase44.asServiceRole.entities;
     const body = await req.json().catch(() => ({}));
     const signedDocument = {
@@ -150,6 +151,7 @@ Deno.serve(async (req) => {
       workerVersion: WORKER_VERSION,
       scanId: identity.scan_id,
       fixListId: fixList.id,
+      fixListVerified: true,
       allowanceConsumed: allowance.consumed,
       scanRun: persistedScan,
     });
@@ -160,25 +162,10 @@ Deno.serve(async (req) => {
   }
 });
 
-function createServiceOnlyClient(req: Request) {
+function assertWorkerHeader(req: Request) {
   if (String(req.headers.get("X-FixList-Worker") || "") !== WORKER_VERSION) {
     throw new RequestProblem(403, "worker_header_invalid", "The durable worker identity is invalid.");
   }
-  const serviceAuthorization = String(req.headers.get("Base44-Service-Authorization") || "");
-  const appId = cleanId(req.headers.get("Base44-App-Id"));
-  if (!appId || !serviceAuthorization.startsWith("Bearer ") || serviceAuthorization.split(" ").length !== 2) {
-    throw new RequestProblem(401, "service_auth_required", "A valid Base44 service token is required.");
-  }
-  const dataEnv = String(req.headers.get("X-Data-Env") || "");
-  const headers: Record<string, string> = {};
-  if (dataEnv === "dev" || dataEnv === "prod") headers["X-Data-Env"] = dataEnv;
-  return createClient({
-    serverUrl: req.headers.get("Base44-Api-Url") || "https://base44.app",
-    appId,
-    serviceToken: serviceAuthorization.slice("Bearer ".length),
-    functionsVersion: req.headers.get("Base44-Functions-Version") || undefined,
-    headers,
-  });
 }
 
 function normalizeIdentity(value) {

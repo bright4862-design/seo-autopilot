@@ -30,6 +30,7 @@ Deno.serve(async (req) => {
     const signedDocument = {
       version: body?.version,
       action: body?.action,
+      scan_id: body?.scan_id,
       identity: body?.identity,
       failure: body?.failure,
     };
@@ -38,6 +39,22 @@ Deno.serve(async (req) => {
     if (!secret) throw new RequestProblem(503, "authority_not_configured", "Server scan authority is not configured.");
     if (body?.version !== CONTROL_VERSION || !proof || !await verifyAuthoritySeal(signedDocument, secret, proof)) {
       throw new RequestProblem(409, "worker_control_invalid", "The durable worker control envelope could not be verified.");
+    }
+
+    const action = String(body?.action || "");
+    const base44 = createClientFromRequest(req);
+    const entities = base44.asServiceRole.entities;
+
+    if (action === "read") {
+      const scanId = cleanId(body?.scan_id);
+      if (!scanId) throw new RequestProblem(400, "worker_scan_id_missing", "The durable scan ID is missing.");
+      const scan = await entities.ScanRun.get(scanId).catch(() => null);
+      if (!scan) throw new RequestProblem(404, "worker_record_not_found", "The durable scan record was not found.");
+      return Response.json({ success: true, workerVersion: WORKER_VERSION, scanRun: scan });
+    }
+
+    if (action !== "fail") {
+      throw new RequestProblem(400, "worker_action_invalid", "The durable worker action is not supported.");
     }
 
     const identity = normalizeIdentity(body?.identity);
@@ -52,20 +69,10 @@ Deno.serve(async (req) => {
       throw new RequestProblem(400, "worker_identity_missing", "The durable worker identity is incomplete.");
     }
 
-    const base44 = createClientFromRequest(req);
-    const entities = base44.asServiceRole.entities;
     const scan = await entities.ScanRun.get(identity.scan_id).catch(() => null);
     const project = await entities.BusinessProject.get(identity.project_id).catch(() => null);
     if (!scan || !project) throw new RequestProblem(404, "worker_record_not_found", "The durable scan project was not found.");
     validateBoundIdentity({ scan, project, identity });
-
-    const action = String(body?.action || "");
-    if (action === "read") {
-      return Response.json({ success: true, workerVersion: WORKER_VERSION, scanRun: scan });
-    }
-    if (action !== "fail") {
-      throw new RequestProblem(400, "worker_action_invalid", "The durable worker action is not supported.");
-    }
 
     if (TERMINAL_STATUSES.has(String(scan.status || "").toLowerCase())) {
       return Response.json({

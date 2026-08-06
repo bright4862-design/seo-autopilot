@@ -1,0 +1,4 @@
+{
+  "name": "startStandardScanJob",
+  "entry": "entry.ts"
+}

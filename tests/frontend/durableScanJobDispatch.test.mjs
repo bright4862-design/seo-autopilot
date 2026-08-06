@@ -10,6 +10,7 @@ import test from "node:test";
 
 import {
   audienceForWorkerUrl,
+  encodeTaskBody,
   taskNameForScan,
 } from "../../base44/functions/startStandardScanJob/cloudTasks.js";
 
@@ -41,6 +42,12 @@ test("task names cannot be injected through the scan id", () => {
   const queue = "projects/p/locations/l/queues/q";
   assert.equal(taskNameForScan(queue, "../../evil"), `${queue}/tasks/standard150-evil`);
   assert.equal(taskNameForScan(queue, "a/b?c=d"), `${queue}/tasks/standard150-abcd`);
+});
+
+test("Cloud Task bodies preserve Unicode business names and URLs", () => {
+  const payload = { business_name: "Café Noël 東京", website_url: "https://example.com/équipe" };
+  const decoded = JSON.parse(Buffer.from(encodeTaskBody(payload), "base64").toString("utf8"));
+  assert.deepEqual(decoded, payload);
 });
 
 test("a duplicate submission for one ScanRun is deduplicated, not re-run", () => {

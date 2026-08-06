@@ -1,7 +1,26 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 import { waitUntil } from "base44:runtime";
 import { createAuthoritySeal } from "./authoritySeal.js";
-import { corsHeaders, jsonResponse } from "./httpResponse.js";
+
+// Defined inline rather than imported. The bundler emitted a _bundled.mjs in
+// which the ./httpResponse.js bindings were not defined at runtime, so every
+// invocation died with "ReferenceError: jsonResponse is not defined" at the
+// accepted-response return -- after the job had already been accepted and the
+// worker started, which is how ScanRuns were left running with no reply.
+// runStandard150Scan, which works in production, declares these inline too.
+const CORS_HEADERS = Object.freeze({
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+});
+
+function corsHeaders() {
+  return { ...CORS_HEADERS };
+}
+
+function jsonResponse(payload, status = 200) {
+  return Response.json(payload, { status, headers: corsHeaders() });
+}
 
 // Asynchronous durable Standard 150 job gateway.
 //

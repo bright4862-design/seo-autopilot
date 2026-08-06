@@ -25,6 +25,18 @@ export function audienceForWorkerUrl(workerUrl) {
   return parsed.origin;
 }
 
+export function encodeTaskBody(payload) {
+  // btoa(JSON.stringify(payload)) throws on names and URLs containing Unicode.
+  // Cloud Tasks expects base64 of the UTF-8 request bytes.
+  const bytes = new TextEncoder().encode(JSON.stringify(payload));
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
 async function accessToken() {
   // A direct token is retained only for short-lived diagnostic use. Normal
   // operation uses the service-account key to mint a fresh OAuth token.
@@ -60,7 +72,7 @@ export async function enqueueScanJob({ queuePath, workerUrl, invokerServiceAccou
         url: workerUrl,
         httpMethod: "POST",
         headers: { "content-type": "application/json" },
-        body: btoa(JSON.stringify(payload)),
+        body: encodeTaskBody(payload),
         // Cloud Run is deployed --no-allow-unauthenticated; Cloud Tasks mints
         // an OIDC token for this service account and the worker checks it.
         oidcToken: { serviceAccountEmail: invokerServiceAccount, audience: workerAudience },

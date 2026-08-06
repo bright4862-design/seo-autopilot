@@ -168,16 +168,16 @@ async def write_terminal_failure(
     failure_code: str,
     detail: str,
 ) -> bool:
-    """Close the exact ScanRun through the signed hosted control boundary."""
+    """Close the exact ScanRun or raise so Cloud Tasks retries safely."""
     signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
     if not signing_key:
-        return False
+        raise RuntimeError("Durable failure signing is not configured.")
     scan = await read_scan_run(client, scan_id)
     if not isinstance(scan, dict):
-        return False
+        raise RuntimeError("The durable ScanRun could not be re-read for failure persistence.")
     identity = _scan_identity(scan)
     if not all(identity.values()):
-        return False
+        raise RuntimeError("The durable ScanRun identity is incomplete.")
     envelope = build_control_envelope(
         "fail",
         signing_key,
@@ -185,7 +185,9 @@ async def write_terminal_failure(
         failure={"code": str(failure_code or "scan_failed"), "detail": str(detail or "")},
     )
     response = await invoke_function(client, "durableScanWorkerControl", envelope, timeout=20.0)
-    return response["status_code"] < 300 and response["body"].get("success") is True
+    if response["status_code"] >= 300 or response["body"].get("success") is not True:
+        raise RuntimeError("The durable failure state could not be verified.")
+    return True
 
 
 def identity_matches(scan: dict[str, Any], job: dict[str, Any]) -> bool:

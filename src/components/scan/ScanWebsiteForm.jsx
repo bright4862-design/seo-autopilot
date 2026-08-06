@@ -16,6 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { base44 } from "@/api/base44Client";
+import useDurableScanCompletion from "@/hooks/useDurableScanCompletion";
 import { ensureScanProject } from "@/lib/activeProject";
 import { normalizeActionPriority, normalizeFindingEvidence, normalizeReviewEvidenceState, normalizeReviewScope, selectFinalReviewFixes } from "@/lib/reviewContract";
 import { mergePersistedScanRunRecord } from "@/lib/persistedScanRecord";
@@ -85,8 +86,14 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   const requestEpochRef = useRef(0);
   const [debugCopied, setDebugCopied] = useState(false);
   const [debugCompressed, setDebugCompressed] = useState(true);
+  // Durable identity of the scan currently in flight. Once it exists, the saved
+  // ScanRun -- not this component's function chain -- decides when the result
+  // opens, so a missed response or navigation callback cannot strand the user.
+  const [watchedScanId, setWatchedScanId] = useState("");
 
   const isLoading = submitting || saving;
+  const durableScan = useDurableScanCompletion(watchedScanId, isLoading);
+  const durableScanFailed = ["failed", "cancelled"].includes(durableScan.status);
   const cleanedKeywords = useMemo(() => splitLines(keywordsText), [keywordsText]);
   const selectedCms = CMS_OPTIONS.find((item) => item.value === cmsPlatform);
   const displayedDebugData = debugCompressed ? compressDebugData(debugData) : debugData;
@@ -105,6 +112,17 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
     }, 1000);
     return () => window.clearInterval(timer);
   }, [isLoading]);
+
+  // A durable terminal failure always stops the spinner, even when the pending
+  // function call never returns an error to this component.
+  useEffect(() => {
+    if (!durableScanFailed) return;
+    submitLockRef.current = false;
+    setSubmitting(false);
+    setActiveStep("");
+    setWatchedScanId("");
+    setError("This scan stopped before it finished, so no results were saved. Nothing was charged — you can run it again.");
+  }, [durableScanFailed]);
 
   function recordDebug(data) {
     const next = runtimeDebug(data);
@@ -248,6 +266,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         idempotencyKey,
       });
       scanId = scanRunHandle.id;
+      setWatchedScanId(scanId);
       sessionIdentity = {
         ownerId: scanOwner.id,
         projectId: scanProject.id,
@@ -440,6 +459,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         submitLockRef.current = false;
         setActiveStep("");
         setSubmitting(false);
+        setWatchedScanId("");
       }
     }
   }
@@ -538,6 +558,21 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
                     ? "Still working — larger or slower sites can take a little longer."
                     : "FixList is actively working. Your result will open automatically when it is saved."}
                 </p>
+                {durableScan.stalled && watchedScanId ? (
+                  <p className="mt-3 text-sm text-indigo-900">
+                    This is taking longer than usual. Your scan is saved to your account, so you can
+                    {" "}
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/dashboard?scan_id=${encodeURIComponent(watchedScanId)}`)}
+                      className="font-semibold underline underline-offset-2"
+                    >
+                      open its result page
+                    </button>
+                    {" "}
+                    now — it will fill in as soon as it finishes.
+                  </p>
+                ) : null}
               </div>
             </div>
             <div className="mt-4 grid grid-cols-4 gap-2" aria-label="Scan progress">

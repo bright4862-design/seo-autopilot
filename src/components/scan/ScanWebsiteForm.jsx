@@ -8,8 +8,6 @@ import {
   FileJson,
   Loader2,
   RefreshCw,
-  Search,
-  ShieldCheck,
   Trash2,
 } from "lucide-react";
 
@@ -506,15 +504,12 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   }
 
   return (
-    <div className="mx-auto w-full max-w-[640px]">
+    <div className="mx-auto w-full max-w-[680px] px-4 pb-24 pt-14 sm:px-6">
       <form onSubmit={handleSubmit} noValidate aria-busy={isLoading} className="flex flex-col gap-8">
-        <div className="flex flex-col gap-3">
-          <h1 className="text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">Create your FixList</h1>
-          <p className="text-base leading-7 text-slate-600">Enter a website URL and we’ll turn the scan into a plain-English list of what to fix, what matters most, and what may need a developer.</p>
-          <div className="inline-flex w-fit items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600">
-            <ShieldCheck className="h-3.5 w-3.5 text-indigo-600" />
-            Read-only scan — FixList never logs in or changes your website.
-          </div>
+        <div className="flex flex-col gap-4">
+          <p className="text-[13px] text-ink-faint">Read-only scan · no site changes</p>
+          <h1 className="text-[32px] font-semibold leading-tight tracking-tight text-ink sm:text-[38px]">Create your FixList</h1>
+          <p className="max-w-[52ch] text-[15px] leading-relaxed text-ink-muted">Enter a website URL and we’ll turn the scan into a plain-English list of what to fix, what matters most, and what may need a developer.</p>
         </div>
 
         {debugVisible ? (
@@ -547,7 +542,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
 
         <div className="flex flex-col gap-6">
           <div>
-            <label htmlFor="fixlist-website-url" className="text-sm font-medium text-slate-700">Website URL</label>
+            <label htmlFor="fixlist-website-url" className="text-[13px] font-medium text-ink">Website URL</label>
             <Input
               id="fixlist-website-url"
               value={websiteUrl}
@@ -559,17 +554,17 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
               aria-invalid={Boolean(urlError)}
               aria-describedby={urlError ? "fixlist-website-url-error" : undefined}
               disabled={isLoading}
-              className={`mt-2 h-11 rounded-lg border bg-white px-3 text-slate-950 shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 ${urlError ? "border-red-400 focus-visible:ring-red-300" : "border-slate-300 focus-visible:border-indigo-500 focus-visible:ring-indigo-200"}`}
+              className={`mt-2 h-11 rounded-lg border bg-white px-3 text-[15px] text-ink shadow-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 ${urlError ? "border-crit/50 focus-visible:ring-crit/20" : "border-hairline focus-visible:border-ink focus-visible:ring-ink/10"}`}
             />
             {urlError ? (
-              <p id="fixlist-website-url-error" className="mt-2 flex items-start gap-1.5 text-sm text-red-700">
+              <p id="fixlist-website-url-error" className="mt-2 flex items-start gap-1.5 text-[13px] text-crit">
                 <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{urlError}
               </p>
             ) : null}
           </div>
 
           <div>
-            <label htmlFor="fixlist-business-name" className="text-sm font-medium text-slate-700">Business or website name (optional)</label>
+            <label htmlFor="fixlist-business-name" className="text-[13px] font-medium text-ink">Business or website name (optional)</label>
             <Input
               id="fixlist-business-name"
               value={businessName}
@@ -577,36 +572,36 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
               placeholder="Example Business"
               autoComplete="organization"
               disabled={isLoading}
-              className="mt-2 h-11 rounded-lg border border-slate-300 bg-white px-3 text-slate-950 shadow-sm transition focus-visible:border-indigo-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200 focus-visible:ring-offset-1"
+              className="mt-2 h-11 rounded-lg border border-hairline bg-white px-3 text-[15px] text-ink shadow-none transition focus-visible:border-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/10 focus-visible:ring-offset-1"
             />
           </div>
 
-          <p className="text-sm text-slate-500">{SCAN_SPEC_LINE}</p>
+          <p className="text-[13px] text-ink-muted">{SCAN_SPEC_LINE}</p>
         </div>
 
-        {error ? <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"><div className="flex items-start gap-2"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span>{error}</span></div></div> : null}
+        {error ? <div className="rounded-lg border border-crit/25 bg-crit/[0.04] p-4 text-[13px] leading-relaxed text-crit"><div className="flex items-start gap-2"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span>{error}</span></div></div> : null}
         {isLoading ? (
           <div
             role="status"
             aria-live="assertive"
             aria-atomic="true"
-            className="fixed left-1/2 top-4 z-[100] w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 rounded-2xl border border-indigo-200 bg-white p-5 text-indigo-950 shadow-2xl ring-1 ring-indigo-100"
+            className="fixed left-1/2 top-4 z-[100] w-[calc(100%-2rem)] max-w-[560px] -translate-x-1/2 rounded-2xl border border-hairline bg-white p-5 text-ink shadow-lg"
           >
             <div className="flex items-start gap-3">
-              <Loader2 className="mt-0.5 h-6 w-6 shrink-0 animate-spin text-indigo-600" />
+              <Loader2 className="mt-0.5 h-5 w-5 shrink-0 animate-spin text-ink" />
               <div className="min-w-0 flex-1">
-                <p className="text-xs font-bold uppercase tracking-[0.12em] text-indigo-600">Scan running</p>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Scan running</p>
                 <div className="mt-1 flex items-baseline justify-between gap-3">
-                  <p className="font-semibold">{activeStep || "Starting your scan"}</p>
-                  <span className="shrink-0 text-xs tabular-nums text-indigo-700">{formatElapsed(elapsedSeconds)}</span>
+                  <p className="text-[15px] font-medium tracking-tight">{activeStep || "Starting your scan"}</p>
+                  <span className="shrink-0 text-[12px] tabular-nums text-ink-faint">{formatElapsed(elapsedSeconds)}</span>
                 </div>
-                <p className="mt-1 text-sm text-indigo-800">
+                <p className="mt-1 text-[13px] leading-relaxed text-ink-muted">
                   {elapsedSeconds >= 30
                     ? "Still working — larger or slower sites can take a little longer."
                     : "FixList is actively working. Your result will open automatically when it is saved."}
                 </p>
                 {durableScan.stalled && watchedScanId ? (
-                  <p className="mt-3 text-sm text-indigo-900">
+                  <p className="mt-3 text-[13px] leading-relaxed text-ink">
                     This is taking longer than usual. Your scan is saved to your account, so you can
                     {" "}
                     <button
@@ -625,8 +620,8 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
             <div className="mt-4 grid grid-cols-4 gap-2" aria-label="Scan progress">
               {SCAN_PROGRESS_STEPS.map((label, index) => (
                 <div key={label} className="min-w-0">
-                  <div className={`h-1.5 rounded-full ${index <= progressIndex ? "bg-indigo-600" : "bg-indigo-200"}`} />
-                  <p className={`mt-1 truncate text-[11px] ${index <= progressIndex ? "text-indigo-900" : "text-indigo-500"}`}>{label}</p>
+                  <div className={`h-1 rounded-full ${index <= progressIndex ? "bg-ink" : "bg-hairline"}`} />
+                  <p className={`mt-1 truncate text-[11px] ${index <= progressIndex ? "text-ink" : "text-ink-faint"}`}>{label}</p>
                 </div>
               ))}
             </div>
@@ -634,28 +629,34 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         ) : null}
 
         <div className="flex flex-col gap-3">
-          <Button type="submit" disabled={isLoading} className="h-11 w-full bg-indigo-600 text-white hover:bg-indigo-700 sm:w-auto sm:self-start sm:px-6">{isLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Building FixList...</> : <><Search className="mr-2 h-4 w-4" />Create FixList</>}</Button>
-          <p className="text-sm text-slate-600">Takes about 2–4 minutes. You can leave this page — we’ll save your list.</p>
-          <p className="text-xs text-slate-500">Scans up to 150 pages. Larger sites coming soon.</p>
+          <button
+            type="submit"
+            disabled={isLoading}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-ink px-5 py-2.5 text-[13px] font-medium text-paper transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink disabled:opacity-50 sm:w-auto sm:self-start"
+          >
+            {isLoading ? <><Loader2 className="h-4 w-4 animate-spin" />Building FixList…</> : "Create FixList"}
+          </button>
+          <p className="text-[13px] leading-relaxed text-ink-muted">Takes about 2–4 minutes. You can leave this page — we’ll save your list.</p>
+          <p className="text-[12px] text-ink-faint">Scans up to 150 pages. Larger sites coming soon.</p>
         </div>
 
-        <div className="border-t border-slate-200 pt-6">
-          <button type="button" onClick={() => setOptionalOpen((value) => !value)} aria-expanded={optionalOpen} className="text-sm font-medium text-slate-600 underline-offset-4 transition hover:text-slate-900 hover:underline">
+        <div className="border-t border-hairline-soft pt-6">
+          <button type="button" onClick={() => setOptionalOpen((value) => !value)} aria-expanded={optionalOpen} className="text-[13px] font-medium text-ink-muted underline-offset-4 transition-colors hover:text-ink hover:underline">
             {optionalOpen ? "Hide optional settings" : "Optional: personalize your FixList"}
           </button>
           {optionalOpen ? (
             <div className="mt-6 flex flex-col gap-6">
               <div>
-                <label htmlFor="fixlist-cms" className="text-sm font-medium text-slate-700">CMS / website builder</label>
-                <select id="fixlist-cms" value={cmsPlatform} onChange={(event) => setCmsPlatform(event.target.value)} disabled={isLoading} className="mt-2 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-950 shadow-sm outline-none transition focus-visible:border-indigo-500 focus-visible:ring-2 focus-visible:ring-indigo-200 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:bg-slate-50">
+                <label htmlFor="fixlist-cms" className="text-[13px] font-medium text-ink">CMS / website builder</label>
+                <select id="fixlist-cms" value={cmsPlatform} onChange={(event) => setCmsPlatform(event.target.value)} disabled={isLoading} className="mt-2 h-11 w-full rounded-lg border border-hairline bg-white px-3 text-[15px] text-ink outline-none transition focus-visible:border-ink focus-visible:ring-2 focus-visible:ring-ink/10 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-60">
                   {CMS_OPTIONS.map((cms) => <option key={cms.value} value={cms.value}>{cms.label}</option>)}
                 </select>
-                <p className="mt-2 text-xs text-slate-500">We’ll tailor every fix to your CMS — where to click and what to change.</p>
+                <p className="mt-2 text-[12px] leading-relaxed text-ink-faint">We’ll tailor every fix to your CMS — where to click and what to change.</p>
               </div>
               <div>
-                <label htmlFor="fixlist-keywords" className="text-sm font-medium text-slate-700">Important keywords</label>
-                <textarea id="fixlist-keywords" value={keywordsText} onChange={(event) => setKeywordsText(event.target.value)} placeholder={"local service\nbest product\nnear me"} disabled={isLoading} rows={4} className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 shadow-sm outline-none transition placeholder:text-slate-400 focus-visible:border-indigo-500 focus-visible:ring-2 focus-visible:ring-indigo-200 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:bg-slate-50" />
-                <p className="mt-2 text-xs text-slate-500">Optional. We’ll check whether your pages clearly target these searches.</p>
+                <label htmlFor="fixlist-keywords" className="text-[13px] font-medium text-ink">Important keywords</label>
+                <textarea id="fixlist-keywords" value={keywordsText} onChange={(event) => setKeywordsText(event.target.value)} placeholder={"local service\nbest product\nnear me"} disabled={isLoading} rows={4} className="mt-2 w-full rounded-lg border border-hairline bg-white px-3 py-2 text-[15px] text-ink outline-none transition placeholder:text-ink-faint focus-visible:border-ink focus-visible:ring-2 focus-visible:ring-ink/10 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-60" />
+                <p className="mt-2 text-[12px] leading-relaxed text-ink-faint">Optional. We’ll check whether your pages clearly target these searches.</p>
               </div>
             </div>
           ) : null}

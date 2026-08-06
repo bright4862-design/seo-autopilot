@@ -47,6 +47,29 @@ export function encodeTaskBody(payload) {
   return btoa(binary);
 }
 
+export function buildCloudTaskRequest({ queuePath, workerUrl, invokerServiceAccount, scanId, attemptCount, payload }) {
+  const attempt = normalizeAttemptCount(attemptCount);
+  const workerAudience = audienceForWorkerUrl(workerUrl);
+  return {
+    task: {
+      name: taskNameForScan(queuePath, scanId, attempt),
+      // Keep Cloud Tasks inside the same 300-second envelope as the private
+      // Cloud Run worker. Without this explicit deadline, Cloud Tasks uses a
+      // longer platform default and can outlive the worker ownership window.
+      dispatchDeadline: "300s",
+      httpRequest: {
+        url: workerUrl,
+        httpMethod: "POST",
+        headers: { "content-type": "application/json" },
+        body: encodeTaskBody(payload),
+        // Cloud Run is deployed --no-allow-unauthenticated; Cloud Tasks mints
+        // an OIDC token for this service account and the worker checks it.
+        oidcToken: { serviceAccountEmail: invokerServiceAccount, audience: workerAudience },
+      },
+    },
+  };
+}
+
 async function accessToken() {
   // A direct token is retained only for short-lived diagnostic use. Normal
   // operation uses the service-account key to mint a fresh OAuth token.
@@ -69,27 +92,19 @@ export async function enqueueScanJob({ queuePath, workerUrl, invokerServiceAccou
   const token = await accessToken();
   if (!token) return { ok: false, failureCode: "tasks_credentials_not_configured" };
 
-  let workerAudience;
+  let body;
   try {
-    workerAudience = audienceForWorkerUrl(workerUrl);
+    body = buildCloudTaskRequest({
+      queuePath,
+      workerUrl,
+      invokerServiceAccount,
+      scanId,
+      attemptCount: attempt,
+      payload,
+    });
   } catch {
     return { ok: false, failureCode: "invalid_worker_url" };
   }
-
-  const body = {
-    task: {
-      name: taskNameForScan(queuePath, scanId, attempt),
-      httpRequest: {
-        url: workerUrl,
-        httpMethod: "POST",
-        headers: { "content-type": "application/json" },
-        body: encodeTaskBody(payload),
-        // Cloud Run is deployed --no-allow-unauthenticated; Cloud Tasks mints
-        // an OIDC token for this service account and the worker checks it.
-        oidcToken: { serviceAccountEmail: invokerServiceAccount, audience: workerAudience },
-      },
-    },
-  };
 
   let response;
   try {

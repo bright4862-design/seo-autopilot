@@ -10,6 +10,7 @@ import test from "node:test";
 
 import {
   audienceForWorkerUrl,
+  buildCloudTaskRequest,
   encodeTaskBody,
   taskNameForScan,
 } from "../../base44/functions/startStandardScanJob/cloudTasks.js";
@@ -71,6 +72,26 @@ test("the worker route and Cloud Run OIDC audience are kept separate", () => {
 
 test("the worker is invoked with OIDC, never anonymously", () => {
   assert.match(tasks, /oidcToken: \{ serviceAccountEmail: invokerServiceAccount, audience: workerAudience \}/);
+});
+
+
+test("the task request is bound to the 300-second worker envelope", () => {
+  const queuePath = "projects/seo-autopilot-501517/locations/europe-west1/queues/standard150-scans";
+  const workerUrl = "https://fixlist-standard150-worker-abc-ew.a.run.app/scan-job";
+  const request = buildCloudTaskRequest({
+    queuePath,
+    workerUrl,
+    invokerServiceAccount: "fixlist-scan-invoker@seo-autopilot-501517.iam.gserviceaccount.com",
+    scanId: "6a748d5f9e8a27963ae678dc",
+    attemptCount: 2,
+    payload: { scan_id: "6a748d5f9e8a27963ae678dc", attempt_count: 2 },
+  });
+
+  assert.equal(request.task.dispatchDeadline, "300s");
+  assert.equal(request.task.name, `${queuePath}/tasks/standard150-6a748d5f9e8a27963ae678dc-a2`);
+  assert.equal(request.task.httpRequest.url, workerUrl);
+  assert.equal(request.task.httpRequest.oidcToken.audience, "https://fixlist-standard150-worker-abc-ew.a.run.app");
+  assert.equal(request.task.httpRequest.oidcToken.serviceAccountEmail, "fixlist-scan-invoker@seo-autopilot-501517.iam.gserviceaccount.com");
 });
 
 test("a failed enqueue closes the ScanRun truthfully and charges nothing", () => {

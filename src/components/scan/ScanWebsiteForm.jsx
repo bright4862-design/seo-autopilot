@@ -31,6 +31,7 @@ import {
 const STANDARD_SCANNER_FUNCTION = "runStandard150Scan";
 const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJob";
 const AI_REVIEW_FUNCTION = "aiReviewScan";
+const SYNC_FALLBACK_ENABLED = false;
 
 // Standard 150 is the only customer scan. There is no scan-size selector and no
 // customer-controlled scanner budget. The gateway owns the Python compatibility
@@ -353,10 +354,18 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         navigate(`/dashboard?scan_id=${encodeURIComponent(scanId)}`);
         return;
       }
-      // TEMPORARY FALLBACK — the verified synchronous 28-second path, kept
-      // until the async job flow is verified per the release-coordination
-      // record. The allowance on this path is still recorded only after the
-      // durable result is saved (below).
+      // The customer path must never launch a second synchronous request when
+      // async submission fails. Doing so can run two workers against one
+      // ScanRun and recreates the browser-visible 503 that this path replaces.
+      // Keep the old code below disabled for rollback inspection only.
+      if (!SYNC_FALLBACK_ENABLED) {
+        const failureCode = String(jobData?.failure_code || "async_submission_not_accepted");
+        logScanBoundary("async_job_rejected_no_fallback", identityDebug(), { failure_code: failureCode });
+        throw Object.assign(
+          new Error("The scan job could not be accepted. No fallback scan was started and nothing was charged."),
+          { code: failureCode },
+        );
+      }
       logScanBoundary("async_job_unavailable_sync_fallback", identityDebug(), {});
       recordDebug({ ...identityDebug(), status: "running", stage: "scanner_request_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, payload_summary: { max_pages: scanPayload.max_pages, max_competitors: 0, max_browser_render_attempts: scanPayload.max_browser_render_attempts, crawl_timeout_ms: scanPayload.crawl_timeout_ms, keyword_count: scanPayload.important_keywords.length, respect_robots_txt: scanPayload.respect_robots_txt } });
       refreshDebugData();

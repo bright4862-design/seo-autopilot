@@ -143,3 +143,23 @@ test("9. completed ScanRun automatically opens its exact FixList", () => {
   assert.match(completionHook, /\["complete", "limited"\]\.includes\(status\) && fixListId/);
   assert.match(completionHook, /navigate\(`\/dashboard\?scan=complete&scan_id=/);
 });
+
+test("10. async acceptance response is executable and CORS-safe", async () => {
+  assert.match(job, /import \{ corsHeaders, jsonResponse \} from "\.\/httpResponse\.js";/);
+  const headers = corsHeaders();
+  assert.equal(headers["Access-Control-Allow-Origin"], "*");
+  assert.match(headers["Access-Control-Allow-Methods"], /POST/);
+
+  const payload = {
+    success: true,
+    accepted: true,
+    version: "startStandardScanJob_v1_async_durable",
+    scan_id: "scan_123",
+    worker_budget_ms: 120000,
+  };
+  const response = jsonResponse(payload);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("access-control-allow-origin"), "*");
+  assert.match(response.headers.get("content-type") || "", /application\/json/);
+  assert.deepEqual(await response.json(), payload);
+});

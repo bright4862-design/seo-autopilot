@@ -1,18 +1,19 @@
 name: Apply PR114 retry patch
 
 on:
-  push:
+  pull_request:
     branches:
-      - large-site-durable-worker
+      - main
     paths:
       - .pr114-patch/READY
+      - .github/workflows/apply-pr114-retry-patch.yml
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: contains(github.event.head_commit.message, 'launch PR114 retry patch')
+    if: github.head_ref == 'large-site-durable-worker'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

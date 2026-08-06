@@ -44,7 +44,10 @@ export function buildAuthoritySnapshot({ scan, review, identity, userId, now = n
   const counts = { critical: 0, high: 0, medium: 0, low: 0 };
   for (const fix of fixes) counts[fix.priority] += 1;
 
-  const websiteUrl = text(scan?.final_url || scan?.website_url, 2_000);
+  // Preserve the customer-submitted/root target as the scan identity. A scanner
+  // may report a representative or sampled deep page as final_url; persisting
+  // that value as website_url detaches the completed FixList from the root scan.
+  const websiteUrl = text(scan?.submitted_url || scan?.website_url || scan?.final_url, 2_000);
   const customerSummary = text(
     review?.customer_summary || review?.plain_english_summary || review?.website_health_report?.overall_explanation,
     4_000,

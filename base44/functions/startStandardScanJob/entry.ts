@@ -1,6 +1,7 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
 import { waitUntil } from "base44:runtime";
 import { createAuthoritySeal } from "./authoritySeal.js";
+import { enqueueScanJob } from "./cloudTasks.js";
 
 // Defined inline rather than imported. The bundler emitted a _bundled.mjs in
 // which the ./httpResponse.js bindings were not defined at runtime, so every
@@ -87,6 +88,14 @@ export default async function (req: Request): Promise<Response> {
       return jsonResponse({ success: false, version: VERSION, error: "A durable request_id and scan_id are required." }, 400);
     }
 
+    // Standard 150 is the only customer scan. "advanced" is the Python
+    // compatibility alias for the same mode; anything else is refused.
+    const requestedMode = String(body.scan_mode || body.canonical_mode || body.audit_profile || PUBLIC_SCAN_MODE)
+      .trim().toLowerCase();
+    if (![PUBLIC_SCAN_MODE, "advanced"].includes(requestedMode)) {
+      return jsonResponse({ success: false, version: VERSION, error: "Only the Standard 150 scan is available.", ...identity.fields }, 400);
+    }
+
     const websiteUrl = normalizeWebsiteUrl(
       body.website_url || body.url || body.normalized_url || body.requested_start_url || body.start_url || "",
     );
@@ -125,10 +134,55 @@ export default async function (req: Request): Promise<Response> {
       signingKey,
     };
 
-    // Submit the job and answer immediately with the exact durable identity.
-    // The Worker stays alive until the background promise settles.
-    waitUntil(runScanJob({ base44, user, context, jobInput }));
-    logBoundary("async_job_accepted", identity.fields);
+    // Hand the job to Cloud Tasks and answer immediately.
+    //
+    // waitUntil() used to run the crawl here. Base44 reaps post-response work,
+    // so scan 6a748d5f9e8a27963ae678dc logged worker_scan_start and then
+    // produced nothing for 247s until the watchdog closed it as
+    // orphaned_no_terminal_state. Nothing long-running may live in this
+    // function; the durable worker owns execution from here.
+    const queuePath = String(Deno.env.get("SCAN_TASKS_QUEUE_PATH") || "");
+    const workerUrl = String(Deno.env.get("SCAN_WORKER_URL") || "");
+    const invokerServiceAccount = String(Deno.env.get("TASKS_INVOKER_SERVICE_ACCOUNT") || "");
+    if (!queuePath || !workerUrl || !invokerServiceAccount) {
+      return jsonResponse({
+        success: false, accepted: false, version: VERSION, retryable: true,
+        failure_code: "durable_worker_not_configured",
+        error: "The asynchronous scan path is not available.", ...identity.fields,
+      }, 503);
+    }
+
+    const enqueued = await enqueueScanJob({
+      queuePath,
+      workerUrl,
+      invokerServiceAccount,
+      scanId: identity.fields.scan_id,
+      payload: {
+        scan_id: identity.fields.scan_id,
+        request_id: identity.fields.request_id,
+        idempotency_key: identity.fields.idempotency_key,
+        project_id: String(context.scan?.project_id || ""),
+        owner_user_id: String(user.id),
+        website_url: websiteUrl,
+        path_prefix: jobInput.pathPrefix,
+        normalized_domain: identity.fields.normalized_domain,
+        business_name: jobInput.businessName,
+        cms_platform: jobInput.cmsPlatform,
+        scan_mode: PUBLIC_SCAN_MODE,
+        respect_robots_txt: true,
+      },
+    });
+    if (!enqueued.ok) {
+      // Nothing was started, so nothing is charged and the ScanRun is closed
+      // truthfully rather than left active with no owner.
+      await failOwnedScanRun({ base44, context, identity: identity.fields, failureCode: enqueued.failureCode });
+      return jsonResponse({
+        success: false, accepted: false, version: VERSION, retryable: true,
+        failure_code: enqueued.failureCode,
+        error: "The scan job could not be queued. Nothing was charged.", ...identity.fields,
+      }, 503);
+    }
+    logBoundary("async_job_accepted", { ...identity.fields, task_name: enqueued.taskName, deduplicated: enqueued.deduplicated === true });
     return jsonResponse({
       success: true,
       accepted: true,

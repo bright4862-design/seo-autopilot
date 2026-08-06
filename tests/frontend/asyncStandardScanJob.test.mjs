@@ -29,7 +29,11 @@ function jobConst(name) {
 test("1. a scan longer than 50 seconds cannot produce a browser 503", () => {
   // The upstream fetch runs ONLY inside the background task; the accepted
   // response never awaits it.
-  assert.match(job, /waitUntil\(runScanJob\(/);
+  // The crawl must NOT run here. Base44 reaps post-response work: scan
+  // 6a748d5f9e8a27963ae678dc logged worker_scan_start via waitUntil() and then
+  // produced nothing for 247s. Execution belongs to the Cloud Tasks worker.
+  assert.doesNotMatch(job, /waitUntil\(runScanJob\(/);
+  assert.match(job, /enqueueScanJob\(\{/);
   assert.doesNotMatch(job, /await runScanJob\(/);
   assert.match(job, /accepted: true/);
   // The browser navigates to the durable result page the moment the job is
@@ -145,7 +149,12 @@ test("9. completed ScanRun automatically opens its exact FixList", () => {
 });
 
 test("10. async acceptance response is executable and CORS-safe", async () => {
-  assert.match(job, /import \{ corsHeaders, jsonResponse \} from "\.\/httpResponse\.js";/);
+  // Inlined rather than imported: the bundler emitted a _bundled.mjs whose
+  // ./httpResponse.js bindings were undefined, so every production invocation
+  // died with "ReferenceError: jsonResponse is not defined".
+  assert.match(job, /^function jsonResponse\(payload, status = 200\)/m);
+  assert.match(job, /^const CORS_HEADERS = Object\.freeze\(\{/m);
+  assert.doesNotMatch(job, /import \{ corsHeaders, jsonResponse \}/);
   const headers = corsHeaders();
   assert.equal(headers["Access-Control-Allow-Origin"], "*");
   assert.match(headers["Access-Control-Allow-Methods"], /POST/);

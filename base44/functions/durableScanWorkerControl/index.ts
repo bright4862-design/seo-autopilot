@@ -1,4 +1,4 @@
-import { createClientFromRequest } from "npm:@base44/sdk";
+import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { verifyAuthoritySeal } from "./authoritySeal.js";
 
 // Attempts are 1-based; anything unparseable is attempt 1.

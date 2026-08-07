@@ -31,12 +31,32 @@
 # _RUNTIME_SA=<sa>@<project>.iam.gserviceaccount.com,\
 # _INVOKER_SA=<sa>@<project>.iam.gserviceaccount.com
 
+#   _BASE44_APP_ID       Base44 app id the worker calls back into. REQUIRED:
+#                        with it empty, scan_job.py builds
+#                        <api>/api/apps//functions/<name> and every control and
+#                        completion call silently misroutes.
+#   _BASE44_API_URL      Base44 API origin. Optional in code (defaults to
+#                        https://base44.app) but pinned here so a deploy cannot
+#                        silently target the public default.
+#
+# Secrets are injected from Secret Manager by NAME, never as plaintext env vars:
+#   _SIGNING_KEY_SECRET  Secret name for SCAN_EVIDENCE_SIGNING_KEY. REQUIRED:
+#                        without it read_scan_run() returns None and the
+#                        authority path degrades silently rather than failing.
+#   _SCANNER_KEY_SECRET  Secret name for SCANNER_API_KEY. Without it
+#                        require_scanner_api_key() rejects every /scan request
+#                        with 401.
+
 substitutions:
   _WORKER_SERVICE: ""
   _REGION: ""
   _IMAGE: ""
   _RUNTIME_SA: ""
   _INVOKER_SA: ""
+  _BASE44_APP_ID: ""
+  _BASE44_API_URL: ""
+  _SIGNING_KEY_SECRET: ""
+  _SCANNER_KEY_SECRET: ""
 
 steps:
   # Fail closed before anything is built or deployed.
@@ -53,7 +73,11 @@ steps:
           "_REGION=${_REGION}" \
           "_IMAGE=${_IMAGE}" \
           "_RUNTIME_SA=${_RUNTIME_SA}" \
-          "_INVOKER_SA=${_INVOKER_SA}"; do
+          "_INVOKER_SA=${_INVOKER_SA}" \
+          "_BASE44_APP_ID=${_BASE44_APP_ID}" \
+          "_BASE44_API_URL=${_BASE44_API_URL}" \
+          "_SIGNING_KEY_SECRET=${_SIGNING_KEY_SECRET}" \
+          "_SCANNER_KEY_SECRET=${_SCANNER_KEY_SECRET}"; do
           name="${pair%%=*}"; value="${pair#*=}"
           if [ -z "$value" ]; then echo "MISSING required substitution: $name"; missing=1; fi
         done
@@ -96,7 +120,14 @@ steps:
       - --max-instances=20
       # New revision takes no traffic. Promotion is a separate, human decision.
       - --no-traffic
-      - --set-env-vars=TASKS_INVOKER_SERVICE_ACCOUNT=${_INVOKER_SA},GROK_CHAT_ENABLED=false
+      # Non-secret runtime configuration. GROK_PROXY_ENABLED is the variable the
+      # Cloud Run worker actually reads (scanner-api/app/main.py). GROK_CHAT_ENABLED
+      # belongs to the Base44 grokChat function and is a no-op here -- setting it
+      # on this service would be false assurance, so it is deliberately absent.
+      - --set-env-vars=TASKS_INVOKER_SERVICE_ACCOUNT=${_INVOKER_SA},BASE44_APP_ID=${_BASE44_APP_ID},BASE44_API_URL=${_BASE44_API_URL},GROK_PROXY_ENABLED=false
+      # Secrets by reference. Never --set-env-vars a secret value: that would
+      # store plaintext in the service revision and in build logs.
+      - --set-secrets=SCAN_EVIDENCE_SIGNING_KEY=${_SIGNING_KEY_SECRET}:latest,SCANNER_API_KEY=${_SCANNER_KEY_SECRET}:latest
 
 images:
   - ${_IMAGE}:$COMMIT_SHA

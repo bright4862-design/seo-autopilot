@@ -56,8 +56,42 @@ if [ -f "$WORKER_BUILD" ]; then
     && pass "concurrency 1" || fail "concurrency is not 1"
   has "--no-traffic" "$WORKER_BUILD" \
     && pass "no traffic migration on deploy" || fail "deploy would migrate traffic"
-  has "GROK_CHAT_ENABLED=false" "$WORKER_BUILD" \
-    && pass "Grok disabled in worker env" || fail "Grok not explicitly disabled"
+  # The worker reads GROK_PROXY_ENABLED (scanner-api/app/main.py).
+  # GROK_CHAT_ENABLED belongs to the Base44 grokChat function and is a no-op
+  # on this service -- setting it here would be false assurance.
+  has "GROK_PROXY_ENABLED=false" "$WORKER_BUILD" \
+    && pass "Grok disabled with the variable the worker actually reads" \
+    || fail "GROK_PROXY_ENABLED=false not set on the worker"
+  if grep -v '^\s*#' "$WORKER_BUILD" | grep -q "GROK_CHAT_ENABLED"; then
+    fail "GROK_CHAT_ENABLED set on the worker; that variable is only read by the Base44 grokChat function"
+  else
+    pass "no no-op GROK_CHAT_ENABLED on the worker"
+  fi
+
+  # Required worker variables, per docs/standard150-deployment-contract.md.
+  # Must appear on the --set-env-vars line. A bare file-wide match would be
+  # satisfied by the substitution-guard step, hiding a missing deploy value.
+  ENVLINE=$(grep -- "--set-env-vars" "$WORKER_BUILD" 2>/dev/null || true)
+  for v in BASE44_APP_ID BASE44_API_URL TASKS_INVOKER_SERVICE_ACCOUNT; do
+    printf "%s" "$ENVLINE" | grep -qE "[,=]${v}=" \
+      && pass "$v supplied on the deploy line" \
+      || fail "$v not on --set-env-vars; see docs/standard150-deployment-contract.md"
+  done
+
+  # Secrets by reference only.
+  has "--set-secrets=" "$WORKER_BUILD" \
+    && pass "secrets injected from Secret Manager by name" \
+    || fail "no --set-secrets; signing key and scanner key would be unset"
+  for v in SCAN_EVIDENCE_SIGNING_KEY SCANNER_API_KEY; do
+    if grep -v '^\s*#' "$WORKER_BUILD" | grep -q -- "--set-env-vars.*$v"; then
+      fail "$v passed via --set-env-vars; that stores plaintext in the revision"
+    else
+      pass "$v not passed as a plaintext env var"
+    fi
+    grep -v '^\s*#' "$WORKER_BUILD" | grep -q -- "--set-secrets.*$v" \
+      && pass "$v injected as a secret reference" \
+      || fail "$v not injected from Secret Manager"
+  done
   has "_WORKER_SERVICE" "$WORKER_BUILD" \
     && pass "worker service name is a required parameter" \
     || fail "worker service name is not parameterized"
@@ -118,6 +152,19 @@ else
 fi
 
 echo
+echo "=== 3b. Deployment contract ==="
+if [ -f docs/standard150-deployment-contract.md ]; then
+  pass "deployment contract present"
+  grep -q "GROK_PROXY_ENABLED" docs/standard150-deployment-contract.md \
+    && pass "contract documents the worker Grok variable" \
+    || fail "contract does not document GROK_PROXY_ENABLED"
+else
+  fail "docs/standard150-deployment-contract.md missing"
+fi
+[ -f scripts/post_deploy_verify.sh ] && pass "post-deploy verification script present" \
+  || fail "scripts/post_deploy_verify.sh missing"
+
+echo
 echo "=== 4. Toolchain presence ==="
 command -v node >/dev/null 2>&1 && pass "node $(node --version)" || envm "node not installed"
 command -v python3 >/dev/null 2>&1 && pass "python3 present" || envm "python3 not installed"
@@ -139,7 +186,8 @@ done
 
 echo
 echo "=== 6. Deployment parameters (must be supplied explicitly) ==="
-for var in WORKER_SERVICE REGION IMAGE RUNTIME_SA INVOKER_SA TASKS_QUEUE; do
+for var in WORKER_SERVICE REGION IMAGE RUNTIME_SA INVOKER_SA TASKS_QUEUE \
+           BASE44_APP_ID BASE44_API_URL SIGNING_KEY_SECRET SCANNER_KEY_SECRET; do
   if [ -n "${!var:-}" ]; then pass "$var supplied"; else envm "$var not supplied"; fi
 done
 

@@ -71,7 +71,8 @@ test("the worker deployment artifact requires a private service", () => {
   assert.match(buildCode, /--timeout=300/);
   assert.match(buildCode, /--concurrency=1/);
   assert.match(buildCode, /--no-traffic/);
-  assert.match(buildCode, /GROK_CHAT_ENABLED=false/);
+  // GROK_PROXY_ENABLED, not GROK_CHAT_ENABLED: see the dedicated Grok test.
+  assert.match(buildCode, /GROK_PROXY_ENABLED=false/);
 });
 
 test("the worker artifact does not target or mutate the existing scanner deployment", () => {
@@ -146,4 +147,97 @@ test("the manifest covers function.jsonc and the whole closed tree", () => {
       assert.equal(meta.bytes, fs.statSync(`base44/functions/${fnName}/${name}`).size);
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// Deployment contract: environment variables reachable from the durable path.
+// ---------------------------------------------------------------------------
+
+const workerMain = fs.readFileSync("scanner-api/app/main.py", "utf8");
+const contractDoc = fs.readFileSync("docs/standard150-deployment-contract.md", "utf8");
+
+test("the worker Grok flag matches the variable the worker actually reads", () => {
+  // scanner-api reads GROK_PROXY_ENABLED; GROK_CHAT_ENABLED is the Base44
+  // grokChat function's variable and is a no-op on Cloud Run.
+  assert.match(workerMain, /os\.getenv\("GROK_PROXY_ENABLED"/);
+  assert.match(buildCode, /GROK_PROXY_ENABLED=false/);
+  assert.ok(
+    !buildCode.includes("GROK_CHAT_ENABLED"),
+    "GROK_CHAT_ENABLED on the worker is a no-op and gives false assurance",
+  );
+  // And it must remain default-disabled in code.
+  assert.match(workerMain, /os\.getenv\("GROK_PROXY_ENABLED", ""\)\.strip\(\)\.lower\(\) == "true"/);
+});
+
+test("every required worker variable is supplied by the deployment artifact", () => {
+  // Must be on the --set-env-vars line itself. Matching anywhere in the file
+  // would be satisfied by the substitution-guard step, which lists the same
+  // names and would hide a variable missing from the actual deploy.
+  const envLine = buildCode.split("\n").find((l) => l.includes("--set-env-vars")) || "";
+  assert.ok(envLine, "--set-env-vars line not found");
+  for (const v of ["BASE44_APP_ID", "BASE44_API_URL", "TASKS_INVOKER_SERVICE_ACCOUNT"]) {
+    assert.match(envLine, new RegExp(`\\b${v}=`), `${v} not on the --set-env-vars line`);
+  }
+});
+
+test("secrets are injected by reference, never as plaintext env vars", () => {
+  assert.match(buildCode, /--set-secrets=/);
+  for (const v of ["SCAN_EVIDENCE_SIGNING_KEY", "SCANNER_API_KEY"]) {
+    const envLine = buildCode.split("\n").find((l) => l.includes("--set-env-vars")) || "";
+    assert.ok(!envLine.includes(v), `${v} must not be a plaintext env var`);
+    const secretLine = buildCode.split("\n").find((l) => l.includes("--set-secrets")) || "";
+    assert.ok(secretLine.includes(v), `${v} must be injected from Secret Manager`);
+  }
+  // Secret NAMES are parameters; no secret value or literal name is baked in.
+  for (const key of ["_SIGNING_KEY_SECRET", "_SCANNER_KEY_SECRET"]) {
+    assert.match(workerBuild, new RegExp(`${key}: ""`), `${key} must fail closed`);
+  }
+});
+
+test("the deployment contract documents every variable the worker reads", () => {
+  const readVars = [...workerMain.matchAll(/os\.getenv\("([A-Z0-9_]+)"/g)].map((m) => m[1]);
+  const jobVars = [...fs.readFileSync("scanner-api/app/scan_job.py", "utf8")
+    .matchAll(/os\.getenv\("([A-Z0-9_]+)"/g)].map((m) => m[1]);
+  for (const v of new Set([...readVars, ...jobVars])) {
+    assert.ok(
+      contractDoc.includes(v),
+      `${v} is read by the worker but is absent from the deployment contract`,
+    );
+  }
+});
+
+test("the contract documents every variable the Base44 durable functions read", () => {
+  // The dispatcher and the two service-role functions read Deno.env, not
+  // os.getenv, and are supplied through Base44 rather than Cloud Build. They
+  // are still part of the deployment contract.
+  const seen = new Set();
+  for (const fnName of RELEASE_FUNCTIONS) {
+    const dir = `base44/functions/${fnName}`;
+    for (const file of fs.readdirSync(dir)) {
+      if (!/\.(ts|js)$/.test(file)) continue;
+      const source = fs.readFileSync(`${dir}/${file}`, "utf8");
+      for (const m of source.matchAll(/Deno\.env\.get\("([A-Z0-9_]+)"\)/g)) seen.add(m[1]);
+    }
+  }
+  assert.ok(seen.size > 0, "no Deno env reads found; the scan is broken");
+  for (const v of seen) {
+    assert.ok(
+      contractDoc.includes(v),
+      `${v} is read by a Base44 durable function but is absent from the deployment contract`,
+    );
+  }
+});
+
+test("the post-deploy verification path is read-only", () => {
+  const verify = fs.readFileSync("scripts/post_deploy_verify.sh", "utf8");
+  // No mutation verbs against live infrastructure.
+  for (const forbidden of [
+    /gcloud run deploy/, /gcloud run services update/, /update-traffic/,
+    /gcloud builds submit/, /gcloud tasks queues create/, /--to-latest/, /\bdelete\b/,
+  ]) {
+    assert.doesNotMatch(verify, forbidden, `post-deploy script must not mutate: ${forbidden}`);
+  }
+  // It must not start a scan.
+  assert.doesNotMatch(verify, /-X\s*POST|--data|-d\s+['"]/);
+  assert.match(verify, /describe/);
 });

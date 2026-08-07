@@ -1,0 +1,116 @@
+# Cloud Build artifact for the PRIVATE durable Standard 150 worker.
+#
+# This file is deliberately SEPARATE from cloudbuild.yaml. cloudbuild.yaml
+# builds and deploys the existing scanner service (seo-autopilot-4545); it must
+# not be repurposed, because reusing it would redeploy that service instead of
+# creating the private worker.
+#
+# NO VALUE BELOW IS INVENTED. Every deployment-specific value is a required
+# substitution with an empty default, so a build that omits one fails closed at
+# gcloud rather than silently deploying to a guessed target. Fill them from the
+# real project inventory before running.
+#
+# Required substitutions (all must be supplied explicitly):
+#   _WORKER_SERVICE      Cloud Run service name for the private worker.
+#                        MUST NOT equal the existing scanner service.
+#   _REGION              Cloud Run / Artifact Registry region.
+#   _IMAGE               Fully-qualified image path, without tag.
+#   _RUNTIME_SA          Runtime service account the worker runs AS.
+#   _INVOKER_SA          Service account Cloud Tasks mints its OIDC token as.
+#                        Needs roles/run.invoker on _WORKER_SERVICE only.
+#
+# This file BUILDS and DEPLOYS a new private service. It performs no traffic
+# migration: --no-traffic is set, so the new revision receives 0% until a human
+# promotes it explicitly. Nothing here promotes, and nothing here touches the
+# existing scanner service.
+#
+# Example (values are placeholders -- substitute real ones):
+#   gcloud builds submit --config cloudbuild.durable-worker.yaml \
+#     --substitutions=_WORKER_SERVICE=<name>,_REGION=<region>,\
+# _IMAGE=<region>-docker.pkg.dev/<project>/<repo>/<image>,\
+# _RUNTIME_SA=<sa>@<project>.iam.gserviceaccount.com,\
+# _INVOKER_SA=<sa>@<project>.iam.gserviceaccount.com
+
+substitutions:
+  _WORKER_SERVICE: ""
+  _REGION: ""
+  _IMAGE: ""
+  _RUNTIME_SA: ""
+  _INVOKER_SA: ""
+
+steps:
+  # Fail closed before anything is built or deployed.
+  - id: require-substitutions
+    name: gcr.io/cloud-builders/gcloud
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        missing=0
+        for pair in \
+          "_WORKER_SERVICE=${_WORKER_SERVICE}" \
+          "_REGION=${_REGION}" \
+          "_IMAGE=${_IMAGE}" \
+          "_RUNTIME_SA=${_RUNTIME_SA}" \
+          "_INVOKER_SA=${_INVOKER_SA}"; do
+          name="${pair%%=*}"; value="${pair#*=}"
+          if [ -z "$value" ]; then echo "MISSING required substitution: $name"; missing=1; fi
+        done
+        if [ "$missing" -ne 0 ]; then
+          echo "Refusing to build: supply every deployment parameter explicitly."
+          exit 1
+        fi
+        echo "All required substitutions supplied."
+
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args: ["build", "--tag", "${_IMAGE}:$COMMIT_SHA", "."]
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args: ["push", "${_IMAGE}:$COMMIT_SHA"]
+
+  - id: deploy-private-worker
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_WORKER_SERVICE}
+      - --image=${_IMAGE}:$COMMIT_SHA
+      - --region=${_REGION}
+      # Private. Cloud Run IAM performs OIDC token validation (signature,
+      # issuer, audience, expiry) before the request reaches the app. The app's
+      # invoker-email check is a second, weaker gate that does NOT verify the
+      # signature or audience -- so this flag is load-bearing for security.
+      - --no-allow-unauthenticated
+      # Explicit runtime identity. Without this the worker would inherit the
+      # default compute service account.
+      - --service-account=${_RUNTIME_SA}
+      # Must match dispatchDeadline "300s" in startStandardScanJob/cloudTasks.js.
+      - --timeout=300
+      # One durable job per instance.
+      - --concurrency=1
+      - --min-instances=0
+      - --max-instances=20
+      # New revision takes no traffic. Promotion is a separate, human decision.
+      - --no-traffic
+      - --set-env-vars=TASKS_INVOKER_SERVICE_ACCOUNT=${_INVOKER_SA},GROK_CHAT_ENABLED=false
+
+images:
+  - ${_IMAGE}:$COMMIT_SHA
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+# Cloud Tasks target route is /scan-job on this service. Granting the invoker
+# and creating the queue are deliberately NOT performed here -- they are IAM and
+# queue mutations that must be applied explicitly and reviewed. Reference only:
+#
+#   gcloud run services add-iam-policy-binding <_WORKER_SERVICE> \
+#     --region=<_REGION> --member=serviceAccount:<_INVOKER_SA> \
+#     --role=roles/run.invoker
+#
+#   gcloud tasks queues create <queue> --location=<_REGION> \
+#     --max-concurrent-dispatches=1 --max-attempts=3

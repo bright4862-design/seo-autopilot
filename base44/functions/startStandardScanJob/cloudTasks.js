@@ -9,6 +9,14 @@
 // for the same ScanRun is rejected by Cloud Tasks itself (ALREADY_EXISTS)
 // rather than starting a second worker against one durable row.
 
+// Imported statically. A dynamic import() of a sibling module is exactly the
+// resolution the Base44 bundler already failed on for ./httpResponse.js in
+// entry.ts, where it produced a runtime ReferenceError after the job had been
+// accepted. A static import fails at deploy time instead of silently at
+// dispatch time, and a swallowed resolution error can no longer be reported as
+// a missing credential.
+import { createServiceAccountAccessToken } from "./gcpAuth.js";
+
 const TASKS_API = "https://cloudtasks.googleapis.com/v2";
 
 export function normalizeAttemptCount(value) {
@@ -70,27 +78,32 @@ export function buildCloudTaskRequest({ queuePath, workerUrl, invokerServiceAcco
   };
 }
 
+// One deterministic authentication route: the service-account key is exchanged
+// for a short-lived OAuth token. A GCP_ACCESS_TOKEN passthrough previously sat
+// in front of this as a "diagnostic" fallback. It was referenced nowhere else in
+// the repository, and it created a second, expiring production credential path
+// that could silently take precedence over the key. Removed deliberately -- do
+// not reintroduce a direct-token branch here.
 async function accessToken() {
-  // A direct token is retained only for short-lived diagnostic use. Normal
-  // operation uses the service-account key to mint a fresh OAuth token.
-  const direct = String(Deno.env.get("GCP_ACCESS_TOKEN") || "").trim();
-  if (direct) return direct;
-
   const key = String(Deno.env.get("GCP_SERVICE_ACCOUNT_KEY") || "");
-  if (!key) return "";
+  if (!key) return { token: "", failureCode: "tasks_credentials_not_configured" };
 
   try {
-    const { createServiceAccountAccessToken } = await import("./gcpAuth.js");
-    return await createServiceAccountAccessToken(key);
+    const token = await createServiceAccountAccessToken(key);
+    // A malformed key can mint an empty token without throwing.
+    if (!token) return { token: "", failureCode: "tasks_token_mint_failed" };
+    return { token };
   } catch {
-    return "";
+    // A malformed key or a failed exchange is not a missing credential.
+    // Reporting it as one sends operators to check an env var that is correct.
+    return { token: "", failureCode: "tasks_token_mint_failed" };
   }
 }
 
 export async function enqueueScanJob({ queuePath, workerUrl, invokerServiceAccount, scanId, attemptCount, payload }) {
   const attempt = normalizeAttemptCount(attemptCount);
-  const token = await accessToken();
-  if (!token) return { ok: false, failureCode: "tasks_credentials_not_configured" };
+  const { token, failureCode: tokenFailureCode } = await accessToken();
+  if (!token) return { ok: false, failureCode: tokenFailureCode || "tasks_credentials_not_configured" };
 
   let body;
   try {

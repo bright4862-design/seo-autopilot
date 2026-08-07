@@ -355,12 +355,23 @@ class ScanJobRequest(BaseModel):
 
 
 def require_cloud_tasks_oidc(authorization: str | None) -> None:
-    """Accept only Cloud Tasks OIDC bearer tokens for the configured audience.
+    """Check the invoker identity on an already-IAM-validated Cloud Tasks token.
 
-    Cloud Run is deployed with --no-allow-unauthenticated, so IAM has already
-    rejected anonymous callers before the request reaches this process. This is
-    the second gate: it verifies the token was minted for this worker's service
-    account, so another authenticated principal in the project cannot drive jobs.
+    This function does NOT verify the token signature and does NOT check the
+    `aud` claim. It base64-decodes the JWT payload and compares the `email`
+    claim against TASKS_INVOKER_SERVICE_ACCOUNT. Read it as a second, weaker
+    gate -- not as OIDC verification.
+
+    Token validation (signature, issuer, audience, expiry) is performed by
+    Cloud Run IAM before the request reaches this process, which is only true
+    while the service is deployed --no-allow-unauthenticated. That deployment
+    flag is therefore load-bearing for security here: on a public service this
+    check is trivially forgeable, because an unsigned payload with the expected
+    email claim would pass.
+
+    The application-level value it does add is restricting which *authenticated*
+    principal may drive jobs, so another caller with run.invoker in the project
+    cannot enqueue work through this route.
     """
     token = str(authorization or "")
     if not token.lower().startswith("bearer "):

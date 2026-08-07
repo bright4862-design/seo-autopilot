@@ -9,7 +9,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { corsHeaders, jsonResponse } from "../../base44/functions/startStandardScanJob/httpResponse.js";
+// httpResponse.js is intentionally not imported: it has been removed from the
+// package. This suite exercises the helpers inlined into entry.ts instead.
 
 const job = fs.readFileSync("base44/functions/startStandardScanJob/entry.ts", "utf8");
 const gateway = fs.readFileSync("base44/functions/runStandard150Scan/entry.ts", "utf8");
@@ -155,9 +156,27 @@ test("10. async acceptance response is executable and CORS-safe", async () => {
   assert.match(job, /^function jsonResponse\(payload, status = 200\)/m);
   assert.match(job, /^const CORS_HEADERS = Object\.freeze\(\{/m);
   assert.doesNotMatch(job, /import \{ corsHeaders, jsonResponse \}/);
-  const headers = corsHeaders();
-  assert.equal(headers["Access-Control-Allow-Origin"], "*");
-  assert.match(headers["Access-Control-Allow-Methods"], /POST/);
+
+  // httpResponse.js is removed from the package entirely. Keeping a second copy
+  // of these helpers beside the inlined ones is what allowed the broken import
+  // to exist, so the file is gone and the regression cannot return.
+  assert.equal(
+    fs.existsSync("base44/functions/startStandardScanJob/httpResponse.js"),
+    false,
+    "httpResponse.js must stay deleted; entry.ts defines these helpers inline",
+  );
+
+  // Execute the INLINED implementation extracted from entry.ts, so this stays a
+  // behavioral check against the code that actually ships.
+  const corsBlock = job.match(/^const CORS_HEADERS = Object\.freeze\(\{[\s\S]*?\}\);/m)[0];
+  const headersFn = job.match(/^function corsHeaders\(\) \{[\s\S]*?\n\}/m)[0];
+  const jsonBlock = job.match(/^function jsonResponse\(payload, status = 200\) \{[\s\S]*?\n\}/m)[0];
+  const { jsonResponse, CORS_HEADERS } = new Function(
+    `${corsBlock}\n${headersFn}\n${jsonBlock}\nreturn { jsonResponse, CORS_HEADERS };`,
+  )();
+
+  assert.equal(CORS_HEADERS["Access-Control-Allow-Origin"], "*");
+  assert.match(CORS_HEADERS["Access-Control-Allow-Methods"], /POST/);
 
   const payload = {
     success: true,

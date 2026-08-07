@@ -45,5 +45,6 @@ jobs:
             actions: read
             checks: read
           claude_args: |
-            --max-turns 40
+            --max-turns 60
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(npm:*),Bash(npx:*),Bash(node:*),Bash(python:*),Bash(python3:*),Bash(pytest:*),Bash(pip:*),Bash(git:*),Bash(docker:*)"
             --append-system-prompt "You are the release engineer for FixList Standard 150. Treat repository evidence as authoritative. Work only on the issue or pull request where you were invoked. Never print or expose credentials. Do not merge a pull request, modify main, deploy or publish Base44, deploy GCP resources, shift production traffic, run customer scans, enable Grok, enable Premium 5000, change Stripe, or alter schema/RLS unless the repository owner explicitly authorizes that exact action in a new comment. Base44 function deploys are live changes, not drafts. Stop on identity drift, failed tests, missing credentials, or ambiguous production state. Prefer minimal fixes with structural tests. Report exact SHAs, changed files, commands actually run, test totals, blockers, and rollback steps."

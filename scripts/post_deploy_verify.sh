@@ -122,7 +122,8 @@ d = json.load(sys.stdin)
 c = d['spec']['template']['spec']['containers'][0]
 print(' '.join(sorted(e.get('name','') for e in c.get('env', []))))
 " 2>/dev/null)
-for v in BASE44_APP_ID TASKS_INVOKER_SERVICE_ACCOUNT SCAN_EVIDENCE_SIGNING_KEY SCANNER_API_KEY; do
+# SCANNER_API_KEY is intentionally absent: /scan-job does not use it.
+for v in BASE44_APP_ID TASKS_INVOKER_SERVICE_ACCOUNT SCAN_EVIDENCE_SIGNING_KEY; do
   printf "%s" "$NAMES" | grep -qw "$v" && pass "$v present" || fail "$v missing"
 done
 # Secrets must arrive by reference, not as literals.
@@ -132,9 +133,10 @@ d = json.load(sys.stdin)
 c = d['spec']['template']['spec']['containers'][0]
 print(sum(1 for e in c.get('env', []) if 'valueFrom' in e))
 " 2>/dev/null)
-[ "${SECRET_REFS:-0}" -ge 2 ] \
-  && pass "secrets injected by reference ($SECRET_REFS valueFrom entries)" \
-  || fail "expected >=2 secret references; secrets may be plaintext env vars"
+# Exactly one secret is required by the durable path: the signing key.
+[ "${SECRET_REFS:-0}" -ge 1 ] \
+  && pass "secret injected by reference ($SECRET_REFS valueFrom entr(y/ies))" \
+  || fail "expected >=1 secret reference; the signing key may be a plaintext env var"
 
 echo
 echo "=== 6. Base44 function presence (manual) ==="

@@ -32,7 +32,7 @@ Supplied by `cloudbuild.durable-worker.yaml`.
 |---|---|---|---|---|
 | `BASE44_APP_ID` | **required** | `scan_job.py:42` → `_function_url()` | `--set-env-vars` (`_BASE44_APP_ID`) | **Silent misroute.** URL becomes `<api>/api/apps//functions/<name>`. Control and completion calls hit a malformed path. No clean error. |
 | `SCAN_EVIDENCE_SIGNING_KEY` | **required** | `scan_job.py:179,200`, `main.py:488` | `--set-secrets` (`_SIGNING_KEY_SECRET`) | **Silent degradation.** `read_scan_run()` returns `None`; envelopes cannot be signed; authority path stops without raising. |
-| `SCANNER_API_KEY` | **required** | `main.py:51,62` `require_scanner_api_key()` | `--set-secrets` (`_SCANNER_KEY_SECRET`) | Fail-closed: every `/scan` returns 401. Loud, safe. |
+| `SCANNER_API_KEY` | **unrelated to `/scan-job`** | `main.py:51,62` `require_scanner_api_key()` | not supplied | Guards only the sibling routes `/scan`, `/review`, `/chat`, `/health/auth`. `/scan-job` never calls it. Absent, those siblings fail closed with 401 — the intended state for a single-purpose private worker. |
 | `TASKS_INVOKER_SERVICE_ACCOUNT` | **required** | `main.py:379` `require_cloud_tasks_oidc()` | `--set-env-vars` (`_INVOKER_SA`) | Fail-closed: 503 "Worker authentication is not configured." Loud, safe. |
 | `BASE44_API_URL` | optional-with-default | `scan_job.py:38` | `--set-env-vars` (`_BASE44_API_URL`) | Defaults to `https://base44.app`. Pinned explicitly so a deploy cannot silently target the public default. |
 | `GROK_PROXY_ENABLED` | feature-disabled | `main.py:52` | `--set-env-vars`, hardcoded `false` | Defaults `""` → `False`. Grok is off by default; pinned so a future default change cannot enable it. |
@@ -81,11 +81,33 @@ to reach a terminal state; only `startStandardScanJob` is currently live.
 
 ## Secret handling
 
-`SCAN_EVIDENCE_SIGNING_KEY` and `SCANNER_API_KEY` are injected with
-`--set-secrets` by Secret Manager **name**. They must never appear in
-`--set-env-vars`: that writes plaintext into the service revision and into build
-logs. The runtime service account needs `roles/secretmanager.secretAccessor` on
-both secrets.
+`SCAN_EVIDENCE_SIGNING_KEY` is the **only** secret the durable worker requires.
+It is injected with `--set-secrets` by Secret Manager **name** and must never
+appear in `--set-env-vars`: that writes plaintext into the service revision and
+into build logs. The runtime service account needs
+`roles/secretmanager.secretAccessor` on that one secret.
+
+`SCANNER_API_KEY` is deliberately **not** supplied. Evidence:
+
+| Route | App-level guard |
+|---|---|
+| `POST /scan-job` | `require_cloud_tasks_oidc` only |
+| `POST /scan` | `require_scanner_api_key` |
+| `POST /review` | `require_scanner_api_key` + `require_cloud_tasks_oidc` |
+| `POST /chat` | `require_scanner_api_key` |
+| `GET /health/auth` | `require_scanner_api_key` |
+| `GET /health`, `GET /revision` | none |
+
+The durable path runs the Python review **in-process** — `scan_job.py`
+`build_local_review()` imports `run_review` directly — so it never calls the
+`/review` HTTP route, and `scan_job.py` contains no reference to
+`SCANNER_API_KEY` or `x-scanner-key`. Supplying the key to this worker would
+grant it capability it does not need.
+
+Consequence, deliberate: with the key absent, `/scan`, `/review`, `/chat` and
+`/health/auth` return 401 on this service. `require_scanner_api_key()` fails
+closed on an empty expected key (`main.py:62`), so removing the secret makes
+those routes unusable, never open.
 
 ## Values this repository cannot supply
 
@@ -93,8 +115,8 @@ Every value below is environment-specific and must be provided explicitly. The
 build fails closed if any is empty.
 
 `_WORKER_SERVICE` · `_REGION` · `_IMAGE` · `_RUNTIME_SA` · `_INVOKER_SA` ·
-`_BASE44_APP_ID` · `_BASE44_API_URL` · `_SIGNING_KEY_SECRET` ·
-`_SCANNER_KEY_SECRET`, plus the Cloud Tasks queue name.
+`_BASE44_APP_ID` · `_BASE44_API_URL` · `_SIGNING_KEY_SECRET`, plus the Cloud
+Tasks queue name.
 
 ## Verification
 

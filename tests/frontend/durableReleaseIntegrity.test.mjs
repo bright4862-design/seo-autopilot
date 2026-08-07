@@ -156,6 +156,14 @@ test("the manifest covers function.jsonc and the whole closed tree", () => {
 const workerMain = fs.readFileSync("scanner-api/app/main.py", "utf8");
 const contractDoc = fs.readFileSync("docs/standard150-deployment-contract.md", "utf8");
 
+// Extract one route handler body. Splitting on the decorator is reliable for
+// the LAST route too; a lazy `[\s\S]*?(?=\n@app\.|\Z)` collapses to an empty
+// match there, which silently passes "guard absent" assertions.
+function routeHandler(path) {
+  const chunks = workerMain.split(/(?=@app\.(?:get|post|put|delete)\()/);
+  return chunks.find((c) => new RegExp(`^@app\\.(?:get|post|put|delete)\\("${path}"\\)`).test(c)) || "";
+}
+
 test("the worker Grok flag matches the variable the worker actually reads", () => {
   // scanner-api reads GROK_PROXY_ENABLED; GROK_CHAT_ENABLED is the Base44
   // grokChat function's variable and is a no-op on Cloud Run.
@@ -180,18 +188,49 @@ test("every required worker variable is supplied by the deployment artifact", ()
   }
 });
 
-test("secrets are injected by reference, never as plaintext env vars", () => {
+test("the signing key is the only secret the durable worker requires", () => {
   assert.match(buildCode, /--set-secrets=/);
-  for (const v of ["SCAN_EVIDENCE_SIGNING_KEY", "SCANNER_API_KEY"]) {
-    const envLine = buildCode.split("\n").find((l) => l.includes("--set-env-vars")) || "";
-    assert.ok(!envLine.includes(v), `${v} must not be a plaintext env var`);
-    const secretLine = buildCode.split("\n").find((l) => l.includes("--set-secrets")) || "";
-    assert.ok(secretLine.includes(v), `${v} must be injected from Secret Manager`);
+  const envLine = buildCode.split("\n").find((l) => l.includes("--set-env-vars")) || "";
+  const secretLine = buildCode.split("\n").find((l) => l.includes("--set-secrets")) || "";
+
+  assert.ok(!envLine.includes("SCAN_EVIDENCE_SIGNING_KEY"), "signing key must not be a plaintext env var");
+  assert.ok(secretLine.includes("SCAN_EVIDENCE_SIGNING_KEY"), "signing key must come from Secret Manager");
+  assert.match(workerBuild, /_SIGNING_KEY_SECRET: ""/, "_SIGNING_KEY_SECRET must fail closed");
+
+  // Exactly one secret reference. /scan-job needs no other.
+  const refs = (secretLine.match(/[A-Z0-9_]+=\$\{_[A-Z0-9_]+\}:latest/g) || []);
+  assert.equal(refs.length, 1, `expected exactly 1 secret reference, found ${refs.length}: ${refs}`);
+});
+
+test("SCANNER_API_KEY is not supplied to the durable worker", () => {
+  // /scan-job authenticates with Cloud Run IAM + TASKS_INVOKER_SERVICE_ACCOUNT
+  // and runs review in-process; it never calls require_scanner_api_key().
+  assert.ok(
+    !buildCode.includes("SCANNER_API_KEY"),
+    "SCANNER_API_KEY must not be granted to a worker that never uses it",
+  );
+  assert.ok(
+    !buildCode.includes("_SCANNER_KEY_SECRET"),
+    "_SCANNER_KEY_SECRET must not be a required substitution",
+  );
+  // Proven against the source, not just the template.
+  const scanJob = fs.readFileSync("scanner-api/app/scan_job.py", "utf8");
+  assert.ok(!/SCANNER_API_KEY|x-scanner-key/i.test(scanJob), "scan_job.py must not use the scanner key");
+  const handler = routeHandler("/scan-job");
+  assert.ok(handler, "/scan-job handler not found");
+  assert.match(handler, /require_cloud_tasks_oidc\(/);
+  assert.ok(!handler.includes("require_scanner_api_key("), "/scan-job must not depend on the scanner key");
+});
+
+test("sibling routes keep their scanner-key guard", () => {
+  // Removing the secret must not silently drop these guards.
+  for (const route of ["/health/auth", "/scan", "/review", "/chat"]) {
+    const handler = routeHandler(route);
+    assert.ok(handler, `${route} handler not found`);
+    assert.match(handler, /require_scanner_api_key\(/, `${route} lost its scanner-key guard`);
   }
-  // Secret NAMES are parameters; no secret value or literal name is baked in.
-  for (const key of ["_SIGNING_KEY_SECRET", "_SCANNER_KEY_SECRET"]) {
-    assert.match(workerBuild, new RegExp(`${key}: ""`), `${key} must fail closed`);
-  }
+  // And the guard itself must fail closed on an empty expected key.
+  assert.match(workerMain, /not expected_key/);
 });
 
 test("the deployment contract documents every variable the worker reads", () => {

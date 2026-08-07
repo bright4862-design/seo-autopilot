@@ -43,9 +43,14 @@
 #   _SIGNING_KEY_SECRET  Secret name for SCAN_EVIDENCE_SIGNING_KEY. REQUIRED:
 #                        without it read_scan_run() returns None and the
 #                        authority path degrades silently rather than failing.
-#   _SCANNER_KEY_SECRET  Secret name for SCANNER_API_KEY. Without it
-#                        require_scanner_api_key() rejects every /scan request
-#                        with 401.
+#
+# SCANNER_API_KEY is deliberately NOT supplied. /scan-job authenticates with
+# Cloud Run IAM plus TASKS_INVOKER_SERVICE_ACCOUNT, calls run_scan() directly,
+# and runs the Python review in-process (scan_job.py build_local_review). It
+# never calls require_scanner_api_key(). That guard protects only the sibling
+# routes /scan, /review, /chat and /health/auth, which this single-purpose
+# private worker does not serve. With the key absent those routes fail closed
+# with 401, which is the intended state -- see the deployment contract.
 
 substitutions:
   _WORKER_SERVICE: ""
@@ -56,7 +61,6 @@ substitutions:
   _BASE44_APP_ID: ""
   _BASE44_API_URL: ""
   _SIGNING_KEY_SECRET: ""
-  _SCANNER_KEY_SECRET: ""
 
 steps:
   # Fail closed before anything is built or deployed.
@@ -76,8 +80,7 @@ steps:
           "_INVOKER_SA=${_INVOKER_SA}" \
           "_BASE44_APP_ID=${_BASE44_APP_ID}" \
           "_BASE44_API_URL=${_BASE44_API_URL}" \
-          "_SIGNING_KEY_SECRET=${_SIGNING_KEY_SECRET}" \
-          "_SCANNER_KEY_SECRET=${_SCANNER_KEY_SECRET}"; do
+          "_SIGNING_KEY_SECRET=${_SIGNING_KEY_SECRET}"; do
           name="${pair%%=*}"; value="${pair#*=}"
           if [ -z "$value" ]; then echo "MISSING required substitution: $name"; missing=1; fi
         done
@@ -127,7 +130,7 @@ steps:
       - --set-env-vars=TASKS_INVOKER_SERVICE_ACCOUNT=${_INVOKER_SA},BASE44_APP_ID=${_BASE44_APP_ID},BASE44_API_URL=${_BASE44_API_URL},GROK_PROXY_ENABLED=false
       # Secrets by reference. Never --set-env-vars a secret value: that would
       # store plaintext in the service revision and in build logs.
-      - --set-secrets=SCAN_EVIDENCE_SIGNING_KEY=${_SIGNING_KEY_SECRET}:latest,SCANNER_API_KEY=${_SCANNER_KEY_SECRET}:latest
+      - --set-secrets=SCAN_EVIDENCE_SIGNING_KEY=${_SIGNING_KEY_SECRET}:latest
 
 images:
   - ${_IMAGE}:$COMMIT_SHA

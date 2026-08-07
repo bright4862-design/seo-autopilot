@@ -82,7 +82,9 @@ if [ -f "$WORKER_BUILD" ]; then
   has "--set-secrets=" "$WORKER_BUILD" \
     && pass "secrets injected from Secret Manager by name" \
     || fail "no --set-secrets; signing key and scanner key would be unset"
-  for v in SCAN_EVIDENCE_SIGNING_KEY SCANNER_API_KEY; do
+  # SCAN_EVIDENCE_SIGNING_KEY is the only secret /scan-job needs.
+  # SCANNER_API_KEY guards sibling routes this worker does not serve.
+  for v in SCAN_EVIDENCE_SIGNING_KEY; do
     if grep -v '^\s*#' "$WORKER_BUILD" | grep -q -- "--set-env-vars.*$v"; then
       fail "$v passed via --set-env-vars; that stores plaintext in the revision"
     else
@@ -92,6 +94,12 @@ if [ -f "$WORKER_BUILD" ]; then
       && pass "$v injected as a secret reference" \
       || fail "$v not injected from Secret Manager"
   done
+  # The worker must not be handed the sibling-route key it never uses.
+  if grep -v '^\s*#' "$WORKER_BUILD" | grep -q "SCANNER_API_KEY"; then
+    fail "SCANNER_API_KEY supplied to the durable worker; /scan-job never calls require_scanner_api_key()"
+  else
+    pass "SCANNER_API_KEY not supplied (not used by /scan-job)"
+  fi
   has "_WORKER_SERVICE" "$WORKER_BUILD" \
     && pass "worker service name is a required parameter" \
     || fail "worker service name is not parameterized"
@@ -187,7 +195,7 @@ done
 echo
 echo "=== 6. Deployment parameters (must be supplied explicitly) ==="
 for var in WORKER_SERVICE REGION IMAGE RUNTIME_SA INVOKER_SA TASKS_QUEUE \
-           BASE44_APP_ID BASE44_API_URL SIGNING_KEY_SECRET SCANNER_KEY_SECRET; do
+           BASE44_APP_ID BASE44_API_URL SIGNING_KEY_SECRET; do
   if [ -n "${!var:-}" ]; then pass "$var supplied"; else envm "$var not supplied"; fi
 done
 

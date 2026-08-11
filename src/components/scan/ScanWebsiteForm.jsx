@@ -1,17 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  AlertCircle,
-  Bug,
-  Copy,
-  Download,
-  FileJson,
-  Loader2,
-  RefreshCw,
-  Trash2,
-} from "lucide-react";
+import { AlertCircle, Loader2 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { base44 } from "@/api/base44Client";
 import useDurableScanCompletion from "@/hooks/useDurableScanCompletion";
@@ -75,17 +65,11 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   const [activeStep, setActiveStep] = useState("");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [error, setError] = useState("");
-  const [debugOpen, setDebugOpen] = useState(false);
   const [urlError, setUrlError] = useState("");
-  // Debug tooling is internal-only. Customers never see it unless they opt in
-  // explicitly via ?debug=1 or an internal build flag.
-  const debugVisible = useMemo(() => isDebugRequested(), []);
   const [debugData, setDebugData] = useState(() => emptyRuntimeDebug());
   const debugDataRef = useRef(debugData);
   const submitLockRef = useRef(false);
   const requestEpochRef = useRef(0);
-  const [debugCopied, setDebugCopied] = useState(false);
-  const [debugCompressed, setDebugCompressed] = useState(true);
   // Durable identity of the scan currently in flight. Once it exists, the saved
   // ScanRun -- not this component's function chain -- decides when the result
   // opens, so a missed response or navigation callback cannot strand the user.
@@ -96,8 +80,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   const durableScanFailed = ["failed", "cancelled"].includes(durableScan.status);
   const cleanedKeywords = useMemo(() => splitLines(keywordsText), [keywordsText]);
   const selectedCms = CMS_OPTIONS.find((item) => item.value === cmsPlatform);
-  const displayedDebugData = debugCompressed ? compressDebugData(debugData) : debugData;
-  const displayedDebugText = JSON.stringify(displayedDebugData, null, debugCompressed ? 0 : 2);
   const progressIndex = scanProgressIndex(activeStep);
 
   useEffect(() => {
@@ -169,35 +151,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
     if (!normalized) { setUrlError(INVALID_URL_MESSAGE); return; }
     setWebsiteUrl(normalized);
     setUrlError("");
-  }
-
-  async function copyDebugData(compact = debugCompressed) {
-    try {
-      const snapshot = debugDataRef.current;
-      const payload = compact ? compressDebugData(snapshot) : snapshot;
-      await navigator.clipboard.writeText(JSON.stringify(payload, null, compact ? 0 : 2));
-      setDebugCopied(true);
-      window.setTimeout(() => setDebugCopied(false), 1500);
-    } catch (copyError) {
-      console.warn("Could not copy debug data.", copyError);
-    }
-  }
-
-  function downloadDebugData(compact = true) {
-    const snapshot = debugDataRef.current;
-    const payload = compact ? compressDebugData(snapshot) : snapshot;
-    const website = snapshot?.parsed?.runtime?.website_url || websiteUrl || "fixlist";
-    const host = safeHostname(website) || "fixlist";
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const blob = new Blob([JSON.stringify(payload, null, compact ? 0 : 2)], { type: "application/json;charset=utf-8" });
-    const objectUrl = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = objectUrl;
-    link.download = `fixlist-debug-${compact ? "compact" : "full"}-${host}-${timestamp}.json`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
   }
 
   async function handleSubmit(event) {
@@ -547,34 +500,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
           <h1 className="text-[32px] font-semibold leading-tight tracking-tight text-ink sm:text-[38px]">Create your FixList</h1>
           <p className="max-w-[52ch] text-[15px] leading-relaxed text-ink-muted">Enter a website URL and we’ll turn the scan into a plain-English list of what to fix, what matters most, and what may need a developer.</p>
         </div>
-
-        {debugVisible ? (
-          <div className="flex justify-end">
-            <Button type="button" variant="outline" onClick={() => { refreshDebugData(); setDebugOpen((value) => !value); }} className="shrink-0"><Bug className="mr-2 h-4 w-4" />{debugOpen ? "Hide debug" : "Show debug"}</Button>
-          </div>
-        ) : null}
-
-        {debugVisible && debugOpen ? (
-          <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h3 className="font-bold text-slate-950">Scan debug</h3>
-                <p className="mt-1 text-xs text-slate-500">Compact mode limits runtime previews so the JSON is small enough to share. No customer scan data is read from browser storage.</p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="outline" onClick={refreshDebugData}><RefreshCw className="mr-2 h-4 w-4" />Refresh</Button>
-                <Button type="button" variant="outline" onClick={() => setDebugCompressed((value) => !value)}><FileJson className="mr-2 h-4 w-4" />{debugCompressed ? "Show full" : "Compress"}</Button>
-                <Button type="button" variant="outline" onClick={() => copyDebugData(debugCompressed)}><Copy className="mr-2 h-4 w-4" />{debugCopied ? "Copied" : debugCompressed ? "Copy compact" : "Copy full"}</Button>
-                <Button type="button" variant="outline" onClick={() => downloadDebugData(true)}><Download className="mr-2 h-4 w-4" />Download compact</Button>
-                <Button type="button" variant="outline" onClick={() => downloadDebugData(false)}><Download className="mr-2 h-4 w-4" />Download full</Button>
-                <Button type="button" variant="outline" onClick={clearDebugScanData}><Trash2 className="mr-2 h-4 w-4" />Clear scans</Button>
-              </div>
-            </div>
-            <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-slate-950">
-              <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words p-4 text-xs leading-5 text-slate-100">{displayedDebugText}</pre>
-            </div>
-          </div>
-        ) : null}
 
         <div className="flex flex-col gap-6">
           <div>
@@ -1468,16 +1393,6 @@ function createScanId() {
   return `scan_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 const INVALID_URL_MESSAGE = "Enter a valid website address, like example.com";
-
-// Debug tooling stays internal: ?debug=1 in the URL, or an internal build flag.
-function isDebugRequested() {
-  try {
-    if (import.meta.env?.VITE_INTERNAL_DEBUG === "1") return true;
-    return new URLSearchParams(globalThis.location?.search || "").get("debug") === "1";
-  } catch {
-    return false;
-  }
-}
 
 function normalizeWebsiteUrl(value) { const raw = String(value || "").trim(); if (!raw) return ""; try { return new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).href; } catch { return ""; } }
 function normalizeWebsiteKey(value) { try { const url = new URL(value); return `${url.hostname}${url.pathname}`.replace(/\/$/, "").toLowerCase(); } catch { return String(value || "").toLowerCase(); } }

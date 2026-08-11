@@ -71,7 +71,7 @@ export default async function (req: Request): Promise<Response> {
     const requestedMode = String(
       body.scan_mode || body.canonical_mode || body.audit_profile || PUBLIC_SCAN_MODE,
     ).trim().toLowerCase();
-    if (![PUBLIC_SCAN_MODE, "advanced"].includes(requestedMode)) {
+    if (requestedMode !== PUBLIC_SCAN_MODE) {
       return jsonResponse({
         success: false,
         version: VERSION,

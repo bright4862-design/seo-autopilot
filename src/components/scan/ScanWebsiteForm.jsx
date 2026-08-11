@@ -21,7 +21,7 @@ import { mergePersistedScanRunRecord } from "@/lib/persistedScanRecord";
 import { RELEASE_AUTHORITY_CONTRACT, buildAuthorityMarkers, buildDiagnosticAuthorityMarkers, buildScanRunFields } from "@/lib/scanRunModel";
 import { createScanRequestId, normalizedScanDomain, scanReleaseIdentity } from "@/lib/scanRunIdentity";
 import { beginScanRun, cancelScanRun, completeScanRun, failScanRun, getScanRunWithFixList, markScanRunReviewing, recoverOrphanedScanRuns } from "@/lib/scanRuns";
-import { UNLOCK_PRICE_LABEL, loadAccess, recordScanUsed } from "@/lib/access";
+import { UNLOCK_PRICE_LABEL, loadAccess } from "@/lib/access";
 import {
   CUSTOMER_BOUNDARY_EVENT,
   clearCustomerAuthBoundary,
@@ -236,7 +236,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       submitLockRef.current = false;
       setSubmitting(false);
       setActiveStep("");
-      setError(`You've used your free test scan. Unlock full access for ${UNLOCK_PRICE_LABEL} on the Billing page to run more scans and see every result.`);
+      setError(`A paid FixList beta pass is required to run Standard 150 scans. Unlock lifetime access for ${UNLOCK_PRICE_LABEL} on the Billing page.`);
       return;
     }
 
@@ -471,8 +471,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       } else if (persistedCompletion?.fixListId) {
         mergedFinal = { ...mergedFinal, fix_list_id: persistedCompletion.fixListId };
       }
-      // Only a durably persisted scan consumes the customer's allowance.
-      await recordScanUsed().catch(() => {});
       recordDebug({ ...identityDebug(), status: "saved", stage: "dashboard_saved", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), compact_debug_available: true, download_available: true });
       refreshDebugData();
       // Navigation happens only after a durable terminal result exists.
@@ -505,7 +503,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         : null;
       if (recoveredCompletion?.scanRun?.status === "complete" && recoveredCompletion?.fixListId) {
         logScanBoundary("browser_recovered_saved_result", identityDebug(), { status: "complete" });
-        await recordScanUsed().catch(() => {});
         navigate(`/dashboard?scan=complete&scan_id=${encodeURIComponent(scanId)}`);
         return;
       }

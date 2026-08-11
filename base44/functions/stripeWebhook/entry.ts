@@ -4,7 +4,7 @@ import { secrets } from "base44:runtime";
 
 const APP_ID = "6a498732ec779dfaaeab0e53";
 const PLAN_ID = "standard150_lifetime";
-const EXPECTED_AMOUNT = 3000;
+const EXPECTED_AMOUNT = 5000;
 const EXPECTED_CURRENCY = "usd";
 
 function normalizeEmail(value) {

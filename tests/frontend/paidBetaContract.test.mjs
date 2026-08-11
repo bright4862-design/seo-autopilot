@@ -13,6 +13,7 @@ const webhook = readFileSync("base44/functions/stripeWebhook/entry.ts", "utf8");
 const accessClient = readFileSync("src/lib/access.js", "utf8");
 const billing = readFileSync("src/pages/Billing.jsx", "utf8");
 const scanForm = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
+const fixList = readFileSync("src/pages/FixList.jsx", "utf8");
 const persistence = readFileSync("base44/functions/persistDurableScanAuthority/index.ts", "utf8");
 const accessSchema = JSON.parse(readFileSync("base44/entities/Access.jsonc", "utf8"));
 
@@ -36,13 +37,13 @@ test("checkout, webhook and customer copy share one $50 contract", () => {
   assert.match(accessClient, /UNLOCK_PRICE_LABEL = "\$50"/);
   assert.match(billing, /price: "\$50 one-time"/);
 
-  for (const [name, source] of Object.entries({ checkout, webhook, accessClient, billing, scanForm })) {
+  for (const [name, source] of Object.entries({ checkout, webhook, accessClient, billing, scanForm, fixList })) {
     assert.doesNotMatch(source, /\$30|\$75|unit_amount:\s*3000|unit_amount:\s*7500/, name);
   }
 });
 
 test("customer copy is paid-only and contains no free-scan promise", () => {
-  for (const [name, source] of Object.entries({ accessClient, billing, scanForm })) {
+  for (const [name, source] of Object.entries({ accessClient, billing, scanForm, fixList })) {
     assert.doesNotMatch(source, /free test scan|one free scan|Run free scan/i, name);
   }
   assert.match(billing, /one-time payment/i);

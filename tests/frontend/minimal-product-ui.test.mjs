@@ -44,7 +44,9 @@ test("billing uses responsive rows and a visible current-plan summary", () => {
   assert.match(billing, /Run a new scan/);
   assert.match(billing, /flex-col gap-5 sm:flex-row/);
   assert.match(billing, /border-hairline-soft/);
-  assert.match(billing, /Payments are not connected yet/);
+  assert.doesNotMatch(billing, /Payments are not connected yet|free test scan|Run free scan/i);
+  assert.match(billing, /Standard 150 beta/);
+  assert.match(billing, /securely handled by Stripe/);
 });
 
 test("legacy scanner URL redirects to the Standard 150 onboarding route", () => {

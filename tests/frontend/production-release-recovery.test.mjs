@@ -33,7 +33,7 @@ test("merged results preserve authoritative durable release markers", () => {
   assert.match(scannerForm, /const authorityMarkers = buildAuthorityMarkers\(scanData, aiData\)/);
   assert.match(scannerForm, /\.\.\.authorityMarkers/);
   assert.match(scanRunModel, /authority_proof/);
-  assert.match(scanRunModel, /authority_seal_version/);
+  assert.match(persistence, /authority_seal_version/);
   assert.match(scanRunModel, /release_gate_eligible/);
   assert.match(persistence, /persistedScan\?\.authority_proof === authorityProof/);
   assert.match(persistence, /persistedScan\?\.release_gate_eligible === true/);

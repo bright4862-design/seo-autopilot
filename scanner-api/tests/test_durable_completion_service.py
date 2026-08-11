@@ -64,6 +64,7 @@ def test_completion_envelope_binds_owner_scan_project_request_and_review():
         "owner_user_id": "owner-1",
         "request_id": "req-1",
         "idempotency_key": "req-1",
+        "attempt_count": 2,
     }
     envelope = build_completion_envelope(scan, _scan_result(), _review(), "secret")
     assert envelope["version"] == COMPLETION_VERSION
@@ -74,6 +75,7 @@ def test_completion_envelope_binds_owner_scan_project_request_and_review():
         "request_id": "req-1",
         "idempotency_key": "req-1",
         "normalized_domain": "big.example",
+        "attempt_count": "2",
     }
     signed = {key: envelope[key] for key in ("version", "identity", "scan", "review")}
     assert envelope["proof"] == create_authority_seal(signed, "secret")
@@ -140,25 +142,23 @@ def test_hosted_functions_use_supported_service_role_and_signed_envelopes():
     assert "validateBoundIdentity" in control
 
 
-def test_authority_is_verified_before_allowance_and_terminal_completion():
+def test_authority_is_verified_before_paid_independent_terminal_completion():
     source = SERVICE_SOURCE.read_text(encoding="utf-8")
-    assert "Math.max(FREE_SCAN_CONSUMED_VALUE" in source
-    assert "scans_used: used" in source
-    assert "scans_used + 1" not in source
+    assert "entities.Access" not in source
+    assert "scans_used" not in source
     stage_index = source.index("await entities.ScanRun.update(identity.scan_id, stagedScanFields)")
     verify_index = source.index("const authorityStaged = Boolean(")
-    allowance_index = source.index("await ensureAllowanceConsumed")
-    # B4: the terminal write must NOT use rows.scanRun, which carries
-    # attempt_count. Writing it back would let a slow task resurrect an old
-    # attempt number onto a row that has already moved on.
+    terminal_index = source.index("await entities.ScanRun.update(identity.scan_id, scanRunFields)")
+    assert stage_index < verify_index < terminal_index
+    assert source.count("await assertAttemptStillActive(") >= 2
+    assert "terminal_authority_rejected" in source
     assert "await entities.ScanRun.update(identity.scan_id, rows.scanRun)" not in source
     assert "const { attempt_count: _stagedAttempt, ...scanRunFields } = rows.scanRun" in source
-    terminal_index = source.index("await entities.ScanRun.update(identity.scan_id, scanRunFields)")
-    assert stage_index < verify_index < allowance_index < terminal_index
     assert 'status: "reviewing"' in source
     assert 'release_gate_eligible: false' in source
     assert 'persistedScan?.status === "complete"' in source
     assert "fixListVerified: true" in source
+    assert "allowanceConsumed: false" in source
 
 
 def test_worker_uses_only_signed_hosted_boundaries():

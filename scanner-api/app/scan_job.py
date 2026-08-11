@@ -334,6 +334,7 @@ def build_completion_envelope(
         "request_id": str(scan.get("request_id") or result.get("request_id") or ""),
         "idempotency_key": str(scan.get("idempotency_key") or result.get("idempotency_key") or ""),
         "normalized_domain": str(result.get("normalized_domain") or "").lower().removeprefix("www."),
+        "attempt_count": str(current_attempt(scan)),
     }
     signed = {
         "version": COMPLETION_VERSION,

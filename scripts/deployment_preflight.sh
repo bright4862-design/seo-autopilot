@@ -103,6 +103,24 @@ if [ -f "$WORKER_BUILD" ]; then
     pass "no executable ':latest' in the build artifact"
   fi
 
+  # Manual `gcloud builds submit` does not reliably populate the built-in
+  # $COMMIT_SHA. The release therefore requires one explicit full SHA and uses
+  # that substitution for every image reference.
+  has '_RELEASE_SHA: ""' "$WORKER_BUILD" \
+    && pass "_RELEASE_SHA is a required, fail-closed substitution" \
+    || fail "_RELEASE_SHA missing or not fail-closed in the build artifact"
+  has '"_RELEASE_SHA=${_RELEASE_SHA}"' "$WORKER_BUILD" \
+    && pass "_RELEASE_SHA covered by the missing-substitution guard" \
+    || fail "_RELEASE_SHA not covered by the missing-substitution guard"
+  has '${_IMAGE}:${_RELEASE_SHA}' "$WORKER_BUILD" \
+    && pass "image identity is pinned to _RELEASE_SHA" \
+    || fail "image identity is not pinned to _RELEASE_SHA"
+  if grep -v '^[[:space:]]*#' "$WORKER_BUILD" | grep -q '\$COMMIT_SHA'; then
+    fail "executable \$COMMIT_SHA in the build artifact; manual builds can replace it with an empty string"
+  else
+    pass "no executable \$COMMIT_SHA dependency in the build artifact"
+  fi
+
   for v in SCAN_EVIDENCE_SIGNING_KEY; do
     if grep -v '^\s*#' "$WORKER_BUILD" | grep -q -- "--set-env-vars.*$v"; then
       fail "$v passed via --set-env-vars; that stores plaintext in the revision"
@@ -216,7 +234,8 @@ done
 echo
 echo "=== 6. Deployment parameters (must be supplied explicitly) ==="
 for var in WORKER_SERVICE REGION IMAGE RUNTIME_SA INVOKER_SA TASKS_QUEUE \
-           BASE44_APP_ID BASE44_API_URL SIGNING_KEY_SECRET SIGNING_KEY_VERSION; do
+           BASE44_APP_ID BASE44_API_URL SIGNING_KEY_SECRET SIGNING_KEY_VERSION \
+           RELEASE_SHA; do
   if [ -n "${!var:-}" ]; then pass "$var supplied"; else envm "$var not supplied"; fi
 done
 
@@ -228,6 +247,35 @@ if [ -n "${SIGNING_KEY_VERSION:-}" ]; then
     latest|LATEST) fail "SIGNING_KEY_VERSION='latest' is prohibited; pin a numeric enabled version" ;;
     ''|*[!0-9]*)   fail "SIGNING_KEY_VERSION='$SIGNING_KEY_VERSION' is not numeric" ;;
     *)             pass "SIGNING_KEY_VERSION is numeric ($SIGNING_KEY_VERSION)" ;;
+  esac
+fi
+
+# RELEASE_SHA must identify this exact, clean checkout. This ensures the bytes
+# sent by a manual `gcloud builds submit` match the image tag used as the
+# immutable release identity.
+if [ -n "${RELEASE_SHA:-}" ]; then
+  case "$RELEASE_SHA" in
+    *[!0-9a-f]*|"") fail "RELEASE_SHA must be exactly 40 lowercase hexadecimal characters" ;;
+    *)
+      if [ "${#RELEASE_SHA}" -ne 40 ]; then
+        fail "RELEASE_SHA must be exactly 40 lowercase hexadecimal characters"
+      else
+        pass "RELEASE_SHA is a full lowercase Git SHA"
+        if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+          HEAD_SHA=$(git rev-parse HEAD 2>/dev/null || true)
+          [ "$HEAD_SHA" = "$RELEASE_SHA" ] \
+            && pass "checkout HEAD matches RELEASE_SHA" \
+            || fail "checkout HEAD ($HEAD_SHA) does not match RELEASE_SHA ($RELEASE_SHA)"
+          if [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+            pass "checkout is clean"
+          else
+            fail "checkout is dirty; submitted bytes would not match RELEASE_SHA"
+          fi
+        else
+          fail "git checkout unavailable; cannot prove submitted bytes match RELEASE_SHA"
+        fi
+      fi
+      ;;
   esac
 fi
 

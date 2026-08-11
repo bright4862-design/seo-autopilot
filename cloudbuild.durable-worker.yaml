@@ -11,6 +11,8 @@
 # real project inventory before running.
 #
 # Required substitutions (all must be supplied explicitly):
+#   _RELEASE_SHA         Full 40-character lowercase Git commit SHA of the
+#                        exact clean checkout submitted to Cloud Build.
 #   _WORKER_SERVICE      Cloud Run service name for the private worker.
 #                        MUST NOT equal the existing scanner service.
 #   _REGION              Cloud Run / Artifact Registry region.
@@ -26,7 +28,7 @@
 #
 # Example (values are placeholders -- substitute real ones):
 #   gcloud builds submit --config cloudbuild.durable-worker.yaml \
-#     --substitutions=_WORKER_SERVICE=<name>,_REGION=<region>,\
+#     --substitutions=_RELEASE_SHA=<40-char-sha>,_WORKER_SERVICE=<name>,_REGION=<region>,\
 # _IMAGE=<region>-docker.pkg.dev/<project>/<repo>/<image>,\
 # _RUNTIME_SA=<sa>@<project>.iam.gserviceaccount.com,\
 # _INVOKER_SA=<sa>@<project>.iam.gserviceaccount.com
@@ -59,6 +61,7 @@
 # with 401, which is the intended state -- see the deployment contract.
 
 substitutions:
+  _RELEASE_SHA: ""
   _WORKER_SERVICE: ""
   _REGION: ""
   _IMAGE: ""
@@ -80,6 +83,7 @@ steps:
         set -euo pipefail
         missing=0
         for pair in \
+          "_RELEASE_SHA=${_RELEASE_SHA}" \
           "_WORKER_SERVICE=${_WORKER_SERVICE}" \
           "_REGION=${_REGION}" \
           "_IMAGE=${_IMAGE}" \
@@ -96,15 +100,20 @@ steps:
           echo "Refusing to build: supply every deployment parameter explicitly."
           exit 1
         fi
+        if ! printf '%s' "${_RELEASE_SHA}" | grep -Eq '^[0-9a-f]{40}$'; then
+          echo "Invalid _RELEASE_SHA: expected exactly 40 lowercase hexadecimal characters."
+          exit 1
+        fi
         echo "All required substitutions supplied."
+        echo "Release identity pinned to ${_RELEASE_SHA}."
 
   - id: build
     name: gcr.io/cloud-builders/docker
-    args: ["build", "--tag", "${_IMAGE}:$COMMIT_SHA", "."]
+    args: ["build", "--tag", "${_IMAGE}:${_RELEASE_SHA}", "."]
 
   - id: push
     name: gcr.io/cloud-builders/docker
-    args: ["push", "${_IMAGE}:$COMMIT_SHA"]
+    args: ["push", "${_IMAGE}:${_RELEASE_SHA}"]
 
   - id: deploy-private-worker
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -113,7 +122,7 @@ steps:
       - run
       - deploy
       - ${_WORKER_SERVICE}
-      - --image=${_IMAGE}:$COMMIT_SHA
+      - --image=${_IMAGE}:${_RELEASE_SHA}
       - --region=${_REGION}
       # Private. Cloud Run IAM performs OIDC token validation (signature,
       # issuer, audience, expiry) before the request reaches the app. The app's
@@ -141,7 +150,7 @@ steps:
       - --set-secrets=SCAN_EVIDENCE_SIGNING_KEY=${_SIGNING_KEY_SECRET}:${_SIGNING_KEY_VERSION}
 
 images:
-  - ${_IMAGE}:$COMMIT_SHA
+  - ${_IMAGE}:${_RELEASE_SHA}
 
 options:
   logging: CLOUD_LOGGING_ONLY

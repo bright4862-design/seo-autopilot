@@ -116,7 +116,16 @@ build fails closed if any is empty.
 
 `_WORKER_SERVICE` · `_REGION` · `_IMAGE` · `_RUNTIME_SA` · `_INVOKER_SA` ·
 `_BASE44_APP_ID` · `_BASE44_API_URL` · `_SIGNING_KEY_SECRET` ·
-`_SIGNING_KEY_VERSION`, plus the Cloud Tasks queue name.
+`_SIGNING_KEY_VERSION` · `_RELEASE_SHA`, plus the Cloud Tasks queue name.
+
+`_RELEASE_SHA` is the full 40-character lowercase Git commit SHA of the exact,
+clean checkout submitted to Cloud Build. A manual `gcloud builds submit` uses a
+storage source and does not reliably populate the trigger-only built-in
+`$COMMIT_SHA`; a missing built-in can be replaced by an empty string. The
+durable build therefore tags, pushes and deploys `${_IMAGE}:${_RELEASE_SHA}`
+only. Before submission, `scripts/deployment_preflight.sh` requires
+`RELEASE_SHA`, proves that it equals `git rev-parse HEAD`, and requires an empty
+`git status --porcelain` result.
 
 ### Signing-key version pinning
 
@@ -136,6 +145,11 @@ artifact. `scripts/post_deploy_verify.sh` requires `EXPECTED_SIGNING_SECRET` and
 `EXPECTED_SIGNING_VERSION` and asserts the deployed revision's
 `SCAN_EVIDENCE_SIGNING_KEY` reference matches both exactly. Neither script ever
 reads or prints a secret payload.
+
+The post-deploy verifier also requires the exact expected image, runtime service
+account and invoker service account. It fails closed if the Cloud Run IAM policy
+cannot be read or parsed, rejects public `roles/run.invoker` bindings, and
+requires `serviceAccount:<EXPECTED_INVOKER_SA>` to hold that role.
 
 ## Production acceptance gate
 

@@ -6,6 +6,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { auditAll, buildManifest, RELEASE_FUNCTIONS } from "../../scripts/base44_release_manifest.mjs";
 
 const TASKS = "base44/functions/startStandardScanJob/cloudTasks.js";
@@ -101,7 +104,7 @@ test("the worker artifact does not target or mutate the existing scanner deploym
 });
 
 test("no deployment value is invented", () => {
-  for (const key of ["_WORKER_SERVICE", "_REGION", "_IMAGE", "_RUNTIME_SA", "_INVOKER_SA"]) {
+  for (const key of ["_RELEASE_SHA", "_WORKER_SERVICE", "_REGION", "_IMAGE", "_RUNTIME_SA", "_INVOKER_SA"]) {
     assert.match(
       workerBuild,
       new RegExp(`${key}: ""`),
@@ -111,6 +114,18 @@ test("no deployment value is invented", () => {
   // No hardcoded project/region/registry literals in the executable portion.
   assert.doesNotMatch(buildCode, /europe-west1/);
   assert.doesNotMatch(buildCode, /\$PROJECT_ID\/[a-z-]+\/[a-z-]+/);
+});
+
+test("manual builds require one explicit full release SHA for every image reference", () => {
+  const preflight = fs.readFileSync("scripts/deployment_preflight.sh", "utf8");
+  assert.match(workerBuild, /_RELEASE_SHA: ""/);
+  assert.match(workerBuild, /"_RELEASE_SHA=\$\{_RELEASE_SHA\}"/);
+  assert.match(workerBuild, /\^\[0-9a-f\]\{40\}\$/);
+  assert.match(buildCode, /docker[\s\S]*\$\{_IMAGE\}:\$\{_RELEASE_SHA\}/);
+  assert.doesNotMatch(buildCode, /\$COMMIT_SHA/);
+  assert.match(preflight, /git rev-parse HEAD/);
+  assert.match(preflight, /git status --porcelain/);
+  assert.match(preflight, /checkout is dirty/);
 });
 
 test("the /scan-job trust boundary is documented truthfully", () => {
@@ -342,4 +357,87 @@ test("the post-deploy verification path is read-only", () => {
   // It must not start a scan.
   assert.doesNotMatch(verify, /-X\s*POST|--data|-d\s+['"]/);
   assert.match(verify, /describe/);
+});
+
+function runPostDeployVerifier(policyMode) {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "durable-release-verify-"));
+  const gcloudPath = path.join(tempDir, "gcloud");
+  const describePath = path.join(tempDir, "describe.json");
+  const image = `europe-west1-docker.pkg.dev/test/repo/worker:${"a".repeat(40)}`;
+  const runtimeSa = "runtime@test.iam.gserviceaccount.com";
+  const invokerSa = "invoker@test.iam.gserviceaccount.com";
+  const describe = {
+    status: { latestReadyRevisionName: "worker-00001", url: "" },
+    spec: { template: { spec: {
+      serviceAccountName: runtimeSa,
+      timeoutSeconds: 480,
+      containerConcurrency: 1,
+      containers: [{
+        image,
+        env: [
+          { name: "BASE44_APP_ID", value: "test-app" },
+          { name: "TASKS_INVOKER_SERVICE_ACCOUNT", value: invokerSa },
+          { name: "GROK_PROXY_ENABLED", value: "false" },
+          { name: "SCAN_EVIDENCE_SIGNING_KEY", valueFrom: {
+            secretKeyRef: { name: "SCAN_EVIDENCE_SIGNING_KEY", key: "1" },
+          } },
+        ],
+      }],
+    } } },
+  };
+  fs.writeFileSync(describePath, JSON.stringify(describe));
+  fs.writeFileSync(gcloudPath, `#!/usr/bin/env bash
+if [[ " $* " == *" get-iam-policy "* ]]; then
+  case "$FAKE_POLICY_MODE" in
+    unreadable) exit 1 ;;
+    malformed) printf '{' ;;
+    missing) printf '%s' '{"bindings":[]}' ;;
+    public) printf '%s' '{"bindings":[{"role":"roles/run.invoker","members":["allUsers","serviceAccount:invoker@test.iam.gserviceaccount.com"]}]}' ;;
+    valid) printf '%s' '{"bindings":[{"role":"roles/run.invoker","members":["serviceAccount:invoker@test.iam.gserviceaccount.com"]}]}' ;;
+    *) exit 9 ;;
+  esac
+else
+  command cat "$FAKE_DESCRIBE_PATH"
+fi
+`);
+  fs.chmodSync(gcloudPath, 0o755);
+  const result = spawnSync("bash", ["scripts/post_deploy_verify.sh"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${tempDir}:${process.env.PATH}`,
+      FAKE_POLICY_MODE: policyMode,
+      FAKE_DESCRIBE_PATH: describePath,
+      WORKER_SERVICE: "worker",
+      REGION: "europe-west1",
+      PROJECT: "test",
+      EXPECTED_IMAGE: image,
+      EXPECTED_RUNTIME_SA: runtimeSa,
+      EXPECTED_INVOKER_SA: invokerSa,
+      EXPECTED_SIGNING_SECRET: "SCAN_EVIDENCE_SIGNING_KEY",
+      EXPECTED_SIGNING_VERSION: "1",
+    },
+  });
+  fs.rmSync(tempDir, { recursive: true, force: true });
+  return { ...result, output: `${result.stdout}${result.stderr}` };
+}
+
+test("post-deploy verifier fails closed when worker IAM is unreadable or malformed", () => {
+  for (const mode of ["unreadable", "malformed"]) {
+    const result = runPostDeployVerifier(mode);
+    assert.notEqual(result.status, 0, `${mode} IAM must not pass`);
+    assert.match(result.output, /unverified|malformed/i);
+  }
+});
+
+test("post-deploy verifier requires the exact private invoker binding", () => {
+  for (const mode of ["missing", "public"]) {
+    const result = runPostDeployVerifier(mode);
+    assert.equal(result.status, 1, `${mode} IAM must be a failed release check`);
+    assert.match(result.output, /FAILED/);
+  }
+  const valid = runPostDeployVerifier("valid");
+  assert.equal(valid.status, 0, valid.output);
+  assert.match(valid.output, /exact invoker holds roles\/run\.invoker/);
+  assert.match(valid.output, /POST-DEPLOY VERIFICATION PASSED/);
 });

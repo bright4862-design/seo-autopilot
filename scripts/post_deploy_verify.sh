@@ -10,8 +10,13 @@
 #
 # Usage (every value explicit, nothing invented):
 #   WORKER_SERVICE=... REGION=... PROJECT=... \
+#   EXPECTED_SIGNING_SECRET=... EXPECTED_SIGNING_VERSION=... \
 #   [EXPECTED_IMAGE=...] [BASE44_APP_ID=...] \
 #   bash scripts/post_deploy_verify.sh
+#
+# EXPECTED_SIGNING_SECRET / EXPECTED_SIGNING_VERSION are REQUIRED. The deployed
+# revision must mount SCAN_EVIDENCE_SIGNING_KEY from exactly that secret at
+# exactly that numeric version. Metadata only -- the payload is never accessed.
 
 set -uo pipefail
 
@@ -25,11 +30,22 @@ skip() { printf "  SKIP  %s\n" "$1"; }
 : "${PROJECT:=}"
 : "${EXPECTED_IMAGE:=}"
 : "${BASE44_APP_ID:=}"
+: "${EXPECTED_SIGNING_SECRET:=}"
+: "${EXPECTED_SIGNING_VERSION:=}"
 
 if [ -z "$WORKER_SERVICE" ] || [ -z "$REGION" ] || [ -z "$PROJECT" ]; then
   echo "WORKER_SERVICE, REGION and PROJECT are required. Nothing is guessed."
   exit 2
 fi
+if [ -z "$EXPECTED_SIGNING_SECRET" ] || [ -z "$EXPECTED_SIGNING_VERSION" ]; then
+  echo "EXPECTED_SIGNING_SECRET and EXPECTED_SIGNING_VERSION are required."
+  echo "The signing key must be pinned to an exact numeric version; 'latest' is prohibited."
+  exit 2
+fi
+case "$EXPECTED_SIGNING_VERSION" in
+  latest|LATEST) echo "EXPECTED_SIGNING_VERSION='latest' is prohibited; pin a numeric enabled version."; exit 2 ;;
+  ''|*[!0-9]*)   echo "EXPECTED_SIGNING_VERSION='$EXPECTED_SIGNING_VERSION' is not numeric."; exit 2 ;;
+esac
 if ! command -v gcloud >/dev/null 2>&1; then
   echo "gcloud not installed; cannot verify a deployed service."
   exit 2
@@ -137,6 +153,44 @@ print(sum(1 for e in c.get('env', []) if 'valueFrom' in e))
 [ "${SECRET_REFS:-0}" -ge 1 ] \
   && pass "secret injected by reference ($SECRET_REFS valueFrom entr(y/ies))" \
   || fail "expected >=1 secret reference; the signing key may be a plaintext env var"
+
+# The signing key reference must match the pinned secret NAME and numeric
+# VERSION exactly. Metadata only: no payload is read. Fail closed on a missing,
+# malformed, plaintext, 'latest' or mismatched reference.
+SIGNING_REF=$(printf "%s" "$DESCRIBE" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+c = d['spec']['template']['spec']['containers'][0]
+e = next((x for x in c.get('env', []) if x.get('name') == 'SCAN_EVIDENCE_SIGNING_KEY'), None)
+if e is None:
+    print('ABSENT'); raise SystemExit
+if 'value' in e:
+    print('PLAINTEXT'); raise SystemExit
+r = e.get('valueFrom', {}).get('secretKeyRef') or {}
+name, key = str(r.get('name','')), str(r.get('key',''))
+print('MALFORMED' if not name or not key else 'REF %s %s' % (name, key))
+" 2>/dev/null)
+case "$SIGNING_REF" in
+  "ABSENT")    fail "SCAN_EVIDENCE_SIGNING_KEY absent from the revision" ;;
+  "PLAINTEXT") fail "SCAN_EVIDENCE_SIGNING_KEY is a plaintext env var, not a secret reference" ;;
+  "MALFORMED") fail "SCAN_EVIDENCE_SIGNING_KEY secretKeyRef is missing its name or version" ;;
+  "REF "*)
+    GOT_SECRET=$(printf "%s" "$SIGNING_REF" | awk '{print $2}')
+    GOT_VERSION=$(printf "%s" "$SIGNING_REF" | awk '{print $3}')
+    case "$GOT_VERSION" in
+      latest|LATEST) fail "signing key mounted at ':latest'; the release requires a pinned numeric version" ;;
+      ''|*[!0-9]*)   fail "signing key version '$GOT_VERSION' is not numeric" ;;
+      *)
+        [ "$GOT_SECRET" = "$EXPECTED_SIGNING_SECRET" ] \
+          && pass "signing secret name matches ($GOT_SECRET)" \
+          || fail "signing secret name is '$GOT_SECRET', expected '$EXPECTED_SIGNING_SECRET'"
+        [ "$GOT_VERSION" = "$EXPECTED_SIGNING_VERSION" ] \
+          && pass "signing secret version pinned to $GOT_VERSION" \
+          || fail "signing secret version is '$GOT_VERSION', expected '$EXPECTED_SIGNING_VERSION'"
+        ;;
+    esac ;;
+  *) fail "signing key reference could not be read from the revision (describe unparsable)" ;;
+esac
 
 echo
 echo "=== 6. Base44 function presence (manual) ==="

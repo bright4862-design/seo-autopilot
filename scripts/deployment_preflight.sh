@@ -84,6 +84,25 @@ if [ -f "$WORKER_BUILD" ]; then
     || fail "no --set-secrets; signing key and scanner key would be unset"
   # SCAN_EVIDENCE_SIGNING_KEY is the only secret /scan-job needs.
   # SCANNER_API_KEY guards sibling routes this worker does not serve.
+  # The signing key must be pinned to an exact numeric version. "latest"
+  # re-resolves at instance start, so a new secret version would change what an
+  # already-verified revision reads with no revision change to point at.
+  has '_SIGNING_KEY_VERSION: ""' "$WORKER_BUILD" \
+    && pass "_SIGNING_KEY_VERSION is a required, fail-closed substitution" \
+    || fail "_SIGNING_KEY_VERSION missing or not fail-closed in the build artifact"
+  has '"_SIGNING_KEY_VERSION=${_SIGNING_KEY_VERSION}"' "$WORKER_BUILD" \
+    && pass "_SIGNING_KEY_VERSION covered by the missing-substitution guard" \
+    || fail "_SIGNING_KEY_VERSION not covered by the missing-substitution guard"
+  has 'SCAN_EVIDENCE_SIGNING_KEY=${_SIGNING_KEY_SECRET}:${_SIGNING_KEY_VERSION}' "$WORKER_BUILD" \
+    && pass "signing secret binds both name and version substitutions" \
+    || fail "signing secret does not bind ${_SIGNING_KEY_SECRET}:${_SIGNING_KEY_VERSION}"
+  # Executable lines only: the header documents why latest is prohibited.
+  if grep -v '^[[:space:]]*#' "$WORKER_BUILD" | grep -q -- ':latest'; then
+    fail "executable ':latest' in the build artifact; the release must pin a numeric version"
+  else
+    pass "no executable ':latest' in the build artifact"
+  fi
+
   for v in SCAN_EVIDENCE_SIGNING_KEY; do
     if grep -v '^\s*#' "$WORKER_BUILD" | grep -q -- "--set-env-vars.*$v"; then
       fail "$v passed via --set-env-vars; that stores plaintext in the revision"
@@ -197,9 +216,20 @@ done
 echo
 echo "=== 6. Deployment parameters (must be supplied explicitly) ==="
 for var in WORKER_SERVICE REGION IMAGE RUNTIME_SA INVOKER_SA TASKS_QUEUE \
-           BASE44_APP_ID BASE44_API_URL SIGNING_KEY_SECRET; do
+           BASE44_APP_ID BASE44_API_URL SIGNING_KEY_SECRET SIGNING_KEY_VERSION; do
   if [ -n "${!var:-}" ]; then pass "$var supplied"; else envm "$var not supplied"; fi
 done
+
+# SIGNING_KEY_VERSION must be numeric. "latest" is prohibited for the immutable
+# release. An unsupplied value is an environment gap; a malformed one is a
+# source-level failure, because it would deploy an unpinned mount.
+if [ -n "${SIGNING_KEY_VERSION:-}" ]; then
+  case "$SIGNING_KEY_VERSION" in
+    latest|LATEST) fail "SIGNING_KEY_VERSION='latest' is prohibited; pin a numeric enabled version" ;;
+    ''|*[!0-9]*)   fail "SIGNING_KEY_VERSION='$SIGNING_KEY_VERSION' is not numeric" ;;
+    *)             pass "SIGNING_KEY_VERSION is numeric ($SIGNING_KEY_VERSION)" ;;
+  esac
+fi
 
 echo
 echo "=== Verdicts ==="

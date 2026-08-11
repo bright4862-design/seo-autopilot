@@ -210,9 +210,59 @@ test("the signing key is the only secret the durable worker requires", () => {
   assert.ok(secretLine.includes("SCAN_EVIDENCE_SIGNING_KEY"), "signing key must come from Secret Manager");
   assert.match(workerBuild, /_SIGNING_KEY_SECRET: ""/, "_SIGNING_KEY_SECRET must fail closed");
 
-  // Exactly one secret reference. /scan-job needs no other.
-  const refs = (secretLine.match(/[A-Z0-9_]+=\$\{_[A-Z0-9_]+\}:latest/g) || []);
-  assert.equal(refs.length, 1, `expected exactly 1 secret reference, found ${refs.length}: ${refs}`);
+  // Exactly one secret reference, pinned to a substituted numeric version.
+  // ":latest" is prohibited: it re-resolves at instance start, so a new secret
+  // version would change what an already-verified revision reads.
+  const refs = (secretLine.match(/[A-Z0-9_]+=\$\{_[A-Z0-9_]+\}:\$\{_[A-Z0-9_]+\}/g) || []);
+  assert.equal(refs.length, 1, `expected exactly 1 pinned secret reference, found ${refs.length}: ${refs}`);
+});
+
+test("the signing key is pinned to a numeric version across build, preflight, contract and verifier", () => {
+  const workerBuild = fs.readFileSync("cloudbuild.durable-worker.yaml", "utf8");
+  const preflight = fs.readFileSync("scripts/deployment_preflight.sh", "utf8");
+  const verify = fs.readFileSync("scripts/post_deploy_verify.sh", "utf8");
+  const contract = fs.readFileSync("docs/standard150-deployment-contract.md", "utf8");
+
+  // 1. Build artifact: required, fail-closed, guarded, and bound to both substitutions.
+  assert.match(workerBuild, /_SIGNING_KEY_VERSION: ""/, "_SIGNING_KEY_VERSION must fail closed");
+  assert.match(workerBuild, /"_SIGNING_KEY_VERSION=\$\{_SIGNING_KEY_VERSION\}"/,
+    "_SIGNING_KEY_VERSION must be covered by the missing-substitution guard");
+  assert.match(workerBuild,
+    /--set-secrets=SCAN_EVIDENCE_SIGNING_KEY=\$\{_SIGNING_KEY_SECRET\}:\$\{_SIGNING_KEY_VERSION\}/,
+    "the signing secret must bind both the name and the version substitution");
+  // Production version numbers are never hardcoded in source.
+  assert.doesNotMatch(workerBuild, /_SIGNING_KEY_VERSION:\s*"\d/,
+    "no production signing-key version may be hardcoded in source");
+
+  // 2. The executable deployment artifact must contain no ":latest".
+  //    Comments may explain why it is prohibited. The preflight and verifier
+  //    legitimately contain the token as the pattern they REJECT, so the
+  //    prohibition applies to what is actually deployed.
+  const executable = (text) =>
+    text.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+  assert.ok(!executable(workerBuild).includes(":latest"),
+    'cloudbuild.durable-worker.yaml must not contain an executable ":latest"');
+  assert.match(preflight, /executable ':latest' in the build artifact/,
+    "preflight must actively reject an executable ':latest'");
+
+  // 3. Preflight requires the version, validates it is numeric, rejects latest.
+  assert.match(preflight, /SIGNING_KEY_VERSION/, "preflight must require SIGNING_KEY_VERSION");
+  assert.match(preflight, /is not numeric/, "preflight must reject a non-numeric version");
+  assert.match(preflight, /latest\|LATEST/, "preflight must reject 'latest'");
+
+  // 4. Post-deploy verifier requires both expectations and matches them exactly.
+  assert.match(verify, /EXPECTED_SIGNING_SECRET/, "verifier must require EXPECTED_SIGNING_SECRET");
+  assert.match(verify, /EXPECTED_SIGNING_VERSION/, "verifier must require EXPECTED_SIGNING_VERSION");
+  assert.match(verify, /secretKeyRef/, "verifier must read the secret reference, not just count refs");
+  assert.match(verify, /PLAINTEXT/, "verifier must fail closed on a plaintext signing key");
+  assert.match(verify, /MALFORMED/, "verifier must fail closed on a malformed reference");
+  assert.ok(!verify.includes("versions access"), "verifier must never access a secret payload");
+
+  // 5. Contract documents the requirement and the prohibition.
+  assert.match(contract, /_SIGNING_KEY_VERSION/, "contract must list _SIGNING_KEY_VERSION as an input");
+  assert.match(contract, /numeric, \*\*ENABLED\*\*|numeric, ENABLED|\*\*numeric, ENABLED\*\*/,
+    "contract must require a numeric ENABLED version");
+  assert.match(contract, /`latest` is prohibited/, "contract must prohibit latest");
 });
 
 test("SCANNER_API_KEY is not supplied to the durable worker", () => {

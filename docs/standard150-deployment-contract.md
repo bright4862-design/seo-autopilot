@@ -115,8 +115,27 @@ Every value below is environment-specific and must be provided explicitly. The
 build fails closed if any is empty.
 
 `_WORKER_SERVICE` · `_REGION` · `_IMAGE` · `_RUNTIME_SA` · `_INVOKER_SA` ·
-`_BASE44_APP_ID` · `_BASE44_API_URL` · `_SIGNING_KEY_SECRET`, plus the Cloud
-Tasks queue name.
+`_BASE44_APP_ID` · `_BASE44_API_URL` · `_SIGNING_KEY_SECRET` ·
+`_SIGNING_KEY_VERSION`, plus the Cloud Tasks queue name.
+
+### Signing-key version pinning
+
+`_SIGNING_KEY_VERSION` must be a **numeric, ENABLED** Secret Manager version of
+`_SIGNING_KEY_SECRET`. **`latest` is prohibited for the immutable release.**
+
+`latest` is resolved when a container instance starts, not when the revision is
+deployed. Adding a new secret version would therefore change what an
+already-verified revision reads, without any revision change to point at. The
+authority seal would begin failing against evidence sealed under the previous
+key, and the revision digest — the release's identity proof — would still match.
+Pinning one numeric version makes the mounted key part of the frozen artifact.
+
+Verification: `scripts/deployment_preflight.sh` requires `SIGNING_KEY_VERSION`,
+rejects a non-numeric value, and refuses an executable `:latest` in the build
+artifact. `scripts/post_deploy_verify.sh` requires `EXPECTED_SIGNING_SECRET` and
+`EXPECTED_SIGNING_VERSION` and asserts the deployed revision's
+`SCAN_EVIDENCE_SIGNING_KEY` reference matches both exactly. Neither script ever
+reads or prints a secret payload.
 
 ## Production acceptance gate
 

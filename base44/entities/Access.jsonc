@@ -5,15 +5,41 @@
     "user_email": {
       "type": "string"
     },
-    "scans_used": {
-      "type": "number",
-      "default": 0
+    "owner_user_id": {
+      "type": "string"
+    },
+    "access_status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "active",
+        "revoked"
+      ],
+      "default": "pending"
+    },
+    "plan_id": {
+      "type": "string"
+    },
+    "grant_source": {
+      "type": "string"
+    },
+    "app_id": {
+      "type": "string"
     },
     "has_full_access": {
       "type": "boolean",
       "default": false
     },
     "paid_at": {
+      "type": "string"
+    },
+    "stripe_checkout_session_id": {
+      "type": "string"
+    },
+    "stripe_payment_intent_id": {
+      "type": "string"
+    },
+    "stripe_event_id": {
       "type": "string"
     }
   },
@@ -22,12 +48,17 @@
   ],
   "rls": {
     "create": {
-      "created_by_id": "{{user.id}}"
+      "user_condition": {
+        "role": "admin"
+      }
     },
     "read": {
       "$or": [
         {
-          "created_by_id": "{{user.id}}"
+          "owner_user_id": "{{user.id}}"
+        },
+        {
+          "user_email": "{{user.email}}"
         },
         {
           "user_condition": {
@@ -37,16 +68,9 @@
       ]
     },
     "update": {
-      "$or": [
-        {
-          "created_by_id": "{{user.id}}"
-        },
-        {
-          "user_condition": {
-            "role": "admin"
-          }
-        }
-      ]
+      "user_condition": {
+        "role": "admin"
+      }
     },
     "delete": {
       "user_condition": {

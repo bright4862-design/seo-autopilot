@@ -1,38 +1,47 @@
 import { base44 } from "@/api/base44Client";
 
-export const UNLIMITED_EMAILS = ["bright4862@gmail.com", "londonparisandbrussels@gmail.com"];
-export const FREE_SCAN_LIMIT = 1;
-export const UNLOCK_PRICE_LABEL = "$75";
-export const FREE_PREVIEW_FIX_COUNT = 2;
+export const UNLOCK_PRICE_LABEL = "$30";
+export const FREE_PREVIEW_FIX_COUNT = 0;
+
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+export function isActivePaidAccess(record, user = {}) {
+  const email = normalizeEmail(user?.email);
+  const userId = String(user?.id || "").trim();
+  if (!record || !email || !userId) return false;
+  return (
+    normalizeEmail(record.user_email) === email &&
+    String(record.owner_user_id || "") === userId &&
+    record.has_full_access === true &&
+    record.access_status === "active" &&
+    record.plan_id === "standard150_lifetime" &&
+    record.grant_source === "stripe_checkout" &&
+    record.app_id === "6a498732ec779dfaaeab0e53" &&
+    Boolean(record.paid_at)
+  );
+}
 
 export async function loadAccess() {
   const user = await base44.auth.me().catch(() => null);
-  const email = String(user?.email || "").toLowerCase();
-  if (!email) {
+  const email = normalizeEmail(user?.email);
+  const userId = String(user?.id || "").trim();
+  if (!email || !userId) {
     return { email: "", fullAccess: false, scansUsed: 0, canScan: false, record: null };
   }
 
-  const unlimited = UNLIMITED_EMAILS.includes(email);
   const records = await base44.entities.Access.filter({ user_email: email }).catch(() => []);
-  const record = Array.isArray(records) ? records[0] || null : null;
-  const fullAccess = unlimited || record?.has_full_access === true;
-  const scansUsed = Number(record?.scans_used || 0);
+  const rows = Array.isArray(records) ? records : [];
+  const record = rows.length === 1 ? rows[0] : null;
+  const fullAccess = isActivePaidAccess(record, user);
 
   return {
     email,
     fullAccess,
-    scansUsed,
-    canScan: fullAccess || scansUsed < FREE_SCAN_LIMIT,
+    scansUsed: 0,
+    canScan: fullAccess,
     record,
+    conflict: rows.length > 1,
   };
-}
-
-export async function recordScanUsed() {
-  const access = await loadAccess();
-  if (!access.email || access.fullAccess) return;
-  if (access.record) {
-    await base44.entities.Access.update(access.record.id, { scans_used: access.scansUsed + 1 }).catch(() => {});
-    return;
-  }
-  await base44.entities.Access.create({ user_email: access.email, scans_used: 1, has_full_access: false }).catch(() => {});
 }

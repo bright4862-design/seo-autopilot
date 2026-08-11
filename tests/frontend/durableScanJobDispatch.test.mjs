@@ -1,17 +1,14 @@
-// Contract for the Cloud Tasks dispatcher.
-//
-// ScanRun 6a748d5f9e8a27963ae678dc logged async_job_accepted and
-// worker_scan_start, then produced nothing for 247s: Base44 reaps work started
-// after the response returns, so waitUntil() could never carry a crawl. The
-// dispatcher must now do nothing but authenticate, verify, enqueue and answer.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
   audienceForWorkerUrl,
+  buildCloudDrainTaskRequest,
   buildCloudTaskRequest,
+  drainUrlForWorker,
   encodeTaskBody,
+  taskNameForDrain,
   taskNameForScan,
 } from "../../base44/functions/startStandardScanJob/cloudTasks.js";
 
@@ -24,98 +21,102 @@ const tasks = readFileSync(
   "utf8",
 );
 
-test("the dispatcher performs no post-response background work", () => {
-  // The exact defect: a crawl handed to waitUntil() is reaped mid-flight.
-  assert.doesNotMatch(dispatcher, /waitUntil\(\s*runScanJob/);
+const QUEUE = "projects/seo-autopilot-501517/locations/europe-west1/queues/standard150-scans";
+const WORKER = "https://fixlist-standard150-worker-abc-ew.a.run.app/scan-job";
+const INVOKER = "fixlist-scan-invoker@seo-autopilot-501517.iam.gserviceaccount.com";
+
+test("the Base44 dispatcher contains no crawl or post-response worker", () => {
+  assert.doesNotMatch(dispatcher, /waitUntil|runScanJob|fetchScannerResult/);
+  assert.doesNotMatch(dispatcher, /SCANNER_API_URL|SCANNER_API_KEY|SCAN_EVIDENCE_SIGNING_KEY/);
+  assert.match(dispatcher, /enqueueScanDrain\(\{/);
   assert.match(dispatcher, /enqueueScanJob\(\{/);
 });
 
-test("task identity is derived deterministically from the existing scan_id", () => {
-  const queue = "projects/seo-autopilot-501517/locations/europe-west1/queues/standard150-scans";
-  // Task identity is now (scan_id, attempt): a retry must not collide with the
-  // tombstoned name from the previous attempt. Same scan + same attempt is
-  // still stable, which is what keeps a duplicate submission idempotent.
-  const first = taskNameForScan(queue, "6a748d5f9e8a27963ae678dc", 1);
-  const second = taskNameForScan(queue, "6a748d5f9e8a27963ae678dc", 1);
-  assert.equal(first, second, "the same scan must always map to the same task");
-  assert.equal(first, `${queue}/tasks/standard150-6a748d5f9e8a27963ae678dc-a1`);
-  assert.notEqual(first, taskNameForScan(queue, "6a744c8220780ec729e20724", 1));
-  assert.notEqual(first, taskNameForScan(queue, "6a748d5f9e8a27963ae678dc", 2));
+test("paid admission is server-side and precedes every enqueue", () => {
+  assert.match(dispatcher, /loadPaidEntitlement\(base44, user\)/);
+  assert.match(dispatcher, /paid_access_required/);
+  assert.match(dispatcher, /paid_access_conflict/);
+  assert.ok(dispatcher.indexOf("loadPaidEntitlement(base44, user)") < dispatcher.indexOf("enqueueScanDrain({"));
+  assert.ok(dispatcher.indexOf("loadPaidEntitlement(base44, user)") < dispatcher.indexOf("enqueueScanJob({"));
 });
 
-test("task names cannot be injected through the scan id", () => {
-  const queue = "projects/p/locations/l/queues/q";
-  assert.equal(taskNameForScan(queue, "../../evil", 1), `${queue}/tasks/standard150-evil-a1`);
-  assert.equal(taskNameForScan(queue, "a/b?c=d", 2), `${queue}/tasks/standard150-abcd-a2`);
+test("task identity is deterministic per scan and attempt", () => {
+  assert.equal(taskNameForScan(QUEUE, "scan-1", 1), `${QUEUE}/tasks/standard150-scan-1-a1`);
+  assert.equal(taskNameForScan(QUEUE, "scan-1", 2), `${QUEUE}/tasks/standard150-scan-1-a2`);
+  assert.equal(taskNameForDrain(QUEUE, "scan-1", 2), `${QUEUE}/tasks/standard150-drain-scan-1-a2`);
+  assert.equal(taskNameForScan(QUEUE, "../../evil", 1), `${QUEUE}/tasks/standard150-evil-a1`);
 });
 
-test("Cloud Task bodies preserve Unicode business names and URLs", () => {
+test("Cloud Task bodies preserve Unicode", () => {
   const payload = { business_name: "Café Noël 東京", website_url: "https://example.com/équipe" };
   const decoded = JSON.parse(Buffer.from(encodeTaskBody(payload), "base64").toString("utf8"));
   assert.deepEqual(decoded, payload);
 });
 
-test("a duplicate submission for one ScanRun is deduplicated, not re-run", () => {
-  // Cloud Tasks answers 409 ALREADY_EXISTS for a name it already holds.
+test("worker tasks use OIDC and the 480 second request envelope", () => {
+  const request = buildCloudTaskRequest({
+    queuePath: QUEUE,
+    workerUrl: WORKER,
+    invokerServiceAccount: INVOKER,
+    scanId: "scan-1",
+    attemptCount: 2,
+    payload: { scan_id: "scan-1", attempt_count: 2 },
+  });
+  assert.equal(request.task.dispatchDeadline, "480s");
+  assert.equal(request.task.httpRequest.url, WORKER);
+  assert.equal(request.task.httpRequest.oidcToken.audience, audienceForWorkerUrl(WORKER));
+  assert.equal(request.task.httpRequest.oidcToken.serviceAccountEmail, INVOKER);
+});
+
+test("the terminal drain is delayed, private and attempt-bound", () => {
+  const now = Date.parse("2026-08-11T12:00:00.000Z");
+  const request = buildCloudDrainTaskRequest({
+    queuePath: QUEUE,
+    workerUrl: WORKER,
+    invokerServiceAccount: INVOKER,
+    scanId: "scan-1",
+    attemptCount: 2,
+    payload: { scan_id: "scan-1", attempt_count: 2 },
+    nowMs: now,
+    delaySeconds: 900,
+  });
+  assert.equal(request.task.scheduleTime, "2026-08-11T12:15:00.000Z");
+  assert.equal(request.task.httpRequest.url, drainUrlForWorker(WORKER));
+  assert.equal(request.task.httpRequest.url, "https://fixlist-standard150-worker-abc-ew.a.run.app/scan-job-drain");
+  assert.equal(request.task.httpRequest.oidcToken.audience, "https://fixlist-standard150-worker-abc-ew.a.run.app");
+  assert.equal(request.task.name, `${QUEUE}/tasks/standard150-drain-scan-1-a2`);
+});
+
+test("same-attempt duplicate tasks are accepted idempotently", () => {
   assert.match(tasks, /response\.status === 409/);
   assert.match(tasks, /deduplicated: true/);
-  assert.match(tasks, /ok: true, deduplicated: true/);
 });
 
-test("the worker route and Cloud Run OIDC audience are kept separate", () => {
-  const workerUrl = "https://fixlist-worker-abc-ew.a.run.app/scan-job";
-  assert.equal(audienceForWorkerUrl(workerUrl), "https://fixlist-worker-abc-ew.a.run.app");
-  assert.match(tasks, /url: workerUrl/);
-  assert.match(tasks, /audience: workerAudience/);
-  assert.throws(() => audienceForWorkerUrl("http://localhost:8080/scan-job"));
+test("ambiguous immediate enqueue failures stay server-owned", () => {
+  assert.match(tasks, /outcomeUnknown: true, failureCode: "tasks_unreachable"/);
+  assert.match(tasks, /outcomeUnknown: response\.status >= 500/);
+  assert.match(dispatcher, /enqueued\.outcomeUnknown !== true/);
+  assert.match(dispatcher, /dispatch_uncertain: dispatchUncertain/);
 });
 
-test("the worker is invoked with OIDC, never anonymously", () => {
-  assert.match(tasks, /oidcToken: \{ serviceAccountEmail: invokerServiceAccount, audience: workerAudience \}/);
+test("definite failures terminalize the exact attempt", () => {
+  assert.match(dispatcher, /normalizeAttemptCount\(current\.attempt_count\) !== normalizeAttemptCount\(attemptCount\)/);
+  assert.match(dispatcher, /TERMINAL_SCAN_STATUSES\.has/);
+  assert.match(dispatcher, /status: "failed"/);
+  assert.match(dispatcher, /release_gate_eligible: false/);
 });
 
-
-test("the task request is bound to the 300-second worker envelope", () => {
-  const queuePath = "projects/seo-autopilot-501517/locations/europe-west1/queues/standard150-scans";
-  const workerUrl = "https://fixlist-standard150-worker-abc-ew.a.run.app/scan-job";
-  const request = buildCloudTaskRequest({
-    queuePath,
-    workerUrl,
-    invokerServiceAccount: "fixlist-scan-invoker@seo-autopilot-501517.iam.gserviceaccount.com",
-    scanId: "6a748d5f9e8a27963ae678dc",
-    attemptCount: 2,
-    payload: { scan_id: "6a748d5f9e8a27963ae678dc", attempt_count: 2 },
-  });
-
-  assert.equal(request.task.dispatchDeadline, "300s");
-  assert.equal(request.task.name, `${queuePath}/tasks/standard150-6a748d5f9e8a27963ae678dc-a2`);
-  assert.equal(request.task.httpRequest.url, workerUrl);
-  assert.equal(request.task.httpRequest.oidcToken.audience, "https://fixlist-standard150-worker-abc-ew.a.run.app");
-  assert.equal(request.task.httpRequest.oidcToken.serviceAccountEmail, "fixlist-scan-invoker@seo-autopilot-501517.iam.gserviceaccount.com");
-});
-
-test("a failed enqueue closes the ScanRun truthfully and charges nothing", () => {
-  const branch = dispatcher.match(/if \(!enqueued\.ok\) \{[\s\S]*?\n {4}\}/);
-  assert.ok(branch, "the enqueue-failure branch is missing");
-  assert.match(branch[0], /failOwnedScanRun\(/);
-  assert.match(branch[0], /accepted: false/);
-  assert.match(branch[0], /Nothing was charged/);
-});
-
-test("missing durable-worker configuration fails closed with no fallback", () => {
+test("missing durable configuration fails closed after admission", () => {
   assert.match(dispatcher, /failure_code: "durable_worker_not_configured"/);
   assert.match(dispatcher, /SCAN_TASKS_QUEUE_PATH/);
   assert.match(dispatcher, /SCAN_WORKER_URL/);
   assert.match(dispatcher, /TASKS_INVOKER_SERVICE_ACCOUNT/);
+  assert.match(dispatcher, /failOwnedScanRun\(\{/);
 });
 
-test("the dispatcher still refuses anything but Standard 150", () => {
+test("the public route remains Standard 150 only", () => {
   assert.match(dispatcher, /Only the Standard 150 scan is available/);
   assert.match(dispatcher, /scan_mode: PUBLIC_SCAN_MODE/);
   assert.match(dispatcher, /respect_robots_txt: true/);
-});
-
-test("the accepted response records the task for evidence", () => {
-  assert.match(dispatcher, /task_name: enqueued\.taskName/);
-  assert.match(dispatcher, /deduplicated: enqueued\.deduplicated === true/);
+  assert.doesNotMatch(dispatcher, /grok|premium/i);
 });

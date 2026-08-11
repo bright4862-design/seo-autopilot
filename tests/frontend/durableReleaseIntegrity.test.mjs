@@ -80,7 +80,9 @@ test("preflight and post-deploy verification enforce the same 480-second envelop
   const verify = fs.readFileSync("scripts/post_deploy_verify.sh", "utf8");
 
   assert.match(preflight, /has "--timeout=480"/);
-  assert.match(preflight, /dispatchDeadline: "480s"/);
+  assert.match(preflight, /WORKER_DISPATCH_DEADLINE = "480s"/);
+  assert.match(preflight, /dispatchDeadline: WORKER_DISPATCH_DEADLINE/);
+  assert.match(preflight, /standard150-\$\{safeScanId\(scanId\)\}-a\$\{normalizeAttemptCount\(attemptCount\)\}/);
   assert.doesNotMatch(preflight, /timeout(?:=|\s)300|dispatchDeadline[^\n]*300s/);
   assert.match(verify, /\[ "\$TO" = "480" \]/);
   assert.doesNotMatch(verify, /timeout 300s|expected 300/);

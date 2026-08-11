@@ -136,11 +136,13 @@ else
 fi
 
 if [ -f "$TASKS" ]; then
-  has 'dispatchDeadline: "480s"' "$TASKS" && pass "dispatchDeadline 480s" || fail "dispatchDeadline not 480s"
+  has 'export const WORKER_DISPATCH_DEADLINE = "480s"' "$TASKS" \
+    && has 'dispatchDeadline: WORKER_DISPATCH_DEADLINE' "$TASKS" \
+    && pass "dispatchDeadline 480s" || fail "dispatchDeadline not bound to 480s"
   has "oidcToken" "$TASKS" && pass "task carries OIDC token" || fail "task has no OIDC token"
   has "serviceAccountEmail" "$TASKS" && pass "OIDC invoker SA set" || fail "OIDC has no invoker SA"
   has "audience" "$TASKS" && pass "OIDC audience set" || fail "OIDC has no audience"
-  has 'standard150-${safeId}-a${attempt}' "$TASKS" \
+  has 'standard150-${safeScanId(scanId)}-a${normalizeAttemptCount(attemptCount)}' "$TASKS" \
     && pass "task name deterministic per (scan_id, attempt)" || fail "task name not attempt-bound"
   # One deterministic auth route only.
   # Ignore comment lines: the file documents why the fallback was removed.

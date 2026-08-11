@@ -82,29 +82,28 @@ test("a superseded task stops before crawling, failing or charging", () => {
 });
 
 // 3 + 4. same-attempt partial authority resumes; terminal authority immutable
-test("same-attempt partial authority resumes, other attempts are superseded", () => {
-  assert.match(persist, /scanIsTerminallySealed/);
+test("same-attempt partial authority resumes, terminal outcomes stay immutable", () => {
   assert.match(persist, /authority_immutable/);
-  const branch = persist.match(/if \(scan\.authority_proof && scan\.authority_proof !== authorityProof\) \{[\s\S]*?\n {4}\}/);
-  assert.ok(branch, "the staged-proof branch is missing");
-  // A differing proof is no longer a blanket conflict.
-  assert.match(branch[0], /normalizeAttempt\(scan\.authority_attempt_count \?\? rowAttempt\) !== claimedAttempt/);
+  assert.match(persist, /terminal_authority_rejected/);
+  assert.match(persist, /scanStatus === "complete"/);
+  assert.match(persist, /scan\.authority_proof === authorityProof && scan\.fix_list_id/);
+  assert.match(persist, /normalizeAttempt\(scan\.authority_attempt_count \?\? rowAttempt\) !== claimedAttempt/);
+  assert.ok((persist.match(/await assertAttemptStillActive\(/g) || []).length >= 2);
   assert.match(workerJob, /"already_sealed": True/);
   assert.match(workerJob, /if already_terminal\(fresh\) and has_authority_proof\(fresh\)/);
 });
 
-// 5. retry cannot duplicate FixLists, FixItems or allowance
-test("retries cannot duplicate authority rows or allowance", () => {
+// 5. retries reconcile rows but never touch paid access
+test("retries reconcile authority rows without touching paid access", () => {
   assert.match(persist, /upsertSingleFixList/);
   assert.match(persist, /reconcileFixItems/);
-  assert.match(persist, /ensureAllowanceConsumed/);
-  assert.match(persist, /duplicate_fix_list_conflict/);
-  // Allowance is only reachable after the staged rows are verified.
+  assert.match(persist, /for \(const duplicate of rows\)/);
+  assert.match(persist, /for \(const duplicate of items\.slice\(1\)\)/);
+  assert.doesNotMatch(persist, /ensureAllowanceConsumed|entities\.Access|scans_used/);
   assert.ok(
-    persist.indexOf("authority_persistence_incomplete") < persist.indexOf("ensureAllowanceConsumed"),
-    "allowance must be consumed only after authority rows are verified",
+    persist.indexOf("authority_persistence_incomplete") < persist.indexOf("await entities.ScanRun.update(identity.scan_id, scanRunFields)"),
+    "the terminal write must follow complete authority verification",
   );
-  // rows.scanRun must never carry attempt_count into a ScanRun write.
   assert.match(persist, /const \{ attempt_count: _stagedAttempt, \.\.\.scanRunFields \} = rows\.scanRun/);
   assert.doesNotMatch(persist, /ScanRun\.update\(identity\.scan_id, rows\.scanRun\)/);
 });

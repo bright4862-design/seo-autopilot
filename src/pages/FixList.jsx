@@ -6,7 +6,7 @@ import { isRateLimitFinding, shouldUseLegacyRateLimitPresentation } from "@/lib/
 import { trackEvent } from "@/lib/analytics";
 import { getScanRunWithFixList, recoverOrphanedScanRuns } from "@/lib/scanRuns";
 import { ACTIVE_SCAN_RUN_STATUSES, STANDARD_ORPHAN_RECOVERY_TTL_MS, isStaleActiveScanRun } from "@/lib/scanRunIdentity";
-import { FREE_PREVIEW_FIX_COUNT, UNLOCK_PRICE_LABEL, loadAccess } from "@/lib/access";
+import { LOCKED_PREVIEW_FIX_COUNT, UNLOCK_PRICE_LABEL, loadAccess } from "@/lib/access";
 import UnlockAccessButton from "@/components/billing/UnlockAccessButton";
 import { CUSTOMER_BOUNDARY_EVENT } from "@/lib/customerBrowserCache";
 import ScoreRing from "@/components/fixlist/ScoreRing";
@@ -221,7 +221,7 @@ export default function FixList() {
   const later = active.filter((item) => item.priority !== "critical" && item.priority !== "high");
   // Free-tier preview gate. This only limits what is rendered; the durable
   // scan record itself is always loaded by exact scan_id.
-  const shownFixNow = locked ? active.slice(0, FREE_PREVIEW_FIX_COUNT) : fixNow;
+  const shownFixNow = locked ? active.slice(0, LOCKED_PREVIEW_FIX_COUNT) : fixNow;
   const shownLater = locked ? [] : later;
   const hiddenCount = locked ? Math.max(0, active.length - shownFixNow.length) : 0;
   const passedChecks = hasUsefulScan && !scoreUnavailable ? buildPassedChecks(recommendations) : [];
@@ -308,7 +308,7 @@ export default function FixList() {
                   {hiddenCount > 0 ? `${hiddenCount} more ${hiddenCount === 1 ? "fix is" : "fixes are"} hidden` : "Full results are hidden"}
                 </h2>
                 <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">
-                  This is your free test scan, so we only show a couple of items. Unlock full access for {UNLOCK_PRICE_LABEL} to see every fix, the affected pages, the passed checks, and to run more scans.
+                  This result is locked. Activate Standard 150 lifetime beta access for {UNLOCK_PRICE_LABEL} to see every fix, the affected pages, the passed checks, and to run scans.
                 </p>
                 <div className="mt-5">
                   <UnlockAccessButton />

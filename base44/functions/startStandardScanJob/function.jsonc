@@ -1,4 +1,4 @@
 {
   "name": "startStandardScanJob",
-  "entry": "base44/functions/startStandardScanJob/entry.ts"
+  "entry": "entry.ts"
 }

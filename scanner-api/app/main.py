@@ -1,6 +1,7 @@
 import asyncio
 import os
 import secrets
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -354,6 +355,20 @@ class ScanJobRequest(BaseModel):
     respect_robots_txt: bool = True
 
 
+class ScanDrainRequest(BaseModel):
+    """Delayed watchdog payload for one scan attempt."""
+
+    scan_id: str
+    request_id: str
+    attempt_count: int = 1
+    idempotency_key: str | None = None
+    project_id: str | None = None
+    owner_user_id: str | None = None
+    website_url: str
+    normalized_domain: str | None = None
+    drain_after: str
+
+
 def require_cloud_tasks_oidc(authorization: str | None) -> None:
     """Check the invoker identity on an already-IAM-validated Cloud Tasks token.
 
@@ -518,4 +533,80 @@ async def scan_job(
             "pages_found": result.get("pages_found"),
             "fix_list_id": outcome.get("fix_list_id"),
             "authority_proof_present": len(str(outcome.get("authority_proof") or "")) == 64,
+        }
+
+
+@app.post("/scan-job-drain")
+async def scan_job_drain(
+    payload: ScanDrainRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Close a stale active attempt after the scan task's retry envelope."""
+
+    require_cloud_tasks_oidc(authorization)
+    scan_id = str(payload.scan_id or "").strip()
+    request_id = str(payload.request_id or "").strip()
+    if not scan_id or not request_id:
+        raise HTTPException(status_code=400, detail="A durable scan_id and request_id are required.")
+
+    try:
+        drain_after = datetime.fromisoformat(str(payload.drain_after).replace("Z", "+00:00"))
+        if drain_after.tzinfo is None:
+            drain_after = drain_after.replace(tzinfo=timezone.utc)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid drain_after timestamp.") from exc
+    if datetime.now(timezone.utc) < drain_after.astimezone(timezone.utc):
+        raise HTTPException(status_code=503, detail="The terminal drain is not due yet.")
+
+    job = payload.model_dump()
+    job_attempt = normalize_attempt(payload.attempt_count)
+    async with httpx.AsyncClient() as client:
+        scan = await read_scan_run(client, scan_id)
+        if scan is None:
+            raise HTTPException(status_code=503, detail="The scan record is unavailable.")
+        if not identity_matches(scan, job):
+            return {
+                "success": True,
+                "worker_version": WORKER_VERSION,
+                "skipped": "identity_mismatch",
+                "scan_id": scan_id,
+            }
+        if is_superseded_attempt(scan, job_attempt):
+            return {
+                "success": True,
+                "worker_version": WORKER_VERSION,
+                "skipped": "superseded_attempt",
+                "scan_id": scan_id,
+                "task_attempt": job_attempt,
+                "current_attempt": current_attempt(scan),
+            }
+        if already_terminal(scan):
+            return {
+                "success": True,
+                "worker_version": WORKER_VERSION,
+                "skipped": "already_terminal",
+                "status": scan.get("status"),
+                "scan_id": scan_id,
+            }
+
+        try:
+            closed = await write_terminal_failure(
+                client,
+                scan_id,
+                "worker_terminal_drain_timeout",
+                "The scan did not reach a final result in time. Please start a new scan.",
+                attempt_count=job_attempt,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="The terminal state could not be verified.",
+            ) from exc
+
+        return {
+            "success": True,
+            "worker_version": WORKER_VERSION,
+            "scan_id": scan_id,
+            "closed": bool(closed),
+            "status": "failed" if closed else "superseded_attempt",
         }

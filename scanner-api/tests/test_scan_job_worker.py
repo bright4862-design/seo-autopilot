@@ -125,7 +125,7 @@ def test_worker_version_is_pinned():
 # ------------------------------------------------- discovery vs crawl cap --
 #
 # Hard compatibility contract: the 150-page cap bounds fetch/analyse ONLY. On a
-# large site the scanner must still enumerate more than 1,000 in-scope URLs and
+# large site the scanner must still enumerate at least 1,200 in-scope URLs and
 # report them in pages_found. The old crawler did this (Funbooker: 1,200 found /
 # 150 crawled) and the durable path must not regress it.
 
@@ -142,11 +142,11 @@ def _large_site_result(found: int = 1_247, crawled: int = 150) -> dict:
     }
 
 
-def test_discovery_exceeds_1000_while_crawl_stays_at_150():
+def test_discovery_reaches_1200_while_crawl_stays_exactly_at_150():
     from app.scan_job import build_authority_review_payload
 
     payload = build_authority_review_payload(_large_site_result())
-    assert payload["pages_found"] > 1_000, "discovery must not be truncated by the crawl cap"
+    assert payload["pages_found"] >= 1_200, "eligible discovery must reach the release threshold"
     assert payload["pages_crawled"] == 150
     assert payload["pages_found"] > payload["pages_crawled"]
     assert payload["queued_remaining"] > 0

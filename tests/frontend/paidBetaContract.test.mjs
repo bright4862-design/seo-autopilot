@@ -38,7 +38,7 @@ test("checkout, webhook and customer copy share one $50 contract", () => {
   assert.match(billing, /price: "\$50 one-time"/);
 
   for (const [name, source] of Object.entries({ checkout, webhook, accessClient, billing, scanForm, fixList })) {
-    assert.doesNotMatch(source, /\$30|\$75|unit_amount:\s*3000|unit_amount:\s*7500/, name);
+    assert.doesNotMatch(source, /\$30(?!\d)|\$75(?!\d)|unit_amount:\s*3000|unit_amount:\s*7500/, name);
   }
 });
 

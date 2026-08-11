@@ -14,7 +14,6 @@ function normalizeAttempt(value) {
 const WORKER_VERSION = "scan_job_worker_v1_cloud_tasks";
 const COMPLETION_VERSION = "durable_standard150_completion_v1";
 const MAX_FIX_ITEMS = 100;
-const FREE_SCAN_CONSUMED_VALUE = 1;
 
 class RequestProblem extends Error {
   status: number;
@@ -84,25 +83,34 @@ Deno.serve(async (req) => {
       throw new RequestProblem(409, "superseded_attempt", "A newer attempt owns this scan.");
     }
 
-    // A terminal seal is immutable: once a run is complete and sealed, no
-    // further persistence may replace it, not even by the same attempt.
-    const scanIsTerminallySealed = scan.status === "complete" && Boolean(scan.authority_proof);
-    if (scanIsTerminallySealed && scan.authority_proof !== authorityProof) {
-      throw new RequestProblem(409, "authority_immutable", "This scan is already sealed with a different authority proof.");
+    const scanStatus = String(scan.status || "").toLowerCase();
+    if (["failed", "cancelled", "limited"].includes(scanStatus)) {
+      throw new RequestProblem(409, "terminal_authority_rejected", "This scan attempt is already terminal.");
     }
-    // A proof staged by THIS attempt while the row is still non-terminal is a
-    // resumable partial persistence, not a conflict -- that is exactly the
-    // state a Cloud Tasks retry finds after an interrupted finalisation. A
-    // proof staged by a different attempt is superseded.
-    if (scan.authority_proof && scan.authority_proof !== authorityProof) {
-      if (scanIsTerminallySealed) {
-        throw new RequestProblem(409, "authority_immutable", "This scan is already sealed.");
+    if (scanStatus === "complete") {
+      if (scan.authority_proof === authorityProof && scan.fix_list_id) {
+        return Response.json({
+          success: true,
+          replayed: true,
+          workerVersion: WORKER_VERSION,
+          scanId: identity.scan_id,
+          fixListId: scan.fix_list_id,
+          fixListVerified: true,
+          allowanceConsumed: false,
+          scanRun: scan,
+        });
       }
-      if (normalizeAttempt(scan.authority_attempt_count ?? rowAttempt) !== claimedAttempt) {
-        throw new RequestProblem(409, "superseded_attempt", "A different attempt staged this authority.");
-      }
-      // Same attempt, different proof: the earlier partial stage is superseded
-      // by this one and is safely overwritten below while still non-terminal.
+      throw new RequestProblem(409, "authority_immutable", "This scan is already terminal.");
+    }
+
+    // A proof staged by this attempt is resumable. A staged proof owned by a
+    // different attempt is superseded and cannot be replaced.
+    if (
+      scan.authority_proof
+      && scan.authority_proof !== authorityProof
+      && normalizeAttempt(scan.authority_attempt_count ?? rowAttempt) !== claimedAttempt
+    ) {
+      throw new RequestProblem(409, "superseded_attempt", "A different attempt staged this authority.");
     }
     const replayed = scan.authority_proof === authorityProof;
 
@@ -110,7 +118,7 @@ Deno.serve(async (req) => {
       ownerUserId: identity.owner_user_id,
       proof: authorityProof,
     });
-    const fixList = await upsertSingleFixList(entities, rowsWithoutListId.fixList, identity);
+    const fixList = await upsertSingleFixList(entities, rowsWithoutListId.fixList, identity, scan);
     if (!fixList?.id) throw new RequestProblem(500, "authority_persistence_failed", "The authoritative FixList could not be saved.");
 
     const rows = authorityRowsFromSnapshot(snapshot, {
@@ -119,6 +127,7 @@ Deno.serve(async (req) => {
       proof: authorityProof,
     });
     await reconcileFixItems(entities, fixList.id, rows.fixItems);
+    await assertAttemptStillActive(entities, identity.scan_id, claimedAttempt);
 
     // Stage the exact authority proof while the run remains non-terminal. This
     // makes retries safe and lets us verify every authoritative row before any
@@ -143,6 +152,7 @@ Deno.serve(async (req) => {
       : [];
     const authorityStaged = Boolean(
       stagedScan?.status === "reviewing"
+      && normalizeAttempt(stagedScan?.attempt_count) === claimedAttempt
       && stagedScan?.authority_proof === authorityProof
       && stagedScan?.authority_seal_version === snapshot.version
       && stagedScan?.authority_sealed_at === snapshot.sealed_at
@@ -160,15 +170,9 @@ Deno.serve(async (req) => {
       throw new RequestProblem(500, "authority_persistence_incomplete", "The durable authority rows were not completely staged.");
     }
 
-    // The current product has one free scan. Set the allowance to at least one
-    // rather than incrementing it, so a retry cannot charge twice.
-    const allowance = await ensureAllowanceConsumed(entities, scan);
-    if (!allowance.ok) {
-      throw new RequestProblem(500, "allowance_persistence_failed", "The authoritative result was staged but its allowance state could not be verified.");
-    }
-
-    // Only after authority and allowance are both verified does the ScanRun
-    // become a terminal, release-eligible result.
+    // Paid admission happens before enqueue. Completion never creates, updates
+    // or consumes Access rows, so a persistence retry cannot affect billing.
+    await assertAttemptStillActive(entities, identity.scan_id, claimedAttempt);
     await entities.ScanRun.update(identity.scan_id, scanRunFields);
     const persistedScan = await entities.ScanRun.get(identity.scan_id);
     const authorityPersisted = Boolean(
@@ -190,7 +194,7 @@ Deno.serve(async (req) => {
       scanId: identity.scan_id,
       fixListId: fixList.id,
       fixListVerified: true,
-      allowanceConsumed: allowance.consumed,
+      allowanceConsumed: false,
       scanRun: persistedScan,
     });
   } catch (error) {
@@ -238,54 +242,75 @@ function validateCurrentIdentity({ scan, project, identity, scanResult }) {
   }
 }
 
-async function upsertSingleFixList(entities, desired, identity) {
+async function upsertSingleFixList(entities, desired, identity, scan) {
   const existing = await entities.FixList.filter({
     scan_run_id: identity.scan_id,
     owner_user_id: identity.owner_user_id,
-  }, "-created_date", 2);
-  if ((existing || []).length > 1) {
-    throw new RequestProblem(409, "duplicate_fix_list_conflict", "More than one FixList exists for this ScanRun.");
-  }
-  const current = existing?.[0];
+  }, "-created_date", MAX_FIX_ITEMS);
+  const rows = Array.isArray(existing) ? existing.filter((row) => row?.id) : [];
+  const preferredId = String(scan?.fix_list_id || "");
+  const current = rows.find((row) => String(row.id) === preferredId)
+    || [...rows].sort((a, b) => String(a.id).localeCompare(String(b.id)))[0]
+    || null;
+
   if (!current?.id) return entities.FixList.create(desired);
+
+  for (const duplicate of rows) {
+    if (duplicate.id === current.id) continue;
+    const duplicateItems = await entities.FixItem.filter(
+      { fix_list_id: duplicate.id },
+      "created_date",
+      MAX_FIX_ITEMS,
+    );
+    for (const item of duplicateItems || []) {
+      if (item?.id) await entities.FixItem.delete(item.id);
+    }
+    await entities.FixList.delete(duplicate.id);
+  }
+
   const updated = await entities.FixList.update(current.id, desired);
   return { ...current, ...(updated || {}), id: current.id };
 }
 
 async function reconcileFixItems(entities, fixListId, desiredRows) {
-  const existing = await entities.FixItem.filter({ fix_list_id: fixListId }, "created_date", MAX_FIX_ITEMS);
-  const existingById = new Map((existing || []).map((item) => [String(item?.fix_id || ""), item]));
+  const existing = await entities.FixItem.filter(
+    { fix_list_id: fixListId },
+    "created_date",
+    MAX_FIX_ITEMS,
+  );
+  const groups = new Map();
+  for (const item of existing || []) {
+    const key = String(item?.fix_id || "");
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
   const desiredIds = new Set(desiredRows.map((row) => String(row.fix_id || "")));
 
-  for (const item of existing || []) {
-    if (!desiredIds.has(String(item?.fix_id || ""))) await entities.FixItem.delete(item.id);
+  for (const [fixId, items] of groups) {
+    if (!desiredIds.has(fixId)) {
+      for (const item of items) if (item?.id) await entities.FixItem.delete(item.id);
+      continue;
+    }
+    for (const duplicate of items.slice(1)) {
+      if (duplicate?.id) await entities.FixItem.delete(duplicate.id);
+    }
   }
+
   for (const row of desiredRows) {
-    const current = existingById.get(String(row.fix_id || ""));
+    const current = groups.get(String(row.fix_id || ""))?.[0];
     if (current?.id) await entities.FixItem.update(current.id, row);
     else await entities.FixItem.create(row);
   }
 }
 
-async function ensureAllowanceConsumed(entities, scan) {
-  const email = cleanText(scan?.created_by || scan?.owner_email, 320).toLowerCase();
-  if (!email) return { ok: false, consumed: false };
-  const rows = await entities.Access.filter({ user_email: email }, "-created_date", 2);
-  if ((rows || []).length > 1) return { ok: false, consumed: false };
-  const current = rows?.[0];
-  if (current?.has_full_access === true) return { ok: true, consumed: false };
-  if (current?.id) {
-    const used = Math.max(FREE_SCAN_CONSUMED_VALUE, Number(current.scans_used || 0));
-    await entities.Access.update(current.id, { scans_used: used });
-  } else {
-    await entities.Access.create({ user_email: email, scans_used: FREE_SCAN_CONSUMED_VALUE, has_full_access: false });
+async function assertAttemptStillActive(entities, scanId, claimedAttempt) {
+  const current = await entities.ScanRun.get(scanId).catch(() => null);
+  if (!current || normalizeAttempt(current.attempt_count) !== claimedAttempt) {
+    throw new RequestProblem(409, "superseded_attempt", "A newer attempt owns this scan.");
   }
-  const verified = await entities.Access.filter({ user_email: email }, "-created_date", 2);
-  const record = verified?.[0];
-  return {
-    ok: Boolean(record && (record.has_full_access === true || Number(record.scans_used || 0) >= FREE_SCAN_CONSUMED_VALUE)),
-    consumed: record?.has_full_access !== true,
-  };
+  if (["complete", "limited", "failed", "cancelled"].includes(String(current.status || "").toLowerCase())) {
+    throw new RequestProblem(409, "terminal_authority_rejected", "This scan attempt is already terminal.");
+  }
 }
 
 function stableTimestamp(scan) {

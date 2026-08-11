@@ -116,13 +116,8 @@ test("cancelScanRun closes the row truthfully without fabricating evidence", () 
   assert.doesNotMatch(cancel[0], /pages_crawled|health_score|scanner_version|authority_proof|fix_list_id/);
 });
 
-test("a cancelled or failed attempt never consumes the customer allowance", () => {
-  // recordScanUsed must stay downstream of the durable-seal check, so only a
-  // persisted success spends the allowance.
-  const sealIndex = scanFormSource.indexOf("scan_authority_persistence_failed");
-  const usedIndex = scanFormSource.indexOf("await recordScanUsed()");
-  assert.ok(sealIndex > 0 && usedIndex > 0, "allowance and seal guards must both exist");
-  assert.ok(usedIndex > sealIndex, "recordScanUsed must run after the authority seal is verified");
+test("the browser never creates, updates, or consumes paid access", () => {
+  assert.doesNotMatch(scanFormSource, /recordScanUsed|scans_used|Access\.create|Access\.update/);
 });
 
 test("orphan recovery closes abandoned runs well before the replay TTL", () => {

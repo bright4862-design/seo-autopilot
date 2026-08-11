@@ -2,7 +2,7 @@
 
 Base44 reaps post-response work, so ScanRun 6a748d5f9e8a27963ae678dc logged
 worker_scan_start and then nothing for 247s. The crawl now runs on Cloud Run,
-which holds a request for up to 300s, and Cloud Tasks retries it safely.
+which holds a request for up to 480s, and Cloud Tasks retries it safely.
 
 These tests pin the properties that make a retry safe: identity is checked
 against the existing ScanRun, a terminal run is never scanned twice, permanent
@@ -111,8 +111,8 @@ def test_worker_fails_closed_when_the_invoker_is_not_configured(monkeypatch):
 def test_crawl_budget_fits_inside_the_cloud_run_request_timeout():
     from app.scan_job import CRAWL_BUDGET_SECONDS, HANDOFF_TIMEOUT_SECONDS
 
-    # cloudbuild.yaml deploys Cloud Run with --timeout=300.
-    assert CRAWL_BUDGET_SECONDS + HANDOFF_TIMEOUT_SECONDS < 300
+    # Cloud Run and Cloud Tasks both use 480s. Include two signed control reads.
+    assert CRAWL_BUDGET_SECONDS + HANDOFF_TIMEOUT_SECONDS + 40 < 480
     # And it must exceed the synchronous gateway budget it replaces, or the
     # large sites this exists for still cannot finish.
     assert CRAWL_BUDGET_SECONDS > 28.0

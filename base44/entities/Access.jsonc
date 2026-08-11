@@ -58,10 +58,10 @@
     "read": {
       "$or": [
         {
-          "owner_user_id": "{{user.id}}"
+          "data.owner_user_id": "{{user.id}}"
         },
         {
-          "user_email": "{{user.email}}"
+          "data.user_email": "{{user.email}}"
         },
         {
           "user_condition": {

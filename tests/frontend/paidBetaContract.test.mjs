@@ -115,8 +115,8 @@ test("Access writes are backend-only and completion is billing-independent", () 
   for (const action of ["create", "update", "delete"]) {
     assert.equal(accessSchema.rls[action].user_condition.role, "admin");
   }
-  assert.ok(accessSchema.rls.read.$or.some((rule) => rule.owner_user_id === "{{user.id}}"));
-  assert.ok(accessSchema.rls.read.$or.some((rule) => rule.user_email === "{{user.email}}"));
+  assert.ok(accessSchema.rls.read.$or.some((rule) => rule["data.owner_user_id"] === "{{user.id}}"));
+  assert.ok(accessSchema.rls.read.$or.some((rule) => rule["data.user_email"] === "{{user.email}}"));
   assert.equal(accessSchema.properties.granted_at.type, "string");
   assert.equal("scans_used" in accessSchema.properties, false);
   assert.doesNotMatch(scanForm, /recordScanUsed|Access\.create|Access\.update|scans_used/);

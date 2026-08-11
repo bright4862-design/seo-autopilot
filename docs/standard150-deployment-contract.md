@@ -1,9 +1,9 @@
 # Standard 150 Deployment Contract
 
 Authoritative mapping of every environment input reachable from the durable
-Standard 150 path. Derived by tracing `/scan-job`, `scan_job.py`, `run_scan`, the
-authority completion path, and the three Base44 durable functions at commit
-`0059cb44b3b051011674df16c343eddabb1c3fd2`.
+Standard 150 path. Derived by tracing `/scan-job`, `/scan-job-drain`, `scan_job.py`, `run_scan`, the
+authority completion path, and the three Base44 durable functions. The immutable
+release SHA is recorded only after the full gate passes.
 
 **Classification**
 
@@ -45,7 +45,7 @@ Supplied by `cloudbuild.durable-worker.yaml`.
 |---|---|---|
 | auth | `--no-allow-unauthenticated` | **Load-bearing.** `require_cloud_tasks_oidc()` verifies neither signature nor `aud`; it only compares the `email` claim of a base64-decoded payload. Cloud Run IAM performs the real token validation. On a public service this check is trivially forgeable. |
 | runtime identity | `--service-account=<_RUNTIME_SA>` | Otherwise inherits the over-privileged default compute SA. |
-| `--timeout` | `300` | Must match `dispatchDeadline: "300s"` in `cloudTasks.js`. |
+| `--timeout` | `480` | Must match `dispatchDeadline: "480s"` in `cloudTasks.js` and outlast crawl, review, signed control reads, and persistence. |
 | `--concurrency` | `1` | One durable job per instance. |
 | `--no-traffic` | set | New revision takes 0%; promotion is a separate human decision. |
 
@@ -61,12 +61,10 @@ Base44-hosted. Supplied through Base44 function environment, **not** Cloud Build
 | `SCAN_WORKER_URL` | **required** | `entry.ts` → `audienceForWorkerUrl()` | `new URL("")` throws → `invalid_worker_url`. Fail-closed. |
 | `TASKS_INVOKER_SERVICE_ACCOUNT` | **required** | `cloudTasks.js:74` `oidcToken.serviceAccountEmail` | Cloud Tasks cannot mint an OIDC token; the worker rejects the call. |
 | `GCP_SERVICE_ACCOUNT_KEY` | **required** | `cloudTasks.js` `accessToken()` | `tasks_credentials_not_configured`. Distinct from a malformed key, which yields `tasks_token_mint_failed`. |
-| `SCAN_EVIDENCE_SIGNING_KEY` | **required** | `entry.ts` attestation | Results cannot be attested. |
-| `SCANNER_API_URL` (aliases `PYTHON_SCANNER_API_URL`, `PYTHON_SCANNER_URL`, `SCANNER_URL`, `CLOUD_API`) | **required** | `scannerApiUrl()` | `url_not_configured`. |
-| `SCANNER_API_KEY` (alias `PYTHON_SCANNER_API_KEY`) | **required** | `scannerApiKey()` | `key_not_configured`. |
-
-> The multiple URL/key aliases are legacy compatibility. The dispatcher accepts
-> the first non-empty match; prefer `SCANNER_API_URL` / `SCANNER_API_KEY`.
+The dispatcher does **not** read `SCANNER_API_URL`, `SCANNER_API_KEY`, or
+`SCAN_EVIDENCE_SIGNING_KEY`. It authenticates the customer, verifies exactly
+one active paid owner-bound Access record, creates the delayed attempt-bound
+watchdog task, creates the immediate worker task, and returns.
 
 ## Component C — `durableScanWorkerControl` and `persistDurableScanAuthority`
 
@@ -74,8 +72,9 @@ Base44-hosted. Supplied through Base44 function environment, **not** Cloud Build
 |---|---|---|---|
 | `SCAN_EVIDENCE_SIGNING_KEY` | **required** | both `index.ts` | 503 `authority_not_configured`. Fail-closed: no envelope is trusted without it. |
 
-Both functions hold `asServiceRole`. Both must be deployed for the durable path
-to reach a terminal state; only `startStandardScanJob` is currently live.
+Both functions hold `asServiceRole`. All three release functions must be deployed
+from the same immutable SHA. Completion never reads or writes `Access`; payment
+is enforced once, before enqueue.
 
 ---
 
@@ -92,6 +91,7 @@ into build logs. The runtime service account needs
 | Route | App-level guard |
 |---|---|
 | `POST /scan-job` | `require_cloud_tasks_oidc` only |
+| `POST /scan-job-drain` | `require_cloud_tasks_oidc` only |
 | `POST /scan` | `require_scanner_api_key` |
 | `POST /review` | `require_scanner_api_key` + `require_cloud_tasks_oidc` |
 | `POST /chat` | `require_scanner_api_key` |
@@ -117,6 +117,20 @@ build fails closed if any is empty.
 `_WORKER_SERVICE` · `_REGION` · `_IMAGE` · `_RUNTIME_SA` · `_INVOKER_SA` ·
 `_BASE44_APP_ID` · `_BASE44_API_URL` · `_SIGNING_KEY_SECRET`, plus the Cloud
 Tasks queue name.
+
+## Production acceptance gate
+
+The paid beta is a single Standard 150 contract. A release is NO-GO unless one
+deployed Funbooker acceptance scan proves all of the following on the exact
+candidate SHA/image/fingerprint:
+
+- broad sitemap and DOM-link discovery reports at least 1,200 in-scope URLs;
+- exactly 150 pages are fetched and analysed;
+- the site is classified as a booking/experiences marketplace;
+- the saved ScanRun and FixList are authority-sealed and release-gate eligible;
+- Python review is used, no fallback result is substituted, and no FixItem
+  targets an asset URL;
+- refreshing the exact result route restores the same completed scan.
 
 ## Verification
 

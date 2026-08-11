@@ -224,13 +224,19 @@ async def write_terminal_failure(
 
 
 def identity_matches(scan: dict[str, Any], job: dict[str, Any]) -> bool:
-    """The task must name the same durable request the ScanRun was created for."""
-    for field in ("request_id", "idempotency_key", "project_id"):
+    """The task must name the same owner-bound durable request."""
+    for field in ("owner_user_id", "request_id", "idempotency_key", "project_id"):
         stored = str(scan.get(field) or "").strip()
         claimed = str(job.get(field) or "").strip()
         if stored and claimed and stored != claimed:
             return False
-    return True
+    stored_domain = _normalize_domain(
+        str(scan.get("normalized_domain") or scan.get("website_url") or scan.get("submitted_url") or "")
+    )
+    claimed_domain = _normalize_domain(
+        str(job.get("normalized_domain") or job.get("website_url") or "")
+    )
+    return not (stored_domain and claimed_domain and stored_domain != claimed_domain)
 
 
 def already_terminal(scan: dict[str, Any]) -> bool:

@@ -23,14 +23,22 @@ from app import main
 client = TestClient(main.app)
 
 # Routes whose only application-level guard is the Cloud Tasks OIDC check.
-DURABLE_ROUTE = "/scan-job"
+DURABLE_ROUTES = ("/scan-job", "/scan-job-drain")
 
 # A schema-valid ScanJobRequest. FastAPI validates the body before the endpoint
 # body runs, so an incomplete payload would 422 and never reach the OIDC gate.
-VALID_JOB = {
-    "scan_id": "scan_test_1",
-    "request_id": "req_test_1",
-    "website_url": "https://example.com",
+VALID_JOBS = {
+    "/scan-job": {
+        "scan_id": "scan_test_1",
+        "request_id": "req_test_1",
+        "website_url": "https://example.com",
+    },
+    "/scan-job-drain": {
+        "scan_id": "scan_test_1",
+        "request_id": "req_test_1",
+        "website_url": "https://example.com",
+        "drain_after": "2026-08-11T00:00:00+00:00",
+    },
 }
 
 # Routes guarded by the scanner key. /review additionally requires OIDC.
@@ -42,36 +50,39 @@ SCANNER_KEY_ROUTES = (
 )
 
 
+@pytest.mark.parametrize("route", DURABLE_ROUTES)
 @pytest.mark.parametrize("configured_key", ["", "a-configured-scanner-key"])
-def test_scan_job_rejects_without_oidc_regardless_of_scanner_key(monkeypatch, configured_key):
+def test_scan_job_rejects_without_oidc_regardless_of_scanner_key(monkeypatch, configured_key, route):
     """The durable route's outcome must not change with the scanner key."""
     monkeypatch.setattr(main, "SCANNER_API_KEY", configured_key)
     monkeypatch.setenv("TASKS_INVOKER_SERVICE_ACCOUNT", "worker-invoker@example.invalid")
 
-    response = client.post(DURABLE_ROUTE, json=VALID_JOB)
+    response = client.post(route, json=VALID_JOBS[route])
 
     # No Authorization header -> rejected by the OIDC gate, never by the key.
     assert response.status_code == 401
     assert response.json()["detail"] == "Unauthorized"
 
 
-def test_scan_job_supplying_the_scanner_key_does_not_grant_access(monkeypatch):
+@pytest.mark.parametrize("route", DURABLE_ROUTES)
+def test_scan_job_supplying_the_scanner_key_does_not_grant_access(monkeypatch, route):
     """A valid scanner key must not substitute for the OIDC invoker check."""
     monkeypatch.setattr(main, "SCANNER_API_KEY", "a-configured-scanner-key")
     monkeypatch.setenv("TASKS_INVOKER_SERVICE_ACCOUNT", "worker-invoker@example.invalid")
 
     response = client.post(
-        DURABLE_ROUTE,
-        json=VALID_JOB,
+        route,
+        json=VALID_JOBS[route],
         headers={"X-Scanner-Key": "a-configured-scanner-key"},
     )
 
     assert response.status_code == 401
 
 
-def test_scan_job_handler_does_not_call_require_scanner_api_key():
-    """Structural: the durable handler's guard set must stay OIDC-only."""
-    source = inspect.getsource(main.scan_job)
+@pytest.mark.parametrize("handler", [main.scan_job, main.scan_job_drain])
+def test_scan_job_handler_does_not_call_require_scanner_api_key(handler):
+    """Structural: durable handlers must stay OIDC-only."""
+    source = inspect.getsource(handler)
     assert "require_cloud_tasks_oidc" in source
     assert "require_scanner_api_key" not in source
 
@@ -107,7 +118,7 @@ def test_every_scanner_key_route_is_still_guarded():
     """Guard inventory: catches a new route added without authentication."""
     guarded = {"/health/auth", "/scan", "/review", "/chat"}
     open_routes = {"/health", "/revision"}
-    durable = {"/scan-job"}
+    durable = {"/scan-job", "/scan-job-drain"}
 
     for route in main.app.routes:
         path = getattr(route, "path", None)

@@ -75,6 +75,17 @@ test("the worker deployment artifact requires a private service", () => {
   assert.match(buildCode, /GROK_PROXY_ENABLED=false/);
 });
 
+test("preflight and post-deploy verification enforce the same 480-second envelope", () => {
+  const preflight = fs.readFileSync("scripts/deployment_preflight.sh", "utf8");
+  const verify = fs.readFileSync("scripts/post_deploy_verify.sh", "utf8");
+
+  assert.match(preflight, /has "--timeout=480"/);
+  assert.match(preflight, /dispatchDeadline: "480s"/);
+  assert.doesNotMatch(preflight, /timeout(?:=|\s)300|dispatchDeadline[^\n]*300s/);
+  assert.match(verify, /\[ "\$TO" = "480" \]/);
+  assert.doesNotMatch(verify, /timeout 300s|expected 300/);
+});
+
 test("the worker artifact does not target or mutate the existing scanner deployment", () => {
   const existing = fs.readFileSync("cloudbuild.yaml", "utf8").match(/seo-autopilot-\d+/)?.[0];
   assert.ok(existing, "could not identify the existing scanner service");

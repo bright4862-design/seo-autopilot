@@ -50,8 +50,8 @@ if [ -f "$WORKER_BUILD" ]; then
   has "--service-account=" "$WORKER_BUILD" \
     && pass "explicit runtime service account" \
     || fail "no explicit runtime service account (would inherit default compute SA)"
-  has "--timeout=300" "$WORKER_BUILD" \
-    && pass "Cloud Run timeout 300s" || fail "Cloud Run timeout is not 300s"
+  has "--timeout=480" "$WORKER_BUILD" \
+    && pass "Cloud Run timeout 480s" || fail "Cloud Run timeout is not 480s"
   has "--concurrency=1" "$WORKER_BUILD" \
     && pass "concurrency 1" || fail "concurrency is not 1"
   has "--no-traffic" "$WORKER_BUILD" \
@@ -136,7 +136,7 @@ else
 fi
 
 if [ -f "$TASKS" ]; then
-  has 'dispatchDeadline: "300s"' "$TASKS" && pass "dispatchDeadline 300s" || fail "dispatchDeadline not 300s"
+  has 'dispatchDeadline: "480s"' "$TASKS" && pass "dispatchDeadline 480s" || fail "dispatchDeadline not 480s"
   has "oidcToken" "$TASKS" && pass "task carries OIDC token" || fail "task has no OIDC token"
   has "serviceAccountEmail" "$TASKS" && pass "OIDC invoker SA set" || fail "OIDC has no invoker SA"
   has "audience" "$TASKS" && pass "OIDC audience set" || fail "OIDC has no audience"

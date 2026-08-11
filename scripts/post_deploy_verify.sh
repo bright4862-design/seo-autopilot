@@ -92,7 +92,7 @@ SA=$(jqq "d['spec']['template']['spec'].get('serviceAccountName','')")
 TO=$(jqq "d['spec']['template']['spec'].get('timeoutSeconds','')")
 CC=$(jqq "d['spec']['template']['spec'].get('containerConcurrency','')")
 [ -n "$SA" ] && pass "runtime service account: $SA" || fail "no explicit runtime service account"
-[ "$TO" = "300" ] && pass "timeout 300s" || fail "timeout is $TO, expected 300"
+[ "$TO" = "480" ] && pass "timeout 480s" || fail "timeout is $TO, expected 480"
 [ "$CC" = "1" ] && pass "concurrency 1" || fail "concurrency is $CC, expected 1"
 
 echo

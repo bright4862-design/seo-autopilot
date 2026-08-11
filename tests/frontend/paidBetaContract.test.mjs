@@ -5,6 +5,8 @@ import test from "node:test";
 import {
   ACCESS_APP_ID,
   ACCESS_PLAN_ID,
+  OWNER_TEST_EMAIL,
+  OWNER_TEST_USER_ID,
   evaluatePaidAccess,
 } from "../../base44/functions/startStandardScanJob/entitlement.js";
 
@@ -29,6 +31,18 @@ const active = {
   app_id: ACCESS_APP_ID,
   paid_at: "2026-08-11T12:00:00.000Z",
   stripe_checkout_session_id: "cs_paid_1",
+};
+const ownerUser = { id: OWNER_TEST_USER_ID, email: OWNER_TEST_EMAIL };
+const ownerAccess = {
+  id: "access-owner",
+  owner_user_id: OWNER_TEST_USER_ID,
+  user_email: OWNER_TEST_EMAIL,
+  has_full_access: true,
+  access_status: "active",
+  plan_id: ACCESS_PLAN_ID,
+  grant_source: "owner_test",
+  app_id: ACCESS_APP_ID,
+  granted_at: "2026-08-11T12:00:00.000Z",
 };
 
 test("checkout, webhook and customer copy share one $50 contract", () => {
@@ -74,12 +88,36 @@ test("an entitlement is bound to the exact owner, email, app and Stripe grant", 
   }
 });
 
+test("the exact owner can test the scanner without inventing Stripe data", () => {
+  assert.equal(evaluatePaidAccess({ rows: [ownerAccess], user: ownerUser }).ok, true);
+  assert.equal("paid_at" in ownerAccess, false);
+  assert.equal("stripe_checkout_session_id" in ownerAccess, false);
+
+  for (const changed of [
+    { owner_user_id: "other" },
+    { user_email: "other@example.com" },
+    { app_id: "other-app" },
+    { plan_id: "other-plan" },
+    { grant_source: "manual" },
+    { granted_at: "" },
+  ]) {
+    assert.equal(evaluatePaidAccess({ rows: [{ ...ownerAccess, ...changed }], user: ownerUser }).ok, false);
+  }
+  assert.equal(evaluatePaidAccess({ rows: [ownerAccess], user: { ...ownerUser, id: "other" } }).ok, false);
+  assert.equal(evaluatePaidAccess({ rows: [ownerAccess], user: { ...ownerUser, email: "other@example.com" } }).ok, false);
+  assert.equal(
+    evaluatePaidAccess({ rows: [ownerAccess, { ...ownerAccess, id: "access-owner-2" }], user: ownerUser }).failureCode,
+    "paid_access_conflict",
+  );
+});
+
 test("Access writes are backend-only and completion is billing-independent", () => {
   for (const action of ["create", "update", "delete"]) {
     assert.equal(accessSchema.rls[action].user_condition.role, "admin");
   }
   assert.ok(accessSchema.rls.read.$or.some((rule) => rule.owner_user_id === "{{user.id}}"));
   assert.ok(accessSchema.rls.read.$or.some((rule) => rule.user_email === "{{user.email}}"));
+  assert.equal(accessSchema.properties.granted_at.type, "string");
   assert.equal("scans_used" in accessSchema.properties, false);
   assert.doesNotMatch(scanForm, /recordScanUsed|Access\.create|Access\.update|scans_used/);
   assert.doesNotMatch(persistence, /entities\.Access|scans_used|ensureAllowanceConsumed/);

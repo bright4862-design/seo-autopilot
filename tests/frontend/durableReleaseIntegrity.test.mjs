@@ -68,7 +68,7 @@ test("Cloud Tasks HTTP failures keep distinct status-derived codes", () => {
 test("the worker deployment artifact requires a private service", () => {
   assert.match(buildCode, /--no-allow-unauthenticated/);
   assert.match(buildCode, /--service-account=\$\{_RUNTIME_SA\}/);
-  assert.match(buildCode, /--timeout=300/);
+  assert.match(buildCode, /--timeout=480/);
   assert.match(buildCode, /--concurrency=1/);
   assert.match(buildCode, /--no-traffic/);
   // GROK_PROXY_ENABLED, not GROK_CHAT_ENABLED: see the dedicated Grok test.

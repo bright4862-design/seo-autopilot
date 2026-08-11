@@ -8,7 +8,7 @@ import useDurableScanCompletion from "@/hooks/useDurableScanCompletion";
 import { ensureScanProject } from "@/lib/activeProject";
 import { normalizeActionPriority, normalizeFindingEvidence, normalizeReviewEvidenceState, normalizeReviewScope, selectFinalReviewFixes } from "@/lib/reviewContract";
 import { mergePersistedScanRunRecord } from "@/lib/persistedScanRecord";
-import { RELEASE_AUTHORITY_CONTRACT, buildAuthorityMarkers, buildDiagnosticAuthorityMarkers, buildScanRunFields } from "@/lib/scanRunModel";
+import { RELEASE_AUTHORITY_CONTRACT, buildAuthorityMarkers, buildScanRunFields } from "@/lib/scanRunModel";
 import { createScanRequestId, normalizedScanDomain, scanReleaseIdentity } from "@/lib/scanRunIdentity";
 import { beginScanRun, cancelScanRun, completeScanRun, failScanRun, getScanRunWithFixList, markScanRunReviewing, recoverOrphanedScanRuns } from "@/lib/scanRuns";
 import { UNLOCK_PRICE_LABEL, loadAccess } from "@/lib/access";

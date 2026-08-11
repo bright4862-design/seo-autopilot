@@ -5,6 +5,8 @@ import test from "node:test";
 const advanced = readFileSync("base44/functions/runAdvancedScan/entry.ts", "utf8");
 const scannerForm = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
 const fixList = readFileSync("src/pages/FixList.jsx", "utf8");
+const scanRunModel = readFileSync("src/lib/scanRunModel.js", "utf8");
+const persistence = readFileSync("base44/functions/persistDurableScanAuthority/index.ts", "utf8");
 
 test("normal scans require Python and do not silently save Deno fallback", () => {
   assert.match(scannerForm, /require_python_scanner: true/);
@@ -30,7 +32,11 @@ test("scan results route by exact durable scan ID without browser-result fallbac
 test("merged results preserve authoritative durable release markers", () => {
   assert.match(scannerForm, /const authorityMarkers = buildAuthorityMarkers\(scanData, aiData\)/);
   assert.match(scannerForm, /\.\.\.authorityMarkers/);
-  assert.match(scannerForm, /\.\.\.buildDiagnosticAuthorityMarkers\(record\)/);
+  assert.match(scanRunModel, /authority_proof/);
+  assert.match(scanRunModel, /authority_seal_version/);
+  assert.match(scanRunModel, /release_gate_eligible/);
+  assert.match(persistence, /persistedScan\?\.authority_proof === authorityProof/);
+  assert.match(persistence, /persistedScan\?\.release_gate_eligible === true/);
 });
 
 

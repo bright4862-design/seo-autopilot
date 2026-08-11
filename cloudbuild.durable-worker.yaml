@@ -115,8 +115,8 @@ steps:
       # Explicit runtime identity. Without this the worker would inherit the
       # default compute service account.
       - --service-account=${_RUNTIME_SA}
-      # Must match dispatchDeadline "300s" in startStandardScanJob/cloudTasks.js.
-      - --timeout=300
+      # Must match dispatchDeadline "480s" in startStandardScanJob/cloudTasks.js.
+      - --timeout=480
       # One durable job per instance.
       - --concurrency=1
       - --min-instances=0

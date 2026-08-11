@@ -6,7 +6,7 @@ const APP_ID = "6a498732ec779dfaaeab0e53";
 const PLAN_ID = "standard150_lifetime";
 const PRICE_DATA = {
   currency: "usd",
-  unit_amount: 3000,
+  unit_amount: 5000,
   product: "prod_V0lLfb5lSwxOxh",
 };
 

@@ -78,7 +78,7 @@ export default function Billing() {
               <p className="text-[12px] font-medium text-ink-faint">Current plan</p>
               <p className="mt-1 text-[17px] font-medium tracking-tight">{access?.fullAccess ? "Standard 150 beta" : "No active access"}</p>
             </div>
-            access?.fullAccess ? <PillButton solid onClick={() => navigate("/onboarding")}>Run a new scan</PillButton> : <UnlockAccessButton />
+            {access?.fullAccess ? <PillButton solid onClick={() => navigate("/onboarding")}>Run a new scan</PillButton> : <UnlockAccessButton />}
           </div>
         </section>
 

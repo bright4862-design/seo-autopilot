@@ -7,7 +7,7 @@ import UnlockAccessButton from "@/components/billing/UnlockAccessButton";
 import { loadAccess, UNLOCK_PRICE_LABEL } from "@/lib/access";
 
 const plans = [
-  { id: "standard_150", name: "Standard 150 beta", price: "$30 one-time", desc: "Paid lifetime beta access to the production Standard 150 scanner.", features: ["Unlimited Standard 150 scans", "Complete FixList", "Plain-English recommendations"] },
+  { id: "standard_150", name: "Standard 150 beta", price: "$50 one-time", desc: "Paid lifetime beta access to the production Standard 150 scanner.", features: ["Unlimited Standard 150 scans", "Complete FixList", "Plain-English recommendations"] },
   { id: "rebuild", name: "Website rebuild", price: "$300", desc: "For larger website structure or migration projects.", features: ["Site structure planning", "Safe migration plan", "Post-launch review"] },
   { id: "grok_ai_helper", name: "Grok AI helper", price: "Coming soon", desc: "An AI helper that answers questions about your scan and walks you through each fix.", features: ["Ask about any fix", "Step-by-step guidance", "Grounded in your scan"], comingSoon: true },
   { id: "premium_scanner", name: "Premium 5,000 page scanner", price: "Coming soon", desc: "Deep scans for large websites, up to 5,000 pages per run.", features: ["Up to 5,000 pages", "Full-site coverage", "Priority scan queue"], comingSoon: true },

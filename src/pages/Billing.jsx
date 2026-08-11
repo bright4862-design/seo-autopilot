@@ -7,7 +7,7 @@ import UnlockAccessButton from "@/components/billing/UnlockAccessButton";
 import { loadAccess, UNLOCK_PRICE_LABEL } from "@/lib/access";
 
 const plans = [
-  { id: "free", name: "Free scan", price: "Free", desc: "Start with a simple website scan.", features: ["Website scan", "Simple FixList", "Plain-English recommendations"] },
+  { id: "standard_150", name: "Standard 150 beta", price: "$30 one-time", desc: "Paid lifetime beta access to the production Standard 150 scanner.", features: ["Unlimited Standard 150 scans", "Complete FixList", "Plain-English recommendations"] },
   { id: "rebuild", name: "Website rebuild", price: "$300", desc: "For larger website structure or migration projects.", features: ["Site structure planning", "Safe migration plan", "Post-launch review"] },
   { id: "grok_ai_helper", name: "Grok AI helper", price: "Coming soon", desc: "An AI helper that answers questions about your scan and walks you through each fix.", features: ["Ask about any fix", "Step-by-step guidance", "Grounded in your scan"], comingSoon: true },
   { id: "premium_scanner", name: "Premium 5,000 page scanner", price: "Coming soon", desc: "Deep scans for large websites, up to 5,000 pages per run.", features: ["Up to 5,000 pages", "Full-site coverage", "Priority scan queue"], comingSoon: true },
@@ -15,7 +15,7 @@ const plans = [
 
 export default function Billing() {
   const navigate = useNavigate();
-  const [currentPlan, setCurrentPlan] = useState("free");
+  const [currentPlan, setCurrentPlan] = useState("none");
   const [leadModal, setLeadModal] = useState(null);
   const [deleteMessage, setDeleteMessage] = useState("");
   const [access, setAccess] = useState(null);
@@ -28,7 +28,7 @@ export default function Billing() {
     trackEvent("billing_viewed");
     const load = async () => {
       const projects = await base44.entities.BusinessProject.list("-created_date", 1);
-      if (projects.length > 0) setCurrentPlan(projects[0].subscription_plan || "free");
+      if (projects.length > 0) setCurrentPlan(projects[0].subscription_plan || "none");
     };
     load();
   }, []);
@@ -43,8 +43,10 @@ export default function Billing() {
 
   function planAction(plan) {
     const isCurrent = plan.id === currentPlan;
-    if (plan.id === "free") {
-      return <PillButton solid onClick={() => navigate("/crawl-status")}>Run free scan</PillButton>;
+    if (plan.id === "standard_150") {
+      return access?.fullAccess
+        ? <span className="text-[13px] text-good">Active</span>
+        : <UnlockAccessButton />;
     }
     if (isCurrent) {
       return <span className="text-[13px] text-ink-faint">Current plan</span>;
@@ -66,7 +68,7 @@ export default function Billing() {
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Account</p>
           <h1 className="mt-2 text-[28px] font-semibold leading-tight tracking-[-0.035em]">Billing</h1>
           <p className="mt-2 max-w-[54ch] text-[15px] leading-relaxed text-ink-muted">
-            Choose the level of help you need. Payments are not connected yet, so nothing is charged here.
+            Standard 150 beta access is a one-time payment. Checkout is securely handled by Stripe.
           </p>
         </div>
 
@@ -74,9 +76,9 @@ export default function Billing() {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-[12px] font-medium text-ink-faint">Current plan</p>
-              <p className="mt-1 text-[17px] font-medium tracking-tight">{plans.find((plan) => plan.id === currentPlan)?.name || "Free scan"}</p>
+              <p className="mt-1 text-[17px] font-medium tracking-tight">{access?.fullAccess ? "Standard 150 beta" : "No active access"}</p>
             </div>
-            <PillButton solid onClick={() => navigate("/onboarding")}>Run a new scan</PillButton>
+            access?.fullAccess ? <PillButton solid onClick={() => navigate("/onboarding")}>Run a new scan</PillButton> : <UnlockAccessButton />
           </div>
         </section>
 
@@ -92,7 +94,7 @@ export default function Billing() {
             <>
               <h2 className="text-[18px] font-semibold tracking-tight">Unlock full access — {UNLOCK_PRICE_LABEL}</h2>
               <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">
-                Everyone gets one free test scan with a short preview of the results. A one-time {UNLOCK_PRICE_LABEL} payment unlocks unlimited scans and the complete FixList — every fix, every affected page, and all passed checks.
+                A one-time {UNLOCK_PRICE_LABEL} payment unlocks lifetime beta access to unlimited Standard 150 scans and the complete FixList — every fix, every affected page, and all passed checks.
               </p>
               <div className="mt-5">
                 <UnlockAccessButton />
@@ -104,7 +106,7 @@ export default function Billing() {
         <div className="mt-14 flex items-baseline gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Plans</div>
         <div className="mt-2">
           {plans.map((plan) => {
-            const isCurrent = plan.id === currentPlan;
+            const isCurrent = plan.id === "standard_150" ? access?.fullAccess === true : plan.id === currentPlan;
             return (
               <div key={plan.id} className="border-b border-hairline-soft py-6">
                 <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between sm:gap-8">
@@ -143,7 +145,7 @@ export default function Billing() {
         </div>
 
         <footer className="mt-24 border-t border-hairline-soft pt-5 text-[12px] leading-relaxed text-ink-faint">
-          Plans unlock as FixList leaves beta. Joining a waitlist never charges you.
+          Standard 150 is the only paid scanner in this beta. Grok and Premium remain unavailable.
         </footer>
 
         {leadModal && <LeadRequestModal requestType={leadModal.type} selectedPlan={leadModal.plan} onClose={() => setLeadModal(null)} />}

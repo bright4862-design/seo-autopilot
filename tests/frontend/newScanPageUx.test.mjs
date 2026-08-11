@@ -88,14 +88,9 @@ test("the business name is genuinely optional", () => {
   assert.match(scanForm, /businessName\.trim\(\) \|\| safeHostname\(normalizedUrl\)/);
 });
 
-test("debug tooling is hidden unless explicitly requested", () => {
-  assert.match(scanForm, /const debugVisible = useMemo\(\(\) => isDebugRequested\(\), \[\]\)/);
-  assert.match(scanForm, /\{debugVisible \? \(/);
-  assert.match(scanForm, /\{debugVisible && debugOpen \? \(/);
-  const gate = scanForm.match(/function isDebugRequested\(\)[\s\S]*?\n\}/);
-  assert.ok(gate, "isDebugRequested is missing");
-  assert.match(gate[0], /get\("debug"\) === "1"/);
-  assert.match(gate[0], /VITE_INTERNAL_DEBUG/);
+test("customer-visible debug controls are absent", () => {
+  assert.doesNotMatch(scanForm, /Show debug|Hide debug|Scan debug|debugVisible|isDebugRequested/);
+  assert.doesNotMatch(scanForm, /VITE_INTERNAL_DEBUG|get\("debug"\) === "1"/);
 });
 
 test("customer navigation cannot reach Grok", () => {

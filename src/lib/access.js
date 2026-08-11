@@ -1,7 +1,7 @@
 import { base44 } from "@/api/base44Client";
 
 export const UNLOCK_PRICE_LABEL = "$50";
-export const FREE_PREVIEW_FIX_COUNT = 0;
+export const LOCKED_PREVIEW_FIX_COUNT = 0;
 
 function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();

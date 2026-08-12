@@ -1,0 +1,64 @@
+name: FixList Cloud Operator
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Allowlisted Google Cloud operation"
+        required: true
+        type: choice
+        options:
+          - status
+          - verify-iam
+          - promote-worker
+          - pause-queue
+          - resume-queue
+          - activate-beta
+      confirm:
+        description: "Required only for mutations: PROMOTE, PAUSE, RESUME, or ACTIVATE"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: fixlist-cloud-operator
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT: seo-autopilot-501517
+  GCP_REGION: europe-west1
+  CLOUD_RUN_SERVICE: fixlist-standard150-worker
+  CLOUD_TASKS_QUEUE: fixlist-standard150
+  TASKS_INVOKER_SERVICE_ACCOUNT: fixlist-standard150-invoker@seo-autopilot-501517.iam.gserviceaccount.com
+
+jobs:
+  operate:
+    name: ${{ inputs.operation }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Run allowlisted operation
+        env:
+          OPERATION: ${{ inputs.operation }}
+          CONFIRM: ${{ inputs.confirm }}
+        shell: bash
+        run: ./scripts/fixlist-cloud-operator.sh

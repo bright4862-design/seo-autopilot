@@ -97,24 +97,35 @@ export async function createServiceAccountJwt(rawKey, nowSeconds = Math.floor(Da
 }
 
 export async function createServiceAccountAccessToken(rawKey, options = {}) {
+  let credentials;
   try {
-    const credentials = parseServiceAccountKey(rawKey);
-    const assertion = await createServiceAccountJwt(credentials, options.nowSeconds);
-    const fetchImpl = options.fetchImpl || fetch;
-    const response = await fetchImpl(credentials.token_uri, {
+    credentials = parseServiceAccountKey(rawKey);
+  } catch {
+    throw new Error("tasks_key_parse_failed");
+  }
+
+  let assertion;
+  try {
+    assertion = await createServiceAccountJwt(credentials, options.nowSeconds);
+  } catch {
+    throw new Error("tasks_jwt_sign_failed");
+  }
+
+  const fetchImpl = options.fetchImpl || fetch;
+  let response;
+  try {
+    response = await fetchImpl(credentials.token_uri, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ grant_type: JWT_GRANT_TYPE, assertion }).toString(),
     });
-    if (!response?.ok) return "";
-
-    const payload = await response.json().catch(() => null);
-    const accessToken = String(payload?.access_token || "").trim();
-    return accessToken;
   } catch {
-    // Authentication failure must not expose key material or start a fallback
-    // crawl. The dispatcher converts an empty token into a truthful enqueue
-    // failure and closes the exact ScanRun without charging it.
-    return "";
+    throw new Error("tasks_token_endpoint_unreachable");
   }
+
+  if (!response?.ok) throw new Error(`tasks_token_http_${Number(response?.status || 0)}`);
+  const payload = await response.json().catch(() => null);
+  const accessToken = String(payload?.access_token || "").trim();
+  if (!accessToken) throw new Error("tasks_token_missing");
+  return accessToken;
 }

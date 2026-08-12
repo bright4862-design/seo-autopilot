@@ -144,8 +144,9 @@ export async function createServiceAccountAccessToken(rawKey, options = {}) {
   let credentials;
   try {
     credentials = parseServiceAccountKey(rawKey);
-  } catch {
-    throw new Error("tasks_key_parse_failed");
+  } catch (error) {
+    const safeCode = String(error?.message || "").trim();
+    throw new Error(/^tasks_key_[a-z0-9_]+$/.test(safeCode) ? safeCode : "tasks_key_parse_failed");
   }
 
   let assertion;

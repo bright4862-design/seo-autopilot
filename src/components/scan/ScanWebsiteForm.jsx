@@ -344,7 +344,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       // page polls the durable ScanRun and opens the sealed result when saved.
       setActiveStep("Starting your scan");
       logScanBoundary("async_job_submit", identityDebug(), { function_name: ASYNC_SCAN_JOB_FUNCTION });
-      asyncDispatcherStarted = true;
       const jobData = normalizeFunctionResponse(
         await callBase44Function(ASYNC_SCAN_JOB_FUNCTION, scanPayload).catch((jobError) => {
           if (jobError?.code === "stale_customer_session" || clearCustomerAuthBoundary(jobError)) throw jobError;
@@ -353,6 +352,11 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       );
       await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
       if (jobData?.accepted === true && String(jobData.scan_id || "") === String(scanId)) {
+        // The durable worker boundary starts only after the gateway has
+        // positively accepted this exact scan. A rejected or unreachable
+        // dispatcher must stay browser-owned so it can be closed truthfully
+        // instead of lingering in crawling until the orphan watchdog fires.
+        asyncDispatcherStarted = true;
         // Exact identity only — never a substitute scan.
         logScanBoundary("async_job_accepted", identityDebug(), { status: "async" });
         recordDebug({ ...identityDebug(), status: "running", stage: "async_job_accepted", website_url: normalizedUrl, scan_mode: scanMode });

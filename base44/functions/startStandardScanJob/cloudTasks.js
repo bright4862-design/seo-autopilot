@@ -101,8 +101,12 @@ async function accessToken() {
     const token = await createServiceAccountAccessToken(key);
     if (!token) return { token: "", failureCode: "tasks_token_mint_failed" };
     return { token };
-  } catch {
-    return { token: "", failureCode: "tasks_token_mint_failed" };
+  } catch (error) {
+    const safeCode = String(error?.message || "").trim();
+    return {
+      token: "",
+      failureCode: /^tasks_[a-z0-9_]+$/.test(safeCode) ? safeCode : "tasks_token_mint_failed",
+    };
   }
 }
 

@@ -30,19 +30,47 @@ function decodeBase64Text(value) {
 }
 
 export function parseServiceAccountKey(rawKey) {
-  const source = String(rawKey || "").trim();
+  let source = String(rawKey || "").trim();
   if (!source) throw new Error("Missing service-account key.");
+
+  // Be tolerant of the common ways secret UIs persist JSON: raw JSON, a JSON
+  // string containing escaped JSON, KEY={...}, or base64-encoded JSON. Never
+  // expose the value; just normalize it before extracting the three required
+  // service-account fields.
+  const assignmentPrefix = /^GCP_SERVICE_ACCOUNT_KEY\s*=\s*/;
+  if (assignmentPrefix.test(source)) source = source.replace(assignmentPrefix, "").trim();
+
+  const parseJsonLayers = (value) => {
+    let current = value;
+    for (let depth = 0; depth < 3; depth += 1) {
+      if (current && typeof current === "object") return current;
+      if (typeof current !== "string") break;
+      current = JSON.parse(current.trim());
+    }
+    return current;
+  };
 
   let parsed;
   try {
-    parsed = JSON.parse(source);
+    parsed = parseJsonLayers(source);
   } catch {
-    parsed = JSON.parse(decodeBase64Text(source));
+    try {
+      parsed = parseJsonLayers(decodeBase64Text(source));
+    } catch {
+      throw new Error("Unparseable service-account key.");
+    }
   }
 
   const clientEmail = String(parsed?.client_email || "").trim();
-  const privateKey = String(parsed?.private_key || "").trim();
+  let privateKey = String(parsed?.private_key || "").trim();
   const tokenUri = String(parsed?.token_uri || DEFAULT_TOKEN_URI).trim();
+
+  // Some secret editors preserve literal backslash-n sequences instead of
+  // actual newlines. WebCrypto needs a valid PEM body, so normalize those.
+  if (privateKey.includes("\\n") && !privateKey.includes("\n")) {
+    privateKey = privateKey.replace(/\\n/g, "\n");
+  }
+
   if (!clientEmail || !privateKey || !tokenUri) throw new Error("Incomplete service-account key.");
 
   return {

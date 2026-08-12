@@ -57,8 +57,21 @@ export function parseServiceAccountKey(rawKey) {
     try {
       parsed = parseJsonLayers(decodeBase64Text(source));
     } catch {
-      throw new Error("Unparseable service-account key.");
+      if (/\.json$/i.test(source) || source.startsWith("/") || source.startsWith("~")) {
+        throw new Error("tasks_key_looks_like_path");
+      }
+      if (/-----BEGIN (?:RSA )?PRIVATE KEY-----/.test(source)) {
+        throw new Error("tasks_key_private_key_only");
+      }
+      if (source.length < 200) {
+        throw new Error("tasks_key_too_short");
+      }
+      throw new Error("tasks_key_unparseable");
     }
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("tasks_key_not_object");
   }
 
   const clientEmail = String(parsed?.client_email || "").trim();
@@ -71,7 +84,10 @@ export function parseServiceAccountKey(rawKey) {
     privateKey = privateKey.replace(/\\n/g, "\n");
   }
 
-  if (!clientEmail || !privateKey || !tokenUri) throw new Error("Incomplete service-account key.");
+  if (!clientEmail && !privateKey) throw new Error("tasks_key_fields_missing");
+  if (!clientEmail) throw new Error("tasks_key_email_missing");
+  if (!privateKey) throw new Error("tasks_key_private_key_missing");
+  if (!tokenUri) throw new Error("tasks_key_token_uri_missing");
 
   return {
     client_email: clientEmail,

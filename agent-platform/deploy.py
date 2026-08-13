@@ -5,13 +5,19 @@ import vertexai
 
 PROJECT = os.environ["GOOGLE_CLOUD_PROJECT"]
 LOCATION = os.getenv("AGENT_PLATFORM_LOCATION", "europe-west1")
+RELEASE_OPERATOR_SA = os.getenv(
+    "FIXLIST_RELEASE_OPERATOR_SERVICE_ACCOUNT",
+    f"fixlist-release-operator@{PROJECT}.iam.gserviceaccount.com",
+)
 client = vertexai.Client(project=PROJECT, location=LOCATION)
 
 AGENTS = {
     "research": {
         "display_name": "FixList Research Agent",
         "description": "Grounded research on how to improve FixList.",
+        "entrypoint_module": "agents",
         "entrypoint_object": "research_agent",
+        "source_packages": ["agents.py", "requirements.txt"],
         "methods": [{
             "name": "query", "api_mode": "", "parameters": {
                 "type": "object",
@@ -27,7 +33,9 @@ AGENTS = {
     "claude": {
         "display_name": "FixList Claude Liaison",
         "description": "Controlled liaison between FixList and Claude Opus 5.",
+        "entrypoint_module": "agents",
         "entrypoint_object": "claude_liaison_agent",
+        "source_packages": ["agents.py", "requirements.txt"],
         "methods": [{
             "name": "query", "api_mode": "", "parameters": {
                 "type": "object",
@@ -45,17 +53,23 @@ AGENTS = {
         }],
     },
     "cloud": {
-        "display_name": "FixList Cloud Operator",
-        "description": "Controlled Cloud Run, Cloud Logging, Cloud Build and Cloud Tasks operator.",
-        "entrypoint_object": "cloud_operator_agent",
+        "display_name": "FixList Release Operator",
+        "description": "Autonomous operator for the allowlisted FixList Standard 150 release surface.",
+        "entrypoint_module": "release_operator",
+        "entrypoint_object": "release_operator",
+        "source_packages": ["release_operator.py", "requirements.txt"],
+        "service_account": RELEASE_OPERATOR_SA,
         "methods": [
-            {"name": "inspect_cloud_run", "api_mode": "", "parameters": {"type": "object", "properties": {"service": {"type": "string"}, "region": {"type": "string"}}, "required": ["service"]}},
+            {"name": "inspect_release_surface", "api_mode": "", "parameters": {"type": "object", "properties": {}}},
+            {"name": "inspect_cloud_run", "api_mode": "", "parameters": {"type": "object", "properties": {"service": {"type": "string"}}, "required": ["service"]}},
             {"name": "read_logs", "api_mode": "", "parameters": {"type": "object", "properties": {"service": {"type": "string"}, "minutes": {"type": "integer"}, "limit": {"type": "integer"}, "request_id": {"type": "string"}, "scan_id": {"type": "string"}}, "required": ["service"]}},
             {"name": "inspect_build", "api_mode": "", "parameters": {"type": "object", "properties": {"build_id": {"type": "string"}}, "required": ["build_id"]}},
-            {"name": "inspect_queue", "api_mode": "", "parameters": {"type": "object", "properties": {"queue": {"type": "string"}, "location": {"type": "string"}}, "required": ["queue", "location"]}},
-            {"name": "pause_queue", "api_mode": "", "parameters": {"type": "object", "properties": {"queue": {"type": "string"}, "location": {"type": "string"}, "approval_token": {"type": "string"}}, "required": ["queue", "location", "approval_token"]}},
-            {"name": "resume_queue", "api_mode": "", "parameters": {"type": "object", "properties": {"queue": {"type": "string"}, "location": {"type": "string"}, "approval_token": {"type": "string"}}, "required": ["queue", "location", "approval_token"]}},
-            {"name": "set_traffic_100", "api_mode": "", "parameters": {"type": "object", "properties": {"service": {"type": "string"}, "revision": {"type": "string"}, "approval_token": {"type": "string"}, "region": {"type": "string"}}, "required": ["service", "revision", "approval_token"]}},
+            {"name": "inspect_queue", "api_mode": "", "parameters": {"type": "object", "properties": {"queue": {"type": "string"}, "location": {"type": "string"}}}},
+            {"name": "list_tasks", "api_mode": "", "parameters": {"type": "object", "properties": {"queue": {"type": "string"}, "location": {"type": "string"}, "name_contains": {"type": "string"}, "limit": {"type": "integer"}}}},
+            {"name": "pause_queue", "api_mode": "", "parameters": {"type": "object", "properties": {"confirm": {"type": "string"}, "queue": {"type": "string"}, "location": {"type": "string"}}, "required": ["confirm"]}},
+            {"name": "resume_queue", "api_mode": "", "parameters": {"type": "object", "properties": {"confirm": {"type": "string"}, "queue": {"type": "string"}, "location": {"type": "string"}}, "required": ["confirm"]}},
+            {"name": "set_traffic_100", "api_mode": "", "parameters": {"type": "object", "properties": {"service": {"type": "string"}, "revision": {"type": "string"}, "confirm": {"type": "string"}}, "required": ["service", "revision", "confirm"]}},
+            {"name": "export_signing_key_encrypted", "api_mode": "", "parameters": {"type": "object", "properties": {"public_key_pem": {"type": "string"}}, "required": ["public_key_pem"]}},
         ],
     },
 }
@@ -63,15 +77,18 @@ AGENTS = {
 
 def deploy(name: str):
     spec = AGENTS[name]
-    remote = client.agent_engines.create(config={
+    config = {
         "display_name": spec["display_name"],
         "description": spec["description"],
-        "source_packages": ["agents.py", "requirements.txt"],
-        "entrypoint_module": "agents",
+        "source_packages": spec["source_packages"],
+        "entrypoint_module": spec["entrypoint_module"],
         "entrypoint_object": spec["entrypoint_object"],
         "requirements_file": "requirements.txt",
         "class_methods": spec["methods"],
-    })
+    }
+    if spec.get("service_account"):
+        config["service_account"] = spec["service_account"]
+    remote = client.agent_engines.create(config=config)
     print(f"DEPLOYED {name}: {remote.api_resource.name}", flush=True)
 
 

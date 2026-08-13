@@ -1,0 +1,54 @@
+name: FixList Keyless Gateway CI
+
+on:
+  push:
+    branches:
+      - agent/fixlist-keyless-recovery
+    paths:
+      - '.github/workflows/fixlist-keyless-gateway-ci.yml'
+      - 'ops/fixlist-dispatch-gateway/**'
+      - 'scripts/bootstrap-fixlist-keyless-wif.sh'
+      - 'base44/functions/startStandardScanJob/cloudTasks.js'
+      - 'tests/frontend/keylessDispatchGateway.test.mjs'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate WIF bootstrap shell
+        run: |
+          set -euo pipefail
+          bash -n scripts/bootstrap-fixlist-keyless-wif.sh
+          shellcheck scripts/bootstrap-fixlist-keyless-wif.sh
+
+      - name: Validate Base44 gateway dispatch contract
+        run: |
+          set -euo pipefail
+          node --check base44/functions/startStandardScanJob/cloudTasks.js
+          node --test tests/frontend/keylessDispatchGateway.test.mjs
+
+      - name: Install gateway dependencies
+        working-directory: ops/fixlist-dispatch-gateway
+        run: python -m pip install -r requirements.txt
+
+      - name: Run gateway contract tests
+        working-directory: ops/fixlist-dispatch-gateway
+        run: python -m unittest -v test_gateway.py
+
+      - name: Compile Python source
+        working-directory: ops/fixlist-dispatch-gateway
+        run: python -m py_compile main.py test_gateway.py
+
+      - name: Build gateway container
+        working-directory: ops/fixlist-dispatch-gateway
+        run: docker build -t fixlist-dispatch-gateway:recovery .

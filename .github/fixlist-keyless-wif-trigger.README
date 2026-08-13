@@ -1,0 +1,1 @@
+This file documents the recovery trigger path. The actual WIF verification trigger is `.github/fixlist-keyless-wif-trigger` and is created only after the one-time GCP WIF bootstrap has completed.

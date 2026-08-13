@@ -1,0 +1,45 @@
+name: Research Crawler Hardening CI
+
+on:
+  push:
+    branches:
+      - agent/research-crawler-hardening
+
+permissions:
+  contents: read
+
+jobs:
+  scanner-hardening:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact branch commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install scanner dependencies
+        run: |
+          python -m pip install --upgrade pip pytest pytest-asyncio
+          pip install -r scanner-api/requirements.txt
+
+      - name: Run focused trap guard regressions
+        working-directory: scanner-api
+        run: pytest -q tests/test_crawler_trap_guard.py
+
+      - name: Run crawler safety regressions
+        working-directory: scanner-api
+        run: |
+          pytest -q \
+            tests/test_crawler_acceptance.py \
+            tests/test_security_dns_pinning.py \
+            tests/test_concurrency.py \
+            tests/test_final_url_dedup.py
+
+      - name: Compile scanner package
+        run: python -m compileall -q scanner-api/app

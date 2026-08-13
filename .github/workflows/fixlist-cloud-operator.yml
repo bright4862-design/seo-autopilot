@@ -1,7 +1,7 @@
 name: FixList Cloud Operator
 
 # Keyless GCP operations for the durable Standard 150 release.
-# Authentication is Workload Identity Federation: no service-account key exists.
+# This exact workflow path is pinned by the Google WIF provider condition.
 
 on:
   workflow_dispatch:
@@ -25,14 +25,13 @@ on:
         required: false
         type: string
       confirm:
-        description: "Mutations require confirmation: PAUSE/RESUME; exact revision for worker traffic; exact GitHub SHA for gateway deploy."
+        description: "Mutations require exact confirmation."
         required: false
         type: string
   push:
     branches:
       - main
     paths:
-      - 'agent-platform/**'
       - '.github/workflows/fixlist-cloud-operator.yml'
 
 permissions:
@@ -53,6 +52,7 @@ env:
   TASKS_INVOKER_SERVICE_ACCOUNT: fixlist-standard150-invoker@seo-autopilot-501517.iam.gserviceaccount.com
   GATEWAY_SERVICE: fixlist-dispatch-gateway
   GATEWAY_RUNTIME_SERVICE_ACCOUNT: fixlist-base44-dispatcher@seo-autopilot-501517.iam.gserviceaccount.com
+  RELEASE_OPERATOR_SERVICE_ACCOUNT: fixlist-release-operator@seo-autopilot-501517.iam.gserviceaccount.com
 
 jobs:
   operate:
@@ -60,7 +60,6 @@ jobs:
     name: ${{ inputs.operation }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
     steps:
       - name: Refuse to run outside main
         if: github.ref != 'refs/heads/main'
@@ -69,13 +68,13 @@ jobs:
           exit 2
 
       - name: Checkout exact dispatched commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Validate canonical gateway before any cloud mutation
+      - name: Validate canonical gateway before deployment
         if: inputs.operation == 'deploy-dispatch-gateway'
         shell: bash
         run: |
@@ -83,10 +82,7 @@ jobs:
           bash -n scripts/deploy_dispatch_gateway.sh
           node --check base44/functions/startStandardScanJob/cloudTasks.js
           python -m pip install -r dispatch-gateway/requirements.txt
-          (
-            cd dispatch-gateway
-            python -m unittest -v test_gateway.py
-          )
+          (cd dispatch-gateway && python -m unittest -v test_gateway.py)
           python -m py_compile dispatch-gateway/main.py dispatch-gateway/test_gateway.py
           node --test tests/frontend/dispatchGatewayContract.test.mjs
 
@@ -102,7 +98,7 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT }}
 
-      - name: Run existing allowlisted worker operation
+      - name: Run allowlisted worker operation
         if: inputs.operation != 'deploy-dispatch-gateway'
         env:
           OPERATION: ${{ inputs.operation }}
@@ -119,67 +115,11 @@ jobs:
         shell: bash
         run: ./scripts/deploy_dispatch_gateway.sh
 
-  deploy-custom-agents:
-    if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[agent-runtime-diagnostic]') && !contains(github.event.head_commit.message, '[iam-bootstrap]')
-    name: Deploy custom agents
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout exact main commit
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v3
-        with:
-          project_id: ${{ env.GCP_PROJECT }}
-          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
-          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Install Agent Platform SDK
-        working-directory: agent-platform
-        run: python -m pip install --upgrade -r requirements.txt
-
-      - name: Compile agent source
-        working-directory: agent-platform
-        run: python -m compileall -q agents.py deploy.py
-
-      - name: Cloud Operator setup preflight
-        if: contains(github.event.head_commit.message, '[cloud-only-agent-deploy]')
-        working-directory: agent-platform
-        env:
-          GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT }}
-        shell: bash
-        run: |
-          python - <<'PY'
-          from agents import cloud_operator_agent
-          cloud_operator_agent.set_up()
-          print('Cloud Operator set_up preflight passed')
-          PY
-
-      - name: Deploy selected Agent Runtime agents
-        working-directory: agent-platform
-        env:
-          GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT }}
-          AGENT_PLATFORM_LOCATION: ${{ env.GCP_REGION }}
-          FIXLIST_AGENTS_TO_DEPLOY: ${{ contains(github.event.head_commit.message, '[cloud-only-agent-deploy]') && 'cloud' || 'research,claude,cloud' }}
-        run: python deploy.py
-
-  diagnose-agent-runtime:
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[agent-runtime-diagnostic]')
-    name: Diagnose failed Cloud Operator runtime
+  readonly-diagnostic:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[cloud-readonly-diagnostic]')
+    name: Read-only release diagnostic
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
     steps:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
@@ -193,91 +133,38 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT }}
 
-      - name: Read failed Reasoning Engine logs
+      - name: Inspect FixList release surface without mutation
         shell: bash
         run: |
-          set -euo pipefail
-          ENGINE_ID='7135452232266285056'
-          FILTER="resource.type=\"aiplatform.googleapis.com/ReasoningEngine\" AND resource.labels.reasoning_engine_id=\"${ENGINE_ID}\""
-          gcloud logging read "$FILTER" \
-            --project="$GCP_PROJECT" \
-            --freshness=2h \
-            --limit=200 \
-            --order=asc \
-            --format='table(timestamp,severity,logName,textPayload,jsonPayload.message)'
+          set +e
+          echo '=== AUTH ==='
+          gcloud auth list --filter=status:ACTIVE --format='value(account)'
 
-  bootstrap-agent-logging-viewer:
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[iam-bootstrap]')
-    name: Bootstrap Agent Runtime log access
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+          echo '=== WORKER ==='
+          gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format='yaml(metadata.name,status.url,status.latestReadyRevisionName,status.latestCreatedRevisionName,status.traffic,spec.template.spec.serviceAccountName,spec.template.spec.timeoutSeconds)'
+          echo "worker_exit=$?"
 
-    steps:
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v3
-        with:
-          project_id: ${{ env.GCP_PROJECT }}
-          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
-          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+          echo '=== GATEWAY ==='
+          gcloud run services describe "$GATEWAY_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format='yaml(metadata.name,status.url,status.latestReadyRevisionName,status.latestCreatedRevisionName,status.traffic,spec.template.spec.serviceAccountName)'
+          echo "gateway_exit=$?"
 
-      - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v3
-        with:
-          project_id: ${{ env.GCP_PROJECT }}
+          echo '=== QUEUE ==='
+          gcloud tasks queues describe "$CLOUD_TASKS_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --format='yaml(name,state,rateLimits,retryConfig)'
+          echo "queue_exit=$?"
 
-      - name: Grant exact Logs Viewer role
-        shell: bash
-        run: |
-          set -euo pipefail
-          MEMBER="serviceAccount:${GCP_OPERATOR_SERVICE_ACCOUNT}"
-          ROLE='roles/logging.viewer'
+          echo '=== RECENT TASKS ==='
+          gcloud tasks list --queue="$CLOUD_TASKS_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --limit=20 --format='table(name.basename(),scheduleTime,dispatchCount,responseCount,lastAttempt.responseStatus.code)'
+          echo "tasks_exit=$?"
 
-          echo "Applying one exact IAM binding:"
-          echo "  project=${GCP_PROJECT}"
-          echo "  member=${MEMBER}"
-          echo "  role=${ROLE}"
+          echo '=== RELEASE OPERATOR IDENTITY ==='
+          gcloud iam service-accounts describe "$RELEASE_OPERATOR_SERVICE_ACCOUNT" --project="$GCP_PROJECT" --format='yaml(email,disabled,uniqueId)'
+          echo "release_operator_exit=$?"
 
-          gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
-            --member="$MEMBER" \
-            --role="$ROLE" \
-            --condition=None \
-            --quiet
-
-      - name: Verify exact binding
-        shell: bash
-        run: |
-          set -euo pipefail
-          MEMBER="serviceAccount:${GCP_OPERATOR_SERVICE_ACCOUNT}"
-          ROLE='roles/logging.viewer'
-          FOUND="$(gcloud projects get-iam-policy "$GCP_PROJECT" \
-            --flatten='bindings[].members' \
-            --filter="bindings.role=${ROLE} AND bindings.members=${MEMBER}" \
-            --format='value(bindings.role)' | head -n 1)"
-          if [[ "$FOUND" != "$ROLE" ]]; then
-            echo "Exact Logs Viewer binding was not verified." >&2
-            exit 3
+          echo '=== GATEWAY HEALTH ==='
+          GATEWAY_URL="$(gcloud run services describe "$GATEWAY_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format='value(status.url)' 2>/dev/null)"
+          if [ -n "$GATEWAY_URL" ]; then
+            curl --silent --show-error --max-time 20 "$GATEWAY_URL/health" || true
+            echo
           fi
-          echo "Verified: ${MEMBER} has ${ROLE}."
 
-      - name: Read latest failed Agent Runtime startup logs
-        shell: bash
-        run: |
-          set -euo pipefail
-          ENGINE_ID='6830333357511933952'
-          FILTER="resource.type=\"aiplatform.googleapis.com/ReasoningEngine\" AND resource.labels.reasoning_engine_id=\"${ENGINE_ID}\""
-
-          for attempt in 1 2 3 4 5; do
-            if gcloud logging read "$FILTER" \
-              --project="$GCP_PROJECT" \
-              --freshness=2h \
-              --limit=200 \
-              --order=asc \
-              --format='table(timestamp,severity,logName,textPayload,jsonPayload.message)'; then
-              exit 0
-            fi
-            if [[ "$attempt" -eq 5 ]]; then
-              echo "Logs Viewer grant verified, but log read still failed after retries." >&2
-              exit 4
-            fi
-            sleep 5
-          done
+          echo 'READONLY_DIAGNOSTIC_COMPLETE'

@@ -52,9 +52,10 @@ gcloud run services describe "$WORKER" --project="$PROJECT" --region="$REGION" >
 gcloud tasks queues describe "$QUEUE" --project="$PROJECT" --location="$REGION" >/dev/null
 
 say "Resolve the project's actual default Cloud Build service account"
-BUILD_SA="$(gcloud builds get-default-service-account --project="$PROJECT" --format='value(serviceAccountEmail)')"
-if [[ -z "$BUILD_SA" ]]; then
-  echo "Refusing bootstrap: Cloud Build returned no default service account." >&2
+BUILD_SA_RESOURCE="$(gcloud builds get-default-service-account --project="$PROJECT" --format='value(serviceAccountEmail)')"
+BUILD_SA="${BUILD_SA_RESOURCE##*/}"
+if [[ -z "$BUILD_SA" || "$BUILD_SA" != *@* ]]; then
+  echo "Refusing bootstrap: Cloud Build returned an invalid default service-account identity." >&2
   exit 2
 fi
 gcloud iam service-accounts describe "$BUILD_SA" --project="$PROJECT" >/dev/null

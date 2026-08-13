@@ -2,7 +2,6 @@
 set -euo pipefail
 
 PROJECT="seo-autopilot-501517"
-PROJECT_NUMBER="919035207432"
 REGION="europe-west1"
 OPERATOR_SA="fixlist-github-operator@${PROJECT}.iam.gserviceaccount.com"
 GATEWAY="fixlist-dispatch-gateway"
@@ -10,7 +9,6 @@ GATEWAY_RUNTIME_SA="fixlist-base44-dispatcher@${PROJECT}.iam.gserviceaccount.com
 INVOKER_SA="fixlist-standard150-invoker@${PROJECT}.iam.gserviceaccount.com"
 WORKER="fixlist-standard150-worker"
 QUEUE="fixlist-standard150"
-BUILD_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -53,6 +51,15 @@ gcloud iam service-accounts describe "$INVOKER_SA" --project="$PROJECT" >/dev/nu
 gcloud run services describe "$WORKER" --project="$PROJECT" --region="$REGION" >/dev/null
 gcloud tasks queues describe "$QUEUE" --project="$PROJECT" --location="$REGION" >/dev/null
 
+say "Resolve the project's actual default Cloud Build service account"
+BUILD_SA="$(gcloud builds get-default-service-account --project="$PROJECT" --format='value(serviceAccountEmail)')"
+if [[ -z "$BUILD_SA" ]]; then
+  echo "Refusing bootstrap: Cloud Build returned no default service account." >&2
+  exit 2
+fi
+gcloud iam service-accounts describe "$BUILD_SA" --project="$PROJECT" >/dev/null
+printf 'build_service_account=%s\n' "$BUILD_SA"
+
 say "Grant only source-build permissions the WIF operator needs for future revisions"
 for ROLE in \
   roles/run.sourceDeveloper \
@@ -72,7 +79,7 @@ gcloud iam service-accounts add-iam-policy-binding "$GATEWAY_RUNTIME_SA" \
   --condition=None \
   --quiet >/dev/null
 
-say "Allow Cloud Run source builds to build the gateway"
+say "Allow the actual Cloud Build identity to build the gateway"
 gcloud projects add-iam-policy-binding "$PROJECT" \
   --member="serviceAccount:${BUILD_SA}" \
   --role="roles/run.builder" \
@@ -182,6 +189,7 @@ fi
 printf '\nGATEWAY_BOOTSTRAP_COMPLETE\n'
 printf 'source_sha=%s\n' "$SOURCE_SHA"
 printf 'operator=%s\n' "$OPERATOR_SA"
+printf 'build_service_account=%s\n' "$BUILD_SA"
 printf 'gateway_runtime=%s\n' "$GATEWAY_RUNTIME_SA"
 printf 'queue=projects/%s/locations/%s/queues/%s\n' "$PROJECT" "$REGION" "$QUEUE"
 printf 'invoker=%s\n' "$INVOKER_SA"

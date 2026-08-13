@@ -87,6 +87,11 @@ own configuration, so the dispatcher and the gateway must be deployed from the
 same contract. `dispatchDeadline` is `480s` on both sides; the Cloud Run
 `--timeout` above must stay equal to it.
 
+The gateway's canonical source is `dispatch-gateway/` in this repository,
+deployed with `scripts/deploy_dispatch_gateway.sh` (owner-executed). Its
+validation surface is pinned by `tests/frontend/dispatchGatewayContract.test.mjs`;
+change the gateway, the dispatcher, or that suite only together.
+
 The dispatcher does **not** read `SCANNER_API_URL` or `SCANNER_API_KEY`. It
 authenticates the customer, verifies exactly one active paid owner-bound Access
 record, creates the delayed attempt-bound watchdog task, creates the immediate

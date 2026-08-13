@@ -14,6 +14,7 @@
 // scan.
 import assert from "node:assert/strict";
 import { createHmac, webcrypto } from "node:crypto";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 if (!globalThis.crypto) globalThis.crypto = webcrypto;
@@ -218,6 +219,45 @@ test("the worker URL must match the gateway's configuration byte for byte", asyn
       const { init } = calls[0];
       assert.equal(gatewayWouldReject(init.body, init.headers["x-fixlist-signature"]), "invalid_worker_target");
     }));
+});
+
+test("the canonical gateway source enforces the validation this suite mirrors", () => {
+  // dispatch-gateway/main.py is the deployed artifact's canonical source.
+  // gatewayWouldReject() above re-implements its checks in JS; this test ties
+  // the two together textually so an edit to the Python that adds, removes,
+  // or relaxes a check cannot land without this suite noticing.
+  const source = readFileSync(new URL("../../dispatch-gateway/main.py", import.meta.url), "utf8");
+
+  for (const pinned of [
+    'request.headers.get("x-fixlist-signature", "")',
+    "hmac.compare_digest(supplied, expected)",
+    'payload.get("queue_path") != QUEUE_PATH',
+    'f"{QUEUE_PATH}/tasks/standard150-"',
+    "target not in ALLOWED_URLS",
+    '!= "POST"',
+    'oidc.get("serviceAccountEmail") != INVOKER_SA',
+    'oidc.get("audience") != WORKER_ORIGIN',
+    'task.get("dispatchDeadline") != "480s"',
+    'job.get("scan_mode") not in (None, "standard_150")',
+    'os.environ["SCAN_WORKER_URL"].rstrip("/")',
+    'f"{WORKER_ORIGIN}/scan-job-drain"',
+    "upstream.status_code == 409",
+    "502 if upstream.status_code >= 500 else 403",
+  ]) {
+    assert.ok(source.includes(pinned), `gateway source lost its pinned check: ${pinned}`);
+  }
+
+  // The gateway must never accept a Google key or bypass ADC.
+  assert.doesNotMatch(source, /GCP_SERVICE_ACCOUNT_KEY|private_key/);
+  assert.match(source, /google\.auth\.default\(/);
+
+  // The deploy script must deploy the canonical directory and mount the
+  // signing key from Secret Manager, never as a plaintext env var.
+  const deploy = readFileSync(new URL("../../scripts/deploy_dispatch_gateway.sh", import.meta.url), "utf8");
+  assert.match(deploy, /--source="\$SOURCE_DIR"/);
+  assert.match(deploy, /--set-secrets="SCAN_EVIDENCE_SIGNING_KEY=/);
+  assert.doesNotMatch(deploy, /--set-env-vars="[^"]*SCAN_EVIDENCE_SIGNING_KEY/);
+  assert.doesNotMatch(deploy, /keys create|iam service-accounts keys/);
 });
 
 test("without a gateway URL the key-based route is selected and fails closed", async () => {

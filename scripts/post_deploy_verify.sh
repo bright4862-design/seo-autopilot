@@ -171,10 +171,11 @@ CANDIDATE_PCT=$(jqq "sum(int(t.get('percent') or 0) for t in d.get('status',{}).
   && pass "candidate holds 0% traffic" \
   || fail "candidate already serves ${CANDIDATE_PCT}% traffic; verification must precede promotion"
 
-# Image identity is proven digest-to-digest. Cloud Run records the resolved
-# digest on the revision; the service template keeps whatever reference was
-# written at deploy time, which for a tag-based deploy is the tag. Comparing
-# those two representations byte-for-byte can only ever fail.
+# Image identity is proven digest-to-digest. An image has two representations --
+# the tag supplied at deploy time and the digest Cloud Run resolves it to -- and
+# which one appears in an API response depends on the object being read. A
+# byte-for-byte comparison that lands on opposite representations can only ever
+# fail, in either direction. Both sides are therefore reduced to a digest first.
 REV_IMAGE=$(rq "d['spec']['containers'][0].get('image','')")
 REV_DIGEST=$(rq "d.get('status',{}).get('imageDigest','')")
 # Cloud Run normally records the resolved digest in status.imageDigest. When a

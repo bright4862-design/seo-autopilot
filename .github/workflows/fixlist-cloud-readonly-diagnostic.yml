@@ -1,0 +1,69 @@
+name: FixList Cloud Readonly Diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fixlist-cloud-readonly-diagnostic.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT: seo-autopilot-501517
+  GCP_REGION: europe-west1
+  GCP_WIF_PROVIDER: projects/919035207432/locations/global/workloadIdentityPools/github/providers/github-actions
+  GCP_OPERATOR_SERVICE_ACCOUNT: fixlist-github-operator@seo-autopilot-501517.iam.gserviceaccount.com
+  WORKER: fixlist-standard150-worker
+  GATEWAY: fixlist-dispatch-gateway
+  QUEUE: fixlist-standard150
+  RELEASE_OPERATOR_SA: fixlist-release-operator@seo-autopilot-501517.iam.gserviceaccount.com
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Authenticate keylessly to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Read-only release diagnostic
+        shell: bash
+        run: |
+          set +e
+          echo '=== AUTH ==='
+          gcloud auth list --filter=status:ACTIVE --format='value(account)'
+          echo
+          echo '=== RELEASE OPERATOR SERVICE ACCOUNT ==='
+          gcloud iam service-accounts describe "$RELEASE_OPERATOR_SA" --project="$GCP_PROJECT" --format='yaml(email,disabled,uniqueId)'
+          echo "release_operator_describe_exit=$?"
+          echo
+          echo '=== WORKER ==='
+          gcloud run services describe "$WORKER" --project="$GCP_PROJECT" --region="$GCP_REGION" --format='yaml(metadata.name,status.url,status.latestReadyRevisionName,status.latestCreatedRevisionName,status.traffic,spec.template.spec.serviceAccountName,spec.template.spec.timeoutSeconds)'
+          echo "worker_describe_exit=$?"
+          echo
+          echo '=== GATEWAY ==='
+          gcloud run services describe "$GATEWAY" --project="$GCP_PROJECT" --region="$GCP_REGION" --format='yaml(metadata.name,status.url,status.latestReadyRevisionName,status.latestCreatedRevisionName,status.traffic,spec.template.spec.serviceAccountName)'
+          echo "gateway_describe_exit=$?"
+          echo
+          echo '=== QUEUE ==='
+          gcloud tasks queues describe "$QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --format='yaml(name,state,rateLimits,retryConfig)'
+          echo "queue_describe_exit=$?"
+          echo
+          echo '=== RECENT STANDARD150 TASKS ==='
+          gcloud tasks list --queue="$QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --limit=20 --format='table(name.basename(),scheduleTime,dispatchCount,responseCount,lastAttempt.responseStatus.code)'
+          echo "tasks_list_exit=$?"
+          echo
+          echo '=== AGENT ENGINE INVENTORY ==='
+          gcloud ai reasoning-engines list --project="$GCP_PROJECT" --region="$GCP_REGION" --format='table(name.basename(),displayName,createTime)' 2>&1
+          echo "agent_inventory_exit=$?"

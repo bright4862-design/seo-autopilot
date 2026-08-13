@@ -362,6 +362,46 @@ class FixListCloudOperatorAgent:
         return {"risk": "PRODUCTION_MUTATION", "operation": "set_traffic_100", "verification": self._summary(verified)}
 
 
+class FixListCloudOperatorRuntimeAgent(FixListCloudOperatorAgent):
+    """Agent Runtime variant that defers Google API client construction until use."""
+
+    def set_up(self):
+        self.project = _project(self.project)
+        self._approval_token = None
+        self._run_services_client = None
+        self._logging_client = None
+        self._tasks_client = None
+        self._builds_client = None
+
+    @property
+    def run_services(self):
+        if self._run_services_client is None:
+            from google.cloud import run_v2
+            self._run_services_client = run_v2.ServicesClient()
+        return self._run_services_client
+
+    @property
+    def logging(self):
+        if self._logging_client is None:
+            from google.cloud import logging_v2
+            self._logging_client = logging_v2.Client(project=self.project)
+        return self._logging_client
+
+    @property
+    def tasks(self):
+        if self._tasks_client is None:
+            from google.cloud import tasks_v2
+            self._tasks_client = tasks_v2.CloudTasksClient()
+        return self._tasks_client
+
+    @property
+    def builds(self):
+        if self._builds_client is None:
+            from google.cloud.devtools import cloudbuild_v1
+            self._builds_client = cloudbuild_v1.CloudBuildClient()
+        return self._builds_client
+
+
 research_agent = FixListResearchAgent()
 claude_liaison_agent = FixListClaudeLiaisonAgent()
-cloud_operator_agent = FixListCloudOperatorAgent()
+cloud_operator_agent = FixListCloudOperatorRuntimeAgent()

@@ -120,7 +120,7 @@ jobs:
         run: ./scripts/deploy_dispatch_gateway.sh
 
   deploy-custom-agents:
-    if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[agent-runtime-diagnostic]')
+    if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[agent-runtime-diagnostic]') && !contains(github.event.head_commit.message, '[iam-bootstrap]')
     name: Deploy custom agents
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -205,3 +205,79 @@ jobs:
             --limit=200 \
             --order=asc \
             --format='table(timestamp,severity,logName,textPayload,jsonPayload.message)'
+
+  bootstrap-agent-logging-viewer:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[iam-bootstrap]')
+    name: Bootstrap Agent Runtime log access
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Grant exact Logs Viewer role
+        shell: bash
+        run: |
+          set -euo pipefail
+          MEMBER="serviceAccount:${GCP_OPERATOR_SERVICE_ACCOUNT}"
+          ROLE='roles/logging.viewer'
+
+          echo "Applying one exact IAM binding:"
+          echo "  project=${GCP_PROJECT}"
+          echo "  member=${MEMBER}"
+          echo "  role=${ROLE}"
+
+          gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
+            --member="$MEMBER" \
+            --role="$ROLE" \
+            --condition=None \
+            --quiet
+
+      - name: Verify exact binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          MEMBER="serviceAccount:${GCP_OPERATOR_SERVICE_ACCOUNT}"
+          ROLE='roles/logging.viewer'
+          FOUND="$(gcloud projects get-iam-policy "$GCP_PROJECT" \
+            --flatten='bindings[].members' \
+            --filter="bindings.role=${ROLE} AND bindings.members=${MEMBER}" \
+            --format='value(bindings.role)' | head -n 1)"
+          if [[ "$FOUND" != "$ROLE" ]]; then
+            echo "Exact Logs Viewer binding was not verified." >&2
+            exit 3
+          fi
+          echo "Verified: ${MEMBER} has ${ROLE}."
+
+      - name: Read latest failed Agent Runtime startup logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENGINE_ID='6830333357511933952'
+          FILTER="resource.type=\"aiplatform.googleapis.com/ReasoningEngine\" AND resource.labels.reasoning_engine_id=\"${ENGINE_ID}\""
+
+          for attempt in 1 2 3 4 5; do
+            if gcloud logging read "$FILTER" \
+              --project="$GCP_PROJECT" \
+              --freshness=2h \
+              --limit=200 \
+              --order=asc \
+              --format='table(timestamp,severity,logName,textPayload,jsonPayload.message)'; then
+              exit 0
+            fi
+            if [[ "$attempt" -eq 5 ]]; then
+              echo "Logs Viewer grant verified, but log read still failed after retries." >&2
+              exit 4
+            fi
+            sleep 5
+          done

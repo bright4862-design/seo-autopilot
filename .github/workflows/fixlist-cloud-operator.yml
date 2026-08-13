@@ -1,0 +1,95 @@
+name: FixList Cloud Operator
+
+# Keyless GCP operations for the durable Standard 150 release.
+#
+# Authentication is Workload Identity Federation: no service-account key
+# exists, which is required here because the org policy
+# constraints/iam.disableServiceAccountKeyCreation blocks key creation
+# outright. The WIF provider MUST carry an attribute condition pinning both
+# the repository and refs/heads/main -- see docs/fixlist-cloud-operator.md.
+# Without that condition any branch could run this workflow with the
+# operator's credentials, so the guard below is defence in depth, not the
+# primary control.
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Allowlisted Google Cloud operation"
+        required: true
+        type: choice
+        options:
+          - status
+          - verify-iam
+          - verify-worker-routes
+          - promote-worker
+          - rollback-worker
+          - pause-queue
+          - resume-queue
+          - activate-beta
+      revision:
+        description: "Exact Cloud Run revision for promote/rollback/activate (e.g. fixlist-standard150-worker-00003-abc)"
+        required: false
+        type: string
+      confirm:
+        description: "Mutations require confirmation. PAUSE / RESUME for the queue; the exact revision name for promote, rollback, and activate."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: fixlist-cloud-operator
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT: seo-autopilot-501517
+  GCP_REGION: europe-west1
+  CLOUD_RUN_SERVICE: fixlist-standard150-worker
+  CLOUD_TASKS_QUEUE: fixlist-standard150
+  TASKS_INVOKER_SERVICE_ACCOUNT: fixlist-standard150-invoker@seo-autopilot-501517.iam.gserviceaccount.com
+
+jobs:
+  operate:
+    name: ${{ inputs.operation }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # The operator's credentials must never be driven by a branch that has
+      # not been reviewed. workflow_dispatch accepts any ref, and checkout
+      # would take the script from that same ref, so a pushed branch could
+      # otherwise rewrite the script it is about to run as the operator SA.
+      - name: Refuse to run outside main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "The Cloud Operator runs only from refs/heads/main. Got: ${{ github.ref }}" >&2
+          exit 2
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Run allowlisted operation
+        env:
+          OPERATION: ${{ inputs.operation }}
+          CONFIRM: ${{ inputs.confirm }}
+          TARGET_REVISION: ${{ inputs.revision }}
+        shell: bash
+        run: ./scripts/fixlist-cloud-operator.sh

@@ -88,12 +88,13 @@ gcloud projects add-iam-policy-binding "$PROJECT" \
   --quiet >/dev/null
 
 say "Grant the gateway runtime create-only access on the Standard 150 queue"
+# The GA Cloud Tasks queue IAM command does not expose --condition in all
+# installed gcloud releases. Queue bindings here are intentionally unconditional.
 gcloud tasks queues add-iam-policy-binding "$QUEUE" \
   --project="$PROJECT" \
   --location="$REGION" \
   --member="serviceAccount:${GATEWAY_RUNTIME_SA}" \
   --role="roles/cloudtasks.enqueuer" \
-  --condition=None \
   --quiet >/dev/null
 
 say "Allow the gateway runtime to mint task OIDC only as the existing invoker identity"

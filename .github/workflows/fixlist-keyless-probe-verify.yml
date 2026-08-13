@@ -1,0 +1,167 @@
+name: FixList Keyless Probe Verify
+
+on:
+  push:
+    branches:
+      - agent/fixlist-keyless-recovery
+    paths:
+      - '.github/fixlist-keyless-probe.json'
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT: seo-autopilot-501517
+  GCP_REGION: europe-west1
+  GCP_WIF_PROVIDER: projects/919035207432/locations/global/workloadIdentityPools/fixlist-github/providers/github
+  GCP_OPERATOR_SERVICE_ACCOUNT: fixlist-github-cloud-operator@seo-autopilot-501517.iam.gserviceaccount.com
+  CLOUD_TASKS_QUEUE: fixlist-standard150
+  WORKER_SERVICE: fixlist-standard150-worker
+  GATEWAY_SERVICE: fixlist-dispatch-gateway
+
+jobs:
+  verify:
+    name: Verify exact dispatch evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate probe identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import json, re
+          with open('.github/fixlist-keyless-probe.json', encoding='utf-8') as handle:
+              data = json.load(handle)
+          scan_id = str(data.get('scan_id') or '').strip()
+          request_id = str(data.get('request_id') or '').strip()
+          if not re.fullmatch(r'[A-Za-z0-9_-]{8,128}', scan_id):
+              raise SystemExit('invalid scan_id in probe trigger')
+          if request_id and not re.fullmatch(r'[A-Za-z0-9_-]{8,160}', request_id):
+              raise SystemExit('invalid request_id in probe trigger')
+          print(f'SCAN_ID={scan_id}')
+          print(f'REQUEST_ID={request_id}')
+          PY
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Inspect current queue state and exact task names
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud tasks queues describe "$CLOUD_TASKS_QUEUE" \
+            --project="$GCP_PROJECT" \
+            --location="$GCP_REGION" \
+            --format='yaml(name,state,rateLimits,retryConfig)'
+
+          gcloud tasks list \
+            --queue="$CLOUD_TASKS_QUEUE" \
+            --project="$GCP_PROJECT" \
+            --location="$GCP_REGION" \
+            --format=json > /tmp/tasks.json
+
+          python3 - <<'PY'
+          import json, os
+          scan_id = os.environ['SCAN_ID']
+          with open('/tmp/tasks.json', encoding='utf-8') as handle:
+              tasks = json.load(handle)
+          matches = [task for task in tasks if scan_id in str(task.get('name') or '')]
+          print(f'CURRENT_TASK_MATCHES={len(matches)}')
+          for task in matches:
+              print(json.dumps({
+                  'name': task.get('name'),
+                  'scheduleTime': task.get('scheduleTime'),
+                  'dispatchCount': task.get('dispatchCount'),
+                  'responseCount': task.get('responseCount'),
+                  'firstAttempt': task.get('firstAttempt'),
+                  'lastAttempt': task.get('lastAttempt'),
+              }, sort_keys=True))
+          PY
+
+      - name: Wait for worker evidence or retained task evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          for attempt in $(seq 1 20); do
+            gcloud logging read \
+              "resource.type=\"cloud_run_revision\" AND (resource.labels.service_name=\"$WORKER_SERVICE\" OR resource.labels.service_name=\"$GATEWAY_SERVICE\")" \
+              --project="$GCP_PROJECT" \
+              --freshness=30m \
+              --limit=800 \
+              --format=json > /tmp/fixlist-logs.json
+
+            if python3 - <<'PY'
+          import json, os
+          scan_id = os.environ['SCAN_ID']
+          request_id = os.environ.get('REQUEST_ID', '')
+          with open('/tmp/fixlist-logs.json', encoding='utf-8') as handle:
+              logs = json.load(handle)
+          matches = []
+          for entry in logs:
+              blob = json.dumps(entry, sort_keys=True, default=str)
+              if scan_id in blob or (request_id and request_id in blob):
+                  matches.append(entry)
+          print(f'LOG_MATCHES={len(matches)}')
+          for entry in matches[:40]:
+              print(json.dumps(entry, sort_keys=True, default=str))
+          raise SystemExit(0 if matches else 1)
+          PY
+            then
+              found=1
+              break
+            fi
+
+            # A retained task with the exact scan id is also useful evidence: it
+            # lets the verifier expose Cloud Tasks dispatch/response attempts if
+            # delivery has not completed yet.
+            gcloud tasks list \
+              --queue="$CLOUD_TASKS_QUEUE" \
+              --project="$GCP_PROJECT" \
+              --location="$GCP_REGION" \
+              --format=json > /tmp/tasks-retry.json
+            if python3 - <<'PY'
+          import json, os
+          scan_id = os.environ['SCAN_ID']
+          with open('/tmp/tasks-retry.json', encoding='utf-8') as handle:
+              tasks = json.load(handle)
+          matches = [task for task in tasks if scan_id in str(task.get('name') or '')]
+          for task in matches:
+              print(json.dumps(task, sort_keys=True, default=str))
+          raise SystemExit(0 if matches else 1)
+          PY
+            then
+              found=1
+              break
+            fi
+            sleep 15
+          done
+
+          if [ "$found" -ne 1 ]; then
+            echo "No retained Cloud Task or scan-correlated Cloud Run log was observed for $SCAN_ID." >&2
+            exit 1
+          fi
+
+      - name: Final worker revision state
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run services describe "$WORKER_SERVICE" \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --format='yaml(metadata.name,status.latestReadyRevisionName,status.traffic)'

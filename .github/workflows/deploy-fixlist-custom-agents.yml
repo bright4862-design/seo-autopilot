@@ -3,7 +3,7 @@ name: Deploy FixList Custom Agents
 on:
   push:
     branches:
-      - agent/fixlist-custom-agents
+      - main
     paths:
       - 'agent-platform/**'
       - '.github/workflows/deploy-fixlist-custom-agents.yml'
@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout exact branch commit
+      - name: Checkout exact main commit
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}

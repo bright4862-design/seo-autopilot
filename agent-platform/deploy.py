@@ -75,5 +75,16 @@ def deploy(name: str):
     print(f"DEPLOYED {name}: {remote.api_resource.name}", flush=True)
 
 
-for name in ("research", "claude", "cloud"):
+def selected_agents() -> list[str]:
+    raw = os.getenv("FIXLIST_AGENTS_TO_DEPLOY", "research,claude,cloud")
+    names = [part.strip() for part in raw.split(",") if part.strip()]
+    if not names:
+        raise ValueError("FIXLIST_AGENTS_TO_DEPLOY selected no agents")
+    unknown = [name for name in names if name not in AGENTS]
+    if unknown:
+        raise ValueError(f"Unknown agent deployment target(s): {', '.join(unknown)}")
+    return names
+
+
+for name in selected_agents():
     deploy(name)

@@ -7,3 +7,4 @@ google-cloud-tasks
 google-cloud-build
 anthropic
 protobuf
+cryptography>=45,<51

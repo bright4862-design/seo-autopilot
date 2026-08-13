@@ -93,11 +93,19 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT }}
 
-      - name: Run allowlisted operation
+      - name: Run existing allowlisted worker operation
+        if: inputs.operation != 'deploy-dispatch-gateway'
         env:
           OPERATION: ${{ inputs.operation }}
           CONFIRM: ${{ inputs.confirm }}
           TARGET_REVISION: ${{ inputs.revision }}
-          SOURCE_SHA: ${{ github.sha }}
         shell: bash
         run: ./scripts/fixlist-cloud-operator.sh
+
+      - name: Deploy constrained dispatch gateway
+        if: inputs.operation == 'deploy-dispatch-gateway'
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: ./scripts/deploy-fixlist-dispatch-gateway.sh

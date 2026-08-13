@@ -1,0 +1,9 @@
+google-cloud-aiplatform[agent_engines]>=1.112,<2
+google-genai
+google-cloud-secret-manager
+google-cloud-run
+google-cloud-logging
+google-cloud-tasks
+google-cloud-build
+anthropic
+protobuf

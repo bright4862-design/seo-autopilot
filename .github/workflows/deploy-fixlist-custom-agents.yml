@@ -1,0 +1,83 @@
+name: Deploy FixList Custom Agents
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'agent-platform/**'
+      - '.github/workflows/deploy-fixlist-custom-agents.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: fixlist-custom-agents-deploy
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT: seo-autopilot-501517
+  GCP_REGION: europe-west1
+  GCP_WIF_PROVIDER: projects/919035207432/locations/global/workloadIdentityPools/github/providers/github-actions
+  GCP_OPERATOR_SERVICE_ACCOUNT: fixlist-github-operator@seo-autopilot-501517.iam.gserviceaccount.com
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact main commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Authenticate keylessly to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Verify Agent Platform prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'Active identity:'
+          gcloud auth list --filter=status:ACTIVE --format='value(account)'
+          echo 'Relevant enabled APIs:'
+          gcloud services list --enabled --project="$GCP_PROJECT" \
+            --filter='name:aiplatform.googleapis.com OR name:secretmanager.googleapis.com' \
+            --format='value(name)'
+          echo 'Operator project roles:'
+          gcloud projects get-iam-policy "$GCP_PROJECT" \
+            --flatten='bindings[].members' \
+            --filter="bindings.members:serviceAccount:${GCP_OPERATOR_SERVICE_ACCOUNT}" \
+            --format='table(bindings.role)' || true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Agent Platform SDK
+        working-directory: agent-platform
+        run: python -m pip install --upgrade -r requirements.txt
+
+      - name: Compile agent source
+        working-directory: agent-platform
+        run: python -m compileall -q agents.py deploy.py
+
+      - name: Deploy all three Agent Runtime agents
+        working-directory: agent-platform
+        env:
+          GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT }}
+          AGENT_PLATFORM_LOCATION: ${{ env.GCP_REGION }}
+        run: python deploy.py

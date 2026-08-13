@@ -1,0 +1,157 @@
+name: FixList Keyless Gateway Deploy
+
+on:
+  push:
+    branches:
+      - agent/fixlist-keyless-recovery
+    paths:
+      - '.github/fixlist-keyless-deploy-trigger'
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT: seo-autopilot-501517
+  GCP_PROJECT_NUMBER: '919035207432'
+  GCP_REGION: europe-west1
+  GCP_WIF_PROVIDER: projects/919035207432/locations/global/workloadIdentityPools/fixlist-github/providers/github
+  GCP_OPERATOR_SERVICE_ACCOUNT: fixlist-github-cloud-operator@seo-autopilot-501517.iam.gserviceaccount.com
+  WORKER_SERVICE: fixlist-standard150-worker
+  GATEWAY_SERVICE: fixlist-dispatch-gateway
+  GATEWAY_RUNTIME_SA: fixlist-base44-dispatcher@seo-autopilot-501517.iam.gserviceaccount.com
+  TASKS_INVOKER_SA: fixlist-standard150-invoker@seo-autopilot-501517.iam.gserviceaccount.com
+  QUEUE_PATH: projects/seo-autopilot-501517/locations/europe-west1/queues/fixlist-standard150
+  WORKER_URL: https://fixlist-standard150-worker-tpucgyfewa-ew.a.run.app/scan-job
+
+jobs:
+  deploy:
+    name: Build, deploy, and verify gateway
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact recovery source
+        uses: actions/checkout@v4
+
+      - name: Re-run gateway contract tests before mutation
+        working-directory: ops/fixlist-dispatch-gateway
+        run: |
+          set -euo pipefail
+          python -m pip install -r requirements.txt
+          python -m unittest -v test_gateway.py
+          docker build -t fixlist-dispatch-gateway:predeploy .
+
+      - name: Authenticate to Google Cloud through WIF
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Resolve the exact signing-secret reference from the live worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run services describe "$WORKER_SERVICE" \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --format=json > /tmp/worker.json
+
+          python3 - <<'PY' > /tmp/signing-secret.env
+          import json
+          with open('/tmp/worker.json', encoding='utf-8') as handle:
+              service = json.load(handle)
+          containers = service.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+          if not containers:
+              raise SystemExit('Worker has no container spec')
+          for item in containers[0].get('env', []):
+              if item.get('name') != 'SCAN_EVIDENCE_SIGNING_KEY':
+                  continue
+              ref = item.get('valueFrom', {}).get('secretKeyRef', {})
+              name = str(ref.get('name') or '').strip()
+              version = str(ref.get('key') or '').strip()
+              if not name or not version:
+                  raise SystemExit('Worker signing-secret reference is incomplete')
+              print(f'SIGNING_SECRET_NAME={name}')
+              print(f'SIGNING_SECRET_VERSION={version}')
+              break
+          else:
+              raise SystemExit('Worker does not expose SCAN_EVIDENCE_SIGNING_KEY by Secret Manager reference')
+          PY
+
+          cat /tmp/signing-secret.env >> "$GITHUB_ENV"
+          echo "Resolved worker signing-secret reference by name/version only."
+
+      - name: Deploy keyless dispatch gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run deploy "$GATEWAY_SERVICE" \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --source=ops/fixlist-dispatch-gateway \
+            --service-account="$GATEWAY_RUNTIME_SA" \
+            --allow-unauthenticated \
+            --ingress=all \
+            --memory=256Mi \
+            --cpu=1 \
+            --concurrency=20 \
+            --min-instances=0 \
+            --max-instances=2 \
+            --timeout=60 \
+            --set-env-vars="SCAN_TASKS_QUEUE_PATH=$QUEUE_PATH,SCAN_WORKER_URL=$WORKER_URL,TASKS_INVOKER_SERVICE_ACCOUNT=$TASKS_INVOKER_SA,DISPATCH_MAX_CLOCK_SKEW_SECONDS=300" \
+            --set-secrets="SCAN_EVIDENCE_SIGNING_KEY=$SIGNING_SECRET_NAME:$SIGNING_SECRET_VERSION" \
+            --quiet
+
+      - name: Verify deployed identity, configuration, and health
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run services describe "$GATEWAY_SERVICE" \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --format=json > /tmp/gateway.json
+
+          GATEWAY_URL="$(python3 - <<'PY'
+          import json
+          with open('/tmp/gateway.json', encoding='utf-8') as handle:
+              service = json.load(handle)
+          print(service.get('status', {}).get('url', ''))
+          PY
+          )"
+          test -n "$GATEWAY_URL"
+
+          python3 - <<'PY'
+          import json, os
+          with open('/tmp/gateway.json', encoding='utf-8') as handle:
+              service = json.load(handle)
+          template = service.get('spec', {}).get('template', {}).get('spec', {})
+          assert template.get('serviceAccountName') == os.environ['GATEWAY_RUNTIME_SA']
+          containers = template.get('containers', [])
+          assert containers, 'missing gateway container'
+          env = {item.get('name'): item for item in containers[0].get('env', [])}
+          assert env['SCAN_TASKS_QUEUE_PATH'].get('value') == os.environ['QUEUE_PATH']
+          assert env['SCAN_WORKER_URL'].get('value') == os.environ['WORKER_URL']
+          assert env['TASKS_INVOKER_SERVICE_ACCOUNT'].get('value') == os.environ['TASKS_INVOKER_SA']
+          assert 'valueFrom' in env['SCAN_EVIDENCE_SIGNING_KEY']
+          print('Gateway runtime identity and allowlisted configuration verified.')
+          PY
+
+          curl --fail --silent --show-error --retry 10 --retry-delay 3 "$GATEWAY_URL/health" | tee /tmp/gateway-health.json
+          python3 - <<'PY'
+          import json
+          with open('/tmp/gateway-health.json', encoding='utf-8') as handle:
+              health = json.load(handle)
+          assert health.get('ok') is True
+          assert health.get('service') == 'fixlist-dispatch-gateway'
+          print('Gateway health verified.')
+          PY
+
+          echo "GATEWAY_URL=$GATEWAY_URL" >> "$GITHUB_ENV"
+          echo "GATEWAY_READY=$GATEWAY_URL"

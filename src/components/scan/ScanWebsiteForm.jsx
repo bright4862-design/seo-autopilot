@@ -81,6 +81,9 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   const cleanedKeywords = useMemo(() => splitLines(keywordsText), [keywordsText]);
   const selectedCms = CMS_OPTIONS.find((item) => item.value === cmsPlatform);
   const progressIndex = scanProgressIndex(activeStep);
+  // Show the customer their own domain the moment the scan starts. Momentum
+  // comes from something real and personal, not from a bar sitting at zero.
+  const scanTargetLabel = durableScan.domain || safeHostname(websiteUrl) || "";
 
   useEffect(() => {
     if (!isLoading) {
@@ -560,6 +563,15 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
                   <p className="text-[15px] font-medium tracking-tight">{activeStep || "Starting your scan"}</p>
                   <span className="shrink-0 text-[12px] tabular-nums text-ink-faint">{formatElapsed(elapsedSeconds)}</span>
                 </div>
+                {scanTargetLabel ? (
+                  <p className="mt-0.5 truncate text-[13px] text-ink-muted" title={scanTargetLabel}>{scanTargetLabel}</p>
+                ) : null}
+                {durableScan.pagesFound > 0 ? (
+                  <p className="mt-1 text-[12px] tabular-nums text-ink-faint" aria-live="polite">
+                    {durableScan.pagesFound.toLocaleString()} pages discovered
+                    {durableScan.pagesCrawled > 0 ? ` · ${durableScan.pagesCrawled.toLocaleString()} of ${STANDARD_SCAN_BUDGET.max_pages} checked` : ""}
+                  </p>
+                ) : null}
                 <p className="mt-1 text-[13px] leading-relaxed text-ink-muted">
                   {elapsedSeconds >= 30
                     ? "Still working — larger or slower sites can take a little longer."

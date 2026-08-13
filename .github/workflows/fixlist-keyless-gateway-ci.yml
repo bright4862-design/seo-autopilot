@@ -46,12 +46,25 @@ jobs:
       - name: Refuse project-wide Run Admin in gateway bootstrap
         run: |
           set -euo pipefail
-          if grep -Eq 'add-iam-policy-binding.*roles/run\.admin|--role=["'"']?roles/run\.admin' scripts/bootstrap-fixlist-dispatch-gateway.sh; then
-            echo "Gateway bootstrap must not grant project-wide roles/run.admin." >&2
-            exit 1
-          fi
-          grep -Fq 'roles/run.developer' scripts/bootstrap-fixlist-dispatch-gateway.sh
-          grep -Fq 'gcloud run services add-iam-policy-binding "$GATEWAY"' scripts/bootstrap-fixlist-dispatch-gateway.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          source = Path('scripts/bootstrap-fixlist-dispatch-gateway.sh').read_text(encoding='utf-8')
+          project_run_admin_grant = re.search(
+              r'gcloud\s+projects\s+add-iam-policy-binding[\s\S]{0,500}?--role(?:=|\s+)["\']?roles/run\.admin',
+              source,
+          )
+          if project_run_admin_grant:
+              raise SystemExit('Gateway bootstrap must not grant project-wide roles/run.admin.')
+          if 'roles/run.developer' not in source:
+              raise SystemExit('Gateway bootstrap must grant service-scoped roles/run.developer after creation.')
+          if 'gcloud run services add-iam-policy-binding "$GATEWAY"' not in source:
+              raise SystemExit('Gateway bootstrap lost its service-scoped operator binding.')
+          if 'bindings.role=roles/run.admin' not in source:
+              raise SystemExit('Gateway bootstrap must verify project-wide Run Admin is absent.')
+          print('No project-wide Cloud Run Admin grant is present.')
+          PY
 
       - name: Install canonical gateway dependencies
         working-directory: dispatch-gateway

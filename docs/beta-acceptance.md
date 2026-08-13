@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `51c813a6219b4e70` |
+| Candidate fingerprint | `5caec7fdcabceee7` |
 | Classifier | `archetype_classifier_v9_local_business_hospitality` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,8 +15,15 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The shipping code is
-fingerprint `51c813a6219b4e70` with classifier
-`archetype_classifier_v9_local_business_hospitality`.
+fingerprint `5caec7fdcabceee7` with classifier
+`archetype_classifier_v9_local_business_hospitality` and URL frontier policy
+`url_frontier_policy_v1_conservative_trap_guard`.
+
+The fingerprint moved from `51c813a6219b4e70` to `5caec7fdcabceee7` when the URL
+frontier trap guard was added to the crawl path. That is a crawl-behaviour
+change, so under the freeze rule it required a regenerated fingerprint — which
+is exactly what happened, and why acceptance must be re-run rather than
+inherited.
 
 By the freeze rule this document already states, that difference requires a
 regenerated fingerprint, regression coverage, and **a new production acceptance

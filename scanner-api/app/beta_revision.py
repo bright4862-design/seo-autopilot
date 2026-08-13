@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+
+from .url_frontier_policy import FRONTIER_POLICY_VERSION
 from pathlib import Path
 from typing import Any
 
@@ -91,6 +93,7 @@ def collect_component_versions() -> dict[str, str]:
         "trust_finding_gate_version": TRUST_FINDING_GATE_VERSION,
         "crawler_acceptance_version": CRAWLER_ACCEPTANCE_VERSION,
         "evidence_quality_gate_version": EVIDENCE_QUALITY_GATE_VERSION,
+        "frontier_policy_version": FRONTIER_POLICY_VERSION,
     }
 
 

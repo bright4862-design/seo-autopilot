@@ -51,7 +51,9 @@ test("missing key and malformed key produce distinct failure codes", () => {
   const fn = tasksCode.match(/async function accessToken\(\)[\s\S]*?\n\}/)?.[0] || "";
   assert.ok(fn, "accessToken() not found");
   assert.match(fn, /if \(!key\) return \{ token: "", failureCode: "tasks_credentials_not_configured" \}/);
-  const catchBlock = fn.match(/catch \{[\s\S]*?\}/)?.[0] || "";
+  // The catch may bind the error to inspect its code, so accept either form.
+  const catchBlock = fn.match(/catch\s*(?:\([^)]*\))?\s*\{[\s\S]*?\}/)?.[0] || "";
+  assert.ok(catchBlock, "accessToken() catch block not found");
   assert.match(catchBlock, /tasks_token_mint_failed/);
   assert.doesNotMatch(catchBlock, /tasks_credentials_not_configured/);
 });

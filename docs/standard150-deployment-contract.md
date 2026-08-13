@@ -59,12 +59,38 @@ Base44-hosted. Supplied through Base44 function environment, **not** Cloud Build
 |---|---|---|---|
 | `SCAN_TASKS_QUEUE_PATH` | **required** | `entry.ts` → `enqueueScanJob({queuePath})` | Cloud Tasks REST call targets a malformed queue path; enqueue fails. |
 | `SCAN_WORKER_URL` | **required** | `entry.ts` → `audienceForWorkerUrl()` | `new URL("")` throws → `invalid_worker_url`. Fail-closed. |
-| `TASKS_INVOKER_SERVICE_ACCOUNT` | **required** | `cloudTasks.js:74` `oidcToken.serviceAccountEmail` | Cloud Tasks cannot mint an OIDC token; the worker rejects the call. |
-| `GCP_SERVICE_ACCOUNT_KEY` | **required** | `cloudTasks.js` `accessToken()` | `tasks_credentials_not_configured`. Distinct from a malformed key, which yields `tasks_token_mint_failed`. |
-The dispatcher does **not** read `SCANNER_API_URL`, `SCANNER_API_KEY`, or
-`SCAN_EVIDENCE_SIGNING_KEY`. It authenticates the customer, verifies exactly
-one active paid owner-bound Access record, creates the delayed attempt-bound
-watchdog task, creates the immediate worker task, and returns.
+| `TASKS_INVOKER_SERVICE_ACCOUNT` | **required** | `cloudTasks.js` `oidcToken.serviceAccountEmail` | Cloud Tasks cannot mint an OIDC token; the worker rejects the call. |
+| `SCAN_DISPATCH_GATEWAY_URL` | **required for keyless dispatch** | `cloudTasks.js` `createTask()` | Unset selects the key-based route below. Set, it is the only enqueue path. |
+| `SCAN_EVIDENCE_SIGNING_KEY` | **required with the gateway** | `cloudTasks.js` `createTaskViaGateway()` | `dispatch_gateway_signing_key_missing`. Fail-closed before any network call. |
+| `GCP_SERVICE_ACCOUNT_KEY` | **required only without the gateway** | `cloudTasks.js` `accessToken()` | `tasks_credentials_not_configured`. Distinct from a malformed key, which yields a `tasks_key_*` code, or `tasks_token_mint_failed` when the cause is not recognised. |
+
+### Enqueue route selection
+
+`createTask()` picks exactly one of two routes, and `SCAN_DISPATCH_GATEWAY_URL`
+is the switch:
+
+- **Keyless (preferred).** Set `SCAN_DISPATCH_GATEWAY_URL`. The dispatcher
+  HMAC-SHA256-signs the canonical `{queue_path, task}` document with
+  `SCAN_EVIDENCE_SIGNING_KEY`, sends it to `POST <gateway>/dispatch` as
+  `x-fixlist-signature`, and the Cloud Run gateway creates the task using its
+  own attached identity through Application Default Credentials. No Google
+  private key is ever held by Base44. Org policy
+  `constraints/iam.disableServiceAccountKeyCreation` makes this the only
+  route that can be provisioned.
+- **Key-based (legacy fallback).** Leave `SCAN_DISPATCH_GATEWAY_URL` unset and
+  supply `GCP_SERVICE_ACCOUNT_KEY`. Retained for rollback only.
+
+The gateway is a validating proxy, not a general Cloud Tasks relay. It rejects
+any document whose `queue_path`, task-name prefix, target URL, HTTP method,
+OIDC service account, OIDC audience, or `dispatchDeadline` does not match its
+own configuration, so the dispatcher and the gateway must be deployed from the
+same contract. `dispatchDeadline` is `480s` on both sides; the Cloud Run
+`--timeout` above must stay equal to it.
+
+The dispatcher does **not** read `SCANNER_API_URL` or `SCANNER_API_KEY`. It
+authenticates the customer, verifies exactly one active paid owner-bound Access
+record, creates the delayed attempt-bound watchdog task, creates the immediate
+worker task, and returns.
 
 ## Component C — `durableScanWorkerControl` and `persistDurableScanAuthority`
 

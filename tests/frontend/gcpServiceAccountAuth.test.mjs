@@ -78,12 +78,38 @@ test("the signed assertion is exchanged for a short-lived OAuth access token", a
   assert.equal(form.get("assertion").split(".").length, 3);
 });
 
+// Failing closed means never handing back a usable token. This path rejects
+// with a specific `tasks_*` code rather than returning "": the dispatcher's
+// accessToken() passes any `tasks_*` message straight through as the customer
+// failure code, so an unusable key says which way it was unusable instead of
+// collapsing every cause into one generic mint failure.
 test("invalid credentials and rejected token exchanges fail closed", async () => {
-  assert.equal(await createServiceAccountAccessToken("not-json-or-base64"), "");
-  assert.equal(
-    await createServiceAccountAccessToken(JSON.stringify(credentials), {
+  await assert.rejects(
+    () => createServiceAccountAccessToken("not-json-or-base64"),
+    (error) => {
+      assert.match(error.message, /^tasks_key_[a-z0-9_]+$/);
+      return true;
+    },
+  );
+
+  await assert.rejects(
+    () => createServiceAccountAccessToken(JSON.stringify(credentials), {
       fetchImpl: async () => new Response("denied", { status: 401 }),
     }),
-    "",
+    (error) => {
+      assert.equal(error.message, "tasks_token_http_401");
+      return true;
+    },
+  );
+
+  // A rejected exchange must never be reported as a usable token.
+  await assert.rejects(
+    () => createServiceAccountAccessToken(JSON.stringify(credentials), {
+      fetchImpl: async () => Response.json({ access_token: "" }),
+    }),
+    (error) => {
+      assert.equal(error.message, "tasks_token_missing");
+      return true;
+    },
   );
 });

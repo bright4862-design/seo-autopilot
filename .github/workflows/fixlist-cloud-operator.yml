@@ -1,15 +1,7 @@
 name: FixList Cloud Operator
 
 # Keyless GCP operations for the durable Standard 150 release.
-#
-# Authentication is Workload Identity Federation: no service-account key
-# exists. The WIF provider MUST pin the immutable repository/owner IDs,
-# refs/heads/main, and this exact workflow_ref -- see
-# docs/fixlist-cloud-operator.md. The guard below is defense in depth.
-#
-# The provider resource name and operator service-account email are identifiers,
-# not credentials, so they are pinned here instead of being stored as GitHub
-# secrets. The only credential is the short-lived token minted by WIF per run.
+# Authentication is Workload Identity Federation: no service-account key exists.
 
 on:
   workflow_dispatch:
@@ -22,17 +14,18 @@ on:
           - status
           - verify-iam
           - verify-worker-routes
+          - deploy-dispatch-gateway
           - promote-worker
           - rollback-worker
           - pause-queue
           - resume-queue
           - activate-beta
       revision:
-        description: "Exact Cloud Run revision for promote/rollback/activate (e.g. fixlist-standard150-worker-00003-abc)"
+        description: "Exact Cloud Run revision for promote/rollback/activate"
         required: false
         type: string
       confirm:
-        description: "Mutations require confirmation. PAUSE / RESUME for the queue; the exact revision name for promote, rollback, and activate."
+        description: "Mutations require confirmation: PAUSE/RESUME; exact revision for worker traffic; exact GitHub SHA for gateway deploy."
         required: false
         type: string
 
@@ -52,12 +45,14 @@ env:
   CLOUD_RUN_SERVICE: fixlist-standard150-worker
   CLOUD_TASKS_QUEUE: fixlist-standard150
   TASKS_INVOKER_SERVICE_ACCOUNT: fixlist-standard150-invoker@seo-autopilot-501517.iam.gserviceaccount.com
+  GATEWAY_SERVICE: fixlist-dispatch-gateway
+  GATEWAY_RUNTIME_SERVICE_ACCOUNT: fixlist-base44-dispatcher@seo-autopilot-501517.iam.gserviceaccount.com
 
 jobs:
   operate:
     name: ${{ inputs.operation }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Refuse to run outside main
@@ -66,19 +61,27 @@ jobs:
           echo "The Cloud Operator runs only from refs/heads/main. Got: ${{ github.ref }}" >&2
           exit 2
 
-      # workflow_dispatch records the exact commit in github.sha. Checking out
-      # that SHA prevents main moving between authorization and execution from
-      # swapping the operator script underneath an approved run.
-      # Full history is required: verify-worker-routes resolves the deployed
-      # image back to its Cloud Build _RELEASE_SHA and then inspects that
-      # commit here to decide whether it declares the durable routes. A
-      # shallow clone cannot read an arbitrary historical commit.
       - name: Checkout exact dispatched commit
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Validate canonical gateway before any cloud mutation
+        if: inputs.operation == 'deploy-dispatch-gateway'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/deploy_dispatch_gateway.sh
+          node --check base44/functions/startStandardScanJob/cloudTasks.js
+          python -m pip install -r dispatch-gateway/requirements.txt
+          (
+            cd dispatch-gateway
+            python -m unittest -v test_gateway.py
+          )
+          python -m py_compile dispatch-gateway/main.py dispatch-gateway/test_gateway.py
+          node --test tests/frontend/dispatchGatewayContract.test.mjs
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
@@ -92,10 +95,19 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT }}
 
-      - name: Run allowlisted operation
+      - name: Run existing allowlisted worker operation
+        if: inputs.operation != 'deploy-dispatch-gateway'
         env:
           OPERATION: ${{ inputs.operation }}
           CONFIRM: ${{ inputs.confirm }}
           TARGET_REVISION: ${{ inputs.revision }}
         shell: bash
         run: ./scripts/fixlist-cloud-operator.sh
+
+      - name: Deploy canonical dispatch gateway
+        if: inputs.operation == 'deploy-dispatch-gateway'
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: ./scripts/deploy_dispatch_gateway.sh

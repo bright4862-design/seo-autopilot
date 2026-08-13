@@ -1,0 +1,85 @@
+name: FixList Keyless Gateway CI
+
+on:
+  pull_request:
+    paths:
+      - 'dispatch-gateway/**'
+      - 'base44/functions/startStandardScanJob/cloudTasks.js'
+      - 'tests/frontend/dispatchGatewayContract.test.mjs'
+      - 'scripts/deploy_dispatch_gateway.sh'
+      - 'scripts/bootstrap-fixlist-dispatch-gateway.sh'
+      - '.github/workflows/fixlist-cloud-operator.yml'
+      - '.github/workflows/fixlist-keyless-gateway-ci.yml'
+  push:
+    branches:
+      - agent/fixlist-keyless-gateway-main
+    paths:
+      - 'dispatch-gateway/**'
+      - 'base44/functions/startStandardScanJob/cloudTasks.js'
+      - 'tests/frontend/dispatchGatewayContract.test.mjs'
+      - 'scripts/deploy_dispatch_gateway.sh'
+      - 'scripts/bootstrap-fixlist-dispatch-gateway.sh'
+      - '.github/workflows/fixlist-cloud-operator.yml'
+      - '.github/workflows/fixlist-keyless-gateway-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate shell and Base44 syntax
+        run: |
+          set -euo pipefail
+          bash -n scripts/deploy_dispatch_gateway.sh
+          bash -n scripts/bootstrap-fixlist-dispatch-gateway.sh
+          node --check base44/functions/startStandardScanJob/cloudTasks.js
+
+      - name: Refuse project-wide Run Admin in gateway bootstrap
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          source = Path('scripts/bootstrap-fixlist-dispatch-gateway.sh').read_text(encoding='utf-8')
+          project_run_admin_grant = re.search(
+              r'gcloud\s+projects\s+add-iam-policy-binding[\s\S]{0,500}?--role(?:=|\s+)["\']?roles/run\.admin',
+              source,
+          )
+          if project_run_admin_grant:
+              raise SystemExit('Gateway bootstrap must not grant project-wide roles/run.admin.')
+          if 'roles/run.developer' not in source:
+              raise SystemExit('Gateway bootstrap must grant service-scoped roles/run.developer after creation.')
+          if 'gcloud run services add-iam-policy-binding "$GATEWAY"' not in source:
+              raise SystemExit('Gateway bootstrap lost its service-scoped operator binding.')
+          if 'bindings.role=roles/run.admin' not in source:
+              raise SystemExit('Gateway bootstrap must verify project-wide Run Admin is absent.')
+          print('No project-wide Cloud Run Admin grant is present.')
+          PY
+
+      - name: Install canonical gateway dependencies
+        working-directory: dispatch-gateway
+        run: python -m pip install -r requirements.txt
+
+      - name: Run canonical gateway Python tests
+        working-directory: dispatch-gateway
+        run: python -m unittest -v test_gateway.py
+
+      - name: Run Base44 to gateway contract tests
+        run: node --test tests/frontend/dispatchGatewayContract.test.mjs
+
+      - name: Compile canonical gateway source
+        run: python -m py_compile dispatch-gateway/main.py dispatch-gateway/test_gateway.py
+
+      - name: Build canonical gateway container
+        working-directory: dispatch-gateway
+        run: docker build -t fixlist-dispatch-gateway:${{ github.sha }} .

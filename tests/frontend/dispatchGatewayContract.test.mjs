@@ -1,17 +1,10 @@
 // Keyless dispatch gateway contract.
 //
-// With the org policy blocking service-account key creation, the dispatcher's
-// only provisionable enqueue route is the Cloud Run dispatch gateway: Base44
-// HMAC-signs the {queue_path, task} document with SCAN_EVIDENCE_SIGNING_KEY
-// and the gateway creates the Cloud Task using its own attached identity.
-//
-// The deployed gateway is a validating proxy, not a relay: it rejects any
-// document whose queue path, task-name prefix, target URL, method, invoker,
-// audience, or dispatchDeadline differs from its own configuration. This
-// suite pins the dispatcher to that exact validation surface by re-running
-// the gateway's checks against what the dispatcher actually signs and sends,
-// so either side drifting breaks a contract test before it breaks a customer
-// scan.
+// Base44 cannot depend on a long-lived Google service-account key. The durable
+// dispatcher signs the exact {queue_path, task} document with a short-lived
+// timestamped HMAC derived from SCAN_EVIDENCE_SIGNING_KEY; the public Cloud Run
+// gateway validates that envelope and creates only the allowlisted Cloud Task
+// with its attached Google identity.
 import assert from "node:assert/strict";
 import { createHmac, webcrypto } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -31,6 +24,7 @@ const DRAIN = `${WORKER_ORIGIN}/scan-job-drain`;
 const INVOKER = "fixlist-standard150-invoker@seo-autopilot-501517.iam.gserviceaccount.com";
 const GATEWAY = "https://fixlist-dispatch-gateway-tpucgyfewa-ew.a.run.app";
 const SIGNING_KEY = "test-signing-key";
+const SIGNING_DOMAIN = "fixlist-dispatch-gateway-v1";
 
 const baseArgs = {
   queuePath: QUEUE,
@@ -38,7 +32,12 @@ const baseArgs = {
   invokerServiceAccount: INVOKER,
   scanId: "scan_abc123",
   attemptCount: 1,
-  payload: { scan_id: "scan_abc123", scan_mode: "standard_150", website_url: "https://example.com" },
+  payload: {
+    scan_id: "scan_abc123",
+    scan_mode: "standard_150",
+    respect_robots_txt: true,
+    website_url: "https://example.com",
+  },
 };
 
 function withEnv(env, fn) {
@@ -71,11 +70,23 @@ const gatewayEnv = {
   SCAN_EVIDENCE_SIGNING_KEY: SIGNING_KEY,
 };
 
-// Mirror of the deployed gateway's /dispatch validation (fixlist-dispatch-
-// gateway main.py). Returns the error code the gateway would return, or ""
-// when the request would be accepted. Keep in lockstep with the deployment.
-function gatewayWouldReject(rawBody, signatureHeader) {
-  const expected = createHmac("sha256", SIGNING_KEY).update(rawBody).digest("hex");
+function expectedSignature(timestamp, rawBody) {
+  const derived = createHmac("sha256", SIGNING_KEY)
+    .update(SIGNING_DOMAIN)
+    .digest();
+  return createHmac("sha256", derived)
+    .update(`${timestamp}\n${rawBody}`)
+    .digest("hex");
+}
+
+// Mirror the canonical dispatch-gateway/main.py validation. Returning an error
+// code here means the real gateway would reject the dispatcher request.
+function gatewayWouldReject(rawBody, signatureHeader, timestampHeader, nowSeconds = Math.trunc(Date.now() / 1000)) {
+  if (!/^\d+$/.test(String(timestampHeader || ""))) return "invalid_timestamp";
+  const requestSeconds = Number(timestampHeader);
+  if (Math.abs(nowSeconds - requestSeconds) > 300) return "stale_request";
+
+  const expected = expectedSignature(timestampHeader, rawBody);
   if (!signatureHeader || signatureHeader !== expected) return "invalid_signature";
 
   let payload;
@@ -85,29 +96,59 @@ function gatewayWouldReject(rawBody, signatureHeader) {
     return "invalid_json";
   }
   if (payload.queue_path !== QUEUE) return "invalid_queue";
+
   const task = payload.task;
   if (!task || typeof task !== "object") return "invalid_task";
-  if (!String(task.name || "").startsWith(`${QUEUE}/tasks/standard150-`)) return "invalid_task_name";
+  const prefix = `${QUEUE}/tasks/`;
+  const name = String(task.name || "");
+  if (!name.startsWith(prefix)) return "invalid_task_name";
+  const match = /^standard150-(?:(drain)-)?([A-Za-z0-9_-]+)-a([1-9][0-9]*)$/.exec(name.slice(prefix.length));
+  if (!match) return "invalid_task_name";
+  const isDrain = Boolean(match[1]);
+  const nameScanId = match[2];
+
+  if (task.dispatchDeadline !== "480s") return "invalid_dispatch_deadline";
+
   const http = task.httpRequest;
   if (!http || typeof http !== "object") return "invalid_http_request";
-  if (http.url !== WORKER && http.url !== DRAIN) return "invalid_worker_target";
   if (String(http.httpMethod || "").toUpperCase() !== "POST") return "invalid_method";
+  const expectedTarget = isDrain ? DRAIN : WORKER;
+  if ((http.url !== WORKER && http.url !== DRAIN) || http.url !== expectedTarget) {
+    return "invalid_worker_target";
+  }
+
   const oidc = http.oidcToken;
   if (!oidc || typeof oidc !== "object") return "missing_oidc";
   if (oidc.serviceAccountEmail !== INVOKER) return "invalid_invoker";
   if (oidc.audience !== WORKER_ORIGIN) return "invalid_audience";
-  if (task.dispatchDeadline !== "480s") return "invalid_dispatch_deadline";
+
   let job;
   try {
     job = JSON.parse(Buffer.from(String(http.body || ""), "base64").toString("utf8"));
   } catch {
     return "invalid_task_body";
   }
-  if (!String(job.scan_id || "").trim()) return "missing_scan_id";
-  if (job.scan_mode !== undefined && job.scan_mode !== null && job.scan_mode !== "standard_150") {
-    return "invalid_scan_mode";
+  const scanId = String(job.scan_id || "").replace(/[^A-Za-z0-9_-]/g, "");
+  if (!scanId || scanId !== nameScanId) return "scan_identity_mismatch";
+
+  if (isDrain) {
+    if (!task.scheduleTime) return "missing_drain_schedule";
+    if (!String(job.drain_after || "").trim()) return "missing_drain_after";
+  } else {
+    if (task.scheduleTime) return "unexpected_scan_schedule";
+    if (job.scan_mode !== "standard_150") return "invalid_scan_mode";
+    if (job.respect_robots_txt !== true) return "invalid_robots_policy";
   }
+
   return "";
+}
+
+function rejectionForCall(call) {
+  return gatewayWouldReject(
+    call.init.body,
+    call.init.headers["x-fixlist-signature"],
+    call.init.headers["x-fixlist-timestamp"],
+  );
 }
 
 test("a signing key must exist before any network dispatch is attempted", async () => {
@@ -123,63 +164,75 @@ test("a signing key must exist before any network dispatch is attempted", async 
     }));
 });
 
-test("the scan task the dispatcher signs passes the deployed gateway's validation", async () => {
+test("the scan task the dispatcher signs passes the canonical gateway validation", async () => {
   await withEnv(gatewayEnv, () =>
     withFetch(() => Response.json({ success: true, deduplicated: false }), async (calls) => {
       const result = await enqueueScanJob(baseArgs);
       assert.equal(result.ok, true);
       assert.equal(calls.length, 1);
 
-      const { url, init } = calls[0];
-      assert.equal(url, `${GATEWAY}/dispatch`);
-      assert.equal(init.method, "POST");
-      assert.equal(init.headers["content-type"], "application/json");
-      assert.equal(gatewayWouldReject(init.body, init.headers["x-fixlist-signature"]), "");
+      const call = calls[0];
+      assert.equal(call.url, `${GATEWAY}/dispatch`);
+      assert.equal(call.init.method, "POST");
+      assert.equal(call.init.headers["content-type"], "application/json");
+      assert.match(call.init.headers["x-fixlist-timestamp"], /^\d{10}$/);
+      assert.match(call.init.headers["x-fixlist-signature"], /^[0-9a-f]{64}$/);
+      assert.equal(rejectionForCall(call), "");
 
-      // The signed document is exactly {queue_path, task} — nothing else for
-      // the gateway to trust or ignore.
-      assert.deepEqual(Object.keys(JSON.parse(init.body)).sort(), ["queue_path", "task"]);
-      const { task } = JSON.parse(init.body);
+      assert.deepEqual(Object.keys(JSON.parse(call.init.body)).sort(), ["queue_path", "task"]);
+      const { task } = JSON.parse(call.init.body);
       assert.equal(task.name, `${QUEUE}/tasks/standard150-scan_abc123-a1`);
       assert.equal(task.httpRequest.url, WORKER);
     }));
 });
 
-test("the drain watchdog task passes the same gateway validation", async () => {
+test("the drain watchdog task passes the same canonical gateway validation", async () => {
   await withEnv(gatewayEnv, () =>
     withFetch(() => Response.json({ success: true, deduplicated: false }), async (calls) => {
       const result = await enqueueScanDrain({
         ...baseArgs,
-        payload: { ...baseArgs.payload, scan_mode: undefined, drain_after: "2026-08-13T00:00:00.000Z" },
+        payload: {
+          scan_id: "scan_abc123",
+          website_url: "https://example.com",
+          drain_after: "2026-08-13T00:00:00.000Z",
+        },
       });
       assert.equal(result.ok, true);
-      const { init } = calls[0];
-      assert.equal(gatewayWouldReject(init.body, init.headers["x-fixlist-signature"]), "");
-      const { task } = JSON.parse(init.body);
+      assert.equal(rejectionForCall(calls[0]), "");
+      const { task } = JSON.parse(calls[0].init.body);
       assert.equal(task.name, `${QUEUE}/tasks/standard150-drain-scan_abc123-a1`);
       assert.equal(task.httpRequest.url, DRAIN);
       assert.ok(task.scheduleTime, "the watchdog must be delayed, not immediate");
     }));
 });
 
+test("timestamp and signature are bound to the exact request body", async () => {
+  await withEnv(gatewayEnv, () =>
+    withFetch(() => Response.json({ success: true }), async (calls) => {
+      await enqueueScanJob(baseArgs);
+      const call = calls[0];
+      const timestamp = call.init.headers["x-fixlist-timestamp"];
+      const signature = call.init.headers["x-fixlist-signature"];
+      assert.equal(signature, expectedSignature(timestamp, call.init.body));
+      assert.equal(gatewayWouldReject(call.init.body, signature, String(Number(timestamp) - 301), Number(timestamp)), "stale_request");
+      assert.equal(gatewayWouldReject(`${call.init.body} `, signature, timestamp, Number(timestamp)), "invalid_signature");
+    }));
+});
+
 test("gateway responses map to the dispatcher's dedup and retry semantics", async () => {
   await withEnv(gatewayEnv, async () => {
-    // 409 — deterministic task name already exists: success, deduplicated.
     await withFetch(() => new Response("conflict", { status: 409 }), async () => {
       const result = await enqueueScanJob(baseArgs);
       assert.equal(result.ok, true);
       assert.equal(result.deduplicated, true);
     });
 
-    // 200 with deduplicated:true from the gateway's own 409 mapping.
     await withFetch(() => Response.json({ success: true, deduplicated: true, taskName: "t" }), async () => {
       const result = await enqueueScanJob(baseArgs);
       assert.equal(result.ok, true);
       assert.equal(result.deduplicated, true);
     });
 
-    // 4xx — the gateway rejected the document: definite failure, safe to
-    // terminalize the run; the task was provably never created.
     await withFetch(() => new Response("denied", { status: 403 }), async () => {
       const result = await enqueueScanJob(baseArgs);
       assert.equal(result.ok, false);
@@ -187,15 +240,12 @@ test("gateway responses map to the dispatcher's dedup and retry semantics", asyn
       assert.equal(result.failureCode, "dispatch_gateway_http_403");
     });
 
-    // 5xx — the gateway may or may not have reached Cloud Tasks: the outcome
-    // is unknown, so the dispatcher must NOT terminalize the run as failed.
-    await withFetch(() => new Response("upstream", { status: 502 }), async () => {
+    await withFetch(() => new Response("upstream", { status: 503 }), async () => {
       const result = await enqueueScanJob(baseArgs);
       assert.equal(result.ok, false);
       assert.equal(result.outcomeUnknown, true);
     });
 
-    // Network failure — same uncertainty.
     await withFetch(() => {
       throw new Error("connection reset");
     }, async () => {
@@ -207,60 +257,52 @@ test("gateway responses map to the dispatcher's dedup and retry semantics", asyn
   });
 });
 
-test("the worker URL must match the gateway's configuration byte for byte", async () => {
-  // The gateway compares http.url against its own SCAN_WORKER_URL with
-  // rstrip("/") applied at startup. The dispatcher sends SCAN_WORKER_URL
-  // exactly as Base44 supplies it, so a trailing slash or a bare origin in
-  // the Base44 secret produces invalid_worker_target at the gateway — a
-  // loud, definite 400, never a silently mistargeted task.
+test("the worker URL must match the gateway configuration byte for byte", async () => {
   await withEnv(gatewayEnv, () =>
     withFetch(() => Response.json({ success: true }), async (calls) => {
       await enqueueScanJob({ ...baseArgs, workerUrl: `${WORKER}/` });
-      const { init } = calls[0];
-      assert.equal(gatewayWouldReject(init.body, init.headers["x-fixlist-signature"]), "invalid_worker_target");
+      assert.equal(rejectionForCall(calls[0]), "invalid_worker_target");
     }));
 });
 
 test("the canonical gateway source enforces the validation this suite mirrors", () => {
-  // dispatch-gateway/main.py is the deployed artifact's canonical source.
-  // gatewayWouldReject() above re-implements its checks in JS; this test ties
-  // the two together textually so an edit to the Python that adds, removes,
-  // or relaxes a check cannot land without this suite noticing.
   const source = readFileSync(new URL("../../dispatch-gateway/main.py", import.meta.url), "utf8");
 
   for (const pinned of [
+    'request.headers.get("x-fixlist-timestamp", "")',
     'request.headers.get("x-fixlist-signature", "")',
+    'b"fixlist-dispatch-gateway-v1"',
+    "MAX_CLOCK_SKEW_SECONDS",
     "hmac.compare_digest(supplied, expected)",
     'payload.get("queue_path") != QUEUE_PATH',
-    'f"{QUEUE_PATH}/tasks/standard150-"',
-    "target not in ALLOWED_URLS",
-    '!= "POST"',
+    "TASK_RE.fullmatch(short_name)",
+    "scan_id != name_scan_id",
+    "target != expected_target",
     'oidc.get("serviceAccountEmail") != INVOKER_SA',
     'oidc.get("audience") != WORKER_ORIGIN',
     'task.get("dispatchDeadline") != "480s"',
-    'job.get("scan_mode") not in (None, "standard_150")',
-    'os.environ["SCAN_WORKER_URL"].rstrip("/")',
-    'f"{WORKER_ORIGIN}/scan-job-drain"',
+    'job.get("scan_mode") != "standard_150"',
+    'job.get("respect_robots_txt") is not True',
+    'not task.get("scheduleTime")',
+    'task.get("scheduleTime")',
     "upstream.status_code == 409",
-    "502 if upstream.status_code >= 500 else 403",
   ]) {
     assert.ok(source.includes(pinned), `gateway source lost its pinned check: ${pinned}`);
   }
 
-  // The gateway must never accept a Google key or bypass ADC.
   assert.doesNotMatch(source, /GCP_SERVICE_ACCOUNT_KEY|private_key/);
   assert.match(source, /google\.auth\.default\(/);
 
-  // The deploy script must deploy the canonical directory and mount the
-  // signing key from Secret Manager, never as a plaintext env var.
   const deploy = readFileSync(new URL("../../scripts/deploy_dispatch_gateway.sh", import.meta.url), "utf8");
   assert.match(deploy, /--source="\$SOURCE_DIR"/);
   assert.match(deploy, /--set-secrets="SCAN_EVIDENCE_SIGNING_KEY=/);
+  assert.match(deploy, /--no-invoker-iam-check/);
+  assert.match(deploy, /confirmation must equal exact source SHA/);
   assert.doesNotMatch(deploy, /--set-env-vars="[^"]*SCAN_EVIDENCE_SIGNING_KEY/);
   assert.doesNotMatch(deploy, /keys create|iam service-accounts keys/);
 });
 
-test("without a gateway URL the key-based route is selected and fails closed", async () => {
+test("without a gateway URL the legacy key route fails closed", async () => {
   await withEnv({}, () =>
     withFetch(() => {
       throw new Error("must not reach the network");

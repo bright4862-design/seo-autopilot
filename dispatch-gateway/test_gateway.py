@@ -178,6 +178,16 @@ class SignatureTests(unittest.TestCase):
         self.assertEqual(payload["queue"], main.QUEUE_PATH)
         self.assertEqual(payload["worker_origin"], main.WORKER_ORIGIN)
 
+    def test_dispatch_rejects_oversized_body_before_auth(self):
+        client = main.app.test_client()
+        response = client.post(
+            "/dispatch",
+            data=b"x" * (main.MAX_DISPATCH_BODY_BYTES + 1),
+            headers={"content-type": "application/json"},
+        )
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(response.get_json()["error"], "request_too_large")
+
     def test_dispatch_rejects_missing_timestamp_before_cloud_auth(self):
         client = main.app.test_client()
         response = client.post("/dispatch", json={"queue_path": main.QUEUE_PATH, "task": task()})

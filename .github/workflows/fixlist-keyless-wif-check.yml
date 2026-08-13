@@ -6,6 +6,7 @@ on:
       - agent/fixlist-keyless-recovery
     paths:
       - '.github/workflows/fixlist-keyless-wif-check.yml'
+      - '.github/fixlist-keyless-wif-trigger'
       - 'ops/fixlist-dispatch-gateway/**'
 
 permissions:

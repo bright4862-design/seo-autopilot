@@ -1,27 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  AlertCircle,
-  Bug,
-  Copy,
-  Download,
-  FileJson,
-  Loader2,
-  RefreshCw,
-  Trash2,
-} from "lucide-react";
+import { AlertCircle, Loader2 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { base44 } from "@/api/base44Client";
 import useDurableScanCompletion from "@/hooks/useDurableScanCompletion";
 import { ensureScanProject } from "@/lib/activeProject";
 import { normalizeActionPriority, normalizeFindingEvidence, normalizeReviewEvidenceState, normalizeReviewScope, selectFinalReviewFixes } from "@/lib/reviewContract";
 import { mergePersistedScanRunRecord } from "@/lib/persistedScanRecord";
-import { RELEASE_AUTHORITY_CONTRACT, buildAuthorityMarkers, buildDiagnosticAuthorityMarkers, buildScanRunFields } from "@/lib/scanRunModel";
+import { RELEASE_AUTHORITY_CONTRACT, buildAuthorityMarkers, buildScanRunFields } from "@/lib/scanRunModel";
 import { createScanRequestId, normalizedScanDomain, scanReleaseIdentity } from "@/lib/scanRunIdentity";
 import { beginScanRun, cancelScanRun, completeScanRun, failScanRun, getScanRunWithFixList, markScanRunReviewing, recoverOrphanedScanRuns } from "@/lib/scanRuns";
-import { UNLOCK_PRICE_LABEL, loadAccess, recordScanUsed } from "@/lib/access";
+import { UNLOCK_PRICE_LABEL, loadAccess } from "@/lib/access";
 import {
   CUSTOMER_BOUNDARY_EVENT,
   clearCustomerAuthBoundary,
@@ -75,17 +65,11 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   const [activeStep, setActiveStep] = useState("");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [error, setError] = useState("");
-  const [debugOpen, setDebugOpen] = useState(false);
   const [urlError, setUrlError] = useState("");
-  // Debug tooling is internal-only. Customers never see it unless they opt in
-  // explicitly via ?debug=1 or an internal build flag.
-  const debugVisible = useMemo(() => isDebugRequested(), []);
   const [debugData, setDebugData] = useState(() => emptyRuntimeDebug());
   const debugDataRef = useRef(debugData);
   const submitLockRef = useRef(false);
   const requestEpochRef = useRef(0);
-  const [debugCopied, setDebugCopied] = useState(false);
-  const [debugCompressed, setDebugCompressed] = useState(true);
   // Durable identity of the scan currently in flight. Once it exists, the saved
   // ScanRun -- not this component's function chain -- decides when the result
   // opens, so a missed response or navigation callback cannot strand the user.
@@ -96,8 +80,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   const durableScanFailed = ["failed", "cancelled"].includes(durableScan.status);
   const cleanedKeywords = useMemo(() => splitLines(keywordsText), [keywordsText]);
   const selectedCms = CMS_OPTIONS.find((item) => item.value === cmsPlatform);
-  const displayedDebugData = debugCompressed ? compressDebugData(debugData) : debugData;
-  const displayedDebugText = JSON.stringify(displayedDebugData, null, debugCompressed ? 0 : 2);
   const progressIndex = scanProgressIndex(activeStep);
 
   useEffect(() => {
@@ -171,35 +153,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
     setUrlError("");
   }
 
-  async function copyDebugData(compact = debugCompressed) {
-    try {
-      const snapshot = debugDataRef.current;
-      const payload = compact ? compressDebugData(snapshot) : snapshot;
-      await navigator.clipboard.writeText(JSON.stringify(payload, null, compact ? 0 : 2));
-      setDebugCopied(true);
-      window.setTimeout(() => setDebugCopied(false), 1500);
-    } catch (copyError) {
-      console.warn("Could not copy debug data.", copyError);
-    }
-  }
-
-  function downloadDebugData(compact = true) {
-    const snapshot = debugDataRef.current;
-    const payload = compact ? compressDebugData(snapshot) : snapshot;
-    const website = snapshot?.parsed?.runtime?.website_url || websiteUrl || "fixlist";
-    const host = safeHostname(website) || "fixlist";
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const blob = new Blob([JSON.stringify(payload, null, compact ? 0 : 2)], { type: "application/json;charset=utf-8" });
-    const objectUrl = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = objectUrl;
-    link.download = `fixlist-debug-${compact ? "compact" : "full"}-${host}-${timestamp}.json`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-  }
-
   async function handleSubmit(event) {
     event.preventDefault();
     if (submitLockRef.current || saving) return;
@@ -236,7 +189,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       submitLockRef.current = false;
       setSubmitting(false);
       setActiveStep("");
-      setError(`You've used your free test scan. Unlock full access for ${UNLOCK_PRICE_LABEL} on the Billing page to run more scans and see every result.`);
+      setError(`A paid FixList beta pass is required to run Standard 150 scans. Unlock lifetime access for ${UNLOCK_PRICE_LABEL} on the Billing page.`);
       return;
     }
 
@@ -475,8 +428,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       } else if (persistedCompletion?.fixListId) {
         mergedFinal = { ...mergedFinal, fix_list_id: persistedCompletion.fixListId };
       }
-      // Only a durably persisted scan consumes the customer's allowance.
-      await recordScanUsed().catch(() => {});
       recordDebug({ ...identityDebug(), status: "saved", stage: "dashboard_saved", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), compact_debug_available: true, download_available: true });
       refreshDebugData();
       // Navigation happens only after a durable terminal result exists.
@@ -509,7 +460,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         : null;
       if (recoveredCompletion?.scanRun?.status === "complete" && recoveredCompletion?.fixListId) {
         logScanBoundary("browser_recovered_saved_result", identityDebug(), { status: "complete" });
-        await recordScanUsed().catch(() => {});
         navigate(`/dashboard?scan=complete&scan_id=${encodeURIComponent(scanId)}`);
         return;
       }
@@ -554,34 +504,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
           <h1 className="text-[32px] font-semibold leading-tight tracking-tight text-ink sm:text-[38px]">Create your FixList</h1>
           <p className="max-w-[52ch] text-[15px] leading-relaxed text-ink-muted">Enter a website URL and we’ll turn the scan into a plain-English list of what to fix, what matters most, and what may need a developer.</p>
         </div>
-
-        {debugVisible ? (
-          <div className="flex justify-end">
-            <Button type="button" variant="outline" onClick={() => { refreshDebugData(); setDebugOpen((value) => !value); }} className="shrink-0"><Bug className="mr-2 h-4 w-4" />{debugOpen ? "Hide debug" : "Show debug"}</Button>
-          </div>
-        ) : null}
-
-        {debugVisible && debugOpen ? (
-          <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h3 className="font-bold text-slate-950">Scan debug</h3>
-                <p className="mt-1 text-xs text-slate-500">Compact mode limits runtime previews so the JSON is small enough to share. No customer scan data is read from browser storage.</p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="outline" onClick={refreshDebugData}><RefreshCw className="mr-2 h-4 w-4" />Refresh</Button>
-                <Button type="button" variant="outline" onClick={() => setDebugCompressed((value) => !value)}><FileJson className="mr-2 h-4 w-4" />{debugCompressed ? "Show full" : "Compress"}</Button>
-                <Button type="button" variant="outline" onClick={() => copyDebugData(debugCompressed)}><Copy className="mr-2 h-4 w-4" />{debugCopied ? "Copied" : debugCompressed ? "Copy compact" : "Copy full"}</Button>
-                <Button type="button" variant="outline" onClick={() => downloadDebugData(true)}><Download className="mr-2 h-4 w-4" />Download compact</Button>
-                <Button type="button" variant="outline" onClick={() => downloadDebugData(false)}><Download className="mr-2 h-4 w-4" />Download full</Button>
-                <Button type="button" variant="outline" onClick={clearDebugScanData}><Trash2 className="mr-2 h-4 w-4" />Clear scans</Button>
-              </div>
-            </div>
-            <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-slate-950">
-              <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words p-4 text-xs leading-5 text-slate-100">{displayedDebugText}</pre>
-            </div>
-          </div>
-        ) : null}
 
         <div className="flex flex-col gap-6">
           <div>

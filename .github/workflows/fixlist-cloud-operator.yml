@@ -3,13 +3,15 @@ name: FixList Cloud Operator
 # Keyless GCP operations for the durable Standard 150 release.
 #
 # Authentication is Workload Identity Federation: no service-account key
-# exists, which is required here because the org policy
-# constraints/iam.disableServiceAccountKeyCreation blocks key creation
-# outright. The WIF provider MUST carry an attribute condition pinning both
-# the repository and refs/heads/main -- see docs/fixlist-cloud-operator.md.
+# exists. The WIF provider MUST carry an attribute condition pinning both the
+# repository and refs/heads/main -- see docs/fixlist-cloud-operator.md.
 # Without that condition any branch could run this workflow with the
 # operator's credentials, so the guard below is defence in depth, not the
 # primary control.
+#
+# The provider resource name and operator service-account email are identifiers,
+# not credentials, so they are pinned here instead of being stored as GitHub
+# secrets. The only credential is the short-lived token minted by WIF per run.
 
 on:
   workflow_dispatch:
@@ -47,6 +49,8 @@ concurrency:
 env:
   GCP_PROJECT: seo-autopilot-501517
   GCP_REGION: europe-west1
+  GCP_WIF_PROVIDER: projects/919035207432/locations/global/workloadIdentityPools/github/providers/github-actions
+  GCP_OPERATOR_SERVICE_ACCOUNT: fixlist-github-operator@seo-autopilot-501517.iam.gserviceaccount.com
   CLOUD_RUN_SERVICE: fixlist-standard150-worker
   CLOUD_TASKS_QUEUE: fixlist-standard150
   TASKS_INVOKER_SERVICE_ACCOUNT: fixlist-standard150-invoker@seo-autopilot-501517.iam.gserviceaccount.com
@@ -78,8 +82,8 @@ jobs:
         uses: google-github-actions/auth@v3
         with:
           project_id: ${{ env.GCP_PROJECT }}
-          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_OPERATOR_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3

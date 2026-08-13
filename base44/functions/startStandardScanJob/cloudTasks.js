@@ -94,20 +94,32 @@ export function buildCloudDrainTaskRequest({
   });
 }
 
-async function hmacHex(secret, payloadText) {
+async function hmacBytes(secretBytes, payloadText) {
   const key = await crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode(secret),
+    secretBytes,
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],
   );
-  const signature = await crypto.subtle.sign(
+  return new Uint8Array(await crypto.subtle.sign(
     "HMAC",
     key,
     new TextEncoder().encode(payloadText),
+  ));
+}
+
+async function dispatchSignature(rootSecret, timestamp, payloadText) {
+  const encoder = new TextEncoder();
+  const derivedKey = await hmacBytes(
+    encoder.encode(rootSecret),
+    "fixlist-dispatch-gateway-v1",
   );
-  return Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const signature = await hmacBytes(
+    derivedKey,
+    `${timestamp}\n${payloadText}`,
+  );
+  return Array.from(signature, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 async function accessToken() {
@@ -128,9 +140,10 @@ async function accessToken() {
 
 async function createTaskViaGateway({ gatewayUrl, signingKey, queuePath, body, taskName, attemptCount }) {
   const payloadText = JSON.stringify({ queue_path: queuePath, task: body?.task || null });
+  const timestamp = String(Math.trunc(Date.now() / 1000));
   let signature = "";
   try {
-    signature = await hmacHex(signingKey, payloadText);
+    signature = await dispatchSignature(signingKey, timestamp, payloadText);
   } catch {
     return { ok: false, outcomeUnknown: false, failureCode: "dispatch_gateway_sign_failed" };
   }
@@ -141,6 +154,7 @@ async function createTaskViaGateway({ gatewayUrl, signingKey, queuePath, body, t
       method: "POST",
       headers: {
         "content-type": "application/json",
+        "x-fixlist-timestamp": timestamp,
         "x-fixlist-signature": signature,
       },
       body: payloadText,

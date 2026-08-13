@@ -100,12 +100,12 @@ gcloud iam service-accounts add-iam-policy-binding "$OPERATOR_SA" \
 say "Granting temporary recovery deploy permissions to the GitHub operator"
 # Source deploy requires run.sourceDeveloper + serviceUsageConsumer. Configuring
 # the gateway's Secret Manager reference and public IAM requires run.admin.
-# These operator grants are bootstrap/recovery grants and should be narrowed or
-# removed after the gateway is verified and production is stable.
+# logging.viewer is read-only and supports automated post-deploy/probe evidence.
 for ROLE in \
   roles/run.admin \
   roles/run.sourceDeveloper \
-  roles/serviceusage.serviceUsageConsumer; do
+  roles/serviceusage.serviceUsageConsumer \
+  roles/logging.viewer; do
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member="serviceAccount:${OPERATOR_SA}" \
     --role="$ROLE" \
@@ -131,6 +131,14 @@ gcloud tasks queues add-iam-policy-binding "$QUEUE" \
   --location="$REGION" \
   --member="serviceAccount:${GATEWAY_RUNTIME_SA}" \
   --role="roles/cloudtasks.enqueuer" \
+  --quiet >/dev/null
+
+say "Granting the GitHub operator read-only access to that same queue"
+gcloud tasks queues add-iam-policy-binding "$QUEUE" \
+  --project="$PROJECT_ID" \
+  --location="$REGION" \
+  --member="serviceAccount:${OPERATOR_SA}" \
+  --role="roles/cloudtasks.viewer" \
   --quiet >/dev/null
 
 say "Allowing the gateway runtime to use only the existing task OIDC identity"

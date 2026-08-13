@@ -57,6 +57,24 @@ if ! gcloud iam service-accounts describe "$RELEASE_OPERATOR_SA" --project="$PRO
     --description="Dedicated runtime identity for the allowlisted FixList Standard 150 release operator"
 fi
 
+say "Wait for the release operator identity to propagate into project IAM"
+for ATTEMPT in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  if gcloud projects add-iam-policy-binding "$PROJECT" \
+    --member="serviceAccount:${RELEASE_OPERATOR_SA}" \
+    --role="roles/serviceusage.serviceUsageConsumer" \
+    --condition=None \
+    --quiet >/dev/null; then
+    echo "Release operator identity is visible to project IAM."
+    break
+  fi
+  if [[ "$ATTEMPT" -eq 12 ]]; then
+    echo "Release operator identity did not propagate into project IAM after 12 attempts." >&2
+    exit 5
+  fi
+  echo "Project IAM has not recognized the new service account yet; retrying in 5s (${ATTEMPT}/12)..." >&2
+  sleep 5
+done
+
 say "Grant only project-level read/use roles required by the release agent"
 for ROLE in \
   roles/aiplatform.user \

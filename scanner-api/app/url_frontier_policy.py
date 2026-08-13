@@ -109,7 +109,20 @@ def classify_frontier_url(url: str) -> FrontierDecision:
             )
         kept.append((key, value))
 
-    normalized = urlunsplit((parts.scheme, parts.netloc, parts.path or "/", urlencode(kept, doseq=True), ""))
+    # Nothing was stripped, so return the URL byte-for-byte. Re-serializing an
+    # unchanged URL is not free: urlunsplit would rewrite an empty path to "/",
+    # collapsing https://example.com and https://example.com/ into one crawl
+    # identity. normalize_url() deliberately keeps those distinct (it rstrips
+    # only when path != "/"), and the final-URL dedup layer counts them as a
+    # duplicate pair when both resolve to the same final URL. Collapsing here
+    # would silently zero final_url_duplicates_deduped.
+    if not removed:
+        return FrontierDecision(url=raw, allowed=True, changed=False)
+
+    # Only the query is rewritten. The path is preserved exactly as received so
+    # trailing-slash identity, and every accounting layer downstream that
+    # depends on it, is unaffected.
+    normalized = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(kept, doseq=True), ""))
     return FrontierDecision(
         url=normalized,
         allowed=True,

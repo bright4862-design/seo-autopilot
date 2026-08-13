@@ -48,6 +48,51 @@ class UrlFrontierPolicyTests(unittest.TestCase):
     def test_version_is_explicit(self):
         self.assertTrue(FRONTIER_POLICY_VERSION.startswith("url_frontier_policy_v1"))
 
+    def test_trailing_slash_identity_is_never_collapsed(self):
+        # normalize_url() deliberately keeps these distinct: it rstrips only
+        # when path != "/". The final-URL dedup layer relies on receiving both
+        # forms to count a duplicate pair when they resolve to the same final
+        # URL. Rewriting an empty path to "/" here silently zeroes
+        # final_url_duplicates_deduped while the returned pages still look right.
+        bare = classify_frontier_url("https://example.com")
+        slashed = classify_frontier_url("https://example.com/")
+        self.assertTrue(bare.allowed and slashed.allowed)
+        self.assertEqual(bare.url, "https://example.com")
+        self.assertEqual(slashed.url, "https://example.com/")
+        self.assertNotEqual(bare.url, slashed.url)
+
+    def test_unchanged_urls_are_returned_byte_for_byte(self):
+        # Any URL with nothing to strip must survive untouched, so the frontier
+        # cannot perturb an identity contract it does not own.
+        for url in (
+            "https://example.com",
+            "https://example.com/",
+            "https://example.com/about",
+            "https://example.com/about/",
+            "https://example.com/p?a=1&b=2",
+            "https://example.com/p/?a=1",
+        ):
+            decision = classify_frontier_url(url)
+            self.assertTrue(decision.allowed, url)
+            self.assertEqual(decision.url, url, url)
+            self.assertFalse(decision.changed, url)
+            self.assertEqual(decision.removed_params, ())
+
+    def test_stripping_preserves_the_path_exactly(self):
+        # Only the query is rewritten when a parameter is removed.
+        self.assertEqual(
+            classify_frontier_url("https://example.com?utm_source=x").url,
+            "https://example.com",
+        )
+        self.assertEqual(
+            classify_frontier_url("https://example.com/?utm_source=x").url,
+            "https://example.com/",
+        )
+        self.assertEqual(
+            classify_frontier_url("https://example.com/a/?sid=1&v=2").url,
+            "https://example.com/a/?v=2",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -76,7 +76,7 @@ verify_iam() {
 # probes cannot answer this: Cloud Run IAM rejects them before routing. The
 # only external proof is the image's build provenance.
 verify_worker_routes() {
-  local revision image digest
+  local revision image digest timeout release_sha verdict=0
   revision="${TARGET_REVISION:-$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
     --region="$GCP_REGION" --project="$GCP_PROJECT" \
     --format='value(status.latestReadyRevisionName)')}"
@@ -90,28 +90,84 @@ verify_worker_routes() {
 
   digest="${image##*@}"
   if [ "$digest" = "$image" ]; then
-    echo
-    echo "WARNING: the revision runs a mutable tag, not an immutable digest."
-    echo "An immutable release must pin image@sha256:..."
+    echo "WARNING: revision runs a mutable tag, not an immutable digest."
+    digest=""
+  fi
+
+  # Match the image back to the Cloud Build that produced it. gcloud's --filter
+  # cannot reliably index into results.images, so the builds are pulled as JSON
+  # and matched here: by digest when the revision is digest-pinned, otherwise by
+  # image name.
+  echo
+  echo "=== Build provenance ==="
+  release_sha=$(gcloud builds list --project="$GCP_PROJECT" --limit=50 \
+    --format=json 2>/dev/null | python3 -c '
+import json,sys
+builds=json.load(sys.stdin)
+image=sys.argv[1]; digest=sys.argv[2]
+name=image.split("@")[0].split(":")[0]
+for b in builds:
+    imgs=(b.get("results") or {}).get("images") or []
+    names=[i.get("name","") for i in imgs]
+    digs=[i.get("digest","") for i in imgs]
+    hit=(digest and digest in digs) or (not digest and any(n.split("@")[0].split(":")[0]==name for n in names))
+    if hit:
+        sha=(b.get("substitutions") or {}).get("_RELEASE_SHA","")
+        print(sha)
+        sys.stderr.write("build %s  status=%s  created=%s  _RELEASE_SHA=%s\n" % (
+            b.get("id",""), b.get("status",""), b.get("createTime",""), sha or "(unset)"))
+        break
+' "$image" "$digest" || true)
+
+  # The runner has this repository checked out with full history, so whether a
+  # SHA declares the durable routes is a fact we can decide here rather than
+  # asking a human to eyeball it.
+  echo
+  echo "=== Route verification ==="
+  if [ -z "$release_sha" ]; then
+    echo "INDETERMINATE: no Cloud Build recorded for this image, or _RELEASE_SHA unset."
+    echo "The image predates provenance-tagged builds. Rebuild from"
+    echo "cloudbuild.durable-worker.yaml at a known SHA before promoting."
+    verdict=1
+  elif ! git cat-file -e "${release_sha}^{commit}" 2>/dev/null; then
+    echo "INDETERMINATE: _RELEASE_SHA $release_sha is not a commit in this repository."
+    verdict=1
+  else
+    echo "built from: $release_sha"
+    if git cat-file -e "${release_sha}:scanner-api/app/scan_job.py" 2>/dev/null \
+      && git show "${release_sha}:scanner-api/app/main.py" 2>/dev/null | grep -q '@app.post("/scan-job")' \
+      && git show "${release_sha}:scanner-api/app/main.py" 2>/dev/null | grep -q '@app.post("/scan-job-drain")'; then
+      echo "PASS: that commit has scan_job.py and declares /scan-job and /scan-job-drain."
+    else
+      echo "FAIL: that commit does NOT declare both durable routes."
+      echo "Every Cloud Task would 404, and the drain watchdog would 404 too,"
+      echo "so runs would never reach a terminal state. Rebuild the worker from"
+      echo "cloudbuild.durable-worker.yaml at current main before promoting."
+      verdict=1
+    fi
   fi
 
   echo
-  echo "=== Build provenance for this image ==="
-  gcloud builds list --project="$GCP_PROJECT" --limit=20 \
-    --format='table(id,status,createTime,substitutions._RELEASE_SHA,results.images[0].name)' \
-    --filter="results.images[0].name~$(printf '%s' "${image%%@*}" | sed 's/[].[^$\\*/]/\\&/g')" || true
+  echo "=== Request timeout (must equal the 480s dispatchDeadline) ==="
+  timeout=$(gcloud run revisions describe "$revision" \
+    --region="$GCP_REGION" --project="$GCP_PROJECT" \
+    --format='value(spec.timeoutSeconds)')
+  echo "timeoutSeconds: ${timeout:-unknown}"
+  if [ "$timeout" != "480" ]; then
+    echo "FAIL: expected 480. A shorter timeout kills the worker mid-crawl;"
+    echo "a longer one outlives the Cloud Tasks dispatch deadline."
+    verdict=1
+  else
+    echo "PASS"
+  fi
 
   echo
-  echo "ROUTE VERIFICATION IS NOT COMPLETE UNTIL A HUMAN CONFIRMS:"
-  echo "  the _RELEASE_SHA above is a commit whose scanner-api/app/main.py"
-  echo "  declares @app.post(\"/scan-job\") and @app.post(\"/scan-job-drain\")."
-  echo "  Current main contains those routes, but an older deployed revision"
-  echo "  may still have been built before they landed."
-  echo
-  echo "=== Revision request timeout (must be 480 to match dispatchDeadline) ==="
-  gcloud run revisions describe "$revision" \
-    --region="$GCP_REGION" --project="$GCP_PROJECT" \
-    --format='value(spec.timeoutSeconds)'
+  if [ "$verdict" -eq 0 ]; then
+    echo "WORKER ROUTES VERIFIED"
+  else
+    echo "WORKER NOT VERIFIED -- do not promote or resume the queue."
+    return 1
+  fi
 }
 
 require_confirmation() {

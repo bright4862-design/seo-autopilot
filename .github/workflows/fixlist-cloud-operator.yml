@@ -69,10 +69,15 @@ jobs:
       # workflow_dispatch records the exact commit in github.sha. Checking out
       # that SHA prevents main moving between authorization and execution from
       # swapping the operator script underneath an approved run.
+      # Full history is required: verify-worker-routes resolves the deployed
+      # image back to its Cloud Build _RELEASE_SHA and then inspects that
+      # commit here to decide whether it declares the durable routes. A
+      # shallow clone cannot read an arbitrary historical commit.
       - name: Checkout exact dispatched commit
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Authenticate to Google Cloud

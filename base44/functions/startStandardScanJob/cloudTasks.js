@@ -167,10 +167,45 @@ async function createTaskViaGateway({ gatewayUrl, signingKey, queuePath, body, t
     return { ok: true, deduplicated: true, attemptCount, taskName };
   }
   if (!response.ok) {
+    let gatewayError = "";
+    try {
+      const parsed = await response.clone().json();
+      const candidate = String(parsed?.error || "").trim();
+      const safeGatewayErrors = new Set([
+        "invalid_timestamp",
+        "stale_request",
+        "invalid_signature",
+        "request_too_large",
+        "invalid_payload",
+        "invalid_queue",
+        "invalid_task",
+        "invalid_task_name",
+        "invalid_dispatch_deadline",
+        "invalid_http_request",
+        "invalid_method",
+        "invalid_worker_target",
+        "missing_oidc",
+        "invalid_invoker",
+        "invalid_audience",
+        "invalid_task_body",
+        "scan_identity_mismatch",
+        "missing_drain_schedule",
+        "missing_drain_after",
+        "unexpected_scan_schedule",
+        "invalid_scan_mode",
+        "invalid_robots_policy",
+        "adc_auth_failed",
+        "cloud_tasks_unreachable",
+        "cloud_tasks_rejected",
+      ]);
+      if (safeGatewayErrors.has(candidate)) gatewayError = candidate;
+    } catch { /* preserve status-only fallback */ }
     return {
       ok: false,
       outcomeUnknown: response.status >= 500,
-      failureCode: `dispatch_gateway_http_${response.status}`,
+      failureCode: gatewayError
+        ? `dispatch_gateway_${gatewayError}`
+        : `dispatch_gateway_http_${response.status}`,
     };
   }
 

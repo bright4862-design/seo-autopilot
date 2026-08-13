@@ -1,0 +1,60 @@
+name: FixList Keyless WIF Check
+
+on:
+  push:
+    branches:
+      - agent/fixlist-keyless-recovery
+    paths:
+      - '.github/workflows/fixlist-keyless-wif-check.yml'
+      - 'ops/fixlist-dispatch-gateway/**'
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT: seo-autopilot-501517
+  GCP_REGION: europe-west1
+  CLOUD_RUN_SERVICE: fixlist-standard150-worker
+  CLOUD_TASKS_QUEUE: fixlist-standard150
+
+jobs:
+  check:
+    name: Read-only WIF authentication check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Verify active identity and read production state
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== ACTIVE GOOGLE IDENTITY ==='
+          gcloud auth list --filter=status:ACTIVE --format='value(account)'
+          echo
+          echo '=== STANDARD 150 WORKER ==='
+          gcloud run services describe "$CLOUD_RUN_SERVICE" \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --format='yaml(metadata.name,status.url,status.latestReadyRevisionName,status.traffic)'
+          echo
+          echo '=== STANDARD 150 QUEUE ==='
+          gcloud tasks queues describe "$CLOUD_TASKS_QUEUE" \
+            --project="$GCP_PROJECT" \
+            --location="$GCP_REGION" \
+            --format='yaml(name,state,rateLimits,retryConfig)'

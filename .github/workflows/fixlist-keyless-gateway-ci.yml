@@ -7,6 +7,9 @@ on:
     paths:
       - '.github/workflows/fixlist-keyless-gateway-ci.yml'
       - 'ops/fixlist-dispatch-gateway/**'
+      - 'scripts/bootstrap-fixlist-keyless-wif.sh'
+      - 'base44/functions/startStandardScanJob/cloudTasks.js'
+      - 'tests/frontend/keylessDispatchGateway.test.mjs'
 
 permissions:
   contents: read
@@ -21,6 +24,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Validate WIF bootstrap shell
+        run: |
+          set -euo pipefail
+          bash -n scripts/bootstrap-fixlist-keyless-wif.sh
+          shellcheck scripts/bootstrap-fixlist-keyless-wif.sh
+
+      - name: Validate Base44 gateway dispatch contract
+        run: |
+          set -euo pipefail
+          node --check base44/functions/startStandardScanJob/cloudTasks.js
+          node --test tests/frontend/keylessDispatchGateway.test.mjs
 
       - name: Install gateway dependencies
         working-directory: ops/fixlist-dispatch-gateway

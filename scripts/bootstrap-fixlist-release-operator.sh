@@ -81,13 +81,15 @@ for SERVICE in "$WORKER" "$GATEWAY"; do
     --quiet >/dev/null
 done
 
-say "Grant Cloud Tasks Queue Admin only on Standard 150"
-gcloud tasks queues add-iam-policy-binding "$QUEUE" \
-  --project="$PROJECT" \
-  --location="$REGION" \
-  --member="serviceAccount:${RELEASE_OPERATOR_SA}" \
-  --role="roles/cloudtasks.queueAdmin" \
-  --quiet >/dev/null
+say "Grant queue administration and task inspection only on Standard 150"
+for ROLE in roles/cloudtasks.queueAdmin roles/cloudtasks.viewer; do
+  gcloud tasks queues add-iam-policy-binding "$QUEUE" \
+    --project="$PROJECT" \
+    --location="$REGION" \
+    --member="serviceAccount:${RELEASE_OPERATOR_SA}" \
+    --role="$ROLE" \
+    --quiet >/dev/null
+done
 
 say "Allow the release operator to attach only existing FixList runtime identities"
 for TARGET_SA in "$INVOKER_SA" "$GATEWAY_RUNTIME_SA" "$RELEASE_OPERATOR_SA"; do

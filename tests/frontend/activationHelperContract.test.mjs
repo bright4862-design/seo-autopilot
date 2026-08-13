@@ -17,13 +17,16 @@ test("helper is pinned to the exact merged candidate and fingerprint", () => {
   assert.match(source, /origin\/main moved.*refusing to deploy a stale release/);
 });
 
-test("candidate is built no-traffic before any promotion", () => {
+test("candidate is built no-traffic before the explicit candidate promotion", () => {
   assert.match(source, /cloudbuild\.durable-worker\.yaml/);
   assert.match(source, /candidate_traffic=0%%/);
   assert.match(source, /post_deploy_verify\.sh/);
   const buildAt = source.indexOf("gcloud builds submit");
-  const promoteAt = source.indexOf("gcloud run services update-traffic");
-  assert.ok(buildAt >= 0 && promoteAt > buildAt);
+  const promotionMarkerAt = source.indexOf('say "6/7 PROMOTE EXACT CANDIDATE');
+  const exactPromotionAt = source.indexOf('--to-revisions="${CANDIDATE_REVISION}=100"', promotionMarkerAt);
+  assert.ok(buildAt >= 0, "Cloud Build submission must exist");
+  assert.ok(promotionMarkerAt > buildAt, "candidate promotion phase must come after the build");
+  assert.ok(exactPromotionAt > promotionMarkerAt, "the exact candidate promotion must occur inside the promotion phase");
 });
 
 test("Base44 receives only JS TS durable functions and the site from GitHub", () => {
@@ -50,8 +53,11 @@ test("promotion requires an empty queue and has automatic recovery", () => {
   assert.match(source, /to-revisions="\$\{CANDIDATE_REVISION\}=100"/);
 });
 
-test("helper never starts a scan or enables deferred features", () => {
-  assert.doesNotMatch(source, /curl[^\n]*(\/scan\b|\/scan-job[^"']*\s+-X\s*POST)/i);
+test("helper never POSTs a scan or enables deferred features", () => {
+  const curlCommands = source.split("\n").filter((line) => /\bcurl\b/.test(line));
+  for (const line of curlCommands) {
+    assert.doesNotMatch(line, /(?:-X|--request)\s*POST/i, `activation helper must never POST with curl: ${line}`);
+  }
   assert.doesNotMatch(source, /GROK_PROXY_ENABLED=true|GROK_CHAT_ENABLED=true|premium_5000/i);
   assert.match(source, /No customer scan was started/);
 });

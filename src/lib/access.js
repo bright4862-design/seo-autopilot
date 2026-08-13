@@ -1,38 +1,57 @@
 import { base44 } from "@/api/base44Client";
 
-export const UNLIMITED_EMAILS = ["bright4862@gmail.com", "londonparisandbrussels@gmail.com"];
-export const FREE_SCAN_LIMIT = 1;
-export const UNLOCK_PRICE_LABEL = "$75";
-export const FREE_PREVIEW_FIX_COUNT = 2;
+export const UNLOCK_PRICE_LABEL = "$50";
+export const LOCKED_PREVIEW_FIX_COUNT = 0;
+const OWNER_TEST_EMAIL = "bright4862@gmail.com";
+const OWNER_TEST_USER_ID = "6a498da58ef5cec1f5cd4486";
+
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+export function isActivePaidAccess(record, user = {}) {
+  const email = normalizeEmail(user?.email);
+  const userId = String(user?.id || "").trim();
+  if (!record || !email || !userId) return false;
+  const identityMatches = (
+    normalizeEmail(record.user_email) === email &&
+    String(record.owner_user_id || "") === userId
+  );
+  const activeGrant = (
+    record.has_full_access === true &&
+    record.access_status === "active" &&
+    record.plan_id === "standard150_lifetime" &&
+    record.app_id === "6a498732ec779dfaaeab0e53"
+  );
+  const paidGrant = record.grant_source === "stripe_checkout" && Boolean(record.paid_at);
+  const ownerTestGrant = (
+    record.grant_source === "owner_test" &&
+    email === OWNER_TEST_EMAIL &&
+    userId === OWNER_TEST_USER_ID &&
+    Boolean(record.granted_at)
+  );
+  return identityMatches && activeGrant && (paidGrant || ownerTestGrant);
+}
 
 export async function loadAccess() {
   const user = await base44.auth.me().catch(() => null);
-  const email = String(user?.email || "").toLowerCase();
-  if (!email) {
+  const email = normalizeEmail(user?.email);
+  const userId = String(user?.id || "").trim();
+  if (!email || !userId) {
     return { email: "", fullAccess: false, scansUsed: 0, canScan: false, record: null };
   }
 
-  const unlimited = UNLIMITED_EMAILS.includes(email);
   const records = await base44.entities.Access.filter({ user_email: email }).catch(() => []);
-  const record = Array.isArray(records) ? records[0] || null : null;
-  const fullAccess = unlimited || record?.has_full_access === true;
-  const scansUsed = Number(record?.scans_used || 0);
+  const rows = Array.isArray(records) ? records : [];
+  const record = rows.length === 1 ? rows[0] : null;
+  const fullAccess = isActivePaidAccess(record, user);
 
   return {
     email,
     fullAccess,
-    scansUsed,
-    canScan: fullAccess || scansUsed < FREE_SCAN_LIMIT,
+    scansUsed: 0,
+    canScan: fullAccess,
     record,
+    conflict: rows.length > 1,
   };
-}
-
-export async function recordScanUsed() {
-  const access = await loadAccess();
-  if (!access.email || access.fullAccess) return;
-  if (access.record) {
-    await base44.entities.Access.update(access.record.id, { scans_used: access.scansUsed + 1 }).catch(() => {});
-    return;
-  }
-  await base44.entities.Access.create({ user_email: access.email, scans_used: 1, has_full_access: false }).catch(() => {});
 }

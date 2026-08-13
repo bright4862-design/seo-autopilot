@@ -94,6 +94,34 @@ export function buildCloudDrainTaskRequest({
   });
 }
 
+async function hmacBytes(secretBytes, payloadText) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    secretBytes,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  return new Uint8Array(await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(payloadText),
+  ));
+}
+
+async function dispatchSignature(rootSecret, timestamp, payloadText) {
+  const encoder = new TextEncoder();
+  const derivedKey = await hmacBytes(
+    encoder.encode(rootSecret),
+    "fixlist-dispatch-gateway-v1",
+  );
+  const signature = await hmacBytes(
+    derivedKey,
+    `${timestamp}\n${payloadText}`,
+  );
+  return Array.from(signature, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 async function accessToken() {
   const key = String(Deno.env.get("GCP_SERVICE_ACCOUNT_KEY") || "");
   if (!key) return { token: "", failureCode: "tasks_credentials_not_configured" };
@@ -101,12 +129,71 @@ async function accessToken() {
     const token = await createServiceAccountAccessToken(key);
     if (!token) return { token: "", failureCode: "tasks_token_mint_failed" };
     return { token };
-  } catch {
-    return { token: "", failureCode: "tasks_token_mint_failed" };
+  } catch (error) {
+    const safeCode = String(error?.message || "").trim();
+    return {
+      token: "",
+      failureCode: /^tasks_[a-z0-9_]+$/.test(safeCode) ? safeCode : "tasks_token_mint_failed",
+    };
   }
 }
 
+async function createTaskViaGateway({ gatewayUrl, signingKey, queuePath, body, taskName, attemptCount }) {
+  const payloadText = JSON.stringify({ queue_path: queuePath, task: body?.task || null });
+  const timestamp = String(Math.trunc(Date.now() / 1000));
+  let signature = "";
+  try {
+    signature = await dispatchSignature(signingKey, timestamp, payloadText);
+  } catch {
+    return { ok: false, outcomeUnknown: false, failureCode: "dispatch_gateway_sign_failed" };
+  }
+
+  let response;
+  try {
+    response = await fetch(`${String(gatewayUrl).replace(/\/+$/, "")}/dispatch`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-fixlist-timestamp": timestamp,
+        "x-fixlist-signature": signature,
+      },
+      body: payloadText,
+    });
+  } catch {
+    return { ok: false, outcomeUnknown: true, failureCode: "dispatch_gateway_unreachable" };
+  }
+
+  if (response.status === 409) {
+    return { ok: true, deduplicated: true, attemptCount, taskName };
+  }
+  if (!response.ok) {
+    return {
+      ok: false,
+      outcomeUnknown: response.status >= 500,
+      failureCode: `dispatch_gateway_http_${response.status}`,
+    };
+  }
+
+  let created = {};
+  try { created = await response.json(); } catch { /* deterministic task name */ }
+  return {
+    ok: true,
+    deduplicated: created?.deduplicated === true,
+    attemptCount,
+    taskName: String(created?.taskName || created?.task_name || taskName),
+  };
+}
+
 async function createTask({ queuePath, body, taskName, attemptCount }) {
+  const gatewayUrl = String(Deno.env.get("SCAN_DISPATCH_GATEWAY_URL") || "").trim();
+  const signingKey = String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || "");
+  if (gatewayUrl) {
+    if (!signingKey) {
+      return { ok: false, outcomeUnknown: false, failureCode: "dispatch_gateway_signing_key_missing" };
+    }
+    return createTaskViaGateway({ gatewayUrl, signingKey, queuePath, body, taskName, attemptCount });
+  }
+
   const { token, failureCode: tokenFailureCode } = await accessToken();
   if (!token) return { ok: false, outcomeUnknown: false, failureCode: tokenFailureCode };
 

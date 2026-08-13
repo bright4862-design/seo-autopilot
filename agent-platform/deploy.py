@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from google.cloud.aiplatform import vertexai
+import vertexai
 
 PROJECT = os.environ["GOOGLE_CLOUD_PROJECT"]
 LOCATION = os.getenv("AGENT_PLATFORM_LOCATION", "europe-west1")

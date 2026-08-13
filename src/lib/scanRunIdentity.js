@@ -1,19 +1,17 @@
 export const ACTIVE_SCAN_RUN_STATUSES = new Set(["queued", "crawling", "reviewing"]);
 export const STANDARD_SCAN_MODE = "standard_150";
 
-// The Standard scanner request deadline is under 105 seconds. Ten minutes is a
-// deliberately conservative recovery window that covers scanner + review/UI
-// handoff without letting abandoned active rows block later scans indefinitely.
+// The Standard durable worker can spend up to 210 seconds crawling and another
+// 60 seconds reviewing/persisting. Ten minutes remains the conservative replay
+// window, leaving room for queue delivery and cold-start delay without letting
+// abandoned rows block later scans indefinitely.
 export const STANDARD_ACTIVE_SCAN_TTL_MS = 10 * 60 * 1000;
 
-// Recovery threshold for rows that are still "active" but can no longer be
-// live. The whole synchronous customer request is bounded by the 105-second
-// browser deadline, so an active row with no activity for three minutes has no
-// owner left to finish it. This is deliberately shorter than the replay TTL
-// above: replay must stay conservative about reusing a request key, but a
-// customer staring at "still running" must reach a truthful terminal state
-// quickly. It never fabricates a result -- it only closes an abandoned row.
-export const STANDARD_ORPHAN_RECOVERY_TTL_MS = 3 * 60 * 1000;
+// Browser recovery must never fail a live durable worker. Eight minutes is
+// deliberately above the complete 270-second worker envelope and leaves extra
+// dispatch/cold-start headroom. It still closes genuinely abandoned rows before
+// the longer replay TTL above.
+export const STANDARD_ORPHAN_RECOVERY_TTL_MS = 8 * 60 * 1000;
 
 export class ScanRunConflictError extends Error {
   constructor(message = "This scan request key was already used for a different scan.") {

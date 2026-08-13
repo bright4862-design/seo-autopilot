@@ -1,27 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  AlertCircle,
-  Bug,
-  Copy,
-  Download,
-  FileJson,
-  Loader2,
-  RefreshCw,
-  Trash2,
-} from "lucide-react";
+import { AlertCircle, Loader2 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { base44 } from "@/api/base44Client";
 import useDurableScanCompletion from "@/hooks/useDurableScanCompletion";
 import { ensureScanProject } from "@/lib/activeProject";
 import { normalizeActionPriority, normalizeFindingEvidence, normalizeReviewEvidenceState, normalizeReviewScope, selectFinalReviewFixes } from "@/lib/reviewContract";
 import { mergePersistedScanRunRecord } from "@/lib/persistedScanRecord";
-import { RELEASE_AUTHORITY_CONTRACT, buildAuthorityMarkers, buildDiagnosticAuthorityMarkers, buildScanRunFields } from "@/lib/scanRunModel";
+import { RELEASE_AUTHORITY_CONTRACT, buildAuthorityMarkers, buildScanRunFields } from "@/lib/scanRunModel";
 import { createScanRequestId, normalizedScanDomain, scanReleaseIdentity } from "@/lib/scanRunIdentity";
 import { beginScanRun, cancelScanRun, completeScanRun, failScanRun, getScanRunWithFixList, markScanRunReviewing, recoverOrphanedScanRuns } from "@/lib/scanRuns";
-import { UNLOCK_PRICE_LABEL, loadAccess, recordScanUsed } from "@/lib/access";
+import { UNLOCK_PRICE_LABEL, loadAccess } from "@/lib/access";
 import {
   CUSTOMER_BOUNDARY_EVENT,
   clearCustomerAuthBoundary,
@@ -75,17 +65,11 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   const [activeStep, setActiveStep] = useState("");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [error, setError] = useState("");
-  const [debugOpen, setDebugOpen] = useState(false);
   const [urlError, setUrlError] = useState("");
-  // Debug tooling is internal-only. Customers never see it unless they opt in
-  // explicitly via ?debug=1 or an internal build flag.
-  const debugVisible = useMemo(() => isDebugRequested(), []);
   const [debugData, setDebugData] = useState(() => emptyRuntimeDebug());
   const debugDataRef = useRef(debugData);
   const submitLockRef = useRef(false);
   const requestEpochRef = useRef(0);
-  const [debugCopied, setDebugCopied] = useState(false);
-  const [debugCompressed, setDebugCompressed] = useState(true);
   // Durable identity of the scan currently in flight. Once it exists, the saved
   // ScanRun -- not this component's function chain -- decides when the result
   // opens, so a missed response or navigation callback cannot strand the user.
@@ -96,8 +80,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   const durableScanFailed = ["failed", "cancelled"].includes(durableScan.status);
   const cleanedKeywords = useMemo(() => splitLines(keywordsText), [keywordsText]);
   const selectedCms = CMS_OPTIONS.find((item) => item.value === cmsPlatform);
-  const displayedDebugData = debugCompressed ? compressDebugData(debugData) : debugData;
-  const displayedDebugText = JSON.stringify(displayedDebugData, null, debugCompressed ? 0 : 2);
   const progressIndex = scanProgressIndex(activeStep);
 
   useEffect(() => {
@@ -171,35 +153,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
     setUrlError("");
   }
 
-  async function copyDebugData(compact = debugCompressed) {
-    try {
-      const snapshot = debugDataRef.current;
-      const payload = compact ? compressDebugData(snapshot) : snapshot;
-      await navigator.clipboard.writeText(JSON.stringify(payload, null, compact ? 0 : 2));
-      setDebugCopied(true);
-      window.setTimeout(() => setDebugCopied(false), 1500);
-    } catch (copyError) {
-      console.warn("Could not copy debug data.", copyError);
-    }
-  }
-
-  function downloadDebugData(compact = true) {
-    const snapshot = debugDataRef.current;
-    const payload = compact ? compressDebugData(snapshot) : snapshot;
-    const website = snapshot?.parsed?.runtime?.website_url || websiteUrl || "fixlist";
-    const host = safeHostname(website) || "fixlist";
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const blob = new Blob([JSON.stringify(payload, null, compact ? 0 : 2)], { type: "application/json;charset=utf-8" });
-    const objectUrl = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = objectUrl;
-    link.download = `fixlist-debug-${compact ? "compact" : "full"}-${host}-${timestamp}.json`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-  }
-
   async function handleSubmit(event) {
     event.preventDefault();
     if (submitLockRef.current || saving) return;
@@ -236,7 +189,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       submitLockRef.current = false;
       setSubmitting(false);
       setActiveStep("");
-      setError(`You've used your free test scan. Unlock full access for ${UNLOCK_PRICE_LABEL} on the Billing page to run more scans and see every result.`);
+      setError(`A paid FixList beta pass is required to run Standard 150 scans. Unlock lifetime access for ${UNLOCK_PRICE_LABEL} on the Billing page.`);
       return;
     }
 
@@ -475,8 +428,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       } else if (persistedCompletion?.fixListId) {
         mergedFinal = { ...mergedFinal, fix_list_id: persistedCompletion.fixListId };
       }
-      // Only a durably persisted scan consumes the customer's allowance.
-      await recordScanUsed().catch(() => {});
       recordDebug({ ...identityDebug(), status: "saved", stage: "dashboard_saved", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), compact_debug_available: true, download_available: true });
       refreshDebugData();
       // Navigation happens only after a durable terminal result exists.
@@ -509,7 +460,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         : null;
       if (recoveredCompletion?.scanRun?.status === "complete" && recoveredCompletion?.fixListId) {
         logScanBoundary("browser_recovered_saved_result", identityDebug(), { status: "complete" });
-        await recordScanUsed().catch(() => {});
         navigate(`/dashboard?scan=complete&scan_id=${encodeURIComponent(scanId)}`);
         return;
       }
@@ -554,34 +504,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
           <h1 className="text-[32px] font-semibold leading-tight tracking-tight text-ink sm:text-[38px]">Create your FixList</h1>
           <p className="max-w-[52ch] text-[15px] leading-relaxed text-ink-muted">Enter a website URL and we’ll turn the scan into a plain-English list of what to fix, what matters most, and what may need a developer.</p>
         </div>
-
-        {debugVisible ? (
-          <div className="flex justify-end">
-            <Button type="button" variant="outline" onClick={() => { refreshDebugData(); setDebugOpen((value) => !value); }} className="shrink-0"><Bug className="mr-2 h-4 w-4" />{debugOpen ? "Hide debug" : "Show debug"}</Button>
-          </div>
-        ) : null}
-
-        {debugVisible && debugOpen ? (
-          <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h3 className="font-bold text-slate-950">Scan debug</h3>
-                <p className="mt-1 text-xs text-slate-500">Compact mode limits runtime previews so the JSON is small enough to share. No customer scan data is read from browser storage.</p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="outline" onClick={refreshDebugData}><RefreshCw className="mr-2 h-4 w-4" />Refresh</Button>
-                <Button type="button" variant="outline" onClick={() => setDebugCompressed((value) => !value)}><FileJson className="mr-2 h-4 w-4" />{debugCompressed ? "Show full" : "Compress"}</Button>
-                <Button type="button" variant="outline" onClick={() => copyDebugData(debugCompressed)}><Copy className="mr-2 h-4 w-4" />{debugCopied ? "Copied" : debugCompressed ? "Copy compact" : "Copy full"}</Button>
-                <Button type="button" variant="outline" onClick={() => downloadDebugData(true)}><Download className="mr-2 h-4 w-4" />Download compact</Button>
-                <Button type="button" variant="outline" onClick={() => downloadDebugData(false)}><Download className="mr-2 h-4 w-4" />Download full</Button>
-                <Button type="button" variant="outline" onClick={clearDebugScanData}><Trash2 className="mr-2 h-4 w-4" />Clear scans</Button>
-              </div>
-            </div>
-            <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-slate-950">
-              <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words p-4 text-xs leading-5 text-slate-100">{displayedDebugText}</pre>
-            </div>
-          </div>
-        ) : null}
 
         <div className="flex flex-col gap-6">
           <div>
@@ -952,124 +874,6 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, submittedUrl, busi
   return {
     ...mergedRecord,
     release_gate_eligible: buildScanRunFields(mergedRecord).release_gate_eligible,
-  };
-}
-
-function compressDebugData(snapshot = {}) {
-  const debug = snapshot?.parsed?.runtime || {};
-  return {
-    compressed: true,
-    read_at: snapshot?.read_at || new Date().toISOString(),
-    storage: "memory_only",
-    debug: compressDebugRecord(debug),
-  };
-}
-
-function compressDebugRecord(debug = {}) {
-  if (!debug || typeof debug !== "object") return null;
-  return {
-    request_id: debug.request_id || "",
-    idempotency_key: debug.idempotency_key || "",
-    scan_id: debug.scan_id || debug.scan_run_id || "",
-    scan_run_id: debug.scan_run_id || debug.scan_id || "",
-    status: debug.status || "",
-    stage: debug.stage || "",
-    updated_at: debug.updated_at || "",
-    website_url: debug.website_url || "",
-    business_name: debug.business_name || "",
-    scan_mode: debug.scan_mode || "",
-    requested_path_prefix: debug.requested_path_prefix || "",
-    error: debug.error || "",
-    ai_error: debug.ai_error || "",
-    payload_summary: debug.payload_summary || null,
-    ai_payload_summary: debug.ai_payload_summary || null,
-    scanner: debug.scanner || null,
-    ai_review: debug.ai_review || null,
-    final_record: compressScanRecord(debug.final_record),
-  };
-}
-
-function compressScanRecord(record = {}) {
-  if (!record || typeof record !== "object") return null;
-  const recommendations = getRecommendations(record).slice(0, 24).map((fix) => ({
-    id: fix.fix_id || fix.id || "",
-    rule: fix.rule || "",
-    category: fix.category || "",
-    title: fix.title || fix.issue_title || "",
-    priority: fix.priority || "",
-    who_can_do_this: fix.who_can_do_this || "",
-    difficulty: fix.difficulty || "",
-    status: fix.status || "",
-    business_importance: fix.business_importance || "",
-    page_url: fix.page_url || fix.affected_pages?.[0] || "",
-    affected_pages_count: firstArray([fix.affected_pages]).length,
-    affected_pages_preview: firstArray([fix.affected_pages]).slice(0, 8),
-    reason: clampText(fix.why_it_matters || fix.reason || fix.plain_english_explanation || "", 260),
-  }));
-  const pages = getPages(record).slice(0, 35).map((page) => ({
-    url: page.url || page.final_url || "",
-    status_code: page.status_code || 0,
-    title: clampText(page.title || "", 120),
-    h1: clampText(page.h1 || "", 120),
-    indexable: page.indexable !== false,
-    in_sitemap: Boolean(page.in_sitemap),
-    page_template_family: page.page_template_family || "",
-    estimated_page_intent: page.estimated_page_intent || "",
-    route_boundary_candidate: Boolean(page.route_boundary_candidate),
-    url_confidence: page.url_confidence || "",
-  }));
-  return {
-    ...buildDiagnosticAuthorityMarkers(record),
-    request_id: record.request_id || "",
-    idempotency_key: record.idempotency_key || record.request_id || "",
-    scan_id: record.scan_id || record.scan_run_id || record.id || "",
-    scan_run_id: record.scan_run_id || record.scan_id || record.id || "",
-    submitted_url: record.submitted_url || record.website_url || "",
-    final_url: record.final_url || record.website_url || "",
-    normalized_domain: record.normalized_domain || normalizedScanDomain(record.final_url || record.website_url),
-    scanner_wrapper_version: record.scanner_wrapper_version || "",
-    release_id: record.release_id || "",
-    sampling_version: record.sampling_version || "",
-    sampling_evidence: record.sampling_evidence || {},
-    crawl_timing: record.crawl_timing || record.technical_audit_summary?.crawl_timing || {},
-    id: record.id || "",
-    created_at: record.created_at || "",
-    website_url: record.website_url || "",
-    business_name: record.business_name || "",
-    scan_mode: record.scan_mode || "",
-    health_score: record.health_score || record.seo_score || 0,
-    pages_crawled: record.pages_crawled || 0,
-    pages_found: record.pages_found || 0,
-    customer_summary: clampText(record.customer_summary || record.simple_summary || record.scan_summary?.plain_english_summary || "", 1200),
-    no_high_confidence_findings: record.no_high_confidence_findings === true,
-    review_confidence_state: record.review_confidence_state || "",
-    zero_fix_confidence_version: record.zero_fix_confidence_version || "",
-    scan_status: record.scan_status || "",
-    next_best_step: record.next_best_step || record.website_health_report?.next_best_step || "",
-    limitation: record.limitation || "",
-    health_grade: record.health_grade || record.website_health_report?.health_grade || "",
-    crawl_policy_source: record.crawl_policy_source || record.crawl_policy?.source || record.technical_audit_summary?.crawl_policy_source || "",
-    verified_failed_pages: getFirstNumber([record.verified_failed_pages, record.scan_summary?.verified_failed_pages, record.technical_audit_summary?.verified_failed_pages]),
-    suspicious_url_artifacts: getFirstNumber([record.suspicious_url_artifacts, record.scan_summary?.suspicious_url_artifacts, record.technical_audit_summary?.suspicious_url_artifacts]),
-    site_fingerprint: record.site_fingerprint || record.scan_summary?.site_fingerprint || {},
-    archetype_playbook: record.archetype_playbook || {},
-    url_evidence_summary: record.url_evidence_summary || record.technical_audit_summary?.url_evidence_summary || {},
-    technical_audit_summary: record.technical_audit_summary ? {
-      scanner_version: record.technical_audit_summary.scanner_version || "",
-      pages_crawled: record.technical_audit_summary.pages_crawled || 0,
-      pages_found: record.technical_audit_summary.pages_found || 0,
-      verified_failed_pages: record.technical_audit_summary.verified_failed_pages || 0,
-      suspicious_url_artifacts: record.technical_audit_summary.suspicious_url_artifacts || 0,
-      route_boundary_candidates_crawled: record.technical_audit_summary.route_boundary_candidates_crawled || 0,
-      crawl_timing: record.technical_audit_summary.crawl_timing || record.crawl_timing || {},
-      crawl_policy_source: record.technical_audit_summary.crawl_policy_source || record.technical_audit_summary.crawl_policy?.source || "",
-    } : null,
-    debug: record.debug || {},
-    top_recommended_actions: getRecommendations(record).slice(0, 5).map(fixToAction).map(slimAction),
-    recommendations_count: getRecommendations(record).length,
-    recommendations_preview: recommendations,
-    pages_preview_count: pages.length,
-    pages_preview: pages,
   };
 }
 
@@ -1475,16 +1279,6 @@ function createScanId() {
   return `scan_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 const INVALID_URL_MESSAGE = "Enter a valid website address, like example.com";
-
-// Debug tooling stays internal: ?debug=1 in the URL, or an internal build flag.
-function isDebugRequested() {
-  try {
-    if (import.meta.env?.VITE_INTERNAL_DEBUG === "1") return true;
-    return new URLSearchParams(globalThis.location?.search || "").get("debug") === "1";
-  } catch {
-    return false;
-  }
-}
 
 function normalizeWebsiteUrl(value) { const raw = String(value || "").trim(); if (!raw) return ""; try { return new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).href; } catch { return ""; } }
 function normalizeWebsiteKey(value) { try { const url = new URL(value); return `${url.hostname}${url.pathname}`.replace(/\/$/, "").toLowerCase(); } catch { return String(value || "").toLowerCase(); } }

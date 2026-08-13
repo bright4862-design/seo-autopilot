@@ -5,6 +5,7 @@ import test from "node:test";
 import { mergePersistedScanRunRecord } from "../../src/lib/persistedScanRecord.js";
 import {
   STANDARD_ACTIVE_SCAN_TTL_MS,
+  STANDARD_ORPHAN_RECOVERY_TTL_MS,
   ScanRunConflictError,
   buildScanRequestIdentity,
   buildStaleScanRetryFields,
@@ -16,6 +17,7 @@ const scanForm = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8")
 const activeProject = readFileSync("src/lib/activeProject.js", "utf8");
 const scanRuns = readFileSync("src/lib/scanRuns.js", "utf8");
 const wrapper = readFileSync("base44/functions/runAdvancedScan/entry.ts", "utf8");
+const scanJobWorker = readFileSync("scanner-api/app/scan_job.py", "utf8");
 const scanRunSchema = JSON.parse(readFileSync("base44/entities/ScanRun.jsonc", "utf8"));
 
 test("same request key and normalized target reuses the durable ScanRun", () => {
@@ -118,6 +120,21 @@ test("stale request retry keeps its key and clears terminal state for a numbered
   assert.equal(retry.started_at, "2026-08-01T20:00:00.000Z");
   assert.equal(retry.completed_at, "");
   assert.equal(retry.error_code, "");
+});
+
+test("browser orphan recovery outlasts the complete durable worker envelope", () => {
+  const crawlSeconds = Number(scanJobWorker.match(/CRAWL_BUDGET_SECONDS = ([\d.]+)/)?.[1]);
+  const handoffSeconds = Number(scanJobWorker.match(/HANDOFF_TIMEOUT_SECONDS = ([\d.]+)/)?.[1]);
+  assert.ok(Number.isFinite(crawlSeconds) && Number.isFinite(handoffSeconds));
+  const workerEnvelopeMs = (crawlSeconds + handoffSeconds) * 1000;
+  assert.ok(
+    STANDARD_ORPHAN_RECOVERY_TTL_MS > workerEnvelopeMs,
+    "browser recovery must not terminalize a live Cloud Tasks worker",
+  );
+  assert.ok(
+    STANDARD_ORPHAN_RECOVERY_TTL_MS < STANDARD_ACTIVE_SCAN_TTL_MS,
+    "orphan recovery should still precede the longer replay window",
+  );
 });
 
 test("stale exact-request recovery restarts only after updating the existing row", () => {

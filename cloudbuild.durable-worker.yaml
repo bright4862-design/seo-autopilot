@@ -1,0 +1,167 @@
+# Cloud Build artifact for the PRIVATE durable Standard 150 worker.
+#
+# This file is deliberately SEPARATE from cloudbuild.yaml. cloudbuild.yaml
+# builds and deploys the existing scanner service (seo-autopilot-4545); it must
+# not be repurposed, because reusing it would redeploy that service instead of
+# creating the private worker.
+#
+# NO VALUE BELOW IS INVENTED. Every deployment-specific value is a required
+# substitution with an empty default, so a build that omits one fails closed at
+# gcloud rather than silently deploying to a guessed target. Fill them from the
+# real project inventory before running.
+#
+# Required substitutions (all must be supplied explicitly):
+#   _RELEASE_SHA         Full 40-character lowercase Git commit SHA of the
+#                        exact clean checkout submitted to Cloud Build.
+#   _WORKER_SERVICE      Cloud Run service name for the private worker.
+#                        MUST NOT equal the existing scanner service.
+#   _REGION              Cloud Run / Artifact Registry region.
+#   _IMAGE               Fully-qualified image path, without tag.
+#   _RUNTIME_SA          Runtime service account the worker runs AS.
+#   _INVOKER_SA          Service account Cloud Tasks mints its OIDC token as.
+#                        Needs roles/run.invoker on _WORKER_SERVICE only.
+#
+# This file BUILDS and DEPLOYS a new private service. It performs no traffic
+# migration: --no-traffic is set, so the new revision receives 0% until a human
+# promotes it explicitly. Nothing here promotes, and nothing here touches the
+# existing scanner service.
+#
+# Example (values are placeholders -- substitute real ones):
+#   gcloud builds submit --config cloudbuild.durable-worker.yaml \
+#     --substitutions=_RELEASE_SHA=<40-char-sha>,_WORKER_SERVICE=<name>,_REGION=<region>,\
+# _IMAGE=<region>-docker.pkg.dev/<project>/<repo>/<image>,\
+# _RUNTIME_SA=<sa>@<project>.iam.gserviceaccount.com,\
+# _INVOKER_SA=<sa>@<project>.iam.gserviceaccount.com
+
+#   _BASE44_APP_ID       Base44 app id the worker calls back into. REQUIRED:
+#                        with it empty, scan_job.py builds
+#                        <api>/api/apps//functions/<name> and every control and
+#                        completion call silently misroutes.
+#   _BASE44_API_URL      Base44 API origin. Optional in code (defaults to
+#                        https://base44.app) but pinned here so a deploy cannot
+#                        silently target the public default.
+#
+# Secrets are injected from Secret Manager by NAME, never as plaintext env vars:
+#   _SIGNING_KEY_SECRET  Secret name for SCAN_EVIDENCE_SIGNING_KEY. REQUIRED:
+#                        without it read_scan_run() returns None and the
+#                        authority path degrades silently rather than failing.
+#   _SIGNING_KEY_VERSION Numeric, ENABLED Secret Manager version. REQUIRED.
+#                        "latest" is PROHIBITED: it re-resolves at instance
+#                        start, so a new secret version would silently change
+#                        what an already-verified revision reads, breaking the
+#                        authority seal with no revision change to point at.
+#                        The immutable release pins one exact version.
+#
+# SCANNER_API_KEY is deliberately NOT supplied. /scan-job authenticates with
+# Cloud Run IAM plus TASKS_INVOKER_SERVICE_ACCOUNT, calls run_scan() directly,
+# and runs the Python review in-process (scan_job.py build_local_review). It
+# never calls require_scanner_api_key(). That guard protects only the sibling
+# routes /scan, /review, /chat and /health/auth, which this single-purpose
+# private worker does not serve. With the key absent those routes fail closed
+# with 401, which is the intended state -- see the deployment contract.
+
+substitutions:
+  _RELEASE_SHA: ""
+  _WORKER_SERVICE: ""
+  _REGION: ""
+  _IMAGE: ""
+  _RUNTIME_SA: ""
+  _INVOKER_SA: ""
+  _BASE44_APP_ID: ""
+  _BASE44_API_URL: ""
+  _SIGNING_KEY_SECRET: ""
+  _SIGNING_KEY_VERSION: ""
+
+steps:
+  # Fail closed before anything is built or deployed.
+  - id: require-substitutions
+    name: gcr.io/cloud-builders/gcloud
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        missing=0
+        for pair in \
+          "_RELEASE_SHA=${_RELEASE_SHA}" \
+          "_WORKER_SERVICE=${_WORKER_SERVICE}" \
+          "_REGION=${_REGION}" \
+          "_IMAGE=${_IMAGE}" \
+          "_RUNTIME_SA=${_RUNTIME_SA}" \
+          "_INVOKER_SA=${_INVOKER_SA}" \
+          "_BASE44_APP_ID=${_BASE44_APP_ID}" \
+          "_BASE44_API_URL=${_BASE44_API_URL}" \
+          "_SIGNING_KEY_SECRET=${_SIGNING_KEY_SECRET}" \
+          "_SIGNING_KEY_VERSION=${_SIGNING_KEY_VERSION}"; do
+          name="${pair%%=*}"; value="${pair#*=}"
+          if [ -z "$value" ]; then echo "MISSING required substitution: $name"; missing=1; fi
+        done
+        if [ "$missing" -ne 0 ]; then
+          echo "Refusing to build: supply every deployment parameter explicitly."
+          exit 1
+        fi
+        if ! printf '%s' "${_RELEASE_SHA}" | grep -Eq '^[0-9a-f]{40}$'; then
+          echo "Invalid _RELEASE_SHA: expected exactly 40 lowercase hexadecimal characters."
+          exit 1
+        fi
+        echo "All required substitutions supplied."
+        echo "Release identity pinned to ${_RELEASE_SHA}."
+
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args: ["build", "--tag", "${_IMAGE}:${_RELEASE_SHA}", "."]
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args: ["push", "${_IMAGE}:${_RELEASE_SHA}"]
+
+  - id: deploy-private-worker
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_WORKER_SERVICE}
+      - --image=${_IMAGE}:${_RELEASE_SHA}
+      - --region=${_REGION}
+      # Private. Cloud Run IAM performs OIDC token validation (signature,
+      # issuer, audience, expiry) before the request reaches the app. The app's
+      # invoker-email check is a second, weaker gate that does NOT verify the
+      # signature or audience -- so this flag is load-bearing for security.
+      - --no-allow-unauthenticated
+      # Explicit runtime identity. Without this the worker would inherit the
+      # default compute service account.
+      - --service-account=${_RUNTIME_SA}
+      # Must match dispatchDeadline "480s" in startStandardScanJob/cloudTasks.js.
+      - --timeout=480
+      # One durable job per instance.
+      - --concurrency=1
+      - --min-instances=0
+      - --max-instances=20
+      # New revision takes no traffic. Promotion is a separate, human decision.
+      - --no-traffic
+      # Non-secret runtime configuration. GROK_PROXY_ENABLED is the variable the
+      # Cloud Run worker actually reads (scanner-api/app/main.py). GROK_CHAT_ENABLED
+      # belongs to the Base44 grokChat function and is a no-op here -- setting it
+      # on this service would be false assurance, so it is deliberately absent.
+      - --set-env-vars=TASKS_INVOKER_SERVICE_ACCOUNT=${_INVOKER_SA},BASE44_APP_ID=${_BASE44_APP_ID},BASE44_API_URL=${_BASE44_API_URL},GROK_PROXY_ENABLED=false
+      # Secrets by reference. Never --set-env-vars a secret value: that would
+      # store plaintext in the service revision and in build logs.
+      - --set-secrets=SCAN_EVIDENCE_SIGNING_KEY=${_SIGNING_KEY_SECRET}:${_SIGNING_KEY_VERSION}
+
+images:
+  - ${_IMAGE}:${_RELEASE_SHA}
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+# Cloud Tasks target route is /scan-job on this service. Granting the invoker
+# and creating the queue are deliberately NOT performed here -- they are IAM and
+# queue mutations that must be applied explicitly and reviewed. Reference only:
+#
+#   gcloud run services add-iam-policy-binding <_WORKER_SERVICE> \
+#     --region=<_REGION> --member=serviceAccount:<_INVOKER_SA> \
+#     --role=roles/run.invoker
+#
+#   gcloud tasks queues create <queue> --location=<_REGION> \
+#     --max-concurrent-dispatches=1 --max-attempts=3

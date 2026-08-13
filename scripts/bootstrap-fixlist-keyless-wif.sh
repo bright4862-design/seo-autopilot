@@ -5,6 +5,8 @@ PROJECT_ID="seo-autopilot-501517"
 PROJECT_NUMBER="919035207432"
 REGION="europe-west1"
 REPO="bright4862-design/seo-autopilot"
+REPO_ID="1291460209"
+REPO_OWNER_ID="300628670"
 RECOVERY_REF="refs/heads/agent/fixlist-keyless-recovery"
 POOL_ID="fixlist-github"
 PROVIDER_ID="github"
@@ -18,7 +20,7 @@ COMPUTE_BUILD_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
 POOL_NAME="projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}"
 PROVIDER_NAME="${POOL_NAME}/providers/${PROVIDER_ID}"
-REPO_PRINCIPAL="principalSet://iam.googleapis.com/${POOL_NAME}/attribute.repository/${REPO}"
+REPO_PRINCIPAL="principalSet://iam.googleapis.com/${POOL_NAME}/attribute.repository_id/${REPO_ID}"
 
 say() { printf '\n==> %s\n' "$*"; }
 
@@ -49,7 +51,7 @@ if ! gcloud iam workload-identity-pools describe "$POOL_ID" \
     --quiet
 fi
 
-say "Creating repository- and branch-restricted GitHub OIDC provider if absent"
+say "Creating immutable-repository- and branch-restricted GitHub OIDC provider if absent"
 if ! gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
   --project="$PROJECT_ID" \
   --location=global \
@@ -60,8 +62,8 @@ if ! gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
     --workload-identity-pool="$POOL_ID" \
     --display-name="FixList GitHub recovery" \
     --issuer-uri="https://token.actions.githubusercontent.com" \
-    --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner,attribute.ref=assertion.ref,attribute.event_name=assertion.event_name" \
-    --attribute-condition="assertion.repository == '${REPO}' && assertion.ref == '${RECOVERY_REF}' && assertion.event_name == 'push'" \
+    --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository,attribute.repository_id=assertion.repository_id,attribute.repository_owner_id=assertion.repository_owner_id,attribute.ref=assertion.ref,attribute.event_name=assertion.event_name" \
+    --attribute-condition="assertion.repository_id == '${REPO_ID}' && assertion.repository_owner_id == '${REPO_OWNER_ID}' && assertion.ref == '${RECOVERY_REF}' && assertion.event_name == 'push'" \
     --quiet
 fi
 
@@ -88,7 +90,7 @@ if ! gcloud iam service-accounts describe "$OPERATOR_SA" --project="$PROJECT_ID"
     --quiet
 fi
 
-say "Allowing only the exact repository principal to impersonate the operator"
+say "Allowing only the immutable repository principal to impersonate the operator"
 gcloud iam service-accounts add-iam-policy-binding "$OPERATOR_SA" \
   --project="$PROJECT_ID" \
   --role="roles/iam.workloadIdentityUser" \
@@ -96,8 +98,10 @@ gcloud iam service-accounts add-iam-policy-binding "$OPERATOR_SA" \
   --quiet >/dev/null
 
 say "Granting temporary recovery deploy permissions to the GitHub operator"
-# Cloud Run documents roles/run.admin for configuring secrets/public IAM and
-# roles/run.sourceDeveloper + serviceUsageConsumer for source deployments.
+# Source deploy requires run.sourceDeveloper + serviceUsageConsumer. Configuring
+# the gateway's Secret Manager reference and public IAM requires run.admin.
+# These operator grants are bootstrap/recovery grants and should be narrowed or
+# removed after the gateway is verified and production is stable.
 for ROLE in \
   roles/run.admin \
   roles/run.sourceDeveloper \
@@ -180,6 +184,7 @@ gcloud secrets add-iam-policy-binding "$SIGNING_SECRET" \
 say "Final read-only verification"
 printf 'Provider: %s\n' "$PROVIDER_NAME"
 printf 'Operator: %s\n' "$OPERATOR_SA"
+printf 'Repository: %s (id=%s, owner_id=%s)\n' "$REPO" "$REPO_ID" "$REPO_OWNER_ID"
 printf 'Repository principal: %s\n' "$REPO_PRINCIPAL"
 printf 'Gateway runtime: %s\n' "$GATEWAY_RUNTIME_SA"
 printf 'Queue: projects/%s/locations/%s/queues/%s\n' "$PROJECT_ID" "$REGION" "$QUEUE"

@@ -9,16 +9,23 @@
 #   - reads or prints a secret value
 #
 # Usage (every value explicit, nothing invented):
-#   WORKER_SERVICE=... REGION=... PROJECT=... \
+#   WORKER_SERVICE=... REGION=... PROJECT=... CANDIDATE_REVISION=... \
 #   EXPECTED_IMAGE=... EXPECTED_RUNTIME_SA=... EXPECTED_INVOKER_SA=... \
 #   EXPECTED_SIGNING_SECRET=... EXPECTED_SIGNING_VERSION=... \
 #   [BASE44_APP_ID=...] \
 #   bash scripts/post_deploy_verify.sh
 #
-# All EXPECTED_* inputs above are REQUIRED. The deployed revision must use the
-# exact image and runtime/invoker identities and mount SCAN_EVIDENCE_SIGNING_KEY
-# from exactly that secret at exactly that numeric version. Metadata only -- the
-# payload is never accessed.
+# All EXPECTED_* inputs above are REQUIRED, as is CANDIDATE_REVISION.
+#
+# CANDIDATE_REVISION names the exact revision under test. Every revision-scoped
+# check reads THAT revision, never the service template. The template describes
+# what the service would deploy next; a candidate held at 0% traffic is a
+# different object, and verifying the template would pass a candidate that was
+# never actually created with those settings.
+#
+# The candidate must use the exact image and runtime/invoker identities and
+# mount SCAN_EVIDENCE_SIGNING_KEY from exactly that secret at exactly that
+# numeric version. Metadata only -- the payload is never accessed.
 
 set -uo pipefail
 
@@ -30,6 +37,7 @@ skip() { printf "  SKIP  %s\n" "$1"; }
 : "${WORKER_SERVICE:=}"
 : "${REGION:=}"
 : "${PROJECT:=}"
+: "${CANDIDATE_REVISION:=}"
 : "${EXPECTED_IMAGE:=}"
 : "${EXPECTED_RUNTIME_SA:=}"
 : "${EXPECTED_INVOKER_SA:=}"
@@ -39,6 +47,12 @@ skip() { printf "  SKIP  %s\n" "$1"; }
 
 if [ -z "$WORKER_SERVICE" ] || [ -z "$REGION" ] || [ -z "$PROJECT" ]; then
   echo "WORKER_SERVICE, REGION and PROJECT are required. Nothing is guessed."
+  exit 2
+fi
+if [ -z "$CANDIDATE_REVISION" ]; then
+  echo "CANDIDATE_REVISION is required: name the exact revision under test."
+  echo "Verifying the service template instead would check what the service would"
+  echo "deploy next, not the candidate currently held at 0% traffic."
   exit 2
 fi
 if [ -z "$EXPECTED_IMAGE" ] || [ -z "$EXPECTED_RUNTIME_SA" ] || [ -z "$EXPECTED_INVOKER_SA" ] || \
@@ -64,7 +78,17 @@ if [ -z "$DESCRIBE" ]; then
   exit 2
 fi
 
+if ! REVISION_JSON=$(gcloud run revisions describe "$CANDIDATE_REVISION" \
+  --region="$REGION" --project="$PROJECT" --format=json 2>/dev/null) || [ -z "$REVISION_JSON" ]; then
+  echo "Could not describe revision $CANDIDATE_REVISION in $REGION."
+  echo "The candidate must exist before it can be verified."
+  exit 2
+fi
+
+# jqq reads the SERVICE (privacy, IAM, URL, traffic).
+# rq  reads the CANDIDATE REVISION (image, identity, limits, env, secrets).
 jqq() { printf "%s" "$DESCRIBE" | python3 -c "import sys,json;d=json.load(sys.stdin);print($1)" 2>/dev/null; }
+rq()  { printf "%s" "$REVISION_JSON" | python3 -c "import sys,json;d=json.load(sys.stdin);print($1)" 2>/dev/null; }
 
 echo "=== 1. Worker privacy ==="
 # IAM policy is authoritative: allUsers/allAuthenticatedUsers must not hold run.invoker.
@@ -127,20 +151,83 @@ else
 fi
 
 echo
-echo "=== 2. Revision and image identity ==="
-REV=$(jqq "d.get('status',{}).get('latestReadyRevisionName','')")
-IMG=$(jqq "d['spec']['template']['spec']['containers'][0].get('image','')")
-[ -n "$REV" ] && pass "latest ready revision: $REV" || fail "no ready revision"
-[ -n "$IMG" ] && pass "image: $IMG" || fail "no image recorded"
-[ "$IMG" = "$EXPECTED_IMAGE" ] \
-  && pass "image matches EXPECTED_IMAGE" \
-  || fail "image mismatch: expected $EXPECTED_IMAGE"
+echo "=== 2. Candidate revision and image identity ==="
+pass "candidate under test: $CANDIDATE_REVISION"
+
+# The candidate must be Ready in its own right. latestReadyRevisionName is a
+# service-level pointer and can name a different revision entirely while the
+# candidate is held at 0%, so it is never used as the subject here.
+READY=$(rq "next((c.get('status','') for c in d.get('status',{}).get('conditions',[]) if c.get('type')=='Ready'), '')")
+[ "$READY" = "True" ] \
+  && pass "candidate revision is Ready" \
+  || fail "candidate revision is not Ready (Ready=${READY:-<none>})"
+
+SERVICE_LATEST_READY=$(jqq "d.get('status',{}).get('latestReadyRevisionName','')")
+[ -n "$SERVICE_LATEST_READY" ] && skip "service latestReadyRevisionName: $SERVICE_LATEST_READY (context only, not verified)"
+
+# The candidate must still hold zero traffic at verification time.
+CANDIDATE_PCT=$(jqq "sum(int(t.get('percent') or 0) for t in d.get('status',{}).get('traffic',[]) if (t.get('revisionName') or t.get('revision'))=='$CANDIDATE_REVISION')")
+[ "${CANDIDATE_PCT:-0}" = "0" ] \
+  && pass "candidate holds 0% traffic" \
+  || fail "candidate already serves ${CANDIDATE_PCT}% traffic; verification must precede promotion"
+
+# Image identity is proven digest-to-digest. Cloud Run records the resolved
+# digest on the revision; the service template keeps whatever reference was
+# written at deploy time, which for a tag-based deploy is the tag. Comparing
+# those two representations byte-for-byte can only ever fail.
+REV_IMAGE=$(rq "d['spec']['containers'][0].get('image','')")
+REV_DIGEST=$(rq "d.get('status',{}).get('imageDigest','')")
+# Cloud Run normally records the resolved digest in status.imageDigest. When a
+# revision was created from a digest reference the same proof is already carried
+# on spec.containers[0].image, so that is the only accepted fallback. A tag is
+# never accepted as a digest.
+if [ -z "$REV_DIGEST" ]; then
+  case "$REV_IMAGE" in
+    *@sha256:*) REV_DIGEST="$REV_IMAGE" ;;
+  esac
+fi
+[ -n "$REV_IMAGE" ] && pass "candidate image reference: $REV_IMAGE" || fail "candidate has no image reference"
+[ -n "$REV_DIGEST" ] && pass "candidate resolved digest: $REV_DIGEST" || fail "candidate has no resolved digest"
+
+# Reduce the expectation to a digest. A digest expectation is used as-is; a tag
+# expectation is resolved through Artifact Registry, which PROVES the tag points
+# at that digest rather than assuming it. Identity is never weakened to
+# "same repository" or "any tag".
+case "$EXPECTED_IMAGE" in
+  *@sha256:*)
+    EXPECTED_DIGEST="${EXPECTED_IMAGE##*@}"
+    EXPECTED_SOURCE="supplied digest"
+    ;;
+  *)
+    EXPECTED_DIGEST=$(gcloud artifacts docker images describe "$EXPECTED_IMAGE" \
+      --project="$PROJECT" --format='value(image_summary.digest)' 2>/dev/null)
+    EXPECTED_SOURCE="tag $EXPECTED_IMAGE resolved via Artifact Registry"
+    ;;
+esac
+
+if [ -z "$EXPECTED_DIGEST" ]; then
+  fail "could not resolve EXPECTED_IMAGE to a digest ($EXPECTED_IMAGE)"
+else
+  pass "expected digest: $EXPECTED_DIGEST ($EXPECTED_SOURCE)"
+  # Compare only the digest. The registry path is checked separately so a digest
+  # match in a DIFFERENT repository still fails.
+  ACTUAL_DIGEST="${REV_DIGEST##*@}"
+  [ "$ACTUAL_DIGEST" = "${EXPECTED_DIGEST##*@}" ] \
+    && pass "candidate image digest matches expected" \
+    || fail "image digest mismatch: candidate $ACTUAL_DIGEST, expected ${EXPECTED_DIGEST##*@}"
+
+  EXPECTED_REPO="${EXPECTED_IMAGE%%@*}"; EXPECTED_REPO="${EXPECTED_REPO%%:*}"
+  ACTUAL_REPO="${REV_IMAGE%%@*}"; ACTUAL_REPO="${ACTUAL_REPO%%:*}"
+  [ "$ACTUAL_REPO" = "$EXPECTED_REPO" ] \
+    && pass "candidate image repository matches expected" \
+    || fail "image repository mismatch: candidate $ACTUAL_REPO, expected $EXPECTED_REPO"
+fi
 
 echo
 echo "=== 3. Runtime configuration ==="
-SA=$(jqq "d['spec']['template']['spec'].get('serviceAccountName','')")
-TO=$(jqq "d['spec']['template']['spec'].get('timeoutSeconds','')")
-CC=$(jqq "d['spec']['template']['spec'].get('containerConcurrency','')")
+SA=$(rq "d['spec'].get('serviceAccountName','')")
+TO=$(rq "d['spec'].get('timeoutSeconds','')")
+CC=$(rq "d['spec'].get('containerConcurrency','')")
 [ -n "$SA" ] && pass "runtime service account: $SA" || fail "no explicit runtime service account"
 [ "$SA" = "$EXPECTED_RUNTIME_SA" ] \
   && pass "runtime service account matches EXPECTED_RUNTIME_SA" \
@@ -150,10 +237,10 @@ CC=$(jqq "d['spec']['template']['spec'].get('containerConcurrency','')")
 
 echo
 echo "=== 4. Grok disabled (names and flags only, no secret values) ==="
-GROK=$(printf "%s" "$DESCRIBE" | python3 -c "
+GROK=$(printf "%s" "$REVISION_JSON" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
-env = d['spec']['template']['spec']['containers'][0].get('env', [])
+env = d['spec']['containers'][0].get('env', [])
 print(next((e.get('value','') for e in env if e.get('name') == 'GROK_PROXY_ENABLED'), '<unset>'))
 " 2>/dev/null)
 case "$GROK" in
@@ -161,7 +248,7 @@ case "$GROK" in
   "<unset>")         pass "GROK_PROXY_ENABLED unset (code default is disabled)" ;;
   *)                 fail "GROK_PROXY_ENABLED=$GROK -- Grok is not disabled" ;;
 esac
-if printf "%s" "$DESCRIBE" | grep -q "GROK_CHAT_ENABLED"; then
+if printf "%s" "$REVISION_JSON" | grep -q "GROK_CHAT_ENABLED"; then
   fail "GROK_CHAT_ENABLED set on the worker; it is a no-op here and is false assurance"
 else
   pass "no no-op GROK_CHAT_ENABLED on the worker"
@@ -169,30 +256,30 @@ fi
 
 echo
 echo "=== 5. Required variables present (names only, values never printed) ==="
-NAMES=$(printf "%s" "$DESCRIBE" | python3 -c "
+NAMES=$(printf "%s" "$REVISION_JSON" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
-c = d['spec']['template']['spec']['containers'][0]
+c = d['spec']['containers'][0]
 print(' '.join(sorted(e.get('name','') for e in c.get('env', []))))
 " 2>/dev/null)
 # SCANNER_API_KEY is intentionally absent: /scan-job does not use it.
 for v in BASE44_APP_ID TASKS_INVOKER_SERVICE_ACCOUNT SCAN_EVIDENCE_SIGNING_KEY; do
   printf "%s" "$NAMES" | grep -qw "$v" && pass "$v present" || fail "$v missing"
 done
-INVOKER_ENV=$(printf "%s" "$DESCRIBE" | python3 -c "
+INVOKER_ENV=$(printf "%s" "$REVISION_JSON" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
-env = d['spec']['template']['spec']['containers'][0].get('env', [])
+env = d['spec']['containers'][0].get('env', [])
 print(next((e.get('value','') for e in env if e.get('name') == 'TASKS_INVOKER_SERVICE_ACCOUNT'), ''))
 " 2>/dev/null)
 [ "$INVOKER_ENV" = "$EXPECTED_INVOKER_SA" ] \
   && pass "TASKS_INVOKER_SERVICE_ACCOUNT matches EXPECTED_INVOKER_SA" \
   || fail "TASKS_INVOKER_SERVICE_ACCOUNT does not match EXPECTED_INVOKER_SA"
 # Secrets must arrive by reference, not as literals.
-SECRET_REFS=$(printf "%s" "$DESCRIBE" | python3 -c "
+SECRET_REFS=$(printf "%s" "$REVISION_JSON" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
-c = d['spec']['template']['spec']['containers'][0]
+c = d['spec']['containers'][0]
 print(sum(1 for e in c.get('env', []) if 'valueFrom' in e))
 " 2>/dev/null)
 # Exactly one secret is required by the durable path: the signing key.
@@ -203,10 +290,10 @@ print(sum(1 for e in c.get('env', []) if 'valueFrom' in e))
 # The signing key reference must match the pinned secret NAME and numeric
 # VERSION exactly. Metadata only: no payload is read. Fail closed on a missing,
 # malformed, plaintext, 'latest' or mismatched reference.
-SIGNING_REF=$(printf "%s" "$DESCRIBE" | python3 -c "
+SIGNING_REF=$(printf "%s" "$REVISION_JSON" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
-c = d['spec']['template']['spec']['containers'][0]
+c = d['spec']['containers'][0]
 e = next((x for x in c.get('env', []) if x.get('name') == 'SCAN_EVIDENCE_SIGNING_KEY'), None)
 if e is None:
     print('ABSENT'); raise SystemExit

@@ -364,13 +364,33 @@ test("the post-deploy verification path is read-only", () => {
 function runPostDeployVerifier(policyMode) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "durable-release-verify-"));
   const gcloudPath = path.join(tempDir, "gcloud");
-  const describePath = path.join(tempDir, "describe.json");
-  const image = `europe-west1-docker.pkg.dev/test/repo/worker:${"a".repeat(40)}`;
+  const servicePath = path.join(tempDir, "service.json");
+  const revisionPath = path.join(tempDir, "revision.json");
+  const digest = `sha256:${"a".repeat(64)}`;
+  const image = `europe-west1-docker.pkg.dev/test/repo/worker@${digest}`;
+  const candidate = "worker-00002";
   const runtimeSa = "runtime@test.iam.gserviceaccount.com";
   const invokerSa = "invoker@test.iam.gserviceaccount.com";
-  const describe = {
-    status: { latestReadyRevisionName: "worker-00001", url: "" },
-    spec: { template: { spec: {
+
+  // The service and the candidate are separate objects. latestReadyRevisionName
+  // deliberately names a DIFFERENT revision, and the template deliberately
+  // carries a tag, so anything reading the service instead of the candidate
+  // would be caught here too.
+  const service = {
+    status: {
+      latestReadyRevisionName: "worker-00001",
+      url: "",
+      traffic: [
+        { revisionName: "worker-00001", percent: 100 },
+        { revisionName: candidate, percent: 0 },
+      ],
+    },
+    spec: { template: { spec: { containers: [{ image: "europe-west1-docker.pkg.dev/test/repo/worker:tag" }] } } },
+  };
+  const revision = {
+    metadata: { name: candidate },
+    status: { imageDigest: image, conditions: [{ type: "Ready", status: "True" }] },
+    spec: {
       serviceAccountName: runtimeSa,
       timeoutSeconds: 480,
       containerConcurrency: 1,
@@ -385,9 +405,10 @@ function runPostDeployVerifier(policyMode) {
           } },
         ],
       }],
-    } } },
+    },
   };
-  fs.writeFileSync(describePath, JSON.stringify(describe));
+  fs.writeFileSync(servicePath, JSON.stringify(service));
+  fs.writeFileSync(revisionPath, JSON.stringify(revision));
   fs.writeFileSync(gcloudPath, `#!/usr/bin/env bash
 if [[ " $* " == *" get-iam-policy "* ]]; then
   case "$FAKE_POLICY_MODE" in
@@ -398,8 +419,10 @@ if [[ " $* " == *" get-iam-policy "* ]]; then
     valid) printf '%s' '{"bindings":[{"role":"roles/run.invoker","members":["serviceAccount:invoker@test.iam.gserviceaccount.com"]}]}' ;;
     *) exit 9 ;;
   esac
+elif [[ " $* " == *" revisions describe "* ]]; then
+  command cat "$FAKE_REVISION_PATH"
 else
-  command cat "$FAKE_DESCRIBE_PATH"
+  command cat "$FAKE_SERVICE_PATH"
 fi
 `);
   fs.chmodSync(gcloudPath, 0o755);
@@ -409,10 +432,12 @@ fi
       ...process.env,
       PATH: `${tempDir}:${process.env.PATH}`,
       FAKE_POLICY_MODE: policyMode,
-      FAKE_DESCRIBE_PATH: describePath,
+      FAKE_SERVICE_PATH: servicePath,
+      FAKE_REVISION_PATH: revisionPath,
       WORKER_SERVICE: "worker",
       REGION: "europe-west1",
       PROJECT: "test",
+      CANDIDATE_REVISION: candidate,
       EXPECTED_IMAGE: image,
       EXPECTED_RUNTIME_SA: runtimeSa,
       EXPECTED_INVOKER_SA: invokerSa,

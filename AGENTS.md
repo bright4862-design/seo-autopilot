@@ -17,6 +17,19 @@ If your agent supports Agent Skills, install or update Base44 skills before Base
 npx skills add base44/skills
 ```
 
+## Subagents
+
+`.claude/agents/` holds repo-specific Claude Code subagents:
+
+- `jean`: read-only mining of public GitHub repositories for architecture
+  FixList could adopt. Reports gaps and licensing verdicts; writes no code.
+- `jack`: adapts one identified external pattern into this codebase, with tests
+  and license attribution.
+
+They chain: Jean finds and gates, Jack implements. Both follow the license
+policy in `agent-platform/crawler_research_agent.py` — permissive SPDX licenses
+may be adapted with attribution, everything else is ideas-only.
+
 ## Key Files
 
 - `src/`: frontend application source.

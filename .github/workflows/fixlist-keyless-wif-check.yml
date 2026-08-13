@@ -15,6 +15,8 @@ permissions:
 env:
   GCP_PROJECT: seo-autopilot-501517
   GCP_REGION: europe-west1
+  GCP_WIF_PROVIDER: projects/919035207432/locations/global/workloadIdentityPools/fixlist-github/providers/github
+  GCP_OPERATOR_SERVICE_ACCOUNT: fixlist-github-cloud-operator@seo-autopilot-501517.iam.gserviceaccount.com
   CLOUD_RUN_SERVICE: fixlist-standard150-worker
   CLOUD_TASKS_QUEUE: fixlist-standard150
 
@@ -32,8 +34,8 @@ jobs:
         uses: google-github-actions/auth@v3
         with:
           project_id: ${{ env.GCP_PROJECT }}
-          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_OPERATOR_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3

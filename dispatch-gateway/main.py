@@ -23,6 +23,10 @@ WORKER_URL = os.environ["SCAN_WORKER_URL"].strip().rstrip("/")
 INVOKER_SA = os.environ["TASKS_INVOKER_SERVICE_ACCOUNT"].strip()
 SIGNING_ROOT = os.environ["SCAN_EVIDENCE_SIGNING_KEY"]
 MAX_CLOCK_SKEW_SECONDS = int(os.environ.get("DISPATCH_MAX_CLOCK_SKEW_SECONDS", "300"))
+MAX_DISPATCH_BODY_BYTES = int(os.environ.get("DISPATCH_MAX_BODY_BYTES", str(256 * 1024)))
+if MAX_DISPATCH_BODY_BYTES < 1024:
+    raise RuntimeError("DISPATCH_MAX_BODY_BYTES is too small")
+app.config["MAX_CONTENT_LENGTH"] = MAX_DISPATCH_BODY_BYTES
 
 worker_parts = urlsplit(WORKER_URL)
 if worker_parts.scheme != "https" or not worker_parts.netloc:
@@ -36,6 +40,11 @@ TASK_RE = re.compile(r"^standard150-(?:(drain)-)?([A-Za-z0-9_-]+)-a([1-9][0-9]*)
 
 def response_error(code: str, status: int):
     return jsonify({"success": False, "error": code}), status
+
+
+@app.errorhandler(413)
+def request_too_large(_error):
+    return response_error("request_too_large", 413)
 
 
 def _derive_dispatch_key(root: str) -> bytes:

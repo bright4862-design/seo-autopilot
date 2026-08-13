@@ -167,9 +167,13 @@ jobs:
           PY
           )
           if [ -n "$SECRET_NAME" ] && [ -n "$SECRET_VERSION" ] && gcloud secrets versions access "$SECRET_VERSION" --secret="$SECRET_NAME" --project="$GCP_PROJECT" > "$TMP_DIR/key" 2>"$TMP_DIR/secret.err"; then
+            # Report reachability ONLY. Neither the byte length nor a digest of
+            # the signing key may reach a workflow log: Actions logs persist and
+            # are readable by anyone with repository access, GitHub's secret
+            # masking does not cover values derived at runtime, and a stable
+            # fingerprint of the HMAC key is a permanent offline oracle over the
+            # value the entire authority-seal model rests on.
             echo 'secret_access=YES'
-            printf 'secret_bytes='; wc -c < "$TMP_DIR/key"
-            printf 'secret_sha256='; sha256sum "$TMP_DIR/key" | awk '{print $1}'
           else
             echo 'secret_access=NO'
             sed -n '1,4p' "$TMP_DIR/secret.err"

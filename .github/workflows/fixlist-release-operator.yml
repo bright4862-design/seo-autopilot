@@ -1,0 +1,80 @@
+name: FixList Release Operator Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: fixlist-release-operator-deploy
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT: seo-autopilot-501517
+  GCP_REGION: europe-west1
+  GCP_WIF_PROVIDER: projects/919035207432/locations/global/workloadIdentityPools/github/providers/github-actions
+  GCP_DEPLOYER_SERVICE_ACCOUNT: fixlist-github-operator@seo-autopilot-501517.iam.gserviceaccount.com
+  FIXLIST_RELEASE_OPERATOR_SERVICE_ACCOUNT: fixlist-release-operator@seo-autopilot-501517.iam.gserviceaccount.com
+
+jobs:
+  deploy-release-operator:
+    if: contains(github.event.head_commit.message, '[release-operator-deploy]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout exact main commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Authenticate keylessly to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Agent Engine dependencies
+        working-directory: agent-platform
+        run: python -m pip install --upgrade -r requirements.txt
+
+      - name: Compile release operator
+        working-directory: agent-platform
+        run: python -m compileall -q release_operator.py deploy.py
+
+      - name: Verify release allowlist locally
+        working-directory: agent-platform
+        env:
+          GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT }}
+          AGENT_PLATFORM_LOCATION: ${{ env.GCP_REGION }}
+        run: |
+          python - <<'PY'
+          import release_operator as r
+          assert r.PROJECT == 'seo-autopilot-501517'
+          assert r.REGION == 'europe-west1'
+          assert r.ALLOWED_SERVICES == {'fixlist-standard150-worker', 'fixlist-dispatch-gateway'}
+          assert r.QUEUE == 'fixlist-standard150'
+          assert r.MUTATION_CONFIRM == 'FIXLIST_RELEASE_MUTATION'
+          print('Release operator allowlist verified')
+          PY
+
+      - name: Deploy only FixList Release Operator
+        working-directory: agent-platform
+        env:
+          GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT }}
+          AGENT_PLATFORM_LOCATION: ${{ env.GCP_REGION }}
+          FIXLIST_AGENTS_TO_DEPLOY: cloud
+          FIXLIST_RELEASE_OPERATOR_SERVICE_ACCOUNT: ${{ env.FIXLIST_RELEASE_OPERATOR_SERVICE_ACCOUNT }}
+        run: python deploy.py

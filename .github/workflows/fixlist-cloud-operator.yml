@@ -140,29 +140,6 @@ jobs:
           workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
           service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
 
-      - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v3
-        with:
-          project_id: ${{ env.GCP_PROJECT }}
-
-      - name: Ensure only required Agent Platform deploy role
-        shell: bash
-        run: |
-          set -euo pipefail
-          CURRENT_ROLES="$(gcloud projects get-iam-policy "$GCP_PROJECT" \
-            --flatten='bindings[].members' \
-            --filter="bindings.members:serviceAccount:${GCP_OPERATOR_SERVICE_ACCOUNT}" \
-            --format='value(bindings.role)' || true)"
-          if printf '%s\n' "$CURRENT_ROLES" | grep -Fxq 'roles/aiplatform.user'; then
-            echo 'roles/aiplatform.user already present.'
-          else
-            echo 'Granting only roles/aiplatform.user to the trusted deployment service account.'
-            gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
-              --member="serviceAccount:${GCP_OPERATOR_SERVICE_ACCOUNT}" \
-              --role='roles/aiplatform.user' \
-              --condition=None
-          fi
-
       - name: Set up Python
         uses: actions/setup-python@v6
         with:

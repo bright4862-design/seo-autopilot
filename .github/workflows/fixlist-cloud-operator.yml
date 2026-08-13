@@ -120,7 +120,7 @@ jobs:
         run: ./scripts/deploy_dispatch_gateway.sh
 
   deploy-custom-agents:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[agent-runtime-diagnostic]')
     name: Deploy custom agents
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -159,3 +159,35 @@ jobs:
           GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT }}
           AGENT_PLATFORM_LOCATION: ${{ env.GCP_REGION }}
         run: python deploy.py
+
+  diagnose-agent-runtime:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[agent-runtime-diagnostic]')
+    name: Diagnose failed Cloud Operator runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Read failed Reasoning Engine logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENGINE_ID='7135452232266285056'
+          FILTER="resource.type=\"aiplatform.googleapis.com/ReasoningEngine\" AND resource.labels.reasoning_engine_id=\"${ENGINE_ID}\""
+          gcloud logging read "$FILTER" \
+            --project="$GCP_PROJECT" \
+            --freshness=2h \
+            --limit=200 \
+            --order=asc \
+            --format='table(timestamp,severity,logName,textPayload,jsonPayload.message)'

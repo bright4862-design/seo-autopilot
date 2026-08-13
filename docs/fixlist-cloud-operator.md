@@ -76,6 +76,7 @@ verifies:
 - immutable GitHub repository ID `1291460209`
 - immutable GitHub owner ID `300628670`
 - exact allowed ref `refs/heads/main`
+- exact allowed workflow `bright4862-design/seo-autopilot/.github/workflows/fixlist-cloud-operator.yml@refs/heads/main`
 - `roles/iam.workloadIdentityUser` only for that repository identity
 - `roles/run.developer` on `fixlist-standard150-worker`
 - `roles/cloudtasks.queueAdmin` on `fixlist-standard150`
@@ -87,16 +88,17 @@ The WIF provider resource name and operator service-account email are identifier
 not secrets. They are pinned directly in `.github/workflows/fixlist-cloud-operator.yml`;
 no GitHub repository secrets are required for them.
 
-### Why immutable IDs and `refs/heads/main` matter
+### Why immutable IDs, main, and the exact workflow matter
 
 GitHub's OIDC `repository_id` and `repository_owner_id` claims are immutable
-numeric identifiers. The WIF provider accepts only this repository, this owner,
-and `refs/heads/main`. This avoids relying only on reusable repository names.
+numeric identifiers. The provider also checks `ref` and `workflow_ref`. Google
+therefore accepts the operator identity only when the token comes from this
+repository, this owner, `refs/heads/main`, and the exact Cloud Operator workflow
+file on main.
 
-`workflow_dispatch` can otherwise be launched from a branch whose workflow or
-operator script has been modified. The WIF condition makes authentication
-itself fail away from `main`; the workflow's explicit ref guard and pinned
-checkout provide defense in depth.
+This prevents another workflow on the same repository and branch from borrowing
+the operator service account merely because it also has `id-token: write`.
+The workflow's explicit ref guard and pinned source provide defense in depth.
 
 ## Release sequence
 

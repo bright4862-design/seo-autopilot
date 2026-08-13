@@ -8,6 +8,7 @@ REPO="bright4862-design/seo-autopilot"
 REPO_ID="1291460209"
 REPO_OWNER_ID="300628670"
 MAIN_REF="refs/heads/main"
+WORKFLOW_REF="${REPO}/.github/workflows/fixlist-cloud-operator.yml@${MAIN_REF}"
 POOL="github"
 PROVIDER="github-actions"
 OPERATOR_ID="fixlist-github-operator"
@@ -25,6 +26,7 @@ gcloud services enable \
   iam.googleapis.com \
   iamcredentials.googleapis.com \
   sts.googleapis.com \
+  cloudresourcemanager.googleapis.com \
   --project="$PROJECT" \
   --quiet
 
@@ -33,7 +35,7 @@ if ! gcloud iam service-accounts describe "$OPERATOR_SA" --project="$PROJECT" >/
   gcloud iam service-accounts create "$OPERATOR_ID" \
     --project="$PROJECT" \
     --display-name="FixList GitHub Cloud Operator" \
-    --description="Keyless main-only release operator for FixList Standard 150" \
+    --description="Keyless exact-workflow release operator for FixList Standard 150" \
     --quiet
 fi
 
@@ -61,9 +63,6 @@ gcloud iam service-accounts add-iam-policy-binding "$INVOKER_SA" \
   --quiet >/dev/null
 
 say "Grant read-only Cloud Build provenance access"
-# verify-worker-routes calls gcloud builds list. Google documents
-# roles/cloudbuild.builds.viewer as the viewer role containing
-# cloudbuild.builds.get/list; the lowest grant level for this role is project.
 gcloud projects add-iam-policy-binding "$PROJECT" \
   --member="serviceAccount:${OPERATOR_SA}" \
   --role="roles/cloudbuild.builds.viewer" \
@@ -80,9 +79,9 @@ if ! gcloud iam workload-identity-pools describe "$POOL" \
     --quiet
 fi
 
-say "Create immutable-repository, owner, and main-only GitHub provider if needed"
-EXPECTED_CONDITION="assertion.repository_id == '${REPO_ID}' && assertion.repository_owner_id == '${REPO_OWNER_ID}' && assertion.ref == '${MAIN_REF}'"
-EXPECTED_MAPPING="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.repository_id=assertion.repository_id,attribute.repository_owner_id=assertion.repository_owner_id,attribute.ref=assertion.ref"
+say "Create immutable repository, main, and exact-workflow GitHub provider if needed"
+EXPECTED_CONDITION="assertion.repository_id == '${REPO_ID}' && assertion.repository_owner_id == '${REPO_OWNER_ID}' && assertion.ref == '${MAIN_REF}' && assertion.workflow_ref == '${WORKFLOW_REF}'"
+EXPECTED_MAPPING="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.repository_id=assertion.repository_id,attribute.repository_owner_id=assertion.repository_owner_id,attribute.ref=assertion.ref,attribute.workflow_ref=assertion.workflow_ref"
 
 if ! gcloud iam workload-identity-pools providers describe "$PROVIDER" \
   --project="$PROJECT" \
@@ -92,24 +91,47 @@ if ! gcloud iam workload-identity-pools providers describe "$PROVIDER" \
     --project="$PROJECT" \
     --location=global \
     --workload-identity-pool="$POOL" \
-    --display-name="FixList GitHub main" \
+    --display-name="FixList GitHub main operator" \
     --issuer-uri="https://token.actions.githubusercontent.com/" \
     --attribute-mapping="$EXPECTED_MAPPING" \
     --attribute-condition="$EXPECTED_CONDITION" \
     --quiet
-else
-  ACTUAL_CONDITION="$(gcloud iam workload-identity-pools providers describe "$PROVIDER" \
-    --project="$PROJECT" \
-    --location=global \
-    --workload-identity-pool="$POOL" \
-    --format='value(attributeCondition)')"
-  if [[ "$ACTUAL_CONDITION" != "$EXPECTED_CONDITION" ]]; then
-    echo "ERROR: existing WIF provider condition does not match the expected immutable main-only condition." >&2
-    echo "Expected: $EXPECTED_CONDITION" >&2
-    echo "Actual:   $ACTUAL_CONDITION" >&2
-    exit 2
-  fi
 fi
+
+PROVIDER_JSON="$(mktemp)"
+trap 'rm -f "$PROVIDER_JSON"' EXIT
+gcloud iam workload-identity-pools providers describe "$PROVIDER" \
+  --project="$PROJECT" \
+  --location=global \
+  --workload-identity-pool="$POOL" \
+  --format=json > "$PROVIDER_JSON"
+
+python3 - "$PROVIDER_JSON" "$EXPECTED_CONDITION" "$WORKFLOW_REF" <<'PY'
+import json, sys
+path, expected_condition, expected_workflow = sys.argv[1:4]
+with open(path, encoding="utf-8") as fh:
+    data = json.load(fh)
+if data.get("state") != "ACTIVE":
+    raise SystemExit(f"WIF provider is not ACTIVE: {data.get('state')!r}")
+issuer = str(data.get("oidc", {}).get("issuerUri") or "").rstrip("/")
+if issuer != "https://token.actions.githubusercontent.com":
+    raise SystemExit(f"Unexpected GitHub issuer: {issuer!r}")
+if data.get("attributeCondition") != expected_condition:
+    raise SystemExit("Existing WIF provider condition does not match the exact immutable workflow condition")
+mapping = data.get("attributeMapping") or {}
+expected = {
+    "google.subject": "assertion.sub",
+    "attribute.repository": "assertion.repository",
+    "attribute.repository_id": "assertion.repository_id",
+    "attribute.repository_owner_id": "assertion.repository_owner_id",
+    "attribute.ref": "assertion.ref",
+    "attribute.workflow_ref": "assertion.workflow_ref",
+}
+for key, value in expected.items():
+    if mapping.get(key) != value:
+        raise SystemExit(f"Unexpected attribute mapping for {key}: {mapping.get(key)!r}")
+print(f"Exact workflow trust verified: {expected_workflow}")
+PY
 
 POOL_NAME="$(gcloud iam workload-identity-pools describe "$POOL" \
   --project="$PROJECT" \
@@ -136,5 +158,6 @@ printf '\nWIF_PROVIDER=%s\n' "$PROVIDER_NAME"
 printf 'OPERATOR_SA=%s\n' "$OPERATOR_SA"
 printf 'REPOSITORY=%s (id=%s owner_id=%s)\n' "$REPO" "$REPO_ID" "$REPO_OWNER_ID"
 printf 'AUTHORIZED_REF=%s\n' "$MAIN_REF"
+printf 'AUTHORIZED_WORKFLOW=%s\n' "$WORKFLOW_REF"
 printf '\nWIF_BOOTSTRAP_COMPLETE\n'
 printf 'No service-account key was created. No GitHub repository secret is required for these identifiers.\n'

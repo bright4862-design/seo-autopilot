@@ -198,16 +198,72 @@ printf 'candidate_revision=%s\ncandidate_image=%s\ncandidate_traffic=0%%\n' \
   "$CANDIDATE_REVISION" "$CANDIDATE_IMAGE"
 
 say "3/7 VERIFY CANDIDATE BEFORE TRAFFIC"
+# post_deploy_verify.sh inspects the service template, where Cloud Run preserves
+# the release tag supplied at deploy time. Compare tag-to-tag there; then verify
+# the exact candidate revision independently below using its resolved digest.
 WORKER_SERVICE="$WORKER" \
 REGION="$REGION" \
 PROJECT="$PROJECT" \
-EXPECTED_IMAGE="$CANDIDATE_IMAGE" \
+EXPECTED_IMAGE="${IMAGE_BASE}:${EXPECTED_RELEASE_SHA}" \
 EXPECTED_RUNTIME_SA="$RUNTIME_SA" \
 EXPECTED_INVOKER_SA="$INVOKER_SA" \
 BASE44_APP_ID="$BASE44_APP_ID" \
 EXPECTED_SIGNING_SECRET="$SIGNING_SECRET" \
 EXPECTED_SIGNING_VERSION="$SIGNING_VERSION" \
   bash scripts/post_deploy_verify.sh
+
+# The service-level verifier may still report the previously serving
+# latestReadyRevisionName while a new --no-traffic revision is ready. Verify the
+# exact candidate by revision name so the old ready revision cannot satisfy this
+# gate. gcloud revision describe resolves the container image to an immutable
+# digest, which must match the digest captured immediately after deployment.
+gcloud run revisions describe "$CANDIDATE_REVISION" \
+  --project="$PROJECT" --region="$REGION" --format=json > "$PREP_TMP/candidate-revision.json"
+python3 - "$PREP_TMP/candidate-revision.json" "$CANDIDATE_REVISION" "$CANDIDATE_IMAGE" \
+  "$RUNTIME_SA" "$SIGNING_SECRET" "$SIGNING_VERSION" <<'PY'
+import json, sys
+path, expected_revision, expected_image, expected_sa, expected_secret, expected_version = sys.argv[1:7]
+d = json.load(open(path, encoding="utf-8"))
+name = str((d.get("metadata") or {}).get("name") or "").strip()
+if name != expected_revision:
+    raise SystemExit(f"candidate revision identity mismatch: got {name!r}, expected {expected_revision!r}")
+status = d.get("status") or {}
+ready = any(
+    str(c.get("type") or "") == "Ready" and str(c.get("status") or "").lower() == "true"
+    for c in status.get("conditions") or []
+)
+if not ready:
+    raise SystemExit("exact candidate revision is not Ready")
+spec = d.get("spec") or {}
+containers = spec.get("containers") or []
+if not containers:
+    raise SystemExit("exact candidate revision has no container")
+c = containers[0]
+image = str(c.get("image") or "").strip()
+if image != expected_image:
+    raise SystemExit(f"candidate digest mismatch: got {image!r}, expected {expected_image!r}")
+if "@sha256:" not in image:
+    raise SystemExit(f"candidate image is not resolved to an immutable digest: {image!r}")
+sa = str(spec.get("serviceAccountName") or "").strip()
+if sa != expected_sa:
+    raise SystemExit(f"candidate runtime service account mismatch: got {sa!r}, expected {expected_sa!r}")
+if str(spec.get("timeoutSeconds") or "") != "480":
+    raise SystemExit(f"candidate timeout is {spec.get('timeoutSeconds')!r}, expected 480")
+if str(spec.get("containerConcurrency") or "") != "1":
+    raise SystemExit(f"candidate concurrency is {spec.get('containerConcurrency')!r}, expected 1")
+env = c.get("env") or []
+secret_env = next((e for e in env if e.get("name") == "SCAN_EVIDENCE_SIGNING_KEY"), None)
+if secret_env is None:
+    raise SystemExit("candidate signing-key environment reference is absent")
+ref = (secret_env.get("valueFrom") or {}).get("secretKeyRef") or {}
+if str(ref.get("name") or "") != expected_secret or str(ref.get("key") or "") != expected_version:
+    raise SystemExit(
+        "candidate signing-key reference mismatch: "
+        f"got {ref.get('name')!r}:{ref.get('key')!r}, expected {expected_secret!r}:{expected_version!r}"
+    )
+print(f"PASS — exact candidate revision {expected_revision} is Ready")
+print(f"PASS — exact candidate resolved image matches immutable digest {expected_image}")
+PY
 
 say "4/7 SYNCHRONIZE SIGNING ROOT + GITHUB SOURCE INTO BASE44"
 # This subprocess removes its plaintext secret temp files immediately on return.

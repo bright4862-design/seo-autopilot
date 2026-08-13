@@ -21,11 +21,11 @@ test("retired copy is gone", () => {
   assert.doesNotMatch(scanForm, /Standard · 150/);
 });
 
-test("field order is heading, subhead, trust badge, URL, name, spec line, CTA", () => {
+test("field order is trust note, heading, subhead, URL, name, spec line, CTA", () => {
   const order = [
+    /Read-only scan · no site changes/,
     /<h1[^>]*>Create your FixList<\/h1>/,
     /Enter a website URL and we’ll turn the scan/,
-    /Read-only scan — FixList never logs in or changes your website\./,
     /id="fixlist-website-url"/,
     /id="fixlist-business-name"/,
     /\{SCAN_SPEC_LINE\}/,
@@ -88,14 +88,9 @@ test("the business name is genuinely optional", () => {
   assert.match(scanForm, /businessName\.trim\(\) \|\| safeHostname\(normalizedUrl\)/);
 });
 
-test("debug tooling is hidden unless explicitly requested", () => {
-  assert.match(scanForm, /const debugVisible = useMemo\(\(\) => isDebugRequested\(\), \[\]\)/);
-  assert.match(scanForm, /\{debugVisible \? \(/);
-  assert.match(scanForm, /\{debugVisible && debugOpen \? \(/);
-  const gate = scanForm.match(/function isDebugRequested\(\)[\s\S]*?\n\}/);
-  assert.ok(gate, "isDebugRequested is missing");
-  assert.match(gate[0], /get\("debug"\) === "1"/);
-  assert.match(gate[0], /VITE_INTERNAL_DEBUG/);
+test("customer-visible debug controls are absent", () => {
+  assert.doesNotMatch(scanForm, /Show debug|Hide debug|Scan debug|debugVisible|isDebugRequested/);
+  assert.doesNotMatch(scanForm, /VITE_INTERNAL_DEBUG|get\("debug"\) === "1"/);
 });
 
 test("customer navigation cannot reach Grok", () => {
@@ -104,10 +99,9 @@ test("customer navigation cannot reach Grok", () => {
   assert.match(layout, /aria-disabled="true"/);
 });
 
-test("the page is a centred column of about 640px", () => {
-  assert.match(onboarding, /max-w-\[640px\]/);
-  assert.match(onboarding, /mx-auto/);
-  assert.match(scanForm, /mx-auto w-full max-w-\[640px\]/);
+test("the page is a centred 680px column owned by the form", () => {
+  assert.match(onboarding, /return <ScanWebsiteForm \/>/);
+  assert.match(scanForm, /mx-auto w-full max-w-\[680px\]/);
 });
 
 

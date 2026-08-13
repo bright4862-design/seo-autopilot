@@ -11,22 +11,22 @@ const scanForm = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8")
 // scanner-minimal.css was deleted. It restyled the form through positional
 // selectors (`form > div:first-child > div:first-child > div:first-child`),
 // which stripped the input borders and left the selection-card thumb behind
-// once the card itself was removed. Layout now lives with the markup.
-test("the New Scan page owns its own centred layout, with no override stylesheet", () => {
+// once the card itself was removed. Layout now lives with the form markup.
+test("the New Scan form owns its centred layout, with no override stylesheet", () => {
   // Comments may explain why the stylesheet is gone; code may not import it.
   const onboardingCode = onboarding
     .split("\n")
     .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
     .join("\n");
   assert.doesNotMatch(onboardingCode, /scanner-minimal/);
-  assert.match(onboarding, /max-w-\[640px\]/);
-  assert.match(scanForm, /max-w-\[640px\]/);
+  assert.match(onboarding, /return <ScanWebsiteForm \/>/);
+  assert.match(scanForm, /mx-auto w-full max-w-\[680px\]/);
 });
 
 test("inputs are bordered and expose a visible focus ring", () => {
-  assert.match(scanForm, /border-slate-300/);
+  assert.match(scanForm, /border-hairline/);
   assert.match(scanForm, /focus-visible:ring-2/);
-  assert.match(scanForm, /focus-visible:ring-indigo-200/);
+  assert.match(scanForm, /focus-visible:ring-ink\/10/);
 });
 
 test("dashboard shell stays lightweight, sticky, and keyboard-aware", () => {
@@ -44,7 +44,9 @@ test("billing uses responsive rows and a visible current-plan summary", () => {
   assert.match(billing, /Run a new scan/);
   assert.match(billing, /flex-col gap-5 sm:flex-row/);
   assert.match(billing, /border-hairline-soft/);
-  assert.match(billing, /Payments are not connected yet/);
+  assert.doesNotMatch(billing, /Payments are not connected yet|free test scan|Run free scan/i);
+  assert.match(billing, /Standard 150 beta/);
+  assert.match(billing, /securely handled by Stripe/);
 });
 
 test("legacy scanner URL redirects to the Standard 150 onboarding route", () => {

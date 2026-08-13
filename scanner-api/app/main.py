@@ -1,8 +1,10 @@
 import asyncio
 import os
 import secrets
+from datetime import datetime, timezone
 from typing import Any
 
+import httpx
 from fastapi import Body, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
@@ -31,6 +33,18 @@ from .render_evidence_quality import (
 from .review import ARCHETYPE_CLASSIFIER_VERSION, REVIEW_VERSION, run_review
 from .review_calibration import CALIBRATION_VERSION, apply_review_evidence_calibration
 from .scan_timing import SITEMAP_TIME_RESERVATION_VERSION
+from .scan_job import (
+    CRAWL_BUDGET_SECONDS,
+    current_attempt,
+    is_superseded_attempt,
+    normalize_attempt,
+    WORKER_VERSION,
+    already_terminal,
+    complete_authority,
+    identity_matches,
+    read_scan_run,
+    write_terminal_failure,
+)
 from .scanner import VERSION, run_scan
 from .trust_discovery import apply_trust_discovery_gate, enrich_scan_with_trust_pages
 from .url_evidence import URL_EVIDENCE_VERSION, apply_verified_url_contract
@@ -320,3 +334,279 @@ async def review(payload: dict[str, Any] = Body(default_factory=dict), x_scanner
         return timer.failed(exc)
     timer.completed(**review_metrics(result))
     return result
+
+class ScanJobRequest(BaseModel):
+    """Payload Cloud Tasks delivers for one durable Standard 150 job."""
+
+    scan_id: str
+    request_id: str
+    # The attempt this task was minted for. Bound end to end so a task from an
+    # earlier attempt cannot crawl, fail, finalise or charge a newer one.
+    attempt_count: int = 1
+    idempotency_key: str | None = None
+    project_id: str | None = None
+    owner_user_id: str | None = None
+    website_url: str
+    path_prefix: str | None = None
+    normalized_domain: str | None = None
+    business_name: str | None = None
+    cms_platform: str | None = None
+    scan_mode: str = "standard_150"
+    respect_robots_txt: bool = True
+
+
+class ScanDrainRequest(BaseModel):
+    """Delayed watchdog payload for one scan attempt."""
+
+    scan_id: str
+    request_id: str
+    attempt_count: int = 1
+    idempotency_key: str | None = None
+    project_id: str | None = None
+    owner_user_id: str | None = None
+    website_url: str
+    normalized_domain: str | None = None
+    drain_after: str
+
+
+def require_cloud_tasks_oidc(authorization: str | None) -> None:
+    """Check the invoker identity on an already-IAM-validated Cloud Tasks token.
+
+    This function does NOT verify the token signature and does NOT check the
+    `aud` claim. It base64-decodes the JWT payload and compares the `email`
+    claim against TASKS_INVOKER_SERVICE_ACCOUNT. Read it as a second, weaker
+    gate -- not as OIDC verification.
+
+    Token validation (signature, issuer, audience, expiry) is performed by
+    Cloud Run IAM before the request reaches this process, which is only true
+    while the service is deployed --no-allow-unauthenticated. That deployment
+    flag is therefore load-bearing for security here: on a public service this
+    check is trivially forgeable, because an unsigned payload with the expected
+    email claim would pass.
+
+    The application-level value it does add is restricting which *authenticated*
+    principal may drive jobs, so another caller with run.invoker in the project
+    cannot enqueue work through this route.
+    """
+    token = str(authorization or "")
+    if not token.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    expected_sa = str(os.getenv("TASKS_INVOKER_SERVICE_ACCOUNT") or "")
+    if not expected_sa:
+        raise HTTPException(status_code=503, detail="Worker authentication is not configured.")
+    import base64
+    import json as _json
+
+    parts = token.split(" ", 1)[1].split(".")
+    if len(parts) != 3:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    try:
+        padded = parts[1] + "=" * (-len(parts[1]) % 4)
+        claims = _json.loads(base64.urlsafe_b64decode(padded))
+    except Exception:  # noqa: BLE001 - malformed token is simply unauthorized
+        raise HTTPException(status_code=401, detail="Unauthorized") from None
+    if str(claims.get("email") or "") != expected_sa:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+@app.post("/scan-job")
+async def scan_job(
+    payload: ScanJobRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Run one durable Standard 150 job to a terminal state.
+
+    Returns 200 for any outcome Cloud Tasks must not retry (success, or a
+    permanent failure already written to the ScanRun). Returns 5xx only for
+    transient conditions where a retry against the same scan_id is safe.
+    """
+    require_cloud_tasks_oidc(authorization)
+
+    scan_id = str(payload.scan_id or "").strip()
+    if not scan_id or not str(payload.request_id or "").strip():
+        raise HTTPException(status_code=400, detail="A durable scan_id and request_id are required.")
+    if str(payload.scan_mode or "").lower() != "standard_150":
+        raise HTTPException(status_code=400, detail="Only the Standard 150 scan is available.")
+    if payload.respect_robots_txt is not True:
+        raise HTTPException(status_code=400, detail="Standard scans must respect robots.txt.")
+
+    job = payload.model_dump()
+    job_attempt = normalize_attempt(payload.attempt_count)
+
+    async with httpx.AsyncClient() as client:
+        scan = await read_scan_run(client, scan_id)
+        if scan is None:
+            # Transient: the row must exist, so let Cloud Tasks retry it.
+            raise HTTPException(status_code=503, detail="The scan record is unavailable.")
+        if not identity_matches(scan, job):
+            await write_terminal_failure(
+                client, scan_id, "scan_identity_mismatch",
+                "This scan could not be matched to your request. Please start a new scan.",
+                attempt_count=job_attempt,
+            )
+            return {"success": False, "worker_version": WORKER_VERSION, "error_code": "scan_identity_mismatch"}
+        # A superseded task must do nothing at all: no crawl, no failure write,
+        # no persistence, no charge. It is not an error -- the newer attempt
+        # owns the row -- so return 200 and let Cloud Tasks drop the task.
+        if is_superseded_attempt(scan, job_attempt):
+            return {
+                "success": True,
+                "worker_version": WORKER_VERSION,
+                "skipped": "superseded_attempt",
+                "scan_id": scan_id,
+                "task_attempt": job_attempt,
+                "current_attempt": current_attempt(scan),
+            }
+        # Idempotency: a retry after a completed run must not scan again.
+        if already_terminal(scan):
+            return {
+                "success": True,
+                "worker_version": WORKER_VERSION,
+                "skipped": "already_terminal",
+                "status": scan.get("status"),
+                "scan_id": scan_id,
+            }
+
+        try:
+            result = await run_scan(
+                website_url=payload.website_url,
+                path_prefix=payload.path_prefix,
+                scan_mode="advanced",
+                business_name=payload.business_name or "",
+                cms_platform=payload.cms_platform or "",
+                timeout_seconds=CRAWL_BUDGET_SECONDS,
+                job_mode=True,
+            )
+            result = apply_indexability_quality_to_result(result)
+            result = apply_render_evidence_quality(result)
+            # Server-side 150-page cap. Discovery stays broad; only the crawl
+            # sample is bounded.
+            result = enforce_scan_response_page_budget(result, "advanced")
+            result["beta_revision_fingerprint"] = live_revision()["fingerprint"]
+            result.update({
+                "request_id": payload.request_id,
+                "idempotency_key": payload.idempotency_key or payload.request_id,
+                "scan_id": scan_id,
+                "scan_run_id": scan_id,
+                "submitted_url": payload.website_url,
+                "normalized_domain": payload.normalized_domain or website_host(payload.website_url),
+                "respect_robots_txt": True,
+            })
+        except Exception:  # noqa: BLE001 - customer-safe envelope
+            await write_terminal_failure(
+                client, scan_id, "scanner_failed",
+                "The scan stopped unexpectedly. No partial result was saved. Please try again.",
+                attempt_count=job_attempt,
+            )
+            return {"success": False, "worker_version": WORKER_VERSION, "error_code": "scanner_failed"}
+
+        signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
+        if not signing_key:
+            raise HTTPException(status_code=503, detail="Authority signing is not configured.")
+
+        outcome = await complete_authority(client, scan, result, signing_key)
+        if outcome.get("transient"):
+            # ScanRun untouched: Cloud Tasks retries the same scan_id safely.
+            raise HTTPException(status_code=503, detail="Authority persistence is unavailable.")
+        if outcome.get("superseded"):
+            # A newer attempt owns the row: write nothing, charge nothing.
+            return {
+                "success": True,
+                "worker_version": WORKER_VERSION,
+                "skipped": "superseded_attempt",
+                "scan_id": scan_id,
+                "task_attempt": job_attempt,
+            }
+        if not outcome.get("ok"):
+            await write_terminal_failure(
+                client, scan_id, str(outcome.get("failure_code") or "authority_persistence_failed"),
+                "The scan finished, but its result could not be saved. Please try again.",
+                attempt_count=job_attempt,
+            )
+            return {"success": False, "worker_version": WORKER_VERSION, "error_code": outcome.get("failure_code")}
+
+        return {
+            "success": True,
+            "worker_version": WORKER_VERSION,
+            "scan_id": scan_id,
+            "pages_crawled": result.get("pages_crawled"),
+            "pages_found": result.get("pages_found"),
+            "fix_list_id": outcome.get("fix_list_id"),
+            "authority_proof_present": len(str(outcome.get("authority_proof") or "")) == 64,
+        }
+
+
+@app.post("/scan-job-drain")
+async def scan_job_drain(
+    payload: ScanDrainRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Close a stale active attempt after the scan task's retry envelope."""
+
+    require_cloud_tasks_oidc(authorization)
+    scan_id = str(payload.scan_id or "").strip()
+    request_id = str(payload.request_id or "").strip()
+    if not scan_id or not request_id:
+        raise HTTPException(status_code=400, detail="A durable scan_id and request_id are required.")
+
+    try:
+        drain_after = datetime.fromisoformat(str(payload.drain_after).replace("Z", "+00:00"))
+        if drain_after.tzinfo is None:
+            drain_after = drain_after.replace(tzinfo=timezone.utc)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid drain_after timestamp.") from exc
+    if datetime.now(timezone.utc) < drain_after.astimezone(timezone.utc):
+        raise HTTPException(status_code=503, detail="The terminal drain is not due yet.")
+
+    job = payload.model_dump()
+    job_attempt = normalize_attempt(payload.attempt_count)
+    async with httpx.AsyncClient() as client:
+        scan = await read_scan_run(client, scan_id)
+        if scan is None:
+            raise HTTPException(status_code=503, detail="The scan record is unavailable.")
+        if not identity_matches(scan, job):
+            return {
+                "success": True,
+                "worker_version": WORKER_VERSION,
+                "skipped": "identity_mismatch",
+                "scan_id": scan_id,
+            }
+        if is_superseded_attempt(scan, job_attempt):
+            return {
+                "success": True,
+                "worker_version": WORKER_VERSION,
+                "skipped": "superseded_attempt",
+                "scan_id": scan_id,
+                "task_attempt": job_attempt,
+                "current_attempt": current_attempt(scan),
+            }
+        if already_terminal(scan):
+            return {
+                "success": True,
+                "worker_version": WORKER_VERSION,
+                "skipped": "already_terminal",
+                "status": scan.get("status"),
+                "scan_id": scan_id,
+            }
+
+        try:
+            closed = await write_terminal_failure(
+                client,
+                scan_id,
+                "worker_terminal_drain_timeout",
+                "The scan did not reach a final result in time. Please start a new scan.",
+                attempt_count=job_attempt,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="The terminal state could not be verified.",
+            ) from exc
+
+        return {
+            "success": True,
+            "worker_version": WORKER_VERSION,
+            "scan_id": scan_id,
+            "closed": bool(closed),
+            "status": "failed" if closed else "superseded_attempt",
+        }

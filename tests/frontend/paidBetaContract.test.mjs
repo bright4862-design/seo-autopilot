@@ -1,0 +1,124 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+import {
+  ACCESS_APP_ID,
+  ACCESS_PLAN_ID,
+  OWNER_TEST_EMAIL,
+  OWNER_TEST_USER_ID,
+  evaluatePaidAccess,
+} from "../../base44/functions/startStandardScanJob/entitlement.js";
+
+const checkout = readFileSync("base44/functions/createAccessCheckout/entry.ts", "utf8");
+const webhook = readFileSync("base44/functions/stripeWebhook/entry.ts", "utf8");
+const accessClient = readFileSync("src/lib/access.js", "utf8");
+const billing = readFileSync("src/pages/Billing.jsx", "utf8");
+const scanForm = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
+const fixList = readFileSync("src/pages/FixList.jsx", "utf8");
+const persistence = readFileSync("base44/functions/persistDurableScanAuthority/index.ts", "utf8");
+const accessSchema = JSON.parse(readFileSync("base44/entities/Access.jsonc", "utf8"));
+
+const user = { id: "user-1", email: "paid@example.com" };
+const active = {
+  id: "access-1",
+  owner_user_id: user.id,
+  user_email: user.email,
+  has_full_access: true,
+  access_status: "active",
+  plan_id: ACCESS_PLAN_ID,
+  grant_source: "stripe_checkout",
+  app_id: ACCESS_APP_ID,
+  paid_at: "2026-08-11T12:00:00.000Z",
+  stripe_checkout_session_id: "cs_paid_1",
+};
+const ownerUser = { id: OWNER_TEST_USER_ID, email: OWNER_TEST_EMAIL };
+const ownerAccess = {
+  id: "access-owner",
+  owner_user_id: OWNER_TEST_USER_ID,
+  user_email: OWNER_TEST_EMAIL,
+  has_full_access: true,
+  access_status: "active",
+  plan_id: ACCESS_PLAN_ID,
+  grant_source: "owner_test",
+  app_id: ACCESS_APP_ID,
+  granted_at: "2026-08-11T12:00:00.000Z",
+};
+
+test("checkout, webhook and customer copy share one $50 contract", () => {
+  assert.match(checkout, /unit_amount: 5000/);
+  assert.match(webhook, /const EXPECTED_AMOUNT = 5000;/);
+  assert.match(accessClient, /UNLOCK_PRICE_LABEL = "\$50"/);
+  assert.match(billing, /price: "\$50 one-time"/);
+
+  for (const [name, source] of Object.entries({ checkout, webhook, accessClient, billing, scanForm, fixList })) {
+    assert.doesNotMatch(source, /\$30(?!\d)|\$75(?!\d)|unit_amount:\s*3000|unit_amount:\s*7500/, name);
+  }
+});
+
+test("customer copy is paid-only and contains no free-scan promise", () => {
+  for (const [name, source] of Object.entries({ accessClient, billing, scanForm, fixList })) {
+    assert.doesNotMatch(source, /free test scan|one free scan|Run free scan/i, name);
+  }
+  assert.match(billing, /one-time payment/i);
+  assert.match(billing, /Standard 150 beta/);
+});
+
+test("paid admission fails closed for missing, unpaid and duplicate rows", () => {
+  assert.deepEqual(evaluatePaidAccess({ rows: [], user }), {
+    ok: false,
+    failureCode: "paid_access_required",
+  });
+  assert.equal(evaluatePaidAccess({ rows: [{ ...active, has_full_access: false }], user }).ok, false);
+  assert.equal(evaluatePaidAccess({ rows: [active, { ...active, id: "access-2" }], user }).failureCode, "paid_access_conflict");
+  assert.equal(evaluatePaidAccess({ rows: [active], user }).ok, true);
+});
+
+test("an entitlement is bound to the exact owner, email, app and Stripe grant", () => {
+  for (const changed of [
+    { owner_user_id: "other" },
+    { user_email: "other@example.com" },
+    { app_id: "other-app" },
+    { plan_id: "other-plan" },
+    { grant_source: "manual" },
+    { stripe_checkout_session_id: "" },
+    { paid_at: "" },
+  ]) {
+    assert.equal(evaluatePaidAccess({ rows: [{ ...active, ...changed }], user }).ok, false);
+  }
+});
+
+test("the exact owner can test the scanner without inventing Stripe data", () => {
+  assert.equal(evaluatePaidAccess({ rows: [ownerAccess], user: ownerUser }).ok, true);
+  assert.equal("paid_at" in ownerAccess, false);
+  assert.equal("stripe_checkout_session_id" in ownerAccess, false);
+
+  for (const changed of [
+    { owner_user_id: "other" },
+    { user_email: "other@example.com" },
+    { app_id: "other-app" },
+    { plan_id: "other-plan" },
+    { grant_source: "manual" },
+    { granted_at: "" },
+  ]) {
+    assert.equal(evaluatePaidAccess({ rows: [{ ...ownerAccess, ...changed }], user: ownerUser }).ok, false);
+  }
+  assert.equal(evaluatePaidAccess({ rows: [ownerAccess], user: { ...ownerUser, id: "other" } }).ok, false);
+  assert.equal(evaluatePaidAccess({ rows: [ownerAccess], user: { ...ownerUser, email: "other@example.com" } }).ok, false);
+  assert.equal(
+    evaluatePaidAccess({ rows: [ownerAccess, { ...ownerAccess, id: "access-owner-2" }], user: ownerUser }).failureCode,
+    "paid_access_conflict",
+  );
+});
+
+test("Access writes are backend-only and completion is billing-independent", () => {
+  for (const action of ["create", "update", "delete"]) {
+    assert.equal(accessSchema.rls[action].user_condition.role, "admin");
+  }
+  assert.ok(accessSchema.rls.read.$or.some((rule) => rule["data.owner_user_id"] === "{{user.id}}"));
+  assert.ok(accessSchema.rls.read.$or.some((rule) => rule["data.user_email"] === "{{user.email}}"));
+  assert.equal(accessSchema.properties.granted_at.type, "string");
+  assert.equal("scans_used" in accessSchema.properties, false);
+  assert.doesNotMatch(scanForm, /recordScanUsed|Access\.create|Access\.update|scans_used/);
+  assert.doesNotMatch(persistence, /entities\.Access|scans_used|ensureAllowanceConsumed/);
+});

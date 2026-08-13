@@ -76,7 +76,11 @@ jobs:
           bash -n scripts/deploy_dispatch_gateway.sh
           node --check base44/functions/startStandardScanJob/cloudTasks.js
           python -m pip install -r dispatch-gateway/requirements.txt
-          python -m py_compile dispatch-gateway/main.py
+          (
+            cd dispatch-gateway
+            python -m unittest -v test_gateway.py
+          )
+          python -m py_compile dispatch-gateway/main.py dispatch-gateway/test_gateway.py
           node --test tests/frontend/dispatchGatewayContract.test.mjs
 
       - name: Authenticate to Google Cloud

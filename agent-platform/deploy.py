@@ -71,7 +71,6 @@ def deploy(name: str):
         "entrypoint_object": spec["entrypoint_object"],
         "requirements_file": "requirements.txt",
         "class_methods": spec["methods"],
-        "env_vars": {"GOOGLE_CLOUD_PROJECT": PROJECT},
     })
     print(f"DEPLOYED {name}: {remote.api_resource.name}", flush=True)
 

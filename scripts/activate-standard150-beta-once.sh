@@ -2,22 +2,25 @@
 set -euo pipefail
 
 # One-shot owner-run activation helper for the exact merged Standard 150 beta.
-# This script lives on an ops-only branch so using it does not move the release
-# source SHA. It must be executed while the working tree itself is clean main at
-# EXPECTED_RELEASE_SHA.
+# This helper lives on an ops-only branch so it cannot move the release source
+# SHA. Execute it while the working tree itself is clean main at the exact SHA.
 #
 # Sequence:
-#   1. Discover all deployment inputs from the live worker; invent nothing.
-#   2. Build/deploy EXPECTED_RELEASE_SHA as a private 0%-traffic candidate.
+#   1. Discover deployment inputs from the live worker; invent nothing.
+#   2. Build/deploy the exact release as a private 0%-traffic candidate.
 #   3. Verify the candidate configuration read-only.
-#   4. Synchronize Base44's signing root from the worker's pinned GCP secret.
-#      Base44 device login happens BEFORE the secret is read.
-#   5. Pause the Standard 150 queue, require it to be empty, promote the exact
-#      candidate, prove the canonical worker is still private/reachable, resume.
+#   4. Synchronize Base44's signing root, then deploy ONLY the durable JS/TS
+#      functions and the site from the exact GitHub checkout. No Python is ever
+#      deployed into Base44.
+#   5. Pause an empty Standard 150 queue, promote the exact candidate, prove the
+#      canonical worker is private/reachable, then resume the queue.
 #
+# Any failure after this script pauses the queue triggers automatic queue resume.
+# Any failure after candidate promotion also attempts exact-revision rollback.
 # It never deletes tasks, changes billing, enables Grok/Premium, or starts a scan.
 
 EXPECTED_RELEASE_SHA="499d6479225d980ee95d60ef9df4118d726823d5"
+EXPECTED_FINGERPRINT="5caec7fdcabceee7"
 PROJECT="seo-autopilot-501517"
 REGION="europe-west1"
 WORKER="fixlist-standard150-worker"
@@ -25,11 +28,13 @@ QUEUE="fixlist-standard150"
 INVOKER_SA="fixlist-standard150-invoker@${PROJECT}.iam.gserviceaccount.com"
 BASE44_APP_ID="6a498732ec779dfaaeab0e53"
 BASE44_API_URL="https://base44.app"
+BASE44_CLI_VERSION="0.1.9"
+BASE44_CLI_SRI="sha512-o1IFePlQHvUARUVr19FiYEakkPrwDf6IVcz3pWSngSaG+sBSs8t7T7coJir1N4yBFQ76052hjgqT2V+xC8BNOQ=="
 
 say() { printf '\n========== %s ==========\n' "$*"; }
 fail() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
-for cmd in git gcloud python3 curl bash; do
+for cmd in git gcloud python3 curl bash npm openssl; do
   command -v "$cmd" >/dev/null 2>&1 || fail "$cmd is required"
 done
 
@@ -48,28 +53,50 @@ REMOTE_SHA="$(git rev-parse origin/main)"
   || fail "working tree is not clean"
 
 echo "release_sha=$EXPECTED_RELEASE_SHA"
+echo "beta_fingerprint=$EXPECTED_FINGERPRINT"
 
 gcloud config set project "$PROJECT" >/dev/null
 ACTIVE_ACCOUNT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n1)"
 [[ -n "$ACTIVE_ACCOUNT" ]] || fail "no active gcloud account"
 echo "gcloud_account=$ACTIVE_ACCOUNT"
 
-TMP="$(mktemp -d)"
-QUEUE_WAS_PAUSED=0
+PREP_TMP="$(mktemp -d)"
+DEPLOY_TMP=""
+QUEUE_PAUSED_BY_US=0
 PROMOTED=0
+ACTIVATION_COMPLETE=0
 OLD_REVISION=""
 CANDIDATE_REVISION=""
-cleanup() {
-  rm -rf "$TMP"
+
+recover_on_exit() {
+  rc=$?
+  trap - EXIT
+  if [[ "$rc" -ne 0 && "$PROMOTED" -eq 1 && -n "$OLD_REVISION" ]]; then
+    echo >&2
+    echo "Activation failed after promotion; attempting rollback to $OLD_REVISION ..." >&2
+    gcloud run services update-traffic "$WORKER" \
+      --project="$PROJECT" --region="$REGION" \
+      --to-revisions="${OLD_REVISION}=100" --quiet >/dev/null 2>&1 || \
+      echo "WARNING: automatic traffic rollback failed; inspect Cloud Run immediately." >&2
+  fi
+  if [[ "$QUEUE_PAUSED_BY_US" -eq 1 ]]; then
+    echo "Restoring Standard 150 queue to RUNNING ..." >&2
+    gcloud tasks queues resume "$QUEUE" \
+      --project="$PROJECT" --location="$REGION" --quiet >/dev/null 2>&1 || \
+      echo "WARNING: automatic queue resume failed; inspect Cloud Tasks immediately." >&2
+  fi
+  rm -rf "$PREP_TMP"
+  [[ -n "$DEPLOY_TMP" ]] && rm -rf "$DEPLOY_TMP"
+  exit "$rc"
 }
-trap cleanup EXIT
-chmod 700 "$TMP"
+trap recover_on_exit EXIT
+chmod 700 "$PREP_TMP"
 
-say "1/6 DISCOVER LIVE DEPLOYMENT INPUTS"
+say "1/7 DISCOVER LIVE DEPLOYMENT INPUTS"
 gcloud run services describe "$WORKER" \
-  --project="$PROJECT" --region="$REGION" --format=json > "$TMP/before.json"
+  --project="$PROJECT" --region="$REGION" --format=json > "$PREP_TMP/before.json"
 
-python3 - "$TMP/before.json" "$TMP/inputs.env" <<'PY'
+python3 - "$PREP_TMP/before.json" "$PREP_TMP/inputs.env" <<'PY'
 import json, re, sys
 src, out = sys.argv[1:3]
 d = json.load(open(src, encoding="utf-8"))
@@ -82,8 +109,6 @@ image = str(c.get("image") or "").strip()
 runtime = str(spec.get("serviceAccountName") or "").strip()
 if not image or not runtime:
     raise SystemExit("live worker image/runtime identity missing")
-# Cloud Run may expose a resolved digest. Cloud Build needs the repository/image
-# path without tag or digest.
 image_base = image.split("@", 1)[0]
 last = image_base.rsplit("/", 1)[-1]
 if ":" in last:
@@ -102,9 +127,8 @@ if not secret_name or not secret_version.isdigit():
     raise SystemExit("live worker signing secret is not pinned to a numeric version")
 status = d.get("status") or {}
 latest_ready = str(status.get("latestReadyRevisionName") or "").strip()
-traffic = status.get("traffic") or []
 old = ""
-for t in traffic:
+for t in status.get("traffic") or []:
     try:
         pct = int(t.get("percent") or 0)
     except Exception:
@@ -130,22 +154,30 @@ with open(out, "w", encoding="utf-8") as fh:
             raise SystemExit(f"unexpected characters in discovered {k}")
         fh.write(f"{k}={v}\n")
 PY
-# Values are identifiers/paths only; no secret payload is read here.
+# Identifiers/paths only; no secret payload is read in discovery.
 # shellcheck disable=SC1090
-source "$TMP/inputs.env"
-OLD_REVISION="$OLD_REVISION"
+source "$PREP_TMP/inputs.env"
 printf 'image_base=%s\nruntime_sa=%s\nsigning_secret_ref=%s:%s\nrollback_revision=%s\n' \
   "$IMAGE_BASE" "$RUNTIME_SA" "$SIGNING_SECRET" "$SIGNING_VERSION" "$OLD_REVISION"
 
-say "2/6 BUILD + DEPLOY EXACT SHA AT 0% TRAFFIC"
+QUEUE_STATE_START="$(gcloud tasks queues describe "$QUEUE" \
+  --project="$PROJECT" --location="$REGION" --format='value(state)')"
+[[ "$QUEUE_STATE_START" == "RUNNING" ]] \
+  || fail "Standard 150 queue must start RUNNING; got $QUEUE_STATE_START"
+START_TASKS="$(gcloud tasks list --project="$PROJECT" --location="$REGION" \
+  --queue="$QUEUE" --format='value(name)' 2>/dev/null || true)"
+[[ -z "$START_TASKS" ]] || fail "queue already contains tasks; refusing candidate activation"
+echo "queue_preflight=RUNNING_AND_EMPTY"
+
+say "2/7 BUILD + DEPLOY EXACT SHA AT 0% TRAFFIC"
 gcloud builds submit . \
   --project="$PROJECT" \
   --config=cloudbuild.durable-worker.yaml \
   --substitutions="_RELEASE_SHA=${EXPECTED_RELEASE_SHA},_WORKER_SERVICE=${WORKER},_REGION=${REGION},_IMAGE=${IMAGE_BASE},_RUNTIME_SA=${RUNTIME_SA},_INVOKER_SA=${INVOKER_SA},_BASE44_APP_ID=${BASE44_APP_ID},_BASE44_API_URL=${BASE44_API_URL},_SIGNING_KEY_SECRET=${SIGNING_SECRET},_SIGNING_KEY_VERSION=${SIGNING_VERSION}"
 
 gcloud run services describe "$WORKER" \
-  --project="$PROJECT" --region="$REGION" --format=json > "$TMP/candidate.json"
-CANDIDATE_REVISION="$(python3 - "$TMP/candidate.json" "$OLD_REVISION" <<'PY'
+  --project="$PROJECT" --region="$REGION" --format=json > "$PREP_TMP/candidate.json"
+CANDIDATE_REVISION="$(python3 - "$PREP_TMP/candidate.json" "$OLD_REVISION" <<'PY'
 import json, sys
 d=json.load(open(sys.argv[1], encoding="utf-8")); old=sys.argv[2]
 rev=str((d.get("status") or {}).get("latestCreatedRevisionName") or "").strip()
@@ -162,9 +194,10 @@ PY
 CANDIDATE_IMAGE="$(gcloud run revisions describe "$CANDIDATE_REVISION" \
   --project="$PROJECT" --region="$REGION" --format='value(spec.containers[0].image)')"
 [[ -n "$CANDIDATE_IMAGE" ]] || fail "candidate image could not be resolved"
-printf 'candidate_revision=%s\ncandidate_image=%s\n' "$CANDIDATE_REVISION" "$CANDIDATE_IMAGE"
+printf 'candidate_revision=%s\ncandidate_image=%s\ncandidate_traffic=0%%\n' \
+  "$CANDIDATE_REVISION" "$CANDIDATE_IMAGE"
 
-say "3/6 VERIFY CANDIDATE BEFORE TRAFFIC"
+say "3/7 VERIFY CANDIDATE BEFORE TRAFFIC"
 WORKER_SERVICE="$WORKER" \
 REGION="$REGION" \
 PROJECT="$PROJECT" \
@@ -176,35 +209,50 @@ EXPECTED_SIGNING_SECRET="$SIGNING_SECRET" \
 EXPECTED_SIGNING_VERSION="$SIGNING_VERSION" \
   bash scripts/post_deploy_verify.sh
 
-say "4/6 SYNCHRONIZE BASE44 SIGNING ROOT"
-# Hardened script verifies the pinned Base44 CLI tarball, performs device login
-# before it reads the secret, imports the exact live worker root, and removes its
-# temporary files on exit.
+say "4/7 SYNCHRONIZE SIGNING ROOT + GITHUB SOURCE INTO BASE44"
+# This subprocess removes its plaintext secret temp files immediately on return.
+# It also persists only the Base44 device-login credential in the user's normal
+# CLI auth store, so the following deployment can reuse the authenticated session.
 bash scripts/sync-base44-signing-key.sh
 
-say "5/6 QUIESCE QUEUE + PROMOTE EXACT CANDIDATE"
-QUEUE_STATE="$(gcloud tasks queues describe "$QUEUE" \
-  --project="$PROJECT" --location="$REGION" --format='value(state)')"
-case "$QUEUE_STATE" in
-  RUNNING)
-    gcloud tasks queues pause "$QUEUE" --project="$PROJECT" --location="$REGION" --quiet
-    QUEUE_WAS_PAUSED=1
-    ;;
-  PAUSED)
-    echo "Queue was already PAUSED; preserving that intent until verification completes."
-    ;;
-  *) fail "unexpected queue state before activation: $QUEUE_STATE" ;;
-esac
+# Reinstall the same CLI from the same independently pinned/verified artifact,
+# now only to deploy source. No signing-key plaintext is present at this stage.
+DEPLOY_TMP="$(mktemp -d)"
+chmod 700 "$DEPLOY_TMP"
+npm pack "base44@${BASE44_CLI_VERSION}" --pack-destination "$DEPLOY_TMP" >/dev/null
+BASE44_TGZ="$DEPLOY_TMP/base44-${BASE44_CLI_VERSION}.tgz"
+[[ -s "$BASE44_TGZ" ]] || fail "verified Base44 CLI tarball was not downloaded"
+GOT_SRI="sha512-$(openssl dgst -sha512 -binary "$BASE44_TGZ" | openssl base64 -A)"
+[[ "$GOT_SRI" == "$BASE44_CLI_SRI" ]] \
+  || fail "Base44 CLI integrity mismatch during source deployment"
+npm install --prefix "$DEPLOY_TMP/cli" --no-save --save-exact --ignore-scripts "$BASE44_TGZ" >/dev/null
+BASE44_CLI="$DEPLOY_TMP/cli/node_modules/.bin/base44"
+[[ -x "$BASE44_CLI" ]] || fail "verified Base44 CLI executable missing"
 
-TASKS="$(gcloud tasks list --project="$PROJECT" --location="$REGION" --queue="$QUEUE" --format='value(name)' 2>/dev/null || true)"
-if [[ -n "$TASKS" ]]; then
-  if [[ "$QUEUE_WAS_PAUSED" -eq 1 ]]; then
-    gcloud tasks queues resume "$QUEUE" --project="$PROJECT" --location="$REGION" --quiet || true
-  fi
-  echo "$TASKS" >&2
-  fail "queue contains tasks; refusing traffic promotion without disposition"
-fi
+"$BASE44_CLI" --app-id "$BASE44_APP_ID" functions deploy \
+  startStandardScanJob durableScanWorkerControl persistDurableScanAuthority
+"$BASE44_CLI" --app-id "$BASE44_APP_ID" deploy --site-only
 
+echo "Base44 durable functions + site deployed from release_sha=$EXPECTED_RELEASE_SHA"
+rm -rf "$DEPLOY_TMP"
+DEPLOY_TMP=""
+
+say "5/7 QUIESCE EMPTY QUEUE"
+# Re-check after the build/login/deploy window. We never delete or adopt an
+# unexpected task; a non-empty queue requires explicit disposition instead.
+TASKS_BEFORE_PROMOTION="$(gcloud tasks list --project="$PROJECT" --location="$REGION" \
+  --queue="$QUEUE" --format='value(name)' 2>/dev/null || true)"
+[[ -z "$TASKS_BEFORE_PROMOTION" ]] || fail "queue gained tasks; refusing traffic promotion"
+gcloud tasks queues pause "$QUEUE" --project="$PROJECT" --location="$REGION" --quiet
+QUEUE_PAUSED_BY_US=1
+
+TASKS_AFTER_PAUSE="$(gcloud tasks list --project="$PROJECT" --location="$REGION" \
+  --queue="$QUEUE" --format='value(name)' 2>/dev/null || true)"
+[[ -z "$TASKS_AFTER_PAUSE" ]] || fail "queue contains tasks after pause; refusing traffic promotion"
+
+echo "queue=PAUSED_AND_EMPTY"
+
+say "6/7 PROMOTE EXACT CANDIDATE WITH AUTOMATIC ROLLBACK"
 gcloud run services update-traffic "$WORKER" \
   --project="$PROJECT" --region="$REGION" \
   --to-revisions="${CANDIDATE_REVISION}=100" --quiet
@@ -212,50 +260,49 @@ PROMOTED=1
 
 WORKER_URL="$(gcloud run services describe "$WORKER" \
   --project="$PROJECT" --region="$REGION" --format='value(status.url)')"
-CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$WORKER_URL/scan-job" || printf '000')"
+HTTP_FILE="$PREP_TMP/http_code"
+if curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$WORKER_URL/scan-job" > "$HTTP_FILE"; then
+  CODE="$(cat "$HTTP_FILE")"
+else
+  CODE="000"
+fi
 case "$CODE" in
   401|403) echo "PASS — canonical worker is serving and private ($CODE)" ;;
-  *)
-    echo "Promotion verification failed with HTTP $CODE; rolling back to $OLD_REVISION." >&2
-    gcloud run services update-traffic "$WORKER" \
-      --project="$PROJECT" --region="$REGION" \
-      --to-revisions="${OLD_REVISION}=100" --quiet || true
-    if [[ "$QUEUE_WAS_PAUSED" -eq 1 ]]; then
-      gcloud tasks queues resume "$QUEUE" --project="$PROJECT" --location="$REGION" --quiet || true
-    fi
-    fail "candidate did not satisfy the private serving probe"
-    ;;
+  *) fail "candidate serving probe returned $CODE; automatic rollback will run" ;;
 esac
 
-TRAFFIC_REV="$(gcloud run services describe "$WORKER" \
-  --project="$PROJECT" --region="$REGION" \
-  --format='value(status.traffic[0].revisionName)')"
-TRAFFIC_PCT="$(gcloud run services describe "$WORKER" \
-  --project="$PROJECT" --region="$REGION" \
-  --format='value(status.traffic[0].percent)')"
-[[ "$TRAFFIC_REV" == "$CANDIDATE_REVISION" && "$TRAFFIC_PCT" == "100" ]] || {
-  gcloud run services update-traffic "$WORKER" \
-    --project="$PROJECT" --region="$REGION" \
-    --to-revisions="${OLD_REVISION}=100" --quiet || true
-  if [[ "$QUEUE_WAS_PAUSED" -eq 1 ]]; then
-    gcloud tasks queues resume "$QUEUE" --project="$PROJECT" --location="$REGION" --quiet || true
-  fi
-  fail "traffic did not settle at exact candidate 100%; rolled back"
-}
+gcloud run services describe "$WORKER" \
+  --project="$PROJECT" --region="$REGION" --format=json > "$PREP_TMP/promoted.json"
+python3 - "$PREP_TMP/promoted.json" "$CANDIDATE_REVISION" <<'PY'
+import json, sys
+d=json.load(open(sys.argv[1], encoding="utf-8")); expected=sys.argv[2]
+positive=[]
+for t in (d.get("status") or {}).get("traffic") or []:
+    try: pct=int(t.get("percent") or 0)
+    except Exception: pct=0
+    if pct <= 0: continue
+    name=str(t.get("revisionName") or t.get("revision") or "").strip()
+    positive.append((name,pct))
+if positive != [(expected,100)]:
+    raise SystemExit(f"traffic is not exact candidate=100: {positive!r}")
+print("PASS — exact candidate holds 100% traffic")
+PY
 
-if [[ "$QUEUE_WAS_PAUSED" -eq 1 ]]; then
-  gcloud tasks queues resume "$QUEUE" --project="$PROJECT" --location="$REGION" --quiet
-fi
+gcloud tasks queues resume "$QUEUE" --project="$PROJECT" --location="$REGION" --quiet
+QUEUE_PAUSED_BY_US=0
 
-say "6/6 FINAL INFRA VERIFICATION"
+say "7/7 FINAL INFRA VERIFICATION"
 FINAL_QUEUE_STATE="$(gcloud tasks queues describe "$QUEUE" \
   --project="$PROJECT" --location="$REGION" --format='value(state)')"
-printf 'release_sha=%s\nfingerprint=%s\nworker_revision=%s\nworker_image=%s\ntraffic=100%%\nqueue_state=%s\n' \
-  "$EXPECTED_RELEASE_SHA" "5caec7fdcabceee7" "$CANDIDATE_REVISION" "$CANDIDATE_IMAGE" "$FINAL_QUEUE_STATE"
+[[ "$FINAL_QUEUE_STATE" == "RUNNING" ]] || fail "queue did not return to RUNNING"
+FINAL_TASKS="$(gcloud tasks list --project="$PROJECT" --location="$REGION" \
+  --queue="$QUEUE" --format='value(name)' 2>/dev/null || true)"
+[[ -z "$FINAL_TASKS" ]] || fail "unexpected task exists before customer acceptance"
 
-if [[ "$QUEUE_WAS_PAUSED" -eq 1 && "$FINAL_QUEUE_STATE" != "RUNNING" ]]; then
-  fail "queue was originally running but did not return to RUNNING"
-fi
+ACTIVATION_COMPLETE=1
+printf 'release_sha=%s\nfingerprint=%s\nworker_revision=%s\nworker_image=%s\ntraffic=100%%\nqueue_state=%s\nbase44_source_sha=%s\n' \
+  "$EXPECTED_RELEASE_SHA" "$EXPECTED_FINGERPRINT" "$CANDIDATE_REVISION" \
+  "$CANDIDATE_IMAGE" "$FINAL_QUEUE_STATE" "$EXPECTED_RELEASE_SHA"
 
 echo
 echo "BETA_INFRA_ACTIVATED"

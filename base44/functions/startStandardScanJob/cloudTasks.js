@@ -122,6 +122,14 @@ async function dispatchSignature(rootSecret, timestamp, payloadText) {
   return Array.from(signature, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+export async function buildDispatchGatewayRequest({ signingKey, queuePath, body, timestampSeconds = Math.trunc(Date.now() / 1000) }) {
+  const payloadText = JSON.stringify({ queue_path: queuePath, task: body?.task || null });
+  const timestamp = String(Math.trunc(Number(timestampSeconds)));
+  if (!/^[0-9]+$/.test(timestamp)) throw new Error("Invalid dispatch timestamp.");
+  const signature = await dispatchSignature(signingKey, timestamp, payloadText);
+  return { payloadText, timestamp, signature };
+}
+
 async function accessToken() {
   const key = String(Deno.env.get("GCP_SERVICE_ACCOUNT_KEY") || "");
   if (!key) return { token: "", failureCode: "tasks_credentials_not_configured" };
@@ -139,14 +147,13 @@ async function accessToken() {
 }
 
 async function createTaskViaGateway({ gatewayUrl, signingKey, queuePath, body, taskName, attemptCount }) {
-  const payloadText = JSON.stringify({ queue_path: queuePath, task: body?.task || null });
-  const timestamp = String(Math.trunc(Date.now() / 1000));
-  let signature = "";
+  let requestParts;
   try {
-    signature = await dispatchSignature(signingKey, timestamp, payloadText);
+    requestParts = await buildDispatchGatewayRequest({ signingKey, queuePath, body });
   } catch {
     return { ok: false, outcomeUnknown: false, failureCode: "dispatch_gateway_sign_failed" };
   }
+  const { payloadText, timestamp, signature } = requestParts;
 
   let response;
   try {

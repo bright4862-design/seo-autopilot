@@ -486,6 +486,22 @@ test("the Base44 CLI is pinned and digest-verified before it handles the signing
   assert.match(sync, /openssl dgst -sha512/, "digest must actually be computed");
   assert.match(sync, /integrity mismatch/, "a digest mismatch must abort");
 
+  // The pinned value must be present, not left for an operator to supply at
+  // run time, or the fail-closed check is one forgotten env var from blocking
+  // the release for a reason unrelated to supply-chain safety.
+  assert.match(sync, /BASE44_CLI_SHA512:-sha512-[A-Za-z0-9+/=]{40,}/,
+    "the verified registry digest must be pinned in source");
+
+  // openssl emits bare base64; npm publishes "sha512-<base64>". Comparing the
+  // two forms directly would never match, so a correctly pinned value would
+  // abort every run and look exactly like a real integrity failure.
+  assert.match(sync, /GOT_SHA512="sha512-\$\(openssl dgst -sha512/,
+    "the computed digest must be normalized to npm SRI form");
+  assert.match(sync, /EXPECTED_SHA512="sha512-\$\{EXPECTED_SHA512\}"/,
+    "a bare base64 pin must be normalized rather than rejected");
+  assert.match(sync, /\[ "\$GOT_SHA512" != "\$EXPECTED_SHA512" \]/,
+    "comparison must use the normalized values on both sides");
+
   // Login must precede the secret read, so the plaintext window never spans an
   // unbounded wait for a human to approve a device code.
   const loginAt = sync.indexOf('"$CLI" login');

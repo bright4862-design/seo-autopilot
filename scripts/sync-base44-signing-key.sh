@@ -10,7 +10,11 @@ APP_ID="6a498732ec779dfaaeab0e53"
 # AND verified by tarball digest before it is installed. `npx -y pkg@ver` would
 # resolve and execute whatever the registry serves at run time.
 BASE44_CLI_VERSION="0.1.9"
-BASE44_CLI_SHA512="${BASE44_CLI_SHA512:-}"
+# npm SRI form, as published for base44@0.1.9. Independently verified against
+# the registry by the release owner. Either form is accepted below: the
+# "sha512-" prefix is what npm and the registry actually show, so rejecting it
+# would make the natural copy-paste fail closed for the wrong reason.
+BASE44_CLI_SHA512="${BASE44_CLI_SHA512:-sha512-o1IFePlQHvUARUVr19FiYEakkPrwDf6IVcz3pWSngSaG+sBSs8t7T7coJir1N4yBFQ76052hjgqT2V+xC8BNOQ==}"
 
 echo
 echo "========== FIXLIST KEY SYNC =========="
@@ -66,11 +70,22 @@ echo "[3/7] Installing and verifying the pinned Base44 CLI..."
 npm pack "base44@${BASE44_CLI_VERSION}" --pack-destination "$TMP" >/dev/null
 TGZ="$TMP/base44-${BASE44_CLI_VERSION}.tgz"
 test -s "$TGZ"
-GOT_SHA512="$(openssl dgst -sha512 -binary "$TGZ" | openssl base64 -A)"
-if [ -n "$BASE44_CLI_SHA512" ]; then
-  if [ "$GOT_SHA512" != "$BASE44_CLI_SHA512" ]; then
+# openssl emits the bare base64 digest; npm publishes it as "sha512-<base64>".
+# Normalize both sides so an operator can paste either form. A pinned value that
+# silently never matches its own artifact is a fail-closed check that fails for
+# the wrong reason, which is indistinguishable from a real supply-chain hit.
+GOT_SHA512="sha512-$(openssl dgst -sha512 -binary "$TGZ" | openssl base64 -A)"
+EXPECTED_SHA512="$BASE44_CLI_SHA512"
+case "$EXPECTED_SHA512" in
+  sha512-*) ;;
+  "")       ;;
+  *)        EXPECTED_SHA512="sha512-${EXPECTED_SHA512}" ;;
+esac
+
+if [ -n "$EXPECTED_SHA512" ]; then
+  if [ "$GOT_SHA512" != "$EXPECTED_SHA512" ]; then
     echo "ERROR: base44@${BASE44_CLI_VERSION} integrity mismatch" >&2
-    echo "  expected: $BASE44_CLI_SHA512" >&2
+    echo "  expected: $EXPECTED_SHA512" >&2
     echo "  got:      $GOT_SHA512" >&2
     exit 1
   fi

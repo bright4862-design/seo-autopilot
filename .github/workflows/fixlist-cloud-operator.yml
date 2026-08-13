@@ -184,3 +184,32 @@ jobs:
           fi
 
           echo 'READONLY_DIAGNOSTIC_COMPLETE'
+
+  sync-base44-signing-key:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[sync-base44-signing-key]')
+    name: Synchronize Base44 signing key
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact main commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Run protected GCP-to-Base44 key synchronization
+        shell: bash
+        run: bash scripts/sync-base44-signing-key.sh

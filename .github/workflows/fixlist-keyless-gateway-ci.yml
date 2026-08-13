@@ -1,0 +1,58 @@
+name: FixList Keyless Gateway CI
+
+on:
+  pull_request:
+    paths:
+      - 'ops/fixlist-dispatch-gateway/**'
+      - 'base44/functions/startStandardScanJob/cloudTasks.js'
+      - 'scripts/deploy-fixlist-dispatch-gateway.sh'
+      - 'scripts/bootstrap-fixlist-dispatch-gateway-iam.sh'
+      - '.github/workflows/fixlist-cloud-operator.yml'
+      - '.github/workflows/fixlist-keyless-gateway-ci.yml'
+  push:
+    branches:
+      - agent/fixlist-keyless-gateway-main
+    paths:
+      - 'ops/fixlist-dispatch-gateway/**'
+      - 'base44/functions/startStandardScanJob/cloudTasks.js'
+      - 'scripts/deploy-fixlist-dispatch-gateway.sh'
+      - 'scripts/bootstrap-fixlist-dispatch-gateway-iam.sh'
+      - '.github/workflows/fixlist-cloud-operator.yml'
+      - '.github/workflows/fixlist-keyless-gateway-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate shell safety and Base44 syntax
+        run: |
+          set -euo pipefail
+          bash -n scripts/deploy-fixlist-dispatch-gateway.sh
+          bash -n scripts/bootstrap-fixlist-dispatch-gateway-iam.sh
+          node --check base44/functions/startStandardScanJob/cloudTasks.js
+
+      - name: Install gateway dependencies
+        working-directory: ops/fixlist-dispatch-gateway
+        run: python -m pip install -r requirements.txt
+
+      - name: Run constrained gateway contract tests
+        working-directory: ops/fixlist-dispatch-gateway
+        run: python -m unittest -v test_gateway.py
+
+      - name: Compile gateway source
+        working-directory: ops/fixlist-dispatch-gateway
+        run: python -m py_compile main.py test_gateway.py
+
+      - name: Build gateway container
+        working-directory: ops/fixlist-dispatch-gateway
+        run: docker build -t fixlist-dispatch-gateway:${{ github.sha }} .

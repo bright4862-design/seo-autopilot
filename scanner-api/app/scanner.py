@@ -36,6 +36,7 @@ from .render_followup import RENDER_FOLLOWUP_VERSION, run_render_followup
 from .robots_policy import SCANNER_USER_AGENT, annotate_robots_evidence, load_robots_policy
 from .security import is_public_http_url, safe_get
 from .sitemap import load_sitemap_urls
+from .url_frontier_policy import FRONTIER_POLICY_VERSION, classify_frontier_url
 
 VERSION = "python_scanner_v3_bounded_request"
 RENDER_EVIDENCE_VERSION = "render_evidence_v1"
@@ -159,6 +160,10 @@ async def run_scan(
         "market_prefixes_detected": [],
         "sitemap_urls_excluded_outside_scope": 0,
         "internal_urls_excluded_outside_scope": 0,
+        "frontier_policy_version": FRONTIER_POLICY_VERSION,
+        "crawler_trap_urls_skipped": 0,
+        "crawler_trap_reason_counts": {},
+        "frontier_tracking_params_removed": 0,
     }
 
     pages: list[dict] = []
@@ -175,6 +180,16 @@ async def run_scan(
             if is_artifact_url(url):
                 record_artifact(artifacts, url, source, source_page, link_text)
             return
+        frontier = classify_frontier_url(clean)
+        if not frontier.allowed:
+            scope_evidence["crawler_trap_urls_skipped"] += 1
+            reason = frontier.reason or "frontier_rejected"
+            counts = scope_evidence["crawler_trap_reason_counts"]
+            counts[reason] = int(counts.get(reason, 0)) + 1
+            return
+        clean = frontier.url
+        if frontier.removed_params:
+            scope_evidence["frontier_tracking_params_removed"] += len(frontier.removed_params)
         if is_artifact_url(clean):
             record_artifact(artifacts, clean, source, source_page, link_text)
             return

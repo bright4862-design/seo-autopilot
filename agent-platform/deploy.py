@@ -12,6 +12,24 @@ RELEASE_OPERATOR_SA = os.getenv(
 client = vertexai.Client(project=PROJECT, location=LOCATION)
 
 AGENTS = {
+    "crawler-research": {
+        "display_name": "FixList Crawler Research Agent",
+        "description": "Read-only public GitHub mining for reusable SEO crawler engineering patterns.",
+        "entrypoint_module": "crawler_research_agent",
+        "entrypoint_object": "crawler_research_agent",
+        "source_packages": ["crawler_research_agent.py", "requirements.txt"],
+        "methods": [{
+            "name": "query", "api_mode": "", "parameters": {
+                "type": "object",
+                "properties": {
+                    "queries": {"type": "array", "items": {"type": "string"}},
+                    "local_root": {"type": "string"},
+                    "seed_repositories": {"type": "array", "items": {"type": "string"}},
+                    "max_repos": {"type": "integer"},
+                },
+            },
+        }],
+    },
     "research": {
         "display_name": "FixList Research Agent",
         "description": "Grounded research on how to improve FixList.",

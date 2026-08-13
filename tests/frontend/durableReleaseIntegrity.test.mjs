@@ -443,3 +443,70 @@ test("post-deploy verifier requires the exact private invoker binding", () => {
   assert.match(valid.output, /exact invoker holds roles\/run\.invoker/);
   assert.match(valid.output, /POST-DEPLOY VERIFICATION PASSED/);
 });
+
+test("the release path never publishes signing-key material or fingerprints", () => {
+  const operator = fs.readFileSync(".github/workflows/fixlist-cloud-operator.yml", "utf8");
+  const sync = fs.readFileSync("scripts/sync-base44-signing-key.sh", "utf8");
+
+  // Actions logs persist and are readable by anyone with repo access, and
+  // GitHub's masking does not cover values derived at runtime. A digest or
+  // exact length of the HMAC key is a permanent oracle over it.
+  assert.doesNotMatch(operator, /secret_sha256/, "must not log a signing-key digest");
+  assert.doesNotMatch(operator, /secret_bytes/, "must not log the signing-key length");
+  assert.doesNotMatch(operator, /sha256sum\s+"\$TMP_DIR\/key"/, "must not digest the key file");
+
+  // The diagnostic proves reachability; it must not put plaintext on disk.
+  assert.doesNotMatch(operator, /versions access[^\n]*>\s*"\$TMP_DIR\/key"/,
+    "the diagnostic must not write the secret payload to the runner filesystem");
+
+  // The key is never echoed by the sync script either.
+  assert.doesNotMatch(sync, /echo[^\n]*\$\(cat "\$TMP\/signing-key"\)/,
+    "the sync script must never echo the signing key");
+});
+
+test("reading and transmitting the signing key requires explicit dispatch confirmation", () => {
+  const operator = fs.readFileSync(".github/workflows/fixlist-cloud-operator.yml", "utf8");
+  const job = operator.split("\n  sync-base44-signing-key:")[1] || "";
+  assert.ok(job, "sync-base44-signing-key job must exist");
+
+  const gate = job.split("\n    name:")[0];
+  assert.match(gate, /workflow_dispatch/, "sync must be workflow_dispatch-only");
+  assert.match(gate, /inputs\.confirm == 'SYNC-SIGNING-KEY'/, "sync must require exact confirmation");
+  assert.doesNotMatch(gate, /head_commit\.message/,
+    "a commit message must not be able to trigger a signing-key read");
+});
+
+test("the Base44 CLI is pinned and digest-verified before it handles the signing key", () => {
+  const sync = fs.readFileSync("scripts/sync-base44-signing-key.sh", "utf8");
+
+  assert.doesNotMatch(sync, /npx\s+-y\s+base44/,
+    "must not run an unverified CLI fetched at use time");
+  assert.match(sync, /BASE44_CLI_VERSION="\d+\.\d+\.\d+"/, "CLI version must be pinned");
+  assert.match(sync, /BASE44_CLI_SHA512/, "CLI tarball digest must be checked");
+  assert.match(sync, /openssl dgst -sha512/, "digest must actually be computed");
+  assert.match(sync, /integrity mismatch/, "a digest mismatch must abort");
+
+  // The pinned value must be present, not left for an operator to supply at
+  // run time, or the fail-closed check is one forgotten env var from blocking
+  // the release for a reason unrelated to supply-chain safety.
+  assert.match(sync, /BASE44_CLI_SHA512:-sha512-[A-Za-z0-9+/=]{40,}/,
+    "the verified registry digest must be pinned in source");
+
+  // openssl emits bare base64; npm publishes "sha512-<base64>". Comparing the
+  // two forms directly would never match, so a correctly pinned value would
+  // abort every run and look exactly like a real integrity failure.
+  assert.match(sync, /GOT_SHA512="sha512-\$\(openssl dgst -sha512/,
+    "the computed digest must be normalized to npm SRI form");
+  assert.match(sync, /EXPECTED_SHA512="sha512-\$\{EXPECTED_SHA512\}"/,
+    "a bare base64 pin must be normalized rather than rejected");
+  assert.match(sync, /\[ "\$GOT_SHA512" != "\$EXPECTED_SHA512" \]/,
+    "comparison must use the normalized values on both sides");
+
+  // Login must precede the secret read, so the plaintext window never spans an
+  // unbounded wait for a human to approve a device code.
+  const loginAt = sync.indexOf('"$CLI" login');
+  const readAt = sync.indexOf("gcloud secrets versions access");
+  assert.ok(loginAt > 0 && readAt > 0, "both steps must be present");
+  assert.ok(loginAt < readAt,
+    "Base44 login must happen before the signing key is read from Secret Manager");
+});

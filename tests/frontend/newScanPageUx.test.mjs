@@ -1,3 +1,4 @@
+import fs from "node:fs";
 // Contract for the New Scan page after the UI/UX rebuild. The page presents one
 // scanner, states its scope as plain text, and never offers a scan-size choice.
 import assert from "node:assert/strict";
@@ -116,4 +117,35 @@ test("the loading state shows visible progress and reassures the customer", () =
   assert.match(scanForm, /formatElapsed\(elapsedSeconds\)/);
   assert.match(scanForm, /Your result will open automatically when it is saved/);
   assert.match(scanForm, /Still working — larger or slower sites can take a little longer/);
+});
+
+test("the running scan shows the customer's own domain, not just a spinner", () => {
+  // Momentum comes from something real and personal appearing immediately.
+  // Falling back to the typed URL means the label is present on the first
+  // frame, before the durable run has been read even once.
+  assert.match(scanForm, /const scanTargetLabel = durableScan\.domain \|\| safeHostname\(websiteUrl\) \|\| ""/);
+  assert.match(scanForm, /\{scanTargetLabel \? \(/, "the progress surface must render the scan target");
+});
+
+test("live discovery counts render only once there is something to report", () => {
+  // A counter reading "0 pages discovered" is worse than no counter: it reads
+  // as a stalled scan. The count appears only when it is non-zero, and the
+  // crawled figure only once crawling has actually started.
+  assert.match(scanForm, /durableScan\.pagesFound > 0 \? \(/);
+  assert.match(scanForm, /pages discovered/);
+  assert.match(scanForm, /durableScan\.pagesCrawled > 0 \?/);
+  assert.match(scanForm, /STANDARD_SCAN_BUDGET\.max_pages\} checked/,
+    "the cap shown must come from the scan budget, not a hardcoded number");
+});
+
+test("progress counters never move backwards during one scan", () => {
+  const hook = fs.readFileSync("src/hooks/useDurableScanCompletion.js", "utf8");
+  // A transient null read (RLS hiccup, backgrounded tab) must not blank a
+  // counter the customer has already seen.
+  assert.match(hook, /Math\.max\(previous\.pagesFound, next\.pagesFound\)/);
+  assert.match(hook, /Math\.max\(previous\.pagesCrawled, next\.pagesCrawled\)/);
+  assert.match(hook, /next\.domain \|\| previous\.domain/);
+  // Derived from the run already fetched for completion — no extra polling.
+  assert.equal((hook.match(/getScanRunWithFixList\(/g) || []).length, 1,
+    "live progress must reuse the existing read, not add a second request");
 });

@@ -1,10 +1,56 @@
-# FixList v8 production acceptance
+# FixList production acceptance records
+
+## Current status — Standard 150 beta candidate
+
+**Status: CANDIDATE — production acceptance NOT met.**
+
+| | |
+|---|---|
+| Candidate fingerprint | `5caec7fdcabceee7` |
+| Classifier | `archetype_classifier_v9_local_business_hospitality` |
+| Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
+| Deployed commit | **not recorded** (`git_commit: ""`) |
+| Acceptance report | **not recorded** (`acceptance_report: ""`) |
+
+The v8 record below is **historical** and does **not** cover this candidate. It
+accepted fingerprint `430813f2b15afa8f` with classifier
+`archetype_classifier_v8_platform_product_routes`. The shipping code is
+fingerprint `5caec7fdcabceee7` with classifier
+`archetype_classifier_v9_local_business_hospitality` and URL frontier policy
+`url_frontier_policy_v1_conservative_trap_guard`.
+
+The fingerprint moved from `51c813a6219b4e70` to `5caec7fdcabceee7` when the URL
+frontier trap guard was added to the crawl path. That is a crawl-behaviour
+change, so under the freeze rule it required a regenerated fingerprint — which
+is exactly what happened, and why acceptance must be re-run rather than
+inherited.
+
+By the freeze rule this document already states, that difference requires a
+regenerated fingerprint, regression coverage, and **a new production acceptance
+gate**. The fingerprint was regenerated and regression coverage exists; the
+production acceptance gate has not been run. Presenting the v8 evidence as the
+current baseline would assert a 20-site production validation of a build that
+was never validated.
+
+Issue #107 requires exact Git, scanner, backend, frontend and release
+identifiers in one evidence pack. For the Standard 150 beta that pack is
+incomplete: no deployed commit, no acceptance report, no production scan.
+**Standard 150 beta acceptance is therefore No-Go on evidence.**
+
+`data/beta-crawler-revision.json` is authoritative and is already truthful about
+this — it records `status: "candidate"` and notes that production acceptance,
+deployed commit, workflow runs and artifact digests are pending. This document
+now agrees with it.
+
+---
+
+# FixList v8 production acceptance (historical)
 
 ## Decision
 
-**Status: frozen production baseline — accepted with non-blocking follow-ups.**
+**Status: historical record — superseded by the v9 candidate above.**
 
-This record freezes the deployed FixList scanner and review behavior represented by fingerprint `430813f2b15afa8f`. Any change to a component version listed in `data/beta-crawler-revision.json` requires a new fingerprint and a new acceptance record.
+This record froze the deployed FixList scanner and review behavior represented by fingerprint `430813f2b15afa8f`. Any change to a component version listed in `data/beta-crawler-revision.json` requires a new fingerprint and a new acceptance record.
 
 ## Release authority
 

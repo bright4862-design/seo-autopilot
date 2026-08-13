@@ -21,6 +21,7 @@ on:
           - pause-queue
           - resume-queue
           - activate-beta
+          - sync-base44-signing-key
       revision:
         description: "Exact Cloud Run revision for promote/rollback/activate"
         required: false
@@ -167,10 +168,17 @@ jobs:
                   break
           PY
           )
-          if [ -n "$SECRET_NAME" ] && [ -n "$SECRET_VERSION" ] && gcloud secrets versions access "$SECRET_VERSION" --secret="$SECRET_NAME" --project="$GCP_PROJECT" > "$TMP_DIR/key" 2>"$TMP_DIR/secret.err"; then
+          # Payload goes to /dev/null: this check proves the operator CAN read the
+          # secret, and nothing downstream consumes the value. Writing it to the
+          # runner filesystem would put plaintext on disk for no benefit.
+          if [ -n "$SECRET_NAME" ] && [ -n "$SECRET_VERSION" ] && gcloud secrets versions access "$SECRET_VERSION" --secret="$SECRET_NAME" --project="$GCP_PROJECT" > /dev/null 2>"$TMP_DIR/secret.err"; then
+            # Report reachability ONLY. Neither the byte length nor a digest of
+            # the signing key may reach a workflow log: Actions logs persist and
+            # are readable by anyone with repository access, GitHub's secret
+            # masking does not cover values derived at runtime, and a stable
+            # fingerprint of the HMAC key is a permanent offline oracle over the
+            # value the entire authority-seal model rests on.
             echo 'secret_access=YES'
-            printf 'secret_bytes='; wc -c < "$TMP_DIR/key"
-            printf 'secret_sha256='; sha256sum "$TMP_DIR/key" | awk '{print $1}'
           else
             echo 'secret_access=NO'
             sed -n '1,4p' "$TMP_DIR/secret.err"
@@ -187,7 +195,15 @@ jobs:
           echo 'READONLY_DIAGNOSTIC_COMPLETE'
 
   sync-base44-signing-key:
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[sync-base44-signing-key]')
+    # Reading the signing key and transmitting it to an external service is a
+    # mutation, not a diagnostic. A commit-message trigger let any push to main
+    # carrying a magic string cause it. It is now workflow_dispatch-only and
+    # requires the same exact confirmation the promote/rollback path uses, so
+    # the operator states intent per invocation.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && github.event.inputs.operation == 'sync-base44-signing-key'
+      && github.event.inputs.confirm == 'SYNC-SIGNING-KEY'
     name: Synchronize Base44 signing key
     runs-on: ubuntu-latest
     timeout-minutes: 20

@@ -22,7 +22,7 @@ fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE_DIR="$REPO_ROOT/dispatch-gateway"
-for file in main.py requirements.txt Dockerfile; do
+for file in main.py requirements.txt Dockerfile test_gateway.py; do
   test -f "$SOURCE_DIR/$file" || { echo "Missing canonical gateway source: $SOURCE_DIR/$file" >&2; exit 2; }
 done
 
@@ -72,6 +72,20 @@ echo "queue_path=$QUEUE_PATH"
 echo "signing_secret_ref=${SIGNING_SECRET}:${SIGNING_VERSION} (value not read)"
 echo "source_sha=$SOURCE_SHA"
 
+# Creating a public Cloud Run service requires run.services.setIamPolicy. The
+# authenticated owner bootstrap performs that one-time creation. After the
+# service exists, the exact public-invoker annotation is preserved and future
+# WIF deployments need only service-scoped Cloud Run Developer access.
+PUBLIC_ARGS=()
+if gcloud run services describe "$GATEWAY" \
+  --project="$PROJECT" \
+  --region="$REGION" >/dev/null 2>&1; then
+  echo "Existing gateway detected; preserving its current invoker-IAM setting."
+else
+  echo "Gateway does not exist; creating it with the Invoker IAM check disabled."
+  PUBLIC_ARGS+=(--no-invoker-iam-check)
+fi
+
 echo
 echo "=== Deploy canonical keyless gateway ==="
 gcloud run deploy "$GATEWAY" \
@@ -79,7 +93,7 @@ gcloud run deploy "$GATEWAY" \
   --region="$REGION" \
   --source="$SOURCE_DIR" \
   --service-account="$DISPATCHER_SA" \
-  --no-invoker-iam-check \
+  "${PUBLIC_ARGS[@]}" \
   --ingress=all \
   --memory=256Mi \
   --cpu=1 \

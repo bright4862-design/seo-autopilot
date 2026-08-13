@@ -152,13 +152,29 @@ jobs:
           gcloud tasks queues describe "$CLOUD_TASKS_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --format='yaml(name,state,rateLimits,retryConfig)'
           echo "queue_exit=$?"
 
-          echo '=== RECENT TASKS ==='
-          gcloud tasks list --queue="$CLOUD_TASKS_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --limit=20 --format='table(name.basename(),scheduleTime,dispatchCount,responseCount,lastAttempt.responseStatus.code)'
-          echo "tasks_exit=$?"
-
-          echo '=== RELEASE OPERATOR IDENTITY ==='
-          gcloud iam service-accounts describe "$RELEASE_OPERATOR_SERVICE_ACCOUNT" --project="$GCP_PROJECT" --format='yaml(email,disabled,uniqueId)'
-          echo "release_operator_exit=$?"
+          echo '=== SIGNING SECRET ACCESS CHECK ==='
+          TMP_DIR="$(mktemp -d)"
+          gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > "$TMP_DIR/worker.json"
+          read -r SECRET_NAME SECRET_VERSION < <(python3 - "$TMP_DIR/worker.json" <<'PY'
+          import json, sys
+          value=json.load(open(sys.argv[1]))
+          envs=value.get('spec',{}).get('template',{}).get('spec',{}).get('containers',[{}])[0].get('env',[])
+          for item in envs:
+              if item.get('name')=='SCAN_EVIDENCE_SIGNING_KEY':
+                  ref=item.get('valueFrom',{}).get('secretKeyRef',{})
+                  print(ref.get('name',''), ref.get('key',''))
+                  break
+          PY
+          )
+          if [ -n "$SECRET_NAME" ] && [ -n "$SECRET_VERSION" ] && gcloud secrets versions access "$SECRET_VERSION" --secret="$SECRET_NAME" --project="$GCP_PROJECT" > "$TMP_DIR/key" 2>"$TMP_DIR/secret.err"; then
+            echo 'secret_access=YES'
+            printf 'secret_bytes='; wc -c < "$TMP_DIR/key"
+            printf 'secret_sha256='; sha256sum "$TMP_DIR/key" | awk '{print $1}'
+          else
+            echo 'secret_access=NO'
+            sed -n '1,4p' "$TMP_DIR/secret.err"
+          fi
+          rm -rf "$TMP_DIR"
 
           echo '=== GATEWAY HEALTH ==='
           GATEWAY_URL="$(gcloud run services describe "$GATEWAY_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format='value(status.url)' 2>/dev/null)"

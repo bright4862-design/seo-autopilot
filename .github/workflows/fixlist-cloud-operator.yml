@@ -153,11 +153,25 @@ jobs:
         working-directory: agent-platform
         run: python -m compileall -q agents.py deploy.py
 
-      - name: Deploy all three Agent Runtime agents
+      - name: Cloud Operator setup preflight
+        if: contains(github.event.head_commit.message, '[cloud-only-agent-deploy]')
+        working-directory: agent-platform
+        env:
+          GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          from agents import cloud_operator_agent
+          cloud_operator_agent.set_up()
+          print('Cloud Operator set_up preflight passed')
+          PY
+
+      - name: Deploy selected Agent Runtime agents
         working-directory: agent-platform
         env:
           GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT }}
           AGENT_PLATFORM_LOCATION: ${{ env.GCP_REGION }}
+          FIXLIST_AGENTS_TO_DEPLOY: ${{ contains(github.event.head_commit.message, '[cloud-only-agent-deploy]') && 'cloud' || 'research,claude,cloud' }}
         run: python deploy.py
 
   diagnose-agent-runtime:

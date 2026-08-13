@@ -29,6 +29,15 @@ test("candidate is built no-traffic before the explicit candidate promotion", ()
   assert.ok(exactPromotionAt > promotionMarkerAt, "the exact candidate promotion must occur inside the promotion phase");
 });
 
+test("service tag and exact candidate digest are verified separately", () => {
+  assert.match(source, /EXPECTED_IMAGE="\$\{IMAGE_BASE\}:\$\{EXPECTED_RELEASE_SHA\}"/);
+  assert.match(source, /gcloud run revisions describe "\$CANDIDATE_REVISION"/);
+  assert.match(source, /exact candidate revision is not Ready/);
+  assert.match(source, /candidate digest mismatch/);
+  assert.match(source, /@sha256:/);
+  assert.match(source, /exact candidate resolved image matches immutable digest/);
+});
+
 test("Base44 receives only JS TS durable functions and the site from GitHub", () => {
   assert.match(source, /functions deploy[\s\\\n]+startStandardScanJob durableScanWorkerControl persistDurableScanAuthority/);
   assert.match(source, /deploy --site-only/);

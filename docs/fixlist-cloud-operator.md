@@ -3,11 +3,10 @@
 Keyless Google Cloud operations for the durable Standard 150 release, run
 from GitHub Actions instead of Cloud Shell.
 
-The org policy `constraints/iam.disableServiceAccountKeyCreation` blocks
-service-account key creation, so there is no key to store and none is
-wanted: authentication is Workload Identity Federation, which mints a
-short-lived token per run. Nothing in this path creates, stores, or prints
-a credential.
+The organization blocks service-account key creation, so this operator uses
+Workload Identity Federation (WIF). Each GitHub Actions run receives a
+short-lived Google credential; no long-lived Google key is created, stored,
+or printed.
 
 ## Operations
 
@@ -25,103 +24,96 @@ a credential.
 ### Why traffic operations name a revision
 
 `--to-latest` resolves at execution time. If anything deployed between
-validation and promotion, it would promote the newer revision instead of the
+validation and promotion, it could promote a newer revision instead of the
 validated candidate. Every traffic operation therefore requires an explicit
-`revision` input, verifies the revision exists, and uses
-`--to-revisions=<revision>=100`.
+revision and uses `--to-revisions=<revision>=100`.
 
-The confirmation string for those operations **is** the revision name, so a
-confirmation that is correct for one revision is wrong for every other one.
-A stale approval cannot promote whatever happens to be newest.
+The confirmation string for those operations is the revision name itself, so
+a stale confirmation cannot promote a different revision.
 
 ### `verify-worker-routes`
 
-The durable pipeline sends every Cloud Task to `POST /scan-job` and the
-watchdog to `POST /scan-job-drain`. Those routes exist only in builds
-containing `scanner-api/app/scan_job.py` — they are **absent from `main`**
-and present only on the durable release branches.
+The durable pipeline sends Cloud Tasks to `POST /scan-job` and the watchdog to
+`POST /scan-job-drain`. Both routes and `scanner-api/app/scan_job.py` are now
+present on `main` as of the durable Standard 150 merge. A previously deployed
+worker can still have been built from older source, so source readiness alone
+does not prove the running revision serves those routes.
 
-A worker built from the wrong source deploys cleanly, serves `/health`, and
-404s every task; the watchdog 404s too, so runs never reach a terminal
-state. An unauthenticated probe cannot detect this, because Cloud Run IAM
-rejects the request before it reaches routing. This operation therefore
-reports the running revision's image, whether it is pinned to an immutable
-digest, the Cloud Build provenance including `_RELEASE_SHA`, and the
-revision's request timeout, then requires a human to confirm the SHA is one
-that declares both routes.
+Because the worker is private, unauthenticated HTTP probes are rejected by
+Cloud Run IAM before application routing. `verify-worker-routes` therefore
+reports the running revision, image identity, Cloud Build provenance including
+`_RELEASE_SHA`, and request timeout. A human must confirm that the reported
+release SHA is a commit that declares both durable routes.
 
-Run this **before** `activate-beta`.
+Run this before `activate-beta`.
 
 ### `activate-beta` ordering
 
-1. Promote the named revision.
-2. Probe the worker and require 401/403 — the worker is private, so an IAM
-   rejection is the healthy answer and proves the service is both reachable
-   and not public. Any other result aborts before the queue is touched.
-3. Resume the queue.
+1. Promote the explicitly named revision.
+2. Probe the private worker and require an IAM rejection (`401` or `403`).
+3. Resume the queue only if the promotion and privacy probe succeed.
 
-A failure at step 2 or 3 leaves the safe promoted-and-paused state. Nothing
-here publishes Base44; per the release rules, Base44 must already be
-published before the queue is resumed, and the operator cannot verify that —
-confirm it yourself first.
+A failure leaves the queue paused. The operator does not publish Base44; the
+Base44 durable backend must already be published before the queue is resumed.
 
-## One-time setup
+## One-time WIF setup
 
-Run once, in an authorized Cloud Shell. Creates no keys.
+Use the repository script from an authorized Cloud Shell:
 
 ```bash
-PROJECT=seo-autopilot-501517
-REPO=bright4862-design/seo-autopilot
-SA=fixlist-github-operator@$PROJECT.iam.gserviceaccount.com
-
-# 1. Operator service account
-gcloud iam service-accounts create fixlist-github-operator --project=$PROJECT
-
-# 2. Resource-scoped grants only — nothing project-wide
-gcloud run services add-iam-policy-binding fixlist-standard150-worker \
-  --region=europe-west1 --member=serviceAccount:$SA --role=roles/run.developer
-gcloud tasks queues add-iam-policy-binding fixlist-standard150 \
-  --location=europe-west1 --member=serviceAccount:$SA --role=roles/cloudtasks.queueAdmin
-gcloud iam service-accounts add-iam-policy-binding \
-  fixlist-standard150-invoker@$PROJECT.iam.gserviceaccount.com \
-  --member=serviceAccount:$SA --role=roles/iam.serviceAccountViewer
-
-# 3. WIF pool + provider, pinned to this repository AND main
-gcloud iam workload-identity-pools create github --location=global --project=$PROJECT
-gcloud iam workload-identity-pools providers create-oidc github-actions \
-  --project=$PROJECT --location=global --workload-identity-pool=github \
-  --issuer-uri="https://token.actions.githubusercontent.com" \
-  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref" \
-  --attribute-condition="assertion.repository == '$REPO' && assertion.ref == 'refs/heads/main'"
-
-# 4. Allow that identity to impersonate the operator SA
-POOL_ID=$(gcloud iam workload-identity-pools describe github \
-  --location=global --project=$PROJECT --format='value(name)')
-gcloud iam service-accounts add-iam-policy-binding $SA --project=$PROJECT \
-  --role=roles/iam.workloadIdentityUser \
-  --member="principalSet://iam.googleapis.com/$POOL_ID/attribute.repository/$REPO"
-
-# 5. GitHub repository secrets
-#    GCP_WIF_PROVIDER            = $POOL_ID/providers/github-actions
-#    GCP_OPERATOR_SERVICE_ACCOUNT = $SA
+git clone https://github.com/bright4862-design/seo-autopilot.git
+cd seo-autopilot
+git checkout main
+bash scripts/bootstrap-fixlist-cloud-operator-wif.sh
 ```
 
-### Why the `refs/heads/main` condition matters
+The bootstrap is idempotent and creates no service-account keys. It creates or
+verifies:
 
-`workflow_dispatch` accepts any ref, and `actions/checkout` would take the
-operator script from that same ref. Without the condition, anyone able to
-push a branch could rewrite the script and run it as the operator service
-account. The condition makes authentication itself fail off `main`; the
-workflow's own `Refuse to run outside main` guard and its pinned
-`ref: refs/heads/main` checkout are defence in depth.
+- operator service account `fixlist-github-operator@seo-autopilot-501517.iam.gserviceaccount.com`
+- WIF pool `github`
+- provider `github-actions`
+- immutable GitHub repository ID `1291460209`
+- immutable GitHub owner ID `300628670`
+- exact allowed ref `refs/heads/main`
+- `roles/iam.workloadIdentityUser` only for that repository identity
+- `roles/run.developer` on `fixlist-standard150-worker`
+- `roles/cloudtasks.queueAdmin` on `fixlist-standard150`
+- `roles/iam.serviceAccountViewer` on the existing Tasks invoker service account
+- project-level `roles/cloudbuild.builds.viewer`, required only so
+  `verify-worker-routes` can read Cloud Build provenance
 
-Because authentication is pinned to `main`, this workflow must be **merged
-to `main`** before it can run at all.
+The WIF provider resource name and operator service-account email are identifiers,
+not secrets. They are pinned directly in `.github/workflows/fixlist-cloud-operator.yml`;
+no GitHub repository secrets are required for them.
 
-### Scope of the grants
+### Why immutable IDs and `refs/heads/main` matter
 
-Traffic-only `update-traffic` does not need `actAs` on the runtime service
-account, so the operator holds **no** `serviceAccountUser` anywhere. The two
-role grants are on the single service and the single queue, not the project.
-A custom role limited to `run.services.get/update` and
-`cloudtasks.queues.get/pause/resume` is the further tightening if wanted.
+GitHub's OIDC `repository_id` and `repository_owner_id` claims are immutable
+numeric identifiers. The WIF provider accepts only this repository, this owner,
+and `refs/heads/main`. This avoids relying only on reusable repository names.
+
+`workflow_dispatch` can otherwise be launched from a branch whose workflow or
+operator script has been modified. The WIF condition makes authentication
+itself fail away from `main`; the workflow's explicit ref guard and pinned
+checkout provide defense in depth.
+
+## Release sequence
+
+After the one-time WIF setup:
+
+1. Run `verify-worker-routes` against the current worker revision.
+2. If provenance does not map to a commit containing both durable routes,
+   rebuild/deploy the worker from the exact approved `main` release SHA before
+   any queue activation.
+3. Deploy and verify the keyless dispatch gateway from canonical
+   `dispatch-gateway/` source.
+4. Publish the audited Base44 durable backend and configure
+   `SCAN_DISPATCH_GATEWAY_URL`.
+5. Run a controlled dispatch probe and verify the exact Cloud Task and worker
+   request.
+6. Run one fresh customer Funbooker scan end to end.
+
+Standard 150 is restored only after the real customer flow completes:
+
+`Browser → Base44 → Cloud Task → Python worker → crawl → review → durable callbacks → persisted FixList → authority proof → exact browser result`.

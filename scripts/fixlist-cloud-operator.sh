@@ -70,7 +70,7 @@ verify_iam() {
 
 # The durable pipeline sends every Cloud Task to POST /scan-job and the
 # watchdog to POST /scan-job-drain. Those routes exist only in builds that
-# contain scanner-api/app/scan_job.py. A worker built from a source without
+# contain scanner-api/app/scan_job.py. A worker built from older source without
 # them accepts the deployment, serves /health, and 404s every task -- and the
 # watchdog 404s too, so runs never reach a terminal state. Unauthenticated
 # probes cannot answer this: Cloud Run IAM rejects them before routing. The
@@ -105,8 +105,8 @@ verify_worker_routes() {
   echo "ROUTE VERIFICATION IS NOT COMPLETE UNTIL A HUMAN CONFIRMS:"
   echo "  the _RELEASE_SHA above is a commit whose scanner-api/app/main.py"
   echo "  declares @app.post(\"/scan-job\") and @app.post(\"/scan-job-drain\")."
-  echo "  Those routes are absent from main; they exist only on the durable"
-  echo "  release branches."
+  echo "  Current main contains those routes, but an older deployed revision"
+  echo "  may still have been built before they landed."
   echo
   echo "=== Revision request timeout (must be 480 to match dispatchDeadline) ==="
   gcloud run revisions describe "$revision" \

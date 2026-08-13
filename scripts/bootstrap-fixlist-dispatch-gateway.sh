@@ -24,8 +24,8 @@ if [[ "$SOURCE_SHA" != "$REMOTE_MAIN_SHA" ]]; then
   echo "Refusing bootstrap: checkout $SOURCE_SHA is not current origin/main $REMOTE_MAIN_SHA" >&2
   exit 2
 fi
-if ! git -C "$REPO_ROOT" diff --quiet || ! git -C "$REPO_ROOT" diff --cached --quiet; then
-  echo "Refusing bootstrap: repository worktree/index is dirty." >&2
+if [[ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all)" ]]; then
+  echo "Refusing bootstrap: repository contains tracked or untracked changes." >&2
   exit 2
 fi
 if ! printf '%s' "$SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then

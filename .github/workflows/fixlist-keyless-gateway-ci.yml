@@ -7,7 +7,7 @@ on:
       - 'base44/functions/startStandardScanJob/cloudTasks.js'
       - 'tests/frontend/dispatchGatewayContract.test.mjs'
       - 'scripts/deploy_dispatch_gateway.sh'
-      - 'scripts/bootstrap-fixlist-dispatch-gateway-iam.sh'
+      - 'scripts/bootstrap-fixlist-dispatch-gateway.sh'
       - '.github/workflows/fixlist-cloud-operator.yml'
       - '.github/workflows/fixlist-keyless-gateway-ci.yml'
   push:
@@ -18,7 +18,7 @@ on:
       - 'base44/functions/startStandardScanJob/cloudTasks.js'
       - 'tests/frontend/dispatchGatewayContract.test.mjs'
       - 'scripts/deploy_dispatch_gateway.sh'
-      - 'scripts/bootstrap-fixlist-dispatch-gateway-iam.sh'
+      - 'scripts/bootstrap-fixlist-dispatch-gateway.sh'
       - '.github/workflows/fixlist-cloud-operator.yml'
       - '.github/workflows/fixlist-keyless-gateway-ci.yml'
 
@@ -40,8 +40,18 @@ jobs:
         run: |
           set -euo pipefail
           bash -n scripts/deploy_dispatch_gateway.sh
-          bash -n scripts/bootstrap-fixlist-dispatch-gateway-iam.sh
+          bash -n scripts/bootstrap-fixlist-dispatch-gateway.sh
           node --check base44/functions/startStandardScanJob/cloudTasks.js
+
+      - name: Refuse project-wide Run Admin in gateway bootstrap
+        run: |
+          set -euo pipefail
+          if grep -Eq 'add-iam-policy-binding.*roles/run\.admin|--role=["'"']?roles/run\.admin' scripts/bootstrap-fixlist-dispatch-gateway.sh; then
+            echo "Gateway bootstrap must not grant project-wide roles/run.admin." >&2
+            exit 1
+          fi
+          grep -Fq 'roles/run.developer' scripts/bootstrap-fixlist-dispatch-gateway.sh
+          grep -Fq 'gcloud run services add-iam-policy-binding "$GATEWAY"' scripts/bootstrap-fixlist-dispatch-gateway.sh
 
       - name: Install canonical gateway dependencies
         working-directory: dispatch-gateway

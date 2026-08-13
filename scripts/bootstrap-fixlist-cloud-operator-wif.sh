@@ -45,6 +45,7 @@ gcloud run services add-iam-policy-binding "$WORKER" \
   --region="$REGION" \
   --member="serviceAccount:${OPERATOR_SA}" \
   --role="roles/run.developer" \
+  --condition=None \
   --quiet >/dev/null
 
 say "Grant resource-scoped Cloud Tasks access"
@@ -53,6 +54,7 @@ gcloud tasks queues add-iam-policy-binding "$QUEUE" \
   --location="$REGION" \
   --member="serviceAccount:${OPERATOR_SA}" \
   --role="roles/cloudtasks.queueAdmin" \
+  --condition=None \
   --quiet >/dev/null
 
 say "Grant read-only visibility of the task invoker service account"
@@ -60,12 +62,14 @@ gcloud iam service-accounts add-iam-policy-binding "$INVOKER_SA" \
   --project="$PROJECT" \
   --member="serviceAccount:${OPERATOR_SA}" \
   --role="roles/iam.serviceAccountViewer" \
+  --condition=None \
   --quiet >/dev/null
 
 say "Grant read-only Cloud Build provenance access"
 gcloud projects add-iam-policy-binding "$PROJECT" \
   --member="serviceAccount:${OPERATOR_SA}" \
   --role="roles/cloudbuild.builds.viewer" \
+  --condition=None \
   --quiet >/dev/null
 
 say "Create WIF pool if needed"
@@ -145,6 +149,7 @@ gcloud iam service-accounts add-iam-policy-binding "$OPERATOR_SA" \
   --project="$PROJECT" \
   --member="$PRINCIPAL" \
   --role="roles/iam.workloadIdentityUser" \
+  --condition=None \
   --quiet >/dev/null
 
 say "Verify exact WIF configuration"

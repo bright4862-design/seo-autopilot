@@ -49,12 +49,13 @@ gcloud run services add-iam-policy-binding "$WORKER" \
   --quiet >/dev/null
 
 say "Grant resource-scoped Cloud Tasks access"
+# The GA Cloud Tasks queue IAM command does not expose --condition in all
+# installed gcloud releases. Queue bindings here are intentionally unconditional.
 gcloud tasks queues add-iam-policy-binding "$QUEUE" \
   --project="$PROJECT" \
   --location="$REGION" \
   --member="serviceAccount:${OPERATOR_SA}" \
   --role="roles/cloudtasks.queueAdmin" \
-  --condition=None \
   --quiet >/dev/null
 
 say "Grant read-only visibility of the task invoker service account"

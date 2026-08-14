@@ -93,8 +93,12 @@ REVIEW_FINDING_LIMIT = 100
 def canonicalize(value: Any) -> Any:
     if value is None or isinstance(value, (str, bool)):
         return value
-    if isinstance(value, (int, float)):
-        return value if value == value and value not in (float("inf"), float("-inf")) else None
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            return None
+        return int(value) if value.is_integer() else value
+    if isinstance(value, int):
+        return value
     if isinstance(value, list):
         return [canonicalize(item) for item in value]
     if isinstance(value, dict):

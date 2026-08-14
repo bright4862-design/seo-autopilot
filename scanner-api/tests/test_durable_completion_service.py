@@ -171,3 +171,11 @@ def test_worker_uses_only_signed_hosted_boundaries():
     assert 'invoke_function(client, "persistScanAuthority"' not in source
     assert "build_local_review" in source
     assert 'get("fixListVerified") is not True' in source
+
+
+def test_durable_worker_stamps_python_backend_authority_markers():
+    source = (REPO_ROOT / "scanner-api/app/main.py").read_text(encoding="utf-8")
+    durable = source.split('@app.post("/scan-job")', 1)[1].split('@app.post("/scan-job-drain")', 1)[0]
+    assert '"advanced_scan_backend": "python_scanner_api"' in durable
+    assert '"deno_fallback_used": False' in durable
+    assert durable.index('"advanced_scan_backend": "python_scanner_api"') < durable.index('outcome = await complete_authority')

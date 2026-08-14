@@ -484,6 +484,8 @@ async def scan_job(
             result = enforce_scan_response_page_budget(result, "advanced")
             result["beta_revision_fingerprint"] = live_revision()["fingerprint"]
             result.update({
+                "advanced_scan_backend": "python_scanner_api",
+                "deno_fallback_used": False,
                 "request_id": payload.request_id,
                 "idempotency_key": payload.idempotency_key or payload.request_id,
                 "scan_id": scan_id,

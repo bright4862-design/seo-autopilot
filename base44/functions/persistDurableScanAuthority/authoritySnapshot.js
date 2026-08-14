@@ -10,25 +10,30 @@ export const AUTHORITY_CONTRACT = Object.freeze({
   beta_revision_fingerprint: "5caec7fdcabceee7",
 });
 
-export function isAuthorityEligible(scan, review) {
+export function firstFailedAuthorityPredicate(scan, review) {
   const firstPage = firstArray([scan?.crawled_pages, scan?.pages, scan?.scanned_pages])[0] || {};
-  return Boolean(
-    scan?.scanner_version === AUTHORITY_CONTRACT.scanner_version
-    && text(scan?.scanner_build_revision || scan?.technical_audit_summary?.scanner_build_revision, 160) === AUTHORITY_CONTRACT.scanner_build_revision
-    && scan?.advanced_scan_backend === "python_scanner_api"
-    && scan?.deno_fallback_used !== true
-    && text(review?.archetype_classifier_version || review?.site_fingerprint?.classification?.classifier_version, 160) === AUTHORITY_CONTRACT.archetype_classifier_version
-    && text(review?.review_version || review?.ai_review_version, 160) === AUTHORITY_CONTRACT.review_version
-    && text(review?.review_evidence_calibration_version, 160) === AUTHORITY_CONTRACT.review_evidence_calibration_version
-    && text(review?.beta_revision_fingerprint || scan?.beta_revision_fingerprint, 160) === AUTHORITY_CONTRACT.beta_revision_fingerprint
-    && text(review?.metadata_evidence_version || scan?.metadata_evidence_version || scan?.component_versions?.metadata_evidence_version || firstPage.metadata_evidence_version, 160)
-    && text(review?.title_evidence_version || scan?.title_evidence_version || scan?.component_versions?.title_evidence_version || firstPage.title_evidence_version, 160)
-    && review?.ai_review_backend === "python_review_api"
-    && review?.python_review_fallback_used !== true
-    && review?.release_gate_eligible === true
-    && review?.score_is_provisional !== true
-    && review?.evidence_quality_blocking !== true
-  );
+  const predicates = [
+    ["scanner_version", scan?.scanner_version === AUTHORITY_CONTRACT.scanner_version],
+    ["scanner_build_revision", text(scan?.scanner_build_revision || scan?.technical_audit_summary?.scanner_build_revision, 160) === AUTHORITY_CONTRACT.scanner_build_revision],
+    ["advanced_scan_backend", scan?.advanced_scan_backend === "python_scanner_api"],
+    ["deno_fallback_used", scan?.deno_fallback_used !== true],
+    ["archetype_classifier_version", text(review?.archetype_classifier_version || review?.site_fingerprint?.classification?.classifier_version, 160) === AUTHORITY_CONTRACT.archetype_classifier_version],
+    ["review_version", text(review?.review_version || review?.ai_review_version, 160) === AUTHORITY_CONTRACT.review_version],
+    ["review_evidence_calibration_version", text(review?.review_evidence_calibration_version, 160) === AUTHORITY_CONTRACT.review_evidence_calibration_version],
+    ["beta_revision_fingerprint", text(review?.beta_revision_fingerprint || scan?.beta_revision_fingerprint, 160) === AUTHORITY_CONTRACT.beta_revision_fingerprint],
+    ["metadata_evidence_version", Boolean(text(review?.metadata_evidence_version || scan?.metadata_evidence_version || scan?.component_versions?.metadata_evidence_version || firstPage.metadata_evidence_version, 160))],
+    ["title_evidence_version", Boolean(text(review?.title_evidence_version || scan?.title_evidence_version || scan?.component_versions?.title_evidence_version || firstPage.title_evidence_version, 160))],
+    ["ai_review_backend", review?.ai_review_backend === "python_review_api"],
+    ["python_review_fallback_used", review?.python_review_fallback_used !== true],
+    ["release_gate_eligible", review?.release_gate_eligible === true],
+    ["score_is_provisional", review?.score_is_provisional !== true],
+    ["evidence_quality_blocking", review?.evidence_quality_blocking !== true],
+  ];
+  return predicates.find(([, passed]) => !passed)?.[0] || "";
+}
+
+export function isAuthorityEligible(scan, review) {
+  return firstFailedAuthorityPredicate(scan, review) === "";
 }
 
 export function buildAuthoritySnapshot({ scan, review, identity, userId, now = new Date().toISOString() }) {

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Bug, Copy, Download, ExternalLink, RefreshCw, Trash2 } from "lucide-react";
+import { Copy, Download, ExternalLink } from "lucide-react";
 
 import { isRateLimitFinding, shouldUseLegacyRateLimitPresentation } from "@/lib/reviewContract";
 import { trackEvent } from "@/lib/analytics";
@@ -10,6 +10,8 @@ import { LOCKED_PREVIEW_FIX_COUNT, UNLOCK_PRICE_LABEL, loadAccess } from "@/lib/
 import UnlockAccessButton from "@/components/billing/UnlockAccessButton";
 import { CUSTOMER_BOUNDARY_EVENT } from "@/lib/customerBrowserCache";
 import ScoreRing from "@/components/fixlist/ScoreRing";
+import { prepareCustomerFixes, priorityBucket } from "@/lib/fixRanking";
+import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel } from "@/lib/fixVocabulary";
 
 const CMS_OPTIONS = [
   { value: "wordpress", label: "WordPress" },
@@ -76,14 +78,9 @@ export default function FixList() {
   const loadedScanIdRef = useRef("");
   const recoveryAttemptedForRef = useRef("");
   const pollTimerRef = useRef(0);
-  const [debugData, setDebugData] = useState(() => buildAuthoritativeDebugData(null));
   const [selectedCms, setSelectedCms] = useState("custom");
   const [doneIds, setDoneIds] = useState([]);
   const [locked, setLocked] = useState(false);
-
-  function reloadScan() {
-    setReloadToken((value) => value + 1);
-  }
 
   useEffect(() => {
     let active = true;
@@ -107,7 +104,6 @@ export default function FixList() {
     function applyRecord(next) {
       if (cancelled) return;
       setScanRecord(next);
-      setDebugData(buildAuthoritativeDebugData(next));
       if (next?.cms_platform) setSelectedCms(normalizeCmsValue(next.cms_platform));
     }
 
@@ -115,7 +111,6 @@ export default function FixList() {
       if (cancelled) return;
       loadedScanIdRef.current = "";
       setScanRecord(null);
-      setDebugData(buildAuthoritativeDebugData(null));
       // Completed-fix ticks belong to the scan being cleared, not the next one.
       setDoneIds([]);
     }
@@ -185,7 +180,6 @@ export default function FixList() {
       window.clearTimeout(pollTimerRef.current);
       loadedScanIdRef.current = "";
       setScanRecord(null);
-      setDebugData(buildAuthoritativeDebugData(null));
       setDoneIds([]);
       setRequestedScanState(requestedScanId ? "not_found" : "idle");
     }
@@ -199,11 +193,16 @@ export default function FixList() {
     };
   }, [requestedScanId, reloadToken]);
 
-  const recommendations = useMemo(() => mergeMetaDescriptionRecommendations(getRecommendations(scanRecord).map((item) => normalizeRecommendation(item, scanRecord))), [scanRecord]);
+  const recommendations = useMemo(() => prepareCustomerFixes(
+    mergeMetaDescriptionRecommendations(
+      getRecommendations(scanRecord).map((item) => normalizeRecommendation(item, scanRecord)),
+    ).map(applyCustomerVocabulary),
+  ), [scanRecord]);
   const pages = useMemo(() => getPages(scanRecord), [scanRecord]);
   const healthScore = getHealthScore(scanRecord);
   const scoreUnavailable = isHealthScoreUnavailable(scanRecord);
   const pagesScanned = getPagesScanned(scanRecord, pages);
+  const pagesFound = getPagesFound(scanRecord);
   const hasUsefulScan = Boolean(scanRecord && (
     recommendations.length > 0
     || pages.length > 0
@@ -217,17 +216,18 @@ export default function FixList() {
 
   const active = recommendations.filter((item) => !doneIds.includes(item.id));
   const doneItems = recommendations.filter((item) => doneIds.includes(item.id));
-  const fixNow = active.filter((item) => item.priority === "critical" || item.priority === "high");
-  const later = active.filter((item) => item.priority !== "critical" && item.priority !== "high");
+  const topPriorities = active.slice(0, 3);
+  const remaining = active.slice(3);
+  const moreImportant = remaining.filter((item) => priorityBucket(item.priority) === "fix_first");
+  const improveNext = remaining.filter((item) => priorityBucket(item.priority) === "improve_next");
+  const worthChecking = remaining.filter((item) => priorityBucket(item.priority) === "worth_checking");
   // Free-tier preview gate. This only limits what is rendered; the durable
   // scan record itself is always loaded by exact scan_id.
-  const shownFixNow = locked ? active.slice(0, LOCKED_PREVIEW_FIX_COUNT) : fixNow;
-  const shownLater = locked ? [] : later;
-  const hiddenCount = locked ? Math.max(0, active.length - shownFixNow.length) : 0;
+  const shownTopPriorities = locked ? topPriorities.slice(0, LOCKED_PREVIEW_FIX_COUNT) : topPriorities;
+  const hiddenCount = locked ? Math.max(0, active.length - shownTopPriorities.length) : 0;
   const passedChecks = hasUsefulScan && !scoreUnavailable ? buildPassedChecks(recommendations) : [];
   const limitationNote = getLimitationNote(scanRecord);
   const summary = hasUsefulScan ? getBestSummary(scanRecord, healthScore, pagesScanned, recommendations.length) : "";
-  const healthGrade = hasUsefulScan ? getHealthGrade(scanRecord, healthScore, noHighConfidenceFindings) : "";
 
   function markDone(item) {
     const next = [...doneIds, item.id];
@@ -372,8 +372,6 @@ export default function FixList() {
         ) : (
           <NoScanState onScan={() => navigate("/onboarding")} />
         )}
-
-        <ScanDebugPanel debugData={debugData} onRefresh={reloadScan} onClear={() => setDebugData(buildAuthoritativeDebugData(scanRecord))} />
 
         <footer className="mt-24 border-t border-hairline-soft pt-5 text-[12px] leading-relaxed text-ink-faint">
           {hasUsefulScan

@@ -705,62 +705,6 @@ function downloadTextFile(content, filename, type) {
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 }
 
-function ScanDebugPanel({ debugData, onRefresh, onClear }) {
-  const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const summary = useMemo(() => buildDebugSummary(debugData), [debugData]);
-
-  async function copyJson() {
-    try {
-      await navigator.clipboard.writeText(JSON.stringify(debugData, null, 2));
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch (error) {
-      console.warn("Could not copy scan debug data.", error);
-    }
-  }
-
-  return (
-    <section className="mt-16 border-t border-hairline-soft pt-4">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[13px] text-ink-faint">
-        <button type="button" onClick={() => setOpen((value) => !value)} className="flex items-center gap-1.5 transition-colors hover:text-ink">
-          <Bug className="h-3.5 w-3.5" />
-          {open ? "Hide scan details" : "Scan details"}
-        </button>
-        <button type="button" onClick={onRefresh} className="flex items-center gap-1.5 transition-colors hover:text-ink">
-          <RefreshCw className="h-3.5 w-3.5" />
-          Refresh
-        </button>
-        <button type="button" onClick={copyJson} className="flex items-center gap-1.5 transition-colors hover:text-ink">
-          <Copy className="h-3.5 w-3.5" />
-          {copied ? "Copied" : "Copy JSON"}
-        </button>
-        <button type="button" onClick={onClear} className="flex items-center gap-1.5 transition-colors hover:text-crit">
-          <Trash2 className="h-3.5 w-3.5" />
-          Clear scans
-        </button>
-        <span className="tabular-nums">
-          {summary.status || "no scan"}{summary.pages ? ` · ${summary.pages} pages` : ""}{summary.score ? ` · score ${summary.score}` : ""}
-        </span>
-      </div>
-
-      {open ? (
-        <pre className="mt-4 max-h-[480px] overflow-auto rounded-lg border border-hairline bg-ink p-4 text-xs leading-5 text-paper">{JSON.stringify(debugData, null, 2)}</pre>
-      ) : null}
-    </section>
-  );
-}
-
-function getHeroHeadline({ healthScore, scoreUnavailable, noHighConfidenceFindings, activeCount, doneCount }) {
-  if (scoreUnavailable) return "Score unavailable.";
-  if (noHighConfidenceFindings && activeCount === 0 && doneCount === 0) return "Nothing to fix in this sample.";
-  if (activeCount === 0 && doneCount > 0) return "Nothing left on the list.";
-  if (healthScore >= 85) return "Great shape overall.";
-  if (healthScore >= 70) return "Good shape overall.";
-  if (healthScore >= 50) return "Getting there.";
-  return "Room to improve.";
-}
-
 function getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount, doneCount }) {
   if (noHighConfidenceFindings && activeCount === 0 && doneCount === 0) {
     return nextBestStep || "No high-confidence issues were found in the pages we checked.";

@@ -227,7 +227,7 @@ export default function FixList() {
   const hiddenCount = locked ? Math.max(0, active.length - shownTopPriorities.length) : 0;
   const passedChecks = hasUsefulScan && !scoreUnavailable ? buildPassedChecks(recommendations) : [];
   const limitationNote = getLimitationNote(scanRecord);
-  const summary = hasUsefulScan ? getBestSummary(scanRecord, healthScore, pagesScanned, recommendations.length) : "";
+  const summary = hasUsefulScan ? getBestSummary(scanRecord, healthScore, pagesScanned, pagesFound, recommendations) : "";
 
   function markDone(item) {
     const next = [...doneIds, item.id];
@@ -509,9 +509,19 @@ function FixRow({ item, cms, onDone }) {
           ) : null}
 
           <div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">What to do</div>
-          <ol className="mt-2 max-w-[60ch] list-decimal space-y-2 pl-5 text-ink">
-            {cmsSteps.map((step, index) => <li key={`${step}-${index}`} className="pl-1 leading-relaxed">{step}</li>)}
-          </ol>
+          <p className="mt-1 max-w-[56ch] leading-relaxed text-ink">{item.recommendation}</p>
+          <p className="mt-2 text-[12.5px] text-ink-faint">
+            {item.needsHelp ? "Best for: Web developer" : "Best for: You"}
+            {item.estimatedTime ? ` · Typical effort: ${item.estimatedTime}` : ""}
+          </p>
+          {cmsSteps.length > 0 ? (
+            <details className="mt-4 max-w-[60ch]">
+              <summary className="cursor-pointer text-[13px] font-medium text-ink-muted underline decoration-hairline underline-offset-4">Step-by-step instructions</summary>
+              <ol className="mt-3 list-decimal space-y-2 pl-5 text-ink">
+                {cmsSteps.map((step, index) => <li key={`${step}-${index}`} className="pl-1 leading-relaxed">{step}</li>)}
+              </ol>
+            </details>
+          ) : null}
 
           {reportedCount > 0 ? (
             <>
@@ -783,6 +793,8 @@ function normalizeRecommendation(item = {}, scanRecord = {}) {
     combinedRules: firstArray([item.combined_rules]).map(String),
     groupingExplanation: cleanString(item.grouping_explanation),
     needsHelp,
+    estimatedTime: cleanString(item.estimated_time || item.time_estimate),
+    confidenceScore: Number(item.confidence_score || 0),
     generalSteps: legacyBlocked429 ? build429Steps(evidence) : buildGeneralSteps(item, recommendation, needsHelp),
   };
 }
@@ -1288,14 +1300,21 @@ function getNextBestStep(record, noHighConfidenceFindings) {
     || (noHighConfidenceFindings ? "No high-confidence issues were found in the scanned sample — consider a deeper crawl or manual review of money pages." : "");
 }
 
-function getBestSummary(record, healthScore, pagesScanned, issueCount) {
-  const summary = cleanString(record?.customer_summary || record?.simple_summary || record?.website_health_report?.overall_explanation || record?.scan_summary?.plain_english_summary || record?.scan_summary?.summary);
-  if (summary) return normalizeCoverageSummary(summary, pagesScanned);
+function getBestSummary(record, healthScore, pagesScanned, pagesFound, recommendations = []) {
+  const issueCount = recommendations.length;
   if (isHealthScoreUnavailable(record)) {
-    return `FixList could not verify enough usable pages to calculate a reliable score. It retained ${issueCount || 0} access or verification item${issueCount === 1 ? "" : "s"} from this scan.`;
+    return `FixList could not check enough usable pages to calculate a reliable score. It kept ${issueCount || 0} item${issueCount === 1 ? "" : "s"} for you to review.`;
   }
-  const label = getScoreBand(healthScore).label;
-  return `Your website health is ${label.toLowerCase()} with a score of ${healthScore || 0}/100. FixList reviewed ${pagesScanned || 0} pages and found ${issueCount || 0} recommendations. Start with the highest-impact items first.`;
+  const importantCount = recommendations.filter((item) => ["critical", "high"].includes(item.priority)).length;
+  const groupedCount = recommendations.filter((item) => Number(item.pageCount || 0) > 1 || ["family", "cross_cutting", "sitewide"].includes(item.pageScope)).length;
+  const coverage = pagesFound > 0
+    ? `FixList found ${formatCount(pagesFound)} pages and checked ${formatCount(pagesScanned)} representative pages.`
+    : `FixList checked ${formatCount(pagesScanned)} representative pages.`;
+  const priorities = importantCount > 0
+    ? ` It found ${issueCount} improvement${issueCount === 1 ? "" : "s"}; ${importantCount} should be handled first.`
+    : ` It found ${issueCount} improvement${issueCount === 1 ? "" : "s"} to work through.`;
+  const grouping = groupedCount > 0 ? " Several affect shared page patterns, so one change can improve many pages at once." : "";
+  return `${coverage}${priorities}${grouping}`;
 }
 
 

@@ -227,7 +227,7 @@ export default function FixList() {
   const hiddenCount = locked ? Math.max(0, active.length - shownTopPriorities.length) : 0;
   const passedChecks = hasUsefulScan && !scoreUnavailable ? buildPassedChecks(recommendations) : [];
   const limitationNote = getLimitationNote(scanRecord);
-  const summary = hasUsefulScan ? getBestSummary(scanRecord, healthScore, pagesScanned, pagesFound, recommendations) : "";
+  const summary = hasUsefulScan ? getBestSummary(scanRecord, pagesScanned, pagesFound, recommendations) : "";
 
   function markDone(item) {
     const next = [...doneIds, item.id];
@@ -1300,7 +1300,7 @@ function getNextBestStep(record, noHighConfidenceFindings) {
     || (noHighConfidenceFindings ? "No high-confidence issues were found in the scanned sample — consider a deeper crawl or manual review of money pages." : "");
 }
 
-function getBestSummary(record, healthScore, pagesScanned, pagesFound, recommendations = []) {
+function getBestSummary(record, pagesScanned, pagesFound, recommendations = []) {
   const issueCount = recommendations.length;
   if (isHealthScoreUnavailable(record)) {
     return `FixList could not check enough usable pages to calculate a reliable score. It kept ${issueCount || 0} item${issueCount === 1 ? "" : "s"} for you to review.`;
@@ -1336,14 +1336,6 @@ function normalizePriority(value) {
 }
 
 
-
-function getScoreBand(score) {
-  const number = Number(score || 0);
-  if (number >= 90) return { label: "Excellent", className: "bg-emerald-50 text-emerald-700" };
-  if (number >= 75) return { label: "Good", className: "bg-emerald-50 text-emerald-700" };
-  if (number >= 55) return { label: "Fair", className: "bg-amber-50 text-amber-700" };
-  return { label: "Needs work", className: "bg-red-50 text-red-700" };
-}
 
 function formatPageLabel(page) {
   try {
@@ -1402,13 +1394,6 @@ function getFirstNumber(values) {
 
 function humanize(value) {
   return String(value || "").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim().replace(/^\w/, (char) => char.toUpperCase());
-}
-
-function normalizeCoverageSummary(summary, pagesCrawled) {
-  const text = String(summary || "");
-  const count = Number(pagesCrawled || 0);
-  if (!count || !text) return text;
-  return text.replace(/The scanner reviewed\s+\d+\s+pages/gi, `The scanner reviewed ${count} pages`).replace(/scanner reviewed\s+\d+\s+pages/gi, `scanner reviewed ${count} pages`);
 }
 
 function safeHostname(value) {

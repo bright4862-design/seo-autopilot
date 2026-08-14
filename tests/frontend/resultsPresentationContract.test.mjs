@@ -1,0 +1,57 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+import { prepareCustomerFixes } from "../../src/lib/fixRanking.js";
+import { applyCustomerVocabulary, customerHealthLabel } from "../../src/lib/fixVocabulary.js";
+
+const fixListSource = readFileSync(new URL("../../src/pages/FixList.jsx", import.meta.url), "utf8");
+
+test("Funbooker-style results rank by severity, then scope, without changing scanner priority", () => {
+  const items = [
+    { id: "low-page-it", rule: "title_over_pixel_limit", priority: "low", pageScope: "page", affectedPages: ["/it/title"], confidenceScore: 88 },
+    { id: "high-meta", rule: "meta_description_unusable", priority: "high", pageScope: "family", affectedPages: Array.from({ length: 34 }, (_, i) => `/standard-${i}`), confidenceScore: 92 },
+    { id: "critical-redirect", rule: "redirect_chain", priority: "critical", pageScope: "page", affectedPages: ["/"], confidenceScore: 94 },
+    { id: "critical-meta", rule: "meta_description_unusable", priority: "critical", pageScope: "family", affectedPages: Array.from({ length: 46 }, (_, i) => `/activity-${i}`), confidenceScore: 92 },
+  ];
+  const ranked = prepareCustomerFixes(items);
+  assert.deepEqual(ranked.slice(0, 3).map((item) => item.id), ["critical-meta", "critical-redirect", "high-meta"]);
+  assert.equal(items[0].priority, "low");
+});
+
+test("family-level same-rule coverage suppresses duplicate page cards but never merges different rules", () => {
+  const items = [
+    { id: "title-family", rule: "title_over_pixel_limit", priority: "low", pageScope: "family", affectedPages: ["/de/a", "/it/a", "/pt/a"] },
+    { id: "title-de", rule: "title_over_pixel_limit", priority: "low", pageScope: "page", affectedPages: ["/de/a"] },
+    { id: "title-it", rule: "title_over_pixel_limit", priority: "low", pageScope: "page", affectedPages: ["/it/a"] },
+    { id: "title-pt", rule: "title_over_pixel_limit", priority: "low", pageScope: "page", affectedPages: ["/pt/a"] },
+    { id: "orphan", rule: "potential_orphan_pages", priority: "low", pageScope: "family", affectedPages: ["/de/a", "/it/a", "/pt/a"] },
+  ];
+  const prepared = prepareCustomerFixes(items);
+  assert.deepEqual(new Set(prepared.map((item) => item.id)), new Set(["title-family", "orphan"]));
+});
+
+test("rule-specific vocabulary keeps SEO jargon out of primary customer copy", () => {
+  const canonical = applyCustomerVocabulary({ rule: "canonical_missing", category: "canonical", pageScope: "family", pageCount: 2, affectedPages: ["/terms", "/privacy"] });
+  assert.equal(canonical.title, "Tell search engines which page versions are the main ones");
+  assert.equal(canonical.customerCategory, "Search visibility");
+  assert.equal(canonical.technicalLabel, "Canonical URL");
+
+  const orphan = applyCustomerVocabulary({ rule: "potential_orphan_pages", category: "indexability", pageCount: 147, affectedPages: ["/a"] });
+  assert.equal(orphan.title, "Check pages that may be hard to find");
+  assert.doesNotMatch(orphan.title, /orphan|indexability/i);
+});
+
+test("score 60 uses a customer-friendly health label without changing the numeric score", () => {
+  assert.equal(customerHealthLabel(60), "Needs attention");
+  assert.equal(customerHealthLabel(86), "Looking good");
+});
+
+test("customer result page hides internal debug controls and leads with priorities", () => {
+  assert.match(fixListSource, /Your priorities/);
+  assert.match(fixListSource, /Technical details/);
+  assert.match(fixListSource, /pages found/);
+  assert.doesNotMatch(fixListSource, />Scan details</);
+  assert.doesNotMatch(fixListSource, />Copy JSON</);
+  assert.doesNotMatch(fixListSource, />Clear scans</);
+});

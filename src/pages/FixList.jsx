@@ -475,10 +475,14 @@ function FixRow({ item, cms, onDone }) {
         <span className={`mt-[7px] h-[7px] w-[7px] shrink-0 rounded-full ${severe ? "bg-crit" : "bg-warnink"}`} />
         <span className="min-w-0 flex-1">
           <span className="block text-[16px] font-medium tracking-tight">{item.title}</span>
-          <span className="mt-0.5 block text-[13.5px] text-ink-muted">{clampText(item.explanation, 110)}</span>
+          <span className="mt-1 block text-[12px] font-medium text-ink-faint">
+            {customerPriorityLabel(item.priority)} · {item.customerCategory}
+            {reportedCount > 0 ? ` · ${reportedCount} ${reportedCount === 1 ? "page" : "pages"}` : ""}
+          </span>
+          <span className="mt-1 block text-[13.5px] text-ink-muted">{clampText(item.explanation, 140)}</span>
         </span>
         <span className="mt-0.5 flex shrink-0 items-center gap-3">
-          <span className="hidden text-[12px] text-ink-faint sm:block">{item.needsHelp ? "Developer" : "You"}</span>
+          <span className="hidden text-[12px] text-ink-faint sm:block">{item.needsHelp ? "Web developer" : "You"}</span>
           <span className={`text-[12px] leading-none text-ink-faint transition-transform ${open ? "rotate-90" : ""}`}>›</span>
         </span>
       </button>
@@ -489,22 +493,22 @@ function FixRow({ item, cms, onDone }) {
           <p className="mt-1 max-w-[56ch]">{item.whyItMatters}</p>
 
           {evidenceItems.length > 0 ? (
-            <>
-              <div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">What FixList confirmed</div>
-              <p className="mt-1 max-w-[56ch] text-[13.5px]">
+            <details className="mt-5 max-w-[60ch] rounded-lg border border-hairline-soft px-3 py-2.5">
+              <summary className="cursor-pointer text-[12.5px] font-medium text-ink-muted">Technical details</summary>
+              <p className="mt-2 text-[12.5px] leading-relaxed text-ink-faint">
                 {evidenceItems.map((entry) => `${entry.label}: ${entry.value}`).join(" · ")}
               </p>
-            </>
+            </details>
           ) : null}
 
           {item.groupingExplanation ? (
             <>
-              <div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Why these URLs are grouped</div>
+              <div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Why these pages are grouped</div>
               <p className="mt-1 max-w-[56ch] text-[13.5px]">{item.groupingExplanation}</p>
             </>
           ) : null}
 
-          <div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">How to fix it</div>
+          <div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">What to do</div>
           <ol className="mt-2 max-w-[60ch] list-decimal space-y-2 pl-5 text-ink">
             {cmsSteps.map((step, index) => <li key={`${step}-${index}`} className="pl-1 leading-relaxed">{step}</li>)}
           </ol>
@@ -513,13 +517,13 @@ function FixRow({ item, cms, onDone }) {
             <>
               <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
-                  Affected URLs <span className="font-normal tabular-nums">{availableCount}{reportedCount > availableCount ? ` of ${reportedCount}` : ""}</span>
+                  Affected pages <span className="font-normal tabular-nums">{availableCount}{reportedCount > availableCount ? ` of ${reportedCount}` : ""}</span>
                 </div>
                 {availableCount > 0 ? (
                   <div className="flex flex-wrap items-center gap-3 text-[12px]">
                     <button type="button" onClick={copyAffectedUrls} className="flex items-center gap-1.5 text-ink-muted transition-colors hover:text-ink">
                       <Copy className="h-3.5 w-3.5" />
-                      {copied ? "Copied" : "Copy all"}
+                      {copied ? "Copied" : "Copy page list"}
                     </button>
                     <button type="button" onClick={downloadAffectedUrls} className="flex items-center gap-1.5 text-ink-muted transition-colors hover:text-ink">
                       <Download className="h-3.5 w-3.5" />
@@ -531,7 +535,7 @@ function FixRow({ item, cms, onDone }) {
 
               {reportedCount > availableCount ? (
                 <p className="mt-2 max-w-[60ch] rounded-md bg-warnink/[0.07] px-3 py-2 text-[12.5px] leading-relaxed text-ink-muted">
-                  This saved record contains {availableCount} of {reportedCount} flagged URLs. Run a fresh scan after this update is published to capture the complete list.
+                  This saved result contains {availableCount} of {reportedCount} affected pages. Run a fresh scan after the update is published to capture the complete list.
                 </p>
               ) : null}
 
@@ -548,12 +552,12 @@ function FixRow({ item, cms, onDone }) {
                   ))}
                   {extraCount > 0 ? (
                     <button type="button" onClick={() => setShowAllPages(true)} className="mt-1 text-[13px] font-medium text-ink underline decoration-hairline underline-offset-4">
-                      Show all {availableCount} URLs
+                      Show all {availableCount} pages
                     </button>
                   ) : null}
                   {showAllPages && availableCount > 8 ? (
                     <button type="button" onClick={() => setShowAllPages(false)} className="mt-1 text-[13px] text-ink-muted underline decoration-hairline underline-offset-4">
-                      Show fewer URLs
+                      Show fewer pages
                     </button>
                   ) : null}
                 </div>

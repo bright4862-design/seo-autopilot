@@ -8,16 +8,16 @@ const fixListSource = readFileSync(new URL("../../src/pages/FixList.jsx", import
 const scanFormSource = readFileSync(new URL("../../src/components/scan/ScanWebsiteForm.jsx", import.meta.url), "utf8");
 const fixItemEntity = JSON.parse(readFileSync(new URL("../../base44/entities/FixItem.jsonc", import.meta.url), "utf8"));
 
-test("FixList exposes the complete affected URL list with copy and CSV controls", () => {
-  assert.match(fixListSource, /Affected URLs/);
-  assert.match(fixListSource, /Show all \{availableCount\} URLs/);
-  assert.match(fixListSource, /Copy all/);
+test("FixList exposes the complete affected-page list with copy and CSV controls", () => {
+  assert.match(fixListSource, /Affected pages/);
+  assert.match(fixListSource, /Show all \{availableCount\} pages/);
+  assert.match(fixListSource, /Copy page list/);
   assert.match(fixListSource, /Download CSV/);
   assert.match(fixListSource, /affected_url/);
 });
 
 test("FixList instructions are action-oriented and rule specific", () => {
-  assert.match(fixListSource, /How to fix it/);
+  assert.match(fixListSource, /What to do/);
   assert.match(fixListSource, /rule === "internal_link_redirect"/);
   assert.match(fixListSource, /rule === "sitemap_redirect"/);
   assert.match(fixListSource, /rule === "redirect_chain"/);

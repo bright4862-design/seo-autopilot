@@ -266,7 +266,9 @@ export default function FixList() {
         ) : hasUsefulScan ? (
           <>
             <p className="mt-16 text-[13px] text-ink-faint tabular-nums">
-              Scanned {scanRecord?.created_at ? formatDate(scanRecord.created_at) : "recently"} · {pagesScanned} pages checked
+              Scanned {scanRecord?.created_at ? formatDate(scanRecord.created_at) : "recently"}
+              {pagesFound > 0 ? ` · ${formatCount(pagesFound)} pages found` : ""}
+              {pagesScanned > 0 ? ` · ${formatCount(pagesScanned)} checked` : ""}
               {passedChecks.length > 0 ? ` · ${passedChecks.length} checks passed` : ""}
             </p>
 
@@ -274,12 +276,11 @@ export default function FixList() {
               <ScoreRing score={healthScore} unavailable={scoreUnavailable} />
               <div>
                 <h1 className="text-[26px] font-semibold leading-tight tracking-tight">
-                  {getHeroHeadline({ healthScore, scoreUnavailable, noHighConfidenceFindings, activeCount: active.length, doneCount: doneItems.length })}
+                  {customerHealthLabel(healthScore, { unavailable: scoreUnavailable, noHighConfidenceFindings })}
                 </h1>
                 <p className="mt-1.5 text-[15px] text-ink-muted tabular-nums">
                   {getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount: active.length, doneCount: doneItems.length })}
                 </p>
-                {healthGrade ? <p className="mt-1 text-[13px] text-ink-faint">{healthGrade}</p> : null}
               </div>
             </div>
 
@@ -291,11 +292,11 @@ export default function FixList() {
               <p className="mt-6 border-l-2 border-warnink/40 pl-3 text-[13.5px] leading-relaxed text-ink-muted">{limitationNote}</p>
             ) : null}
 
-            {shownFixNow.length > 0 ? (
+            {shownTopPriorities.length > 0 ? (
               <>
-                <SectionEyebrow label="Fix now" count={shownFixNow.length} />
+                <SectionEyebrow label="Your priorities" count={shownTopPriorities.length} />
                 <div className="mt-2">
-                  {shownFixNow.map((item) => (
+                  {shownTopPriorities.map((item) => (
                     <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
                   ))}
                 </div>
@@ -316,11 +317,33 @@ export default function FixList() {
               </div>
             ) : null}
 
-            {shownLater.length > 0 ? (
+            {!locked && moreImportant.length > 0 ? (
               <>
-                <SectionEyebrow label="When you have time" count={shownLater.length} />
+                <SectionEyebrow label="More important fixes" count={moreImportant.length} />
                 <div className="mt-2">
-                  {shownLater.map((item) => (
+                  {moreImportant.map((item) => (
+                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
+                  ))}
+                </div>
+              </>
+            ) : null}
+
+            {!locked && improveNext.length > 0 ? (
+              <>
+                <SectionEyebrow label="Improve next" count={improveNext.length} />
+                <div className="mt-2">
+                  {improveNext.map((item) => (
+                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
+                  ))}
+                </div>
+              </>
+            ) : null}
+
+            {!locked && worthChecking.length > 0 ? (
+              <>
+                <SectionEyebrow label="Worth checking" count={worthChecking.length} />
+                <div className="mt-2">
+                  {worthChecking.map((item) => (
                     <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
                   ))}
                 </div>

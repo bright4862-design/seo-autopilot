@@ -12,7 +12,7 @@ test("missing, empty, and malformed descriptions become one customer task", () =
   assert.match(scanFormSource, /meta_description_unusable/);
   assert.match(scanFormSource, /Add usable meta descriptions to/);
   assert.match(fixListSource, /mergeMetaDescriptionRecommendations/);
-  assert.match(fixListSource, /Why these URLs are grouped/);
+  assert.match(fixListSource, /Why these pages are grouped/);
 });
 
 test("the unified card explains search appearance without promising rankings", () => {

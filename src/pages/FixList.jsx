@@ -1189,25 +1189,6 @@ function formatMetadataStateBreakdown(value = {}) {
   ].filter(Boolean).join(" · ");
 }
 
-function buildAuthoritativeDebugData(record) {
-  if (!record) return { source: "authoritative_server", scan_id: "", identity: null };
-  return {
-    source: "authoritative_server",
-    scan_id: record.scan_id || record.scan_run_id || record.id || "",
-    identity: {
-      owner_user_id: record.owner_user_id || "",
-      project_id: record.project_id || "",
-      request_id: record.request_id || "",
-      scan_id: record.scan_id || record.scan_run_id || record.id || "",
-      normalized_domain: record.normalized_domain || safeHostname(record.website_url),
-      canonical_mode: record.scan_mode || "advanced",
-      release_identity: record.beta_revision_fingerprint || "",
-    },
-    status: record.status || record.scan_status || "",
-    release_gate_eligible: record.release_gate_eligible === true,
-  };
-}
-
 // Converts a durable {run, fixList, fixItems} bundle into the flat record
 // shape this page reads from.
 function normalizeDurableScanBundle(bundle = {}) {
@@ -1288,6 +1269,11 @@ function getPagesScanned(record, pages) {
   return Number.isFinite(count) ? count : 0;
 }
 
+function getPagesFound(record) {
+  const count = Number(record?.pages_found || record?.scan_summary?.pages_found || record?.technical_audit_summary?.pages_found || 0);
+  return Number.isFinite(count) ? count : 0;
+}
+
 function isNoHighConfidenceFindings(record, recommendations = []) {
   const scanStatus = String(record?.scan_status || "");
   if (["incomplete_evidence", "inconclusive_insufficient_evidence", "blocked_or_incomplete"].includes(scanStatus)) return false;
@@ -1295,11 +1281,6 @@ function isNoHighConfidenceFindings(record, recommendations = []) {
     || record?.review_confidence_state === "no_high_confidence_findings"
     || scanStatus === "complete_no_high_confidence_findings"
     || recommendations.length === 0;
-}
-
-function getHealthGrade(record, healthScore, noHighConfidenceFindings) {
-  return cleanString(record?.website_health_report?.health_grade || record?.health_grade)
-    || (noHighConfidenceFindings ? "No issues found in sample" : getScoreBand(healthScore).label);
 }
 
 function getNextBestStep(record, noHighConfidenceFindings) {
@@ -1436,15 +1417,10 @@ function stableId(input) {
   return `finding_${Math.abs(hash)}`;
 }
 
-function buildDebugSummary(debugData = {}) {
-  return {
-    status: debugData.status || "",
-    websiteUrl: debugData.identity?.normalized_domain || "",
-    pages: 0,
-    score: "",
-  };
+function formatCount(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number.toLocaleString() : "0";
 }
-
 
 function formatDate(value) {
   try {

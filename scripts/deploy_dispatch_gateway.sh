@@ -5,6 +5,7 @@ PROJECT="${GCP_PROJECT:-${PROJECT:-seo-autopilot-501517}}"
 REGION="${GCP_REGION:-${REGION:-europe-west1}}"
 WORKER="${CLOUD_RUN_SERVICE:-${WORKER:-fixlist-standard150-worker}}"
 QUEUE="${CLOUD_TASKS_QUEUE:-fixlist-standard150}"
+DRAIN_QUEUE="${CLOUD_TASKS_DRAIN_QUEUE:-fixlist-standard150-drain}"
 GATEWAY="${GATEWAY_SERVICE:-${GATEWAY:-fixlist-dispatch-gateway}}"
 DISPATCHER_SA="${GATEWAY_RUNTIME_SERVICE_ACCOUNT:-${DISPATCHER_SA:-fixlist-base44-dispatcher@${PROJECT}.iam.gserviceaccount.com}}"
 INVOKER_SA="${TASKS_INVOKER_SERVICE_ACCOUNT:-${INVOKER_SA:-fixlist-standard150-invoker@${PROJECT}.iam.gserviceaccount.com}}"
@@ -65,10 +66,16 @@ PY
 )
 
 QUEUE_PATH="projects/${PROJECT}/locations/${REGION}/queues/${QUEUE}"
+DRAIN_QUEUE_PATH="projects/${PROJECT}/locations/${REGION}/queues/${DRAIN_QUEUE}"
+if [[ "$QUEUE_PATH" == "$DRAIN_QUEUE_PATH" ]]; then
+  echo "Refusing gateway deployment: scan and drain queues must be distinct." >&2
+  exit 2
+fi
 WORKER_URL="${WORKER_ORIGIN}/scan-job"
 
 echo "worker_origin=$WORKER_ORIGIN"
 echo "queue_path=$QUEUE_PATH"
+echo "drain_queue_path=$DRAIN_QUEUE_PATH"
 echo "signing_secret_ref=${SIGNING_SECRET}:${SIGNING_VERSION} (value not read)"
 echo "source_sha=$SOURCE_SHA"
 
@@ -101,7 +108,7 @@ gcloud run deploy "$GATEWAY" \
   --min-instances=0 \
   --max-instances=2 \
   --timeout=60 \
-  --set-env-vars="SCAN_TASKS_QUEUE_PATH=$QUEUE_PATH,SCAN_WORKER_URL=$WORKER_URL,TASKS_INVOKER_SERVICE_ACCOUNT=$INVOKER_SA,DISPATCH_MAX_CLOCK_SKEW_SECONDS=300,DISPATCH_MAX_BODY_BYTES=262144,FIXLIST_GATEWAY_SOURCE_SHA=$SOURCE_SHA" \
+  --set-env-vars="SCAN_TASKS_QUEUE_PATH=$QUEUE_PATH,SCAN_DRAIN_QUEUE_PATH=$DRAIN_QUEUE_PATH,SCAN_WORKER_URL=$WORKER_URL,TASKS_INVOKER_SERVICE_ACCOUNT=$INVOKER_SA,DISPATCH_MAX_CLOCK_SKEW_SECONDS=300,DISPATCH_MAX_BODY_BYTES=262144,FIXLIST_GATEWAY_SOURCE_SHA=$SOURCE_SHA" \
   --set-secrets="SCAN_EVIDENCE_SIGNING_KEY=${SIGNING_SECRET}:${SIGNING_VERSION}" \
   --quiet
 
@@ -112,9 +119,9 @@ gcloud run services describe "$GATEWAY" \
   --region="$REGION" \
   --format=json > "$GATEWAY_JSON"
 
-GATEWAY_URL="$(python3 - "$GATEWAY_JSON" "$DISPATCHER_SA" "$QUEUE_PATH" "$WORKER_URL" "$INVOKER_SA" "$SOURCE_SHA" "$SIGNING_SECRET" "$SIGNING_VERSION" <<'PY'
+GATEWAY_URL="$(python3 - "$GATEWAY_JSON" "$DISPATCHER_SA" "$QUEUE_PATH" "$DRAIN_QUEUE_PATH" "$WORKER_URL" "$INVOKER_SA" "$SOURCE_SHA" "$SIGNING_SECRET" "$SIGNING_VERSION" <<'PY'
 import json, sys
-(path, expected_sa, queue_path, worker_url, invoker_sa, source_sha, secret_name, secret_version) = sys.argv[1:]
+(path, expected_sa, queue_path, drain_queue_path, worker_url, invoker_sa, source_sha, secret_name, secret_version) = sys.argv[1:]
 with open(path, encoding='utf-8') as handle:
     service = json.load(handle)
 url = str(service.get('status', {}).get('url') or '').strip()
@@ -129,6 +136,7 @@ if not containers:
 env = {item.get('name'): item for item in containers[0].get('env', [])}
 expected_values = {
     'SCAN_TASKS_QUEUE_PATH': queue_path,
+    'SCAN_DRAIN_QUEUE_PATH': drain_queue_path,
     'SCAN_WORKER_URL': worker_url,
     'TASKS_INVOKER_SERVICE_ACCOUNT': invoker_sa,
     'DISPATCH_MAX_CLOCK_SKEW_SECONDS': '300',
@@ -151,14 +159,15 @@ PY
 test -n "$GATEWAY_URL"
 curl --fail --silent --show-error --retry 12 --retry-delay 3 --max-time 20 \
   "$GATEWAY_URL/health" > "$HEALTH_JSON"
-python3 - "$HEALTH_JSON" "$QUEUE_PATH" "$WORKER_ORIGIN" <<'PY'
+python3 - "$HEALTH_JSON" "$QUEUE_PATH" "$DRAIN_QUEUE_PATH" "$WORKER_ORIGIN" <<'PY'
 import json, sys
-path, queue_path, worker_origin = sys.argv[1:]
+path, queue_path, drain_queue_path, worker_origin = sys.argv[1:]
 with open(path, encoding='utf-8') as handle:
     value = json.load(handle)
 assert value.get('ok') is True
 assert value.get('service') == 'fixlist-dispatch-gateway'
 assert value.get('queue') == queue_path
+assert value.get('drain_queue') == drain_queue_path
 assert value.get('worker_origin') == worker_origin
 print('Gateway health contract verified.')
 PY

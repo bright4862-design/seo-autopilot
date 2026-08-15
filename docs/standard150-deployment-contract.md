@@ -58,6 +58,7 @@ Base44-hosted. Supplied through Base44 function environment, **not** Cloud Build
 | Variable | Class | Code reader | Missing-value failure mode |
 |---|---|---|---|
 | `SCAN_TASKS_QUEUE_PATH` | **required** | `entry.ts` → `enqueueScanJob({queuePath})` | Cloud Tasks REST call targets a malformed queue path; enqueue fails. |
+| `SCAN_DRAIN_QUEUE_PATH` | **required and must differ from scan queue** | `entry.ts` → `enqueueScanDrain({queuePath})` | Admission fails closed before dispatch. The delayed watchdog must not share the concurrency-1 scan queue. |
 | `SCAN_WORKER_URL` | **required** | `entry.ts` → `audienceForWorkerUrl()` | `new URL("")` throws → `invalid_worker_url`. Fail-closed. |
 | `TASKS_INVOKER_SERVICE_ACCOUNT` | **required** | `cloudTasks.js` `oidcToken.serviceAccountEmail` | Cloud Tasks cannot mint an OIDC token; the worker rejects the call. |
 | `SCAN_DISPATCH_GATEWAY_URL` | **required for keyless dispatch** | `cloudTasks.js` `createTask()` | Unset selects the key-based route below. Set, it is the only enqueue path. |

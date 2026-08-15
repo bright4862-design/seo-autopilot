@@ -62,8 +62,11 @@ test("refresh restores only the exact durable result", () => {
   assert.match(completionHook, /scan_id=\$\{encodeURIComponent\(scanId\)\}/);
 });
 
-test("the delayed watchdog is the final terminal owner", () => {
-  assert.match(job, /enqueueScanDrain\(\{/);
+test("the delayed watchdog is the final terminal owner on an isolated control queue", () => {
+  assert.match(job, /const drainQueuePath = String\(Deno\.env\.get\("SCAN_DRAIN_QUEUE_PATH"\)/);
+  assert.match(job, /queuePath === drainQueuePath/);
+  assert.match(job, /enqueueScanDrain\(\{[\s\S]*?queuePath: drainQueuePath/);
+  assert.match(job, /enqueueScanJob\(\{[\s\S]*?queuePath,/);
   assert.ok(job.indexOf("enqueueScanDrain({") < job.indexOf("enqueueScanJob({"));
   assert.match(workerMain, /@app\.post\("\/scan-job-drain"\)/);
   assert.match(workerMain, /worker_terminal_drain_timeout/);

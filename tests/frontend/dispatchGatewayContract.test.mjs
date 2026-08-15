@@ -18,6 +18,7 @@ import {
 } from "../../base44/functions/startStandardScanJob/cloudTasks.js";
 
 const QUEUE = "projects/seo-autopilot-501517/locations/europe-west1/queues/fixlist-standard150";
+const DRAIN_QUEUE = "projects/seo-autopilot-501517/locations/europe-west1/queues/fixlist-standard150-drain";
 const WORKER = "https://fixlist-standard150-worker-tpucgyfewa-ew.a.run.app/scan-job";
 const WORKER_ORIGIN = "https://fixlist-standard150-worker-tpucgyfewa-ew.a.run.app";
 const DRAIN = `${WORKER_ORIGIN}/scan-job-drain`;
@@ -95,17 +96,19 @@ function gatewayWouldReject(rawBody, signatureHeader, timestampHeader, nowSecond
   } catch {
     return "invalid_json";
   }
-  if (payload.queue_path !== QUEUE) return "invalid_queue";
+  if (payload.queue_path !== QUEUE && payload.queue_path !== DRAIN_QUEUE) return "invalid_queue";
 
   const task = payload.task;
   if (!task || typeof task !== "object") return "invalid_task";
-  const prefix = `${QUEUE}/tasks/`;
+  const prefix = `${payload.queue_path}/tasks/`;
   const name = String(task.name || "");
   if (!name.startsWith(prefix)) return "invalid_task_name";
   const match = /^standard150-(?:(drain)-)?([A-Za-z0-9_-]+)-a([1-9][0-9]*)$/.exec(name.slice(prefix.length));
   if (!match) return "invalid_task_name";
   const isDrain = Boolean(match[1]);
   const nameScanId = match[2];
+  const expectedQueue = isDrain ? DRAIN_QUEUE : QUEUE;
+  if (payload.queue_path !== expectedQueue) return "invalid_queue";
 
   if (task.dispatchDeadline !== "480s") return "invalid_dispatch_deadline";
 
@@ -191,6 +194,7 @@ test("the drain watchdog task passes the same canonical gateway validation", asy
     withFetch(() => Response.json({ success: true, deduplicated: false }), async (calls) => {
       const result = await enqueueScanDrain({
         ...baseArgs,
+        queuePath: DRAIN_QUEUE,
         payload: {
           scan_id: "scan_abc123",
           website_url: "https://example.com",
@@ -200,7 +204,7 @@ test("the drain watchdog task passes the same canonical gateway validation", asy
       assert.equal(result.ok, true);
       assert.equal(rejectionForCall(calls[0]), "");
       const { task } = JSON.parse(calls[0].init.body);
-      assert.equal(task.name, `${QUEUE}/tasks/standard150-drain-scan_abc123-a1`);
+      assert.equal(task.name, `${DRAIN_QUEUE}/tasks/standard150-drain-scan_abc123-a1`);
       assert.equal(task.httpRequest.url, DRAIN);
       assert.ok(task.scheduleTime, "the watchdog must be delayed, not immediate");
     }));
@@ -274,7 +278,9 @@ test("the canonical gateway source enforces the validation this suite mirrors", 
     'b"fixlist-dispatch-gateway-v1"',
     "MAX_CLOCK_SKEW_SECONDS",
     "hmac.compare_digest(supplied, expected)",
-    'payload.get("queue_path") != QUEUE_PATH',
+    'queue_path not in {QUEUE_PATH, DRAIN_QUEUE_PATH}',
+    'expected_queue = DRAIN_QUEUE_PATH if is_drain else QUEUE_PATH',
+    'queue_path != expected_queue',
     "TASK_RE.fullmatch(short_name)",
     "scan_id != name_scan_id",
     "target != expected_target",
@@ -295,6 +301,7 @@ test("the canonical gateway source enforces the validation this suite mirrors", 
 
   const deploy = readFileSync(new URL("../../scripts/deploy_dispatch_gateway.sh", import.meta.url), "utf8");
   assert.match(deploy, /--source="\$SOURCE_DIR"/);
+  assert.match(deploy, /SCAN_DRAIN_QUEUE_PATH=\$DRAIN_QUEUE_PATH/);
   assert.match(deploy, /--set-secrets="SCAN_EVIDENCE_SIGNING_KEY=/);
   assert.match(deploy, /--no-invoker-iam-check/);
   assert.match(deploy, /confirmation must equal exact source SHA/);

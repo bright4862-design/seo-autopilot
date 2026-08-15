@@ -250,9 +250,10 @@ export default async function (req: Request): Promise<Response> {
     }
 
     const queuePath = String(Deno.env.get("SCAN_TASKS_QUEUE_PATH") || "");
+    const drainQueuePath = String(Deno.env.get("SCAN_DRAIN_QUEUE_PATH") || "");
     const workerUrl = String(Deno.env.get("SCAN_WORKER_URL") || "");
     const invokerServiceAccount = String(Deno.env.get("TASKS_INVOKER_SERVICE_ACCOUNT") || "");
-    if (!queuePath || !workerUrl || !invokerServiceAccount) {
+    if (!queuePath || !drainQueuePath || queuePath === drainQueuePath || !workerUrl || !invokerServiceAccount) {
       await failOwnedScanRun({
         base44,
         context,
@@ -290,7 +291,7 @@ export default async function (req: Request): Promise<Response> {
     // all of its retries disappear, this task is the final server-side owner of
     // terminal state. If the scan completes, it no-ops.
     const drain = await enqueueScanDrain({
-      queuePath,
+      queuePath: drainQueuePath,
       workerUrl,
       invokerServiceAccount,
       scanId: identity.fields.scan_id,

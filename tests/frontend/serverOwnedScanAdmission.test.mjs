@@ -191,6 +191,7 @@ function installEnv() {
     ["SCAN_ADMISSION_COORDINATOR_URL", "https://coordinator.example"],
     ["SCAN_EVIDENCE_SIGNING_KEY", "test-signing-root"],
     ["SCAN_TASKS_QUEUE_PATH", "projects/test/locations/europe-west1/queues/standard150"],
+    ["SCAN_DRAIN_QUEUE_PATH", "projects/test/locations/europe-west1/queues/standard150-drain"],
     ["SCAN_WORKER_URL", "https://worker.example/scan-job"],
     ["TASKS_INVOKER_SERVICE_ACCOUNT", "invoker@test.iam.gserviceaccount.com"],
   ]);

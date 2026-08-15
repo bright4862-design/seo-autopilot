@@ -36,12 +36,11 @@ const recoveryHarness = new Function(`
 
 const { pageLimit, SCAN_GATEWAY_FUNCTIONS } = recoveryHarness;
 
-test("the recovery boundary fires for the Standard 150 gateway", () => {
+test("the active Standard 150 form uses server-owned admission instead of the legacy scanner recovery boundary", () => {
   assert.equal(SCAN_GATEWAY_FUNCTIONS.has("runStandard150Scan"), true);
-  // The form's single call site must be a name the boundary actually matches.
-  const invoked = scanFormSource.match(/const STANDARD_SCANNER_FUNCTION = "([^"]+)"/)?.[1];
-  assert.equal(invoked, "runStandard150Scan");
-  assert.equal(SCAN_GATEWAY_FUNCTIONS.has(invoked), true);
+  assert.match(scanFormSource, /const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJob"/);
+  assert.match(scanFormSource, /submitStandardScanJob\(scanPayload\)/);
+  assert.doesNotMatch(scanFormSource, /const STANDARD_SCANNER_FUNCTION|callBase44Function\(STANDARD_SCANNER_FUNCTION/);
 });
 
 test("the boundary still fires for the legacy gateway while it remains deployed", () => {

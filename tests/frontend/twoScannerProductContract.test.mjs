@@ -121,23 +121,24 @@ test("the page cap is 150 and is not customer-controlled", () => {
   assert.doesNotMatch(scanFormSource, /max_pages: 40/);
 });
 
-test("the customer scan is routed to the Standard 150 Python-only gateway", () => {
-  assert.match(scanFormSource, /const STANDARD_SCANNER_FUNCTION = "runStandard150Scan"/);
-  assert.match(scanFormSource, /callBase44Function\(STANDARD_SCANNER_FUNCTION, scanPayload\)/);
-  assert.doesNotMatch(scanFormSource, /"runAdvancedScan"/);
+test("the customer scan is routed through the Standard 150 server admission dispatcher", () => {
+  assert.match(scanFormSource, /const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJob"/);
+  assert.match(scanFormSource, /submitStandardScanJob\(scanPayload\)/);
+  assert.match(scanFormSource, /require_python_scanner: true/);
+  assert.match(scanFormSource, /allow_deno_fallback: false/);
+  assert.doesNotMatch(scanFormSource, /const STANDARD_SCANNER_FUNCTION|callBase44Function\(STANDARD_SCANNER_FUNCTION/);
 });
 
-test("scan identity, duplicate-submit protection and failure handling stay intact", () => {
+test("scan identity and duplicate-submit protection stay intact while failure ownership is server-side", () => {
   assert.match(scanFormSource, /submitLockRef/);
   assert.match(scanFormSource, /requestEpochRef/);
-  assert.match(scanFormSource, /await beginScanRun/);
+  assert.match(scanFormSource, /const requestId = createScanRequestId\(\)/);
   assert.match(scanFormSource, /canonicalMode: scanMode/);
-  // Identity must be persisted before any scanner network work.
-  assert.ok(
-    scanFormSource.indexOf("await beginScanRun")
-      < scanFormSource.indexOf("callBase44Function(STANDARD_SCANNER_FUNCTION"),
-  );
-  // A failed scan must not leave a stale result behind.
+  assert.match(scanFormSource, /assertServerAdmissionIdentity\(jobData/);
   assert.match(scanFormSource, /clear_previous_scan: true/);
-  assert.match(scanFormSource, /failScanRun/);
+  const submitStart = scanFormSource.indexOf("async function handleSubmit");
+  const submitEnd = scanFormSource.indexOf("\n  return (", submitStart);
+  const submitSource = scanFormSource.slice(submitStart, submitEnd);
+  assert.doesNotMatch(submitSource, /beginScanRun|failScanRun|cancelScanRun|completeScanRun/);
+  assert.match(submitSource, /async_job_browser_error_no_terminal_write/);
 });

@@ -62,6 +62,9 @@ Base44-hosted. Supplied through Base44 function environment, **not** Cloud Build
 | `TASKS_INVOKER_SERVICE_ACCOUNT` | **required** | `cloudTasks.js` `oidcToken.serviceAccountEmail` | Cloud Tasks cannot mint an OIDC token; the worker rejects the call. |
 | `SCAN_DISPATCH_GATEWAY_URL` | **required for keyless dispatch** | `cloudTasks.js` `createTask()` | Unset selects the key-based route below. Set, it is the only enqueue path. |
 | `SCAN_EVIDENCE_SIGNING_KEY` | **required with the gateway** | `cloudTasks.js` `createTaskViaGateway()` | `dispatch_gateway_signing_key_missing`. Fail-closed before any network call. |
+| `BETA_SCAN_ADMISSION_ENABLED` | **required; default-off** | `admission.js`, package-local `admissionClient.js` | Any value other than exact `true` refuses new admission. No ScanRun is created. |
+| `BETA_COHORT_ALLOWED_USER_IDS` | **required when admission is enabled** | `admission.js` | Must contain 1–25 unique exact Base44 user IDs. Missing, malformed, or oversized cohorts fail closed. |
+| `SCAN_ADMISSION_COORDINATOR_URL` | **required when admission is enabled** | package-local `admissionClient.js` | Admission fails closed; no new ScanRun is created or bound. |
 | `GCP_SERVICE_ACCOUNT_KEY` | **required only without the gateway** | `cloudTasks.js` `accessToken()` | `tasks_credentials_not_configured`. Distinct from a malformed key, which yields a `tasks_key_*` code, or `tasks_token_mint_failed` when the cause is not recognised. |
 
 ### Enqueue route selection
@@ -102,12 +105,18 @@ worker task, and returns.
 | Variable | Class | Code reader | Missing-value failure mode |
 |---|---|---|---|
 | `SCAN_EVIDENCE_SIGNING_KEY` | **required** | `durableScanWorkerControl/index.ts`, `persistDurableScanAuthority/index.ts`, `getCustomerScanResult/index.ts` | Authority writes fail with `authority_not_configured`; customer result reads return `result_authority_unavailable`. No unverified FixItems are returned. |
+| `BETA_SCAN_ADMISSION_ENABLED` | **required for active coordinator release** | package-local `admissionClient.js` | If disabled, terminal persistence stays truthful but the Firestore lease is not actively released; lease expiry is the fallback. |
+| `SCAN_ADMISSION_COORDINATOR_URL` | **required for active coordinator release** | package-local `admissionClient.js` | Terminal persistence stays authoritative; release logs a bounded failure and lease expiry remains the fallback. |
 
 The authority functions and result projection hold `asServiceRole` only after
 an exact caller/ScanRun ownership check. All six release functions must be
 deployed from the same immutable SHA. The result projection independently
 checks the active paid entitlement and verifies the persisted HMAC before it
 returns FixList or FixItem content.
+
+Admission ownership lives in Firestore through the coordinator.
+`BASE44_ATOMIC_UPDATE_MANY_CONFIRMED` is deliberately absent, and the
+coordinator claim token is transient rather than persisted to `ScanRun`.
 
 ## Component D — Base44 checkout and activation
 

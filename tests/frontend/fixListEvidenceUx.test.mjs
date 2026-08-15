@@ -6,6 +6,8 @@ import { buildFixItemFields } from "../../src/lib/scanRunModel.js";
 
 const fixListSource = readFileSync(new URL("../../src/pages/FixList.jsx", import.meta.url), "utf8");
 const scanFormSource = readFileSync(new URL("../../src/components/scan/ScanWebsiteForm.jsx", import.meta.url), "utf8");
+const durablePersistenceSource = readFileSync(new URL("../../base44/functions/persistDurableScanAuthority/index.ts", import.meta.url), "utf8");
+const scanRunsSource = readFileSync(new URL("../../src/lib/scanRuns.js", import.meta.url), "utf8");
 const fixItemEntity = JSON.parse(readFileSync(new URL("../../base44/entities/FixItem.jsonc", import.meta.url), "utf8"));
 
 test("FixList exposes the complete affected URL list with copy and CSV controls", () => {
@@ -54,21 +56,17 @@ test("FixItem entity stores URL counts, family evidence, and fix steps", () => {
   }
 });
 
-test("returned durable ScanRun authority is written into the browser scan record", () => {
-  assert.match(scanFormSource, /const reviewAttestation = aiData\?\.authority_review_attestation/);
-  assert.match(scanFormSource, /const usingAuthorityPersistence = Boolean\(reviewAttestation\)/);
-  assert.match(scanFormSource, /const completion = usingAuthorityPersistence/);
-  assert.match(scanFormSource, /scan_authority_persistence_failed/);
-  assert.match(scanFormSource, /scan_authority_attestation_missing/);
-  assert.match(scanFormSource, /aiData\?\.release_gate_eligible === true && !usingAuthorityPersistence/);
-  assert.match(scanFormSource, /release_gate_eligible: false, is_authoritative: false/);
-  assert.match(scanFormSource, /persistedCompletion\.scanRun\.authority_seal_version/);
-  assert.match(scanFormSource, /persistedCompletion\.scanRun\.authority_sealed_at/);
-  assert.match(scanFormSource, /"persistScanAuthority"/);
-  assert.match(scanFormSource, /await completeScanRun\(scanRunHandle, durableRecord\)/);
-  assert.match(scanFormSource, /mergePersistedScanRunRecord\(/);
-  assert.match(scanFormSource, /persistedCompletion\.fixListId/);
-  assert.match(scanFormSource, /meta_description_state/);
-  assert.match(scanFormSource, /metadata_evidence_version/);
-  assert.match(scanFormSource, /title_evidence_version/);
+test("durable authority is written server-side and the browser only reads the exact sealed result", () => {
+  assert.match(durablePersistenceSource, /verifyAuthoritySeal\(signedDocument, secret, proof\)/);
+  assert.match(durablePersistenceSource, /buildAuthoritySnapshot\(\{/);
+  assert.match(durablePersistenceSource, /persistedScan\?\.status === "complete"/);
+  assert.match(durablePersistenceSource, /authority_proof/);
+  assert.match(durablePersistenceSource, /releaseAdmission\(\{/);
+  assert.match(scanRunsSource, /base44\.functions\.invoke\("getCustomerScanResult"/);
+  assert.match(scanFormSource, /submitStandardScanJob\(scanPayload\)/);
+  assert.match(scanFormSource, /setWatchedScanId\(scanId\)/);
+  const submitStart = scanFormSource.indexOf("async function handleSubmit");
+  const submitEnd = scanFormSource.indexOf("\n  return (", submitStart);
+  const submitSource = scanFormSource.slice(submitStart, submitEnd);
+  assert.doesNotMatch(submitSource, /persistScanAuthority|completeScanRun|mergePersistedScanRunRecord/);
 });

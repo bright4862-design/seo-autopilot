@@ -39,6 +39,9 @@ const fixListSource = readFileSync(
   new URL("../../src/pages/FixList.jsx", import.meta.url),
   "utf8",
 );
+const dispatcherSource = readFileSync(new URL("../../base44/functions/startStandardScanJob/entry.ts", import.meta.url), "utf8");
+const workerControlSource = readFileSync(new URL("../../base44/functions/durableScanWorkerControl/index.ts", import.meta.url), "utf8");
+const durablePersistenceSource = readFileSync(new URL("../../base44/functions/persistDurableScanAuthority/index.ts", import.meta.url), "utf8");
 
 // Rebuild assertCurrentScanSession in an isolated scope with injected doubles.
 const guardMatch = scanFormSource.match(
@@ -91,19 +94,16 @@ test("a superseded request epoch still aborts the scan", async () => {
   );
 });
 
-test("an abandoned scan writes a terminal state instead of returning bare", () => {
+test("an abandoned browser never overwrites server-owned terminal state", () => {
   const abandonedBranch = scanFormSource.match(
     /const abandoned = err\?\.code === "stale_customer_session"[\s\S]*?\n {6}\}/,
   );
   assert.ok(abandonedBranch, "the abandoned branch is missing from handleSubmit");
-  // The exact defect: `return` reached without a durable terminal write.
-  assert.match(abandonedBranch[0], /cancelScanRun\(scanRunHandle, err\)/);
-  assert.ok(
-    abandonedBranch[0].indexOf("cancelScanRun") < abandonedBranch[0].indexOf("return;"),
-    "cancelScanRun must run before the abandoned branch returns",
-  );
-  // The pre-existing failure path must still terminalize too.
-  assert.match(scanFormSource, /const failure = await failScanRun\(scanRunHandle, err\)/);
+  assert.match(abandonedBranch[0], /durable_worker_owned: Boolean\(scanId\)/);
+  assert.doesNotMatch(abandonedBranch[0], /cancelScanRun|failScanRun|ScanRun\.(?:create|update)/);
+  assert.match(dispatcherSource, /failOwnedScanRun\(\{/);
+  assert.match(workerControlSource, /status: "failed"/);
+  assert.match(durablePersistenceSource, /persistedScan\?\.status === "complete"/);
 });
 
 test("cancelScanRun closes the row truthfully without fabricating evidence", () => {
@@ -166,26 +166,19 @@ test("customer views never terminalize delayed scans", () => {
   assert.match(recover[0], /activeTtlMs: STANDARD_ORPHAN_RECOVERY_TTL_MS/);
 });
 
-test("boundary instrumentation records identity only, never evidence or secrets", () => {
+test("boundary instrumentation records identity only around server admission and read-only recovery", () => {
   const logger = scanFormSource.match(/function logScanBoundary[\s\S]*?\n\}/);
   assert.ok(logger, "logScanBoundary is missing from ScanWebsiteForm.jsx");
   assert.doesNotMatch(logger[0], /attestation|proof|token|payload|api_key|secret/i);
-
   for (const boundary of [
-    "scanner_function_start",
-    "scanner_function_response",
-    "review_function_start",
-    "review_function_response",
-    "persistence_start",
-    "persistence_response",
-    "browser_navigation",
+    "async_job_submit",
+    "async_job_accepted",
+    "browser_recovered_saved_result",
+    "async_job_browser_error_no_terminal_write",
     "scan_abandoned",
   ]) {
     assert.match(scanFormSource, new RegExp(`logScanBoundary\\("${boundary}"`), `missing boundary log: ${boundary}`);
   }
-
-  // Navigation to the result route may only happen after a durable terminal result.
-  const navIndex = scanFormSource.indexOf('logScanBoundary("browser_navigation"');
-  const sealIndex = scanFormSource.indexOf("scan_authority_persistence_failed");
-  assert.ok(navIndex > sealIndex, "navigation must follow the durable authority seal check");
+  assert.doesNotMatch(scanFormSource, /logScanBoundary\("scanner_function_start"|logScanBoundary\("review_function_start"|logScanBoundary\("persistence_start"/);
+  assert.ok(scanFormSource.indexOf("assertServerAdmissionIdentity(jobData") < scanFormSource.indexOf('logScanBoundary("async_job_accepted"'));
 });

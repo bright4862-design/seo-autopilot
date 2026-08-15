@@ -44,10 +44,10 @@ test("a missed browser response recovers the durable saved result before failing
   assert.match(scannerForm, /getScanRunWithFixList/);
   assert.match(scannerForm, /async function recoverPersistedCompletion/);
   assert.match(scannerForm, /browser_recovered_saved_result/);
-  const catchBlock = scannerForm.match(/const recoveredCompletion = scanId[\s\S]*?console\.error\("Website scan failed\.", err\);/)?.[0] || "";
+  const catchBlock = scannerForm.match(/const recoveredCompletion = scanId[\s\S]*?console\.error\("Website scan submission failed\.", err\);/)?.[0] || "";
   assert.ok(catchBlock, "durable recovery must run in the catch path");
   assert.ok(
-    catchBlock.indexOf("recoverPersistedCompletion") < catchBlock.indexOf('console.error("Website scan failed.", err)'),
+    catchBlock.indexOf("recoverPersistedCompletion") < catchBlock.indexOf('console.error("Website scan submission failed.", err)'),
     "the durable reread must happen before the UI declares failure",
   );
   assert.match(catchBlock, /navigate\(`\/dashboard\?scan=complete&scan_id=/);

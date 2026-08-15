@@ -29,6 +29,8 @@ const functionSource = readFileSync("base44/functions/grokChat/index.ts", "utf8"
 const scannerFunctionSource = readFileSync("base44/functions/runAdvancedScan/entry.ts", "utf8");
 const reviewFunctionSource = readFileSync("base44/functions/aiReviewScan/entry.ts", "utf8");
 const persistenceFunctionSource = readFileSync("base44/functions/persistScanAuthority/index.ts", "utf8");
+const durablePersistenceSource = readFileSync("base44/functions/persistDurableScanAuthority/index.ts", "utf8");
+const durableWorkerSource = readFileSync("scanner-api/app/scan_job.py", "utf8");
 const assistantSource = readFileSync("src/pages/Assistant.jsx", "utf8");
 const scanFormSource = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
 const appSource = readFileSync("src/App.jsx", "utf8");
@@ -223,47 +225,22 @@ test("server review snapshot survives the actual persistence and Grok reconstruc
   assert.deepEqual(recovered.map((item) => item.fix_id), [rows.fixItems[1].fix_id]);
 });
 
-test("only trusted server scan and review results can enter the authority persistence path", () => {
-  assert.match(scannerFunctionSource, /const result = toPythonAdvancedScanResponse/);
-  assert.match(scannerFunctionSource, /attachScanAttestation\(\{ base44, user, result, websiteUrl \}\)/);
-  assert.match(scannerFunctionSource, /base44\.entities\.ScanRun\.get\(scanId\)/);
-  assert.match(scannerFunctionSource, /createAuthoritySeal\(document, secret\)/);
-
-  assert.match(reviewFunctionSource, /resolveTrustedScan\(\{ base44, user, requestBody \}\)/);
-  assert.match(reviewFunctionSource, /verifyAuthoritySeal\(document, secret, attestation\.proof\)/);
-  assert.match(reviewFunctionSource, /mergeTrustedScanWithClientContext\(trustedScan\.result/);
-  assert.match(reviewFunctionSource, /buildAuthoritySnapshot\(\{[\s\S]*scan: trustedScan\.result,[\s\S]*review: result/);
-
-  assert.match(persistenceFunctionSource, /verifyAuthoritySeal\(attestation\.snapshot, secret, attestation\.proof\)/);
-  assert.match(persistenceFunctionSource, /createServiceOnlyClient\(req\)/);
-  assert.match(persistenceFunctionSource, /Base44-Service-Authorization/);
-  assert.match(persistenceFunctionSource, /serviceToken: serviceAuthorization\.slice/);
-  assert.match(persistenceFunctionSource, /serviceEntities\.FixList\.create/);
-  assert.match(persistenceFunctionSource, /serviceEntities\.FixItem\.bulkCreate/);
-  assert.match(persistenceFunctionSource, /serviceEntities\.ScanRun\.update/);
-  assert.doesNotMatch(persistenceFunctionSource, /base44\.asServiceRole\.entities/);
-  assert.match(persistenceFunctionSource, /authority_proof: String\(attestation\.proof\)\.toLowerCase\(\)/);
-  assert.match(persistenceFunctionSource, /missingAuthorityFixRows\(rows\.fixItems, existingItems\)/);
-  assert.match(persistenceFunctionSource, /const persistedScan = await serviceEntities\.ScanRun\.get\(scanId\)/);
-  assert.match(persistenceFunctionSource, /const persistedFixList = await serviceEntities\.FixList\.get\(fixList\.id\)/);
-  assert.match(persistenceFunctionSource, /authority_persistence_incomplete/);
-  assert.match(persistenceFunctionSource, /persistedItems\.length === snapshot\.recommendations\.length/);
-  assert.doesNotMatch(persistenceFunctionSource, /createAuthoritySeal/);
-
-  assert.match(scanFormSource, /authoritative_scan: \{/);
-  assert.match(scanFormSource, /authority_review_payload: scanData\.authority_review_payload/);
-  assert.match(scanFormSource, /authority_scan_attestation: scanData\.authority_scan_attestation/);
-  assert.doesNotMatch(scanFormSource, /authoritative_scan: scanData,/);
-  assert.match(scanFormSource, /"persistScanAuthority"/);
-  assert.match(scanFormSource, /scan_authority_persistence_failed/);
-  assert.match(scanFormSource, /scan_authority_attestation_missing/);
-  assert.match(scanFormSource, /aiData\?\.release_gate_eligible === true && !usingAuthorityPersistence/);
-  assert.match(scanFormSource, /release_gate_eligible: false, is_authoritative: false/);
-  assert.match(scanFormSource, /\^\[a-f0-9\]\{64\}\$/);
-  assert.match(scanFormSource, /persistedCompletion\.scanRun\.authority_seal_version/);
-  assert.match(scanFormSource, /persistedCompletion\.scanRun\.authority_sealed_at/);
-  assert.match(scanFormSource, /persistedCompletion\.scanRun\.release_gate_eligible === true/);
-  assert.match(scanFormSource, /Boolean\(persistedCompletion\.fixListId\)/);
+test("only trusted server worker evidence can enter the active durable authority persistence path", () => {
+  assert.match(durableWorkerSource, /invoke_function\(client, "durableScanWorkerControl"/);
+  assert.match(durableWorkerSource, /invoke_function\(client, "persistDurableScanAuthority"/);
+  assert.match(durablePersistenceSource, /assertWorkerHeader\(req\)/);
+  assert.match(durablePersistenceSource, /verifyAuthoritySeal\(signedDocument, secret, proof\)/);
+  assert.match(durablePersistenceSource, /buildAuthoritySnapshot\(\{/);
+  assert.match(durablePersistenceSource, /entities\.FixList\.create/);
+  assert.match(durablePersistenceSource, /entities\.FixItem\.(?:bulkCreate|create)/);
+  assert.match(durablePersistenceSource, /entities\.ScanRun\.update/);
+  assert.match(durablePersistenceSource, /authority_proof/);
+  assert.match(durablePersistenceSource, /releaseAdmission\(\{/);
+  const submitStart = scanFormSource.indexOf("async function handleSubmit");
+  const submitEnd = scanFormSource.indexOf("\n  return (", submitStart);
+  const submitSource = scanFormSource.slice(submitStart, submitEnd);
+  assert.match(submitSource, /submitStandardScanJob\(scanPayload\)/);
+  assert.doesNotMatch(submitSource, /persistScanAuthority|aiReviewScan|runAdvancedScan|runStandard150Scan/);
   assert.match(functionSource, /await assertServerAuthoritySeal\(\{ scan, fixList, fixItems, user \}\)/);
   assert.match(functionSource, /verifyAuthoritySeal\(snapshot, secret, scan\.authority_proof\)/);
   assert.ok(functionSource.indexOf("await assertServerAuthoritySeal") < functionSource.indexOf("await callScannerChat"));

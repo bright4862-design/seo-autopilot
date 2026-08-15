@@ -8,11 +8,14 @@ import {
 import { evaluatePaidAccess, uniqueAccessRows } from "./entitlement.js";
 import {
   betaScanAdmissionPolicy,
-  bindScanLease,
-  claimScanLease,
   normalizeAdmissionIdentity,
   scanIsTerminal,
 } from "./admission.js";
+import {
+  bindAdmission,
+  claimAdmission,
+  releaseAdmission,
+} from "./admissionClient.js";
 
 const CORS_HEADERS = Object.freeze({
   "Access-Control-Allow-Origin": "*",
@@ -43,7 +46,6 @@ const CUSTOMER_STATUS_DETAIL: Record<string, string> = {
   tasks_token_mint_failed: "The scan queue could not authenticate. No scan was started.",
   tasks_unreachable: "The scan queue could not be reached. Please retry.",
   scan_admission_paused: "New beta scans are temporarily paused.",
-  scan_atomic_admission_unconfirmed: "The scan admission coordinator is not enabled yet.",
   scan_admission_configuration_invalid: "The scan admission coordinator is not configured correctly.",
 };
 
@@ -404,62 +406,32 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
   const request = normalizeAdmissionIdentity({
     request_id: identity.fields.request_id,
     idempotency_key: identity.fields.idempotency_key,
-    request_fingerprint: `${PUBLIC_SCAN_MODE}|${websiteUrl}`,
+    request_fingerprint: await buildAdmissionFingerprint(websiteUrl),
   });
   if (!request.ok) {
     return { ok: false, status: 409, code: request.code, error: "The scan request identity is invalid." };
   }
   identity.fields.request_fingerprint = request.request_fingerprint;
 
-  let lease;
+  let claim;
   try {
-    lease = await claimScanLease({
-      accessEntity: base44.asServiceRole.entities.Access,
-      access,
-      identity: request,
+    claim = await claimAdmission({
+      ownerUserId: String(user.id),
+      requestId: request.request_id,
+      requestFingerprint: request.request_fingerprint,
     });
   } catch {
-    return {
-      ok: false,
-      status: 503,
-      code: "scan_admission_state_unavailable",
-      error: "Scan admission is temporarily unavailable.",
-      retryable: true,
-      retryAfter: 2,
-    };
+    claim = { ok: false, outcomeUnknown: true, failureCode: "admission_unreachable" };
   }
+  if (!claim?.ok) return coordinatorAdmissionFailure(claim);
 
-  if (lease.action === "pending") {
-    return {
-      ok: false,
-      status: 202,
-      code: "scan_admission_pending",
-      error: "This exact scan request is still being admitted.",
-      retryable: true,
-      retryAfter: lease.retry_after,
-    };
-  }
-  if (lease.action === "busy") {
-    return {
-      ok: false,
-      status: 429,
-      code: "scan_admission_busy",
-      error: "Another scan is already active for this account.",
-      retryable: true,
-      retryAfter: lease.retry_after,
-    };
-  }
-  if (lease.action === "conflict" || lease.action === "invalid") {
-    return { ok: false, status: 409, code: lease.code, error: "The scan request identity conflicts with an existing request." };
-  }
-  if (lease.action === "unavailable") {
-    return { ok: false, status: 503, code: lease.code, error: "Scan admission is temporarily unavailable.", retryable: true, retryAfter: 2 };
-  }
-
-  if (lease.action === "reuse") {
-    const scan = await base44.asServiceRole.entities.ScanRun.get(lease.scan_id).catch(() => null);
+  const claimToken = String(claim.claim_token || "").trim();
+  const claimedScanId = String(claim.scan_id || "").trim();
+  if (claim.outcome === "replayed" && claimedScanId) {
+    let scan = await base44.asServiceRole.entities.ScanRun.get(claimedScanId).catch(() => null);
     const validation = validateServerScanContext({ scan, user, project, request, websiteUrl });
     if (!validation.ok) return validation;
+    scan = await normalizeRecoveredServerScan({ scans: base44.asServiceRole.entities.ScanRun, scan });
     return {
       ok: true,
       replayed: true,
@@ -467,8 +439,48 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
       context: { ok: true, scan, project, expectedDomain: authorityDomain(websiteUrl) },
     };
   }
-  if (lease.action !== "leader") {
-    return { ok: false, status: 503, code: "scan_admission_state_invalid", error: "Scan admission is temporarily unavailable." };
+  if (!["claimed", "replayed"].includes(String(claim.outcome || "")) || !claimToken) {
+    return { ok: false, status: 503, code: "scan_admission_state_invalid", error: "Scan admission is temporarily unavailable.", retryable: true, retryAfter: 2 };
+  }
+
+  // Only the caller that received a fresh `claimed` outcome may create a new
+  // ScanRun. An exact replay with no coordinator scan_id first looks for a row
+  // that the original caller may already have created before losing its bind
+  // response. If none exists yet, it waits instead of racing a second create.
+  if (claim.outcome === "replayed" && !claimedScanId) {
+    const recovered = await recoverExistingServerScan({
+      base44,
+      user,
+      project,
+      request,
+      websiteUrl,
+    }).catch(() => null);
+    if (!recovered) {
+      return {
+        ok: false,
+        status: 202,
+        code: "scan_admission_pending",
+        error: "This exact scan request is still being admitted.",
+        retryable: true,
+        retryAfter: 2,
+      };
+    }
+    const rebound = await bindAdmission({
+      ownerUserId: String(user.id),
+      requestId: request.request_id,
+      claimToken,
+      scanId: String(recovered.id),
+    }).catch(() => ({ ok: false, outcomeUnknown: true, failureCode: "admission_unreachable" }));
+    if (!rebound?.ok || !["bound", "already_bound"].includes(String(rebound.outcome || ""))) {
+      const failure = coordinatorAdmissionFailure(rebound, "scan_admission_binding_lost");
+      return { ...failure, error: "The recovered scan could not be bound to this request." };
+    }
+    return {
+      ok: true,
+      replayed: true,
+      replayReason: "request_replay_recovered",
+      context: { ok: true, scan: recovered, project, expectedDomain: authorityDomain(websiteUrl) },
+    };
   }
 
   let scan;
@@ -481,7 +493,6 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
       body,
       request,
       websiteUrl,
-      claimToken: lease.claim_token,
     });
   } catch (error) {
     return {
@@ -494,34 +505,75 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
     };
   }
 
-  let bound = await bindScanLease({
-    accessEntity: base44.asServiceRole.entities.Access,
-    accessId: access.id,
-    claimToken: lease.claim_token,
-    scanId: scan.id,
-  }).catch(() => false);
-  if (!bound) {
-    const current = await base44.asServiceRole.entities.Access.get(String(access.id)).catch(() => null);
-    bound = String(current?.scan_claim_token || "") === String(lease.claim_token)
-      && String(current?.scan_claim_scan_id || "") === String(scan.id);
+  let bound;
+  try {
+    bound = await bindAdmission({
+      ownerUserId: String(user.id),
+      requestId: request.request_id,
+      claimToken,
+      scanId: String(scan.id),
+    });
+  } catch {
+    bound = { ok: false, outcomeUnknown: true, failureCode: "admission_unreachable" };
   }
-  if (!bound) {
-    return {
-      ok: false,
-      status: 503,
-      code: "scan_admission_binding_lost",
-      error: "The durable scan record could not be bound to this request.",
-      retryable: true,
-      retryAfter: 2,
-    };
+  if (!bound?.ok || !["bound", "already_bound"].includes(String(bound.outcome || ""))) {
+    const failure = coordinatorAdmissionFailure(bound, "scan_admission_binding_lost");
+    return { ...failure, error: "The durable scan record could not be bound to this request." };
   }
 
   return {
     ok: true,
-    replayed: false,
-    replayReason: "server_admitted",
+    replayed: claim.outcome === "replayed",
+    replayReason: claim.outcome === "replayed" ? "request_replay_recovered" : "server_admitted",
     context: { ok: true, scan, project, expectedDomain: authorityDomain(websiteUrl) },
   };
+}
+
+function coordinatorAdmissionFailure(result = {}, fallbackCode = "scan_admission_state_unavailable") {
+  const upstream = String(result?.failureCode || fallbackCode);
+  if (upstream === "admission_busy") {
+    return {
+      ok: false,
+      status: 429,
+      code: "scan_admission_busy",
+      error: "Another scan is already active for this account.",
+      retryable: true,
+      retryAfter: Math.max(1, Number(result?.retryAfterSeconds || 2)),
+    };
+  }
+  if (["request_conflict", "scan_identity_conflict", "invalid_claim_token", "claim_expired"].includes(upstream)) {
+    return { ok: false, status: 409, code: upstream === "request_conflict" ? "scan_request_identity_conflict" : upstream, error: "The scan request identity conflicts with an existing request." };
+  }
+  return {
+    ok: false,
+    status: 503,
+    code: upstream || fallbackCode,
+    error: "Scan admission is temporarily unavailable.",
+    retryable: true,
+    retryAfter: Math.max(1, Number(result?.retryAfterSeconds || 2)),
+  };
+}
+
+async function buildAdmissionFingerprint(websiteUrl) {
+  const canonical = `${PUBLIC_SCAN_MODE}|${normalizeWebsiteUrl(websiteUrl)}`;
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)));
+  return `standard150:${Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+async function recoverExistingServerScan({ base44, user, project, request, websiteUrl }) {
+  const scans = base44.asServiceRole.entities.ScanRun;
+  const matches = await scans.filter(
+    { owner_user_id: String(user.id), request_id: request.request_id },
+    "-created_date",
+    3,
+  ).catch(() => []);
+  if (matches.length > 1) {
+    throw Object.assign(new Error("scan_request_duplicate_rows"), { status: 409, code: "scan_request_duplicate_rows" });
+  }
+  if (matches.length === 0) return null;
+  const validation = validateServerScanContext({ scan: matches[0], user, project, request, websiteUrl });
+  if (!validation.ok) throw Object.assign(new Error(validation.code), validation);
+  return normalizeRecoveredServerScan({ scans, scan: matches[0] });
 }
 
 async function recoverOrCreateServerScan({
@@ -532,7 +584,6 @@ async function recoverOrCreateServerScan({
   body,
   request,
   websiteUrl,
-  claimToken,
 }) {
   const scans = base44.asServiceRole.entities.ScanRun;
   let matches = await scans.filter(
@@ -548,7 +599,7 @@ async function recoverOrCreateServerScan({
   if (scan) {
     const validation = validateServerScanContext({ scan, user, project, request, websiteUrl });
     if (!validation.ok) throw Object.assign(new Error(validation.code), validation);
-    return scan;
+    return normalizeRecoveredServerScan({ scans, scan });
   }
 
   let previousScanId = "";
@@ -580,14 +631,8 @@ async function recoverOrCreateServerScan({
       queued_at: now,
       owner_user_id: String(user.id),
       admission_access_id: String(access.id),
-      admission_claim_token: String(claimToken),
     });
-    const started = await scans.update(created.id, {
-      scan_id: String(created.id),
-      status: "crawling",
-      started_at: now,
-    });
-    return { ...created, ...(started || {}), id: String(created.id), scan_id: String(created.id) };
+    return normalizeRecoveredServerScan({ scans, scan: created, now });
   } catch (error) {
     // A create/update response can be lost after Base44 committed it. Recover by
     // the owner/request identity before reporting an ambiguous admission.
@@ -599,10 +644,25 @@ async function recoverOrCreateServerScan({
     if (matches.length === 1) {
       scan = matches[0];
       const validation = validateServerScanContext({ scan, user, project, request, websiteUrl });
-      if (validation.ok) return scan;
+      if (validation.ok) return normalizeRecoveredServerScan({ scans, scan });
     }
     throw error;
   }
+}
+
+async function normalizeRecoveredServerScan({ scans, scan, now = new Date().toISOString() }) {
+  const id = String(scan?.id || "").trim();
+  if (!id) throw Object.assign(new Error("admission_scan_id_missing"), { status: 503, code: "admission_scan_id_missing" });
+  const terminal = TERMINAL_SCAN_STATUSES.has(String(scan?.status || "").toLowerCase());
+  const fields = {};
+  if (String(scan?.scan_id || "") !== id) fields.scan_id = id;
+  if (!terminal && String(scan?.status || "").toLowerCase() === "queued") {
+    fields.status = "crawling";
+    if (!scan?.started_at) fields.started_at = now;
+  }
+  if (Object.keys(fields).length === 0) return { ...scan, id, scan_id: id };
+  const updated = await scans.update(id, fields);
+  return { ...scan, ...(updated || {}), ...fields, id, scan_id: id };
 }
 
 function validateServerScanContext({ scan, user, project, request, websiteUrl }) {
@@ -701,6 +761,13 @@ async function failOwnedScanRun({ base44, context, identity, attemptCount, failu
       completed_at: new Date().toISOString(),
       release_gate_eligible: false,
     });
+    if (context.scan?.admission_access_id) {
+      await releaseCoordinatorAdmission({
+        ownerUserId: String(context.scan.owner_user_id || ""),
+        scanId: String(context.scan.id),
+        terminalStatus: "failed",
+      });
+    }
     logBoundary("dispatcher_terminal_failed", identity, {
       attempt_count: normalizeAttemptCount(attemptCount),
       failure_code: failureCode,
@@ -713,6 +780,22 @@ async function failOwnedScanRun({ base44, context, identity, attemptCount, failu
       update_error: String(error?.message || error).slice(0, 160),
     });
   }
+}
+
+async function releaseCoordinatorAdmission({ ownerUserId, scanId, terminalStatus }) {
+  const released = await releaseAdmission({ ownerUserId, scanId, terminalStatus }).catch(() => ({
+    ok: false,
+    failureCode: "admission_unreachable",
+    outcomeUnknown: true,
+  }));
+  if (released?.ok && ["released", "already_released"].includes(String(released.outcome || ""))) return true;
+  console.error("startStandardScanJob admission release failed", {
+    scan_id: scanId,
+    terminal_status: terminalStatus,
+    failure_code: String(released?.failureCode || "admission_release_failed"),
+    outcome_unknown: released?.outcomeUnknown === true,
+  });
+  return false;
 }
 
 function customerStatusDetail(failureCode) {

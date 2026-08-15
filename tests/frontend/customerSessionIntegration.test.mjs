@@ -63,9 +63,12 @@ test("scan duplicate and late-response guards bind owner, project, request, scan
   assert.match(scanForm, /releaseIdentity: RELEASE_AUTHORITY_CONTRACT\.betaRevisionFingerprint/);
   assert.match(scanForm, /err\?\.code === "stale_customer_session"/);
   assert.match(scanForm, /requestEpochRef\.current !== requestEpoch/);
-  assert.match(scanForm, /aiError\?\.code === "stale_customer_session"[\s\S]*clearCustomerAuthBoundary\(aiError\)/);
-  assert.match(scanForm, /clearCustomerAuthBoundary\(persistenceError\)/);
   assert.match(scanForm, /clearCustomerAuthBoundary\(err\)/);
+  const submitStart = scanForm.indexOf("async function handleSubmit");
+  const submitEnd = scanForm.indexOf("\n  return (", submitStart);
+  const submitSource = scanForm.slice(submitStart, submitEnd);
+  assert.match(submitSource, /submitStandardScanJob\(scanPayload\)/);
+  assert.doesNotMatch(submitSource, /aiReviewScan|persistScanAuthority|completeScanRun|failScanRun|cancelScanRun/);
 });
 
 test("Grok conversations and pending responses bind owner, project, scan, domain, and release", () => {

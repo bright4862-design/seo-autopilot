@@ -49,6 +49,7 @@ test("Stripe return and activation outcomes are deduplicated in the Billing jour
 
 test("scan acceptance is emitted only after the exact durable job is accepted", () => {
   const acceptedBranch = scan.match(/if \(jobData\?\.accepted === true[\s\S]*?navigate\(`\/dashboard\?scan_id=/)?.[0] || "";
-  assert.match(acceptedBranch, /asyncDispatcherStarted = true/);
   assert.match(acceptedBranch, /trackEvent\("scan_accepted", \{ scan_mode: STANDARD_SCAN_MODE \}\)/);
+  assert.ok(scan.indexOf("assertServerAdmissionIdentity(jobData") < scan.indexOf('trackEvent("scan_accepted"'));
+  assert.ok(scan.indexOf('scanId = String(jobData.scan_id || "")') < scan.indexOf('trackEvent("scan_accepted"'));
 });

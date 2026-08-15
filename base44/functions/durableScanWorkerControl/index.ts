@@ -1,5 +1,6 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { verifyAuthoritySeal } from "./authoritySeal.js";
+import { releaseAdmission } from "./admissionClient.js";
 
 // Attempts are 1-based; anything unparseable is attempt 1.
 function normalizeAttempt(value) {
@@ -90,6 +91,7 @@ Deno.serve(async (req) => {
     }
 
     if (TERMINAL_STATUSES.has(String(scan.status || "").toLowerCase())) {
+      await releaseIfServerAdmitted(scan);
       return Response.json({
         success: true,
         replayed: true,
@@ -120,6 +122,7 @@ Deno.serve(async (req) => {
     ) {
       throw new RequestProblem(500, "worker_failure_persistence_failed", "The durable failure state could not be verified.");
     }
+    await releaseIfServerAdmitted(persisted);
 
     return Response.json({
       success: true,
@@ -133,6 +136,25 @@ Deno.serve(async (req) => {
     return problemResponse(new RequestProblem(500, "worker_control_failed", "The durable worker control request failed."));
   }
 });
+
+async function releaseIfServerAdmitted(scan) {
+  if (!cleanId(scan?.admission_access_id)) return true;
+  const terminalStatus = String(scan?.status || "").trim().toLowerCase();
+  if (!TERMINAL_STATUSES.has(terminalStatus)) return false;
+  const released = await releaseAdmission({
+    ownerUserId: cleanId(scan?.owner_user_id || scan?.created_by_id),
+    scanId: cleanId(scan?.id),
+    terminalStatus,
+  }).catch(() => ({ ok: false, failureCode: "admission_unreachable", outcomeUnknown: true }));
+  if (released?.ok && ["released", "already_released"].includes(String(released.outcome || ""))) return true;
+  console.error("durableScanWorkerControl admission release failed", {
+    scan_id: cleanId(scan?.id),
+    terminal_status: terminalStatus,
+    failure_code: cleanCode(released?.failureCode) || "admission_release_failed",
+    outcome_unknown: released?.outcomeUnknown === true,
+  });
+  return false;
+}
 
 function normalizeIdentity(value) {
   const source = objectValue(value);

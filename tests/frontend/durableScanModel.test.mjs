@@ -67,7 +67,7 @@ test("ScanRun carries retry/resume/comparison lineage fields", () => {
   ]) {
     assert.ok(scanRun.properties[field], `ScanRun missing ${field}`);
   }
-  assertOwnerScopedRls(scanRun);
+  assertAdminOnlyRls(scanRun);
 });
 
 test("FixList links to a scan run and tracks priority counts", () => {
@@ -115,27 +115,20 @@ test("FixItem preserves finding provenance and completion tracking", () => {
   assertAdminOnlyRls(fixItem);
 });
 
-test("all durable entities are owner-scoped and well-formed", () => {
+test("all durable scan-result entities are server-only and well-formed", () => {
   for (const name of ["ScanRun", "FixList", "FixItem"]) {
     const entity = loadEntity(name);
     assert.equal(entity.type, "object");
     assert.ok(entity.properties.owner_user_id, `${name} must have owner_user_id`);
-    if (name === "ScanRun") assertOwnerScopedRls(entity);
-    else assertAdminOnlyRls(entity);
+    assertAdminOnlyRls(entity);
   }
 });
 
-test("tenant inputs bind creates to the caller while sealed result rows stay server-only", () => {
-  for (const name of ["BusinessProject", "ScanRun"]) {
-    const entity = loadEntity(name);
-    const createRules = JSON.stringify(entity.rls.create);
-    assert.match(createRules, /data\.owner_user_id/, `${name} create must bind owner_user_id`);
-    assert.match(createRules, /\{\{user\.id\}\}/, `${name} create must bind the caller id`);
-    assert.equal(
-      entity.properties.owner_user_id.rls.update.user_condition.role,
-      "admin",
-      `${name}.owner_user_id must be immutable to customer clients`,
-    );
-  }
-  for (const name of ["FixList", "FixItem"]) assertAdminOnlyRls(loadEntity(name));
+test("tenant project input binds to the caller while ScanRun and sealed results stay server-only", () => {
+  const project = loadEntity("BusinessProject");
+  const createRules = JSON.stringify(project.rls.create);
+  assert.match(createRules, /data\.owner_user_id/, "BusinessProject create must bind owner_user_id");
+  assert.match(createRules, /\{\{user\.id\}\}/, "BusinessProject create must bind the caller id");
+  assert.equal(project.properties.owner_user_id.rls.update.user_condition.role, "admin");
+  for (const name of ["ScanRun", "FixList", "FixItem"]) assertAdminOnlyRls(loadEntity(name));
 });

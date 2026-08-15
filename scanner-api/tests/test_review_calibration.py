@@ -1,4 +1,4 @@
-from app.review import compute_health_score, run_review
+from app.review import compute_health_score, compute_health_score_breakdown, run_review
 from app.review_calibration import apply_review_evidence_calibration
 
 
@@ -132,7 +132,7 @@ def test_verification_only_findings_stay_low_non_scoring_and_do_not_outrank_conf
     assert orphan["overall_priority_score"] <= 39
     assert orphan["score_impact"] == 0
     assert orphan["non_scoring"] is True
-    assert result["health_score"] == 84
+    assert result["health_score"] == 86
     assert result["next_best_step"] == "Add a canonical URL"
 
 
@@ -249,7 +249,7 @@ def test_funbooker_narrow_issues_calibrate_to_needs_work_without_score_noise():
     assert priorities["missing_meta_description"] == "medium"
     assert priorities["missing_h1"] == "medium"
     assert priorities["potential_orphan_pages"] == "low"
-    assert result["health_score"] == 76
+    assert result["health_score"] == 64
     assert result["health_grade"] == "Needs work"
     assert result["next_best_step"] == "Add canonical URLs to legal info pages"
     assert result["review_evidence_calibration_version"] == "review_evidence_calibration_v5_utility_redirect"
@@ -335,8 +335,53 @@ def test_health_score_uses_the_strongest_priority_once_per_rule():
         {"id": "verification", "rule": "potential_orphan_pages", "priority": "critical", "non_scoring": True},
     ]
 
-    assert compute_health_score(fixes, fingerprint) == 84
+    assert compute_health_score(fixes, fingerprint) == 85
 
+
+def test_health_score_v2_clean_complete_site_starts_at_100():
+    fingerprint = {
+        "pages_crawled": 150,
+        "pages_found": 150,
+        "pages_received": 150,
+        "sampled_pages_sent_to_ai": 150,
+        "blocked_access_pages": 0,
+        "blocked_or_429_pages": 0,
+    }
+    breakdown = compute_health_score_breakdown([], fingerprint)
+    assert breakdown["version"] == "health_score_v2_action_weighted"
+    assert breakdown["score"] == 100
+    assert breakdown["total_penalty"] == 0
+
+
+def test_health_score_v2_prevalence_increases_one_action_penalty_without_counting_duplicate_cards_twice():
+    fingerprint = {
+        "pages_crawled": 150,
+        "pages_found": 150,
+        "pages_received": 150,
+        "sampled_pages_sent_to_ai": 150,
+        "blocked_access_pages": 0,
+        "blocked_or_429_pages": 0,
+    }
+    base = {
+        "rule": "missing_meta_description",
+        "category": "meta_description",
+        "priority": "high",
+        "page_scope": "family",
+        "page_template_family": "guide_article",
+        "confidence_score": 92,
+    }
+    narrow = [{**base, "id": "meta-narrow", "affected_pages": ["/a"]}]
+    widespread = [{**base, "id": "meta-wide", "affected_pages": [f"/article-{index}" for index in range(30)]}]
+    duplicated = [
+        {**base, "id": "meta-wide-1", "affected_pages": [f"/article-{index}" for index in range(15)]},
+        {**base, "id": "meta-wide-2", "affected_pages": [f"/article-{index}" for index in range(15, 30)]},
+    ]
+
+    narrow_score = compute_health_score(narrow, fingerprint)
+    wide_score = compute_health_score(widespread, fingerprint)
+    duplicate_score = compute_health_score(duplicated, fingerprint)
+    assert wide_score < narrow_score
+    assert duplicate_score == wide_score
 
 
 def test_severe_undercoverage_is_incomplete_and_score_limited():
@@ -406,7 +451,7 @@ def test_large_trailing_slash_internal_redirect_group_is_medium_not_critical():
     assert fix["priority"] == "medium"
     assert fix["overall_priority_score"] <= 67
     assert fix["severity_calibration_reason"] == "trailing_slash_only_healthy_redirect"
-    assert result["health_score"] == 88
+    assert result["health_score"] == 90
 
 
 def test_pdf_and_cloudflare_utility_targets_do_not_create_page_semantic_tasks():

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 FIXLIST_BASE44_CLI_VERSION="0.1.8"
-FIXLIST_BASE44_CLI_SHA512="sha512-o1IFePlQHvUARUVr19FiYEakkPrwDf6IVcz3pWSngSaG+sBSs8t7T7coJir1N4yBFQ76052hjgqT2V+xC8BNOQ=="
+FIXLIST_BASE44_CLI_SHA512="sha512-Vquv/Jdzj+XECE2YEtU/oFQVCawqJDAvnsgl9fBEXHpg0gtBiYE/roImzujYiR1zX2Yy9a7XqUMysIDDAIuo2g=="
 
 fixlist_install_base44_cli() {
   local root="$1"

@@ -30,6 +30,8 @@ const functionSource = readFileSync("base44/functions/grokChat/index.ts", "utf8"
 const scannerFunctionSource = readFileSync("base44/functions/runAdvancedScan/entry.ts", "utf8");
 const reviewFunctionSource = readFileSync("base44/functions/aiReviewScan/entry.ts", "utf8");
 const persistenceFunctionSource = readFileSync("base44/functions/persistScanAuthority/index.ts", "utf8");
+const durablePersistenceSource = readFileSync("base44/functions/persistDurableScanAuthority/index.ts", "utf8");
+const durableWorkerSource = readFileSync("scanner-api/app/scan_job.py", "utf8");
 const assistantSource = readFileSync("src/pages/Assistant.jsx", "utf8");
 const scanFormSource = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
 const appSource = readFileSync("src/App.jsx", "utf8");
@@ -147,7 +149,7 @@ test("server review snapshot survives the actual persistence and Grok reconstruc
       scanner_wrapper_version: "runAdvancedScan_v22_python_required",
       advanced_scan_backend: "python_scanner_api",
       deno_fallback_used: false,
-      beta_revision_fingerprint: "5caec7fdcabceee7",
+      beta_revision_fingerprint: "03dbfa67f4b708cf",
       metadata_evidence_version: "metadata_v1",
       title_evidence_version: "title_v1",
       submitted_url: "https://www.example.com/",
@@ -159,13 +161,13 @@ test("server review snapshot survives the actual persistence and Grok reconstruc
     review: {
       archetype_classifier_version: "archetype_classifier_v9_local_business_hospitality",
       review_version: "python_review_v2_structural_marketplace",
-      review_evidence_calibration_version: "review_evidence_calibration_v5_utility_redirect",
+      review_evidence_calibration_version: "review_evidence_calibration_v6_health_score_v2",
       ai_review_backend: "python_review_api",
       python_review_fallback_used: false,
       release_gate_eligible: true,
       score_is_provisional: false,
       evidence_quality_blocking: false,
-      beta_revision_fingerprint: "5caec7fdcabceee7",
+      beta_revision_fingerprint: "03dbfa67f4b708cf",
       metadata_evidence_version: "metadata_v1",
       title_evidence_version: "title_v1",
       scan_status: "complete",
@@ -231,47 +233,22 @@ test("server review snapshot survives the actual persistence and Grok reconstruc
   assert.deepEqual(recovered.map((item) => item.fix_id), [rows.fixItems[1].fix_id]);
 });
 
-test("only trusted server scan and review results can enter the authority persistence path", () => {
-  assert.match(scannerFunctionSource, /const result = toPythonAdvancedScanResponse/);
-  assert.match(scannerFunctionSource, /attachScanAttestation\(\{ base44, user, result, websiteUrl \}\)/);
-  assert.match(scannerFunctionSource, /base44\.entities\.ScanRun\.get\(scanId\)/);
-  assert.match(scannerFunctionSource, /createAuthoritySeal\(document, secret\)/);
-
-  assert.match(reviewFunctionSource, /resolveTrustedScan\(\{ base44, user, requestBody \}\)/);
-  assert.match(reviewFunctionSource, /verifyAuthoritySeal\(document, secret, attestation\.proof\)/);
-  assert.match(reviewFunctionSource, /mergeTrustedScanWithClientContext\(trustedScan\.result/);
-  assert.match(reviewFunctionSource, /buildAuthoritySnapshot\(\{[\s\S]*scan: trustedScan\.result,[\s\S]*review: result/);
-
-  assert.match(persistenceFunctionSource, /verifyAuthoritySeal\(attestation\.snapshot, secret, attestation\.proof\)/);
-  assert.match(persistenceFunctionSource, /createServiceOnlyClient\(req\)/);
-  assert.match(persistenceFunctionSource, /Base44-Service-Authorization/);
-  assert.match(persistenceFunctionSource, /serviceToken: serviceAuthorization\.slice/);
-  assert.match(persistenceFunctionSource, /serviceEntities\.FixList\.create/);
-  assert.match(persistenceFunctionSource, /serviceEntities\.FixItem\.bulkCreate/);
-  assert.match(persistenceFunctionSource, /serviceEntities\.ScanRun\.update/);
-  assert.doesNotMatch(persistenceFunctionSource, /base44\.asServiceRole\.entities/);
-  assert.match(persistenceFunctionSource, /authority_proof: String\(attestation\.proof\)\.toLowerCase\(\)/);
-  assert.match(persistenceFunctionSource, /missingAuthorityFixRows\(rows\.fixItems, existingItems\)/);
-  assert.match(persistenceFunctionSource, /const persistedScan = await serviceEntities\.ScanRun\.get\(scanId\)/);
-  assert.match(persistenceFunctionSource, /const persistedFixList = await serviceEntities\.FixList\.get\(fixList\.id\)/);
-  assert.match(persistenceFunctionSource, /authority_persistence_incomplete/);
-  assert.match(persistenceFunctionSource, /persistedItems\.length === snapshot\.recommendations\.length/);
-  assert.doesNotMatch(persistenceFunctionSource, /createAuthoritySeal/);
-
-  assert.match(scanFormSource, /authoritative_scan: \{/);
-  assert.match(scanFormSource, /authority_review_payload: scanData\.authority_review_payload/);
-  assert.match(scanFormSource, /authority_scan_attestation: scanData\.authority_scan_attestation/);
-  assert.doesNotMatch(scanFormSource, /authoritative_scan: scanData,/);
-  assert.match(scanFormSource, /"persistScanAuthority"/);
-  assert.match(scanFormSource, /scan_authority_persistence_failed/);
-  assert.match(scanFormSource, /scan_authority_attestation_missing/);
-  assert.match(scanFormSource, /aiData\?\.release_gate_eligible === true && !usingAuthorityPersistence/);
-  assert.match(scanFormSource, /release_gate_eligible: false, is_authoritative: false/);
-  assert.match(scanFormSource, /\^\[a-f0-9\]\{64\}\$/);
-  assert.match(scanFormSource, /persistedCompletion\.scanRun\.authority_seal_version/);
-  assert.match(scanFormSource, /persistedCompletion\.scanRun\.authority_sealed_at/);
-  assert.match(scanFormSource, /persistedCompletion\.scanRun\.release_gate_eligible === true/);
-  assert.match(scanFormSource, /Boolean\(persistedCompletion\.fixListId\)/);
+test("only trusted server worker evidence can enter the active durable authority persistence path", () => {
+  assert.match(durableWorkerSource, /invoke_function\(client, "durableScanWorkerControl"/);
+  assert.match(durableWorkerSource, /invoke_function\(client, "persistDurableScanAuthority"/);
+  assert.match(durablePersistenceSource, /assertWorkerHeader\(req\)/);
+  assert.match(durablePersistenceSource, /verifyAuthoritySeal\(signedDocument, secret, proof\)/);
+  assert.match(durablePersistenceSource, /buildAuthoritySnapshot\(\{/);
+  assert.match(durablePersistenceSource, /entities\.FixList\.create/);
+  assert.match(durablePersistenceSource, /entities\.FixItem\.(?:bulkCreate|create)/);
+  assert.match(durablePersistenceSource, /entities\.ScanRun\.update/);
+  assert.match(durablePersistenceSource, /authority_proof/);
+  assert.match(durablePersistenceSource, /releaseAdmission\(\{/);
+  const submitStart = scanFormSource.indexOf("async function handleSubmit");
+  const submitEnd = scanFormSource.indexOf("\n  return (", submitStart);
+  const submitSource = scanFormSource.slice(submitStart, submitEnd);
+  assert.match(submitSource, /submitStandardScanJob\(scanPayload\)/);
+  assert.doesNotMatch(submitSource, /persistScanAuthority|aiReviewScan|runAdvancedScan|runStandard150Scan/);
   assert.match(functionSource, /await assertServerAuthoritySeal\(\{ scan, fixList, fixItems, user \}\)/);
   assert.match(functionSource, /verifyAuthoritySeal\(snapshot, secret, scan\.authority_proof\)/);
   assert.ok(functionSource.indexOf("await assertServerAuthoritySeal") < functionSource.indexOf("await callScannerChat"));
@@ -301,14 +278,11 @@ test("Cloud Run chat uses only server secrets, a bounded timeout, and safe error
   assert.doesNotMatch(functionSource, /error\?\.message|String\(error\)/);
 });
 
-test("Grok is reachable only inside the authenticated customer app", () => {
-  assert.match(appSource, /<ProtectedRoute[\s\S]*path="\/assistant" element=\{<Assistant \/>\}/);
-  // Customer navigation must not expose Grok. The entry renders as inert text
-  // with no href and no route, so navigating the product cannot reach it.
-  assert.match(layoutSource, /\{ name: "Ask Grok · Coming soon", href: "", disabled: true \}/);
-  assert.doesNotMatch(layoutSource, /name: "Ask Grok", href: "\/assistant"/);
-  assert.match(layoutSource, /if \(item\.disabled\)/);
-  assert.match(layoutSource, /aria-disabled="true"/);
+test("Grok is disabled and absent from the customer application", () => {
+  assert.match(appSource, /path="\/assistant"[\s\S]*<Navigate to="\/dashboard" replace \/>/);
+  assert.doesNotMatch(appSource, /import Assistant/);
+  assert.doesNotMatch(appSource, /<Assistant \/>/);
+  assert.doesNotMatch(layoutSource, /Ask Grok|\/assistant/);
 });
 
 test("the latest authoritative scan must belong to the active project and domain", () => {

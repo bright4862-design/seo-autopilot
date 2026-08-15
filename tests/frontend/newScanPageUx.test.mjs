@@ -8,6 +8,7 @@ import test from "node:test";
 const scanForm = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
 const onboarding = readFileSync("src/pages/Onboarding.jsx", "utf8");
 const layout = readFileSync("src/components/layout/DashboardLayout.jsx", "utf8");
+const app = readFileSync("src/App.jsx", "utf8");
 
 test("required copy is present verbatim", () => {
   assert.match(scanForm, /Scan depth: up to 150 pages · respects robots\.txt · read-only/);
@@ -95,9 +96,9 @@ test("customer-visible debug controls are absent", () => {
 });
 
 test("customer navigation cannot reach Grok", () => {
-  assert.match(layout, /Ask Grok · Coming soon/);
-  assert.doesNotMatch(layout, /name: "Ask Grok", href: "\/assistant"/);
-  assert.match(layout, /aria-disabled="true"/);
+  assert.doesNotMatch(layout, /Ask Grok|\/assistant/);
+  assert.match(app, /path="\/assistant"[\s\S]*<Navigate to="\/dashboard" replace \/>/);
+  assert.doesNotMatch(app, /import Assistant|<Assistant \/>/);
 });
 
 test("the page is a centred 680px column owned by the form", () => {

@@ -25,7 +25,7 @@ def _scan_result() -> dict:
         "scanner_build_revision": "authenticated_health_probe_v1",
         "advanced_scan_backend": "python_scanner_api",
         "deno_fallback_used": False,
-        "beta_revision_fingerprint": "5caec7fdcabceee7",
+        "beta_revision_fingerprint": "03dbfa67f4b708cf",
         "request_id": "req-1",
         "idempotency_key": "req-1",
         "scan_id": "scan-1",
@@ -43,14 +43,14 @@ def _scan_result() -> dict:
 def _review() -> dict:
     return {
         "review_version": "python_review_v2_structural_marketplace",
-        "review_evidence_calibration_version": "review_evidence_calibration_v5_utility_redirect",
+        "review_evidence_calibration_version": "review_evidence_calibration_v6_health_score_v2",
         "archetype_classifier_version": "archetype_classifier_v9_local_business_hospitality",
         "ai_review_backend": "python_review_api",
         "python_review_fallback_used": False,
         "release_gate_eligible": True,
         "score_is_provisional": False,
         "evidence_quality_blocking": False,
-        "beta_revision_fingerprint": "5caec7fdcabceee7",
+        "beta_revision_fingerprint": "03dbfa67f4b708cf",
         "metadata_evidence_version": "metadata-v1",
         "title_evidence_version": "title-v1",
         "recommendations": [],
@@ -95,6 +95,11 @@ def test_review_changes_the_completion_proof():
 
 def test_control_envelopes_bind_action_scan_and_failure():
     read = build_control_envelope("read", "secret", scan_id="scan-1")
+    sweep = build_control_envelope("sweep", "secret")
+    assert sweep["version"] == CONTROL_VERSION
+    assert sweep["action"] == "sweep"
+    assert sweep["scan_id"] is None and sweep["identity"] is None and sweep["failure"] is None
+    assert len(sweep["proof"]) == 64
     assert read["version"] == CONTROL_VERSION
     assert read["action"] == "read"
     assert read["scan_id"] == "scan-1"
@@ -108,6 +113,11 @@ def test_control_envelopes_bind_action_scan_and_failure():
         "idempotency_key": "req-1",
         "normalized_domain": "big.example",
     }
+    start = build_control_envelope("start", "secret", identity=identity)
+    assert start["action"] == "start"
+    assert start["identity"] == identity
+    assert len(start["proof"]) == 64
+
     failure = build_control_envelope(
         "fail", "secret", identity=identity,
         failure={"code": "scanner_failed", "detail": "Stopped."},
@@ -140,6 +150,11 @@ def test_hosted_functions_use_supported_service_role_and_signed_envelopes():
         assert "verifyAuthoritySeal" in source
     assert "validateCurrentIdentity" in persistence
     assert "validateBoundIdentity" in control
+    assert '["start", "fail"].includes(action)' in control
+    assert 'action === "sweep"' in control
+    assert 'reconcileDurableScans(entities)' in control
+    assert 'status: "crawling"' in control
+    assert 'started_at:' in control
 
 
 def test_authority_is_verified_before_paid_independent_terminal_completion():
@@ -170,6 +185,10 @@ def test_worker_uses_only_signed_hosted_boundaries():
     assert 'invoke_function(client, "aiReviewScan"' not in source
     assert 'invoke_function(client, "persistScanAuthority"' not in source
     assert "build_local_review" in source
+    assert 'build_control_envelope("start"' in source
+    assert "mark_scan_started" in source
+    assert 'build_control_envelope("sweep"' in source
+    assert "reconcile_stale_scans" in source
     assert 'get("fixListVerified") is not True' in source
 
 

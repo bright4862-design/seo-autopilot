@@ -23,20 +23,11 @@ export function evaluatePaidAccess({ rows, user }) {
   const userId = String(user?.id || "").trim();
   const paidAt = Date.parse(String(row?.paid_at || ""));
   const grantedAt = Date.parse(String(row?.granted_at || ""));
-  const rowOwnerId = String(row?.owner_user_id || "").trim();
   const identityMatches = Boolean(
     email &&
     userId &&
     normalizeEmail(row?.user_email) === email &&
-    rowOwnerId === userId
-  );
-  // Manual grants are created by an admin before the customer registers, so
-  // they bind by email; a stored owner id (if any) must still match.
-  const manualIdentityMatches = Boolean(
-    email &&
-    userId &&
-    normalizeEmail(row?.user_email) === email &&
-    (!rowOwnerId || rowOwnerId === userId)
+    String(row?.owner_user_id || "").trim() === userId
   );
   const activeGrant = Boolean(
     row?.has_full_access === true &&
@@ -57,15 +48,13 @@ export function evaluatePaidAccess({ rows, user }) {
     userId === OWNER_TEST_USER_ID &&
     Number.isFinite(grantedAt)
   );
-
   const manualGrantMatches = Boolean(
     activeGrant &&
     row?.grant_source === "manual_grant" &&
     Number.isFinite(grantedAt)
   );
 
-  return (identityMatches && (paidGrantMatches || ownerTestGrantMatches)) ||
-    (manualIdentityMatches && manualGrantMatches)
+  return identityMatches && (paidGrantMatches || ownerTestGrantMatches || manualGrantMatches)
     ? { ok: true, record: row }
     : { ok: false, failureCode: "paid_access_required" };
 }

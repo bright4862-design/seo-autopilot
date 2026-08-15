@@ -1,13 +1,19 @@
 import base64
-import importlib
+import importlib.util
 import json
 import os
+import sys
+from pathlib import Path
 import time
 import unittest
 
 os.environ.setdefault(
     "SCAN_TASKS_QUEUE_PATH",
     "projects/seo-autopilot-501517/locations/europe-west1/queues/fixlist-standard150",
+)
+os.environ.setdefault(
+    "SCAN_DRAIN_QUEUE_PATH",
+    "projects/seo-autopilot-501517/locations/europe-west1/queues/fixlist-standard150-drain",
 )
 os.environ.setdefault(
     "SCAN_WORKER_URL",
@@ -19,7 +25,20 @@ os.environ.setdefault(
 )
 os.environ.setdefault("SCAN_EVIDENCE_SIGNING_KEY", "unit-test-signing-root")
 
-main = importlib.import_module("main")
+# admission-coordinator/test_coordinator.py installs a fake top-level `google`
+# package before importing its own main module. That module already holds the
+# fake Firestore object by reference, so remove only the import-cache stubs here
+# before loading the gateway, which needs the real google.auth namespace.
+for module_name in ("google.cloud.firestore", "google.cloud", "google"):
+    sys.modules.pop(module_name, None)
+
+spec = importlib.util.spec_from_file_location(
+    "fixlist_dispatch_gateway_main",
+    Path(__file__).with_name("main.py"),
+)
+assert spec and spec.loader
+main = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(main)
 
 
 def encoded(value):
@@ -42,7 +61,7 @@ def task(*, scan_id="scan_abc123", drain=False, attempt=1):
         })
 
     value = {
-        "name": f"{main.QUEUE_PATH}/tasks/{short_name}",
+        "name": f"{main.DRAIN_QUEUE_PATH if drain else main.QUEUE_PATH}/tasks/{short_name}",
         "dispatchDeadline": "480s",
         "httpRequest": {
             "url": main.DRAIN_URL if drain else main.WORKER_URL,
@@ -62,8 +81,9 @@ def task(*, scan_id="scan_abc123", drain=False, attempt=1):
 
 class ValidateDispatchTests(unittest.TestCase):
     def validate(self, value, *, queue_path=None):
+        inferred_queue = main.DRAIN_QUEUE_PATH if "standard150-drain-" in str(value.get("name") or "") else main.QUEUE_PATH
         return main.validate_dispatch({
-            "queue_path": queue_path or main.QUEUE_PATH,
+            "queue_path": queue_path or inferred_queue,
             "task": value,
         })
 
@@ -81,6 +101,16 @@ class ValidateDispatchTests(unittest.TestCase):
         accepted, error = self.validate(task(drain=True))
         self.assertIsNone(error)
         self.assertIsNotNone(accepted)
+
+    def test_scan_task_cannot_use_drain_queue(self):
+        accepted, error = self.validate(task(), queue_path=main.DRAIN_QUEUE_PATH)
+        self.assertIsNone(accepted)
+        self.assertEqual(error, "invalid_task_name")
+
+    def test_drain_task_cannot_use_scan_queue(self):
+        accepted, error = self.validate(task(drain=True), queue_path=main.QUEUE_PATH)
+        self.assertIsNone(accepted)
+        self.assertEqual(error, "invalid_task_name")
 
     def test_wrong_queue_is_rejected(self):
         accepted, error = main.validate_dispatch({
@@ -176,6 +206,7 @@ class SignatureTests(unittest.TestCase):
         self.assertEqual(payload["ok"], True)
         self.assertEqual(payload["service"], "fixlist-dispatch-gateway")
         self.assertEqual(payload["queue"], main.QUEUE_PATH)
+        self.assertEqual(payload["drain_queue"], main.DRAIN_QUEUE_PATH)
         self.assertEqual(payload["worker_origin"], main.WORKER_ORIGIN)
 
     def test_dispatch_rejects_oversized_body_before_auth(self):

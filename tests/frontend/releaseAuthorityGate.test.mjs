@@ -14,10 +14,10 @@ const authoritativeRecord = {
   advanced_scan_backend: "python_scanner_api",
   deno_fallback_used: false,
   review_version: "python_review_v2_structural_marketplace",
-  review_evidence_calibration_version: "review_evidence_calibration_v5_utility_redirect",
+  review_evidence_calibration_version: "review_evidence_calibration_v6_health_score_v2",
   ai_review_backend: "python_review_api",
   python_review_fallback_used: false,
-  beta_revision_fingerprint: "5caec7fdcabceee7",
+  beta_revision_fingerprint: "03dbfa67f4b708cf",
   release_gate_eligible: true,
 };
 
@@ -81,24 +81,26 @@ test("scanner or review fallback fails the release gate", () => {
   );
 });
 
-// Regression: scanner-stage eligibility is provisional until Python Review adds its authority markers.
-test("the frontend re-evaluates the completed record instead of AND-ing the scanner-stage gate", () => {
+// Regression: the browser no longer recomputes terminal authority. The durable
+// worker persists the sealed result and the customer reads it through the
+// server projection.
+test("the browser never recomputes or writes terminal release authority", () => {
   const source = readFileSync(
     new URL("../../src/components/scan/ScanWebsiteForm.jsx", import.meta.url),
     "utf8"
   );
-
-  assert.match(source, /const mergedRecord = \{/);
-  assert.match(
-    source,
-    /release_gate_eligible: buildScanRunFields\(mergedRecord\)\.release_gate_eligible/
+  const persistence = readFileSync(
+    new URL("../../base44/functions/persistDurableScanAuthority/index.ts", import.meta.url),
+    "utf8"
   );
-  assert.doesNotMatch(
-    source,
-    /scanData\?\.release_gate_eligible === true && aiData\?\.release_gate_eligible === true/
-  );
-  assert.match(source, /mergePersistedScanRunRecord\(/);
-  assert.match(source, /navigate\(`\/dashboard\?scan=complete&scan_id=\$\{encodeURIComponent\(scanId\)\}`\)/);
+  const submitStart = source.indexOf("async function handleSubmit");
+  const submitEnd = source.indexOf("\n  return (", submitStart);
+  const submitSource = source.slice(submitStart, submitEnd);
+  assert.match(submitSource, /submitStandardScanJob\(scanPayload\)/);
+  assert.doesNotMatch(submitSource, /mergePersistedScanRunRecord|buildScanRunFields\(mergedRecord|persistScanAuthority|completeScanRun/);
+  assert.match(persistence, /verifyAuthoritySeal\(signedDocument, secret, proof\)/);
+  assert.match(persistence, /persistedScan\?\.release_gate_eligible === true/);
+  assert.match(source, /navigate\(`\/dashboard\?scan_id=\$\{encodeURIComponent\(scanId\)\}`\)/);
   assert.doesNotMatch(source, /saveScanForDashboard|localStorage\.setItem/);
 });
 

@@ -16,8 +16,8 @@ import {
 const frozenRevision = JSON.parse(readFileSync("data/beta-crawler-revision.json", "utf8"));
 const EXPECTED_SCANNER_VERSION = "python_scanner_v3_bounded_request";
 const EXPECTED_REVIEW_VERSION = "python_review_v2_structural_marketplace";
-const EXPECTED_CALIBRATION_VERSION = "review_evidence_calibration_v5_utility_redirect";
-const EXPECTED_BETA_FINGERPRINT = "5caec7fdcabceee7";
+const EXPECTED_CALIBRATION_VERSION = "review_evidence_calibration_v6_health_score_v2";
+const EXPECTED_BETA_FINGERPRINT = "03dbfa67f4b708cf";
 const EXPECTED_CLASSIFIER_VERSION = "archetype_classifier_v9_local_business_hospitality";
 const EXPECTED_SCANNER_BUILD = "authenticated_health_probe_v1";
 const EXPECTED_METADATA_VERSION = "metadata_evidence_v1_description_states";
@@ -142,7 +142,7 @@ test("an explicit review veto cannot be inferred back into release eligibility",
     ai_review_backend: "python_review_api",
     python_review_fallback_used: false,
     review_version: "python_review_v2_structural_marketplace",
-    review_evidence_calibration_version: "review_evidence_calibration_v5_utility_redirect",
+    review_evidence_calibration_version: "review_evidence_calibration_v6_health_score_v2",
   });
   assert.equal(fields.release_gate_eligible, false);
 });

@@ -13,7 +13,6 @@ import ResetPassword from "@/pages/ResetPassword";
 import FixList from "@/pages/FixList";
 import Onboarding from "@/pages/Onboarding";
 import Billing from "@/pages/Billing";
-import Assistant from "@/pages/Assistant";
 
 export default function App() {
   return (
@@ -37,12 +36,15 @@ export default function App() {
           <Route element={<DashboardLayout />}>
             <Route path="/dashboard" element={<FixList />} />
             <Route path="/onboarding" element={<Onboarding />} />
-            <Route path="/assistant" element={<Assistant />} />
             <Route path="/billing" element={<Billing />} />
           </Route>
         </Route>
 
         {/* Hidden / old pages */}
+        <Route
+          path="/assistant"
+          element={<Navigate to="/dashboard" replace />}
+        />
         <Route path="/reports" element={<Navigate to="/dashboard" replace />} />
         <Route
           path="/seo-connections"

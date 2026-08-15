@@ -35,10 +35,124 @@ const MAX_REPLAY_CANDIDATES = 50;
 const pendingBeginsByRequest = new Map();
 const pendingBeginsByTarget = new Map();
 
+const CUSTOMER_RECOVERY_KIND_BY_CODE = Object.freeze({
+  unauthorized: "unauthorized",
+  scan_id_required: "not_found",
+  scan_not_found: "not_found",
+  not_found: "not_found",
+  paid_access_conflict: "access_conflict",
+  paid_access_unavailable: "unavailable",
+  result_authority_unavailable: "unavailable",
+  result_authority_invalid: "authority_invalid",
+  fix_list_unavailable: "authority_invalid",
+  fix_list_mismatch: "authority_invalid",
+  fix_items_unavailable: "authority_invalid",
+  fix_items_incomplete: "authority_invalid",
+  fix_items_mismatch: "authority_invalid",
+  result_not_authoritative: "not_authoritative",
+  result_load_failed: "load_failed",
+});
+
+const CUSTOMER_RECOVERY_RETRYABLE_KINDS = new Set(["unavailable", "load_failed"]);
+const CUSTOMER_RECOVERY_NETWORK_CODES = new Set([
+  "econnaborted",
+  "econnreset",
+  "enetunreach",
+  "etimedout",
+  "err_network",
+]);
+
 async function currentOwner() {
   const user = await base44.auth.me();
   if (!user?.id) throw new Error("Sign in before starting a durable scan.");
   return { owner_user_id: user.id };
+}
+
+function recoveryPayloads(error) {
+  return [
+    error?.response?.data?.data,
+    error?.response?.data,
+    error?.data?.data,
+    error?.data,
+    error,
+  ].filter((value) => value && typeof value === "object");
+}
+
+function recoveryErrorCode(error) {
+  for (const payload of recoveryPayloads(error)) {
+    const code = String(payload.error_code || payload.error?.code || "").trim().toLowerCase();
+    if (code) return code;
+  }
+  return "";
+}
+
+function recoveryErrorStatus(error) {
+  const candidates = [
+    error?.status,
+    error?.response?.status,
+    error?.data?.status,
+    error?.response?.data?.status,
+  ];
+  for (const candidate of candidates) {
+    const status = Number(candidate);
+    if (Number.isInteger(status) && status >= 100 && status <= 599) return status;
+  }
+  return 0;
+}
+
+// Converts transport and allowlisted server failures to a small customer-safe
+// contract. Raw SDK payloads, function names, entity identities, and proofs
+// never cross this seam.
+export function classifyCustomerRecoveryError(error) {
+  const serverCode = recoveryErrorCode(error);
+  const allowlistedKind = CUSTOMER_RECOVERY_KIND_BY_CODE[serverCode];
+  if (allowlistedKind) {
+    return {
+      kind: allowlistedKind,
+      retryable: CUSTOMER_RECOVERY_RETRYABLE_KINDS.has(allowlistedKind),
+    };
+  }
+
+  const status = recoveryErrorStatus(error);
+  if (status === 401 || status === 403) return { kind: "unauthorized", retryable: false };
+  if (status === 404) return { kind: "not_found", retryable: false };
+  if ([408, 425, 429, 502, 503, 504].includes(status)) return { kind: "unavailable", retryable: true };
+
+  const transportCode = String(error?.code || "").trim().toLowerCase();
+  const message = String(error?.message || error?.error || "").trim();
+  if (
+    CUSTOMER_RECOVERY_NETWORK_CODES.has(transportCode)
+    || /failed to fetch|network error|network request failed|^load failed$/i.test(message)
+  ) {
+    return { kind: "unavailable", retryable: true };
+  }
+  if (/sign in before/i.test(message)) return { kind: "unauthorized", retryable: false };
+  return { kind: "load_failed", retryable: true };
+}
+
+// The customer can quote this deterministic token to support. It is a one-way
+// compact hash of the safe error kind and local lookup scope; it never embeds
+// an owner id, request id, authority proof, or raw backend message.
+export function buildCustomerSupportReference(kind, scope = "") {
+  const safeKind = String(kind || "load_failed").trim().toLowerCase().slice(0, 40);
+  const safeScope = String(scope || "").trim().slice(0, 200);
+  const basis = `fixlist-customer-recovery-v1|${safeKind}|${safeScope}`;
+  let hash = 0xcbf29ce484222325n;
+  for (let index = 0; index < basis.length; index += 1) {
+    hash ^= BigInt(basis.charCodeAt(index));
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return `FL-${hash.toString(36).toUpperCase().padStart(13, "0").slice(-13)}`;
+}
+
+export function customerRecoveryFailure(error, scope) {
+  const classification = classifyCustomerRecoveryError(error);
+  return {
+    ok: false,
+    kind: classification.kind,
+    retryable: classification.retryable,
+    support_reference: buildCustomerSupportReference(classification.kind, scope),
+  };
 }
 
 function scanRunHandle(run, { replayed = false, replayReason = "", retried = false } = {}) {
@@ -451,55 +565,107 @@ export async function failScanRun(handle, error) {
   }
 }
 
-// Scan history per website, newest first. Returns [] when unavailable.
+// Scan history per website, newest first. Empty history and a failed read are
+// distinct so the customer is never told that saved scans disappeared.
 export async function listScanRuns(projectId, limit = 20) {
+  const requestedProjectId = String(projectId || "").trim();
+  const scope = `history:${requestedProjectId}`;
   try {
-    const owner = await currentOwner();
-    return (
-      (await base44.entities.ScanRun.filter({ project_id: projectId || "", ...owner }, "-queued_at", limit)) || []
-    );
+    await currentOwner();
+    const response = await base44.functions.invoke("getCustomerScanResult", {
+      action: "list",
+      project_id: requestedProjectId,
+      limit: Math.min(Math.max(Number(limit) || 8, 1), 20),
+    });
+    const result = response?.data && typeof response.data === "object" ? response.data : response;
+    if (
+      !result
+      || result.success !== true
+      || result.action !== "list"
+      || String(result.project_id || "") !== requestedProjectId
+      || !Array.isArray(result.runs)
+    ) {
+      return customerRecoveryFailure({
+        status: response?.status,
+        data: result && typeof result === "object" ? result : { error_code: "result_load_failed" },
+      }, scope);
+    }
+    const runs = result.runs.map((run) => ({
+      id: String(run?.id || ""),
+      project_id: String(run?.project_id || ""),
+      website_url: String(run?.website_url || ""),
+      normalized_domain: String(run?.normalized_domain || ""),
+      status: String(run?.status || ""),
+      pages_found: Math.max(0, Math.trunc(Number(run?.pages_found) || 0)),
+      pages_crawled: Math.max(0, Math.trunc(Number(run?.pages_crawled) || 0)),
+      queued_at: String(run?.queued_at || ""),
+      started_at: String(run?.started_at || ""),
+      reviewing_at: String(run?.reviewing_at || ""),
+      completed_at: String(run?.completed_at || ""),
+    })).filter((run) => run.id && run.project_id === requestedProjectId);
+    return { ok: true, kind: "loaded", runs };
   } catch (error) {
-    console.warn("Durable scan history: could not list ScanRuns.", error);
-    return [];
+    const failure = customerRecoveryFailure(error, scope);
+    console.warn("Durable scan history read failed.", failure.kind, failure.support_reference);
+    if (failure.kind === "unauthorized") clearCustomerAuthBoundary({ status: 401 });
+    return failure;
   }
 }
 
 // Reopen a previous scan: the run plus its saved FixList and FixItems.
 export async function getScanRunWithFixList(scanRunId) {
+  const requestedScanId = String(scanRunId || "").trim();
+  const fail = (error) => customerRecoveryFailure(error, `result:${requestedScanId}`);
+  if (!requestedScanId) return fail({ error_code: "scan_id_required" });
+
   try {
-    const owner = await currentOwner();
-    const run = await base44.entities.ScanRun.get(scanRunId);
-    if (!run || String(run.owner_user_id || "") !== owner.owner_user_id) return null;
+    await currentOwner();
+    const response = await base44.functions.invoke("getCustomerScanResult", {
+      scan_id: requestedScanId,
+    });
+    const result = response?.data && typeof response.data === "object" ? response.data : response;
+    if (!result || result.success !== true) {
+      const failure = fail({
+        status: response?.status,
+        data: result && typeof result === "object" ? result : { error_code: "result_load_failed" },
+      });
+      if (failure.kind === "unauthorized") clearCustomerAuthBoundary({ status: 401 });
+      return failure;
+    }
+    const run = result.run || null;
+    if (!run || String(run.id || "") !== requestedScanId) {
+      return fail({ error_code: "result_authority_invalid" });
+    }
     const projectId = String(run.project_id || "").trim();
-    if (!projectId || String(run.id || "") !== String(scanRunId || "")) return null;
-    const [fixList] = run.fix_list_id
-      ? [await base44.entities.FixList.get(run.fix_list_id)]
-      : await base44.entities.FixList.filter({ scan_run_id: scanRunId, ...owner }, "-generated_at", 1);
+    if (!projectId) return fail({ error_code: "result_authority_invalid" });
+    const fixList = result.fixList || null;
     if (fixList && (
-      String(fixList.owner_user_id || "") !== owner.owner_user_id
-      || String(fixList.project_id || "") !== projectId
+      String(fixList.project_id || "") !== projectId
       || String(fixList.scan_run_id || "") !== String(run.id || "")
-    )) return null;
-    const fixItems = fixList
-      ? await base44.entities.FixItem.filter({ fix_list_id: fixList.id, ...owner })
-      : [];
+    )) return fail({ error_code: "result_authority_invalid" });
+    if (!Array.isArray(result.fixItems)) return fail({ error_code: "result_authority_invalid" });
+    const fixItems = result.fixItems;
+    if (!fixList && fixItems.length > 0) return fail({ error_code: "result_authority_invalid" });
     if ((fixItems || []).some((item) => (
-      String(item.owner_user_id || "") !== owner.owner_user_id
-      || String(item.project_id || "") !== projectId
+      String(item.project_id || "") !== projectId
       || String(item.scan_run_id || "") !== String(run.id || "")
       || String(item.fix_list_id || "") !== String(fixList?.id || "")
-    ))) return null;
+    ))) return fail({ error_code: "result_authority_invalid" });
     return {
-      request_id: run.request_id || "",
+      ok: true,
+      kind: "loaded",
       scan_id: run.id,
-      fix_list_id: fixList?.id || run.fix_list_id || "",
+      fix_list_id: fixList?.id || result.fix_list_id || run.fix_list_id || "",
+      access: result.access || "locked",
+      authority_verified: result.authority_verified === true,
       run: { ...run, scan_id: run.id },
       fixList: fixList || null,
       fixItems: fixItems || [],
     };
   } catch (error) {
-    clearCustomerAuthBoundary(error);
-    console.warn("Durable scan history: could not load ScanRun.", error);
-    return null;
+    const failure = fail(error);
+    console.warn("Durable saved-result read failed.", failure.kind, failure.support_reference);
+    if (failure.kind === "unauthorized") clearCustomerAuthBoundary({ status: 401 });
+    return failure;
   }
 }

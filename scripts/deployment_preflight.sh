@@ -31,12 +31,46 @@ has() { grep -q -- "$1" "$2" 2>/dev/null; }
 WORKER_BUILD="cloudbuild.durable-worker.yaml"
 TASKS="base44/functions/startStandardScanJob/cloudTasks.js"
 WORKER_SRC="scanner-api/app/main.py"
+RECONCILER_CONFIG="scripts/configure-standard150-reconciler.sh"
+RECONCILER_VERIFY="scripts/verify-standard150-reconciler.sh"
+SCAN_RAMP="scripts/set-standard150-scan-concurrency.sh"
+SCAN_RETRY="scripts/set-standard150-retry-policy.sh"
+DRAIN_POLICY="scripts/set-standard150-drain-policy.sh"
 
+echo "=== 0. Queue reconciliation backstop ==="
+need_file "$RECONCILER_CONFIG" "Scheduler reconciler configurator present"
+need_file "$RECONCILER_VERIFY" "Scheduler reconciler verifier present"
+if [ -f "$WORKER_SRC" ]; then
+  has '@app.post("/scan-reconcile")' "$WORKER_SRC" && pass "private scan reconciliation route present" || fail "scan reconciliation route missing"
+  has 'WORKER_TERMINAL_DRAIN_AFTER_START_SECONDS = 1800' "$WORKER_SRC" && pass "drain waits through the full retry envelope" || fail "worker terminal drain deadline is not pinned to 1800s"
+fi
+
+echo
 echo "=== 1. Base44 package integrity ==="
 if node scripts/base44_release_manifest.mjs verify >/dev/null 2>&1; then
   pass "release packages portable, closed, pinned, symlink-free"
 else
   fail "package integrity failed (node scripts/base44_release_manifest.mjs verify)"
+fi
+
+echo
+echo "=== 1b. Queue policy source contract ==="
+need_file "$SCAN_RAMP" "bounded scan concurrency ramp present"
+need_file "$SCAN_RETRY" "bounded scan retry policy present"
+need_file "$DRAIN_POLICY" "independent drain queue policy present"
+if [ -f "$SCAN_RAMP" ]; then
+  has '1|3|5|10' "$SCAN_RAMP" && pass "scan concurrency only permits 1/3/5/10" || fail "scan concurrency ramp is not bounded"
+  has '--max-dispatches-per-second="$TARGET"' "$SCAN_RAMP" && pass "scan dispatch rate tracks concurrency" || fail "scan dispatch rate is not pinned to concurrency"
+fi
+if [ -f "$SCAN_RETRY" ]; then
+  has 'MAX_ATTEMPTS=3' "$SCAN_RETRY" && pass "scan retries capped at 3" || fail "scan retry attempts are not pinned to 3"
+  has 'MIN_BACKOFF="10s"' "$SCAN_RETRY" && pass "scan retry min backoff 10s" || fail "scan retry min backoff is not 10s"
+  has 'MAX_BACKOFF="300s"' "$SCAN_RETRY" && pass "scan retry max backoff 300s" || fail "scan retry max backoff is not 300s"
+fi
+if [ -f "$DRAIN_POLICY" ]; then
+  has 'MAX_ATTEMPTS=100' "$DRAIN_POLICY" && pass "drain retries survive queue/start timing" || fail "drain retry attempts are not pinned to 100"
+  has 'MIN_BACKOFF="30s"' "$DRAIN_POLICY" && pass "drain retry min backoff 30s" || fail "drain retry min backoff is not 30s"
+  has 'MAX_RETRY_DURATION="14400s"' "$DRAIN_POLICY" && pass "drain retry duration 14400s" || fail "drain retry duration is not 14400s"
 fi
 
 echo

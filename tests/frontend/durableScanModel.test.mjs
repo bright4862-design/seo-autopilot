@@ -26,6 +26,13 @@ function assertOwnerScopedRls(entity) {
   assert.match(readClauses, /owner_user_id|created_by_id/, `${entity.name} read must be owner-scoped`);
 }
 
+function assertAdminOnlyRls(entity) {
+  assert.ok(entity.rls, `${entity.name} must define rls`);
+  for (const action of RLS_ACTIONS) {
+    assert.equal(entity.rls[action]?.user_condition?.role, "admin", `${entity.name}.${action} must be server-only`);
+  }
+}
+
 test("ScanRun encodes the roadmap status lifecycle", () => {
   const scanRun = loadEntity("ScanRun");
   assert.equal(scanRun.name, "ScanRun");
@@ -60,7 +67,7 @@ test("ScanRun carries retry/resume/comparison lineage fields", () => {
   ]) {
     assert.ok(scanRun.properties[field], `ScanRun missing ${field}`);
   }
-  assertOwnerScopedRls(scanRun);
+  assertAdminOnlyRls(scanRun);
 });
 
 test("FixList links to a scan run and tracks priority counts", () => {
@@ -78,7 +85,7 @@ test("FixList links to a scan run and tracks priority counts", () => {
   ]) {
     assert.ok(fixList.properties[field], `FixList missing ${field}`);
   }
-  assertOwnerScopedRls(fixList);
+  assertAdminOnlyRls(fixList);
 });
 
 test("FixItem enums match the review-presentation contract", () => {
@@ -105,28 +112,23 @@ test("FixItem preserves finding provenance and completion tracking", () => {
     assert.ok(fixItem.properties[field], `FixItem missing ${field}`);
   }
   assert.deepEqual(fixItem.required, ["fix_list_id", "scan_run_id", "project_id", "issue_title"]);
-  assertOwnerScopedRls(fixItem);
+  assertAdminOnlyRls(fixItem);
 });
 
-test("all durable entities are owner-scoped and well-formed", () => {
+test("all durable scan-result entities are server-only and well-formed", () => {
   for (const name of ["ScanRun", "FixList", "FixItem"]) {
     const entity = loadEntity(name);
     assert.equal(entity.type, "object");
     assert.ok(entity.properties.owner_user_id, `${name} must have owner_user_id`);
-    assertOwnerScopedRls(entity);
+    assertAdminOnlyRls(entity);
   }
 });
 
-test("tenant-owned entities bind creates to the caller and freeze owner reassignment", () => {
-  for (const name of ["BusinessProject", "ScanRun", "FixList", "FixItem"]) {
-    const entity = loadEntity(name);
-    const createRules = JSON.stringify(entity.rls.create);
-    assert.match(createRules, /data\.owner_user_id/, `${name} create must bind owner_user_id`);
-    assert.match(createRules, /\{\{user\.id\}\}/, `${name} create must bind the caller id`);
-    assert.equal(
-      entity.properties.owner_user_id.rls.update.user_condition.role,
-      "admin",
-      `${name}.owner_user_id must be immutable to customer clients`,
-    );
-  }
+test("tenant project input binds to the caller while ScanRun and sealed results stay server-only", () => {
+  const project = loadEntity("BusinessProject");
+  const createRules = JSON.stringify(project.rls.create);
+  assert.match(createRules, /data\.owner_user_id/, "BusinessProject create must bind owner_user_id");
+  assert.match(createRules, /\{\{user\.id\}\}/, "BusinessProject create must bind the caller id");
+  assert.equal(project.properties.owner_user_id.rls.update.user_condition.role, "admin");
+  for (const name of ["ScanRun", "FixList", "FixItem"]) assertAdminOnlyRls(loadEntity(name));
 });

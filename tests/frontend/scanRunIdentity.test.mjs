@@ -152,10 +152,10 @@ test("ScanRun schema remains compatible with legacy empty project ids until a ba
   assert.equal(Object.hasOwn(scanRunSchema.properties.project_id, "minLength"), false);
 });
 
-test("form ensures an owner-bound domain project before creating the ScanRun", () => {
+test("form ensures an owner-bound domain project before requesting server ScanRun admission", () => {
   const ensureIndex = scanForm.indexOf("await ensureScanProject");
-  const beginIndex = scanForm.indexOf("await beginScanRun");
-  assert.ok(ensureIndex >= 0 && ensureIndex < beginIndex);
+  const admitIndex = scanForm.indexOf("submitStandardScanJob(scanPayload)");
+  assert.ok(ensureIndex >= 0 && ensureIndex < admitIndex);
   assert.match(scanForm, /projectId: scanProject\.id/);
   assert.match(activeProject, /BusinessProject\.filter\([\s\S]*owner_user_id: user\.id/);
   assert.match(activeProject, /const projectFields = \{[\s\S]*owner_user_id: user\.id/);
@@ -172,15 +172,16 @@ test("active replays reopen the exact durable scan instead of a nonexistent hist
   assert.doesNotMatch(scanForm, /Reopen it from scan history/);
 });
 
-test("form persists identity before network work and Standard always respects robots", () => {
-  assert.ok(scanForm.indexOf("await beginScanRun") < scanForm.indexOf("callBase44Function(STANDARD_SCANNER_FUNCTION"));
+test("form sends exact identity to server admission and Standard always respects robots", () => {
+  assert.ok(scanForm.indexOf("const requestId = createScanRequestId()") < scanForm.indexOf("submitStandardScanJob(scanPayload)"));
   assert.match(scanForm, /const requestId = createScanRequestId\(\)/);
   assert.match(scanForm, /request_id: requestId/);
   assert.match(scanForm, /idempotency_key: idempotencyKey/);
   assert.match(scanForm, /respect_robots_txt: true/);
   assert.doesNotMatch(scanForm, /respect_robots_txt: false/);
-  assert.match(scanRuns, /scan_id: created\.id/);
-  assert.match(scanRuns, /resolveScanRunReplay/);
+  const serverEntry = readFileSync("base44/functions/startStandardScanJob/entry.ts", "utf8");
+  assert.match(serverEntry, /scan_id: id/);
+  assert.match(serverEntry, /recoverOrCreateServerScan|recoverExistingServerScan/);
 });
 
 test("Base44 wrapper forwards and echoes durable identity at the Cloud Run boundary", () => {

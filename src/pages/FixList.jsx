@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Copy, Download, ExternalLink } from "lucide-react";
 
 import { isRateLimitFinding, shouldUseLegacyRateLimitPresentation } from "@/lib/reviewContract";
 import { trackEvent } from "@/lib/analytics";
-import { getScanRunWithFixList, recoverOrphanedScanRuns } from "@/lib/scanRuns";
-import { ACTIVE_SCAN_RUN_STATUSES, STANDARD_ORPHAN_RECOVERY_TTL_MS, isStaleActiveScanRun } from "@/lib/scanRunIdentity";
-import { LOCKED_PREVIEW_FIX_COUNT, UNLOCK_PRICE_LABEL, loadAccess } from "@/lib/access";
+import { getActiveProject } from "@/lib/activeProject";
+import { getScanRunWithFixList, listScanRuns } from "@/lib/scanRuns";
+import { customerRecoveryFailure } from "@/lib/scanRuns";
+import { ACTIVE_SCAN_RUN_STATUSES } from "@/lib/scanRunIdentity";
+import { UNLOCK_PRICE_LABEL } from "@/lib/access";
 import UnlockAccessButton from "@/components/billing/UnlockAccessButton";
 import { CUSTOMER_BOUNDARY_EVENT } from "@/lib/customerBrowserCache";
 import ScoreRing from "@/components/fixlist/ScoreRing";
@@ -51,6 +53,44 @@ const CATEGORY_LABELS = {
 const ENERGY_PATH_HINTS = ["energie", "énergie", "electricite", "électricité", "gaz", "fournisseur", "kwh", "tarif"];
 const CREDIT_PATH_HINTS = ["rachat-de-credits", "rachat-de-credit", "credit", "crédit", "credits", "crédits", "pret", "prêt", "emprunt"];
 
+const CUSTOMER_RECOVERY_COPY = Object.freeze({
+  unauthorized: {
+    title: "Sign in again to open this scan",
+    detail: "Your session could not be confirmed. Sign in again, then reopen the saved scan from your account.",
+    action: "login",
+  },
+  not_found: {
+    title: "Scan not found",
+    detail: "This scan does not exist or is not available to this signed-in account. No other scan has been substituted.",
+    action: "history",
+  },
+  access_conflict: {
+    title: "We couldn't confirm this account's access",
+    detail: "Your saved scan has not been replaced or removed. Contact support and include the reference below so the access record can be checked.",
+    action: "support",
+  },
+  unavailable: {
+    title: "This saved scan is temporarily unavailable",
+    detail: "We couldn't reach the saved result service. Your scan has not been removed; try loading it again.",
+    action: "retry",
+  },
+  authority_invalid: {
+    title: "We couldn't verify this saved result",
+    detail: "The result did not match its server verification seal, so no fix details are being shown. Contact support and include the reference below.",
+    action: "support",
+  },
+  not_authoritative: {
+    title: "This scan has no verified result",
+    detail: "The scan did not produce a result that passed the release checks, so no fix details are being shown. You can run a fresh scan.",
+    action: "new_scan",
+  },
+  load_failed: {
+    title: "We couldn't load this saved scan",
+    detail: "An unexpected error interrupted the read. Your saved scan has not been replaced; try loading it again.",
+    action: "retry",
+  },
+});
+
 // Checks the scanner actually runs; a check "passes" when no finding in the
 // scanned sample carries its category. Copy is deliberately sample-scoped —
 // the contract forbids claiming the whole site is perfect.
@@ -72,23 +112,18 @@ export default function FixList() {
   const requestedScanId = searchParams.get("scan_id") || "";
   const [scanRecord, setScanRecord] = useState(null);
   const [requestedScanState, setRequestedScanState] = useState(requestedScanId ? "loading" : "idle");
+  const [requestedScanFailure, setRequestedScanFailure] = useState(null);
   const [reloadToken, setReloadToken] = useState(0);
   // Survive effect re-runs: a poll re-runs the effect, so "have we already
   // loaded this exact scan?" cannot live in the effect's own scope.
   const loadedScanIdRef = useRef("");
-  const recoveryAttemptedForRef = useRef("");
   const pollTimerRef = useRef(0);
   const [selectedCms, setSelectedCms] = useState("custom");
   const [doneIds, setDoneIds] = useState([]);
-  const [locked, setLocked] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    loadAccess()
-      .then((access) => { if (active) setLocked(!access.fullAccess); })
-      .catch(() => {});
-    return () => { active = false; };
-  }, []);
+  const [recentScans, setRecentScans] = useState([]);
+  const [recentScansState, setRecentScansState] = useState(requestedScanId ? "idle" : "loading");
+  const [recentScansFailure, setRecentScansFailure] = useState(null);
+  const [historyReloadToken, setHistoryReloadToken] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -118,41 +153,25 @@ export default function FixList() {
     async function loadRequestedScan() {
       if (!requestedScanId) {
         clearRecord();
+        setRequestedScanFailure(null);
         setRequestedScanState("idle");
         return;
       }
       // "Loading this scan…" is an initial-load state only.
       if (!isBackgroundRead) {
         clearRecord();
+        setRequestedScanFailure(null);
         setRequestedScanState("loading");
       }
 
-      let durableBundle = await getScanRunWithFixList(requestedScanId);
+      const durableBundle = await getScanRunWithFixList(requestedScanId);
       if (cancelled) return;
-      // A run still shown as active may have been abandoned by a browser that
-      // never wrote a terminal state. Recovery runs at most once per scan and
-      // only once the row is genuinely past the orphan threshold -- never on
-      // every 2.5-second poll, which would hammer writes against a live scan.
-      if (
-        recoveryAttemptedForRef.current !== requestedScanId
-        && durableBundle?.run
-        && ACTIVE_SCAN_RUN_STATUSES.has(String(durableBundle.run.status || ""))
-        && isStaleActiveScanRun(durableBundle.run, { activeTtlMs: STANDARD_ORPHAN_RECOVERY_TTL_MS })
-      ) {
-        recoveryAttemptedForRef.current = requestedScanId;
-        const recovered = await recoverOrphanedScanRuns({ projectId: durableBundle.run.project_id || "" });
-        if (cancelled) return;
-        if (recovered.includes(requestedScanId)) {
-          durableBundle = await getScanRunWithFixList(requestedScanId) || durableBundle;
-          if (cancelled) return;
-        }
-      }
-
       // Never substitute another scan for the one that was requested.
       const isExactScan = String(durableBundle?.run?.id || "") === String(requestedScanId);
-      if (durableBundle?.run && isExactScan) {
+      if (durableBundle?.ok === true && durableBundle?.run && isExactScan) {
         loadedScanIdRef.current = requestedScanId;
         applyRecord(normalizeDurableScanBundle(durableBundle));
+        setRequestedScanFailure(null);
         setRequestedScanState("loaded");
         // Polling stops as soon as the run reaches a terminal state.
         if (ACTIVE_SCAN_RUN_STATUSES.has(String(durableBundle.run.status || ""))) {
@@ -163,25 +182,47 @@ export default function FixList() {
         return;
       }
 
-      // A transient null or read error during polling must not erase a scan we
-      // already hold. Keep the exact record on screen and try again.
-      if (isBackgroundRead && loadedScanIdRef.current === requestedScanId) {
+      const failure = durableBundle?.ok === false
+        ? durableBundle
+        : customerRecoveryFailure({ error_code: "result_load_failed" }, `result:${requestedScanId}`);
+
+      // A transient read error during polling must not erase the last exact,
+      // proof-verified record. Keep it visible, explain the refresh failure,
+      // and retry. Integrity, access, auth, and not-found failures clear it.
+      if (
+        isBackgroundRead
+        && loadedScanIdRef.current === requestedScanId
+        && failure.retryable === true
+      ) {
+        setRequestedScanFailure(failure);
+        setRequestedScanState("loaded");
         pollTimerRef.current = window.setTimeout(() => {
           if (!cancelled) setReloadToken((value) => value + 1);
         }, 2500);
         return;
       }
       clearRecord();
-      setRequestedScanState("not_found");
+      setRequestedScanFailure(failure);
+      setRequestedScanState(failure.kind);
     }
 
-    function clearProtectedView() {
+    function clearProtectedView(event) {
       cancelled = true;
       window.clearTimeout(pollTimerRef.current);
       loadedScanIdRef.current = "";
       setScanRecord(null);
       setDoneIds([]);
-      setRequestedScanState(requestedScanId ? "not_found" : "idle");
+      if (!requestedScanId) {
+        setRequestedScanFailure(null);
+        setRequestedScanState("idle");
+        return;
+      }
+      const boundaryKind = ["auth_expired", "session_cleared"].includes(String(event?.detail?.reason || ""))
+        ? "unauthorized"
+        : "not_found";
+      const failure = customerRecoveryFailure({ error_code: boundaryKind }, `result:${requestedScanId}`);
+      setRequestedScanFailure(failure);
+      setRequestedScanState(failure.kind);
     }
 
     loadRequestedScan();
@@ -193,6 +234,74 @@ export default function FixList() {
     };
   }, [requestedScanId, reloadToken]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    if (requestedScanId) {
+      setRecentScans([]);
+      setRecentScansFailure(null);
+      setRecentScansState("idle");
+      return undefined;
+    }
+
+    async function loadRecentScans() {
+      setRecentScansFailure(null);
+      setRecentScansState("loading");
+      try {
+        const { project } = await getActiveProject();
+        if (cancelled) return;
+        if (!project?.id) {
+          setRecentScans([]);
+          setRecentScansFailure(null);
+          setRecentScansState("loaded");
+          return;
+        }
+        const historyResult = await listScanRuns(project.id, 8);
+        if (cancelled) return;
+        if (historyResult?.ok !== true) {
+          const failure = historyResult?.ok === false
+            ? historyResult
+            : customerRecoveryFailure({ error_code: "result_load_failed" }, `history:${project.id}`);
+          setRecentScans([]);
+          setRecentScansFailure(failure);
+          setRecentScansState(failure.kind);
+          return;
+        }
+        setRecentScans((historyResult.runs || []).map(toRecentScanSummary).filter(Boolean));
+        setRecentScansFailure(null);
+        setRecentScansState("loaded");
+      } catch (error) {
+        if (cancelled) return;
+        const failure = customerRecoveryFailure(error, "history:active-project");
+        console.warn("Saved scan history read failed.", failure.kind, failure.support_reference);
+        setRecentScans([]);
+        setRecentScansFailure(failure);
+        setRecentScansState(failure.kind);
+      }
+    }
+
+    function clearRecentScans(event) {
+      cancelled = true;
+      setRecentScans([]);
+      const reason = String(event?.detail?.reason || "");
+      if (["auth_expired", "session_cleared"].includes(reason)) {
+        const failure = customerRecoveryFailure({ error_code: "unauthorized" }, "history:session");
+        setRecentScansFailure(failure);
+        setRecentScansState(failure.kind);
+        return;
+      }
+      setRecentScansFailure(null);
+      setRecentScansState("idle");
+    }
+
+    loadRecentScans();
+    window.addEventListener(CUSTOMER_BOUNDARY_EVENT, clearRecentScans);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(CUSTOMER_BOUNDARY_EVENT, clearRecentScans);
+    };
+  }, [requestedScanId, historyReloadToken]);
+
   const recommendations = useMemo(() => prepareCustomerFixes(
     mergeMetaDescriptionRecommendations(
       getRecommendations(scanRecord).map((item) => normalizeRecommendation(item, scanRecord)),
@@ -203,12 +312,16 @@ export default function FixList() {
   const scoreUnavailable = isHealthScoreUnavailable(scanRecord);
   const pagesScanned = getPagesScanned(scanRecord, pages);
   const pagesFound = getPagesFound(scanRecord);
-  const hasUsefulScan = Boolean(scanRecord && (
-    recommendations.length > 0
-    || pages.length > 0
-    || (healthScore !== null && healthScore > 0)
-    || (scanRecord.status === "complete" && scanRecord.is_authoritative === true)
-  ));
+  const locked = scanRecord?.customer_access === "locked";
+  const hasUsefulScan = Boolean(
+    scanRecord
+    && scanRecord.authority_verified === true
+    && scanRecord.status === "complete"
+    && scanRecord.release_gate_eligible === true
+    && scanRecord.is_authoritative === true
+    && scanRecord.score_is_provisional !== true
+    && scanRecord.evidence_quality_blocking !== true
+  );
   const noHighConfidenceFindings = isNoHighConfidenceFindings(scanRecord, recommendations);
   const nextBestStep = getNextBestStep(scanRecord, noHighConfidenceFindings);
   const websiteKey = websiteKeyOf(scanRecord);
@@ -221,10 +334,7 @@ export default function FixList() {
   const moreImportant = remaining.filter((item) => priorityBucket(item.priority) === "fix_first");
   const improveNext = remaining.filter((item) => priorityBucket(item.priority) === "improve_next");
   const worthChecking = remaining.filter((item) => priorityBucket(item.priority) === "worth_checking");
-  // Free-tier preview gate. This only limits what is rendered; the durable
-  // scan record itself is always loaded by exact scan_id.
-  const shownTopPriorities = locked ? topPriorities.slice(0, LOCKED_PREVIEW_FIX_COUNT) : topPriorities;
-  const hiddenCount = locked ? Math.max(0, active.length - shownTopPriorities.length) : 0;
+  const shownTopPriorities = topPriorities;
   const passedChecks = hasUsefulScan && !scoreUnavailable ? buildPassedChecks(recommendations) : [];
   const limitationNote = getLimitationNote(scanRecord);
   const summary = hasUsefulScan ? getBestSummary(scanRecord, pagesScanned, pagesFound, recommendations) : "";
@@ -240,6 +350,36 @@ export default function FixList() {
     setDoneIds(next);
   }
 
+  function retryRequestedScan() {
+    setRequestedScanFailure(null);
+    if (!scanRecord) setRequestedScanState("loading");
+    setReloadToken((value) => value + 1);
+  }
+
+  function retryRecentScans() {
+    setRecentScansFailure(null);
+    setRecentScansState("loading");
+    setHistoryReloadToken((value) => value + 1);
+  }
+
+  function handleRecoveryAction(action, target) {
+    if (action === "retry") {
+      if (target === "history") retryRecentScans();
+      else retryRequestedScan();
+      return;
+    }
+    if (action === "login") {
+      navigate("/login", { replace: true });
+      return;
+    }
+    if (action === "history") {
+      navigate("/dashboard", { replace: true });
+      return;
+    }
+    if (action === "new_scan") navigate("/onboarding");
+  }
+
+
   return (
     <div className="min-h-screen bg-paper text-ink antialiased">
       <div className="mx-auto max-w-[680px] px-6 pb-24">
@@ -254,10 +394,28 @@ export default function FixList() {
           </button>
         </div>
 
-        {requestedScanId && requestedScanState === "loading" && !scanRecord ? (
+        {requestedScanId && scanRecord && requestedScanFailure?.retryable === true ? (
+          <CustomerRecoveryNotice failure={requestedScanFailure} onRetry={retryRequestedScan} />
+        ) : null}
+
+        {!requestedScanId ? (
+          <RecentScansState
+            scans={recentScans}
+            state={recentScansState}
+            failure={recentScansFailure}
+            onAction={(action) => handleRecoveryAction(action, "history")}
+            onScan={() => navigate("/onboarding")}
+          />
+        ) : requestedScanState === "loading" && !scanRecord ? (
           <RequestedScanState title="Loading this scan…" detail="FixList is reopening the exact saved scan from your account." />
-        ) : requestedScanId && requestedScanState === "not_found" ? (
-          <RequestedScanState title="Scan not found" detail="This scan does not exist or is not available to this signed-in account. No other scan has been substituted." />
+        ) : requestedScanFailure && !scanRecord ? (
+          <CustomerRecoveryState
+            failure={requestedScanFailure}
+            target="scan"
+            onAction={(action) => handleRecoveryAction(action, "scan")}
+          />
+        ) : locked ? (
+          <LockedResultState />
         ) : scanRecord && !hasUsefulScan ? (
           <RequestedScanState
             title={getDurableScanStateTitle(scanRecord.status)}
@@ -303,21 +461,7 @@ export default function FixList() {
               </>
             ) : null}
 
-            {locked ? (
-              <div className="mt-10 rounded-2xl border border-hairline bg-white/60 p-6">
-                <h2 className="text-[18px] font-semibold tracking-tight">
-                  {hiddenCount > 0 ? `${hiddenCount} more ${hiddenCount === 1 ? "fix is" : "fixes are"} hidden` : "Full results are hidden"}
-                </h2>
-                <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">
-                  This result is locked. Activate Standard 150 lifetime beta access for {UNLOCK_PRICE_LABEL} to see every fix, the affected pages, the passed checks, and to run scans.
-                </p>
-                <div className="mt-5">
-                  <UnlockAccessButton />
-                </div>
-              </div>
-            ) : null}
-
-            {!locked && moreImportant.length > 0 ? (
+            {moreImportant.length > 0 ? (
               <>
                 <SectionEyebrow label="More important fixes" count={moreImportant.length} />
                 <div className="mt-2">
@@ -328,7 +472,7 @@ export default function FixList() {
               </>
             ) : null}
 
-            {!locked && improveNext.length > 0 ? (
+            {improveNext.length > 0 ? (
               <>
                 <SectionEyebrow label="Improve next" count={improveNext.length} />
                 <div className="mt-2">
@@ -339,7 +483,7 @@ export default function FixList() {
               </>
             ) : null}
 
-            {!locked && worthChecking.length > 0 ? (
+            {worthChecking.length > 0 ? (
               <>
                 <SectionEyebrow label="Worth checking" count={worthChecking.length} />
                 <div className="mt-2">
@@ -420,6 +564,135 @@ function RequestedScanState({ title, detail }) {
     <div className="mt-16 rounded-2xl border border-hairline-soft bg-white p-6">
       <h1 className="text-[22px] font-semibold tracking-tight">{title}</h1>
       <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{detail}</p>
+    </div>
+  );
+}
+
+function CustomerRecoveryState({ failure, target, onAction }) {
+  const copy = CUSTOMER_RECOVERY_COPY[failure?.kind] || CUSTOMER_RECOVERY_COPY.load_failed;
+  const actionLabel = recoveryActionLabel(copy.action, target);
+  return (
+    <div className="mt-16 rounded-2xl border border-hairline-soft bg-white p-6">
+      <h1 className="text-[22px] font-semibold tracking-tight">{copy.title}</h1>
+      <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{copy.detail}</p>
+      {actionLabel ? (
+        <button
+          type="button"
+          onClick={() => onAction(copy.action)}
+          className="mt-5 rounded-full bg-ink px-4 py-2 text-[13px] font-medium text-paper transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+        >
+          {actionLabel}
+        </button>
+      ) : null}
+      {failure?.support_reference ? (
+        <p className="mt-4 text-[12px] text-ink-faint">
+          Support reference: <span className="font-mono tabular-nums">{failure.support_reference}</span>
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function CustomerRecoveryNotice({ failure, onRetry }) {
+  const copy = CUSTOMER_RECOVERY_COPY[failure?.kind] || CUSTOMER_RECOVERY_COPY.load_failed;
+  return (
+    <div className="mt-6 rounded-xl border border-hairline-soft bg-white px-4 py-3" role="status">
+      <p className="text-[13px] font-medium text-ink">{copy.title}</p>
+      <p className="mt-1 text-[12px] leading-relaxed text-ink-muted">
+        The last verified result remains visible. Support reference: <span className="font-mono tabular-nums">{failure.support_reference}</span>
+      </p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-2 text-[12px] font-medium text-ink underline decoration-hairline underline-offset-4 hover:no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+      >
+        Retry loading this scan
+      </button>
+    </div>
+  );
+}
+
+function recoveryActionLabel(action, target) {
+  if (action === "retry") return target === "history" ? "Retry loading saved scans" : "Retry loading this scan";
+  if (action === "login") return "Sign in again";
+  if (action === "history") return "View saved scans";
+  if (action === "new_scan") return "Run a fresh scan";
+  return "";
+}
+
+function RecentScansState({ scans, state, failure, onAction, onScan }) {
+  if (state === "loading") {
+    return <RequestedScanState title="Loading your scans…" detail="FixList is checking your account for saved scans." />;
+  }
+
+  if (failure) return <CustomerRecoveryState failure={failure} target="history" onAction={onAction} />;
+
+  if (scans.length === 0) return <NoScanState onScan={onScan} />;
+
+  return (
+    <section className="mt-16" aria-labelledby="recent-scans-heading">
+      <h1 id="recent-scans-heading" className="text-[26px] font-semibold leading-tight tracking-tight">Recent scans</h1>
+      <p className="mt-2 text-[14px] leading-relaxed text-ink-muted">
+        Reopen a saved scan to see its current status or verified FixList.
+      </p>
+      <div className="mt-6 overflow-hidden rounded-2xl border border-hairline-soft bg-white">
+        {scans.map((scan) => {
+          const scanStatus = getRecentScanStatus(scan.status);
+          return (
+            <Link
+              key={scan.id}
+              to={`/dashboard?scan_id=${encodeURIComponent(scan.id)}`}
+              className="flex items-center justify-between gap-4 border-b border-hairline-soft px-5 py-4 transition-colors last:border-b-0 hover:bg-ink/[0.025] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ink"
+            >
+              <span className="min-w-0">
+                <span className="block truncate text-[14px] font-medium text-ink">{scan.website}</span>
+                <span className="mt-1 block text-[12px] text-ink-faint tabular-nums">
+                  {scan.occurredAt ? formatDate(scan.occurredAt) : "Date unavailable"}
+                </span>
+              </span>
+              <span className={`shrink-0 text-[12px] font-medium ${scanStatus.active ? "text-warnink" : "text-ink-muted"}`}>
+                {scanStatus.label} <span aria-hidden="true">›</span>
+              </span>
+            </Link>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function toRecentScanSummary(run = {}) {
+  const id = String(run.id || "").trim();
+  if (!id) return null;
+  return {
+    id: id,
+    website: safeHostname(run.website_url || run.submitted_url || run.final_url) || "Website scan",
+    status: String(run.status || "").trim().toLowerCase(),
+    occurredAt: run.completed_at || run.reviewing_at || run.started_at || run.queued_at || run.created_date || run.created_at || "",
+  };
+}
+
+function getRecentScanStatus(status) {
+  if (status === "queued") return { label: "Queued", active: true };
+  if (status === "crawling") return { label: "Scanning", active: true };
+  if (status === "reviewing") return { label: "Preparing FixList", active: true };
+  if (status === "complete") return { label: "Completed", active: false };
+  if (status === "failed") return { label: "Failed", active: false };
+  if (status === "limited") return { label: "Limited", active: false };
+  if (status === "cancelled") return { label: "Cancelled", active: false };
+  return { label: "Saved", active: false };
+}
+
+function LockedResultState() {
+  return (
+    <div className="mt-16 rounded-2xl border border-hairline-soft bg-white p-6">
+      <h1 className="text-[22px] font-semibold tracking-tight">Your saved result is locked</h1>
+      <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">
+        Activate Standard 150 beta access for {UNLOCK_PRICE_LABEL} to open verified fixes and run scans. Result details stay on the server until access is confirmed.
+      </p>
+      <div className="mt-5">
+        <UnlockAccessButton />
+      </div>
     </div>
   );
 }
@@ -1211,6 +1484,8 @@ function normalizeDurableScanBundle(bundle = {}) {
     id: run.id || bundle.scan_id || "",
     scan_id: run.scan_id || run.id || bundle.scan_id || "",
     fix_list_id: fixList.id || run.fix_list_id || "",
+    customer_access: bundle.access || "locked",
+    authority_verified: bundle.authority_verified === true,
     is_authoritative: fixList.is_authoritative === true,
     health_score: run.health_score ?? fixList.health_score ?? null,
     health_grade: run.health_grade || fixList.health_grade || "",
@@ -1224,6 +1499,7 @@ function normalizeDurableScanBundle(bundle = {}) {
 
 function getDurableScanStateTitle(status) {
   if (["queued", "crawling", "reviewing"].includes(status)) return "This scan is still running";
+  if (status === "limited") return "This scan finished with limited evidence";
   if (status === "failed") return "This scan didn't finish";
   if (status === "cancelled") return "This scan was cancelled";
   return "No results saved for this scan";
@@ -1232,6 +1508,9 @@ function getDurableScanStateTitle(status) {
 function getDurableScanStateDetail(status) {
   if (["queued", "crawling", "reviewing"].includes(status)) {
     return "FixList is still working. This page refreshes automatically and will show your saved result as soon as it is ready.";
+  }
+  if (status === "limited") {
+    return "FixList couldn't verify enough representative page evidence to publish a reliable result. Run a fresh scan when you're ready to try again.";
   }
   if (status === "failed") {
     return "Something interrupted this scan before results could be saved. Run a fresh scan to get a complete FixList.";

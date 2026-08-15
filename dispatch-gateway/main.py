@@ -19,6 +19,9 @@ app = Flask(__name__)
 
 CLOUD_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 QUEUE_PATH = os.environ["SCAN_TASKS_QUEUE_PATH"].strip()
+DRAIN_QUEUE_PATH = os.environ["SCAN_DRAIN_QUEUE_PATH"].strip()
+if not QUEUE_PATH or not DRAIN_QUEUE_PATH or QUEUE_PATH == DRAIN_QUEUE_PATH:
+    raise RuntimeError("scan and drain queue paths must be non-empty and distinct")
 WORKER_URL = os.environ["SCAN_WORKER_URL"].strip().rstrip("/")
 INVOKER_SA = os.environ["TASKS_INVOKER_SERVICE_ACCOUNT"].strip()
 SIGNING_ROOT = os.environ["SCAN_EVIDENCE_SIGNING_KEY"]
@@ -34,7 +37,6 @@ if worker_parts.scheme != "https" or not worker_parts.netloc:
 WORKER_ORIGIN = f"{worker_parts.scheme}://{worker_parts.netloc}"
 DRAIN_URL = f"{WORKER_ORIGIN}/scan-job-drain"
 ALLOWED_URLS = {WORKER_URL, DRAIN_URL}
-TASK_PREFIX = f"{QUEUE_PATH}/tasks/"
 TASK_RE = re.compile(r"^standard150-(?:(drain)-)?([A-Za-z0-9_-]+)-a([1-9][0-9]*)$")
 
 
@@ -78,7 +80,8 @@ def _decode_task_payload(task: dict[str, Any]) -> dict[str, Any] | None:
 def validate_dispatch(payload: Any) -> tuple[dict[str, Any] | None, str | None]:
     if not isinstance(payload, dict):
         return None, "invalid_payload"
-    if payload.get("queue_path") != QUEUE_PATH:
+    queue_path = str(payload.get("queue_path") or "")
+    if queue_path not in {QUEUE_PATH, DRAIN_QUEUE_PATH}:
         return None, "invalid_queue"
 
     task = payload.get("task")
@@ -86,14 +89,18 @@ def validate_dispatch(payload: Any) -> tuple[dict[str, Any] | None, str | None]:
         return None, "invalid_task"
 
     name = str(task.get("name") or "")
-    if not name.startswith(TASK_PREFIX):
+    task_prefix = f"{queue_path}/tasks/"
+    if not name.startswith(task_prefix):
         return None, "invalid_task_name"
-    short_name = name[len(TASK_PREFIX):]
+    short_name = name[len(task_prefix):]
     match = TASK_RE.fullmatch(short_name)
     if not match:
         return None, "invalid_task_name"
     is_drain = bool(match.group(1))
     name_scan_id = match.group(2)
+    expected_queue = DRAIN_QUEUE_PATH if is_drain else QUEUE_PATH
+    if queue_path != expected_queue:
+        return None, "invalid_queue"
 
     if task.get("dispatchDeadline") != "480s":
         return None, "invalid_dispatch_deadline"
@@ -147,6 +154,7 @@ def health():
         "ok": True,
         "service": "fixlist-dispatch-gateway",
         "queue": QUEUE_PATH,
+        "drain_queue": DRAIN_QUEUE_PATH,
         "worker_origin": WORKER_ORIGIN,
     })
 
@@ -185,7 +193,7 @@ def dispatch():
     except Exception:
         return response_error("adc_auth_failed", 503)
 
-    endpoint = f"https://cloudtasks.googleapis.com/v2/{QUEUE_PATH}/tasks"
+    endpoint = f"https://cloudtasks.googleapis.com/v2/{payload['queue_path']}/tasks"
     try:
         upstream = requests.post(
             endpoint,

@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 const faqs = [
   {
     q: "What does FixList do?",
-    a: "FixList scans your website and turns the results into plain-English SEO fixes you can understand and act on.",
+    a: "FixList runs a read-only Standard 150 beta scan of up to 150 pages, then turns the results into plain-English SEO fixes you can understand and act on.",
   },
   {
     q: "Will FixList change my website?",
@@ -15,8 +15,12 @@ const faqs = [
     a: "No. FixList is built for small business owners. It explains what matters, why it matters, and whether you can handle it yourself or may need help.",
   },
   {
+    q: "How much is beta access?",
+    a: "Beta access is a one-time $50 payment. It includes Standard 150 beta scans, with up to 150 pages checked per scan.",
+  },
+  {
     q: "How long does a scan take?",
-    a: "Most first scans take 1–2 minutes. Bigger websites may take a little longer depending on scan size.",
+    a: "Most scans take about 2–4 minutes. Larger or slower websites may take longer.",
   },
   {
     q: "What happens after I run my scan?",
@@ -51,7 +55,7 @@ export default function Landing() {
               to="/register"
               className="rounded-full bg-ink px-4 py-2 text-[13px] font-medium text-paper transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
             >
-              Run my scan
+              Get beta access
             </Link>
           </div>
         </nav>
@@ -59,15 +63,15 @@ export default function Landing() {
         <main>
           <section className="mt-24">
             <p className="text-[13px] text-ink-faint">
-              Read-only scan · no site changes
+              Standard 150 beta · read-only · no site changes
             </p>
             <h1 className="mt-4 text-[32px] font-semibold leading-tight tracking-tight sm:text-[38px]">
               Website scans, turned into simple SEO fixes.
             </h1>
             <p className="mt-4 max-w-[52ch] text-[15px] leading-relaxed text-ink-muted">
-              Scan your site, see what needs attention, and get a plain-English
-              list of what to fix first — each with where to click and who
-              should do it.
+              Check up to 150 pages, see what needs attention, and get a
+              plain-English list of what to fix first — each with where to
+              click and who should do it.
             </p>
 
             <div className="mt-8 flex flex-wrap items-center gap-4">
@@ -75,7 +79,7 @@ export default function Landing() {
                 to="/register"
                 className="rounded-full bg-ink px-5 py-2.5 text-[13px] font-medium text-paper transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
               >
-                Run my scan
+                Get beta access
               </Link>
               <a
                 href="#faq"
@@ -87,13 +91,13 @@ export default function Landing() {
 
             <div className="mt-8 flex flex-wrap gap-x-6 gap-y-2 text-[13px] text-ink-muted">
               <span className="flex items-center gap-2">
-                <span className="text-good">✓</span> Free scan included
+                <span className="text-good">✓</span> Up to 150 pages per scan
               </span>
               <span className="flex items-center gap-2">
-                <span className="text-good">✓</span> No credit card needed
+                <span className="text-good">✓</span> One-time $50 beta access
               </span>
               <span className="flex items-center gap-2">
-                <span className="text-good">✓</span> Results in minutes
+                <span className="text-good">✓</span> Usually 2–4 minutes
               </span>
             </div>
           </section>
@@ -135,8 +139,8 @@ export default function Landing() {
         </main>
 
         <footer className="mt-24 border-t border-hairline-soft pt-5 text-[12px] leading-relaxed text-ink-faint">
-          FixList checks the most important pages of your site and turns what
-          it finds into a short, plain-English list.
+          FixList checks up to 150 pages of your site and turns what it finds
+          into a short, plain-English list.
         </footer>
       </div>
     </div>

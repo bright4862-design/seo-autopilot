@@ -23,7 +23,7 @@ from app import main
 client = TestClient(main.app)
 
 # Routes whose only application-level guard is the Cloud Tasks OIDC check.
-DURABLE_ROUTES = ("/scan-job", "/scan-job-drain")
+DURABLE_ROUTES = ("/scan-job", "/scan-job-drain", "/scan-reconcile")
 
 # A schema-valid ScanJobRequest. FastAPI validates the body before the endpoint
 # body runs, so an incomplete payload would 422 and never reach the OIDC gate.
@@ -39,6 +39,7 @@ VALID_JOBS = {
         "website_url": "https://example.com",
         "drain_after": "2026-08-11T00:00:00+00:00",
     },
+    "/scan-reconcile": {},
 }
 
 # Routes guarded by the scanner key. /review additionally requires OIDC.
@@ -79,7 +80,7 @@ def test_scan_job_supplying_the_scanner_key_does_not_grant_access(monkeypatch, r
     assert response.status_code == 401
 
 
-@pytest.mark.parametrize("handler", [main.scan_job, main.scan_job_drain])
+@pytest.mark.parametrize("handler", [main.scan_job, main.scan_job_drain, main.scan_reconcile])
 def test_scan_job_handler_does_not_call_require_scanner_api_key(handler):
     """Structural: durable handlers must stay OIDC-only."""
     source = inspect.getsource(handler)
@@ -118,7 +119,7 @@ def test_every_scanner_key_route_is_still_guarded():
     """Guard inventory: catches a new route added without authentication."""
     guarded = {"/health/auth", "/scan", "/review", "/chat"}
     open_routes = {"/health", "/revision"}
-    durable = {"/scan-job", "/scan-job-drain"}
+    durable = {"/scan-job", "/scan-job-drain", "/scan-reconcile"}
 
     for route in main.app.routes:
         path = getattr(route, "path", None)

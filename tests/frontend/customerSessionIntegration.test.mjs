@@ -5,6 +5,7 @@ import test from "node:test";
 const auth = readFileSync("src/lib/AuthContext.jsx", "utf8");
 const activeProject = readFileSync("src/lib/activeProject.js", "utf8");
 const scanRuns = readFileSync("src/lib/scanRuns.js", "utf8");
+const customerResult = readFileSync("base44/functions/getCustomerScanResult/index.ts", "utf8");
 const scanForm = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
 const fixList = readFileSync("src/pages/FixList.jsx", "utf8");
 const assistant = readFileSync("src/pages/Assistant.jsx", "utf8");
@@ -40,7 +41,11 @@ test("refresh and browser history reopen only an exact owner-authorized server s
   assert.match(fixList, /searchParams\.get\("scan_id"\)/);
   assert.match(fixList, /getScanRunWithFixList\(requestedScanId\)/);
   assert.doesNotMatch(fixList, /latest local|readBestScanRecord|loaded_local/);
-  assert.match(scanRuns, /String\(run\.owner_user_id \|\| ""\) !== owner\.owner_user_id/);
+  assert.match(scanRuns, /base44\.functions\.invoke\("getCustomerScanResult"/);
+  assert.doesNotMatch(scanRuns.match(/export async function getScanRunWithFixList[\s\S]*?\n\}/)?.[0] || "", /entities\.(?:FixList|FixItem)/);
+  assert.match(customerResult, /const exactOwner = cleanId\(run\?\.owner_user_id\) === cleanId\(user\.id\)/);
+  assert.match(customerResult, /\(!exactOwner && !legacyOwner\)/);
+  assert.match(customerResult, /verifyAuthoritySeal\(snapshot, secret, proof\)/);
   assert.match(scanRuns, /String\(fixList\.project_id \|\| ""\) !== projectId/);
   assert.match(scanRuns, /String\(item\.scan_run_id \|\| ""\) !== String\(run\.id \|\| ""\)/);
 });
@@ -58,9 +63,12 @@ test("scan duplicate and late-response guards bind owner, project, request, scan
   assert.match(scanForm, /releaseIdentity: RELEASE_AUTHORITY_CONTRACT\.betaRevisionFingerprint/);
   assert.match(scanForm, /err\?\.code === "stale_customer_session"/);
   assert.match(scanForm, /requestEpochRef\.current !== requestEpoch/);
-  assert.match(scanForm, /aiError\?\.code === "stale_customer_session"[\s\S]*clearCustomerAuthBoundary\(aiError\)/);
-  assert.match(scanForm, /clearCustomerAuthBoundary\(persistenceError\)/);
   assert.match(scanForm, /clearCustomerAuthBoundary\(err\)/);
+  const submitStart = scanForm.indexOf("async function handleSubmit");
+  const submitEnd = scanForm.indexOf("\n  return (", submitStart);
+  const submitSource = scanForm.slice(submitStart, submitEnd);
+  assert.match(submitSource, /submitStandardScanJob\(scanPayload\)/);
+  assert.doesNotMatch(submitSource, /aiReviewScan|persistScanAuthority|completeScanRun|failScanRun|cancelScanRun/);
 });
 
 test("Grok conversations and pending responses bind owner, project, scan, domain, and release", () => {

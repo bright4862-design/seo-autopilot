@@ -2,7 +2,7 @@
 
 Authoritative mapping of every environment input reachable from the durable
 Standard 150 path. Derived by tracing `/scan-job`, `/scan-job-drain`, `scan_job.py`, `run_scan`, the
-authority completion path, and the three Base44 durable functions. The immutable
+authority completion path, and the six Base44 customer-release functions. The immutable
 release SHA is recorded only after the full gate passes.
 
 **Classification**
@@ -58,10 +58,14 @@ Base44-hosted. Supplied through Base44 function environment, **not** Cloud Build
 | Variable | Class | Code reader | Missing-value failure mode |
 |---|---|---|---|
 | `SCAN_TASKS_QUEUE_PATH` | **required** | `entry.ts` → `enqueueScanJob({queuePath})` | Cloud Tasks REST call targets a malformed queue path; enqueue fails. |
+| `SCAN_DRAIN_QUEUE_PATH` | **required and must differ from scan queue** | `entry.ts` → `enqueueScanDrain({queuePath})` | Admission fails closed before dispatch. The delayed watchdog must not share the concurrency-1 scan queue. |
 | `SCAN_WORKER_URL` | **required** | `entry.ts` → `audienceForWorkerUrl()` | `new URL("")` throws → `invalid_worker_url`. Fail-closed. |
 | `TASKS_INVOKER_SERVICE_ACCOUNT` | **required** | `cloudTasks.js` `oidcToken.serviceAccountEmail` | Cloud Tasks cannot mint an OIDC token; the worker rejects the call. |
 | `SCAN_DISPATCH_GATEWAY_URL` | **required for keyless dispatch** | `cloudTasks.js` `createTask()` | Unset selects the key-based route below. Set, it is the only enqueue path. |
 | `SCAN_EVIDENCE_SIGNING_KEY` | **required with the gateway** | `cloudTasks.js` `createTaskViaGateway()` | `dispatch_gateway_signing_key_missing`. Fail-closed before any network call. |
+| `BETA_SCAN_ADMISSION_ENABLED` | **required; default-off** | `admission.js`, package-local `admissionClient.js` | Any value other than exact `true` refuses new admission. No ScanRun is created. |
+| `BETA_COHORT_ALLOWED_USER_IDS` | **required when admission is enabled** | `admission.js` | Must contain 1–25 unique exact Base44 user IDs. Missing, malformed, or oversized cohorts fail closed. |
+| `SCAN_ADMISSION_COORDINATOR_URL` | **required when admission is enabled** | package-local `admissionClient.js` | Admission fails closed; no new ScanRun is created or bound. |
 | `GCP_SERVICE_ACCOUNT_KEY` | **required only without the gateway** | `cloudTasks.js` `accessToken()` | `tasks_credentials_not_configured`. Distinct from a malformed key, which yields a `tasks_key_*` code, or `tasks_token_mint_failed` when the cause is not recognised. |
 
 ### Enqueue route selection
@@ -97,15 +101,53 @@ authenticates the customer, verifies exactly one active paid owner-bound Access
 record, creates the delayed attempt-bound watchdog task, creates the immediate
 worker task, and returns.
 
-## Component C — `durableScanWorkerControl` and `persistDurableScanAuthority`
+## Component C — authority persistence and customer result projection
 
 | Variable | Class | Code reader | Missing-value failure mode |
 |---|---|---|---|
-| `SCAN_EVIDENCE_SIGNING_KEY` | **required** | both `index.ts` | 503 `authority_not_configured`. Fail-closed: no envelope is trusted without it. |
+| `SCAN_EVIDENCE_SIGNING_KEY` | **required** | `durableScanWorkerControl/index.ts`, `persistDurableScanAuthority/index.ts`, `getCustomerScanResult/index.ts` | Authority writes fail with `authority_not_configured`; customer result reads return `result_authority_unavailable`. No unverified FixItems are returned. |
+| `BETA_SCAN_ADMISSION_ENABLED` | **required for active coordinator release** | package-local `admissionClient.js` | If disabled, terminal persistence stays truthful but the Firestore lease is not actively released; lease expiry is the fallback. |
+| `SCAN_ADMISSION_COORDINATOR_URL` | **required for active coordinator release** | package-local `admissionClient.js` | Terminal persistence stays authoritative; release logs a bounded failure and lease expiry remains the fallback. |
 
-Both functions hold `asServiceRole`. All three release functions must be deployed
-from the same immutable SHA. Completion never reads or writes `Access`; payment
-is enforced once, before enqueue.
+The authority functions and result projection hold `asServiceRole` only after
+an exact caller/ScanRun ownership check. All six release functions must be
+deployed from the same immutable SHA. The result projection independently
+checks the active paid entitlement and verifies the persisted HMAC before it
+returns FixList or FixItem content.
+
+Admission ownership lives in Firestore through the coordinator.
+`BASE44_ATOMIC_UPDATE_MANY_CONFIRMED` is deliberately absent, and the
+coordinator claim token is transient rather than persisted to `ScanRun`.
+
+## Component D — Base44 checkout and activation
+
+`createAccessCheckout` and `stripeWebhook` are Base44-hosted. Their Stripe
+secrets are supplied through Base44 Secrets, never Cloud Build or browser
+configuration.
+
+| Variable or secret | Class | Code reader | Missing-value failure mode |
+|---|---|---|---|
+| `STRIPE_SECRET_KEY` | **required secret** | both checkout functions via `base44:runtime` | Stripe session retrieval/creation fails; no entitlement is granted. |
+| `STRIPE_WEBHOOK_SECRET` | **required secret** | `stripeWebhook/entry.ts` | Webhook signature verification fails; no entitlement is granted. |
+| `BETA_CHECKOUT_ENABLED` | **required switch; secure default is off** | `createAccessCheckout/entry.ts` | Missing or any value other than exact `true` returns `checkout_paused` before Access or Stripe writes. |
+| `BETA_CHECKOUT_GENERATION` | **required when checkout is enabled** | `createAccessCheckout/entry.ts` | Missing or malformed values fail closed with `checkout_configuration_invalid`; this generation participates in Stripe idempotency. |
+| `BETA_COHORT_ALLOWED_USER_IDS` | **required when checkout is enabled** | `createAccessCheckout/entry.ts` | Must contain 1–25 unique exact Base44 user IDs separated by commas or whitespace. Empty, malformed, or more than 25 IDs fail closed before writes. The list must include every existing active beta owner as well as new invitees. |
+| `CHECKOUT_RETURN_ORIGINS` | optional production supplement; **required for preview checkout** | `createAccessCheckout/entry.ts` | Only the fixed production origin remains accepted. Configure `https://preview--rich-rank-pilot-flow.base44.app` when preview checkout is intentionally tested. |
+| `CHECKOUT_ALLOW_LOCALHOST` | optional-with-secure-default | `createAccessCheckout/entry.ts` | Defaults to false. Localhost return URLs remain rejected. Never enable in production. |
+
+Return URLs are exact-origin matched. Arbitrary request origins, paths,
+credentials, query strings, fragments, and lookalike subdomains are rejected
+before any Access write or Stripe call. Pending checkout retries reuse the
+stored open session. Checkout never creates Access rows: an operator must
+pre-provision exactly one pending, owner-ID-and-email-bound Access record for
+each allowlisted customer before enabling the cohort. The hard 25-ID allowlist
+is therefore the seat allocator; missing or duplicate Access rows fail before
+Stripe. Stripe idempotency is stable on user ID, cohort generation, and prior
+session, while webhook replay handling keeps one entitlement grant exact-once.
+
+To pause new purchases without taking existing scans or results offline, set
+`BETA_CHECKOUT_ENABLED=false`. Do not delete Access rows or disable the worker
+as a purchase-pause mechanism.
 
 ---
 
@@ -182,6 +224,15 @@ account and invoker service account. It fails closed if the Cloud Run IAM policy
 cannot be read or parsed, rejects public `roles/run.invoker` bindings, and
 requires `serviceAccount:<EXPECTED_INVOKER_SA>` to hold that role.
 
+Before running it, use the authenticated, pinned Base44 CLI in a clean temporary
+checkout to pull the deployed functions, then pass that pull's `base44/functions`
+directory as `BASE44_PULLED_FUNCTIONS_DIR` and the same pull's
+`base44/entities` directory as `BASE44_PULLED_ENTITIES_DIR`. The verifier hashes
+all six required function packages, including each `function.jsonc`, plus the
+exact `ScanRun.jsonc`, `FixList.jsonc`, and `FixItem.jsonc` authority schemas.
+It fails if any package/schema is missing or differs from the release candidate.
+A dashboard name or function-only check is not sufficient.
+
 ## Production acceptance gate
 
 The paid beta is a single Standard 150 contract. A release is NO-GO unless one
@@ -201,3 +252,35 @@ candidate SHA/image/fingerprint:
 - Pre-deploy: `bash scripts/deployment_preflight.sh`
 - Post-deploy, read-only: `bash scripts/post_deploy_verify.sh`
 - Full gate: `bash scripts/release_gate.sh`
+
+## Queue reconciliation backstop
+
+Multi-scan beta operation has two independent terminal-recovery paths:
+
+1. Each admitted scan gets a delayed `/scan-job-drain` task on the dedicated
+   `fixlist-standard150-drain` queue. Queue wait never counts as crawl runtime;
+   the worker stamps `started_at` on actual pickup and the drain waits through
+   the full three-delivery Cloud Tasks retry envelope before terminalizing.
+2. Cloud Scheduler job `fixlist-standard150-reconcile` invokes the private
+   worker route `/scan-reconcile` every five minutes using the exact existing
+   `TASKS_INVOKER_SERVICE_ACCOUNT` OIDC identity. The route performs no crawl.
+   It sends a parameter-free HMAC-signed `sweep` action to
+   `durableScanWorkerControl`, which may only touch server-admitted ScanRuns.
+
+The periodic sweep is deliberately later than the normal drain: queued scans
+must exceed 30 minutes and worker-started scans must exceed 35 minutes before
+reconciliation may fail them. Terminal server-admitted rows in the recent
+release window are also re-released idempotently so a transient coordinator
+failure cannot leave an owner admission bound after the scan itself completed.
+
+Bound admission is not released by wall-clock lease expiry. Only an exact
+terminal release for the bound `scan_id` frees the owner slot. This prevents a
+late Cloud Task from an old scan overlapping a newly admitted scan.
+
+Deployment/verification scripts:
+
+- `scripts/configure-standard150-reconciler.sh` — confirmation-gated Scheduler
+  create/update; OIDC audience is the canonical Cloud Run service URL.
+- `scripts/verify-standard150-reconciler.sh` — read-only verification of enabled
+  state, five-minute schedule, exact `/scan-reconcile` target, POST method,
+  service account and OIDC audience.

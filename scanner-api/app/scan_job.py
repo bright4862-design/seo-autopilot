@@ -192,6 +192,40 @@ async def read_scan_run(client: httpx.AsyncClient, scan_id: str) -> dict[str, An
     return scan if isinstance(scan, dict) else None
 
 
+async def mark_scan_started(client: httpx.AsyncClient, scan: dict[str, Any]) -> dict[str, Any]:
+    """Atomically mark actual worker pickup without resetting an existing start time."""
+    signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
+    identity = _scan_identity(scan)
+    if not signing_key or not all(identity.values()):
+        raise RuntimeError("Durable scan start signing is not configured.")
+    envelope = build_control_envelope("start", signing_key, identity=identity)
+    response = await invoke_function(client, "durableScanWorkerControl", envelope, timeout=20.0)
+    if response["status_code"] >= 300 or response["body"].get("success") is not True:
+        raise RuntimeError("The durable scan start state could not be verified.")
+    persisted = response["body"].get("scanRun")
+    if not isinstance(persisted, dict):
+        raise RuntimeError("The durable scan start response is missing its ScanRun.")
+    return persisted
+
+
+async def reconcile_stale_scans(client: httpx.AsyncClient) -> dict[str, Any]:
+    """Run one signed, parameter-free stale-scan reconciliation sweep."""
+    signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
+    if not signing_key:
+        raise RuntimeError("Durable reconciliation signing is not configured.")
+    envelope = build_control_envelope("sweep", signing_key)
+    response = await invoke_function(client, "durableScanWorkerControl", envelope, timeout=60.0)
+    if response["status_code"] >= 300 or response["body"].get("success") is not True:
+        raise RuntimeError("Durable scan reconciliation could not be verified.")
+    counts = response["body"].get("reconciliation")
+    if not isinstance(counts, dict):
+        raise RuntimeError("Durable scan reconciliation response is malformed.")
+    return {
+        key: max(0, int(counts.get(key) or 0))
+        for key in ("examined", "closed", "released", "skipped", "errors")
+    }
+
+
 async def write_terminal_failure(
     client: httpx.AsyncClient,
     scan_id: str,

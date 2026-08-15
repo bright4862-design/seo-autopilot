@@ -1,7 +1,7 @@
 import asyncio
 import os
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -22,6 +22,7 @@ from .navigation_indexability import NAVIGATION_INDEXABILITY_VERSION
 from .observability import (
     OBSERVABILITY_VERSION,
     RequestTimer,
+    emit,
     review_metrics,
     scan_metrics,
     website_host,
@@ -42,7 +43,9 @@ from .scan_job import (
     already_terminal,
     complete_authority,
     identity_matches,
+    mark_scan_started,
     read_scan_run,
+    reconcile_stale_scans,
     write_terminal_failure,
 )
 from .scanner import VERSION, run_scan
@@ -54,6 +57,7 @@ GROK_PROXY_ENABLED = os.getenv("GROK_PROXY_ENABLED", "").strip().lower() == "tru
 TRUST_DISCOVERY_TIMEOUTS = {"basic": 2.0, "quick": 3.0, "deep": 5.0, "advanced": 7.0}
 SCAN_RESPONSE_PAGE_LIMITS = {"basic": 25, "quick": 40, "deep": 85, "advanced": 150}
 GROK_ERROR_DETAIL_VERSION = "grok_upstream_detail_v1"
+WORKER_TERMINAL_DRAIN_AFTER_START_SECONDS = 1800
 
 app = FastAPI(title="FixList Scanner API", version=VERSION)
 
@@ -468,6 +472,11 @@ async def scan_job(
             }
 
         try:
+            scan = await mark_scan_started(client, scan)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail="The scan start state is unavailable.") from exc
+
+        try:
             result = await run_scan(
                 website_url=payload.website_url,
                 path_prefix=payload.path_prefix,
@@ -483,6 +492,13 @@ async def scan_job(
             # sample is bounded.
             result = enforce_scan_response_page_budget(result, "advanced")
             result["beta_revision_fingerprint"] = live_revision()["fingerprint"]
+            emit(
+                "scan_job_crawl_completed",
+                scan_id=scan_id,
+                attempt_count=job_attempt,
+                normalized_domain=payload.normalized_domain or website_host(payload.website_url),
+                **scan_metrics(result),
+            )
             result.update({
                 "advanced_scan_backend": "python_scanner_api",
                 "deno_fallback_used": False,
@@ -538,6 +554,19 @@ async def scan_job(
         }
 
 
+@app.post("/scan-reconcile")
+async def scan_reconcile(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    """Scheduler backstop for stale durable scans; never performs a crawl."""
+    require_cloud_tasks_oidc(authorization)
+    async with httpx.AsyncClient() as client:
+        try:
+            counts = await reconcile_stale_scans(client)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail="Durable scan reconciliation is unavailable.") from exc
+    emit("scan_reconcile_completed", **counts)
+    return {"success": True, "worker_version": WORKER_VERSION, "reconciliation": counts}
+
+
 @app.post("/scan-job-drain")
 async def scan_job_drain(
     payload: ScanDrainRequest,
@@ -590,6 +619,24 @@ async def scan_job_drain(
                 "status": scan.get("status"),
                 "scan_id": scan_id,
             }
+
+        status = str(scan.get("status") or "").lower()
+        started_raw = str(scan.get("started_at") or "").strip()
+        if status == "queued" or not started_raw:
+            # Queue wait is not worker runtime. Keep this watchdog task alive via
+            # Cloud Tasks retries until a worker has actually picked the scan up.
+            raise HTTPException(status_code=503, detail="The scan has not started yet.")
+        try:
+            started_at = datetime.fromisoformat(started_raw.replace("Z", "+00:00"))
+            if started_at.tzinfo is None:
+                started_at = started_at.replace(tzinfo=timezone.utc)
+        except ValueError as exc:
+            raise HTTPException(status_code=503, detail="The scan start time is unavailable.") from exc
+        terminal_deadline = started_at.astimezone(timezone.utc) + timedelta(
+            seconds=WORKER_TERMINAL_DRAIN_AFTER_START_SECONDS,
+        )
+        if datetime.now(timezone.utc) < terminal_deadline:
+            raise HTTPException(status_code=503, detail="The worker terminal deadline is not due yet.")
 
         try:
             closed = await write_terminal_failure(

@@ -94,7 +94,7 @@ content **never** enter this document. A test asserts the exact key set.
 | --- | --- | --- |
 | `SCAN_EVIDENCE_SIGNING_KEY` | — | Required; the service refuses to start without it |
 | `ADMISSION_COLLECTION` | `scan_admission` | |
-| `ADMISSION_LEASE_SECONDS` | `900` | Clamped to 60–3600 |
+| `ADMISSION_LEASE_SECONDS` | `2400` | Clamped to 60–3600; bound scans remain held until explicit terminal release |
 | `ADMISSION_MAX_CLOCK_SKEW_SECONDS` | `300` | |
 | `ADMISSION_MAX_BODY_BYTES` | `65536` | |
 | `FIRESTORE_PROJECT` / `FIRESTORE_DATABASE` | ADC default | |
@@ -114,7 +114,4 @@ cover the HTTP surface, the HMAC boundary and the transaction wiring.
 
 ## Not yet done
 
-This service is **implemented and tested, not deployed**. It has no deployment
-script and is not in the Cloud Operator allowlist, and `BETA_SCAN_ADMISSION_ENABLED`
-remains `false` so no Base44 code path calls it. See
-`docs/scan-admission-coordinator.md` for the remaining wiring.
+The service is deployed only through the confirmation-gated release tooling. The one-time owner bootstrap creates the dedicated runtime identity and named Firestore database; routine exact-SHA deploys use `scripts/deploy_admission_coordinator.sh`. `BETA_SCAN_ADMISSION_ENABLED` remains disabled until the deployed coordinator, Base44 function set, worker candidate, watchdog queue and reconciliation backstop have all passed their release gates.

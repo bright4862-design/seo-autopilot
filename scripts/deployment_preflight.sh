@@ -36,6 +36,12 @@ RECONCILER_VERIFY="scripts/verify-standard150-reconciler.sh"
 SCAN_RAMP="scripts/set-standard150-scan-concurrency.sh"
 SCAN_RETRY="scripts/set-standard150-retry-policy.sh"
 DRAIN_POLICY="scripts/set-standard150-drain-policy.sh"
+ADMISSION_BOOTSTRAP="scripts/bootstrap-fixlist-admission-coordinator.sh"
+ADMISSION_DEPLOY="scripts/deploy_admission_coordinator.sh"
+BASE44_CONFIG="scripts/configure-base44-beta-admission.sh"
+BASE44_DEPLOY="scripts/deploy-base44-beta-functions.sh"
+WORKER_STAGE="scripts/build-worker-candidate.sh"
+GATEWAY_DEPLOY="scripts/deploy_dispatch_gateway.sh"
 
 echo "=== 0. Queue reconciliation backstop ==="
 need_file "$RECONCILER_CONFIG" "Scheduler reconciler configurator present"
@@ -71,6 +77,39 @@ if [ -f "$DRAIN_POLICY" ]; then
   has 'MAX_ATTEMPTS=100' "$DRAIN_POLICY" && pass "drain retries survive queue/start timing" || fail "drain retry attempts are not pinned to 100"
   has 'MIN_BACKOFF="30s"' "$DRAIN_POLICY" && pass "drain retry min backoff 30s" || fail "drain retry min backoff is not 30s"
   has 'MAX_RETRY_DURATION="14400s"' "$DRAIN_POLICY" && pass "drain retry duration 14400s" || fail "drain retry duration is not 14400s"
+fi
+
+echo
+echo "=== 1c. Disabled-first deployment controls ==="
+need_file "$ADMISSION_BOOTSTRAP" "owner-only admission bootstrap present"
+need_file "$ADMISSION_DEPLOY" "admission coordinator deploy present"
+need_file "$BASE44_CONFIG" "Base44 disabled-first configurator present"
+need_file "$BASE44_DEPLOY" "six-function Base44 release deploy present"
+need_file "$WORKER_STAGE" "zero-traffic worker staging script present"
+if [ -f "$ADMISSION_BOOTSTRAP" ]; then
+  has 'BOOTSTRAP-ADMISSION-INFRA' "$ADMISSION_BOOTSTRAP" && pass "admission bootstrap confirmation-gated" || fail "admission bootstrap is not confirmation-gated"
+  has 'fixlist-admission' "$ADMISSION_BOOTSTRAP" && has '--delete-protection' "$ADMISSION_BOOTSTRAP" && pass "dedicated protected Firestore database pinned" || fail "admission database contract missing"
+fi
+if [ -f "$BASE44_CONFIG" ]; then
+  has 'BETA_SCAN_ADMISSION_ENABLED=false' "$BASE44_CONFIG" && has 'BETA_CHECKOUT_ENABLED=false' "$BASE44_CONFIG" && pass "Base44 activation is disabled-first" || fail "Base44 disabled-first flags missing"
+  if grep -q 'BETA_SCAN_ADMISSION_ENABLED=true\|BETA_CHECKOUT_ENABLED=true' "$BASE44_CONFIG"; then fail "Base44 configurator can enable beta during setup"; else pass "Base44 configurator cannot enable beta"; fi
+fi
+if [ -f "$BASE44_DEPLOY" ]; then
+  if grep -Fq 'functions deploy "${FUNCTIONS[@]}"' "$BASE44_DEPLOY"; then pass "Base44 deploy names an explicit function list"; else fail "Base44 deploy is not explicit"; fi
+  if grep -q 'entities[[:space:]]\+push\|site[[:space:]]\+deploy\|--force' "$BASE44_DEPLOY"; then fail "Base44 release deploy contains a broad/destructive command"; else pass "Base44 release deploy excludes entity/site reconciliation"; fi
+fi
+if [ -f "$WORKER_STAGE" ]; then
+  has '--service-account="$BUILD_SA_RESOURCE"' "$WORKER_STAGE" && pass "worker build submission pins build SA" || fail "worker build SA not explicit"
+  has 'candidate unexpectedly receives traffic' "$WORKER_STAGE" && pass "worker staging verifies zero traffic" || fail "worker staging does not verify zero traffic"
+fi
+if [ -f "$GATEWAY_DEPLOY" ]; then
+  has '--build-service-account="$BUILD_SA_RESOURCE"' "$GATEWAY_DEPLOY" && pass "gateway source deploy pins build SA" || fail "gateway build SA not explicit"
+fi
+if [ -f "$WORKER_BUILD" ]; then
+  has 'FIXLIST_WORKER_SOURCE_SHA=${_RELEASE_SHA}' "$WORKER_BUILD" && pass "worker revision stamps exact source SHA" || fail "worker source SHA provenance missing"
+fi
+if [ -f "admission-coordinator/main.py" ]; then
+  has 'FIXLIST_COORDINATOR_SOURCE_SHA' "admission-coordinator/main.py" && pass "coordinator health stamps exact source SHA" || fail "coordinator source SHA provenance missing"
 fi
 
 echo

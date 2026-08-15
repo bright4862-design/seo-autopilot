@@ -53,6 +53,7 @@ MAX_BODY_BYTES = int(os.environ.get("ADMISSION_MAX_BODY_BYTES", str(64 * 1024)))
 LEASE_SECONDS = admission.normalize_lease_seconds(
     os.environ.get("ADMISSION_LEASE_SECONDS", admission.DEFAULT_LEASE_SECONDS)
 )
+SOURCE_SHA = os.environ.get("FIXLIST_COORDINATOR_SOURCE_SHA", "").strip()
 
 if MAX_BODY_BYTES < 1024:
     raise RuntimeError("ADMISSION_MAX_BODY_BYTES is too small")
@@ -163,6 +164,7 @@ def health():
         "service": "fixlist-admission-coordinator",
         "collection": COLLECTION,
         "lease_seconds": LEASE_SECONDS,
+        "source_sha": SOURCE_SHA,
     })
 
 

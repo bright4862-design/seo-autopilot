@@ -132,6 +132,7 @@ class Authentication(CoordinatorTestCase):
         response = self.client.get("/health")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["service"], "fixlist-admission-coordinator")
+        self.assertEqual(response.json["source_sha"], "")
 
     def test_valid_signature_is_accepted(self):
         self.assertEqual(self.claim().status_code, 200)

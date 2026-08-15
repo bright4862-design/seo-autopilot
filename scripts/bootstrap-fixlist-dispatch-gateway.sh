@@ -9,6 +9,7 @@ GATEWAY_RUNTIME_SA="fixlist-base44-dispatcher@${PROJECT}.iam.gserviceaccount.com
 INVOKER_SA="fixlist-standard150-invoker@${PROJECT}.iam.gserviceaccount.com"
 WORKER="fixlist-standard150-worker"
 QUEUE="fixlist-standard150"
+DRAIN_QUEUE="fixlist-standard150-drain"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -50,6 +51,7 @@ gcloud iam service-accounts describe "$GATEWAY_RUNTIME_SA" --project="$PROJECT" 
 gcloud iam service-accounts describe "$INVOKER_SA" --project="$PROJECT" >/dev/null
 gcloud run services describe "$WORKER" --project="$PROJECT" --region="$REGION" >/dev/null
 gcloud tasks queues describe "$QUEUE" --project="$PROJECT" --location="$REGION" >/dev/null
+gcloud tasks queues describe "$DRAIN_QUEUE" --project="$PROJECT" --location="$REGION" >/dev/null
 
 say "Resolve the project's actual default Cloud Build service account"
 BUILD_SA_RESOURCE="$(gcloud builds get-default-service-account --project="$PROJECT" --format='value(serviceAccountEmail)')"
@@ -80,6 +82,14 @@ gcloud iam service-accounts add-iam-policy-binding "$GATEWAY_RUNTIME_SA" \
   --condition=None \
   --quiet >/dev/null
 
+say "Allow the WIF operator to use only the resolved Cloud Build identity"
+gcloud iam service-accounts add-iam-policy-binding "$BUILD_SA" \
+  --project="$PROJECT" \
+  --member="serviceAccount:${OPERATOR_SA}" \
+  --role="roles/iam.serviceAccountUser" \
+  --condition=None \
+  --quiet >/dev/null
+
 say "Allow the actual Cloud Build identity to build the gateway"
 gcloud projects add-iam-policy-binding "$PROJECT" \
   --member="serviceAccount:${BUILD_SA}" \
@@ -91,6 +101,12 @@ say "Grant the gateway runtime create-only access on the Standard 150 queue"
 # The GA Cloud Tasks queue IAM command does not expose --condition in all
 # installed gcloud releases. Queue bindings here are intentionally unconditional.
 gcloud tasks queues add-iam-policy-binding "$QUEUE" \
+  --project="$PROJECT" \
+  --location="$REGION" \
+  --member="serviceAccount:${GATEWAY_RUNTIME_SA}" \
+  --role="roles/cloudtasks.enqueuer" \
+  --quiet >/dev/null
+gcloud tasks queues add-iam-policy-binding "$DRAIN_QUEUE" \
   --project="$PROJECT" \
   --location="$REGION" \
   --member="serviceAccount:${GATEWAY_RUNTIME_SA}" \

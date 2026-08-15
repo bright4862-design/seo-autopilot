@@ -17,6 +17,8 @@ set -euo pipefail
 : "${CLOUD_RUN_SERVICE:?CLOUD_RUN_SERVICE is required}"
 : "${CLOUD_TASKS_QUEUE:?CLOUD_TASKS_QUEUE is required}"
 STANDARD150_RECONCILER_JOB="${STANDARD150_RECONCILER_JOB:-fixlist-standard150-reconcile}"
+CLOUD_TASKS_DRAIN_QUEUE="${CLOUD_TASKS_DRAIN_QUEUE:-fixlist-standard150-drain}"
+ADMISSION_COORDINATOR_SERVICE="${ADMISSION_COORDINATOR_SERVICE:-fixlist-scan-admission-coordinator}"
 : "${TASKS_INVOKER_SERVICE_ACCOUNT:?TASKS_INVOKER_SERVICE_ACCOUNT is required}"
 : "${OPERATION:?OPERATION is required}"
 
@@ -46,6 +48,30 @@ show_status() {
     --location="$GCP_REGION" \
     --project="$GCP_PROJECT" \
     --format='yaml(name,state,rateLimits,retryConfig)'
+
+  echo
+  echo "=== Drain queue ==="
+  if gcloud tasks queues describe "$CLOUD_TASKS_DRAIN_QUEUE" --location="$GCP_REGION" --project="$GCP_PROJECT" >/dev/null 2>&1; then
+    gcloud tasks queues describe "$CLOUD_TASKS_DRAIN_QUEUE" --location="$GCP_REGION" --project="$GCP_PROJECT" --format='yaml(name,state,rateLimits,retryConfig)'
+  else
+    echo "not_deployed=$CLOUD_TASKS_DRAIN_QUEUE"
+  fi
+
+  echo
+  echo "=== Admission coordinator ==="
+  if gcloud run services describe "$ADMISSION_COORDINATOR_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT" >/dev/null 2>&1; then
+    gcloud run services describe "$ADMISSION_COORDINATOR_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT" --format='yaml(metadata.name,status.url,status.latestReadyRevisionName,status.traffic)'
+  else
+    echo "not_deployed=$ADMISSION_COORDINATOR_SERVICE"
+  fi
+
+  echo
+  echo "=== Reconciler ==="
+  if gcloud scheduler jobs describe "$STANDARD150_RECONCILER_JOB" --location="$GCP_REGION" --project="$GCP_PROJECT" >/dev/null 2>&1; then
+    gcloud scheduler jobs describe "$STANDARD150_RECONCILER_JOB" --location="$GCP_REGION" --project="$GCP_PROJECT" --format='yaml(name,state,schedule,httpTarget.uri,httpTarget.oidcToken.serviceAccountEmail)'
+  else
+    echo "not_deployed=$STANDARD150_RECONCILER_JOB"
+  fi
 }
 
 verify_iam() {

@@ -16,6 +16,7 @@ on:
           - verify-iam
           - verify-worker-routes
           - deploy-dispatch-gateway
+          - deploy-admission-coordinator
           - promote-worker
           - rollback-worker
           - pause-queue
@@ -55,6 +56,10 @@ env:
   GATEWAY_SERVICE: fixlist-dispatch-gateway
   GATEWAY_RUNTIME_SERVICE_ACCOUNT: fixlist-base44-dispatcher@seo-autopilot-501517.iam.gserviceaccount.com
   RELEASE_OPERATOR_SERVICE_ACCOUNT: fixlist-release-operator@seo-autopilot-501517.iam.gserviceaccount.com
+  CLOUD_TASKS_DRAIN_QUEUE: fixlist-standard150-drain
+  ADMISSION_COORDINATOR_SERVICE: fixlist-scan-admission-coordinator
+  ADMISSION_COORDINATOR_RUNTIME_SA: fixlist-admission-coordinator@seo-autopilot-501517.iam.gserviceaccount.com
+  FIRESTORE_DATABASE: fixlist-admission
 
 jobs:
   operate:
@@ -88,6 +93,15 @@ jobs:
           python -m py_compile dispatch-gateway/main.py dispatch-gateway/test_gateway.py
           node --test tests/frontend/dispatchGatewayContract.test.mjs
 
+      - name: Validate admission coordinator before deployment
+        if: inputs.operation == 'deploy-admission-coordinator'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/deploy_admission_coordinator.sh
+          python -m pip install -r admission-coordinator/requirements.txt pytest
+          PYTHONPATH=admission-coordinator python -m pytest -q admission-coordinator
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
         with:
@@ -101,7 +115,7 @@ jobs:
           project_id: ${{ env.GCP_PROJECT }}
 
       - name: Run allowlisted worker operation
-        if: inputs.operation != 'deploy-dispatch-gateway'
+        if: inputs.operation != 'deploy-dispatch-gateway' && inputs.operation != 'deploy-admission-coordinator'
         env:
           OPERATION: ${{ inputs.operation }}
           CONFIRM: ${{ inputs.confirm }}
@@ -116,6 +130,14 @@ jobs:
           SOURCE_SHA: ${{ github.sha }}
         shell: bash
         run: ./scripts/deploy_dispatch_gateway.sh
+
+      - name: Deploy admission coordinator
+        if: inputs.operation == 'deploy-admission-coordinator'
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: ./scripts/deploy_admission_coordinator.sh
 
   readonly-diagnostic:
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[cloud-readonly-diagnostic]')

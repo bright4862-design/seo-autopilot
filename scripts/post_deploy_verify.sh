@@ -11,6 +11,7 @@
 # Usage (every value explicit, nothing invented):
 #   WORKER_SERVICE=... REGION=... PROJECT=... \
 #   EXPECTED_IMAGE=... EXPECTED_RUNTIME_SA=... EXPECTED_INVOKER_SA=... \
+#   EXPECTED_SOURCE_SHA=<40-char-sha> \
 #   EXPECTED_SIGNING_SECRET=... EXPECTED_SIGNING_VERSION=... \
 #   TASKS_QUEUE=fixlist-standard150 DRAIN_QUEUE=fixlist-standard150-drain \
 #   EXPECTED_SCAN_QUEUE_CONCURRENCY=1|3|5|10 \
@@ -37,6 +38,7 @@ skip() { printf "  SKIP  %s\n" "$1"; }
 : "${EXPECTED_IMAGE:=}"
 : "${EXPECTED_RUNTIME_SA:=}"
 : "${EXPECTED_INVOKER_SA:=}"
+: "${EXPECTED_SOURCE_SHA:=}"
 : "${BASE44_APP_ID:=}"
 : "${EXPECTED_SIGNING_SECRET:=}"
 : "${EXPECTED_SIGNING_VERSION:=}"
@@ -51,11 +53,11 @@ if [ -z "$WORKER_SERVICE" ] || [ -z "$REGION" ] || [ -z "$PROJECT" ]; then
   echo "WORKER_SERVICE, REGION and PROJECT are required. Nothing is guessed."
   exit 2
 fi
-if [ -z "$EXPECTED_IMAGE" ] || [ -z "$EXPECTED_RUNTIME_SA" ] || [ -z "$EXPECTED_INVOKER_SA" ] || \
+if [ -z "$EXPECTED_IMAGE" ] || [ -z "$EXPECTED_RUNTIME_SA" ] || [ -z "$EXPECTED_INVOKER_SA" ] || [ -z "$EXPECTED_SOURCE_SHA" ] || \
    [ -z "$EXPECTED_SIGNING_SECRET" ] || [ -z "$EXPECTED_SIGNING_VERSION" ] || \
    [ -z "$TASKS_QUEUE" ] || [ -z "$DRAIN_QUEUE" ] || [ -z "$EXPECTED_SCAN_QUEUE_CONCURRENCY" ] || \
    [ -z "$BASE44_PULLED_FUNCTIONS_DIR" ] || [ -z "$BASE44_PULLED_ENTITIES_DIR" ]; then
-  echo "EXPECTED_IMAGE, EXPECTED_RUNTIME_SA, EXPECTED_INVOKER_SA, EXPECTED_SIGNING_SECRET and EXPECTED_SIGNING_VERSION are required."
+  echo "EXPECTED_IMAGE, EXPECTED_RUNTIME_SA, EXPECTED_INVOKER_SA, EXPECTED_SOURCE_SHA, EXPECTED_SIGNING_SECRET and EXPECTED_SIGNING_VERSION are required."
   echo "TASKS_QUEUE, DRAIN_QUEUE and EXPECTED_SCAN_QUEUE_CONCURRENCY are required."
   echo "BASE44_PULLED_FUNCTIONS_DIR is required and must name a fresh authenticated CLI pull of deployed functions."
   echo "BASE44_PULLED_ENTITIES_DIR is required and must name the same pull's deployed entity schemas."
@@ -66,6 +68,10 @@ fi
 case "$EXPECTED_SIGNING_VERSION" in
   latest|LATEST) echo "EXPECTED_SIGNING_VERSION='latest' is prohibited; pin a numeric enabled version."; exit 2 ;;
   ''|*[!0-9]*)   echo "EXPECTED_SIGNING_VERSION='$EXPECTED_SIGNING_VERSION' is not numeric."; exit 2 ;;
+esac
+case "$EXPECTED_SOURCE_SHA" in
+  *[!0-9a-f]*|"") echo "EXPECTED_SOURCE_SHA must be exactly 40 lowercase hexadecimal characters."; exit 2 ;;
+  *) [ "${#EXPECTED_SOURCE_SHA}" -eq 40 ] || { echo "EXPECTED_SOURCE_SHA must be exactly 40 lowercase hexadecimal characters."; exit 2; } ;;
 esac
 if ! command -v gcloud >/dev/null 2>&1; then
   echo "gcloud not installed; cannot verify a deployed service."
@@ -191,7 +197,7 @@ c = d['spec']['template']['spec']['containers'][0]
 print(' '.join(sorted(e.get('name','') for e in c.get('env', []))))
 " 2>/dev/null)
 # SCANNER_API_KEY is intentionally absent: /scan-job does not use it.
-for v in BASE44_APP_ID TASKS_INVOKER_SERVICE_ACCOUNT SCAN_EVIDENCE_SIGNING_KEY; do
+for v in BASE44_APP_ID TASKS_INVOKER_SERVICE_ACCOUNT FIXLIST_WORKER_SOURCE_SHA SCAN_EVIDENCE_SIGNING_KEY; do
   printf "%s" "$NAMES" | grep -qw "$v" && pass "$v present" || fail "$v missing"
 done
 INVOKER_ENV=$(printf "%s" "$DESCRIBE" | python3 -c "
@@ -203,6 +209,15 @@ print(next((e.get('value','') for e in env if e.get('name') == 'TASKS_INVOKER_SE
 [ "$INVOKER_ENV" = "$EXPECTED_INVOKER_SA" ] \
   && pass "TASKS_INVOKER_SERVICE_ACCOUNT matches EXPECTED_INVOKER_SA" \
   || fail "TASKS_INVOKER_SERVICE_ACCOUNT does not match EXPECTED_INVOKER_SA"
+SOURCE_SHA_ENV=$(printf "%s" "$DESCRIBE" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+env = d['spec']['template']['spec']['containers'][0].get('env', [])
+print(next((e.get('value','') for e in env if e.get('name') == 'FIXLIST_WORKER_SOURCE_SHA'), ''))
+" 2>/dev/null)
+[ "$SOURCE_SHA_ENV" = "$EXPECTED_SOURCE_SHA" ] \
+  && pass "FIXLIST_WORKER_SOURCE_SHA matches EXPECTED_SOURCE_SHA" \
+  || fail "FIXLIST_WORKER_SOURCE_SHA does not match EXPECTED_SOURCE_SHA"
 # Secrets must arrive by reference, not as literals.
 SECRET_REFS=$(printf "%s" "$DESCRIBE" | python3 -c "
 import sys, json

@@ -36,6 +36,7 @@ Supplied by `cloudbuild.durable-worker.yaml`.
 | `TASKS_INVOKER_SERVICE_ACCOUNT` | **required** | `main.py:379` `require_cloud_tasks_oidc()` | `--set-env-vars` (`_INVOKER_SA`) | Fail-closed: 503 "Worker authentication is not configured." Loud, safe. |
 | `BASE44_API_URL` | optional-with-default | `scan_job.py:38` | `--set-env-vars` (`_BASE44_API_URL`) | Defaults to `https://base44.app`. Pinned explicitly so a deploy cannot silently target the public default. |
 | `GROK_PROXY_ENABLED` | feature-disabled | `main.py:52` | `--set-env-vars`, hardcoded `false` | Defaults `""` → `False`. Grok is off by default; pinned so a future default change cannot enable it. |
+| `FIXLIST_WORKER_SOURCE_SHA` | **required release provenance** | `main.py` health/revision payload | `--set-env-vars` (`_RELEASE_SHA`) | Missing does not change crawl behavior, but the revision is **not promotable** because its deployed bytes cannot be tied to the tested source SHA. |
 | `GROK_MODEL_ID`, `GROK_TIMEOUT_SECONDS`, `GROK_MAX_ATTEMPTS`, `VERTEX_LOCATION` | feature-disabled | `grok_chat.py:14-17` | not supplied | Unreachable while `GROK_PROXY_ENABLED` is false. |
 | `GCP_PROJECT`, `GOOGLE_CLOUD_PROJECT` | unrelated | `grok_chat.py` (Vertex endpoint) | not supplied | Grok-only. Not on the Standard 150 path. |
 
@@ -106,8 +107,8 @@ worker task, and returns.
 | Variable | Class | Code reader | Missing-value failure mode |
 |---|---|---|---|
 | `SCAN_EVIDENCE_SIGNING_KEY` | **required** | `durableScanWorkerControl/index.ts`, `persistDurableScanAuthority/index.ts`, `getCustomerScanResult/index.ts` | Authority writes fail with `authority_not_configured`; customer result reads return `result_authority_unavailable`. No unverified FixItems are returned. |
-| `BETA_SCAN_ADMISSION_ENABLED` | **required for active coordinator release** | package-local `admissionClient.js` | If disabled, terminal persistence stays truthful but the Firestore lease is not actively released; lease expiry is the fallback. |
-| `SCAN_ADMISSION_COORDINATOR_URL` | **required for active coordinator release** | package-local `admissionClient.js` | Terminal persistence stays authoritative; release logs a bounded failure and lease expiry remains the fallback. |
+| `BETA_SCAN_ADMISSION_ENABLED` | **required for active coordinator release** | package-local `admissionClient.js` | If disabled, terminal persistence stays truthful but the bound Firestore admission is not actively released. Bound admissions intentionally do **not** expire by wall clock, so the reconciliation/backstop path must repair release before the same owner can start another scan. |
+| `SCAN_ADMISSION_COORDINATOR_URL` | **required for active coordinator release** | package-local `admissionClient.js` | Terminal persistence stays authoritative; release logs a bounded failure. The periodic reconciliation backstop repairs terminal release without allowing a bound scan to overlap a newer admission. |
 
 The authority functions and result projection hold `asServiceRole` only after
 an exact caller/ScanRun ownership check. All six release functions must be
@@ -150,6 +151,20 @@ To pause new purchases without taking existing scans or results offline, set
 as a purchase-pause mechanism.
 
 ---
+
+## Component E — disabled-first deployment controls
+
+Production rollout is intentionally split from source integration. The release tooling requires an exact clean `origin/main` checkout before any mutation.
+
+- `scripts/bootstrap-fixlist-admission-coordinator.sh` is the **one-time owner-only** bootstrap. It creates/normalizes the dedicated `fixlist-admission` Firestore Native database with delete protection, the dedicated coordinator runtime identity, the drain queue, and only the IAM edges required by those resources. It requires `CONFIRM=BOOTSTRAP-ADMISSION-INFRA`.
+- `scripts/deploy_admission_coordinator.sh` performs an exact-SHA Cloud Run source deploy with an explicit Cloud Build service account, pinned signing-secret reference and `FIXLIST_COORDINATOR_SOURCE_SHA`.
+- `scripts/configure-base44-beta-admission.sh` sets only the coordinator URL, drain queue, exact 1–25-user cohort and both beta switches to **false**. It cannot enable admission or checkout.
+- `scripts/deploy-base44-beta-functions.sh` deploys exactly the six release functions named by `scripts/base44_release_manifest.mjs`; it never deploys the site or reconciles entities.
+- `scripts/build-worker-candidate.sh` submits the durable worker build with an explicit Cloud Build identity and refuses completion unless the candidate is Ready, `concurrency=1`, `timeout=480`, source-stamped, and at **0% traffic**.
+
+**`base44 entities push` is prohibited in the release path.** It is not used to update `ScanRun`, `FixList`, or `FixItem`. Those three authority schemas must be updated explicitly by name through the Base44 schema API/connector at cutover, then the deployed package/schema inventory is compared byte-for-byte with the candidate.
+
+Both worker and coordinator expose their exact source SHA in health/revision metadata. Source provenance is release evidence; a revision without the expected SHA is not promotable.
 
 ## Secret handling
 

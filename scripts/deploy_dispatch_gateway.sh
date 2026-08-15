@@ -23,6 +23,23 @@ fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE_DIR="$REPO_ROOT/dispatch-gateway"
+
+# The claimed SOURCE_SHA must be the exact clean checkout whose bytes are sent
+# to source deploy. A label without this guard is not provenance.
+git -C "$REPO_ROOT" fetch origin main --quiet
+HEAD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+REMOTE_MAIN_SHA="$(git -C "$REPO_ROOT" rev-parse origin/main)"
+if [[ "$HEAD_SHA" != "$SOURCE_SHA" || "$HEAD_SHA" != "$REMOTE_MAIN_SHA" || -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all)" ]]; then
+  echo "Refusing gateway deployment: checkout must be clean exact current main $SOURCE_SHA." >&2
+  exit 2
+fi
+
+BUILD_SA_RAW="${CLOUD_BUILD_SERVICE_ACCOUNT:-$(gcloud builds get-default-service-account --project="$PROJECT" --format='value(serviceAccountEmail)')}"
+BUILD_SA_EMAIL="${BUILD_SA_RAW##*/}"
+[[ "$BUILD_SA_EMAIL" == *@* ]] || { echo "Refusing gateway deployment: invalid Cloud Build SA." >&2; exit 2; }
+BUILD_SA_RESOURCE="projects/${PROJECT}/serviceAccounts/${BUILD_SA_EMAIL}"
+gcloud iam service-accounts describe "$BUILD_SA_EMAIL" --project="$PROJECT" >/dev/null
+echo "build_service_account=$BUILD_SA_EMAIL"
 for file in main.py requirements.txt Dockerfile test_gateway.py; do
   test -f "$SOURCE_DIR/$file" || { echo "Missing canonical gateway source: $SOURCE_DIR/$file" >&2; exit 2; }
 done
@@ -99,6 +116,7 @@ gcloud run deploy "$GATEWAY" \
   --project="$PROJECT" \
   --region="$REGION" \
   --source="$SOURCE_DIR" \
+  --build-service-account="$BUILD_SA_RESOURCE" \
   --service-account="$DISPATCHER_SA" \
   "${PUBLIC_ARGS[@]}" \
   --ingress=all \

@@ -193,7 +193,7 @@ steps:
       # Cloud Run worker actually reads (scanner-api/app/main.py). GROK_CHAT_ENABLED
       # belongs to the Base44 grokChat function and is a no-op here -- setting it
       # on this service would be false assurance, so it is deliberately absent.
-      - --set-env-vars=TASKS_INVOKER_SERVICE_ACCOUNT=${_INVOKER_SA},BASE44_APP_ID=${_BASE44_APP_ID},BASE44_API_URL=${_BASE44_API_URL},GROK_PROXY_ENABLED=false
+      - --set-env-vars=TASKS_INVOKER_SERVICE_ACCOUNT=${_INVOKER_SA},BASE44_APP_ID=${_BASE44_APP_ID},BASE44_API_URL=${_BASE44_API_URL},GROK_PROXY_ENABLED=false,FIXLIST_WORKER_SOURCE_SHA=${_RELEASE_SHA}
       # Secrets by reference. Never --set-env-vars a secret value: that would
       # store plaintext in the service revision and in build logs.
       - --set-secrets=SCAN_EVIDENCE_SIGNING_KEY=${_SIGNING_KEY_SECRET}:${_SIGNING_KEY_VERSION}

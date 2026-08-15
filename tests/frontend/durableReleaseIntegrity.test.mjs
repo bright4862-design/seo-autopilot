@@ -490,6 +490,7 @@ function runPostDeployVerifier(policyMode) {
           { name: "BASE44_APP_ID", value: "test-app" },
           { name: "TASKS_INVOKER_SERVICE_ACCOUNT", value: invokerSa },
           { name: "GROK_PROXY_ENABLED", value: "false" },
+          { name: "FIXLIST_WORKER_SOURCE_SHA", value: "a".repeat(40) },
           { name: "SCAN_EVIDENCE_SIGNING_KEY", valueFrom: {
             secretKeyRef: { name: "SCAN_EVIDENCE_SIGNING_KEY", key: "1" },
           } },
@@ -542,6 +543,7 @@ fi
       EXPECTED_IMAGE: image,
       EXPECTED_RUNTIME_SA: runtimeSa,
       EXPECTED_INVOKER_SA: invokerSa,
+      EXPECTED_SOURCE_SHA: "a".repeat(40),
       EXPECTED_SIGNING_SECRET: "SCAN_EVIDENCE_SIGNING_KEY",
       EXPECTED_SIGNING_VERSION: "1",
       TASKS_QUEUE: "fixlist-standard150",

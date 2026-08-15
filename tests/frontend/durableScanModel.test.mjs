@@ -26,6 +26,13 @@ function assertOwnerScopedRls(entity) {
   assert.match(readClauses, /owner_user_id|created_by_id/, `${entity.name} read must be owner-scoped`);
 }
 
+function assertAdminOnlyRls(entity) {
+  assert.ok(entity.rls, `${entity.name} must define rls`);
+  for (const action of RLS_ACTIONS) {
+    assert.equal(entity.rls[action]?.user_condition?.role, "admin", `${entity.name}.${action} must be server-only`);
+  }
+}
+
 test("ScanRun encodes the roadmap status lifecycle", () => {
   const scanRun = loadEntity("ScanRun");
   assert.equal(scanRun.name, "ScanRun");
@@ -78,7 +85,7 @@ test("FixList links to a scan run and tracks priority counts", () => {
   ]) {
     assert.ok(fixList.properties[field], `FixList missing ${field}`);
   }
-  assertOwnerScopedRls(fixList);
+  assertAdminOnlyRls(fixList);
 });
 
 test("FixItem enums match the review-presentation contract", () => {
@@ -105,7 +112,7 @@ test("FixItem preserves finding provenance and completion tracking", () => {
     assert.ok(fixItem.properties[field], `FixItem missing ${field}`);
   }
   assert.deepEqual(fixItem.required, ["fix_list_id", "scan_run_id", "project_id", "issue_title"]);
-  assertOwnerScopedRls(fixItem);
+  assertAdminOnlyRls(fixItem);
 });
 
 test("all durable entities are owner-scoped and well-formed", () => {
@@ -113,12 +120,13 @@ test("all durable entities are owner-scoped and well-formed", () => {
     const entity = loadEntity(name);
     assert.equal(entity.type, "object");
     assert.ok(entity.properties.owner_user_id, `${name} must have owner_user_id`);
-    assertOwnerScopedRls(entity);
+    if (name === "ScanRun") assertOwnerScopedRls(entity);
+    else assertAdminOnlyRls(entity);
   }
 });
 
-test("tenant-owned entities bind creates to the caller and freeze owner reassignment", () => {
-  for (const name of ["BusinessProject", "ScanRun", "FixList", "FixItem"]) {
+test("tenant inputs bind creates to the caller while sealed result rows stay server-only", () => {
+  for (const name of ["BusinessProject", "ScanRun"]) {
     const entity = loadEntity(name);
     const createRules = JSON.stringify(entity.rls.create);
     assert.match(createRules, /data\.owner_user_id/, `${name} create must bind owner_user_id`);
@@ -129,4 +137,5 @@ test("tenant-owned entities bind creates to the caller and freeze owner reassign
       `${name}.owner_user_id must be immutable to customer clients`,
     );
   }
+  for (const name of ["FixList", "FixItem"]) assertAdminOnlyRls(loadEntity(name));
 });

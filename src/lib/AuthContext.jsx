@@ -8,6 +8,7 @@ import {
   synchronizeAuthenticatedOwner,
 } from '@/lib/customerBrowserCache';
 import { createAxiosClient } from '@base44/sdk/dist/utils/axios-client';
+import { flushQueuedEvents } from '@/lib/analytics';
 
 const AuthContext = createContext();
 
@@ -126,6 +127,7 @@ export const AuthProvider = ({ children }) => {
       setIsAuthenticated(true);
       setIsLoadingAuth(false);
       setAuthChecked(true);
+      flushQueuedEvents();
     } catch (error) {
       console.error('User auth check failed:', error);
       setIsLoadingAuth(false);

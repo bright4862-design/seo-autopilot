@@ -32,6 +32,13 @@ function assertPaidSession(session) {
   if (String(metadata.plan_id || "") !== PLAN_ID) throw new Error("checkout_plan_mismatch");
 }
 
+function classifyPaidDelivery(access, sessionId) {
+  if (access?.access_status === "revoked") return "revoked";
+  if (access?.has_full_access !== true || access?.access_status !== "active") return "grant";
+  if (String(access?.stripe_checkout_session_id || "") === String(sessionId || "")) return "replay";
+  return "already_active";
+}
+
 export default async function (req) {
   try {
     const base44 = createClientFromRequest(req);
@@ -63,19 +70,23 @@ export default async function (req) {
       }
 
       const access = rows[0];
-      if (
-        access.has_full_access === true &&
-        access.access_status === "active" &&
-        String(access.stripe_checkout_session_id || "") === String(session.id)
-      ) {
-        return Response.json({ received: true, replay: true });
+      if (String(access.owner_user_id || "") !== userId || normalizeEmail(access.user_email) !== email) {
+        throw new Error("checkout_access_identity_mismatch");
       }
 
-      if (
-        access.has_full_access === true ||
-        (access.stripe_checkout_session_id && String(access.stripe_checkout_session_id) !== String(session.id))
-      ) {
-        throw new Error("checkout_access_binding_mismatch");
+      const delivery = classifyPaidDelivery(access, session.id);
+      if (delivery === "revoked") throw new Error("checkout_access_revoked");
+      if (delivery === "replay") {
+        return Response.json({ received: true, replay: true });
+      }
+      if (delivery === "already_active") {
+        console.warn("stripeWebhook received a paid session for an already-active access record", {
+          access_id: String(access.id),
+          active_session_id: String(access.stripe_checkout_session_id || ""),
+          received_session_id: String(session.id || ""),
+          event_id: String(event.id || ""),
+        });
+        return Response.json({ received: true, duplicate_payment: true });
       }
 
       await base44.asServiceRole.entities.Access.update(access.id, {

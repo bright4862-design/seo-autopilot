@@ -151,20 +151,17 @@ test("orphan recovery closes abandoned runs well before the replay TTL", () => {
   }
 });
 
-test("recovery runs on view only after the orphan TTL", () => {
-  // The scan form recovers on mount.
-  assert.match(scanFormSource, /recoverOrphanedScanRuns\(\{ projectId: project\?\.id \|\| "" \}\)/);
-  // The result route keeps a live scan visible, and only attempts recovery once
-  // the exact active row is genuinely stale.
-  assert.match(fixListSource, /recoveryAttemptedForRef\.current !== requestedScanId/);
+test("customer views never terminalize delayed scans", () => {
+  // Queue/worker watchdogs own terminal recovery. Merely opening a customer
+  // view must remain read-only even when a scan has been delayed for minutes.
+  assert.doesNotMatch(scanFormSource, /recoverOrphanedScanRuns/);
+  assert.doesNotMatch(fixListSource, /recoverOrphanedScanRuns|isStaleActiveScanRun|recoveryAttemptedForRef/);
   assert.match(fixListSource, /ACTIVE_SCAN_RUN_STATUSES\.has\(String\(durableBundle\.run\.status \|\| ""\)\)/);
-  assert.match(fixListSource, /isStaleActiveScanRun\(durableBundle\.run, \{ activeTtlMs: STANDARD_ORPHAN_RECOVERY_TTL_MS \}\)/);
-  assert.match(fixListSource, /await recoverOrphanedScanRuns\(\{ projectId: durableBundle\.run\.project_id \|\| "" \}\)/);
-  assert.match(fixListSource, /durableBundle = await getScanRunWithFixList\(requestedScanId\) \|\| durableBundle/);
 
   const recover = scanRunsSource.match(/export async function recoverOrphanedScanRuns[\s\S]*?\n\}/);
   assert.ok(recover, "recoverOrphanedScanRuns is missing from scanRuns.js");
-  // Recovery is owner-scoped and threshold-gated.
+  // The legacy helper remains threshold- and owner-scoped while callers move
+  // to the server watchdog; no customer route invokes it.
   assert.match(recover[0], /await currentOwner\(\)/);
   assert.match(recover[0], /activeTtlMs: STANDARD_ORPHAN_RECOVERY_TTL_MS/);
 });

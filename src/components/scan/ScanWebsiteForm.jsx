@@ -10,8 +10,9 @@ import { normalizeActionPriority, normalizeFindingEvidence, normalizeReviewEvide
 import { mergePersistedScanRunRecord } from "@/lib/persistedScanRecord";
 import { RELEASE_AUTHORITY_CONTRACT, buildAuthorityMarkers, buildScanRunFields } from "@/lib/scanRunModel";
 import { createScanRequestId, normalizedScanDomain, scanReleaseIdentity } from "@/lib/scanRunIdentity";
-import { beginScanRun, cancelScanRun, completeScanRun, failScanRun, getScanRunWithFixList, markScanRunReviewing, recoverOrphanedScanRuns } from "@/lib/scanRuns";
+import { cancelScanRun, completeScanRun, failScanRun, getScanRunWithFixList, markScanRunReviewing } from "@/lib/scanRuns";
 import { UNLOCK_PRICE_LABEL, loadAccess } from "@/lib/access";
+import { trackEvent } from "@/lib/analytics";
 import {
   CUSTOMER_BOUNDARY_EVENT,
   clearCustomerAuthBoundary,
@@ -134,10 +135,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       clearDebugScanData();
     }
     window.addEventListener(CUSTOMER_BOUNDARY_EVENT, invalidatePendingRequest);
-    // Close abandoned runs as soon as the customer reaches the scan form,
-    // rather than waiting for their next submission. A row past the orphan
-    // threshold has no owner left to finish it.
-    recoverOrphanedScanRuns({ projectId: project?.id || "" }).catch(() => {});
     return () => {
       requestEpochRef.current += 1;
       submitLockRef.current = false;
@@ -228,37 +225,18 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       submitLockRef.current = true;
       requestEpoch = requestEpochRef.current + 1;
       requestEpochRef.current = requestEpoch;
-      scanRunHandle = await beginScanRun({
-        projectId: scanProject.id,
-        websiteUrl: normalizedUrl,
-        submittedUrl,
-        pathPrefix: requestedPathPrefix,
-        scanMode,
-        scanSource: "scan_website_page",
-        requestId,
-        idempotencyKey,
-      });
-      scanId = scanRunHandle.id;
-      setWatchedScanId(scanId);
       sessionIdentity = {
         ownerId: scanOwner.id,
         projectId: scanProject.id,
         requestId,
-        scanId,
+        scanId: "",
         normalizedDomain: normalizedScanDomain(normalizedUrl),
         canonicalMode: scanMode,
         releaseIdentity: RELEASE_AUTHORITY_CONTRACT.betaRevisionFingerprint,
       };
       await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
-      recordDebug({ ...identityDebug(), status: "running", stage: "scan_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix });
+      recordDebug({ ...identityDebug(), status: "running", stage: "scan_admission_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix });
       refreshDebugData();
-
-      if (scanRunHandle.replayed) {
-        recordDebug({ ...identityDebug(), status: scanRunHandle.status, stage: scanRunHandle.replay_reason, website_url: normalizedUrl, scan_mode: scanMode });
-        refreshDebugData();
-        navigate(`/dashboard?scan_id=${encodeURIComponent(scanId)}`);
-        return;
-      }
 
       const safeScanBudget = STANDARD_SCAN_BUDGET;
       setActiveStep("Reading your pages");
@@ -282,40 +260,58 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         max_browser_render_attempts: safeScanBudget.max_browser_render_attempts,
         crawl_timeout_ms: safeScanBudget.crawl_timeout_ms,
         source: "scan_website_page",
+        project_id: scanProject.id,
         requested_at: new Date().toISOString(),
         request_id: requestId,
         idempotency_key: idempotencyKey,
-        scan_id: scanId,
-        scan_run_id: scanId,
         submitted_url: submittedUrl,
         normalized_domain: normalizedScanDomain(normalizedUrl),
         require_python_scanner: true,
         allow_deno_fallback: false,
       };
 
-      // PRIMARY PATH — asynchronous durable job. The owner-bound ScanRun
-      // already exists; the job gateway verifies it, submits the authenticated
-      // Python job with its 120-second worker budget, and returns this exact
-      // scan_id immediately. The browser never waits for Cloud Run: the result
-      // page polls the durable ScanRun and opens the sealed result when saved.
+      // PRIMARY PATH — one authenticated begin-and-dispatch call. The server
+      // elects the owner lease, creates or reuses the canonical ScanRun, queues
+      // the worker, and returns its ID. The browser never creates or chooses a
+      // ScanRun identity and never waits for Cloud Run completion.
       setActiveStep("Starting your scan");
       logScanBoundary("async_job_submit", identityDebug(), { function_name: ASYNC_SCAN_JOB_FUNCTION });
-      const jobData = normalizeFunctionResponse(
-        await callBase44Function(ASYNC_SCAN_JOB_FUNCTION, scanPayload).catch((jobError) => {
-          if (jobError?.code === "stale_customer_session" || clearCustomerAuthBoundary(jobError)) throw jobError;
-          return null;
-        }),
-      );
+      const jobData = await submitStandardScanJob(scanPayload);
       await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
-      if (jobData?.accepted === true && String(jobData.scan_id || "") === String(scanId)) {
+      if (jobData?.accepted !== true) {
+        const failureCode = String(jobData?.failure_code || "async_submission_not_accepted");
+        throw Object.assign(new Error(customerScanAdmissionMessage(failureCode)), { code: failureCode });
+      }
+      assertServerAdmissionIdentity(jobData, { request_id: requestId, idempotency_key: idempotencyKey });
+      if (jobData?.accepted === true) {
+        scanId = String(jobData.scan_id || "");
+        scanRunHandle = {
+          id: scanId,
+          scan_id: scanId,
+          request_id: requestId,
+          idempotency_key: idempotencyKey,
+          project_id: scanProject.id,
+          owner_user_id: scanOwner.id,
+          website_url: normalizedUrl,
+          submitted_url: submittedUrl,
+          normalized_domain: normalizedScanDomain(normalizedUrl),
+          scan_mode: scanMode,
+          status: String(jobData.status || "crawling"),
+          replayed: jobData.replayed === true,
+          replay_reason: String(jobData.replay_reason || ""),
+        };
+        sessionIdentity = { ...sessionIdentity, scanId };
+        setWatchedScanId(scanId);
+        await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
         // The durable worker boundary starts only after the gateway has
         // positively accepted this exact scan. A rejected or unreachable
         // dispatcher must stay browser-owned so it can be closed truthfully
         // instead of lingering in crawling until the orphan watchdog fires.
         asyncDispatcherStarted = true;
+        trackEvent("scan_accepted", { scan_mode: STANDARD_SCAN_MODE });
         // Exact identity only — never a substitute scan.
-        logScanBoundary("async_job_accepted", identityDebug(), { status: "async" });
-        recordDebug({ ...identityDebug(), status: "running", stage: "async_job_accepted", website_url: normalizedUrl, scan_mode: scanMode });
+        logScanBoundary("async_job_accepted", identityDebug(), { status: jobData.status || "crawling", replayed: jobData.replayed === true });
+        recordDebug({ ...identityDebug(), status: jobData.status || "crawling", stage: jobData.replayed ? "async_job_replayed" : "async_job_accepted", website_url: normalizedUrl, scan_mode: scanMode });
         refreshDebugData();
         navigate(`/dashboard?scan_id=${encodeURIComponent(scanId)}`);
         return;
@@ -941,6 +937,59 @@ function normalizeFunctionResponse(response) {
   if (response.result) return response.result;
   if (response.body) return response.body;
   return response;
+}
+
+async function submitStandardScanJob(payload, attempts = 3) {
+  let lastError = null;
+  let lastResult = {};
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      lastResult = normalizeFunctionResponse(
+        await callBase44Function(ASYNC_SCAN_JOB_FUNCTION, payload),
+      );
+    } catch (error) {
+      if (error?.code === "stale_customer_session" || clearCustomerAuthBoundary(error)) throw error;
+      lastError = error;
+      lastResult = normalizeFunctionResponse(
+        error?.response?.data || error?.data || error?.response || {},
+      );
+    }
+    if (lastResult?.accepted === true) return lastResult;
+    const code = String(lastResult?.failure_code || "");
+    const shouldRetry = attempt < attempts && (
+      code === "scan_admission_pending"
+      || (!code && lastError)
+    );
+    if (!shouldRetry) return lastResult;
+    const retrySeconds = Math.min(5, Math.max(1, Number(lastResult?.retry_after) || 2));
+    await new Promise((resolve) => window.setTimeout(resolve, retrySeconds * 1000));
+  }
+  if (lastError) throw lastError;
+  return lastResult;
+}
+
+function customerScanAdmissionMessage(code) {
+  const messages = {
+    scan_admission_paused: "New beta scans are temporarily paused. Your existing results are still available.",
+    scan_not_invited: "This Standard 150 beta cohort is currently invite-only.",
+    scan_admission_busy: "Another scan is already running for this account. Open the dashboard to follow it before starting another.",
+    scan_admission_pending: "This scan request is still being prepared. Please wait a few seconds and try again.",
+    scan_atomic_admission_unconfirmed: "New scans are temporarily unavailable while the admission coordinator is verified.",
+    scan_admission_configuration_invalid: "New scans are temporarily unavailable because the beta cohort is not configured.",
+  };
+  return messages[String(code || "")] || "The scan job could not be accepted. No fallback scan was started.";
+}
+
+function assertServerAdmissionIdentity(response, expected) {
+  for (const field of ["request_id", "idempotency_key"]) {
+    if (String(response?.[field] || "") !== String(expected?.[field] || "")) {
+      throw new Error("The scan admission response did not match this request.");
+    }
+  }
+  const scanId = String(response?.scan_id || "");
+  if (!scanId || scanId !== String(response?.scan_run_id || "")) {
+    throw new Error("The scan admission response did not include one canonical ScanRun identity.");
+  }
 }
 
 function assertServerScanIdentity(response, expected) {

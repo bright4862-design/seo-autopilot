@@ -38,13 +38,13 @@ export function isAuthorityEligible(scan, review) {
 
 export function buildAuthoritySnapshot({ scan, review, identity, userId, now = new Date().toISOString() }) {
   const firstPage = firstArray([scan?.crawled_pages, scan?.pages, scan?.scanned_pages])[0] || {};
-  const fixes = firstArray([
+  const fixes = suppressAggregateCoveredPageFixes(firstArray([
     review?.recommendations,
     review?.fixes,
     review?.findings,
     review?.cleaned_fixes,
     review?.recommended_actions,
-  ]).slice(0, MAX_AUTHORITY_FIXES).map(toAuthorityFix)
+  ]).slice(0, MAX_AUTHORITY_FIXES).map(toAuthorityFix))
     .sort((left, right) => left.fix_id.localeCompare(right.fix_id));
   const counts = { critical: 0, high: 0, medium: 0, low: 0 };
   for (const fix of fixes) counts[fix.priority] += 1;
@@ -122,6 +122,90 @@ export function buildAuthoritySnapshot({ scan, review, identity, userId, now = n
     },
     recommendations: fixes,
   };
+}
+
+function suppressAggregateCoveredPageFixes(fixes) {
+  const coverage = new Set();
+  for (const fix of fixes) {
+    if (!isAggregateFix(fix)) continue;
+    const rule = findingKey(fix.rule);
+    const family = aggregateFamilyKey(fix);
+    if (!rule) continue;
+    for (const page of explicitAffectedPageKeys(fix)) {
+      coverage.add(coverageKey(rule, family, page));
+    }
+  }
+  if (coverage.size === 0) return fixes;
+
+  return fixes.filter((fix) => {
+    if (isAggregateFix(fix) || fix.page_scope !== "page") return true;
+    const pages = pageKeys(fix);
+    if (pages.length !== 1) return true;
+    const rule = findingKey(fix.rule);
+    const family = findingKey(fix.page_template_family);
+    if (!rule) return true;
+    return !coverage.has(coverageKey(rule, family, pages[0]))
+      && !coverage.has(coverageKey(rule, "*", pages[0]));
+  });
+}
+
+function isAggregateFix(fix) {
+  return ["family", "cross_cutting", "sitewide"].includes(fix?.page_scope);
+}
+
+function aggregateFamilyKey(fix) {
+  return fix.page_scope === "sitewide" ? "*" : findingKey(fix.page_template_family);
+}
+
+function coverageKey(rule, family, page) {
+  return `${rule}\u0000${family}\u0000${page}`;
+}
+
+function explicitAffectedPageKeys(fix) {
+  return uniquePageKeys(fix?.affected_pages);
+}
+
+function pageKeys(fix) {
+  const affected = explicitAffectedPageKeys(fix);
+  return affected.length > 0 ? affected : uniquePageKeys([fix?.page_url]);
+}
+
+function uniquePageKeys(values) {
+  const seen = new Set();
+  const output = [];
+  for (const value of values || []) {
+    const key = pageKey(value);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    output.push(key);
+  }
+  return output;
+}
+
+function pageKey(value) {
+  const raw = text(value, 2_000);
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    return normalizedPathAndQuery(parsed.pathname, parsed.search);
+  } catch {
+    const withoutFragment = raw.split("#", 1)[0];
+    const queryIndex = withoutFragment.indexOf("?");
+    const path = queryIndex >= 0 ? withoutFragment.slice(0, queryIndex) : withoutFragment;
+    const query = queryIndex >= 0 ? withoutFragment.slice(queryIndex) : "";
+    return normalizedPathAndQuery(path, query);
+  }
+}
+
+function normalizedPathAndQuery(pathValue, queryValue) {
+  let path = String(pathValue || "/");
+  if (!path.startsWith("/")) path = `/${path}`;
+  if (path.length > 1) path = path.replace(/\/+$/, "") || "/";
+  return `${path}${String(queryValue || "")}`;
+}
+
+function findingKey(value) {
+  return text(value, 200).toLowerCase();
 }
 
 function toAuthorityFix(fix, index) {

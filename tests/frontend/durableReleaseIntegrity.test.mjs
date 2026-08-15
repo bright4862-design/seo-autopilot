@@ -9,7 +9,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { auditAll, buildManifest, RELEASE_FUNCTIONS } from "../../scripts/base44_release_manifest.mjs";
+import {
+  auditAll,
+  buildManifest,
+  compareReleaseDirectories,
+  RELEASE_ENTITIES,
+  RELEASE_FUNCTIONS,
+} from "../../scripts/base44_release_manifest.mjs";
 
 const TASKS = "base44/functions/startStandardScanJob/cloudTasks.js";
 const WORKER_BUILD = "cloudbuild.durable-worker.yaml";
@@ -36,10 +42,17 @@ test("no release function contains a local dynamic import", () => {
   }
 });
 
-test("all three release packages are portable, closed, pinned and symlink-free", () => {
+test("every customer-release function package is portable, closed, pinned and symlink-free", () => {
   const problems = auditAll().flatMap((r) => r.problems);
   assert.deepEqual(problems, [], problems.join("\n"));
-  assert.equal(RELEASE_FUNCTIONS.length, 3);
+  assert.deepEqual(RELEASE_FUNCTIONS, [
+    "startStandardScanJob",
+    "durableScanWorkerControl",
+    "persistDurableScanAuthority",
+    "getCustomerScanResult",
+    "createAccessCheckout",
+    "stripeWebhook",
+  ]);
 });
 
 test("missing key and malformed key produce distinct failure codes", () => {
@@ -130,6 +143,28 @@ test("manual builds require one explicit full release SHA for every image refere
   assert.match(preflight, /checkout is dirty/);
 });
 
+test("Cloud Build proves the uploaded worker bytes match the claimed commit", () => {
+  assert.match(workerBuild, /id: verify-release-source/);
+  assert.match(workerBuild, /https:\/\/github\.com\/bright4862-design\/seo-autopilot\.git/);
+  assert.match(workerBuild, /fetch --quiet --depth=1 origin "\$\{_RELEASE_SHA\}"/);
+  assert.match(workerBuild, /actual_sha=.*rev-parse HEAD/);
+  assert.match(workerBuild, /scanner-api\/requirements\.txt/);
+  assert.match(workerBuild, /scanner-api\/app/);
+  assert.match(workerBuild, /git diff --no-index --exit-code/);
+  assert.match(workerBuild, /git[^\n]*archive --format=tar "\$\{_RELEASE_SHA\}"/);
+  assert.match(workerBuild, /sha256sum "\$verified_context\/scanner-api\/app\/main\.py"/);
+  assert.match(
+    buildCode,
+    /docker[\s\S]*\/workspace\/\.verified-context/,
+    "the image must be built from the fetched immutable commit archive",
+  );
+  assert.doesNotMatch(
+    buildCode,
+    /args:\s*\["build",\s*"--tag",[^\n]*,\s*"\."\]/,
+    "the uploaded workspace must not remain the Docker build source",
+  );
+});
+
 test("the /scan-job trust boundary is documented truthfully", () => {
   const docstring = workerSrc.match(/def require_cloud_tasks_oidc[\s\S]*?"""[\s\S]*?"""/)?.[0] || "";
   assert.ok(docstring, "require_cloud_tasks_oidc docstring not found");
@@ -161,7 +196,7 @@ test("the manifest contains no timestamps or machine-specific paths", () => {
 });
 
 test("the manifest covers function.jsonc and the whole closed tree", () => {
-  const { functions } = buildManifest();
+  const { functions, entities, entityDigest } = buildManifest();
   for (const fnName of RELEASE_FUNCTIONS) {
     const entry = functions[fnName];
     assert.ok(entry, `${fnName} missing from manifest`);
@@ -176,6 +211,62 @@ test("the manifest covers function.jsonc and the whole closed tree", () => {
       assert.match(meta.sha256, /^[a-f0-9]{64}$/, `${fnName}/${name}: bad sha256`);
       assert.equal(meta.bytes, fs.statSync(`base44/functions/${fnName}/${name}`).size);
     }
+  }
+  assert.deepEqual(RELEASE_ENTITIES, ["ScanRun", "FixList", "FixItem"]);
+  assert.match(entityDigest, /^[a-f0-9]{64}$/);
+  for (const entityName of RELEASE_ENTITIES) {
+    const metadata = entities[entityName];
+    assert.equal(metadata.file, `${entityName}.jsonc`);
+    assert.match(metadata.sha256, /^[a-f0-9]{64}$/);
+    assert.equal(metadata.bytes, fs.statSync(`base44/entities/${entityName}.jsonc`).size);
+  }
+});
+
+test("a fresh pulled Base44 inventory must match every release package and authority schema byte-for-byte", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "fixlist-base44-pull-"));
+  const functionsRoot = path.join(root, "functions");
+  const entitiesRoot = path.join(root, "entities");
+  try {
+    fs.mkdirSync(functionsRoot);
+    fs.mkdirSync(entitiesRoot);
+    for (const fnName of RELEASE_FUNCTIONS) {
+      fs.cpSync(`base44/functions/${fnName}`, path.join(functionsRoot, fnName), { recursive: true });
+    }
+    for (const entityName of RELEASE_ENTITIES) {
+      fs.copyFileSync(
+        `base44/entities/${entityName}.jsonc`,
+        path.join(entitiesRoot, `${entityName}.jsonc`),
+      );
+    }
+    assert.equal(compareReleaseDirectories(functionsRoot, entitiesRoot).ok, true);
+
+    fs.appendFileSync(path.join(functionsRoot, "getCustomerScanResult", "projection.js"), "\n// drift\n");
+    const drifted = compareReleaseDirectories(functionsRoot, entitiesRoot);
+    assert.equal(drifted.ok, false);
+    assert.ok(drifted.problems.some((problem) => problem.includes("getCustomerScanResult")));
+    fs.copyFileSync(
+      "base44/functions/getCustomerScanResult/projection.js",
+      path.join(functionsRoot, "getCustomerScanResult", "projection.js"),
+    );
+
+    fs.appendFileSync(path.join(entitiesRoot, "ScanRun.jsonc"), "\n// drift\n");
+    const entityDrift = compareReleaseDirectories(functionsRoot, entitiesRoot);
+    assert.equal(entityDrift.ok, false);
+    assert.ok(entityDrift.problems.some((problem) => problem.includes("ScanRun: deployed entity digest")));
+    fs.copyFileSync("base44/entities/ScanRun.jsonc", path.join(entitiesRoot, "ScanRun.jsonc"));
+
+    fs.rmSync(path.join(functionsRoot, "stripeWebhook"), { recursive: true });
+    const missing = compareReleaseDirectories(functionsRoot, entitiesRoot);
+    assert.equal(missing.ok, false);
+    assert.ok(missing.problems.some((problem) => problem.includes("stripeWebhook: missing")));
+
+    fs.cpSync("base44/functions/stripeWebhook", path.join(functionsRoot, "stripeWebhook"), { recursive: true });
+    fs.rmSync(path.join(entitiesRoot, "FixItem.jsonc"));
+    const missingEntity = compareReleaseDirectories(functionsRoot, entitiesRoot);
+    assert.equal(missingEntity.ok, false);
+    assert.ok(missingEntity.problems.some((problem) => problem.includes("FixItem: entity schema missing")));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -361,10 +452,29 @@ test("the post-deploy verification path is read-only", () => {
   assert.match(verify, /describe/);
 });
 
+test("post-deploy verification fails closed without a fresh Base44 package pull", () => {
+  const verify = fs.readFileSync("scripts/post_deploy_verify.sh", "utf8");
+  assert.match(verify, /BASE44_PULLED_FUNCTIONS_DIR/);
+  assert.match(verify, /BASE44_PULLED_ENTITIES_DIR/);
+  assert.match(verify, /base44_release_manifest\.mjs compare/);
+  assert.doesNotMatch(verify, /Base44 function presence \(manual\)/);
+  assert.doesNotMatch(verify, /no read-only CLI check exists/);
+});
+
 function runPostDeployVerifier(policyMode) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "durable-release-verify-"));
   const gcloudPath = path.join(tempDir, "gcloud");
   const describePath = path.join(tempDir, "describe.json");
+  const pulledFunctions = path.join(tempDir, "base44-functions");
+  const pulledEntities = path.join(tempDir, "base44-entities");
+  fs.mkdirSync(pulledFunctions);
+  fs.mkdirSync(pulledEntities);
+  for (const fnName of RELEASE_FUNCTIONS) {
+    fs.cpSync(`base44/functions/${fnName}`, path.join(pulledFunctions, fnName), { recursive: true });
+  }
+  for (const entityName of RELEASE_ENTITIES) {
+    fs.copyFileSync(`base44/entities/${entityName}.jsonc`, path.join(pulledEntities, `${entityName}.jsonc`));
+  }
   const image = `europe-west1-docker.pkg.dev/test/repo/worker:${"a".repeat(40)}`;
   const runtimeSa = "runtime@test.iam.gserviceaccount.com";
   const invokerSa = "invoker@test.iam.gserviceaccount.com";
@@ -418,6 +528,9 @@ fi
       EXPECTED_INVOKER_SA: invokerSa,
       EXPECTED_SIGNING_SECRET: "SCAN_EVIDENCE_SIGNING_KEY",
       EXPECTED_SIGNING_VERSION: "1",
+      BASE44_PULLED_FUNCTIONS_DIR: pulledFunctions,
+      BASE44_PULLED_ENTITIES_DIR: pulledEntities,
+      NODE_BIN: process.execPath,
     },
   });
   fs.rmSync(tempDir, { recursive: true, force: true });

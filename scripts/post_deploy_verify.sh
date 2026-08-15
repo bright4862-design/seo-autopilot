@@ -12,7 +12,9 @@
 #   WORKER_SERVICE=... REGION=... PROJECT=... \
 #   EXPECTED_IMAGE=... EXPECTED_RUNTIME_SA=... EXPECTED_INVOKER_SA=... \
 #   EXPECTED_SIGNING_SECRET=... EXPECTED_SIGNING_VERSION=... \
-#   [BASE44_APP_ID=...] \
+#   BASE44_PULLED_FUNCTIONS_DIR=<fresh-read-only-cli-pull>/base44/functions \
+#   BASE44_PULLED_ENTITIES_DIR=<fresh-read-only-cli-pull>/base44/entities \
+#   [BASE44_APP_ID=...] [NODE_BIN=node] \
 #   bash scripts/post_deploy_verify.sh
 #
 # All EXPECTED_* inputs above are REQUIRED. The deployed revision must use the
@@ -36,14 +38,20 @@ skip() { printf "  SKIP  %s\n" "$1"; }
 : "${BASE44_APP_ID:=}"
 : "${EXPECTED_SIGNING_SECRET:=}"
 : "${EXPECTED_SIGNING_VERSION:=}"
+: "${BASE44_PULLED_FUNCTIONS_DIR:=}"
+: "${BASE44_PULLED_ENTITIES_DIR:=}"
+: "${NODE_BIN:=node}"
 
 if [ -z "$WORKER_SERVICE" ] || [ -z "$REGION" ] || [ -z "$PROJECT" ]; then
   echo "WORKER_SERVICE, REGION and PROJECT are required. Nothing is guessed."
   exit 2
 fi
 if [ -z "$EXPECTED_IMAGE" ] || [ -z "$EXPECTED_RUNTIME_SA" ] || [ -z "$EXPECTED_INVOKER_SA" ] || \
-   [ -z "$EXPECTED_SIGNING_SECRET" ] || [ -z "$EXPECTED_SIGNING_VERSION" ]; then
+   [ -z "$EXPECTED_SIGNING_SECRET" ] || [ -z "$EXPECTED_SIGNING_VERSION" ] || \
+   [ -z "$BASE44_PULLED_FUNCTIONS_DIR" ] || [ -z "$BASE44_PULLED_ENTITIES_DIR" ]; then
   echo "EXPECTED_IMAGE, EXPECTED_RUNTIME_SA, EXPECTED_INVOKER_SA, EXPECTED_SIGNING_SECRET and EXPECTED_SIGNING_VERSION are required."
+  echo "BASE44_PULLED_FUNCTIONS_DIR is required and must name a fresh authenticated CLI pull of deployed functions."
+  echo "BASE44_PULLED_ENTITIES_DIR is required and must name the same pull's deployed entity schemas."
   echo "The verifier refuses an unpinned image or identity expectation."
   echo "The signing key must be pinned to an exact numeric version; 'latest' is prohibited."
   exit 2
@@ -239,8 +247,19 @@ case "$SIGNING_REF" in
 esac
 
 echo
-echo "=== 6. Base44 function presence (manual) ==="
-skip "durableScanWorkerControl / persistDurableScanAuthority presence must be confirmed in the Base44 dashboard; no read-only CLI check exists"
+echo "=== 6. Base44 deployed function and authority-schema inventory ==="
+if ! command -v "$NODE_BIN" >/dev/null 2>&1 && [ ! -x "$NODE_BIN" ]; then
+  fail "NODE_BIN is unavailable; deployed Base44 packages cannot be compared"
+elif [ ! -e "$BASE44_PULLED_FUNCTIONS_DIR/." ]; then
+  fail "BASE44_PULLED_FUNCTIONS_DIR does not exist"
+elif [ ! -e "$BASE44_PULLED_ENTITIES_DIR/." ]; then
+  fail "BASE44_PULLED_ENTITIES_DIR does not exist"
+elif "$NODE_BIN" scripts/base44_release_manifest.mjs compare \
+  "$BASE44_PULLED_FUNCTIONS_DIR" "$BASE44_PULLED_ENTITIES_DIR" >/dev/null; then
+  pass "all six deployed functions and three authority entity schemas match the candidate manifest"
+else
+  fail "deployed Base44 function/entity inventory is missing or differs from the candidate"
+fi
 
 echo
 echo "=== Result ==="

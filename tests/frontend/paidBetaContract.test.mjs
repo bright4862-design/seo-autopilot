@@ -122,3 +122,12 @@ test("Access writes are backend-only and completion is billing-independent", () 
   assert.doesNotMatch(scanForm, /recordScanUsed|Access\.create|Access\.update|scans_used/);
   assert.doesNotMatch(persistence, /entities\.Access|scans_used|ensureAllowanceConsumed/);
 });
+
+test("paid beta checkout is invite-only, default-off, and cannot allocate Access rows", () => {
+  assert.match(checkout, /BETA_CHECKOUT_ENABLED/);
+  assert.match(checkout, /BETA_COHORT_ALLOWED_USER_IDS/);
+  assert.match(checkout, /const MAX_BETA_CUSTOMERS = 25/);
+  assert.match(checkout, /checkout_access_not_preprovisioned/);
+  assert.doesNotMatch(checkout, /entities\.Access\.create/);
+  assert.match(checkout, /await checkoutIdempotencyKey\(access, policy\.generation\)/);
+});

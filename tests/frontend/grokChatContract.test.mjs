@@ -293,14 +293,11 @@ test("Cloud Run chat uses only server secrets, a bounded timeout, and safe error
   assert.doesNotMatch(functionSource, /error\?\.message|String\(error\)/);
 });
 
-test("Grok is reachable only inside the authenticated customer app", () => {
-  assert.match(appSource, /<ProtectedRoute[\s\S]*path="\/assistant" element=\{<Assistant \/>\}/);
-  // Customer navigation must not expose Grok. The entry renders as inert text
-  // with no href and no route, so navigating the product cannot reach it.
-  assert.match(layoutSource, /\{ name: "Ask Grok · Coming soon", href: "", disabled: true \}/);
-  assert.doesNotMatch(layoutSource, /name: "Ask Grok", href: "\/assistant"/);
-  assert.match(layoutSource, /if \(item\.disabled\)/);
-  assert.match(layoutSource, /aria-disabled="true"/);
+test("Grok is disabled and absent from the customer application", () => {
+  assert.match(appSource, /path="\/assistant"[\s\S]*<Navigate to="\/dashboard" replace \/>/);
+  assert.doesNotMatch(appSource, /import Assistant/);
+  assert.doesNotMatch(appSource, /<Assistant \/>/);
+  assert.doesNotMatch(layoutSource, /Ask Grok|\/assistant/);
 });
 
 test("the latest authoritative scan must belong to the active project and domain", () => {

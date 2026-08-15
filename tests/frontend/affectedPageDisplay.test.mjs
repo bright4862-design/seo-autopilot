@@ -11,7 +11,7 @@ const start = Math.max(
   source.indexOf("function AffectedPage({ page })"),
   source.indexOf("function AffectedPage({ page, websiteUrl, index })"),
 );
-const end = source.indexOf("function ScanDebugPanel", start);
+const end = source.indexOf("function normalizeAffectedPageList", start);
 const affectedPageSource = source.slice(start, end);
 
 test("relative affected URLs are not printed twice", () => {

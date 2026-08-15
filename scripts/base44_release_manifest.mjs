@@ -3,8 +3,8 @@
 //
 // Two jobs:
 //   1. verify   -- prove each function package is portable and self-contained
-//   2. manifest -- emit an exact file list with SHA-256 hashes so a package
-//                  pulled back out of Base44 can be compared byte-for-byte
+//   2. manifest -- emit exact function-package and authority-entity SHA-256
+//                  hashes so a fresh Base44 pull can be compared byte-for-byte
 //                  against this GitHub source
 //
 // Integrity rules enforced (each one has burned this repo at least once):
@@ -26,17 +26,28 @@
 // Usage:
 //   node scripts/base44_release_manifest.mjs verify
 //   node scripts/base44_release_manifest.mjs manifest [> release-manifest.json]
+//   node scripts/base44_release_manifest.mjs compare <pulled-functions-dir> <pulled-entities-dir>
 
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 
 const FUNCTIONS_DIR = "base44/functions";
+const ENTITIES_DIR = "base44/entities";
 
 export const RELEASE_FUNCTIONS = [
   "startStandardScanJob",
   "durableScanWorkerControl",
   "persistDurableScanAuthority",
+  "getCustomerScanResult",
+  "createAccessCheckout",
+  "stripeWebhook",
+];
+
+export const RELEASE_ENTITIES = [
+  "ScanRun",
+  "FixList",
+  "FixItem",
 ];
 
 // Bare specifiers the Base44 runtime provides. Not resolvable on disk and not
@@ -179,10 +190,15 @@ export function auditAll(fns = RELEASE_FUNCTIONS) {
   return fns.map(auditFunction);
 }
 
-export function buildManifest(fns = RELEASE_FUNCTIONS) {
+export function buildManifest(
+  fns = RELEASE_FUNCTIONS,
+  functionsDir = FUNCTIONS_DIR,
+  entitiesToHash = RELEASE_ENTITIES,
+  entitiesDir = ENTITIES_DIR,
+) {
   const functions = {};
   for (const fnName of fns) {
-    const dir = path.join(FUNCTIONS_DIR, fnName);
+    const dir = path.join(functionsDir, fnName);
     const files = {};
     for (const file of fs.readdirSync(dir).sort()) {
       const full = path.join(dir, file);
@@ -200,10 +216,82 @@ export function buildManifest(fns = RELEASE_FUNCTIONS) {
     ).digest("hex");
     functions[fnName] = { entry: readJsonc(path.join(dir, "function.jsonc")).entry, files, packageDigest };
   }
-  const releaseDigest = crypto.createHash("sha256").update(
+  const functionDigest = crypto.createHash("sha256").update(
     Object.entries(functions).map(([n, f]) => `${n}\0${f.packageDigest}`).join("\n"),
   ).digest("hex");
-  return { functions, releaseDigest };
+
+  const entities = {};
+  for (const entityName of entitiesToHash) {
+    const file = `${entityName}.jsonc`;
+    const full = path.join(entitiesDir, file);
+    const bytes = fs.readFileSync(full);
+    const schema = readJsonc(full);
+    if (schema.name !== entityName) {
+      throw new Error(`${file}: schema name "${schema.name}" does not match the release entity`);
+    }
+    entities[entityName] = {
+      file,
+      bytes: bytes.length,
+      sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
+    };
+  }
+  const entityDigest = crypto.createHash("sha256").update(
+    Object.entries(entities).map(([n, metadata]) => `${n}\0${metadata.sha256}`).join("\n"),
+  ).digest("hex");
+  const releaseDigest = crypto.createHash("sha256").update(
+    `functions\0${functionDigest}\nentities\0${entityDigest}`,
+  ).digest("hex");
+  return { functions, entities, functionDigest, entityDigest, releaseDigest };
+}
+
+export function compareReleaseDirectories(remoteFunctionsDir, remoteEntitiesDir) {
+  const remoteRoot = path.resolve(String(remoteFunctionsDir || ""));
+  const remoteEntityRoot = path.resolve(String(remoteEntitiesDir || ""));
+  const problems = [];
+  if (!remoteFunctionsDir || !fs.existsSync(remoteRoot) || !fs.statSync(remoteRoot).isDirectory()) {
+    return { ok: false, problems: ["pulled Base44 functions directory is missing"], local: null, remote: null };
+  }
+  if (!remoteEntitiesDir || !fs.existsSync(remoteEntityRoot) || !fs.statSync(remoteEntityRoot).isDirectory()) {
+    return { ok: false, problems: ["pulled Base44 entities directory is missing"], local: null, remote: null };
+  }
+  for (const fnName of RELEASE_FUNCTIONS) {
+    if (!fs.existsSync(path.join(remoteRoot, fnName))) {
+      problems.push(`${fnName}: missing from pulled Base44 inventory`);
+    }
+  }
+  for (const entityName of RELEASE_ENTITIES) {
+    if (!fs.existsSync(path.join(remoteEntityRoot, `${entityName}.jsonc`))) {
+      problems.push(`${entityName}: entity schema missing from pulled Base44 inventory`);
+    }
+  }
+  if (problems.length) return { ok: false, problems, local: null, remote: null };
+
+  const local = buildManifest(RELEASE_FUNCTIONS, FUNCTIONS_DIR);
+  const remote = buildManifest(RELEASE_FUNCTIONS, remoteRoot, RELEASE_ENTITIES, remoteEntityRoot);
+  for (const fnName of RELEASE_FUNCTIONS) {
+    const localPackage = local.functions[fnName];
+    const remotePackage = remote.functions[fnName];
+    if (localPackage.packageDigest !== remotePackage.packageDigest) {
+      problems.push(
+        `${fnName}: deployed package digest ${remotePackage.packageDigest} does not match candidate ${localPackage.packageDigest}`,
+      );
+    }
+  }
+  for (const entityName of RELEASE_ENTITIES) {
+    const localSchema = local.entities[entityName];
+    const remoteSchema = remote.entities[entityName];
+    if (localSchema.sha256 !== remoteSchema.sha256) {
+      problems.push(
+        `${entityName}: deployed entity digest ${remoteSchema.sha256} does not match candidate ${localSchema.sha256}`,
+      );
+    }
+  }
+  if (local.releaseDigest !== remote.releaseDigest) {
+    problems.push(
+      `release digest ${remote.releaseDigest} does not match candidate ${local.releaseDigest}`,
+    );
+  }
+  return { ok: problems.length === 0, problems, local, remote };
 }
 
 const invokedDirectly = process.argv[1] && import.meta.url.endsWith(path.basename(process.argv[1]));
@@ -211,6 +299,13 @@ if (invokedDirectly) {
   const mode = process.argv[2] || "verify";
   if (mode === "manifest") {
     process.stdout.write(`${JSON.stringify(buildManifest(), null, 2)}\n`);
+  } else if (mode === "compare") {
+    const comparison = compareReleaseDirectories(process.argv[3], process.argv[4]);
+    if (!comparison.ok) {
+      for (const problem of comparison.problems) process.stdout.write(`FAIL ${problem}\n`);
+      process.exit(1);
+    }
+    process.stdout.write(`OK   pulled Base44 function/entity inventory matches ${comparison.local.releaseDigest}\n`);
   } else {
     const results = auditAll();
     const problems = results.flatMap((r) => r.problems);

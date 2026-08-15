@@ -24,6 +24,13 @@ const EVENT_CATEGORY = {
   report_generated: "report",
   report_exported: "report",
   billing_viewed: "billing",
+  checkout_started: "billing",
+  payment_returned: "billing",
+  access_activated: "billing",
+  access_activation_delayed: "billing",
+  scan_accepted: "scan",
+  result_viewed: "recommendation",
+  fix_opened: "recommendation",
   waitlist_joined: "billing",
   cleanup_requested: "help",
   contact_submitted: "help",
@@ -50,18 +57,25 @@ export async function flushQueuedEvents() {
   try {
     const pending = JSON.parse(sessionStorage.getItem(QUEUE_KEY) || "[]");
     if (!pending.length) return;
-    sessionStorage.removeItem(QUEUE_KEY);
-    pending.forEach((event) => trackEvent(event.eventName, event.metadata));
+    const remaining = [];
+    for (const event of pending) {
+      if (!await trackEvent(event.eventName, event.metadata)) remaining.push(event);
+    }
+    if (remaining.length > 0) {
+      sessionStorage.setItem(QUEUE_KEY, JSON.stringify(remaining.slice(-10)));
+    } else {
+      sessionStorage.removeItem(QUEUE_KEY);
+    }
   } catch (e) {}
 }
 
 export async function trackEvent(eventName, metadata = {}) {
   try {
     const event_category = EVENT_CATEGORY[eventName];
-    if (!event_category) return;
+    if (!event_category) return false;
 
     const user = await base44.auth.me();
-    if (!user?.id) return;
+    if (!user?.id) return false;
 
     let project = null;
     try {
@@ -78,5 +92,8 @@ export async function trackEvent(eventName, metadata = {}) {
       metadata: normalizeMetadata(metadata),
       created_at: new Date().toISOString(),
     });
-  } catch (e) {}
+    return true;
+  } catch (e) {
+    return false;
+  }
 }

@@ -2,7 +2,7 @@
 
 Authoritative mapping of every environment input reachable from the durable
 Standard 150 path. Derived by tracing `/scan-job`, `/scan-job-drain`, `scan_job.py`, `run_scan`, the
-authority completion path, and the three Base44 durable functions. The immutable
+authority completion path, and the six Base44 customer-release functions. The immutable
 release SHA is recorded only after the full gate passes.
 
 **Classification**
@@ -97,15 +97,47 @@ authenticates the customer, verifies exactly one active paid owner-bound Access
 record, creates the delayed attempt-bound watchdog task, creates the immediate
 worker task, and returns.
 
-## Component C — `durableScanWorkerControl` and `persistDurableScanAuthority`
+## Component C — authority persistence and customer result projection
 
 | Variable | Class | Code reader | Missing-value failure mode |
 |---|---|---|---|
-| `SCAN_EVIDENCE_SIGNING_KEY` | **required** | both `index.ts` | 503 `authority_not_configured`. Fail-closed: no envelope is trusted without it. |
+| `SCAN_EVIDENCE_SIGNING_KEY` | **required** | `durableScanWorkerControl/index.ts`, `persistDurableScanAuthority/index.ts`, `getCustomerScanResult/index.ts` | Authority writes fail with `authority_not_configured`; customer result reads return `result_authority_unavailable`. No unverified FixItems are returned. |
 
-Both functions hold `asServiceRole`. All three release functions must be deployed
-from the same immutable SHA. Completion never reads or writes `Access`; payment
-is enforced once, before enqueue.
+The authority functions and result projection hold `asServiceRole` only after
+an exact caller/ScanRun ownership check. All six release functions must be
+deployed from the same immutable SHA. The result projection independently
+checks the active paid entitlement and verifies the persisted HMAC before it
+returns FixList or FixItem content.
+
+## Component D — Base44 checkout and activation
+
+`createAccessCheckout` and `stripeWebhook` are Base44-hosted. Their Stripe
+secrets are supplied through Base44 Secrets, never Cloud Build or browser
+configuration.
+
+| Variable or secret | Class | Code reader | Missing-value failure mode |
+|---|---|---|---|
+| `STRIPE_SECRET_KEY` | **required secret** | both checkout functions via `base44:runtime` | Stripe session retrieval/creation fails; no entitlement is granted. |
+| `STRIPE_WEBHOOK_SECRET` | **required secret** | `stripeWebhook/entry.ts` | Webhook signature verification fails; no entitlement is granted. |
+| `BETA_CHECKOUT_ENABLED` | **required switch; secure default is off** | `createAccessCheckout/entry.ts` | Missing or any value other than exact `true` returns `checkout_paused` before Access or Stripe writes. |
+| `BETA_CHECKOUT_GENERATION` | **required when checkout is enabled** | `createAccessCheckout/entry.ts` | Missing or malformed values fail closed with `checkout_configuration_invalid`; this generation participates in Stripe idempotency. |
+| `BETA_COHORT_ALLOWED_USER_IDS` | **required when checkout is enabled** | `createAccessCheckout/entry.ts` | Must contain 1–25 unique exact Base44 user IDs separated by commas or whitespace. Empty, malformed, or more than 25 IDs fail closed before writes. The list must include every existing active beta owner as well as new invitees. |
+| `CHECKOUT_RETURN_ORIGINS` | optional production supplement; **required for preview checkout** | `createAccessCheckout/entry.ts` | Only the fixed production origin remains accepted. Configure `https://preview--rich-rank-pilot-flow.base44.app` when preview checkout is intentionally tested. |
+| `CHECKOUT_ALLOW_LOCALHOST` | optional-with-secure-default | `createAccessCheckout/entry.ts` | Defaults to false. Localhost return URLs remain rejected. Never enable in production. |
+
+Return URLs are exact-origin matched. Arbitrary request origins, paths,
+credentials, query strings, fragments, and lookalike subdomains are rejected
+before any Access write or Stripe call. Pending checkout retries reuse the
+stored open session. Checkout never creates Access rows: an operator must
+pre-provision exactly one pending, owner-ID-and-email-bound Access record for
+each allowlisted customer before enabling the cohort. The hard 25-ID allowlist
+is therefore the seat allocator; missing or duplicate Access rows fail before
+Stripe. Stripe idempotency is stable on user ID, cohort generation, and prior
+session, while webhook replay handling keeps one entitlement grant exact-once.
+
+To pause new purchases without taking existing scans or results offline, set
+`BETA_CHECKOUT_ENABLED=false`. Do not delete Access rows or disable the worker
+as a purchase-pause mechanism.
 
 ---
 
@@ -181,6 +213,15 @@ The post-deploy verifier also requires the exact expected image, runtime service
 account and invoker service account. It fails closed if the Cloud Run IAM policy
 cannot be read or parsed, rejects public `roles/run.invoker` bindings, and
 requires `serviceAccount:<EXPECTED_INVOKER_SA>` to hold that role.
+
+Before running it, use the authenticated, pinned Base44 CLI in a clean temporary
+checkout to pull the deployed functions, then pass that pull's `base44/functions`
+directory as `BASE44_PULLED_FUNCTIONS_DIR` and the same pull's
+`base44/entities` directory as `BASE44_PULLED_ENTITIES_DIR`. The verifier hashes
+all six required function packages, including each `function.jsonc`, plus the
+exact `ScanRun.jsonc`, `FixList.jsonc`, and `FixItem.jsonc` authority schemas.
+It fails if any package/schema is missing or differs from the release candidate.
+A dashboard name or function-only check is not sufficient.
 
 ## Production acceptance gate
 

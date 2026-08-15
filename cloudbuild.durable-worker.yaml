@@ -107,9 +107,58 @@ steps:
         echo "All required substitutions supplied."
         echo "Release identity pinned to ${_RELEASE_SHA}."
 
+  # A release tag is not provenance by itself. Fetch the claimed immutable
+  # commit from the canonical repository, compare every Dockerfile input with
+  # the uploaded workspace, and build from a fresh archive of that commit. This
+  # makes a dirty or unrelated `gcloud builds submit` context fail inside Cloud
+  # Build instead of merely inheriting the operator-supplied _RELEASE_SHA label.
+  - id: verify-release-source
+    name: gcr.io/cloud-builders/git
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        readonly canonical_repository="https://github.com/bright4862-design/seo-autopilot.git"
+        readonly verified_checkout="/workspace/.verified-source"
+        readonly verified_context="/workspace/.verified-context"
+        rm -rf "$verified_checkout" "$verified_context"
+        git init -q "$verified_checkout"
+        git -C "$verified_checkout" remote add origin "$canonical_repository"
+        git -C "$verified_checkout" fetch --quiet --depth=1 origin "${_RELEASE_SHA}"
+        git -C "$verified_checkout" checkout --quiet --detach FETCH_HEAD
+        actual_sha="$(git -C "$verified_checkout" rev-parse HEAD)"
+        if [ "$actual_sha" != "${_RELEASE_SHA}" ]; then
+          echo "Release source mismatch: fetched $actual_sha, expected ${_RELEASE_SHA}."
+          exit 1
+        fi
+
+        # These are the complete inputs copied by the durable worker Dockerfile,
+        # plus this build policy itself. Directory comparison also rejects extra
+        # uncommitted modules under scanner-api/app.
+        git diff --no-index --exit-code -- \
+          "$verified_checkout/cloudbuild.durable-worker.yaml" \
+          /workspace/cloudbuild.durable-worker.yaml
+        git diff --no-index --exit-code -- \
+          "$verified_checkout/Dockerfile" \
+          /workspace/Dockerfile
+        git diff --no-index --exit-code -- \
+          "$verified_checkout/scanner-api/requirements.txt" \
+          /workspace/scanner-api/requirements.txt
+        git diff --no-index --exit-code -- \
+          "$verified_checkout/scanner-api/app" \
+          /workspace/scanner-api/app
+
+        mkdir -p "$verified_context"
+        git -C "$verified_checkout" archive --format=tar "${_RELEASE_SHA}" \
+          | tar -xf - -C "$verified_context"
+        main_sha="$(sha256sum "$verified_context/scanner-api/app/main.py" | cut -d ' ' -f 1)"
+        echo "Verified uploaded worker context against ${_RELEASE_SHA}."
+        echo "Verified scanner-api/app/main.py sha256=$main_sha"
+
   - id: build
     name: gcr.io/cloud-builders/docker
-    args: ["build", "--tag", "${_IMAGE}:${_RELEASE_SHA}", "."]
+    args: ["build", "--tag", "${_IMAGE}:${_RELEASE_SHA}", "/workspace/.verified-context"]
 
   - id: push
     name: gcr.io/cloud-builders/docker

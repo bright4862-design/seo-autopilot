@@ -91,8 +91,82 @@ export function rankFixesForCustomer(items = []) {
     .map(({ item }) => item);
 }
 
+function templateFamilyOf(item = {}) {
+  return String(item.templateFamily || item.page_template_family || item.original?.page_template_family || "").trim().toLowerCase();
+}
+
+function recommendationOf(item = {}) {
+  return String(item.recommendation || item.recommended_value || item.original?.recommended_value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function uniqueStrings(values = []) {
+  return Array.from(new Set(values.filter(Boolean).map(String)));
+}
+
+function actionKeyOf(item = {}, index = 0) {
+  const rule = ruleOf(item);
+  if (!rule) return `ungrouped:${item.id || index}`;
+  const family = templateFamilyOf(item) || "unclassified";
+  const recommendation = recommendationOf(item) || String(item.title || item.issue_title || "").trim().toLowerCase();
+  return `${rule}\u0000${family}\u0000${recommendation}`;
+}
+
+function strongerPriority(left, right) {
+  return PRIORITY_RANK[priorityOf({ priority: right })] > PRIORITY_RANK[priorityOf({ priority: left })] ? right : left;
+}
+
+/**
+ * Merge separate evidence rows only when they resolve to the same customer action:
+ * same rule, same page/template family, and same recommended remediation.
+ * Scanner evidence remains untouched; this is presentation synthesis only.
+ */
+export function mergeSameActionFixes(items = []) {
+  const list = Array.isArray(items) ? items.filter(Boolean) : [];
+  const groups = new Map();
+  const output = [];
+
+  list.forEach((item, index) => {
+    const key = actionKeyOf(item, index);
+    const found = groups.get(key);
+    if (!found) {
+      const seeded = {
+        ...item,
+        affectedPages: uniqueStrings(affectedPagesOf(item)),
+        sourcePages: uniqueStrings(item.sourcePages || item.source_pages || []),
+        memberIds: uniqueStrings([item.id]),
+        groupedFindingCount: 1,
+      };
+      seeded.pageCount = Math.max(pageCountOf(item), seeded.affectedPages.length);
+      groups.set(key, { index: output.length, item: seeded, currentValues: new Set([String(item.currentValue || item.current_value || "").trim()].filter(Boolean)) });
+      output.push(seeded);
+      return;
+    }
+
+    const merged = found.item;
+    merged.affectedPages = uniqueStrings([...merged.affectedPages, ...affectedPagesOf(item)]);
+    merged.sourcePages = uniqueStrings([...merged.sourcePages, ...(item.sourcePages || item.source_pages || [])]);
+    merged.memberIds = uniqueStrings([...merged.memberIds, item.id]);
+    merged.groupedFindingCount += 1;
+    merged.pageCount = Math.max(merged.affectedPages.length, pageCountOf(merged), pageCountOf(item));
+    merged.priority = strongerPriority(merged.priority, item.priority);
+    merged.confidenceScore = Math.max(confidenceOf(merged), confidenceOf(item));
+    merged.needsHelp = Boolean(merged.needsHelp || item.needsHelp);
+    merged.combinedRules = uniqueStrings([...(merged.combinedRules || []), ...(item.combinedRules || []), ruleOf(item)]);
+
+    const currentValue = String(item.currentValue || item.current_value || "").trim();
+    if (currentValue) found.currentValues.add(currentValue);
+    if (found.currentValues.size > 1) merged.currentValue = "";
+    if (merged.groupedFindingCount > 1) {
+      merged.groupingExplanation = `FixList grouped ${merged.groupedFindingCount} related findings because they use the same page pattern and require the same change. One fix can address all ${merged.affectedPages.length} affected pages.`;
+    }
+    output[found.index] = merged;
+  });
+
+  return output;
+}
+
 export function prepareCustomerFixes(items = []) {
-  return rankFixesForCustomer(suppressCoveredPageFixes(items));
+  return rankFixesForCustomer(mergeSameActionFixes(suppressCoveredPageFixes(items)));
 }
 
 export function priorityBucket(priority = "") {

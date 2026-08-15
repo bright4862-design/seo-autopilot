@@ -105,9 +105,12 @@ function uniqueStrings(values = []) {
 
 function actionKeyOf(item = {}, index = 0) {
   const rule = ruleOf(item);
-  if (!rule) return `ungrouped:${item.id || index}`;
-  const family = templateFamilyOf(item) || "unclassified";
-  const recommendation = recommendationOf(item) || String(item.title || item.issue_title || "").trim().toLowerCase();
+  const family = templateFamilyOf(item);
+  const recommendation = recommendationOf(item);
+  // Fail open for presentation: without an explicit page pattern AND an
+  // explicit remediation, keep the evidence rows separate rather than risk
+  // hiding genuinely different work behind one customer card.
+  if (!rule || !family || !recommendation) return `ungrouped:${item.id || index}`;
   return `${rule}\u0000${family}\u0000${recommendation}`;
 }
 

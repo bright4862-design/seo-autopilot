@@ -81,7 +81,7 @@ test("Base44 release deploy names exactly six functions and never reconciles ent
 });
 
 test("release Base44 CLI is version and digest pinned before login or deployment", () => {
-  assert.match(cliHelper, /FIXLIST_BASE44_CLI_VERSION="0\.1\.9"/);
+  assert.match(cliHelper, /FIXLIST_BASE44_CLI_VERSION="0\.1\.8"/);
   assert.match(cliHelper, /FIXLIST_BASE44_CLI_SHA512="sha512-[A-Za-z0-9+/=]+"/);
   assert.match(cliHelper, /openssl dgst -sha512/);
   assert.match(cliHelper, /integrity mismatch/);

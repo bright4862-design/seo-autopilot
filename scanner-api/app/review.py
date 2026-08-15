@@ -2290,7 +2290,7 @@ def score_evidence_confidence(fix: dict[str, Any]) -> int:
 
 
 HEALTH_SCORE_VERSION = "health_score_v2_action_weighted"
-HEALTH_SCORE_SEVERITY_PENALTIES = {"critical": 12.0, "high": 8.0, "medium": 4.0, "low": 1.0}
+HEALTH_SCORE_SEVERITY_PENALTIES = {"critical": 12.0, "high": 8.0, "medium": 5.0, "low": 1.5}
 HEALTH_SCORE_BUCKET_CAPS = {
     "search_visibility": 30.0,
     "site_structure": 20.0,
@@ -2391,21 +2391,21 @@ def _health_score_prevalence_factor(page_count: int, pages_crawled: int, scope: 
     ratio = count / crawled
     factor = 1.0
     if count >= 50 or ratio >= 0.33:
-        factor = 1.6
+        factor = 2.0
     elif count >= 15 or ratio >= 0.10:
-        factor = 1.45
+        factor = 1.7
     elif count >= 5 or ratio >= 0.03:
-        factor = 1.25
+        factor = 1.4
     elif count >= 2:
-        factor = 1.10
+        factor = 1.2
 
     normalized_scope = str(scope or "").strip().lower()
     if normalized_scope == "sitewide":
-        factor = max(factor, 1.6)
+        factor = max(factor, 2.0)
     elif normalized_scope == "cross_cutting":
-        factor = max(factor, 1.45)
+        factor = max(factor, 1.7)
     elif normalized_scope == "family":
-        factor = max(factor, 1.10)
+        factor = max(factor, 1.2)
     return factor
 
 

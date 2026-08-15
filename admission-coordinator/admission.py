@@ -92,16 +92,20 @@ def normalize_lease_seconds(value: Any) -> int:
 
 
 def is_lease_active(document: dict[str, Any] | None, now: int) -> bool:
-    """A lease is active only while its state is live AND it has not expired.
+    """Return whether this owner slot is still authoritative.
 
-    Both halves matter. A released document is never active regardless of its
-    expiry, and a claimed document past its expiry is reclaimable even though
-    nothing explicitly released it -- that is what lets a vanished worker's
-    admission be taken over instead of wedging the owner forever.
+    A claimed-but-unbound lease may expire so a request that died before a
+    canonical ScanRun existed cannot wedge the owner forever. Once bound to a
+    real ScanRun, time alone must never free the slot: an old queued Cloud Task
+    could still arrive later and overlap a newly admitted scan. Bound admission
+    is therefore held until an exact terminal release.
     """
     if not isinstance(document, dict):
         return False
-    if str(document.get("state") or "") not in ACTIVE_STATES:
+    state = str(document.get("state") or "")
+    if state == STATE_BOUND:
+        return True
+    if state != STATE_CLAIMED:
         return False
     try:
         expires_at = int(document.get("lease_expires_at") or 0)
@@ -158,9 +162,12 @@ def decide_claim(
     # Rule D -- a different request is mid-flight. Create nothing, tell the
     # caller to retry. This is the cross-tab case.
     if held_request != request:
+        expires_in = max(1, int(document.get("lease_expires_at") or moment) - moment)
+        if str(document.get("state") or "") == STATE_BOUND:
+            expires_in = max(60, expires_in)
         return {
             "outcome": OUTCOME_BUSY,
-            "retry_after_seconds": max(1, int(document.get("lease_expires_at") or moment) - moment),
+            "retry_after_seconds": expires_in,
             "document": document,
         }
 

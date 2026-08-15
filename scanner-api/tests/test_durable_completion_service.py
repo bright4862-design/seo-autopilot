@@ -95,6 +95,11 @@ def test_review_changes_the_completion_proof():
 
 def test_control_envelopes_bind_action_scan_and_failure():
     read = build_control_envelope("read", "secret", scan_id="scan-1")
+    sweep = build_control_envelope("sweep", "secret")
+    assert sweep["version"] == CONTROL_VERSION
+    assert sweep["action"] == "sweep"
+    assert sweep["scan_id"] is None and sweep["identity"] is None and sweep["failure"] is None
+    assert len(sweep["proof"]) == 64
     assert read["version"] == CONTROL_VERSION
     assert read["action"] == "read"
     assert read["scan_id"] == "scan-1"
@@ -146,6 +151,8 @@ def test_hosted_functions_use_supported_service_role_and_signed_envelopes():
     assert "validateCurrentIdentity" in persistence
     assert "validateBoundIdentity" in control
     assert '["start", "fail"].includes(action)' in control
+    assert 'action === "sweep"' in control
+    assert 'reconcileDurableScans(entities)' in control
     assert 'status: "crawling"' in control
     assert 'started_at:' in control
 
@@ -180,6 +187,8 @@ def test_worker_uses_only_signed_hosted_boundaries():
     assert "build_local_review" in source
     assert 'build_control_envelope("start"' in source
     assert "mark_scan_started" in source
+    assert 'build_control_envelope("sweep"' in source
+    assert "reconcile_stale_scans" in source
     assert 'get("fixListVerified") is not True' in source
 
 

@@ -1,6 +1,7 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { verifyAuthoritySeal } from "./authoritySeal.js";
 import { releaseAdmission } from "./admissionClient.js";
+import { reconciliationDecision, uniqueRows } from "./reconciliation.js";
 
 // Attempts are 1-based; anything unparseable is attempt 1.
 function normalizeAttempt(value) {
@@ -59,6 +60,10 @@ Deno.serve(async (req) => {
       const scan = await entities.ScanRun.get(scanId).catch(() => null);
       if (!scan) throw new RequestProblem(404, "worker_record_not_found", "The durable scan record was not found.");
       return Response.json({ success: true, workerVersion: WORKER_VERSION, scanRun: scan });
+    }
+
+    if (action === "sweep") {
+      return Response.json(await reconcileDurableScans(entities));
     }
 
     if (!["start", "fail"].includes(action)) {
@@ -167,6 +172,81 @@ Deno.serve(async (req) => {
     return problemResponse(new RequestProblem(500, "worker_control_failed", "The durable worker control request failed."));
   }
 });
+
+async function reconcileDurableScans(entities) {
+  const statuses = ["queued", "crawling", "reviewing", "complete", "limited", "failed", "cancelled"];
+  let rows;
+  try {
+    const groups = await Promise.all(statuses.map((status) => {
+      const sort = status === "queued"
+        ? "-queued_at"
+        : (["crawling", "reviewing"].includes(status) ? "-started_at" : "-completed_at");
+      return entities.ScanRun.filter({ status }, sort, 50);
+    }));
+    rows = uniqueRows(groups.flat());
+  } catch {
+    throw new RequestProblem(503, "worker_reconciliation_query_failed", "Durable scan reconciliation is temporarily unavailable.");
+  }
+
+  const counts = { examined: 0, closed: 0, released: 0, skipped: 0, errors: 0 };
+  const nowMs = Date.now();
+  for (const candidate of rows) {
+    const scanId = cleanId(candidate?.id);
+    if (!scanId) continue;
+    counts.examined += 1;
+    try {
+      const fresh = await entities.ScanRun.get(scanId).catch(() => null);
+      if (!fresh || cleanId(fresh.id) !== scanId) { counts.skipped += 1; continue; }
+      const decision = reconciliationDecision(fresh, nowMs);
+      if (decision.action === "skip") { counts.skipped += 1; continue; }
+      if (decision.action === "release") {
+        if (await releaseIfServerAdmitted(fresh)) counts.released += 1;
+        else counts.errors += 1;
+        continue;
+      }
+
+      // Re-read immediately before the terminal write so a worker that advanced
+      // the row after the query wins. Reconciliation never overwrites a changed
+      // attempt/status or any terminal authority.
+      const current = await entities.ScanRun.get(scanId).catch(() => null);
+      if (!current || cleanId(current.id) !== scanId) { counts.skipped += 1; continue; }
+      if (normalizeAttempt(current.attempt_count) !== normalizeAttempt(fresh.attempt_count)) { counts.skipped += 1; continue; }
+      const currentDecision = reconciliationDecision(current, nowMs);
+      if (currentDecision.action !== "fail" || currentDecision.error_code !== decision.error_code) {
+        counts.skipped += 1;
+        continue;
+      }
+      await entities.ScanRun.update(scanId, {
+        status: "failed",
+        status_detail: currentDecision.detail,
+        error_code: currentDecision.error_code,
+        error_message: currentDecision.detail,
+        completed_at: new Date(nowMs).toISOString(),
+        release_gate_eligible: false,
+      });
+      const persisted = await entities.ScanRun.get(scanId).catch(() => null);
+      if (!persisted || String(persisted.status || "").toLowerCase() !== "failed" || persisted.release_gate_eligible === true) {
+        counts.errors += 1;
+        continue;
+      }
+      counts.closed += 1;
+      if (await releaseIfServerAdmitted(persisted)) counts.released += 1;
+      else counts.errors += 1;
+    } catch (error) {
+      counts.errors += 1;
+      console.error("durable scan reconciliation candidate failed", {
+        scan_id: scanId,
+        error: error instanceof Error ? error.name : "unknown_error",
+      });
+    }
+  }
+
+  return {
+    success: counts.errors === 0,
+    workerVersion: WORKER_VERSION,
+    reconciliation: counts,
+  };
+}
 
 async function releaseIfServerAdmitted(scan) {
   if (!cleanId(scan?.admission_access_id)) return true;

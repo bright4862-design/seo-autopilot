@@ -31,10 +31,21 @@ has() { grep -q -- "$1" "$2" 2>/dev/null; }
 WORKER_BUILD="cloudbuild.durable-worker.yaml"
 TASKS="base44/functions/startStandardScanJob/cloudTasks.js"
 WORKER_SRC="scanner-api/app/main.py"
+RECONCILER_CONFIG="scripts/configure-standard150-reconciler.sh"
+RECONCILER_VERIFY="scripts/verify-standard150-reconciler.sh"
 SCAN_RAMP="scripts/set-standard150-scan-concurrency.sh"
 SCAN_RETRY="scripts/set-standard150-retry-policy.sh"
 DRAIN_POLICY="scripts/set-standard150-drain-policy.sh"
 
+echo "=== 0. Queue reconciliation backstop ==="
+need_file "$RECONCILER_CONFIG" "Scheduler reconciler configurator present"
+need_file "$RECONCILER_VERIFY" "Scheduler reconciler verifier present"
+if [ -f "$WORKER_SRC" ]; then
+  has '@app.post("/scan-reconcile")' "$WORKER_SRC" && pass "private scan reconciliation route present" || fail "scan reconciliation route missing"
+  has 'WORKER_TERMINAL_DRAIN_AFTER_START_SECONDS = 1800' "$WORKER_SRC" && pass "drain waits through the full retry envelope" || fail "worker terminal drain deadline is not pinned to 1800s"
+fi
+
+echo
 echo "=== 1. Base44 package integrity ==="
 if node scripts/base44_release_manifest.mjs verify >/dev/null 2>&1; then
   pass "release packages portable, closed, pinned, symlink-free"

@@ -45,6 +45,7 @@ from .scan_job import (
     identity_matches,
     mark_scan_started,
     read_scan_run,
+    reconcile_stale_scans,
     write_terminal_failure,
 )
 from .scanner import VERSION, run_scan
@@ -56,7 +57,7 @@ GROK_PROXY_ENABLED = os.getenv("GROK_PROXY_ENABLED", "").strip().lower() == "tru
 TRUST_DISCOVERY_TIMEOUTS = {"basic": 2.0, "quick": 3.0, "deep": 5.0, "advanced": 7.0}
 SCAN_RESPONSE_PAGE_LIMITS = {"basic": 25, "quick": 40, "deep": 85, "advanced": 150}
 GROK_ERROR_DETAIL_VERSION = "grok_upstream_detail_v1"
-WORKER_TERMINAL_DRAIN_AFTER_START_SECONDS = 600
+WORKER_TERMINAL_DRAIN_AFTER_START_SECONDS = 1800
 
 app = FastAPI(title="FixList Scanner API", version=VERSION)
 
@@ -551,6 +552,19 @@ async def scan_job(
             "fix_list_id": outcome.get("fix_list_id"),
             "authority_proof_present": len(str(outcome.get("authority_proof") or "")) == 64,
         }
+
+
+@app.post("/scan-reconcile")
+async def scan_reconcile(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    """Scheduler backstop for stale durable scans; never performs a crawl."""
+    require_cloud_tasks_oidc(authorization)
+    async with httpx.AsyncClient() as client:
+        try:
+            counts = await reconcile_stale_scans(client)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail="Durable scan reconciliation is unavailable.") from exc
+    emit("scan_reconcile_completed", **counts)
+    return {"success": True, "worker_version": WORKER_VERSION, "reconciliation": counts}
 
 
 @app.post("/scan-job-drain")

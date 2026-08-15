@@ -252,3 +252,35 @@ candidate SHA/image/fingerprint:
 - Pre-deploy: `bash scripts/deployment_preflight.sh`
 - Post-deploy, read-only: `bash scripts/post_deploy_verify.sh`
 - Full gate: `bash scripts/release_gate.sh`
+
+## Queue reconciliation backstop
+
+Multi-scan beta operation has two independent terminal-recovery paths:
+
+1. Each admitted scan gets a delayed `/scan-job-drain` task on the dedicated
+   `fixlist-standard150-drain` queue. Queue wait never counts as crawl runtime;
+   the worker stamps `started_at` on actual pickup and the drain waits through
+   the full three-delivery Cloud Tasks retry envelope before terminalizing.
+2. Cloud Scheduler job `fixlist-standard150-reconcile` invokes the private
+   worker route `/scan-reconcile` every five minutes using the exact existing
+   `TASKS_INVOKER_SERVICE_ACCOUNT` OIDC identity. The route performs no crawl.
+   It sends a parameter-free HMAC-signed `sweep` action to
+   `durableScanWorkerControl`, which may only touch server-admitted ScanRuns.
+
+The periodic sweep is deliberately later than the normal drain: queued scans
+must exceed 30 minutes and worker-started scans must exceed 35 minutes before
+reconciliation may fail them. Terminal server-admitted rows in the recent
+release window are also re-released idempotently so a transient coordinator
+failure cannot leave an owner admission bound after the scan itself completed.
+
+Bound admission is not released by wall-clock lease expiry. Only an exact
+terminal release for the bound `scan_id` frees the owner slot. This prevents a
+late Cloud Task from an old scan overlapping a newly admitted scan.
+
+Deployment/verification scripts:
+
+- `scripts/configure-standard150-reconciler.sh` — confirmation-gated Scheduler
+  create/update; OIDC audience is the canonical Cloud Run service URL.
+- `scripts/verify-standard150-reconciler.sh` — read-only verification of enabled
+  state, five-minute schedule, exact `/scan-reconcile` target, POST method,
+  service account and OIDC audience.

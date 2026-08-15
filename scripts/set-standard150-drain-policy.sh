@@ -14,7 +14,7 @@ fi
 
 # The drain queue is control-plane work, not crawling. It must have enough
 # retries to survive a scan waiting in the main queue and then wait until the
-# worker-start anchored 600s terminal deadline becomes due.
+# worker-start anchored 1800s full retry-envelope deadline becomes due.
 MAX_CONCURRENT=5
 MAX_RATE=5
 MAX_ATTEMPTS=100

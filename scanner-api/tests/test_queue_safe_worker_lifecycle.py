@@ -98,3 +98,39 @@ async def test_drain_closes_only_after_worker_start_deadline(monkeypatch):
 
 async def _async_value(value):
     return value
+
+
+def test_terminal_drain_waits_for_the_full_three_dispatch_attempt_envelope():
+    assert main.WORKER_TERMINAL_DRAIN_AFTER_START_SECONDS >= (3 * 480) + 30
+
+
+@pytest.mark.asyncio
+async def test_reconcile_route_is_private_and_returns_only_safe_counts(monkeypatch):
+    monkeypatch.setattr(main, "require_cloud_tasks_oidc", lambda _: None)
+
+    async def reconcile(_client):
+        return {"examined": 4, "closed": 1, "released": 2, "skipped": 1, "errors": 0}
+
+    monkeypatch.setattr(main, "reconcile_stale_scans", reconcile)
+    result = await main.scan_reconcile(authorization="test")
+    assert result["success"] is True
+    assert result["reconciliation"] == {
+        "examined": 4,
+        "closed": 1,
+        "released": 2,
+        "skipped": 1,
+        "errors": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_reconcile_route_fails_transiently_when_base44_sweep_is_unavailable(monkeypatch):
+    monkeypatch.setattr(main, "require_cloud_tasks_oidc", lambda _: None)
+
+    async def reconcile(_client):
+        raise RuntimeError("unavailable")
+
+    monkeypatch.setattr(main, "reconcile_stale_scans", reconcile)
+    with pytest.raises(HTTPException) as exc:
+        await main.scan_reconcile(authorization="test")
+    assert exc.value.status_code == 503

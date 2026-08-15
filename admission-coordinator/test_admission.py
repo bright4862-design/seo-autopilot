@@ -306,3 +306,45 @@ class DocumentShape(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class BoundLeaseSafetyTests(unittest.TestCase):
+    def _bound(self, *, expires_at=100):
+        return {
+            "owner_user_id": "owner-1",
+            "request_id": "req-1",
+            "request_fingerprint": "standard_150|https://example.com/",
+            "claim_token": "token-1",
+            "scan_id": "scan-1",
+            "state": admission.STATE_BOUND,
+            "claimed_at": 10,
+            "lease_expires_at": expires_at,
+            "released_at": None,
+            "terminal_status": "",
+        }
+
+    def test_bound_scan_stays_active_after_diagnostic_lease_timestamp(self):
+        self.assertTrue(admission.is_lease_active(self._bound(expires_at=100), now=10_000))
+
+    def test_expired_claim_without_scan_is_still_reclaimable(self):
+        claimed = {**self._bound(expires_at=100), "state": admission.STATE_CLAIMED, "scan_id": ""}
+        self.assertFalse(admission.is_lease_active(claimed, now=101))
+
+    def test_different_request_cannot_replace_expired_but_bound_scan(self):
+        decision = admission.decide_claim(
+            self._bound(expires_at=100),
+            owner_user_id="owner-1",
+            request_id="req-2",
+            request_fingerprint="standard_150|https://other.example/",
+            claim_token="token-2",
+            now=10_000,
+            lease_seconds=2_400,
+        )
+        self.assertEqual(decision["outcome"], admission.OUTCOME_BUSY)
+        self.assertGreaterEqual(decision["retry_after_seconds"], 60)
+
+    def test_terminal_release_is_what_frees_a_bound_slot(self):
+        released = admission.decide_release(
+            self._bound(expires_at=100), scan_id="scan-1", terminal_status="failed", now=10_000,
+        )
+        self.assertEqual(released["outcome"], admission.OUTCOME_RELEASED)
+        self.assertFalse(admission.is_lease_active(released["document"], now=10_000))

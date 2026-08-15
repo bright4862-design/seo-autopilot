@@ -16,6 +16,7 @@ set -euo pipefail
 : "${GCP_REGION:?GCP_REGION is required}"
 : "${CLOUD_RUN_SERVICE:?CLOUD_RUN_SERVICE is required}"
 : "${CLOUD_TASKS_QUEUE:?CLOUD_TASKS_QUEUE is required}"
+STANDARD150_RECONCILER_JOB="${STANDARD150_RECONCILER_JOB:-fixlist-standard150-reconcile}"
 : "${TASKS_INVOKER_SERVICE_ACCOUNT:?TASKS_INVOKER_SERVICE_ACCOUNT is required}"
 : "${OPERATION:?OPERATION is required}"
 
@@ -55,6 +56,10 @@ verify_iam() {
     --format=yaml
 
   echo
+  echo "=== Cloud Scheduler reconciler ==="
+  gcloud scheduler jobs describe "$STANDARD150_RECONCILER_JOB" \
+    --location="$GCP_REGION" --project="$GCP_PROJECT" --format=json || true
+
   echo "=== Cloud Tasks queue IAM ==="
   gcloud tasks queues get-iam-policy "$CLOUD_TASKS_QUEUE" \
     --location="$GCP_REGION" \

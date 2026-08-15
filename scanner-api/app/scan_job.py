@@ -208,6 +208,24 @@ async def mark_scan_started(client: httpx.AsyncClient, scan: dict[str, Any]) -> 
     return persisted
 
 
+async def reconcile_stale_scans(client: httpx.AsyncClient) -> dict[str, Any]:
+    """Run one signed, parameter-free stale-scan reconciliation sweep."""
+    signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
+    if not signing_key:
+        raise RuntimeError("Durable reconciliation signing is not configured.")
+    envelope = build_control_envelope("sweep", signing_key)
+    response = await invoke_function(client, "durableScanWorkerControl", envelope, timeout=60.0)
+    if response["status_code"] >= 300 or response["body"].get("success") is not True:
+        raise RuntimeError("Durable scan reconciliation could not be verified.")
+    counts = response["body"].get("reconciliation")
+    if not isinstance(counts, dict):
+        raise RuntimeError("Durable scan reconciliation response is malformed.")
+    return {
+        key: max(0, int(counts.get(key) or 0))
+        for key in ("examined", "closed", "released", "skipped", "errors")
+    }
+
+
 async def write_terminal_failure(
     client: httpx.AsyncClient,
     scan_id: str,

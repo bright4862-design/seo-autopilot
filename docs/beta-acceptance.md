@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `5caec7fdcabceee7` |
+| Candidate fingerprint | `03dbfa67f4b708cf` |
 | Classifier | `archetype_classifier_v9_local_business_hospitality` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,15 +15,18 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The shipping code is
-fingerprint `5caec7fdcabceee7` with classifier
-`archetype_classifier_v9_local_business_hospitality` and URL frontier policy
-`url_frontier_policy_v1_conservative_trap_guard`.
+fingerprint `03dbfa67f4b708cf` with classifier
+`archetype_classifier_v9_local_business_hospitality`, URL frontier policy
+`url_frontier_policy_v1_conservative_trap_guard`, and review calibration
+`review_evidence_calibration_v6_health_score_v2`.
 
-The fingerprint moved from `51c813a6219b4e70` to `5caec7fdcabceee7` when the URL
-frontier trap guard was added to the crawl path. That is a crawl-behaviour
-change, so under the freeze rule it required a regenerated fingerprint — which
-is exactly what happened, and why acceptance must be re-run rather than
-inherited.
+The immediately superseded candidate was `5caec7fdcabceee7`. The fingerprint
+moved to `03dbfa67f4b708cf` when Health Score v2 changed the authoritative review
+calibration. That is a customer-visible scoring/review behaviour change, so the
+freeze rule requires a regenerated fingerprint and a new production acceptance
+gate. The earlier move from `51c813a6219b4e70` to `5caec7fdcabceee7` was the URL
+frontier trap-guard change; both prior fingerprints are historical for this
+candidate.
 
 By the freeze rule this document already states, that difference requires a
 regenerated fingerprint, regression coverage, and **a new production acceptance

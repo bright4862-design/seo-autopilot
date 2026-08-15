@@ -9,7 +9,7 @@ test("insufficient evidence never becomes a zero score in the FixList UI", () =>
   assert.match(fixListSource, /const scoreUnavailable = isHealthScoreUnavailable\(scanRecord\)/);
   assert.match(fixListSource, /<ScoreRing score=\{healthScore\} unavailable=\{scoreUnavailable\} \/>/);
   assert.match(fixListSource, /hasUsefulScan && !scoreUnavailable \? buildPassedChecks/);
-  assert.match(fixListSource, /if \(scoreUnavailable\) return "Score unavailable\."/);
+  assert.match(fixListSource, /customerHealthLabel\(healthScore, \{ unavailable: scoreUnavailable, noHighConfidenceFindings \}\)/);
   assert.match(fixListSource, /if \(isHealthScoreUnavailable\(record\)\) return null/);
   assert.doesNotMatch(fixListSource, /Number\(record\?\.health_score \|\|/);
 });

@@ -2094,7 +2094,7 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
         "health_score": health_score,
         "score": health_score,
         "overall_explanation": summary,
-        "health_grade": "Blocked / incomplete" if blocked else "Scan incomplete" if incomplete else "Insufficient evidence" if insufficient else "Score unavailable" if health_score is None else "Strong" if health_score >= 90 else "Good" if health_score >= 80 else "Needs work" if health_score >= 65 else "Major issues",
+        "health_grade": "Blocked / incomplete" if blocked else "Scan incomplete" if incomplete else "Insufficient evidence" if insufficient else "Score unavailable" if health_score is None else "Strong" if health_score >= 85 else "Good" if health_score >= 70 else "Needs work" if health_score >= 50 else "Major issues",
         "health_score_status": health_score_status,
         "usable_page_count": usable_page_count,
         "what_is_working": working,
@@ -2289,49 +2289,213 @@ def score_evidence_confidence(fix: dict[str, Any]) -> int:
     return max(0, min(100, round(score)))
 
 
-def _health_score_rule_key(fix: dict[str, Any], index: int) -> str:
+HEALTH_SCORE_VERSION = "health_score_v2_action_weighted"
+HEALTH_SCORE_SEVERITY_PENALTIES = {"critical": 12.0, "high": 8.0, "medium": 5.0, "low": 1.5}
+HEALTH_SCORE_BUCKET_CAPS = {
+    "search_visibility": 30.0,
+    "site_structure": 20.0,
+    "search_appearance": 20.0,
+    "page_content": 15.0,
+    "technical_quality": 15.0,
+}
+
+
+def _health_score_rule_name(fix: dict[str, Any], index: int) -> str:
     rule = str(fix.get("rule") or "").strip().lower()
     aliases = {
         "missing_canonical": "canonical_missing",
+        "empty_meta_description": "meta_description_unusable",
+        "malformed_meta_description": "meta_description_unusable",
+        "missing_meta_description": "meta_description_unusable",
+        "meta_description_unusable": "meta_description_unusable",
         "missing_image_alt": "image_alt_text",
-        "empty_meta_description": "missing_meta_description",
-        "malformed_meta_description": "missing_meta_description",
-        "meta_description_unusable": "missing_meta_description",
     }
     if rule:
-        return f"rule:{aliases.get(rule, rule)}"
+        return aliases.get(rule, rule)
 
     identity = str(
         fix.get("fix_id")
         or fix.get("id")
         or fix.get("issue_title")
         or fix.get("title")
-        or ""
+        or index
     ).strip().lower()
     category = str(fix.get("category") or "uncategorized").strip().lower()
-    return f"card:{category}:{identity or index}"
+    return f"card:{category}:{identity}"
 
 
-def compute_health_score(fixes: list[dict[str, Any]], site_fingerprint: dict[str, Any]) -> int:
-    penalties = {"critical": 12, "high": 8, "medium": 4, "low": 1}
-    strongest_penalty_by_rule: dict[str, int] = {}
+def _health_score_rule_key(fix: dict[str, Any], index: int) -> str:
+    rule = _health_score_rule_name(fix, index)
+    scope = str(fix.get("page_scope") or "").strip().lower()
+    family = str(fix.get("page_template_family") or "").strip().lower()
+    if scope == "sitewide":
+        family = "*"
+    return f"{rule}|family:{family or 'unclassified'}"
+
+
+def _health_score_bucket(fix: dict[str, Any], index: int) -> str:
+    rule = _health_score_rule_name(fix, index)
+    category = str(fix.get("category") or "").strip().lower()
+
+    if rule == "potential_orphan_pages" or "redirect" in rule or "sitemap" in rule or "internal_link" in rule:
+        return "site_structure"
+    if "canonical" in rule or "noindex" in rule or "robots" in rule or "indexab" in rule or "route_boundary" in rule:
+        return "search_visibility"
+    if "meta_description" in rule or "title" in rule or "schema" in rule:
+        return "search_appearance"
+    if "h1" in rule or "heading" in rule or "thin_content" in rule:
+        return "page_content"
+
+    if category in {"canonical", "indexability"}:
+        return "search_visibility"
+    if category in {"internal_link", "sitemap"}:
+        return "site_structure"
+    if category in {"meta_description", "meta_title", "duplicate_content", "schema", "social_metadata"}:
+        return "search_appearance"
+    if category in {"thin_content", "image_alt_text", "alt_text"}:
+        return "page_content"
+    return "technical_quality"
+
+
+def _health_score_affected_pages(fix: dict[str, Any]) -> set[str]:
+    values = fix.get("affected_pages") if isinstance(fix.get("affected_pages"), list) else []
+    pages = {str(value).strip() for value in values if str(value or "").strip()}
+    page_url = str(fix.get("page_url") or "").strip()
+    if page_url:
+        pages.add(page_url)
+    return pages
+
+
+def _health_score_evidence_factor(fix: dict[str, Any]) -> float:
+    state = " ".join([
+        str(fix.get("evidence_status") or ""),
+        str(fix.get("verification_state") or ""),
+        str(fix.get("review_confidence_state") or ""),
+    ]).strip().lower()
+    if any(token in state for token in ("needs_verification", "inconclusive", "provisional", "unverified")):
+        return 0.5
+
+    confidence = fix.get("confidence_score")
+    try:
+        confidence_value = float(confidence)
+    except (TypeError, ValueError):
+        confidence_value = 0.0
+    if confidence_value <= 0:
+        return 1.0
+    return max(0.75, min(1.0, confidence_value / 100.0))
+
+
+def _health_score_prevalence_factor(page_count: int, pages_crawled: int, scope: str) -> float:
+    count = max(1, int(page_count or 0))
+    crawled = max(1, int(pages_crawled or 0))
+    ratio = count / crawled
+    factor = 1.0
+    if count >= 50 or ratio >= 0.33:
+        factor = 2.0
+    elif count >= 15 or ratio >= 0.10:
+        factor = 1.7
+    elif count >= 5 or ratio >= 0.03:
+        factor = 1.4
+    elif count >= 2:
+        factor = 1.2
+
+    normalized_scope = str(scope or "").strip().lower()
+    if normalized_scope == "sitewide":
+        factor = max(factor, 2.0)
+    elif normalized_scope == "cross_cutting":
+        factor = max(factor, 1.7)
+    elif normalized_scope == "family":
+        factor = max(factor, 1.2)
+    return factor
+
+
+def compute_health_score_breakdown(fixes: list[dict[str, Any]], site_fingerprint: dict[str, Any]) -> dict[str, Any]:
+    pages_crawled = int_or_zero(site_fingerprint.get("pages_crawled"))
+    pages_found = int_or_zero(site_fingerprint.get("pages_found"))
+    grouped: dict[str, dict[str, Any]] = {}
 
     for index, fix in enumerate(fixes):
         if fix.get("non_scoring") is True or fix.get("score_impact") == 0:
             continue
-        priority = str(fix.get("priority") or "low").lower()
-        penalty = penalties.get(priority, 1)
-        key = _health_score_rule_key(fix, index)
-        strongest_penalty_by_rule[key] = max(strongest_penalty_by_rule.get(key, 0), penalty)
 
-    score = 92 - sum(strongest_penalty_by_rule.values())
+        priority = str(fix.get("priority") or "low").strip().lower()
+        base_penalty = HEALTH_SCORE_SEVERITY_PENALTIES.get(priority, 1.0)
+        key = _health_score_rule_key(fix, index)
+        bucket = _health_score_bucket(fix, index)
+        pages = _health_score_affected_pages(fix)
+        reported_count = int_or_zero(fix.get("page_count"))
+        evidence_factor = _health_score_evidence_factor(fix)
+        scope = str(fix.get("page_scope") or "").strip().lower()
+
+        current = grouped.get(key)
+        if current is None:
+            grouped[key] = {
+                "bucket": bucket,
+                "base_penalty": base_penalty,
+                "pages": set(pages),
+                "reported_count": reported_count,
+                "evidence_factor": evidence_factor,
+                "scope": scope,
+            }
+            continue
+
+        current["base_penalty"] = max(float(current["base_penalty"]), base_penalty)
+        current["pages"].update(pages)
+        current["reported_count"] = max(int(current["reported_count"]), reported_count)
+        current["evidence_factor"] = max(float(current["evidence_factor"]), evidence_factor)
+        if scope == "sitewide" or (scope == "cross_cutting" and current["scope"] != "sitewide"):
+            current["scope"] = scope
+
+    bucket_raw = {name: 0.0 for name in HEALTH_SCORE_BUCKET_CAPS}
+    action_penalties: dict[str, float] = {}
+    for key, action in grouped.items():
+        page_count = max(len(action["pages"]), int(action["reported_count"]), 1)
+        prevalence = _health_score_prevalence_factor(page_count, pages_crawled, str(action["scope"]))
+        penalty = float(action["base_penalty"]) * prevalence * float(action["evidence_factor"])
+        action_penalties[key] = round(penalty, 2)
+        bucket_raw[str(action["bucket"])] += penalty
+
+    bucket_penalties = {
+        bucket: round(min(HEALTH_SCORE_BUCKET_CAPS[bucket], penalty), 2)
+        for bucket, penalty in bucket_raw.items()
+    }
+    total_penalty = sum(bucket_penalties.values())
+    score = max(20, min(100, round(100 - total_penalty)))
+
+    # A small representative sample can show that nothing urgent was found,
+    # but it should not claim a perfect whole-site score. Full small-site
+    # inventories and 100+ page representative crawls may reach 100.
+    coverage_ceiling = 100
+    if pages_found > pages_crawled > 0:
+        if pages_crawled >= 100:
+            coverage_ceiling = 100
+        elif pages_crawled >= 50:
+            coverage_ceiling = 98
+        elif pages_crawled >= 25:
+            coverage_ceiling = 95
+        else:
+            coverage_ceiling = 92
+        score = min(score, coverage_ceiling)
+
     if crawl_is_blocked(site_fingerprint):
-        return min(score, 45)
+        score = min(score, 45)
     if evidence_is_incomplete(site_fingerprint):
-        return min(score, 55)
-    if site_fingerprint.get("pages_crawled") == 0:
+        score = min(score, 55)
+    if pages_crawled == 0:
         score = min(score, 86)
-    return max(35, min(98, score))
+
+    return {
+        "version": HEALTH_SCORE_VERSION,
+        "score": score,
+        "coverage_ceiling": coverage_ceiling,
+        "total_penalty": round(total_penalty, 2),
+        "bucket_penalties": bucket_penalties,
+        "action_penalties": action_penalties,
+    }
+
+
+def compute_health_score(fixes: list[dict[str, Any]], site_fingerprint: dict[str, Any]) -> int:
+    return int(compute_health_score_breakdown(fixes, site_fingerprint)["score"])
 
 
 def fix_sort_key(fix: dict[str, Any]) -> tuple[int, int]:

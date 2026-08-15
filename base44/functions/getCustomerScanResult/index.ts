@@ -9,7 +9,7 @@ import {
 } from "./projection.js";
 
 const AUTHORITY_VERSION = "standard_review_snapshot_hmac_v1";
-const RELEASE_FINGERPRINT = "5caec7fdcabceee7";
+const RELEASE_FINGERPRINT = "03dbfa67f4b708cf";
 const MAX_FIX_ITEMS = 100;
 
 class RequestProblem extends Error {

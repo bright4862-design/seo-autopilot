@@ -6,8 +6,8 @@ export const AUTHORITY_CONTRACT = Object.freeze({
   scanner_build_revision: "authenticated_health_probe_v1",
   archetype_classifier_version: "archetype_classifier_v9_local_business_hospitality",
   review_version: "python_review_v2_structural_marketplace",
-  review_evidence_calibration_version: "review_evidence_calibration_v5_utility_redirect",
-  beta_revision_fingerprint: "5caec7fdcabceee7",
+  review_evidence_calibration_version: "review_evidence_calibration_v6_health_score_v2",
+  beta_revision_fingerprint: "03dbfa67f4b708cf",
 });
 
 export function firstFailedAuthorityPredicate(scan, review) {

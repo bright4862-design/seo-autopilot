@@ -11,6 +11,7 @@ import {
   authorityRowsFromSnapshot,
   missingAuthorityFixRows,
 } from "../../base44/functions/persistScanAuthority/authorityRows.js";
+import { authorityRowsFromSnapshot as durableAuthorityRowsFromSnapshot } from "../../base44/functions/persistDurableScanAuthority/authorityRows.js";
 import { authoritySnapshotFromRows } from "../../base44/functions/grokChat/authoritySnapshot.js";
 
 import {
@@ -148,7 +149,7 @@ test("server review snapshot survives the actual persistence and Grok reconstruc
       scanner_wrapper_version: "runAdvancedScan_v22_python_required",
       advanced_scan_backend: "python_scanner_api",
       deno_fallback_used: false,
-      beta_revision_fingerprint: "5caec7fdcabceee7",
+      beta_revision_fingerprint: "03dbfa67f4b708cf",
       metadata_evidence_version: "metadata_v1",
       title_evidence_version: "title_v1",
       submitted_url: "https://www.example.com/",
@@ -160,13 +161,13 @@ test("server review snapshot survives the actual persistence and Grok reconstruc
     review: {
       archetype_classifier_version: "archetype_classifier_v9_local_business_hospitality",
       review_version: "python_review_v2_structural_marketplace",
-      review_evidence_calibration_version: "review_evidence_calibration_v5_utility_redirect",
+      review_evidence_calibration_version: "review_evidence_calibration_v6_health_score_v2",
       ai_review_backend: "python_review_api",
       python_review_fallback_used: false,
       release_gate_eligible: true,
       score_is_provisional: false,
       evidence_quality_blocking: false,
-      beta_revision_fingerprint: "5caec7fdcabceee7",
+      beta_revision_fingerprint: "03dbfa67f4b708cf",
       metadata_evidence_version: "metadata_v1",
       title_evidence_version: "title_v1",
       scan_status: "complete",
@@ -210,6 +211,13 @@ test("server review snapshot survives the actual persistence and Grok reconstruc
   });
   assert.deepEqual(reconstructed, snapshot);
   assert.equal(await verifyAuthoritySeal(reconstructed, secret, proof), true);
+  const durableRows = durableAuthorityRowsFromSnapshot(snapshot, {
+    fixListId: "fixlist_1",
+    ownerUserId: "user_1",
+    proof,
+  });
+  assert.equal(durableRows.scanRun.status, "complete");
+  assert.equal(durableRows.scanRun.status_detail, "");
 
   const changedRows = structuredClone(rows);
   changedRows.fixItems[0].recommended_value = "attacker changed this";

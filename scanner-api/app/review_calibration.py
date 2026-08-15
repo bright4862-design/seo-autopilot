@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 from .review import compute_health_score, group_page_recommendations, unwrap_scan_payload
 
-CALIBRATION_VERSION = "review_evidence_calibration_v5_utility_redirect"
+CALIBRATION_VERSION = "review_evidence_calibration_v6_health_score_v2"
 IMAGE_ALT_EVIDENCE_VERSION = "material_image_alt_v1"
 IMAGE_ALT_RULES = {"image_alt_text", "missing_image_alt"}
 VERIFICATION_ONLY_RULES = {"potential_orphan_pages", "indexable_faceted_navigation"}
@@ -525,11 +525,11 @@ def _health_grade(score: int, scan_status: str) -> str:
         return "Scan incomplete"
     if scan_status == "inconclusive_insufficient_evidence":
         return "Insufficient evidence"
-    if score >= 90:
+    if score >= 85:
         return "Strong"
-    if score >= 80:
+    if score >= 70:
         return "Good"
-    if score >= 65:
+    if score >= 50:
         return "Needs work"
     return "Major issues"
 

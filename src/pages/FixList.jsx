@@ -12,6 +12,8 @@ import { UNLOCK_PRICE_LABEL } from "@/lib/access";
 import UnlockAccessButton from "@/components/billing/UnlockAccessButton";
 import { CUSTOMER_BOUNDARY_EVENT } from "@/lib/customerBrowserCache";
 import ScoreRing from "@/components/fixlist/ScoreRing";
+import { prepareCustomerFixes, priorityBucket } from "@/lib/fixRanking";
+import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel } from "@/lib/fixVocabulary";
 
 const CMS_OPTIONS = [
   { value: "wordpress", label: "WordPress" },
@@ -300,11 +302,16 @@ export default function FixList() {
     };
   }, [requestedScanId, historyReloadToken]);
 
-  const recommendations = useMemo(() => mergeMetaDescriptionRecommendations(getRecommendations(scanRecord).map((item) => normalizeRecommendation(item, scanRecord))), [scanRecord]);
+  const recommendations = useMemo(() => prepareCustomerFixes(
+    mergeMetaDescriptionRecommendations(
+      getRecommendations(scanRecord).map((item) => normalizeRecommendation(item, scanRecord)),
+    ).map(applyCustomerVocabulary),
+  ), [scanRecord]);
   const pages = useMemo(() => getPages(scanRecord), [scanRecord]);
   const healthScore = getHealthScore(scanRecord);
   const scoreUnavailable = isHealthScoreUnavailable(scanRecord);
   const pagesScanned = getPagesScanned(scanRecord, pages);
+  const pagesFound = getPagesFound(scanRecord);
   const locked = scanRecord?.customer_access === "locked";
   const hasUsefulScan = Boolean(
     scanRecord
@@ -322,12 +329,15 @@ export default function FixList() {
 
   const active = recommendations.filter((item) => !doneIds.includes(item.id));
   const doneItems = recommendations.filter((item) => doneIds.includes(item.id));
-  const fixNow = active.filter((item) => item.priority === "critical" || item.priority === "high");
-  const later = active.filter((item) => item.priority !== "critical" && item.priority !== "high");
+  const topPriorities = active.slice(0, 3);
+  const remaining = active.slice(3);
+  const moreImportant = remaining.filter((item) => priorityBucket(item.priority) === "fix_first");
+  const improveNext = remaining.filter((item) => priorityBucket(item.priority) === "improve_next");
+  const worthChecking = remaining.filter((item) => priorityBucket(item.priority) === "worth_checking");
+  const shownTopPriorities = topPriorities;
   const passedChecks = hasUsefulScan && !scoreUnavailable ? buildPassedChecks(recommendations) : [];
   const limitationNote = getLimitationNote(scanRecord);
-  const summary = hasUsefulScan ? getBestSummary(scanRecord, healthScore, pagesScanned, recommendations.length) : "";
-  const healthGrade = hasUsefulScan ? getHealthGrade(scanRecord, healthScore, noHighConfidenceFindings) : "";
+  const summary = hasUsefulScan ? getBestSummary(scanRecord, pagesScanned, pagesFound, recommendations) : "";
 
   function markDone(item) {
     const next = [...doneIds, item.id];
@@ -368,6 +378,7 @@ export default function FixList() {
     }
     if (action === "new_scan") navigate("/onboarding");
   }
+
 
   return (
     <div className="min-h-screen bg-paper text-ink antialiased">
@@ -413,7 +424,9 @@ export default function FixList() {
         ) : hasUsefulScan ? (
           <>
             <p className="mt-16 text-[13px] text-ink-faint tabular-nums">
-              Scanned {scanRecord?.created_at ? formatDate(scanRecord.created_at) : "recently"} · {pagesScanned} pages checked
+              Scanned {scanRecord?.created_at ? formatDate(scanRecord.created_at) : "recently"}
+              {pagesFound > 0 ? ` · ${formatCount(pagesFound)} pages found` : ""}
+              {pagesScanned > 0 ? ` · ${formatCount(pagesScanned)} checked` : ""}
               {passedChecks.length > 0 ? ` · ${passedChecks.length} checks passed` : ""}
             </p>
 
@@ -421,12 +434,11 @@ export default function FixList() {
               <ScoreRing score={healthScore} unavailable={scoreUnavailable} />
               <div>
                 <h1 className="text-[26px] font-semibold leading-tight tracking-tight">
-                  {getHeroHeadline({ healthScore, scoreUnavailable, noHighConfidenceFindings, activeCount: active.length, doneCount: doneItems.length })}
+                  {customerHealthLabel(healthScore, { unavailable: scoreUnavailable, noHighConfidenceFindings })}
                 </h1>
                 <p className="mt-1.5 text-[15px] text-ink-muted tabular-nums">
                   {getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount: active.length, doneCount: doneItems.length })}
                 </p>
-                {healthGrade ? <p className="mt-1 text-[13px] text-ink-faint">{healthGrade}</p> : null}
               </div>
             </div>
 
@@ -438,22 +450,44 @@ export default function FixList() {
               <p className="mt-6 border-l-2 border-warnink/40 pl-3 text-[13.5px] leading-relaxed text-ink-muted">{limitationNote}</p>
             ) : null}
 
-            {fixNow.length > 0 ? (
+            {shownTopPriorities.length > 0 ? (
               <>
-                <SectionEyebrow label="Fix now" count={fixNow.length} />
+                <SectionEyebrow label="Your priorities" count={shownTopPriorities.length} />
                 <div className="mt-2">
-                  {fixNow.map((item) => (
+                  {shownTopPriorities.map((item) => (
                     <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
                   ))}
                 </div>
               </>
             ) : null}
 
-            {later.length > 0 ? (
+            {moreImportant.length > 0 ? (
               <>
-                <SectionEyebrow label="When you have time" count={later.length} />
+                <SectionEyebrow label="More important fixes" count={moreImportant.length} />
                 <div className="mt-2">
-                  {later.map((item) => (
+                  {moreImportant.map((item) => (
+                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
+                  ))}
+                </div>
+              </>
+            ) : null}
+
+            {improveNext.length > 0 ? (
+              <>
+                <SectionEyebrow label="Improve next" count={improveNext.length} />
+                <div className="mt-2">
+                  {improveNext.map((item) => (
+                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
+                  ))}
+                </div>
+              </>
+            ) : null}
+
+            {worthChecking.length > 0 ? (
+              <>
+                <SectionEyebrow label="Worth checking" count={worthChecking.length} />
+                <div className="mt-2">
+                  {worthChecking.map((item) => (
                     <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
                   ))}
                 </div>
@@ -714,10 +748,14 @@ function FixRow({ item, cms, onDone }) {
         <span className={`mt-[7px] h-[7px] w-[7px] shrink-0 rounded-full ${severe ? "bg-crit" : "bg-warnink"}`} />
         <span className="min-w-0 flex-1">
           <span className="block text-[16px] font-medium tracking-tight">{item.title}</span>
-          <span className="mt-0.5 block text-[13.5px] text-ink-muted">{clampText(item.explanation, 110)}</span>
+          <span className="mt-1 block text-[12px] font-medium text-ink-faint">
+            {customerPriorityLabel(item.priority)} · {item.customerCategory}
+            {reportedCount > 0 ? ` · ${reportedCount} ${reportedCount === 1 ? "page" : "pages"}` : ""}
+          </span>
+          <span className="mt-1 block text-[13.5px] text-ink-muted">{clampText(item.explanation, 140)}</span>
         </span>
         <span className="mt-0.5 flex shrink-0 items-center gap-3">
-          <span className="hidden text-[12px] text-ink-faint sm:block">{item.needsHelp ? "Developer" : "You"}</span>
+          <span className="hidden text-[12px] text-ink-faint sm:block">{item.needsHelp ? "Web developer" : "You"}</span>
           <span className={`text-[12px] leading-none text-ink-faint transition-transform ${open ? "rotate-90" : ""}`}>›</span>
         </span>
       </button>
@@ -728,37 +766,47 @@ function FixRow({ item, cms, onDone }) {
           <p className="mt-1 max-w-[56ch]">{item.whyItMatters}</p>
 
           {evidenceItems.length > 0 ? (
-            <>
-              <div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">What FixList confirmed</div>
-              <p className="mt-1 max-w-[56ch] text-[13.5px]">
+            <details className="mt-5 max-w-[60ch] rounded-lg border border-hairline-soft px-3 py-2.5">
+              <summary className="cursor-pointer text-[12.5px] font-medium text-ink-muted">Technical details</summary>
+              <p className="mt-2 text-[12.5px] leading-relaxed text-ink-faint">
                 {evidenceItems.map((entry) => `${entry.label}: ${entry.value}`).join(" · ")}
               </p>
-            </>
+            </details>
           ) : null}
 
           {item.groupingExplanation ? (
             <>
-              <div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Why these URLs are grouped</div>
+              <div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Why these pages are grouped</div>
               <p className="mt-1 max-w-[56ch] text-[13.5px]">{item.groupingExplanation}</p>
             </>
           ) : null}
 
-          <div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">How to fix it</div>
-          <ol className="mt-2 max-w-[60ch] list-decimal space-y-2 pl-5 text-ink">
-            {cmsSteps.map((step, index) => <li key={`${step}-${index}`} className="pl-1 leading-relaxed">{step}</li>)}
-          </ol>
+          <div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">What to do</div>
+          <p className="mt-1 max-w-[56ch] leading-relaxed text-ink">{item.recommendation}</p>
+          <p className="mt-2 text-[12.5px] text-ink-faint">
+            {item.needsHelp ? "Best for: Web developer" : "Best for: You"}
+            {item.estimatedTime ? ` · Typical effort: ${item.estimatedTime}` : ""}
+          </p>
+          {cmsSteps.length > 0 ? (
+            <details className="mt-4 max-w-[60ch]">
+              <summary className="cursor-pointer text-[13px] font-medium text-ink-muted underline decoration-hairline underline-offset-4">Step-by-step instructions</summary>
+              <ol className="mt-3 list-decimal space-y-2 pl-5 text-ink">
+                {cmsSteps.map((step, index) => <li key={`${step}-${index}`} className="pl-1 leading-relaxed">{step}</li>)}
+              </ol>
+            </details>
+          ) : null}
 
           {reportedCount > 0 ? (
             <>
               <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
-                  Affected URLs <span className="font-normal tabular-nums">{availableCount}{reportedCount > availableCount ? ` of ${reportedCount}` : ""}</span>
+                  Affected pages <span className="font-normal tabular-nums">{availableCount}{reportedCount > availableCount ? ` of ${reportedCount}` : ""}</span>
                 </div>
                 {availableCount > 0 ? (
                   <div className="flex flex-wrap items-center gap-3 text-[12px]">
                     <button type="button" onClick={copyAffectedUrls} className="flex items-center gap-1.5 text-ink-muted transition-colors hover:text-ink">
                       <Copy className="h-3.5 w-3.5" />
-                      {copied ? "Copied" : "Copy all"}
+                      {copied ? "Copied" : "Copy page list"}
                     </button>
                     <button type="button" onClick={downloadAffectedUrls} className="flex items-center gap-1.5 text-ink-muted transition-colors hover:text-ink">
                       <Download className="h-3.5 w-3.5" />
@@ -770,7 +818,7 @@ function FixRow({ item, cms, onDone }) {
 
               {reportedCount > availableCount ? (
                 <p className="mt-2 max-w-[60ch] rounded-md bg-warnink/[0.07] px-3 py-2 text-[12.5px] leading-relaxed text-ink-muted">
-                  This saved record contains {availableCount} of {reportedCount} flagged URLs. Run a fresh scan after this update is published to capture the complete list.
+                  This saved result contains {availableCount} of {reportedCount} affected pages. Run a fresh scan after the update is published to capture the complete list.
                 </p>
               ) : null}
 
@@ -787,12 +835,12 @@ function FixRow({ item, cms, onDone }) {
                   ))}
                   {extraCount > 0 ? (
                     <button type="button" onClick={() => setShowAllPages(true)} className="mt-1 text-[13px] font-medium text-ink underline decoration-hairline underline-offset-4">
-                      Show all {availableCount} URLs
+                      Show all {availableCount} pages
                     </button>
                   ) : null}
                   {showAllPages && availableCount > 8 ? (
                     <button type="button" onClick={() => setShowAllPages(false)} className="mt-1 text-[13px] text-ink-muted underline decoration-hairline underline-offset-4">
-                      Show fewer URLs
+                      Show fewer pages
                     </button>
                   ) : null}
                 </div>
@@ -940,16 +988,6 @@ function downloadTextFile(content, filename, type) {
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 }
 
-function getHeroHeadline({ healthScore, scoreUnavailable, noHighConfidenceFindings, activeCount, doneCount }) {
-  if (scoreUnavailable) return "Score unavailable.";
-  if (noHighConfidenceFindings && activeCount === 0 && doneCount === 0) return "Nothing to fix in this sample.";
-  if (activeCount === 0 && doneCount > 0) return "Nothing left on the list.";
-  if (healthScore >= 85) return "Great shape overall.";
-  if (healthScore >= 70) return "Good shape overall.";
-  if (healthScore >= 50) return "Getting there.";
-  return "Room to improve.";
-}
-
 function getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount, doneCount }) {
   if (noHighConfidenceFindings && activeCount === 0 && doneCount === 0) {
     return nextBestStep || "No high-confidence issues were found in the pages we checked.";
@@ -1028,6 +1066,8 @@ function normalizeRecommendation(item = {}, scanRecord = {}) {
     combinedRules: firstArray([item.combined_rules]).map(String),
     groupingExplanation: cleanString(item.grouping_explanation),
     needsHelp,
+    estimatedTime: cleanString(item.estimated_time || item.time_estimate),
+    confidenceScore: Number(item.confidence_score || 0),
     generalSteps: legacyBlocked429 ? build429Steps(evidence) : buildGeneralSteps(item, recommendation, needsHelp),
   };
 }
@@ -1520,6 +1560,11 @@ function getPagesScanned(record, pages) {
   return Number.isFinite(count) ? count : 0;
 }
 
+function getPagesFound(record) {
+  const count = Number(record?.pages_found || record?.scan_summary?.pages_found || record?.technical_audit_summary?.pages_found || 0);
+  return Number.isFinite(count) ? count : 0;
+}
+
 function isNoHighConfidenceFindings(record, recommendations = []) {
   const scanStatus = String(record?.scan_status || "");
   if (["incomplete_evidence", "inconclusive_insufficient_evidence", "blocked_or_incomplete"].includes(scanStatus)) return false;
@@ -1529,24 +1574,26 @@ function isNoHighConfidenceFindings(record, recommendations = []) {
     || recommendations.length === 0;
 }
 
-function getHealthGrade(record, healthScore, noHighConfidenceFindings) {
-  return cleanString(record?.website_health_report?.health_grade || record?.health_grade)
-    || (noHighConfidenceFindings ? "No issues found in sample" : getScoreBand(healthScore).label);
-}
-
 function getNextBestStep(record, noHighConfidenceFindings) {
   return cleanString(record?.website_health_report?.next_best_step || record?.next_best_step)
     || (noHighConfidenceFindings ? "No high-confidence issues were found in the scanned sample — consider a deeper crawl or manual review of money pages." : "");
 }
 
-function getBestSummary(record, healthScore, pagesScanned, issueCount) {
-  const summary = cleanString(record?.customer_summary || record?.simple_summary || record?.website_health_report?.overall_explanation || record?.scan_summary?.plain_english_summary || record?.scan_summary?.summary);
-  if (summary) return normalizeCoverageSummary(summary, pagesScanned);
+function getBestSummary(record, pagesScanned, pagesFound, recommendations = []) {
+  const issueCount = recommendations.length;
   if (isHealthScoreUnavailable(record)) {
-    return `FixList could not verify enough usable pages to calculate a reliable score. It retained ${issueCount || 0} access or verification item${issueCount === 1 ? "" : "s"} from this scan.`;
+    return `FixList could not check enough usable pages to calculate a reliable score. It kept ${issueCount || 0} item${issueCount === 1 ? "" : "s"} for you to review.`;
   }
-  const label = getScoreBand(healthScore).label;
-  return `Your website health is ${label.toLowerCase()} with a score of ${healthScore || 0}/100. FixList reviewed ${pagesScanned || 0} pages and found ${issueCount || 0} recommendations. Start with the highest-impact items first.`;
+  const importantCount = recommendations.filter((item) => ["critical", "high"].includes(item.priority)).length;
+  const groupedCount = recommendations.filter((item) => Number(item.pageCount || 0) > 1 || ["family", "cross_cutting", "sitewide"].includes(item.pageScope)).length;
+  const coverage = pagesFound > 0
+    ? `FixList found ${formatCount(pagesFound)} pages and checked ${formatCount(pagesScanned)} representative pages.`
+    : `FixList checked ${formatCount(pagesScanned)} representative pages.`;
+  const priorities = importantCount > 0
+    ? ` It found ${issueCount} improvement${issueCount === 1 ? "" : "s"}; ${importantCount} should be handled first.`
+    : ` It found ${issueCount} improvement${issueCount === 1 ? "" : "s"} to work through.`;
+  const grouping = groupedCount > 0 ? " Several affect shared page patterns, so one change can improve many pages at once." : "";
+  return `${coverage}${priorities}${grouping}`;
 }
 
 
@@ -1568,14 +1615,6 @@ function normalizePriority(value) {
 }
 
 
-
-function getScoreBand(score) {
-  const number = Number(score || 0);
-  if (number >= 90) return { label: "Excellent", className: "bg-emerald-50 text-emerald-700" };
-  if (number >= 75) return { label: "Good", className: "bg-emerald-50 text-emerald-700" };
-  if (number >= 55) return { label: "Fair", className: "bg-amber-50 text-amber-700" };
-  return { label: "Needs work", className: "bg-red-50 text-red-700" };
-}
 
 function formatPageLabel(page) {
   try {
@@ -1636,13 +1675,6 @@ function humanize(value) {
   return String(value || "").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim().replace(/^\w/, (char) => char.toUpperCase());
 }
 
-function normalizeCoverageSummary(summary, pagesCrawled) {
-  const text = String(summary || "");
-  const count = Number(pagesCrawled || 0);
-  if (!count || !text) return text;
-  return text.replace(/The scanner reviewed\s+\d+\s+pages/gi, `The scanner reviewed ${count} pages`).replace(/scanner reviewed\s+\d+\s+pages/gi, `scanner reviewed ${count} pages`);
-}
-
 function safeHostname(value) {
   try {
     return new URL(String(value || "")).hostname.toLowerCase();
@@ -1666,6 +1698,11 @@ function stableId(input) {
     hash |= 0;
   }
   return `finding_${Math.abs(hash)}`;
+}
+
+function formatCount(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number.toLocaleString() : "0";
 }
 
 function formatDate(value) {

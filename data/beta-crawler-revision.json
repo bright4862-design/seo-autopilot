@@ -23,7 +23,7 @@
     "render_evidence_version": "render_evidence_v1",
     "render_followup_version": "render_followup_v1",
     "representative_page_version": "business_representative_page_v3_sitewide_archetype_ranking",
-    "review_evidence_calibration_version": "review_evidence_calibration_v5_utility_redirect",
+    "review_evidence_calibration_version": "review_evidence_calibration_v6_health_score_v2",
     "review_version": "python_review_v2_structural_marketplace",
     "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",
     "sampling_version": "balanced_sitemap_buckets_v1",
@@ -35,10 +35,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "5caec7fdcabceee7",
+  "fingerprint": "03dbfa67f4b708cf",
   "git_commit": "",
-  "note": "Standard 150 beta candidate; URL frontier trap guard added. Production acceptance, deployed commit, workflow runs and artifact digests are pending.",
-  "recorded_at": "2026-08-01T16:32:12Z",
+  "note": "Standard 150 beta candidate; Health Score v2 action-weighted calibration, server-owned admission, and isolated watchdog queue added. Production acceptance, deployed commit, workflow runs and artifact digests are pending.",
+  "recorded_at": "2026-08-15T15:36:00Z",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

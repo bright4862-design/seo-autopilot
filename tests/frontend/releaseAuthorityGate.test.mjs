@@ -14,10 +14,10 @@ const authoritativeRecord = {
   advanced_scan_backend: "python_scanner_api",
   deno_fallback_used: false,
   review_version: "python_review_v2_structural_marketplace",
-  review_evidence_calibration_version: "review_evidence_calibration_v5_utility_redirect",
+  review_evidence_calibration_version: "review_evidence_calibration_v6_health_score_v2",
   ai_review_backend: "python_review_api",
   python_review_fallback_used: false,
-  beta_revision_fingerprint: "5caec7fdcabceee7",
+  beta_revision_fingerprint: "03dbfa67f4b708cf",
   release_gate_eligible: true,
 };
 

@@ -42,10 +42,12 @@ async function importHandler(harnessName) {
     evaluatePaidAccess,
     uniqueAccessRows,
     betaScanAdmissionPolicy,
-    bindScanLease,
-    claimScanLease,
     normalizeAdmissionIdentity,
     scanIsTerminal,
+    bindAdmission,
+    claimAdmission,
+    releaseAdmission,
+    normalizeScanIdentity,
   } = globalThis.${harnessName};`;
   return import(`data:text/javascript;base64,${Buffer.from(`${prelude}\n${javascript}`).toString("base64")}`);
 }
@@ -54,7 +56,8 @@ test("the server creates and returns the canonical ScanRun while concurrent retr
   const priorDeno = globalThis.Deno;
   const env = new Map([
     ["BETA_SCAN_ADMISSION_ENABLED", "true"],
-    ["BASE44_ATOMIC_UPDATE_MANY_CONFIRMED", "true"],
+    ["SCAN_ADMISSION_COORDINATOR_URL", "https://coordinator.example"],
+    ["SCAN_EVIDENCE_SIGNING_KEY", "harness-signing-root"],
     ["BETA_COHORT_ALLOWED_USER_IDS", "user-1"],
     ["SCAN_TASKS_QUEUE_PATH", "projects/test/locations/europe-west1/queues/standard150"],
     ["SCAN_WORKER_URL", "https://worker.example/scan-job"],
@@ -122,7 +125,73 @@ test("the server creates and returns the canonical ScanRun while concurrent retr
     auth: { me: async () => ({ id: "user-1", email: "paid@example.com" }) },
     asServiceRole: { entities: { Access, ScanRun, BusinessProject } },
   };
+  // Stands in for the Firestore admission coordinator. One document, and the
+  // same rules the real transaction applies: a fresh claim wins, an identical
+  // request replays onto it, a different request is busy, and a reused request
+  // id carrying different work is a conflict.
+  let admissionDoc = null;
+  const coordinator = {
+    async claim({ ownerUserId, requestId, requestFingerprint }) {
+      if (!admissionDoc || admissionDoc.state === "released") {
+        admissionDoc = {
+          owner_user_id: ownerUserId,
+          request_id: requestId,
+          request_fingerprint: requestFingerprint,
+          claim_token: `tok-${requestId}`,
+          scan_id: "",
+          state: "claimed",
+        };
+        return { ok: true, outcome: "claimed", claim_token: admissionDoc.claim_token, scan_id: "" };
+      }
+      if (admissionDoc.request_id !== requestId) {
+        return { ok: false, failureCode: "admission_busy", retryAfterSeconds: 5, outcomeUnknown: false };
+      }
+      if (admissionDoc.request_fingerprint !== requestFingerprint) {
+        return { ok: false, failureCode: "request_conflict", outcomeUnknown: false };
+      }
+      return {
+        ok: true,
+        outcome: "replayed",
+        claim_token: admissionDoc.claim_token,
+        scan_id: admissionDoc.scan_id,
+      };
+    },
+    async bind({ requestId, claimToken, scanId }) {
+      if (!admissionDoc || admissionDoc.request_id !== requestId) {
+        return { ok: false, failureCode: "claim_not_found", outcomeUnknown: false };
+      }
+      if (admissionDoc.claim_token !== claimToken) {
+        return { ok: false, failureCode: "invalid_claim_token", outcomeUnknown: false };
+      }
+      if (admissionDoc.scan_id === scanId) return { ok: true, outcome: "already_bound", scan_id: scanId };
+      if (admissionDoc.scan_id) {
+        return { ok: false, failureCode: "scan_identity_conflict", outcomeUnknown: false };
+      }
+      admissionDoc.scan_id = scanId;
+      admissionDoc.state = "bound";
+      return { ok: true, outcome: "bound", scan_id: scanId };
+    },
+    async release({ scanId, terminalStatus }) {
+      if (!admissionDoc || admissionDoc.scan_id !== scanId) {
+        return { ok: false, failureCode: "scan_identity_conflict", outcomeUnknown: false };
+      }
+      admissionDoc.state = "released";
+      admissionDoc.terminal_status = terminalStatus;
+      return { ok: true, outcome: "released" };
+    },
+    doc: () => admissionDoc,
+  };
+
   globalThis.__serverOwnedAdmissionHarness = {
+    claimAdmission: (args) => coordinator.claim(args),
+    bindAdmission: (args) => coordinator.bind(args),
+    releaseAdmission: (args) => coordinator.release(args),
+    normalizeScanIdentity: (entity) => {
+      const id = String(entity?.id || "").trim();
+      return id
+        ? { ok: true, failureCode: "", scanId: id, scanRun: { ...entity, scan_id: id } }
+        : { ok: false, failureCode: "admission_scan_id_missing", scanId: "", scanRun: null };
+    },
     createClientFromRequest: () => base44,
     DRAIN_DELAY_SECONDS: 900,
     enqueueScanDrain: async ({ scanId, attemptCount }) => {
@@ -164,7 +233,8 @@ test("the server creates and returns the canonical ScanRun while concurrent retr
     assert.equal(scans.length, 1);
     assert.equal(scans[0].owner_user_id, "user-1");
     assert.equal(scans[0].scan_id, "scan-1");
-    assert.equal(access.scan_claim_scan_id, "scan-1");
+    assert.equal(coordinator.doc().scan_id, "scan-1");
+    assert.equal(coordinator.doc().state, "bound");
 
     const replay = await invoke();
     const replayBody = await replay.json();

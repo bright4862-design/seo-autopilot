@@ -154,8 +154,11 @@ test("ScanRun schema remains compatible with legacy empty project ids until a ba
 
 test("form ensures an owner-bound domain project before creating the ScanRun", () => {
   const ensureIndex = scanForm.indexOf("await ensureScanProject");
-  const beginIndex = scanForm.indexOf("await beginScanRun");
-  assert.ok(ensureIndex >= 0 && ensureIndex < beginIndex);
+  // The project must be resolved before the server is asked to admit a scan.
+  // The browser no longer creates the ScanRun itself.
+  const submitIndex = scanForm.indexOf("await submitStandardScanJob(scanPayload)");
+  assert.ok(ensureIndex >= 0 && ensureIndex < submitIndex);
+  assert.doesNotMatch(scanForm, /await beginScanRun/);
   assert.match(scanForm, /projectId: scanProject\.id/);
   assert.match(activeProject, /BusinessProject\.filter\([\s\S]*owner_user_id: user\.id/);
   assert.match(activeProject, /const projectFields = \{[\s\S]*owner_user_id: user\.id/);
@@ -173,7 +176,9 @@ test("active replays reopen the exact durable scan instead of a nonexistent hist
 });
 
 test("form persists identity before network work and Standard always respects robots", () => {
-  assert.ok(scanForm.indexOf("await beginScanRun") < scanForm.indexOf("callBase44Function(STANDARD_SCANNER_FUNCTION"));
+  // Request identity is generated before any network work, then handed to the
+  // server, which owns the durable row it maps to.
+  assert.ok(scanForm.indexOf("const requestId = createScanRequestId()") < scanForm.indexOf("await submitStandardScanJob(scanPayload)"));
   assert.match(scanForm, /const requestId = createScanRequestId\(\)/);
   assert.match(scanForm, /request_id: requestId/);
   assert.match(scanForm, /idempotency_key: idempotencyKey/);

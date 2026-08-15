@@ -9,8 +9,16 @@ export function betaScanAdmissionPolicy() {
   if (String(Deno.env.get("BETA_SCAN_ADMISSION_ENABLED") || "").trim().toLowerCase() !== "true") {
     return { ok: false, code: "scan_admission_paused", allowedUserIds: [] };
   }
-  if (String(Deno.env.get("BASE44_ATOMIC_UPDATE_MANY_CONFIRMED") || "").trim().toLowerCase() !== "true") {
-    return { ok: false, code: "scan_atomic_admission_unconfirmed", allowedUserIds: [] };
+  // Admission authority now lives in the Firestore coordinator, whose
+  // transactions are documented as atomic with serializable isolation. The
+  // previous gate required BASE44_ATOMIC_UPDATE_MANY_CONFIRMED because the
+  // Access-row lease below depended on Base44 update atomicity that Base44
+  // does not document. Nothing on the live path depends on that any more, so
+  // the flag is neither read nor required -- what is required instead is that
+  // the coordinator is actually configured. Missing configuration must pause
+  // admission rather than silently fall back to the unproven path.
+  if (!String(Deno.env.get("SCAN_ADMISSION_COORDINATOR_URL") || "").trim()) {
+    return { ok: false, code: "scan_admission_coordinator_unconfigured", allowedUserIds: [] };
   }
   const allowedUserIds = Array.from(new Set(
     String(Deno.env.get("BETA_COHORT_ALLOWED_USER_IDS") || "")
@@ -86,7 +94,32 @@ function updatedExactlyOne(result) {
   return result?.success === true && Number(result?.updated) === 1;
 }
 
+// ---------------------------------------------------------------------------
+// LEGACY: Access-row admission lease. Retained for rollback inspection only.
+//
+// This path claimed admission with Access.updateMany() and treated
+// "updated === 1" as a compare-and-set. Base44 documents updateMany's matched
+// and updated counts but not transactional, compare-and-set or linearizable
+// semantics, so that read cannot be relied on to elect exactly one winner
+// across tabs. The Firestore coordinator replaced it.
+//
+// Both mutating helpers now refuse unless BETA_LEGACY_ACCESS_LEASE_ENABLED is
+// explicitly "true", which no environment sets. decideScanLease is left
+// callable because it is pure and its tests document the old semantics.
+// ---------------------------------------------------------------------------
+
+export function legacyAccessLeaseEnabled() {
+  // Read defensively. These helpers are exercised by Node tests that document
+  // the retired semantics, and Deno is not defined there. An unreadable
+  // environment must leave the legacy path off, not crash.
+  const value = globalThis.Deno?.env?.get?.("BETA_LEGACY_ACCESS_LEASE_ENABLED");
+  return String(value || "").trim().toLowerCase() === "true";
+}
+
 export async function claimScanLease({ accessEntity, access, identity, nowMs = Date.now(), claimToken }) {
+  if (!legacyAccessLeaseEnabled()) {
+    return { action: "unavailable", code: "scan_admission_legacy_lease_disabled" };
+  }
   const initial = decideScanLease(access, identity, nowMs);
   if (initial.action !== "claim") return initial;
 
@@ -116,6 +149,7 @@ export async function claimScanLease({ accessEntity, access, identity, nowMs = D
 }
 
 export async function bindScanLease({ accessEntity, accessId, claimToken, scanId }) {
+  if (!legacyAccessLeaseEnabled()) return false;
   const result = await accessEntity.updateMany(
     {
       id: String(accessId),

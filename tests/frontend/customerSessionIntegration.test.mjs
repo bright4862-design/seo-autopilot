@@ -63,8 +63,10 @@ test("scan duplicate and late-response guards bind owner, project, request, scan
   assert.match(scanForm, /releaseIdentity: RELEASE_AUTHORITY_CONTRACT\.betaRevisionFingerprint/);
   assert.match(scanForm, /err\?\.code === "stale_customer_session"/);
   assert.match(scanForm, /requestEpochRef\.current !== requestEpoch/);
-  assert.match(scanForm, /aiError\?\.code === "stale_customer_session"[\s\S]*clearCustomerAuthBoundary\(aiError\)/);
-  assert.match(scanForm, /clearCustomerAuthBoundary\(persistenceError\)/);
+  // Review and persistence moved to the server, so their browser-side session
+  // guards moved with them. The submit-path guard is what remains.
+  assert.match(scanForm, /clearCustomerAuthBoundary\(err\)/);
+  assert.doesNotMatch(scanForm, /clearCustomerAuthBoundary\(persistenceError\)/);
   assert.match(scanForm, /clearCustomerAuthBoundary\(err\)/);
 });
 

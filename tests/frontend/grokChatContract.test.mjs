@@ -250,20 +250,21 @@ test("only trusted server scan and review results can enter the authority persis
   assert.match(persistenceFunctionSource, /persistedItems\.length === snapshot\.recommendations\.length/);
   assert.doesNotMatch(persistenceFunctionSource, /createAuthoritySeal/);
 
-  assert.match(scanFormSource, /authoritative_scan: \{/);
+  // The browser is no longer on the authority-persistence path at all, which is
+  // a stronger guarantee than constraining what it may send: it cannot enter
+  // untrusted scan or review output into sealing because it never calls it.
+  assert.doesNotMatch(scanFormSource, /authoritative_scan: scanData,/);
+  assert.doesNotMatch(scanFormSource, /"persistScanAuthority"/);
+  // buildAiReviewPayload survives but is no longer called from the submit path.
+  // While it exists its narrowing must hold: it may forward only the signed
+  // attestation and review payload, never the raw scan object.
   assert.match(scanFormSource, /authority_review_payload: scanData\.authority_review_payload/);
   assert.match(scanFormSource, /authority_scan_attestation: scanData\.authority_scan_attestation/);
-  assert.doesNotMatch(scanFormSource, /authoritative_scan: scanData,/);
-  assert.match(scanFormSource, /"persistScanAuthority"/);
-  assert.match(scanFormSource, /scan_authority_persistence_failed/);
-  assert.match(scanFormSource, /scan_authority_attestation_missing/);
-  assert.match(scanFormSource, /aiData\?\.release_gate_eligible === true && !usingAuthorityPersistence/);
-  assert.match(scanFormSource, /release_gate_eligible: false, is_authoritative: false/);
-  assert.match(scanFormSource, /\^\[a-f0-9\]\{64\}\$/);
-  assert.match(scanFormSource, /persistedCompletion\.scanRun\.authority_seal_version/);
-  assert.match(scanFormSource, /persistedCompletion\.scanRun\.authority_sealed_at/);
-  assert.match(scanFormSource, /persistedCompletion\.scanRun\.release_gate_eligible === true/);
-  assert.match(scanFormSource, /Boolean\(persistedCompletion\.fixListId\)/);
+  // The browser-side seal verification block went with the persistence path it
+  // guarded. persistDurableScanAuthority performs the seal, and the customer
+  // result route serves only rows that carry it.
+  assert.doesNotMatch(scanFormSource, /persistedCompletion\.scanRun\.authority_seal_version/);
+  assert.doesNotMatch(scanFormSource, /persistedCompletion\.scanRun\.authority_sealed_at/);
   assert.match(functionSource, /await assertServerAuthoritySeal\(\{ scan, fixList, fixItems, user \}\)/);
   assert.match(functionSource, /verifyAuthoritySeal\(snapshot, secret, scan\.authority_proof\)/);
   assert.ok(functionSource.indexOf("await assertServerAuthoritySeal") < functionSource.indexOf("await callScannerChat"));

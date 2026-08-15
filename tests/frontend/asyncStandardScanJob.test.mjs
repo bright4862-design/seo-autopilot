@@ -18,7 +18,11 @@ test("the browser cannot be held open by a crawl", () => {
   const navigateIndex = form.indexOf("navigate(`/dashboard?scan_id=${encodeURIComponent(scanId)}`)", acceptIndex);
   assert.ok(acceptIndex > -1);
   assert.ok(navigateIndex > acceptIndex);
-  assert.match(form, /const SYNC_FALLBACK_ENABLED = false;/);
+  // The synchronous fallback is deleted, not disabled. While it existed it
+  // could run a second scanner against the same ScanRun and write that row's
+  // terminal state from the browser.
+  assert.doesNotMatch(form, /SYNC_FALLBACK_ENABLED/);
+  assert.doesNotMatch(form, /callBase44Function\(STANDARD_SCANNER_FUNCTION/);
 });
 
 test("the durable route owns the longer Python-only scan", () => {
@@ -46,7 +50,7 @@ test("the exact owner-bound scan identity travels end to end", () => {
   assert.match(job, /owner_user_id: String\(user\.id\)/);
   assert.match(workerMain, /identity_matches\(scan, job\)/);
   assert.match(workerJob, /"attempt_count": str\(current_attempt\(scan\)\)/);
-  assert.match(form, /jobData\?\.accepted === true && String\(jobData\.scan_id \|\| ""\) === String\(scanId\)/);
+  assert.match(form, /assertServerAdmissionIdentity\(jobData, \{ request_id: requestId, idempotency_key: idempotencyKey \}\)/);
   assert.match(fixListPage, /const isExactScan = String\(durableBundle\?\.run\?\.id \|\| ""\) === String\(requestedScanId\)/);
 });
 

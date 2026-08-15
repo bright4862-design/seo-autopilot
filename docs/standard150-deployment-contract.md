@@ -63,6 +63,11 @@ Base44-hosted. Supplied through Base44 function environment, **not** Cloud Build
 | `SCAN_DISPATCH_GATEWAY_URL` | **required for keyless dispatch** | `cloudTasks.js` `createTask()` | Unset selects the key-based route below. Set, it is the only enqueue path. |
 | `SCAN_EVIDENCE_SIGNING_KEY` | **required with the gateway** | `cloudTasks.js` `createTaskViaGateway()` | `dispatch_gateway_signing_key_missing`. Fail-closed before any network call. |
 | `GCP_SERVICE_ACCOUNT_KEY` | **required only without the gateway** | `cloudTasks.js` `accessToken()` | `tasks_credentials_not_configured`. Distinct from a malformed key, which yields a `tasks_key_*` code, or `tasks_token_mint_failed` when the cause is not recognised. |
+| `BETA_SCAN_ADMISSION_ENABLED` | **required switch; secure default is off** | `admission.js` `betaScanAdmissionPolicy()` | Missing or any value other than exact `true` returns `scan_admission_paused` before any admission or ScanRun write. |
+| `SCAN_ADMISSION_COORDINATOR_URL` | **required when admission is enabled** | `admission.js` `betaScanAdmissionPolicy()`, `admissionClient.js` `callCoordinator()` | Unset returns `scan_admission_coordinator_unconfigured` and pauses admission. Admission never falls back to the retired Access-row lease. |
+| `BETA_COHORT_ALLOWED_USER_IDS` | **required when admission is enabled** | `admission.js` `betaScanAdmissionPolicy()` | Must contain 1–25 unique exact Base44 user IDs. Empty, malformed, or more than 25 fail closed with `scan_admission_configuration_invalid`. Shared with checkout; the two lists must agree. |
+| `BETA_LEGACY_ACCESS_LEASE_ENABLED` | **retired path; must stay unset** | `admission.js` `legacyAccessLeaseEnabled()` | Unset (the required state) makes `claimScanLease`/`bindScanLease` refuse without touching Access. Set to `true` only to inspect the retired Base44 `updateMany` lease during a rollback. |
+| `BASE44_ATOMIC_UPDATE_MANY_CONFIRMED` | **no longer read** | — | Retired with the Access-row lease. Base44 does not document transactional or compare-and-set semantics for `updateMany`, so admission no longer depends on it. Setting it has no effect. |
 
 ### Enqueue route selection
 

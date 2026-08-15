@@ -123,21 +123,25 @@ test("the page cap is 150 and is not customer-controlled", () => {
 
 test("the customer scan is routed to the Standard 150 Python-only gateway", () => {
   assert.match(scanFormSource, /const STANDARD_SCANNER_FUNCTION = "runStandard150Scan"/);
-  assert.match(scanFormSource, /callBase44Function\(STANDARD_SCANNER_FUNCTION, scanPayload\)/);
+  // The browser submits a job; startStandardScanJob runs the Python scanner.
+  assert.match(scanFormSource, /await submitStandardScanJob\(scanPayload\)/);
+  assert.match(scanFormSource, /const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJob"/);
   assert.doesNotMatch(scanFormSource, /"runAdvancedScan"/);
 });
 
 test("scan identity, duplicate-submit protection and failure handling stay intact", () => {
   assert.match(scanFormSource, /submitLockRef/);
   assert.match(scanFormSource, /requestEpochRef/);
-  assert.match(scanFormSource, /await beginScanRun/);
+  assert.doesNotMatch(scanFormSource, /await beginScanRun/);
   assert.match(scanFormSource, /canonicalMode: scanMode/);
-  // Identity must be persisted before any scanner network work.
+  // Identity is established before any network work, then handed to the server,
+  // which owns the durable row.
   assert.ok(
-    scanFormSource.indexOf("await beginScanRun")
-      < scanFormSource.indexOf("callBase44Function(STANDARD_SCANNER_FUNCTION"),
+    scanFormSource.indexOf("const requestId = createScanRequestId()")
+      < scanFormSource.indexOf("await submitStandardScanJob(scanPayload)"),
   );
   // A failed scan must not leave a stale result behind.
   assert.match(scanFormSource, /clear_previous_scan: true/);
-  assert.match(scanFormSource, /failScanRun/);
+  // ...but the browser is no longer the thing that closes the row.
+  assert.doesNotMatch(scanFormSource, /failScanRun/);
 });

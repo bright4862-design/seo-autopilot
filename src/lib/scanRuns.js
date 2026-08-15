@@ -232,7 +232,43 @@ async function terminalizeStaleScanRuns(runs = [], { ttlMs = STANDARD_ACTIVE_SCA
 const CANCELLED_RUN_STATUS_DETAIL =
   "This scan was stopped before it finished, so no results were saved. You can run it again.";
 
+// ---------------------------------------------------------------------------
+// Browser ScanRun writes are retired.
+//
+// startStandardScanJob creates the canonical ScanRun server-side, and the
+// durable worker or the server watchdog owns its terminal state. A browser
+// that closes, navigates away or loses its session must leave the durable row
+// untouched.
+//
+// The two production incidents this closes: Pretto 6a7f68d74633a26189302346
+// was terminalized after eight minutes only because a customer tab happened to
+// be open to run the orphan sweep, while Funbooker 6a7f67bdee7f1e82ce6b418c
+// stayed "crawling" at 0/0 because no tab was. Terminal state cannot be owned
+// by a process that may vanish.
+//
+// The functions below are kept for rollback inspection and for the cached-client
+// compatibility window only. They throw before touching any entity, so a stale
+// bundle still loaded in a customer's browser cannot mutate a ScanRun. Read
+// paths (listScanRuns, getScanRunWithFixList) are unaffected.
+// ---------------------------------------------------------------------------
+
+export const BROWSER_SCAN_RUN_WRITES_DISABLED = true;
+
+export class BrowserScanRunWriteError extends Error {
+  constructor(operation) {
+    super(`Browser ScanRun writes are disabled: ${operation}. The server owns this ScanRun.`);
+    this.name = "BrowserScanRunWriteError";
+    this.code = "browser_scan_run_writes_disabled";
+    this.operation = String(operation || "");
+  }
+}
+
+function assertBrowserScanRunWritesDisabled(operation) {
+  throw new BrowserScanRunWriteError(operation);
+}
+
 export async function cancelScanRun(handle, error) {
+  assertBrowserScanRunWritesDisabled("cancelScanRun");
   if (!handle?.id) return null;
   try {
     const cancelledFields = {
@@ -262,6 +298,7 @@ export async function cancelScanRun(handle, error) {
 // running" screen. Only rows past the orphan threshold are touched, so a live
 // scan in another tab is never interrupted.
 export async function recoverOrphanedScanRuns({ projectId = "", now = Date.now() } = {}) {
+  assertBrowserScanRunWritesDisabled("recoverOrphanedScanRuns");
   try {
     const owner = await currentOwner();
     const scope = String(projectId || "").trim();
@@ -381,6 +418,7 @@ export async function beginScanRun({
   requestId,
   idempotencyKey,
 }) {
+  assertBrowserScanRunWritesDisabled("beginScanRun");
   const owner = await currentOwner();
   const resolvedProjectId = await resolveProjectId(projectId);
   const identity = buildScanRequestIdentity({ websiteUrl, scanMode, requestId, idempotencyKey });
@@ -420,6 +458,7 @@ export async function beginScanRun({
 }
 
 export async function markScanRunReviewing(handle) {
+  assertBrowserScanRunWritesDisabled("markScanRunReviewing");
   if (!handle?.id) return;
   try {
     await base44.entities.ScanRun.update(handle.id, {
@@ -462,6 +501,7 @@ function durableIdentityFields(handle, record = {}) {
 // Persists the terminal result: updates the ScanRun to complete/limited and
 // saves the FixList + FixItems (with carried_over lineage from the previous run).
 export async function completeScanRun(handle, mergedRecord) {
+  assertBrowserScanRunWritesDisabled("completeScanRun");
   if (!handle?.id) return null;
   try {
     const owner = { owner_user_id: handle.owner_user_id || "" };
@@ -543,6 +583,7 @@ export async function completeScanRun(handle, mergedRecord) {
 }
 
 export async function failScanRun(handle, error) {
+  assertBrowserScanRunWritesDisabled("failScanRun");
   if (!handle?.id) return null;
   try {
     const identityFields = durableIdentityFields(handle, error?.scan_record || error?.scanData || {});

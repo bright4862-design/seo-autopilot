@@ -8,11 +8,17 @@ import {
 import { evaluatePaidAccess, uniqueAccessRows } from "./entitlement.js";
 import {
   betaScanAdmissionPolicy,
-  bindScanLease,
-  claimScanLease,
   normalizeAdmissionIdentity,
   scanIsTerminal,
 } from "./admission.js";
+// Admission authority. The Access-row lease in admission.js is retained for
+// rollback inspection but is disabled and no longer consulted here.
+import {
+  bindAdmission,
+  claimAdmission,
+  releaseAdmission,
+} from "./admissionClient.js";
+import { normalizeScanIdentity } from "./canonicalScanRun.js";
 
 const CORS_HEADERS = Object.freeze({
   "Access-Control-Allow-Origin": "*",
@@ -233,6 +239,15 @@ export default async function (req: Request): Promise<Response> {
 
     const attemptCount = normalizeAttemptCount(context.scan?.attempt_count);
     if (scanIsTerminal(context.scan)) {
+      // Self-heal a lost release. If the worker terminalized this scan but its
+      // release call never landed, admission would stay held until the lease
+      // expired. Release is idempotent and matches on the bound scan id, so
+      // repeating it here is safe and cannot touch a newer scan's admission.
+      await releaseScanAdmission({
+        user,
+        scan: context.scan,
+        terminalStatus: String(context.scan.status),
+      });
       return jsonResponse({
         success: true,
         accepted: true,
@@ -411,53 +426,56 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
   }
   identity.fields.request_fingerprint = request.request_fingerprint;
 
-  let lease;
-  try {
-    lease = await claimScanLease({
-      accessEntity: base44.asServiceRole.entities.Access,
-      access,
-      identity: request,
-    });
-  } catch {
+  // Admission is decided by one Firestore transaction. Nothing durable is
+  // created before it returns, so a coordinator failure can never leave a
+  // half-admitted ScanRun behind.
+  const claim = await claimAdmission({
+    ownerUserId: String(user.id),
+    requestId: request.request_id,
+    requestFingerprint: request.request_fingerprint,
+  });
+
+  if (!claim.ok) {
+    if (claim.failureCode === "admission_busy") {
+      return {
+        ok: false,
+        status: 429,
+        code: "scan_admission_busy",
+        error: "Another scan is already active for this account.",
+        retryable: true,
+        retryAfter: Math.max(1, Number(claim.retryAfterSeconds) || 2),
+      };
+    }
+    if (claim.failureCode === "request_conflict") {
+      return {
+        ok: false,
+        status: 409,
+        code: "scan_request_identity_conflict",
+        error: "The scan request identity conflicts with an existing request.",
+      };
+    }
+    // Everything else -- disabled, unconfigured, unreachable, 5xx -- fails
+    // closed. No ScanRun is created when admission cannot be decided.
     return {
       ok: false,
       status: 503,
-      code: "scan_admission_state_unavailable",
+      code: `scan_admission_${claim.failureCode || "unavailable"}`,
       error: "Scan admission is temporarily unavailable.",
       retryable: true,
       retryAfter: 2,
     };
   }
 
-  if (lease.action === "pending") {
-    return {
-      ok: false,
-      status: 202,
-      code: "scan_admission_pending",
-      error: "This exact scan request is still being admitted.",
-      retryable: true,
-      retryAfter: lease.retry_after,
-    };
-  }
-  if (lease.action === "busy") {
-    return {
-      ok: false,
-      status: 429,
-      code: "scan_admission_busy",
-      error: "Another scan is already active for this account.",
-      retryable: true,
-      retryAfter: lease.retry_after,
-    };
-  }
-  if (lease.action === "conflict" || lease.action === "invalid") {
-    return { ok: false, status: 409, code: lease.code, error: "The scan request identity conflicts with an existing request." };
-  }
-  if (lease.action === "unavailable") {
-    return { ok: false, status: 503, code: lease.code, error: "Scan admission is temporarily unavailable.", retryable: true, retryAfter: 2 };
+  const claimToken = String(claim.claim_token || "");
+  if (!claimToken) {
+    return { ok: false, status: 503, code: "scan_admission_state_invalid", error: "Scan admission is temporarily unavailable.", retryable: true, retryAfter: 2 };
   }
 
-  if (lease.action === "reuse") {
-    const scan = await base44.asServiceRole.entities.ScanRun.get(lease.scan_id).catch(() => null);
+  // A replayed claim that already carries a bound ScanRun is the deterministic
+  // replay case: hand back the exact same canonical scan.
+  const boundScanId = String(claim.scan_id || "");
+  if (boundScanId) {
+    const scan = await base44.asServiceRole.entities.ScanRun.get(boundScanId).catch(() => null);
     const validation = validateServerScanContext({ scan, user, project, request, websiteUrl });
     if (!validation.ok) return validation;
     return {
@@ -467,10 +485,29 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
       context: { ok: true, scan, project, expectedDomain: authorityDomain(websiteUrl) },
     };
   }
-  if (lease.action !== "leader") {
-    return { ok: false, status: 503, code: "scan_admission_state_invalid", error: "Scan admission is temporarily unavailable." };
+
+  // A replay that arrives before the winner has bound must wait rather than
+  // race it. Both callers would otherwise find zero rows and both create one,
+  // giving a single request two durable identities -- the exact defect this
+  // design exists to prevent. Only the caller that minted the claim proceeds;
+  // the replay retries and lands on the bound scan above a moment later.
+  //
+  // This costs a lost-response retry one lease interval in the worst case,
+  // which is bounded and recoverable. Creating a second ScanRun is neither.
+  if (claim.outcome !== "claimed") {
+    return {
+      ok: false,
+      status: 202,
+      code: "scan_admission_pending",
+      error: "This exact scan request is still being admitted.",
+      retryable: true,
+      retryAfter: 2,
+    };
   }
 
+  // The winning caller creates. recoverOrCreateServerScan is keyed on owner +
+  // request id, so it adopts an existing row if a previous attempt's response
+  // was lost rather than creating a duplicate.
   let scan;
   try {
     scan = await recoverOrCreateServerScan({
@@ -481,7 +518,7 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
       body,
       request,
       websiteUrl,
-      claimToken: lease.claim_token,
+      claimToken,
     });
   } catch (error) {
     return {
@@ -494,18 +531,24 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
     };
   }
 
-  let bound = await bindScanLease({
-    accessEntity: base44.asServiceRole.entities.Access,
-    accessId: access.id,
-    claimToken: lease.claim_token,
-    scanId: scan.id,
-  }).catch(() => false);
-  if (!bound) {
-    const current = await base44.asServiceRole.entities.Access.get(String(access.id)).catch(() => null);
-    bound = String(current?.scan_claim_token || "") === String(lease.claim_token)
-      && String(current?.scan_claim_scan_id || "") === String(scan.id);
-  }
-  if (!bound) {
+  const bound = await bindAdmission({
+    ownerUserId: String(user.id),
+    requestId: request.request_id,
+    claimToken,
+    scanId: String(scan.id),
+  });
+
+  // already_bound is success: it means this exact scan was bound by an earlier
+  // attempt whose response was lost.
+  if (!bound.ok) {
+    if (bound.failureCode === "scan_identity_conflict") {
+      return {
+        ok: false,
+        status: 409,
+        code: "scan_admission_identity_conflict",
+        error: "A different scan is already bound to this request.",
+      };
+    }
     return {
       ok: false,
       status: 503,
@@ -520,8 +563,26 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
     ok: true,
     replayed: false,
     replayReason: "server_admitted",
+    claimToken,
     context: { ok: true, scan, project, expectedDomain: authorityDomain(websiteUrl) },
   };
+}
+
+/**
+ * Release admission for a terminal scan. Server paths only.
+ *
+ * Never throws: a failed release must not turn a genuine terminal result into
+ * an error response. The lease expires on its own as a backstop.
+ */
+async function releaseScanAdmission({ user, scan, terminalStatus }) {
+  const scanId = String(scan?.id || scan?.scan_id || "");
+  if (!scanId) return false;
+  const result = await releaseAdmission({
+    ownerUserId: String(user?.id || scan?.owner_user_id || ""),
+    scanId,
+    terminalStatus: String(terminalStatus || ""),
+  }).catch(() => ({ ok: false }));
+  return result?.ok === true;
 }
 
 async function recoverOrCreateServerScan({
@@ -548,7 +609,7 @@ async function recoverOrCreateServerScan({
   if (scan) {
     const validation = validateServerScanContext({ scan, user, project, request, websiteUrl });
     if (!validation.ok) throw Object.assign(new Error(validation.code), validation);
-    return scan;
+    return await adoptExistingScanRun({ scans, scan });
   }
 
   let previousScanId = "";
@@ -599,10 +660,46 @@ async function recoverOrCreateServerScan({
     if (matches.length === 1) {
       scan = matches[0];
       const validation = validateServerScanContext({ scan, user, project, request, websiteUrl });
-      if (validation.ok) return scan;
+      if (validation.ok) return await adoptExistingScanRun({ scans, scan });
     }
     throw error;
   }
+}
+
+/**
+ * Adopt a ScanRun that already exists for this request key.
+ *
+ * The create and the follow-up "mark it crawling" update are two calls. When
+ * the create commits and the update is lost, the surviving row carries a blank
+ * scan_id, because only that second call sets it. Adopting the row without
+ * repairing that would hand the caller a canonical scan whose own scan_id
+ * field is empty.
+ *
+ * entity.id is the only identity Base44 guarantees, so it is authoritative
+ * here: a blank scan_id is normalized to it server-side. A row that already
+ * names a different scan_id is left untouched and rejected upstream rather
+ * than silently rewritten -- that is a genuine identity conflict.
+ */
+async function adoptExistingScanRun({ scans, scan }) {
+  const identity = normalizeScanIdentity(scan);
+  if (!identity.ok) {
+    throw Object.assign(new Error("scan_identity_unrecoverable"), {
+      status: 503,
+      code: "scan_identity_unrecoverable",
+    });
+  }
+
+  const persisted = String(scan.scan_id || "").trim();
+  if (persisted === identity.scanId) return scan;
+  if (persisted && persisted !== identity.scanId) {
+    throw Object.assign(new Error("scan_identity_conflict"), {
+      status: 409,
+      code: "scan_identity_conflict",
+    });
+  }
+
+  const repaired = await scans.update(identity.scanId, { scan_id: identity.scanId }).catch(() => null);
+  return { ...scan, ...(repaired || {}), id: identity.scanId, scan_id: identity.scanId };
 }
 
 function validateServerScanContext({ scan, user, project, request, websiteUrl }) {
@@ -705,6 +802,17 @@ async function failOwnedScanRun({ base44, context, identity, attemptCount, failu
       attempt_count: normalizeAttemptCount(attemptCount),
       failure_code: failureCode,
     });
+    // Every server-side terminal failure funnels through here -- pre-worker
+    // dispatch failure, drain-enqueue failure and scan-enqueue failure alike --
+    // so releasing admission at this one point covers all of them. Without it
+    // a dispatch failure after a successful bind would hold the owner's
+    // admission until the lease expired, blocking a retry that is already safe.
+    const released = await releaseScanAdmission({
+      user: { id: current.owner_user_id },
+      scan: current,
+      terminalStatus: "failed",
+    });
+    logBoundary("dispatcher_admission_released", identity, { released, terminal_status: "failed" });
   } catch (error) {
     console.error("startStandardScanJob terminal write failed", {
       request_id: identity?.request_id,

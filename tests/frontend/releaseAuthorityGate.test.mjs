@@ -97,8 +97,11 @@ test("the frontend re-evaluates the completed record instead of AND-ing the scan
     source,
     /scanData\?\.release_gate_eligible === true && aiData\?\.release_gate_eligible === true/
   );
-  assert.match(source, /mergePersistedScanRunRecord\(/);
-  assert.match(source, /navigate\(`\/dashboard\?scan=complete&scan_id=\$\{encodeURIComponent\(scanId\)\}`\)/);
+  // The browser no longer merges a persisted record or navigates on its own
+  // completion signal -- it navigates on server acceptance and reads the sealed
+  // result from the result route.
+  assert.doesNotMatch(source, /mergePersistedScanRunRecord\(/);
+  assert.match(source, /navigate\(`\/dashboard\?scan_id=\$\{encodeURIComponent\(scanId\)\}`\)/);
   assert.doesNotMatch(source, /saveScanForDashboard|localStorage\.setItem/);
 });
 

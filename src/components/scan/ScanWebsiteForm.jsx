@@ -7,10 +7,12 @@ import { base44 } from "@/api/base44Client";
 import useDurableScanCompletion from "@/hooks/useDurableScanCompletion";
 import { ensureScanProject } from "@/lib/activeProject";
 import { normalizeActionPriority, normalizeFindingEvidence, normalizeReviewEvidenceState, normalizeReviewScope, selectFinalReviewFixes } from "@/lib/reviewContract";
-import { mergePersistedScanRunRecord } from "@/lib/persistedScanRecord";
 import { RELEASE_AUTHORITY_CONTRACT, buildAuthorityMarkers, buildScanRunFields } from "@/lib/scanRunModel";
 import { createScanRequestId, normalizedScanDomain, scanReleaseIdentity } from "@/lib/scanRunIdentity";
-import { cancelScanRun, completeScanRun, failScanRun, getScanRunWithFixList, markScanRunReviewing } from "@/lib/scanRuns";
+// Read-only. The browser no longer creates, updates, cancels, fails or
+// terminalizes a ScanRun -- startStandardScanJob owns the durable row and the
+// worker/watchdog owns its terminal state.
+import { getScanRunWithFixList } from "@/lib/scanRuns";
 import { UNLOCK_PRICE_LABEL, loadAccess } from "@/lib/access";
 import { trackEvent } from "@/lib/analytics";
 import {
@@ -22,7 +24,6 @@ import {
 const STANDARD_SCANNER_FUNCTION = "runStandard150Scan";
 const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJob";
 const AI_REVIEW_FUNCTION = "aiReviewScan";
-const SYNC_FALLBACK_ENABLED = false;
 
 // Standard 150 is the only customer scan. There is no scan-size selector and no
 // customer-controlled scanner budget. The gateway owns the Python compatibility
@@ -316,128 +317,26 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         navigate(`/dashboard?scan_id=${encodeURIComponent(scanId)}`);
         return;
       }
-      // The customer path must never launch a second synchronous request when
-      // async submission fails. Doing so can run two workers against one
-      // ScanRun and recreates the browser-visible 503 that this path replaces.
-      // Keep the old code below disabled for rollback inspection only.
-      if (!SYNC_FALLBACK_ENABLED) {
-        const failureCode = String(jobData?.failure_code || "async_submission_not_accepted");
-        logScanBoundary("async_job_rejected_no_fallback", identityDebug(), { failure_code: failureCode });
-        throw Object.assign(
-          new Error("The scan job could not be accepted. No fallback scan was started and nothing was charged."),
-          { code: failureCode },
-        );
-      }
-      logScanBoundary("async_job_unavailable_sync_fallback", identityDebug(), {});
-      recordDebug({ ...identityDebug(), status: "running", stage: "scanner_request_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, payload_summary: { max_pages: scanPayload.max_pages, max_competitors: 0, max_browser_render_attempts: scanPayload.max_browser_render_attempts, crawl_timeout_ms: scanPayload.crawl_timeout_ms, keyword_count: scanPayload.important_keywords.length, respect_robots_txt: scanPayload.respect_robots_txt } });
-      refreshDebugData();
-
-      logScanBoundary("scanner_function_start", identityDebug(), { function_name: STANDARD_SCANNER_FUNCTION });
-      const scannerResponse = await callBase44Function(STANDARD_SCANNER_FUNCTION, scanPayload);
-      logScanBoundary("scanner_function_response", identityDebug(), { function_name: STANDARD_SCANNER_FUNCTION });
-      await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
-      scanData = normalizeFunctionResponse(scannerResponse);
-      assertServerScanIdentity(scanData, identityDebug());
-      recordDebug({ ...identityDebug(), status: "running", stage: "scanner_complete", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData) });
-      refreshDebugData();
-      if (scanData?.success === false || scanData?.error) throw new Error(scanData.error || "Website scan failed.");
-
-      setActiveStep("Checking SEO issues");
-      markScanRunReviewing(scanRunHandle).catch((reviewingError) => {
-        clearCustomerAuthBoundary(reviewingError);
-      });
-      try {
-        const aiPayload = buildAiReviewPayload({ scanData, businessName: trimmedBusinessName, websiteUrl: normalizedUrl, cmsPlatform, cmsName, cleanedKeywords, scanMode, requestedPathPrefix, ...identityDebug() });
-        recordDebug({ ...identityDebug(), status: "running", stage: "ai_review_request_started", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_payload_summary: { pages_crawled: aiPayload.scan_coverage?.pages_crawled || aiPayload.authoritative_scan?.pages_crawled || 0, pages_found: aiPayload.scan_coverage?.pages_found || aiPayload.authoritative_scan?.pages_found || 0, sampled_pages_sent_to_ai: aiPayload.scan_coverage?.sampled_pages_sent_to_ai || aiPayload.crawled_pages?.length || aiPayload.authoritative_scan?.crawled_pages?.length || 0, raw_fixes_count: aiPayload.raw_fixes?.length || getRecommendations(aiPayload.authoritative_scan).length, crawl_policy_source: aiPayload.crawl_policy_source || aiPayload.authoritative_scan?.crawl_policy_source || "", url_evidence_preserved: Boolean(aiPayload.url_evidence_summary || aiPayload.authoritative_scan?.url_evidence_summary), business_priority_rules_enabled: true, coverage_instruction_enabled: true } });
-        refreshDebugData();
-        setActiveStep("Writing your FixList");
-        logScanBoundary("review_function_start", identityDebug(), { function_name: AI_REVIEW_FUNCTION });
-        const aiResponse = await callBase44Function(AI_REVIEW_FUNCTION, aiPayload);
-        logScanBoundary("review_function_response", identityDebug(), { function_name: AI_REVIEW_FUNCTION });
-        await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
-        aiData = { ...normalizeFunctionResponse(aiResponse), ...identityDebug() };
-        recordDebug({ ...identityDebug(), status: "running", stage: "ai_review_complete", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData) });
-        refreshDebugData();
-      } catch (aiError) {
-        if (
-          aiError?.code === "stale_customer_session"
-          || clearCustomerAuthBoundary(aiError)
-        ) throw aiError;
-        console.warn("AI review was skipped or failed.", aiError);
-        aiData = { success: false, ...identityDebug(), error: aiError?.message || String(aiError) };
-        recordDebug({ ...identityDebug(), status: "running", stage: "ai_review_failed_but_continuing", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), ai_error: aiError?.message || String(aiError) });
-        refreshDebugData();
-      }
-
-      setActiveStep("Saving your FixList");
-      mergedFinal = mergeScanAndAiReview({ scanData, aiData, websiteUrl: normalizedUrl, submittedUrl, businessName: trimmedBusinessName, cmsPlatform, cmsName, scanMode, requestedPathPrefix, requestId, idempotencyKey, scanId, scanRunId: scanId });
-      const reviewAttestation = aiData?.authority_review_attestation;
-      const usingAuthorityPersistence = Boolean(reviewAttestation);
-      if (aiData?.release_gate_eligible === true && !usingAuthorityPersistence) {
-        throw Object.assign(new Error("The review finished, but its server authority attestation was missing."), {
-          code: "scan_authority_attestation_missing",
-          scan_record: { ...mergedFinal, release_gate_eligible: false, is_authoritative: false },
-        });
-      }
-      logScanBoundary("persistence_start", identityDebug(), { authority_persistence: usingAuthorityPersistence });
-      const durableRecord = usingAuthorityPersistence
-        ? mergedFinal
-        : { ...mergedFinal, release_gate_eligible: false, is_authoritative: false };
-      const completion = usingAuthorityPersistence
-        ? normalizeFunctionResponse(await callBase44Function("persistScanAuthority", {
-          scan_id: scanId,
-          attestation: reviewAttestation,
-        }).catch((persistenceError) => {
-          if (clearCustomerAuthBoundary(persistenceError)) throw persistenceError;
-          return null;
-        }))
-        : await completeScanRun(scanRunHandle, durableRecord).catch((persistenceError) => {
-          if (clearCustomerAuthBoundary(persistenceError)) throw persistenceError;
-          return null;
-        });
-      logScanBoundary("persistence_response", identityDebug(), { persisted: Boolean(completion?.scanRun) });
-      await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
-      const persistedCompletion = completion?.scanRun
-        ? completion
-        : await recoverPersistedCompletion(scanId);
-      if (!completion?.scanRun) {
-        logScanBoundary("persistence_recovery", identityDebug(), { persisted: Boolean(persistedCompletion?.scanRun) });
-      }
-      if (!persistedCompletion?.scanRun) throw Object.assign(new Error("The scan finished, but its durable FixList record could not be saved."), { code: "scan_persistence_failed", scan_record: durableRecord });
-      if (usingAuthorityPersistence) {
-        const proof = String(persistedCompletion.scanRun.authority_proof || "").trim().toLowerCase();
-        const sealed = /^[a-f0-9]{64}$/.test(proof)
-          && Boolean(persistedCompletion.scanRun.authority_seal_version)
-          && Boolean(persistedCompletion.scanRun.authority_sealed_at)
-          && persistedCompletion.scanRun.release_gate_eligible === true
-          && Boolean(persistedCompletion.fixListId);
-        if (!sealed) {
-          throw Object.assign(new Error("The scan finished, but its server authority seal was not saved."), {
-            code: "scan_authority_persistence_failed",
-            scan_record: durableRecord,
-          });
-        }
-      }
-      if (persistedCompletion?.scanRun) {
-        mergedFinal = mergePersistedScanRunRecord(
-          mergedFinal,
-          persistedCompletion.scanRun,
-          persistedCompletion.fixListId,
-        );
-      } else if (persistedCompletion?.fixListId) {
-        mergedFinal = { ...mergedFinal, fix_list_id: persistedCompletion.fixListId };
-      }
-      recordDebug({ ...identityDebug(), status: "saved", stage: "dashboard_saved", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal), compact_debug_available: true, download_available: true });
-      refreshDebugData();
-      // Navigation happens only after a durable terminal result exists.
-      logScanBoundary("browser_navigation", identityDebug(), { status: "complete" });
-      navigate(`/dashboard?scan=complete&scan_id=${encodeURIComponent(scanId)}`);
+      // Unreachable-by-construction guard. The accepted branch above returns,
+      // and a non-accepted response has already thrown, so control cannot
+      // arrive here. The synchronous fallback that used to live in this block
+      // ran a second scanner request against the same ScanRun and wrote its
+      // terminal state from the browser; it is deleted rather than disabled.
+      throw Object.assign(
+        new Error("The scan job could not be accepted. No fallback scan was started and nothing was charged."),
+        { code: String(jobData?.failure_code || "async_submission_not_accepted") },
+      );
     } catch (err) {
-      // Every attempt must reach a terminal state. This branch used to return
-      // without writing one, which is exactly what left ScanRun rows stuck at
-      // "crawling" with zero pages and no error -- the permanent "still
-      // running" screen. The request is abandoned for UI purposes, but the
-      // durable row is still closed truthfully as cancelled before returning.
+      // Terminal state is server-owned. A durable ScanRun exists only once
+      // startStandardScanJob has accepted the request, and acceptance is also
+      // what sets asyncDispatcherStarted -- so by the time any row exists, the
+      // worker and watchdog own its outcome. The browser closing, navigating
+      // away or losing its session must leave that row alone.
+      //
+      // This is the exact regression the migration removes: browser-side
+      // terminalization closed Pretto 6a7f68d74633a26189302346 after eight
+      // minutes only because a tab happened to be open, while Funbooker
+      // 6a7f67bdee7f1e82ce6b418c stayed crawling because none was.
       const abandoned = err?.code === "stale_customer_session"
         || requestEpochRef.current !== requestEpoch
         || clearCustomerAuthBoundary(err);
@@ -446,12 +345,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
           reason: err?.code || err?.name || "session_changed",
           durable_worker_owned: asyncDispatcherStarted,
         });
-        // A session change after dispatch must not cancel a Cloud Task that may
-        // already be running. Server-side worker/control boundaries own the
-        // terminal state from this point forward.
-        if (!asyncDispatcherStarted) {
-          await cancelScanRun(scanRunHandle, err).catch(() => {});
-        }
         return;
       }
       const recoveredCompletion = scanId
@@ -480,8 +373,10 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         setError("The scan job may still be running. Open the dashboard to check this exact scan before starting another one.");
         return;
       }
-      const failure = await failScanRun(scanRunHandle, err).catch(() => null);
-      const failureRecord = failure?.scanRun || { ...identityDebug(), status: "failed", error_code: err?.code || err?.name || "scan_failed", error_message: err?.message || String(err) };
+      // Reached only before the server accepted the request, so no durable row
+      // exists to close. The failure is reported to the customer and recorded
+      // in local debug state; nothing is written to ScanRun.
+      const failureRecord = { ...identityDebug(), status: "failed", error_code: err?.code || err?.name || "scan_failed", error_message: err?.message || String(err) };
       recordDebug({ ...identityDebug(), status: "failed", stage: "scan_failed", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, error: err?.message || String(err), scanner: slimScannerData(scanData), ai_review: slimAiData(aiData), final_record: slimScanRecord(mergedFinal || failureRecord), compact_debug_available: true, download_available: true });
       refreshDebugData();
       setError(err?.message || "The website scan failed. Try again or check the backend function logs.");

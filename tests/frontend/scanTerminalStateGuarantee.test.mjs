@@ -91,19 +91,41 @@ test("a superseded request epoch still aborts the scan", async () => {
   );
 });
 
-test("an abandoned scan writes a terminal state instead of returning bare", () => {
+test("an abandoned scan leaves the durable row to the server", () => {
   const abandonedBranch = scanFormSource.match(
     /const abandoned = err\?\.code === "stale_customer_session"[\s\S]*?\n {6}\}/,
   );
   assert.ok(abandonedBranch, "the abandoned branch is missing from handleSubmit");
-  // The exact defect: `return` reached without a durable terminal write.
-  assert.match(abandonedBranch[0], /cancelScanRun\(scanRunHandle, err\)/);
-  assert.ok(
-    abandonedBranch[0].indexOf("cancelScanRun") < abandonedBranch[0].indexOf("return;"),
-    "cancelScanRun must run before the abandoned branch returns",
-  );
-  // The pre-existing failure path must still terminalize too.
-  assert.match(scanFormSource, /const failure = await failScanRun\(scanRunHandle, err\)/);
+
+  // Inverted deliberately. Browser-side terminalization was the defect, not the
+  // fix: it closed Pretto 6a7f68d74633a26189302346 after eight minutes only
+  // because a tab happened to be open, while Funbooker 6a7f67bdee7f1e82ce6b418c
+  // stayed "crawling" at 0/0 because none was. A durable row exists only after
+  // the server has accepted the request, and from that moment the worker and
+  // the watchdog own its outcome.
+  assert.doesNotMatch(abandonedBranch[0], /cancelScanRun/);
+  assert.match(abandonedBranch[0], /logScanBoundary\("scan_abandoned"/);
+  assert.doesNotMatch(scanFormSource, /await failScanRun/);
+  assert.doesNotMatch(scanFormSource, /await cancelScanRun/);
+});
+
+test("no browser code path can mutate a ScanRun", () => {
+  // Every write helper still exported by scanRuns.js refuses before touching an
+  // entity, so a stale bundle in a customer's browser cannot terminalize a row.
+  for (const fn of [
+    "cancelScanRun",
+    "recoverOrphanedScanRuns",
+    "beginScanRun",
+    "markScanRunReviewing",
+    "completeScanRun",
+    "failScanRun",
+  ]) {
+    assert.match(
+      scanRunsSource,
+      new RegExp(`export async function ${fn}[\\s\\S]{0,400}?assertBrowserScanRunWritesDisabled\\("${fn}"\\)`),
+      `${fn} must refuse before any entity write`,
+    );
+  }
 });
 
 test("cancelScanRun closes the row truthfully without fabricating evidence", () => {
@@ -171,21 +193,22 @@ test("boundary instrumentation records identity only, never evidence or secrets"
   assert.ok(logger, "logScanBoundary is missing from ScanWebsiteForm.jsx");
   assert.doesNotMatch(logger[0], /attestation|proof|token|payload|api_key|secret/i);
 
+  // Scanner, review and persistence boundaries moved to the server with the
+  // work they instrumented. What the browser still owns is submission,
+  // acceptance and abandonment.
   for (const boundary of [
-    "scanner_function_start",
-    "scanner_function_response",
-    "review_function_start",
-    "review_function_response",
-    "persistence_start",
-    "persistence_response",
-    "browser_navigation",
+    "async_job_submit",
+    "async_job_accepted",
+    "async_job_browser_error_no_terminal_write",
     "scan_abandoned",
   ]) {
     assert.match(scanFormSource, new RegExp(`logScanBoundary\\("${boundary}"`), `missing boundary log: ${boundary}`);
   }
 
-  // Navigation to the result route may only happen after a durable terminal result.
-  const navIndex = scanFormSource.indexOf('logScanBoundary("browser_navigation"');
-  const sealIndex = scanFormSource.indexOf("scan_authority_persistence_failed");
-  assert.ok(navIndex > sealIndex, "navigation must follow the durable authority seal check");
+  // Navigation now follows server acceptance, not a browser-side seal check:
+  // the authority seal is written by persistDurableScanAuthority, and the
+  // browser reads the sealed result back through the result route.
+  const acceptIndex = scanFormSource.indexOf('logScanBoundary("async_job_accepted"');
+  const navIndex = scanFormSource.indexOf("navigate(`/dashboard?scan_id=");
+  assert.ok(acceptIndex > -1 && navIndex > acceptIndex, "navigation must follow server acceptance");
 });

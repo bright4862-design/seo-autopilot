@@ -22,7 +22,7 @@ import {
   matchingScanRuns,
   normalizeScanIdentity,
   resolveCanonicalScanRun,
-} from "../../base44/functions/scanAdmission/canonicalScanRun.js";
+} from "../../base44/functions/startStandardScanJob/canonicalScanRun.js";
 import {
   ADMISSION_FLAG,
   ADMISSION_LABEL,
@@ -32,7 +32,7 @@ import {
   bindAdmission,
   claimAdmission,
   releaseAdmission,
-} from "../../base44/functions/scanAdmission/admissionClient.js";
+} from "../../base44/functions/startStandardScanJob/admissionClient.js";
 
 const OWNER = "6a498da58ef5cec1f5cd4486";
 const REQUEST = "req_alpha";

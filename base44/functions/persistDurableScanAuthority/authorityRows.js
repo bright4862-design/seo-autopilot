@@ -8,6 +8,7 @@ export function authorityRowsFromSnapshot(snapshot, {
     scanRun: {
       ...snapshot.scan,
       status: "complete",
+      status_detail: "",
       fix_list_id: String(fixListId || ""),
       authority_seal_version: snapshot.version,
       authority_sealed_at: snapshot.sealed_at,

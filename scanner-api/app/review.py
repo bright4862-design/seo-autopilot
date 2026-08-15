@@ -2411,6 +2411,7 @@ def _health_score_prevalence_factor(page_count: int, pages_crawled: int, scope: 
 
 def compute_health_score_breakdown(fixes: list[dict[str, Any]], site_fingerprint: dict[str, Any]) -> dict[str, Any]:
     pages_crawled = int_or_zero(site_fingerprint.get("pages_crawled"))
+    pages_found = int_or_zero(site_fingerprint.get("pages_found"))
     grouped: dict[str, dict[str, Any]] = {}
 
     for index, fix in enumerate(fixes):
@@ -2461,6 +2462,21 @@ def compute_health_score_breakdown(fixes: list[dict[str, Any]], site_fingerprint
     total_penalty = sum(bucket_penalties.values())
     score = max(20, min(100, round(100 - total_penalty)))
 
+    # A small representative sample can show that nothing urgent was found,
+    # but it should not claim a perfect whole-site score. Full small-site
+    # inventories and 100+ page representative crawls may reach 100.
+    coverage_ceiling = 100
+    if pages_found > pages_crawled > 0:
+        if pages_crawled >= 100:
+            coverage_ceiling = 100
+        elif pages_crawled >= 50:
+            coverage_ceiling = 98
+        elif pages_crawled >= 25:
+            coverage_ceiling = 95
+        else:
+            coverage_ceiling = 92
+        score = min(score, coverage_ceiling)
+
     if crawl_is_blocked(site_fingerprint):
         score = min(score, 45)
     if evidence_is_incomplete(site_fingerprint):
@@ -2471,6 +2487,7 @@ def compute_health_score_breakdown(fixes: list[dict[str, Any]], site_fingerprint
     return {
         "version": HEALTH_SCORE_VERSION,
         "score": score,
+        "coverage_ceiling": coverage_ceiling,
         "total_penalty": round(total_penalty, 2),
         "bucket_penalties": bucket_penalties,
         "action_penalties": action_penalties,

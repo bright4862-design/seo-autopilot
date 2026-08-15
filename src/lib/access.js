@@ -13,9 +13,16 @@ export function isActivePaidAccess(record, user = {}) {
   const email = normalizeEmail(user?.email);
   const userId = String(user?.id || "").trim();
   if (!record || !email || !userId) return false;
+  const recordOwnerId = String(record.owner_user_id || "").trim();
   const identityMatches = (
     normalizeEmail(record.user_email) === email &&
-    String(record.owner_user_id || "") === userId
+    recordOwnerId === userId
+  );
+  // Manual grants are created by an admin before the customer registers, so
+  // they bind by email; a stored owner id (if any) must still match.
+  const manualIdentityMatches = (
+    normalizeEmail(record.user_email) === email &&
+    (!recordOwnerId || recordOwnerId === userId)
   );
   const activeGrant = (
     record.has_full_access === true &&
@@ -30,7 +37,12 @@ export function isActivePaidAccess(record, user = {}) {
     userId === OWNER_TEST_USER_ID &&
     Boolean(record.granted_at)
   );
-  return identityMatches && activeGrant && (paidGrant || ownerTestGrant);
+  const manualGrant = (
+    record.grant_source === "manual_grant" &&
+    Boolean(record.granted_at)
+  );
+  return (identityMatches && activeGrant && (paidGrant || ownerTestGrant)) ||
+    (manualIdentityMatches && activeGrant && manualGrant);
 }
 
 export async function loadAccess() {

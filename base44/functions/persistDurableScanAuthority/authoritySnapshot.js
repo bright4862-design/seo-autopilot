@@ -10,36 +10,41 @@ export const AUTHORITY_CONTRACT = Object.freeze({
   beta_revision_fingerprint: "5caec7fdcabceee7",
 });
 
-export function isAuthorityEligible(scan, review) {
+export function firstFailedAuthorityPredicate(scan, review) {
   const firstPage = firstArray([scan?.crawled_pages, scan?.pages, scan?.scanned_pages])[0] || {};
-  return Boolean(
-    scan?.scanner_version === AUTHORITY_CONTRACT.scanner_version
-    && text(scan?.scanner_build_revision || scan?.technical_audit_summary?.scanner_build_revision, 160) === AUTHORITY_CONTRACT.scanner_build_revision
-    && scan?.advanced_scan_backend === "python_scanner_api"
-    && scan?.deno_fallback_used !== true
-    && text(review?.archetype_classifier_version || review?.site_fingerprint?.classification?.classifier_version, 160) === AUTHORITY_CONTRACT.archetype_classifier_version
-    && text(review?.review_version || review?.ai_review_version, 160) === AUTHORITY_CONTRACT.review_version
-    && text(review?.review_evidence_calibration_version, 160) === AUTHORITY_CONTRACT.review_evidence_calibration_version
-    && text(review?.beta_revision_fingerprint || scan?.beta_revision_fingerprint, 160) === AUTHORITY_CONTRACT.beta_revision_fingerprint
-    && text(review?.metadata_evidence_version || scan?.metadata_evidence_version || scan?.component_versions?.metadata_evidence_version || firstPage.metadata_evidence_version, 160)
-    && text(review?.title_evidence_version || scan?.title_evidence_version || scan?.component_versions?.title_evidence_version || firstPage.title_evidence_version, 160)
-    && review?.ai_review_backend === "python_review_api"
-    && review?.python_review_fallback_used !== true
-    && review?.release_gate_eligible === true
-    && review?.score_is_provisional !== true
-    && review?.evidence_quality_blocking !== true
-  );
+  const predicates = [
+    ["scanner_version", scan?.scanner_version === AUTHORITY_CONTRACT.scanner_version],
+    ["scanner_build_revision", text(scan?.scanner_build_revision || scan?.technical_audit_summary?.scanner_build_revision, 160) === AUTHORITY_CONTRACT.scanner_build_revision],
+    ["advanced_scan_backend", scan?.advanced_scan_backend === "python_scanner_api"],
+    ["deno_fallback_used", scan?.deno_fallback_used !== true],
+    ["archetype_classifier_version", text(review?.archetype_classifier_version || review?.site_fingerprint?.classification?.classifier_version, 160) === AUTHORITY_CONTRACT.archetype_classifier_version],
+    ["review_version", text(review?.review_version || review?.ai_review_version, 160) === AUTHORITY_CONTRACT.review_version],
+    ["review_evidence_calibration_version", text(review?.review_evidence_calibration_version, 160) === AUTHORITY_CONTRACT.review_evidence_calibration_version],
+    ["beta_revision_fingerprint", text(review?.beta_revision_fingerprint || scan?.beta_revision_fingerprint, 160) === AUTHORITY_CONTRACT.beta_revision_fingerprint],
+    ["metadata_evidence_version", Boolean(text(review?.metadata_evidence_version || scan?.metadata_evidence_version || scan?.component_versions?.metadata_evidence_version || firstPage.metadata_evidence_version, 160))],
+    ["title_evidence_version", Boolean(text(review?.title_evidence_version || scan?.title_evidence_version || scan?.component_versions?.title_evidence_version || firstPage.title_evidence_version, 160))],
+    ["ai_review_backend", review?.ai_review_backend === "python_review_api"],
+    ["python_review_fallback_used", review?.python_review_fallback_used !== true],
+    ["release_gate_eligible", review?.release_gate_eligible === true],
+    ["score_is_provisional", review?.score_is_provisional !== true],
+    ["evidence_quality_blocking", review?.evidence_quality_blocking !== true],
+  ];
+  return predicates.find(([, passed]) => !passed)?.[0] || "";
+}
+
+export function isAuthorityEligible(scan, review) {
+  return firstFailedAuthorityPredicate(scan, review) === "";
 }
 
 export function buildAuthoritySnapshot({ scan, review, identity, userId, now = new Date().toISOString() }) {
   const firstPage = firstArray([scan?.crawled_pages, scan?.pages, scan?.scanned_pages])[0] || {};
-  const fixes = firstArray([
+  const fixes = suppressAggregateCoveredPageFixes(firstArray([
     review?.recommendations,
     review?.fixes,
     review?.findings,
     review?.cleaned_fixes,
     review?.recommended_actions,
-  ]).slice(0, MAX_AUTHORITY_FIXES).map(toAuthorityFix)
+  ]).slice(0, MAX_AUTHORITY_FIXES).map(toAuthorityFix))
     .sort((left, right) => left.fix_id.localeCompare(right.fix_id));
   const counts = { critical: 0, high: 0, medium: 0, low: 0 };
   for (const fix of fixes) counts[fix.priority] += 1;
@@ -117,6 +122,90 @@ export function buildAuthoritySnapshot({ scan, review, identity, userId, now = n
     },
     recommendations: fixes,
   };
+}
+
+function suppressAggregateCoveredPageFixes(fixes) {
+  const coverage = new Set();
+  for (const fix of fixes) {
+    if (!isAggregateFix(fix)) continue;
+    const rule = findingKey(fix.rule);
+    const family = aggregateFamilyKey(fix);
+    if (!rule) continue;
+    for (const page of explicitAffectedPageKeys(fix)) {
+      coverage.add(coverageKey(rule, family, page));
+    }
+  }
+  if (coverage.size === 0) return fixes;
+
+  return fixes.filter((fix) => {
+    if (isAggregateFix(fix) || fix.page_scope !== "page") return true;
+    const pages = pageKeys(fix);
+    if (pages.length !== 1) return true;
+    const rule = findingKey(fix.rule);
+    const family = findingKey(fix.page_template_family);
+    if (!rule) return true;
+    return !coverage.has(coverageKey(rule, family, pages[0]))
+      && !coverage.has(coverageKey(rule, "*", pages[0]));
+  });
+}
+
+function isAggregateFix(fix) {
+  return ["family", "cross_cutting", "sitewide"].includes(fix?.page_scope);
+}
+
+function aggregateFamilyKey(fix) {
+  return fix.page_scope === "sitewide" ? "*" : findingKey(fix.page_template_family);
+}
+
+function coverageKey(rule, family, page) {
+  return `${rule}\u0000${family}\u0000${page}`;
+}
+
+function explicitAffectedPageKeys(fix) {
+  return uniquePageKeys(fix?.affected_pages);
+}
+
+function pageKeys(fix) {
+  const affected = explicitAffectedPageKeys(fix);
+  return affected.length > 0 ? affected : uniquePageKeys([fix?.page_url]);
+}
+
+function uniquePageKeys(values) {
+  const seen = new Set();
+  const output = [];
+  for (const value of values || []) {
+    const key = pageKey(value);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    output.push(key);
+  }
+  return output;
+}
+
+function pageKey(value) {
+  const raw = text(value, 2_000);
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    return normalizedPathAndQuery(parsed.pathname, parsed.search);
+  } catch {
+    const withoutFragment = raw.split("#", 1)[0];
+    const queryIndex = withoutFragment.indexOf("?");
+    const path = queryIndex >= 0 ? withoutFragment.slice(0, queryIndex) : withoutFragment;
+    const query = queryIndex >= 0 ? withoutFragment.slice(queryIndex) : "";
+    return normalizedPathAndQuery(path, query);
+  }
+}
+
+function normalizedPathAndQuery(pathValue, queryValue) {
+  let path = String(pathValue || "/");
+  if (!path.startsWith("/")) path = `/${path}`;
+  if (path.length > 1) path = path.replace(/\/+$/, "") || "/";
+  return `${path}${String(queryValue || "")}`;
+}
+
+function findingKey(value) {
+  return text(value, 200).toLowerCase();
 }
 
 function toAuthorityFix(fix, index) {

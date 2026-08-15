@@ -1,7 +1,7 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
 import { authorityRowsFromSnapshot } from "./authorityRows.js";
-import { buildAuthoritySnapshot, isAuthorityEligible } from "./authoritySnapshot.js";
+import { buildAuthoritySnapshot, firstFailedAuthorityPredicate } from "./authoritySnapshot.js";
 
 // Attempts are 1-based; anything unparseable is attempt 1. Mirrors
 // normalize_attempt in scanner-api/app/scan_job.py.
@@ -61,8 +61,9 @@ Deno.serve(async (req) => {
     if (!scan || !project) throw new RequestProblem(404, "authority_record_not_found", "The durable scan project was not found.");
     validateCurrentIdentity({ scan, project, identity, scanResult });
 
-    if (!isAuthorityEligible(scanResult, review)) {
-      throw new RequestProblem(409, "authority_snapshot_not_eligible", "The reviewed scan is not release-authoritative.");
+    const failedPredicate = firstFailedAuthorityPredicate(scanResult, review);
+    if (failedPredicate) {
+      throw new RequestProblem(409, `authority_snapshot_not_eligible__${failedPredicate}`, "The reviewed scan is not release-authoritative.");
     }
 
     const stableSealedAt = stableTimestamp(scan);

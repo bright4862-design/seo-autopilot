@@ -2094,7 +2094,7 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
         "health_score": health_score,
         "score": health_score,
         "overall_explanation": summary,
-        "health_grade": "Blocked / incomplete" if blocked else "Scan incomplete" if incomplete else "Insufficient evidence" if insufficient else "Score unavailable" if health_score is None else "Strong" if health_score >= 90 else "Good" if health_score >= 80 else "Needs work" if health_score >= 65 else "Major issues",
+        "health_grade": "Blocked / incomplete" if blocked else "Scan incomplete" if incomplete else "Insufficient evidence" if insufficient else "Score unavailable" if health_score is None else "Strong" if health_score >= 85 else "Good" if health_score >= 70 else "Needs work" if health_score >= 50 else "Major issues",
         "health_score_status": health_score_status,
         "usable_page_count": usable_page_count,
         "what_is_working": working,

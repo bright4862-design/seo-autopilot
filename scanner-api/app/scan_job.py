@@ -192,6 +192,22 @@ async def read_scan_run(client: httpx.AsyncClient, scan_id: str) -> dict[str, An
     return scan if isinstance(scan, dict) else None
 
 
+async def mark_scan_started(client: httpx.AsyncClient, scan: dict[str, Any]) -> dict[str, Any]:
+    """Atomically mark actual worker pickup without resetting an existing start time."""
+    signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
+    identity = _scan_identity(scan)
+    if not signing_key or not all(identity.values()):
+        raise RuntimeError("Durable scan start signing is not configured.")
+    envelope = build_control_envelope("start", signing_key, identity=identity)
+    response = await invoke_function(client, "durableScanWorkerControl", envelope, timeout=20.0)
+    if response["status_code"] >= 300 or response["body"].get("success") is not True:
+        raise RuntimeError("The durable scan start state could not be verified.")
+    persisted = response["body"].get("scanRun")
+    if not isinstance(persisted, dict):
+        raise RuntimeError("The durable scan start response is missing its ScanRun.")
+    return persisted
+
+
 async def write_terminal_failure(
     client: httpx.AsyncClient,
     scan_id: str,

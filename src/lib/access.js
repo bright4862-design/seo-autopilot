@@ -30,7 +30,8 @@ export function isActivePaidAccess(record, user = {}) {
     userId === OWNER_TEST_USER_ID &&
     Boolean(record.granted_at)
   );
-  return identityMatches && activeGrant && (paidGrant || ownerTestGrant);
+  const manualGrant = record.grant_source === "manual_grant" && Boolean(record.granted_at);
+  return identityMatches && activeGrant && (paidGrant || ownerTestGrant || manualGrant);
 }
 
 export async function loadAccess() {

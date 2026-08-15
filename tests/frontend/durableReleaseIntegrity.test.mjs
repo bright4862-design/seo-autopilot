@@ -498,8 +498,22 @@ function runPostDeployVerifier(policyMode) {
     } } },
   };
   fs.writeFileSync(describePath, JSON.stringify(describe));
+  const scanQueuePath = path.join(tempDir, "scan-queue.json");
+  const drainQueuePath = path.join(tempDir, "drain-queue.json");
+  fs.writeFileSync(scanQueuePath, JSON.stringify({
+    state: "RUNNING",
+    rateLimits: { maxConcurrentDispatches: 1, maxDispatchesPerSecond: 1 },
+    retryConfig: { maxAttempts: 3, minBackoff: "10s", maxBackoff: "300s", maxDoublings: 3 },
+  }));
+  fs.writeFileSync(drainQueuePath, JSON.stringify({
+    state: "RUNNING",
+    rateLimits: { maxConcurrentDispatches: 5, maxDispatchesPerSecond: 5 },
+    retryConfig: { maxAttempts: 100, maxRetryDuration: "14400s", minBackoff: "30s", maxBackoff: "180s", maxDoublings: 3 },
+  }));
   fs.writeFileSync(gcloudPath, `#!/usr/bin/env bash
-if [[ " $* " == *" get-iam-policy "* ]]; then
+if [[ " $* " == *" tasks queues describe "* ]]; then
+  if [[ " $* " == *" $DRAIN_QUEUE "* ]]; then command cat "$FAKE_DRAIN_QUEUE_PATH"; else command cat "$FAKE_SCAN_QUEUE_PATH"; fi
+elif [[ " $* " == *" get-iam-policy "* ]]; then
   case "$FAKE_POLICY_MODE" in
     unreadable) exit 1 ;;
     malformed) printf '{' ;;
@@ -520,6 +534,8 @@ fi
       PATH: `${tempDir}:${process.env.PATH}`,
       FAKE_POLICY_MODE: policyMode,
       FAKE_DESCRIBE_PATH: describePath,
+      FAKE_SCAN_QUEUE_PATH: scanQueuePath,
+      FAKE_DRAIN_QUEUE_PATH: drainQueuePath,
       WORKER_SERVICE: "worker",
       REGION: "europe-west1",
       PROJECT: "test",
@@ -528,6 +544,9 @@ fi
       EXPECTED_INVOKER_SA: invokerSa,
       EXPECTED_SIGNING_SECRET: "SCAN_EVIDENCE_SIGNING_KEY",
       EXPECTED_SIGNING_VERSION: "1",
+      TASKS_QUEUE: "fixlist-standard150",
+      DRAIN_QUEUE: "fixlist-standard150-drain",
+      EXPECTED_SCAN_QUEUE_CONCURRENCY: "1",
       BASE44_PULLED_FUNCTIONS_DIR: pulledFunctions,
       BASE44_PULLED_ENTITIES_DIR: pulledEntities,
       NODE_BIN: process.execPath,

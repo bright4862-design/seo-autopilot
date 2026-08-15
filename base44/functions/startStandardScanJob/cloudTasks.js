@@ -2,7 +2,7 @@ import { createServiceAccountAccessToken } from "./gcpAuth.js";
 
 const TASKS_API = "https://cloudtasks.googleapis.com/v2";
 export const WORKER_DISPATCH_DEADLINE = "480s";
-export const DRAIN_DELAY_SECONDS = 900;
+export const DRAIN_DELAY_SECONDS = 600;
 
 export function normalizeAttemptCount(value) {
   const parsed = Number(value);

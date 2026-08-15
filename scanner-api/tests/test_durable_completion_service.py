@@ -108,6 +108,11 @@ def test_control_envelopes_bind_action_scan_and_failure():
         "idempotency_key": "req-1",
         "normalized_domain": "big.example",
     }
+    start = build_control_envelope("start", "secret", identity=identity)
+    assert start["action"] == "start"
+    assert start["identity"] == identity
+    assert len(start["proof"]) == 64
+
     failure = build_control_envelope(
         "fail", "secret", identity=identity,
         failure={"code": "scanner_failed", "detail": "Stopped."},
@@ -140,6 +145,9 @@ def test_hosted_functions_use_supported_service_role_and_signed_envelopes():
         assert "verifyAuthoritySeal" in source
     assert "validateCurrentIdentity" in persistence
     assert "validateBoundIdentity" in control
+    assert '["start", "fail"].includes(action)' in control
+    assert 'status: "crawling"' in control
+    assert 'started_at:' in control
 
 
 def test_authority_is_verified_before_paid_independent_terminal_completion():
@@ -170,6 +178,8 @@ def test_worker_uses_only_signed_hosted_boundaries():
     assert 'invoke_function(client, "aiReviewScan"' not in source
     assert 'invoke_function(client, "persistScanAuthority"' not in source
     assert "build_local_review" in source
+    assert 'build_control_envelope("start"' in source
+    assert "mark_scan_started" in source
     assert 'get("fixListVerified") is not True' in source
 
 

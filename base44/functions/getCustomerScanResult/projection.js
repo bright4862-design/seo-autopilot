@@ -203,7 +203,12 @@ export function evaluatePaidAccess({ rows, user }) {
     && userId === OWNER_TEST_USER_ID
     && Number.isFinite(grantedAt)
   );
-  return identityMatches && (paidGrant || ownerGrant)
+  const manualGrant = Boolean(
+    activeGrant
+    && row?.grant_source === "manual_grant"
+    && Number.isFinite(grantedAt)
+  );
+  return identityMatches && (paidGrant || ownerGrant || manualGrant)
     ? { ok: true, record: row }
     : { ok: false, failureCode: "paid_access_required" };
 }

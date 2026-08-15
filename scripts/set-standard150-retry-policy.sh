@@ -43,9 +43,10 @@ gcloud tasks queues update "$QUEUE" \
   --quiet
 
 gcloud tasks queues describe "$QUEUE" \
-  --project="$PROJECT" --location="$REGION" --format=json | python3 - <<'PY'
+  --project="$PROJECT" --location="$REGION" --format=json > "$QUEUE_JSON"
+python3 - "$QUEUE_JSON" <<'PY'
 import json,sys
-q=json.load(sys.stdin)
+q=json.load(open(sys.argv[1]))
 retry=q.get("retryConfig") or {}
 assert int(retry.get("maxAttempts") or 0) == 3, retry
 assert str(retry.get("minBackoff") or "") == "10s", retry

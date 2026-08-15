@@ -12,6 +12,8 @@
 #   WORKER_SERVICE=... REGION=... PROJECT=... \
 #   EXPECTED_IMAGE=... EXPECTED_RUNTIME_SA=... EXPECTED_INVOKER_SA=... \
 #   EXPECTED_SIGNING_SECRET=... EXPECTED_SIGNING_VERSION=... \
+#   TASKS_QUEUE=fixlist-standard150 DRAIN_QUEUE=fixlist-standard150-drain \
+#   EXPECTED_SCAN_QUEUE_CONCURRENCY=1|3|5|10 \
 #   BASE44_PULLED_FUNCTIONS_DIR=<fresh-read-only-cli-pull>/base44/functions \
 #   BASE44_PULLED_ENTITIES_DIR=<fresh-read-only-cli-pull>/base44/entities \
 #   [BASE44_APP_ID=...] [NODE_BIN=node] \
@@ -38,6 +40,9 @@ skip() { printf "  SKIP  %s\n" "$1"; }
 : "${BASE44_APP_ID:=}"
 : "${EXPECTED_SIGNING_SECRET:=}"
 : "${EXPECTED_SIGNING_VERSION:=}"
+: "${TASKS_QUEUE:=}"
+: "${DRAIN_QUEUE:=}"
+: "${EXPECTED_SCAN_QUEUE_CONCURRENCY:=}"
 : "${BASE44_PULLED_FUNCTIONS_DIR:=}"
 : "${BASE44_PULLED_ENTITIES_DIR:=}"
 : "${NODE_BIN:=node}"
@@ -48,8 +53,10 @@ if [ -z "$WORKER_SERVICE" ] || [ -z "$REGION" ] || [ -z "$PROJECT" ]; then
 fi
 if [ -z "$EXPECTED_IMAGE" ] || [ -z "$EXPECTED_RUNTIME_SA" ] || [ -z "$EXPECTED_INVOKER_SA" ] || \
    [ -z "$EXPECTED_SIGNING_SECRET" ] || [ -z "$EXPECTED_SIGNING_VERSION" ] || \
+   [ -z "$TASKS_QUEUE" ] || [ -z "$DRAIN_QUEUE" ] || [ -z "$EXPECTED_SCAN_QUEUE_CONCURRENCY" ] || \
    [ -z "$BASE44_PULLED_FUNCTIONS_DIR" ] || [ -z "$BASE44_PULLED_ENTITIES_DIR" ]; then
   echo "EXPECTED_IMAGE, EXPECTED_RUNTIME_SA, EXPECTED_INVOKER_SA, EXPECTED_SIGNING_SECRET and EXPECTED_SIGNING_VERSION are required."
+  echo "TASKS_QUEUE, DRAIN_QUEUE and EXPECTED_SCAN_QUEUE_CONCURRENCY are required."
   echo "BASE44_PULLED_FUNCTIONS_DIR is required and must name a fresh authenticated CLI pull of deployed functions."
   echo "BASE44_PULLED_ENTITIES_DIR is required and must name the same pull's deployed entity schemas."
   echo "The verifier refuses an unpinned image or identity expectation."
@@ -247,7 +254,52 @@ case "$SIGNING_REF" in
 esac
 
 echo
-echo "=== 6. Base44 deployed function and authority-schema inventory ==="
+echo "=== 6. Cloud Tasks queue contract ==="
+case "$EXPECTED_SCAN_QUEUE_CONCURRENCY" in
+  1|3|5|10) ;;
+  *) fail "EXPECTED_SCAN_QUEUE_CONCURRENCY must be exactly 1, 3, 5, or 10" ;;
+esac
+SCAN_QUEUE_JSON=$(gcloud tasks queues describe "$TASKS_QUEUE" --location="$REGION" --project="$PROJECT" --format=json 2>/dev/null || true)
+DRAIN_QUEUE_JSON=$(gcloud tasks queues describe "$DRAIN_QUEUE" --location="$REGION" --project="$PROJECT" --format=json 2>/dev/null || true)
+if [ -z "$SCAN_QUEUE_JSON" ]; then
+  fail "scan queue $TASKS_QUEUE could not be described"
+else
+  SCAN_QUEUE_CHECK=$(SCAN_QUEUE_JSON="$SCAN_QUEUE_JSON" EXPECTED_SCAN_QUEUE_CONCURRENCY="$EXPECTED_SCAN_QUEUE_CONCURRENCY" python3 -c '
+import json,os
+q=json.loads(os.environ["SCAN_QUEUE_JSON"]); expected=int(os.environ["EXPECTED_SCAN_QUEUE_CONCURRENCY"])
+r=q.get("rateLimits") or {}; retry=q.get("retryConfig") or {}
+ok=(str(q.get("state") or "") in {"RUNNING","PAUSED"}
+    and int(r.get("maxConcurrentDispatches") or 0)==expected
+    and float(r.get("maxDispatchesPerSecond") or 0)==float(expected)
+    and int(retry.get("maxAttempts") or 0)==3
+    and str(retry.get("minBackoff") or "")=="10s"
+    and str(retry.get("maxBackoff") or "")=="300s"
+    and int(retry.get("maxDoublings") or 0)==3)
+print("OK" if ok else "BAD")
+')
+  [ "$SCAN_QUEUE_CHECK" = "OK" ] && pass "scan queue matches beta concurrency/retry contract" || fail "scan queue differs from beta concurrency/retry contract"
+fi
+if [ -z "$DRAIN_QUEUE_JSON" ]; then
+  fail "drain queue $DRAIN_QUEUE could not be described"
+else
+  DRAIN_QUEUE_CHECK=$(DRAIN_QUEUE_JSON="$DRAIN_QUEUE_JSON" python3 -c '
+import json,os
+q=json.loads(os.environ["DRAIN_QUEUE_JSON"]); r=q.get("rateLimits") or {}; retry=q.get("retryConfig") or {}
+ok=(str(q.get("state") or "") in {"RUNNING","PAUSED"}
+    and int(r.get("maxConcurrentDispatches") or 0)==5
+    and float(r.get("maxDispatchesPerSecond") or 0)==5.0
+    and int(retry.get("maxAttempts") or 0)==100
+    and str(retry.get("maxRetryDuration") or "")=="14400s"
+    and str(retry.get("minBackoff") or "")=="30s"
+    and str(retry.get("maxBackoff") or "")=="180s"
+    and int(retry.get("maxDoublings") or 0)==3)
+print("OK" if ok else "BAD")
+')
+  [ "$DRAIN_QUEUE_CHECK" = "OK" ] && pass "drain queue matches independent watchdog contract" || fail "drain queue differs from independent watchdog contract"
+fi
+
+echo
+echo "=== 7. Base44 deployed function and authority-schema inventory ==="
 if ! command -v "$NODE_BIN" >/dev/null 2>&1 && [ ! -x "$NODE_BIN" ]; then
   fail "NODE_BIN is unavailable; deployed Base44 packages cannot be compared"
 elif [ ! -e "$BASE44_PULLED_FUNCTIONS_DIR/." ]; then

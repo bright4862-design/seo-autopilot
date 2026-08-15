@@ -13,4 +13,5 @@ test("scan queue ramp is bounded, confirmation-gated, and does not mutate worker
   assert.match(ramp, /--max-dispatches-per-second="\$TARGET"/);
   assert.doesNotMatch(ramp, /gcloud run (?:deploy|services update|services replace|revisions)/);
   assert.doesNotMatch(ramp, /update-traffic|--concurrency|--max-instances/);
+  assert.doesNotMatch(ramp, /\| python3 -[^\n]*<</);
 });

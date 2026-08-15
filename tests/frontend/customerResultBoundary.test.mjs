@@ -178,3 +178,16 @@ test("customer results cross one server projection and authority rows are admin-
     }
   }
 });
+
+test("saved results use the same exact owner-bound manual grant rule as scan admission", () => {
+  const manual = paidAccess({
+    grant_source: "manual_grant",
+    paid_at: "",
+    stripe_checkout_session_id: "",
+    granted_at: "2026-08-15T17:00:00.000Z",
+  });
+  assert.equal(evaluatePaidAccess({ rows: [manual], user: USER }).ok, true);
+  assert.equal(evaluatePaidAccess({ rows: [{ ...manual, owner_user_id: "" }], user: USER }).ok, false);
+  assert.equal(evaluatePaidAccess({ rows: [{ ...manual, owner_user_id: "other" }], user: USER }).ok, false);
+  assert.equal(evaluatePaidAccess({ rows: [{ ...manual, user_email: "other@example.com" }], user: USER }).ok, false);
+});

@@ -160,7 +160,7 @@ function createHarness({ failScanEnqueue = false, createCommitsThenThrows = fals
     admission: () => admission && { ...admission },
     globals: {
       createClientFromRequest: () => base44,
-      DRAIN_DELAY_SECONDS: 900,
+      DRAIN_DELAY_SECONDS: 600,
       enqueueScanDrain: async ({ scanId, attemptCount }) => {
         drainTasks.add(`${scanId}:${attemptCount}`);
         return { ok: true, taskName: `drain:${scanId}:${attemptCount}` };
@@ -230,6 +230,8 @@ test("two exact concurrent tabs share one canonical ScanRun and one deterministi
     assert.equal(harness.scans[0].id, "scan-1");
     assert.equal(harness.scans[0].scan_id, "scan-1");
     assert.equal(harness.scans[0].owner_user_id, "user-1");
+    assert.equal(harness.scans[0].status, "queued");
+    assert.equal(harness.scans[0].started_at, undefined);
     assert.equal(harness.scans[0].admission_claim_token, undefined);
     assert.equal(harness.admission().scan_id, "scan-1");
     assert.equal(harness.scanTasks.size, 1);
@@ -238,6 +240,7 @@ test("two exact concurrent tabs share one canonical ScanRun and one deterministi
     const accepted = bodies.filter((body) => body.accepted === true);
     assert.equal(accepted.length, 2);
     assert.ok(accepted.every((body) => body.scan_id === "scan-1" && body.scan_run_id === "scan-1"));
+    assert.ok(accepted.every((body) => body.status === "queued"));
     assert.ok(accepted.some((body) => body.replayed === true));
 
     const replay = await invoke(handler);
@@ -310,4 +313,29 @@ test("the production entry never persists the coordinator claim token or uses Ac
   assert.match(entrySource, /claimAdmission\(\{/);
   assert.match(entrySource, /bindAdmission\(\{/);
   assert.match(entrySource, /releaseAdmission\(\{/);
+});
+
+test("two different simultaneous requests from the same owner admit exactly one scan", async () => {
+  const restoreEnv = installEnv();
+  const harness = createHarness();
+  globalThis.__serverOwnedCompetingHarness = harness.globals;
+  try {
+    const { default: handler } = await importHandler("__serverOwnedCompetingHarness");
+    const responses = await Promise.all([
+      invoke(handler, "scanreq_competing_a"),
+      invoke(handler, "scanreq_competing_b"),
+    ]);
+    const bodies = await Promise.all(responses.map((response) => response.json()));
+    const accepted = bodies.filter((body) => body.accepted === true);
+    const refused = bodies.filter((body) => body.failure_code === "scan_admission_busy");
+
+    assert.equal(harness.scans.length, 1, "same owner must never create two active ScanRuns");
+    assert.equal(harness.scanTasks.size, 1, "same owner must never enqueue two scan tasks");
+    assert.equal(harness.drainTasks.size, 1, "same owner must never enqueue two watchdogs");
+    assert.equal(accepted.length, 1, "exactly one competing request may win admission");
+    assert.equal(refused.length, 1, "the losing request must fail closed as admission busy");
+  } finally {
+    delete globalThis.__serverOwnedCompetingHarness;
+    restoreEnv();
+  }
 });

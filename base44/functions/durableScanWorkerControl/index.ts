@@ -61,7 +61,7 @@ Deno.serve(async (req) => {
       return Response.json({ success: true, workerVersion: WORKER_VERSION, scanRun: scan });
     }
 
-    if (action !== "fail") {
+    if (!["start", "fail"].includes(action)) {
       throw new RequestProblem(400, "worker_action_invalid", "The durable worker action is not supported.");
     }
 
@@ -97,6 +97,37 @@ Deno.serve(async (req) => {
         replayed: true,
         workerVersion: WORKER_VERSION,
         scanRun: scan,
+      });
+    }
+
+    if (action === "start") {
+      const currentStatus = String(scan.status || "queued").toLowerCase();
+      if (!["queued", "crawling", "reviewing"].includes(currentStatus)) {
+        throw new RequestProblem(409, "worker_start_state_invalid", "The durable scan is not startable.");
+      }
+      if (currentStatus === "queued") {
+        const startedAt = new Date().toISOString();
+        await entities.ScanRun.update(identity.scan_id, {
+          status: "crawling",
+          status_detail: "",
+          started_at: cleanText(scan?.started_at, 80) || startedAt,
+        });
+      }
+      const persisted = await entities.ScanRun.get(identity.scan_id);
+      if (
+        !persisted
+        || !["crawling", "reviewing"].includes(String(persisted.status || "").toLowerCase())
+        || !cleanText(persisted?.started_at, 80)
+        || cleanId(persisted?.id) !== identity.scan_id
+        || normalizeAttempt(persisted?.attempt_count) !== claimedAttempt
+      ) {
+        throw new RequestProblem(500, "worker_start_persistence_failed", "The durable scan start could not be verified.");
+      }
+      return Response.json({
+        success: true,
+        replayed: currentStatus !== "queued",
+        workerVersion: WORKER_VERSION,
+        scanRun: persisted,
       });
     }
 

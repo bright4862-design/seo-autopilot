@@ -14,4 +14,5 @@ test("Standard 150 retry policy is fixed, confirmation-gated, and queue-only", (
   assert.match(policy, /--max-attempts="\$MAX_ATTEMPTS"/);
   assert.match(policy, /--min-backoff="\$MIN_BACKOFF"/);
   assert.doesNotMatch(policy, /gcloud run|update-traffic|functions deploy|secrets set|iam-policy-binding/);
+  assert.doesNotMatch(policy, /\| python3 -[^\n]*<</);
 });

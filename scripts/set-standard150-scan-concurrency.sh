@@ -68,10 +68,11 @@ gcloud tasks queues update "$QUEUE" \
   --quiet
 
 gcloud tasks queues describe "$QUEUE" \
-  --project="$PROJECT" --location="$REGION" --format=json | python3 - "$TARGET" <<'PY'
+  --project="$PROJECT" --location="$REGION" --format=json > "$QUEUE_JSON"
+python3 - "$QUEUE_JSON" "$TARGET" <<'PY'
 import json,sys
-expected=int(sys.argv[1])
-q=json.load(sys.stdin)
+q=json.load(open(sys.argv[1]))
+expected=int(sys.argv[2])
 rate=q.get("rateLimits") or {}
 actual_concurrency=int(rate.get("maxConcurrentDispatches") or 0)
 actual_rate=float(rate.get("maxDispatchesPerSecond") or 0)

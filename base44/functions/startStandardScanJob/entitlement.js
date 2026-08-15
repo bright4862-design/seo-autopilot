@@ -48,8 +48,13 @@ export function evaluatePaidAccess({ rows, user }) {
     userId === OWNER_TEST_USER_ID &&
     Number.isFinite(grantedAt)
   );
+  const manualGrantMatches = Boolean(
+    activeGrant &&
+    row?.grant_source === "manual_grant" &&
+    Number.isFinite(grantedAt)
+  );
 
-  return identityMatches && (paidGrantMatches || ownerTestGrantMatches)
+  return identityMatches && (paidGrantMatches || ownerTestGrantMatches || manualGrantMatches)
     ? { ok: true, record: row }
     : { ok: false, failureCode: "paid_access_required" };
 }

@@ -131,3 +131,18 @@ test("paid beta checkout is invite-only, default-off, and cannot allocate Access
   assert.doesNotMatch(checkout, /entities\.Access\.create/);
   assert.match(checkout, /await checkoutIdempotencyKey\(access, policy\.generation\)/);
 });
+
+test("an exact owner-bound manual beta grant works without accepting blank-owner grants", () => {
+  const manual = {
+    ...active,
+    grant_source: "manual_grant",
+    paid_at: "",
+    stripe_checkout_session_id: "",
+    granted_at: "2026-08-15T17:00:00.000Z",
+  };
+  assert.equal(evaluatePaidAccess({ rows: [manual], user }).ok, true);
+  assert.equal(evaluatePaidAccess({ rows: [{ ...manual, owner_user_id: "" }], user }).ok, false);
+  assert.equal(evaluatePaidAccess({ rows: [{ ...manual, owner_user_id: "other" }], user }).ok, false);
+  assert.equal(evaluatePaidAccess({ rows: [{ ...manual, user_email: "other@example.com" }], user }).ok, false);
+  assert.equal(evaluatePaidAccess({ rows: [{ ...manual, granted_at: "" }], user }).ok, false);
+});

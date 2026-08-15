@@ -365,7 +365,7 @@ export default async function (req: Request): Promise<Response> {
       accepted: true,
       version: VERSION,
       scan_mode: PUBLIC_SCAN_MODE,
-      status: "crawling",
+      status: String(context.scan?.status || "queued"),
       worker_budget_ms: ASYNC_WORKER_BUDGET_MS,
       max_pages: MAX_PAGES,
       respect_robots_txt: true,
@@ -633,7 +633,7 @@ async function recoverOrCreateServerScan({
       owner_user_id: String(user.id),
       admission_access_id: String(access.id),
     });
-    return normalizeRecoveredServerScan({ scans, scan: created, now });
+    return normalizeRecoveredServerScan({ scans, scan: created });
   } catch (error) {
     // A create/update response can be lost after Base44 committed it. Recover by
     // the owner/request identity before reporting an ambiguous admission.
@@ -651,16 +651,14 @@ async function recoverOrCreateServerScan({
   }
 }
 
-async function normalizeRecoveredServerScan({ scans, scan, now = new Date().toISOString() }) {
+async function normalizeRecoveredServerScan({ scans, scan }) {
   const id = String(scan?.id || "").trim();
   if (!id) throw Object.assign(new Error("admission_scan_id_missing"), { status: 503, code: "admission_scan_id_missing" });
-  const terminal = TERMINAL_SCAN_STATUSES.has(String(scan?.status || "").toLowerCase());
   const fields = {};
   if (String(scan?.scan_id || "") !== id) fields.scan_id = id;
-  if (!terminal && String(scan?.status || "").toLowerCase() === "queued") {
-    fields.status = "crawling";
-    if (!scan?.started_at) fields.started_at = now;
-  }
+  // Queue wait is not crawl time. The worker owns the queued -> crawling
+  // transition through durableScanWorkerControl so started_at reflects actual
+  // pickup, not browser/server submission time.
   if (Object.keys(fields).length === 0) return { ...scan, id, scan_id: id };
   const updated = await scans.update(id, fields);
   return { ...scan, ...(updated || {}), ...fields, id, scan_id: id };

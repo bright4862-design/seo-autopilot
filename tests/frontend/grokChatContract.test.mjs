@@ -11,6 +11,7 @@ import {
   authorityRowsFromSnapshot,
   missingAuthorityFixRows,
 } from "../../base44/functions/persistScanAuthority/authorityRows.js";
+import { authorityRowsFromSnapshot as durableAuthorityRowsFromSnapshot } from "../../base44/functions/persistDurableScanAuthority/authorityRows.js";
 import { authoritySnapshotFromRows } from "../../base44/functions/grokChat/authoritySnapshot.js";
 
 import {
@@ -208,8 +209,13 @@ test("server review snapshot survives the actual persistence and Grok reconstruc
   });
   assert.deepEqual(reconstructed, snapshot);
   assert.equal(await verifyAuthoritySeal(reconstructed, secret, proof), true);
-  assert.equal(rows.scanRun.status, "complete");
-  assert.equal(rows.scanRun.status_detail, "");
+  const durableRows = durableAuthorityRowsFromSnapshot(snapshot, {
+    fixListId: "fixlist_1",
+    ownerUserId: "user_1",
+    proof,
+  });
+  assert.equal(durableRows.scanRun.status, "complete");
+  assert.equal(durableRows.scanRun.status_detail, "");
 
   const changedRows = structuredClone(rows);
   changedRows.fixItems[0].recommended_value = "attacker changed this";

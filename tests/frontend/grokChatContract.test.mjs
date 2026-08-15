@@ -208,6 +208,8 @@ test("server review snapshot survives the actual persistence and Grok reconstruc
   });
   assert.deepEqual(reconstructed, snapshot);
   assert.equal(await verifyAuthoritySeal(reconstructed, secret, proof), true);
+  assert.equal(rows.scanRun.status, "complete");
+  assert.equal(rows.scanRun.status_detail, "");
 
   const changedRows = structuredClone(rows);
   changedRows.fixItems[0].recommended_value = "attacker changed this";

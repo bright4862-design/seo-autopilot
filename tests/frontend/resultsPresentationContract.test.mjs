@@ -31,6 +31,49 @@ test("family-level same-rule coverage suppresses duplicate page cards but never 
   assert.deepEqual(new Set(prepared.map((item) => item.id)), new Set(["title-family", "orphan"]));
 });
 
+test("same customer action collapses repeated evidence groups without hiding affected pages", () => {
+  const items = [
+    {
+      id: "title-template-1",
+      rule: "duplicate_title_template",
+      priority: "low",
+      pageScope: "family",
+      templateFamily: "guide_article",
+      recommendation: "Update the shared title template so each page has a distinct title.",
+      affectedPages: ["/de/a", "/de/b"],
+      currentValue: "Two pages share title A",
+    },
+    {
+      id: "title-template-2",
+      rule: "duplicate_title_template",
+      priority: "low",
+      pageScope: "family",
+      templateFamily: "guide_article",
+      recommendation: "Update the shared title template so each page has a distinct title.",
+      affectedPages: ["/nl/a", "/nl/b"],
+      currentValue: "Two pages share title B",
+    },
+    {
+      id: "localized-title",
+      rule: "duplicate_title_localized",
+      priority: "low",
+      pageScope: "family",
+      templateFamily: "guide_article",
+      recommendation: "Verify localization before changing titles.",
+      affectedPages: ["/fr/a", "/be/a"],
+    },
+  ];
+
+  const prepared = prepareCustomerFixes(items);
+  assert.equal(prepared.length, 2);
+  const template = prepared.find((item) => item.rule === "duplicate_title_template");
+  assert.deepEqual(new Set(template.affectedPages), new Set(["/de/a", "/de/b", "/nl/a", "/nl/b"]));
+  assert.equal(template.groupedFindingCount, 2);
+  assert.equal(template.pageCount, 4);
+  assert.equal(template.currentValue, "");
+  assert.deepEqual(new Set(template.memberIds), new Set(["title-template-1", "title-template-2"]));
+});
+
 test("rule-specific vocabulary keeps SEO jargon out of primary customer copy", () => {
   const canonical = applyCustomerVocabulary({ rule: "canonical_missing", category: "canonical", pageScope: "family", pageCount: 2, affectedPages: ["/terms", "/privacy"] });
   assert.equal(canonical.title, "Tell search engines which page versions are the main ones");

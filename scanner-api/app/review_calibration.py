@@ -525,11 +525,11 @@ def _health_grade(score: int, scan_status: str) -> str:
         return "Scan incomplete"
     if scan_status == "inconclusive_insufficient_evidence":
         return "Insufficient evidence"
-    if score >= 90:
+    if score >= 85:
         return "Strong"
-    if score >= 80:
+    if score >= 70:
         return "Good"
-    if score >= 65:
+    if score >= 50:
         return "Needs work"
     return "Major issues"
 

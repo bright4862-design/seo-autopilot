@@ -152,6 +152,10 @@ test("scan refusal messaging preserves curated copy and safe server detail", () 
   assert.match(scanForm, /boundary: "async_job_refused"|logScanBoundary\("async_job_refused"/);
   assert.match(scanForm, /failure_code: failureCode/);
   assert.match(scanForm, /dispatcher_version: String\(jobData\?\.version \|\| ""\)/);
+  assert.match(scanForm, /error\?\.backend_error/,
+    "wrapped Base44 refusals must preserve the parsed server payload");
+  assert.match(scanForm, /typeof error\?\.message === "string"/,
+    "a safe wrapper message must survive when no structured carrier is present");
 });
 
 test("unsafe server refusal detail is rejected before rendering", () => {

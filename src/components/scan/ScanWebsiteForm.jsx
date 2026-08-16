@@ -268,7 +268,18 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       await assertCurrentScanSession(sessionIdentity, requestEpoch, requestEpochRef);
       if (jobData?.accepted !== true) {
         const failureCode = String(jobData?.failure_code || "async_submission_not_accepted");
-        throw Object.assign(new Error(customerScanAdmissionMessage(failureCode)), { code: failureCode });
+        // Always emit the machine-readable refusal identity so the next ramp
+        // failure can be diagnosed without opening the Network tab.
+        logScanBoundary("async_job_refused", identityDebug(), {
+          failure_code: failureCode,
+          dispatcher_version: String(jobData?.version || ""),
+          retryable: jobData?.retryable === true,
+          http_status: Number(jobData?.status || 0) || undefined,
+        });
+        throw Object.assign(
+          new Error(customerScanAdmissionMessage(failureCode, jobData?.error)),
+          { code: failureCode, version: String(jobData?.version || "") },
+        );
       }
       assertServerAdmissionIdentity(jobData, { request_id: requestId, idempotency_key: idempotencyKey });
       if (jobData?.accepted === true) {
@@ -831,7 +842,21 @@ async function submitStandardScanJob(payload, attempts = 3) {
   return lastResult;
 }
 
-function customerScanAdmissionMessage(code) {
+// Server-safe detail cap. The dispatcher returns customer-written prose, but
+// bound length and reject unexpected shapes so arbitrary structured content is
+// never rendered into the page.
+const MAX_SERVER_DETAIL = 240;
+
+function serverProvidedDetail(value) {
+  if (typeof value !== "string") return "";
+  const text = value.trim();
+  if (!text || text.length > MAX_SERVER_DETAIL) return "";
+  if (/[{}\[\]<>]|\n/.test(text)) return "";
+  return text;
+}
+
+function customerScanAdmissionMessage(code, serverDetail = "") {
+  // Curated admission copy remains first choice because it is more actionable.
   const messages = {
     scan_admission_paused: "New beta scans are temporarily paused. Your existing results are still available.",
     scan_not_invited: "This Standard 150 beta cohort is currently invite-only.",
@@ -840,7 +865,15 @@ function customerScanAdmissionMessage(code) {
     scan_atomic_admission_unconfirmed: "New scans are temporarily unavailable while the admission coordinator is verified.",
     scan_admission_configuration_invalid: "New scans are temporarily unavailable because the beta cohort is not configured.",
   };
-  return messages[String(code || "")] || "The scan job could not be accepted. No fallback scan was started.";
+  const curated = messages[String(code || "")];
+  if (curated) return curated;
+
+  // For entitlement/dispatch failures, preserve the customer-safe detail the
+  // server already computed rather than collapsing it to a generic sentence.
+  const detail = serverProvidedDetail(serverDetail);
+  if (detail) return detail;
+
+  return "The scan job could not be accepted. No fallback scan was started.";
 }
 
 function assertServerAdmissionIdentity(response, expected) {

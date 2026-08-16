@@ -789,7 +789,9 @@ function formatElapsed(seconds = 0) {
 }
 
 async function callBase44Function(functionName, payload) {
-  const timeoutMs = functionName === STANDARD_SCANNER_FUNCTION ? Number(payload?.crawl_timeout_ms || 30000) + 15000 : 70000;
+  // This helper now serves only the durable admission dispatcher. The browser
+  // must never wait on a crawl or depend on a retired scanner-function constant.
+  const timeoutMs = 70000;
   return await Promise.race([
     callBase44FunctionWithoutTimeout(functionName, payload),
     new Promise((_, reject) => window.setTimeout(() => reject(new Error(`${functionName} did not return within ${Math.round(timeoutMs / 1000)} seconds. The scan may have timed out before saving results.`)), timeoutMs)),

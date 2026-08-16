@@ -711,11 +711,8 @@ function mergeScanAndAiReview({ scanData, aiData, websiteUrl, submittedUrl, busi
       idempotency_key: idempotencyKey || requestId || "",
       scan_id: scanId || "",
       scan_run_id: scanRunId || scanId || "",
-async function callBase44Function(functionName, payload) {
-  // The customer path invokes only the fast durable admission dispatcher here;
-  // the browser never waits for the Python crawl itself.
-  const timeoutMs = 70000;
-  return await Promise.race([
+      scanner_function: ASYNC_SCAN_JOB_FUNCTION,
+      ai_function: "",
       screaming_frog_lite_enabled: true,
       scanner_success: scanData?.success !== false,
       ai_success: aiData?.success === true,

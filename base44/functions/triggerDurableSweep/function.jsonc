@@ -1,0 +1,4 @@
+{
+  "name": "triggerDurableSweep",
+  "entry": "entry.ts"
+}

@@ -1,4 +1,4 @@
-import { createServiceAccountAccessToken } from "../startStandardScanJob/gcpAuth.js";
+import { createServiceAccountAccessToken } from "./gcpAuth.js";
 
 function b64(s: string) {
   return btoa(unescape(encodeURIComponent(s)));

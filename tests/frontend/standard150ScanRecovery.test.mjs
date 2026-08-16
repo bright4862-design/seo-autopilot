@@ -40,7 +40,8 @@ test("the active Standard 150 form uses server-owned admission instead of the le
   assert.equal(SCAN_GATEWAY_FUNCTIONS.has("runStandard150Scan"), true);
   assert.match(scanFormSource, /const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJob"/);
   assert.match(scanFormSource, /submitStandardScanJob\(scanPayload\)/);
-  assert.doesNotMatch(scanFormSource, /const STANDARD_SCANNER_FUNCTION|callBase44Function\(STANDARD_SCANNER_FUNCTION/);
+  assert.doesNotMatch(scanFormSource, /\bSTANDARD_SCANNER_FUNCTION\b|\bAI_REVIEW_FUNCTION\b/,
+    "retired scanner/review constants must not survive in the active customer form");
 });
 
 test("the boundary still fires for the legacy gateway while it remains deployed", () => {

@@ -825,8 +825,25 @@ async function submitStandardScanJob(payload, attempts = 3) {
       if (error?.code === "stale_customer_session" || clearCustomerAuthBoundary(error)) throw error;
       lastError = error;
       lastResult = normalizeFunctionResponse(
-        error?.response?.data || error?.data || error?.response || {},
+        error?.response?.data
+          || error?.backend_error
+          || error?.data
+          || error?.response
+          || {},
       );
+      // The Base44 client wrapper may preserve the parsed server refusal only
+      // on `backend_error`. If every structured carrier is missing, keep the
+      // safe wrapper message so the customer never falls back to an opaque
+      // generic refusal when the SDK actually supplied a reason.
+      if (!lastResult?.failure_code && !lastResult?.error && typeof error?.message === "string") {
+        lastResult = {
+          ...lastResult,
+          error: error.message,
+          failure_code: String(error?.backend_error?.failure_code || ""),
+          version: String(error?.backend_error?.version || ""),
+          retryable: error?.backend_error?.retryable === true,
+        };
+      }
     }
     if (lastResult?.accepted === true) return lastResult;
     const code = String(lastResult?.failure_code || "");

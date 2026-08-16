@@ -47,12 +47,15 @@ test("1. Standard stays capped at 150 pages with a 28-second gateway crawl budge
   assert.match(pythonScanner, /max\(20\.0, min\(float\(base\["timeout"\]\), requested\)\)/);
 });
 
-test("2. gateway timeout leaves headroom before the browser's 105s deadline", () => {
+test("2. legacy gateway keeps its 105s envelope while durable admission returns sooner", () => {
   assert.equal(BROWSER_DEADLINE_MS, 105_000);
-  // Browser deadline is derived in the form as crawl_timeout_ms + 15000.
-  const formCrawlTimeout = Number(form.match(/crawl_timeout_ms: (\d+)/)?.[1]);
-  const formPad = Number(form.match(/crawl_timeout_ms \|\| 30000\) \+ (\d+)/)?.[1]);
-  assert.equal(formCrawlTimeout + formPad, BROWSER_DEADLINE_MS);
+  // The active customer form no longer waits for the legacy scanner gateway.
+  // It invokes startStandardScanJob and uses the pre-existing non-scanner
+  // timeout branch directly; this must remain below the old 105s crawl deadline.
+  const admissionTimeout = Number(form.match(/const timeoutMs = (\d+);/)?.[1]);
+  assert.equal(admissionTimeout, 70_000);
+  assert.ok(admissionTimeout < BROWSER_DEADLINE_MS);
+  assert.doesNotMatch(form, /\bSTANDARD_SCANNER_FUNCTION\b/);
 
   assert.equal(FUNCTION_RESPONSE_BUDGET_MS, 55_000);
   for (const elapsed of [0, 1_000, 4_000]) {

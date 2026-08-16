@@ -139,6 +139,27 @@ test("live discovery counts render only once there is something to report", () =
     "the cap shown must come from the scan budget, not a hardcoded number");
 });
 
+test("scan refusal messaging preserves curated copy and safe server detail", () => {
+  assert.match(scanForm, /const MAX_SERVER_DETAIL = 240/);
+  assert.match(scanForm, /function serverProvidedDetail\(value\)/);
+  assert.match(scanForm, /function customerScanAdmissionMessage\(code, serverDetail = ""\)/);
+  assert.match(scanForm, /const curated = messages\[String\(code \|\| ""\)\]/);
+  assert.match(scanForm, /if \(curated\) return curated/);
+  assert.match(scanForm, /const detail = serverProvidedDetail\(serverDetail\)/);
+  assert.match(scanForm, /if \(detail\) return detail/);
+  assert.match(scanForm, /The scan job could not be accepted\. No fallback scan was started\./);
+  assert.match(scanForm, /customerScanAdmissionMessage\(failureCode, jobData\?\.error\)/);
+  assert.match(scanForm, /boundary: "async_job_refused"|logScanBoundary\("async_job_refused"/);
+  assert.match(scanForm, /failure_code: failureCode/);
+  assert.match(scanForm, /dispatcher_version: String\(jobData\?\.version \|\| ""\)/);
+});
+
+test("unsafe server refusal detail is rejected before rendering", () => {
+  assert.match(scanForm, /typeof value !== "string"/);
+  assert.match(scanForm, /text\.length > MAX_SERVER_DETAIL/);
+  assert.match(scanForm, /\[\{\}\\\[\\\]<>\]\|\\n/);
+});
+
 test("progress counters never move backwards during one scan", () => {
   const hook = fs.readFileSync("src/hooks/useDurableScanCompletion.js", "utf8");
   // A transient null read (RLS hiccup, backgrounded tab) must not blank a

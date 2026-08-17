@@ -61,7 +61,7 @@ test("the history endpoint service-reads ScanRun after an owned project check", 
   assert.match(resultFunction, /loadOwnedProject\(serviceEntities\.BusinessProject/);
   assert.match(resultFunction, /serviceEntities\.ScanRun\.filter/);
   assert.match(resultFunction, /buildScanHistoryProjection/);
-  assert.match(resultFunction, /Math\.min\([^\n]*20/);
+  assert.match(resultFunction, /Math\.min\([^\n]*3/);
 
   const directCallerRead = resultFunction.match(/base44\.entities\.ScanRun\.(?:get|filter)/g) || [];
   assert.deepEqual(directCallerRead, [], "customer result/history must not caller-read ScanRun");

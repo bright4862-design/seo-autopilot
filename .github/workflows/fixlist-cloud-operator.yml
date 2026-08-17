@@ -25,8 +25,9 @@ on:
           - activate-beta
           - sync-base44-signing-key
       revision:
-        description: "Exact Cloud Run revision for promote/rollback/activate"
+        description: "Exact Cloud Run revision for promote/rollback/activate. Prefilled for the currently verified Standard 150 worker candidate."
         required: false
+        default: "fixlist-standard150-worker-00011-v7m"
         type: string
       confirm:
         description: "Mutations require exact confirmation. Prefilled for the currently verified Standard 150 worker candidate."

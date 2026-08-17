@@ -80,7 +80,7 @@ async def test_cloudflare_shopify_profile_paces_before_first_429(mock_network, m
     monkeypatch.setattr(scanner, "fetch_and_extract", burst_sensitive)
     monkeypatch.setattr(scanner, "detect_rate_limit_profile", lambda _response: "cloudflare_shopify", raising=False)
     monkeypatch.setattr(scanner, "RATE_LIMIT_COOLDOWN_SECONDS", 0.005, raising=False)
-    monkeypatch.setattr(scanner, "RATE_LIMIT_REQUEST_INTERVAL_SECONDS", 0.005, raising=False)
+    monkeypatch.setattr(scanner, "RATE_LIMIT_PROACTIVE_REQUEST_INTERVAL_SECONDS", 0.005, raising=False)
 
     result = await scanner.run_scan(
         f"{origin}/",

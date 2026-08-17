@@ -130,8 +130,8 @@ test("orphan recovery closes abandoned runs well before the replay TTL", () => {
   // start, so the threshold sits well above it.
   assert.ok(STANDARD_ORPHAN_RECOVERY_TTL_MS > 270_000);
 
-  // Ten minutes after the last write: past the recovery threshold.
-  const now = Date.parse("2026-08-05T19:38:30.000Z");
+  // More than 35 minutes after the last write: past the recovery threshold.
+  const now = Date.parse("2026-08-05T20:10:30.000Z");
   const orphan = {
     status: "crawling",
     queued_at: "2026-08-05T19:28:04.195Z",
@@ -142,7 +142,7 @@ test("orphan recovery closes abandoned runs well before the replay TTL", () => {
 
   // A scan that is genuinely still running in another tab must be left alone.
   // A durable worker mid-crawl writes nothing for minutes; it must survive.
-  const live = { status: "crawling", queued_at: "2026-08-05T19:34:30.000Z", started_at: "2026-08-05T19:34:30.000Z" };
+  const live = { status: "crawling", queued_at: "2026-08-05T20:05:30.000Z", started_at: "2026-08-05T20:05:30.000Z" };
   assert.equal(isStaleActiveScanRun(live, { now, activeTtlMs: STANDARD_ORPHAN_RECOVERY_TTL_MS }), false);
 
   // Persisted evidence is never eligible for recovery.

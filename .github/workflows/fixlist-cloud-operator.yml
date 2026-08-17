@@ -370,3 +370,93 @@ jobs:
           SOURCE_SHA: ${{ github.sha }}
           CONFIRM: ${{ github.sha }}
         run: bash scripts/build-worker-candidate.sh
+
+  promote-queued-watchdog-candidate-once:
+    # Single-use promotion for the exact verified queued-watchdog worker candidate.
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[promote-queued-watchdog]')
+    name: Promote queued-watchdog worker candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout promotion control commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prove promotion commit is workflow-only after candidate source
+        shell: bash
+        run: |
+          set -euo pipefail
+          CANDIDATE_SHA='7285cfa88626d7a7ac7487555ca928c990ddffb7'
+          git cat-file -e "${CANDIDATE_SHA}^{commit}"
+          test -n "$(git show "${CANDIDATE_SHA}:scanner-api/app/main.py" | grep 'WORKER_QUEUED_DRAIN_AFTER_QUEUE_SECONDS = 1800')"
+          test -n "$(git show "${CANDIDATE_SHA}:scanner-api/app/main.py" | grep 'scan_queue_drain_timeout')"
+          CHANGED="$(git diff --name-only "$CANDIDATE_SHA"..HEAD)"
+          printf 'promotion-control-diff:\n%s\n' "$CHANGED"
+          test "$CHANGED" = '.github/workflows/fixlist-cloud-operator.yml'
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Verify exact isolated candidate before promotion
+        shell: bash
+        run: |
+          set -euo pipefail
+          CANDIDATE='fixlist-standard150-worker-00012-fsd'
+          CANDIDATE_SHA='7285cfa88626d7a7ac7487555ca928c990ddffb7'
+          OLD='fixlist-standard150-worker-00011-v7m'
+          R="$(mktemp)"; S="$(mktemp)"; trap 'rm -f "$R" "$S"' EXIT
+          gcloud run revisions describe "$CANDIDATE" --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json > "$R"
+          gcloud run services describe "$CLOUD_RUN_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json > "$S"
+          python3 - "$R" "$S" "$CANDIDATE" "$CANDIDATE_SHA" "$OLD" <<'PY'
+          import json,sys
+          r=json.load(open(sys.argv[1])); s=json.load(open(sys.argv[2])); candidate,sha,old=sys.argv[3:]
+          spec=r.get('spec') or {}; c=(spec.get('containers') or [{}])[0]
+          env={x.get('name'):x.get('value','') for x in c.get('env',[])}
+          assert env.get('FIXLIST_WORKER_SOURCE_SHA') == sha, env.get('FIXLIST_WORKER_SOURCE_SHA')
+          assert int(spec.get('containerConcurrency') or 0) == 1, spec.get('containerConcurrency')
+          assert int(spec.get('timeoutSeconds') or 0) == 480, spec.get('timeoutSeconds')
+          ready=next((x for x in (r.get('status') or {}).get('conditions',[]) if x.get('type')=='Ready'),{})
+          assert str(ready.get('status') or '').lower() == 'true', ready
+          traffic=(s.get('status') or {}).get('traffic') or []
+          assert not any(x.get('revisionName')==candidate and int(x.get('percent') or 0)>0 for x in traffic), traffic
+          assert any(x.get('revisionName')==old and int(x.get('percent') or 0)==100 for x in traffic), traffic
+          print('QUEUED_WATCHDOG_CANDIDATE_VERIFIED')
+          PY
+
+      - name: Promote exact candidate only
+        shell: bash
+        env:
+          OPERATION: promote-worker
+          TARGET_REVISION: fixlist-standard150-worker-00012-fsd
+          CONFIRM: fixlist-standard150-worker-00012-fsd
+        run: bash scripts/fixlist-cloud-operator.sh
+
+      - name: Verify production traffic and queue remained running
+        shell: bash
+        run: |
+          set -euo pipefail
+          S="$(mktemp)"; Q="$(mktemp)"; trap 'rm -f "$S" "$Q"' EXIT
+          gcloud run services describe "$CLOUD_RUN_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json > "$S"
+          gcloud tasks queues describe "$CLOUD_TASKS_QUEUE" --location="$GCP_REGION" --project="$GCP_PROJECT" --format=json > "$Q"
+          python3 - "$S" "$Q" <<'PY'
+          import json,sys
+          s=json.load(open(sys.argv[1])); q=json.load(open(sys.argv[2]))
+          traffic=(s.get('status') or {}).get('traffic') or []
+          assert any(x.get('revisionName')=='fixlist-standard150-worker-00012-fsd' and int(x.get('percent') or 0)==100 for x in traffic), traffic
+          assert str(q.get('state') or '') == 'RUNNING', q.get('state')
+          rate=q.get('rateLimits') or {}
+          assert int(rate.get('maxConcurrentDispatches') or 0) == 3, rate
+          print('QUEUED_WATCHDOG_PROMOTED traffic=100 queue=RUNNING concurrency=3')
+          PY

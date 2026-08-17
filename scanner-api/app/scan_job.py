@@ -419,6 +419,31 @@ def build_local_review(result: dict[str, Any]) -> dict[str, Any]:
     return review
 
 
+def terminal_review_limitation(review: dict[str, Any]) -> dict[str, str] | None:
+    """Translate known fail-closed review states into truthful terminal errors.
+
+    A provisional review must never be persisted as authoritative. For access
+    failures we can still tell the customer what actually happened instead of
+    surfacing an opaque authority-persistence error that sounds like data loss.
+    """
+    if not isinstance(review, dict) or review.get("release_gate_eligible") is True:
+        return None
+    fingerprint = review.get("site_fingerprint") if isinstance(review.get("site_fingerprint"), dict) else {}
+    blocked = int(fingerprint.get("blocked_or_429_pages") or fingerprint.get("blocked_access_pages") or 0)
+    usable = int((fingerprint.get("classification") or {}).get("usable_pages") or 0) if isinstance(fingerprint.get("classification"), dict) else 0
+    access_state = str(review.get("access_evidence_state") or "")
+    confidence = str(review.get("review_confidence_state") or "")
+    if access_state == "blocked" or confidence == "blocked_access_needs_verification" or (blocked > 0 and usable == 0):
+        return {
+            "code": "scan_access_limited_429",
+            "detail": (
+                "The site rate-limited or challenged the scanner, so FixList could not collect enough verified HTML "
+                "to save an authoritative result. Please try again later."
+            ),
+        }
+    return None
+
+
 async def complete_authority(
     client: httpx.AsyncClient,
     scan: dict[str, Any],
@@ -453,6 +478,15 @@ async def complete_authority(
         reviewed = review if isinstance(review, dict) else build_local_review(result)
     except Exception:
         return {"ok": False, "transient": False, "failure_code": "review_failed"}
+
+    limitation = terminal_review_limitation(reviewed)
+    if limitation is not None:
+        return {
+            "ok": False,
+            "transient": False,
+            "failure_code": limitation["code"],
+            "customer_message": limitation["detail"],
+        }
 
     envelope = build_completion_envelope(scan, result, reviewed, signing_key)
     persisted = await invoke_function(client, "persistDurableScanAuthority", envelope)

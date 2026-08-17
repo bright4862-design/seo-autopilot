@@ -21,8 +21,13 @@ _CHALLENGE_MARKERS = (
     "connection verification",
     "enable javascript and cookies to continue",
     "verify you are human",
-    "access denied",
 )
+
+# Some legitimate storefronts embed bot-blocker configuration in script/JSON
+# that contains the literal phrase "Access Denied". Treat that phrase as a
+# challenge only when it is rendered as page content, rather than matching an
+# incidental configuration string anywhere in a large HTML document.
+_VISIBLE_ACCESS_DENIED = re.compile(r">\s*access\s+denied(?:\s*[.!:–—-]*)?\s*<", re.I)
 
 def _status(page_or_status: Any) -> int:
     if isinstance(page_or_status, dict):
@@ -39,7 +44,7 @@ def _looks_like_html(source: str) -> bool:
 
 def _looks_like_challenge(source: str) -> bool:
     lowered = source.lower()
-    return any(marker in lowered for marker in _CHALLENGE_MARKERS)
+    return any(marker in lowered for marker in _CHALLENGE_MARKERS) or bool(_VISIBLE_ACCESS_DENIED.search(source))
 
 def classify_page_evidence(
     *,

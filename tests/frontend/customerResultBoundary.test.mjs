@@ -191,3 +191,15 @@ test("saved results use the same exact owner-bound manual grant rule as scan adm
   assert.equal(evaluatePaidAccess({ rows: [{ ...manual, owner_user_id: "other" }], user: USER }).ok, false);
   assert.equal(evaluatePaidAccess({ rows: [{ ...manual, user_email: "other@example.com" }], user: USER }).ok, false);
 });
+
+test("customer result verification preserves exact signing-key bytes", async () => {
+  const { snapshot } = sealedRows();
+  const secret = "unit-test-result-boundary-secret\n";
+  const proof = await createAuthoritySeal(snapshot, secret);
+  assert.equal(await verifyAuthoritySeal(snapshot, secret, proof), true);
+  assert.equal(await verifyAuthoritySeal(snapshot, secret.trim(), proof), false);
+
+  const entry = readFileSync("base44/functions/getCustomerScanResult/index.ts", "utf8");
+  assert.match(entry, /String\(Deno\.env\.get\("SCAN_EVIDENCE_SIGNING_KEY"\) \|\| ""\)/);
+  assert.doesNotMatch(entry, /cleanText\(Deno\.env\.get\("SCAN_EVIDENCE_SIGNING_KEY"\)/);
+});

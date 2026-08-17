@@ -69,9 +69,11 @@ SITEMAP_DISCOVERY_LIMIT = 5000
 # sites keep the existing concurrent crawler behavior. Once HTTP 429 is seen,
 # request starts are paced for the rest of that crawl and the blocked URL gets
 # one bounded retry. This is rate-limit cooperation, not a bot-protection bypass.
-RATE_LIMIT_COOLDOWN_SECONDS = 2.0
+RATE_LIMIT_COOLDOWN_SECONDS = 3.0
 RATE_LIMIT_REQUEST_INTERVAL_SECONDS = 0.5
 RATE_LIMIT_PROACTIVE_REQUEST_INTERVAL_SECONDS = 1.0
+RATE_LIMIT_BACKOFF_INTERVAL_SECONDS = 2.5
+RATE_LIMIT_MAX_INTERVAL_SECONDS = 4.0
 RATE_LIMIT_MAX_RETRIES = 8
 
 
@@ -120,6 +122,19 @@ class _AdaptiveRateLimitPacer:
             first_429 = not self.saw_429
             self.saw_429 = True
             self.active = True
+            if first_429:
+                self.request_interval_seconds = max(
+                    self.request_interval_seconds,
+                    float(RATE_LIMIT_BACKOFF_INTERVAL_SECONDS),
+                )
+            else:
+                self.request_interval_seconds = min(
+                    float(RATE_LIMIT_MAX_INTERVAL_SECONDS),
+                    max(
+                        float(RATE_LIMIT_BACKOFF_INTERVAL_SECONDS),
+                        self.request_interval_seconds * 1.5,
+                    ),
+                )
             delay = RATE_LIMIT_COOLDOWN_SECONDS if first_429 else self.request_interval_seconds
             self.next_request_at = max(self.next_request_at, now + max(0.0, float(delay)))
 
@@ -519,6 +534,7 @@ async def run_scan(
         "rate_limit_proactive_profile": rate_limit_profile,
         "rate_limit_retry_count": rate_limit_pacer.retry_count,
         "rate_limit_recovered_count": rate_limit_pacer.recovered_count,
+        "rate_limit_final_interval_seconds": round(rate_limit_pacer.request_interval_seconds, 3),
         "final_url_dedup_version": FINAL_URL_DEDUP_VERSION,
         "final_url_duplicates_deduped": crawl_state["final_url_duplicates_deduped"],
         "final_url_duplicate_examples": crawl_state["final_url_duplicate_examples"],

@@ -12,6 +12,8 @@ import { UNLOCK_PRICE_LABEL } from "@/lib/access";
 import UnlockAccessButton from "@/components/billing/UnlockAccessButton";
 import { CUSTOMER_BOUNDARY_EVENT } from "@/lib/customerBrowserCache";
 import ScoreRing from "@/components/fixlist/ScoreRing";
+import RecentScanRow from "@/components/fixlist/RecentScanRow";
+import { deleteScanRun, pruneScanHistory } from "@/lib/scanHistory";
 import { prepareCustomerFixes, priorityBucket } from "@/lib/fixRanking";
 import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel } from "@/lib/fixVocabulary";
 
@@ -124,6 +126,8 @@ export default function FixList() {
   const [recentScansState, setRecentScansState] = useState(requestedScanId ? "idle" : "loading");
   const [recentScansFailure, setRecentScansFailure] = useState(null);
   const [historyReloadToken, setHistoryReloadToken] = useState(0);
+  const [historyProjectId, setHistoryProjectId] = useState("");
+  const [deletingScanId, setDeletingScanId] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -261,6 +265,10 @@ export default function FixList() {
         // holding this account's admission lease.
         await recoverOrphanedScanRuns({ projectId: project.id });
         if (cancelled) return;
+        setHistoryProjectId(project.id);
+        // Keep only the three newest saved scans for this website.
+        await pruneScanHistory(project.id);
+        if (cancelled) return;
         const historyResult = await listScanRuns(project.id, 8);
         if (cancelled) return;
         if (historyResult?.ok !== true) {
@@ -361,6 +369,13 @@ export default function FixList() {
     setReloadToken((value) => value + 1);
   }
 
+  async function handleDeleteScan(scanId) {
+    setDeletingScanId(scanId);
+    const result = await deleteScanRun(historyProjectId, scanId);
+    setDeletingScanId("");
+    if (result.ok) setRecentScans((scans) => scans.filter((scan) => scan.id !== scanId));
+  }
+
   function retryRecentScans() {
     setRecentScansFailure(null);
     setRecentScansState("loading");
@@ -410,6 +425,8 @@ export default function FixList() {
             failure={recentScansFailure}
             onAction={(action) => handleRecoveryAction(action, "history")}
             onScan={() => navigate("/onboarding")}
+            onDelete={handleDeleteScan}
+            deletingScanId={deletingScanId}
           />
         ) : requestedScanState === "loading" && !scanRecord ? (
           <RequestedScanState title="Loading this scan…" detail="FixList is reopening the exact saved scan from your account." />
@@ -625,7 +642,7 @@ function recoveryActionLabel(action, target) {
   return "";
 }
 
-function RecentScansState({ scans, state, failure, onAction, onScan }) {
+function RecentScansState({ scans, state, failure, onAction, onScan, onDelete, deletingScanId }) {
   if (state === "loading") {
     return <RequestedScanState title="Loading your scans…" detail="FixList is checking your account for saved scans." />;
   }
@@ -641,27 +658,20 @@ function RecentScansState({ scans, state, failure, onAction, onScan }) {
         Reopen a saved scan to see its current status or verified FixList.
       </p>
       <div className="mt-6 overflow-hidden rounded-2xl border border-hairline-soft bg-white">
-        {scans.map((scan) => {
-          const scanStatus = getRecentScanStatus(scan.status);
-          return (
-            <Link
-              key={scan.id}
-              to={`/dashboard?scan_id=${encodeURIComponent(scan.id)}`}
-              className="flex items-center justify-between gap-4 border-b border-hairline-soft px-5 py-4 transition-colors last:border-b-0 hover:bg-ink/[0.025] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ink"
-            >
-              <span className="min-w-0">
-                <span className="block truncate text-[14px] font-medium text-ink">{scan.website}</span>
-                <span className="mt-1 block text-[12px] text-ink-faint tabular-nums">
-                  {scan.occurredAt ? formatDate(scan.occurredAt) : "Date unavailable"}
-                </span>
-              </span>
-              <span className={`shrink-0 text-[12px] font-medium ${scanStatus.active ? "text-warnink" : "text-ink-muted"}`}>
-                {scanStatus.label} <span aria-hidden="true">›</span>
-              </span>
-            </Link>
-          );
-        })}
+        {scans.map((scan) => (
+          <RecentScanRow
+            key={scan.id}
+            scan={scan}
+            status={getRecentScanStatus(scan.status)}
+            occurredLabel={scan.occurredAt ? formatDate(scan.occurredAt) : "Date unavailable"}
+            deleting={deletingScanId === scan.id}
+            onDelete={onDelete}
+          />
+        ))}
       </div>
+      <p className="mt-3 text-[12px] text-ink-faint">
+        Your three most recent scans are kept for each website. Older ones are removed automatically.
+      </p>
     </section>
   );
 }

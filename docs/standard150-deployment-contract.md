@@ -48,6 +48,7 @@ Supplied by `cloudbuild.durable-worker.yaml`.
 | runtime identity | `--service-account=<_RUNTIME_SA>` | Otherwise inherits the over-privileged default compute SA. |
 | `--timeout` | `480` | Must match `dispatchDeadline: "480s"` in `cloudTasks.js` and outlast crawl, review, signed control reads, and persistence. |
 | `--concurrency` | `1` | One durable job per instance. |
+| `--max-instances` | `40` | Provides horizontal headroom above the 30-scan queue ceiling so Cloud Tasks remains the explicit concurrency controller rather than Cloud Run instance exhaustion. |
 | `--no-traffic` | set | New revision takes 0%; promotion is a separate human decision. |
 
 ---
@@ -65,7 +66,7 @@ Base44-hosted. Supplied through Base44 function environment, **not** Cloud Build
 | `SCAN_DISPATCH_GATEWAY_URL` | **required for keyless dispatch** | `cloudTasks.js` `createTask()` | Unset selects the key-based route below. Set, it is the only enqueue path. |
 | `SCAN_EVIDENCE_SIGNING_KEY` | **required with the gateway** | `cloudTasks.js` `createTaskViaGateway()` | `dispatch_gateway_signing_key_missing`. Fail-closed before any network call. |
 | `BETA_SCAN_ADMISSION_ENABLED` | **required; default-off** | `admission.js`, package-local `admissionClient.js` | Any value other than exact `true` refuses new admission. No ScanRun is created. |
-| `BETA_COHORT_ALLOWED_USER_IDS` | **required when admission is enabled** | `admission.js` | Must contain 1–25 unique exact Base44 user IDs. Missing, malformed, or oversized cohorts fail closed. |
+| `BETA_COHORT_ALLOWED_USER_IDS` | unrelated to scan admission; checkout-only legacy cohort input | not read by `startStandardScanJob/admission.js` | Scan membership is determined by the exact owner-bound active `Access` entitlement. The static cohort list must not be a second scan gate. |
 | `SCAN_ADMISSION_COORDINATOR_URL` | **required when admission is enabled** | package-local `admissionClient.js` | Admission fails closed; no new ScanRun is created or bound. |
 | `GCP_SERVICE_ACCOUNT_KEY` | **required only without the gateway** | `cloudTasks.js` `accessToken()` | `tasks_credentials_not_configured`. Distinct from a malformed key, which yields a `tasks_key_*` code, or `tasks_token_mint_failed` when the cause is not recognised. |
 
@@ -167,7 +168,7 @@ Production rollout is intentionally split from source integration. The release t
 
 - `scripts/bootstrap-fixlist-admission-coordinator.sh` is the **one-time owner-only** bootstrap. It creates/normalizes the dedicated `fixlist-admission` Firestore Native database with delete protection, the dedicated coordinator runtime identity, the drain queue, and only the IAM edges required by those resources. It requires `CONFIRM=BOOTSTRAP-ADMISSION-INFRA`.
 - `scripts/deploy_admission_coordinator.sh` performs an exact-SHA Cloud Run source deploy with an explicit Cloud Build service account, pinned signing-secret reference and `FIXLIST_COORDINATOR_SOURCE_SHA`.
-- `scripts/configure-base44-beta-admission.sh` sets only the coordinator URL, drain queue, exact 1–25-user cohort and both beta switches to **false**. It cannot enable admission or checkout.
+- `scripts/configure-base44-beta-admission.sh` sets only the coordinator URL, drain queue and both beta switches to **false**. It does not write the checkout cohort. Scan membership is entitlement-owned, so the admission configuration cannot reintroduce a second static user gate.
 - `scripts/deploy-base44-beta-functions.sh` deploys exactly the six release functions named by `scripts/base44_release_manifest.mjs`; it never deploys the site or reconciles entities.
 - `scripts/build-worker-candidate.sh` submits the durable worker build with an explicit Cloud Build identity and refuses completion unless the candidate is Ready, `concurrency=1`, `timeout=480`, source-stamped, and at **0% traffic**.
 

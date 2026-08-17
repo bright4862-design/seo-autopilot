@@ -567,7 +567,7 @@ export async function failScanRun(handle, error) {
 
 // Scan history per website, newest first. Empty history and a failed read are
 // distinct so the customer is never told that saved scans disappeared.
-export async function listScanRuns(projectId, limit = 20) {
+export async function listScanRuns(projectId, limit = 3) {
   const requestedProjectId = String(projectId || "").trim();
   const scope = `history:${requestedProjectId}`;
   try {
@@ -575,7 +575,7 @@ export async function listScanRuns(projectId, limit = 20) {
     const response = await base44.functions.invoke("getCustomerScanResult", {
       action: "list",
       project_id: requestedProjectId,
-      limit: Math.min(Math.max(Number(limit) || 8, 1), 20),
+      limit: Math.min(Math.max(Number(limit) || 3, 1), 3),
     });
     const result = response?.data && typeof response.data === "object" ? response.data : response;
     if (

@@ -9,9 +9,9 @@ TARGET="${TARGET_SCAN_CONCURRENCY:-}"
 CONFIRM="${CONFIRM:-}"
 
 case "$TARGET" in
-  1|3|5|10) ;;
+  1|3|5|10|20|30) ;;
   *)
-    echo "Refusing scan concurrency change: TARGET_SCAN_CONCURRENCY must be exactly 1, 3, 5, or 10." >&2
+    echo "Refusing scan concurrency change: TARGET_SCAN_CONCURRENCY must be exactly 1, 3, 5, 10, 20, or 30." >&2
     exit 2
     ;;
 esac
@@ -31,9 +31,9 @@ trap 'rm -f "$WORKER_JSON" "$QUEUE_JSON"' EXIT
 gcloud run services describe "$WORKER" \
   --project="$PROJECT" --region="$REGION" --format=json > "$WORKER_JSON"
 
-python3 - "$WORKER_JSON" <<'PY'
+python3 - "$WORKER_JSON" "$TARGET" <<'PY'
 import json,sys
-service=json.load(open(sys.argv[1]))
+service=json.load(open(sys.argv[1])); target=int(sys.argv[2])
 template=(service.get("spec") or {}).get("template") or {}
 spec=template.get("spec") or {}
 containers=spec.get("containers") or []
@@ -41,11 +41,13 @@ if not containers:
     raise SystemExit("Refusing: worker has no container configuration")
 concurrency=spec.get("containerConcurrency")
 if int(concurrency or 0) != 1:
-    raise SystemExit(f"Refusing: worker concurrency must remain 1; observed {concurrency!r}")
+    raise SystemExit(f"Refusing: worker request concurrency must remain 1; observed {concurrency!r}")
 max_instances=((template.get("metadata") or {}).get("annotations") or {}).get("autoscaling.knative.dev/maxScale")
-if max_instances is not None and int(max_instances) < 10:
-    raise SystemExit(f"Refusing: worker max instances {max_instances} is below the 10-scan ramp target")
-print("Worker invariant verified: concurrency=1 and horizontal scale headroom is sufficient.")
+if max_instances is None:
+    raise SystemExit("Refusing: worker max instance ceiling is unreadable")
+if int(max_instances) < target:
+    raise SystemExit(f"Refusing: worker max instances {max_instances} is below requested scan concurrency {target}")
+print(f"Worker invariant verified: request concurrency=1 and max instances={max_instances} >= target={target}.")
 PY
 
 gcloud tasks queues describe "$QUEUE" \

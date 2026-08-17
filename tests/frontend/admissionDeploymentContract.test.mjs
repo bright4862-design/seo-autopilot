@@ -57,13 +57,13 @@ test("coordinator source deployment pins exact main, build identity, database, s
   assert.match(coordinatorMain, /"source_sha": SOURCE_SHA/);
 });
 
-test("Base44 admission configuration is disabled-first, cohort-bounded and additive", () => {
+test("Base44 admission configuration is disabled-first, entitlement-owned and additive", () => {
   assert.match(configureBase44, /BETA_SCAN_ADMISSION_ENABLED=false/);
   assert.match(configureBase44, /BETA_CHECKOUT_ENABLED=false/);
   assert.match(configureBase44, /SCAN_ADMISSION_COORDINATOR_URL=\$COORD_URL/);
   assert.match(configureBase44, /SCAN_DRAIN_QUEUE_PATH=\$DRAIN_QUEUE_PATH/);
-  assert.match(configureBase44, /BETA_COHORT_ALLOWED_USER_IDS=\$COHORT/);
-  assert.match(configureBase44, /1 <= len\(ids\) <= 25/);
+  assert.doesNotMatch(configureBase44, /BETA_COHORT_ALLOWED_USER_IDS=/);
+  assert.doesNotMatch(configureBase44, /len\(ids\)/);
   assert.match(configureBase44, /v\.get\('source_sha'\)==expected/);
   assert.doesNotMatch(configureBase44, /BETA_SCAN_ADMISSION_ENABLED=true|BETA_CHECKOUT_ENABLED=true/);
   assert.doesNotMatch(configureBase44, /SCAN_EVIDENCE_SIGNING_KEY=/);

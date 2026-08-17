@@ -320,10 +320,35 @@ async def run_scan(
     ) as client:
         robots_policy = await load_robots_policy(client, origin)
         rate_limit_profile = ""
+        initial_rate_limit_retry_count = 0
+        initial_rate_limit_recovered = False
+        initial_rate_limit_blocked = False
+        initial_rate_limit_page = None
         if not path_prefix and prefix == "/":
             try:
                 landing = await safe_get(client, start_url)
-                rate_limit_profile = detect_rate_limit_profile(landing) if job_mode else ""
+                if job_mode and is_cloudflare_rate_limited_response(landing):
+                    remaining_for_crawl = max(0.0, deadline - time.monotonic() - 20.0)
+                    cooldown = min(RATE_LIMIT_INITIAL_COOLDOWN_SECONDS, remaining_for_crawl)
+                    if cooldown > 0:
+                        await asyncio.sleep(cooldown)
+                        initial_rate_limit_retry_count = 1
+                        landing = await safe_get(client, start_url)
+                        initial_rate_limit_recovered = not is_cloudflare_rate_limited_response(landing)
+                    if is_cloudflare_rate_limited_response(landing):
+                        initial_rate_limit_blocked = True
+                        rate_limit_profile = "cloudflare_initial_throttle"
+                        snapshot = {key: list(value) for key, value in discovery.get(start_url, empty_discovery()).items()}
+                        initial_rate_limit_page = extract_page(
+                            str(getattr(landing, "text", "") or ""),
+                            start_url,
+                            str(getattr(landing, "url", start_url) or start_url),
+                            int(getattr(landing, "status_code", 429) or 429),
+                            str(landing.headers.get("content-type", "")),
+                            snapshot,
+                        )
+                if not initial_rate_limit_blocked:
+                    rate_limit_profile = detect_rate_limit_profile(landing) if job_mode else ""
                 final_landing_url = str(getattr(landing, "url", start_url) or start_url) if landing is not None else start_url
                 landing_status = int(getattr(landing, "status_code", 0) or 0) if landing is not None else 0
                 landing_origin = url_origin(final_landing_url)
@@ -359,11 +384,21 @@ async def run_scan(
             "response_reserved_seconds": round(timing_budget["response_reserved_seconds"], 3),
         }
         sitemap_started_monotonic = time.monotonic()
-        sitemap_urls = await load_sitemap_urls(
-            client, origin, prefix, SITEMAP_DISCOVERY_LIMIT, artifacts,
-            scope_evidence=scope_evidence, deadline=timing_budget["sitemap_deadline"],
-            max_fetches=max_sitemap_fetches, diagnostics=sitemap_diagnostics,
-        )
+        if initial_rate_limit_blocked:
+            sitemap_urls = []
+            sitemap_diagnostics.update({
+                "sitemap_fetch_count": 0,
+                "sitemap_fetch_limit_reached": False,
+                "sitemap_budget_exhausted": False,
+                "sitemap_failure_reason_buckets": {"initial_access_limited_429": 1},
+                "sitemap_child_url_count": 0,
+            })
+        else:
+            sitemap_urls = await load_sitemap_urls(
+                client, origin, prefix, SITEMAP_DISCOVERY_LIMIT, artifacts,
+                scope_evidence=scope_evidence, deadline=timing_budget["sitemap_deadline"],
+                max_fetches=max_sitemap_fetches, diagnostics=sitemap_diagnostics,
+            )
         sitemap_diagnostics["sitemap_elapsed_ms"] = round((time.monotonic() - sitemap_started_monotonic) * 1000)
         sitemap_diagnostics["sitemap_urls_discovered"] = len(sitemap_urls)
         family_of = lambda url: classify_template(urlparse(url).path or "/")
@@ -374,6 +409,17 @@ async def run_scan(
         sampling_evidence["crawl_scope"] = dict(scope_evidence)
         for url in sampled_sitemap_urls:
             enqueue(url, "sitemap", "/sitemap.xml", "")
+
+        if initial_rate_limit_page is not None:
+            annotate_robots_evidence(initial_rate_limit_page, robots_policy, start_url)
+            initial_rate_limit_page.pop("_html", None)
+            pages.append(initial_rate_limit_page)
+            identity = final_url_identity(initial_rate_limit_page.get("final_url") or initial_rate_limit_page.get("url") or "")
+            if identity:
+                final_pages[identity] = initial_rate_limit_page
+            seen.add(start_url)
+            queued.discard(start_url)
+            queue[:] = [url for url in queue if url != start_url]
 
         crawl_started_at = utc_now_iso()
         crawl_started_monotonic = time.monotonic()
@@ -539,6 +585,9 @@ async def run_scan(
         "failure_reason_buckets": failure_reason_buckets,
         "rate_limit_throttle_activated": rate_limit_pacer.active,
         "rate_limit_proactive_profile": rate_limit_profile,
+        "rate_limit_initial_retry_count": initial_rate_limit_retry_count,
+        "rate_limit_initial_recovered": initial_rate_limit_recovered,
+        "rate_limit_initial_blocked": initial_rate_limit_blocked,
         "rate_limit_retry_count": rate_limit_pacer.retry_count,
         "rate_limit_recovered_count": rate_limit_pacer.recovered_count,
         "rate_limit_final_interval_seconds": round(rate_limit_pacer.request_interval_seconds, 3),

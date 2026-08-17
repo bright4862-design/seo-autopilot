@@ -120,6 +120,10 @@ test("Cloud Operator may redeploy the coordinator after bootstrap but cannot run
   assert.doesNotMatch(workflow, /bootstrap-fixlist-admission-coordinator\.sh/);
 });
 
+test("Cloud Operator invokes the allowlisted shell through bash so file mode cannot block verification", () => {
+  assert.match(workflow, /run: bash \.\/scripts\/fixlist-cloud-operator\.sh/);
+});
+
 test("worker provenance lookup uses the same regional Cloud Build scope as the candidate build", () => {
   assert.match(
     cloudOperator,

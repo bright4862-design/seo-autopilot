@@ -122,7 +122,10 @@ Deno.serve(async (req) => {
     const snapshot = authoritySnapshotFromRows({ run, fixList, fixItems, userId: user.id });
     assertSnapshotIdentity(snapshot, { run, fixList, user });
 
-    const secret = cleanText(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY"), 4_000);
+    // Authority proof must be verified with the exact same secret bytes used
+    // by persistDurableScanAuthority. Do not trim or normalize this value:
+    // whitespace is part of an HMAC key and changing it invalidates every seal.
+    const secret = String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || "");
     if (!secret) {
       throw new RequestProblem(503, "result_authority_unavailable", "Verified results are temporarily unavailable.");
     }

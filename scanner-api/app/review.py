@@ -792,10 +792,10 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         and int_or_zero(crawl_timing.get("failed_fetch_count")) == 0
         and int_or_zero(body.get("queued_remaining")) == 0
     )
-    if usable_pages < 4 and not complete_small_site_inventory:
-        evidence_sufficiency = "insufficient_pages"
-    elif blocked_or_429_pages and blocked_or_429_pages / max(usable_pages + blocked_or_429_pages, 1) >= 0.6:
+    if blocked_or_429_pages and blocked_or_429_pages / max(usable_pages + blocked_or_429_pages, 1) >= 0.6:
         evidence_sufficiency = "access_limited"
+    elif usable_pages < 4 and not complete_small_site_inventory:
+        evidence_sufficiency = "insufficient_pages"
     else:
         evidence_sufficiency = "complete_small_site_inventory" if complete_small_site_inventory else "sufficient"
     classification_state = "classified" if evidence_sufficiency in {"sufficient", "complete_small_site_inventory"} else "inconclusive_insufficient_evidence"
@@ -2019,7 +2019,7 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
     if blocked:
         summary = (
             f"FixList could not complete a reliable page-quality review because {blocked_count} of {reviewed_count or blocked_count} reviewed pages "
-            "returned HTTP 429, bot-protection, or connection-verification responses. The score is provisional until server, CDN, "
+            "returned access blocks, rate limiting, bot-protection, or connection-verification responses. The score is provisional until server, CDN, "
             "firewall, or bot-protection logs confirm legitimate crawler access."
         )
     elif incomplete:

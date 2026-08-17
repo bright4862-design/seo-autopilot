@@ -324,7 +324,10 @@ function uniqueRows(rows) {
 }
 
 function scanTimestamp(run) {
-  for (const value of [run?.completed_at, run?.reviewing_at, run?.started_at, run?.queued_at, run?.created_date]) {
+  // "Newest scan" means when the scan was created/queued, not when an older
+  // orphan was later cancelled or reconciled. Completion time must not make
+  // stale history jump ahead of genuinely newer runs.
+  for (const value of [run?.queued_at, run?.created_date, run?.started_at, run?.reviewing_at, run?.completed_at]) {
     const parsed = Date.parse(cleanText(value, 80));
     if (Number.isFinite(parsed)) return parsed;
   }

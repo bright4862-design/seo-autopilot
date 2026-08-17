@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Publish the customer site without leaving the durable Base44 backend stripped.
+#
+# Observed Base44 CLI behavior (2026-08-17): `site deploy` can reconcile the
+# remote function inventory back to the older site snapshot. Therefore the
+# only supported beta site-publish order is:
+#   exact clean main -> build -> site deploy -> canonical release functions ->
+#   owner-safe history function -> final inventory verification.
+set -euo pipefail
+
+APP_ID="${BASE44_APP_ID:-6a498732ec779dfaaeab0e53}"
+SOURCE_SHA="${SOURCE_SHA:-}"
+CONFIRM="${CONFIRM:-}"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$REPO_ROOT/scripts/lib/release-source-guard.sh"
+source "$REPO_ROOT/scripts/lib/base44-pinned-cli.sh"
+
+fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$CONFIRM"
+SOURCE_SHA="$FIXLIST_EXACT_SOURCE_SHA"
+node "$REPO_ROOT/scripts/base44_release_manifest.mjs" verify
+
+TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+fixlist_install_base44_cli "$TMP"
+"$FIXLIST_BASE44_CLI" login
+
+cd "$REPO_ROOT"
+npm run build
+"$FIXLIST_BASE44_CLI" --app-id "$APP_ID" site deploy --no-build --yes
+
+# Site publication comes first. Re-establish the canonical six-function
+# release package afterwards so a site reconciliation cannot remove worker
+# control, authority persistence, or customer-result verification.
+SOURCE_SHA="$SOURCE_SHA" CONFIRM="$CONFIRM" BASE44_APP_ID="$APP_ID" \
+  bash "$REPO_ROOT/scripts/deploy-base44-beta-functions.sh"
+
+# Customer scan-history deletion is intentionally outside the canonical six
+# release-function digest, but the published dashboard depends on it.
+"$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions deploy deleteCustomerScanData
+
+INVENTORY="$($FIXLIST_BASE44_CLI --app-id "$APP_ID" functions list 2>&1)"
+printf '%s\n' "$INVENTORY"
+for required in \
+  startStandardScanJob \
+  durableScanWorkerControl \
+  persistDurableScanAuthority \
+  getCustomerScanResult \
+  createAccessCheckout \
+  stripeWebhook \
+  deleteCustomerScanData
+do
+  grep -Eq "(^|[[:space:]])${required}([[:space:]]|$)" <<<"$INVENTORY" || {
+    echo "Refusing: Base44 post-site inventory is missing ${required}." >&2
+    exit 2
+  }
+done
+
+printf 'BASE44_SITE_AND_BACKEND_DEPLOYED\nsource_sha=%s\n' "$SOURCE_SHA"

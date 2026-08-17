@@ -7,6 +7,7 @@ const bootstrap = read("scripts/bootstrap-fixlist-admission-coordinator.sh");
 const deployCoordinator = read("scripts/deploy_admission_coordinator.sh");
 const configureBase44 = read("scripts/configure-base44-beta-admission.sh");
 const deployFunctions = read("scripts/deploy-base44-beta-functions.sh");
+const deploySite = read("scripts/deploy-base44-beta-site.sh");
 const workerCandidate = read("scripts/build-worker-candidate.sh");
 const workerBuild = read("cloudbuild.durable-worker.yaml");
 const workerMain = read("scanner-api/app/main.py");
@@ -79,6 +80,25 @@ test("Base44 release deploy names exactly six functions and never reconciles ent
   assert.match(deployFunctions, /base44_release_manifest\.mjs" verify/);
   assert.doesNotMatch(deployFunctions, /\bdeploy\s+--|\bsite\s+deploy|entities\s+push|--force/);
   for (const source of releaseMutationScripts) assert.doesNotMatch(source, /entities\s+push/);
+});
+
+test("Base44 site publication restores the durable backend after the site deploy", () => {
+  const siteIndex = deploySite.indexOf('site deploy --no-build --yes');
+  const functionsIndex = deploySite.indexOf('deploy-base44-beta-functions.sh');
+  const historyIndex = deploySite.indexOf('functions deploy deleteCustomerScanData');
+  assert.ok(siteIndex >= 0, "missing Base44 site deployment");
+  assert.ok(functionsIndex > siteIndex, "canonical release functions must deploy after the site");
+  assert.ok(historyIndex > functionsIndex, "history function must be restored after canonical release functions");
+  for (const required of [
+    "startStandardScanJob",
+    "durableScanWorkerControl",
+    "persistDurableScanAuthority",
+    "getCustomerScanResult",
+    "createAccessCheckout",
+    "stripeWebhook",
+    "deleteCustomerScanData",
+  ]) assert.match(deploySite, new RegExp(`\\b${required}\\b`));
+  assert.doesNotMatch(deploySite, /--force|entities\s+push/);
 });
 
 test("release Base44 CLI is version and digest pinned before login or deployment", () => {

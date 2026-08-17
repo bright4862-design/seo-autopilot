@@ -59,6 +59,7 @@ TRUST_DISCOVERY_TIMEOUTS = {"basic": 2.0, "quick": 3.0, "deep": 5.0, "advanced":
 SCAN_RESPONSE_PAGE_LIMITS = {"basic": 25, "quick": 40, "deep": 85, "advanced": 150}
 GROK_ERROR_DETAIL_VERSION = "grok_upstream_detail_v1"
 WORKER_TERMINAL_DRAIN_AFTER_START_SECONDS = 1800
+WORKER_QUEUED_DRAIN_AFTER_QUEUE_SECONDS = 1800
 
 app = FastAPI(title="FixList Scanner API", version=VERSION)
 
@@ -624,9 +625,47 @@ async def scan_job_drain(
 
         status = str(scan.get("status") or "").lower()
         started_raw = str(scan.get("started_at") or "").strip()
-        if status == "queued" or not started_raw:
-            # Queue wait is not worker runtime. Keep this watchdog task alive via
-            # Cloud Tasks retries until a worker has actually picked the scan up.
+        if status == "queued":
+            # Queue wait is not worker runtime, but a bound admission must not
+            # remain queued forever. The drain task begins retrying after 10m;
+            # only after the full 30-minute queue safety window may it close the
+            # exact still-queued attempt and release admission server-side.
+            queued_raw = str(scan.get("queued_at") or scan.get("created_date") or "").strip()
+            try:
+                queued_at = datetime.fromisoformat(queued_raw.replace("Z", "+00:00"))
+                if queued_at.tzinfo is None:
+                    queued_at = queued_at.replace(tzinfo=timezone.utc)
+            except ValueError as exc:
+                raise HTTPException(status_code=503, detail="The scan queue time is unavailable.") from exc
+            queue_deadline = queued_at.astimezone(timezone.utc) + timedelta(
+                seconds=WORKER_QUEUED_DRAIN_AFTER_QUEUE_SECONDS,
+            )
+            if datetime.now(timezone.utc) < queue_deadline:
+                raise HTTPException(status_code=503, detail="The scan has not started yet.")
+            try:
+                closed = await write_terminal_failure(
+                    client,
+                    scan_id,
+                    "scan_queue_drain_timeout",
+                    "The scan stayed in the queue too long and was safely stopped. Please start a new scan.",
+                    attempt_count=job_attempt,
+                )
+            except RuntimeError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail="The queued terminal state could not be verified.",
+                ) from exc
+            return {
+                "success": True,
+                "worker_version": WORKER_VERSION,
+                "scan_id": scan_id,
+                "closed": bool(closed),
+                "status": "failed" if closed else "superseded_attempt",
+            }
+        if not started_raw:
+            # A non-queued active row without a verified start is abnormal; keep
+            # the watchdog alive so the separate reconciliation backstop can
+            # adjudicate it without guessing in this route.
             raise HTTPException(status_code=503, detail="The scan has not started yet.")
         try:
             started_at = datetime.fromisoformat(started_raw.replace("Z", "+00:00"))

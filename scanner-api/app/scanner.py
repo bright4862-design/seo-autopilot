@@ -230,6 +230,9 @@ async def run_scan(
         "requested_seed_path": requested_seed_path,
         "effective_path_prefix": prefix,
         "scope_source": prefix_source,
+        "requested_origin": origin,
+        "effective_origin": origin,
+        "origin_scope_source": "requested_origin",
         "multimarket_detected": False,
         "market_scope_required": False,
         "market_prefixes_detected": [],
@@ -300,6 +303,17 @@ async def run_scan(
                 landing = await safe_get(client, start_url)
                 rate_limit_profile = detect_rate_limit_profile(landing) if job_mode else ""
                 final_landing_url = str(getattr(landing, "url", start_url) or start_url) if landing is not None else start_url
+                landing_status = int(getattr(landing, "status_code", 0) or 0) if landing is not None else 0
+                landing_origin = url_origin(final_landing_url)
+                if (
+                    200 <= landing_status < 300
+                    and landing_origin
+                    and is_www_origin_alias(start_url, final_landing_url)
+                ):
+                    origin = landing_origin
+                    scope_evidence["effective_origin"] = origin
+                    scope_evidence["origin_scope_source"] = "verified_www_alias_redirect"
+                    robots_policy = await load_robots_policy(client, origin)
                 redirected_market = market_pair_prefix(final_landing_url)
                 if redirected_market:
                     prefix = redirected_market
@@ -1485,9 +1499,33 @@ def normalize_prefix(value: str) -> str:
     return path.rstrip("/") if path != "/" else "/"
 
 
+def url_origin(url: str) -> str:
+    parsed = urlparse(str(url or ""))
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def is_www_origin_alias(source: str, target: str) -> bool:
+    source_parsed = urlparse(str(source or ""))
+    target_parsed = urlparse(str(target or ""))
+    if source_parsed.scheme.lower() != target_parsed.scheme.lower():
+        return False
+    source_host = (source_parsed.hostname or "").lower().strip(".")
+    target_host = (target_parsed.hostname or "").lower().strip(".")
+    if not source_host or not target_host or source_host == target_host:
+        return False
+    if source_parsed.port != target_parsed.port:
+        return False
+    source_base = source_host[4:] if source_host.startswith("www.") else source_host
+    target_base = target_host[4:] if target_host.startswith("www.") else target_host
+    return source_base == target_base and (
+        source_host.startswith("www.") or target_host.startswith("www.")
+    )
+
+
 def same_origin(url: str, origin: str) -> bool:
-    parsed = urlparse(url)
-    return f"{parsed.scheme}://{parsed.netloc}" == origin
+    return url_origin(url) == origin
 
 
 def empty_discovery() -> dict:

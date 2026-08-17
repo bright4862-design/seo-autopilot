@@ -20,6 +20,7 @@ from app.scan_job import (
     already_terminal,
     has_authority_proof,
     identity_matches,
+    terminal_review_limitation,
 )
 
 
@@ -75,6 +76,41 @@ def test_authority_proof_must_be_64_lowercase_hex():
     assert has_authority_proof({"authority_proof": "a" * 65}) is False
     assert has_authority_proof({"authority_proof": ""}) is False
     assert has_authority_proof({}) is False
+
+
+def test_blocked_review_gets_truthful_access_limited_terminal_code():
+    limitation = terminal_review_limitation({
+        "release_gate_eligible": False,
+        "access_evidence_state": "blocked",
+        "review_confidence_state": "blocked_access_needs_verification",
+        "site_fingerprint": {
+            "blocked_or_429_pages": 1,
+            "classification": {"usable_pages": 0},
+        },
+    })
+    assert limitation is not None
+    assert limitation["code"] == "scan_access_limited_429"
+    assert "rate-limited or challenged" in limitation["detail"]
+
+
+def test_non_access_provisional_review_keeps_authority_predicate_path():
+    assert terminal_review_limitation({
+        "release_gate_eligible": False,
+        "score_is_provisional": True,
+        "review_confidence_state": "insufficient_discovery_quality",
+        "evidence_quality_blocking": True,
+        "site_fingerprint": {
+            "blocked_or_429_pages": 0,
+            "classification": {"usable_pages": 1},
+        },
+    }) is None
+
+
+def test_eligible_review_never_gets_terminal_limitation():
+    assert terminal_review_limitation({
+        "release_gate_eligible": True,
+        "access_evidence_state": "blocked",
+    }) is None
 
 
 # ----------------------------------------------------------------- auth ----

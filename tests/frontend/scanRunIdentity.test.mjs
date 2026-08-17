@@ -132,6 +132,10 @@ test("browser orphan recovery outlasts the complete durable worker envelope", ()
     "browser recovery must not terminalize a live Cloud Tasks worker",
   );
   assert.ok(
+    STANDARD_ORPHAN_RECOVERY_TTL_MS > 30 * 60 * 1000,
+    "legacy orphan recovery must outlast the server's 30-minute terminal deadline",
+  );
+  assert.ok(
     STANDARD_ORPHAN_RECOVERY_TTL_MS < STANDARD_ACTIVE_SCAN_TTL_MS,
     "orphan recovery should still precede the longer replay window",
   );

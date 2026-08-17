@@ -143,10 +143,26 @@ def evaluate_evidence_quality(payload: dict[str, Any]) -> dict[str, Any]:
         blocking = True
         reasons.append("no_usable_html_pages")
     elif usable_count == 1 and representative_count == 1 and _meaningful_root(representative[0]):
-        state = "small_site_supported"
-        discovery_state = "small_site_supported"
-        score = 85
-        reasons.append("meaningful_single_page_site")
+        crawl_timing = payload.get("crawl_timing") if isinstance(payload.get("crawl_timing"), dict) else {}
+        discovery_complete = bool(
+            _int(payload.get("pages_found")) == 1
+            and _int(payload.get("pages_crawled")) == 1
+            and crawl_timing.get("queue_exhausted") is True
+            and not crawl_timing.get("sitemap_budget_exhausted")
+            and not crawl_timing.get("sitemap_fetch_limit_reached")
+            and _int(crawl_timing.get("failed_fetch_count")) == 0
+        )
+        if discovery_complete:
+            state = "small_site_supported"
+            discovery_state = "small_site_supported"
+            score = 85
+            reasons.append("meaningful_single_page_site")
+        else:
+            state = "insufficient_discovery"
+            discovery_state = "single_page_inventory_unproven"
+            score = 35
+            blocking = True
+            reasons.extend(["single_page_inventory_unproven", "representative_html_pages_below_minimum"])
     elif (
         2 <= usable_count <= 6
         and default_count >= 2

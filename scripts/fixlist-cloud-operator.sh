@@ -131,7 +131,7 @@ verify_worker_routes() {
   # image name.
   echo
   echo "=== Build provenance ==="
-  release_sha=$(gcloud builds list --project="$GCP_PROJECT" --limit=50 \
+  release_sha=$(gcloud builds list --project="$GCP_PROJECT" --region="$GCP_REGION" --limit=50 \
     --format=json 2>/dev/null | python3 -c '
 import json,sys
 builds=json.load(sys.stdin)

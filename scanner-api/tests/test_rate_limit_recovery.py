@@ -55,10 +55,10 @@ async def test_single_429_activates_pacing_and_retries_once(mock_network, monkey
 @pytest.mark.asyncio
 async def test_cloudflare_shopify_profile_paces_before_first_429(mock_network, monkeypatch):
     origin = "https://paced-shop.example"
-    urls = [f"{origin}/shop/p{i}" for i in range(6)]
+    urls = [f"{origin}/p{i}" for i in range(6)]
     routes = {
-        f"{origin}/sitemap.xml": fx._xml(fx._sitemap([f"{origin}/shop", *urls])),
-        f"{origin}/shop": fx._html(fx._page("Shop")),
+        f"{origin}/sitemap.xml": fx._xml(fx._sitemap([f"{origin}/", *urls])),
+        f"{origin}/": fx._html(fx._page("Shop")),
         **{url: fx._html(fx._page(f"Product {index}")) for index, url in enumerate(urls)},
     }
     mock_network(routes)
@@ -83,8 +83,8 @@ async def test_cloudflare_shopify_profile_paces_before_first_429(mock_network, m
     monkeypatch.setattr(scanner, "RATE_LIMIT_REQUEST_INTERVAL_SECONDS", 0.005, raising=False)
 
     result = await scanner.run_scan(
-        f"{origin}/shop",
-        path_prefix="/shop",
+        f"{origin}/",
+        path_prefix=None,
         scan_mode="advanced",
         concurrency=8,
         timeout_seconds=120,

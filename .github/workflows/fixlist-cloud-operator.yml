@@ -130,7 +130,7 @@ jobs:
           CONFIRM: ${{ inputs.confirm }}
           TARGET_REVISION: ${{ inputs.revision }}
         shell: bash
-        run: ./scripts/fixlist-cloud-operator.sh
+        run: bash ./scripts/fixlist-cloud-operator.sh
 
       - name: Build isolated Standard 150 worker candidate
         if: inputs.operation == 'build-worker-candidate'

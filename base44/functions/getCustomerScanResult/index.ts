@@ -152,7 +152,7 @@ async function listCustomerScans({ serviceEntities, user, body }) {
   if (!projectId) throw new RequestProblem(400, "project_id_required", "Choose a website project to view saved scans.");
   await loadOwnedProject(serviceEntities.BusinessProject, projectId, user);
 
-  const limit = Math.min(Math.max(nonNegativeInteger(body?.limit) || 8, 1), 20);
+  const limit = Math.min(Math.max(nonNegativeInteger(body?.limit) || 3, 1), 3);
   let rows;
   try {
     const [owned, legacy] = await Promise.all([

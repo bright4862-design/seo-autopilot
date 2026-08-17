@@ -196,6 +196,16 @@ jobs:
           gcloud tasks queues describe "$CLOUD_TASKS_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --format='yaml(name,state,rateLimits,retryConfig)'
           echo "queue_exit=$?"
 
+          echo '=== DRAIN QUEUE ==='
+          gcloud tasks queues describe "$CLOUD_TASKS_DRAIN_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --format='yaml(name,state,rateLimits,retryConfig)'
+          echo "drain_queue_exit=$?"
+
+          echo '=== RECONCILER ==='
+          gcloud scheduler jobs describe fixlist-standard150-reconcile \
+            --project="$GCP_PROJECT" --location="$GCP_REGION" \
+            --format='yaml(name,state,schedule,httpTarget.uri,httpTarget.httpMethod,httpTarget.oidcToken.serviceAccountEmail,httpTarget.oidcToken.audience)'
+          echo "reconciler_exit=$?"
+
           echo '=== SIGNING SECRET ACCESS CHECK ==='
           TMP_DIR="$(mktemp -d)"
           gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > "$TMP_DIR/worker.json"

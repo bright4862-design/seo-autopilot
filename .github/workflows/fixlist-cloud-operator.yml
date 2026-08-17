@@ -271,3 +271,78 @@ jobs:
       - name: Run protected GCP-to-Base44 key synchronization
         shell: bash
         run: bash scripts/sync-base44-signing-key.sh
+
+  capacity-repair-once:
+    # One-shot recovery for the 2026-08-17 Standard 150 queue clamp incident.
+    # Remove this job after the resulting push run is inspected.
+    if: github.event_name == 'push'
+    name: Restore Standard 150 bounded concurrency
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact main commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Raise scan queue to three parallel workers
+        shell: bash
+        env:
+          TARGET_SCAN_CONCURRENCY: '3'
+          CONFIRM: SET-SCAN-CONCURRENCY-3
+        run: bash scripts/set-standard150-scan-concurrency.sh
+
+      - name: Inspect exact stuck scan task and drain queue
+        shell: bash
+        run: |
+          set +e
+          echo '=== EXACT SCAN TASK ==='
+          gcloud tasks describe standard150-6a830cb7ee4ca623fca6267f-a1 \
+            --queue="$CLOUD_TASKS_QUEUE" --location="$GCP_REGION" --project="$GCP_PROJECT" \
+            --format='yaml(name,scheduleTime,dispatchCount,responseCount,firstAttempt,lastAttempt)' 2>&1
+          echo "scan_task_describe_exit=$?"
+          echo
+          echo '=== DRAIN QUEUE ==='
+          gcloud tasks queues describe "$CLOUD_TASKS_DRAIN_QUEUE" \
+            --location="$GCP_REGION" --project="$GCP_PROJECT" \
+            --format='yaml(name,state,rateLimits,retryConfig)' 2>&1
+          echo "drain_queue_describe_exit=$?"
+
+      - name: Restore drain queue policy when authorized
+        shell: bash
+        env:
+          CONFIRM: SET-DRAIN-QUEUE-SAFE-BETA
+        run: bash scripts/set-standard150-drain-policy.sh
+
+      - name: Configure stale-scan reconciler when authorized
+        shell: bash
+        env:
+          CONFIRM: CONFIGURE-STANDARD150-RECONCILER
+          STANDARD150_RECONCILER_SCHEDULE: '*/5 * * * *'
+        run: bash scripts/configure-standard150-reconciler.sh
+
+      - name: Verify bounded capacity
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud tasks queues describe "$CLOUD_TASKS_QUEUE" \
+            --location="$GCP_REGION" --project="$GCP_PROJECT" \
+            --format='yaml(name,state,rateLimits,retryConfig)'
+          gcloud run services describe "$CLOUD_RUN_SERVICE" \
+            --region="$GCP_REGION" --project="$GCP_PROJECT" \
+            --format='yaml(status.latestReadyRevisionName,status.traffic,spec.template.spec.containerConcurrency,spec.template.metadata.annotations)'
+          bash scripts/verify-standard150-reconciler.sh

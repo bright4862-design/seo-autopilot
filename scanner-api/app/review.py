@@ -2556,7 +2556,12 @@ def is_failed_page(page: dict[str, Any]) -> bool:
 def is_blocked_access_page(page: dict[str, Any]) -> bool:
     status = int_or_zero(page.get("status_code") or page.get("status"))
     text = f"{page.get('fetch_error', '')} {page.get('title', '')} {page.get('content_type', '')}".lower()
-    return status == 429 or has_any(text, ["rate limit", "too many requests", "connection verification", "bot protection", "access denied", "cloudflare"])
+    evidence_class = page_evidence_class(page)
+    return (
+        status == 429
+        or (status in {401, 403} and evidence_class == "failed_access")
+        or has_any(text, ["rate limit", "too many requests", "connection verification", "bot protection", "access denied", "cloudflare"])
+    )
 
 
 def status_bucket_from_page(page: dict[str, Any]) -> str:

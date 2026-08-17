@@ -23,6 +23,12 @@ def payload(pages: list[dict]) -> dict:
         "pages_found": len(pages),
         "pages_crawled": len(pages),
         "crawled_pages": pages,
+        "crawl_timing": {
+            "queue_exhausted": True,
+            "sitemap_budget_exhausted": False,
+            "sitemap_fetch_limit_reached": False,
+            "failed_fetch_count": 0,
+        },
     }
 
 
@@ -77,6 +83,19 @@ def test_meaningful_one_page_site_remains_supported():
     assert result["evidence_quality_blocking"] is False
     assert result["scan_status"] == "complete"
     assert result["score_is_provisional"] is False
+
+
+def test_single_page_cannot_claim_small_site_when_discovery_is_unproven():
+    pages = [page("/", words=420, family="homepage", intent="money_or_conversion")]
+    collapsed = payload(pages)
+    collapsed["crawl_timing"]["queue_exhausted"] = False
+    result = apply_evidence_quality_gate(complete_result(), collapsed)
+    assert result["evidence_quality_state"] == "insufficient_discovery"
+    assert result["discovery_quality_state"] == "single_page_inventory_unproven"
+    assert result["evidence_quality_blocking"] is True
+    assert result["scan_status"] == "inconclusive_insufficient_evidence"
+    assert result["score_is_provisional"] is True
+    assert result["release_gate_eligible"] is False
 
 
 def test_small_brochure_site_without_default_route_dominance_remains_complete():

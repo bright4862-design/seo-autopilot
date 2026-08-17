@@ -272,21 +272,14 @@ jobs:
         shell: bash
         run: bash scripts/sync-base44-signing-key.sh
 
-  capacity-repair-once:
-    # One-shot recovery for the 2026-08-17 Standard 150 queue clamp incident.
-    # Remove this job after the resulting push run is inspected.
+  capacity-verify-once:
+    # One-shot binary verification for the 2026-08-17 Standard 150 capacity repair.
+    # Remove after the resulting push run is inspected.
     if: github.event_name == 'push'
-    name: Restore Standard 150 bounded concurrency
+    name: Verify Standard 150 bounded concurrency
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
-      - name: Checkout exact main commit
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
         with:
@@ -299,50 +292,26 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT }}
 
-      - name: Raise scan queue to three parallel workers
-        shell: bash
-        env:
-          TARGET_SCAN_CONCURRENCY: '3'
-          CONFIRM: SET-SCAN-CONCURRENCY-3
-        run: bash scripts/set-standard150-scan-concurrency.sh
-
-      - name: Inspect exact stuck scan task and drain queue
-        shell: bash
-        run: |
-          set +e
-          echo '=== EXACT SCAN TASK ==='
-          gcloud tasks describe standard150-6a830cb7ee4ca623fca6267f-a1 \
-            --queue="$CLOUD_TASKS_QUEUE" --location="$GCP_REGION" --project="$GCP_PROJECT" \
-            --format='yaml(name,scheduleTime,dispatchCount,responseCount,firstAttempt,lastAttempt)' 2>&1
-          echo "scan_task_describe_exit=$?"
-          echo
-          echo '=== DRAIN QUEUE ==='
-          gcloud tasks queues describe "$CLOUD_TASKS_DRAIN_QUEUE" \
-            --location="$GCP_REGION" --project="$GCP_PROJECT" \
-            --format='yaml(name,state,rateLimits,retryConfig)' 2>&1
-          echo "drain_queue_describe_exit=$?"
-
-      - name: Restore drain queue policy when authorized
-        shell: bash
-        env:
-          CONFIRM: SET-DRAIN-QUEUE-SAFE-BETA
-        run: bash scripts/set-standard150-drain-policy.sh
-
-      - name: Configure stale-scan reconciler when authorized
-        shell: bash
-        env:
-          CONFIRM: CONFIGURE-STANDARD150-RECONCILER
-          STANDARD150_RECONCILER_SCHEDULE: '*/5 * * * *'
-        run: bash scripts/configure-standard150-reconciler.sh
-
-      - name: Verify bounded capacity
+      - name: Require three-way queue capacity and horizontal worker scaling
         shell: bash
         run: |
           set -euo pipefail
-          gcloud tasks queues describe "$CLOUD_TASKS_QUEUE" \
-            --location="$GCP_REGION" --project="$GCP_PROJECT" \
-            --format='yaml(name,state,rateLimits,retryConfig)'
-          gcloud run services describe "$CLOUD_RUN_SERVICE" \
-            --region="$GCP_REGION" --project="$GCP_PROJECT" \
-            --format='yaml(status.latestReadyRevisionName,status.traffic,spec.template.spec.containerConcurrency,spec.template.metadata.annotations)'
-          bash scripts/verify-standard150-reconciler.sh
+          Q="$(mktemp)"; W="$(mktemp)"; trap 'rm -f "$Q" "$W"' EXIT
+          gcloud tasks queues describe "$CLOUD_TASKS_QUEUE" --location="$GCP_REGION" --project="$GCP_PROJECT" --format=json > "$Q"
+          gcloud run services describe "$CLOUD_RUN_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json > "$W"
+          python3 - "$Q" "$W" <<'PY2'
+          import json,sys
+          q=json.load(open(sys.argv[1])); w=json.load(open(sys.argv[2]))
+          rate=q.get('rateLimits') or {}
+          assert str(q.get('state') or '') == 'RUNNING', q.get('state')
+          assert int(rate.get('maxConcurrentDispatches') or 0) == 3, rate
+          assert float(rate.get('maxDispatchesPerSecond') or 0) == 3.0, rate
+          template=(w.get('spec') or {}).get('template') or {}
+          spec=template.get('spec') or {}
+          assert int(spec.get('containerConcurrency') or 0) == 1, spec.get('containerConcurrency')
+          max_scale=((template.get('metadata') or {}).get('annotations') or {}).get('autoscaling.knative.dev/maxScale')
+          assert max_scale is None or int(max_scale) >= 3, max_scale
+          traffic=(w.get('status') or {}).get('traffic') or []
+          assert any(str(t.get('revisionName') or '') == 'fixlist-standard150-worker-00011-v7m' and int(t.get('percent') or 0) == 100 for t in traffic), traffic
+          print('STANDARD150_CAPACITY_VERIFIED concurrency=3 worker_request_concurrency=1')
+          PY2

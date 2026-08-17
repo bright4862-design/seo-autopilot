@@ -48,3 +48,30 @@ def test_non_html_and_empty_200_are_not_usable():
     assert page_evidence_class(non_html) == "non_html"
     assert page_evidence_class(empty) == "incomplete_html"
     assert not ({finding["rule"] for finding in build_findings([non_html, empty])} & HTML_RULES)
+
+
+def test_access_denied_text_inside_storefront_script_does_not_block_valid_html():
+    html = """
+    <html>
+      <head>
+        <title>Jack's Surfboards</title>
+        <script type="application/json">
+          {"ipBlocker":{"title":{"text":"Access Denied"},"description":{"text":"The site owner may have set restrictions."}}}
+        </script>
+      </head>
+      <body><h1>Jack's Surfboards</h1><p>Shop surfboards and wetsuits.</p></body>
+    </html>
+    """
+    page = extracted(html, status=200, error="", content_type="text/html")
+    assert page_evidence_class(page) == "usable_html"
+
+
+def test_visible_access_denied_challenge_with_http_200_remains_failed_access():
+    html = """
+    <html>
+      <head><title>Access Denied</title></head>
+      <body><h1>Access Denied</h1><p>Please contact the site owner for access.</p></body>
+    </html>
+    """
+    page = extracted(html, status=200, error="", content_type="text/html")
+    assert page_evidence_class(page) == "failed_access"

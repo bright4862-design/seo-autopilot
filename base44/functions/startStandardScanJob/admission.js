@@ -1,32 +1,18 @@
-export const MAX_BETA_CUSTOMERS = 25;
-
-const USER_ID_PATTERN = /^[A-Za-z0-9_-]{3,128}$/;
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{8,180}$/;
 const TERMINAL_STATUSES = new Set(["complete", "limited", "failed", "cancelled"]);
 
 export function betaScanAdmissionPolicy() {
   if (String(Deno.env.get("BETA_SCAN_ADMISSION_ENABLED") || "").trim().toLowerCase() !== "true") {
-    return { ok: false, code: "scan_admission_paused", allowedUserIds: [] };
+    return { ok: false, code: "scan_admission_paused" };
   }
   const coordinatorUrl = String(Deno.env.get("SCAN_ADMISSION_COORDINATOR_URL") || "").trim();
   const signingKey = String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || "");
   if (!coordinatorUrl || !signingKey) {
-    return { ok: false, code: "scan_admission_configuration_invalid", allowedUserIds: [] };
+    return { ok: false, code: "scan_admission_configuration_invalid" };
   }
-  const allowedUserIds = Array.from(new Set(
-    String(Deno.env.get("BETA_COHORT_ALLOWED_USER_IDS") || "")
-      .split(/[\s,]+/)
-      .map((value) => value.trim())
-      .filter(Boolean),
-  ));
-  if (
-    allowedUserIds.length < 1
-    || allowedUserIds.length > MAX_BETA_CUSTOMERS
-    || allowedUserIds.some((userId) => !USER_ID_PATTERN.test(userId))
-  ) {
-    return { ok: false, code: "scan_admission_configuration_invalid", allowedUserIds: [] };
-  }
-  return { ok: true, code: "", allowedUserIds };
+  // Membership is entitlement-owned. An active owner-bound Access grant is the
+  // invitation; scan admission must not maintain a second static user list.
+  return { ok: true, code: "" };
 }
 
 export function normalizeAdmissionIdentity(value = {}) {

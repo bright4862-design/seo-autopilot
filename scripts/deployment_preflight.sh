@@ -40,6 +40,7 @@ ADMISSION_BOOTSTRAP="scripts/bootstrap-fixlist-admission-coordinator.sh"
 ADMISSION_DEPLOY="scripts/deploy_admission_coordinator.sh"
 BASE44_CONFIG="scripts/configure-base44-beta-admission.sh"
 BASE44_DEPLOY="scripts/deploy-base44-beta-functions.sh"
+BASE44_SITE_DEPLOY="scripts/deploy-base44-beta-site.sh"
 WORKER_STAGE="scripts/build-worker-candidate.sh"
 GATEWAY_DEPLOY="scripts/deploy_dispatch_gateway.sh"
 
@@ -85,6 +86,7 @@ need_file "$ADMISSION_BOOTSTRAP" "owner-only admission bootstrap present"
 need_file "$ADMISSION_DEPLOY" "admission coordinator deploy present"
 need_file "$BASE44_CONFIG" "Base44 disabled-first configurator present"
 need_file "$BASE44_DEPLOY" "six-function Base44 release deploy present"
+need_file "$BASE44_SITE_DEPLOY" "site-then-functions Base44 publish wrapper present"
 need_file "$WORKER_STAGE" "zero-traffic worker staging script present"
 if [ -f "$ADMISSION_BOOTSTRAP" ]; then
   has 'BOOTSTRAP-ADMISSION-INFRA' "$ADMISSION_BOOTSTRAP" && pass "admission bootstrap confirmation-gated" || fail "admission bootstrap is not confirmation-gated"
@@ -97,6 +99,14 @@ fi
 if [ -f "$BASE44_DEPLOY" ]; then
   if grep -Fq 'functions deploy "${FUNCTIONS[@]}"' "$BASE44_DEPLOY"; then pass "Base44 deploy names an explicit function list"; else fail "Base44 deploy is not explicit"; fi
   if grep -q 'entities[[:space:]]\+push\|site[[:space:]]\+deploy\|--force' "$BASE44_DEPLOY"; then fail "Base44 release deploy contains a broad/destructive command"; else pass "Base44 release deploy excludes entity/site reconciliation"; fi
+fi
+if [ -f "$BASE44_SITE_DEPLOY" ]; then
+  SITE_LINE="$(grep -n 'site deploy --no-build --yes' "$BASE44_SITE_DEPLOY" | head -1 | cut -d: -f1)"
+  FUNCTIONS_LINE="$(grep -n 'deploy-base44-beta-functions.sh' "$BASE44_SITE_DEPLOY" | tail -1 | cut -d: -f1)"
+  HISTORY_LINE="$(grep -n 'functions deploy deleteCustomerScanData' "$BASE44_SITE_DEPLOY" | tail -1 | cut -d: -f1)"
+  if [ -n "$SITE_LINE" ] && [ -n "$FUNCTIONS_LINE" ] && [ "$FUNCTIONS_LINE" -gt "$SITE_LINE" ]; then pass "Base44 site publish restores canonical release functions afterwards"; else fail "Base44 site publish order can leave release functions stripped"; fi
+  if [ -n "$HISTORY_LINE" ] && [ "$HISTORY_LINE" -gt "$FUNCTIONS_LINE" ]; then pass "Base44 site publish restores customer history function last"; else fail "Base44 history function is not restored after site reconciliation"; fi
+  if grep -q -- '--force\|entities[[:space:]]\+push' "$BASE44_SITE_DEPLOY"; then fail "Base44 site wrapper contains a broad/destructive command"; else pass "Base44 site wrapper avoids force/entity reconciliation"; fi
 fi
 if [ -f "$WORKER_STAGE" ]; then
   has '--service-account="$BUILD_SA_RESOURCE"' "$WORKER_STAGE" && pass "worker build submission pins build SA" || fail "worker build SA not explicit"

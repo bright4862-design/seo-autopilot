@@ -72,9 +72,16 @@ SITEMAP_DISCOVERY_LIMIT = 5000
 RATE_LIMIT_COOLDOWN_SECONDS = 3.0
 RATE_LIMIT_REQUEST_INTERVAL_SECONDS = 0.5
 RATE_LIMIT_PROACTIVE_REQUEST_INTERVAL_SECONDS = 1.0
+RATE_LIMIT_INITIAL_COOLDOWN_SECONDS = 30.0
 RATE_LIMIT_BACKOFF_INTERVAL_SECONDS = 2.5
 RATE_LIMIT_MAX_INTERVAL_SECONDS = 4.0
 RATE_LIMIT_MAX_RETRIES = 8
+
+
+def is_cloudflare_rate_limited_response(response) -> bool:
+    if response is None or int(getattr(response, "status_code", 0) or 0) != 429:
+        return False
+    return "cloudflare" in str(response.headers.get("server", "")).lower()
 
 
 def detect_rate_limit_profile(response) -> str:

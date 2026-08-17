@@ -60,6 +60,30 @@ def test_blocked_crawl_from_page_evidence_is_capped():
     assert result["site_fingerprint"]["blocked_or_429_pages"] == 1
 
 
+def test_failed_access_403_is_classified_as_blocked_access_not_generic_insufficient_evidence():
+    for title in ("ERROR: The request could not be satisfied", "Just a moment..."):
+        result = run_review({
+            "website_url": "https://blocked.example",
+            "pages": [{
+                "final_url": "https://blocked.example/",
+                "status_code": 403,
+                "content_type": "text/html",
+                "page_evidence_class": "failed_access",
+                "title": title,
+            }],
+            "scan_coverage": {"pages_found": 1, "pages_crawled": 1, "sampled_pages_sent_to_ai": 1},
+        })
+
+        assert result["scan_status"] == "blocked_or_incomplete"
+        assert result["website_health_report"]["health_grade"] == "Blocked / incomplete"
+        assert result["access_evidence_state"] == "blocked"
+        assert result["review_confidence_state"] == "blocked_access_needs_verification"
+        assert result["release_gate_eligible"] is False
+        assert result["score_is_provisional"] is True
+        assert result["site_fingerprint"]["blocked_access_pages"] == 1
+        assert result["site_fingerprint"]["blocked_or_429_pages"] == 1
+
+
 def test_metadata_only_block_is_flagged():
     result = run_review({
         "website_url": "https://x.com",

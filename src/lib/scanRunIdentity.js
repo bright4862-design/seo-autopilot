@@ -1,17 +1,18 @@
 export const ACTIVE_SCAN_RUN_STATUSES = new Set(["queued", "crawling", "reviewing"]);
 export const STANDARD_SCAN_MODE = "standard_150";
 
-// The Standard durable worker can spend up to 210 seconds crawling and another
-// 60 seconds reviewing/persisting. Ten minutes remains the conservative replay
-// window, leaving room for queue delivery and cold-start delay without letting
-// abandoned rows block later scans indefinitely.
-export const STANDARD_ACTIVE_SCAN_TTL_MS = 10 * 60 * 1000;
+// The server reconciliation/drain path owns terminal recovery and can keep a
+// legitimate durable attempt alive for up to 30 minutes. Any client/replay
+// staleness threshold must outlast that full server envelope so a slow but live
+// worker can never be treated as abandoned. Forty minutes leaves explicit
+// queue/cold-start headroom beyond the 1800-second terminal deadline.
+export const STANDARD_ACTIVE_SCAN_TTL_MS = 40 * 60 * 1000;
 
-// Browser recovery must never fail a live durable worker. Eight minutes is
-// deliberately above the complete 270-second worker envelope and leaves extra
-// dispatch/cold-start headroom. It still closes genuinely abandoned rows before
-// the longer replay TTL above.
-export const STANDARD_ORPHAN_RECOVERY_TTL_MS = 8 * 60 * 1000;
+// Legacy browser recovery is intentionally unreachable from customer pages,
+// but its threshold is still kept safe in case the helper is reused. It must
+// outlast the full 30-minute server envelope while remaining below the replay
+// TTL above.
+export const STANDARD_ORPHAN_RECOVERY_TTL_MS = 35 * 60 * 1000;
 
 export class ScanRunConflictError extends Error {
   constructor(message = "This scan request key was already used for a different scan.") {

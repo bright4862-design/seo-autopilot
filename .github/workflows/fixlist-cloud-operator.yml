@@ -201,6 +201,16 @@ jobs:
           gcloud tasks list --queue="$CLOUD_TASKS_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --limit=20 --format='table(name.basename(),scheduleTime,dispatchCount,responseCount,lastAttempt.responseStatus.code)'
           echo "tasks_list_exit=$?"
 
+          echo '=== EXACT ACTIVE TASKS ==='
+          for TASK in \
+            standard150-6a8362b378d9c0ad578373db-a1 \
+            standard150-6a8363b819106960d205550d-a1 \
+            standard150-6a8363d1762f91317dcd1b53-a1; do
+            echo "--- $TASK ---"
+            gcloud tasks describe "$TASK" --queue="$CLOUD_TASKS_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --format='yaml(name,scheduleTime,dispatchCount,responseCount,firstAttempt,lastAttempt)'
+            echo "task_describe_exit=$?"
+          done
+
           echo '=== DRAIN QUEUE ==='
           gcloud tasks queues describe "$CLOUD_TASKS_DRAIN_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --format='yaml(name,state,rateLimits,retryConfig)'
           echo "drain_queue_exit=$?"

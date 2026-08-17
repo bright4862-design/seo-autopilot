@@ -264,7 +264,7 @@ export default function FixList() {
         // Keep only the three newest saved scans for this website.
         await pruneScanHistory(project.id);
         if (cancelled) return;
-        const historyResult = await listScanRuns(project.id, 8);
+        const historyResult = await listScanRuns(project.id, 3);
         if (cancelled) return;
         if (historyResult?.ok !== true) {
           const failure = historyResult?.ok === false

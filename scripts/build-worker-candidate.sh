@@ -14,11 +14,20 @@ SOURCE_SHA="$FIXLIST_EXACT_SOURCE_SHA"
 
 gcloud config set project "$PROJECT" >/dev/null
 
-WORKER_JSON="$(mktemp)"; REVISIONS_JSON="$(mktemp)"; trap 'rm -f "$WORKER_JSON" "$REVISIONS_JSON"' EXIT
+WORKER_JSON="$(mktemp)"
+REVISIONS_JSON="$(mktemp)"
+SERVICE_JSON="$(mktemp)"
+BUILD_CONTEXT="$(mktemp -d)"
+cleanup() {
+  rm -f "$WORKER_JSON" "$REVISIONS_JSON" "$SERVICE_JSON"
+  rm -rf "$BUILD_CONTEXT"
+}
+trap cleanup EXIT
+
 gcloud run services describe "$WORKER" --project="$PROJECT" --region="$REGION" --format=json > "$WORKER_JSON"
 
 readarray -t VALUES < <(python3 - "$WORKER_JSON" <<'PY'
-import json,sys,re
+import json,sys
 v=json.load(open(sys.argv[1])); spec=v.get('spec',{}).get('template',{}).get('spec',{}); c=(spec.get('containers') or [{}])[0]
 image=str(c.get('image') or '')
 if not image: raise SystemExit('worker image missing')
@@ -47,10 +56,16 @@ gcloud iam service-accounts describe "$BUILD_SA_EMAIL" --project="$PROJECT" >/de
 printf 'worker=%s\nimage=%s\nruntime_sa=%s\ninvoker_sa=%s\nbuild_sa=%s\nsource_sha=%s\n' \
   "$WORKER" "$IMAGE" "$RUNTIME_SA" "$INVOKER_SA" "$BUILD_SA_EMAIL" "$SOURCE_SHA"
 
-gcloud builds submit "$REPO_ROOT" \
+# Submit only a clean archive of the exact verified commit. The generated stamp
+# is provenance metadata consumed by cloudbuild.durable-worker.yaml and is not
+# copied into the worker image.
+git -C "$REPO_ROOT" archive --format=tar "$SOURCE_SHA" | tar -xf - -C "$BUILD_CONTEXT"
+printf '%s\n' "$SOURCE_SHA" > "$BUILD_CONTEXT/.fixlist-source-sha"
+
+gcloud builds submit "$BUILD_CONTEXT" \
   --project="$PROJECT" \
   --region="$REGION" \
-  --config="$REPO_ROOT/cloudbuild.durable-worker.yaml" \
+  --config="$BUILD_CONTEXT/cloudbuild.durable-worker.yaml" \
   --service-account="$BUILD_SA_RESOURCE" \
   --substitutions="_RELEASE_SHA=$SOURCE_SHA,_WORKER_SERVICE=$WORKER,_REGION=$REGION,_IMAGE=$IMAGE,_RUNTIME_SA=$RUNTIME_SA,_INVOKER_SA=$INVOKER_SA,_BASE44_APP_ID=$BASE44_APP,_BASE44_API_URL=$BASE44_API,_SIGNING_KEY_SECRET=$SIGNING_SECRET,_SIGNING_KEY_VERSION=$SIGNING_VERSION"
 
@@ -79,7 +94,6 @@ ready=next((x for x in conds if x.get('type')=='Ready'),{})
 if str(ready.get('status') or '').lower()!='true': raise SystemExit('candidate revision is not Ready')
 PY
 
-SERVICE_JSON="$(mktemp)"; trap 'rm -f "$WORKER_JSON" "$REVISIONS_JSON" "$SERVICE_JSON"' EXIT
 gcloud run services describe "$WORKER" --project="$PROJECT" --region="$REGION" --format=json > "$SERVICE_JSON"
 python3 - "$SERVICE_JSON" "$CANDIDATE" <<'PY'
 import json,sys

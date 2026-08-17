@@ -12,12 +12,13 @@ fi
 
 verify_url() {
   local url="$1"
-  local html
-  html="$(curl --fail --silent --show-error --max-time 30 \
+  local body expected
+  expected="{\"source_sha\":\"${EXPECTED_SOURCE_SHA}\"}"
+  body="$(curl --fail --silent --show-error --max-time 30 \
     -H 'Cache-Control: no-cache' \
     -H 'Pragma: no-cache' \
-    "${url}?fixlist_release_verify=${EXPECTED_SOURCE_SHA}")"
-  if ! grep -Fq "<meta name=\"fixlist-source-sha\" content=\"${EXPECTED_SOURCE_SHA}\"" <<<"$html"; then
+    "${url%/}/fixlist-release.json?fixlist_release_verify=${EXPECTED_SOURCE_SHA}")"
+  if [[ "$body" != "$expected" ]]; then
     echo "SITE SOURCE SHA MISMATCH: $url" >&2
     return 1
   fi

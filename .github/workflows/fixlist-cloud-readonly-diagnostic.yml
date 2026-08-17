@@ -1,4 +1,5 @@
 name: FixList Cloud Readonly Diagnostic
+# diagnostic refresh: 2026-08-17T19:43Z
 
 on:
   push:

@@ -24,7 +24,7 @@ fixlist_install_base44_cli "$TMP"
 "$FIXLIST_BASE44_CLI" login
 
 cd "$REPO_ROOT"
-npm run build
+VITE_FIXLIST_SOURCE_SHA="$SOURCE_SHA" npm run build
 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" site deploy --no-build --yes
 
 # Site publication comes first. Re-establish the canonical six-function
@@ -53,5 +53,7 @@ do
     exit 2
   }
 done
+
+EXPECTED_SOURCE_SHA="$SOURCE_SHA" bash "$REPO_ROOT/scripts/verify-base44-site.sh"
 
 printf 'BASE44_SITE_AND_BACKEND_DEPLOYED\nsource_sha=%s\n' "$SOURCE_SHA"

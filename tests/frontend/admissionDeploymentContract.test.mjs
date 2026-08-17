@@ -97,7 +97,9 @@ test("worker candidate is exact-SHA, explicit-build-SA, private and zero-traffic
   assert.match(workerCandidate, /candidate unexpectedly receives traffic/);
   assert.match(workerBuild, /--no-traffic/);
   assert.match(workerBuild, /--concurrency=1/);
-  assert.match(workerBuild, /--max-instances=20/);
+  // Must stay strictly above the queue's maxConcurrentDispatches so the
+  // Cloud Tasks limiter, not the instance ceiling, is what caps concurrency.
+  assert.match(workerBuild, /--max-instances=40/);
   assert.match(workerBuild, /FIXLIST_WORKER_SOURCE_SHA=\$\{_RELEASE_SHA\}/);
   assert.match(workerMain, /FIXLIST_WORKER_SOURCE_SHA/);
   assert.match(workerMain, /"source_sha": WORKER_SOURCE_SHA/);

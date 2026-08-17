@@ -47,8 +47,24 @@ Supplied by `cloudbuild.durable-worker.yaml`.
 | auth | `--no-allow-unauthenticated` | **Load-bearing.** `require_cloud_tasks_oidc()` verifies neither signature nor `aud`; it only compares the `email` claim of a base64-decoded payload. Cloud Run IAM performs the real token validation. On a public service this check is trivially forgeable. |
 | runtime identity | `--service-account=<_RUNTIME_SA>` | Otherwise inherits the over-privileged default compute SA. |
 | `--timeout` | `480` | Must match `dispatchDeadline: "480s"` in `cloudTasks.js` and outlast crawl, review, signed control reads, and persistence. |
-| `--concurrency` | `1` | One durable job per instance. |
+| `--concurrency` | `1` | One durable job per instance. Never raise this: parallel scans must scale horizontally, not share a Python process. |
+| `--max-instances` | `40` | Must stay **strictly above** the queue's `maxConcurrentDispatches` so the Cloud Tasks limiter is the single control point for how many scans run at once. If the two were equal, ordinary instance churn would make Cloud Run reject dispatches before the queue throttled, and those 429s would read as scan failures rather than backpressure. `scripts/set-standard150-scan-concurrency.sh` refuses any target above the live ceiling. |
 | `--no-traffic` | set | New revision takes 0%; promotion is a separate human decision. |
+
+### Scan capacity — two independent limits
+
+| Limit | Where enforced | Current value |
+|---|---|---|
+| Membership | `evaluatePaidAccess()` — an active `Access` grant | unbounded; 100+ members supported |
+| Concurrent scans, all owners | Cloud Tasks `maxConcurrentDispatches` | ramp target 30 |
+| Concurrent scans, one owner | Firestore coordinator, one document per owner | 1 |
+| Worker instance ceiling | Cloud Run `--max-instances` | 40 |
+
+Raising throughput means moving the queue and the worker ceiling **together**, in
+that order: rebuild and promote the worker first, then raise the queue. The ramp
+script enforces the ordering by refusing a queue target the live worker cannot
+serve. Rungs are discrete — `1, 3, 5, 10, 20, 30` — so each step is observable
+and attributable.
 
 ---
 
@@ -65,7 +81,7 @@ Base44-hosted. Supplied through Base44 function environment, **not** Cloud Build
 | `SCAN_DISPATCH_GATEWAY_URL` | **required for keyless dispatch** | `cloudTasks.js` `createTask()` | Unset selects the key-based route below. Set, it is the only enqueue path. |
 | `SCAN_EVIDENCE_SIGNING_KEY` | **required with the gateway** | `cloudTasks.js` `createTaskViaGateway()` | `dispatch_gateway_signing_key_missing`. Fail-closed before any network call. |
 | `BETA_SCAN_ADMISSION_ENABLED` | **required; default-off** | `admission.js`, package-local `admissionClient.js` | Any value other than exact `true` refuses new admission. No ScanRun is created. |
-| `BETA_COHORT_ALLOWED_USER_IDS` | **required when admission is enabled** | `admission.js` | Must contain 1–25 unique exact Base44 user IDs. Missing, malformed, or oversized cohorts fail closed. |
+| `BETA_COHORT_ALLOWED_USER_IDS` | **retired for scan admission; no longer read** | — | `admission.js` no longer reads it and setting it has no effect on scanning. Entitlement is the invitation: `evaluatePaidAccess()` accepts `stripe_checkout`, `owner_test` and `manual_grant`, each requiring an active grant bound to the caller's own id and email, and `Access` is admin-only for create/update/delete. **`createAccessCheckout` still reads its own separate copy of this variable as a purchase-seat cap** — that is a different gate and is unchanged. |
 | `SCAN_ADMISSION_COORDINATOR_URL` | **required when admission is enabled** | package-local `admissionClient.js` | Admission fails closed; no new ScanRun is created or bound. |
 | `GCP_SERVICE_ACCOUNT_KEY` | **required only without the gateway** | `cloudTasks.js` `accessToken()` | `tasks_credentials_not_configured`. Distinct from a malformed key, which yields a `tasks_key_*` code, or `tasks_token_mint_failed` when the cause is not recognised. |
 

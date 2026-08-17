@@ -8,10 +8,13 @@ WORKER="${CLOUD_RUN_SERVICE:-fixlist-standard150-worker}"
 TARGET="${TARGET_SCAN_CONCURRENCY:-}"
 CONFIRM="${CONFIRM:-}"
 
+# Discrete rungs only. An arbitrary integer would let a typo take production
+# from 3 to 300, and the ramp is meant to be walked one observable step at a
+# time.
 case "$TARGET" in
-  1|3|5|10) ;;
+  1|3|5|10|20|30) ;;
   *)
-    echo "Refusing scan concurrency change: TARGET_SCAN_CONCURRENCY must be exactly 1, 3, 5, or 10." >&2
+    echo "Refusing scan concurrency change: TARGET_SCAN_CONCURRENCY must be exactly 1, 3, 5, 10, 20, or 30." >&2
     exit 2
     ;;
 esac
@@ -31,9 +34,10 @@ trap 'rm -f "$WORKER_JSON" "$QUEUE_JSON"' EXIT
 gcloud run services describe "$WORKER" \
   --project="$PROJECT" --region="$REGION" --format=json > "$WORKER_JSON"
 
-python3 - "$WORKER_JSON" <<'PY'
+python3 - "$WORKER_JSON" "$TARGET" <<'PY'
 import json,sys
 service=json.load(open(sys.argv[1]))
+target=int(sys.argv[2])
 template=(service.get("spec") or {}).get("template") or {}
 spec=template.get("spec") or {}
 containers=spec.get("containers") or []
@@ -42,10 +46,21 @@ if not containers:
 concurrency=spec.get("containerConcurrency")
 if int(concurrency or 0) != 1:
     raise SystemExit(f"Refusing: worker concurrency must remain 1; observed {concurrency!r}")
+
+# The matched pair, enforced mechanically. Queue concurrency may never exceed
+# what the worker can actually serve -- otherwise Cloud Tasks dispatches scans
+# Cloud Run has no instance for, and the overflow returns 429 to the queue and
+# reads as scan failure instead of backpressure. Checked against this exact
+# TARGET rather than a fixed floor, so the invariant holds at every rung.
 max_instances=((template.get("metadata") or {}).get("annotations") or {}).get("autoscaling.knative.dev/maxScale")
-if max_instances is not None and int(max_instances) < 10:
-    raise SystemExit(f"Refusing: worker max instances {max_instances} is below the 10-scan ramp target")
-print("Worker invariant verified: concurrency=1 and horizontal scale headroom is sufficient.")
+if max_instances is None:
+    raise SystemExit("Refusing: worker maxScale annotation is absent; cannot prove it can serve this concurrency")
+if int(max_instances) < target:
+    raise SystemExit(
+        f"Refusing: worker max instances {max_instances} cannot serve {target} concurrent scans. "
+        f"Raise the worker instance ceiling in cloudbuild.durable-worker.yaml and rebuild first."
+    )
+print(f"Worker invariant verified: concurrency=1, maxScale={max_instances} >= target {target}.")
 PY
 
 gcloud tasks queues describe "$QUEUE" \

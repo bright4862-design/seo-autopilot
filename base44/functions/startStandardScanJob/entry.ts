@@ -161,17 +161,9 @@ export default async function (req: Request): Promise<Response> {
           ...identity.fields,
         }, 503);
       }
-      if (!policy.allowedUserIds.includes(String(user.id))) {
-        return jsonResponse({
-          success: false,
-          accepted: false,
-          version: VERSION,
-          retryable: false,
-          failure_code: "scan_not_invited",
-          error: "This Standard 150 beta cohort is invite-only.",
-          ...identity.fields,
-        }, 403);
-      }
+      // No cohort allowlist. Entitlement is the invitation -- loadPaidEntitlement
+      // below is the identity gate, and it fails closed with 402 for anyone
+      // without an active grant bound to their own id and email.
 
       const project = await loadExactOwnedProject({
         base44,

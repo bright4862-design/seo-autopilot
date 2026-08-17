@@ -101,15 +101,17 @@ if [ -f "$BASE44_DEPLOY" ]; then
   if grep -q 'entities[[:space:]]\+push\|site[[:space:]]\+deploy\|--force' "$BASE44_DEPLOY"; then fail "Base44 release deploy contains a broad/destructive command"; else pass "Base44 release deploy excludes entity/site reconciliation"; fi
 fi
 if [ -f "$BASE44_SITE_DEPLOY" ]; then
-  STAMP_LINE="$(grep -n 'dist/fixlist-release.json' "$BASE44_SITE_DEPLOY" | head -1 | cut -d: -f1)"
+  AUTH_LINE="$(grep -n '"$FIXLIST_BASE44_CLI" whoami' "$BASE44_SITE_DEPLOY" | head -1 | cut -d: -f1)"
+  BUILD_LINE="$(grep -n 'VITE_FIXLIST_SOURCE_SHA="$SOURCE_SHA" npm run build' "$BASE44_SITE_DEPLOY" | head -1 | cut -d: -f1)"
   SITE_LINE="$(grep -n 'site deploy --no-build --yes' "$BASE44_SITE_DEPLOY" | head -1 | cut -d: -f1)"
   FUNCTIONS_LINE="$(grep -n 'functions deploy "${FUNCTIONS\[@\]}"' "$BASE44_SITE_DEPLOY" | tail -1 | cut -d: -f1)"
   VERIFY_LINE="$(grep -n 'verify-base44-site.sh' "$BASE44_SITE_DEPLOY" | tail -1 | cut -d: -f1)"
-  LOGIN_COUNT="$(grep -c '"$FIXLIST_BASE44_CLI" login' "$BASE44_SITE_DEPLOY" || true)"
-  if [ -n "$STAMP_LINE" ] && [ -n "$SITE_LINE" ] && [ "$STAMP_LINE" -lt "$SITE_LINE" ]; then pass "Base44 site build stamps exact source before publish"; else fail "Base44 site source stamp is missing or too late"; fi
+  WHOAMI_COUNT="$(grep -c '"$FIXLIST_BASE44_CLI" whoami' "$BASE44_SITE_DEPLOY" || true)"
+  if [ -n "$AUTH_LINE" ] && [ -n "$BUILD_LINE" ] && [ "$AUTH_LINE" -lt "$BUILD_LINE" ]; then pass "Base44 site publish verifies auth non-interactively"; else fail "Base44 site publish auth check is missing or interactive"; fi
+  if [ -n "$BUILD_LINE" ] && [ -n "$SITE_LINE" ] && [ "$BUILD_LINE" -lt "$SITE_LINE" ]; then pass "Base44 site build compiles exact source SHA before publish"; else fail "Base44 site source binding is missing or too late"; fi
   if [ -n "$SITE_LINE" ] && [ -n "$FUNCTIONS_LINE" ] && [ "$FUNCTIONS_LINE" -gt "$SITE_LINE" ]; then pass "Base44 site publish restores release functions afterwards"; else fail "Base44 site publish order can leave release functions stripped"; fi
   if [ -n "$VERIFY_LINE" ] && [ "$VERIFY_LINE" -gt "$FUNCTIONS_LINE" ]; then pass "Base44 public source verification runs after backend restoration"; else fail "Base44 site source verification is missing or premature"; fi
-  if [ "$LOGIN_COUNT" = "1" ]; then pass "Base44 site publish uses one authenticated CLI session"; else fail "Base44 site publish can stall on nested CLI login"; fi
+  if [ "$WHOAMI_COUNT" = "1" ] && ! grep -q '"$FIXLIST_BASE44_CLI" login' "$BASE44_SITE_DEPLOY"; then pass "Base44 site publish avoids interactive login"; else fail "Base44 site publish can stall on interactive login"; fi
   if grep -q -- 'deploy-base44-beta-functions\.sh\|--force\|entities[[:space:]]\+push' "$BASE44_SITE_DEPLOY"; then fail "Base44 site wrapper contains nested/broad reconciliation"; else pass "Base44 site wrapper avoids nested/broad reconciliation"; fi
 fi
 if [ -f "$WORKER_STAGE" ]; then

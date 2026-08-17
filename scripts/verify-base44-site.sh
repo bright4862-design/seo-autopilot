@@ -12,17 +12,25 @@ fi
 
 verify_url() {
   local url="$1"
-  local body expected
-  expected="{\"source_sha\":\"${EXPECTED_SOURCE_SHA}\"}"
-  body="$(curl --fail --silent --show-error --max-time 30 \
+  local html asset bundle
+  html="$(curl --fail --silent --show-error --max-time 30 \
     -H 'Cache-Control: no-cache' \
     -H 'Pragma: no-cache' \
-    "${url%/}/fixlist-release.json?fixlist_release_verify=${EXPECTED_SOURCE_SHA}")"
-  if [[ "$body" != "$expected" ]]; then
-    echo "SITE SOURCE SHA MISMATCH: $url" >&2
+    "${url%/}/?fixlist_release_verify=${EXPECTED_SOURCE_SHA}")"
+  asset="$(grep -oE '/assets/index-[A-Za-z0-9_-]+\.js' <<<"$html" | head -1)"
+  if [[ -z "$asset" ]]; then
+    echo "SITE BUNDLE NOT FOUND: $url" >&2
     return 1
   fi
-  printf 'SITE_SOURCE_SHA_VERIFIED %s\n' "$url"
+  bundle="$(curl --fail --silent --show-error --max-time 30 \
+    -H 'Cache-Control: no-cache' \
+    -H 'Pragma: no-cache' \
+    "${url%/}${asset}?fixlist_release_verify=${EXPECTED_SOURCE_SHA}")"
+  if ! grep -Fq "$EXPECTED_SOURCE_SHA" <<<"$bundle"; then
+    echo "SITE SOURCE SHA MISMATCH: $url$asset" >&2
+    return 1
+  fi
+  printf 'SITE_SOURCE_SHA_VERIFIED %s%s\n' "$url" "$asset"
 }
 
 verify_url "$PUBLIC_URL"

@@ -83,12 +83,15 @@ test("Base44 release deploy names exactly six functions and never reconciles ent
 });
 
 test("Base44 site publication restores the durable backend after the site deploy", () => {
+  const stampIndex = deploySite.indexOf('dist/fixlist-release.json');
   const siteIndex = deploySite.indexOf('site deploy --no-build --yes');
-  const functionsIndex = deploySite.indexOf('deploy-base44-beta-functions.sh');
-  const historyIndex = deploySite.indexOf('functions deploy deleteCustomerScanData');
+  const functionsIndex = deploySite.indexOf('functions deploy "${FUNCTIONS[@]}"');
+  const verifyIndex = deploySite.indexOf('verify-base44-site.sh');
+  assert.ok(stampIndex >= 0 && stampIndex < siteIndex, "source stamp must be written before the site deploy");
   assert.ok(siteIndex >= 0, "missing Base44 site deployment");
-  assert.ok(functionsIndex > siteIndex, "canonical release functions must deploy after the site");
-  assert.ok(historyIndex > functionsIndex, "history function must be restored after canonical release functions");
+  assert.ok(functionsIndex > siteIndex, "release functions must deploy after the site");
+  assert.ok(verifyIndex > functionsIndex, "public source verification must run after backend restoration");
+  assert.equal((deploySite.match(/\"\$FIXLIST_BASE44_CLI\" login/g) || []).length, 1, "site publish must use one CLI login");
   for (const required of [
     "startStandardScanJob",
     "durableScanWorkerControl",
@@ -98,7 +101,7 @@ test("Base44 site publication restores the durable backend after the site deploy
     "stripeWebhook",
     "deleteCustomerScanData",
   ]) assert.match(deploySite, new RegExp(`\\b${required}\\b`));
-  assert.doesNotMatch(deploySite, /--force|entities\s+push/);
+  assert.doesNotMatch(deploySite, /deploy-base44-beta-functions\.sh|--force|entities\s+push/);
 });
 
 test("release Base44 CLI is version and digest pinned before login or deployment", () => {

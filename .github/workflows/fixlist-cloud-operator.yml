@@ -4,6 +4,7 @@ name: FixList Cloud Operator
 # This exact workflow path is pinned by the Google WIF provider condition.
 # Protected key-sync trigger: 2026-08-13T13:20Z
 # Read-only reconciler diagnostic trigger: 2026-08-17T16:12Z
+# Read-only reconciler diagnostic rerun: 2026-08-17T16:38Z
 
 on:
   workflow_dispatch:

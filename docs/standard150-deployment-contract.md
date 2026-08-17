@@ -102,6 +102,15 @@ authenticates the customer, verifies exactly one active paid owner-bound Access
 record, creates the delayed attempt-bound watchdog task, creates the immediate
 worker task, and returns.
 
+The drain watchdog is also the per-scan stale-queue safety net. It starts after
+10 minutes and retries on the independent drain queue. A still-`queued` exact
+attempt is never failed before 30 minutes from `queued_at`; after that full
+queue safety window `/scan-job-drain` may write `scan_queue_drain_timeout` and
+release the server admission. A started attempt keeps the separate 30-minute
+worker-runtime deadline anchored to `started_at`. Cloud Scheduler reconciliation
+remains a secondary fleet-wide backstop rather than the only mechanism capable
+of releasing a scan that never reached a worker.
+
 ## Component C — authority persistence and customer result projection
 
 | Variable | Class | Code reader | Missing-value failure mode |

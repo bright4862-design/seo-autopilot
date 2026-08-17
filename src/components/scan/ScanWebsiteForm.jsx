@@ -9,7 +9,7 @@ import { ensureScanProject } from "@/lib/activeProject";
 import { normalizeActionPriority, normalizeFindingEvidence, normalizeReviewEvidenceState, normalizeReviewScope, selectFinalReviewFixes } from "@/lib/reviewContract";
 import { RELEASE_AUTHORITY_CONTRACT, buildAuthorityMarkers, buildScanRunFields } from "@/lib/scanRunModel";
 import { createScanRequestId, normalizedScanDomain, scanReleaseIdentity } from "@/lib/scanRunIdentity";
-import { getScanRunWithFixList, recoverOrphanedScanRuns } from "@/lib/scanRuns";
+import { getScanRunWithFixList } from "@/lib/scanRuns";
 import { UNLOCK_PRICE_LABEL, loadAccess } from "@/lib/access";
 import { trackEvent } from "@/lib/analytics";
 import {
@@ -97,14 +97,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
     }, 1000);
     return () => window.clearInterval(timer);
   }, [isLoading]);
-
-  // A scan the browser abandoned mid-flight stays "active" forever on its own
-  // and holds this account's admission lease, which refuses every new scan.
-  // Sweeping on form load closes those rows before the customer can be told
-  // that another scan is already running.
-  useEffect(() => {
-    recoverOrphanedScanRuns({ projectId: project?.id || "" });
-  }, [project?.id]);
 
   // A durable terminal failure always stops the spinner, even when the pending
   // function call never returns an error to this component.

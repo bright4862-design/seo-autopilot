@@ -197,6 +197,10 @@ jobs:
           gcloud tasks queues describe "$CLOUD_TASKS_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --format='yaml(name,state,rateLimits,retryConfig)'
           echo "queue_exit=$?"
 
+          echo '=== RECENT STANDARD150 TASKS ==='
+          gcloud tasks list --queue="$CLOUD_TASKS_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --limit=20 --format='table(name.basename(),scheduleTime,dispatchCount,responseCount,lastAttempt.responseStatus.code)'
+          echo "tasks_list_exit=$?"
+
           echo '=== DRAIN QUEUE ==='
           gcloud tasks queues describe "$CLOUD_TASKS_DRAIN_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --format='yaml(name,state,rateLimits,retryConfig)'
           echo "drain_queue_exit=$?"

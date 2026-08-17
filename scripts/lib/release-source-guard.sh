@@ -7,7 +7,17 @@ fixlist_require_exact_main() {
   local expected_sha="${2:-}"
   local confirm="${3:-}"
 
-  git -C "$repo_root" fetch origin main --quiet
+  # The Cloud Operator checks out with persist-credentials: false, so a network
+  # fetch here has no credentials and aborts the entire release with git exit
+  # 128 ("could not read Username") on this private repo. fetch-depth: 0 has
+  # already populated refs/remotes/origin/*, so refresh opportunistically --
+  # which is what keeps a local operator honest against a stale ref -- and fall
+  # back to the checkout's own remote-tracking ref in CI.
+  git -C "$repo_root" fetch origin main --quiet 2>/dev/null || true
+  if ! git -C "$repo_root" rev-parse --verify --quiet origin/main >/dev/null; then
+    echo "Refusing: origin/main is not present in this checkout." >&2
+    return 2
+  fi
   local head remote
   head="$(git -C "$repo_root" rev-parse HEAD)"
   remote="$(git -C "$repo_root" rev-parse origin/main)"

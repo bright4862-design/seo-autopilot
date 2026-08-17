@@ -161,18 +161,11 @@ export default async function (req: Request): Promise<Response> {
           ...identity.fields,
         }, 503);
       }
-      if (!policy.allowedUserIds.includes(String(user.id))) {
-        return jsonResponse({
-          success: false,
-          accepted: false,
-          version: VERSION,
-          retryable: false,
-          failure_code: "scan_not_invited",
-          error: "This Standard 150 beta cohort is invite-only.",
-          ...identity.fields,
-        }, 403);
-      }
-
+      // An active access grant (Stripe checkout, owner test, or manual grant)
+      // IS the beta invitation. The static cohort id list is no longer a
+      // separate gate: it used to 403 fully-granted customers, and the browser
+      // treated that refusal as an expired session. Entitlement below is the
+      // single admission gate.
       const project = await loadExactOwnedProject({
         base44,
         user,

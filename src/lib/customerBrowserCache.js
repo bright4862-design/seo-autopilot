@@ -144,7 +144,10 @@ export function isCustomerAuthBoundaryError(error) {
     ?? error?.data?.status
     ?? error?.response?.data?.status,
   );
-  return status === 401 || status === 403;
+  // Only 401 means the session itself is gone. A 403 is a permission refusal
+  // for one action (e.g. scan admission) — clearing the session on 403 logged
+  // customers out whenever a scan was refused.
+  return status === 401;
 }
 
 export function clearCustomerAuthBoundary(error, browserWindow = globalThis.window) {

@@ -541,7 +541,7 @@ async def scan_job(
         if not outcome.get("ok"):
             await write_terminal_failure(
                 client, scan_id, str(outcome.get("failure_code") or "authority_persistence_failed"),
-                "The scan finished, but its result could not be saved. Please try again.",
+                str(outcome.get("customer_message") or "The scan finished, but its result could not be saved. Please try again."),
                 attempt_count=job_attempt,
             )
             return {"success": False, "worker_version": WORKER_VERSION, "error_code": outcome.get("failure_code")}

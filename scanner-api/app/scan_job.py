@@ -435,7 +435,7 @@ def terminal_review_limitation(review: dict[str, Any]) -> dict[str, str] | None:
     confidence = str(review.get("review_confidence_state") or "")
     if access_state == "blocked" or confidence == "blocked_access_needs_verification" or (blocked > 0 and usable == 0):
         return {
-            "code": "scan_access_limited_429",
+            "code": "scan_access_limited",
             "detail": (
                 "The site rate-limited or challenged the scanner, so FixList could not collect enough verified HTML "
                 "to save an authoritative result. Please try again later."

@@ -328,6 +328,7 @@ jobs:
           print('STANDARD150_CAPACITY_VERIFIED concurrency=3 worker_request_concurrency=1')
           PY2
 
+  # queued-watchdog candidate retry after shallow-main source-guard fix
   build-queued-watchdog-candidate-once:
     # Single-use zero-traffic build for the queued-admission watchdog fix.
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[build-worker-candidate]')

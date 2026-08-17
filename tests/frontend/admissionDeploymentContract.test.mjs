@@ -14,6 +14,7 @@ const coordinatorMain = read("admission-coordinator/main.py");
 const gatewayDeploy = read("scripts/deploy_dispatch_gateway.sh");
 const gatewayBootstrap = read("scripts/bootstrap-fixlist-dispatch-gateway.sh");
 const workflow = read(".github/workflows/fixlist-cloud-operator.yml");
+const cloudOperator = read("scripts/fixlist-cloud-operator.sh");
 const cliHelper = read("scripts/lib/base44-pinned-cli.sh");
 
 const releaseMutationScripts = [
@@ -117,4 +118,11 @@ test("Cloud Operator may redeploy the coordinator after bootstrap but cannot run
   assert.match(workflow, /deploy-admission-coordinator/);
   assert.match(workflow, /run: \.\/scripts\/deploy_admission_coordinator\.sh/);
   assert.doesNotMatch(workflow, /bootstrap-fixlist-admission-coordinator\.sh/);
+});
+
+test("worker provenance lookup uses the same regional Cloud Build scope as the candidate build", () => {
+  assert.match(
+    cloudOperator,
+    /gcloud builds list --project="\$GCP_PROJECT" --region="\$GCP_REGION" --limit=50/,
+  );
 });

@@ -40,3 +40,7 @@ base44/.app.jsonc
 .venv/
 scanner-api/.venv/
 **/.venv/
+
+# GitHub Actions temporary Google Cloud credentials
+# Created by google-github-actions/auth inside the checkout and removed during post-job cleanup.
+gha-creds-*.json

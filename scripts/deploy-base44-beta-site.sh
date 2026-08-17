@@ -24,18 +24,23 @@ fixlist_install_base44_cli "$TMP"
 "$FIXLIST_BASE44_CLI" login
 
 cd "$REPO_ROOT"
-VITE_FIXLIST_SOURCE_SHA="$SOURCE_SHA" npm run build
+npm run build
+printf '{"source_sha":"%s"}\n' "$SOURCE_SHA" > dist/fixlist-release.json
 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" site deploy --no-build --yes
 
-# Site publication comes first. Re-establish the canonical six-function
-# release package afterwards so a site reconciliation cannot remove worker
-# control, authority persistence, or customer-result verification.
-SOURCE_SHA="$SOURCE_SHA" CONFIRM="$CONFIRM" BASE44_APP_ID="$APP_ID" \
-  bash "$REPO_ROOT/scripts/deploy-base44-beta-functions.sh"
-
-# Customer scan-history deletion is intentionally outside the canonical six
-# release-function digest, but the published dashboard depends on it.
-"$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions deploy deleteCustomerScanData
+# Site publication comes first. Re-establish the canonical release functions
+# afterwards using the SAME authenticated CLI session so a second interactive
+# login can never strand production with the older site-snapshot inventory.
+FUNCTIONS=(
+  startStandardScanJob
+  durableScanWorkerControl
+  persistDurableScanAuthority
+  getCustomerScanResult
+  createAccessCheckout
+  stripeWebhook
+  deleteCustomerScanData
+)
+"$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions deploy "${FUNCTIONS[@]}"
 
 INVENTORY="$($FIXLIST_BASE44_CLI --app-id "$APP_ID" functions list 2>&1)"
 printf '%s\n' "$INVENTORY"

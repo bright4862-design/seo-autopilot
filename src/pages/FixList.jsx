@@ -678,7 +678,7 @@ function toRecentScanSummary(run = {}) {
     id: id,
     website: safeHostname(run.website_url || run.submitted_url || run.final_url) || "Website scan",
     status: String(run.status || "").trim().toLowerCase(),
-    occurredAt: run.completed_at || run.reviewing_at || run.started_at || run.queued_at || run.created_date || run.created_at || "",
+    occurredAt: run.queued_at || run.created_date || run.created_at || run.started_at || run.reviewing_at || run.completed_at || "",
   };
 }
 

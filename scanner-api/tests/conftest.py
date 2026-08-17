@@ -28,9 +28,11 @@ def install_mock_network(monkeypatch, routes: dict):
         entry = routes.get(logical_url) or routes.get(request.url.path)
         if entry is None:
             return httpx.Response(404, text="")
+        response_headers = {"content-type": entry.get("content_type", "text/html")}
+        response_headers.update(entry.get("headers", {}))
         return httpx.Response(
             entry.get("status", 200),
-            headers={"content-type": entry.get("content_type", "text/html")},
+            headers=response_headers,
             text=entry.get("body", ""),
         )
 

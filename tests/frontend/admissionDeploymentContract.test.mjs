@@ -8,6 +8,8 @@ const deployCoordinator = read("scripts/deploy_admission_coordinator.sh");
 const configureBase44 = read("scripts/configure-base44-beta-admission.sh");
 const deployFunctions = read("scripts/deploy-base44-beta-functions.sh");
 const deploySite = read("scripts/deploy-base44-beta-site.sh");
+const verifySite = read("scripts/verify-base44-site.sh");
+const mainEntry = read("src/main.jsx");
 const workerCandidate = read("scripts/build-worker-candidate.sh");
 const workerBuild = read("cloudbuild.durable-worker.yaml");
 const workerMain = read("scanner-api/app/main.py");
@@ -83,15 +85,22 @@ test("Base44 release deploy names exactly six functions and never reconciles ent
 });
 
 test("Base44 site publication restores the durable backend after the site deploy", () => {
-  const stampIndex = deploySite.indexOf('dist/fixlist-release.json');
+  const authIndex = deploySite.indexOf('"$FIXLIST_BASE44_CLI" whoami');
+  const buildIndex = deploySite.indexOf('VITE_FIXLIST_SOURCE_SHA="$SOURCE_SHA" npm run build');
   const siteIndex = deploySite.indexOf('site deploy --no-build --yes');
   const functionsIndex = deploySite.indexOf('functions deploy "${FUNCTIONS[@]}"');
   const verifyIndex = deploySite.indexOf('verify-base44-site.sh');
-  assert.ok(stampIndex >= 0 && stampIndex < siteIndex, "source stamp must be written before the site deploy");
+  assert.ok(authIndex >= 0 && authIndex < buildIndex, "non-interactive auth verification must precede the build");
+  assert.ok(buildIndex >= 0 && buildIndex < siteIndex, "exact source SHA must be compiled before the site deploy");
   assert.ok(siteIndex >= 0, "missing Base44 site deployment");
   assert.ok(functionsIndex > siteIndex, "release functions must deploy after the site");
   assert.ok(verifyIndex > functionsIndex, "public source verification must run after backend restoration");
-  assert.equal((deploySite.match(/\"\$FIXLIST_BASE44_CLI\" login/g) || []).length, 1, "site publish must use one CLI login");
+  assert.equal((deploySite.match(/\"\$FIXLIST_BASE44_CLI\" whoami/g) || []).length, 1, "site publish must use one non-interactive auth check");
+  assert.doesNotMatch(deploySite, /\"\$FIXLIST_BASE44_CLI\" login/);
+  assert.match(mainEntry, /import\.meta\.env\.VITE_FIXLIST_SOURCE_SHA/);
+  assert.match(mainEntry, /__FIXLIST_SOURCE_SHA__/);
+  assert.match(verifySite, /\/assets\/index-/);
+  assert.match(verifySite, /grep -Fq "\$EXPECTED_SOURCE_SHA"/);
   for (const required of [
     "startStandardScanJob",
     "durableScanWorkerControl",

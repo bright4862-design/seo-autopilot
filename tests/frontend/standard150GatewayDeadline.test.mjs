@@ -174,7 +174,7 @@ test("5. a stale active run becomes failed and frees the key for retry", () => {
 test("6. a fresh active run is not failed by recovery", () => {
   const identity = fs.readFileSync("src/lib/scanRunIdentity.js", "utf8");
   const ttl = identity.match(/STANDARD_ACTIVE_SCAN_TTL_MS = (\d+) \* 60 \* 1000/)?.[1];
-  assert.equal(Number(ttl), 10, "stale threshold must be 10 minutes");
+  assert.equal(Number(ttl), 40, "replay staleness must outlast the 30-minute server terminal envelope");
   assert.match(identity, /ACTIVE_SCAN_RUN_STATUSES = new Set\(\["queued", "crawling", "reviewing"\]\)/);
   // Staleness is time-gated, so a fresh run is never in staleRuns.
   assert.match(identity, /isStaleActiveScanRun/);

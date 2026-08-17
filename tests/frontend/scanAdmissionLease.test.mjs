@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
-  MAX_BETA_CUSTOMERS,
   betaScanAdmissionPolicy,
   normalizeAdmissionIdentity,
 } from "../../base44/functions/startStandardScanJob/admission.js";
@@ -25,16 +24,16 @@ function withEnv(values, fn) {
 test("scan admission is default-off and requires the coordinator, not an unproven Base44 atomic primitive", () => {
   const values = new Map();
   withEnv(values, () => {
-    assert.equal(MAX_BETA_CUSTOMERS, 25);
     assert.equal(betaScanAdmissionPolicy().code, "scan_admission_paused");
     values.set("BETA_SCAN_ADMISSION_ENABLED", "true");
-    values.set("BETA_COHORT_ALLOWED_USER_IDS", "user-1");
     assert.equal(betaScanAdmissionPolicy().code, "scan_admission_configuration_invalid");
     values.set("SCAN_ADMISSION_COORDINATOR_URL", "https://coordinator.example");
     values.set("SCAN_EVIDENCE_SIGNING_KEY", "test-root");
-    assert.deepEqual(betaScanAdmissionPolicy(), { ok: true, code: "", allowedUserIds: ["user-1"] });
+    assert.deepEqual(betaScanAdmissionPolicy(), { ok: true, code: "" });
+    values.set("BETA_COHORT_ALLOWED_USER_IDS", Array.from({ length: 150 }, (_, i) => `user-${i + 1}`).join(","));
+    assert.deepEqual(betaScanAdmissionPolicy(), { ok: true, code: "" });
     values.set("BASE44_ATOMIC_UPDATE_MANY_CONFIRMED", "false");
-    assert.deepEqual(betaScanAdmissionPolicy(), { ok: true, code: "", allowedUserIds: ["user-1"] });
+    assert.deepEqual(betaScanAdmissionPolicy(), { ok: true, code: "" });
   });
   assert.doesNotMatch(admissionSource, /BASE44_ATOMIC_UPDATE_MANY_CONFIRMED|updateMany|scan_claim_/);
   assert.doesNotMatch(entrySource, /bindScanLease|claimScanLease|scan_claim_token/);
@@ -42,18 +41,18 @@ test("scan admission is default-off and requires the coordinator, not an unprove
   assert.match(entrySource, /bindAdmission\(\{/);
 });
 
-test("cohort stays capped at 25 exact users", () => {
+test("scan admission does not use the static cohort list as a membership gate", () => {
   const values = new Map([
     ["BETA_SCAN_ADMISSION_ENABLED", "true"],
     ["SCAN_ADMISSION_COORDINATOR_URL", "https://coordinator.example"],
     ["SCAN_EVIDENCE_SIGNING_KEY", "test-root"],
   ]);
   withEnv(values, () => {
-    values.set("BETA_COHORT_ALLOWED_USER_IDS", Array.from({ length: 25 }, (_, i) => `user-${i + 1}`).join(","));
     assert.equal(betaScanAdmissionPolicy().ok, true);
-    values.set("BETA_COHORT_ALLOWED_USER_IDS", Array.from({ length: 26 }, (_, i) => `user-${i + 1}`).join(","));
-    assert.equal(betaScanAdmissionPolicy().code, "scan_admission_configuration_invalid");
+    values.set("BETA_COHORT_ALLOWED_USER_IDS", "malformed/not-a-user-id");
+    assert.equal(betaScanAdmissionPolicy().ok, true);
   });
+  assert.doesNotMatch(admissionSource, /BETA_COHORT_ALLOWED_USER_IDS/);
 });
 
 test("request identity is exact and bounded before coordinator admission", () => {

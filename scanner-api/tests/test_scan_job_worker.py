@@ -89,7 +89,7 @@ def test_blocked_review_gets_truthful_access_limited_terminal_code():
         },
     })
     assert limitation is not None
-    assert limitation["code"] == "scan_access_limited_429"
+    assert limitation["code"] == "scan_access_limited"
     assert "rate-limited or challenged" in limitation["detail"]
 
 

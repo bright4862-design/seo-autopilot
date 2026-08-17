@@ -22,7 +22,7 @@ def _payload() -> ScanDrainRequest:
     )
 
 
-def _scan(*, status: str, started_at: str = "") -> dict:
+def _scan(*, status: str, started_at: str = "", queued_at: str = "") -> dict:
     return {
         "id": "scan-1",
         "scan_id": "scan-1",
@@ -35,13 +35,15 @@ def _scan(*, status: str, started_at: str = "") -> dict:
         "attempt_count": 1,
         "status": status,
         "started_at": started_at,
+        "queued_at": queued_at,
     }
 
 
 @pytest.mark.asyncio
-async def test_drain_never_terminalizes_a_scan_still_waiting_in_queue(monkeypatch):
+async def test_drain_never_terminalizes_a_fresh_scan_still_waiting_in_queue(monkeypatch):
     monkeypatch.setattr(main, "require_cloud_tasks_oidc", lambda _: None)
-    monkeypatch.setattr(main, "read_scan_run", lambda *_: _async_value(_scan(status="queued")))
+    queued = datetime.now(timezone.utc) - timedelta(seconds=300)
+    monkeypatch.setattr(main, "read_scan_run", lambda *_: _async_value(_scan(status="queued", queued_at=queued.isoformat())))
     called = False
 
     async def fail(*_args, **_kwargs):
@@ -55,6 +57,29 @@ async def test_drain_never_terminalizes_a_scan_still_waiting_in_queue(monkeypatc
     assert exc.value.status_code == 503
     assert "not started" in str(exc.value.detail).lower()
     assert called is False
+
+
+@pytest.mark.asyncio
+async def test_drain_closes_an_exact_attempt_after_thirty_minutes_queued(monkeypatch):
+    monkeypatch.setattr(main, "require_cloud_tasks_oidc", lambda _: None)
+    queued = datetime.now(timezone.utc) - timedelta(seconds=main.WORKER_QUEUED_DRAIN_AFTER_QUEUE_SECONDS + 30)
+    monkeypatch.setattr(main, "read_scan_run", lambda *_: _async_value(_scan(status="queued", queued_at=queued.isoformat())))
+    calls = []
+
+    async def fail(*args, **kwargs):
+        calls.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(main, "write_terminal_failure", fail)
+    result = await main.scan_job_drain(_payload(), authorization="test")
+    assert result["success"] is True
+    assert result["closed"] is True
+    assert result["status"] == "failed"
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[1] == "scan-1"
+    assert args[2] == "scan_queue_drain_timeout"
+    assert kwargs["attempt_count"] == 1
 
 
 @pytest.mark.asyncio
@@ -102,6 +127,7 @@ async def _async_value(value):
 
 def test_terminal_drain_waits_for_the_full_three_dispatch_attempt_envelope():
     assert main.WORKER_TERMINAL_DRAIN_AFTER_START_SECONDS >= (3 * 480) + 30
+    assert main.WORKER_QUEUED_DRAIN_AFTER_QUEUE_SECONDS >= 30 * 60
 
 
 @pytest.mark.asyncio

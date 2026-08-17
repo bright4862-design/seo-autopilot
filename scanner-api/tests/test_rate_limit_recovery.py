@@ -38,6 +38,8 @@ async def test_single_429_activates_pacing_and_retries_once(mock_network, monkey
         path_prefix="/section",
         scan_mode="advanced",
         concurrency=4,
+        timeout_seconds=120,
+        job_mode=True,
     )
 
     p1 = next(page for page in result["pages"] if page["path"] == "/section/p1")

@@ -21,11 +21,10 @@ node "$REPO_ROOT/scripts/base44_release_manifest.mjs" verify
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 fixlist_install_base44_cli "$TMP"
-"$FIXLIST_BASE44_CLI" login
+"$FIXLIST_BASE44_CLI" whoami >/dev/null
 
 cd "$REPO_ROOT"
-npm run build
-printf '{"source_sha":"%s"}\n' "$SOURCE_SHA" > dist/fixlist-release.json
+VITE_FIXLIST_SOURCE_SHA="$SOURCE_SHA" npm run build
 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" site deploy --no-build --yes
 
 # Site publication comes first. Re-establish the canonical release functions

@@ -3,6 +3,7 @@ name: FixList Cloud Operator
 # Keyless GCP operations for the durable Standard 150 release.
 # This exact workflow path is pinned by the Google WIF provider condition.
 # Protected key-sync trigger: 2026-08-13T13:20Z
+# Read-only reconciler diagnostic trigger: 2026-08-17T16:12Z
 
 on:
   workflow_dispatch:

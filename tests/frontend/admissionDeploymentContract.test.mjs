@@ -19,6 +19,7 @@ const gatewayBootstrap = read("scripts/bootstrap-fixlist-dispatch-gateway.sh");
 const workflow = read(".github/workflows/fixlist-cloud-operator.yml");
 const cloudOperator = read("scripts/fixlist-cloud-operator.sh");
 const cliHelper = read("scripts/lib/base44-pinned-cli.sh");
+const sourceGuard = read("scripts/lib/release-source-guard.sh");
 
 const releaseMutationScripts = [
   bootstrap,
@@ -120,6 +121,15 @@ test("release Base44 CLI is version and digest pinned before login or deployment
   assert.match(cliHelper, /integrity mismatch/);
   assert.match(configureBase44, /fixlist_install_base44_cli/);
   assert.match(deployFunctions, /fixlist_install_base44_cli/);
+});
+
+test("exact-source guard supports shallow GitHub main checkouts without weakening identity", () => {
+  assert.match(sourceGuard, /GITHUB_REF:-.*refs\/heads\/main/);
+  assert.match(sourceGuard, /GITHUB_SHA/);
+  assert.match(sourceGuard, /event_sha.*!=.*head/);
+  assert.match(sourceGuard, /refs\/remotes\/origin\/main/);
+  assert.match(sourceGuard, /remote="\$event_sha"/);
+  assert.match(sourceGuard, /CONFIRM must equal exact SOURCE_SHA/);
 });
 
 test("worker candidate is exact-SHA, explicit-build-SA, private and zero-traffic", () => {

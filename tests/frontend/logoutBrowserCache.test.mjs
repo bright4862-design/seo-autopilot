@@ -159,14 +159,18 @@ test("authentication owner synchronization clears legacy and cross-account state
   assert.doesNotThrow(() => clearLegacyCustomerCaches(win));
 });
 
-test("auth boundary errors clear protected state from direct and nested status shapes", () => {
-  for (const error of [{ status: 401 }, { response: { status: 403 } }]) {
+test("only 401 clears protected session state; 403 permission refusals keep the customer signed in", () => {
+  const expired = browser();
+  writeCustomerCache("scan", { owner: "a" }, identityA, expired);
+  assert.equal(clearCustomerAuthBoundary({ status: 401 }, expired), true);
+  assert.equal(readCustomerCache("scan", identityA, expired), null);
+
+  for (const error of [{ status: 403 }, { response: { status: 403 } }, { status: 500 }]) {
     const win = browser();
     writeCustomerCache("scan", { owner: "a" }, identityA, win);
-    assert.equal(clearCustomerAuthBoundary(error, win), true);
-    assert.equal(readCustomerCache("scan", identityA, win), null);
+    assert.equal(clearCustomerAuthBoundary(error, win), false);
+    assert.deepEqual(readCustomerCache("scan", identityA, win), { owner: "a" });
   }
-  assert.equal(clearCustomerAuthBoundary({ status: 500 }, browser()), false);
 });
 
 test("cache cleanup is safe when browser storage is unavailable", () => {

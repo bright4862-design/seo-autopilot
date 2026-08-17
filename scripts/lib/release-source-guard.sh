@@ -7,10 +7,18 @@ fixlist_require_exact_main() {
   local expected_sha="${2:-}"
   local confirm="${3:-}"
 
-  git -C "$repo_root" fetch origin main --quiet
   local head remote
+  # actions/checkout fetches origin/main before removing its temporary GitHub
+  # credential. In GitHub Actions, verify that already-fetched ref locally so
+  # the exact-source guard does not require a second authenticated network
+  # fetch. Local/manual release runs still refresh origin/main from GitHub.
+  if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    remote="$(git -C "$repo_root" rev-parse refs/remotes/origin/main)"
+  else
+    git -C "$repo_root" fetch origin main --quiet
+    remote="$(git -C "$repo_root" rev-parse origin/main)"
+  fi
   head="$(git -C "$repo_root" rev-parse HEAD)"
-  remote="$(git -C "$repo_root" rev-parse origin/main)"
 
   if ! printf '%s' "$head" | grep -Eq '^[0-9a-f]{40}$'; then
     echo "Refusing: checkout HEAD is not an exact 40-character Git SHA." >&2

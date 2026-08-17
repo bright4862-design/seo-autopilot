@@ -283,3 +283,5 @@ jobs:
       - name: Run protected GCP-to-Base44 key synchronization
         shell: bash
         run: bash scripts/sync-base44-signing-key.sh
+
+# capacity diagnostic refresh: 2026-08-17T19:49Z

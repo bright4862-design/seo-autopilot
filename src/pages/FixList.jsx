@@ -5,7 +5,7 @@ import { Copy, Download, ExternalLink } from "lucide-react";
 import { isRateLimitFinding, shouldUseLegacyRateLimitPresentation } from "@/lib/reviewContract";
 import { trackEvent } from "@/lib/analytics";
 import { getActiveProject } from "@/lib/activeProject";
-import { getScanRunWithFixList, listScanRuns } from "@/lib/scanRuns";
+import { getScanRunWithFixList, listScanRuns, recoverOrphanedScanRuns } from "@/lib/scanRuns";
 import { customerRecoveryFailure } from "@/lib/scanRuns";
 import { ACTIVE_SCAN_RUN_STATUSES } from "@/lib/scanRunIdentity";
 import { UNLOCK_PRICE_LABEL } from "@/lib/access";
@@ -256,6 +256,11 @@ export default function FixList() {
           setRecentScansState("loaded");
           return;
         }
+        // Close runs the browser abandoned before listing them, so an
+        // unfinishable scan cannot sit here as "Scanning" forever or keep
+        // holding this account's admission lease.
+        await recoverOrphanedScanRuns({ projectId: project.id });
+        if (cancelled) return;
         const historyResult = await listScanRuns(project.id, 8);
         if (cancelled) return;
         if (historyResult?.ok !== true) {

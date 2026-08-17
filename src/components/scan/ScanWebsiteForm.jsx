@@ -64,7 +64,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   const [error, setError] = useState("");
   // Set only when the refusal has a real destination for the customer, so an
   // error is never a dead end.
-  const [errorActionScanId, setErrorActionScanId] = useState("");
+  const [errorAction, setErrorAction] = useState("");
   const [urlError, setUrlError] = useState("");
   const [debugData, setDebugData] = useState(() => emptyRuntimeDebug());
   const debugDataRef = useRef(debugData);
@@ -165,6 +165,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
     if (submitLockRef.current || saving) return;
     let requestEpoch = requestEpochRef.current;
     setError("");
+    setErrorAction("");
     const submittedUrl = String(websiteUrl || "").trim();
     const normalizedUrl = normalizeWebsiteUrl(websiteUrl);
     const requestedPathPrefix = getRequestedPathPrefix(normalizedUrl);
@@ -370,6 +371,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       recordDebug({ ...identityDebug(), status: "rejected", stage: "scan_admission_failed", website_url: normalizedUrl, business_name: trimmedBusinessName, cms_platform: cmsPlatform, cms_name: cmsName, scan_mode: scanMode, requested_path_prefix: requestedPathPrefix, error: err?.message || String(err) });
       refreshDebugData();
       setError(err?.message || "FixList could not start the scan. Please try again.");
+      if (err?.code === "scan_admission_busy") setErrorAction("open_dashboard");
     } finally {
       if (requestEpochRef.current === requestEpoch) {
         submitLockRef.current = false;
@@ -428,7 +430,25 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
           <p className="text-[13px] text-ink-muted">{SCAN_SPEC_LINE}</p>
         </div>
 
-        {error ? <div className="rounded-lg border border-crit/25 bg-crit/[0.04] p-4 text-[13px] leading-relaxed text-crit"><div className="flex items-start gap-2"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span>{error}</span></div></div> : null}
+        {error ? (
+          <div className="rounded-lg border border-crit/25 bg-crit/[0.04] p-4 text-[13px] leading-relaxed text-crit">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div className="min-w-0">
+                <span>{error}</span>
+                {errorAction === "open_dashboard" ? (
+                  <button
+                    type="button"
+                    onClick={() => navigate("/dashboard")}
+                    className="mt-2 block font-semibold underline underline-offset-2"
+                  >
+                    Open my scans
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : null}
         {isLoading ? (
           <div
             role="status"

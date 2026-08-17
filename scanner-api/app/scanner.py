@@ -71,16 +71,35 @@ SITEMAP_DISCOVERY_LIMIT = 5000
 # one bounded retry. This is rate-limit cooperation, not a bot-protection bypass.
 RATE_LIMIT_COOLDOWN_SECONDS = 2.0
 RATE_LIMIT_REQUEST_INTERVAL_SECONDS = 0.5
+RATE_LIMIT_MAX_RETRIES = 8
+
+
+def detect_rate_limit_profile(response) -> str:
+    if response is None or int(getattr(response, "status_code", 0) or 0) >= 400:
+        return ""
+    server = str(response.headers.get("server", "")).lower()
+    content_type = str(response.headers.get("content-type", "")).lower()
+    if "cloudflare" not in server or (content_type and "html" not in content_type):
+        return ""
+    try:
+        source = str(response.text or "")[:500_000].lower()
+    except Exception:
+        return ""
+    shopify_markers = ("cdn.shopify.com", "shopify.theme", "myshopify.com", "shopify-section")
+    if sum(1 for marker in shopify_markers if marker in source) >= 2:
+        return "cloudflare_shopify"
+    return ""
 
 
 class _AdaptiveRateLimitPacer:
-    def __init__(self, *, deadline: float, enabled: bool):
+    def __init__(self, *, deadline: float, enabled: bool, start_active: bool = False):
         self.deadline = float(deadline)
         self.enabled = bool(enabled)
-        self.active = False
+        self.active = bool(self.enabled and start_active)
         self.next_request_at = 0.0
         self.retry_count = 0
         self.recovered_count = 0
+        self.saw_429 = False
         self._lock = asyncio.Lock()
 
     async def activate(self) -> None:
@@ -88,9 +107,10 @@ class _AdaptiveRateLimitPacer:
             return
         async with self._lock:
             now = time.monotonic()
-            first_activation = not self.active
+            first_429 = not self.saw_429
+            self.saw_429 = True
             self.active = True
-            delay = RATE_LIMIT_COOLDOWN_SECONDS if first_activation else RATE_LIMIT_REQUEST_INTERVAL_SECONDS
+            delay = RATE_LIMIT_COOLDOWN_SECONDS if first_429 else RATE_LIMIT_REQUEST_INTERVAL_SECONDS
             self.next_request_at = max(self.next_request_at, now + max(0.0, float(delay)))
 
     async def wait_for_slot(self) -> bool:
@@ -264,9 +284,11 @@ async def run_scan(
         headers={"User-Agent": "Mozilla/5.0 (compatible; FixListPythonScanner/1.0)"},
     ) as client:
         robots_policy = await load_robots_policy(client, origin)
+        rate_limit_profile = ""
         if not path_prefix and prefix == "/":
             try:
                 landing = await safe_get(client, start_url)
+                rate_limit_profile = detect_rate_limit_profile(landing) if job_mode else ""
                 final_landing_url = str(getattr(landing, "url", start_url) or start_url) if landing is not None else start_url
                 redirected_market = market_pair_prefix(final_landing_url)
                 if redirected_market:
@@ -320,6 +342,7 @@ async def run_scan(
         rate_limit_pacer = _AdaptiveRateLimitPacer(
             deadline=timing_budget["crawl_deadline"],
             enabled=job_mode,
+            start_active=bool(rate_limit_profile),
         )
 
         async def worker() -> None:
@@ -374,7 +397,7 @@ async def run_scan(
                         page = await fetch_and_extract(client, target, snapshot, robots_policy=robots_policy)
                         if rate_limit_pacer.enabled and int(page.get("status_code") or 0) == 429:
                             await rate_limit_pacer.activate()
-                            if await rate_limit_pacer.wait_for_slot():
+                            if rate_limit_pacer.retry_count < RATE_LIMIT_MAX_RETRIES and await rate_limit_pacer.wait_for_slot():
                                 rate_limit_pacer.retry_count += 1
                                 retry_page = await fetch_and_extract(client, target, snapshot, robots_policy=robots_policy)
                                 page = retry_page
@@ -464,6 +487,7 @@ async def run_scan(
         "failed_fetch_count": failed_fetch_count,
         "failure_reason_buckets": failure_reason_buckets,
         "rate_limit_throttle_activated": rate_limit_pacer.active,
+        "rate_limit_proactive_profile": rate_limit_profile,
         "rate_limit_retry_count": rate_limit_pacer.retry_count,
         "rate_limit_recovered_count": rate_limit_pacer.recovered_count,
         "final_url_dedup_version": FINAL_URL_DEDUP_VERSION,

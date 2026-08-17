@@ -17,6 +17,7 @@ on:
           - verify-worker-routes
           - deploy-dispatch-gateway
           - deploy-admission-coordinator
+          - build-worker-candidate
           - promote-worker
           - rollback-worker
           - pause-queue
@@ -114,14 +115,30 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT }}
 
+      - name: Validate worker candidate build path
+        if: inputs.operation == 'build-worker-candidate'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/build-worker-candidate.sh
+          bash -n scripts/lib/release-source-guard.sh
+
       - name: Run allowlisted worker operation
-        if: inputs.operation != 'deploy-dispatch-gateway' && inputs.operation != 'deploy-admission-coordinator'
+        if: inputs.operation != 'deploy-dispatch-gateway' && inputs.operation != 'deploy-admission-coordinator' && inputs.operation != 'build-worker-candidate'
         env:
           OPERATION: ${{ inputs.operation }}
           CONFIRM: ${{ inputs.confirm }}
           TARGET_REVISION: ${{ inputs.revision }}
         shell: bash
         run: ./scripts/fixlist-cloud-operator.sh
+
+      - name: Build isolated Standard 150 worker candidate
+        if: inputs.operation == 'build-worker-candidate'
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: ./scripts/build-worker-candidate.sh
 
       - name: Deploy canonical dispatch gateway
         if: inputs.operation == 'deploy-dispatch-gateway'

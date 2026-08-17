@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const fixList = readFileSync("src/pages/FixList.jsx", "utf8");
+const recentScanRow = readFileSync("src/components/fixlist/RecentScanRow.jsx", "utf8");
 
 test("the dashboard lists recent owner-scoped ScanRuns only when no exact scan is requested", () => {
   assert.match(fixList, /import \{ getActiveProject \} from "@\/lib\/activeProject"/);
@@ -14,10 +15,10 @@ test("the dashboard lists recent owner-scoped ScanRuns only when no exact scan i
 
 test("recent scan rows reopen only their exact encoded durable scan id", () => {
   assert.match(
-    fixList,
+    recentScanRow,
     /to=\{`\/dashboard\?scan_id=\$\{encodeURIComponent\(scan\.id\)\}`\}/,
   );
-  assert.doesNotMatch(fixList, /latest scan|latest result|readBestScanRecord|loaded_local/);
+  assert.doesNotMatch(`${fixList}\n${recentScanRow}`, /latest scan|latest result|readBestScanRecord|loaded_local/);
 });
 
 test("history state stores and renders only customer-safe scan summary fields", () => {

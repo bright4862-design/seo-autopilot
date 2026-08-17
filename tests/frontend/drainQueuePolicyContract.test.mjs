@@ -5,6 +5,7 @@ import test from "node:test";
 const policy = readFileSync("scripts/set-standard150-drain-policy.sh", "utf8");
 const preflight = readFileSync("scripts/deployment_preflight.sh", "utf8");
 const postDeploy = readFileSync("scripts/post_deploy_verify.sh", "utf8");
+const workerMain = readFileSync("scanner-api/app/main.py", "utf8");
 
 test("drain queue has an independent bounded retry envelope", () => {
   assert.match(policy, /CLOUD_TASKS_DRAIN_QUEUE:-fixlist-standard150-drain/);
@@ -18,6 +19,14 @@ test("drain queue has an independent bounded retry envelope", () => {
   assert.match(policy, /MAX_DOUBLINGS=3/);
   assert.doesNotMatch(policy, /gcloud run|update-traffic|base44/);
   assert.doesNotMatch(policy, /\| python3 -[^\n]*<</);
+});
+
+test("the per-scan drain watchdog closes a genuinely stale queued admission", () => {
+  assert.match(workerMain, /WORKER_QUEUED_DRAIN_AFTER_QUEUE_SECONDS = 1800/);
+  assert.match(workerMain, /if status == "queued"/);
+  assert.match(workerMain, /scan_queue_drain_timeout/);
+  assert.match(workerMain, /attempt_count=job_attempt/);
+  assert.match(workerMain, /queue_deadline/);
 });
 
 test("release verification pins both live Cloud Tasks queues", () => {

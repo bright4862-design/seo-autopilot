@@ -1,4 +1,4 @@
 {
   "name": "getCustomerScanResult",
-  "entry": "index.ts"
+  "entry": "entry.ts"
 }

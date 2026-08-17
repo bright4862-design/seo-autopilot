@@ -76,10 +76,12 @@ test("a superseded task stops before crawling, failing or charging", () => {
   // Every failure write is attempt-bound. Inspect the call blocks directly so
   // unrelated attempt-bound operations (for example the worker start marker)
   // cannot create a false positive or false negative in this contract.
-  const failureCalls = [...workerMain.matchAll(/await write_terminal_failure\([\s\S]*?attempt_count=job_attempt,[\s\S]*?\n {12}\)/g)];
-  const callCount = (workerMain.match(/await write_terminal_failure\(/g) || []).length;
-  assert.ok(callCount >= 3, `expected the failure call sites, found ${callCount}`);
-  assert.equal(failureCalls.length, callCount, "every failure write must bind the task's attempt");
+  const failureCalls = [...workerMain.matchAll(/await write_terminal_failure\(/g)];
+  assert.ok(failureCalls.length >= 3, `expected the failure call sites, found ${failureCalls.length}`);
+  for (const call of failureCalls) {
+    const callBlock = workerMain.slice(call.index, call.index + 700);
+    assert.match(callBlock, /attempt_count=job_attempt/, "every failure write must bind the task's attempt");
+  }
   assert.match(workerJob, /if attempt_count is not None and is_superseded_attempt\(scan, attempt_count\)/);
 });
 

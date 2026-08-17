@@ -144,24 +144,35 @@ test("manual builds require one explicit full release SHA for every image refere
 });
 
 test("Cloud Build proves the uploaded worker bytes match the claimed commit", () => {
+  const candidateBuild = fs.readFileSync("scripts/build-worker-candidate.sh", "utf8");
+
+  // GitHub Actions verifies the exact clean commit and submits a git archive of
+  // that commit, rather than asking Cloud Build to clone the private repository.
+  assert.match(candidateBuild, /git -C "\$REPO_ROOT" archive --format=tar "\$SOURCE_SHA"/);
+  assert.match(candidateBuild, /\.fixlist-source-sha/);
+  assert.match(candidateBuild, /gcloud builds submit "\$BUILD_CONTEXT"/);
+
+  // Cloud Build independently binds the uploaded archive to the claimed SHA,
+  // then builds only from the isolated verified context.
   assert.match(workerBuild, /id: verify-release-source/);
-  assert.match(workerBuild, /https:\/\/github\.com\/bright4862-design\/seo-autopilot\.git/);
-  assert.match(workerBuild, /fetch --quiet --depth=1 origin "\$\{_RELEASE_SHA\}"/);
-  assert.match(workerBuild, /actual_sha=.*rev-parse HEAD/);
+  assert.match(workerBuild, /readonly stamp=\/workspace\/\.fixlist-source-sha/);
+  assert.match(workerBuild, /actual_sha=.*tr -d/);
+  assert.match(workerBuild, /archive stamp \$actual_sha, expected \$\{_RELEASE_SHA\}/);
   assert.match(workerBuild, /scanner-api\/requirements\.txt/);
   assert.match(workerBuild, /scanner-api\/app/);
-  assert.match(workerBuild, /git diff --no-index --exit-code/);
-  assert.match(workerBuild, /git[^\n]*archive --format=tar "\$\{_RELEASE_SHA\}"/);
+  assert.match(workerBuild, /cp -a \/workspace\/scanner-api\/app/);
   assert.match(workerBuild, /sha256sum "\$verified_context\/scanner-api\/app\/main\.py"/);
+  assert.doesNotMatch(workerBuild, /https:\/\/github\.com\/bright4862-design\/seo-autopilot\.git/);
+  assert.doesNotMatch(buildCode, /git[^\n]*fetch/);
   assert.match(
     buildCode,
     /docker[\s\S]*\/workspace\/\.verified-context/,
-    "the image must be built from the fetched immutable commit archive",
+    "the image must be built from the exact archived commit context",
   );
   assert.doesNotMatch(
     buildCode,
     /args:\s*\["build",\s*"--tag",[^\n]*,\s*"\."\]/,
-    "the uploaded workspace must not remain the Docker build source",
+    "the uploaded workspace root must not remain the Docker build source",
   );
 });
 

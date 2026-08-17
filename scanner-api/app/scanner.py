@@ -71,6 +71,7 @@ SITEMAP_DISCOVERY_LIMIT = 5000
 # one bounded retry. This is rate-limit cooperation, not a bot-protection bypass.
 RATE_LIMIT_COOLDOWN_SECONDS = 2.0
 RATE_LIMIT_REQUEST_INTERVAL_SECONDS = 0.5
+RATE_LIMIT_PROACTIVE_REQUEST_INTERVAL_SECONDS = 1.0
 RATE_LIMIT_MAX_RETRIES = 8
 
 
@@ -92,10 +93,19 @@ def detect_rate_limit_profile(response) -> str:
 
 
 class _AdaptiveRateLimitPacer:
-    def __init__(self, *, deadline: float, enabled: bool, start_active: bool = False):
+    def __init__(
+        self,
+        *,
+        deadline: float,
+        enabled: bool,
+        start_active: bool = False,
+        request_interval_seconds: float | None = None,
+    ):
         self.deadline = float(deadline)
         self.enabled = bool(enabled)
         self.active = bool(self.enabled and start_active)
+        interval = RATE_LIMIT_REQUEST_INTERVAL_SECONDS if request_interval_seconds is None else request_interval_seconds
+        self.request_interval_seconds = max(0.0, float(interval))
         self.next_request_at = 0.0
         self.retry_count = 0
         self.recovered_count = 0
@@ -110,7 +120,7 @@ class _AdaptiveRateLimitPacer:
             first_429 = not self.saw_429
             self.saw_429 = True
             self.active = True
-            delay = RATE_LIMIT_COOLDOWN_SECONDS if first_429 else RATE_LIMIT_REQUEST_INTERVAL_SECONDS
+            delay = RATE_LIMIT_COOLDOWN_SECONDS if first_429 else self.request_interval_seconds
             self.next_request_at = max(self.next_request_at, now + max(0.0, float(delay)))
 
     async def wait_for_slot(self) -> bool:
@@ -126,7 +136,7 @@ class _AdaptiveRateLimitPacer:
             now = time.monotonic()
             if now >= self.deadline:
                 return False
-            self.next_request_at = now + max(0.0, float(RATE_LIMIT_REQUEST_INTERVAL_SECONDS))
+            self.next_request_at = now + self.request_interval_seconds
             return True
 
 
@@ -343,6 +353,11 @@ async def run_scan(
             deadline=timing_budget["crawl_deadline"],
             enabled=job_mode,
             start_active=bool(rate_limit_profile),
+            request_interval_seconds=(
+                RATE_LIMIT_PROACTIVE_REQUEST_INTERVAL_SECONDS
+                if rate_limit_profile
+                else RATE_LIMIT_REQUEST_INTERVAL_SECONDS
+            ),
         )
 
         async def worker() -> None:

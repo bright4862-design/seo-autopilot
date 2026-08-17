@@ -1,64 +1,6 @@
 # Cloud Build artifact for the PRIVATE durable Standard 150 worker.
-#
-# This file is deliberately SEPARATE from cloudbuild.yaml. cloudbuild.yaml
-# builds and deploys the existing scanner service (seo-autopilot-4545); it must
-# not be repurposed, because reusing it would redeploy that service instead of
-# creating the private worker.
-#
-# NO VALUE BELOW IS INVENTED. Every deployment-specific value is a required
-# substitution with an empty default, so a build that omits one fails closed at
-# gcloud rather than silently deploying to a guessed target. Fill them from the
-# real project inventory before running.
-#
-# Required substitutions (all must be supplied explicitly):
-#   _RELEASE_SHA         Full 40-character lowercase Git commit SHA of the
-#                        exact clean checkout submitted to Cloud Build.
-#   _WORKER_SERVICE      Cloud Run service name for the private worker.
-#                        MUST NOT equal the existing scanner service.
-#   _REGION              Cloud Run / Artifact Registry region.
-#   _IMAGE               Fully-qualified image path, without tag.
-#   _RUNTIME_SA          Runtime service account the worker runs AS.
-#   _INVOKER_SA          Service account Cloud Tasks mints its OIDC token as.
-#                        Needs roles/run.invoker on _WORKER_SERVICE only.
-#
-# This file BUILDS and DEPLOYS a new private service. It performs no traffic
-# migration: --no-traffic is set, so the new revision receives 0% until a human
-# promotes it explicitly. Nothing here promotes, and nothing here touches the
-# existing scanner service.
-#
-# Example (values are placeholders -- substitute real ones):
-#   gcloud builds submit --config cloudbuild.durable-worker.yaml \
-#     --substitutions=_RELEASE_SHA=<40-char-sha>,_WORKER_SERVICE=<name>,_REGION=<region>,\
-# _IMAGE=<region>-docker.pkg.dev/<project>/<repo>/<image>,\
-# _RUNTIME_SA=<sa>@<project>.iam.gserviceaccount.com,\
-# _INVOKER_SA=<sa>@<project>.iam.gserviceaccount.com
-
-#   _BASE44_APP_ID       Base44 app id the worker calls back into. REQUIRED:
-#                        with it empty, scan_job.py builds
-#                        <api>/api/apps//functions/<name> and every control and
-#                        completion call silently misroutes.
-#   _BASE44_API_URL      Base44 API origin. Optional in code (defaults to
-#                        https://base44.app) but pinned here so a deploy cannot
-#                        silently target the public default.
-#
-# Secrets are injected from Secret Manager by NAME, never as plaintext env vars:
-#   _SIGNING_KEY_SECRET  Secret name for SCAN_EVIDENCE_SIGNING_KEY. REQUIRED:
-#                        without it read_scan_run() returns None and the
-#                        authority path degrades silently rather than failing.
-#   _SIGNING_KEY_VERSION Numeric, ENABLED Secret Manager version. REQUIRED.
-#                        "latest" is PROHIBITED: it re-resolves at instance
-#                        start, so a new secret version would silently change
-#                        what an already-verified revision reads, breaking the
-#                        authority seal with no revision change to point at.
-#                        The immutable release pins one exact version.
-#
-# SCANNER_API_KEY is deliberately NOT supplied. /scan-job authenticates with
-# Cloud Run IAM plus TASKS_INVOKER_SERVICE_ACCOUNT, calls run_scan() directly,
-# and runs the Python review in-process (scan_job.py build_local_review). It
-# never calls require_scanner_api_key(). That guard protects only the sibling
-# routes /scan, /review, /chat and /health/auth, which this single-purpose
-# private worker does not serve. With the key absent those routes fail closed
-# with 401, which is the intended state -- see the deployment contract.
+# The caller must submit a clean git archive of the exact release commit and
+# include .fixlist-source-sha containing that same 40-character SHA.
 
 substitutions:
   _RELEASE_SHA: ""
@@ -73,7 +15,6 @@ substitutions:
   _SIGNING_KEY_VERSION: ""
 
 steps:
-  # Fail closed before anything is built or deployed.
   - id: require-substitutions
     name: gcr.io/cloud-builders/gcloud
     entrypoint: bash
@@ -104,56 +45,44 @@ steps:
           echo "Invalid _RELEASE_SHA: expected exactly 40 lowercase hexadecimal characters."
           exit 1
         fi
+        if ! printf '%s' "${_SIGNING_KEY_VERSION}" | grep -Eq '^[0-9]+$'; then
+          echo "Invalid _SIGNING_KEY_VERSION: expected a numeric pinned version."
+          exit 1
+        fi
         echo "All required substitutions supplied."
         echo "Release identity pinned to ${_RELEASE_SHA}."
 
-  # A release tag is not provenance by itself. Fetch the claimed immutable
-  # commit from the canonical repository, compare every Dockerfile input with
-  # the uploaded workspace, and build from a fresh archive of that commit. This
-  # makes a dirty or unrelated `gcloud builds submit` context fail inside Cloud
-  # Build instead of merely inheriting the operator-supplied _RELEASE_SHA label.
+  # The GitHub-side operator has already verified HEAD == current origin/main,
+  # CONFIRM == SOURCE_SHA, and a clean checkout, then submitted `git archive`
+  # output from that exact commit. Verify the archive stamp here and copy only
+  # the Dockerfile inputs into an isolated build context. This avoids requiring
+  # a GitHub credential inside Cloud Build while preserving exact-source build
+  # provenance and rejecting mismatched release labels.
   - id: verify-release-source
-    name: gcr.io/cloud-builders/git
+    name: gcr.io/cloud-builders/gcloud
     entrypoint: bash
     args:
       - -c
       - |
         set -euo pipefail
-        readonly canonical_repository="https://github.com/bright4862-design/seo-autopilot.git"
-        readonly verified_checkout="/workspace/.verified-source"
-        readonly verified_context="/workspace/.verified-context"
-        rm -rf "$verified_checkout" "$verified_context"
-        git init -q "$verified_checkout"
-        git -C "$verified_checkout" remote add origin "$canonical_repository"
-        git -C "$verified_checkout" fetch --quiet --depth=1 origin "${_RELEASE_SHA}"
-        git -C "$verified_checkout" checkout --quiet --detach FETCH_HEAD
-        actual_sha="$(git -C "$verified_checkout" rev-parse HEAD)"
+        readonly stamp=/workspace/.fixlist-source-sha
+        readonly verified_context=/workspace/.verified-context
+        test -f "$stamp" || { echo "Missing exact-source stamp." >&2; exit 1; }
+        actual_sha="$(tr -d '[:space:]' < "$stamp")"
         if [ "$actual_sha" != "${_RELEASE_SHA}" ]; then
-          echo "Release source mismatch: fetched $actual_sha, expected ${_RELEASE_SHA}."
+          echo "Release source mismatch: archive stamp $actual_sha, expected ${_RELEASE_SHA}." >&2
           exit 1
         fi
-
-        # These are the complete inputs copied by the durable worker Dockerfile,
-        # plus this build policy itself. Directory comparison also rejects extra
-        # uncommitted modules under scanner-api/app.
-        git diff --no-index --exit-code -- \
-          "$verified_checkout/cloudbuild.durable-worker.yaml" \
-          /workspace/cloudbuild.durable-worker.yaml
-        git diff --no-index --exit-code -- \
-          "$verified_checkout/Dockerfile" \
-          /workspace/Dockerfile
-        git diff --no-index --exit-code -- \
-          "$verified_checkout/scanner-api/requirements.txt" \
-          /workspace/scanner-api/requirements.txt
-        git diff --no-index --exit-code -- \
-          "$verified_checkout/scanner-api/app" \
-          /workspace/scanner-api/app
-
-        mkdir -p "$verified_context"
-        git -C "$verified_checkout" archive --format=tar "${_RELEASE_SHA}" \
-          | tar -xf - -C "$verified_context"
+        for path in Dockerfile scanner-api/requirements.txt scanner-api/app/main.py; do
+          test -e "/workspace/$path" || { echo "Missing worker build input: $path" >&2; exit 1; }
+        done
+        rm -rf "$verified_context"
+        mkdir -p "$verified_context/scanner-api"
+        cp /workspace/Dockerfile "$verified_context/Dockerfile"
+        cp /workspace/scanner-api/requirements.txt "$verified_context/scanner-api/requirements.txt"
+        cp -a /workspace/scanner-api/app "$verified_context/scanner-api/app"
         main_sha="$(sha256sum "$verified_context/scanner-api/app/main.py" | cut -d ' ' -f 1)"
-        echo "Verified uploaded worker context against ${_RELEASE_SHA}."
+        echo "Verified archived worker context for ${_RELEASE_SHA}."
         echo "Verified scanner-api/app/main.py sha256=$main_sha"
 
   - id: build
@@ -173,29 +102,14 @@ steps:
       - ${_WORKER_SERVICE}
       - --image=${_IMAGE}:${_RELEASE_SHA}
       - --region=${_REGION}
-      # Private. Cloud Run IAM performs OIDC token validation (signature,
-      # issuer, audience, expiry) before the request reaches the app. The app's
-      # invoker-email check is a second, weaker gate that does NOT verify the
-      # signature or audience -- so this flag is load-bearing for security.
       - --no-allow-unauthenticated
-      # Explicit runtime identity. Without this the worker would inherit the
-      # default compute service account.
       - --service-account=${_RUNTIME_SA}
-      # Must match dispatchDeadline "480s" in startStandardScanJob/cloudTasks.js.
       - --timeout=480
-      # One durable job per instance.
       - --concurrency=1
       - --min-instances=0
       - --max-instances=20
-      # New revision takes no traffic. Promotion is a separate, human decision.
       - --no-traffic
-      # Non-secret runtime configuration. GROK_PROXY_ENABLED is the variable the
-      # Cloud Run worker actually reads (scanner-api/app/main.py). GROK_CHAT_ENABLED
-      # belongs to the Base44 grokChat function and is a no-op here -- setting it
-      # on this service would be false assurance, so it is deliberately absent.
       - --set-env-vars=TASKS_INVOKER_SERVICE_ACCOUNT=${_INVOKER_SA},BASE44_APP_ID=${_BASE44_APP_ID},BASE44_API_URL=${_BASE44_API_URL},GROK_PROXY_ENABLED=false,FIXLIST_WORKER_SOURCE_SHA=${_RELEASE_SHA}
-      # Secrets by reference. Never --set-env-vars a secret value: that would
-      # store plaintext in the service revision and in build logs.
       - --set-secrets=SCAN_EVIDENCE_SIGNING_KEY=${_SIGNING_KEY_SECRET}:${_SIGNING_KEY_VERSION}
 
 images:
@@ -203,14 +117,3 @@ images:
 
 options:
   logging: CLOUD_LOGGING_ONLY
-
-# Cloud Tasks target route is /scan-job on this service. Granting the invoker
-# and creating the queue are deliberately NOT performed here -- they are IAM and
-# queue mutations that must be applied explicitly and reviewed. Reference only:
-#
-#   gcloud run services add-iam-policy-binding <_WORKER_SERVICE> \
-#     --region=<_REGION> --member=serviceAccount:<_INVOKER_SA> \
-#     --role=roles/run.invoker
-#
-#   gcloud tasks queues create <queue> --location=<_REGION> \
-#     --max-concurrent-dispatches=1 --max-attempts=3

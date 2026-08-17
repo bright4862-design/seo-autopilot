@@ -65,6 +65,51 @@ SCAN_BUDGETS = {
 
 SITEMAP_DISCOVERY_LIMIT = 5000
 
+# Durable scans can adapt when a site explicitly rate-limits a burst. Normal
+# sites keep the existing concurrent crawler behavior. Once HTTP 429 is seen,
+# request starts are paced for the rest of that crawl and the blocked URL gets
+# one bounded retry. This is rate-limit cooperation, not a bot-protection bypass.
+RATE_LIMIT_COOLDOWN_SECONDS = 2.0
+RATE_LIMIT_REQUEST_INTERVAL_SECONDS = 0.5
+
+
+class _AdaptiveRateLimitPacer:
+    def __init__(self, *, deadline: float, enabled: bool):
+        self.deadline = float(deadline)
+        self.enabled = bool(enabled)
+        self.active = False
+        self.next_request_at = 0.0
+        self.retry_count = 0
+        self.recovered_count = 0
+        self._lock = asyncio.Lock()
+
+    async def activate(self) -> None:
+        if not self.enabled:
+            return
+        async with self._lock:
+            now = time.monotonic()
+            first_activation = not self.active
+            self.active = True
+            delay = RATE_LIMIT_COOLDOWN_SECONDS if first_activation else RATE_LIMIT_REQUEST_INTERVAL_SECONDS
+            self.next_request_at = max(self.next_request_at, now + max(0.0, float(delay)))
+
+    async def wait_for_slot(self) -> bool:
+        if not self.enabled or not self.active:
+            return True
+        async with self._lock:
+            now = time.monotonic()
+            wait_seconds = max(0.0, self.next_request_at - now)
+            if now + wait_seconds >= self.deadline:
+                return False
+            if wait_seconds:
+                await asyncio.sleep(wait_seconds)
+            now = time.monotonic()
+            if now >= self.deadline:
+                return False
+            self.next_request_at = now + max(0.0, float(RATE_LIMIT_REQUEST_INTERVAL_SECONDS))
+            return True
+
+
 TRUST_PATHS = ["/about", "/contact", "/privacy", "/terms", "/security", "/legal", "/mentions-legales", "/cgv"]
 
 
@@ -272,6 +317,10 @@ async def run_scan(
             "final_url_duplicates_deduped": 0,
             "final_url_duplicate_examples": [],
         }
+        rate_limit_pacer = _AdaptiveRateLimitPacer(
+            deadline=timing_budget["crawl_deadline"],
+            enabled=job_mode,
+        )
 
         async def worker() -> None:
             while True:
@@ -320,7 +369,20 @@ async def run_scan(
                             fetch_error="blocked_by_robots_txt",
                         )
                     else:
+                        if not await rate_limit_pacer.wait_for_slot():
+                            return
                         page = await fetch_and_extract(client, target, snapshot, robots_policy=robots_policy)
+                        if rate_limit_pacer.enabled and int(page.get("status_code") or 0) == 429:
+                            await rate_limit_pacer.activate()
+                            if await rate_limit_pacer.wait_for_slot():
+                                rate_limit_pacer.retry_count += 1
+                                retry_page = await fetch_and_extract(client, target, snapshot, robots_policy=robots_policy)
+                                page = retry_page
+                                retry_status = int(page.get("status_code") or 0)
+                                if 200 <= retry_status < 400:
+                                    rate_limit_pacer.recovered_count += 1
+                                elif retry_status == 429:
+                                    await rate_limit_pacer.activate()
                     annotate_robots_evidence(page, robots_policy, target)
                     html = page.pop("_html", "")
                     # Parse links OUTSIDE the lock (CPU-bound) so workers don't block each other.
@@ -401,6 +463,9 @@ async def run_scan(
         "queue_exhausted": final_queue_size == 0 and len(pages) < max_pages and not crawl_deadline_reached,
         "failed_fetch_count": failed_fetch_count,
         "failure_reason_buckets": failure_reason_buckets,
+        "rate_limit_throttle_activated": rate_limit_pacer.active,
+        "rate_limit_retry_count": rate_limit_pacer.retry_count,
+        "rate_limit_recovered_count": rate_limit_pacer.recovered_count,
         "final_url_dedup_version": FINAL_URL_DEDUP_VERSION,
         "final_url_duplicates_deduped": crawl_state["final_url_duplicates_deduped"],
         "final_url_duplicate_examples": crawl_state["final_url_duplicate_examples"],

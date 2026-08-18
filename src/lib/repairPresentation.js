@@ -1,4 +1,4 @@
-import { customerPriorityReason, priorityBucket } from "@/lib/fixRanking";
+import { customerPriorityReason, priorityBucket } from "./fixRanking.js";
 
 export const REPAIR_PRESENTATION_VERSION = "repair_presentation_v1_compact_mobile";
 

@@ -14,13 +14,43 @@ from .security import safe_get
 MAX_SITEMAP_FETCHES = 60
 
 
-async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix: str, limit: int, artifacts: list[dict], scope_evidence: dict | None = None, *, deadline: float | None = None, max_fetches: int | None = None, diagnostics: dict | None = None) -> list[str]:
+class _SitemapRequestPacer:
+    """Space sequential sitemap-discovery requests for burst-sensitive origins.
+
+    The default zero interval is a no-op, so normal sites keep the existing fast
+    discovery path.
+    """
+
+    def __init__(self, min_interval_seconds: float = 0.0):
+        self.min_interval_seconds = max(0.0, float(min_interval_seconds or 0.0))
+        self.next_request_at = 0.0
+
+    async def wait_for_slot(self, deadline: float | None = None) -> bool:
+        if self.min_interval_seconds <= 0:
+            return True
+        now = time.monotonic()
+        wait_seconds = max(0.0, self.next_request_at - now)
+        if deadline is not None and now + wait_seconds >= deadline:
+            return False
+        if wait_seconds:
+            await asyncio.sleep(wait_seconds)
+        now = time.monotonic()
+        if deadline is not None and now >= deadline:
+            return False
+        self.next_request_at = now + self.min_interval_seconds
+        return True
+
+
+async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix: str, limit: int, artifacts: list[dict], scope_evidence: dict | None = None, *, deadline: float | None = None, max_fetches: int | None = None, diagnostics: dict | None = None, min_request_interval_seconds: float = 0.0) -> list[str]:
     scope_evidence = scope_evidence if scope_evidence is not None else {}
     diagnostics = diagnostics if diagnostics is not None else {}
     diagnostics.setdefault("sitemap_fetch_count", 0)
     diagnostics.setdefault("sitemap_fetch_limit_reached", False)
     diagnostics.setdefault("sitemap_budget_exhausted", False)
     diagnostics.setdefault("sitemap_failure_reason_buckets", {})
+    request_interval = max(0.0, float(min_request_interval_seconds or 0.0))
+    diagnostics["sitemap_request_interval_seconds"] = request_interval
+    request_pacer = _SitemapRequestPacer(request_interval)
     scope_evidence.setdefault("sitemap_urls_excluded_outside_scope", 0)
     scope_evidence.setdefault("market_prefixes_detected", [])
     scope_evidence.setdefault("multimarket_detected", False)
@@ -30,7 +60,7 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
     roots: list[str] = []
     robots_url = f"{origin}/robots.txt"
     try:
-        robots = await _safe_get_before_deadline(client, robots_url, deadline)
+        robots = await _safe_get_before_deadline(client, robots_url, deadline, pacer=request_pacer)
         if robots is not None:
             for line in robots.text.splitlines():
                 if line.lower().startswith("sitemap:"):
@@ -50,7 +80,15 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
     for root in dedupe(roots):
         if _stop_sitemap_discovery(fetched, fetch_limit, deadline, diagnostics):
             break
-        locs = await fetch_sitemap_locs(client, root, fetched, artifacts, deadline=deadline, diagnostics=diagnostics)
+        locs = await fetch_sitemap_locs(
+            client,
+            root,
+            fetched,
+            artifacts,
+            deadline=deadline,
+            diagnostics=diagnostics,
+            pacer=request_pacer,
+        )
         bucket = family_urls.setdefault(f"root:{sitemap_family_key(root)}", [])
         for loc in locs:
             if is_sitemap_url(loc):
@@ -70,7 +108,15 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
         if _stop_sitemap_discovery(fetched, fetch_limit, deadline, diagnostics):
             break
         bucket = family_urls.setdefault(f"child:{sitemap_family_key(child)}", [])
-        locs = await fetch_sitemap_locs(client, child, fetched, artifacts, deadline=deadline, diagnostics=diagnostics)
+        locs = await fetch_sitemap_locs(
+            client,
+            child,
+            fetched,
+            artifacts,
+            deadline=deadline,
+            diagnostics=diagnostics,
+            pacer=request_pacer,
+        )
         for loc in locs:
             if len(bucket) >= limit:
                 break
@@ -139,7 +185,7 @@ def _stop_sitemap_discovery(fetched: set[str], fetch_limit: int, deadline: float
     return False
 
 
-async def fetch_sitemap_locs(client: httpx.AsyncClient, sitemap_url: str, fetched: set[str], artifacts: list[dict], *, deadline: float | None = None, diagnostics: dict | None = None) -> list[str]:
+async def fetch_sitemap_locs(client: httpx.AsyncClient, sitemap_url: str, fetched: set[str], artifacts: list[dict], *, deadline: float | None = None, diagnostics: dict | None = None, pacer: _SitemapRequestPacer | None = None) -> list[str]:
     if not sitemap_url or sitemap_url in fetched:
         return []
     if _deadline_reached(deadline):
@@ -151,7 +197,7 @@ async def fetch_sitemap_locs(client: httpx.AsyncClient, sitemap_url: str, fetche
     if diagnostics is not None:
         diagnostics["sitemap_fetch_count"] = len(fetched)
     try:
-        response = await _safe_get_before_deadline(client, sitemap_url, deadline)
+        response = await _safe_get_before_deadline(client, sitemap_url, deadline, pacer=pacer)
         if response is None:
             if _deadline_reached(deadline) and diagnostics is not None:
                 diagnostics["sitemap_budget_exhausted"] = True
@@ -192,7 +238,9 @@ def _deadline_reached(deadline: float | None) -> bool:
     return deadline is not None and time.monotonic() >= deadline
 
 
-async def _safe_get_before_deadline(client: httpx.AsyncClient, url: str, deadline: float | None):
+async def _safe_get_before_deadline(client: httpx.AsyncClient, url: str, deadline: float | None, *, pacer: _SitemapRequestPacer | None = None):
+    if pacer is not None and not await pacer.wait_for_slot(deadline):
+        return None
     if deadline is None:
         return await safe_get(client, url)
     remaining = deadline - time.monotonic()

@@ -59,8 +59,8 @@ def _path(value: Any) -> str:
         return ""
     try:
         parsed = urlparse(raw if "://" in raw else f"https://fixlist.invalid{raw if raw.startswith('/') else '/' + raw}")
-        path = parsed.path or "/"
-        return path.rstrip("/") or "/"
+        path = (parsed.path or "/").rstrip("/") or "/"
+        return f"{path}?{parsed.query}" if parsed.query else path
     except Exception:
         return raw.rstrip("/") or "/"
 

@@ -72,6 +72,10 @@ SITEMAP_DISCOVERY_LIMIT = 5000
 RATE_LIMIT_COOLDOWN_SECONDS = 3.0
 RATE_LIMIT_REQUEST_INTERVAL_SECONDS = 0.5
 RATE_LIMIT_PROACTIVE_REQUEST_INTERVAL_SECONDS = 1.0
+# Cloudflare-fronted Shopify stores can tolerate ordinary browser traffic while
+# rejecting crawler bursts much earlier. Use a slower cooperative start rate for
+# that detected profile only; normal sites and generic 429 recovery stay unchanged.
+RATE_LIMIT_CLOUDFLARE_SHOPIFY_INTERVAL_SECONDS = 2.5
 RATE_LIMIT_INITIAL_COOLDOWN_SECONDS = 30.0
 RATE_LIMIT_BACKOFF_INTERVAL_SECONDS = 2.5
 RATE_LIMIT_MAX_INTERVAL_SECONDS = 4.0
@@ -99,6 +103,12 @@ def detect_rate_limit_profile(response) -> str:
     if sum(1 for marker in shopify_markers if marker in source) >= 2:
         return "cloudflare_shopify"
     return ""
+
+
+def proactive_rate_limit_interval(profile: str) -> float:
+    if profile == "cloudflare_shopify":
+        return RATE_LIMIT_CLOUDFLARE_SHOPIFY_INTERVAL_SECONDS
+    return RATE_LIMIT_PROACTIVE_REQUEST_INTERVAL_SECONDS
 
 
 class _AdaptiveRateLimitPacer:
@@ -399,7 +409,7 @@ async def run_scan(
                 scope_evidence=scope_evidence, deadline=timing_budget["sitemap_deadline"],
                 max_fetches=max_sitemap_fetches, diagnostics=sitemap_diagnostics,
                 min_request_interval_seconds=(
-                    RATE_LIMIT_PROACTIVE_REQUEST_INTERVAL_SECONDS
+                    proactive_rate_limit_interval(rate_limit_profile)
                     if rate_limit_profile
                     else 0.0
                 ),
@@ -441,7 +451,7 @@ async def run_scan(
             enabled=job_mode,
             start_active=bool(rate_limit_profile),
             request_interval_seconds=(
-                RATE_LIMIT_PROACTIVE_REQUEST_INTERVAL_SECONDS
+                proactive_rate_limit_interval(rate_limit_profile)
                 if rate_limit_profile
                 else RATE_LIMIT_REQUEST_INTERVAL_SECONDS
             ),

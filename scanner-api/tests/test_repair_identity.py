@@ -149,3 +149,17 @@ def test_unknown_indexability_remains_compatible_for_historical_scans():
     state, reason = verification_eligibility(previous, page("/products/a"))
     assert state == "eligible"
     assert "comparable" in reason.lower()
+
+
+def test_different_query_variant_is_not_treated_as_rechecked_evidence():
+    previous = search_fix(affected_pages=["/products/a?variant=red"])
+    result = compare_repair_runs(previous, [], [page("/products/a?variant=blue")])
+    assert result["state"] == "could_not_verify"
+    assert result["rechecked_pages"] == 0
+
+
+def test_same_query_variant_can_be_verified_when_still_eligible():
+    previous = search_fix(affected_pages=["/products/a?variant=red"])
+    result = compare_repair_runs(previous, [], [page("/products/a?variant=red", indexable=True)])
+    assert result["state"] == "verified_fixed"
+    assert result["eligible_rechecked_pages"] == 1

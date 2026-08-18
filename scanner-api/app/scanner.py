@@ -398,6 +398,11 @@ async def run_scan(
                 client, origin, prefix, SITEMAP_DISCOVERY_LIMIT, artifacts,
                 scope_evidence=scope_evidence, deadline=timing_budget["sitemap_deadline"],
                 max_fetches=max_sitemap_fetches, diagnostics=sitemap_diagnostics,
+                min_request_interval_seconds=(
+                    RATE_LIMIT_PROACTIVE_REQUEST_INTERVAL_SECONDS
+                    if rate_limit_profile
+                    else 0.0
+                ),
             )
         sitemap_diagnostics["sitemap_elapsed_ms"] = round((time.monotonic() - sitemap_started_monotonic) * 1000)
         sitemap_diagnostics["sitemap_urls_discovered"] = len(sitemap_urls)

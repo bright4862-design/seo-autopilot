@@ -1,5 +1,10 @@
 export const RECONCILE_QUEUED_AFTER_MS = 30 * 60 * 1000;
 export const RECONCILE_STARTED_AFTER_MS = 35 * 60 * 1000;
+// A live Cloud Tasks delivery can occupy the worker for up to 480s and the
+// production retry queue permits up to 300s backoff. Fifteen minutes safely
+// spans both plus headroom, while allowing a worker that vanished after pickup
+// to be closed well before the full 35-minute recovery envelope.
+export const RECONCILE_HEARTBEAT_AFTER_MS = 15 * 60 * 1000;
 export const RECONCILE_TERMINAL_RELEASE_LOOKBACK_MS = 2 * 60 * 60 * 1000;
 
 const TERMINAL = new Set(["complete", "limited", "failed", "cancelled"]);
@@ -55,13 +60,29 @@ export function reconciliationDecision(scan = {}, nowMs = Date.now()) {
         detail: "This scan did not reach a verified worker start and was safely stopped. Please start a new scan.",
       };
     }
-    if (now - started <= RECONCILE_STARTED_AFTER_MS) return { action: "skip", reason: "worker_within_budget" };
-    return {
-      action: "fail",
-      reason: "worker_timeout",
-      error_code: "worker_reconciliation_timeout",
-      detail: "This scan exceeded the durable worker recovery window and was safely stopped. Please start a new scan.",
-    };
+    if (now - started > RECONCILE_STARTED_AFTER_MS) {
+      return {
+        action: "fail",
+        reason: "worker_timeout",
+        error_code: "worker_reconciliation_timeout",
+        detail: "This scan exceeded the durable worker recovery window and was safely stopped. Please start a new scan.",
+      };
+    }
+
+    const heartbeat = timestampMs(scan?.worker_heartbeat_at);
+    if (heartbeat !== null) {
+      if (now - heartbeat > RECONCILE_HEARTBEAT_AFTER_MS) {
+        return {
+          action: "fail",
+          reason: "worker_heartbeat_timeout",
+          error_code: "worker_heartbeat_timeout",
+          detail: "The scan worker stopped reporting progress and was safely stopped. Please start a new scan.",
+        };
+      }
+      return { action: "skip", reason: "worker_heartbeat_within_budget" };
+    }
+
+    return { action: "skip", reason: "worker_within_budget" };
   }
 
   return { action: "skip", reason: "status_not_reconcilable" };

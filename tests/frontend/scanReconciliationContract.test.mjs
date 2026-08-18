@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  RECONCILE_HEARTBEAT_AFTER_MS,
   RECONCILE_QUEUED_AFTER_MS,
   RECONCILE_STARTED_AFTER_MS,
   reconciliationDecision,
@@ -35,6 +36,32 @@ test("worker reconciliation sits after the normal drain/retry envelope", () => {
   const stale = reconciliationDecision({ ...base, status: "crawling", started_at: startedAt }, now);
   assert.equal(stale.action, "fail");
   assert.equal(stale.error_code, "worker_reconciliation_timeout");
+});
+
+test("worker heartbeat closes vanished jobs without shortening the full retry envelope", () => {
+  // One Cloud Tasks request may run for 480s and the production queue permits
+  // up to 300s backoff. The heartbeat deadline must safely outlast both.
+  assert.ok(RECONCILE_HEARTBEAT_AFTER_MS > (480 + 300) * 1000);
+  assert.ok(RECONCILE_HEARTBEAT_AFTER_MS < RECONCILE_STARTED_AFTER_MS);
+  const startedAt = new Date(now - 20 * 60 * 1000).toISOString();
+  const staleHeartbeat = new Date(now - RECONCILE_HEARTBEAT_AFTER_MS - 1).toISOString();
+  const stale = reconciliationDecision({
+    ...base,
+    status: "crawling",
+    started_at: startedAt,
+    worker_heartbeat_at: staleHeartbeat,
+  }, now);
+  assert.equal(stale.action, "fail");
+  assert.equal(stale.error_code, "worker_heartbeat_timeout");
+
+  const freshHeartbeat = new Date(now - RECONCILE_HEARTBEAT_AFTER_MS + 1).toISOString();
+  const live = reconciliationDecision({
+    ...base,
+    status: "crawling",
+    started_at: startedAt,
+    worker_heartbeat_at: freshHeartbeat,
+  }, now);
+  assert.equal(live.action, "skip");
 });
 
 test("terminal rows are release-reconciled but never rewritten", () => {

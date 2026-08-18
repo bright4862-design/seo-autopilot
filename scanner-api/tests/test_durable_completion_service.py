@@ -197,4 +197,6 @@ def test_durable_worker_stamps_python_backend_authority_markers():
     durable = source.split('@app.post("/scan-job")', 1)[1].split('@app.post("/scan-job-drain")', 1)[0]
     assert '"advanced_scan_backend": "python_scanner_api"' in durable
     assert '"deno_fallback_used": False' in durable
-    assert durable.index('"advanced_scan_backend": "python_scanner_api"') < durable.index('outcome = await complete_authority')
+    assert "complete_authority(client, scan, result, signing_key)" in durable
+    assert "timeout=WORKER_COMPLETION_WALL_TIMEOUT_SECONDS" in durable
+    assert durable.index('"advanced_scan_backend": "python_scanner_api"') < durable.index("complete_authority(client, scan, result, signing_key)")

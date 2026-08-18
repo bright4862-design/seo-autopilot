@@ -292,6 +292,24 @@ test("a network failure leaves the outcome unknown rather than assuming failure"
   assert.equal(result.failureCode, "admission_unreachable");
 });
 
+test("a coordinator request that never resolves is aborted on the admission deadline", async () => {
+  const started = Date.now();
+  const result = await releaseAdmission({
+    ownerUserId: OWNER,
+    scanId: SCAN_ID,
+    terminalStatus: "failed",
+    ...enabled,
+    timeoutMs: 10,
+    fetchImpl: (_url, options = {}) => new Promise((resolve, reject) => {
+      options.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+    }),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.outcomeUnknown, true);
+  assert.equal(result.failureCode, "admission_unreachable");
+  assert.ok(Date.now() - started < 500, "the coordinator deadline must stop a hung fetch promptly");
+});
+
 test("an unrecognised upstream error never becomes a control-flow value", async () => {
   const result = await claimAdmission({
     ownerUserId: OWNER,

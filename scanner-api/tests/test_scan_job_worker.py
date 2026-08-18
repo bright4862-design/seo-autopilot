@@ -259,8 +259,10 @@ async def test_durable_worker_wall_clock_timeout_terminalizes_exact_attempt(monk
 
     monkeypatch.setattr(main, "require_cloud_tasks_oidc", lambda _: None)
 
+    persisted_state = dict(scan)
+
     async def read(*_args, **_kwargs):
-        return scan
+        return dict(persisted_state)
 
     async def started(*_args, **_kwargs):
         return {**scan, "status": "crawling", "started_at": "2026-08-18T10:00:00Z"}
@@ -272,6 +274,11 @@ async def test_durable_worker_wall_clock_timeout_terminalizes_exact_attempt(monk
 
     async def fail(*args, **kwargs):
         failures.append((args, kwargs))
+        persisted_state.update({
+            "status": "failed",
+            "error_code": args[2],
+            "release_gate_eligible": False,
+        })
         return True
 
     monkeypatch.setattr(main, "read_scan_run", read)
@@ -373,6 +380,31 @@ async def test_durable_worker_completion_wall_timeout_terminalizes_exact_attempt
     assert args[1] == "scan-1"
     assert args[2] == "worker_completion_wall_timeout"
     assert kwargs["attempt_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_post_crawl_terminal_write_has_endpoint_level_deadline(monkeypatch):
+    """A hung Base44 terminal write cannot keep an access-limited crawl open."""
+    import asyncio
+    from app import main
+
+    async def never_returns(*_args, **_kwargs):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(main, "write_terminal_failure", never_returns)
+    monkeypatch.setattr(main, "WORKER_TERMINAL_WRITE_WALL_TIMEOUT_SECONDS", 0.01)
+
+    with pytest.raises(HTTPException) as excinfo:
+        await main.persist_terminal_failure_bounded(
+            None,
+            "scan-1",
+            "scan_access_limited",
+            "The site challenged the scanner.",
+            attempt_count=1,
+        )
+
+    assert excinfo.value.status_code == 503
+    assert "bounded worker time" in str(excinfo.value.detail)
 
 
 # ------------------------------------------------- discovery vs crawl cap --

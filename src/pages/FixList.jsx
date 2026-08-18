@@ -446,6 +446,46 @@ export default function FixList() {
           </button>
         </div>
 
+        {ownerDebugVisible ? (
+          <div className="mt-5 rounded-2xl border border-ink/10 bg-white/60 p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="mr-auto text-[12px] font-semibold uppercase tracking-[0.12em] text-ink-faint">Owner debug</span>
+              <button
+                type="button"
+                onClick={handleOwnerDebugScan}
+                disabled={Boolean(ownerDebugBusy)}
+                className="rounded-full border border-ink/15 px-3 py-1.5 text-[12px] font-medium text-ink transition-opacity hover:opacity-70 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {ownerDebugBusy === "debug" ? "Checking…" : "Debug scan"}
+              </button>
+              {ownerScanActive ? (
+                <button
+                  type="button"
+                  onClick={handleOwnerForceStopScan}
+                  disabled={Boolean(ownerDebugBusy)}
+                  className="rounded-full border border-red-500/30 px-3 py-1.5 text-[12px] font-medium text-red-700 transition-opacity hover:opacity-70 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {ownerDebugBusy === "kill" ? "Stopping…" : "Force stop scan"}
+                </button>
+              ) : null}
+            </div>
+            {ownerDebugResult ? (
+              <div className="mt-3">
+                <p className="text-[12px] leading-relaxed text-ink-muted">
+                  {ownerDebugResult.ok
+                    ? ownerDebugResult.lease_released === false
+                      ? "Scan control completed, but the admission lease is not confirmed released yet."
+                      : "Owner scan control completed."
+                    : ownerDebugResult.message || "Owner scan control failed."}
+                </p>
+                <pre className="mt-2 max-h-72 overflow-auto rounded-xl bg-ink/[0.04] p-3 text-[11px] leading-relaxed text-ink-muted">
+                  {JSON.stringify(ownerDebugResult, null, 2)}
+                </pre>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         {requestedScanId && scanRecord && requestedScanFailure?.retryable === true ? (
           <CustomerRecoveryNotice failure={requestedScanFailure} onRetry={retryRequestedScan} />
         ) : null}

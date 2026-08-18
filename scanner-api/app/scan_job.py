@@ -13,6 +13,7 @@ failures raise so Cloud Tasks retries the same durable request.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -30,6 +31,10 @@ COMPLETION_VERSION = "durable_standard150_completion_v1"
 # state before the platform closes the request.
 CRAWL_BUDGET_SECONDS = 210.0
 HANDOFF_TIMEOUT_SECONDS = 60.0
+# The local review is CPU/synchronous work. Run it off the event loop so the
+# worker's outer completion fuse remains enforceable even on pathological
+# evidence. Normal Standard 150 reviews finish far below this ceiling.
+LOCAL_REVIEW_WALL_TIMEOUT_SECONDS = 20.0
 
 TERMINAL_STATUSES = frozenset({"complete", "limited", "failed", "cancelled"})
 
@@ -419,6 +424,35 @@ def build_local_review(result: dict[str, Any]) -> dict[str, Any]:
     return review
 
 
+def terminal_crawl_limitation(result: dict[str, Any]) -> dict[str, str] | None:
+    """Short-circuit a definitively blocked crawl before full local review.
+
+    This is intentionally narrow: at least one page must carry the existing
+    blocked-access classifier and there must be zero usable HTML pages. Other
+    crawl failures continue through the normal review contract.
+    """
+    if not isinstance(result, dict):
+        return None
+    pages = result.get("crawled_pages") if isinstance(result.get("crawled_pages"), list) else result.get("pages")
+    if not isinstance(pages, list) or not pages:
+        return None
+
+    from .page_evidence_gate import page_has_usable_html
+    from .review import is_blocked_access_page
+
+    blocked = sum(1 for page in pages if isinstance(page, dict) and is_blocked_access_page(page))
+    usable = sum(1 for page in pages if isinstance(page, dict) and page_has_usable_html(page))
+    if blocked > 0 and usable == 0:
+        return {
+            "code": "scan_access_limited",
+            "detail": (
+                "The site rate-limited or challenged the scanner, so FixList could not collect enough verified HTML "
+                "to save an authoritative result. Please try again later."
+            ),
+        }
+    return None
+
+
 def terminal_review_limitation(review: dict[str, Any]) -> dict[str, str] | None:
     """Translate known fail-closed review states into truthful terminal errors.
 
@@ -474,8 +508,31 @@ async def complete_authority(
             "authority_proof": str(fresh.get("authority_proof") or ""),
         }
     scan = fresh
+
+    crawl_limitation = terminal_crawl_limitation(result)
+    if crawl_limitation is not None:
+        return {
+            "ok": False,
+            "transient": False,
+            "failure_code": crawl_limitation["code"],
+            "customer_message": crawl_limitation["detail"],
+        }
+
     try:
-        reviewed = review if isinstance(review, dict) else build_local_review(result)
+        if isinstance(review, dict):
+            reviewed = review
+        else:
+            reviewed = await asyncio.wait_for(
+                asyncio.to_thread(build_local_review, result),
+                timeout=LOCAL_REVIEW_WALL_TIMEOUT_SECONDS,
+            )
+    except asyncio.TimeoutError:
+        return {
+            "ok": False,
+            "transient": False,
+            "failure_code": "review_wall_timeout",
+            "customer_message": "The scan finished crawling, but its review exceeded the bounded worker time. Please try again.",
+        }
     except Exception:
         return {"ok": False, "transient": False, "failure_code": "review_failed"}
 

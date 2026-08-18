@@ -115,7 +115,11 @@ export function classifyCustomerRecoveryError(error) {
 
   const status = recoveryErrorStatus(error);
   if (status === 401 || status === 403) return { kind: "unauthorized", retryable: false };
-  if (status === 404) return { kind: "not_found", retryable: false };
+  // A raw transport 404 is ambiguous: Base44 also uses it when a backend
+  // function route is missing from a published snapshot. Only an explicit
+  // allowlisted server code such as scan_not_found may claim the ScanRun does
+  // not exist. Otherwise keep the customer on a retryable unavailable state.
+  if (status === 404) return { kind: "unavailable", retryable: true };
   if ([408, 425, 429, 502, 503, 504].includes(status)) return { kind: "unavailable", retryable: true };
 
   const transportCode = String(error?.code || "").trim().toLowerCase();

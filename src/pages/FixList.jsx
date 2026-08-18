@@ -9,6 +9,12 @@ import { getScanRunWithFixList, listScanRuns } from "@/lib/scanRuns";
 import { customerRecoveryFailure } from "@/lib/scanRuns";
 import { ACTIVE_SCAN_RUN_STATUSES } from "@/lib/scanRunIdentity";
 import { UNLOCK_PRICE_LABEL } from "@/lib/access";
+import { useAuth } from "@/lib/AuthContext";
+import {
+  debugScanRun,
+  forceStopScanRun,
+  isOwnerScanDebugUser,
+} from "@/lib/ownerScanDebugControl";
 import UnlockAccessButton from "@/components/billing/UnlockAccessButton";
 import { CUSTOMER_BOUNDARY_EVENT } from "@/lib/customerBrowserCache";
 import ScoreRing from "@/components/fixlist/ScoreRing";
@@ -110,6 +116,7 @@ const PASSED_CHECK_DEFINITIONS = [
 
 export default function FixList() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const requestedScanId = searchParams.get("scan_id") || "";
   const [scanRecord, setScanRecord] = useState(null);
@@ -128,6 +135,8 @@ export default function FixList() {
   const [historyReloadToken, setHistoryReloadToken] = useState(0);
   const [historyProjectId, setHistoryProjectId] = useState("");
   const [deletingScanId, setDeletingScanId] = useState("");
+  const [ownerDebugBusy, setOwnerDebugBusy] = useState("");
+  const [ownerDebugResult, setOwnerDebugResult] = useState(null);
 
   useEffect(() => {
     let cancelled = false;

@@ -60,6 +60,10 @@ SCAN_RESPONSE_PAGE_LIMITS = {"basic": 25, "quick": 40, "deep": 85, "advanced": 1
 GROK_ERROR_DETAIL_VERSION = "grok_upstream_detail_v1"
 WORKER_TERMINAL_DRAIN_AFTER_START_SECONDS = 1800
 WORKER_QUEUED_DRAIN_AFTER_QUEUE_SECONDS = 1800
+# Cloud Tasks may hold one delivery for 480s and retry with up to 300s backoff.
+# A 15-minute heartbeat window safely spans both plus headroom while closing a
+# vanished worker much earlier than the full 30-minute terminal envelope.
+WORKER_HEARTBEAT_DRAIN_AFTER_SECONDS = 900
 
 app = FastAPI(title="FixList Scanner API", version=VERSION)
 
@@ -521,6 +525,14 @@ async def scan_job(
             )
             return {"success": False, "worker_version": WORKER_VERSION, "error_code": "scanner_failed"}
 
+        # Refresh durable liveness after the bounded crawl. A transient failure
+        # here is retryable: the same attempt is safe to redeliver, and the
+        # original started_at remains unchanged by the control function.
+        try:
+            scan = await mark_scan_started(client, scan)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail="The scan handoff heartbeat is unavailable.") from exc
+
         signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
         if not signing_key:
             raise HTTPException(status_code=503, detail="Authority signing is not configured.")
@@ -673,10 +685,44 @@ async def scan_job_drain(
                 started_at = started_at.replace(tzinfo=timezone.utc)
         except ValueError as exc:
             raise HTTPException(status_code=503, detail="The scan start time is unavailable.") from exc
+        now_utc = datetime.now(timezone.utc)
+        heartbeat_raw = str(scan.get("worker_heartbeat_at") or "").strip()
+        if heartbeat_raw:
+            try:
+                heartbeat_at = datetime.fromisoformat(heartbeat_raw.replace("Z", "+00:00"))
+                if heartbeat_at.tzinfo is None:
+                    heartbeat_at = heartbeat_at.replace(tzinfo=timezone.utc)
+            except ValueError as exc:
+                raise HTTPException(status_code=503, detail="The worker heartbeat time is unavailable.") from exc
+            heartbeat_deadline = heartbeat_at.astimezone(timezone.utc) + timedelta(
+                seconds=WORKER_HEARTBEAT_DRAIN_AFTER_SECONDS,
+            )
+            if now_utc >= heartbeat_deadline:
+                try:
+                    closed = await write_terminal_failure(
+                        client,
+                        scan_id,
+                        "worker_heartbeat_timeout",
+                        "The scan worker stopped reporting progress and was safely stopped. Please start a new scan.",
+                        attempt_count=job_attempt,
+                    )
+                except RuntimeError as exc:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="The stale worker state could not be verified.",
+                    ) from exc
+                return {
+                    "success": True,
+                    "worker_version": WORKER_VERSION,
+                    "scan_id": scan_id,
+                    "closed": bool(closed),
+                    "status": "failed" if closed else "superseded_attempt",
+                }
+
         terminal_deadline = started_at.astimezone(timezone.utc) + timedelta(
             seconds=WORKER_TERMINAL_DRAIN_AFTER_START_SECONDS,
         )
-        if datetime.now(timezone.utc) < terminal_deadline:
+        if now_utc < terminal_deadline:
             raise HTTPException(status_code=503, detail="The worker terminal deadline is not due yet.")
 
         try:

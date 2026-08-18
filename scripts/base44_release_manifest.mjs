@@ -42,6 +42,8 @@ export const RELEASE_FUNCTIONS = [
   "getCustomerScanResult",
   "createAccessCheckout",
   "stripeWebhook",
+  "deleteCustomerScanData",
+  "ownerScanDebugControl",
 ];
 
 export const RELEASE_ENTITIES = [

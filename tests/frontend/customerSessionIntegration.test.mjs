@@ -35,6 +35,10 @@ test("auth expiry, logout, account switch, and project switch share one atomic b
   assert.doesNotMatch(activeProject, /projects\[0\]/);
   assert.doesNotMatch(activeProject, /localStorage/);
   for (const source of [scanForm, fixList, assistant]) assert.match(source, /CUSTOMER_BOUNDARY_EVENT/);
+  assert.match(fixList, /\["auth_expired", "session_cleared", "logout"\]\.includes\(reason\)/);
+  assert.match(fixList, /reason === "account_switch"/);
+  assert.match(fixList, /setReloadToken\(\(value\) => value \+ 1\)/);
+  assert.doesNotMatch(fixList, /const boundaryKind[\s\S]*\? "unauthorized"[\s\S]*: "not_found"/);
 });
 
 test("refresh and browser history reopen only an exact owner-authorized server scan", () => {

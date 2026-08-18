@@ -67,10 +67,12 @@ test("a superseded task stops before crawling, failing or charging", () => {
   assert.match(guard[0], /"skipped": "superseded_attempt"/);
   // It must sit before the crawl, scoped to the /scan-job worker (the legacy
   // synchronous /scan endpoint also calls run_scan and must not be matched).
-  const workerBody = workerMain.slice(workerMain.indexOf('async def scan_job('));
-  assert.ok(workerBody.length > 0, "the scan_job endpoint is missing");
+  const workerStart = workerMain.indexOf('async def scan_job(');
+  const workerEnd = workerMain.indexOf('@app.post("/scan-reconcile")', workerStart);
+  const workerBody = workerMain.slice(workerStart, workerEnd);
+  assert.ok(workerStart >= 0 && workerEnd > workerStart, "the scan_job endpoint is missing");
   assert.ok(
-    workerBody.indexOf("is_superseded_attempt(scan, job_attempt)") < workerBody.indexOf("await run_scan("),
+    workerBody.indexOf("is_superseded_attempt(scan, job_attempt)") < workerBody.indexOf("run_scan("),
     "the superseded check must run before the crawl",
   );
   // Every failure write is attempt-bound. Inspect the call blocks directly so

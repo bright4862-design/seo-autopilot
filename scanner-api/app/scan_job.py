@@ -17,7 +17,9 @@ import asyncio
 import hashlib
 import hmac
 import json
+import multiprocessing as mp
 import os
+import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -31,10 +33,12 @@ COMPLETION_VERSION = "durable_standard150_completion_v1"
 # state before the platform closes the request.
 CRAWL_BUDGET_SECONDS = 210.0
 HANDOFF_TIMEOUT_SECONDS = 60.0
-# The local review is CPU/synchronous work. Run it off the event loop so the
-# worker's outer completion fuse remains enforceable even on pathological
-# evidence. Normal Standard 150 reviews finish far below this ceiling.
+# The local review is CPU/synchronous work. It runs in a separate process,
+# rather than merely a thread, so a pathological regex/parser that monopolizes
+# the Python GIL cannot starve the durable worker event loop or its deadlines.
+# Normal Standard 150 reviews finish far below this ceiling.
 LOCAL_REVIEW_WALL_TIMEOUT_SECONDS = 20.0
+LOCAL_REVIEW_PROCESS_JOIN_GRACE_SECONDS = 1.0
 
 TERMINAL_STATUSES = frozenset({"complete", "limited", "failed", "cancelled"})
 
@@ -424,6 +428,76 @@ def build_local_review(result: dict[str, Any]) -> dict[str, Any]:
     return review
 
 
+class LocalReviewProcessTimeout(RuntimeError):
+    """The isolated local-review child exceeded its hard wall-clock budget."""
+
+
+def _local_review_process_entry(result: dict[str, Any], send_conn: Any) -> None:
+    """Run local review in a child process and return only a bounded result envelope."""
+    try:
+        reviewed = build_local_review(result)
+        send_conn.send(("ok", reviewed))
+    except BaseException as exc:  # noqa: BLE001 - child must never strand its parent
+        try:
+            send_conn.send(("error", type(exc).__name__))
+        except Exception:
+            pass
+    finally:
+        try:
+            send_conn.close()
+        except Exception:
+            pass
+
+
+def run_local_review_isolated(
+    result: dict[str, Any],
+    timeout_seconds: float = LOCAL_REVIEW_WALL_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Run review in a killable child so GIL starvation cannot defeat the deadline."""
+    timeout = max(0.001, float(timeout_seconds or LOCAL_REVIEW_WALL_TIMEOUT_SECONDS))
+    ctx = mp.get_context("spawn")
+    recv_conn, send_conn = ctx.Pipe(duplex=False)
+    process = ctx.Process(target=_local_review_process_entry, args=(result, send_conn), daemon=True)
+    process.start()
+    send_conn.close()
+    deadline = time.monotonic() + timeout
+    payload: Any = None
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise LocalReviewProcessTimeout("local review exceeded its process wall time")
+            if recv_conn.poll(min(0.05, remaining)):
+                try:
+                    payload = recv_conn.recv()
+                except EOFError as exc:
+                    raise RuntimeError("local review process closed without a result") from exc
+                break
+            if not process.is_alive():
+                if recv_conn.poll():
+                    payload = recv_conn.recv()
+                    break
+                raise RuntimeError("local review process exited without a result")
+
+        if not isinstance(payload, tuple) or len(payload) != 2:
+            raise RuntimeError("local review process returned an invalid envelope")
+        state, value = payload
+        if state != "ok" or not isinstance(value, dict):
+            raise RuntimeError(f"local review process failed: {str(value or 'unknown_error')[:80]}")
+        return value
+    finally:
+        try:
+            recv_conn.close()
+        except Exception:
+            pass
+        if process.is_alive():
+            process.terminate()
+        process.join(timeout=LOCAL_REVIEW_PROCESS_JOIN_GRACE_SECONDS)
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=LOCAL_REVIEW_PROCESS_JOIN_GRACE_SECONDS)
+
+
 def terminal_crawl_limitation(result: dict[str, Any]) -> dict[str, str] | None:
     """Short-circuit a definitively blocked crawl before full local review.
 
@@ -523,10 +597,14 @@ async def complete_authority(
             reviewed = review
         else:
             reviewed = await asyncio.wait_for(
-                asyncio.to_thread(build_local_review, result),
-                timeout=LOCAL_REVIEW_WALL_TIMEOUT_SECONDS,
+                asyncio.to_thread(
+                    run_local_review_isolated,
+                    result,
+                    LOCAL_REVIEW_WALL_TIMEOUT_SECONDS,
+                ),
+                timeout=LOCAL_REVIEW_WALL_TIMEOUT_SECONDS + 5.0,
             )
-    except asyncio.TimeoutError:
+    except (asyncio.TimeoutError, LocalReviewProcessTimeout):
         return {
             "ok": False,
             "transient": False,

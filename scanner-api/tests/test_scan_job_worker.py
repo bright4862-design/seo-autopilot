@@ -253,8 +253,10 @@ async def test_durable_worker_completion_wall_timeout_terminalizes_exact_attempt
     monkeypatch.setattr(main, "require_cloud_tasks_oidc", lambda _: None)
     monkeypatch.setenv("SCAN_EVIDENCE_SIGNING_KEY", "test-signing-key")
 
+    persisted_state = dict(scan)
+
     async def read(*_args, **_kwargs):
-        return scan
+        return dict(persisted_state)
 
     started_calls = 0
 
@@ -273,6 +275,11 @@ async def test_durable_worker_completion_wall_timeout_terminalizes_exact_attempt
 
     async def fail(*args, **kwargs):
         failures.append((args, kwargs))
+        persisted_state.update({
+            "status": "failed",
+            "error_code": args[2],
+            "release_gate_eligible": False,
+        })
         return True
 
     monkeypatch.setattr(main, "read_scan_run", read)

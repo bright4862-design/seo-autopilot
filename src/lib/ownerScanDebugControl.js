@@ -1,20 +1,17 @@
 import { base44 } from "@/api/base44Client";
+import {
+  OWNER_SCAN_DEBUG_EMAIL,
+  OWNER_SCAN_DEBUG_USER_ID,
+  isOwnerScanDebugUser,
+} from "@/lib/ownerScanDebugIdentity";
 
-export const OWNER_SCAN_DEBUG_EMAIL = "bright4862@gmail.com";
-export const OWNER_SCAN_DEBUG_USER_ID = "6a498da58ef5cec1f5cd4486";
+export {
+  OWNER_SCAN_DEBUG_EMAIL,
+  OWNER_SCAN_DEBUG_USER_ID,
+  isOwnerScanDebugUser,
+};
+
 const OWNER_SCAN_DEBUG_FUNCTION = "ownerScanDebugControl";
-
-function normalizeEmail(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
-export function isOwnerScanDebugUser(user = {}) {
-  return (
-    String(user?.id || "").trim() === OWNER_SCAN_DEBUG_USER_ID
-    && normalizeEmail(user?.email) === OWNER_SCAN_DEBUG_EMAIL
-    && String(user?.role || "").trim().toLowerCase() === "admin"
-  );
-}
 
 function resultOf(response) {
   return response?.data && typeof response.data === "object" ? response.data : response;

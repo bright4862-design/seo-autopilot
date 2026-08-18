@@ -1,4 +1,4 @@
-from app.repair_identity import build_repair_identity, compare_repair_runs
+from app.repair_identity import build_repair_identity, compare_repair_runs, verification_eligibility
 
 
 def stable_fix(**overrides):
@@ -15,8 +15,23 @@ def stable_fix(**overrides):
     return base
 
 
-def page(url):
-    return {"url": url, "status_code": 200, "content_type": "text/html"}
+def page(url, **overrides):
+    value = {"url": url, "status_code": 200, "content_type": "text/html"}
+    value.update(overrides)
+    return value
+
+
+def search_fix(**overrides):
+    base = stable_fix(
+        rule="missing_meta_description",
+        category="meta_description",
+        page_template_family="product_page",
+        repair_surface="product_template",
+        remediation_family="add_meta_description",
+        affected_pages=["/products/a"],
+    )
+    base.update(overrides)
+    return base
 
 
 def test_family_and_recommendation_copy_alone_are_not_stable_identity():
@@ -59,11 +74,12 @@ def test_previously_verified_repair_with_same_fingerprint_came_back():
     assert result["state"] == "came_back"
 
 
-def test_missing_repair_is_verified_only_when_all_previous_pages_are_rechecked():
+def test_missing_repair_is_verified_only_when_all_previous_pages_are_rechecked_and_eligible():
     previous = stable_fix()
     result = compare_repair_runs(previous, [], [page("/a"), page("/b"), page("/other")])
     assert result["state"] == "verified_fixed"
     assert result["rechecked_pages"] == 2
+    assert result["eligible_rechecked_pages"] == 2
 
 
 def test_missing_page_is_not_false_proof_of_fix():
@@ -85,3 +101,51 @@ def test_provisional_identity_can_never_auto_verify_fixed():
     result = compare_repair_runs(previous, [], [page("/products/a")])
     assert result["state"] == "could_not_verify"
     assert "stable repair identity" in result["reason"].lower()
+
+
+def test_search_facing_repair_does_not_verify_when_page_becomes_noindex():
+    previous = search_fix()
+    result = compare_repair_runs(previous, [], [page("/products/a", indexable=False)])
+    assert result["state"] == "could_not_verify"
+    assert result["eligible_rechecked_pages"] == 0
+    assert result["non_comparable_pages"][0]["state"] == "ineligible"
+    assert "non-indexable" in result["non_comparable_pages"][0]["reason"].lower()
+
+
+def test_search_facing_repair_does_not_verify_when_page_becomes_redirect():
+    previous = search_fix()
+    result = compare_repair_runs(previous, [], [page("/products/a", status_code=301)])
+    assert result["state"] == "could_not_verify"
+    assert "http 301" in result["non_comparable_pages"][0]["reason"].lower()
+
+
+def test_search_facing_repair_does_not_verify_when_page_becomes_error():
+    previous = search_fix()
+    result = compare_repair_runs(previous, [], [page("/products/a", status_code=404)])
+    assert result["state"] == "could_not_verify"
+    assert "http 404" in result["non_comparable_pages"][0]["reason"].lower()
+
+
+def test_search_facing_repair_does_not_verify_when_access_is_blocked():
+    previous = search_fix()
+    result = compare_repair_runs(
+        previous,
+        [],
+        [page("/products/a", status_code=403, page_evidence_class="failed_access")],
+    )
+    assert result["state"] == "could_not_verify"
+    assert "failed_access" in result["non_comparable_pages"][0]["reason"].lower()
+
+
+def test_non_html_page_is_not_comparable_repair_evidence():
+    previous = stable_fix(affected_pages=["/a"])
+    result = compare_repair_runs(previous, [], [page("/a", content_type="application/pdf")])
+    assert result["state"] == "could_not_verify"
+    assert "html" in result["non_comparable_pages"][0]["reason"].lower()
+
+
+def test_unknown_indexability_remains_compatible_for_historical_scans():
+    previous = search_fix()
+    state, reason = verification_eligibility(previous, page("/products/a"))
+    assert state == "eligible"
+    assert "comparable" in reason.lower()

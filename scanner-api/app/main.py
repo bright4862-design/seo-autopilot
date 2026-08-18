@@ -430,6 +430,61 @@ def require_cloud_tasks_oidc(authorization: str | None) -> None:
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
+async def persist_terminal_failure_bounded(
+    client: httpx.AsyncClient,
+    scan_id: str,
+    failure_code: str,
+    detail: str,
+    *,
+    attempt_count: Any,
+) -> dict[str, Any]:
+    """Persist and verify one attempt-bound terminal failure within a hard wall time.
+
+    Base44 control writes and coordinator release are remote operations. No
+    caller in the durable request path may await them without an endpoint-level
+    deadline, otherwise a correctly classified crawl can remain customer-visible
+    as `crawling` until the platform request or stale-worker backstop fires.
+    """
+    try:
+        closed = await asyncio.wait_for(
+            write_terminal_failure(
+                client,
+                scan_id,
+                failure_code,
+                detail,
+                attempt_count=attempt_count,
+            ),
+            timeout=WORKER_TERMINAL_WRITE_WALL_TIMEOUT_SECONDS,
+        )
+    except (asyncio.TimeoutError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="The scan terminal state could not be persisted within its bounded worker time.",
+        ) from exc
+
+    if not closed:
+        return {"state": "superseded_attempt", "scan": None}
+
+    try:
+        persisted = await asyncio.wait_for(
+            read_scan_run(client, scan_id),
+            timeout=min(WORKER_TERMINAL_WRITE_WALL_TIMEOUT_SECONDS, 25.0),
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=503, detail="The scan terminal state could not be verified.") from exc
+    if not isinstance(persisted, dict):
+        raise HTTPException(status_code=503, detail="The scan terminal state is unavailable.")
+    if is_superseded_attempt(persisted, attempt_count):
+        return {"state": "superseded_attempt", "scan": persisted}
+
+    status = str(persisted.get("status") or "").lower()
+    if status == "failed" and str(persisted.get("error_code") or "") == str(failure_code or ""):
+        return {"state": "failed", "scan": persisted}
+    if already_terminal(persisted):
+        return {"state": "terminal_won_race", "scan": persisted}
+    raise HTTPException(status_code=503, detail="The scan terminal state was not persisted.")
+
+
 @app.post("/scan-job")
 async def scan_job(
     payload: ScanJobRequest,
@@ -460,7 +515,7 @@ async def scan_job(
             # Transient: the row must exist, so let Cloud Tasks retry it.
             raise HTTPException(status_code=503, detail="The scan record is unavailable.")
         if not identity_matches(scan, job):
-            await write_terminal_failure(
+            await persist_terminal_failure_bounded(
                 client, scan_id, "scan_identity_mismatch",
                 "This scan could not be matched to your request. Please start a new scan.",
                 attempt_count=job_attempt,
@@ -534,14 +589,14 @@ async def scan_job(
             # This is an outer fail-safe, not a retry signal. If the scanner's
             # own bounded deadline failed to return, redelivering the same task
             # can repeat the hang. Close the exact attempt truthfully instead.
-            await write_terminal_failure(
+            await persist_terminal_failure_bounded(
                 client, scan_id, "scanner_wall_timeout",
                 "The scan exceeded its bounded worker time and was safely stopped. Please try again.",
                 attempt_count=job_attempt,
             )
             return {"success": False, "worker_version": WORKER_VERSION, "error_code": "scanner_wall_timeout"}
         except Exception:  # noqa: BLE001 - customer-safe envelope
-            await write_terminal_failure(
+            await persist_terminal_failure_bounded(
                 client, scan_id, "scanner_failed",
                 "The scan stopped unexpectedly. No partial result was saved. Please try again.",
                 attempt_count=job_attempt,
@@ -633,12 +688,32 @@ async def scan_job(
                 "task_attempt": job_attempt,
             }
         if not outcome.get("ok"):
-            await write_terminal_failure(
-                client, scan_id, str(outcome.get("failure_code") or "authority_persistence_failed"),
+            failure_code = str(outcome.get("failure_code") or "authority_persistence_failed")
+            terminal = await persist_terminal_failure_bounded(
+                client,
+                scan_id,
+                failure_code,
                 str(outcome.get("customer_message") or "The scan finished, but its result could not be saved. Please try again."),
                 attempt_count=job_attempt,
             )
-            return {"success": False, "worker_version": WORKER_VERSION, "error_code": outcome.get("failure_code")}
+            if terminal.get("state") == "superseded_attempt":
+                return {
+                    "success": True,
+                    "worker_version": WORKER_VERSION,
+                    "skipped": "superseded_attempt",
+                    "scan_id": scan_id,
+                    "task_attempt": job_attempt,
+                }
+            if terminal.get("state") == "terminal_won_race":
+                persisted = terminal.get("scan") if isinstance(terminal.get("scan"), dict) else {}
+                return {
+                    "success": True,
+                    "worker_version": WORKER_VERSION,
+                    "skipped": "terminal_won_failure_race",
+                    "status": persisted.get("status"),
+                    "scan_id": scan_id,
+                }
+            return {"success": False, "worker_version": WORKER_VERSION, "error_code": failure_code}
 
         return {
             "success": True,

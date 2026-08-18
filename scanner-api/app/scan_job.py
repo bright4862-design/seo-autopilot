@@ -193,7 +193,7 @@ async def read_scan_run(client: httpx.AsyncClient, scan_id: str) -> dict[str, An
 
 
 async def mark_scan_started(client: httpx.AsyncClient, scan: dict[str, Any]) -> dict[str, Any]:
-    """Atomically mark actual worker pickup without resetting an existing start time."""
+    """Mark worker liveness without resetting the attempt's original start time."""}],"dry_run":false}
     signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
     identity = _scan_identity(scan)
     if not signing_key or not all(identity.values()):

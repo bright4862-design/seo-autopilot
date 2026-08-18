@@ -110,19 +110,27 @@ Deno.serve(async (req) => {
       if (!["queued", "crawling", "reviewing"].includes(currentStatus)) {
         throw new RequestProblem(409, "worker_start_state_invalid", "The durable scan is not startable.");
       }
+      const heartbeatAt = new Date().toISOString();
+      const startFields = {
+        worker_heartbeat_at: heartbeatAt,
+      };
       if (currentStatus === "queued") {
-        const startedAt = new Date().toISOString();
-        await entities.ScanRun.update(identity.scan_id, {
+        Object.assign(startFields, {
           status: "crawling",
           status_detail: "",
-          started_at: cleanText(scan?.started_at, 80) || startedAt,
+          started_at: cleanText(scan?.started_at, 80) || heartbeatAt,
         });
       }
+      // Refresh liveness on every attempt/retry and after the crawl handoff.
+      // started_at remains immutable after first pickup, so total runtime still
+      // has the existing hard 35-minute reconciliation ceiling.
+      await entities.ScanRun.update(identity.scan_id, startFields);
       const persisted = await entities.ScanRun.get(identity.scan_id);
       if (
         !persisted
         || !["crawling", "reviewing"].includes(String(persisted.status || "").toLowerCase())
         || !cleanText(persisted?.started_at, 80)
+        || !cleanText(persisted?.worker_heartbeat_at, 80)
         || cleanId(persisted?.id) !== identity.scan_id
         || normalizeAttempt(persisted?.attempt_count) !== claimedAttempt
       ) {

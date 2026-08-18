@@ -17,12 +17,19 @@ from app.main import require_cloud_tasks_oidc
 from app.scan_job import (
     TERMINAL_STATUSES,
     WORKER_VERSION,
+    LocalReviewProcessTimeout,
     already_terminal,
     has_authority_proof,
     identity_matches,
+    run_local_review_isolated,
     terminal_crawl_limitation,
     terminal_review_limitation,
 )
+
+
+def _blocking_review_child(_result, _send_conn):
+    import time
+    time.sleep(30)
 
 
 def _oidc(email: str) -> str:
@@ -137,10 +144,24 @@ def test_eligible_review_never_gets_terminal_limitation():
     }) is None
 
 
-@pytest.mark.asyncio
-async def test_blocking_local_review_cannot_starve_completion_timeout(monkeypatch):
-    """Synchronous review work must not prevent the event-loop fuse from firing."""
+def test_blocking_local_review_process_is_killed_at_hard_deadline():
+    """A pathological review child cannot keep the durable worker alive indefinitely."""
     import time
+
+    started = time.monotonic()
+    with pytest.raises(LocalReviewProcessTimeout):
+        run_local_review_isolated(
+            {"crawled_pages": [{"url": "https://example.com/"}]},
+            0.05,
+            entrypoint=_blocking_review_child,
+        )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 3.0, "the isolated review child was not terminated promptly"
+
+
+@pytest.mark.asyncio
+async def test_isolated_review_timeout_maps_to_customer_safe_failure(monkeypatch):
     from app import scan_job
 
     scan = {
@@ -154,15 +175,12 @@ async def test_blocking_local_review_cannot_starve_completion_timeout(monkeypatc
     async def read(*_args, **_kwargs):
         return dict(scan)
 
-    def blocking_review(_result):
-        time.sleep(0.25)
-        return {"release_gate_eligible": True}
+    def timed_out_review(*_args, **_kwargs):
+        raise LocalReviewProcessTimeout("test timeout")
 
     monkeypatch.setattr(scan_job, "read_scan_run", read)
-    monkeypatch.setattr(scan_job, "build_local_review", blocking_review)
-    monkeypatch.setattr(scan_job, "LOCAL_REVIEW_WALL_TIMEOUT_SECONDS", 0.02)
+    monkeypatch.setattr(scan_job, "run_local_review_isolated", timed_out_review)
 
-    started = time.monotonic()
     outcome = await scan_job.complete_authority(
         None,
         scan,
@@ -176,11 +194,9 @@ async def test_blocking_local_review_cannot_starve_completion_timeout(monkeypatc
         },
         "test-signing-key",
     )
-    elapsed = time.monotonic() - started
 
     assert outcome["ok"] is False
     assert outcome["failure_code"] == "review_wall_timeout"
-    assert elapsed < 0.15, "the event loop was blocked by synchronous review work"
 
 
 # ----------------------------------------------------------------- auth ----

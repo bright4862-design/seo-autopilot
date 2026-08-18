@@ -158,6 +158,69 @@ def test_worker_version_is_pinned():
     assert WORKER_VERSION == "scan_job_worker_v1_cloud_tasks"
 
 
+@pytest.mark.asyncio
+async def test_durable_worker_wall_clock_timeout_terminalizes_exact_attempt(monkeypatch):
+    """A crawler coroutine that never returns must not hold the durable row open."""
+    import asyncio
+    from app import main
+
+    scan = {
+        "id": "scan-1",
+        "scan_id": "scan-1",
+        "request_id": "req-1",
+        "idempotency_key": "req-1",
+        "project_id": "proj-1",
+        "owner_user_id": "owner-1",
+        "website_url": "https://example.com/",
+        "normalized_domain": "example.com",
+        "attempt_count": 1,
+        "status": "queued",
+    }
+    payload = main.ScanJobRequest(
+        scan_id="scan-1",
+        request_id="req-1",
+        idempotency_key="req-1",
+        project_id="proj-1",
+        owner_user_id="owner-1",
+        website_url="https://example.com/",
+        normalized_domain="example.com",
+        attempt_count=1,
+    )
+
+    monkeypatch.setattr(main, "require_cloud_tasks_oidc", lambda _: None)
+
+    async def read(*_args, **_kwargs):
+        return scan
+
+    async def started(*_args, **_kwargs):
+        return {**scan, "status": "crawling", "started_at": "2026-08-18T10:00:00Z"}
+
+    async def never_returns(*_args, **_kwargs):
+        await asyncio.sleep(60)
+
+    failures = []
+
+    async def fail(*args, **kwargs):
+        failures.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(main, "read_scan_run", read)
+    monkeypatch.setattr(main, "mark_scan_started", started)
+    monkeypatch.setattr(main, "run_scan", never_returns)
+    monkeypatch.setattr(main, "write_terminal_failure", fail)
+    monkeypatch.setattr(main, "WORKER_CRAWL_WALL_TIMEOUT_SECONDS", 0.01)
+
+    result = await main.scan_job(payload, authorization="test")
+
+    assert result["success"] is False
+    assert result["error_code"] == "scanner_wall_timeout"
+    assert len(failures) == 1
+    args, kwargs = failures[0]
+    assert args[1] == "scan-1"
+    assert args[2] == "scanner_wall_timeout"
+    assert kwargs["attempt_count"] == 1
+
+
 # ------------------------------------------------- discovery vs crawl cap --
 #
 # Hard compatibility contract: the 150-page cap bounds fetch/analyse ONLY. On a

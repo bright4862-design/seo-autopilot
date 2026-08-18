@@ -6,7 +6,43 @@ from typing import Any
 from urllib.parse import urlparse
 
 REPAIR_IDENTITY_VERSION = "repair_identity_v1_conservative"
-REPAIR_VERIFICATION_VERSION = "repair_verification_v1_evidence_rechecked"
+REPAIR_VERIFICATION_VERSION = "repair_verification_v2_eligibility_aware"
+
+SEARCH_FACING_CATEGORIES = {
+    "canonical",
+    "indexability",
+    "meta_title",
+    "meta_description",
+    "duplicate_content",
+    "schema",
+    "thin_content",
+    "image_alt_text",
+    "alt_text",
+    "social_metadata",
+}
+
+SEARCH_FACING_RULE_TOKENS = (
+    "canonical",
+    "noindex",
+    "indexab",
+    "title",
+    "meta_description",
+    "description",
+    "h1",
+    "heading",
+    "duplicate_content",
+    "schema",
+    "structured_data",
+    "thin_content",
+    "image_alt",
+)
+
+INELIGIBLE_EVIDENCE_CLASSES = {
+    "failed_access",
+    "fetch_failed",
+    "blocked",
+    "non_html",
+}
 
 
 def _clean(value: Any) -> str:
@@ -119,15 +155,79 @@ def annotate_repair_identity(fix: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _page_keys(pages: list[dict[str, Any]]) -> set[str]:
-    keys: set[str] = set()
+def _page_key(page: dict[str, Any]) -> str:
+    return _path(page.get("url") or page.get("final_url") or page.get("page_url") or page.get("path"))
+
+
+def _page_lookup(pages: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    lookup: dict[str, dict[str, Any]] = {}
     for page in pages or []:
         if not isinstance(page, dict):
             continue
-        key = _path(page.get("url") or page.get("final_url") or page.get("page_url") or page.get("path"))
+        key = _page_key(page)
         if key:
-            keys.add(key)
-    return keys
+            lookup[key] = page
+    return lookup
+
+
+def _status_code(page: dict[str, Any]) -> int | None:
+    raw = page.get("status_code") if page.get("status_code") is not None else page.get("status")
+    try:
+        return int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _page_indexability(page: dict[str, Any]) -> str:
+    if page.get("indexable") is True:
+        return "indexable"
+    if page.get("indexable") is False:
+        return "non_indexable"
+    robots = _token(page.get("robots") or page.get("robots_meta") or page.get("meta_robots"))
+    if "noindex" in robots:
+        return "non_indexable"
+    return "unknown"
+
+
+def _is_search_facing(fix: dict[str, Any]) -> bool:
+    category = _token(fix.get("category"))
+    if category in SEARCH_FACING_CATEGORIES:
+        return True
+    rule = _token(fix.get("rule") or fix.get("type") or fix.get("issue_type"))
+    return any(token in rule for token in SEARCH_FACING_RULE_TOKENS)
+
+
+def verification_eligibility(fix: dict[str, Any], page: dict[str, Any]) -> tuple[str, str]:
+    """Return whether a later page is comparable evidence for verifying a repair.
+
+    This intentionally fails closed. Seeing the URL again is not enough: the
+    page must still be a usable HTTP success document, and search-facing repairs
+    must not be auto-verified after the page becomes deliberately non-indexable.
+    Unknown indexability remains comparable so older scans without an explicit
+    `indexable` field stay readable; an explicit noindex/non-indexable state is
+    treated as ineligible rather than as proof that a metadata repair succeeded.
+    """
+    if not isinstance(page, dict):
+        return "unknown", "Comparable page evidence is unavailable."
+
+    evidence_class = _token(page.get("page_evidence_class") or page.get("evidence_class"))
+    if evidence_class in INELIGIBLE_EVIDENCE_CLASSES:
+        return "ineligible", f"Page evidence is {evidence_class or 'not usable'}."
+
+    status = _status_code(page)
+    if status is None:
+        return "unknown", "HTTP status was not available for the rechecked page."
+    if status < 200 or status >= 300:
+        return "ineligible", f"Page now returns HTTP {status}, so the same check is not comparable."
+
+    content_type = _token(page.get("content_type") or page.get("mime_type"))
+    if content_type and "html" not in content_type and "xhtml" not in content_type:
+        return "ineligible", "Page is no longer an HTML document eligible for the same check."
+
+    if _is_search_facing(fix) and _page_indexability(page) == "non_indexable":
+        return "ineligible", "Page is now non-indexable, so disappearance of the search-facing issue is not proof of repair."
+
+    return "eligible", "The page was re-observed in a comparable state for this repair."
 
 
 def compare_repair_runs(
@@ -138,8 +238,9 @@ def compare_repair_runs(
     """Classify a previous repair against a later crawl without false `fixed` claims.
 
     `verified_fixed` is allowed only when a stable repair identity exists, no
-    matching repair remains, and every previously affected page was observed
-    again in the later crawl. Missing pages become `could_not_verify`, not fixed.
+    matching repair remains, every previously affected page is observed again,
+    and every re-observed page remains eligible for the same technical check.
+    Missing or no-longer-comparable evidence becomes `could_not_verify`.
     """
     previous_identity = build_repair_identity(previous_fix)
     previous_affected = _affected_pages(previous_fix)
@@ -150,6 +251,7 @@ def compare_repair_runs(
             "state": "could_not_verify",
             "reason": "Stable repair identity is not available for this repair.",
             "rechecked_pages": 0,
+            "eligible_rechecked_pages": 0,
             "previous_affected_pages": len(previous_affected),
         }
 
@@ -174,25 +276,46 @@ def compare_repair_runs(
             "state": state,
             "reason": "The same stable repair fingerprint is present in the latest crawl.",
             "rechecked_pages": len(set(_affected_pages(matching_current[0]))),
+            "eligible_rechecked_pages": 0,
             "previous_affected_pages": len(previous_affected),
         }
 
-    observed = _page_keys(current_pages)
+    lookup = _page_lookup(current_pages)
     previous_set = set(previous_affected)
-    rechecked = previous_set & observed
-    if previous_set and previous_set.issubset(observed):
+    observed = previous_set & set(lookup)
+    if not previous_set or not previous_set.issubset(lookup):
         return {
             "version": REPAIR_VERIFICATION_VERSION,
-            "state": "verified_fixed",
-            "reason": "All previously affected pages were checked again and the stable repair fingerprint was no longer detected.",
-            "rechecked_pages": len(rechecked),
+            "state": "could_not_verify",
+            "reason": "One or more previously affected pages were not observed in the latest crawl.",
+            "rechecked_pages": len(observed),
+            "eligible_rechecked_pages": 0,
             "previous_affected_pages": len(previous_affected),
+        }
+
+    eligibility = {key: verification_eligibility(previous_fix, lookup[key]) for key in previous_set}
+    eligible = [key for key, (state, _) in eligibility.items() if state == "eligible"]
+    non_comparable = [
+        {"page": key, "state": state, "reason": reason}
+        for key, (state, reason) in sorted(eligibility.items())
+        if state != "eligible"
+    ]
+    if non_comparable:
+        return {
+            "version": REPAIR_VERIFICATION_VERSION,
+            "state": "could_not_verify",
+            "reason": "All previous URLs were seen again, but one or more were not comparable evidence for the same repair check.",
+            "rechecked_pages": len(observed),
+            "eligible_rechecked_pages": len(eligible),
+            "previous_affected_pages": len(previous_affected),
+            "non_comparable_pages": non_comparable,
         }
 
     return {
         "version": REPAIR_VERIFICATION_VERSION,
-        "state": "could_not_verify",
-        "reason": "One or more previously affected pages were not observed in the latest crawl.",
-        "rechecked_pages": len(rechecked),
+        "state": "verified_fixed",
+        "reason": "All previously affected pages were checked again in a comparable eligible state and the stable repair fingerprint was no longer detected.",
+        "rechecked_pages": len(observed),
+        "eligible_rechecked_pages": len(eligible),
         "previous_affected_pages": len(previous_affected),
     }

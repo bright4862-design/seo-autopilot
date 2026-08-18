@@ -17,6 +17,7 @@ FUNCTIONS=(
   getCustomerScanResult
   createAccessCheckout
   stripeWebhook
+  ownerScanDebugControl
 )
 
 node "$REPO_ROOT/scripts/base44_release_manifest.mjs" verify

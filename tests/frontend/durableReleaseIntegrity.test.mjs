@@ -52,6 +52,8 @@ test("every customer-release function package is portable, closed, pinned and sy
     "getCustomerScanResult",
     "createAccessCheckout",
     "stripeWebhook",
+    "deleteCustomerScanData",
+    "ownerScanDebugControl",
   ]);
 });
 

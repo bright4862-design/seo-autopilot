@@ -67,8 +67,14 @@ async def test_cloudflare_shopify_profile_paces_before_first_429(mock_network, m
     mock_network(routes)
 
     original_fetch = scanner.fetch_and_extract
+    original_load_sitemap_urls = scanner.load_sitemap_urls
+    captured_sitemap_interval = {}
     last_started_at = 0.0
     blocked_attempts = 0
+
+    async def capture_sitemap_interval(*args, **kwargs):
+        captured_sitemap_interval["seconds"] = kwargs.get("min_request_interval_seconds")
+        return await original_load_sitemap_urls(*args, **kwargs)
 
     async def burst_sensitive(client, url, discovery, robots_policy=None):
         nonlocal last_started_at, blocked_attempts
@@ -81,6 +87,7 @@ async def test_cloudflare_shopify_profile_paces_before_first_429(mock_network, m
         return await original_fetch(client, url, discovery, robots_policy=robots_policy)
 
     monkeypatch.setattr(scanner, "fetch_and_extract", burst_sensitive)
+    monkeypatch.setattr(scanner, "load_sitemap_urls", capture_sitemap_interval)
     monkeypatch.setattr(scanner, "detect_rate_limit_profile", lambda _response: "cloudflare_shopify", raising=False)
     monkeypatch.setattr(scanner, "RATE_LIMIT_COOLDOWN_SECONDS", 0.005, raising=False)
     monkeypatch.setattr(scanner, "RATE_LIMIT_PROACTIVE_REQUEST_INTERVAL_SECONDS", 0.005, raising=False)
@@ -95,6 +102,7 @@ async def test_cloudflare_shopify_profile_paces_before_first_429(mock_network, m
     )
 
     assert blocked_attempts == 0
+    assert captured_sitemap_interval["seconds"] == 0.005
     assert result["crawl_timing"]["rate_limit_proactive_profile"] == "cloudflare_shopify"
     assert result["crawl_timing"]["rate_limit_throttle_activated"] is True
     assert result["crawl_timing"]["rate_limit_retry_count"] == 0

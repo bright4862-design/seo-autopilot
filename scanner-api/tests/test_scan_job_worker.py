@@ -221,6 +221,83 @@ async def test_durable_worker_wall_clock_timeout_terminalizes_exact_attempt(monk
     assert kwargs["attempt_count"] == 1
 
 
+@pytest.mark.asyncio
+async def test_durable_worker_completion_wall_timeout_terminalizes_exact_attempt(monkeypatch):
+    """A post-crawl authority handoff that never returns must not hold the row open."""
+    import asyncio
+    from app import main
+
+    scan = {
+        "id": "scan-1",
+        "scan_id": "scan-1",
+        "request_id": "req-1",
+        "idempotency_key": "req-1",
+        "project_id": "proj-1",
+        "owner_user_id": "owner-1",
+        "website_url": "https://example.com/",
+        "normalized_domain": "example.com",
+        "attempt_count": 1,
+        "status": "queued",
+    }
+    payload = main.ScanJobRequest(
+        scan_id="scan-1",
+        request_id="req-1",
+        idempotency_key="req-1",
+        project_id="proj-1",
+        owner_user_id="owner-1",
+        website_url="https://example.com/",
+        normalized_domain="example.com",
+        attempt_count=1,
+    )
+
+    monkeypatch.setattr(main, "require_cloud_tasks_oidc", lambda _: None)
+    monkeypatch.setenv("SCAN_EVIDENCE_SIGNING_KEY", "test-signing-key")
+
+    async def read(*_args, **_kwargs):
+        return scan
+
+    started_calls = 0
+
+    async def started(*_args, **_kwargs):
+        nonlocal started_calls
+        started_calls += 1
+        return {**scan, "status": "crawling", "started_at": "2026-08-18T10:00:00Z"}
+
+    async def quick_scan(*_args, **_kwargs):
+        return {"pages_found": 1, "pages_crawled": 1, "crawled_pages": []}
+
+    async def never_completes(*_args, **_kwargs):
+        await asyncio.sleep(60)
+
+    failures = []
+
+    async def fail(*args, **kwargs):
+        failures.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(main, "read_scan_run", read)
+    monkeypatch.setattr(main, "mark_scan_started", started)
+    monkeypatch.setattr(main, "run_scan", quick_scan)
+    monkeypatch.setattr(main, "apply_indexability_quality_to_result", lambda value: value)
+    monkeypatch.setattr(main, "apply_render_evidence_quality", lambda value: value)
+    monkeypatch.setattr(main, "enforce_scan_response_page_budget", lambda value, _mode: value)
+    monkeypatch.setattr(main, "live_revision", lambda: {"fingerprint": "test"})
+    monkeypatch.setattr(main, "complete_authority", never_completes)
+    monkeypatch.setattr(main, "write_terminal_failure", fail)
+    monkeypatch.setattr(main, "WORKER_COMPLETION_WALL_TIMEOUT_SECONDS", 0.01)
+
+    result = await main.scan_job(payload, authorization="test")
+
+    assert started_calls == 2
+    assert result["success"] is False
+    assert result["error_code"] == "worker_completion_wall_timeout"
+    assert len(failures) == 1
+    args, kwargs = failures[0]
+    assert args[1] == "scan-1"
+    assert args[2] == "worker_completion_wall_timeout"
+    assert kwargs["attempt_count"] == 1
+
+
 # ------------------------------------------------- discovery vs crawl cap --
 #
 # Hard compatibility contract: the 150-page cap bounds fetch/analyse ONLY. On a

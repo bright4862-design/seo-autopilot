@@ -1,4 +1,9 @@
-from app.repair_identity import build_repair_identity, compare_repair_runs, verification_eligibility
+from app.repair_identity import (
+    build_repair_identity,
+    compare_repair_runs,
+    verification_contract_comparability,
+    verification_eligibility,
+)
 
 
 def stable_fix(**overrides):
@@ -80,6 +85,7 @@ def test_missing_repair_is_verified_only_when_all_previous_pages_are_rechecked_a
     assert result["state"] == "verified_fixed"
     assert result["rechecked_pages"] == 2
     assert result["eligible_rechecked_pages"] == 2
+    assert result["comparison_contract_state"] == "legacy_compatible"
 
 
 def test_missing_page_is_not_false_proof_of_fix():
@@ -163,3 +169,72 @@ def test_same_query_variant_can_be_verified_when_still_eligible():
     result = compare_repair_runs(previous, [], [page("/products/a?variant=red", indexable=True)])
     assert result["state"] == "verified_fixed"
     assert result["eligible_rechecked_pages"] == 1
+
+
+def test_versioned_repair_requires_latest_comparison_contract():
+    previous = search_fix(
+        rule_definition_version="missing_meta_description_v3",
+        comparison_profile_version="standard150_review_v2",
+    )
+    result = compare_repair_runs(previous, [], [page("/products/a", indexable=True)])
+    assert result["state"] == "could_not_verify"
+    assert result["comparison_contract_state"] == "incomparable"
+    assert "comparison contract" in result["reason"].lower()
+
+
+def test_rule_definition_change_cannot_be_reported_as_verified_fixed():
+    previous = search_fix(
+        rule_definition_version="missing_meta_description_v3",
+        comparison_profile_version="standard150_review_v2",
+    )
+    result = compare_repair_runs(
+        previous,
+        [],
+        [page("/products/a", indexable=True)],
+        current_contract={
+            "rule_definition_version": "missing_meta_description_v4",
+            "comparison_profile_version": "standard150_review_v2",
+        },
+    )
+    assert result["state"] == "could_not_verify"
+    assert result["comparison_contract_state"] == "incomparable"
+    assert "checking rules changed" in result["reason"].lower()
+
+
+def test_comparison_profile_change_cannot_be_reported_as_verified_fixed():
+    previous = search_fix(
+        rule_definition_version="missing_meta_description_v3",
+        comparison_profile_version="standard150_review_v2",
+    )
+    result = compare_repair_runs(
+        previous,
+        [],
+        [page("/products/a", indexable=True)],
+        current_contract={
+            "rule_definition_version": "missing_meta_description_v3",
+            "comparison_profile_version": "standard150_review_v3",
+        },
+    )
+    assert result["state"] == "could_not_verify"
+    assert "comparison profile changed" in result["reason"].lower()
+
+
+def test_matching_rule_and_profile_versions_allow_eligible_verification():
+    previous = search_fix(
+        rule_definition_version="missing_meta_description_v3",
+        comparison_profile_version="standard150_review_v2",
+    )
+    contract = {
+        "rule_definition_version": "missing_meta_description_v3",
+        "comparison_profile_version": "standard150_review_v2",
+    }
+    state, _ = verification_contract_comparability(previous, contract)
+    assert state == "compatible"
+    result = compare_repair_runs(
+        previous,
+        [],
+        [page("/products/a", indexable=True)],
+        current_contract=contract,
+    )
+    assert result["state"] == "verified_fixed"
+    assert result["comparison_contract_state"] == "compatible"

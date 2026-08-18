@@ -38,6 +38,9 @@ test("server kill control is separately gated and uses coordinator release/statu
   assert.match(source, /\/release/);
   assert.match(source, /\/status/);
   assert.match(source, /release_gate_eligible:\s*false/);
+  assert.match(source, /function coordinatorLeaseReleased/);
+  assert.match(source, /sanitizeAdmissionResult\(result\)/);
+  assert.doesNotMatch(source, /lease_released:\s*admission\.ok\s*===\s*true\s*&&\s*admission\.lease_active/);
 });
 
 test("FixList surfaces owner-only Debug scan and Force stop scan controls", () => {

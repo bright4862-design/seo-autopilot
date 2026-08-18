@@ -85,7 +85,7 @@ echo "=== 1c. Disabled-first deployment controls ==="
 need_file "$ADMISSION_BOOTSTRAP" "owner-only admission bootstrap present"
 need_file "$ADMISSION_DEPLOY" "admission coordinator deploy present"
 need_file "$BASE44_CONFIG" "Base44 disabled-first configurator present"
-need_file "$BASE44_DEPLOY" "six-function Base44 release deploy present"
+need_file "$BASE44_DEPLOY" "explicit Base44 release deploy present"
 need_file "$BASE44_SITE_DEPLOY" "site-then-functions Base44 publish wrapper present"
 need_file "$WORKER_STAGE" "zero-traffic worker staging script present"
 if [ -f "$ADMISSION_BOOTSTRAP" ]; then

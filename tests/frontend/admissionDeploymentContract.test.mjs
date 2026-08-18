@@ -69,7 +69,7 @@ test("Base44 admission configuration is disabled-first, entitlement-owned and ad
   assert.doesNotMatch(configureBase44, /SCAN_EVIDENCE_SIGNING_KEY=/);
 });
 
-test("Base44 release deploy names exactly six functions and never reconciles entities or the site", () => {
+test("Base44 release deploy names the explicit durable functions and never reconciles entities or the site", () => {
   const expected = [
     "startStandardScanJob",
     "durableScanWorkerControl",
@@ -77,6 +77,7 @@ test("Base44 release deploy names exactly six functions and never reconciles ent
     "getCustomerScanResult",
     "createAccessCheckout",
     "stripeWebhook",
+    "ownerScanDebugControl",
   ];
   for (const name of expected) assert.match(deployFunctions, new RegExp(`\\b${name}\\b`));
   assert.match(deployFunctions, /functions deploy "\$\{FUNCTIONS\[@\]\}"/);
@@ -110,6 +111,7 @@ test("Base44 site publication restores the durable backend after the site deploy
     "createAccessCheckout",
     "stripeWebhook",
     "deleteCustomerScanData",
+    "ownerScanDebugControl",
   ]) assert.match(deploySite, new RegExp(`\\b${required}\\b`));
   assert.doesNotMatch(deploySite, /deploy-base44-beta-functions\.sh|--force|entities\s+push/);
 });

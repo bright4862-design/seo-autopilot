@@ -6,7 +6,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 REPAIR_IDENTITY_VERSION = "repair_identity_v1_conservative"
-REPAIR_VERIFICATION_VERSION = "repair_verification_v2_eligibility_aware"
+REPAIR_VERIFICATION_VERSION = "repair_verification_v3_contract_comparable"
 
 SEARCH_FACING_CATEGORIES = {
     "canonical",
@@ -197,6 +197,44 @@ def _is_search_facing(fix: dict[str, Any]) -> bool:
     return any(token in rule for token in SEARCH_FACING_RULE_TOKENS)
 
 
+def verification_contract_comparability(
+    previous_fix: dict[str, Any],
+    current_contract: dict[str, Any] | None,
+) -> tuple[str, str]:
+    """Check whether rule/comparison semantics are compatible across scans.
+
+    This is deliberately metadata-only and fail-closed once a versioned repair
+    declares either field. A changed detector or comparison profile must never
+    make a repair disappear and then be reported as `verified_fixed`.
+
+    Legacy repairs with neither version remain readable and continue through the
+    page-level eligibility gate. Versioned repairs require the later scan to
+    supply matching versions until an explicit compatibility map is introduced.
+    """
+    previous_rule = _clean(previous_fix.get("rule_definition_version"))
+    previous_profile = _clean(previous_fix.get("comparison_profile_version"))
+
+    if not previous_rule and not previous_profile:
+        return "legacy_compatible", "No versioned comparison contract was stored on the historical repair."
+
+    if not isinstance(current_contract, dict):
+        return "incomparable", "The latest scan did not provide the comparison contract required by this historical repair."
+
+    current_rule = _clean(current_contract.get("rule_definition_version"))
+    current_profile = _clean(current_contract.get("comparison_profile_version"))
+
+    if previous_rule and not current_rule:
+        return "incomparable", "The latest scan did not provide the rule-definition version required for comparison."
+    if previous_profile and not current_profile:
+        return "incomparable", "The latest scan did not provide the comparison-profile version required for comparison."
+    if previous_rule and previous_rule != current_rule:
+        return "incomparable", "Checking rules changed since the previous scan."
+    if previous_profile and previous_profile != current_profile:
+        return "incomparable", "The crawl comparison profile changed since the previous scan."
+
+    return "compatible", "Rule definition and comparison profile are compatible with the previous repair."
+
+
 def verification_eligibility(fix: dict[str, Any], page: dict[str, Any]) -> tuple[str, str]:
     """Return whether a later page is comparable evidence for verifying a repair.
 
@@ -234,13 +272,15 @@ def compare_repair_runs(
     previous_fix: dict[str, Any],
     current_fixes: list[dict[str, Any]],
     current_pages: list[dict[str, Any]],
+    current_contract: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Classify a previous repair against a later crawl without false `fixed` claims.
 
     `verified_fixed` is allowed only when a stable repair identity exists, no
-    matching repair remains, every previously affected page is observed again,
-    and every re-observed page remains eligible for the same technical check.
-    Missing or no-longer-comparable evidence becomes `could_not_verify`.
+    matching repair remains, rule/comparison semantics are compatible, every
+    previously affected page is observed again, and every re-observed page
+    remains eligible for the same technical check. Missing, changed-contract,
+    or no-longer-comparable evidence becomes `could_not_verify`.
     """
     previous_identity = build_repair_identity(previous_fix)
     previous_affected = _affected_pages(previous_fix)
@@ -280,6 +320,18 @@ def compare_repair_runs(
             "previous_affected_pages": len(previous_affected),
         }
 
+    contract_state, contract_reason = verification_contract_comparability(previous_fix, current_contract)
+    if contract_state == "incomparable":
+        return {
+            "version": REPAIR_VERIFICATION_VERSION,
+            "state": "could_not_verify",
+            "reason": contract_reason,
+            "rechecked_pages": 0,
+            "eligible_rechecked_pages": 0,
+            "previous_affected_pages": len(previous_affected),
+            "comparison_contract_state": contract_state,
+        }
+
     lookup = _page_lookup(current_pages)
     previous_set = set(previous_affected)
     observed = previous_set & set(lookup)
@@ -291,6 +343,7 @@ def compare_repair_runs(
             "rechecked_pages": len(observed),
             "eligible_rechecked_pages": 0,
             "previous_affected_pages": len(previous_affected),
+            "comparison_contract_state": contract_state,
         }
 
     eligibility = {key: verification_eligibility(previous_fix, lookup[key]) for key in previous_set}
@@ -309,13 +362,15 @@ def compare_repair_runs(
             "eligible_rechecked_pages": len(eligible),
             "previous_affected_pages": len(previous_affected),
             "non_comparable_pages": non_comparable,
+            "comparison_contract_state": contract_state,
         }
 
     return {
         "version": REPAIR_VERIFICATION_VERSION,
         "state": "verified_fixed",
-        "reason": "All previously affected pages were checked again in a comparable eligible state and the stable repair fingerprint was no longer detected.",
+        "reason": "All previously affected pages were checked again under compatible rules in a comparable eligible state and the stable repair fingerprint was no longer detected.",
         "rechecked_pages": len(observed),
         "eligible_rechecked_pages": len(eligible),
         "previous_affected_pages": len(previous_affected),
+        "comparison_contract_state": contract_state,
     }

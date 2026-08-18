@@ -55,6 +55,12 @@ async def test_single_429_activates_pacing_and_retries_once(mock_network, monkey
     assert result["crawl_timing"]["rate_limit_recovered_count"] == 1
 
 
+def test_cloudflare_shopify_profile_uses_slower_default_interval():
+    assert scanner.proactive_rate_limit_interval("cloudflare_shopify") == scanner.RATE_LIMIT_CLOUDFLARE_SHOPIFY_INTERVAL_SECONDS
+    assert scanner.RATE_LIMIT_CLOUDFLARE_SHOPIFY_INTERVAL_SECONDS >= 2.5
+    assert scanner.proactive_rate_limit_interval("other") == scanner.RATE_LIMIT_PROACTIVE_REQUEST_INTERVAL_SECONDS
+
+
 @pytest.mark.asyncio
 async def test_cloudflare_shopify_profile_paces_before_first_429(mock_network, monkeypatch):
     origin = "https://paced-shop.example"
@@ -90,7 +96,7 @@ async def test_cloudflare_shopify_profile_paces_before_first_429(mock_network, m
     monkeypatch.setattr(scanner, "load_sitemap_urls", capture_sitemap_interval)
     monkeypatch.setattr(scanner, "detect_rate_limit_profile", lambda _response: "cloudflare_shopify", raising=False)
     monkeypatch.setattr(scanner, "RATE_LIMIT_COOLDOWN_SECONDS", 0.005, raising=False)
-    monkeypatch.setattr(scanner, "RATE_LIMIT_PROACTIVE_REQUEST_INTERVAL_SECONDS", 0.005, raising=False)
+    monkeypatch.setattr(scanner, "RATE_LIMIT_CLOUDFLARE_SHOPIFY_INTERVAL_SECONDS", 0.005, raising=False)
 
     result = await scanner.run_scan(
         f"{origin}/",
@@ -136,7 +142,7 @@ async def test_real_429_escalates_spacing_before_following_requests(mock_network
 
     monkeypatch.setattr(scanner, "fetch_and_extract", burst_sensitive)
     monkeypatch.setattr(scanner, "detect_rate_limit_profile", lambda _response: "cloudflare_shopify", raising=False)
-    monkeypatch.setattr(scanner, "RATE_LIMIT_PROACTIVE_REQUEST_INTERVAL_SECONDS", 0.001, raising=False)
+    monkeypatch.setattr(scanner, "RATE_LIMIT_CLOUDFLARE_SHOPIFY_INTERVAL_SECONDS", 0.001, raising=False)
     monkeypatch.setattr(scanner, "RATE_LIMIT_COOLDOWN_SECONDS", 0.001, raising=False)
     monkeypatch.setattr(scanner, "RATE_LIMIT_BACKOFF_INTERVAL_SECONDS", 0.005, raising=False)
     monkeypatch.setattr(scanner, "RATE_LIMIT_MAX_INTERVAL_SECONDS", 0.008, raising=False)
@@ -186,7 +192,7 @@ async def test_initial_cloudflare_429_cools_down_once_then_recovers_before_sitem
 
     monkeypatch.setattr(scanner, "safe_get", first_landing_is_429)
     monkeypatch.setattr(scanner, "RATE_LIMIT_INITIAL_COOLDOWN_SECONDS", 0.001, raising=False)
-    monkeypatch.setattr(scanner, "RATE_LIMIT_PROACTIVE_REQUEST_INTERVAL_SECONDS", 0.001, raising=False)
+    monkeypatch.setattr(scanner, "RATE_LIMIT_CLOUDFLARE_SHOPIFY_INTERVAL_SECONDS", 0.001, raising=False)
 
     result = await scanner.run_scan(
         f"{origin}/",

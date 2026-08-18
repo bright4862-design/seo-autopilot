@@ -17,6 +17,7 @@ FUNCTIONS=(
   getCustomerScanResult
   createAccessCheckout
   stripeWebhook
+  deleteCustomerScanData
   ownerScanDebugControl
 )
 

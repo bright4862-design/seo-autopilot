@@ -67,7 +67,7 @@ Deno.serve(async (req) => {
         scan: sanitizeScan(scan),
         release: sanitizeCoordinatorResult(release),
         admission: sanitizeAdmissionResult(admission),
-        lease_released: admission.ok === true && admission.lease_active === false,
+        lease_released: coordinatorLeaseReleased(admission),
       });
     }
     if (!ACTIVE_STATUSES.has(status)) {
@@ -95,7 +95,7 @@ Deno.serve(async (req) => {
         scan: sanitizeScan(scan),
         release: sanitizeCoordinatorResult(release),
         admission: sanitizeAdmissionResult(admission),
-        lease_released: admission.ok === true && admission.lease_active === false,
+        lease_released: coordinatorLeaseReleased(admission),
       });
     }
     if (!ACTIVE_STATUSES.has(status)) {
@@ -133,7 +133,7 @@ Deno.serve(async (req) => {
     console.info("ownerScanDebugControl kill", {
       scan_id: scanId,
       attempt_count: expectedAttempt,
-      lease_released: admission.ok === true && admission.lease_active === false,
+      lease_released: coordinatorLeaseReleased(admission),
     });
 
     return Response.json({
@@ -143,7 +143,7 @@ Deno.serve(async (req) => {
       scan: sanitizeScan(persisted),
       release: sanitizeCoordinatorResult(release),
       admission: sanitizeAdmissionResult(admission),
-      lease_released: admission.ok === true && admission.lease_active === false,
+      lease_released: coordinatorLeaseReleased(admission),
     });
   } catch (error) {
     return problem(error);
@@ -215,6 +215,11 @@ function sanitizeAdmissionResult(result: any) {
     terminal_status: cleanText(admission?.terminal_status, 30),
     error: cleanText(result?.body?.error || result?.error, 100),
   };
+}
+
+function coordinatorLeaseReleased(result: any) {
+  const admission = sanitizeAdmissionResult(result);
+  return admission.ok === true && admission.lease_active === false;
 }
 
 async function coordinatorStatus(ownerUserId: string) {

@@ -19,6 +19,7 @@ test("customer scan recovery has stable, allowlisted error kinds", () => {
   const cases = [
     [{ response: { status: 401, data: { error_code: "unauthorized" } } }, "unauthorized", false],
     [{ response: { status: 404, data: { error_code: "scan_not_found" } } }, "not_found", false],
+    [{ response: { status: 404, data: {} } }, "unavailable", true],
     [{ response: { status: 409, data: { error_code: "paid_access_conflict" } } }, "access_conflict", false],
     [{ response: { status: 503, data: { error_code: "paid_access_unavailable" } } }, "unavailable", true],
     [{ response: { status: 409, data: { error_code: "result_authority_invalid" } } }, "authority_invalid", false],

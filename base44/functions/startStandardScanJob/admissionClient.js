@@ -16,6 +16,7 @@
 
 export const ADMISSION_LABEL = "fixlist-admission-coordinator-v1";
 export const ADMISSION_FLAG = "BETA_SCAN_ADMISSION_ENABLED";
+export const COORDINATOR_TIMEOUT_MS = 8_000;
 
 export const OUTCOME_CLAIMED = "claimed";
 export const OUTCOME_REPLAYED = "replayed";
@@ -98,7 +99,7 @@ function normalizeError(value) {
   return SAFE_COORDINATOR_ERRORS.has(code) ? code : "coordinator_rejected";
 }
 
-async function callCoordinator(path, payload, { coordinatorUrl, signingKey, fetchImpl } = {}) {
+async function callCoordinator(path, payload, { coordinatorUrl, signingKey, fetchImpl, timeoutMs = COORDINATOR_TIMEOUT_MS } = {}) {
   const baseUrl = String(coordinatorUrl ?? readEnv("SCAN_ADMISSION_COORDINATOR_URL")).replace(/\/+$/, "");
   const root = String(signingKey ?? readEnv("SCAN_EVIDENCE_SIGNING_KEY"));
   if (!baseUrl || !root) {
@@ -116,6 +117,9 @@ async function callCoordinator(path, payload, { coordinatorUrl, signingKey, fetc
   }
 
   const send = fetchImpl ?? globalThis.fetch;
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timeout = Math.max(1, Number(timeoutMs) || COORDINATOR_TIMEOUT_MS);
+  const timeoutHandle = controller ? setTimeout(() => controller.abort(), timeout) : null;
   let response;
   try {
     response = await send(`${baseUrl}${path}`, {
@@ -126,11 +130,14 @@ async function callCoordinator(path, payload, { coordinatorUrl, signingKey, fetc
         "x-fixlist-signature": signature,
       },
       body: payloadText,
+      ...(controller ? { signal: controller.signal } : {}),
     });
   } catch {
     // The request may or may not have been applied. Callers must treat this as
     // unknown rather than retrying blind with different inputs.
     return { ok: false, outcomeUnknown: true, failureCode: "admission_unreachable" };
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
   }
 
   let parsed = null;

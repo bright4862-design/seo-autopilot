@@ -82,6 +82,12 @@ test("duplicate query rows collapse to one durable scan", () => {
   assert.equal(uniqueRows([{ id: "a" }, { id: "a", status: "queued" }, { id: "b" }]).length, 2);
 });
 
+test("worker refreshes signed liveness at pickup and after the crawl handoff", () => {
+  assert.match(control, /worker_heartbeat_at: heartbeatAt/);
+  const heartbeatRefreshes = worker.match(/scan = await mark_scan_started\(client, scan\)/g) || [];
+  assert.ok(heartbeatRefreshes.length >= 2, "worker must refresh liveness before and after the bounded crawl");
+});
+
 test("signed sweep is parameter-free and cannot crawl", () => {
   assert.match(control, /action === "sweep"/);
   assert.match(control, /reconcileDurableScans\(entities\)/);

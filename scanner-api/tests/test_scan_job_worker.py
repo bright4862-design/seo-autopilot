@@ -20,6 +20,7 @@ from app.scan_job import (
     already_terminal,
     has_authority_proof,
     identity_matches,
+    terminal_crawl_limitation,
     terminal_review_limitation,
 )
 
@@ -78,6 +79,29 @@ def test_authority_proof_must_be_64_lowercase_hex():
     assert has_authority_proof({}) is False
 
 
+def test_definitive_blocked_crawl_short_circuits_before_full_review():
+    limitation = terminal_crawl_limitation({
+        "crawled_pages": [{
+            "url": "https://blocked.example/",
+            "status_code": 403,
+            "page_evidence_class": "failed_access",
+            "title": "ERROR: The request could not be satisfied",
+        }],
+    })
+    assert limitation is not None
+    assert limitation["code"] == "scan_access_limited"
+    assert "rate-limited or challenged" in limitation["detail"]
+
+    # Ordinary server failures are not relabelled as CDN/bot challenges.
+    assert terminal_crawl_limitation({
+        "crawled_pages": [{
+            "url": "https://broken.example/",
+            "status_code": 500,
+            "page_evidence_class": "failed_access",
+        }],
+    }) is None
+
+
 def test_blocked_review_gets_truthful_access_limited_terminal_code():
     limitation = terminal_review_limitation({
         "release_gate_eligible": False,
@@ -111,6 +135,52 @@ def test_eligible_review_never_gets_terminal_limitation():
         "release_gate_eligible": True,
         "access_evidence_state": "blocked",
     }) is None
+
+
+@pytest.mark.asyncio
+async def test_blocking_local_review_cannot_starve_completion_timeout(monkeypatch):
+    """Synchronous review work must not prevent the event-loop fuse from firing."""
+    import time
+    from app import scan_job
+
+    scan = {
+        "id": "scan-1",
+        "status": "crawling",
+        "attempt_count": 1,
+        "project_id": "proj-1",
+        "owner_user_id": "owner-1",
+    }
+
+    async def read(*_args, **_kwargs):
+        return dict(scan)
+
+    def blocking_review(_result):
+        time.sleep(0.25)
+        return {"release_gate_eligible": True}
+
+    monkeypatch.setattr(scan_job, "read_scan_run", read)
+    monkeypatch.setattr(scan_job, "build_local_review", blocking_review)
+    monkeypatch.setattr(scan_job, "LOCAL_REVIEW_WALL_TIMEOUT_SECONDS", 0.02)
+
+    started = time.monotonic()
+    outcome = await scan_job.complete_authority(
+        None,
+        scan,
+        {
+            "crawled_pages": [{
+                "url": "https://example.com/",
+                "status_code": 200,
+                "page_evidence_class": "usable_html",
+                "title": "Example",
+            }],
+        },
+        "test-signing-key",
+    )
+    elapsed = time.monotonic() - started
+
+    assert outcome["ok"] is False
+    assert outcome["failure_code"] == "review_wall_timeout"
+    assert elapsed < 0.15, "the event loop was blocked by synchronous review work"
 
 
 # ----------------------------------------------------------------- auth ----

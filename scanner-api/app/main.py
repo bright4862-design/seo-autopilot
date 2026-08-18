@@ -68,6 +68,12 @@ WORKER_HEARTBEAT_DRAIN_AFTER_SECONDS = 900
 # an outer wall-clock fuse. This protects terminal state if any nested await or
 # future scanner regression stops honoring the internal deadline.
 WORKER_CRAWL_WALL_TIMEOUT_SECONDS = 135.0
+# The crawl returning is not enough: local review + Base44 authority persistence
+# must also finish inside a bounded window. This second fuse leaves ample room
+# beneath the 480s Cloud Run/Cloud Tasks request envelope for a verified
+# terminal write and retry-safe cleanup.
+WORKER_COMPLETION_WALL_TIMEOUT_SECONDS = 90.0
+WORKER_TERMINAL_WRITE_WALL_TIMEOUT_SECONDS = 45.0
 
 app = FastAPI(title="FixList Scanner API", version=VERSION)
 
@@ -554,7 +560,66 @@ async def scan_job(
         if not signing_key:
             raise HTTPException(status_code=503, detail="Authority signing is not configured.")
 
-        outcome = await complete_authority(client, scan, result, signing_key)
+        try:
+            outcome = await asyncio.wait_for(
+                complete_authority(client, scan, result, signing_key),
+                timeout=WORKER_COMPLETION_WALL_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            # A timed-out HTTP client does not prove the Base44 function stopped;
+            # it may still win the race and persist authority. Re-read first, then
+            # use the terminal control function, which itself refuses to overwrite
+            # any terminal row. Re-read again before reporting the final outcome.
+            fresh = await read_scan_run(client, scan_id)
+            if isinstance(fresh, dict) and already_terminal(fresh):
+                return {
+                    "success": True,
+                    "worker_version": WORKER_VERSION,
+                    "skipped": "terminal_won_completion_timeout_race",
+                    "status": fresh.get("status"),
+                    "scan_id": scan_id,
+                }
+            try:
+                closed = await asyncio.wait_for(
+                    write_terminal_failure(
+                        client,
+                        scan_id,
+                        "worker_completion_wall_timeout",
+                        "The scan finished crawling but final result persistence exceeded its bounded worker time. Please try again.",
+                        attempt_count=job_attempt,
+                    ),
+                    timeout=WORKER_TERMINAL_WRITE_WALL_TIMEOUT_SECONDS,
+                )
+            except (asyncio.TimeoutError, RuntimeError) as exc:
+                raise HTTPException(status_code=503, detail="The scan completion timeout could not be terminalized safely.") from exc
+            if not closed:
+                return {
+                    "success": True,
+                    "worker_version": WORKER_VERSION,
+                    "skipped": "superseded_attempt",
+                    "scan_id": scan_id,
+                    "task_attempt": job_attempt,
+                }
+            persisted = await read_scan_run(client, scan_id)
+            if not isinstance(persisted, dict):
+                raise HTTPException(status_code=503, detail="The scan completion timeout state is unavailable.")
+            if str(persisted.get("status") or "").lower() == "failed" and str(persisted.get("error_code") or "") == "worker_completion_wall_timeout":
+                return {
+                    "success": False,
+                    "worker_version": WORKER_VERSION,
+                    "error_code": "worker_completion_wall_timeout",
+                    "scan_id": scan_id,
+                }
+            if already_terminal(persisted):
+                return {
+                    "success": True,
+                    "worker_version": WORKER_VERSION,
+                    "skipped": "terminal_won_completion_timeout_race",
+                    "status": persisted.get("status"),
+                    "scan_id": scan_id,
+                }
+            raise HTTPException(status_code=503, detail="The scan completion timeout was not terminalized.")
+
         if outcome.get("transient"):
             # ScanRun untouched: Cloud Tasks retries the same scan_id safely.
             raise HTTPException(status_code=503, detail="Authority persistence is unavailable.")

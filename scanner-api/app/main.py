@@ -64,6 +64,10 @@ WORKER_QUEUED_DRAIN_AFTER_QUEUE_SECONDS = 1800
 # A 15-minute heartbeat window safely spans both plus headroom while closing a
 # vanished worker much earlier than the full 30-minute terminal envelope.
 WORKER_HEARTBEAT_DRAIN_AFTER_SECONDS = 900
+# run_scan has its own 120s async-job ceiling, but the durable route also owns
+# an outer wall-clock fuse. This protects terminal state if any nested await or
+# future scanner regression stops honoring the internal deadline.
+WORKER_CRAWL_WALL_TIMEOUT_SECONDS = 135.0
 
 app = FastAPI(title="FixList Scanner API", version=VERSION)
 
@@ -484,14 +488,17 @@ async def scan_job(
             raise HTTPException(status_code=503, detail="The scan start state is unavailable.") from exc
 
         try:
-            result = await run_scan(
-                website_url=payload.website_url,
-                path_prefix=payload.path_prefix,
-                scan_mode="advanced",
-                business_name=payload.business_name or "",
-                cms_platform=payload.cms_platform or "",
-                timeout_seconds=CRAWL_BUDGET_SECONDS,
-                job_mode=True,
+            result = await asyncio.wait_for(
+                run_scan(
+                    website_url=payload.website_url,
+                    path_prefix=payload.path_prefix,
+                    scan_mode="advanced",
+                    business_name=payload.business_name or "",
+                    cms_platform=payload.cms_platform or "",
+                    timeout_seconds=CRAWL_BUDGET_SECONDS,
+                    job_mode=True,
+                ),
+                timeout=WORKER_CRAWL_WALL_TIMEOUT_SECONDS,
             )
             result = apply_indexability_quality_to_result(result)
             result = apply_render_evidence_quality(result)
@@ -517,6 +524,16 @@ async def scan_job(
                 "normalized_domain": payload.normalized_domain or website_host(payload.website_url),
                 "respect_robots_txt": True,
             })
+        except asyncio.TimeoutError:
+            # This is an outer fail-safe, not a retry signal. If the scanner's
+            # own bounded deadline failed to return, redelivering the same task
+            # can repeat the hang. Close the exact attempt truthfully instead.
+            await write_terminal_failure(
+                client, scan_id, "scanner_wall_timeout",
+                "The scan exceeded its bounded worker time and was safely stopped. Please try again.",
+                attempt_count=job_attempt,
+            )
+            return {"success": False, "worker_version": WORKER_VERSION, "error_code": "scanner_wall_timeout"}
         except Exception:  # noqa: BLE001 - customer-safe envelope
             await write_terminal_failure(
                 client, scan_id, "scanner_failed",

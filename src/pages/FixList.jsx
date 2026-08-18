@@ -220,22 +220,43 @@ export default function FixList() {
     }
 
     function clearProtectedView(event) {
-      cancelled = true;
+      const reason = String(event?.detail?.reason || "");
       window.clearTimeout(pollTimerRef.current);
-      loadedScanIdRef.current = "";
-      setScanRecord(null);
-      setDoneIds([]);
       if (!requestedScanId) {
+        loadedScanIdRef.current = "";
+        setScanRecord(null);
+        setDoneIds([]);
         setRequestedScanFailure(null);
         setRequestedScanState("idle");
         return;
       }
-      const boundaryKind = ["auth_expired", "session_cleared"].includes(String(event?.detail?.reason || ""))
-        ? "unauthorized"
-        : "not_found";
-      const failure = customerRecoveryFailure({ error_code: boundaryKind }, `result:${requestedScanId}`);
-      setRequestedScanFailure(failure);
-      setRequestedScanState(failure.kind);
+
+      // Only a real authentication boundary is allowed to declare the current
+      // protected view unavailable without another server read. Project/cache
+      // changes are not evidence that this exact ScanRun disappeared: reload
+      // the requested scan_id and let getCustomerScanResult enforce ownership.
+      if (["auth_expired", "session_cleared", "logout"].includes(reason)) {
+        cancelled = true;
+        loadedScanIdRef.current = "";
+        setScanRecord(null);
+        setDoneIds([]);
+        const failure = customerRecoveryFailure({ error_code: "unauthorized" }, `result:${requestedScanId}`);
+        setRequestedScanFailure(failure);
+        setRequestedScanState(failure.kind);
+        return;
+      }
+
+      // Account switches clear any previously rendered protected data before
+      // re-reading. Same-owner project/cache changes may keep the last exact
+      // record visible while the new server-authorized read is in flight.
+      if (reason === "account_switch") {
+        loadedScanIdRef.current = "";
+        setScanRecord(null);
+        setDoneIds([]);
+        setRequestedScanState("loading");
+      }
+      setRequestedScanFailure(null);
+      setReloadToken((value) => value + 1);
     }
 
     loadRequestedScan();

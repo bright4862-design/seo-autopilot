@@ -6,7 +6,7 @@ import {
   OWNER_SCAN_DEBUG_EMAIL,
   OWNER_SCAN_DEBUG_USER_ID,
   isOwnerScanDebugUser,
-} from "../../src/lib/ownerScanDebugControl.js";
+} from "../../src/lib/ownerScanDebugIdentity.js";
 
 test("owner scan debug UI is restricted to the exact owner admin identity", () => {
   assert.equal(OWNER_SCAN_DEBUG_EMAIL, "bright4862@gmail.com");

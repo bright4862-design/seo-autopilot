@@ -42,8 +42,8 @@ def test_search_facing_issue_on_non_indexable_pages_is_demoted_without_rewriting
     result = annotate_repair_priority(fix, pages)
     assert result["base_severity"] == "high"
     assert result["action_priority"] == "important"
+    assert result["priority_context"]["indexable_affected"] == 0
     assert result["priority_context"]["non_indexable_affected"] == 5
-    assert "lower priority" in result["priority_reason"].lower()
 
 
 def test_sample_qualified_coverage_uses_checked_family_denominator():

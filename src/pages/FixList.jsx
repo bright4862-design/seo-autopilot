@@ -367,10 +367,38 @@ export default function FixList() {
     setDoneIds(next);
   }
 
+  const ownerDebugVisible = isOwnerScanDebugUser(user) && Boolean(requestedScanId && scanRecord);
+  const ownerScanActive = ACTIVE_SCAN_RUN_STATUSES.has(String(scanRecord?.status || "").toLowerCase());
+
   function retryRequestedScan() {
     setRequestedScanFailure(null);
     if (!scanRecord) setRequestedScanState("loading");
     setReloadToken((value) => value + 1);
+  }
+
+  async function handleOwnerDebugScan() {
+    if (!scanRecord?.id || ownerDebugBusy) return;
+    setOwnerDebugBusy("debug");
+    const result = await debugScanRun(scanRecord.id);
+    setOwnerDebugBusy("");
+    setOwnerDebugResult(result);
+  }
+
+  async function handleOwnerForceStopScan() {
+    if (!scanRecord?.id || !ownerScanActive || ownerDebugBusy) return;
+    const confirmed = window.confirm(
+      `Force stop scan ${scanRecord.id}? This cancels only the current attempt and releases its admission lease when the coordinator confirms it.`,
+    );
+    if (!confirmed) return;
+
+    setOwnerDebugBusy("kill");
+    const result = await forceStopScanRun(scanRecord.id, scanRecord.attempt_count || 1);
+    setOwnerDebugBusy("");
+    setOwnerDebugResult(result);
+    if (result?.ok) {
+      setReloadToken((value) => value + 1);
+      setHistoryReloadToken((value) => value + 1);
+    }
   }
 
   async function handleDeleteScan(scanId) {

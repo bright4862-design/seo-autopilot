@@ -197,7 +197,11 @@ async def fetch_sitemap_locs(client: httpx.AsyncClient, sitemap_url: str, fetche
     if diagnostics is not None:
         diagnostics["sitemap_fetch_count"] = len(fetched)
     try:
-        response = await _safe_get_before_deadline(client, sitemap_url, deadline, pacer=pacer)
+        response = (
+            await _safe_get_before_deadline(client, sitemap_url, deadline, pacer=pacer)
+            if pacer is not None
+            else await _safe_get_before_deadline(client, sitemap_url, deadline)
+        )
         if response is None:
             if _deadline_reached(deadline) and diagnostics is not None:
                 diagnostics["sitemap_budget_exhausted"] = True

@@ -232,12 +232,13 @@ export function prepareCustomerFixes(items = []) {
 }
 
 export function priorityBucket(value = "") {
-  const actionValue = typeof value === "object" ? actionPriorityOf(value) : String(value || "").toLowerCase();
-  if (ACTION_RANK[actionValue]) return actionValue;
+  if (typeof value === "object" && value !== null) return actionPriorityOf(value);
+  // Preserve the live FixList section contract until the page is migrated to
+  // action-priority bands tomorrow.
   const severity = priorityOf({ priority: value });
   if (severity === "critical" || severity === "high") return "fix_first";
-  if (severity === "medium") return "important";
-  return "improve";
+  if (severity === "medium") return "improve_next";
+  return "worth_checking";
 }
 
 export function customerPriorityReason(item = {}) {

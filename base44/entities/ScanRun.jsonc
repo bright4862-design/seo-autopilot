@@ -2,75 +2,236 @@
   "name": "ScanRun",
   "type": "object",
   "properties": {
-    "request_id": { "type": "string", "description": "Owner-scoped request identity used for replay protection." },
-    "idempotency_key": { "type": "string", "description": "Must equal request_id for the Standard scan path." },
-    "request_fingerprint": { "type": "string", "description": "Normalized scan mode and target used to reject conflicting replays." },
-    "scan_id": { "type": "string", "description": "Canonical scan identity; set to this entity record's server-generated id." },
-    "project_id": { "type": "string" },
-    "website_url": { "type": "string" },
-    "submitted_url": { "type": "string" },
-    "final_url": { "type": "string" },
-    "normalized_domain": { "type": "string" },
-    "path_prefix": { "type": "string" },
+    "request_id": {
+      "type": "string",
+      "description": "Owner-scoped request identity used for replay protection."
+    },
+    "idempotency_key": {
+      "type": "string",
+      "description": "Must equal request_id for the Standard scan path."
+    },
+    "request_fingerprint": {
+      "type": "string",
+      "description": "Normalized scan mode and target used to reject conflicting replays."
+    },
+    "scan_id": {
+      "type": "string",
+      "description": "Canonical scan identity; set to this entity record's server-generated id."
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "website_url": {
+      "type": "string"
+    },
+    "submitted_url": {
+      "type": "string"
+    },
+    "final_url": {
+      "type": "string"
+    },
+    "normalized_domain": {
+      "type": "string"
+    },
+    "path_prefix": {
+      "type": "string"
+    },
     "scan_mode": {
       "type": "string",
-      "enum": ["standard_150", "basic", "quick", "deep", "advanced"],
+      "enum": [
+        "standard_150",
+        "basic",
+        "quick",
+        "deep",
+        "advanced"
+      ],
       "default": "standard_150",
       "description": "New customer scans use standard_150. Legacy values remain valid so historical scan records stay readable."
     },
-    "scan_source": { "type": "string" },
+    "scan_source": {
+      "type": "string"
+    },
     "status": {
       "type": "string",
-      "enum": ["queued", "crawling", "reviewing", "complete", "limited", "failed", "cancelled"],
+      "enum": [
+        "queued",
+        "crawling",
+        "reviewing",
+        "complete",
+        "limited",
+        "failed",
+        "cancelled"
+      ],
       "default": "queued"
     },
-    "status_detail": { "type": "string" },
-    "scanner_version": { "type": "string" },
-    "scanner_build_revision": { "type": "string" },
-    "scanner_wrapper_version": { "type": "string" },
-    "release_id": { "type": "string", "description": "Composite scanner version/build/beta fingerprint identity." },
-    "advanced_scan_backend": { "type": "string" },
-    "deno_fallback_used": { "type": "boolean", "default": false },
-    "archetype_classifier_version": { "type": "string" },
-    "review_version": { "type": "string" },
-    "review_evidence_calibration_version": { "type": "string" },
-    "ai_review_backend": { "type": "string" },
-    "python_review_fallback_used": { "type": "boolean", "default": false },
-    "release_gate_eligible": { "type": "boolean", "default": false },
-    "beta_revision_fingerprint": { "type": "string" },
-    "metadata_evidence_version": { "type": "string" },
-    "title_evidence_version": { "type": "string" },
-    "pages_found": { "type": "number", "default": 0 },
-    "pages_crawled": { "type": "number", "default": 0 },
-    "pages_retained": { "type": "number", "default": 0 },
-    "local_cache_complete": { "type": "boolean", "default": false },
-    "queued_remaining": { "type": "number", "default": 0 },
-    "sampling_evidence": { "type": "object", "additionalProperties": true, "default": {} },
-    "crawl_timing": { "type": "object", "additionalProperties": true, "default": {} },
-    "scan_status": { "type": "string" },
-    "review_confidence_state": { "type": "string" },
-    "score_is_provisional": { "type": "boolean", "default": false },
-    "access_evidence_state": { "type": "string" },
-    "evidence_quality_state": { "type": "string" },
-    "evidence_quality_score": { "type": "number", "default": 0 },
-    "evidence_quality_reasons": { "type": "array", "items": { "type": "string" }, "default": [] },
-    "discovery_quality_state": { "type": "string" },
-    "representative_html_page_count": { "type": "number", "default": 0 },
-    "usable_html_page_count": { "type": "number", "default": 0 },
-    "default_route_page_count": { "type": "number", "default": 0 },
-    "evidence_quality_blocking": { "type": "boolean", "default": false },
-    "evidence_quality_gate_version": { "type": "string" },
-    "no_high_confidence_findings": { "type": "boolean", "default": false },
-    "limitation": { "type": "string" },
-    "render_evidence": { "type": "object", "additionalProperties": true, "default": {} },
-    "health_score": { "type": "number" },
-    "health_grade": { "type": "string" },
-    "customer_summary": { "type": "string" },
-    "next_best_step": { "type": "string" },
-    "fix_list_id": { "type": "string" },
-    "previous_scan_id": { "type": "string" },
-    "rescan_of_scan_id": { "type": "string" },
-    "attempt_count": { "type": "number", "default": 1 },
+    "status_detail": {
+      "type": "string"
+    },
+    "scanner_version": {
+      "type": "string"
+    },
+    "scanner_build_revision": {
+      "type": "string"
+    },
+    "scanner_wrapper_version": {
+      "type": "string"
+    },
+    "release_id": {
+      "type": "string",
+      "description": "Composite scanner version/build/beta fingerprint identity."
+    },
+    "advanced_scan_backend": {
+      "type": "string"
+    },
+    "deno_fallback_used": {
+      "type": "boolean",
+      "default": false
+    },
+    "archetype_classifier_version": {
+      "type": "string"
+    },
+    "review_version": {
+      "type": "string"
+    },
+    "review_evidence_calibration_version": {
+      "type": "string"
+    },
+    "ai_review_backend": {
+      "type": "string"
+    },
+    "python_review_fallback_used": {
+      "type": "boolean",
+      "default": false
+    },
+    "release_gate_eligible": {
+      "type": "boolean",
+      "default": false
+    },
+    "beta_revision_fingerprint": {
+      "type": "string"
+    },
+    "metadata_evidence_version": {
+      "type": "string"
+    },
+    "title_evidence_version": {
+      "type": "string"
+    },
+    "pages_found": {
+      "type": "number",
+      "default": 0
+    },
+    "pages_crawled": {
+      "type": "number",
+      "default": 0
+    },
+    "pages_retained": {
+      "type": "number",
+      "default": 0
+    },
+    "local_cache_complete": {
+      "type": "boolean",
+      "default": false
+    },
+    "queued_remaining": {
+      "type": "number",
+      "default": 0
+    },
+    "sampling_evidence": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
+    "crawl_timing": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
+    "scan_status": {
+      "type": "string"
+    },
+    "review_confidence_state": {
+      "type": "string"
+    },
+    "score_is_provisional": {
+      "type": "boolean",
+      "default": false
+    },
+    "access_evidence_state": {
+      "type": "string"
+    },
+    "evidence_quality_state": {
+      "type": "string"
+    },
+    "evidence_quality_score": {
+      "type": "number",
+      "default": 0
+    },
+    "evidence_quality_reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "discovery_quality_state": {
+      "type": "string"
+    },
+    "representative_html_page_count": {
+      "type": "number",
+      "default": 0
+    },
+    "usable_html_page_count": {
+      "type": "number",
+      "default": 0
+    },
+    "default_route_page_count": {
+      "type": "number",
+      "default": 0
+    },
+    "evidence_quality_blocking": {
+      "type": "boolean",
+      "default": false
+    },
+    "evidence_quality_gate_version": {
+      "type": "string"
+    },
+    "no_high_confidence_findings": {
+      "type": "boolean",
+      "default": false
+    },
+    "limitation": {
+      "type": "string"
+    },
+    "render_evidence": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
+    "health_score": {
+      "type": "number"
+    },
+    "health_grade": {
+      "type": "string"
+    },
+    "customer_summary": {
+      "type": "string"
+    },
+    "next_best_step": {
+      "type": "string"
+    },
+    "fix_list_id": {
+      "type": "string"
+    },
+    "previous_scan_id": {
+      "type": "string"
+    },
+    "rescan_of_scan_id": {
+      "type": "string"
+    },
+    "attempt_count": {
+      "type": "number",
+      "default": 1
+    },
     "admission_access_id": {
       "type": "string",
       "description": "Server-owned Access lease record that admitted this durable attempt."
@@ -79,26 +240,71 @@
       "type": "string",
       "description": "Server-owned fencing token binding this row to its admission lease."
     },
-    "resumable": { "type": "boolean", "default": false },
-    "resume_token": { "type": "string" },
-    "error_code": { "type": "string" },
-    "error_message": { "type": "string" },
-    "cancelled_reason": { "type": "string" },
-    "respect_robots_txt": { "type": "boolean", "default": true },
-    "queued_at": { "type": "string" },
-    "started_at": { "type": "string" },
-    "reviewing_at": { "type": "string" },
-    "completed_at": { "type": "string" },
+    "resumable": {
+      "type": "boolean",
+      "default": false
+    },
+    "resume_token": {
+      "type": "string"
+    },
+    "error_code": {
+      "type": "string"
+    },
+    "error_message": {
+      "type": "string"
+    },
+    "cancelled_reason": {
+      "type": "string"
+    },
+    "respect_robots_txt": {
+      "type": "boolean",
+      "default": true
+    },
+    "queued_at": {
+      "type": "string"
+    },
+    "started_at": {
+      "type": "string"
+    },
+    "worker_heartbeat_at": {
+      "type": "string",
+      "description": "Server-owned liveness timestamp refreshed when the durable worker starts, retries, or finishes its crawl handoff.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "reviewing_at": {
+      "type": "string"
+    },
+    "completed_at": {
+      "type": "string"
+    },
     "authority_seal_version": {
       "type": "string",
       "description": "Server-only HMAC evidence contract version. Browser-created scans remain unsealed.",
-      "rls": { "write": { "user_condition": { "role": "admin" } } }
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
     },
     "authority_sealed_at": {
       "type": "string",
       "format": "date-time",
       "description": "Time the trusted review snapshot was persisted by persistScanAuthority.",
-      "rls": { "write": { "user_condition": { "role": "admin" } } }
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
     },
     "authority_proof": {
       "type": "string",
@@ -106,26 +312,49 @@
       "maxLength": 64,
       "pattern": "^[a-f0-9]{64}$",
       "description": "HMAC-SHA256 proof binding the ScanRun, FixList, and FixItems consumed by Grok.",
-      "rls": { "write": { "user_condition": { "role": "admin" } } }
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
     },
     "owner_user_id": {
       "type": "string",
-      "rls": { "update": { "user_condition": { "role": "admin" } } }
+      "rls": {
+        "update": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
     }
   },
-  "required": ["project_id", "website_url"],
+  "required": [
+    "project_id",
+    "website_url"
+  ],
   "rls": {
     "create": {
-      "user_condition": { "role": "admin" }
+      "user_condition": {
+        "role": "admin"
+      }
     },
     "read": {
-      "user_condition": { "role": "admin" }
+      "user_condition": {
+        "role": "admin"
+      }
     },
     "update": {
-      "user_condition": { "role": "admin" }
+      "user_condition": {
+        "role": "admin"
+      }
     },
     "delete": {
-      "user_condition": { "role": "admin" }
+      "user_condition": {
+        "role": "admin"
+      }
     }
   }
 }

@@ -452,12 +452,14 @@ def _local_review_process_entry(result: dict[str, Any], send_conn: Any) -> None:
 def run_local_review_isolated(
     result: dict[str, Any],
     timeout_seconds: float = LOCAL_REVIEW_WALL_TIMEOUT_SECONDS,
+    *,
+    entrypoint: Any = None,
 ) -> dict[str, Any]:
     """Run review in a killable child so GIL starvation cannot defeat the deadline."""
     timeout = max(0.001, float(timeout_seconds or LOCAL_REVIEW_WALL_TIMEOUT_SECONDS))
     ctx = mp.get_context("spawn")
     recv_conn, send_conn = ctx.Pipe(duplex=False)
-    process = ctx.Process(target=_local_review_process_entry, args=(result, send_conn), daemon=True)
+    process = ctx.Process(target=entrypoint or _local_review_process_entry, args=(result, send_conn), daemon=True)
     process.start()
     send_conn.close()
     deadline = time.monotonic() + timeout

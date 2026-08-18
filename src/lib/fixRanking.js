@@ -1,9 +1,37 @@
 const PRIORITY_RANK = Object.freeze({ critical: 4, high: 3, medium: 2, low: 1 });
+const ACTION_RANK = Object.freeze({ fix_first: 4, important: 3, improve: 2, review: 1 });
 const COVERING_SCOPES = new Set(["family", "cross_cutting", "sitewide"]);
 
 function priorityOf(item = {}) {
-  const value = String(item.priority || "").toLowerCase();
+  const value = String(item.baseSeverity || item.base_severity || item.priority || "").toLowerCase();
   return PRIORITY_RANK[value] ? value : "medium";
+}
+
+function actionPriorityOf(item = {}) {
+  const value = String(
+    item.actionPriority
+      || item.action_priority
+      || item.priorityContext?.action_priority
+      || item.priority_context?.action_priority
+      || item.original?.action_priority
+      || "",
+  ).toLowerCase();
+  if (ACTION_RANK[value]) return value;
+  const severity = priorityOf(item);
+  if (severity === "critical" || severity === "high") return "fix_first";
+  if (severity === "medium") return "important";
+  return "improve";
+}
+
+function actionScoreOf(item = {}) {
+  const raw = item.actionPriorityScore
+    ?? item.action_priority_score
+    ?? item.priorityContext?.action_priority_score
+    ?? item.priority_context?.action_priority_score
+    ?? item.original?.action_priority_score
+    ?? 0;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : 0;
 }
 
 function affectedPagesOf(item = {}) {
@@ -75,11 +103,22 @@ export function suppressCoveredPageFixes(items = []) {
   });
 }
 
-/** Stable customer presentation order. Scanner/review priority is never changed. */
+/**
+ * Stable customer presentation order.
+ *
+ * `priority` remains the technical/base severity. When the backend supplies the
+ * contextual repair-priority contract, `action_priority` controls the customer
+ * work queue and `action_priority_score` only orders work inside that band.
+ * Legacy results fall back to the old severity-first behavior.
+ */
 export function rankFixesForCustomer(items = []) {
   return (Array.isArray(items) ? items : [])
     .map((item, index) => ({ item, index }))
     .sort((left, right) => {
+      const actionDelta = ACTION_RANK[actionPriorityOf(right.item)] - ACTION_RANK[actionPriorityOf(left.item)];
+      if (actionDelta !== 0) return actionDelta;
+      const actionScoreDelta = actionScoreOf(right.item) - actionScoreOf(left.item);
+      if (actionScoreDelta !== 0) return actionScoreDelta;
       const priorityDelta = PRIORITY_RANK[priorityOf(right.item)] - PRIORITY_RANK[priorityOf(left.item)];
       if (priorityDelta !== 0) return priorityDelta;
       const scopeDelta = pageCountOf(right.item) - pageCountOf(left.item);
@@ -109,7 +148,7 @@ function actionKeyOf(item = {}, index = 0) {
   const recommendation = recommendationOf(item);
   // Fail open for presentation: without an explicit page pattern AND an
   // explicit remediation, keep the evidence rows separate rather than risk
-  // hiding genuinely different work behind one customer card.
+  // hiding genuinely different work behind one customer row.
   if (!rule || !family || !recommendation) return `ungrouped:${item.id || index}`;
   return `${rule}\u0000${family}\u0000${recommendation}`;
 }
@@ -118,10 +157,20 @@ function strongerPriority(left, right) {
   return PRIORITY_RANK[priorityOf({ priority: right })] > PRIORITY_RANK[priorityOf({ priority: left })] ? right : left;
 }
 
+function sharedRepairConfirmed(item = {}) {
+  if (item.sharedRepairConfirmed === true || item.shared_repair_confirmed === true || item.repair_leverage_confirmed === true) return true;
+  const context = item.priorityContext || item.priority_context || item.original?.priority_context || {};
+  return context?.shared_repair_confirmed === true;
+}
+
 /**
  * Merge separate evidence rows only when they resolve to the same customer action:
  * same rule, same page/template family, and same recommended remediation.
  * Scanner evidence remains untouched; this is presentation synthesis only.
+ *
+ * A shared page family is not proof that one CMS/template edit fixes everything.
+ * The stronger "one shared change" language is reserved for explicit backend
+ * repair-surface evidence.
  */
 export function mergeSameActionFixes(items = []) {
   const list = Array.isArray(items) ? items.filter(Boolean) : [];
@@ -140,7 +189,12 @@ export function mergeSameActionFixes(items = []) {
         groupedFindingCount: 1,
       };
       seeded.pageCount = Math.max(pageCountOf(item), seeded.affectedPages.length);
-      groups.set(key, { index: output.length, item: seeded, currentValues: new Set([String(item.currentValue || item.current_value || "").trim()].filter(Boolean)) });
+      groups.set(key, {
+        index: output.length,
+        item: seeded,
+        currentValues: new Set([String(item.currentValue || item.current_value || "").trim()].filter(Boolean)),
+        sharedRepairConfirmed: sharedRepairConfirmed(item),
+      });
       output.push(seeded);
       return;
     }
@@ -155,12 +209,17 @@ export function mergeSameActionFixes(items = []) {
     merged.confidenceScore = Math.max(confidenceOf(merged), confidenceOf(item));
     merged.needsHelp = Boolean(merged.needsHelp || item.needsHelp);
     merged.combinedRules = uniqueStrings([...(merged.combinedRules || []), ...(item.combinedRules || []), ruleOf(item)]);
+    found.sharedRepairConfirmed = Boolean(found.sharedRepairConfirmed && sharedRepairConfirmed(item));
 
     const currentValue = String(item.currentValue || item.current_value || "").trim();
     if (currentValue) found.currentValues.add(currentValue);
     if (found.currentValues.size > 1) merged.currentValue = "";
     if (merged.groupedFindingCount > 1) {
-      merged.groupingExplanation = `FixList grouped ${merged.groupedFindingCount} related findings because they use the same page pattern and require the same change. One fix can address all ${merged.affectedPages.length} affected pages.`;
+      merged.groupingExplanation = found.sharedRepairConfirmed
+        ? `FixList grouped ${merged.groupedFindingCount} related findings because they require the same confirmed shared repair. One shared change may improve ${merged.affectedPages.length} affected pages.`
+        : `FixList grouped ${merged.groupedFindingCount} related findings because they share the same page pattern and recommended change. They remain traceable as separate findings; FixList has not assumed that one implementation change fixes every page.`;
+      merged.sharedRepairConfirmed = found.sharedRepairConfirmed;
+      merged.repairLeverageConfirmed = found.sharedRepairConfirmed;
     }
     output[found.index] = merged;
   });
@@ -172,9 +231,22 @@ export function prepareCustomerFixes(items = []) {
   return rankFixesForCustomer(mergeSameActionFixes(suppressCoveredPageFixes(items)));
 }
 
-export function priorityBucket(priority = "") {
-  const value = priorityOf({ priority });
-  if (value === "critical" || value === "high") return "fix_first";
-  if (value === "medium") return "improve_next";
-  return "worth_checking";
+export function priorityBucket(value = "") {
+  const actionValue = typeof value === "object" ? actionPriorityOf(value) : String(value || "").toLowerCase();
+  if (ACTION_RANK[actionValue]) return actionValue;
+  const severity = priorityOf({ priority: value });
+  if (severity === "critical" || severity === "high") return "fix_first";
+  if (severity === "medium") return "important";
+  return "improve";
+}
+
+export function customerPriorityReason(item = {}) {
+  return String(
+    item.priorityReason
+      || item.priority_reason
+      || item.priorityContext?.priority_reason
+      || item.priority_context?.priority_reason
+      || item.original?.priority_reason
+      || "",
+  ).trim();
 }

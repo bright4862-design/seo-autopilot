@@ -38,6 +38,7 @@ FUNCTIONS=(
   createAccessCheckout
   stripeWebhook
   deleteCustomerScanData
+  ownerScanDebugControl
 )
 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions deploy "${FUNCTIONS[@]}"
 
@@ -50,7 +51,8 @@ for required in \
   getCustomerScanResult \
   createAccessCheckout \
   stripeWebhook \
-  deleteCustomerScanData
+  deleteCustomerScanData \
+  ownerScanDebugControl
 do
   grep -Eq "(^|[[:space:]])${required}([[:space:]]|$)" <<<"$INVENTORY" || {
     echo "Refusing: Base44 post-site inventory is missing ${required}." >&2

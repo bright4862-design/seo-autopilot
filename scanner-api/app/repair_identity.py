@@ -5,7 +5,7 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-REPAIR_IDENTITY_VERSION = "repair_identity_v1_conservative"
+REPAIR_IDENTITY_VERSION = "repair_identity_v2_technical"
 REPAIR_VERIFICATION_VERSION = "repair_verification_v3_contract_comparable"
 
 SEARCH_FACING_CATEGORIES = {
@@ -104,12 +104,20 @@ def _remediation_family(fix: dict[str, Any]) -> str:
 def build_repair_identity(fix: dict[str, Any]) -> dict[str, Any]:
     """Build a conservative cross-scan repair identity.
 
+    Stable verification identity is deliberately limited to durable technical
+    identifiers: canonical rule identity, explicit implementation surface, and
+    explicit remediation family. Presentation/grouping metadata such as category,
+    page scope, and page-template family is retained as context but never enters
+    the stable fingerprint, because those classifications can change while the
+    underlying defect remains identical.
+
     A rule + page-family resemblance is not enough for verified repair tracking.
     Stable identity requires an explicit implementation surface and an explicit
     remediation/action family. Otherwise we emit a provisional fingerprint that
     may help presentation, but it is not eligible for automatic `verified_fixed`.
     """
-    rule = _token(fix.get("rule") or fix.get("type") or fix.get("issue_type"))
+    rule_id = _token(fix.get("rule_id"))
+    rule = rule_id or _token(fix.get("rule") or fix.get("type") or fix.get("issue_type"))
     category = _token(fix.get("category"))
     family = _token(fix.get("page_template_family") or fix.get("template_family"))
     scope = _token(fix.get("page_scope") or "page")
@@ -123,9 +131,13 @@ def build_repair_identity(fix: dict[str, Any]) -> dict[str, Any]:
 
     stable = bool(rule and surface and explicit_remediation)
     if stable:
-        material = "|".join([rule, category, scope, family, surface, explicit_remediation])
+        # Only durable technical identity participates in cross-scan authority.
+        # Mutable classification/presentation fields remain outside this hash.
+        material = "|".join([rule, surface, explicit_remediation])
         state = "stable"
     else:
+        # Provisional identity may use grouping context because it is never
+        # allowed to auto-verify a repair as fixed.
         material = "|".join([rule, category, scope, family, surface, remediation])
         state = "provisional" if rule else "insufficient"
 
@@ -136,6 +148,7 @@ def build_repair_identity(fix: dict[str, Any]) -> dict[str, Any]:
         "stable": stable,
         "fingerprint": fingerprint,
         "rule": rule,
+        "rule_id": rule_id,
         "category": category,
         "page_scope": scope,
         "page_template_family": family,

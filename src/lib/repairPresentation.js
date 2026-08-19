@@ -1,7 +1,7 @@
 import { customerPriorityReason, priorityBucket } from "./fixRanking.js";
 import {
   REPAIR_PRESENTATION_MODES,
-  repairPresentationContract,
+  repairSnapshotPresentationMode,
 } from "./repairContractPresentation.js";
 
 export const REPAIR_PRESENTATION_VERSION = "repair_presentation_v1_compact_mobile";
@@ -156,18 +156,45 @@ export function sectionCustomerRepairs(items = [], { initialFixFirstLimit = 3 } 
     .filter((section) => section.totalCount > 0);
 }
 
+function snapshotModeMarker(items = []) {
+  const list = Array.isArray(items) ? items.filter(Boolean) : [];
+  if (list.length === 0) return "";
+
+  const markers = list.map((item) => clean(
+    item.repairSnapshotPresentationMode
+      || item.repair_snapshot_presentation_mode,
+  ));
+  const present = markers.filter(Boolean);
+  if (present.length === 0) return "";
+  // Partial marker state is never enough to enable canonical interpretation.
+  if (present.length !== list.length) return REPAIR_PRESENTATION_MODES.LEGACY;
+  if (present.some((mode) => mode === REPAIR_PRESENTATION_MODES.UNSUPPORTED)) {
+    return REPAIR_PRESENTATION_MODES.UNSUPPORTED;
+  }
+  if (present.every((mode) => mode === REPAIR_PRESENTATION_MODES.CANONICAL)) {
+    return REPAIR_PRESENTATION_MODES.CANONICAL;
+  }
+  return REPAIR_PRESENTATION_MODES.LEGACY;
+}
+
 function presentationModeForItems(items = []) {
   const list = Array.isArray(items) ? items.filter(Boolean) : [];
   if (list.length === 0) return REPAIR_PRESENTATION_MODES.LEGACY;
 
-  const contracts = list.map((item) => repairPresentationContract(item));
-  if (contracts.some((contract) => contract.unsupported)) {
+  const markedSnapshotMode = snapshotModeMarker(list);
+  const visibleRowsMode = repairSnapshotPresentationMode(list);
+  if (!markedSnapshotMode) return visibleRowsMode;
+
+  // A snapshot-level legacy/unsupported decision always wins over a filtered
+  // visible subset. A canonical marker still requires the visible rows to carry
+  // valid canonical contracts; the marker can never manufacture authority.
+  if (markedSnapshotMode === REPAIR_PRESENTATION_MODES.UNSUPPORTED) {
     return REPAIR_PRESENTATION_MODES.UNSUPPORTED;
   }
-  if (contracts.every((contract) => contract.canonicalActionPriorityAllowed)) {
-    return REPAIR_PRESENTATION_MODES.CANONICAL;
+  if (markedSnapshotMode === REPAIR_PRESENTATION_MODES.LEGACY) {
+    return REPAIR_PRESENTATION_MODES.LEGACY;
   }
-  return REPAIR_PRESENTATION_MODES.LEGACY;
+  return visibleRowsMode;
 }
 
 /**
@@ -177,13 +204,14 @@ function presentationModeForItems(items = []) {
  * state may hide rows from the visible list, but it must never change the
  * snapshot from legacy/mixed/unsupported to canonical (or vice versa).
  *
+ * The preferred explicit API passes the full snapshot as the first argument and
+ * `options.visibleItems` as the filtered customer work queue. The current live
+ * page also receives an in-memory snapshot marker from `prepareCustomerFixes`,
+ * so existing Done filtering cannot reclassify the saved scan before that caller
+ * is migrated to the explicit form.
+ *
  * Canonical action-priority sections are enabled only when every repair in the
  * full saved snapshot explicitly carries a supported persisted contract.
- * Historical rows without a contract keep their frozen legacy ordering. Unknown
- * future contracts also fail closed instead of being silently interpreted.
- *
- * `options.visibleItems` is presentation-only. Use it for Done/deferred/filter
- * state after the full snapshot has already been classified.
  */
 export function buildFixListPresentation(snapshotItems = [], options = {}) {
   const snapshot = Array.isArray(snapshotItems) ? snapshotItems.filter(Boolean) : [];

@@ -1,5 +1,5 @@
 export const SUPPORTED_REPAIR_CONTRACTS = Object.freeze([
-  "repair_contract_v1_shadow",
+  "repair_contract_v2_shadow_calibrated",
 ]);
 
 export const REPAIR_PRESENTATION_MODES = Object.freeze({
@@ -37,10 +37,14 @@ export function canConsumeCanonicalActionPriority(item = {}) {
  *
  * - Supported versioned repairs may consume persisted canonical action_priority.
  * - Repairs with no contract remain in frozen legacy presentation mode.
- * - Unknown future contracts fail closed until the UI explicitly supports them.
+ * - Unknown or superseded contracts fail closed until the UI explicitly
+ *   supports them.
  *
  * This helper is intentionally additive. The live FixList page does not switch
- * presentation modes until the integration gate deliberately wires it.
+ * presentation modes unless the persisted repair contract is explicitly listed
+ * above. The original v1 shadow contract is intentionally unsupported after
+ * calibration proved its base-severity fallback could inherit reach-inflated
+ * legacy priority.
  */
 export function repairPresentationContract(item = {}) {
   const version = repairContractVersionOf(item);

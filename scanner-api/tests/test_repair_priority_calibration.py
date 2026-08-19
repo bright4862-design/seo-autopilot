@@ -37,7 +37,8 @@ def test_legacy_reach_inflated_priority_is_not_reused_as_base_severity():
     result = annotate_calibrated_repair_priority(metadata, [])
     assert result["priority"] == "critical"  # historical field stays untouched
     assert result["base_severity"] == "medium"
-    assert result["action_priority"] == "important"
+    assert result["evidence_class"] == "improvement"
+    assert result["action_priority"] == "improve"
     assert result["repair_priority_version"] == REPAIR_PRIORITY_CALIBRATION_VERSION
     assert result["priority_context"]["legacy_priority"] == "critical"
 
@@ -81,7 +82,8 @@ def test_homepage_redirect_chain_outranks_broad_metadata_in_shadow_without_reord
     assert analysis["proposed_fixes"][0]["base_severity"] == "high"
     assert analysis["proposed_fixes"][0]["action_priority"] == "fix_first"
     assert analysis["proposed_fixes"][1]["base_severity"] == "medium"
-    assert analysis["proposed_fixes"][1]["action_priority"] == "important"
+    assert analysis["proposed_fixes"][1]["evidence_class"] == "improvement"
+    assert analysis["proposed_fixes"][1]["action_priority"] == "improve"
 
 
 def test_evidence_status_needs_verification_is_not_confirmed_problem():
@@ -114,6 +116,43 @@ def test_potential_orphan_finding_is_review_not_confirmed_fix():
     assert result["base_severity"] == "low"
     assert result["evidence_class"] == "opportunity"
     assert result["action_priority"] == "review"
+
+
+def test_broad_image_alt_gap_stays_improvement_even_if_legacy_priority_is_high():
+    finding = {
+        "rule": "image_alt_text",
+        "category": "image_alt_text",
+        "priority": "high",
+        "primary_defect_class": "metadata",
+        "affected_pages": [f"/locations/{i}" for i in range(60)],
+        "page_template_family": "location_landing",
+        "confidence_score": 92,
+    }
+
+    result = annotate_calibrated_repair_priority(finding, [])
+
+    assert result["priority"] == "high"
+    assert result["base_severity"] == "low"
+    assert result["evidence_class"] == "improvement"
+    assert result["action_priority"] == "improve"
+
+
+def test_repeated_title_template_stays_low_impact_improvement_not_reach_driven_problem():
+    finding = {
+        "rule": "duplicate_title_template",
+        "category": "duplicate_content",
+        "priority": "high",
+        "primary_defect_class": "metadata",
+        "affected_pages": [f"/guides/{i}" for i in range(70)],
+        "page_template_family": "guide_article",
+        "confidence_score": 88,
+    }
+
+    result = annotate_calibrated_repair_priority(finding, [])
+
+    assert result["base_severity"] == "low"
+    assert result["evidence_class"] == "improvement"
+    assert result["action_priority"] == "improve"
 
 
 def test_explicit_technical_severity_still_overrides_shadow_taxonomy():

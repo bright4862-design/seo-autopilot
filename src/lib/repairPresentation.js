@@ -173,26 +173,36 @@ function presentationModeForItems(items = []) {
 /**
  * Safe integration seam for the live FixList page.
  *
- * Canonical action-priority sections are enabled only when every displayed
- * repair explicitly carries a supported persisted contract. Historical rows
- * without a contract keep their frozen legacy ordering. Unknown future
- * contracts also fail closed instead of being silently interpreted by this UI.
+ * The complete durable repair snapshot decides presentation authority. Workflow
+ * state may hide rows from the visible list, but it must never change the
+ * snapshot from legacy/mixed/unsupported to canonical (or vice versa).
  *
- * Mixed canonical/legacy data deliberately falls back as one legacy list so a
- * single saved scan is never presented using two competing ranking authorities.
+ * Canonical action-priority sections are enabled only when every repair in the
+ * full saved snapshot explicitly carries a supported persisted contract.
+ * Historical rows without a contract keep their frozen legacy ordering. Unknown
+ * future contracts also fail closed instead of being silently interpreted.
+ *
+ * `options.visibleItems` is presentation-only. Use it for Done/deferred/filter
+ * state after the full snapshot has already been classified.
  */
-export function buildFixListPresentation(items = [], options = {}) {
-  const list = Array.isArray(items) ? items.filter(Boolean) : [];
-  const mode = presentationModeForItems(list);
+export function buildFixListPresentation(snapshotItems = [], options = {}) {
+  const snapshot = Array.isArray(snapshotItems) ? snapshotItems.filter(Boolean) : [];
+  const visibleItems = Array.isArray(options.visibleItems)
+    ? options.visibleItems.filter(Boolean)
+    : snapshot;
+  const mode = presentationModeForItems(snapshot);
   const canonical = mode === REPAIR_PRESENTATION_MODES.CANONICAL;
   const unsupported = mode === REPAIR_PRESENTATION_MODES.UNSUPPORTED;
+  const { visibleItems: _visibleItems, ...sectionOptions } = options;
 
   return {
     version: REPAIR_PRESENTATION_VERSION,
     mode,
     canonical,
     unsupported,
-    sections: canonical ? sectionCustomerRepairs(list, options) : [],
-    legacyItems: canonical ? [] : list,
+    snapshotCount: snapshot.length,
+    visibleCount: visibleItems.length,
+    sections: canonical ? sectionCustomerRepairs(visibleItems, sectionOptions) : [],
+    legacyItems: canonical ? [] : visibleItems,
   };
 }

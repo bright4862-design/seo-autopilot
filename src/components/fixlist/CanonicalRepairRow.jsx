@@ -40,7 +40,7 @@ export default function CanonicalRepairRow({ item, model: suppliedModel, renderD
           ) : null}
           {model.reason ? (
             <span className="mt-1.5 block text-[13px] leading-relaxed text-ink-muted">
-              {model.reason}
+              <span className="text-ink-faint">Why this is here · </span>{model.reason}
             </span>
           ) : null}
           {model.leverage ? (

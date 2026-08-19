@@ -1,6 +1,8 @@
 import { customerPriorityReason, priorityBucket } from "./fixRanking.js";
 import {
   REPAIR_PRESENTATION_MODES,
+  explicitCanonicalActionPriorityOf,
+  repairPresentationMode,
   repairSnapshotPresentationMode,
 } from "./repairContractPresentation.js";
 
@@ -65,6 +67,13 @@ function sharedRepairConfirmedOf(item = {}) {
       || item.shared_repair_confirmed
       || contextOf(item).shared_repair_confirmed,
   );
+}
+
+function presentationActionPriorityOf(item = {}) {
+  if (repairPresentationMode(item) === REPAIR_PRESENTATION_MODES.CANONICAL) {
+    return explicitCanonicalActionPriorityOf(item);
+  }
+  return priorityBucket(item);
 }
 
 export function repairSurfaceLabel(item = {}) {
@@ -160,7 +169,7 @@ export function repairVerificationKind(item = {}) {
 }
 
 export function repairRowModel(item = {}) {
-  const actionPriority = priorityBucket(item);
+  const actionPriority = presentationActionPriorityOf(item);
   const sharedRepairConfirmed = sharedRepairConfirmedOf(item);
   return {
     version: REPAIR_PRESENTATION_VERSION,

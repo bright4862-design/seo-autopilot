@@ -110,6 +110,31 @@ def _clean(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
+def _canonical_priority_pages(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalize existing page evidence for shadow priority only.
+
+    Scanner evidence is not changed. The shadow layer merely makes the three
+    historical robots fields (`robots`, `robots_meta`, `meta_robots`) resolve to
+    the same non-indexable state already used by repair verification. An explicit
+    scanner-owned boolean `indexable` always wins.
+    """
+    normalized: list[dict[str, Any]] = []
+    for page in pages or []:
+        if not isinstance(page, dict):
+            continue
+        copied = dict(page)
+        if copied.get("indexable") is not True and copied.get("indexable") is not False:
+            robots = " ".join(
+                _clean(copied.get(key))
+                for key in ("robots", "robots_meta", "meta_robots")
+                if copied.get(key) is not None
+            )
+            if "noindex" in robots:
+                copied["indexable"] = False
+        normalized.append(copied)
+    return normalized
+
+
 def technical_base_severity(fix: dict[str, Any]) -> tuple[str, str]:
     explicit = _clean(fix.get("base_severity") or fix.get("technical_severity"))
     if explicit in SEVERITY_RANK:
@@ -218,7 +243,7 @@ def annotate_calibrated_repair_priority(fix: dict[str, Any], pages: list[dict[st
     and customer ordering are preserved. This function is not imported by the
     production scanner/review/persistence path.
     """
-    annotated = annotate_repair_priority(dict(fix), pages or [])
+    annotated = annotate_repair_priority(dict(fix), _canonical_priority_pages(pages or []))
     base_severity, severity_source = technical_base_severity(fix)
     evidence_class = calibrated_evidence_class(fix)
     context = dict(annotated.get("priority_context") or {})

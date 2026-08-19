@@ -2,6 +2,13 @@ import React, { useState } from "react";
 
 import CanonicalRepairRow from "@/components/fixlist/CanonicalRepairRow";
 
+const SECTION_HELP = Object.freeze({
+  fix_first: "Start here.",
+  important: "Significant repairs to tackle next.",
+  improve: "Useful improvements after the important work.",
+  review: "Worth checking; these may need your judgment.",
+});
+
 /**
  * Canonical FixList work-queue presentation.
  *
@@ -45,6 +52,7 @@ export default function RepairSectionList({ sections = [], renderRow }) {
           ? Number(section.hiddenCount || 0)
           : 0;
         const totalCount = Number(section.totalCount || 0);
+        const help = SECTION_HELP[section.key] || "";
 
         return (
           <section key={section.key} className="mt-10 first:mt-0 sm:mt-12" aria-labelledby={`repair-section-${section.key}`}>
@@ -59,6 +67,7 @@ export default function RepairSectionList({ sections = [], renderRow }) {
                 {totalCount} {totalCount === 1 ? "repair" : "repairs"}
               </span>
             </div>
+            {help ? <p className="mt-1 text-[12px] leading-relaxed text-ink-faint">{help}</p> : null}
 
             <div className="mt-1.5">
               {visibleRows.map((row, index) => (

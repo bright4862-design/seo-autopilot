@@ -1,4 +1,9 @@
-import { repairSnapshotPresentationMode } from "./repairContractPresentation.js";
+import {
+  REPAIR_PRESENTATION_MODES,
+  repairContractVersionOf,
+  repairSnapshotContractVersionOf,
+  repairSnapshotPresentationMode,
+} from "./repairContractPresentation.js";
 
 const PRIORITY_RANK = Object.freeze({ critical: 4, high: 3, medium: 2, low: 1 });
 const ACTION_RANK = Object.freeze({ fix_first: 4, important: 3, improve: 2, review: 1 });
@@ -106,12 +111,11 @@ export function suppressCoveredPageFixes(items = []) {
 }
 
 /**
- * Stable customer presentation order.
+ * Stable customer presentation order for true historical/legacy results only.
  *
- * `priority` remains the technical/base severity. When the backend supplies the
- * contextual repair-priority contract, `action_priority` controls the customer
- * work queue and `action_priority_score` only orders work inside that band.
- * Legacy results fall back to the old severity-first behavior.
+ * Versioned repair contracts must never rely on this frontend ranking helper as
+ * their canonical authority. They preserve the server-persisted repair rows and
+ * order instead; see `prepareCustomerFixes` below.
  */
 export function rankFixesForCustomer(items = []) {
   return (Array.isArray(items) ? items : [])
@@ -166,9 +170,8 @@ function sharedRepairConfirmed(item = {}) {
 }
 
 /**
- * Merge separate evidence rows only when they resolve to the same customer action:
- * same rule, same page/template family, and same recommended remediation.
- * Scanner evidence remains untouched; this is presentation synthesis only.
+ * Merge separate evidence rows only for true legacy presentation synthesis.
+ * Versioned contracts bypass this helper at the `prepareCustomerFixes` seam.
  *
  * A shared page family is not proof that one CMS/template edit fixes everything.
  * The stronger "one shared change" language is reserved for explicit backend
@@ -229,23 +232,41 @@ export function mergeSameActionFixes(items = []) {
   return output;
 }
 
+function hasVersionedRepairContract(item = {}) {
+  return Boolean(repairContractVersionOf(item) || repairSnapshotContractVersionOf(item));
+}
+
+function withSnapshotPresentationMode(items, mode) {
+  return items.map((item) => ({
+    ...item,
+    repair_snapshot_presentation_mode: mode,
+  }));
+}
+
 /**
- * Prepare the customer-visible repair list once from the complete saved
- * snapshot. The snapshot presentation mode is copied onto each prepared row so
- * later workflow filters (Done/deferred/search) cannot silently reclassify the
- * same saved scan using only the remaining visible rows.
+ * Prepare customer-visible repairs while respecting the authority boundary.
  *
- * This marker is presentation metadata only. It is not persisted, signed, or
- * used as scan/review authority.
+ * Only a genuinely unversioned historical snapshot may use browser-side
+ * suppress/merge/rank synthesis. Any versioned snapshot — fully canonical,
+ * unsupported, mixed, or transitional/incomplete — preserves the persisted row
+ * set and order exactly (apart from the in-memory presentation-mode marker).
+ *
+ * This prevents React from manufacturing a new repair identity/order while
+ * simultaneously claiming to consume a server-owned repair contract.
  */
 export function prepareCustomerFixes(items = []) {
   const snapshot = Array.isArray(items) ? items.filter(Boolean) : [];
   const snapshotPresentationMode = repairSnapshotPresentationMode(snapshot);
+  const containsVersionedContract = snapshot.some(hasVersionedRepairContract);
+  const trueLegacy = snapshotPresentationMode === REPAIR_PRESENTATION_MODES.LEGACY
+    && !containsVersionedContract;
+
+  if (!trueLegacy) {
+    return withSnapshotPresentationMode(snapshot, snapshotPresentationMode);
+  }
+
   const prepared = rankFixesForCustomer(mergeSameActionFixes(suppressCoveredPageFixes(snapshot)));
-  return prepared.map((item) => ({
-    ...item,
-    repair_snapshot_presentation_mode: snapshotPresentationMode,
-  }));
+  return withSnapshotPresentationMode(prepared, snapshotPresentationMode);
 }
 
 export function priorityBucket(value = "") {

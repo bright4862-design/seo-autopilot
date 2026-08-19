@@ -8,7 +8,8 @@ const scoreRingSource = await readFile(new URL("../../src/components/fixlist/Sco
 test("insufficient evidence never becomes a zero score in the FixList UI", () => {
   assert.match(fixListSource, /const scoreUnavailable = isHealthScoreUnavailable\(scanRecord\)/);
   assert.match(fixListSource, /<ScoreRing score=\{healthScore\} unavailable=\{scoreUnavailable\} \/>/);
-  assert.match(fixListSource, /hasUsefulScan && !scoreUnavailable \? buildPassedChecks/);
+  assert.match(fixListSource, /<ExplicitPassedChecks scan=\{scanRecord\} \/>/);
+  assert.doesNotMatch(fixListSource, /buildPassedChecks\(/);
   assert.match(fixListSource, /customerHealthLabel\(healthScore, \{ unavailable: scoreUnavailable, noHighConfidenceFindings \}\)/);
   assert.match(fixListSource, /if \(isHealthScoreUnavailable\(record\)\) return null/);
   assert.doesNotMatch(fixListSource, /Number\(record\?\.health_score \|\|/);

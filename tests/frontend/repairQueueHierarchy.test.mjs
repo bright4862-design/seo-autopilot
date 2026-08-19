@@ -34,6 +34,15 @@ test("canonical work surface leads with the FixList and separates workflow from 
   assert.match(sectionSource, /<h3/);
 });
 
+test("priority bands explain customer intent without exposing scoring internals", () => {
+  assert.match(sectionSource, /fix_first: "Start here\."/);
+  assert.match(sectionSource, /important: "Significant repairs to tackle next\."/);
+  assert.match(sectionSource, /improve: "Useful improvements after the important work\."/);
+  assert.match(sectionSource, /review: "Worth checking; these may need your judgment\."/);
+  assert.doesNotMatch(sectionSource, /action_priority_score/);
+  assert.doesNotMatch(sectionSource, /base_severity/);
+});
+
 test("section counts describe repairs instead of exposing an unlabeled number", () => {
   assert.match(sectionSource, /totalCount === 1 \? "repair" : "repairs"/);
   assert.match(sectionSource, /View \{hiddenCount\} more Fix first/);

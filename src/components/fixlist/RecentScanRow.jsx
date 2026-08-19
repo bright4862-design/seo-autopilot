@@ -1,8 +1,15 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
 
+import ScanHistoryLineageBadge from "@/components/fixlist/ScanHistoryLineageBadge";
+
 // One saved scan in the history list. Delete is a two-step confirm so a stray
 // tap can never destroy a result, and it sits outside the row's Link.
+//
+// The lineage badge is fail-closed: it renders only when this `scan` summary
+// carries explicit durable previous/rescan IDs. The current large-page history
+// summarizer does not preserve those fields yet, so this wiring changes no live
+// claim until that later caller migration is made deliberately.
 export default function RecentScanRow({ scan, status, occurredLabel, deleting, onDelete }) {
   const [confirming, setConfirming] = useState(false);
 
@@ -14,7 +21,10 @@ export default function RecentScanRow({ scan, status, occurredLabel, deleting, o
       >
         <span className="min-w-0">
           <span className="block truncate text-[14px] font-medium text-ink">{scan.website}</span>
-          <span className="mt-1 block text-[12px] text-ink-faint tabular-nums">{occurredLabel}</span>
+          <span className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-ink-faint">
+            <span className="tabular-nums">{occurredLabel}</span>
+            <ScanHistoryLineageBadge scan={scan} />
+          </span>
         </span>
         <span className={`shrink-0 text-[12px] font-medium ${status.active ? "text-warnink" : "text-ink-muted"}`}>
           {status.label} <span aria-hidden="true">›</span>

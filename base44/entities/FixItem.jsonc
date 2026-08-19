@@ -93,6 +93,78 @@
       ],
       "default": "medium"
     },
+    "repair_contract_version": {
+      "type": "string"
+    },
+    "repair_priority_model_version": {
+      "type": "string"
+    },
+    "base_severity": {
+      "type": "string",
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "evidence_class": {
+      "type": "string",
+      "enum": [
+        "confirmed_problem",
+        "improvement",
+        "opportunity"
+      ]
+    },
+    "action_priority": {
+      "type": "string",
+      "enum": [
+        "fix_first",
+        "important",
+        "improve",
+        "review"
+      ]
+    },
+    "canonical_action_rank": {
+      "type": "number"
+    },
+    "action_priority_score": {
+      "type": "number"
+    },
+    "priority_reason": {
+      "type": "string"
+    },
+    "priority_context": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "repair_identity_version": {
+      "type": "string"
+    },
+    "repair_fingerprint": {
+      "type": "string"
+    },
+    "repair_surface": {
+      "type": "string"
+    },
+    "remediation_family": {
+      "type": "string"
+    },
+    "shared_repair_confirmed": {
+      "type": "boolean"
+    },
+    "rule_definition_version": {
+      "type": "string"
+    },
+    "comparison_profile_version": {
+      "type": "string"
+    },
+    "repair_verification_version": {
+      "type": "string"
+    },
+    "repair_verification_state": {
+      "type": "string"
+    },
     "difficulty": {
       "type": "string"
     },

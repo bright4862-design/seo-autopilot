@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useId, useMemo, useState } from "react";
 
 import { repairRowModel } from "@/lib/repairPresentation";
 
@@ -13,6 +13,7 @@ import { repairRowModel } from "@/lib/repairPresentation";
 export default function CanonicalRepairRow({ item, model: suppliedModel, renderDetails }) {
   const model = useMemo(() => suppliedModel || repairRowModel(item), [item, suppliedModel]);
   const [open, setOpen] = useState(false);
+  const disclosureId = useId();
   const hasDetails = typeof renderDetails === "function";
   const supporting = [model.surface, model.scope].filter(Boolean).join(" · ");
 
@@ -21,11 +22,12 @@ export default function CanonicalRepairRow({ item, model: suppliedModel, renderD
       <button
         type="button"
         aria-expanded={hasDetails ? open : undefined}
+        aria-controls={hasDetails ? disclosureId : undefined}
         aria-label={hasDetails ? `${open ? "Hide" : "Show"} evidence and steps for ${model.title}` : undefined}
         onClick={() => {
           if (hasDetails) setOpen((value) => !value);
         }}
-        className={`w-full py-3.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink sm:py-4 ${hasDetails ? "cursor-pointer" : "cursor-default"}`}
+        className={`min-h-11 w-full py-3.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink sm:py-4 ${hasDetails ? "cursor-pointer" : "cursor-default"}`}
       >
         <span className="block min-w-0">
           <span className="block text-[15px] font-medium leading-snug tracking-tight text-ink">
@@ -65,7 +67,12 @@ export default function CanonicalRepairRow({ item, model: suppliedModel, renderD
         </span>
       </button>
       {hasDetails && open ? (
-        <div className="mb-2 border-l border-hairline-soft pb-5 pl-4 sm:pl-5">
+        <div
+          id={disclosureId}
+          role="region"
+          aria-label={`Evidence and steps for ${model.title}`}
+          className="mb-2 border-l border-hairline-soft pb-5 pl-4 sm:pl-5"
+        >
           {renderDetails({ item, model })}
         </div>
       ) : null}

@@ -59,6 +59,14 @@ function familyOf(item = {}) {
   ).toLowerCase();
 }
 
+function sharedRepairConfirmedOf(item = {}) {
+  return Boolean(
+    item.sharedRepairConfirmed
+      || item.shared_repair_confirmed
+      || contextOf(item).shared_repair_confirmed,
+  );
+}
+
 export function repairSurfaceLabel(item = {}) {
   const explicit = clean(
     item.repairSurface
@@ -109,6 +117,12 @@ export function repairScopeSummary(item = {}) {
   return "";
 }
 
+export function repairLeverageSummary(item = {}) {
+  const count = pageCount(item);
+  if (!sharedRepairConfirmedOf(item) || count < 2) return "";
+  return `One shared change may improve ${count} affected pages`;
+}
+
 function comparisonContractStateOf(item = {}) {
   return clean(
     item.comparisonContractState
@@ -145,6 +159,7 @@ export function repairVerificationKind(item = {}) {
 
 export function repairRowModel(item = {}) {
   const actionPriority = priorityBucket(item);
+  const sharedRepairConfirmed = sharedRepairConfirmedOf(item);
   return {
     version: REPAIR_PRESENTATION_VERSION,
     id: clean(item.id || item.fix_id || item.repair_fingerprint),
@@ -154,15 +169,12 @@ export function repairRowModel(item = {}) {
     surface: repairSurfaceLabel(item),
     scope: repairScopeSummary(item),
     reason: customerPriorityReason(item),
+    leverage: repairLeverageSummary(item),
     verification: repairVerificationLabel(item),
     verificationKind: repairVerificationKind(item),
     affectedPageCount: pageCount(item),
     groupedFindingCount: Number(item.groupedFindingCount ?? item.grouped_finding_count ?? 0) || 0,
-    sharedRepairConfirmed: Boolean(
-      item.sharedRepairConfirmed
-        || item.shared_repair_confirmed
-        || contextOf(item).shared_repair_confirmed,
-    ),
+    sharedRepairConfirmed,
   };
 }
 

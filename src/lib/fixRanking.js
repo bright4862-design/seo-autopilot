@@ -236,6 +236,33 @@ function hasVersionedRepairContract(item = {}) {
   return Boolean(repairContractVersionOf(item) || repairSnapshotContractVersionOf(item));
 }
 
+function cleanIdentityValue(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+/**
+ * The current large result page still performs some legacy normalization before
+ * this seam. A versioned repair is allowed to remain canonical only when those
+ * presentation steps preserved its persisted identity. This catches legacy
+ * pre-grouping (for example meta-description family synthesis) without treating
+ * harmless copy/URL normalization as a canonical authority change.
+ */
+export function versionedRepairIdentityIsPristine(item = {}) {
+  if (!hasVersionedRepairContract(item)) return true;
+  const original = item?.original;
+  if (!original || typeof original !== "object") return true;
+
+  const persistedId = cleanIdentityValue(original.id || original.fix_id);
+  const preparedId = cleanIdentityValue(item.id || item.fix_id);
+  if (persistedId && preparedId && persistedId !== preparedId) return false;
+
+  const persistedRule = cleanIdentityValue(original.rule || original.rule_id || original.issue_type);
+  const preparedRule = cleanIdentityValue(item.rule || item.rule_id);
+  if (persistedRule && preparedRule && persistedRule !== preparedRule) return false;
+
+  return true;
+}
+
 function withSnapshotPresentationMode(items, mode) {
   return items.map((item) => ({
     ...item,
@@ -248,16 +275,22 @@ function withSnapshotPresentationMode(items, mode) {
  *
  * Only a genuinely unversioned historical snapshot may use browser-side
  * suppress/merge/rank synthesis. Any versioned snapshot — fully canonical,
- * unsupported, mixed, or transitional/incomplete — preserves the persisted row
- * set and order exactly (apart from the in-memory presentation-mode marker).
+ * unsupported, mixed, or transitional/incomplete — preserves the row set and
+ * order presented to this seam.
  *
- * This prevents React from manufacturing a new repair identity/order while
- * simultaneously claiming to consume a server-owned repair contract.
+ * If an upstream legacy presentation step already changed a versioned repair's
+ * persisted identity, canonical presentation fails closed as unsupported. The
+ * eventual large-page migration should move the contract gate ahead of those
+ * legacy preprocessors; until then they can never silently activate v2 UI.
  */
 export function prepareCustomerFixes(items = []) {
   const snapshot = Array.isArray(items) ? items.filter(Boolean) : [];
-  const snapshotPresentationMode = repairSnapshotPresentationMode(snapshot);
   const containsVersionedContract = snapshot.some(hasVersionedRepairContract);
+  const versionedIdentityChanged = snapshot.some((item) => !versionedRepairIdentityIsPristine(item));
+  const contractMode = repairSnapshotPresentationMode(snapshot);
+  const snapshotPresentationMode = versionedIdentityChanged
+    ? REPAIR_PRESENTATION_MODES.UNSUPPORTED
+    : contractMode;
   const trueLegacy = snapshotPresentationMode === REPAIR_PRESENTATION_MODES.LEGACY
     && !containsVersionedContract;
 

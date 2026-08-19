@@ -20,7 +20,7 @@ export default function RepairSectionList({ sections = [], renderRow }) {
   if (list.length === 0 || typeof renderRow !== "function") return null;
 
   return (
-    <div className="mt-12">
+    <div className="mt-10 sm:mt-12">
       {list.map((section) => {
         const visibleRows = section.key === "fix_first" && showAllFixFirst
           ? [...(section.rows || []), ...(section.hiddenRows || [])]
@@ -28,9 +28,10 @@ export default function RepairSectionList({ sections = [], renderRow }) {
         const hiddenCount = section.key === "fix_first" && !showAllFixFirst
           ? Number(section.hiddenCount || 0)
           : 0;
+        const totalCount = Number(section.totalCount || 0);
 
         return (
-          <section key={section.key} className="mt-12 first:mt-0" aria-labelledby={`repair-section-${section.key}`}>
+          <section key={section.key} className="mt-10 first:mt-0 sm:mt-12" aria-labelledby={`repair-section-${section.key}`}>
             <div className="flex items-baseline justify-between gap-4">
               <h2
                 id={`repair-section-${section.key}`}
@@ -38,10 +39,12 @@ export default function RepairSectionList({ sections = [], renderRow }) {
               >
                 {section.label}
               </h2>
-              <span className="text-[11px] tabular-nums text-ink-faint">{section.totalCount}</span>
+              <span className="text-[11px] tabular-nums text-ink-faint">
+                {totalCount} {totalCount === 1 ? "repair" : "repairs"}
+              </span>
             </div>
 
-            <div className="mt-2">
+            <div className="mt-1.5">
               {visibleRows.map((row, index) => (
                 <CanonicalRepairRow
                   key={row?.model?.id || row?.item?.id || `${section.key}-${index}`}

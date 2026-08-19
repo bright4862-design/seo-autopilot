@@ -148,3 +148,33 @@ test("mixed historical and canonical rows use one legacy authority for the whole
   assert.equal(plan.sections.length, 0);
   assert.deepEqual(plan.legacyItems, [canonical, legacy]);
 });
+
+
+test("workflow filters cannot change the durable snapshot repair-contract authority", () => {
+  const canonicalA = {
+    id: "canonical-a",
+    repair_contract_version: "repair_contract_v2_shadow_calibrated",
+    action_priority: "fix_first",
+  };
+  const canonicalB = {
+    id: "canonical-b",
+    repair_contract_version: "repair_contract_v2_shadow_calibrated",
+    action_priority: "important",
+  };
+  const legacyIncompatible = { id: "legacy", priority: "high" };
+  const snapshot = [canonicalA, canonicalB, legacyIncompatible];
+
+  // Simulate the incompatible card being marked Done. It disappears from the
+  // visible work queue, but remains part of the immutable saved FixList snapshot.
+  const plan = buildFixListPresentation(snapshot, {
+    visibleItems: [canonicalA, canonicalB],
+    initialFixFirstLimit: 3,
+  });
+
+  assert.equal(plan.snapshotCount, 3);
+  assert.equal(plan.visibleCount, 2);
+  assert.equal(plan.mode, REPAIR_PRESENTATION_MODES.LEGACY);
+  assert.equal(plan.canonical, false);
+  assert.equal(plan.sections.length, 0);
+  assert.deepEqual(plan.legacyItems, [canonicalA, canonicalB]);
+});

@@ -45,6 +45,29 @@ test("sample-qualified searchable coverage is shown without implying whole-site 
 });
 
 
+test("incomparable versioned history is presented as could not compare", () => {
+  const model = repairRowModel({
+    id: "history",
+    action_priority: "important",
+    repair_verification_state: "could_not_verify",
+    comparison_contract_state: "incomparable",
+  });
+
+  assert.equal(model.verification, "Could not compare");
+});
+
+
+test("ordinary verification uncertainty remains could not verify", () => {
+  const model = repairRowModel({
+    id: "history",
+    action_priority: "important",
+    repair_verification_state: "could_not_verify",
+  });
+
+  assert.equal(model.verification, "Could not verify");
+});
+
+
 test("raw affected-page fallback stays simple when eligible denominator is unknown", () => {
   assert.equal(repairScopeSummary({ affected_pages: ["/a", "/b", "/c"] }), "3 pages");
 });

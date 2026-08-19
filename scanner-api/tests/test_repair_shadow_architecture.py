@@ -21,6 +21,7 @@ def test_repair_shadow_is_not_imported_by_scanner_or_review_runtime():
         assert "repair_shadow" not in text, f"shadow adapter crossed runtime boundary: {path}"
         assert "repair_priority_calibration" not in text, f"calibrated ranking crossed runtime boundary: {path}"
         assert "repair_persistence_shadow" not in text, f"persistence validator crossed runtime boundary: {path}"
+        assert "repairContractV2Candidate" not in text, f"signed v2 candidate crossed scanner/review runtime boundary: {path}"
 
 
 def test_repair_shadow_is_not_wired_into_authority_or_persistence_handoff():
@@ -34,8 +35,23 @@ def test_repair_shadow_is_not_wired_into_authority_or_persistence_handoff():
         assert "repair_shadow" not in text
         assert "repair_priority_calibration" not in text
         assert "repair_persistence_shadow" not in text
+        assert "repairContractV2Candidate" not in text
         assert "repair_contract_v1_shadow" not in text, f"shadow contract entered authority path: {path}"
         assert "repair_contract_v2_shadow_calibrated" not in text, f"calibrated shadow contract entered authority path: {path}"
+
+
+def test_signed_v2_candidate_is_not_imported_by_current_durable_authority_runtime():
+    protected = [
+        REPO_ROOT / "base44" / "functions" / "persistDurableScanAuthority" / "authoritySnapshot.js",
+        REPO_ROOT / "base44" / "functions" / "persistDurableScanAuthority" / "authorityRows.js",
+        REPO_ROOT / "base44" / "functions" / "getCustomerScanResult" / "projection.js",
+        REPO_ROOT / "base44" / "functions" / "grokChat" / "authoritySnapshot.js",
+    ]
+    for path in protected:
+        text = _source(path)
+        assert "repairContractV2Candidate" not in text, f"candidate wired before activation gate: {path}"
+        assert "applyRepairContractV2Candidate" not in text, f"candidate writer wired before activation gate: {path}"
+        assert "rehydrateRepairContractV2Candidate" not in text, f"candidate reader wired before activation gate: {path}"
 
 
 def test_production_review_does_not_use_proposed_repair_sorting():

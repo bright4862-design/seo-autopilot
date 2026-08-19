@@ -1,5 +1,6 @@
 import {
   REPAIR_PRESENTATION_MODES,
+  explicitCanonicalActionPriorityOf,
   repairContractVersionOf,
   repairSnapshotContractVersionOf,
   repairSnapshotPresentationMode,
@@ -240,6 +241,11 @@ function cleanIdentityValue(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function currentExplicitActionPriority(item = {}) {
+  const value = String(item.actionPriority || item.action_priority || "").trim().toLowerCase();
+  return value;
+}
+
 /**
  * The current large result page still performs some legacy normalization before
  * this seam. A versioned repair is allowed to remain canonical only when those
@@ -263,6 +269,31 @@ export function versionedRepairIdentityIsPristine(item = {}) {
   return true;
 }
 
+/**
+ * Preserve server-owned canonical action priority through browser normalization.
+ *
+ * If a normalized versioned row explicitly carries a current action-priority
+ * value, it must match the valid persisted value on `original`. Omitting the
+ * current field is safe because the canonical contract helper can consume the
+ * persisted original value. Replacing one valid server band with another is not
+ * presentation normalization and therefore fails closed.
+ */
+export function versionedRepairAuthorityIsPristine(item = {}) {
+  if (!versionedRepairIdentityIsPristine(item)) return false;
+  if (!hasVersionedRepairContract(item)) return true;
+
+  const original = item?.original;
+  if (!original || typeof original !== "object") return true;
+
+  const currentRawPriority = currentExplicitActionPriority(item);
+  if (!currentRawPriority) return true;
+
+  const persistedPriority = explicitCanonicalActionPriorityOf(original);
+  if (!persistedPriority) return false;
+
+  return currentRawPriority === persistedPriority;
+}
+
 function withSnapshotPresentationMode(items, mode) {
   return items.map((item) => ({
     ...item,
@@ -278,17 +309,18 @@ function withSnapshotPresentationMode(items, mode) {
  * unsupported, mixed, or transitional/incomplete — preserves the row set and
  * order presented to this seam.
  *
- * If an upstream legacy presentation step already changed a versioned repair's
- * persisted identity, canonical presentation fails closed as unsupported. The
- * eventual large-page migration should move the contract gate ahead of those
- * legacy preprocessors; until then they can never silently activate v2 UI.
+ * If an upstream legacy presentation step changed a versioned repair's persisted
+ * identity or explicit canonical action priority, canonical presentation fails
+ * closed as unsupported. The eventual large-page migration should move the
+ * contract gate ahead of those legacy preprocessors; until then they can never
+ * silently activate v2 UI.
  */
 export function prepareCustomerFixes(items = []) {
   const snapshot = Array.isArray(items) ? items.filter(Boolean) : [];
   const containsVersionedContract = snapshot.some(hasVersionedRepairContract);
-  const versionedIdentityChanged = snapshot.some((item) => !versionedRepairIdentityIsPristine(item));
+  const versionedAuthorityChanged = snapshot.some((item) => !versionedRepairAuthorityIsPristine(item));
   const contractMode = repairSnapshotPresentationMode(snapshot);
-  const snapshotPresentationMode = versionedIdentityChanged
+  const snapshotPresentationMode = versionedAuthorityChanged
     ? REPAIR_PRESENTATION_MODES.UNSUPPORTED
     : contractMode;
   const trueLegacy = snapshotPresentationMode === REPAIR_PRESENTATION_MODES.LEGACY

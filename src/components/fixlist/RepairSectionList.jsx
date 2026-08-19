@@ -45,11 +45,13 @@ export default function RepairSectionList({ sections = [], renderRow }) {
       </div>
 
       {list.map((section) => {
+        const hiddenRows = section.key === "fix_first" ? section.hiddenRows || [] : [];
+        const hasFixFirstOverflow = hiddenRows.length > 0;
         const visibleRows = section.key === "fix_first" && showAllFixFirst
-          ? [...(section.rows || []), ...(section.hiddenRows || [])]
+          ? [...(section.rows || []), ...hiddenRows]
           : section.rows || [];
         const hiddenCount = section.key === "fix_first" && !showAllFixFirst
-          ? Number(section.hiddenCount || 0)
+          ? Number(section.hiddenCount || hiddenRows.length || 0)
           : 0;
         const totalCount = Number(section.totalCount || 0);
         const help = SECTION_HELP[section.key] || "";
@@ -87,6 +89,14 @@ export default function RepairSectionList({ sections = [], renderRow }) {
                 className="mt-3 text-[13px] font-medium text-ink-muted underline decoration-hairline underline-offset-4 transition-colors hover:text-ink hover:no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
               >
                 View {hiddenCount} more Fix first {hiddenCount === 1 ? "repair" : "repairs"}
+              </button>
+            ) : section.key === "fix_first" && showAllFixFirst && hasFixFirstOverflow ? (
+              <button
+                type="button"
+                onClick={() => setShowAllFixFirst(false)}
+                className="mt-3 text-[13px] font-medium text-ink-muted underline decoration-hairline underline-offset-4 transition-colors hover:text-ink hover:no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+              >
+                Show fewer Fix first repairs
               </button>
             ) : null}
           </section>

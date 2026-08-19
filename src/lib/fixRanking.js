@@ -1,3 +1,5 @@
+import { repairSnapshotPresentationMode } from "./repairContractPresentation.js";
+
 const PRIORITY_RANK = Object.freeze({ critical: 4, high: 3, medium: 2, low: 1 });
 const ACTION_RANK = Object.freeze({ fix_first: 4, important: 3, improve: 2, review: 1 });
 const COVERING_SCOPES = new Set(["family", "cross_cutting", "sitewide"]);
@@ -227,8 +229,23 @@ export function mergeSameActionFixes(items = []) {
   return output;
 }
 
+/**
+ * Prepare the customer-visible repair list once from the complete saved
+ * snapshot. The snapshot presentation mode is copied onto each prepared row so
+ * later workflow filters (Done/deferred/search) cannot silently reclassify the
+ * same saved scan using only the remaining visible rows.
+ *
+ * This marker is presentation metadata only. It is not persisted, signed, or
+ * used as scan/review authority.
+ */
 export function prepareCustomerFixes(items = []) {
-  return rankFixesForCustomer(mergeSameActionFixes(suppressCoveredPageFixes(items)));
+  const snapshot = Array.isArray(items) ? items.filter(Boolean) : [];
+  const snapshotPresentationMode = repairSnapshotPresentationMode(snapshot);
+  const prepared = rankFixesForCustomer(mergeSameActionFixes(suppressCoveredPageFixes(snapshot)));
+  return prepared.map((item) => ({
+    ...item,
+    repair_snapshot_presentation_mode: snapshotPresentationMode,
+  }));
 }
 
 export function priorityBucket(value = "") {

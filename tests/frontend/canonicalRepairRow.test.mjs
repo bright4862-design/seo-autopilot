@@ -25,3 +25,16 @@ test("canonical repair row is presentation-only and receives optional details fr
   assert.doesNotMatch(source, /base44/);
   assert.doesNotMatch(source, /ScanRun/);
 });
+
+test("repair evidence disclosure has an accessible control-region relationship", () => {
+  assert.match(source, /useId/);
+  assert.match(source, /aria-controls=\{hasDetails \? disclosureId/);
+  assert.match(source, /aria-expanded=\{hasDetails \? open/);
+  assert.match(source, /id=\{disclosureId\}/);
+  assert.match(source, /role="region"/);
+  assert.match(source, /Evidence and steps for/);
+});
+
+test("mobile repair disclosure keeps a minimum touch target", () => {
+  assert.match(source, /min-h-11/);
+});

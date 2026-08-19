@@ -20,6 +20,7 @@ const VERIFICATION_LABELS = Object.freeze({
   still_detected: "Still detected",
   came_back: "Came back",
   could_not_verify: "Could not verify",
+  could_not_compare: "Could not compare",
   ready_to_verify: "Ready to verify",
 });
 
@@ -99,6 +100,15 @@ export function repairScopeSummary(item = {}) {
   return "";
 }
 
+function comparisonContractStateOf(item = {}) {
+  return clean(
+    item.comparisonContractState
+      || item.comparison_contract_state
+      || item.repair_verification?.comparison_contract_state
+      || item.original?.comparison_contract_state,
+  ).toLowerCase();
+}
+
 export function repairVerificationLabel(item = {}) {
   const state = clean(
     item.repairVerificationState
@@ -106,6 +116,9 @@ export function repairVerificationLabel(item = {}) {
       || item.verification_state
       || item.original?.repair_verification_state,
   ).toLowerCase();
+  if (state === "could_not_verify" && comparisonContractStateOf(item) === "incomparable") {
+    return "Could not compare";
+  }
   return VERIFICATION_LABELS[state] || "";
 }
 

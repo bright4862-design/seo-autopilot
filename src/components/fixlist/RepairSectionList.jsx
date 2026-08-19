@@ -36,7 +36,7 @@ export default function RepairSectionList({ sections = [], renderRow }) {
             Your FixList
           </h2>
           <span className="shrink-0 text-[12px] tabular-nums text-ink-faint">
-            {repairCount} {repairCount === 1 ? "repair" : "repairs"}
+            {repairCount} remaining
           </span>
         </div>
         <p className="mt-1.5 max-w-[52ch] text-[12px] leading-relaxed text-ink-faint">

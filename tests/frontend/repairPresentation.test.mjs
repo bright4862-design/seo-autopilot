@@ -86,13 +86,13 @@ test("canonical sections activate only for a fully supported persisted repair co
     {
       id: "urgent",
       title: "Fix homepage noindex",
-      repair_contract_version: "repair_contract_v1_shadow",
+      repair_contract_version: "repair_contract_v2_shadow_calibrated",
       action_priority: "fix_first",
     },
     {
       id: "important",
       title: "Fix redirected navigation",
-      repair_contract_version: "repair_contract_v1_shadow",
+      repair_contract_version: "repair_contract_v2_shadow_calibrated",
       action_priority: "important",
     },
   ]);
@@ -137,7 +137,7 @@ test("unknown future contracts fail closed instead of being silently re-ranked",
 test("mixed historical and canonical rows use one legacy authority for the whole saved list", () => {
   const canonical = {
     id: "new",
-    repair_contract_version: "repair_contract_v1_shadow",
+    repair_contract_version: "repair_contract_v2_shadow_calibrated",
     action_priority: "fix_first",
   };
   const legacy = { id: "old", priority: "high" };

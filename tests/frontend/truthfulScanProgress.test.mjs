@@ -28,3 +28,13 @@ test("leave-page reassurance is gated by the explicit durable model flag", () =>
   assert.match(source, /progress\.canLeavePage \?/);
   assert.match(source, /running in the background/);
 });
+
+test("saved-scan escape link cannot appear before durable background execution is proven", () => {
+  assert.match(source, /longerThanUsual\s*&&\s*progress\.canLeavePage\s*&&\s*typeof onOpenSavedScan === "function"/s);
+  assert.match(source, /canOpenSavedScan \?/);
+});
+
+test("scan status announcements stay polite instead of repeatedly interrupting assistive technology", () => {
+  assert.match(source, /role="status" aria-live="polite"/);
+  assert.doesNotMatch(source, /aria-live="assertive"/);
+});

@@ -44,7 +44,9 @@ jobs:
           set +e
           npm run test:frontend 2>&1 | tee frontend-test-output.log
           status=${PIPESTATUS[0]}
-          tail -n 200 frontend-test-output.log > frontend-test-tail.txt
+          if ! grep -n -B 25 -A 55 -E '^(not ok|# Subtest:.*not ok)|AssertionError|ERR_ASSERTION|failureType:' frontend-test-output.log > frontend-test-tail.txt; then
+            tail -n 240 frontend-test-output.log > frontend-test-tail.txt
+          fi
           exit "$status"
 
       - name: Upload frontend contract diagnostic
@@ -78,6 +80,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
       - name: Install Python deps
         run: |

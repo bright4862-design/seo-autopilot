@@ -2,6 +2,7 @@ import { customerPriorityReason, priorityBucket } from "./fixRanking.js";
 import {
   REPAIR_PRESENTATION_MODES,
   explicitCanonicalActionPriorityOf,
+  explicitCanonicalPriorityReasonOf,
   repairPresentationMode,
   repairSnapshotPresentationMode,
 } from "./repairContractPresentation.js";
@@ -96,6 +97,13 @@ function presentationActionPriorityOf(item = {}) {
   return priorityBucket(item);
 }
 
+function presentationPriorityReasonOf(item = {}) {
+  if (repairPresentationMode(item) === REPAIR_PRESENTATION_MODES.CANONICAL) {
+    return explicitCanonicalPriorityReasonOf(item);
+  }
+  return customerPriorityReason(item);
+}
+
 export function repairSurfaceLabel(item = {}) {
   const explicit = clean(
     item.repairSurface
@@ -148,7 +156,7 @@ export function repairScopeSummary(item = {}) {
 
 export function repairLeverageSummary(item = {}) {
   const count = pageCount(item);
-  const reason = customerPriorityReason(item).toLowerCase();
+  const reason = presentationPriorityReasonOf(item).toLowerCase();
   if (!sharedRepairConfirmedOf(item) || count < 2) return "";
   if (reason.includes("one shared change")) return "";
   return `One shared change may improve ${count} affected pages`;
@@ -199,7 +207,7 @@ export function repairRowModel(item = {}) {
     sectionLabel: SECTION_LABELS[actionPriority] || "Important",
     surface: repairSurfaceLabel(item),
     scope: repairScopeSummary(item),
-    reason: customerPriorityReason(item),
+    reason: presentationPriorityReasonOf(item),
     leverage: repairLeverageSummary(item),
     verification: repairVerificationLabel(item),
     verificationKind: repairVerificationKind(item),

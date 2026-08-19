@@ -1,4 +1,8 @@
 import { customerPriorityReason, priorityBucket } from "./fixRanking.js";
+import {
+  REPAIR_PRESENTATION_MODES,
+  repairPresentationContract,
+} from "./repairContractPresentation.js";
 
 export const REPAIR_PRESENTATION_VERSION = "repair_presentation_v1_compact_mobile";
 
@@ -150,4 +154,45 @@ export function sectionCustomerRepairs(items = [], { initialFixFirstLimit = 3 } 
       };
     })
     .filter((section) => section.totalCount > 0);
+}
+
+function presentationModeForItems(items = []) {
+  const list = Array.isArray(items) ? items.filter(Boolean) : [];
+  if (list.length === 0) return REPAIR_PRESENTATION_MODES.LEGACY;
+
+  const contracts = list.map((item) => repairPresentationContract(item));
+  if (contracts.some((contract) => contract.unsupported)) {
+    return REPAIR_PRESENTATION_MODES.UNSUPPORTED;
+  }
+  if (contracts.every((contract) => contract.canonicalActionPriorityAllowed)) {
+    return REPAIR_PRESENTATION_MODES.CANONICAL;
+  }
+  return REPAIR_PRESENTATION_MODES.LEGACY;
+}
+
+/**
+ * Safe integration seam for the live FixList page.
+ *
+ * Canonical action-priority sections are enabled only when every displayed
+ * repair explicitly carries a supported persisted contract. Historical rows
+ * without a contract keep their frozen legacy ordering. Unknown future
+ * contracts also fail closed instead of being silently interpreted by this UI.
+ *
+ * Mixed canonical/legacy data deliberately falls back as one legacy list so a
+ * single saved scan is never presented using two competing ranking authorities.
+ */
+export function buildFixListPresentation(items = [], options = {}) {
+  const list = Array.isArray(items) ? items.filter(Boolean) : [];
+  const mode = presentationModeForItems(list);
+  const canonical = mode === REPAIR_PRESENTATION_MODES.CANONICAL;
+  const unsupported = mode === REPAIR_PRESENTATION_MODES.UNSUPPORTED;
+
+  return {
+    version: REPAIR_PRESENTATION_VERSION,
+    mode,
+    canonical,
+    unsupported,
+    sections: canonical ? sectionCustomerRepairs(list, options) : [],
+    legacyItems: canonical ? [] : list,
+  };
 }

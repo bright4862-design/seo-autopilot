@@ -21,6 +21,7 @@ RULE_TECHNICAL_SEVERITY = {
     "server_error": "high",
     "blocked_page": "high",
     "rate_limited_page": "high",
+    "failed_page": "high",
     "redirect_chain": "high",
     "redirect_destination_failed": "high",
     "redirect_destination_blocked": "high",
@@ -42,12 +43,40 @@ RULE_TECHNICAL_SEVERITY = {
     "multiple_h1": "medium",
     "schema": "medium",
     "structured_data": "medium",
-    "image_alt_text": "medium",
-    "missing_image_alt": "medium",
-    # Lower-inherent-impact or explicitly investigative rules.
+    # Lower-inherent-impact optimization/investigative rules.
+    "image_alt_text": "low",
+    "missing_image_alt": "low",
     "title_over_pixel_limit": "low",
+    "duplicate_title_template": "low",
+    "duplicate_title_localized": "low",
+    "duplicate_title_query_variants": "low",
+    "duplicate_meta_description": "low",
     "potential_orphan_pages": "low",
     "potential_topic_overlap": "low",
+}
+
+# Evidence class expresses consequence/decision confidence, not whether the
+# scanner literally observed the condition. A deterministic missing metadata
+# field can still be an optimization rather than a blocking technical problem.
+RULE_DEFAULT_EVIDENCE_CLASS = {
+    "missing_meta_description": "improvement",
+    "empty_meta_description": "improvement",
+    "malformed_meta_description": "improvement",
+    "meta_description_unusable": "improvement",
+    "title_over_pixel_limit": "improvement",
+    "duplicate_title_template": "improvement",
+    "duplicate_title_localized": "improvement",
+    "duplicate_title_query_variants": "improvement",
+    "duplicate_meta_description": "improvement",
+    "missing_h1": "improvement",
+    "multiple_h1": "improvement",
+    "schema": "improvement",
+    "structured_data": "improvement",
+    "image_alt_text": "improvement",
+    "missing_image_alt": "improvement",
+    "failed_page": "improvement",
+    "potential_orphan_pages": "opportunity",
+    "potential_topic_overlap": "opportunity",
 }
 
 DEFECT_CLASS_TECHNICAL_SEVERITY = {
@@ -104,6 +133,14 @@ def calibrated_evidence_class(fix: dict[str, Any]) -> str:
     if explicit in {"confirmed_problem", "improvement", "opportunity"}:
         return explicit
 
+    rule = _clean(fix.get("rule") or fix.get("type"))
+    if rule in RULE_DEFAULT_EVIDENCE_CLASS:
+        default_class = RULE_DEFAULT_EVIDENCE_CLASS[rule]
+        if default_class == "opportunity":
+            return "opportunity"
+    else:
+        default_class = "confirmed_problem"
+
     text = " ".join(
         _clean(fix.get(key))
         for key in (
@@ -123,7 +160,7 @@ def calibrated_evidence_class(fix: dict[str, Any]) -> str:
     evidence_status = _clean(fix.get("evidence_status"))
     if verification in NEEDS_VERIFICATION_STATES or evidence_status in NEEDS_VERIFICATION_STATES:
         return "improvement"
-    return "confirmed_problem"
+    return default_class
 
 
 def _action_priority(base_severity: str, evidence_class: str, context: dict[str, Any], *, search_facing: bool) -> str:

@@ -38,7 +38,23 @@ jobs:
         run: npm run typecheck
 
       - name: Frontend contract tests
-        run: npm run test:frontend
+        id: frontend-contracts
+        shell: bash
+        run: |
+          set +e
+          npm run test:frontend 2>&1 | tee frontend-test-output.log
+          status=${PIPESTATUS[0]}
+          tail -n 200 frontend-test-output.log > frontend-test-tail.txt
+          exit "$status"
+
+      - name: Upload frontend contract diagnostic
+        if: failure() && steps.frontend-contracts.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-contract-failure
+          path: frontend-test-tail.txt
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Build
         run: npm run build

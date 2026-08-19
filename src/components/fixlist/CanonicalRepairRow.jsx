@@ -41,6 +41,11 @@ export default function CanonicalRepairRow({ item, model: suppliedModel, renderD
               {model.reason}
             </span>
           ) : null}
+          {model.leverage ? (
+            <span className="mt-1.5 block text-[12px] leading-relaxed text-ink-muted">
+              {model.leverage}
+            </span>
+          ) : null}
           {model.verification ? (
             <span className="mt-2 block text-[12px] font-medium leading-relaxed text-ink-muted">
               <span className="text-ink-faint">Verification · </span>{model.verification}

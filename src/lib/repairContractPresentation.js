@@ -20,20 +20,59 @@ export function repairContractVersionOf(item = {}) {
   );
 }
 
+export function repairSnapshotContractVersionOf(item = {}) {
+  return clean(
+    item.repairSnapshotContractVersion
+      || item.repair_snapshot_contract_version
+      || item.original?.repair_snapshot_contract_version,
+  );
+}
+
+export function repairSnapshotContractComplete(item = {}) {
+  return item.repairSnapshotContractComplete === true
+    || item.repair_snapshot_contract_complete === true
+    || item.original?.repair_snapshot_contract_complete === true;
+}
+
+/**
+ * A row-level contract is not enough to switch a saved FixList into canonical
+ * presentation. The persisted row must also carry an explicit snapshot-level
+ * attestation proving the entire durable FixList used the same supported
+ * contract. This prevents Done/deferred/filter state from manufacturing
+ * canonical authority out of a mixed historical snapshot.
+ */
 export function repairPresentationMode(item = {}) {
   const version = repairContractVersionOf(item);
-  if (!version) return REPAIR_PRESENTATION_MODES.LEGACY;
-  if (SUPPORTED_REPAIR_CONTRACTS.includes(version)) return REPAIR_PRESENTATION_MODES.CANONICAL;
-  return REPAIR_PRESENTATION_MODES.UNSUPPORTED;
+  const snapshotVersion = repairSnapshotContractVersionOf(item);
+  const snapshotComplete = repairSnapshotContractComplete(item);
+
+  if (!version && !snapshotVersion) return REPAIR_PRESENTATION_MODES.LEGACY;
+  if (version && !SUPPORTED_REPAIR_CONTRACTS.includes(version)) {
+    return REPAIR_PRESENTATION_MODES.UNSUPPORTED;
+  }
+  if (snapshotVersion && !SUPPORTED_REPAIR_CONTRACTS.includes(snapshotVersion)) {
+    return REPAIR_PRESENTATION_MODES.UNSUPPORTED;
+  }
+  if (version && snapshotVersion && version !== snapshotVersion) {
+    return REPAIR_PRESENTATION_MODES.UNSUPPORTED;
+  }
+
+  // Transitional rows with a supported row contract but no complete persisted
+  // snapshot attestation stay legacy. They may never activate canonical UI by
+  // inference alone.
+  if (!version || !snapshotVersion || !snapshotComplete) {
+    return REPAIR_PRESENTATION_MODES.LEGACY;
+  }
+  return REPAIR_PRESENTATION_MODES.CANONICAL;
 }
 
 /**
  * One durable FixList snapshot has one presentation authority.
  *
- * A single unsupported row makes the snapshot unsupported. A fully supported
- * snapshot may use canonical action priority. Any mixture of canonical and
- * historical/no-contract rows remains legacy so the customer never sees two
- * ranking authorities inside one saved scan.
+ * A single unsupported row makes the snapshot unsupported. A fully attested,
+ * supported snapshot may use canonical action priority. Any mixture of
+ * canonical and historical/no-contract rows remains legacy so the customer
+ * never sees two ranking authorities inside one saved scan.
  */
 export function repairSnapshotPresentationMode(items = []) {
   const list = Array.isArray(items) ? items.filter(Boolean) : [];
@@ -57,22 +96,21 @@ export function canConsumeCanonicalActionPriority(item = {}) {
  * Historical scans must not be silently reinterpreted by whichever prioritizer
  * happens to be current when the user opens them later.
  *
- * - Supported versioned repairs may consume persisted canonical action_priority.
+ * - Fully snapshot-attested supported repairs may consume persisted canonical
+ *   action_priority.
  * - Repairs with no contract remain in frozen legacy presentation mode.
- * - Unknown or superseded contracts fail closed until the UI explicitly
- *   supports them.
- *
- * This helper is intentionally additive. The live FixList page does not switch
- * presentation modes unless the persisted repair contract is explicitly listed
- * above. The original v1 shadow contract is intentionally unsupported after
- * calibration proved its base-severity fallback could inherit reach-inflated
- * legacy priority.
+ * - Supported row contracts without snapshot attestation also remain legacy.
+ * - Unknown, superseded, or mismatched contracts fail closed.
  */
 export function repairPresentationContract(item = {}) {
   const version = repairContractVersionOf(item);
+  const snapshotVersion = repairSnapshotContractVersionOf(item);
+  const snapshotComplete = repairSnapshotContractComplete(item);
   const mode = repairPresentationMode(item);
   return {
     version,
+    snapshotVersion,
+    snapshotComplete,
     mode,
     canonicalActionPriorityAllowed: mode === REPAIR_PRESENTATION_MODES.CANONICAL,
     frozenLegacyPresentation: mode === REPAIR_PRESENTATION_MODES.LEGACY,

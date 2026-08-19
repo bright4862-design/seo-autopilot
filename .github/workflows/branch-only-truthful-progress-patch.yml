@@ -1,0 +1,77 @@
+name: Branch-only truthful progress patch
+
+on:
+  push:
+    branches:
+      - agent/repair-priority-integration-current-main
+    paths:
+      - .github/workflows/branch-only-truthful-progress-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/repair-priority-integration-current-main
+          fetch-depth: 0
+
+      - name: Apply exact presentation-only substitutions
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/components/scan/ScanWebsiteForm.jsx')
+          text = path.read_text(encoding='utf-8')
+
+          replacements = [
+              (
+                  'import { Input } from "@/components/ui/input";\n',
+                  'import { Input } from "@/components/ui/input";\nimport TruthfulScanProgress from "@/components/scan/TruthfulScanProgress";\n',
+              ),
+              (
+                  'const SCAN_PROGRESS_STEPS = ["Reading pages", "Checking issues", "Writing fixes", "Saving result"];\n\n',
+                  '',
+              ),
+              (
+                  '  const progressIndex = scanProgressIndex(activeStep);\n',
+                  '',
+              ),
+              (
+                  '''        {isLoading ? (\n          <div\n            role="status"\n            aria-live="assertive"\n            aria-atomic="true"\n            className="fixed left-1/2 top-4 z-[100] w-[calc(100%-2rem)] max-w-[560px] -translate-x-1/2 rounded-2xl border border-hairline bg-white p-5 text-ink shadow-lg"\n          >\n            <div className="flex items-start gap-3">\n              <Loader2 className="mt-0.5 h-5 w-5 shrink-0 animate-spin text-ink" />\n              <div className="min-w-0 flex-1">\n                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Scan running</p>\n                <div className="mt-1 flex items-baseline justify-between gap-3">\n                  <p className="text-[15px] font-medium tracking-tight">{activeStep || "Starting your scan"}</p>\n                  <span className="shrink-0 text-[12px] tabular-nums text-ink-faint">{formatElapsed(elapsedSeconds)}</span>\n                </div>\n                {scanTargetLabel ? (\n                  <p className="mt-0.5 truncate text-[13px] text-ink-muted" title={scanTargetLabel}>{scanTargetLabel}</p>\n                ) : null}\n                {durableScan.pagesFound > 0 ? (\n                  <p className="mt-1 text-[12px] tabular-nums text-ink-faint" aria-live="polite">\n                    {durableScan.pagesFound.toLocaleString()} pages discovered\n                    {durableScan.pagesCrawled > 0 ? ` · ${durableScan.pagesCrawled.toLocaleString()} of ${STANDARD_SCAN_BUDGET.max_pages} checked` : ""}\n                  </p>\n                ) : null}\n                <p className="mt-1 text-[13px] leading-relaxed text-ink-muted">\n                  {elapsedSeconds >= 30\n                    ? "Still working — larger or slower sites can take a little longer."\n                    : "FixList is actively working. Your result will open automatically when it is saved."}\n                </p>\n                {durableScan.stalled && watchedScanId ? (\n                  <p className="mt-3 text-[13px] leading-relaxed text-ink">\n                    This is taking longer than usual. Your scan is saved to your account, so you can\n                    {" "}\n                    <button\n                      type="button"\n                      onClick={() => navigate(`/dashboard?scan_id=${encodeURIComponent(watchedScanId)}`)}\n                      className="font-semibold underline underline-offset-2"\n                    >\n                      open its result page\n                    </button>\n                    {" "}\n                    now — it will fill in as soon as it finishes.\n                  </p>\n                ) : null}\n              </div>\n            </div>\n            <div className="mt-4 grid grid-cols-4 gap-2" aria-label="Scan progress">\n              {SCAN_PROGRESS_STEPS.map((label, index) => (\n                <div key={label} className="min-w-0">\n                  <div className={`h-1 rounded-full ${index <= progressIndex ? "bg-ink" : "bg-hairline"}`} />\n                  <p className={`mt-1 truncate text-[11px] ${index <= progressIndex ? "text-ink" : "text-ink-faint"}`}>{label}</p>\n                </div>\n              ))}\n            </div>\n          </div>\n        ) : null}\n''',
+                  '''        {isLoading ? (\n          <div className="fixed left-1/2 top-4 z-[100] w-[calc(100%-2rem)] max-w-[560px] -translate-x-1/2 rounded-2xl border border-hairline bg-white p-5 text-ink shadow-lg">\n            <TruthfulScanProgress\n              scan={{\n                status: durableScan.status,\n                pages_crawled: durableScan.pagesCrawled,\n                status_detail: durableScan.statusDetail,\n              }}\n              targetLabel={scanTargetLabel}\n              elapsedLabel={formatElapsed(elapsedSeconds)}\n              fallbackPhase={activeStep || "Starting your scan"}\n              longerThanUsual={elapsedSeconds >= 30}\n              onOpenSavedScan={durableScan.stalled && watchedScanId\n                ? () => navigate(`/dashboard?scan_id=${encodeURIComponent(watchedScanId)}`)\n                : undefined}\n            />\n          </div>\n        ) : null}\n''',
+              ),
+              (
+                  '          <p className="text-[13px] leading-relaxed text-ink-muted">Takes about 2–4 minutes. You can leave this page — we’ll save your list.</p>\n',
+                  '          <p className="text-[13px] leading-relaxed text-ink-muted">Most scans take about 2–4 minutes.</p>\n',
+              ),
+              (
+                  '''function scanProgressIndex(step = "") {\n  const normalized = String(step || "").toLowerCase();\n  if (normalized.includes("saving")) return 3;\n  if (normalized.includes("writing") || normalized.includes("review")) return 2;\n  if (normalized.includes("checking") || normalized.includes("scanning")) return 1;\n  return 0;\n}\n\n''',
+                  '',
+              ),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'Expected exactly one match, got {count}: {old[:100]!r}')
+              text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          git diff --check
+          git diff -- src/components/scan/ScanWebsiteForm.jsx
+
+      - name: Commit exact progress patch
+        shell: bash
+        run: |
+          git config user.name "FixList integration bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/components/scan/ScanWebsiteForm.jsx
+          git commit -m "Use truthful durable scan progress"
+          git push origin HEAD:agent/repair-priority-integration-current-main

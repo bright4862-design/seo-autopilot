@@ -6,6 +6,7 @@ import {
   canConsumeCanonicalActionPriority,
   canonicalActionBandOrderIsValid,
   explicitCanonicalActionPriorityOf,
+  explicitCanonicalPriorityReasonOf,
   repairContractVersionOf,
   repairPresentationContract,
   repairPresentationMode,
@@ -21,6 +22,7 @@ function attestedV2(overrides = {}) {
     repair_contract_version: V2,
     repair_snapshot_contract_version: V2,
     repair_snapshot_contract_complete: true,
+    priority_reason: "Persisted reason for this repair band.",
     ...overrides,
   };
 }
@@ -31,6 +33,7 @@ test("calibrated repair contract may consume canonical action priority only with
   assert.equal(repairSnapshotContractVersionOf(item), V2);
   assert.equal(repairSnapshotContractComplete(item), true);
   assert.equal(explicitCanonicalActionPriorityOf(item), "important");
+  assert.equal(explicitCanonicalPriorityReasonOf(item), "Persisted reason for this repair band.");
   assert.equal(repairPresentationMode(item), REPAIR_PRESENTATION_MODES.CANONICAL);
   assert.equal(canConsumeCanonicalActionPriority(item), true);
 });
@@ -41,6 +44,39 @@ test("fully attested v2 row without persisted action priority fails closed", () 
   assert.equal(contract.mode, REPAIR_PRESENTATION_MODES.UNSUPPORTED);
   assert.equal(contract.canonicalActionPriorityAllowed, false);
   assert.equal(contract.unsupported, true);
+});
+
+test("fully attested v2 row without persisted priority reason fails closed", () => {
+  const contract = repairPresentationContract(attestedV2({
+    action_priority: "important",
+    priority_reason: "",
+  }));
+  assert.equal(contract.priorityReason, "");
+  assert.equal(contract.mode, REPAIR_PRESENTATION_MODES.UNSUPPORTED);
+  assert.equal(contract.canonicalActionPriorityAllowed, false);
+});
+
+test("browser priority context cannot substitute for missing canonical priority reason", () => {
+  const item = attestedV2({
+    action_priority: "important",
+    priority_reason: "",
+    priority_context: { priority_reason: "Browser/context fallback" },
+  });
+  assert.equal(explicitCanonicalPriorityReasonOf(item), "");
+  assert.equal(repairPresentationMode(item), REPAIR_PRESENTATION_MODES.UNSUPPORTED);
+});
+
+test("persisted original priority reason wins over normalized browser copy", () => {
+  const item = {
+    action_priority: "important",
+    priority_reason: "Browser-mutated reason",
+    original: attestedV2({
+      action_priority: "important",
+      priority_reason: "Persisted explanation",
+    }),
+  };
+  assert.equal(explicitCanonicalPriorityReasonOf(item), "Persisted explanation");
+  assert.equal(repairPresentationMode(item), REPAIR_PRESENTATION_MODES.CANONICAL);
 });
 
 test("invalid canonical action priority fails closed instead of falling back to severity", () => {
@@ -165,5 +201,9 @@ test("camelCase and nested historical shapes resolve contract fields determinist
   assert.equal(
     explicitCanonicalActionPriorityOf({ original: { action_priority: "review" } }),
     "review",
+  );
+  assert.equal(
+    explicitCanonicalPriorityReasonOf({ original: { priority_reason: "Persisted" } }),
+    "Persisted",
   );
 });

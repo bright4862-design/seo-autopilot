@@ -30,7 +30,7 @@ test("mobile repair rows stay compact while preserving readable desktop spacing"
 test("canonical work surface leads with the FixList and separates workflow from verification", () => {
   assert.match(sectionSource, />\s*Your FixList\s*</);
   assert.match(sectionSource, /verifies changes only after a later comparable scan/);
-  assert.match(sectionSource, /repairCount === 1 \? "repair" : "repairs"/);
+  assert.match(sectionSource, /\{repairCount\} remaining/);
   assert.match(sectionSource, /<h3/);
 });
 

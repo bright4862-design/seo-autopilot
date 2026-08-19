@@ -315,6 +315,32 @@ async def test_durable_worker_wall_clock_timeout_terminalizes_exact_attempt(monk
 
 
 @pytest.mark.asyncio
+async def test_hard_deadline_does_not_wait_for_cancellation_resistant_coroutine():
+    """The wall fuse must return even when the timed-out coroutine ignores cancellation."""
+    import asyncio
+    import time
+    from app import main
+
+    release = asyncio.Event()
+
+    async def cancellation_resistant():
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            await release.wait()
+            return "late"
+
+    started = time.monotonic()
+    with pytest.raises(asyncio.TimeoutError):
+        await main.await_hard_deadline(cancellation_resistant(), 0.01)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.15
+    release.set()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
 async def test_durable_worker_completion_wall_timeout_terminalizes_exact_attempt(monkeypatch):
     """A post-crawl authority handoff that never returns must not hold the row open."""
     import asyncio
@@ -361,8 +387,14 @@ async def test_durable_worker_completion_wall_timeout_terminalizes_exact_attempt
     async def quick_scan(*_args, **_kwargs):
         return {"pages_found": 1, "pages_crawled": 1, "crawled_pages": []}
 
+    release_completion = asyncio.Event()
+
     async def never_completes(*_args, **_kwargs):
-        await asyncio.sleep(60)
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            await release_completion.wait()
+            return {"ok": False, "transient": True}
 
     failures = []
 
@@ -387,6 +419,8 @@ async def test_durable_worker_completion_wall_timeout_terminalizes_exact_attempt
     monkeypatch.setattr(main, "WORKER_COMPLETION_WALL_TIMEOUT_SECONDS", 0.01)
 
     result = await main.scan_job(payload, authorization="test")
+    release_completion.set()
+    await asyncio.sleep(0)
 
     assert started_calls == 2
     assert result["success"] is False

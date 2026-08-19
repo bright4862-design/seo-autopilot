@@ -20,10 +20,14 @@ export default function TruthfulScanProgress({
 }) {
   const progress = useMemo(() => scanProgressModel(scan), [scan]);
   const phase = progress.status ? progress.phaseLabel : fallbackPhase;
-  const canOpenSavedScan = longerThanUsual && typeof onOpenSavedScan === "function";
+  const canOpenSavedScan = Boolean(
+    longerThanUsual
+      && progress.canLeavePage
+      && typeof onOpenSavedScan === "function",
+  );
 
   return (
-    <div role="status" aria-live="assertive" aria-atomic="true">
+    <div role="status" aria-live="polite" aria-atomic="true">
       <div className="flex items-start gap-3">
         <Loader2 className="mt-0.5 h-5 w-5 shrink-0 animate-spin text-ink" />
         <div className="min-w-0 flex-1">
@@ -42,7 +46,7 @@ export default function TruthfulScanProgress({
             </p>
           ) : null}
           {progress.countLabel ? (
-            <p className="mt-1 text-[12px] tabular-nums text-ink-faint" aria-live="polite">
+            <p className="mt-1 text-[12px] tabular-nums text-ink-faint">
               {progress.countLabel}
             </p>
           ) : null}

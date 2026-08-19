@@ -19,6 +19,7 @@ def test_repair_shadow_is_not_imported_by_scanner_or_review_runtime():
     for path in protected:
         text = _source(path)
         assert "repair_shadow" not in text, f"shadow adapter crossed runtime boundary: {path}"
+        assert "repair_priority_calibration" not in text, f"calibrated ranking crossed runtime boundary: {path}"
 
 
 def test_repair_shadow_is_not_wired_into_authority_or_persistence_handoff():
@@ -30,7 +31,9 @@ def test_repair_shadow_is_not_wired_into_authority_or_persistence_handoff():
     for path in protected:
         text = _source(path)
         assert "repair_shadow" not in text
+        assert "repair_priority_calibration" not in text
         assert "repair_contract_v1_shadow" not in text, f"shadow contract entered authority path: {path}"
+        assert "repair_contract_v2_shadow_calibrated" not in text, f"calibrated shadow contract entered authority path: {path}"
 
 
 def test_production_review_does_not_use_proposed_repair_sorting():
@@ -41,3 +44,4 @@ def test_production_review_does_not_use_proposed_repair_sorting():
         assert "proposed_customer_order" not in text
         assert "build_shadow_repair_contract" not in text
         assert "build_shadow_review_analysis" not in text
+        assert "build_calibrated_shadow_review_analysis" not in text

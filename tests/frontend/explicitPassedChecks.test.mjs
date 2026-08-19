@@ -12,11 +12,11 @@ const componentSource = readFileSync(
   "utf8",
 );
 
-test("Already good component is driven by explicit evaluation contract, not repair absence", () => {
+test("Already good component is driven by explicit evaluation contract, not repair collection logic", () => {
   assert.match(componentSource, /buildExplicitPassedChecks/);
   assert.match(componentSource, /if \(claims\.length === 0\) return null/);
   assert.doesNotMatch(componentSource, /recommendations\.filter/);
-  assert.doesNotMatch(componentSource, /absence/i);
+  assert.doesNotMatch(componentSource, /priorityBucket/);
 });
 
 test("current scan shapes without evaluation ledger produce no Already good claims", () => {

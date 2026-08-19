@@ -15,6 +15,13 @@ export const CANONICAL_ACTION_PRIORITIES = Object.freeze([
   "review",
 ]);
 
+const CANONICAL_ACTION_PRIORITY_RANK = Object.freeze({
+  fix_first: 4,
+  important: 3,
+  improve: 2,
+  review: 1,
+});
+
 function clean(value = "") {
   return String(value || "").trim();
 }
@@ -91,6 +98,20 @@ export function repairPresentationMode(item = {}) {
   return REPAIR_PRESENTATION_MODES.CANONICAL;
 }
 
+export function canonicalActionBandOrderIsValid(items = []) {
+  const list = Array.isArray(items) ? items.filter(Boolean) : [];
+  let previousRank = Number.POSITIVE_INFINITY;
+
+  for (const item of list) {
+    const priority = explicitCanonicalActionPriorityOf(item);
+    const rank = CANONICAL_ACTION_PRIORITY_RANK[priority] || 0;
+    if (!rank || rank > previousRank) return false;
+    previousRank = rank;
+  }
+
+  return true;
+}
+
 /**
  * One durable FixList snapshot has one presentation authority.
  *
@@ -98,6 +119,11 @@ export function repairPresentationMode(item = {}) {
  * supported snapshot may use canonical action priority. Any mixture of
  * canonical and historical/no-contract rows remains legacy so the customer
  * never sees two ranking authorities inside one saved scan.
+ *
+ * Canonical snapshots must already arrive in the same band order the UI renders
+ * (`Fix first` -> `Important` -> `Improve` -> `Review`). If the server-persisted
+ * order interleaves bands, the frontend fails closed instead of silently
+ * changing canonical order while building sections.
  */
 export function repairSnapshotPresentationMode(items = []) {
   const list = Array.isArray(items) ? items.filter(Boolean) : [];
@@ -108,7 +134,9 @@ export function repairSnapshotPresentationMode(items = []) {
     return REPAIR_PRESENTATION_MODES.UNSUPPORTED;
   }
   if (modes.every((mode) => mode === REPAIR_PRESENTATION_MODES.CANONICAL)) {
-    return REPAIR_PRESENTATION_MODES.CANONICAL;
+    return canonicalActionBandOrderIsValid(list)
+      ? REPAIR_PRESENTATION_MODES.CANONICAL
+      : REPAIR_PRESENTATION_MODES.UNSUPPORTED;
   }
   return REPAIR_PRESENTATION_MODES.LEGACY;
 }

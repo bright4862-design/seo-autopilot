@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildFixListPresentation,
   repairRowModel,
   repairScopeSummary,
   sectionCustomerRepairs,
 } from "../../src/lib/repairPresentation.js";
+import { REPAIR_PRESENTATION_MODES } from "../../src/lib/repairContractPresentation.js";
 
 
 test("sample-qualified searchable coverage is shown without implying whole-site coverage", () => {
@@ -76,4 +78,73 @@ test("repair leverage is display metadata only when explicitly confirmed", () =>
   assert.equal(unconfirmed.sharedRepairConfirmed, false);
   assert.equal(confirmed.sharedRepairConfirmed, true);
   assert.equal(confirmed.surface, "Shared Navigation");
+});
+
+
+test("canonical sections activate only for a fully supported persisted repair contract", () => {
+  const plan = buildFixListPresentation([
+    {
+      id: "urgent",
+      title: "Fix homepage noindex",
+      repair_contract_version: "repair_contract_v1_shadow",
+      action_priority: "fix_first",
+    },
+    {
+      id: "important",
+      title: "Fix redirected navigation",
+      repair_contract_version: "repair_contract_v1_shadow",
+      action_priority: "important",
+    },
+  ]);
+
+  assert.equal(plan.mode, REPAIR_PRESENTATION_MODES.CANONICAL);
+  assert.equal(plan.canonical, true);
+  assert.equal(plan.unsupported, false);
+  assert.equal(plan.legacyItems.length, 0);
+  assert.equal(plan.sections.map((section) => section.key).join(","), "fix_first,important");
+});
+
+
+test("historical repairs without a contract stay in frozen legacy presentation", () => {
+  const legacyItems = [
+    { id: "old-high", priority: "high", action_priority: "review" },
+    { id: "old-low", priority: "low", action_priority: "fix_first" },
+  ];
+  const plan = buildFixListPresentation(legacyItems);
+
+  assert.equal(plan.mode, REPAIR_PRESENTATION_MODES.LEGACY);
+  assert.equal(plan.canonical, false);
+  assert.equal(plan.sections.length, 0);
+  assert.deepEqual(plan.legacyItems, legacyItems);
+});
+
+
+test("unknown future contracts fail closed instead of being silently re-ranked", () => {
+  const item = {
+    id: "future",
+    repair_contract_version: "repair_contract_v9_future",
+    action_priority: "fix_first",
+  };
+  const plan = buildFixListPresentation([item]);
+
+  assert.equal(plan.mode, REPAIR_PRESENTATION_MODES.UNSUPPORTED);
+  assert.equal(plan.unsupported, true);
+  assert.equal(plan.sections.length, 0);
+  assert.deepEqual(plan.legacyItems, [item]);
+});
+
+
+test("mixed historical and canonical rows use one legacy authority for the whole saved list", () => {
+  const canonical = {
+    id: "new",
+    repair_contract_version: "repair_contract_v1_shadow",
+    action_priority: "fix_first",
+  };
+  const legacy = { id: "old", priority: "high" };
+  const plan = buildFixListPresentation([canonical, legacy]);
+
+  assert.equal(plan.mode, REPAIR_PRESENTATION_MODES.LEGACY);
+  assert.equal(plan.canonical, false);
+  assert.equal(plan.sections.length, 0);
+  assert.deepEqual(plan.legacyItems, [canonical, legacy]);
 });

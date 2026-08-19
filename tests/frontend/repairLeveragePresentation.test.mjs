@@ -35,6 +35,19 @@ test("explicit shared-repair confirmation may expose bounded multi-page leverage
   assert.equal(model.leverage, "One shared change may improve 3 affected pages");
 });
 
+test("shared leverage is not repeated when the priority reason already explains it", () => {
+  const model = repairRowModel({
+    id: "shared-reason",
+    action_priority: "important",
+    affected_pages: ["/a", "/b", "/c"],
+    shared_repair_confirmed: true,
+    priority_reason: "One shared change may improve 3 checked pages.",
+  });
+
+  assert.equal(model.reason, "One shared change may improve 3 checked pages.");
+  assert.equal(model.leverage, "");
+});
+
 test("single-page repair never receives a shared leverage claim", () => {
   const model = repairRowModel({
     id: "single",

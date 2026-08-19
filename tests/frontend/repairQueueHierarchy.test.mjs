@@ -27,6 +27,13 @@ test("mobile repair rows stay compact while preserving readable desktop spacing"
   assert.match(sectionSource, /mt-10 first:mt-0 sm:mt-12/);
 });
 
+test("canonical work surface leads with the FixList and separates workflow from verification", () => {
+  assert.match(sectionSource, />\s*Your FixList\s*</);
+  assert.match(sectionSource, /verifies changes only after a later comparable scan/);
+  assert.match(sectionSource, /repairCount === 1 \? "repair" : "repairs"/);
+  assert.match(sectionSource, /<h3/);
+});
+
 test("section counts describe repairs instead of exposing an unlabeled number", () => {
   assert.match(sectionSource, /totalCount === 1 \? "repair" : "repairs"/);
   assert.match(sectionSource, /View \{hiddenCount\} more Fix first/);

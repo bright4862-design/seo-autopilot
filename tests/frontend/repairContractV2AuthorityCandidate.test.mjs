@@ -14,7 +14,7 @@ import {
   RULE_EVALUATION_CONTRACT_V1,
   applyRepairContractV2Candidate,
   rehydrateRepairContractV2Candidate,
-} from "../../base44/functions/persistDurableScanAuthority/repairContractV2Candidate.js";
+} from "../helpers/repairContractV2Candidate.js";
 
 const NOW = "2026-08-19T16:20:00.000Z";
 const SECRET = "repair-v2-candidate-secret-that-is-never-deployed";

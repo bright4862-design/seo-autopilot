@@ -1,11 +1,17 @@
 import React, { useState } from "react";
 
+import CanonicalRepairRow from "@/components/fixlist/CanonicalRepairRow";
+
 /**
  * Canonical FixList work-queue presentation.
  *
  * This component is deliberately presentation-only: it receives already
- * contract-gated sections and never computes repair priority itself. The
- * caller keeps ownership of row actions and evidence drill-down rendering.
+ * contract-gated sections and never computes repair priority itself.
+ *
+ * The compact canonical row owns the visible work-queue hierarchy. The caller's
+ * existing `renderRow` output is preserved as expandable detail, so evidence,
+ * instructions, and workflow actions can migrate without being duplicated into
+ * a second implementation here.
  */
 export default function RepairSectionList({ sections = [], renderRow }) {
   const [showAllFixFirst, setShowAllFixFirst] = useState(false);
@@ -36,7 +42,14 @@ export default function RepairSectionList({ sections = [], renderRow }) {
             </div>
 
             <div className="mt-2">
-              {visibleRows.map((row, index) => renderRow(row, index))}
+              {visibleRows.map((row, index) => (
+                <CanonicalRepairRow
+                  key={row?.model?.id || row?.item?.id || `${section.key}-${index}`}
+                  item={row.item}
+                  model={row.model}
+                  renderDetails={() => renderRow(row, index)}
+                />
+              ))}
             </div>
 
             {hiddenCount > 0 ? (

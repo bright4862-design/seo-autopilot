@@ -7,16 +7,59 @@ import {
   repairContractVersionOf,
   repairPresentationContract,
   repairPresentationMode,
+  repairSnapshotContractComplete,
+  repairSnapshotContractVersionOf,
 } from "../../src/lib/repairContractPresentation.js";
 
-test("calibrated repair contract may consume persisted canonical action priority", () => {
-  const item = {
-    repair_contract_version: "repair_contract_v2_shadow_calibrated",
-    action_priority: "important",
+const V2 = "repair_contract_v2_shadow_calibrated";
+
+function attestedV2(overrides = {}) {
+  return {
+    repair_contract_version: V2,
+    repair_snapshot_contract_version: V2,
+    repair_snapshot_contract_complete: true,
+    ...overrides,
   };
-  assert.equal(repairContractVersionOf(item), "repair_contract_v2_shadow_calibrated");
+}
+
+test("calibrated repair contract may consume canonical action priority only with snapshot attestation", () => {
+  const item = attestedV2({ action_priority: "important" });
+  assert.equal(repairContractVersionOf(item), V2);
+  assert.equal(repairSnapshotContractVersionOf(item), V2);
+  assert.equal(repairSnapshotContractComplete(item), true);
   assert.equal(repairPresentationMode(item), REPAIR_PRESENTATION_MODES.CANONICAL);
   assert.equal(canConsumeCanonicalActionPriority(item), true);
+});
+
+test("supported row contract without snapshot attestation remains frozen legacy", () => {
+  const item = {
+    repair_contract_version: V2,
+    action_priority: "fix_first",
+  };
+  const contract = repairPresentationContract(item);
+  assert.equal(contract.mode, REPAIR_PRESENTATION_MODES.LEGACY);
+  assert.equal(contract.frozenLegacyPresentation, true);
+  assert.equal(contract.canonicalActionPriorityAllowed, false);
+});
+
+test("incomplete snapshot attestation cannot activate canonical UI", () => {
+  const item = {
+    repair_contract_version: V2,
+    repair_snapshot_contract_version: V2,
+    repair_snapshot_contract_complete: false,
+  };
+  assert.equal(repairPresentationMode(item), REPAIR_PRESENTATION_MODES.LEGACY);
+});
+
+test("mismatched row and snapshot contracts fail closed", () => {
+  const item = {
+    repair_contract_version: V2,
+    repair_snapshot_contract_version: "repair_contract_v1_shadow",
+    repair_snapshot_contract_complete: true,
+  };
+  const contract = repairPresentationContract(item);
+  assert.equal(contract.mode, REPAIR_PRESENTATION_MODES.UNSUPPORTED);
+  assert.equal(contract.unsupported, true);
 });
 
 test("superseded v1 shadow contract fails closed rather than activating canonical UI", () => {
@@ -49,13 +92,21 @@ test("unknown future repair contract fails closed instead of being reinterpreted
   assert.equal(contract.canonicalActionPriorityAllowed, false);
 });
 
-test("camelCase and nested historical shapes resolve contract version deterministically", () => {
+test("camelCase and nested historical shapes resolve contract fields deterministically", () => {
   assert.equal(
-    repairContractVersionOf({ repairContractVersion: "repair_contract_v2_shadow_calibrated" }),
-    "repair_contract_v2_shadow_calibrated",
+    repairContractVersionOf({ repairContractVersion: V2 }),
+    V2,
   );
   assert.equal(
-    repairContractVersionOf({ original: { repair_contract_version: "repair_contract_v2_shadow_calibrated" } }),
-    "repair_contract_v2_shadow_calibrated",
+    repairContractVersionOf({ original: { repair_contract_version: V2 } }),
+    V2,
+  );
+  assert.equal(
+    repairSnapshotContractVersionOf({ repairSnapshotContractVersion: V2 }),
+    V2,
+  );
+  assert.equal(
+    repairSnapshotContractComplete({ original: { repair_snapshot_contract_complete: true } }),
+    true,
   );
 });

@@ -9,14 +9,25 @@ import {
   repairPresentationMode,
 } from "../../src/lib/repairContractPresentation.js";
 
-test("supported repair contract may consume persisted canonical action priority", () => {
+test("calibrated repair contract may consume persisted canonical action priority", () => {
   const item = {
-    repair_contract_version: "repair_contract_v1_shadow",
+    repair_contract_version: "repair_contract_v2_shadow_calibrated",
     action_priority: "important",
   };
-  assert.equal(repairContractVersionOf(item), "repair_contract_v1_shadow");
+  assert.equal(repairContractVersionOf(item), "repair_contract_v2_shadow_calibrated");
   assert.equal(repairPresentationMode(item), REPAIR_PRESENTATION_MODES.CANONICAL);
   assert.equal(canConsumeCanonicalActionPriority(item), true);
+});
+
+test("superseded v1 shadow contract fails closed rather than activating canonical UI", () => {
+  const item = {
+    repair_contract_version: "repair_contract_v1_shadow",
+    action_priority: "fix_first",
+  };
+  const contract = repairPresentationContract(item);
+  assert.equal(contract.mode, REPAIR_PRESENTATION_MODES.UNSUPPORTED);
+  assert.equal(contract.unsupported, true);
+  assert.equal(contract.canonicalActionPriorityAllowed, false);
 });
 
 test("historical repair with no contract remains frozen legacy presentation", () => {
@@ -40,11 +51,11 @@ test("unknown future repair contract fails closed instead of being reinterpreted
 
 test("camelCase and nested historical shapes resolve contract version deterministically", () => {
   assert.equal(
-    repairContractVersionOf({ repairContractVersion: "repair_contract_v1_shadow" }),
-    "repair_contract_v1_shadow",
+    repairContractVersionOf({ repairContractVersion: "repair_contract_v2_shadow_calibrated" }),
+    "repair_contract_v2_shadow_calibrated",
   );
   assert.equal(
-    repairContractVersionOf({ original: { repair_contract_version: "repair_contract_v1_shadow" } }),
-    "repair_contract_v1_shadow",
+    repairContractVersionOf({ original: { repair_contract_version: "repair_contract_v2_shadow_calibrated" } }),
+    "repair_contract_v2_shadow_calibrated",
   );
 });

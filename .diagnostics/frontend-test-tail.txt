@@ -1,0 +1,160 @@
+# Subtest: 4. a complete or limited ScanRun is never overwritten
+ok 456 - 4. a complete or limited ScanRun is never overwritten
+  ---
+  duration_ms: 0.15469
+  ...
+# Subtest: 4b. the terminal write re-reads status instead of trusting the stale snapshot
+ok 457 - 4b. the terminal write re-reads status instead of trusting the stale snapshot
+  ---
+  duration_ms: 0.272051
+  ...
+# Subtest: 5. a stale active run becomes failed and frees the key for retry
+ok 458 - 5. a stale active run becomes failed and frees the key for retry
+  ---
+  duration_ms: 0.288461
+  ...
+# Subtest: 6. a fresh active run is not failed by recovery
+ok 459 - 6. a fresh active run is not failed by recovery
+  ---
+  duration_ms: 0.368202
+  ...
+# Subtest: 7. failure-write errors are logged without secrets or proofs
+ok 460 - 7. failure-write errors are logged without secrets or proofs
+  ---
+  duration_ms: 0.478759
+  ...
+# Subtest: 8. no Grok, Premium, Deno fallback, or scanner-engine change
+ok 461 - 8. no Grok, Premium, Deno fallback, or scanner-engine change
+  ---
+  duration_ms: 1.109855
+  ...
+# Subtest: the active Standard 150 form uses server-owned admission instead of the legacy scanner recovery boundary
+ok 462 - the active Standard 150 form uses server-owned admission instead of the legacy scanner recovery boundary
+  ---
+  duration_ms: 1.584486
+  ...
+# Subtest: the boundary still fires for the legacy gateway while it remains deployed
+ok 463 - the boundary still fires for the legacy gateway while it remains deployed
+  ---
+  duration_ms: 0.160722
+  ...
+# Subtest: the boundary does not fire for unrelated functions
+ok 464 - the boundary does not fire for unrelated functions
+  ---
+  duration_ms: 0.149691
+  ...
+# Subtest: standard_150 enforces a 150 page cap
+ok 465 - standard_150 enforces a 150 page cap
+  ---
+  duration_ms: 0.155352
+  ...
+# Subtest: the standard_150 cap does not depend on the unknown-mode fallback
+ok 466 - the standard_150 cap does not depend on the unknown-mode fallback
+  ---
+  duration_ms: 0.1755
+  ...
+# Subtest: historical Quick/Deep/Advanced records stay readable at their own caps
+ok 467 - historical Quick/Deep/Advanced records stay readable at their own caps
+  ---
+  duration_ms: 0.139011
+  ...
+# Subtest: missing or unknown modes fall back to the Standard 150 cap
+ok 468 - missing or unknown modes fall back to the Standard 150 cap
+  ---
+  duration_ms: 0.204825
+  ...
+# Subtest: mode matching is case-insensitive
+ok 469 - mode matching is case-insensitive
+  ---
+  duration_ms: 0.151765
+  ...
+# Subtest: truthful scan progress consumes the shared presentation model
+ok 470 - truthful scan progress consumes the shared presentation model
+  ---
+  duration_ms: 1.357159
+  ...
+# Subtest: truthful scan progress does not invent crawler denominators or own scan state
+ok 471 - truthful scan progress does not invent crawler denominators or own scan state
+  ---
+  duration_ms: 0.175981
+  ...
+# Subtest: leave-page reassurance is gated by the explicit durable model flag
+ok 472 - leave-page reassurance is gated by the explicit durable model flag
+  ---
+  duration_ms: 0.182903
+  ...
+# Subtest: exactly one customer scanner is presented, and it is Standard 150
+ok 473 - exactly one customer scanner is presented, and it is Standard 150
+  ---
+  duration_ms: 2.329365
+  ...
+# Subtest: no selectable scan-size control exists in the rendered DOM
+ok 474 - no selectable scan-size control exists in the rendered DOM
+  ---
+  duration_ms: 1.015367
+  ...
+# Subtest: Premium 5,000 is not a selectable scan mode
+ok 475 - Premium 5,000 is not a selectable scan mode
+  ---
+  duration_ms: 0.304371
+  ...
+# Subtest: legacy scan modes are absent from the customer scan component
+ok 476 - legacy scan modes are absent from the customer scan component
+  ---
+  duration_ms: 1.042408
+  ...
+# Subtest: standard_150 is the submitted customer mode
+ok 477 - standard_150 is the submitted customer mode
+  ---
+  duration_ms: 0.245051
+  ...
+# Subtest: standard_150 is the persisted and canonical customer mode
+ok 478 - standard_150 is the persisted and canonical customer mode
+  ---
+  duration_ms: 0.165941
+  ...
+# Subtest: the durable schema accepts new Standard 150 scans without breaking legacy history
+ok 479 - the durable schema accepts new Standard 150 scans without breaking legacy history
+  ---
+  duration_ms: 0.269537
+  ...
+# Subtest: historical non-advanced records stay readable as their original mode
+ok 480 - historical non-advanced records stay readable as their original mode
+  ---
+  duration_ms: 0.175449
+  ...
+# Subtest: the customer request requires Python and forbids the Deno fallback
+ok 481 - the customer request requires Python and forbids the Deno fallback
+  ---
+  duration_ms: 0.323428
+  ...
+# Subtest: robots are always respected
+ok 482 - robots are always respected
+  ---
+  duration_ms: 0.291718
+  ...
+# Subtest: the page cap is 150 and is not customer-controlled
+ok 483 - the page cap is 150 and is not customer-controlled
+  ---
+  duration_ms: 0.312707
+  ...
+# Subtest: the customer scan is routed through the Standard 150 server admission dispatcher
+ok 484 - the customer scan is routed through the Standard 150 server admission dispatcher
+  ---
+  duration_ms: 1.045484
+  ...
+# Subtest: scan identity and duplicate-submit protection stay intact while failure ownership is server-side
+ok 485 - scan identity and duplicate-submit protection stay intact while failure ownership is server-side
+  ---
+  duration_ms: 0.258025
+  ...
+1..485
+# tests 485
+# suites 0
+# pass 484
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 9529.218276
+EXIT_CODE=1

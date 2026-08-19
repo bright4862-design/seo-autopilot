@@ -21,7 +21,16 @@ const VERIFICATION_LABELS = Object.freeze({
   came_back: "Came back",
   could_not_verify: "Could not verify",
   could_not_compare: "Could not compare",
-  ready_to_verify: "Ready to verify",
+  ready_to_verify: "Ready to verify with a rescan",
+});
+
+const VERIFICATION_KINDS = Object.freeze({
+  verified_fixed: "verified",
+  still_detected: "detected",
+  came_back: "detected",
+  could_not_verify: "uncertain",
+  could_not_compare: "uncertain",
+  ready_to_verify: "pending",
 });
 
 function clean(value = "") {
@@ -109,17 +118,29 @@ function comparisonContractStateOf(item = {}) {
   ).toLowerCase();
 }
 
-export function repairVerificationLabel(item = {}) {
-  const state = clean(
+function verificationStateOf(item = {}) {
+  return clean(
     item.repairVerificationState
       || item.repair_verification_state
       || item.verification_state
       || item.original?.repair_verification_state,
   ).toLowerCase();
+}
+
+export function repairVerificationLabel(item = {}) {
+  const state = verificationStateOf(item);
   if (state === "could_not_verify" && comparisonContractStateOf(item) === "incomparable") {
     return "Could not compare";
   }
   return VERIFICATION_LABELS[state] || "";
+}
+
+export function repairVerificationKind(item = {}) {
+  const state = verificationStateOf(item);
+  if (state === "could_not_verify" && comparisonContractStateOf(item) === "incomparable") {
+    return "uncertain";
+  }
+  return VERIFICATION_KINDS[state] || "";
 }
 
 export function repairRowModel(item = {}) {
@@ -134,6 +155,7 @@ export function repairRowModel(item = {}) {
     scope: repairScopeSummary(item),
     reason: customerPriorityReason(item),
     verification: repairVerificationLabel(item),
+    verificationKind: repairVerificationKind(item),
     affectedPageCount: pageCount(item),
     groupedFindingCount: Number(item.groupedFindingCount ?? item.grouped_finding_count ?? 0) || 0,
     sharedRepairConfirmed: Boolean(

@@ -1,3 +1,4 @@
+from app.repair_identity import verification_eligibility
 from app.repair_priority_calibration import (
     REPAIR_PRIORITY_CALIBRATION_VERSION,
     annotate_calibrated_repair_priority,
@@ -153,6 +154,32 @@ def test_repeated_title_template_stays_low_impact_improvement_not_reach_driven_p
     assert result["base_severity"] == "low"
     assert result["evidence_class"] == "improvement"
     assert result["action_priority"] == "improve"
+
+
+def test_meta_robots_noindex_is_consistent_between_priority_and_verification():
+    finding = {
+        "rule": "missing_meta_description",
+        "category": "meta_description",
+        "priority": "high",
+        "affected_pages": ["/products/a"],
+        "page_template_family": "product_detail",
+    }
+    page = {
+        "url": "https://example.com/products/a",
+        "final_url": "https://example.com/products/a",
+        "status_code": 200,
+        "content_type": "text/html",
+        "page_template_family": "product_detail",
+        "meta_robots": "noindex,follow",
+    }
+
+    result = annotate_calibrated_repair_priority(finding, [page])
+    eligibility, _ = verification_eligibility(finding, page)
+
+    assert result["priority_context"]["indexable_affected"] == 0
+    assert result["priority_context"]["non_indexable_affected"] == 1
+    assert result["priority_context"]["unknown_indexability_affected"] == 0
+    assert eligibility == "ineligible"
 
 
 def test_explicit_technical_severity_still_overrides_shadow_taxonomy():

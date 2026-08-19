@@ -4,12 +4,14 @@ import test from "node:test";
 import {
   REPAIR_PRESENTATION_MODES,
   canConsumeCanonicalActionPriority,
+  canonicalActionBandOrderIsValid,
   explicitCanonicalActionPriorityOf,
   repairContractVersionOf,
   repairPresentationContract,
   repairPresentationMode,
   repairSnapshotContractComplete,
   repairSnapshotContractVersionOf,
+  repairSnapshotPresentationMode,
 } from "../../src/lib/repairContractPresentation.js";
 
 const V2 = "repair_contract_v2_shadow_calibrated";
@@ -55,6 +57,29 @@ test("normalized camelCase canonical action priority remains explicit authority"
   const item = attestedV2({ actionPriority: "fix_first" });
   assert.equal(explicitCanonicalActionPriorityOf(item), "fix_first");
   assert.equal(repairPresentationMode(item), REPAIR_PRESENTATION_MODES.CANONICAL);
+});
+
+test("canonical snapshot band order must already match the UI section order", () => {
+  const valid = [
+    attestedV2({ id: "a", action_priority: "fix_first" }),
+    attestedV2({ id: "b", action_priority: "fix_first" }),
+    attestedV2({ id: "c", action_priority: "important" }),
+    attestedV2({ id: "d", action_priority: "improve" }),
+    attestedV2({ id: "e", action_priority: "review" }),
+  ];
+
+  assert.equal(canonicalActionBandOrderIsValid(valid), true);
+  assert.equal(repairSnapshotPresentationMode(valid), REPAIR_PRESENTATION_MODES.CANONICAL);
+});
+
+test("interleaved canonical bands fail closed instead of being silently reordered by sections", () => {
+  const interleaved = [
+    attestedV2({ id: "important-first", action_priority: "important" }),
+    attestedV2({ id: "fix-first-later", action_priority: "fix_first" }),
+  ];
+
+  assert.equal(canonicalActionBandOrderIsValid(interleaved), false);
+  assert.equal(repairSnapshotPresentationMode(interleaved), REPAIR_PRESENTATION_MODES.UNSUPPORTED);
 });
 
 test("supported row contract without snapshot attestation remains frozen legacy", () => {

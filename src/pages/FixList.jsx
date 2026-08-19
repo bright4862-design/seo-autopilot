@@ -19,8 +19,10 @@ import UnlockAccessButton from "@/components/billing/UnlockAccessButton";
 import { CUSTOMER_BOUNDARY_EVENT } from "@/lib/customerBrowserCache";
 import ScoreRing from "@/components/fixlist/ScoreRing";
 import RecentScanRow from "@/components/fixlist/RecentScanRow";
+import RepairSectionList from "@/components/fixlist/RepairSectionList";
 import { deleteScanRun, pruneScanHistory } from "@/lib/scanHistory";
 import { prepareCustomerFixes, priorityBucket } from "@/lib/fixRanking";
+import { buildFixListPresentation } from "@/lib/repairPresentation";
 import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel } from "@/lib/fixVocabulary";
 
 const CMS_OPTIONS = [
@@ -367,8 +369,10 @@ export default function FixList() {
 
   const active = recommendations.filter((item) => !doneIds.includes(item.id));
   const doneItems = recommendations.filter((item) => doneIds.includes(item.id));
-  const topPriorities = active.slice(0, 3);
-  const remaining = active.slice(3);
+  const repairPresentation = buildFixListPresentation(active, { initialFixFirstLimit: 3 });
+  const legacyActive = repairPresentation.legacyItems;
+  const topPriorities = legacyActive.slice(0, 3);
+  const remaining = legacyActive.slice(3);
   const moreImportant = remaining.filter((item) => priorityBucket(item.priority) === "fix_first");
   const improveNext = remaining.filter((item) => priorityBucket(item.priority) === "improve_next");
   const worthChecking = remaining.filter((item) => priorityBucket(item.priority) === "worth_checking");
@@ -563,6 +567,15 @@ export default function FixList() {
 
             {limitationNote ? (
               <p className="mt-6 border-l-2 border-warnink/40 pl-3 text-[13.5px] leading-relaxed text-ink-muted">{limitationNote}</p>
+            ) : null}
+
+            {repairPresentation.canonical ? (
+              <RepairSectionList
+                sections={repairPresentation.sections}
+                renderRow={({ item }) => (
+                  <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
+                )}
+              />
             ) : null}
 
             {shownTopPriorities.length > 0 ? (

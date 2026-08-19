@@ -8,7 +8,7 @@ import { scanProgressModel } from "@/lib/scanProgressPresentation";
  *
  * The caller supplies already-read durable scan fields. This component never
  * polls, fetches, starts a scan, mutates a ScanRun, or interprets `pages_found`
- * / Standard-150 as a progress denominator.
+ * / the product page cap as a progress denominator.
  */
 export default function TruthfulScanProgress({
   scan = {},

@@ -6,6 +6,7 @@ import {
   prepareCustomerFixes,
   priorityBucket,
   rankFixesForCustomer,
+  versionedRepairIdentityIsPristine,
 } from "../../src/lib/fixRanking.js";
 import { REPAIR_PRESENTATION_MODES } from "../../src/lib/repairContractPresentation.js";
 
@@ -136,6 +137,44 @@ test("fully canonical v2 snapshot bypasses browser merge and within-band ranking
   assert.equal(prepared.length, 2, "browser must not merge canonical persisted repairs");
   assert.ok(prepared.every((item) => item.repair_snapshot_presentation_mode === REPAIR_PRESENTATION_MODES.CANONICAL));
   assert.ok(prepared.every((item) => item.groupedFindingCount === undefined));
+});
+
+
+test("normalized versioned row stays pristine when persisted identity is unchanged", () => {
+  const original = attestedV2({
+    id: "persisted-a",
+    rule: "missing_h1",
+    action_priority: "important",
+  });
+  const normalized = {
+    id: "persisted-a",
+    rule: "missing_h1",
+    title: "Friendlier customer title",
+    original,
+  };
+
+  assert.equal(versionedRepairIdentityIsPristine(normalized), true);
+  const prepared = prepareCustomerFixes([normalized]);
+  assert.equal(prepared[0].repair_snapshot_presentation_mode, REPAIR_PRESENTATION_MODES.CANONICAL);
+});
+
+
+test("legacy preprocessing that changes a versioned repair identity blocks canonical activation", () => {
+  const original = attestedV2({
+    id: "persisted-meta-a",
+    rule: "missing_meta_description",
+    action_priority: "improve",
+  });
+  const browserGrouped = {
+    id: "finding_browser_group",
+    rule: "meta_description_unusable",
+    title: "Add usable meta descriptions",
+    original,
+  };
+
+  assert.equal(versionedRepairIdentityIsPristine(browserGrouped), false);
+  const prepared = prepareCustomerFixes([browserGrouped]);
+  assert.equal(prepared[0].repair_snapshot_presentation_mode, REPAIR_PRESENTATION_MODES.UNSUPPORTED);
 });
 
 

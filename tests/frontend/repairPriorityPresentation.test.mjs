@@ -110,9 +110,9 @@ test("explicit shared repair evidence permits leverage language", () => {
 });
 
 
-test("fully canonical v2 snapshot bypasses browser merge and ranking", () => {
+test("fully canonical v2 snapshot bypasses browser merge and within-band ranking", () => {
   const first = attestedV2({
-    id: "server-second-band",
+    id: "server-first",
     rule: "missing_h1",
     page_template_family: "product_page",
     recommended_value: "Add one clear H1.",
@@ -121,18 +121,18 @@ test("fully canonical v2 snapshot bypasses browser merge and ranking", () => {
     affected_pages: ["/products/a"],
   });
   const second = attestedV2({
-    id: "server-first-band",
+    id: "server-second",
     rule: "missing_h1",
     page_template_family: "product_page",
     recommended_value: "Add one clear H1.",
-    action_priority: "fix_first",
+    action_priority: "important",
     action_priority_score: 9999,
     affected_pages: ["/products/b"],
   });
 
   const prepared = prepareCustomerFixes([first, second]);
 
-  assert.deepEqual(prepared.map((item) => item.id), ["server-second-band", "server-first-band"]);
+  assert.deepEqual(prepared.map((item) => item.id), ["server-first", "server-second"]);
   assert.equal(prepared.length, 2, "browser must not merge canonical persisted repairs");
   assert.ok(prepared.every((item) => item.repair_snapshot_presentation_mode === REPAIR_PRESENTATION_MODES.CANONICAL));
   assert.ok(prepared.every((item) => item.groupedFindingCount === undefined));

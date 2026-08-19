@@ -61,10 +61,30 @@ function familyOf(item = {}) {
   ).toLowerCase();
 }
 
+function persistedSharedRepairConfirmedOf(item = {}) {
+  const original = item?.original;
+  if (!original || typeof original !== "object") return null;
+  const originalContext = original.priorityContext || original.priority_context || {};
+  return Boolean(
+    original.sharedRepairConfirmed
+      || original.shared_repair_confirmed
+      || original.repairLeverageConfirmed
+      || original.repair_leverage_confirmed
+      || originalContext.shared_repair_confirmed,
+  );
+}
+
 function sharedRepairConfirmedOf(item = {}) {
+  if (repairPresentationMode(item) === REPAIR_PRESENTATION_MODES.CANONICAL) {
+    const persisted = persistedSharedRepairConfirmedOf(item);
+    if (persisted !== null) return persisted;
+  }
+
   return Boolean(
     item.sharedRepairConfirmed
       || item.shared_repair_confirmed
+      || item.repairLeverageConfirmed
+      || item.repair_leverage_confirmed
       || contextOf(item).shared_repair_confirmed,
   );
 }
@@ -224,7 +244,6 @@ function snapshotModeMarker(items = []) {
   ));
   const present = markers.filter(Boolean);
   if (present.length === 0) return "";
-  // Partial marker state is never enough to enable canonical interpretation.
   if (present.length !== list.length) return REPAIR_PRESENTATION_MODES.LEGACY;
   if (present.some((mode) => mode === REPAIR_PRESENTATION_MODES.UNSUPPORTED)) {
     return REPAIR_PRESENTATION_MODES.UNSUPPORTED;
@@ -243,9 +262,6 @@ function presentationModeForItems(items = []) {
   const visibleRowsMode = repairSnapshotPresentationMode(list);
   if (!markedSnapshotMode) return visibleRowsMode;
 
-  // A snapshot-level legacy/unsupported decision always wins over a filtered
-  // visible subset. A canonical marker still requires the visible rows to carry
-  // valid canonical contracts; the marker can never manufacture authority.
   if (markedSnapshotMode === REPAIR_PRESENTATION_MODES.UNSUPPORTED) {
     return REPAIR_PRESENTATION_MODES.UNSUPPORTED;
   }
@@ -267,9 +283,6 @@ function presentationModeForItems(items = []) {
  * page also receives an in-memory snapshot marker from `prepareCustomerFixes`,
  * so existing Done filtering cannot reclassify the saved scan before that caller
  * is migrated to the explicit form.
- *
- * Canonical action-priority sections are enabled only when every repair in the
- * full saved snapshot explicitly carries a supported persisted contract.
  */
 export function buildFixListPresentation(snapshotItems = [], options = {}) {
   const snapshot = Array.isArray(snapshotItems) ? snapshotItems.filter(Boolean) : [];

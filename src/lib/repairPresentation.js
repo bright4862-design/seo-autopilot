@@ -119,7 +119,9 @@ export function repairScopeSummary(item = {}) {
 
 export function repairLeverageSummary(item = {}) {
   const count = pageCount(item);
+  const reason = customerPriorityReason(item).toLowerCase();
   if (!sharedRepairConfirmedOf(item) || count < 2) return "";
+  if (reason.includes("one shared change")) return "";
   return `One shared change may improve ${count} affected pages`;
 }
 

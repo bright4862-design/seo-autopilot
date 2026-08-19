@@ -72,6 +72,20 @@ show_status() {
   else
     echo "not_deployed=$STANDARD150_RECONCILER_JOB"
   fi
+
+  echo
+  echo "=== Recent worker structured logs ==="
+  gcloud logging read \
+    'resource.type="cloud_run_revision" AND resource.labels.service_name="fixlist-standard150-worker"' \
+    --project="$GCP_PROJECT" --freshness=30m --limit=200 --order=asc \
+    --format='table(timestamp,resource.labels.revision_name,severity,jsonPayload.event,jsonPayload.scan_id,jsonPayload.attempt_count,jsonPayload.pages_found,jsonPayload.pages_crawled,textPayload)' || true
+
+  echo
+  echo "=== Recent worker requests ==="
+  gcloud logging read \
+    'resource.type="cloud_run_revision" AND resource.labels.service_name="fixlist-standard150-worker" AND logName:"run.googleapis.com%2Frequests"' \
+    --project="$GCP_PROJECT" --freshness=30m --limit=100 --order=asc \
+    --format='table(timestamp,resource.labels.revision_name,httpRequest.requestMethod,httpRequest.status,httpRequest.latency)' || true
 }
 
 verify_iam() {

@@ -27,6 +27,28 @@ export function repairPresentationMode(item = {}) {
   return REPAIR_PRESENTATION_MODES.UNSUPPORTED;
 }
 
+/**
+ * One durable FixList snapshot has one presentation authority.
+ *
+ * A single unsupported row makes the snapshot unsupported. A fully supported
+ * snapshot may use canonical action priority. Any mixture of canonical and
+ * historical/no-contract rows remains legacy so the customer never sees two
+ * ranking authorities inside one saved scan.
+ */
+export function repairSnapshotPresentationMode(items = []) {
+  const list = Array.isArray(items) ? items.filter(Boolean) : [];
+  if (list.length === 0) return REPAIR_PRESENTATION_MODES.LEGACY;
+
+  const modes = list.map((item) => repairPresentationMode(item));
+  if (modes.some((mode) => mode === REPAIR_PRESENTATION_MODES.UNSUPPORTED)) {
+    return REPAIR_PRESENTATION_MODES.UNSUPPORTED;
+  }
+  if (modes.every((mode) => mode === REPAIR_PRESENTATION_MODES.CANONICAL)) {
+    return REPAIR_PRESENTATION_MODES.CANONICAL;
+  }
+  return REPAIR_PRESENTATION_MODES.LEGACY;
+}
+
 export function canConsumeCanonicalActionPriority(item = {}) {
   return repairPresentationMode(item) === REPAIR_PRESENTATION_MODES.CANONICAL;
 }

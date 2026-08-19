@@ -16,11 +16,13 @@ test("canonical section list renders compact repair rows and keeps full detail b
   assert.doesNotMatch(source, /base44/);
 });
 
-test("additional Fix first repairs remain in Fix first behind an explicit view-more control", () => {
+test("additional Fix first repairs remain in Fix first behind reversible overflow controls", () => {
   assert.match(source, /section\.key === "fix_first" && showAllFixFirst/);
   assert.match(source, /section\.hiddenRows/);
   assert.match(source, /View \{hiddenCount\} more Fix first/);
   assert.match(source, /setShowAllFixFirst\(true\)/);
+  assert.match(source, /Show fewer Fix first repairs/);
+  assert.match(source, /setShowAllFixFirst\(false\)/);
 });
 
 test("section component consumes already-authoritative sections instead of reranking repairs", () => {

@@ -24,40 +24,45 @@ export default function CanonicalRepairRow({ item, model: suppliedModel, renderD
         onClick={() => {
           if (hasDetails) setOpen((value) => !value);
         }}
-        className={`w-full py-4 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink ${hasDetails ? "cursor-pointer" : "cursor-default"}`}
+        className={`w-full py-3.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink sm:py-4 ${hasDetails ? "cursor-pointer" : "cursor-default"}`}
       >
-        <span className="flex items-start gap-3">
-          <span className="min-w-0 flex-1">
-            <span className="block text-[15px] font-medium leading-snug tracking-tight text-ink">
-              {model.title}
-            </span>
-            {supporting ? (
-              <span className="mt-1 block text-[12px] leading-relaxed text-ink-faint">
-                {supporting}
-              </span>
-            ) : null}
-            {model.reason ? (
-              <span className="mt-1.5 block text-[13px] leading-relaxed text-ink-muted">
-                {model.reason}
-              </span>
-            ) : null}
-            {model.verification ? (
-              <span className="mt-1.5 block text-[11px] font-medium uppercase tracking-[0.06em] text-ink-faint">
-                {model.verification}
-              </span>
-            ) : null}
+        <span className="block min-w-0">
+          <span className="block text-[15px] font-medium leading-snug tracking-tight text-ink">
+            {model.title}
           </span>
+          {supporting ? (
+            <span className="mt-1 block text-[12px] leading-relaxed text-ink-faint">
+              {supporting}
+            </span>
+          ) : null}
+          {model.reason ? (
+            <span className="mt-1.5 block text-[13px] leading-relaxed text-ink-muted">
+              {model.reason}
+            </span>
+          ) : null}
+          {model.verification ? (
+            <span className="mt-1.5 block text-[12px] font-medium leading-relaxed text-ink-muted">
+              {model.verification}
+            </span>
+          ) : null}
           {hasDetails ? (
-            <span
-              aria-hidden="true"
-              className={`mt-0.5 shrink-0 text-[13px] leading-none text-ink-faint transition-transform ${open ? "rotate-90" : ""}`}
-            >
-              ›
+            <span className="mt-2 flex items-center gap-1.5 text-[11px] font-medium text-ink-faint">
+              {open ? "Hide evidence & steps" : "Evidence & steps"}
+              <span
+                aria-hidden="true"
+                className={`inline-block leading-none transition-transform ${open ? "rotate-90" : ""}`}
+              >
+                ›
+              </span>
             </span>
           ) : null}
         </span>
       </button>
-      {hasDetails && open ? <div className="pb-5">{renderDetails({ item, model })}</div> : null}
+      {hasDetails && open ? (
+        <div className="mb-2 border-l border-hairline-soft pb-5 pl-4 sm:pl-5">
+          {renderDetails({ item, model })}
+        </div>
+      ) : null}
     </div>
   );
 }

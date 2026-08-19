@@ -430,6 +430,32 @@ def require_cloud_tasks_oidc(authorization: str | None) -> None:
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
+def _consume_detached_task(task: asyncio.Task[Any]) -> None:
+    """Consume a detached task result without ever blocking the request path."""
+    try:
+        task.result()
+    except BaseException:
+        pass
+
+
+async def await_hard_deadline(awaitable: Any, timeout_seconds: float) -> Any:
+    """Enforce a wall deadline without waiting for cancellation to finish.
+
+    ``asyncio.wait_for`` cancels a timed-out coroutine and then waits for that
+    cancellation to complete. A cancellation-resistant transport can therefore
+    keep the request alive past the advertised timeout. This helper stops
+    waiting at the wall deadline, requests cancellation in the background, and
+    lets the caller use a separate race-safe terminal path immediately.
+    """
+    task = asyncio.create_task(awaitable)
+    done, _pending = await asyncio.wait({task}, timeout=max(0.001, float(timeout_seconds)))
+    if task in done:
+        return task.result()
+    task.cancel()
+    task.add_done_callback(_consume_detached_task)
+    raise asyncio.TimeoutError
+
+
 async def persist_terminal_failure_bounded(
     client: httpx.AsyncClient,
     scan_id: str,
@@ -446,7 +472,7 @@ async def persist_terminal_failure_bounded(
     as `crawling` until the platform request or stale-worker backstop fires.
     """
     try:
-        closed = await asyncio.wait_for(
+        closed = await await_hard_deadline(
             write_terminal_failure(
                 client,
                 scan_id,
@@ -454,7 +480,7 @@ async def persist_terminal_failure_bounded(
                 detail,
                 attempt_count=attempt_count,
             ),
-            timeout=WORKER_TERMINAL_WRITE_WALL_TIMEOUT_SECONDS,
+            WORKER_TERMINAL_WRITE_WALL_TIMEOUT_SECONDS,
         )
     except (asyncio.TimeoutError, RuntimeError) as exc:
         raise HTTPException(
@@ -466,9 +492,9 @@ async def persist_terminal_failure_bounded(
         return {"state": "superseded_attempt", "scan": None}
 
     try:
-        persisted = await asyncio.wait_for(
+        persisted = await await_hard_deadline(
             read_scan_run(client, scan_id),
-            timeout=min(WORKER_TERMINAL_WRITE_WALL_TIMEOUT_SECONDS, 25.0),
+            min(WORKER_TERMINAL_WRITE_WALL_TIMEOUT_SECONDS, 25.0),
         )
     except asyncio.TimeoutError as exc:
         raise HTTPException(status_code=503, detail="The scan terminal state could not be verified.") from exc
@@ -616,38 +642,23 @@ async def scan_job(
             raise HTTPException(status_code=503, detail="Authority signing is not configured.")
 
         try:
-            outcome = await asyncio.wait_for(
+            outcome = await await_hard_deadline(
                 complete_authority(client, scan, result, signing_key),
-                timeout=WORKER_COMPLETION_WALL_TIMEOUT_SECONDS,
+                WORKER_COMPLETION_WALL_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
-            # A timed-out HTTP client does not prove the Base44 function stopped;
-            # it may still win the race and persist authority. Re-read first, then
-            # use the terminal control function, which itself refuses to overwrite
-            # any terminal row. Re-read again before reporting the final outcome.
-            fresh = await read_scan_run(client, scan_id)
-            if isinstance(fresh, dict) and already_terminal(fresh):
-                return {
-                    "success": True,
-                    "worker_version": WORKER_VERSION,
-                    "skipped": "terminal_won_completion_timeout_race",
-                    "status": fresh.get("status"),
-                    "scan_id": scan_id,
-                }
-            try:
-                closed = await asyncio.wait_for(
-                    write_terminal_failure(
-                        client,
-                        scan_id,
-                        "worker_completion_wall_timeout",
-                        "The scan finished crawling but final result persistence exceeded its bounded worker time. Please try again.",
-                        attempt_count=job_attempt,
-                    ),
-                    timeout=WORKER_TERMINAL_WRITE_WALL_TIMEOUT_SECONDS,
+            # Do not await cancellation of the stuck completion operation. It may
+            # still win the race, so terminalize through a fresh client and rely
+            # on the existing attempt/terminal fences on both Base44 paths.
+            async with httpx.AsyncClient() as terminal_client:
+                terminal = await persist_terminal_failure_bounded(
+                    terminal_client,
+                    scan_id,
+                    "worker_completion_wall_timeout",
+                    "The scan finished crawling but final result persistence exceeded its bounded worker time. Please try again.",
+                    attempt_count=job_attempt,
                 )
-            except (asyncio.TimeoutError, RuntimeError) as exc:
-                raise HTTPException(status_code=503, detail="The scan completion timeout could not be terminalized safely.") from exc
-            if not closed:
+            if terminal.get("state") == "superseded_attempt":
                 return {
                     "success": True,
                     "worker_version": WORKER_VERSION,
@@ -655,17 +666,8 @@ async def scan_job(
                     "scan_id": scan_id,
                     "task_attempt": job_attempt,
                 }
-            persisted = await read_scan_run(client, scan_id)
-            if not isinstance(persisted, dict):
-                raise HTTPException(status_code=503, detail="The scan completion timeout state is unavailable.")
-            if str(persisted.get("status") or "").lower() == "failed" and str(persisted.get("error_code") or "") == "worker_completion_wall_timeout":
-                return {
-                    "success": False,
-                    "worker_version": WORKER_VERSION,
-                    "error_code": "worker_completion_wall_timeout",
-                    "scan_id": scan_id,
-                }
-            if already_terminal(persisted):
+            if terminal.get("state") == "terminal_won_race":
+                persisted = terminal.get("scan") if isinstance(terminal.get("scan"), dict) else {}
                 return {
                     "success": True,
                     "worker_version": WORKER_VERSION,
@@ -673,7 +675,12 @@ async def scan_job(
                     "status": persisted.get("status"),
                     "scan_id": scan_id,
                 }
-            raise HTTPException(status_code=503, detail="The scan completion timeout was not terminalized.")
+            return {
+                "success": False,
+                "worker_version": WORKER_VERSION,
+                "error_code": "worker_completion_wall_timeout",
+                "scan_id": scan_id,
+            }
 
         if outcome.get("transient"):
             # ScanRun untouched: Cloud Tasks retries the same scan_id safely.

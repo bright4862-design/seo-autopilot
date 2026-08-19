@@ -1,0 +1,44 @@
+name: Branch-only frontend diagnostic
+
+on:
+  push:
+    branches:
+      - agent/repair-priority-integration-current-main
+    paths:
+      - .github/workflows/branch-only-frontend-diagnostic.yml
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/repair-priority-integration-current-main
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Capture frontend test output
+        shell: bash
+        run: |
+          set +e
+          npm run test:frontend > frontend-test-output.txt 2>&1
+          status=$?
+          echo "EXIT_CODE=$status" >> frontend-test-output.txt
+          tail -n 160 frontend-test-output.txt > frontend-test-tail.txt
+          exit 0
+      - name: Commit diagnostic tail
+        shell: bash
+        run: |
+          git config user.name "FixList integration bot"
+          git config user.email "actions@users.noreply.github.com"
+          mkdir -p .diagnostics
+          mv frontend-test-tail.txt .diagnostics/frontend-test-tail.txt
+          git add .diagnostics/frontend-test-tail.txt
+          git commit -m "Capture frontend contract diagnostic"
+          git push origin HEAD:agent/repair-priority-integration-current-main

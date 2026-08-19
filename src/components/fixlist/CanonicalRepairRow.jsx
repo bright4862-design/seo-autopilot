@@ -21,6 +21,7 @@ export default function CanonicalRepairRow({ item, model: suppliedModel, renderD
       <button
         type="button"
         aria-expanded={hasDetails ? open : undefined}
+        aria-label={hasDetails ? `${open ? "Hide" : "Show"} evidence and steps for ${model.title}` : undefined}
         onClick={() => {
           if (hasDetails) setOpen((value) => !value);
         }}
@@ -41,8 +42,8 @@ export default function CanonicalRepairRow({ item, model: suppliedModel, renderD
             </span>
           ) : null}
           {model.verification ? (
-            <span className="mt-1.5 block text-[12px] font-medium leading-relaxed text-ink-muted">
-              {model.verification}
+            <span className="mt-2 block text-[12px] font-medium leading-relaxed text-ink-muted">
+              <span className="text-ink-faint">Verification · </span>{model.verification}
             </span>
           ) : null}
           {hasDetails ? (

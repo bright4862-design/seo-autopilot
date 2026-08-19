@@ -19,3 +19,11 @@ test("FixList retains one frozen legacy path when canonical presentation is unav
   assert.match(source, /priorityBucket\(item\.priority\) === "improve_next"/);
   assert.match(source, /priorityBucket\(item\.priority\) === "worth_checking"/);
 });
+
+test("FixList never infers passed checks from missing repair cards", () => {
+  assert.match(source, /import ExplicitPassedChecks from "@\/components\/fixlist\/ExplicitPassedChecks"/);
+  assert.match(source, /<ExplicitPassedChecks scan=\{scanRecord\} \/>/);
+  assert.doesNotMatch(source, /PASSED_CHECK_DEFINITIONS/);
+  assert.doesNotMatch(source, /buildPassedChecks\(/);
+  assert.doesNotMatch(source, /checks passed/);
+});

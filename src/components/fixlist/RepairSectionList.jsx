@@ -19,8 +19,24 @@ export default function RepairSectionList({ sections = [], renderRow }) {
 
   if (list.length === 0 || typeof renderRow !== "function") return null;
 
+  const repairCount = list.reduce((total, section) => total + Number(section.totalCount || 0), 0);
+
   return (
-    <div className="mt-10 sm:mt-12">
+    <div className="mt-10 sm:mt-12" aria-labelledby="canonical-fixlist-heading">
+      <div className="mb-8">
+        <div className="flex items-baseline justify-between gap-4">
+          <h2 id="canonical-fixlist-heading" className="text-[20px] font-semibold tracking-tight text-ink">
+            Your FixList
+          </h2>
+          <span className="shrink-0 text-[12px] tabular-nums text-ink-faint">
+            {repairCount} {repairCount === 1 ? "repair" : "repairs"}
+          </span>
+        </div>
+        <p className="mt-1.5 max-w-[52ch] text-[12px] leading-relaxed text-ink-faint">
+          Work through the repairs in order. FixList verifies changes only after a later comparable scan.
+        </p>
+      </div>
+
       {list.map((section) => {
         const visibleRows = section.key === "fix_first" && showAllFixFirst
           ? [...(section.rows || []), ...(section.hiddenRows || [])]
@@ -33,12 +49,12 @@ export default function RepairSectionList({ sections = [], renderRow }) {
         return (
           <section key={section.key} className="mt-10 first:mt-0 sm:mt-12" aria-labelledby={`repair-section-${section.key}`}>
             <div className="flex items-baseline justify-between gap-4">
-              <h2
+              <h3
                 id={`repair-section-${section.key}`}
                 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint"
               >
                 {section.label}
-              </h2>
+              </h3>
               <span className="text-[11px] tabular-nums text-ink-faint">
                 {totalCount} {totalCount === 1 ? "repair" : "repairs"}
               </span>

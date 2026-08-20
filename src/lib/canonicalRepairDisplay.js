@@ -1,6 +1,20 @@
 import { REPAIR_PRESENTATION_MODES, repairPresentationMode } from "./repairContractPresentation.js";
 import { repairRowModel } from "./repairPresentation.js";
 
+const CANONICAL_SURFACE_LABELS = Object.freeze({
+  "Shared Navigation": "Shared navigation",
+  "Xml Sitemap": "XML sitemap",
+  "Cms Field": "CMS field",
+  "Redirect Server Config": "Redirect/server config",
+  "Redirect Server Configuration": "Redirect/server config",
+  "Individual Page Content": "Page content",
+});
+
+function canonicalSurfaceLabel(surface = "") {
+  const value = String(surface || "").trim();
+  return CANONICAL_SURFACE_LABELS[value] || value;
+}
+
 function qualifyCanonicalScope(scope = "", affectedPageCount = 0) {
   const value = String(scope || "").trim();
   if (!/^\d+ pages?$/.test(value)) return value;
@@ -30,6 +44,7 @@ export function canonicalRepairDisplayModel(item = {}, suppliedModel = null) {
   if (!original || typeof original !== "object") {
     return {
       ...model,
+      surface: canonicalSurfaceLabel(model.surface),
       scope: qualifyCanonicalScope(model.scope, model.affectedPageCount),
     };
   }
@@ -37,7 +52,7 @@ export function canonicalRepairDisplayModel(item = {}, suppliedModel = null) {
   const persisted = repairRowModel(original);
   return {
     ...model,
-    surface: persisted.surface,
+    surface: canonicalSurfaceLabel(persisted.surface),
     scope: qualifyCanonicalScope(persisted.scope, persisted.affectedPageCount),
     reason: persisted.reason,
     leverage: persisted.leverage,

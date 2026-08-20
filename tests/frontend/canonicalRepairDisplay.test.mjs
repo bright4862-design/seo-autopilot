@@ -15,6 +15,7 @@ function persistedV2(overrides = {}) {
     repair_snapshot_contract_complete: true,
     action_priority: "important",
     priority_reason: "Persisted reason.",
+    evidence_class: "improvement",
     repair_surface: "shared_navigation",
     affected_pages: ["/a"],
     priority_context: {
@@ -34,6 +35,7 @@ test("canonical normalized row keeps persisted evidence while allowing friendly 
     rule: "internal_link_redirect",
     action_priority: "important",
     title: "Fix the navigation links",
+    evidence_class: "confirmed_problem",
     repair_surface: "homepage",
     affected_pages: ["/a", "/b", "/c"],
     priority_context: {
@@ -51,6 +53,8 @@ test("canonical normalized row keeps persisted evidence while allowing friendly 
   assert.equal(model.surface, "Shared navigation");
   assert.equal(model.scope, "1 of 1 relevant pages checked");
   assert.equal(model.reason, "Persisted reason.");
+  assert.equal(model.evidenceClass, "improvement");
+  assert.equal(model.evidenceLabel, "Improvement");
   assert.equal(model.verification, "Ready to verify with a rescan");
   assert.equal(model.affectedPageCount, 1);
   assert.equal(model.sharedRepairConfirmed, false);
@@ -68,6 +72,27 @@ test("browser verification mutation cannot manufacture Verified fixed for a cano
   };
 
   assert.equal(canonicalRepairDisplayModel(item).verification, "Could not verify");
+});
+
+test("browser evidence mutation cannot upgrade a canonical improvement into a confirmed problem", () => {
+  const original = persistedV2({ evidence_class: "improvement" });
+  const item = {
+    id: "repair-1",
+    rule: "internal_link_redirect",
+    action_priority: "important",
+    evidence_class: "confirmed_problem",
+    original,
+  };
+
+  const model = canonicalRepairDisplayModel(item);
+  assert.equal(model.evidenceClass, "improvement");
+  assert.equal(model.evidenceLabel, "Improvement");
+});
+
+test("canonical review opportunities are labeled only from persisted evidence class", () => {
+  const model = canonicalRepairDisplayModel(persistedV2({ evidence_class: "opportunity" }));
+  assert.equal(model.evidenceClass, "opportunity");
+  assert.equal(model.evidenceLabel, "Review opportunity");
 });
 
 test("canonical raw affected-page counts are explicitly qualified as scan evidence", () => {
@@ -117,4 +142,5 @@ test("legacy rows retain their existing display evidence", () => {
   assert.equal(model.surface, "Homepage");
   assert.equal(model.scope, "2 pages");
   assert.equal(model.verification, "Verified fixed");
+  assert.equal(model.evidenceLabel, undefined);
 });

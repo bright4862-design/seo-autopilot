@@ -45,6 +45,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  statuses: write
 
 concurrency:
   group: fixlist-cloud-operator
@@ -195,11 +196,38 @@ jobs:
           bash -n scripts/lib/release-source-guard.sh
 
       - name: Build isolated Standard 150 worker candidate
+        id: stage
         env:
           CONFIRM: ${{ github.sha }}
           SOURCE_SHA: ${{ github.sha }}
         shell: bash
-        run: ./scripts/build-worker-candidate.sh
+        run: |
+          set -euo pipefail
+          ./scripts/build-worker-candidate.sh | tee /tmp/fixlist-worker-stage.log
+          revision="$(sed -n 's/^WORKER_CANDIDATE_READY=//p' /tmp/fixlist-worker-stage.log | tail -1)"
+          test -n "$revision"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Publish worker staging status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVISION: ${{ steps.stage.outputs.revision }}
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$JOB_STATUS" = "success" ] && [ -n "$REVISION" ]; then
+            state=success
+            description="0% worker ready: $REVISION"
+          else
+            state=failure
+            description="Worker staging failed"
+          fi
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="$state" \
+            -f context="fixlist/worker-candidate-stage" \
+            -f description="$description"
 
   readonly-diagnostic:
     # This workflow only receives push events when this exact operator file changes.
@@ -279,9 +307,6 @@ jobs:
                   break
           PY
           )
-          # Payload goes to /dev/null: this check proves the operator CAN read the
-          # secret, and nothing downstream consumes the value. Writing it to the
-          # runner filesystem would put plaintext on disk for no benefit.
           if [ -n "$SECRET_NAME" ] && [ -n "$SECRET_VERSION" ] && gcloud secrets versions access "$SECRET_VERSION" --secret="$SECRET_NAME" --project="$GCP_PROJECT" > /dev/null 2>"$TMP_DIR/secret.err"; then
             echo 'secret_access=YES'
           else

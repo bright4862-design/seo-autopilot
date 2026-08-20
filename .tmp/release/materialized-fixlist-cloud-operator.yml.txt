@@ -1,0 +1,673 @@
+name: FixList Cloud Operator
+
+# Keyless GCP operations for the durable Standard 150 release.
+# This exact workflow path is pinned by the Google WIF provider condition.
+# Protected key-sync trigger: 2026-08-13T13:20Z
+# Read-only reconciler diagnostic trigger: 2026-08-17T16:12Z
+# Read-only reconciler diagnostic rerun: 2026-08-17T16:38Z
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Allowlisted Google Cloud operation"
+        required: true
+        type: choice
+        options:
+          - status
+          - verify-iam
+          - verify-worker-routes
+          - deploy-dispatch-gateway
+          - deploy-admission-coordinator
+          - build-worker-candidate
+          - promote-worker
+          - rollback-worker
+          - pause-queue
+          - resume-queue
+          - activate-beta
+          - sync-base44-signing-key
+      revision:
+        description: "Exact Cloud Run revision for promote/rollback/activate. Prefilled for the currently verified Standard 150 worker candidate."
+        required: false
+        default: "fixlist-standard150-worker-00011-v7m"
+        type: string
+      confirm:
+        description: "Mutations require exact confirmation. Prefilled for the currently verified Standard 150 worker candidate."
+        required: true
+        default: "fixlist-standard150-worker-00011-v7m"
+        type: string
+  issue_comment:
+    types: [created]
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/fixlist-cloud-operator.yml'
+
+permissions:
+  contents: read
+  id-token: write
+  statuses: write
+
+concurrency:
+  group: fixlist-cloud-operator
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT: seo-autopilot-501517
+  GCP_REGION: europe-west1
+  GCP_WIF_PROVIDER: projects/919035207432/locations/global/workloadIdentityPools/github/providers/github-actions
+  GCP_OPERATOR_SERVICE_ACCOUNT: fixlist-github-operator@seo-autopilot-501517.iam.gserviceaccount.com
+  CLOUD_RUN_SERVICE: fixlist-standard150-worker
+  CLOUD_TASKS_QUEUE: fixlist-standard150
+  TASKS_INVOKER_SERVICE_ACCOUNT: fixlist-standard150-invoker@seo-autopilot-501517.iam.gserviceaccount.com
+  GATEWAY_SERVICE: fixlist-dispatch-gateway
+  GATEWAY_RUNTIME_SERVICE_ACCOUNT: fixlist-base44-dispatcher@seo-autopilot-501517.iam.gserviceaccount.com
+  RELEASE_OPERATOR_SERVICE_ACCOUNT: fixlist-release-operator@seo-autopilot-501517.iam.gserviceaccount.com
+  CLOUD_TASKS_DRAIN_QUEUE: fixlist-standard150-drain
+  ADMISSION_COORDINATOR_SERVICE: fixlist-scan-admission-coordinator
+  ADMISSION_COORDINATOR_RUNTIME_SA: fixlist-admission-coordinator@seo-autopilot-501517.iam.gserviceaccount.com
+  FIRESTORE_DATABASE: fixlist-admission
+
+jobs:
+  operate:
+    if: github.event_name == 'workflow_dispatch'
+    name: ${{ inputs.operation }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Refuse to run outside main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "The Cloud Operator runs only from refs/heads/main. Got: ${{ github.ref }}" >&2
+          exit 2
+
+      - name: Checkout exact dispatched commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate canonical gateway before deployment
+        if: inputs.operation == 'deploy-dispatch-gateway'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/deploy_dispatch_gateway.sh
+          node --check base44/functions/startStandardScanJob/cloudTasks.js
+          python -m pip install -r dispatch-gateway/requirements.txt
+          (cd dispatch-gateway && python -m unittest -v test_gateway.py)
+          python -m py_compile dispatch-gateway/main.py dispatch-gateway/test_gateway.py
+          node --test tests/frontend/dispatchGatewayContract.test.mjs
+
+      - name: Validate admission coordinator before deployment
+        if: inputs.operation == 'deploy-admission-coordinator'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/deploy_admission_coordinator.sh
+          python -m pip install -r admission-coordinator/requirements.txt pytest
+          PYTHONPATH=admission-coordinator python -m pytest -q admission-coordinator
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Validate worker candidate build path
+        if: inputs.operation == 'build-worker-candidate'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/build-worker-candidate.sh
+          bash -n scripts/lib/release-source-guard.sh
+
+      - name: Run allowlisted worker operation
+        if: inputs.operation != 'deploy-dispatch-gateway' && inputs.operation != 'deploy-admission-coordinator' && inputs.operation != 'build-worker-candidate'
+        env:
+          OPERATION: ${{ inputs.operation }}
+          CONFIRM: ${{ inputs.confirm }}
+          TARGET_REVISION: ${{ inputs.revision }}
+        shell: bash
+        run: bash ./scripts/fixlist-cloud-operator.sh
+
+      - name: Build isolated Standard 150 worker candidate
+        if: inputs.operation == 'build-worker-candidate'
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: ./scripts/build-worker-candidate.sh
+
+      - name: Deploy canonical dispatch gateway
+        if: inputs.operation == 'deploy-dispatch-gateway'
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: ./scripts/deploy_dispatch_gateway.sh
+
+      - name: Deploy admission coordinator
+        if: inputs.operation == 'deploy-admission-coordinator'
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: ./scripts/deploy_admission_coordinator.sh
+
+  stage-worker-candidate-on-main-push:
+    if: >-
+      github.event_name == 'push'
+      && contains(github.event.head_commit.message, '[stage-worker-candidate]')
+    name: Stage worker candidate at 0% traffic
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact main commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Validate worker candidate build path
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/build-worker-candidate.sh
+          bash -n scripts/lib/release-source-guard.sh
+
+      - name: Build isolated Standard 150 worker candidate
+        id: stage
+        env:
+          CONFIRM: ${{ github.sha }}
+          SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/build-worker-candidate.sh | tee /tmp/fixlist-worker-stage.log
+          revision="$(sed -n 's/^WORKER_CANDIDATE_READY=//p' /tmp/fixlist-worker-stage.log | tail -1)"
+          test -n "$revision"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Publish worker staging status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVISION: ${{ steps.stage.outputs.revision }}
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$JOB_STATUS" = "success" ] && [ -n "$REVISION" ]; then
+            state=success
+            description="0% worker ready: $REVISION"
+          else
+            state=failure
+            description="Worker staging failed"
+          fi
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="$state" \
+            -f context="fixlist/worker-candidate-stage" \
+            -f description="$description"
+
+  stage-worker-candidate-on-owner-comment:
+    if: >-
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && github.event.comment.user.login == 'bright4862-design'
+      && startsWith(github.event.comment.body, '/stage-worker-candidate ')
+    name: Stage exact worker candidate from owner command
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact default-branch SHA bound to the comment event
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate exact owner command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_USER: ${{ github.event.comment.user.login }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$COMMENT_USER" = "bright4862-design"
+          source_sha="$(git rev-parse HEAD)"
+          expected="/stage-worker-candidate $source_sha"
+          if [ "$COMMENT_BODY" != "$expected" ]; then
+            echo "Refusing: comment must equal '$expected'." >&2
+            exit 2
+          fi
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$source_sha"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Validate worker candidate build path
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/build-worker-candidate.sh
+          bash -n scripts/lib/release-source-guard.sh
+
+      - name: Build isolated Standard 150 worker candidate
+        id: owner_stage
+        env:
+          CONFIRM: ${{ steps.command.outputs.source_sha }}
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/build-worker-candidate.sh | tee /tmp/fixlist-worker-stage.log
+          revision="$(sed -n 's/^WORKER_CANDIDATE_READY=//p' /tmp/fixlist-worker-stage.log | tail -1)"
+          test -n "$revision"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Publish owner-command staging status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.command.outputs.source_sha }}
+          REVISION: ${{ steps.owner_stage.outputs.revision }}
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$TARGET_SHA" ]; then
+            exit 0
+          fi
+          if [ "$JOB_STATUS" = "success" ] && [ -n "$REVISION" ]; then
+            state=success
+            description="0% worker ready: $REVISION"
+          else
+            state=failure
+            description="Worker staging failed"
+          fi
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${TARGET_SHA}" \
+            -f state="$state" \
+            -f context="fixlist/worker-candidate-stage" \
+            -f description="$description"
+
+  promote-staged-worker-on-owner-comment:
+    if: >-
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && github.event.comment.user.login == 'bright4862-design'
+      && startsWith(github.event.comment.body, '/promote-staged-worker ')
+    name: Verify and promote exact staged worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact default-branch SHA bound to the comment event
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate exact owner command and resolve product SHA
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_USER: ${{ github.event.comment.user.login }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$COMMENT_USER" = "bright4862-design"
+          source_sha="$(git rev-parse HEAD)"
+          expected="/promote-staged-worker $source_sha"
+          if [ "$COMMENT_BODY" != "$expected" ]; then
+            echo "Refusing: comment must equal '$expected'." >&2
+            exit 2
+          fi
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$source_sha"
+          product_sha="$(git log -1 --format=%H -- . ':(exclude).github/workflows/fixlist-cloud-operator.yml')"
+          test -n "$product_sha"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "product_sha=$product_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Discover exact zero-traffic candidate and rollback revision
+        id: candidate
+        env:
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run revisions list --service="$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > /tmp/revisions.json
+          gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > /tmp/service-before.json
+          readarray -t resolved < <(python3 - "$SOURCE_SHA" /tmp/revisions.json /tmp/service-before.json <<'PY'
+          import json, sys
+          source_sha, revisions_path, service_path = sys.argv[1:]
+          revisions = json.load(open(revisions_path))
+          service = json.load(open(service_path))
+          matches = []
+          for rev in revisions:
+              spec = rev.get('spec', {})
+              container = (spec.get('containers') or [{}])[0]
+              env = {item.get('name'): item.get('value', '') for item in container.get('env', [])}
+              if env.get('FIXLIST_WORKER_SOURCE_SHA') != source_sha:
+                  continue
+              ready = next((c for c in rev.get('status', {}).get('conditions', []) if c.get('type') == 'Ready'), {})
+              if str(ready.get('status') or '').lower() != 'true':
+                  continue
+              matches.append((rev.get('metadata', {}).get('creationTimestamp', ''), rev))
+          if not matches:
+              raise SystemExit('No Ready worker revision matches exact source SHA')
+          matches.sort(key=lambda pair: pair[0])
+          candidate = matches[-1][1]
+          name = candidate.get('metadata', {}).get('name', '')
+          spec = candidate.get('spec', {})
+          if not name:
+              raise SystemExit('Candidate revision name is empty')
+          if int(spec.get('containerConcurrency') or 0) != 1:
+              raise SystemExit('Candidate concurrency is not 1')
+          if int(spec.get('timeoutSeconds') or 0) != 480:
+              raise SystemExit('Candidate timeout is not 480')
+          traffic = service.get('status', {}).get('traffic', []) or []
+          candidate_percent = sum(int(item.get('percent') or 0) for item in traffic if item.get('revisionName') == name)
+          if candidate_percent != 0:
+              raise SystemExit(f'Candidate already receives {candidate_percent}% traffic')
+          live = [(int(item.get('percent') or 0), item.get('revisionName', '')) for item in traffic if int(item.get('percent') or 0) > 0 and item.get('revisionName')]
+          if not live:
+              raise SystemExit('No current live revision found for rollback')
+          live.sort(reverse=True)
+          rollback = live[0][1]
+          if rollback == name:
+              raise SystemExit('Rollback revision unexpectedly equals candidate')
+          print(name)
+          print(rollback)
+          PY
+          )
+          test "${#resolved[@]}" -eq 2
+          queue_state="$(gcloud tasks queues describe "$CLOUD_TASKS_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --format='value(state)')"
+          test -n "$queue_state"
+          echo "revision=${resolved[0]}" >> "$GITHUB_OUTPUT"
+          echo "rollback_revision=${resolved[1]}" >> "$GITHUB_OUTPUT"
+          echo "queue_state=$queue_state" >> "$GITHUB_OUTPUT"
+          echo "candidate=${resolved[0]}"
+          echo "rollback_revision=${resolved[1]}"
+          echo "queue_state=$queue_state"
+
+      - name: Verify candidate build provenance and durable worker routes
+        env:
+          OPERATION: verify-worker-routes
+          TARGET_REVISION: ${{ steps.candidate.outputs.revision }}
+          CONFIRM: ${{ steps.candidate.outputs.revision }}
+        shell: bash
+        run: bash ./scripts/fixlist-cloud-operator.sh
+
+      - name: Verify matching Base44 product release is public
+        env:
+          EXPECTED_SOURCE_SHA: ${{ steps.command.outputs.product_sha }}
+        shell: bash
+        run: bash ./scripts/verify-base44-site.sh
+
+      - name: Promote exact candidate with automatic rollback on failed post-check
+        id: promote
+        env:
+          REVISION: ${{ steps.candidate.outputs.revision }}
+          ROLLBACK_REVISION: ${{ steps.candidate.outputs.rollback_revision }}
+          QUEUE_STATE_BEFORE: ${{ steps.candidate.outputs.queue_state }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rollback() {
+            echo "Rolling worker traffic back to $ROLLBACK_REVISION" >&2
+            gcloud run services update-traffic "$CLOUD_RUN_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT" --to-revisions="$ROLLBACK_REVISION=100" >/dev/null
+          }
+          export OPERATION=promote-worker TARGET_REVISION="$REVISION" CONFIRM="$REVISION"
+          if ! bash ./scripts/fixlist-cloud-operator.sh; then
+            rollback || true
+            exit 1
+          fi
+
+          gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > /tmp/service-after.json
+          if ! python3 - "$REVISION" /tmp/service-after.json <<'PY'
+          import json, sys
+          revision, path = sys.argv[1:]
+          service = json.load(open(path))
+          traffic = service.get('status', {}).get('traffic', []) or []
+          percent = sum(int(item.get('percent') or 0) for item in traffic if item.get('revisionName') == revision)
+          if percent != 100:
+              raise SystemExit(f'Expected 100% traffic on {revision}, got {percent}%')
+          PY
+          then
+            rollback
+            exit 1
+          fi
+
+          service_url="$(gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format='value(status.url)')"
+          code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$service_url/scan-job" || echo 000)"
+          case "$code" in
+            401|403) echo "Worker is reachable and private: HTTP $code" ;;
+            *) echo "Unexpected private worker probe status: $code" >&2; rollback; exit 1 ;;
+          esac
+
+          queue_state_after="$(gcloud tasks queues describe "$CLOUD_TASKS_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --format='value(state)')"
+          if [ "$queue_state_after" != "$QUEUE_STATE_BEFORE" ]; then
+            echo "Queue state changed unexpectedly: $QUEUE_STATE_BEFORE -> $queue_state_after" >&2
+            rollback
+            exit 1
+          fi
+          echo "queue_state_unchanged=$queue_state_after"
+          echo "promoted_revision=$REVISION"
+
+      - name: Publish exact promotion status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.command.outputs.source_sha }}
+          REVISION: ${{ steps.candidate.outputs.revision }}
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "$TARGET_SHA" ] || exit 0
+          if [ "$JOB_STATUS" = "success" ] && [ -n "$REVISION" ]; then
+            state=success
+            description="Promoted verified worker: $REVISION"
+          else
+            state=failure
+            description="Worker promotion failed or rolled back"
+          fi
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${TARGET_SHA}" -f state="$state" -f context="fixlist/worker-promotion" -f description="$description"
+          if [ "$state" = "success" ]; then
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${TARGET_SHA}" -f state=success -f context="fixlist/worker-promoted/$REVISION" -f description="Verified promotion complete"
+          fi
+
+  readonly-diagnostic:
+    # This workflow only receives push events when this exact operator file changes.
+    # Running the diagnostic on those pushes is read-only and avoids depending on
+    # a commit-message convention that external builders cannot control.
+    if: github.event_name == 'push'
+    name: Read-only release diagnostic
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Inspect FixList release surface without mutation
+        shell: bash
+        run: |
+          set +e
+          echo '=== AUTH ==='
+          gcloud auth list --filter=status:ACTIVE --format='value(account)'
+
+          echo '=== WORKER ==='
+          gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format='yaml(metadata.name,status.url,status.latestReadyRevisionName,status.latestCreatedRevisionName,status.traffic,spec.template.spec.serviceAccountName,spec.template.spec.timeoutSeconds)'
+          echo "worker_exit=$?"
+
+          echo '=== GATEWAY ==='
+          gcloud run services describe "$GATEWAY_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format='yaml(metadata.name,status.url,status.latestReadyRevisionName,status.latestCreatedRevisionName,status.traffic,spec.template.spec.serviceAccountName)'
+          echo "gateway_exit=$?"
+
+          echo '=== QUEUE ==='
+          gcloud tasks queues describe "$CLOUD_TASKS_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --format='yaml(name,state,rateLimits,retryConfig)'
+          echo "queue_exit=$?"
+
+          echo '=== RECENT STANDARD150 TASKS ==='
+          gcloud tasks list --queue="$CLOUD_TASKS_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --limit=20 --format='table(name.basename(),scheduleTime,dispatchCount,responseCount,lastAttempt.responseStatus.code)'
+          echo "tasks_list_exit=$?"
+
+          echo '=== EXACT ACTIVE TASKS ==='
+          for TASK in \
+            standard150-6a8362b378d9c0ad578373db-a1 \
+            standard150-6a8363b819106960d205550d-a1 \
+            standard150-6a8363d1762f91317dcd1b53-a1; do
+            echo "--- $TASK ---"
+            gcloud tasks describe "$TASK" --queue="$CLOUD_TASKS_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --format='yaml(name,scheduleTime,dispatchCount,responseCount,firstAttempt,lastAttempt)'
+            echo "task_describe_exit=$?"
+          done
+
+          echo '=== DRAIN QUEUE ==='
+          gcloud tasks queues describe "$CLOUD_TASKS_DRAIN_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --format='yaml(name,state,rateLimits,retryConfig)'
+          echo "drain_queue_exit=$?"
+
+          echo '=== RECONCILER ==='
+          gcloud scheduler jobs describe fixlist-standard150-reconcile \
+            --project="$GCP_PROJECT" --location="$GCP_REGION" \
+            --format='yaml(name,state,schedule,httpTarget.uri,httpTarget.httpMethod,httpTarget.oidcToken.serviceAccountEmail,httpTarget.oidcToken.audience)'
+          echo "reconciler_exit=$?"
+
+          echo '=== SIGNING SECRET ACCESS CHECK ==='
+          TMP_DIR="$(mktemp -d)"
+          gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > "$TMP_DIR/worker.json"
+          read -r SECRET_NAME SECRET_VERSION < <(python3 - "$TMP_DIR/worker.json" <<'PY'
+          import json, sys
+          value=json.load(open(sys.argv[1]))
+          envs=value.get('spec',{}).get('template',{}).get('spec',{}).get('containers',[{}])[0].get('env',[])
+          for item in envs:
+              if item.get('name')=='SCAN_EVIDENCE_SIGNING_KEY':
+                  ref=item.get('valueFrom',{}).get('secretKeyRef',{})
+                  print(ref.get('name',''), ref.get('key',''))
+                  break
+          PY
+          )
+          if [ -n "$SECRET_NAME" ] && [ -n "$SECRET_VERSION" ] && gcloud secrets versions access "$SECRET_VERSION" --secret="$SECRET_NAME" --project="$GCP_PROJECT" > /dev/null 2>"$TMP_DIR/secret.err"; then
+            echo 'secret_access=YES'
+          else
+            echo 'secret_access=NO'
+            sed -n '1,4p' "$TMP_DIR/secret.err"
+          fi
+          rm -rf "$TMP_DIR"
+
+          echo '=== GATEWAY HEALTH ==='
+          GATEWAY_URL="$(gcloud run services describe "$GATEWAY_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format='value(status.url)' 2>/dev/null)"
+          if [ -n "$GATEWAY_URL" ]; then
+            curl --silent --show-error --max-time 20 "$GATEWAY_URL/health" || true
+            echo
+          fi
+
+          echo '=== CURRENT GETYOURGUIDE CANARY LOGS ==='
+          gcloud logging read \
+            'resource.type="cloud_run_revision" AND resource.labels.service_name="fixlist-standard150-worker" AND jsonPayload.scan_id="6a85a93ab35fa769e397f194"' \
+            --project="$GCP_PROJECT" --freshness=30m --limit=100 --order=asc \
+            --format='table(timestamp,resource.labels.revision_name,severity,jsonPayload.event,jsonPayload.scan_id,jsonPayload.attempt_count,jsonPayload.pages_found,jsonPayload.pages_crawled)' || true
+
+          echo '=== WORKER WARNING/ERROR LOGS ==='
+          gcloud logging read \
+            'resource.type="cloud_run_revision" AND resource.labels.service_name="fixlist-standard150-worker" AND severity>=WARNING' \
+            --project="$GCP_PROJECT" --freshness=30m --limit=100 --order=asc \
+            --format='table(timestamp,resource.labels.revision_name,severity,textPayload,jsonPayload.event,jsonPayload.error_code,jsonPayload.error_type)' || true
+
+          echo '=== WORKER REQUEST LOGS ==='
+          gcloud logging read \
+            'resource.type="cloud_run_revision" AND resource.labels.service_name="fixlist-standard150-worker" AND logName:"run.googleapis.com%2Frequests"' \
+            --project="$GCP_PROJECT" --freshness=30m --limit=100 --order=asc \
+            --format='table(timestamp,resource.labels.revision_name,httpRequest.requestMethod,httpRequest.status,httpRequest.latency)' || true
+
+          echo 'READONLY_DIAGNOSTIC_COMPLETE'
+
+  sync-base44-signing-key:
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && github.event.inputs.operation == 'sync-base44-signing-key'
+      && github.event.inputs.confirm == 'SYNC-SIGNING-KEY'
+    name: Synchronize Base44 signing key
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact main commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Run protected GCP-to-Base44 key synchronization
+        shell: bash
+        run: bash scripts/sync-base44-signing-key.sh
+
+# capacity diagnostic refresh: 2026-08-17T19:49Z
+# staged worker trigger checkpoint: 2026-08-21T00:46+02:00

@@ -199,6 +199,66 @@ async def test_isolated_review_timeout_maps_to_customer_safe_failure(monkeypatch
     assert outcome["failure_code"] == "review_wall_timeout"
 
 
+@pytest.mark.asyncio
+async def test_completion_observability_marks_each_pre_persistence_phase(monkeypatch):
+    """Post-crawl hangs must remain locatable without logging customer evidence."""
+    from app import scan_job
+
+    scan = {
+        "id": "scan-1",
+        "status": "crawling",
+        "attempt_count": 1,
+        "project_id": "proj-1",
+        "owner_user_id": "owner-1",
+    }
+    events = []
+
+    async def read(*_args, **_kwargs):
+        return dict(scan)
+
+    def capture(event, **fields):
+        events.append((event, fields))
+        return fields
+
+    monkeypatch.setattr(scan_job, "read_scan_run", read)
+    monkeypatch.setattr(scan_job, "emit", capture)
+
+    outcome = await scan_job.complete_authority(
+        None,
+        scan,
+        {
+            "crawled_pages": [{
+                "url": "https://example.com/",
+                "status_code": 200,
+                "page_evidence_class": "usable_html",
+                "title": "Example",
+            }],
+        },
+        "test-signing-key",
+        review={
+            "release_gate_eligible": False,
+            "access_evidence_state": "blocked",
+            "review_confidence_state": "blocked_access_needs_verification",
+            "site_fingerprint": {"classification": {"usable_pages": 0}},
+        },
+    )
+
+    assert outcome["failure_code"] == "scan_access_limited"
+    phases = [fields.get("phase") for event, fields in events if event == "scan_job_completion_phase"]
+    assert phases == [
+        "enter",
+        "fresh_read_done",
+        "crawl_limitation_done",
+        "review_start",
+        "review_done",
+    ]
+    for event, fields in events:
+        assert "signing_key" not in fields
+        assert "envelope" not in fields
+        assert "result" not in fields
+        assert "review" not in fields
+
+
 # ----------------------------------------------------------------- auth ----
 
 def test_only_the_configured_task_invoker_is_accepted(monkeypatch):

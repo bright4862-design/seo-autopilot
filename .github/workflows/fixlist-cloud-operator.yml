@@ -160,6 +160,47 @@ jobs:
         shell: bash
         run: ./scripts/deploy_admission_coordinator.sh
 
+  stage-worker-candidate-on-main-push:
+    if: >-
+      github.event_name == 'push'
+      && contains(github.event.head_commit.message, '[stage-worker-candidate]')
+    name: Stage worker candidate at 0% traffic
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact main commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Validate worker candidate build path
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/build-worker-candidate.sh
+          bash -n scripts/lib/release-source-guard.sh
+
+      - name: Build isolated Standard 150 worker candidate
+        env:
+          CONFIRM: ${{ github.sha }}
+          SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: ./scripts/build-worker-candidate.sh
+
   readonly-diagnostic:
     # This workflow only receives push events when this exact operator file changes.
     # Running the diagnostic on those pushes is read-only and avoids depending on
@@ -242,12 +283,6 @@ jobs:
           # secret, and nothing downstream consumes the value. Writing it to the
           # runner filesystem would put plaintext on disk for no benefit.
           if [ -n "$SECRET_NAME" ] && [ -n "$SECRET_VERSION" ] && gcloud secrets versions access "$SECRET_VERSION" --secret="$SECRET_NAME" --project="$GCP_PROJECT" > /dev/null 2>"$TMP_DIR/secret.err"; then
-            # Report reachability ONLY. Neither the byte length nor a digest of
-            # the signing key may reach a workflow log: Actions logs persist and
-            # are readable by anyone with repository access, GitHub's secret
-            # masking does not cover values derived at runtime, and a stable
-            # fingerprint of the HMAC key is a permanent offline oracle over the
-            # value the entire authority-seal model rests on.
             echo 'secret_access=YES'
           else
             echo 'secret_access=NO'
@@ -283,11 +318,6 @@ jobs:
           echo 'READONLY_DIAGNOSTIC_COMPLETE'
 
   sync-base44-signing-key:
-    # Reading the signing key and transmitting it to an external service is a
-    # mutation, not a diagnostic. A commit-message trigger let any push to main
-    # carrying a magic string cause it. It is now workflow_dispatch-only and
-    # requires the same exact confirmation the promote/rollback path uses, so
-    # the operator states intent per invocation.
     if: >-
       github.event_name == 'workflow_dispatch'
       && github.event.inputs.operation == 'sync-base44-signing-key'

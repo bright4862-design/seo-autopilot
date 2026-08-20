@@ -36,6 +36,8 @@ on:
         required: true
         default: "fixlist-standard150-worker-00011-v7m"
         type: string
+  issue_comment:
+    types: [created]
   push:
     branches:
       - main
@@ -225,6 +227,99 @@ jobs:
             description="Worker staging failed"
           fi
           gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="$state" \
+            -f context="fixlist/worker-candidate-stage" \
+            -f description="$description"
+
+  stage-worker-candidate-on-owner-comment:
+    if: >-
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && github.event.comment.user.login == 'bright4862-design'
+      && startsWith(github.event.comment.body, '/stage-worker-candidate ')
+    name: Stage exact worker candidate from owner command
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact default-branch SHA bound to the comment event
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate exact owner command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_USER: ${{ github.event.comment.user.login }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$COMMENT_USER" = "bright4862-design"
+          source_sha="$(git rev-parse HEAD)"
+          expected="/stage-worker-candidate $source_sha"
+          if [ "$COMMENT_BODY" != "$expected" ]; then
+            echo "Refusing: comment must equal '$expected'." >&2
+            exit 2
+          fi
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$source_sha"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Validate worker candidate build path
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/build-worker-candidate.sh
+          bash -n scripts/lib/release-source-guard.sh
+
+      - name: Build isolated Standard 150 worker candidate
+        id: owner_stage
+        env:
+          CONFIRM: ${{ steps.command.outputs.source_sha }}
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/build-worker-candidate.sh | tee /tmp/fixlist-worker-stage.log
+          revision="$(sed -n 's/^WORKER_CANDIDATE_READY=//p' /tmp/fixlist-worker-stage.log | tail -1)"
+          test -n "$revision"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Publish owner-command staging status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.command.outputs.source_sha }}
+          REVISION: ${{ steps.owner_stage.outputs.revision }}
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$TARGET_SHA" ]; then
+            exit 0
+          fi
+          if [ "$JOB_STATUS" = "success" ] && [ -n "$REVISION" ]; then
+            state=success
+            description="0% worker ready: $REVISION"
+          else
+            state=failure
+            description="Worker staging failed"
+          fi
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${TARGET_SHA}" \
             -f state="$state" \
             -f context="fixlist/worker-candidate-stage" \
             -f description="$description"

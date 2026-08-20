@@ -18,7 +18,7 @@ export default function CanonicalRepairRow({ item, model: suppliedModel, renderD
   const [open, setOpen] = useState(false);
   const disclosureId = useId();
   const hasDetails = typeof renderDetails === "function";
-  const supporting = [model.surface, model.scope].filter(Boolean).join(" · ");
+  const supporting = [model.surface, model.scope, model.evidenceLabel].filter(Boolean).join(" · ");
 
   return (
     <div className="border-b border-hairline-soft">

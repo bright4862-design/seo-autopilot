@@ -14,13 +14,14 @@ test("required copy is present verbatim", () => {
   assert.match(scanForm, /Scan depth: up to 150 pages · respects robots\.txt · read-only/);
   assert.match(scanForm, /Business or website name \(optional\)/);
   assert.match(scanForm, /Scans up to 150 pages\. Larger sites coming soon\./);
-  assert.match(scanForm, /Takes about 2–4 minutes\. You can leave this page — we’ll save your list\./);
+  assert.match(scanForm, /Scan time varies by site\. FixList will tell you when it’s safe to leave this page\./);
 });
 
 test("retired copy is gone", () => {
   assert.doesNotMatch(scanForm, /Premium large-site scans will be enabled after production benchmarking/);
   assert.doesNotMatch(scanForm, /A complete, prioritized scan of up to 150 pages/);
   assert.doesNotMatch(scanForm, /Standard · 150/);
+  assert.doesNotMatch(scanForm, /Takes about 2–4 minutes\. You can leave this page — we’ll save your list\./);
 });
 
 test("field order is trust note, heading, subhead, URL, name, spec line, CTA", () => {
@@ -107,36 +108,32 @@ test("the page is a centred 680px column owned by the form", () => {
 });
 
 
-test("the loading state shows visible progress and reassures the customer", () => {
-  assert.match(scanForm, /SCAN_PROGRESS_STEPS/);
-  assert.match(scanForm, /aria-label="Scan progress"/);
-  assert.match(scanForm, /role="status"/);
-  assert.match(scanForm, /aria-live="assertive"/);
+test("the loading state delegates to the truthful durable progress surface", () => {
+  assert.match(scanForm, /import DurableScanProgressSurface from "@\/components\/scan\/DurableScanProgressSurface"/);
   assert.match(scanForm, /aria-busy=\{isLoading\}/);
   assert.match(scanForm, /fixed left-1\/2 top-4 z-\[100\]/);
-  assert.match(scanForm, />Scan running<\/p>/);
-  assert.match(scanForm, /formatElapsed\(elapsedSeconds\)/);
-  assert.match(scanForm, /Your result will open automatically when it is saved/);
-  assert.match(scanForm, /Still working — larger or slower sites can take a little longer/);
+  assert.match(scanForm, /<DurableScanProgressSurface/);
+  assert.match(scanForm, /durableScan=\{durableScan\}/);
+  assert.match(scanForm, /targetLabel=\{scanTargetLabel\}/);
+  assert.match(scanForm, /elapsedLabel=\{formatElapsed\(elapsedSeconds\)\}/);
+  assert.match(scanForm, /backgroundExecutionProven=\{Boolean\(watchedScanId\)\}/);
+  assert.match(scanForm, /onOpenSavedScan=\{watchedScanId/);
+  assert.doesNotMatch(scanForm, /SCAN_PROGRESS_STEPS|scanProgressIndex\(/);
 });
 
-test("the running scan shows the customer's own domain, not just a spinner", () => {
+test("the running scan passes the customer's own domain to truthful progress", () => {
   // Momentum comes from something real and personal appearing immediately.
-  // Falling back to the typed URL means the label is present on the first
-  // frame, before the durable run has been read even once.
+  // Falling back to the typed URL means the label exists on the first frame,
+  // before the durable run has been read even once.
   assert.match(scanForm, /const scanTargetLabel = durableScan\.domain \|\| safeHostname\(websiteUrl\) \|\| ""/);
-  assert.match(scanForm, /\{scanTargetLabel \? \(/, "the progress surface must render the scan target");
+  assert.match(scanForm, /targetLabel=\{scanTargetLabel\}/,
+    "the progress surface must receive the customer's scan target");
 });
 
-test("live discovery counts render only once there is something to report", () => {
-  // A counter reading "0 pages discovered" is worse than no counter: it reads
-  // as a stalled scan. The count appears only when it is non-zero, and the
-  // crawled figure only once crawling has actually started.
-  assert.match(scanForm, /durableScan\.pagesFound > 0 \? \(/);
-  assert.match(scanForm, /pages discovered/);
-  assert.match(scanForm, /durableScan\.pagesCrawled > 0 \?/);
-  assert.match(scanForm, /STANDARD_SCAN_BUDGET\.max_pages\} checked/,
-    "the cap shown must come from the scan budget, not a hardcoded number");
+test("discovery inventory and the 150-page cap are never presented as progress", () => {
+  assert.doesNotMatch(scanForm, /pages discovered/);
+  assert.doesNotMatch(scanForm, /of \$\{STANDARD_SCAN_BUDGET\.max_pages\} checked/);
+  assert.doesNotMatch(scanForm, /durableScan\.pagesFound > 0 \? \(/);
 });
 
 test("scan refusal messaging preserves curated copy and safe server detail", () => {

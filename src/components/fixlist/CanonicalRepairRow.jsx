@@ -1,6 +1,6 @@
 import React, { useId, useMemo, useState } from "react";
 
-import { repairRowModel } from "@/lib/repairPresentation";
+import { canonicalRepairDisplayModel } from "@/lib/canonicalRepairDisplay";
 
 /**
  * Compact action-priority row for the canonical FixList presentation.
@@ -11,7 +11,10 @@ import { repairRowModel } from "@/lib/repairPresentation";
  * content once that detail seam is migrated.
  */
 export default function CanonicalRepairRow({ item, model: suppliedModel, renderDetails }) {
-  const model = useMemo(() => suppliedModel || repairRowModel(item), [item, suppliedModel]);
+  const model = useMemo(
+    () => canonicalRepairDisplayModel(item, suppliedModel),
+    [item, suppliedModel],
+  );
   const [open, setOpen] = useState(false);
   const disclosureId = useId();
   const hasDetails = typeof renderDetails === "function";

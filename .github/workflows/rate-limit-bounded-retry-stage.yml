@@ -1,0 +1,53 @@
+name: Rate Limit Bounded Retry Stage
+
+on:
+  push:
+    branches:
+      - agent/canonical-repair-v2-cutover-stage
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout staging branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: agent/canonical-repair-v2-cutover-stage
+
+      - name: Apply verified bounded 429 retry fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED_PATCH_SHA=907dca6d67f2a343351fa7bc7cd34cd3f5b7ff6713eec5618799e1bc5294e762
+          EXPECTED_SCANNER_BLOB=e65ecec499d1b9b30cd415814580b1d194944a25
+          EXPECTED_TREE=1d336afeef8324454be2d4376b97edf81f26f0e8
+          PATCH=.tmp/rate-limit-bounded-retry.patch
+
+          test "$(sha256sum "$PATCH" | awk '{print $1}')" = "$EXPECTED_PATCH_SHA"
+          git apply --check "$PATCH"
+          git apply "$PATCH"
+
+          rm -f "$PATCH"
+          rm -f .github/workflows/rate-limit-bounded-retry-stage.yml
+          rmdir .tmp 2>/dev/null || true
+
+          git add scanner-api/app/scanner.py
+          git add -u -- .tmp .github/workflows/rate-limit-bounded-retry-stage.yml
+
+          test "$(git hash-object scanner-api/app/scanner.py)" = "$EXPECTED_SCANNER_BLOB"
+          ACTUAL_TREE="$(git write-tree)"
+          echo "expected tree: $EXPECTED_TREE"
+          echo "actual tree:   $ACTUAL_TREE"
+          test "$ACTUAL_TREE" = "$EXPECTED_TREE"
+          git diff --cached --check
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Honor bounded retries after repeated HTTP 429"
+          git push origin HEAD:agent/canonical-repair-v2-cutover-stage

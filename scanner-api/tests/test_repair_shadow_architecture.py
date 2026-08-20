@@ -29,16 +29,26 @@ def _assert_shadow_markers_absent(path: Path) -> None:
         assert marker not in text, f"shadow repair marker {marker!r} crossed runtime boundary: {path}"
 
 
-def test_repair_shadow_is_not_imported_by_scanner_review_or_durable_worker_runtime():
+def test_repair_calibration_does_not_cross_scanner_or_normal_review_runtime():
     protected = [
         SCANNER_APP / "scanner.py",
         SCANNER_APP / "main.py",
         SCANNER_APP / "review.py",
-        SCANNER_APP / "scan_job.py",
     ]
 
     for path in protected:
         _assert_shadow_markers_absent(path)
+
+
+def test_durable_worker_uses_one_explicit_post_review_contract_boundary():
+    worker = _source(SCANNER_APP / "scan_job.py")
+    wrapper = _source(SCANNER_APP / "repair_contract_v2.py")
+    assert "from .repair_contract_v2 import apply_canonical_repair_contract" in worker
+    assert "return apply_canonical_repair_contract(review, result)" in worker
+    assert "build_calibrated_shadow_review_analysis" in wrapper
+    assert "validate_v2_persistence_candidate" in wrapper
+    for marker in ("repair_persistence_shadow", "repair_shadow_calibration", "repair_priority_calibration"):
+        assert marker not in worker
 
 
 def test_repair_shadow_is_not_wired_into_authority_or_persistence_handoff():

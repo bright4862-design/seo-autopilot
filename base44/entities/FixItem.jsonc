@@ -145,7 +145,11 @@
     "owner_user_id": {
       "type": "string",
       "rls": {
-        "update": { "user_condition": { "role": "admin" } }
+        "update": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
       }
     },
     "page_count": {
@@ -193,7 +197,103 @@
       "minLength": 64,
       "maxLength": 64,
       "pattern": "^[a-f0-9]{64}$",
-      "rls": { "write": { "user_condition": { "role": "admin" } } }
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "repair_contract_version": {
+      "type": "string"
+    },
+    "repair_snapshot_contract_version": {
+      "type": "string"
+    },
+    "repair_snapshot_contract_complete": {
+      "type": "boolean",
+      "default": false
+    },
+    "repair_priority_model_version": {
+      "type": "string"
+    },
+    "base_severity": {
+      "type": "string",
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "technical_severity_source": {
+      "type": "string"
+    },
+    "evidence_class": {
+      "type": "string",
+      "enum": [
+        "confirmed_problem",
+        "improvement",
+        "opportunity"
+      ]
+    },
+    "action_priority": {
+      "type": "string",
+      "enum": [
+        "fix_first",
+        "important",
+        "improve",
+        "review"
+      ]
+    },
+    "action_priority_score": {
+      "type": "number",
+      "default": 0
+    },
+    "priority_reason": {
+      "type": "string"
+    },
+    "canonical_action_rank": {
+      "type": "number",
+      "default": 0
+    },
+    "repair_identity_version": {
+      "type": "string"
+    },
+    "repair_fingerprint": {
+      "type": "string"
+    },
+    "repair_identity_state": {
+      "type": "string"
+    },
+    "repair_identity_stable": {
+      "type": "boolean",
+      "default": false
+    },
+    "repair_surface": {
+      "type": "string"
+    },
+    "remediation_family": {
+      "type": "string"
+    },
+    "shared_repair_confirmed": {
+      "type": "boolean",
+      "default": false
+    },
+    "priority_context": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
+    "repair_verification_state": {
+      "type": "string"
+    },
+    "rule_definition_version": {
+      "type": "string"
+    },
+    "comparison_profile_version": {
+      "type": "string"
     }
   },
   "required": [

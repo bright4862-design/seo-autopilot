@@ -1,8 +1,8 @@
-"""Offline-only validation for a future FixList repair-contract v2 cutover.
+"""Complete-or-fail validation for the calibrated FixList repair contract.
 
-This module does not build scans, rank live review output, persist entities, sign
-snapshots, or participate in the authority path. It exists so the migration can
-prove complete-or-fail invariants before any production schema/runtime change.
+This module never mutates scans, persists entities, or signs authority. It was
+originally exercised only in shadow analysis and is now consumed exclusively by
+`repair_contract_v2`, the post-review durable-worker cutover boundary.
 """
 
 from __future__ import annotations

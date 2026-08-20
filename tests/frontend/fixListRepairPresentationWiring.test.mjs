@@ -15,7 +15,7 @@ test("FixList routes the saved snapshot through the unified repair work surface"
 });
 
 test("FixList retains one frozen legacy path only for genuinely legacy repairs", () => {
-  assert.match(source, /const legacyActive = repairPresentation\.unsupported \? \[\] : repairPresentation\.legacyItems/);
+  assert.match(source, /const legacyActive = repairPresentation\.canonical \|\| repairPresentation\.unsupported \? \[\] : repairPresentation\.legacyItems/);
   assert.match(source, /const topPriorities = legacyActive\.slice\(0, 3\)/);
   assert.match(source, /priorityBucket\(item\.priority\) === "fix_first"/);
   assert.match(source, /priorityBucket\(item\.priority\) === "improve_next"/);

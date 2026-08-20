@@ -237,11 +237,11 @@ def _score(base_severity: str, action_priority: str, context: dict[str, Any], fi
 
 
 def annotate_calibrated_repair_priority(fix: dict[str, Any], pages: list[dict[str, Any]]) -> dict[str, Any]:
-    """Recalibrate only the shadow repair-priority contract.
+    """Recalibrate one repair without changing its underlying finding.
 
-    The underlying finding, its legacy `priority`, crawl evidence, review output,
-    and customer ordering are preserved. This function is not imported by the
-    production scanner/review/persistence path.
+    Legacy `priority`, crawl evidence, and normal review output remain intact.
+    The post-review repair-contract wrapper may use this annotation to build a
+    separate canonical snapshot after the ordinary review has finished.
     """
     annotated = annotate_repair_priority(dict(fix), _canonical_priority_pages(pages or []))
     base_severity, severity_source = technical_base_severity(fix)

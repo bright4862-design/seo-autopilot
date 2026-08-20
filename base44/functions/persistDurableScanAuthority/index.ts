@@ -153,6 +153,7 @@ Deno.serve(async (req) => {
     const persistedItems = rows.fixItems.length > 0
       ? await entities.FixItem.filter({ fix_list_id: fixList.id }, "created_date", MAX_FIX_ITEMS)
       : [];
+    const canonicalRepairSnapshotExpected = snapshot?.fix_list?.repair_snapshot_contract_complete === true;
     const authorityStaged = Boolean(
       stagedScan?.status === "reviewing"
       && normalizeAttempt(stagedScan?.attempt_count) === claimedAttempt
@@ -168,6 +169,7 @@ Deno.serve(async (req) => {
       && String(persistedFixList?.owner_user_id || "") === identity.owner_user_id
       && persistedItems.length === rows.fixItems.length
       && persistedItems.every((item) => item?.authority_proof === authorityProof)
+      && (!canonicalRepairSnapshotExpected || canonicalRepairRowsPersisted(snapshot, persistedFixList, persistedItems))
     );
     if (!authorityStaged) {
       throw new RequestProblem(500, "authority_persistence_incomplete", "The durable authority rows were not completely staged.");
@@ -331,6 +333,49 @@ async function assertAttemptStillActive(entities, scanId, claimedAttempt) {
   if (["complete", "limited", "failed", "cancelled"].includes(String(current.status || "").toLowerCase())) {
     throw new RequestProblem(409, "terminal_authority_rejected", "This scan attempt is already terminal.");
   }
+}
+
+function canonicalRepairRowsPersisted(snapshot, fixList, items) {
+  const expectedList = snapshot?.fix_list || {};
+  const expectedItems = Array.isArray(snapshot?.recommendations) ? snapshot.recommendations : [];
+  if (
+    expectedList.repair_contract_version !== "repair_contract_v2_shadow_calibrated"
+    || expectedList.repair_snapshot_contract_version !== "repair_contract_v2_shadow_calibrated"
+    || expectedList.repair_snapshot_contract_complete !== true
+    || expectedList.repair_priority_model_version !== "repair_priority_v2_technical_severity"
+    || fixList?.repair_contract_version !== expectedList.repair_contract_version
+    || fixList?.repair_snapshot_contract_version !== expectedList.repair_snapshot_contract_version
+    || fixList?.repair_snapshot_contract_complete !== true
+    || fixList?.repair_priority_model_version !== expectedList.repair_priority_model_version
+  ) return false;
+
+  const expectedOrder = Array.isArray(expectedList.canonical_action_fix_ids)
+    ? expectedList.canonical_action_fix_ids.map((value) => String(value || ""))
+    : [];
+  const persistedOrder = Array.isArray(fixList?.canonical_action_fix_ids)
+    ? fixList.canonical_action_fix_ids.map((value) => String(value || ""))
+    : [];
+  if (expectedOrder.length !== expectedItems.length || JSON.stringify(expectedOrder) !== JSON.stringify(persistedOrder)) {
+    return false;
+  }
+
+  const byFixId = new Map((items || []).map((item) => [String(item?.fix_id || ""), item]));
+  return expectedItems.every((expected, index) => {
+    const row = byFixId.get(String(expected?.fix_id || ""));
+    return Boolean(
+      row
+      && row.repair_contract_version === expected.repair_contract_version
+      && row.repair_snapshot_contract_version === expected.repair_snapshot_contract_version
+      && row.repair_snapshot_contract_complete === true
+      && row.repair_priority_model_version === expected.repair_priority_model_version
+      && row.action_priority === expected.action_priority
+      && row.evidence_class === expected.evidence_class
+      && String(row.priority_reason || "") === String(expected.priority_reason || "")
+      && Number(row.canonical_action_rank || 0) === index + 1
+      && String(row.repair_identity_version || "") === String(expected.repair_identity_version || "")
+      && String(row.repair_fingerprint || "") === String(expected.repair_fingerprint || "")
+    );
+  });
 }
 
 function stableTimestamp(scan) {

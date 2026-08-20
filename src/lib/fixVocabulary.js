@@ -74,9 +74,16 @@ export function customerCopyForFix(item = {}) {
   const family = familyLabel(item);
 
   if (["missing_meta_description", "empty_meta_description", "malformed_meta_description", "meta_description_unusable"].includes(rule)) {
+    const title = count > 1
+      ? `Add search descriptions to ${family}`
+      : family === "homepage"
+        ? "Add a search description to the homepage"
+        : family !== "pages"
+          ? `Add a search description to this ${family.replace(/ pages$/, " page")}`
+          : "Add a search description to this page";
     return {
       customerCategory: "Search appearance",
-      title: `Add search descriptions to ${family}`,
+      title,
       explanation: count > 1
         ? `${count} pages in this group are missing a useful search description or outputting a blank one.`
         : "This page is missing a useful search description or outputs a blank one.",
@@ -89,13 +96,85 @@ export function customerCopyForFix(item = {}) {
   }
 
   if (rule === "redirect_chain") {
+    const location = family === "homepage"
+      ? "the homepage"
+      : count > 1 && family !== "pages"
+        ? family
+        : count > 1
+          ? "these pages"
+          : "this page";
+    const title = count > 1
+      ? `Update redirects on ${location} to point directly to final URLs`
+      : `Update ${location === "the homepage" ? "the homepage" : "this page's"} redirect to point directly to the final URL`;
     return {
       customerCategory: "Page forwarding",
-      title: "Remove extra redirects",
-      explanation: "This page sends visitors and search engines through more than one address before reaching the final page.",
+      title,
+      explanation: count > 1
+        ? `${count} pages send visitors and search engines through extra addresses before reaching their final URLs.`
+        : "This page sends visitors and search engines through more than one address before reaching the final URL.",
       whyItMatters: "Extra redirects add unnecessary steps and can slow down visitors and search engines reaching the right page.",
-      recommendation: "Point the first redirect, internal links, and sitemap entries directly to the final destination.",
+      recommendation: count > 1
+        ? "Update each first redirect, internal link, or sitemap entry so it points directly to the final URL shown in the redirect evidence."
+        : "Update the first redirect, internal link, or sitemap entry so it points directly to the final URL shown in the redirect evidence.",
       technicalLabel: "Redirect chain",
+    };
+  }
+
+  if (rule === "internal_link_redirect") {
+    const location = family === "homepage"
+      ? "homepage"
+      : count > 1 && family !== "pages"
+        ? family
+        : count > 1
+          ? "affected pages"
+          : "this page";
+    return {
+      customerCategory: "Site navigation",
+      title: family === "homepage"
+        ? "Update homepage links to use their final URLs"
+        : count > 1
+          ? `Update links on ${location} to use their final URLs`
+          : "Update this page's links to use the final URLs",
+      explanation: count > 1
+        ? `${count} pages contain links that first go through a redirect instead of linking straight to the final URL.`
+        : "This page contains a link that first goes through a redirect instead of linking straight to the final URL.",
+      whyItMatters: "Direct internal links are simpler for visitors and search engines and avoid unnecessary redirect hops.",
+      recommendation: "Replace each old internal link with the final destination URL shown in the redirect evidence.",
+      technicalLabel: "Internal link redirect",
+    };
+  }
+
+  if (rule === "sitemap_redirect") {
+    return {
+      customerCategory: "Site discovery",
+      title: count > 1
+        ? "Replace redirecting sitemap URLs with their final URLs"
+        : "Replace the redirecting sitemap URL with its final URL",
+      explanation: count > 1
+        ? `${count} sitemap entries redirect instead of listing the final URLs directly.`
+        : "This sitemap entry redirects instead of listing the final URL directly.",
+      whyItMatters: "A sitemap should give search engines the preferred final URLs rather than make them follow redirects first.",
+      recommendation: "Remove each redirecting sitemap entry and list only its final 200-status canonical URL.",
+      technicalLabel: "Sitemap redirect",
+    };
+  }
+
+  if (["duplicate_title_template", "duplicate_title_localized", "duplicate_title_query_variants", "duplicate_title"].includes(rule)) {
+    return {
+      customerCategory: "Search appearance",
+      title: count > 1 && family !== "pages"
+        ? `Give ${family} distinct page titles`
+        : count > 1
+          ? "Give these pages distinct page titles"
+          : "Give this page a distinct title",
+      explanation: count > 1
+        ? `${count} pages use the same or nearly identical search title.`
+        : "This page uses a search title that is repeated elsewhere.",
+      whyItMatters: "Distinct titles help people and search engines tell similar pages apart before they click.",
+      recommendation: count > 1
+        ? `Update the shared ${family.replace(/ pages$/, "")} title pattern so each affected page describes its own topic or purpose.`
+        : "Rewrite the page title so it clearly describes this page rather than repeating another page's title.",
+      technicalLabel: "Repeated page title",
     };
   }
 
@@ -115,22 +194,36 @@ export function customerCopyForFix(item = {}) {
   }
 
   if (rule === "missing_h1") {
+    const title = count > 1
+      ? `Add one clear main heading to ${family}`
+      : family === "homepage"
+        ? "Add one clear main heading to the homepage"
+        : family !== "pages"
+          ? `Add one clear main heading to this ${family.replace(/ pages$/, " page")}`
+          : "Add one clear main heading to this page";
     return {
       customerCategory: "Page content",
-      title: count > 1 ? "Add a clear main heading to these pages" : "Add a clear main heading",
+      title,
       explanation: count > 1 ? `${count} pages do not have a clear main heading.` : "This page does not have a clear main heading.",
       whyItMatters: "A clear main heading helps visitors and search engines understand the page's main topic immediately.",
       recommendation: count > 1
-        ? "Fix the shared page pattern so each affected page has one clear main heading."
+        ? `Fix the shared ${family.replace(/ pages$/, "")} pattern so each affected page has one clear main heading.`
         : "Add one clear main heading that describes the page's main topic.",
       technicalLabel: "Missing H1",
     };
   }
 
   if (rule === "canonical_missing" || rule.includes("canonical")) {
+    const title = count > 1 && family !== "pages"
+      ? `Tell search engines which ${family} are the main versions`
+      : count > 1
+        ? "Tell search engines which versions of these pages are the main ones"
+        : family === "homepage"
+          ? "Tell search engines which homepage URL is the main one"
+          : "Tell search engines which version of this page is the main one";
     return {
       customerCategory: "Search visibility",
-      title: count > 1 ? "Tell search engines which page versions are the main ones" : "Tell search engines which page version is the main one",
+      title,
       explanation: count > 1
         ? `${count} pages do not clearly identify their preferred URL version.`
         : "This page does not clearly identify its preferred URL version.",
@@ -145,7 +238,7 @@ export function customerCopyForFix(item = {}) {
   if (rule === "potential_orphan_pages") {
     return {
       customerCategory: "Site navigation",
-      title: "Check pages that may be hard to find",
+      title: count > 1 ? "Check whether these pages need more internal links" : "Check whether this page needs more internal links",
       explanation: `${count || "Some"} pages were found in your sitemap but were not reached through links in the pages FixList checked.`,
       whyItMatters: "Important pages should be easy for visitors and search engines to reach from the rest of your website.",
       recommendation: "Check these pages with a full internal-link crawl or Search Console, then add useful internal links to any important pages that are genuinely isolated.",

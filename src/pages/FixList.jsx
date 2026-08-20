@@ -576,7 +576,7 @@ export default function FixList() {
               />
             )}
 
-            {shownTopPriorities.length > 0 ? (
+            {repairPresentation.legacySections?.length === 0 && shownTopPriorities.length > 0 ? (
               <>
                 <SectionEyebrow label="Your priorities" count={shownTopPriorities.length} />
                 <div className="mt-2">
@@ -587,7 +587,7 @@ export default function FixList() {
               </>
             ) : null}
 
-            {moreImportant.length > 0 ? (
+            {repairPresentation.legacySections?.length === 0 && moreImportant.length > 0 ? (
               <>
                 <SectionEyebrow label="More important fixes" count={moreImportant.length} />
                 <div className="mt-2">
@@ -598,7 +598,7 @@ export default function FixList() {
               </>
             ) : null}
 
-            {improveNext.length > 0 ? (
+            {repairPresentation.legacySections?.length === 0 && improveNext.length > 0 ? (
               <>
                 <SectionEyebrow label="Improve next" count={improveNext.length} />
                 <div className="mt-2">
@@ -609,7 +609,7 @@ export default function FixList() {
               </>
             ) : null}
 
-            {worthChecking.length > 0 ? (
+            {repairPresentation.legacySections?.length === 0 && worthChecking.length > 0 ? (
               <>
                 <SectionEyebrow label="Worth checking" count={worthChecking.length} />
                 <div className="mt-2">
@@ -620,7 +620,7 @@ export default function FixList() {
               </>
             ) : null}
 
-            {!repairPresentation.canonical && !repairPresentation.unsupported && active.length === 0 && doneItems.length > 0 ? (
+            {repairPresentation.legacySections?.length === 0 && !repairPresentation.canonical && !repairPresentation.unsupported && active.length === 0 && doneItems.length > 0 ? (
               <div className="mt-16 py-10">
                 <h2 className="text-[22px] font-semibold tracking-tight">All clear.</h2>
                 <p className="mt-2 max-w-[48ch] text-ink-muted">

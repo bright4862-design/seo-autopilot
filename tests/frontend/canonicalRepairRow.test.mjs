@@ -12,10 +12,16 @@ test("canonical repair row consumes the persisted-authority presentation seam in
   assert.match(source, /model\.title/);
   assert.match(source, /model\.surface/);
   assert.match(source, /model\.scope/);
+  assert.match(source, /model\.evidenceLabel/);
   assert.match(source, /model\.reason/);
   assert.match(source, /model\.verification/);
   assert.doesNotMatch(source, /customerPriorityLabel/);
   assert.doesNotMatch(source, /item\.priority/);
+});
+
+test("canonical evidence classification stays in the compact supporting metadata line", () => {
+  assert.match(source, /\[model\.surface, model\.scope, model\.evidenceLabel\]/);
+  assert.match(source, /\.filter\(Boolean\)\.join\(" · "\)/);
 });
 
 test("canonical priority reason is labeled for non-SEO users", () => {

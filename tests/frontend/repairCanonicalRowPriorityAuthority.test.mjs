@@ -17,6 +17,7 @@ function originalV2(overrides = {}) {
     repair_snapshot_contract_complete: true,
     action_priority: "important",
     priority_reason: "Persisted canonical priority reason.",
+    evidence_class: "confirmed_problem",
     ...overrides,
   };
 }

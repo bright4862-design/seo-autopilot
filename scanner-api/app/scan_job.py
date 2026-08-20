@@ -25,6 +25,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from .observability import emit
+
 WORKER_VERSION = "scan_job_worker_v1_cloud_tasks"
 CONTROL_VERSION = "durable_standard150_control_v1"
 COMPLETION_VERSION = "durable_standard150_completion_v1"
@@ -567,7 +569,24 @@ async def complete_authority(
     row and refuse if a newer attempt has taken over, so a superseded task can
     never finalise, overwrite a seal, or trigger an allowance charge.
     """
-    fresh = await read_scan_run(client, str(scan.get("id") or ""))
+    scan_id = str(scan.get("id") or scan.get("scan_id") or "")
+    attempt_count = current_attempt(scan)
+    phase_started = time.monotonic()
+    emit(
+        "scan_job_completion_phase",
+        scan_id=scan_id,
+        attempt_count=attempt_count,
+        phase="enter",
+    )
+    fresh = await read_scan_run(client, scan_id)
+    emit(
+        "scan_job_completion_phase",
+        scan_id=scan_id,
+        attempt_count=attempt_count,
+        phase="fresh_read_done",
+        elapsed_ms=int((time.monotonic() - phase_started) * 1000),
+        readable=isinstance(fresh, dict),
+    )
     if not isinstance(fresh, dict):
         return {"ok": False, "transient": True, "failure_code": "scan_unreadable"}
     if is_superseded_attempt(fresh, current_attempt(scan)):
@@ -586,6 +605,14 @@ async def complete_authority(
     scan = fresh
 
     crawl_limitation = terminal_crawl_limitation(result)
+    emit(
+        "scan_job_completion_phase",
+        scan_id=scan_id,
+        attempt_count=attempt_count,
+        phase="crawl_limitation_done",
+        elapsed_ms=int((time.monotonic() - phase_started) * 1000),
+        limited=crawl_limitation is not None,
+    )
     if crawl_limitation is not None:
         return {
             "ok": False,
@@ -595,6 +622,14 @@ async def complete_authority(
         }
 
     try:
+        emit(
+            "scan_job_completion_phase",
+            scan_id=scan_id,
+            attempt_count=attempt_count,
+            phase="review_start",
+            elapsed_ms=int((time.monotonic() - phase_started) * 1000),
+            supplied_review=isinstance(review, dict),
+        )
         if isinstance(review, dict):
             reviewed = review
         else:
@@ -616,6 +651,14 @@ async def complete_authority(
     except Exception:
         return {"ok": False, "transient": False, "failure_code": "review_failed"}
 
+    emit(
+        "scan_job_completion_phase",
+        scan_id=scan_id,
+        attempt_count=attempt_count,
+        phase="review_done",
+        elapsed_ms=int((time.monotonic() - phase_started) * 1000),
+        release_gate_eligible=reviewed.get("release_gate_eligible") is True,
+    )
     limitation = terminal_review_limitation(reviewed)
     if limitation is not None:
         return {
@@ -626,7 +669,29 @@ async def complete_authority(
         }
 
     envelope = build_completion_envelope(scan, result, reviewed, signing_key)
+    emit(
+        "scan_job_completion_phase",
+        scan_id=scan_id,
+        attempt_count=attempt_count,
+        phase="envelope_done",
+        elapsed_ms=int((time.monotonic() - phase_started) * 1000),
+    )
+    emit(
+        "scan_job_completion_phase",
+        scan_id=scan_id,
+        attempt_count=attempt_count,
+        phase="persist_start",
+        elapsed_ms=int((time.monotonic() - phase_started) * 1000),
+    )
     persisted = await invoke_function(client, "persistDurableScanAuthority", envelope)
+    emit(
+        "scan_job_completion_phase",
+        scan_id=scan_id,
+        attempt_count=attempt_count,
+        phase="persist_done",
+        elapsed_ms=int((time.monotonic() - phase_started) * 1000),
+        status_code=int(persisted.get("status_code") or 0),
+    )
     if persisted["status_code"] >= 500:
         return {"ok": False, "transient": True, "failure_code": "persistence_unavailable"}
     scan_run = persisted["body"].get("scanRun") if isinstance(persisted["body"].get("scanRun"), dict) else {}

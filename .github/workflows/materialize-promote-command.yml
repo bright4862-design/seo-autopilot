@@ -1,22 +1,24 @@
 name: Materialize worker promotion command
 
 on:
-  push:
+  pull_request:
+    types: [opened, synchronize, reopened]
     branches:
-      - release/promote-staged-worker-command
-    paths:
-      - '.tmp/release/promote-staged-worker-job.yml'
-      - '.github/workflows/materialize-promote-command.yml'
+      - main
 
 permissions:
   contents: write
 
 jobs:
   materialize:
+    if: >-
+      github.event.pull_request.head.ref == 'release/promote-staged-worker-command'
+      && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - name: Insert payload into pinned cloud operator
         shell: bash
@@ -41,10 +43,12 @@ jobs:
           git diff --check
       - name: Commit exact materialized workflow
         shell: bash
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git commit -m 'Add SHA-bound verified worker promotion command'
-          git push origin HEAD:release/promote-staged-worker-command
+          git push origin "HEAD:$HEAD_REF"

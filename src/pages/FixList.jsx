@@ -363,7 +363,7 @@ export default function FixList() {
     initialFixFirstLimit: 3,
   });
   const repairPresentation = repairWorkSurface.presentation;
-  const legacyActive = repairPresentation.unsupported ? [] : repairPresentation.legacyItems;
+  const legacyActive = repairPresentation.canonical || repairPresentation.unsupported ? [] : repairPresentation.legacyItems;
   const topPriorities = legacyActive.slice(0, 3);
   const remaining = legacyActive.slice(3);
   const moreImportant = remaining.filter((item) => priorityBucket(item.priority) === "fix_first");
@@ -571,7 +571,7 @@ export default function FixList() {
               <RepairWorkSurface
                 {...repairWorkSurface}
                 renderRow={({ item }) => (
-                  <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
+                  <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} embedded />
                 )}
               />
             )}
@@ -807,8 +807,8 @@ function LockedResultState() {
   );
 }
 
-function FixRow({ item, cms, onDone }) {
-  const [open, setOpen] = useState(false);
+function FixRow({ item, cms, onDone, embedded = false }) {
+  const [open, setOpen] = useState(embedded);
   const [showAllPages, setShowAllPages] = useState(false);
   const [copied, setCopied] = useState(false);
   const severe = item.priority === "critical" || item.priority === "high";
@@ -848,12 +848,12 @@ function FixRow({ item, cms, onDone }) {
   }
 
   return (
-    <div className="border-b border-hairline-soft">
+    <div className={embedded ? "border-b-0" : "border-b border-hairline-soft"}>
       <button
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-start gap-3.5 py-5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+        className={embedded ? "hidden" : "flex w-full items-start gap-3.5 py-5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"}
       >
         <span className={`mt-[7px] h-[7px] w-[7px] shrink-0 rounded-full ${severe ? "bg-crit" : "bg-warnink"}`} />
         <span className="min-w-0 flex-1">
@@ -871,7 +871,7 @@ function FixRow({ item, cms, onDone }) {
       </button>
 
       {open ? (
-        <div className="pb-6 pl-[21px] text-[14px] text-ink-muted">
+        <div className={embedded ? "pb-1 text-[14px] text-ink-muted" : "pb-6 pl-[21px] text-[14px] text-ink-muted"}>
           <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Why this matters</div>
           <p className="mt-1 max-w-[56ch]">{item.whyItMatters}</p>
 

@@ -413,6 +413,7 @@ def build_local_review(result: dict[str, Any]) -> dict[str, Any]:
     """Run the exact Python review pipeline inside the durable worker."""
     from .beta_revision import live_revision
     from .evidence_quality import apply_evidence_quality_gate
+    from .repair_contract_v2 import apply_canonical_repair_contract
     from .review import run_review
     from .review_calibration import apply_review_evidence_calibration
     from .trust_discovery import apply_trust_discovery_gate
@@ -427,7 +428,7 @@ def build_local_review(result: dict[str, Any]) -> dict[str, Any]:
         "python_review_fallback_used": False,
         "beta_revision_fingerprint": live_revision()["fingerprint"],
     })
-    return review
+    return apply_canonical_repair_contract(review, result)
 
 
 class LocalReviewProcessTimeout(RuntimeError):

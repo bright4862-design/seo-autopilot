@@ -76,13 +76,54 @@ test("same customer action collapses repeated evidence groups without hiding aff
 
 test("rule-specific vocabulary keeps SEO jargon out of primary customer copy", () => {
   const canonical = applyCustomerVocabulary({ rule: "canonical_missing", category: "canonical", pageScope: "family", pageCount: 2, affectedPages: ["/terms", "/privacy"] });
-  assert.equal(canonical.title, "Tell search engines which page versions are the main ones");
+  assert.equal(canonical.title, "Tell search engines which versions of these pages are the main ones");
   assert.equal(canonical.customerCategory, "Search visibility");
   assert.equal(canonical.technicalLabel, "Canonical URL");
 
   const orphan = applyCustomerVocabulary({ rule: "potential_orphan_pages", category: "indexability", pageCount: 147, affectedPages: ["/a"] });
-  assert.equal(orphan.title, "Check pages that may be hard to find");
+  assert.equal(orphan.title, "Check whether these pages need more internal links");
   assert.doesNotMatch(orphan.title, /orphan|indexability/i);
+});
+
+test("customer titles say what to change and where", () => {
+  const homepageRedirect = applyCustomerVocabulary({
+    rule: "redirect_chain",
+    page_template_family: "homepage",
+    page_count: 1,
+    affected_pages: ["https://example.com/"],
+  });
+  assert.equal(homepageRedirect.title, "Update the homepage redirect to point directly to the final URL");
+
+  const homepageLinks = applyCustomerVocabulary({
+    rule: "internal_link_redirect",
+    page_template_family: "homepage",
+    page_count: 1,
+    affected_pages: ["https://example.com/"],
+  });
+  assert.equal(homepageLinks.title, "Update homepage links to use their final URLs");
+
+  const collectionH1 = applyCustomerVocabulary({
+    rule: "missing_h1",
+    page_template_family: "collection_page",
+    page_count: 15,
+    affected_pages: Array.from({ length: 15 }, (_, index) => `/collection-${index}`),
+  });
+  assert.equal(collectionH1.title, "Add one clear main heading to collection pages");
+
+  const repeatedTitles = applyCustomerVocabulary({
+    rule: "duplicate_title_template",
+    page_template_family: "collection_page",
+    page_count: 4,
+    affected_pages: ["/a", "/b", "/c", "/d"],
+  });
+  assert.equal(repeatedTitles.title, "Give collection pages distinct page titles");
+
+  const orphan = applyCustomerVocabulary({
+    rule: "potential_orphan_pages",
+    page_count: 8,
+    affected_pages: ["/a", "/b"],
+  });
+  assert.equal(orphan.title, "Check whether these pages need more internal links");
 });
 
 test("score 60 uses a customer-friendly health label without changing the numeric score", () => {

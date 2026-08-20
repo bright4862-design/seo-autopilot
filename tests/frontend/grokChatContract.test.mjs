@@ -7,6 +7,7 @@ import {
   verifyAuthoritySeal,
 } from "../../base44/functions/grokChat/authoritySeal.js";
 import { buildAuthoritySnapshot } from "../../base44/functions/aiReviewScan/authoritySnapshot.js";
+import { buildAuthoritySnapshot as buildDurableAuthoritySnapshot } from "../../base44/functions/persistDurableScanAuthority/authoritySnapshot.js";
 import {
   authorityRowsFromSnapshot,
   missingAuthorityFixRows,
@@ -137,6 +138,69 @@ test("authority seals are deterministic and reject any nested evidence mutation"
   assert.equal(await verifyAuthoritySeal(reordered, secret, proof), true);
   assert.equal(await verifyAuthoritySeal({ ...snapshot, recommendations: [{ fix_id: "fix_1", priority: "low" }] }, secret, proof), false);
   assert.equal(await verifyAuthoritySeal(snapshot, "wrong-secret", proof), false);
+});
+
+test("Grok reconstruction stays compatible with canonical v2 durable authority", async () => {
+  const v2 = "repair_contract_v2_shadow_calibrated";
+  const priorityModel = "repair_priority_v2_technical_severity";
+  const canonicalRepairs = [
+    {
+      fix_id: "fix_first", rule: "internal_link_redirect", category: "internal_link",
+      issue_title: "Update homepage links to use their final URLs", affected_pages: ["https://example.com/"],
+      priority: "high", repair_contract_version: v2, repair_priority_model_version: priorityModel,
+      base_severity: "high", technical_severity_source: "rule_taxonomy", evidence_class: "confirmed_problem",
+      action_priority: "fix_first", action_priority_score: 4310, priority_reason: "1 important checked page is affected.",
+      canonical_action_rank: 1, repair_identity_version: "repair_identity_v2_technical",
+      repair_fingerprint: "aaa111aaa111aaa111aaa111", repair_identity_state: "stable", repair_identity_stable: true,
+      repair_surface: "shared_navigation", remediation_family: "replace_redirecting_internal_link",
+      priority_context: { affected_checked: 1, checked_eligible: 1, shared_repair_confirmed: false },
+    },
+    {
+      fix_id: "improve", rule: "missing_meta_description", category: "meta_description",
+      issue_title: "Add a search description to this page", affected_pages: ["https://example.com/a"],
+      priority: "medium", repair_contract_version: v2, repair_priority_model_version: priorityModel,
+      base_severity: "medium", technical_severity_source: "rule_taxonomy", evidence_class: "improvement",
+      action_priority: "improve", action_priority_score: 2310, priority_reason: "1 checked page is affected.",
+      canonical_action_rank: 2, repair_identity_version: "repair_identity_v2_technical",
+      repair_fingerprint: "bbb222bbb222bbb222bbb222", repair_identity_state: "stable", repair_identity_stable: true,
+      repair_surface: "cms_field", remediation_family: "update_meta_description",
+      priority_context: { affected_checked: 1, checked_eligible: 1, shared_repair_confirmed: false },
+    },
+  ];
+  const snapshot = buildDurableAuthoritySnapshot({
+    scan: {
+      scanner_version: "python_scanner_v3_bounded_request", scanner_build_revision: "authenticated_health_probe_v1",
+      scanner_wrapper_version: "runStandard150Scan_v1_python_required", advanced_scan_backend: "python_scanner_api",
+      deno_fallback_used: false, beta_revision_fingerprint: "03dbfa67f4b708cf",
+      metadata_evidence_version: "metadata_v1", title_evidence_version: "title_v1",
+      website_url: "https://example.com/", pages_found: 12, pages_crawled: 10,
+    },
+    review: {
+      archetype_classifier_version: "archetype_classifier_v9_local_business_hospitality",
+      review_version: "python_review_v2_structural_marketplace",
+      review_evidence_calibration_version: "review_evidence_calibration_v6_health_score_v2",
+      ai_review_backend: "python_review_api", python_review_fallback_used: false,
+      release_gate_eligible: true, score_is_provisional: false, evidence_quality_blocking: false,
+      beta_revision_fingerprint: "03dbfa67f4b708cf", metadata_evidence_version: "metadata_v1", title_evidence_version: "title_v1",
+      scan_status: "complete", health_score: 72, health_grade: "Needs attention",
+      repair_contract_version: v2, repair_snapshot_contract_version: v2, repair_snapshot_contract_complete: true,
+      repair_priority_model_version: priorityModel, canonical_action_fix_ids: canonicalRepairs.map((item) => item.fix_id),
+      canonical_repairs: canonicalRepairs, recommendations: [...canonicalRepairs].reverse(),
+    },
+    identity: { scan_id: "scan_v2_grok", project_id: "project_1", normalized_domain: "example.com" },
+    userId: "user_1", now: "2026-08-20T20:30:00.000Z",
+  });
+  const secret = "grok-v2-roundtrip-secret";
+  const proof = await createAuthoritySeal(snapshot, secret);
+  const rows = durableAuthorityRowsFromSnapshot(snapshot, { fixListId: "fixlist_v2_grok", ownerUserId: "user_1", proof });
+  const reconstructed = authoritySnapshotFromRows({
+    scan: { id: "scan_v2_grok", project_id: "project_1", ...rows.scanRun },
+    fixList: { id: "fixlist_v2_grok", ...rows.fixList },
+    fixItems: [...rows.fixItems].reverse(), userId: "user_1",
+  });
+  assert.deepEqual(reconstructed, snapshot);
+  assert.equal(await verifyAuthoritySeal(reconstructed, secret, proof), true);
+  assert.deepEqual(reconstructed.recommendations.map((item) => item.action_priority), ["fix_first", "improve"]);
 });
 
 test("server review snapshot survives the actual persistence and Grok reconstruction round trip", async () => {

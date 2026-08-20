@@ -18,19 +18,18 @@ export default function CanonicalRepairRow({ item, model: suppliedModel, renderD
   const [open, setOpen] = useState(false);
   const disclosureId = useId();
   const hasDetails = typeof renderDetails === "function";
+  const RowShell = hasDetails ? "button" : "div";
   const supporting = [model.surface, model.scope, model.evidenceLabel].filter(Boolean).join(" · ");
 
   return (
     <div className="border-b border-hairline-soft">
-      <button
-        type="button"
+      <RowShell
+        type={hasDetails ? "button" : undefined}
         aria-expanded={hasDetails ? open : undefined}
         aria-controls={hasDetails ? disclosureId : undefined}
         aria-label={hasDetails ? `${open ? "Hide" : "Show"} evidence and steps for ${model.title}` : undefined}
-        onClick={() => {
-          if (hasDetails) setOpen((value) => !value);
-        }}
-        className={`min-h-11 w-full py-3.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink sm:py-4 ${hasDetails ? "cursor-pointer" : "cursor-default"}`}
+        onClick={hasDetails ? () => setOpen((value) => !value) : undefined}
+        className={`min-h-11 w-full py-3.5 text-left sm:py-4 ${hasDetails ? "cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink" : ""}`}
       >
         <span className="block min-w-0">
           <span className="block text-[15px] font-medium leading-snug tracking-tight text-ink">
@@ -68,7 +67,7 @@ export default function CanonicalRepairRow({ item, model: suppliedModel, renderD
             </span>
           ) : null}
         </span>
-      </button>
+      </RowShell>
       {hasDetails && open ? (
         <div
           id={disclosureId}

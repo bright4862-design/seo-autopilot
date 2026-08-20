@@ -39,12 +39,21 @@ test("canonical repair row is presentation-only and receives optional details fr
 
 test("repair evidence disclosure has an accessible control-region relationship", () => {
   assert.match(source, /useId/);
+  assert.match(source, /const RowShell = hasDetails \? "button" : "div"/);
+  assert.match(source, /type=\{hasDetails \? "button" : undefined\}/);
   assert.match(source, /aria-controls=\{hasDetails \? disclosureId/);
   assert.match(source, /aria-expanded=\{hasDetails \? open/);
+  assert.match(source, /onClick=\{hasDetails \? \(\) => setOpen/);
   assert.match(source, /id=\{disclosureId\}/);
   assert.match(source, /role="region"/);
   assert.match(source, /Evidence and steps for/);
   assert.match(source, /Hide evidence & steps/);
+});
+
+test("repair rows without details are not dead interactive controls", () => {
+  assert.match(source, /const RowShell = hasDetails \? "button" : "div"/);
+  assert.match(source, /onClick=\{hasDetails \? \(\) => setOpen\(\(value\) => !value\) : undefined\}/);
+  assert.match(source, /aria-label=\{hasDetails \?/);
 });
 
 test("mobile repair disclosure keeps a minimum touch target", () => {

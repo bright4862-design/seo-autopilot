@@ -70,6 +70,25 @@ test("browser verification mutation cannot manufacture Verified fixed for a cano
   assert.equal(canonicalRepairDisplayModel(item).verification, "Could not verify");
 });
 
+test("canonical raw affected-page counts are explicitly qualified as scan evidence", () => {
+  const item = persistedV2({
+    affected_pages: ["/a", "/b", "/c"],
+    priority_context: {},
+  });
+
+  assert.equal(
+    canonicalRepairDisplayModel(item).scope,
+    "3 affected pages found in this scan",
+  );
+});
+
+test("canonical eligible-denominator scope keeps its stronger checked-page wording", () => {
+  assert.equal(
+    canonicalRepairDisplayModel(persistedV2()).scope,
+    "1 of 1 relevant pages checked",
+  );
+});
+
 test("legacy rows retain their existing display evidence", () => {
   const legacy = {
     id: "legacy",

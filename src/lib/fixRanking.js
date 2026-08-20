@@ -1,9 +1,45 @@
+import {
+  REPAIR_PRESENTATION_MODES,
+  explicitCanonicalActionPriorityOf,
+  repairContractVersionOf,
+  repairSnapshotContractVersionOf,
+  repairSnapshotPresentationMode,
+} from "./repairContractPresentation.js";
+
 const PRIORITY_RANK = Object.freeze({ critical: 4, high: 3, medium: 2, low: 1 });
+const ACTION_RANK = Object.freeze({ fix_first: 4, important: 3, improve: 2, review: 1 });
 const COVERING_SCOPES = new Set(["family", "cross_cutting", "sitewide"]);
 
 function priorityOf(item = {}) {
-  const value = String(item.priority || "").toLowerCase();
+  const value = String(item.baseSeverity || item.base_severity || item.priority || "").toLowerCase();
   return PRIORITY_RANK[value] ? value : "medium";
+}
+
+function actionPriorityOf(item = {}) {
+  const value = String(
+    item.actionPriority
+      || item.action_priority
+      || item.priorityContext?.action_priority
+      || item.priority_context?.action_priority
+      || item.original?.action_priority
+      || "",
+  ).toLowerCase();
+  if (ACTION_RANK[value]) return value;
+  const severity = priorityOf(item);
+  if (severity === "critical" || severity === "high") return "fix_first";
+  if (severity === "medium") return "important";
+  return "improve";
+}
+
+function actionScoreOf(item = {}) {
+  const raw = item.actionPriorityScore
+    ?? item.action_priority_score
+    ?? item.priorityContext?.action_priority_score
+    ?? item.priority_context?.action_priority_score
+    ?? item.original?.action_priority_score
+    ?? 0;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : 0;
 }
 
 function affectedPagesOf(item = {}) {
@@ -75,11 +111,21 @@ export function suppressCoveredPageFixes(items = []) {
   });
 }
 
-/** Stable customer presentation order. Scanner/review priority is never changed. */
+/**
+ * Stable customer presentation order for true historical/legacy results only.
+ *
+ * Versioned repair contracts must never rely on this frontend ranking helper as
+ * their canonical authority. They preserve the server-persisted repair rows and
+ * order instead; see `prepareCustomerFixes` below.
+ */
 export function rankFixesForCustomer(items = []) {
   return (Array.isArray(items) ? items : [])
     .map((item, index) => ({ item, index }))
     .sort((left, right) => {
+      const actionDelta = ACTION_RANK[actionPriorityOf(right.item)] - ACTION_RANK[actionPriorityOf(left.item)];
+      if (actionDelta !== 0) return actionDelta;
+      const actionScoreDelta = actionScoreOf(right.item) - actionScoreOf(left.item);
+      if (actionScoreDelta !== 0) return actionScoreDelta;
       const priorityDelta = PRIORITY_RANK[priorityOf(right.item)] - PRIORITY_RANK[priorityOf(left.item)];
       if (priorityDelta !== 0) return priorityDelta;
       const scopeDelta = pageCountOf(right.item) - pageCountOf(left.item);
@@ -109,7 +155,7 @@ function actionKeyOf(item = {}, index = 0) {
   const recommendation = recommendationOf(item);
   // Fail open for presentation: without an explicit page pattern AND an
   // explicit remediation, keep the evidence rows separate rather than risk
-  // hiding genuinely different work behind one customer card.
+  // hiding genuinely different work behind one customer row.
   if (!rule || !family || !recommendation) return `ungrouped:${item.id || index}`;
   return `${rule}\u0000${family}\u0000${recommendation}`;
 }
@@ -118,10 +164,19 @@ function strongerPriority(left, right) {
   return PRIORITY_RANK[priorityOf({ priority: right })] > PRIORITY_RANK[priorityOf({ priority: left })] ? right : left;
 }
 
+function sharedRepairConfirmed(item = {}) {
+  if (item.sharedRepairConfirmed === true || item.shared_repair_confirmed === true || item.repair_leverage_confirmed === true) return true;
+  const context = item.priorityContext || item.priority_context || item.original?.priority_context || {};
+  return context?.shared_repair_confirmed === true;
+}
+
 /**
- * Merge separate evidence rows only when they resolve to the same customer action:
- * same rule, same page/template family, and same recommended remediation.
- * Scanner evidence remains untouched; this is presentation synthesis only.
+ * Merge separate evidence rows only for true legacy presentation synthesis.
+ * Versioned contracts bypass this helper at the `prepareCustomerFixes` seam.
+ *
+ * A shared page family is not proof that one CMS/template edit fixes everything.
+ * The stronger "one shared change" language is reserved for explicit backend
+ * repair-surface evidence.
  */
 export function mergeSameActionFixes(items = []) {
   const list = Array.isArray(items) ? items.filter(Boolean) : [];
@@ -140,7 +195,12 @@ export function mergeSameActionFixes(items = []) {
         groupedFindingCount: 1,
       };
       seeded.pageCount = Math.max(pageCountOf(item), seeded.affectedPages.length);
-      groups.set(key, { index: output.length, item: seeded, currentValues: new Set([String(item.currentValue || item.current_value || "").trim()].filter(Boolean)) });
+      groups.set(key, {
+        index: output.length,
+        item: seeded,
+        currentValues: new Set([String(item.currentValue || item.current_value || "").trim()].filter(Boolean)),
+        sharedRepairConfirmed: sharedRepairConfirmed(item),
+      });
       output.push(seeded);
       return;
     }
@@ -155,12 +215,17 @@ export function mergeSameActionFixes(items = []) {
     merged.confidenceScore = Math.max(confidenceOf(merged), confidenceOf(item));
     merged.needsHelp = Boolean(merged.needsHelp || item.needsHelp);
     merged.combinedRules = uniqueStrings([...(merged.combinedRules || []), ...(item.combinedRules || []), ruleOf(item)]);
+    found.sharedRepairConfirmed = Boolean(found.sharedRepairConfirmed && sharedRepairConfirmed(item));
 
     const currentValue = String(item.currentValue || item.current_value || "").trim();
     if (currentValue) found.currentValues.add(currentValue);
     if (found.currentValues.size > 1) merged.currentValue = "";
     if (merged.groupedFindingCount > 1) {
-      merged.groupingExplanation = `FixList grouped ${merged.groupedFindingCount} related findings because they use the same page pattern and require the same change. One fix can address all ${merged.affectedPages.length} affected pages.`;
+      merged.groupingExplanation = found.sharedRepairConfirmed
+        ? `FixList grouped ${merged.groupedFindingCount} related findings because they require the same confirmed shared repair. One shared change may improve ${merged.affectedPages.length} affected pages.`
+        : `FixList grouped ${merged.groupedFindingCount} related findings because they share the same page pattern and recommended change. They remain traceable as separate findings; FixList has not assumed that one implementation change fixes every page.`;
+      merged.sharedRepairConfirmed = found.sharedRepairConfirmed;
+      merged.repairLeverageConfirmed = found.sharedRepairConfirmed;
     }
     output[found.index] = merged;
   });
@@ -168,13 +233,124 @@ export function mergeSameActionFixes(items = []) {
   return output;
 }
 
-export function prepareCustomerFixes(items = []) {
-  return rankFixesForCustomer(mergeSameActionFixes(suppressCoveredPageFixes(items)));
+function hasVersionedRepairContract(item = {}) {
+  return Boolean(repairContractVersionOf(item) || repairSnapshotContractVersionOf(item));
 }
 
-export function priorityBucket(priority = "") {
-  const value = priorityOf({ priority });
-  if (value === "critical" || value === "high") return "fix_first";
-  if (value === "medium") return "improve_next";
+function cleanIdentityValue(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function currentExplicitActionPriority(item = {}) {
+  const value = String(item.actionPriority || item.action_priority || "").trim().toLowerCase();
+  return value;
+}
+
+/**
+ * The current large result page still performs some legacy normalization before
+ * this seam. A versioned repair is allowed to remain canonical only when those
+ * presentation steps preserved its persisted identity. This catches legacy
+ * pre-grouping (for example meta-description family synthesis) without treating
+ * harmless copy/URL normalization as a canonical authority change.
+ */
+export function versionedRepairIdentityIsPristine(item = {}) {
+  if (!hasVersionedRepairContract(item)) return true;
+  const original = item?.original;
+  if (!original || typeof original !== "object") return true;
+
+  const persistedId = cleanIdentityValue(original.id || original.fix_id);
+  const preparedId = cleanIdentityValue(item.id || item.fix_id);
+  if (persistedId && preparedId && persistedId !== preparedId) return false;
+
+  const persistedRule = cleanIdentityValue(original.rule || original.rule_id || original.issue_type);
+  const preparedRule = cleanIdentityValue(item.rule || item.rule_id);
+  if (persistedRule && preparedRule && persistedRule !== preparedRule) return false;
+
+  return true;
+}
+
+/**
+ * Preserve server-owned canonical action priority through browser normalization.
+ *
+ * If a normalized versioned row explicitly carries a current action-priority
+ * value, it must match the valid persisted value on `original`. Omitting the
+ * current field is safe because the canonical contract helper can consume the
+ * persisted original value. Replacing one valid server band with another is not
+ * presentation normalization and therefore fails closed.
+ */
+export function versionedRepairAuthorityIsPristine(item = {}) {
+  if (!versionedRepairIdentityIsPristine(item)) return false;
+  if (!hasVersionedRepairContract(item)) return true;
+
+  const original = item?.original;
+  if (!original || typeof original !== "object") return true;
+
+  const currentRawPriority = currentExplicitActionPriority(item);
+  if (!currentRawPriority) return true;
+
+  const persistedPriority = explicitCanonicalActionPriorityOf(original);
+  if (!persistedPriority) return false;
+
+  return currentRawPriority === persistedPriority;
+}
+
+function withSnapshotPresentationMode(items, mode) {
+  return items.map((item) => ({
+    ...item,
+    repair_snapshot_presentation_mode: mode,
+  }));
+}
+
+/**
+ * Prepare customer-visible repairs while respecting the authority boundary.
+ *
+ * Only a genuinely unversioned historical snapshot may use browser-side
+ * suppress/merge/rank synthesis. Any versioned snapshot — fully canonical,
+ * unsupported, mixed, or transitional/incomplete — preserves the row set and
+ * order presented to this seam.
+ *
+ * If an upstream legacy presentation step changed a versioned repair's persisted
+ * identity or explicit canonical action priority, canonical presentation fails
+ * closed as unsupported. The eventual large-page migration should move the
+ * contract gate ahead of those legacy preprocessors; until then they can never
+ * silently activate v2 UI.
+ */
+export function prepareCustomerFixes(items = []) {
+  const snapshot = Array.isArray(items) ? items.filter(Boolean) : [];
+  const containsVersionedContract = snapshot.some(hasVersionedRepairContract);
+  const versionedAuthorityChanged = snapshot.some((item) => !versionedRepairAuthorityIsPristine(item));
+  const contractMode = repairSnapshotPresentationMode(snapshot);
+  const snapshotPresentationMode = versionedAuthorityChanged
+    ? REPAIR_PRESENTATION_MODES.UNSUPPORTED
+    : contractMode;
+  const trueLegacy = snapshotPresentationMode === REPAIR_PRESENTATION_MODES.LEGACY
+    && !containsVersionedContract;
+
+  if (!trueLegacy) {
+    return withSnapshotPresentationMode(snapshot, snapshotPresentationMode);
+  }
+
+  const prepared = rankFixesForCustomer(mergeSameActionFixes(suppressCoveredPageFixes(snapshot)));
+  return withSnapshotPresentationMode(prepared, snapshotPresentationMode);
+}
+
+export function priorityBucket(value = "") {
+  if (typeof value === "object" && value !== null) return actionPriorityOf(value);
+  // Preserve the live FixList section contract until the page is migrated to
+  // action-priority bands tomorrow.
+  const severity = priorityOf({ priority: value });
+  if (severity === "critical" || severity === "high") return "fix_first";
+  if (severity === "medium") return "improve_next";
   return "worth_checking";
+}
+
+export function customerPriorityReason(item = {}) {
+  return String(
+    item.priorityReason
+      || item.priority_reason
+      || item.priorityContext?.priority_reason
+      || item.priority_context?.priority_reason
+      || item.original?.priority_reason
+      || "",
+  ).trim();
 }

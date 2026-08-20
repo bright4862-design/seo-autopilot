@@ -19,8 +19,11 @@ import UnlockAccessButton from "@/components/billing/UnlockAccessButton";
 import { CUSTOMER_BOUNDARY_EVENT } from "@/lib/customerBrowserCache";
 import ScoreRing from "@/components/fixlist/ScoreRing";
 import RecentScanRow from "@/components/fixlist/RecentScanRow";
+import RepairWorkSurface from "@/components/fixlist/RepairWorkSurface";
+import ExplicitPassedChecks from "@/components/fixlist/ExplicitPassedChecks";
 import { deleteScanRun, pruneScanHistory } from "@/lib/scanHistory";
 import { prepareCustomerFixes, priorityBucket } from "@/lib/fixRanking";
+import { buildRepairWorkSurfacePresentation } from "@/lib/repairWorkSurfacePresentation";
 import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel } from "@/lib/fixVocabulary";
 
 const CMS_OPTIONS = [
@@ -98,21 +101,6 @@ const CUSTOMER_RECOVERY_COPY = Object.freeze({
     action: "retry",
   },
 });
-
-// Checks the scanner actually runs; a check "passes" when no finding in the
-// scanned sample carries its category. Copy is deliberately sample-scoped —
-// the contract forbids claiming the whole site is perfect.
-const PASSED_CHECK_DEFINITIONS = [
-  { categories: ["404_error", "broken_page"], label: "No broken pages found in the pages we checked" },
-  { categories: ["meta_title"], label: "Search titles look good on the pages we checked" },
-  { categories: ["meta_description"], label: "Search descriptions look good on the pages we checked" },
-  { categories: ["canonical"], label: "Canonical settings look right on the pages we checked" },
-  { categories: ["image_alt_text", "alt_text"], label: "Images have text descriptions on the pages we checked" },
-  { categories: ["schema"], label: "No missing trust signals on the pages we checked" },
-  { categories: ["duplicate_content"], label: "No duplicate search text found in the pages we checked" },
-  { categories: ["internal_link"], label: "No internal link problems found in the pages we checked" },
-  { categories: ["indexability"], label: "Google can index the pages we checked" },
-];
 
 export default function FixList() {
   const navigate = useNavigate();
@@ -367,13 +355,21 @@ export default function FixList() {
 
   const active = recommendations.filter((item) => !doneIds.includes(item.id));
   const doneItems = recommendations.filter((item) => doneIds.includes(item.id));
-  const topPriorities = active.slice(0, 3);
-  const remaining = active.slice(3);
+  const repairWorkSurface = buildRepairWorkSurfacePresentation({
+    snapshotItems: recommendations,
+    visibleItems: active,
+    doneIds,
+    scan: scanRecord,
+    initialFixFirstLimit: 3,
+  });
+  const repairPresentation = repairWorkSurface.presentation;
+  const legacyActive = repairPresentation.unsupported ? [] : repairPresentation.legacyItems;
+  const topPriorities = legacyActive.slice(0, 3);
+  const remaining = legacyActive.slice(3);
   const moreImportant = remaining.filter((item) => priorityBucket(item.priority) === "fix_first");
   const improveNext = remaining.filter((item) => priorityBucket(item.priority) === "improve_next");
   const worthChecking = remaining.filter((item) => priorityBucket(item.priority) === "worth_checking");
   const shownTopPriorities = topPriorities;
-  const passedChecks = hasUsefulScan && !scoreUnavailable ? buildPassedChecks(recommendations) : [];
   const limitationNote = getLimitationNote(scanRecord);
   const summary = hasUsefulScan ? getBestSummary(scanRecord, pagesScanned, pagesFound, recommendations) : "";
 
@@ -542,7 +538,6 @@ export default function FixList() {
               Scanned {scanRecord?.created_at ? formatDate(scanRecord.created_at) : "recently"}
               {pagesFound > 0 ? ` · ${formatCount(pagesFound)} pages found` : ""}
               {pagesScanned > 0 ? ` · ${formatCount(pagesScanned)} checked` : ""}
-              {passedChecks.length > 0 ? ` · ${passedChecks.length} checks passed` : ""}
             </p>
 
             <div className="mt-4 flex items-center gap-7">
@@ -564,6 +559,22 @@ export default function FixList() {
             {limitationNote ? (
               <p className="mt-6 border-l-2 border-warnink/40 pl-3 text-[13.5px] leading-relaxed text-ink-muted">{limitationNote}</p>
             ) : null}
+
+            {repairPresentation.unsupported ? (
+              <div className="mt-12 rounded-2xl border border-hairline-soft bg-white/40 px-5 py-6">
+                <h2 className="text-[20px] font-semibold tracking-tight">We can&rsquo;t safely display this saved FixList</h2>
+                <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">
+                  This saved scan uses a repair format this interface does not understand. No browser-ranked substitute is being shown. Run a fresh scan to create a compatible FixList.
+                </p>
+              </div>
+            ) : (
+              <RepairWorkSurface
+                {...repairWorkSurface}
+                renderRow={({ item }) => (
+                  <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
+                )}
+              />
+            )}
 
             {shownTopPriorities.length > 0 ? (
               <>
@@ -609,7 +620,7 @@ export default function FixList() {
               </>
             ) : null}
 
-            {active.length === 0 && doneItems.length > 0 ? (
+            {!repairPresentation.canonical && !repairPresentation.unsupported && active.length === 0 && doneItems.length > 0 ? (
               <div className="mt-16 py-10">
                 <h2 className="text-[22px] font-semibold tracking-tight">All clear.</h2>
                 <p className="mt-2 max-w-[48ch] text-ink-muted">
@@ -618,16 +629,7 @@ export default function FixList() {
               </div>
             ) : null}
 
-            {active.length === 0 && doneItems.length === 0 && noHighConfidenceFindings ? (
-              <div className="mt-16 py-4">
-                <h2 className="text-[22px] font-semibold tracking-tight">Nothing to fix in this sample.</h2>
-                <p className="mt-2 max-w-[48ch] text-ink-muted">
-                  {nextBestStep || "No high-confidence issues were found in the pages we checked."}
-                </p>
-              </div>
-            ) : null}
-
-            {passedChecks.length > 0 ? <PassedChecks checks={passedChecks} /> : null}
+            <ExplicitPassedChecks scan={scanRecord} />
 
             {doneItems.length > 0 ? (
               <>
@@ -969,32 +971,6 @@ function FixRow({ item, cms, onDone }) {
   );
 }
 
-function PassedChecks({ checks }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <SectionEyebrow label="Already good" />
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="py-3.5 text-[13.5px] text-ink-muted transition-colors hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
-      >
-        {checks.length} checks passed — {open ? "hide them" : "show them"}
-      </button>
-      {open ? (
-        <div>
-          {checks.map((check) => (
-            <div key={check} className="flex gap-3.5 py-2.5 text-[14px] text-ink-muted">
-              <span className="mt-px text-[13px] text-good">✓</span>
-              {check}
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </>
-  );
-}
-
 function CmsPicker({ selectedCms, onChange }) {
   return (
     <div className="mt-16 flex items-center gap-3 text-[13.5px] text-ink-muted">
@@ -1111,13 +1087,6 @@ function getLimitationNote(record) {
   if (limitation) return limitation;
   if (record?.score_is_provisional === true) return "Scan coverage was limited, so this score is provisional. Fix what's below, then scan again for a fuller picture.";
   return "";
-}
-
-function buildPassedChecks(recommendations) {
-  const present = new Set(recommendations.map((item) => String(item.category || "").toLowerCase()));
-  return PASSED_CHECK_DEFINITIONS
-    .filter((check) => check.categories.every((category) => !present.has(category)))
-    .map((check) => check.label);
 }
 
 function websiteKeyOf(record) {

@@ -19,11 +19,11 @@ import UnlockAccessButton from "@/components/billing/UnlockAccessButton";
 import { CUSTOMER_BOUNDARY_EVENT } from "@/lib/customerBrowserCache";
 import ScoreRing from "@/components/fixlist/ScoreRing";
 import RecentScanRow from "@/components/fixlist/RecentScanRow";
-import RepairSectionList from "@/components/fixlist/RepairSectionList";
+import RepairWorkSurface from "@/components/fixlist/RepairWorkSurface";
 import ExplicitPassedChecks from "@/components/fixlist/ExplicitPassedChecks";
 import { deleteScanRun, pruneScanHistory } from "@/lib/scanHistory";
 import { prepareCustomerFixes, priorityBucket } from "@/lib/fixRanking";
-import { buildFixListPresentation } from "@/lib/repairPresentation";
+import { buildRepairWorkSurfacePresentation } from "@/lib/repairWorkSurfacePresentation";
 import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel } from "@/lib/fixVocabulary";
 
 const CMS_OPTIONS = [
@@ -355,8 +355,15 @@ export default function FixList() {
 
   const active = recommendations.filter((item) => !doneIds.includes(item.id));
   const doneItems = recommendations.filter((item) => doneIds.includes(item.id));
-  const repairPresentation = buildFixListPresentation(active, { initialFixFirstLimit: 3 });
-  const legacyActive = repairPresentation.legacyItems;
+  const repairWorkSurface = buildRepairWorkSurfacePresentation({
+    snapshotItems: recommendations,
+    visibleItems: active,
+    doneIds,
+    scan: scanRecord,
+    initialFixFirstLimit: 3,
+  });
+  const repairPresentation = repairWorkSurface.presentation;
+  const legacyActive = repairPresentation.unsupported ? [] : repairPresentation.legacyItems;
   const topPriorities = legacyActive.slice(0, 3);
   const remaining = legacyActive.slice(3);
   const moreImportant = remaining.filter((item) => priorityBucket(item.priority) === "fix_first");
@@ -553,14 +560,21 @@ export default function FixList() {
               <p className="mt-6 border-l-2 border-warnink/40 pl-3 text-[13.5px] leading-relaxed text-ink-muted">{limitationNote}</p>
             ) : null}
 
-            {repairPresentation.canonical ? (
-              <RepairSectionList
-                sections={repairPresentation.sections}
+            {repairPresentation.unsupported ? (
+              <div className="mt-12 rounded-2xl border border-hairline-soft bg-white/40 px-5 py-6">
+                <h2 className="text-[20px] font-semibold tracking-tight">We can&rsquo;t safely display this saved FixList</h2>
+                <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">
+                  This saved scan uses a repair format this interface does not understand. No browser-ranked substitute is being shown. Run a fresh scan to create a compatible FixList.
+                </p>
+              </div>
+            ) : (
+              <RepairWorkSurface
+                {...repairWorkSurface}
                 renderRow={({ item }) => (
                   <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
                 )}
               />
-            ) : null}
+            )}
 
             {shownTopPriorities.length > 0 ? (
               <>
@@ -606,20 +620,11 @@ export default function FixList() {
               </>
             ) : null}
 
-            {active.length === 0 && doneItems.length > 0 ? (
+            {!repairPresentation.canonical && !repairPresentation.unsupported && active.length === 0 && doneItems.length > 0 ? (
               <div className="mt-16 py-10">
                 <h2 className="text-[22px] font-semibold tracking-tight">All clear.</h2>
                 <p className="mt-2 max-w-[48ch] text-ink-muted">
                   Every fix is marked done. Scan again once the changes are live and we&rsquo;ll confirm them.
-                </p>
-              </div>
-            ) : null}
-
-            {active.length === 0 && doneItems.length === 0 && noHighConfidenceFindings ? (
-              <div className="mt-16 py-4">
-                <h2 className="text-[22px] font-semibold tracking-tight">Nothing to fix in this sample.</h2>
-                <p className="mt-2 max-w-[48ch] text-ink-muted">
-                  {nextBestStep || "No high-confidence issues were found in the pages we checked."}
                 </p>
               </div>
             ) : null}

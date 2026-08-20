@@ -471,6 +471,14 @@ async def persist_terminal_failure_bounded(
     deadline, otherwise a correctly classified crawl can remain customer-visible
     as `crawling` until the platform request or stale-worker backstop fires.
     """
+    terminal_started = asyncio.get_running_loop().time()
+    emit(
+        "scan_job_terminal_phase",
+        scan_id=scan_id,
+        attempt_count=normalize_attempt(attempt_count),
+        phase="write_start",
+        failure_code=failure_code,
+    )
     try:
         closed = await await_hard_deadline(
             write_terminal_failure(
@@ -488,9 +496,26 @@ async def persist_terminal_failure_bounded(
             detail="The scan terminal state could not be persisted within its bounded worker time.",
         ) from exc
 
+    emit(
+        "scan_job_terminal_phase",
+        scan_id=scan_id,
+        attempt_count=normalize_attempt(attempt_count),
+        phase="write_done",
+        failure_code=failure_code,
+        elapsed_ms=int((asyncio.get_running_loop().time() - terminal_started) * 1000),
+        closed=bool(closed),
+    )
     if not closed:
         return {"state": "superseded_attempt", "scan": None}
 
+    emit(
+        "scan_job_terminal_phase",
+        scan_id=scan_id,
+        attempt_count=normalize_attempt(attempt_count),
+        phase="verify_start",
+        failure_code=failure_code,
+        elapsed_ms=int((asyncio.get_running_loop().time() - terminal_started) * 1000),
+    )
     try:
         persisted = await await_hard_deadline(
             read_scan_run(client, scan_id),
@@ -498,6 +523,15 @@ async def persist_terminal_failure_bounded(
         )
     except asyncio.TimeoutError as exc:
         raise HTTPException(status_code=503, detail="The scan terminal state could not be verified.") from exc
+    emit(
+        "scan_job_terminal_phase",
+        scan_id=scan_id,
+        attempt_count=normalize_attempt(attempt_count),
+        phase="verify_done",
+        failure_code=failure_code,
+        elapsed_ms=int((asyncio.get_running_loop().time() - terminal_started) * 1000),
+        readable=isinstance(persisted, dict),
+    )
     if not isinstance(persisted, dict):
         raise HTTPException(status_code=503, detail="The scan terminal state is unavailable.")
     if is_superseded_attempt(persisted, attempt_count):
@@ -641,12 +675,25 @@ async def scan_job(
         if not signing_key:
             raise HTTPException(status_code=503, detail="Authority signing is not configured.")
 
+        emit(
+            "scan_job_completion_deadline_start",
+            scan_id=scan_id,
+            attempt_count=job_attempt,
+            timeout_seconds=WORKER_COMPLETION_WALL_TIMEOUT_SECONDS,
+        )
         try:
             outcome = await await_hard_deadline(
                 complete_authority(client, scan, result, signing_key),
                 WORKER_COMPLETION_WALL_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
+            emit(
+                "scan_job_completion_deadline_timeout",
+                severity="WARNING",
+                scan_id=scan_id,
+                attempt_count=job_attempt,
+                timeout_seconds=WORKER_COMPLETION_WALL_TIMEOUT_SECONDS,
+            )
             # Do not await cancellation of the stuck completion operation. It may
             # still win the race, so terminalize through a fresh client and rely
             # on the existing attempt/terminal fences on both Base44 paths.
@@ -682,6 +729,15 @@ async def scan_job(
                 "scan_id": scan_id,
             }
 
+        emit(
+            "scan_job_completion_outcome",
+            scan_id=scan_id,
+            attempt_count=job_attempt,
+            transient=bool(outcome.get("transient")),
+            superseded=bool(outcome.get("superseded")),
+            failure_code=str(outcome.get("failure_code") or ""),
+            ok=outcome.get("ok") is True,
+        )
         if outcome.get("transient"):
             # ScanRun untouched: Cloud Tasks retries the same scan_id safely.
             raise HTTPException(status_code=503, detail="Authority persistence is unavailable.")

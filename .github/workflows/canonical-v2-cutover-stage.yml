@@ -1,0 +1,68 @@
+name: Canonical V2 Cutover Stage
+
+on:
+  push:
+    branches:
+      - agent/canonical-repair-v2-cutover-stage
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact staging branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: agent/canonical-repair-v2-cutover-stage
+
+      - name: Materialize exact candidate tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=3ea04ceed6f32a18b1ecf689a117001dda176277
+          EXPECTED_PATCH_SHA=5a88c887deeb398bc1ba6a2fb224c36ad4da1558ff581ac226fc424f5a5aba5f
+          EXPECTED_TREE=ecd3a09185e12b0203294fca613d970f1ca206ee
+
+          cat .tmp/canonical-v2/cutover.part.* | base64 -d | xz -d > /tmp/canonical-v2-remaining.patch
+          ACTUAL_PATCH_SHA="$(sha256sum /tmp/canonical-v2-remaining.patch | awk '{print $1}')"
+          test "$ACTUAL_PATCH_SHA" = "$EXPECTED_PATCH_SHA"
+
+          git apply --check /tmp/canonical-v2-remaining.patch
+          git apply /tmp/canonical-v2-remaining.patch
+
+          rm -rf .tmp/canonical-v2
+          rm -f .github/workflows/canonical-v2-cutover-stage.yml
+
+          git add -- \
+            scanner-api/app/scan_job.py \
+            src/lib/fixVocabulary.js \
+            src/pages/FixList.jsx \
+            tests/frontend/customerResultBoundary.test.mjs \
+            tests/frontend/fixListRepairPresentationWiring.test.mjs \
+            tests/frontend/grokChatContract.test.mjs \
+            tests/frontend/resultsPresentationContract.test.mjs
+          git add -u -- .tmp/canonical-v2 .github/workflows/canonical-v2-cutover-stage.yml
+
+          ACTUAL_TREE="$(git write-tree)"
+          echo "expected tree: $EXPECTED_TREE"
+          echo "actual tree:   $ACTUAL_TREE"
+          test "$ACTUAL_TREE" = "$EXPECTED_TREE"
+
+          test "$(git hash-object scanner-api/app/scan_job.py)" = "8d73d08766324510bb7239f1cbfff95f375ad9d7"
+          test "$(git hash-object src/lib/fixVocabulary.js)" = "03c3a2af2cc94fb60b37084594a42c449654bc11"
+          test "$(git hash-object src/pages/FixList.jsx)" = "d6d0c004020fd2cdcd5c27f0ac595a0fffbfe55d"
+          test "$(git hash-object tests/frontend/customerResultBoundary.test.mjs)" = "8d27b90758b2fd1437c20dc6bf4d640827d877b8"
+          test "$(git hash-object tests/frontend/fixListRepairPresentationWiring.test.mjs)" = "e19531c702c7b72c4739a63f08244c7c45b161f0"
+          test "$(git hash-object tests/frontend/grokChatContract.test.mjs)" = "5e0da093c848618b812038f3ef7537bcffbbf021"
+          test "$(git hash-object tests/frontend/resultsPresentationContract.test.mjs)" = "4d9fcf6e250a6faae315b0407ce22785295a3559"
+
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Materialize exact canonical repair v2 candidate"
+          git push origin HEAD:agent/canonical-repair-v2-cutover-stage

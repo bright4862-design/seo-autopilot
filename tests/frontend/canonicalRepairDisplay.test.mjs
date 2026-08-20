@@ -61,6 +61,33 @@ test("canonical normalized row keeps persisted evidence while allowing friendly 
   assert.equal(model.leverage, "");
 });
 
+test("browser scope inflation cannot enlarge canonical shared-repair leverage", () => {
+  const original = persistedV2({
+    affected_pages: ["/a", "/b", "/c", "/d"],
+    priority_context: {},
+    shared_repair_confirmed: true,
+  });
+  const item = {
+    id: "repair-1",
+    rule: "internal_link_redirect",
+    action_priority: "important",
+    affected_pages: Array.from({ length: 40 }, (_, index) => `/browser-${index + 1}`),
+    page_count: 40,
+    priority_context: {
+      affected_checked: 40,
+      checked_eligible: 40,
+    },
+    shared_repair_confirmed: true,
+    original,
+  };
+
+  const model = canonicalRepairDisplayModel(item, repairRowModel(item));
+
+  assert.equal(model.affectedPageCount, 4);
+  assert.equal(model.scope, "4 affected pages found in this scan");
+  assert.equal(model.leverage, "One shared change may improve 4 affected pages");
+});
+
 test("browser verification mutation cannot manufacture Verified fixed for a canonical repair", () => {
   const original = persistedV2({ repair_verification_state: "could_not_verify" });
   const item = {

@@ -18,6 +18,7 @@ function attestedV2(overrides = {}) {
     repair_snapshot_contract_version: V2,
     repair_snapshot_contract_complete: true,
     priority_reason: "Persisted canonical priority reason.",
+    evidence_class: "confirmed_problem",
     ...overrides,
   };
 }

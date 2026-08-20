@@ -48,7 +48,7 @@ test("canonical normalized row keeps persisted evidence while allowing friendly 
   const model = canonicalRepairDisplayModel(item, repairRowModel(item));
 
   assert.equal(model.title, "Fix the navigation links");
-  assert.equal(model.surface, "Shared Navigation");
+  assert.equal(model.surface, "Shared navigation");
   assert.equal(model.scope, "1 of 1 relevant pages checked");
   assert.equal(model.reason, "Persisted reason.");
   assert.equal(model.verification, "Ready to verify with a rescan");
@@ -86,6 +86,21 @@ test("canonical eligible-denominator scope keeps its stronger checked-page wordi
   assert.equal(
     canonicalRepairDisplayModel(persistedV2()).scope,
     "1 of 1 relevant pages checked",
+  );
+});
+
+test("canonical technical surface identifiers use customer-readable labels", () => {
+  assert.equal(
+    canonicalRepairDisplayModel(persistedV2({ repair_surface: "xml_sitemap" })).surface,
+    "XML sitemap",
+  );
+  assert.equal(
+    canonicalRepairDisplayModel(persistedV2({ repair_surface: "cms_field" })).surface,
+    "CMS field",
+  );
+  assert.equal(
+    canonicalRepairDisplayModel(persistedV2({ repair_surface: "redirect_server_config" })).surface,
+    "Redirect/server config",
   );
 });
 

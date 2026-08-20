@@ -133,7 +133,11 @@ async def test_real_429_escalates_spacing_before_following_requests(mock_network
     async def burst_sensitive(client, url, discovery, robots_policy=None):
         nonlocal last_started_at, blocked_attempts
         now = time.monotonic()
-        too_fast = last_started_at > 0 and now - last_started_at < 0.003
+        # Keep a wide deterministic gap between the simulated burst threshold
+        # and the scanner's recovery backoff. Millisecond-scale thresholds made
+        # this regression depend on runner scheduling jitter rather than the
+        # adaptive-spacing behavior it is intended to prove.
+        too_fast = last_started_at > 0 and now - last_started_at < 0.020
         last_started_at = now
         if too_fast:
             blocked_attempts += 1
@@ -144,8 +148,8 @@ async def test_real_429_escalates_spacing_before_following_requests(mock_network
     monkeypatch.setattr(scanner, "detect_rate_limit_profile", lambda _response: "cloudflare_shopify", raising=False)
     monkeypatch.setattr(scanner, "RATE_LIMIT_CLOUDFLARE_SHOPIFY_INTERVAL_SECONDS", 0.001, raising=False)
     monkeypatch.setattr(scanner, "RATE_LIMIT_COOLDOWN_SECONDS", 0.001, raising=False)
-    monkeypatch.setattr(scanner, "RATE_LIMIT_BACKOFF_INTERVAL_SECONDS", 0.005, raising=False)
-    monkeypatch.setattr(scanner, "RATE_LIMIT_MAX_INTERVAL_SECONDS", 0.008, raising=False)
+    monkeypatch.setattr(scanner, "RATE_LIMIT_BACKOFF_INTERVAL_SECONDS", 0.050, raising=False)
+    monkeypatch.setattr(scanner, "RATE_LIMIT_MAX_INTERVAL_SECONDS", 0.080, raising=False)
 
     result = await scanner.run_scan(
         f"{origin}/",
@@ -157,7 +161,7 @@ async def test_real_429_escalates_spacing_before_following_requests(mock_network
 
     assert blocked_attempts >= 1
     assert result["crawl_timing"]["rate_limit_recovered_count"] >= 1
-    assert result["crawl_timing"]["rate_limit_final_interval_seconds"] >= 0.005
+    assert result["crawl_timing"]["rate_limit_final_interval_seconds"] >= 0.050
     assert all(page["status_code"] == 200 for page in result["pages"])
 
 

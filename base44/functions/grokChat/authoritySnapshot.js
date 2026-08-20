@@ -1,4 +1,18 @@
+export const REPAIR_CONTRACT_V2 = "repair_contract_v2_shadow_calibrated";
+export const REPAIR_PRIORITY_MODEL_V2 = "repair_priority_v2_technical_severity";
+
 export function authoritySnapshotFromRows({ scan, fixList, fixItems, userId }) {
+  const canonical = fixList?.repair_contract_version === REPAIR_CONTRACT_V2
+    && fixList?.repair_snapshot_contract_version === REPAIR_CONTRACT_V2
+    && fixList?.repair_snapshot_contract_complete === true
+    && fixList?.repair_priority_model_version === REPAIR_PRIORITY_MODEL_V2;
+  const recommendations = (fixItems || []).map((item) => authorityFixFromRow(item, { canonical }));
+  if (canonical) {
+    recommendations.sort((left, right) => number(left.canonical_action_rank) - number(right.canonical_action_rank));
+  } else {
+    recommendations.sort((left, right) => left.fix_id.localeCompare(right.fix_id));
+  }
+
   return {
     version: text(scan?.authority_seal_version, 160),
     sealed_at: text(scan?.authority_sealed_at, 80),
@@ -58,16 +72,22 @@ export function authoritySnapshotFromRows({ scan, fixList, fixItems, userId }) {
       low_count: number(fixList?.low_count),
       completed_count: number(fixList?.completed_count),
       top_action_fix_ids: textArray(fixList?.top_action_fix_ids, 3, 160),
+      ...(canonical ? {
+        repair_contract_version: REPAIR_CONTRACT_V2,
+        repair_snapshot_contract_version: REPAIR_CONTRACT_V2,
+        repair_snapshot_contract_complete: true,
+        repair_priority_model_version: REPAIR_PRIORITY_MODEL_V2,
+        canonical_action_fix_ids: textArray(fixList?.canonical_action_fix_ids, 100, 160),
+      } : {}),
       generated_at: text(fixList?.generated_at, 80),
     },
-    recommendations: (fixItems || []).map(authorityFixFromRow)
-      .sort((left, right) => left.fix_id.localeCompare(right.fix_id)),
+    recommendations,
   };
 }
 
-function authorityFixFromRow(item) {
+function authorityFixFromRow(item, { canonical = false } = {}) {
   const raw = item?.raw_finding && typeof item.raw_finding === "object" ? item.raw_finding : {};
-  return {
+  const base = {
     fix_id: text(item?.fix_id, 160),
     rule: text(item?.rule, 200),
     category: text(item?.category, 200),
@@ -95,8 +115,70 @@ function authorityFixFromRow(item) {
     estimated_time: text(item?.estimated_time, 120),
     user_status: text(item?.user_status, 80),
     what_to_do_steps: textArray(item?.what_to_do_steps, 12, 1_000),
+  };
+  if (!canonical) {
+    return {
+      ...base,
+      raw_finding: { verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence) },
+    };
+  }
+  return {
+    ...base,
+    repair_contract_version: text(item?.repair_contract_version, 160),
+    repair_snapshot_contract_version: text(item?.repair_snapshot_contract_version, 160),
+    repair_snapshot_contract_complete: item?.repair_snapshot_contract_complete === true,
+    repair_priority_model_version: text(item?.repair_priority_model_version, 160),
+    base_severity: text(item?.base_severity, 40),
+    technical_severity_source: text(item?.technical_severity_source, 120),
+    evidence_class: text(item?.evidence_class, 80),
+    action_priority: text(item?.action_priority, 80),
+    action_priority_score: number(item?.action_priority_score),
+    priority_reason: text(item?.priority_reason, 1_000),
+    canonical_action_rank: number(item?.canonical_action_rank),
+    repair_identity_version: text(item?.repair_identity_version, 160),
+    repair_fingerprint: text(item?.repair_fingerprint, 160),
+    repair_identity_state: text(item?.repair_identity_state, 80),
+    repair_identity_stable: item?.repair_identity_stable === true,
+    repair_surface: text(item?.repair_surface, 160),
+    remediation_family: text(item?.remediation_family, 200),
+    shared_repair_confirmed: item?.shared_repair_confirmed === true,
+    priority_context: canonicalPriorityContext(item?.priority_context),
+    ...(text(item?.repair_verification_state, 120) ? { repair_verification_state: text(item?.repair_verification_state, 120) } : {}),
+    ...(text(item?.rule_definition_version, 160) ? { rule_definition_version: text(item?.rule_definition_version, 160) } : {}),
+    ...(text(item?.comparison_profile_version, 160) ? { comparison_profile_version: text(item?.comparison_profile_version, 160) } : {}),
     raw_finding: { verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence) },
   };
+}
+
+function canonicalPriorityContext(value) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return {
+    version: text(source.version, 160),
+    legacy_priority: text(source.legacy_priority, 40),
+    base_severity: text(source.base_severity, 40),
+    technical_severity_source: text(source.technical_severity_source, 120),
+    evidence_class: text(source.evidence_class, 80),
+    action_priority: text(source.action_priority, 80),
+    action_priority_score: number(source.action_priority_score),
+    search_facing: source.search_facing === true,
+    affected_checked: number(source.affected_checked),
+    checked_eligible: nullableNumber(source.checked_eligible),
+    checked_coverage: nullableNumber(source.checked_coverage),
+    indexable_affected: number(source.indexable_affected),
+    non_indexable_affected: number(source.non_indexable_affected),
+    unknown_indexability_affected: number(source.unknown_indexability_affected),
+    indexable_checked_eligible: nullableNumber(source.indexable_checked_eligible),
+    searchable_coverage: nullableNumber(source.searchable_coverage),
+    important_affected: number(source.important_affected),
+    shared_repair_confirmed: source.shared_repair_confirmed === true,
+    coverage_scope: text(source.coverage_scope, 80),
+  };
+}
+
+function nullableNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function verifiedUrls(value) {

@@ -47,12 +47,12 @@ def build_calibrated_shadow_review_analysis(
     review_result: dict[str, Any],
     pages: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Offline-only v2 comparison over a finished review result.
+    """Build the calibrated v2 ordering over an already-finished review.
 
-    Nothing here is imported by scanner, review, worker, authority persistence,
-    or Base44 runtime code. It exists to validate the technical-severity split
-    against fixtures and read-only saved evidence before a runtime migration is
-    even proposed.
+    This function never changes crawler or review output. The durable worker may
+    consume the returned proposal only through `repair_contract_v2`, where the
+    complete-or-fail persistence validator decides whether a canonical snapshot
+    is eligible.
     """
     source = review_result if isinstance(review_result, dict) else {}
     live_fixes = _first_dict_list(source, _FIX_KEYS)

@@ -4,6 +4,8 @@ export const ACCESS_APP_ID = "6a498732ec779dfaaeab0e53";
 export const ACCESS_PLAN_ID = "standard150_lifetime";
 export const OWNER_TEST_EMAIL = "bright4862@gmail.com";
 export const OWNER_TEST_USER_ID = "6a498da58ef5cec1f5cd4486";
+export const REPAIR_CONTRACT_V2 = "repair_contract_v2_shadow_calibrated";
+export const REPAIR_PRIORITY_MODEL_V2 = "repair_priority_v2_technical_severity";
 
 const PUBLIC_RUN_FIELDS = [
   "id",
@@ -117,6 +119,11 @@ const FIX_LIST_FIELDS = [
   "low_count",
   "completed_count",
   "top_action_fix_ids",
+  "repair_contract_version",
+  "repair_snapshot_contract_version",
+  "repair_snapshot_contract_complete",
+  "repair_priority_model_version",
+  "canonical_action_fix_ids",
   "generated_at",
   "created_date",
   "updated_date",
@@ -165,6 +172,28 @@ const FIX_ITEM_FIELDS = [
   "metadata_state_counts",
   "combined_rules",
   "grouping_explanation",
+  "repair_contract_version",
+  "repair_snapshot_contract_version",
+  "repair_snapshot_contract_complete",
+  "repair_priority_model_version",
+  "base_severity",
+  "technical_severity_source",
+  "evidence_class",
+  "action_priority",
+  "action_priority_score",
+  "priority_reason",
+  "canonical_action_rank",
+  "repair_identity_version",
+  "repair_fingerprint",
+  "repair_identity_state",
+  "repair_identity_stable",
+  "repair_surface",
+  "remediation_family",
+  "shared_repair_confirmed",
+  "priority_context",
+  "repair_verification_state",
+  "rule_definition_version",
+  "comparison_profile_version",
   "created_date",
   "updated_date",
 ];
@@ -215,6 +244,14 @@ export function evaluatePaidAccess({ rows, user }) {
 
 export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, authorityVerified }) {
   const canReadResult = fullAccess === true && authorityVerified === true;
+  const canonical = canReadResult
+    && fixList?.repair_contract_version === REPAIR_CONTRACT_V2
+    && fixList?.repair_snapshot_contract_version === REPAIR_CONTRACT_V2
+    && fixList?.repair_snapshot_contract_complete === true;
+  const customerFixItems = canReadResult ? (fixItems || []).map(sanitizeFixItem) : [];
+  if (canonical) {
+    customerFixItems.sort((left, right) => number(left.canonical_action_rank) - number(right.canonical_action_rank));
+  }
   return {
     success: true,
     access: fullAccess === true ? "full" : "locked",
@@ -223,11 +260,22 @@ export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, au
     fix_list_id: canReadResult ? text(fixList?.id, 160) : "",
     run: sanitizeRun(run, { detailed: canReadResult }),
     fixList: canReadResult ? pickFields(fixList, FIX_LIST_FIELDS) : null,
-    fixItems: canReadResult ? (fixItems || []).map(sanitizeFixItem) : [],
+    fixItems: customerFixItems,
   };
 }
 
 export function authoritySnapshotFromRows({ run, fixList, fixItems, userId }) {
+  const canonical = fixList?.repair_contract_version === REPAIR_CONTRACT_V2
+    && fixList?.repair_snapshot_contract_version === REPAIR_CONTRACT_V2
+    && fixList?.repair_snapshot_contract_complete === true
+    && fixList?.repair_priority_model_version === REPAIR_PRIORITY_MODEL_V2;
+  const recommendations = (fixItems || []).map((item) => authorityFixFromRow(item, { canonical }));
+  if (canonical) {
+    recommendations.sort((left, right) => number(left.canonical_action_rank) - number(right.canonical_action_rank));
+  } else {
+    recommendations.sort((left, right) => left.fix_id.localeCompare(right.fix_id));
+  }
+
   return {
     version: text(run?.authority_seal_version, 160),
     sealed_at: text(run?.authority_sealed_at, 80),
@@ -287,10 +335,16 @@ export function authoritySnapshotFromRows({ run, fixList, fixItems, userId }) {
       low_count: number(fixList?.low_count),
       completed_count: number(fixList?.completed_count),
       top_action_fix_ids: textArray(fixList?.top_action_fix_ids, 3, 160),
+      ...(canonical ? {
+        repair_contract_version: REPAIR_CONTRACT_V2,
+        repair_snapshot_contract_version: REPAIR_CONTRACT_V2,
+        repair_snapshot_contract_complete: true,
+        repair_priority_model_version: REPAIR_PRIORITY_MODEL_V2,
+        canonical_action_fix_ids: textArray(fixList?.canonical_action_fix_ids, 100, 160),
+      } : {}),
       generated_at: text(fixList?.generated_at, 80),
     },
-    recommendations: (fixItems || []).map(authorityFixFromRow)
-      .sort((left, right) => left.fix_id.localeCompare(right.fix_id)),
+    recommendations,
   };
 }
 
@@ -324,9 +378,9 @@ export function stableSerialize(value) {
   return JSON.stringify(canonicalize(value));
 }
 
-function authorityFixFromRow(item) {
+function authorityFixFromRow(item, { canonical = false } = {}) {
   const raw = item?.raw_finding && typeof item.raw_finding === "object" ? item.raw_finding : {};
-  return {
+  const base = {
     fix_id: text(item?.fix_id, 160),
     rule: text(item?.rule, 200),
     category: text(item?.category, 200),
@@ -354,8 +408,70 @@ function authorityFixFromRow(item) {
     estimated_time: text(item?.estimated_time, 120),
     user_status: text(item?.user_status, 80),
     what_to_do_steps: textArray(item?.what_to_do_steps, 12, 1_000),
+  };
+  if (!canonical) {
+    return {
+      ...base,
+      raw_finding: { verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence) },
+    };
+  }
+  return {
+    ...base,
+    repair_contract_version: text(item?.repair_contract_version, 160),
+    repair_snapshot_contract_version: text(item?.repair_snapshot_contract_version, 160),
+    repair_snapshot_contract_complete: item?.repair_snapshot_contract_complete === true,
+    repair_priority_model_version: text(item?.repair_priority_model_version, 160),
+    base_severity: text(item?.base_severity, 40),
+    technical_severity_source: text(item?.technical_severity_source, 120),
+    evidence_class: text(item?.evidence_class, 80),
+    action_priority: text(item?.action_priority, 80),
+    action_priority_score: number(item?.action_priority_score),
+    priority_reason: text(item?.priority_reason, 1_000),
+    canonical_action_rank: number(item?.canonical_action_rank),
+    repair_identity_version: text(item?.repair_identity_version, 160),
+    repair_fingerprint: text(item?.repair_fingerprint, 160),
+    repair_identity_state: text(item?.repair_identity_state, 80),
+    repair_identity_stable: item?.repair_identity_stable === true,
+    repair_surface: text(item?.repair_surface, 160),
+    remediation_family: text(item?.remediation_family, 200),
+    shared_repair_confirmed: item?.shared_repair_confirmed === true,
+    priority_context: canonicalPriorityContext(item?.priority_context),
+    ...(text(item?.repair_verification_state, 120) ? { repair_verification_state: text(item?.repair_verification_state, 120) } : {}),
+    ...(text(item?.rule_definition_version, 160) ? { rule_definition_version: text(item?.rule_definition_version, 160) } : {}),
+    ...(text(item?.comparison_profile_version, 160) ? { comparison_profile_version: text(item?.comparison_profile_version, 160) } : {}),
     raw_finding: { verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence) },
   };
+}
+
+function canonicalPriorityContext(value) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return {
+    version: text(source.version, 160),
+    legacy_priority: text(source.legacy_priority, 40),
+    base_severity: text(source.base_severity, 40),
+    technical_severity_source: text(source.technical_severity_source, 120),
+    evidence_class: text(source.evidence_class, 80),
+    action_priority: text(source.action_priority, 80),
+    action_priority_score: number(source.action_priority_score),
+    search_facing: source.search_facing === true,
+    affected_checked: number(source.affected_checked),
+    checked_eligible: nullableNumber(source.checked_eligible),
+    checked_coverage: nullableNumber(source.checked_coverage),
+    indexable_affected: number(source.indexable_affected),
+    non_indexable_affected: number(source.non_indexable_affected),
+    unknown_indexability_affected: number(source.unknown_indexability_affected),
+    indexable_checked_eligible: nullableNumber(source.indexable_checked_eligible),
+    searchable_coverage: nullableNumber(source.searchable_coverage),
+    important_affected: number(source.important_affected),
+    shared_repair_confirmed: source.shared_repair_confirmed === true,
+    coverage_scope: text(source.coverage_scope, 80),
+  };
+}
+
+function nullableNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function sanitizeRun(run, { detailed }) {

@@ -78,13 +78,43 @@
       "minLength": 64,
       "maxLength": 64,
       "pattern": "^[a-f0-9]{64}$",
-      "rls": { "write": { "user_condition": { "role": "admin" } } }
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
     },
     "owner_user_id": {
       "type": "string",
       "rls": {
-        "update": { "user_condition": { "role": "admin" } }
+        "update": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
       }
+    },
+    "repair_contract_version": {
+      "type": "string"
+    },
+    "repair_snapshot_contract_version": {
+      "type": "string"
+    },
+    "repair_snapshot_contract_complete": {
+      "type": "boolean",
+      "default": false
+    },
+    "repair_priority_model_version": {
+      "type": "string"
+    },
+    "canonical_action_fix_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
     }
   },
   "required": [

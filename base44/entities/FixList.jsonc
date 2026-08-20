@@ -70,6 +70,50 @@
       },
       "default": []
     },
+    "repair_contract_version": {
+      "type": "string"
+    },
+    "repair_snapshot_contract_version": {
+      "type": "string"
+    },
+    "repair_snapshot_contract_complete": {
+      "type": "boolean"
+    },
+    "repair_priority_model_version": {
+      "type": "string"
+    },
+    "repair_identity_version": {
+      "type": "string"
+    },
+    "repair_verification_version": {
+      "type": "string"
+    },
+    "canonical_action_fix_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rule_evaluation_contract_version": {
+      "type": "string"
+    },
+    "rule_evaluations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "rule": { "type": "string" },
+          "rule_definition_version": { "type": "string" },
+          "evaluated": { "type": "boolean" },
+          "applicable": { "type": "boolean" },
+          "passed": { "type": "boolean" },
+          "eligible_checked_count": { "type": "number" },
+          "evaluated_page_count": { "type": "number" },
+          "limitation_code": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
     "generated_at": {
       "type": "string"
     },

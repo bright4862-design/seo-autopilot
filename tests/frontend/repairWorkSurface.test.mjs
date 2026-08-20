@@ -17,7 +17,15 @@ test("all-done state requires every saved repair to be explicitly marked done", 
   assert.match(source, /visibleCount === 0/);
   assert.match(source, /doneCount === snapshotCount/);
   assert.match(source, /<RepairWorkflowCompleteState/);
-  assert.doesNotMatch(source, /all clear|verified fixed|everything is fixed/i);
+  assert.doesNotMatch(source, /verified fixed|everything is fixed/i);
+});
+
+test("canonical filtered-empty state stays distinct from all-done and zero-repair states", () => {
+  assert.match(source, /doneCount < snapshotCount/);
+  assert.match(source, /No repairs match this view/);
+  assert.match(source, /remainingCount === 1 \? "repair remains" : "repairs remain"/);
+  assert.match(source, /typeof onClearFilters === "function"/);
+  assert.match(source, />\s*Clear filters\s*</);
 });
 
 test("zero-repair state delegates to the explicit evidence contract", () => {

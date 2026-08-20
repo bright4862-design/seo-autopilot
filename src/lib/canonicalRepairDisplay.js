@@ -10,9 +10,29 @@ const CANONICAL_SURFACE_LABELS = Object.freeze({
   "Individual Page Content": "Page content",
 });
 
+const CANONICAL_EVIDENCE_LABELS = Object.freeze({
+  confirmed_problem: "Confirmed problem",
+  improvement: "Improvement",
+  opportunity: "Review opportunity",
+});
+
 function canonicalSurfaceLabel(surface = "") {
   const value = String(surface || "").trim();
   return CANONICAL_SURFACE_LABELS[value] || value;
+}
+
+function canonicalEvidenceClassOf(item = {}) {
+  return String(
+    item.evidenceClass
+      || item.evidence_class
+      || item.repairEvidenceClass
+      || item.repair_evidence_class
+      || "",
+  ).trim().toLowerCase();
+}
+
+function canonicalEvidenceLabel(item = {}) {
+  return CANONICAL_EVIDENCE_LABELS[canonicalEvidenceClassOf(item)] || "";
 }
 
 function qualifyCanonicalScope(scope = "", affectedPageCount = 0) {
@@ -30,8 +50,8 @@ function qualifyCanonicalScope(scope = "", affectedPageCount = 0) {
  *
  * Browser normalization may make harmless customer-copy changes such as a
  * friendlier title, but it must not rewrite the evidence-backed surface, scope,
- * priority reason, leverage, or verification state of a canonical repair.
- * Legacy rows retain their existing presentation behavior.
+ * priority reason, evidence class, leverage, or verification state of a
+ * canonical repair. Legacy rows retain their existing presentation behavior.
  */
 export function canonicalRepairDisplayModel(item = {}, suppliedModel = null) {
   const model = suppliedModel || repairRowModel(item);
@@ -42,19 +62,25 @@ export function canonicalRepairDisplayModel(item = {}, suppliedModel = null) {
   }
 
   if (!original || typeof original !== "object") {
+    const evidenceClass = canonicalEvidenceClassOf(item);
     return {
       ...model,
       surface: canonicalSurfaceLabel(model.surface),
       scope: qualifyCanonicalScope(model.scope, model.affectedPageCount),
+      evidenceClass,
+      evidenceLabel: canonicalEvidenceLabel(item),
     };
   }
 
   const persisted = repairRowModel(original);
+  const evidenceClass = canonicalEvidenceClassOf(original);
   return {
     ...model,
     surface: canonicalSurfaceLabel(persisted.surface),
     scope: qualifyCanonicalScope(persisted.scope, persisted.affectedPageCount),
     reason: persisted.reason,
+    evidenceClass,
+    evidenceLabel: canonicalEvidenceLabel(original),
     leverage: persisted.leverage,
     verification: persisted.verification,
     verificationKind: persisted.verificationKind,

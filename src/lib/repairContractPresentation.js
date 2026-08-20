@@ -15,6 +15,12 @@ export const CANONICAL_ACTION_PRIORITIES = Object.freeze([
   "review",
 ]);
 
+export const CANONICAL_EVIDENCE_CLASSES = Object.freeze([
+  "confirmed_problem",
+  "improvement",
+  "opportunity",
+]);
+
 const CANONICAL_ACTION_PRIORITY_RANK = Object.freeze({
   fix_first: 4,
   important: 3,
@@ -58,6 +64,33 @@ export function explicitCanonicalActionPriorityOf(item = {}) {
 }
 
 /**
+ * Evidence classification is part of the persisted v2 authority contract.
+ * When browser normalization wraps the durable row under `original`, the
+ * persisted classification wins and an invalid/missing original value must not
+ * be replaced by a browser-derived label.
+ */
+export function explicitCanonicalEvidenceClassOf(item = {}) {
+  const original = item?.original;
+  if (original && typeof original === "object") {
+    const persisted = clean(
+      original.evidenceClass
+        || original.evidence_class
+        || original.repairEvidenceClass
+        || original.repair_evidence_class,
+    ).toLowerCase();
+    return CANONICAL_EVIDENCE_CLASSES.includes(persisted) ? persisted : "";
+  }
+
+  const value = clean(
+    item.evidenceClass
+      || item.evidence_class
+      || item.repairEvidenceClass
+      || item.repair_evidence_class,
+  ).toLowerCase();
+  return CANONICAL_EVIDENCE_CLASSES.includes(value) ? value : "";
+}
+
+/**
  * Canonical explainability is server-owned too. When a normalized row carries
  * the persisted repair under `original`, prefer that persisted reason so
  * browser presentation context cannot rewrite why a repair received its band.
@@ -79,9 +112,9 @@ export function explicitCanonicalPriorityReasonOf(item = {}) {
  * canonical authority out of a mixed historical snapshot.
  *
  * A fully attested row must also carry an explicit valid persisted
- * `action_priority` and a non-empty persisted `priority_reason`. The frontend
- * may not derive a canonical band or its explanation from legacy severity,
- * priority context, or another browser fallback.
+ * `action_priority`, a valid persisted `evidence_class`, and a non-empty
+ * persisted `priority_reason`. The frontend may not derive canonical priority,
+ * evidence classification, or its explanation from legacy/browser fallbacks.
  */
 export function repairPresentationMode(item = {}) {
   const version = repairContractVersionOf(item);
@@ -107,6 +140,9 @@ export function repairPresentationMode(item = {}) {
   }
 
   if (!explicitCanonicalActionPriorityOf(item)) {
+    return REPAIR_PRESENTATION_MODES.UNSUPPORTED;
+  }
+  if (!explicitCanonicalEvidenceClassOf(item)) {
     return REPAIR_PRESENTATION_MODES.UNSUPPORTED;
   }
   if (!explicitCanonicalPriorityReasonOf(item)) {
@@ -168,10 +204,10 @@ export function canConsumeCanonicalActionPriority(item = {}) {
  * happens to be current when the user opens them later.
  *
  * - Fully snapshot-attested supported repairs may consume persisted canonical
- *   action_priority and its persisted priority_reason.
+ *   action_priority, evidence_class, and priority_reason.
  * - Repairs with no contract remain in frozen legacy presentation mode.
  * - Supported row contracts without snapshot attestation also remain legacy.
- * - Missing canonical action priority/reason on an otherwise attested row fails closed.
+ * - Missing/invalid canonical priority, evidence class, or reason fails closed.
  * - Unknown, superseded, or mismatched contracts fail closed.
  */
 export function repairPresentationContract(item = {}) {
@@ -179,6 +215,7 @@ export function repairPresentationContract(item = {}) {
   const snapshotVersion = repairSnapshotContractVersionOf(item);
   const snapshotComplete = repairSnapshotContractComplete(item);
   const actionPriority = explicitCanonicalActionPriorityOf(item);
+  const evidenceClass = explicitCanonicalEvidenceClassOf(item);
   const priorityReason = explicitCanonicalPriorityReasonOf(item);
   const mode = repairPresentationMode(item);
   return {
@@ -186,6 +223,7 @@ export function repairPresentationContract(item = {}) {
     snapshotVersion,
     snapshotComplete,
     actionPriority,
+    evidenceClass,
     priorityReason,
     mode,
     canonicalActionPriorityAllowed: mode === REPAIR_PRESENTATION_MODES.CANONICAL,

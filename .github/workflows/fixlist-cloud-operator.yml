@@ -375,3 +375,4 @@ jobs:
         run: bash scripts/sync-base44-signing-key.sh
 
 # capacity diagnostic refresh: 2026-08-17T19:49Z
+# staged worker trigger checkpoint: 2026-08-21T00:46+02:00

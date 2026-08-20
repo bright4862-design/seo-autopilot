@@ -161,7 +161,10 @@ jobs:
         run: ./scripts/deploy_admission_coordinator.sh
 
   readonly-diagnostic:
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[cloud-readonly-diagnostic]')
+    # This workflow only receives push events when this exact operator file changes.
+    # Running the diagnostic on those pushes is read-only and avoids depending on
+    # a commit-message convention that external builders cannot control.
+    if: github.event_name == 'push'
     name: Read-only release diagnostic
     runs-on: ubuntu-latest
     timeout-minutes: 10

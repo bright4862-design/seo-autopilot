@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { AlertCircle, Loader2 } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
+import DurableScanProgressSurface from "@/components/scan/DurableScanProgressSurface";
 import { base44 } from "@/api/base44Client";
 import useDurableScanCompletion from "@/hooks/useDurableScanCompletion";
 import { ensureScanProject } from "@/lib/activeProject";
@@ -48,7 +49,6 @@ const WORDPRESS_AUTHOR_ARCHIVE_RE = /^\/author\/[^/?#]+(?:\/page\/\d+)?\/?$/i;
 const isRouteBoundaryPath = (value = "") => { const path = String(value || "").split("?")[0].split("#")[0]; return !WORDPRESS_AUTHOR_ARCHIVE_RE.test(path) && ROUTE_BOUNDARY_RE.test(path); };
 const MONEY_PAGE_PATTERNS = ["devis", "quote", "pricing", "tarif", "contact", "booking", "reservation", "checkout", "ticket", "voucher", "pass", "show", "listing", "product", "produit", "collection", "category", "simulation", "simulateur", "calcul", "calculator", "comparateur", "demo", "signup", "energie", "énergie", "electricite", "électricité", "gaz", "fournisseur"];
 const TEMPLATE_RULES = new Set(["client_rendering", "js_rendering", "canonical_missing", "canonical_to_other_url", "schema", "missing_h1", "image_alt_text", "missing_meta_description", "empty_meta_description", "malformed_meta_description", "meta_description_unusable", "route_boundary_candidate_indexable", "internal_route_indexable"]);
-const SCAN_PROGRESS_STEPS = ["Reading pages", "Checking issues", "Writing fixes", "Saving result"];
 
 export default function ScanWebsiteForm({ project = null, saving = false }) {
   const navigate = useNavigate();
@@ -80,7 +80,6 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   const durableScanFailed = ["failed", "cancelled"].includes(durableScan.status);
   const cleanedKeywords = useMemo(() => splitLines(keywordsText), [keywordsText]);
   const selectedCms = CMS_OPTIONS.find((item) => item.value === cmsPlatform);
-  const progressIndex = scanProgressIndex(activeStep);
   // Show the customer their own domain the moment the scan starts. Momentum
   // comes from something real and personal, not from a bar sitting at zero.
   const scanTargetLabel = durableScan.domain || safeHostname(websiteUrl) || "";
@@ -442,59 +441,18 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
           </div>
         ) : null}
         {isLoading ? (
-          <div
-            role="status"
-            aria-live="assertive"
-            aria-atomic="true"
-            className="fixed left-1/2 top-4 z-[100] w-[calc(100%-2rem)] max-w-[560px] -translate-x-1/2 rounded-2xl border border-hairline bg-white p-5 text-ink shadow-lg"
-          >
-            <div className="flex items-start gap-3">
-              <Loader2 className="mt-0.5 h-5 w-5 shrink-0 animate-spin text-ink" />
-              <div className="min-w-0 flex-1">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Scan running</p>
-                <div className="mt-1 flex items-baseline justify-between gap-3">
-                  <p className="text-[15px] font-medium tracking-tight">{activeStep || "Starting your scan"}</p>
-                  <span className="shrink-0 text-[12px] tabular-nums text-ink-faint">{formatElapsed(elapsedSeconds)}</span>
-                </div>
-                {scanTargetLabel ? (
-                  <p className="mt-0.5 truncate text-[13px] text-ink-muted" title={scanTargetLabel}>{scanTargetLabel}</p>
-                ) : null}
-                {durableScan.pagesFound > 0 ? (
-                  <p className="mt-1 text-[12px] tabular-nums text-ink-faint" aria-live="polite">
-                    {durableScan.pagesFound.toLocaleString()} pages discovered
-                    {durableScan.pagesCrawled > 0 ? ` · ${durableScan.pagesCrawled.toLocaleString()} of ${STANDARD_SCAN_BUDGET.max_pages} checked` : ""}
-                  </p>
-                ) : null}
-                <p className="mt-1 text-[13px] leading-relaxed text-ink-muted">
-                  {elapsedSeconds >= 30
-                    ? "Still working — larger or slower sites can take a little longer."
-                    : "FixList is actively working. Your result will open automatically when it is saved."}
-                </p>
-                {durableScan.stalled && watchedScanId ? (
-                  <p className="mt-3 text-[13px] leading-relaxed text-ink">
-                    This is taking longer than usual. Your scan is saved to your account, so you can
-                    {" "}
-                    <button
-                      type="button"
-                      onClick={() => navigate(`/dashboard?scan_id=${encodeURIComponent(watchedScanId)}`)}
-                      className="font-semibold underline underline-offset-2"
-                    >
-                      open its result page
-                    </button>
-                    {" "}
-                    now — it will fill in as soon as it finishes.
-                  </p>
-                ) : null}
-              </div>
-            </div>
-            <div className="mt-4 grid grid-cols-4 gap-2" aria-label="Scan progress">
-              {SCAN_PROGRESS_STEPS.map((label, index) => (
-                <div key={label} className="min-w-0">
-                  <div className={`h-1 rounded-full ${index <= progressIndex ? "bg-ink" : "bg-hairline"}`} />
-                  <p className={`mt-1 truncate text-[11px] ${index <= progressIndex ? "text-ink" : "text-ink-faint"}`}>{label}</p>
-                </div>
-              ))}
-            </div>
+          <div className="fixed left-1/2 top-4 z-[100] w-[calc(100%-2rem)] max-w-[560px] -translate-x-1/2 rounded-2xl border border-hairline bg-white p-5 text-ink shadow-lg">
+            <DurableScanProgressSurface
+              durableScan={durableScan}
+              targetLabel={scanTargetLabel}
+              elapsedLabel={formatElapsed(elapsedSeconds)}
+              fallbackPhase={activeStep || "Starting your scan"}
+              longerThanUsual={elapsedSeconds >= 30 || durableScan.stalled === true}
+              backgroundExecutionProven={Boolean(watchedScanId)}
+              onOpenSavedScan={watchedScanId
+                ? () => navigate(`/dashboard?scan_id=${encodeURIComponent(watchedScanId)}`)
+                : undefined}
+            />
           </div>
         ) : null}
 
@@ -506,7 +464,7 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
           >
             {isLoading ? <><Loader2 className="h-4 w-4 animate-spin" />Building FixList…</> : "Create FixList"}
           </button>
-          <p className="text-[13px] leading-relaxed text-ink-muted">Takes about 2–4 minutes. You can leave this page — we’ll save your list.</p>
+          <p className="text-[13px] leading-relaxed text-ink-muted">Scan time varies by site. FixList will tell you when it’s safe to leave this page.</p>
           <p className="text-[12px] text-ink-faint">Scans up to 150 pages. Larger sites coming soon.</p>
         </div>
 
@@ -794,14 +752,6 @@ async function recoverPersistedCompletion(scanId, attempts = 5) {
     if (attempt < attempts - 1) await new Promise((resolve) => window.setTimeout(resolve, 1500));
   }
   return null;
-}
-
-function scanProgressIndex(step = "") {
-  const normalized = String(step || "").toLowerCase();
-  if (normalized.includes("saving")) return 3;
-  if (normalized.includes("writing")) return 2;
-  if (normalized.includes("checking") || normalized.includes("review")) return 1;
-  return 0;
 }
 
 function formatElapsed(seconds = 0) {

@@ -302,6 +302,17 @@ export function buildFixListPresentation(snapshotItems = [], options = {}) {
   const unsupported = mode === REPAIR_PRESENTATION_MODES.UNSUPPORTED;
   const { visibleItems: _visibleItems, ...sectionOptions } = options;
 
+  const legacySections = !canonical && !unsupported && visibleItems.length > 0
+    ? [{
+      key: "legacy_prioritized",
+      label: "Prioritized repairs",
+      rows: visibleItems.map((item) => ({ item, model: repairRowModel(item) })),
+      hiddenRows: [],
+      hiddenCount: 0,
+      totalCount: visibleItems.length,
+    }]
+    : [];
+
   return {
     version: REPAIR_PRESENTATION_VERSION,
     mode,
@@ -310,6 +321,7 @@ export function buildFixListPresentation(snapshotItems = [], options = {}) {
     snapshotCount: snapshot.length,
     visibleCount: visibleItems.length,
     sections: canonical ? sectionCustomerRepairs(visibleItems, sectionOptions) : [],
+    legacySections,
     legacyItems: canonical ? [] : visibleItems,
   };
 }

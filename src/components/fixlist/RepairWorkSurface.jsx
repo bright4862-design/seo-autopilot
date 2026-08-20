@@ -28,7 +28,17 @@ export default function RepairWorkSurface({
   }
 
   if (
-    presentation?.canonical === true
+    presentation?.canonical !== true
+    && presentation?.unsupported !== true
+    && visibleCount > 0
+    && Array.isArray(presentation?.legacySections)
+    && presentation.legacySections.length > 0
+  ) {
+    return <RepairSectionList sections={presentation.legacySections} renderRow={renderRow} />;
+  }
+
+  if (
+    presentation?.unsupported !== true
     && snapshotCount > 0
     && visibleCount === 0
     && doneCount === snapshotCount
@@ -43,7 +53,7 @@ export default function RepairWorkSurface({
   }
 
   if (
-    presentation?.canonical === true
+    presentation?.unsupported !== true
     && snapshotCount > 0
     && visibleCount === 0
     && doneCount < snapshotCount

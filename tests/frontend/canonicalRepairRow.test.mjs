@@ -7,8 +7,8 @@ const source = fs.readFileSync(
   "utf8",
 );
 
-test("canonical repair row consumes the presentation model instead of legacy priority labels", () => {
-  assert.match(source, /repairRowModel/);
+test("canonical repair row consumes the persisted-authority presentation seam instead of legacy priority labels", () => {
+  assert.match(source, /canonicalRepairDisplayModel/);
   assert.match(source, /model\.title/);
   assert.match(source, /model\.surface/);
   assert.match(source, /model\.scope/);

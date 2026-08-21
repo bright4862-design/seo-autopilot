@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `03dbfa67f4b708cf` |
+| Candidate fingerprint | `1f730bb039aef84e` |
 | Classifier | `archetype_classifier_v9_local_business_hospitality` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,14 +15,17 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The shipping code is
-fingerprint `03dbfa67f4b708cf` with classifier
+fingerprint `1f730bb039aef84e` with classifier
 `archetype_classifier_v9_local_business_hospitality`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded candidate was `5caec7fdcabceee7`. The fingerprint
-moved to `03dbfa67f4b708cf` when Health Score v2 changed the authoritative review
-calibration. That is a customer-visible scoring/review behaviour change, so the
+The immediately superseded candidate was `03dbfa67f4b708cf`. The fingerprint
+moved to `1f730bb039aef84e` when Patch A made the cross-runtime Base44/frontend
+component markers participate in the same release fingerprint, so a Base44 or UI
+behaviour change can no longer ship under an unchanged release identity. The
+candidate before that was `5caec7fdcabceee7`, superseded when Health Score v2
+changed the authoritative review calibration. That is a customer-visible scoring/review behaviour change, so the
 freeze rule requires a regenerated fingerprint and a new production acceptance
 gate. The earlier move from `51c813a6219b4e70` to `5caec7fdcabceee7` was the URL
 frontier trap-guard change; both prior fingerprints are historical for this

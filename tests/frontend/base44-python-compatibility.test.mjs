@@ -1,3 +1,4 @@
+import { RELEASE_FINGERPRINT } from "../../src/lib/generatedReleaseContract.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -11,7 +12,7 @@ test("Base44 accepts the deployed Python scanner, review, and calibration versio
   assert.match(reviewFunction, /PYTHON_REVIEW_VERSION = "python_review_v2_structural_marketplace"/);
   assert.match(durableAuthority, /review_version: "python_review_v2_structural_marketplace"/);
   assert.match(durableAuthority, /review_evidence_calibration_version: "review_evidence_calibration_v6_health_score_v2"/);
-  assert.match(durableAuthority, /beta_revision_fingerprint: "03dbfa67f4b708cf"/);
+  assert.match(durableAuthority, /beta_revision_fingerprint: RELEASE_FINGERPRINT/);
 });
 
 test("Base44 rejects stale or uncalibrated Python review responses", () => {

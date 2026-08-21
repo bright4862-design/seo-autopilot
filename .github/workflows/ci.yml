@@ -37,6 +37,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Verify generated release contracts are current
+        run: node scripts/generate_release_contracts.mjs --check
+
       - name: Frontend contract tests
         run: npm run test:frontend
 

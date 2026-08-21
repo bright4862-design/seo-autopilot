@@ -8,7 +8,7 @@ const MAX_HISTORY_MESSAGES = 20;
 const MAX_FIX_ITEMS = 100;
 const CHAT_TIMEOUT_MS = 95_000;
 const REVIEW_ATTESTATION_VERSION = "standard_review_snapshot_hmac_v1";
-const EXPECTED_RELEASE_FINGERPRINT = "51c813a6219b4e70";
+import { RELEASE_FINGERPRINT as EXPECTED_RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 const SAFE_UNAVAILABLE_MESSAGE = "Grok is temporarily unavailable. Your FixList conversation is still saved; please try again.";
 
 class RequestProblem extends Error {

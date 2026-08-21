@@ -4,6 +4,10 @@ export const ACCESS_APP_ID = "6a498732ec779dfaaeab0e53";
 export const ACCESS_PLAN_ID = "standard150_lifetime";
 export const OWNER_TEST_EMAIL = "bright4862@gmail.com";
 export const OWNER_TEST_USER_ID = "6a498da58ef5cec1f5cd4486";
+// Versions the customer projection itself. Declared in
+// data/cross-runtime-release-components.json so a projection behavior change
+// moves the release fingerprint like any Python change would.
+export const CUSTOMER_PROJECTION_VERSION = "customer_projection_v1";
 export const REPAIR_CONTRACT_V2 = "repair_contract_v2_shadow_calibrated";
 export const REPAIR_PRIORITY_MODEL_V2 = "repair_priority_v2_technical_severity";
 

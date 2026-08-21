@@ -1,3 +1,4 @@
+import { RELEASE_FINGERPRINT } from "../../src/lib/generatedReleaseContract.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -171,7 +172,7 @@ test("Grok reconstruction stays compatible with canonical v2 durable authority",
     scan: {
       scanner_version: "python_scanner_v3_bounded_request", scanner_build_revision: "authenticated_health_probe_v1",
       scanner_wrapper_version: "runStandard150Scan_v1_python_required", advanced_scan_backend: "python_scanner_api",
-      deno_fallback_used: false, beta_revision_fingerprint: "03dbfa67f4b708cf",
+      deno_fallback_used: false, beta_revision_fingerprint: RELEASE_FINGERPRINT,
       metadata_evidence_version: "metadata_v1", title_evidence_version: "title_v1",
       website_url: "https://example.com/", pages_found: 12, pages_crawled: 10,
     },
@@ -181,7 +182,7 @@ test("Grok reconstruction stays compatible with canonical v2 durable authority",
       review_evidence_calibration_version: "review_evidence_calibration_v6_health_score_v2",
       ai_review_backend: "python_review_api", python_review_fallback_used: false,
       release_gate_eligible: true, score_is_provisional: false, evidence_quality_blocking: false,
-      beta_revision_fingerprint: "03dbfa67f4b708cf", metadata_evidence_version: "metadata_v1", title_evidence_version: "title_v1",
+      beta_revision_fingerprint: RELEASE_FINGERPRINT, metadata_evidence_version: "metadata_v1", title_evidence_version: "title_v1",
       scan_status: "complete", health_score: 72, health_grade: "Needs attention",
       repair_contract_version: v2, repair_snapshot_contract_version: v2, repair_snapshot_contract_complete: true,
       repair_priority_model_version: priorityModel, canonical_action_fix_ids: canonicalRepairs.map((item) => item.fix_id),
@@ -213,7 +214,7 @@ test("server review snapshot survives the actual persistence and Grok reconstruc
       scanner_wrapper_version: "runAdvancedScan_v22_python_required",
       advanced_scan_backend: "python_scanner_api",
       deno_fallback_used: false,
-      beta_revision_fingerprint: "03dbfa67f4b708cf",
+      beta_revision_fingerprint: RELEASE_FINGERPRINT,
       metadata_evidence_version: "metadata_v1",
       title_evidence_version: "title_v1",
       submitted_url: "https://www.example.com/",
@@ -231,7 +232,7 @@ test("server review snapshot survives the actual persistence and Grok reconstruc
       release_gate_eligible: true,
       score_is_provisional: false,
       evidence_quality_blocking: false,
-      beta_revision_fingerprint: "03dbfa67f4b708cf",
+      beta_revision_fingerprint: RELEASE_FINGERPRINT,
       metadata_evidence_version: "metadata_v1",
       title_evidence_version: "title_v1",
       scan_status: "complete",

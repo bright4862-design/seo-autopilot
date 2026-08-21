@@ -358,7 +358,10 @@ jobs:
           fi
           test "$GITHUB_REF" = "refs/heads/main"
           test "$GITHUB_SHA" = "$source_sha"
-          product_sha="$(git log -1 --format=%H -- . ':(exclude).github/workflows/fixlist-cloud-operator.yml')"
+          # Base44 and the worker must attest to the exact same immutable main SHA.
+          # Path-filtered git history can resolve a PR parent rather than the merge
+          # commit even when the trees are identical, producing a false mismatch.
+          product_sha="$source_sha"
           test -n "$product_sha"
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
           echo "product_sha=$product_sha" >> "$GITHUB_OUTPUT"

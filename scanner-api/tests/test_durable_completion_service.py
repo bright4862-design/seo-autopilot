@@ -1,8 +1,16 @@
+from app.beta_revision import live_revision
+
+# Read the canonical release identity instead of copying it: a copied
+# marker is exactly the drift this release contract exists to prevent.
+CURRENT_FINGERPRINT = live_revision()["fingerprint"]
+
 """Regression contract for the signed durable worker boundaries."""
 
 from pathlib import Path
 
 from app.scan_job import (
+
+
     COMPLETION_VERSION,
     CONTROL_VERSION,
     WORKER_VERSION,
@@ -25,7 +33,7 @@ def _scan_result() -> dict:
         "scanner_build_revision": "authenticated_health_probe_v1",
         "advanced_scan_backend": "python_scanner_api",
         "deno_fallback_used": False,
-        "beta_revision_fingerprint": "03dbfa67f4b708cf",
+        "beta_revision_fingerprint": CURRENT_FINGERPRINT,
         "request_id": "req-1",
         "idempotency_key": "req-1",
         "scan_id": "scan-1",
@@ -50,7 +58,7 @@ def _review() -> dict:
         "release_gate_eligible": True,
         "score_is_provisional": False,
         "evidence_quality_blocking": False,
-        "beta_revision_fingerprint": "03dbfa67f4b708cf",
+        "beta_revision_fingerprint": CURRENT_FINGERPRINT,
         "metadata_evidence_version": "metadata-v1",
         "title_evidence_version": "title-v1",
         "recommendations": [],

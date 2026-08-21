@@ -1,3 +1,4 @@
+import { RELEASE_FINGERPRINT } from "../../src/lib/generatedReleaseContract.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -55,7 +56,7 @@ function snapshotFor(recommendations) {
       scanner_build_revision: "authenticated_health_probe_v1",
       advanced_scan_backend: "python_scanner_api",
       deno_fallback_used: false,
-      beta_revision_fingerprint: "03dbfa67f4b708cf",
+      beta_revision_fingerprint: RELEASE_FINGERPRINT,
       metadata_evidence_version: "metadata_v1",
       title_evidence_version: "title_v1",
       pages_found: 163,
@@ -70,7 +71,7 @@ function snapshotFor(recommendations) {
       release_gate_eligible: true,
       score_is_provisional: false,
       evidence_quality_blocking: false,
-      beta_revision_fingerprint: "03dbfa67f4b708cf",
+      beta_revision_fingerprint: RELEASE_FINGERPRINT,
       metadata_evidence_version: "metadata_v1",
       title_evidence_version: "title_v1",
       scan_status: "complete",

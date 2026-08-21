@@ -3,7 +3,7 @@ import { verifyAuthoritySeal } from "./authoritySeal.js";
 import { authorityRowsFromSnapshot, missingAuthorityFixRows } from "./authorityRows.js";
 
 const REVIEW_ATTESTATION_VERSION = "standard_review_snapshot_hmac_v1";
-const EXPECTED_RELEASE_FINGERPRINT = "51c813a6219b4e70";
+import { RELEASE_FINGERPRINT as EXPECTED_RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 const MAX_FIX_ITEMS = 100;
 
 class RequestProblem extends Error {

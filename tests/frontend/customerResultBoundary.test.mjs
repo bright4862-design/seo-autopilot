@@ -1,3 +1,4 @@
+import { RELEASE_FINGERPRINT } from "../../src/lib/generatedReleaseContract.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -40,7 +41,7 @@ function sealedRows() {
       scanner_wrapper_version: "runStandard150Scan_v1_python_required",
       advanced_scan_backend: "python_scanner_api",
       deno_fallback_used: false,
-      beta_revision_fingerprint: "03dbfa67f4b708cf",
+      beta_revision_fingerprint: RELEASE_FINGERPRINT,
       metadata_evidence_version: "metadata_v1",
       title_evidence_version: "title_v1",
       website_url: "https://example.com/",
@@ -56,7 +57,7 @@ function sealedRows() {
       release_gate_eligible: true,
       score_is_provisional: false,
       evidence_quality_blocking: false,
-      beta_revision_fingerprint: "03dbfa67f4b708cf",
+      beta_revision_fingerprint: RELEASE_FINGERPRINT,
       metadata_evidence_version: "metadata_v1",
       title_evidence_version: "title_v1",
       scan_status: "complete",
@@ -265,7 +266,7 @@ test("canonical v2 authority survives persistence reconstruction and projects ra
       scanner_wrapper_version: "runStandard150Scan_v1_python_required",
       advanced_scan_backend: "python_scanner_api",
       deno_fallback_used: false,
-      beta_revision_fingerprint: "03dbfa67f4b708cf",
+      beta_revision_fingerprint: RELEASE_FINGERPRINT,
       metadata_evidence_version: "metadata_v1",
       title_evidence_version: "title_v1",
       website_url: "https://example.com/",
@@ -281,7 +282,7 @@ test("canonical v2 authority survives persistence reconstruction and projects ra
       release_gate_eligible: true,
       score_is_provisional: false,
       evidence_quality_blocking: false,
-      beta_revision_fingerprint: "03dbfa67f4b708cf",
+      beta_revision_fingerprint: RELEASE_FINGERPRINT,
       metadata_evidence_version: "metadata_v1",
       title_evidence_version: "title_v1",
       scan_status: "complete",

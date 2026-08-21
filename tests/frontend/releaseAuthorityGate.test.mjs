@@ -1,3 +1,4 @@
+import { RELEASE_FINGERPRINT } from "../../src/lib/generatedReleaseContract.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -17,7 +18,7 @@ const authoritativeRecord = {
   review_evidence_calibration_version: "review_evidence_calibration_v6_health_score_v2",
   ai_review_backend: "python_review_api",
   python_review_fallback_used: false,
-  beta_revision_fingerprint: "03dbfa67f4b708cf",
+  beta_revision_fingerprint: RELEASE_FINGERPRINT,
   release_gate_eligible: true,
 };
 

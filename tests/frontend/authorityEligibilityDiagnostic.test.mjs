@@ -1,3 +1,4 @@
+import { RELEASE_FINGERPRINT } from "../../src/lib/generatedReleaseContract.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -14,7 +15,7 @@ function eligiblePayload() {
       scanner_build_revision: "authenticated_health_probe_v1",
       advanced_scan_backend: "python_scanner_api",
       deno_fallback_used: false,
-      beta_revision_fingerprint: "03dbfa67f4b708cf",
+      beta_revision_fingerprint: RELEASE_FINGERPRINT,
       metadata_evidence_version: "metadata_evidence_v1",
       title_evidence_version: "title_evidence_v1",
     },
@@ -22,7 +23,7 @@ function eligiblePayload() {
       archetype_classifier_version: "archetype_classifier_v9_local_business_hospitality",
       review_version: "python_review_v2_structural_marketplace",
       review_evidence_calibration_version: "review_evidence_calibration_v6_health_score_v2",
-      beta_revision_fingerprint: "03dbfa67f4b708cf",
+      beta_revision_fingerprint: RELEASE_FINGERPRINT,
       ai_review_backend: "python_review_api",
       python_review_fallback_used: false,
       release_gate_eligible: true,

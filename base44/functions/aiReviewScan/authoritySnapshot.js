@@ -1,3 +1,4 @@
+import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 export const REVIEW_ATTESTATION_VERSION = "standard_review_snapshot_hmac_v1";
 export const MAX_AUTHORITY_FIXES = 100;
 
@@ -7,7 +8,7 @@ export const AUTHORITY_CONTRACT = Object.freeze({
   archetype_classifier_version: "archetype_classifier_v9_local_business_hospitality",
   review_version: "python_review_v2_structural_marketplace",
   review_evidence_calibration_version: "review_evidence_calibration_v5_utility_redirect",
-  beta_revision_fingerprint: "51c813a6219b4e70",
+  beta_revision_fingerprint: RELEASE_FINGERPRINT,
 });
 
 export function isAuthorityEligible(scan, review) {

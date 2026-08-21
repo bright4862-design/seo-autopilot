@@ -1,3 +1,4 @@
+import { RELEASE_FINGERPRINT } from "../../src/lib/generatedReleaseContract.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -17,7 +18,7 @@ const frozenRevision = JSON.parse(readFileSync("data/beta-crawler-revision.json"
 const EXPECTED_SCANNER_VERSION = "python_scanner_v3_bounded_request";
 const EXPECTED_REVIEW_VERSION = "python_review_v2_structural_marketplace";
 const EXPECTED_CALIBRATION_VERSION = "review_evidence_calibration_v6_health_score_v2";
-const EXPECTED_BETA_FINGERPRINT = "03dbfa67f4b708cf";
+const EXPECTED_BETA_FINGERPRINT = RELEASE_FINGERPRINT;
 const EXPECTED_CLASSIFIER_VERSION = "archetype_classifier_v9_local_business_hospitality";
 const EXPECTED_SCANNER_BUILD = "authenticated_health_probe_v1";
 const EXPECTED_METADATA_VERSION = "metadata_evidence_v1_description_states";

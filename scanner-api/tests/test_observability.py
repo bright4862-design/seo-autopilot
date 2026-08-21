@@ -1,9 +1,17 @@
+from app.beta_revision import live_revision
+
+# Read the canonical release identity instead of copying it: a copied
+# marker is exactly the drift this release contract exists to prevent.
+CURRENT_FINGERPRINT = live_revision()["fingerprint"]
+
 import json
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.observability import (
+
+
     CUSTOMER_SAFE_MESSAGES,
     RequestTimer,
     classify_error,
@@ -121,7 +129,7 @@ def test_release_marker_endpoints_are_consistent():
     revision = client.get("/revision").json()
 
     assert health["archetype_classifier_version"] == "archetype_classifier_v9_local_business_hospitality"
-    assert health["beta_revision_fingerprint"] == "03dbfa67f4b708cf"
+    assert health["beta_revision_fingerprint"] == CURRENT_FINGERPRINT
     assert health["review_version"] == "python_review_v2_structural_marketplace"
     assert health["review_evidence_calibration_version"] == "review_evidence_calibration_v6_health_score_v2"
     assert health["scanner_build_revision"] == "authenticated_health_probe_v1"
@@ -178,7 +186,7 @@ def test_scan_endpoint_returns_beta_revision_fingerprint(monkeypatch, capsys):
         headers={"X-Scanner-Key": "test-scanner-key"},
     )
     assert response.status_code == 200
-    assert response.json()["beta_revision_fingerprint"] == "03dbfa67f4b708cf"
+    assert response.json()["beta_revision_fingerprint"] == CURRENT_FINGERPRINT
     assert response.json()["scanner_build_revision"] == "authenticated_health_probe_v1"
     read_log_lines(capsys)
 
@@ -203,7 +211,7 @@ def test_review_endpoint_logs_completion_metrics(monkeypatch, capsys):
         headers={"X-Scanner-Key": "test-scanner-key"},
     )
     assert response.status_code == 200
-    assert response.json()["beta_revision_fingerprint"] == "03dbfa67f4b708cf"
+    assert response.json()["beta_revision_fingerprint"] == CURRENT_FINGERPRINT
     completed = [record for record in read_log_lines(capsys) if record["event"] == "review_completed"]
     assert len(completed) == 1
     assert completed[0]["scan_status"] == "complete"

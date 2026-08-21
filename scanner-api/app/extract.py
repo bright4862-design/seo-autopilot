@@ -155,6 +155,7 @@ def extract_page(
     discovery: dict,
     fetch_error: str = "",
     response_headers: Mapping[str, Any] | None = None,
+    body_truncated: bool = False,
 ) -> dict:
     soup = BeautifulSoup(html or "", "lxml")
     title = clean_text(soup.title.string if soup.title else "")
@@ -208,6 +209,9 @@ def extract_page(
         content_type=content_type,
         fetch_error=fetch_error,
         html=html,
+        # A body cut at the parse ceiling is incomplete evidence: the gate must
+        # see that here, while it is stamping, not after the fact.
+        body_truncated=body_truncated,
     )
 
     return {
@@ -224,6 +228,7 @@ def extract_page(
         "status_code": status_code,
         "fetch_error": fetch_error,
         "content_type": content_type,
+        "raw_html_truncated": bool(body_truncated),
         "page_evidence_class": page_evidence_class,
         "evidence_gate_version": PAGE_EVIDENCE_GATE_VERSION,
         "title": title,

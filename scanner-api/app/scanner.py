@@ -82,6 +82,13 @@ RATE_LIMIT_MAX_INTERVAL_SECONDS = 4.0
 RATE_LIMIT_MAX_RETRIES = 8
 
 
+# A single pathological response must not be able to monopolize a parse. Beyond
+# this ceiling the body is truncated and the page is stamped truncated, which the
+# evidence gate already downgrades to `incomplete_html` -- non-authoritative
+# rather than a source of invented findings.
+MAX_PARSED_HTML_CHARS = 5_000_000
+
+
 def is_cloudflare_rate_limited_response(response) -> bool:
     if response is None or int(getattr(response, "status_code", 0) or 0) != 429:
         return False
@@ -527,8 +534,13 @@ async def run_scan(
                                 break
                     annotate_robots_evidence(page, robots_policy, target)
                     html = page.pop("_html", "")
-                    # Parse links OUTSIDE the lock (CPU-bound) so workers don't block each other.
-                    discovered = extract_links(html, page.get("final_url") or target) if (page.get("status_code") == 200 and html) else []
+                    # Off the event loop for the same reason as extract_page: link
+                    # parsing is CPU-bound, and blocking here starves the heartbeat.
+                    discovered = (
+                        await asyncio.to_thread(extract_links, html, page.get("final_url") or target)
+                        if (page.get("status_code") == 200 and html)
+                        else []
+                    )
                 except Exception:
                     page = extract_page("", target, target, 0, "", snapshot, fetch_error="worker_processing_failed")
                     discovered = []
@@ -773,8 +785,14 @@ async def fetch_and_extract(
                 return page
 
         content_type = response.headers.get("content-type", "")
-        html = response.text if "html" in content_type or "xml" in content_type or not content_type else ""
-        page = extract_page(
+        raw_html = response.text if "html" in content_type or "xml" in content_type or not content_type else ""
+        html_truncated = len(raw_html) > MAX_PARSED_HTML_CHARS
+        html = raw_html[:MAX_PARSED_HTML_CHARS] if html_truncated else raw_html
+        # Parsing is synchronous and CPU-bound. Run it off the event loop so one
+        # large page cannot starve the worker's liveness heartbeat or any asyncio
+        # deadline. Inputs, outputs, and ordering are unchanged.
+        page = await asyncio.to_thread(
+            extract_page,
             html,
             url,
             str(response.url),
@@ -782,6 +800,7 @@ async def fetch_and_extract(
             content_type,
             discovery,
             response_headers={"x-robots-tag": response.headers.get_list("x-robots-tag")},
+            body_truncated=html_truncated,
         )
         if redirect_evidence is not None:
             apply_redirect_evidence(page, redirect_evidence)

@@ -1,13 +1,17 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from app.beta_revision import (
+    CROSS_RUNTIME_SCHEMA_VERSION,
     SCANNER_BUILD_REVISION,
     build_revision_record,
     collect_component_versions,
     diff_versions,
     fingerprint,
     live_revision,
+    load_cross_runtime_components,
     load_recorded_revision,
 )
 from app.crawler_acceptance import summarize_beta_acceptance
@@ -65,6 +69,77 @@ def test_scanner_build_revision_participates_in_frozen_fingerprint():
         "recorded": SCANNER_BUILD_REVISION,
         "live": "unknown_build",
     }
+
+
+# --------------------------------------------------------- cross-runtime --
+#
+# Base44 functions and the frontend can change release truth, but Python cannot
+# import them, so their markers are declared in data and merged here. The
+# frontend suite asserts the same participation against the recorded record; it
+# cannot run this, because collect_component_versions reaches bs4/httpx and the
+# frontend CI job installs Node only.
+
+
+def test_cross_runtime_components_are_merged_into_the_live_fingerprint():
+    declared = load_cross_runtime_components()
+    components = collect_component_versions()
+
+    assert declared, "no cross-runtime markers are declared"
+    for key, value in declared.items():
+        assert components[key] == value, key
+
+
+def test_every_cross_runtime_component_moves_the_fingerprint():
+    """Presence is not participation: each declared marker must be hashed."""
+    components = collect_component_versions()
+    baseline = fingerprint(components)
+
+    for key in load_cross_runtime_components():
+        without = {name: value for name, value in components.items() if name != key}
+        assert fingerprint(without) != baseline, f"{key} does not move the fingerprint"
+
+
+def test_cross_runtime_input_fails_closed_when_missing(tmp_path):
+    with pytest.raises(RuntimeError, match="missing"):
+        load_cross_runtime_components(tmp_path / "absent.json")
+
+
+def test_cross_runtime_input_fails_closed_on_malformed_json(tmp_path):
+    source = tmp_path / "components.json"
+    source.write_text("{not json", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="valid JSON"):
+        load_cross_runtime_components(source)
+
+
+def test_cross_runtime_input_fails_closed_on_wrong_schema(tmp_path):
+    source = tmp_path / "components.json"
+    source.write_text(json.dumps({"schema_version": "v0", "components": {"a": "b"}}), encoding="utf-8")
+    with pytest.raises(RuntimeError, match=CROSS_RUNTIME_SCHEMA_VERSION):
+        load_cross_runtime_components(source)
+
+
+@pytest.mark.parametrize(
+    "components",
+    [{}, {"Not Snake": "value"}, {"empty_value": "   "}, {"wrong_type": 3}],
+)
+def test_cross_runtime_input_rejects_unusable_component_maps(tmp_path, components):
+    source = tmp_path / "components.json"
+    source.write_text(
+        json.dumps({"schema_version": CROSS_RUNTIME_SCHEMA_VERSION, "components": components}),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError):
+        load_cross_runtime_components(source)
+
+
+def test_cross_runtime_components_do_not_collide_with_python_components():
+    """A collision would let one runtime silently redefine another's marker."""
+    declared = set(load_cross_runtime_components())
+    components = collect_component_versions()
+    python_only = set(components) - declared
+
+    assert python_only, "no python-owned components remain"
+    assert declared.isdisjoint(python_only)
 
 
 def test_beta_acceptance_manifest_wellformed():

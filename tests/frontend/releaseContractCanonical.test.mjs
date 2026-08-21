@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -163,19 +164,62 @@ test("editing a generated consumer is detected as drift", () => {
   );
 });
 
-// ------------------------------------------- python fingerprint authority --
+// ----------------------------------------------- fingerprint participation --
 
-test("cross-runtime components participate in the python fingerprint", () => {
-  const script = [
-    "import json,sys",
-    "sys.path.insert(0, 'scanner-api')",
-    "from app.beta_revision import collect_component_versions",
-    "print(json.dumps(collect_component_versions()))",
-  ].join("; ");
-  const versions = JSON.parse(execFileSync("python3", ["-c", script], { cwd: ROOT, encoding: "utf8" }));
+/**
+ * Python's fingerprint, re-derived without Python.
+ *
+ * beta_revision.fingerprint is sha256 over json.dumps(components,
+ * sort_keys=True, separators=(",", ":")), truncated to 16 hex. Every marker is
+ * ASCII, so JSON.stringify over sorted keys is byte-identical to that payload
+ * -- asserted below rather than assumed, because Python escapes non-ASCII by
+ * default and Node does not.
+ *
+ * This runs in the frontend job, which installs Node only. Shelling out to
+ * python3 here fails on `import bs4`: collect_component_versions reaches the
+ * scanner modules transitively. The Python-side half -- that the collector
+ * really does merge this input, and fails closed without it -- is asserted in
+ * scanner-api/tests/test_beta_revision.py, where the dependencies exist.
+ */
+function pythonFingerprint(components) {
+  const keys = Object.keys(components).sort();
+  for (const key of keys) {
+    assert.ok(
+      /^[\x20-\x7e]*$/.test(key) && /^[\x20-\x7e]*$/.test(components[key]),
+      `component ${key} is not ASCII; the node re-derivation would not match python`,
+    );
+  }
+  const payload = `{${keys.map((key) => `${JSON.stringify(key)}:${JSON.stringify(components[key])}`).join(",")}}`;
+  return createHash("sha256").update(payload, "utf8").digest("hex").slice(0, 16);
+}
+
+test("the recorded fingerprint is the hash of the recorded component set", () => {
+  const record = readJson(REVISION_RECORD);
+  assert.equal(pythonFingerprint(record.component_versions), record.fingerprint);
+});
+
+test("cross-runtime components participate in the release fingerprint", () => {
+  const record = readJson(REVISION_RECORD);
   const input = readJson(CROSS_RUNTIME_INPUT);
+
   for (const [key, value] of Object.entries(input.components)) {
-    assert.equal(versions[key], value, `cross-runtime component ${key} is not in the python fingerprint`);
+    assert.equal(
+      record.component_versions[key],
+      value,
+      `cross-runtime component ${key} is not in the recorded component set`,
+    );
+  }
+
+  // Presence in the record is not participation. Drop each declared marker and
+  // the fingerprint must move, or the record could carry a decorative copy.
+  for (const key of Object.keys(input.components)) {
+    const without = { ...record.component_versions };
+    delete without[key];
+    assert.notEqual(
+      pythonFingerprint(without),
+      record.fingerprint,
+      `dropping ${key} does not move the fingerprint`,
+    );
   }
 });
 

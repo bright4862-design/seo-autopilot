@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .repair_architecture_priority import architecture_context, architecture_priority_reason
 from .repair_priority import ACTION_RANK, SEVERITY_RANK, annotate_repair_priority
 
 REPAIR_PRIORITY_CALIBRATION_VERSION = "repair_priority_v2_technical_severity"
@@ -212,7 +213,14 @@ def _action_priority(base_severity: str, evidence_class: str, context: dict[str,
     return band
 
 
-def _score(base_severity: str, action_priority: str, context: dict[str, Any], fix: dict[str, Any]) -> int:
+def _score(
+    base_severity: str,
+    action_priority: str,
+    context: dict[str, Any],
+    fix: dict[str, Any],
+    *,
+    role_bonus: int,
+) -> int:
     score = ACTION_RANK[action_priority] * 1000 + SEVERITY_RANK[base_severity] * 100
     searchable = context.get("searchable_coverage")
     checked = context.get("checked_coverage")
@@ -223,7 +231,12 @@ def _score(base_severity: str, action_priority: str, context: dict[str, Any], fi
             score += round(min(1.0, max(0.0, float(coverage))) * 40)
         except (TypeError, ValueError):
             pass
-    score += min(20, max(0, int(context.get("important_affected") or 0)) * 5)
+
+    # Architecture replaces the old linear "important page" bonus. Structural
+    # and business-critical surfaces receive strong bounded credit, while the
+    # marginal value of repeated product/activity leaves saturates quickly.
+    score += max(0, int(role_bonus or 0))
+
     confidence = fix.get("evidence_confidence")
     if confidence is None:
         confidence = fix.get("confidence_score")
@@ -243,13 +256,26 @@ def annotate_calibrated_repair_priority(fix: dict[str, Any], pages: list[dict[st
     The post-review repair-contract wrapper may use this annotation to build a
     separate canonical snapshot after the ordinary review has finished.
     """
-    annotated = annotate_repair_priority(dict(fix), _canonical_priority_pages(pages or []))
+    normalized_pages = _canonical_priority_pages(pages or [])
+    annotated = annotate_repair_priority(dict(fix), normalized_pages)
     base_severity, severity_source = technical_base_severity(fix)
     evidence_class = calibrated_evidence_class(fix)
     context = dict(annotated.get("priority_context") or {})
     search_facing = bool(context.get("search_facing"))
     action_priority = _action_priority(base_severity, evidence_class, context, search_facing=search_facing)
-    score = _score(base_severity, action_priority, context, fix)
+
+    architecture = architecture_context(
+        fix,
+        normalized_pages,
+        checked_eligible=context.get("checked_eligible"),
+    )
+    score = _score(
+        base_severity,
+        action_priority,
+        context,
+        fix,
+        role_bonus=int(architecture.get("role_bonus") or 0),
+    )
 
     context.update({
         "version": REPAIR_PRIORITY_CALIBRATION_VERSION,
@@ -259,7 +285,18 @@ def annotate_calibrated_repair_priority(fix: dict[str, Any], pages: list[dict[st
         "evidence_class": evidence_class,
         "action_priority": action_priority,
         "action_priority_score": score,
+        "architecture_priority_version": architecture.get("version"),
+        "architecture_role_counts": architecture.get("role_counts"),
+        "architecture_role_bonus": architecture.get("role_bonus"),
+        "repair_reach": architecture.get("repair_reach"),
     })
+
+    priority_reason = architecture_priority_reason(
+        fix,
+        normalized_pages,
+        checked_eligible=context.get("checked_eligible"),
+        fallback_reason=str(annotated.get("priority_reason") or ""),
+    )
 
     return {
         **annotated,
@@ -268,6 +305,7 @@ def annotate_calibrated_repair_priority(fix: dict[str, Any], pages: list[dict[st
         "evidence_class": evidence_class,
         "action_priority": action_priority,
         "action_priority_score": score,
+        "priority_reason": priority_reason,
         "priority_context": context,
         "repair_priority_version": REPAIR_PRIORITY_CALIBRATION_VERSION,
     }

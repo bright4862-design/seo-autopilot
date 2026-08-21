@@ -1,6 +1,7 @@
 import React, { useId, useMemo, useState } from "react";
 
 import { canonicalRepairDisplayModel } from "@/lib/canonicalRepairDisplay";
+import SuggestedFix from "@/components/fixlist/SuggestedFix";
 
 /**
  * Compact action-priority row for the canonical FixList presentation.
@@ -10,7 +11,7 @@ import { canonicalRepairDisplayModel } from "@/lib/canonicalRepairDisplay";
  * already-authoritative repair item and may optionally provide expanded detail
  * content once that detail seam is migrated.
  */
-export default function CanonicalRepairRow({ item, model: suppliedModel, renderDetails }) {
+export default function CanonicalRepairRow({ item, model: suppliedModel, suggestion, showSuggestedFix = true, renderDetails }) {
   const model = useMemo(
     () => canonicalRepairDisplayModel(item, suppliedModel),
     [item, suppliedModel],
@@ -45,6 +46,7 @@ export default function CanonicalRepairRow({ item, model: suppliedModel, renderD
               <span className="text-ink-faint">Why this is here · </span>{model.reason}
             </span>
           ) : null}
+          <SuggestedFix suggestion={suggestion} compact showFix={showSuggestedFix} />
           {model.leverage ? (
             <span className="mt-1.5 block text-[12px] leading-relaxed text-ink-muted">
               {model.leverage}

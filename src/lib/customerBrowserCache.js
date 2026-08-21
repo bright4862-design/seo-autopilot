@@ -25,7 +25,6 @@ export const CUSTOMER_SESSION_STORAGE_KEYS = Object.freeze([
   "seo_autopilot_pending_analytics",
   "seo_autopilot:active_request",
   "seo_autopilot:pending_callbacks",
-  "seo_autopilot:grok_repair_brief",
 ]);
 
 export const CUSTOMER_CACHE_VERSION = 2;

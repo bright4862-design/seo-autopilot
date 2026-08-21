@@ -80,6 +80,8 @@ export default function RepairSectionList({ sections = [], renderRow }) {
                   key={row?.model?.id || row?.item?.id || `${section.key}-${index}`}
                   item={row.item}
                   model={row.model}
+                  suggestion={row.suggestion}
+                  showSuggestedFix={!row.groupedUnderSummary}
                   renderDetails={() => renderRow(row, index)}
                 />
               ))}

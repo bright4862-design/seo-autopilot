@@ -116,13 +116,13 @@ test("legacy presentation also receives group summaries and keeps every legacy r
 });
 
 test("the group summary component states that grouped repairs remain individually fixable", () => {
-  assert.match(componentSource, /Fix once/);
+  assert.match(componentSource, /Fix once: /);
   assert.match(componentSource, /group\.title/);
   assert.match(componentSource, /group\.pageCount/);
   assert.match(componentSource, /group\.templateCount/);
-  assert.match(componentSource, /"page template" : "page templates"/);
+  assert.match(componentSource, /"template" : "templates"/);
   assert.match(componentSource, /group\.pageCountExact === false \? "\+" : ""/);
-  assert.match(componentSource, /keeps its own evidence/);
+  assert.match(componentSource, /keeps its own evidence and affected URLs/);
   assert.doesNotMatch(componentSource, /fetch\(/);
   assert.doesNotMatch(componentSource, /base44/);
 });

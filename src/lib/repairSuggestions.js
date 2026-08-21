@@ -1,20 +1,24 @@
 /**
  * Deterministic repair suggestion layer.
  *
- * FixList owns detection, prioritization, grouping, and the suggested fix. This
- * module is the suggested-fix half of that ownership: a pure, offline mapping
- * from the repair evidence the scanner already publishes to the action a
- * customer should take.
+ * Pipeline position:
+ *   website -> scanner -> findings + evidence -> prioritization -> THIS LAYER -> FixList UI
+ *
+ * This layer is the last step before presentation and the first one that is
+ * allowed to be opinionated about what a customer should *do*. It reads the
+ * repair the scanner already produced and answers the questions the finding
+ * itself does not: what is the fix, where is it applied, how big is it, and
+ * who does it.
  *
  * Hard boundaries:
- * - No scanner, crawler, authority, or persistence behavior is involved.
- * - No new field is written back onto a repair or the authoritative scan
- *   payload. Only fields the payload already carries are read.
- * - No language model participates. Every value here is a fixed table lookup
- *   plus evidence the scanner already published, so the same repair always
- *   produces the same suggestion.
- * - Scanner-authored copy always wins. When the scanner published its own
- *   remediation text, it is preserved and this table is only the fallback.
+ * - No crawler, scan logic, detection rule, scoring, ranking, or persistence
+ *   behavior is involved. Nothing here can change what was found or its order.
+ * - No field is written back onto a repair, a scan payload, or an entity. Only
+ *   fields the payload already carries are read.
+ * - No language model participates. Every value is a fixed table lookup plus
+ *   evidence the scanner published, so one repair always yields one suggestion.
+ * - Scanner-authored copy always wins. Where the scanner published its own
+ *   remediation, role, or effort, that is shown and this table steps aside.
  */
 
 /** Shape/behavior version of the suggestion model returned by this module. */
@@ -26,7 +30,7 @@ export const REPAIR_SUGGESTION_VERSION = "repair_suggestion_v1_deterministic";
  * Nothing persists this today. It is carried on every suggestion so that later
  * A/B tests, improvement tracking, customer feedback, and scan-to-scan
  * comparisons can say which wording a customer actually saw. Bump it whenever
- * the suggested-fix copy, strategy, effort, or role guidance changes.
+ * the suggested-fix copy, scope, effort, or role guidance changes.
  */
 export const REPAIR_SUGGESTION_LIBRARY_VERSION = "v1";
 
@@ -34,7 +38,7 @@ export const REPAIR_SUGGESTION_LIBRARY_VERSION = "v1";
  * Shown whenever the scanner reports a rule this library does not map yet.
  * The UI renders this instead of an empty or undefined suggested fix.
  */
-export const REPAIR_SUGGESTION_FALLBACK = "Review this repair manually using the evidence below, then confirm the change with a fresh scan.";
+export const REPAIR_SUGGESTION_FALLBACK = "Review this issue based on the evidence collected.";
 
 export const REPAIR_TYPES = Object.freeze({
   MISSING_TITLE: "missing_title",
@@ -52,30 +56,29 @@ export const REPAIR_TYPES = Object.freeze({
   THIN_OR_DUPLICATE_TEMPLATE: "thin_or_duplicate_template",
 });
 
-export const FIX_STRATEGIES = Object.freeze({
-  TEMPLATE: "template",
-  PAGE: "page",
-  CONTENT: "content",
-  NAVIGATION: "navigation",
-  SITE_CONFIG: "site_config",
-  SITEMAP: "sitemap",
+/** Where the repair is applied. Deliberately three values, not a taxonomy. */
+export const FIX_SCOPES = Object.freeze(["page", "template", "sitewide"]);
+
+export const FIX_SCOPE_LABELS = Object.freeze({
+  page: "Page",
+  template: "Template",
+  sitewide: "Sitewide",
 });
 
-export const FIX_STRATEGY_LABELS = Object.freeze({
-  template: "Fix the template once",
-  page: "Fix this page",
-  content: "Rewrite the page content",
-  navigation: "Fix the internal links",
-  site_config: "Fix the site or server configuration",
-  sitemap: "Fix the sitemap",
+export const EFFORT_LEVELS = Object.freeze(["low", "medium", "high"]);
+
+export const EFFORT_LABELS = Object.freeze({
+  low: "Low",
+  medium: "Medium",
+  high: "High",
 });
 
-export const EFFORT_LEVELS = Object.freeze(["Low", "Medium", "High"]);
+export const REPAIR_ROLES = Object.freeze(["SEO manager", "Developer", "Content team"]);
 
 /**
  * Exact scanner rule identifiers, mapped to the repair type a customer acts on.
  * Several scanner rules describe one customer repair; that collapsing happens
- * here rather than in a component.
+ * here rather than in a component, and never in the scanner.
  */
 const RULE_REPAIR_TYPES = Object.freeze({
   missing_title: REPAIR_TYPES.MISSING_TITLE,
@@ -170,265 +173,249 @@ const RULE_PATTERNS = Object.freeze([
   [/thin_content|duplicate_content/, REPAIR_TYPES.THIN_OR_DUPLICATE_TEMPLATE],
 ]);
 
+/**
+ * The suggestion table.
+ *
+ * `single` is used when the scan carries no evidence that one shared change
+ * covers the repair; `shared` is used when it does. Some repairs are sitewide
+ * in both cases because that is simply where the fix lives: a redirect chain is
+ * repaired in link sources and redirect rules, not on the page that reports it.
+ */
 const SUGGESTION_LIBRARY = Object.freeze({
   [REPAIR_TYPES.MISSING_TITLE]: {
     label: "Missing page title",
     groupTitle: "Add missing page titles",
-    page: {
-      fixStrategy: FIX_STRATEGIES.PAGE,
+    single: {
+      fixScope: "page",
       suggestedFix: "Add a page title that names what this page is about, in the words a visitor would use.",
       bestApproach: "Write the title directly on this page rather than changing a shared template.",
-      effort: "Low",
-      effortDetail: "Under an hour",
-      recommendedRole: "Content editor",
+      effort: "low",
+      role: "Content team",
     },
-    template: {
-      fixStrategy: FIX_STRATEGIES.TEMPLATE,
+    shared: {
+      fixScope: "template",
       suggestedFix: "Add a title rule to the template that builds these pages so every page generates its own title.",
       bestApproach: "Fix the shared template once instead of typing a title into each affected page.",
-      effort: "Medium",
-      effortDetail: "2-4 hours",
-      recommendedRole: "SEO manager with developer support",
+      effort: "medium",
+      role: "Developer",
     },
   },
   [REPAIR_TYPES.DUPLICATE_TITLE]: {
     label: "Repeated page title",
     groupTitle: "Make page titles unique",
-    page: {
-      fixStrategy: FIX_STRATEGIES.PAGE,
+    single: {
+      fixScope: "page",
       suggestedFix: "Rewrite this page's title so it describes this page instead of repeating another page's title.",
       bestApproach: "Edit the title on this page; no template change is needed for a single page.",
-      effort: "Low",
-      effortDetail: "Under an hour",
-      recommendedRole: "Content editor",
+      effort: "low",
+      role: "Content team",
     },
-    template: {
-      fixStrategy: FIX_STRATEGIES.TEMPLATE,
+    shared: {
+      fixScope: "template",
       suggestedFix: "Update the shared title pattern so it includes the field that makes each page different, such as the product, place, or topic name.",
       bestApproach: "Change the one title pattern rather than editing each page by hand.",
-      effort: "Medium",
-      effortDetail: "2-4 hours",
-      recommendedRole: "SEO manager with developer support",
+      effort: "medium",
+      role: "SEO manager",
     },
   },
   [REPAIR_TYPES.MISSING_META_DESCRIPTION]: {
     label: "Missing search description",
     groupTitle: "Improve search descriptions",
-    page: {
-      fixStrategy: FIX_STRATEGIES.PAGE,
+    single: {
+      fixScope: "page",
       suggestedFix: "Add a short search description to this page explaining what a visitor can do here.",
       bestApproach: "Write it directly on the page; a template change is not needed for one page.",
-      effort: "Low",
-      effortDetail: "Under an hour",
-      recommendedRole: "Content editor",
+      effort: "low",
+      role: "Content team",
     },
-    template: {
-      fixStrategy: FIX_STRATEGIES.TEMPLATE,
-      suggestedFix: "Add unique search descriptions to the page template generating these pages, so each page builds its own description from its own content.",
+    shared: {
+      fixScope: "template",
+      suggestedFix: "Update the page template to generate unique meta descriptions, so each page builds its own description from its own content.",
       bestApproach: "Update the shared templates once rather than writing a description for every affected page.",
-      effort: "Medium",
-      effortDetail: "1-2 hours per template",
-      recommendedRole: "SEO manager",
+      effort: "medium",
+      role: "SEO manager",
     },
   },
   [REPAIR_TYPES.DUPLICATE_META_DESCRIPTION]: {
     label: "Repeated search description",
     groupTitle: "Make search descriptions unique",
-    page: {
-      fixStrategy: FIX_STRATEGIES.PAGE,
+    single: {
+      fixScope: "page",
       suggestedFix: "Rewrite this page's search description so it is specific to this page.",
       bestApproach: "Edit the description on this page directly.",
-      effort: "Low",
-      effortDetail: "Under an hour",
-      recommendedRole: "Content editor",
+      effort: "low",
+      role: "Content team",
     },
-    template: {
-      fixStrategy: FIX_STRATEGIES.TEMPLATE,
+    shared: {
+      fixScope: "template",
       suggestedFix: "Change the template's description pattern so it pulls page-specific content instead of repeating one fixed sentence.",
       bestApproach: "Fix the shared description pattern once; hand-editing each page will drift back over time.",
-      effort: "Medium",
-      effortDetail: "2-4 hours",
-      recommendedRole: "SEO manager with developer support",
+      effort: "medium",
+      role: "SEO manager",
     },
   },
   [REPAIR_TYPES.MISSING_H1]: {
     label: "Missing main heading",
     groupTitle: "Add clear main headings",
-    page: {
-      fixStrategy: FIX_STRATEGIES.PAGE,
+    single: {
+      fixScope: "page",
       suggestedFix: "Add one clear main heading at the top of this page that states its main topic.",
       bestApproach: "Add the heading in the page editor for this page.",
-      effort: "Low",
-      effortDetail: "Under an hour",
-      recommendedRole: "Content editor",
+      effort: "low",
+      role: "Content team",
     },
-    template: {
-      fixStrategy: FIX_STRATEGIES.TEMPLATE,
+    shared: {
+      fixScope: "template",
       suggestedFix: "Add one main heading to the template that builds these pages, filled from each page's own title field.",
       bestApproach: "Fix the shared template once so every page built from it gets a heading.",
-      effort: "Medium",
-      effortDetail: "2-4 hours",
-      recommendedRole: "Web developer",
+      effort: "medium",
+      role: "Developer",
     },
   },
   [REPAIR_TYPES.MULTIPLE_H1]: {
     label: "More than one main heading",
     groupTitle: "Reduce pages to one main heading",
-    page: {
-      fixStrategy: FIX_STRATEGIES.PAGE,
+    single: {
+      fixScope: "page",
       suggestedFix: "Keep one main heading on this page and demote the others to sub-headings.",
       bestApproach: "Adjust the heading levels in this page's content.",
-      effort: "Low",
-      effortDetail: "Under an hour",
-      recommendedRole: "Content editor",
+      effort: "low",
+      role: "Content team",
     },
-    template: {
-      fixStrategy: FIX_STRATEGIES.TEMPLATE,
+    shared: {
+      fixScope: "template",
       suggestedFix: "Change the template or shared blocks so only the page title renders as the main heading and other blocks render as sub-headings.",
       bestApproach: "Fix the template or reusable block once; the duplicate heading is being generated, not typed.",
-      effort: "Medium",
-      effortDetail: "2-4 hours",
-      recommendedRole: "Web developer",
+      effort: "medium",
+      role: "Developer",
     },
   },
   [REPAIR_TYPES.CANONICAL_ISSUE]: {
     label: "Preferred URL not set clearly",
     groupTitle: "Confirm the preferred version of each page",
-    page: {
-      fixStrategy: FIX_STRATEGIES.PAGE,
+    single: {
+      fixScope: "page",
       suggestedFix: "Set this page's preferred-URL setting to its own final, working address.",
       bestApproach: "Correct the setting on this page and confirm the target returns a normal 200 response.",
-      effort: "Low",
-      effortDetail: "1-2 hours",
-      recommendedRole: "Web developer",
+      effort: "low",
+      role: "Developer",
     },
-    template: {
-      fixStrategy: FIX_STRATEGIES.TEMPLATE,
+    shared: {
+      fixScope: "template",
       suggestedFix: "Correct the preferred-URL rule in the template or CMS field that generates it, so each page points at its own final address.",
       bestApproach: "Fix the one rule that generates these values instead of editing pages individually.",
-      effort: "Medium",
-      effortDetail: "Half a day",
-      recommendedRole: "Web developer",
+      effort: "medium",
+      role: "Developer",
     },
   },
   [REPAIR_TYPES.REDIRECT_CHAIN]: {
     label: "Unnecessary redirects",
     groupTitle: "Remove unnecessary redirects",
-    page: {
-      fixStrategy: FIX_STRATEGIES.NAVIGATION,
-      suggestedFix: "Replace redirected internal links with the final destination URL and remove unnecessary redirect steps.",
-      bestApproach: "Fix the source links and templates instead of manually editing individual URLs.",
-      effort: "Low",
-      effortDetail: "1-2 hours",
-      recommendedRole: "Web developer",
+    // Sitewide in both cases: the repair lives in the links and redirect rules
+    // that point at the old URL, which are rarely on the reported page.
+    single: {
+      fixScope: "sitewide",
+      suggestedFix: "Replace internal links pointing to redirected URLs with the final destination URL.",
+      bestApproach: "Fix the source links and redirect rules instead of manually editing individual URLs.",
+      effort: "low",
+      role: "Developer",
     },
-    template: {
-      fixStrategy: FIX_STRATEGIES.TEMPLATE,
+    shared: {
+      fixScope: "sitewide",
       suggestedFix: "Update the shared navigation, templates, and redirect rules so links point straight at the final URL in one hop.",
       bestApproach: "Fix the source links and templates instead of manually editing individual URLs.",
-      effort: "Medium",
-      effortDetail: "Half a day",
-      recommendedRole: "Web developer",
+      effort: "medium",
+      role: "Developer",
     },
   },
   [REPAIR_TYPES.BROKEN_INTERNAL_LINK]: {
     label: "Broken internal link",
     groupTitle: "Repair broken internal links",
-    page: {
-      fixStrategy: FIX_STRATEGIES.NAVIGATION,
+    single: {
+      fixScope: "page",
       suggestedFix: "Point this link at a working page, or restore the page it was meant to reach.",
       bestApproach: "Fix the link at its source page rather than adding a redirect to cover it.",
-      effort: "Low",
-      effortDetail: "1-2 hours",
-      recommendedRole: "Web developer",
+      effort: "low",
+      role: "Content team",
     },
-    template: {
-      fixStrategy: FIX_STRATEGIES.TEMPLATE,
+    shared: {
+      fixScope: "sitewide",
       suggestedFix: "Correct the shared navigation, footer, or template block that repeats this broken link across pages.",
       bestApproach: "One shared block is generating most of these links; fix it there rather than page by page.",
-      effort: "Medium",
-      effortDetail: "Half a day",
-      recommendedRole: "Web developer",
+      effort: "medium",
+      role: "Developer",
     },
   },
   [REPAIR_TYPES.HARD_TO_DISCOVER_PAGE]: {
     label: "Hard to discover page",
     groupTitle: "Make isolated pages easier to reach",
-    page: {
-      fixStrategy: FIX_STRATEGIES.NAVIGATION,
+    single: {
+      fixScope: "sitewide",
       suggestedFix: "Confirm whether this page still matters, then link to it from a related page or from your navigation.",
       bestApproach: "Decide first whether the page should exist; only then add links to it.",
-      effort: "Low",
-      effortDetail: "1-2 hours",
-      recommendedRole: "SEO manager",
+      effort: "low",
+      role: "SEO manager",
     },
-    template: {
-      fixStrategy: FIX_STRATEGIES.NAVIGATION,
+    shared: {
+      fixScope: "sitewide",
       suggestedFix: "Add these pages to a listing, hub, or navigation block so they are reachable by following links from your homepage.",
       bestApproach: "Add one listing or hub page that links to the whole set rather than adding links one at a time.",
-      effort: "Medium",
-      effortDetail: "Half a day",
-      recommendedRole: "SEO manager",
+      effort: "medium",
+      role: "SEO manager",
     },
   },
   [REPAIR_TYPES.SITEMAP_REDIRECT]: {
     label: "Sitemap lists non-final URLs",
     groupTitle: "List only final URLs in the sitemap",
-    page: {
-      fixStrategy: FIX_STRATEGIES.SITEMAP,
+    single: {
+      fixScope: "sitewide",
       suggestedFix: "Replace this sitemap entry with the final URL it currently redirects to.",
       bestApproach: "Correct the sitemap source or generator, not the published file by hand.",
-      effort: "Low",
-      effortDetail: "1-2 hours",
-      recommendedRole: "Web developer",
+      effort: "low",
+      role: "Developer",
     },
-    template: {
-      fixStrategy: FIX_STRATEGIES.SITEMAP,
+    shared: {
+      fixScope: "sitewide",
       suggestedFix: "Change the sitemap generator so it publishes each page's final working URL and drops redirected entries.",
       bestApproach: "Fix the generator once; hand-edited sitemaps are rebuilt and lose the change.",
-      effort: "Medium",
-      effortDetail: "2-4 hours",
-      recommendedRole: "Web developer",
+      effort: "medium",
+      role: "Developer",
     },
   },
   [REPAIR_TYPES.NOINDEX_ISSUE]: {
     label: "Page blocked from search",
     groupTitle: "Resolve pages blocked from search",
-    page: {
-      fixStrategy: FIX_STRATEGIES.SITE_CONFIG,
+    single: {
+      fixScope: "page",
       suggestedFix: "Confirm whether this page should appear in search. If it should, remove the setting that is keeping it out.",
       bestApproach: "Check the intent before changing anything: some pages are hidden deliberately.",
-      effort: "Low",
-      effortDetail: "1-2 hours",
-      recommendedRole: "SEO manager with developer support",
+      effort: "low",
+      role: "SEO manager",
     },
-    template: {
-      fixStrategy: FIX_STRATEGIES.SITE_CONFIG,
+    shared: {
+      fixScope: "sitewide",
       suggestedFix: "Review the template or site-wide rule applying this setting, and limit it to the pages that should genuinely stay out of search.",
       bestApproach: "One rule is affecting the whole group; correct that rule instead of overriding pages individually.",
-      effort: "Medium",
-      effortDetail: "Half a day",
-      recommendedRole: "Web developer",
+      effort: "medium",
+      role: "Developer",
     },
   },
   [REPAIR_TYPES.THIN_OR_DUPLICATE_TEMPLATE]: {
     label: "Thin or repeated page content",
     groupTitle: "Give near-identical pages their own content",
-    page: {
-      fixStrategy: FIX_STRATEGIES.CONTENT,
+    single: {
+      fixScope: "page",
       suggestedFix: "Add content to this page that a visitor could not get from any other page on the site.",
       bestApproach: "Expand this page directly, or merge it into the stronger page covering the same topic.",
-      effort: "Medium",
-      effortDetail: "2-4 hours",
-      recommendedRole: "Content editor",
+      effort: "medium",
+      role: "Content team",
     },
-    template: {
-      fixStrategy: FIX_STRATEGIES.TEMPLATE,
+    shared: {
+      fixScope: "template",
       suggestedFix: "Change the template so each page renders its own details, and merge or remove the pages that cannot carry unique content.",
       bestApproach: "Decide which pages deserve to exist first, then fix the template that makes the survivors look identical.",
-      effort: "High",
-      effortDetail: "1-2 days",
-      recommendedRole: "SEO manager with content support",
+      effort: "high",
+      role: "SEO manager",
     },
   },
 });
@@ -436,30 +423,27 @@ const SUGGESTION_LIBRARY = Object.freeze({
 /**
  * Used when the scanner reports a rule this library has no mapping for.
  *
- * Effort, role, and strategy are deliberately empty here. Inventing "Low ·
- * 1-2 hours" for a repair FixList does not recognize would be a confident
- * guess, and the whole point of this layer is that its output is knowable.
- * The customer gets an honest fallback instruction and the repair's own
- * evidence instead.
+ * Scope, effort, and role are deliberately empty. Inventing "Page · Low · SEO
+ * manager" for a repair FixList does not recognize would be a confident guess,
+ * and the point of this layer is that its output is knowable. The customer gets
+ * an honest instruction and the repair's own evidence instead.
  */
 const UNMAPPED_SUGGESTION = Object.freeze({
   label: "Unrecognized repair",
   groupTitle: "Repairs to review manually",
-  page: Object.freeze({
-    fixStrategy: "",
+  single: Object.freeze({
+    fixScope: "",
     suggestedFix: REPAIR_SUGGESTION_FALLBACK,
     bestApproach: "Use the evidence below to decide whether this is a single-page change or a shared template change.",
     effort: "",
-    effortDetail: "",
-    recommendedRole: "",
+    role: "",
   }),
-  template: Object.freeze({
-    fixStrategy: "",
+  shared: Object.freeze({
+    fixScope: "",
     suggestedFix: REPAIR_SUGGESTION_FALLBACK,
     bestApproach: "Use the evidence below to decide whether this is a single-page change or a shared template change.",
     effort: "",
-    effortDetail: "",
-    recommendedRole: "",
+    role: "",
   }),
 });
 
@@ -518,8 +502,30 @@ function repairSurfaceOf(item = {}) {
  * Roles and effort the scanner already published outrank this library.
  *
  * `needs_developer` is a scanner bucket, not an inference, so it is honored the
- * same way an explicit role string would be.
+ * same way an explicit role string would be. Known synonyms are normalized into
+ * the three-role vocabulary; anything else is passed through untouched, because
+ * scanner text is evidence and this layer does not overwrite evidence.
  */
+const ROLE_SYNONYMS = Object.freeze({
+  "web developer": "Developer",
+  "front-end developer": "Developer",
+  "frontend developer": "Developer",
+  developer: "Developer",
+  engineering: "Developer",
+  "content editor": "Content team",
+  "content team": "Content team",
+  copywriter: "Content team",
+  marketing: "SEO manager",
+  "seo manager": "SEO manager",
+  seo: "SEO manager",
+});
+
+function normalizeRole(value = "") {
+  const raw = clean(value);
+  if (!raw) return "";
+  return ROLE_SYNONYMS[raw.toLowerCase()] || raw;
+}
+
 function scannerRoleOf(item = {}) {
   const explicit = clean(
     item.recommendedRole
@@ -527,12 +533,16 @@ function scannerRoleOf(item = {}) {
       || item.who_can_do_this
       || item.original?.who_can_do_this,
   );
-  if (explicit) return explicit;
-  if (item.needsHelp === true || lower(item.bucket) === "needs_developer") return "Web developer";
+  if (explicit) return normalizeRole(explicit);
+  if (item.needsHelp === true || lower(item.bucket) === "needs_developer") return "Developer";
   return "";
 }
 
-function scannerEffortOf(item = {}) {
+/**
+ * Only the scanner may claim a time estimate. The library states effort as
+ * low/medium/high and never invents an hour figure.
+ */
+function scannerEffortDetailOf(item = {}) {
   return clean(
     item.estimatedTime
       || item.estimated_time
@@ -564,17 +574,17 @@ const TEMPLATE_SURFACES = Object.freeze([
 ]);
 
 /**
- * Decide whether the customer should be pointed at a template rather than a
- * page. This reads published evidence only; it never guesses from page count
- * alone that one template edit is sufficient.
+ * Does the scan carry evidence that one shared change covers this repair?
+ *
+ * This reads published evidence only. A high page count alone is never treated
+ * as proof that one template edit is sufficient.
  */
-export function repairFixScope(item = {}) {
-  if (sharedRepairConfirmedOf(item)) return "template";
+export function hasSharedRepairEvidence(item = {}) {
+  if (sharedRepairConfirmedOf(item)) return true;
   const surface = repairSurfaceOf(item);
-  if (surface && TEMPLATE_SURFACES.some((value) => surface.includes(value))) return "template";
+  if (surface && TEMPLATE_SURFACES.some((value) => surface.includes(value))) return true;
   const family = templateFamilyOf(item);
-  if (pageCountOf(item) > 1 && family && family !== "mixed") return "template";
-  return "page";
+  return pageCountOf(item) > 1 && Boolean(family) && family !== "mixed";
 }
 
 export function repairTypeOf(item = {}) {
@@ -592,6 +602,13 @@ export function repairSuggestionEntry(repairType = "") {
   return SUGGESTION_LIBRARY[lower(repairType)] || null;
 }
 
+/** Where this repair is applied: page, template, or sitewide. */
+export function repairFixScope(item = {}) {
+  const entry = repairSuggestionEntry(repairTypeOf(item)) || UNMAPPED_SUGGESTION;
+  const variant = hasSharedRepairEvidence(item) ? entry.shared : entry.single;
+  return clean(variant.fixScope);
+}
+
 /**
  * Build the customer-facing suggested fix for one repair.
  *
@@ -602,15 +619,15 @@ export function repairSuggestionEntry(repairType = "") {
  *
  * Scanner-published remediation copy is never discarded: when the repair
  * carries its own recommendation it becomes `suggestedFix`, and this table
- * supplies only the strategy, effort, role, and best-approach guidance the
- * scanner does not publish.
+ * supplies only the scope, effort, role, and approach the scanner does not
+ * publish.
  */
 export function repairSuggestion(item = {}) {
   const repairType = repairTypeOf(item);
   const entry = repairSuggestionEntry(repairType) || UNMAPPED_SUGGESTION;
   const suggestionAvailable = Boolean(repairType);
-  const scope = repairFixScope(item);
-  const variant = entry[scope] || entry.page;
+  const shared = hasSharedRepairEvidence(item);
+  const variant = shared ? entry.shared : entry.single;
   const scannerFix = clean(
     item.recommendation
       || item.simple_next_step
@@ -618,38 +635,40 @@ export function repairSuggestion(item = {}) {
       || item.original?.simple_next_step
       || item.original?.recommended_value,
   );
-  const fallback = suggestionAvailable ? "" : REPAIR_SUGGESTION_FALLBACK;
-  const suggestedFix = scannerFix || clean(variant.suggestedFix) || REPAIR_SUGGESTION_FALLBACK;
+
   const scannerRole = scannerRoleOf(item);
-  const scannerEffort = scannerEffortOf(item);
-  const effort = clean(variant.effort);
-  const effortDetail = scannerEffort || clean(variant.effortDetail);
-  const recommendedRole = scannerRole || clean(variant.recommendedRole);
-  const fixStrategy = clean(variant.fixStrategy);
+  const scannerEffortDetail = scannerEffortDetailOf(item);
+  const effort = lower(variant.effort);
+  const effortLabel = EFFORT_LABELS[effort] || "";
+  const role = scannerRole || clean(variant.role);
+  const fixScope = clean(variant.fixScope);
 
   return Object.freeze({
     version: REPAIR_SUGGESTION_VERSION,
     libraryVersion: REPAIR_SUGGESTION_LIBRARY_VERSION,
     repairType,
     suggestionAvailable,
-    fallback,
+    fallback: suggestionAvailable ? "" : REPAIR_SUGGESTION_FALLBACK,
     label: clean(entry.label),
     groupTitle: clean(entry.groupTitle),
-    fixScope: scope,
-    fixStrategy,
-    fixStrategyLabel: FIX_STRATEGY_LABELS[fixStrategy] || "",
-    suggestedFix,
+    sharedRepairEvidence: shared,
+    fixScope,
+    fixScopeLabel: FIX_SCOPE_LABELS[fixScope] || "",
+    suggestedFix: scannerFix || clean(variant.suggestedFix) || REPAIR_SUGGESTION_FALLBACK,
     suggestedFixSource: scannerFix
       ? "scanner_evidence"
       : (suggestionAvailable ? "fixlist_library" : "manual_review_fallback"),
     librarySuggestedFix: clean(variant.suggestedFix),
     bestApproach: clean(variant.bestApproach),
     effort,
-    effortDetail,
-    effortLabel: effort && effortDetail ? `${effort} · ${effortDetail}` : effort || effortDetail,
-    effortSource: scannerEffort ? "scanner_evidence" : (effortDetail ? "fixlist_library" : ""),
-    recommendedRole,
-    recommendedRoleSource: scannerRole ? "scanner_evidence" : (recommendedRole ? "fixlist_library" : ""),
+    effortLabel,
+    // Only ever a scanner-published estimate. The library does not guess hours.
+    effortDetail: scannerEffortDetail,
+    effortDisplay: effortLabel && scannerEffortDetail
+      ? `${effortLabel} · ${scannerEffortDetail}`
+      : effortLabel || scannerEffortDetail,
+    role,
+    roleSource: scannerRole ? "scanner_evidence" : (role ? "fixlist_library" : ""),
     affectedPageCount: pageCountOf(item),
   });
 }
@@ -670,12 +689,13 @@ function repairIdOf(item = {}) {
 }
 
 /**
- * Summarize repairs that are the same template problem.
+ * Summarize repairs that are the same shared problem.
  *
  * This is a read-only rollup for presentation. It never merges, hides,
- * reorders, or rewrites repairs: every underlying repair keeps its own row,
- * evidence, and priority. The summary only tells the customer that one shared
- * change covers several of the rows they are already looking at.
+ * reorders, or rewrites repairs: every repair it counts is still rendered as
+ * its own row, with its own evidence, affected URLs, and detection details.
+ * The evidence remains the source of truth; this only tells the customer that
+ * one change covers several of the rows they are already looking at.
  */
 export function buildRepairGroupSummaries(rows = [], { minimumRepairs = 2 } = {}) {
   const list = Array.isArray(rows) ? rows.filter(Boolean) : [];
@@ -685,7 +705,7 @@ export function buildRepairGroupSummaries(rows = [], { minimumRepairs = 2 } = {}
     const item = row?.item || row;
     if (!item) return;
     const suggestion = row?.suggestion || repairSuggestion(item);
-    if (!suggestion.suggestionAvailable || suggestion.fixScope !== "template") return;
+    if (!suggestion.suggestionAvailable || !suggestion.sharedRepairEvidence) return;
 
     const key = suggestion.repairType;
     const found = groups.get(key) || {
@@ -735,6 +755,8 @@ export function buildRepairGroupSummaries(rows = [], { minimumRepairs = 2 } = {}
       reportedPageCount: group.reportedPageCount,
       templateCount: group.templates.size,
       templates: Array.from(group.templates),
+      fixScope: group.suggestion.fixScope,
+      fixScopeLabel: group.suggestion.fixScopeLabel,
       fixOnce: group.suggestion.bestApproach,
       suggestion: group.suggestion,
     }));

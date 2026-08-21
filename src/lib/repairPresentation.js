@@ -240,7 +240,16 @@ export function sectionCustomerRepairs(items = [], { initialFixFirstLimit = 3 } 
 
   return SECTION_ORDER
     .map((key) => {
-      const rows = buckets.get(key) || [];
+      const bucketRows = buckets.get(key) || [];
+      // Summary only. Every row stays visible with its own evidence; rows are
+      // marked so the shared suggested fix is stated once by the summary
+      // instead of repeating verbatim on each grouped row.
+      const groups = buildRepairGroupSummaries(bucketRows);
+      const groupedIds = new Set(groups.flatMap((group) => group.memberIds));
+      const rows = bucketRows.map((row) => ({
+        ...row,
+        groupedUnderSummary: groupedIds.has(row.model.id),
+      }));
       const visibleLimit = key === "fix_first" ? Math.max(1, Number(initialFixFirstLimit) || 3) : rows.length;
       return {
         key,
@@ -249,8 +258,7 @@ export function sectionCustomerRepairs(items = [], { initialFixFirstLimit = 3 } 
         hiddenRows: rows.slice(visibleLimit),
         hiddenCount: Math.max(0, rows.length - visibleLimit),
         totalCount: rows.length,
-        // Summary only. Every row above stays visible with its own evidence.
-        groups: buildRepairGroupSummaries(rows),
+        groups,
       };
     })
     .filter((section) => section.totalCount > 0);

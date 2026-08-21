@@ -2,10 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  EFFORT_LEVELS,
+  FIX_SCOPES,
+  REPAIR_ROLES,
   REPAIR_SUGGESTION_FALLBACK,
   REPAIR_SUGGESTION_LIBRARY_VERSION,
   REPAIR_TYPES,
   buildRepairGroupSummaries,
+  hasSharedRepairEvidence,
   repairFixScope,
   repairSuggestion,
   repairSuggestionEntry,
@@ -32,13 +36,18 @@ test("every launch repair type has a complete suggestion entry", () => {
   for (const repairType of REQUIRED_REPAIR_TYPES) {
     const entry = repairSuggestionEntry(repairType);
     assert.ok(entry, `missing suggestion entry for ${repairType}`);
-    for (const scope of ["page", "template"]) {
-      for (const field of ["suggestedFix", "bestApproach", "effort", "effortDetail", "recommendedRole", "fixStrategy"]) {
+    for (const variant of ["single", "shared"]) {
+      for (const field of ["suggestedFix", "bestApproach", "effort", "role", "fixScope"]) {
         assert.ok(
-          String(entry[scope][field] || "").trim(),
-          `${repairType}.${scope}.${field} is empty`,
+          String(entry[variant][field] || "").trim(),
+          `${repairType}.${variant}.${field} is empty`,
         );
       }
+      // The launch vocabulary is deliberately small; the library may not invent
+      // a fourth scope, a fourth effort level, or an off-menu role.
+      assert.ok(FIX_SCOPES.includes(entry[variant].fixScope), `${repairType}.${variant} scope`);
+      assert.ok(EFFORT_LEVELS.includes(entry[variant].effort), `${repairType}.${variant} effort`);
+      assert.ok(REPAIR_ROLES.includes(entry[variant].role), `${repairType}.${variant} role`);
     }
   }
 });
@@ -91,8 +100,18 @@ test("an unknown scanner rule reports no suggestion instead of an undefined one"
   assert.equal(suggestion.suggestedFixSource, "manual_review_fallback");
   // Effort and role are withheld rather than invented for a rule FixList does
   // not recognize.
+  assert.equal(suggestion.effort, "");
   assert.equal(suggestion.effortLabel, "");
-  assert.equal(suggestion.recommendedRole, "");
+  assert.equal(suggestion.effortDisplay, "");
+  assert.equal(suggestion.fixScope, "");
+  assert.equal(suggestion.fixScopeLabel, "");
+  assert.equal(suggestion.role, "");
+});
+
+test("the unknown-repair fallback is the exact launch copy", () => {
+  assert.equal(REPAIR_SUGGESTION_FALLBACK, "Review this issue based on the evidence collected.");
+  assert.equal(repairSuggestion({ rule: "nope" }).suggestedFix, REPAIR_SUGGESTION_FALLBACK);
+  assert.equal(repairSuggestion({}).suggestedFix, REPAIR_SUGGESTION_FALLBACK);
 });
 
 test("no rendered suggestion field is ever undefined, null, or a non-string", () => {
@@ -102,12 +121,13 @@ test("no rendered suggestion field is ever undefined, null, or a non-string", ()
     "fallback",
     "label",
     "groupTitle",
-    "fixStrategy",
-    "fixStrategyLabel",
+    "fixScope",
+    "fixScopeLabel",
     "effort",
-    "effortDetail",
     "effortLabel",
-    "recommendedRole",
+    "effortDetail",
+    "effortDisplay",
+    "role",
   ];
   const items = [
     {},
@@ -132,12 +152,52 @@ test("every suggestion carries the library version so wording can be compared ov
   assert.equal(repairSuggestion({ rule: "unknown" }).libraryVersion, "v1");
 });
 
-test("template strategy requires published evidence, not a page count alone", () => {
+test("shared-repair evidence is required before a template fix is suggested", () => {
+  assert.equal(hasSharedRepairEvidence({ rule: "missing_h1", page_count: 40 }), false);
+  assert.equal(hasSharedRepairEvidence({ rule: "missing_h1", page_count: 40, page_template_family: "mixed" }), false);
+  assert.equal(hasSharedRepairEvidence({ rule: "missing_h1", page_count: 40, page_template_family: "collection_page" }), true);
+  assert.equal(hasSharedRepairEvidence({ rule: "missing_h1", page_count: 1, shared_repair_confirmed: true }), true);
+  assert.equal(hasSharedRepairEvidence({ rule: "missing_h1", repair_surface: "cms_field" }), true);
+
   assert.equal(repairFixScope({ rule: "missing_h1", page_count: 40 }), "page");
-  assert.equal(repairFixScope({ rule: "missing_h1", page_count: 40, page_template_family: "mixed" }), "page");
   assert.equal(repairFixScope({ rule: "missing_h1", page_count: 40, page_template_family: "collection_page" }), "template");
-  assert.equal(repairFixScope({ rule: "missing_h1", page_count: 1, shared_repair_confirmed: true }), "template");
-  assert.equal(repairFixScope({ rule: "missing_h1", repair_surface: "cms_field" }), "template");
+});
+
+test("fix scope reflects where the repair lives, not just how many pages report it", () => {
+  // A redirect chain is repaired in link sources and redirect rules, so it is
+  // sitewide even when a single page reports it.
+  assert.equal(repairFixScope({ rule: "redirect_chain", page_count: 1, affected_pages: ["/"] }), "sitewide");
+  assert.equal(repairFixScope({ rule: "sitemap_redirect", page_count: 1 }), "sitewide");
+  assert.equal(repairFixScope({ rule: "potential_orphan_pages", page_count: 1 }), "sitewide");
+  // A missing description on one page really is a one-page edit.
+  assert.equal(repairFixScope({ rule: "missing_meta_description", page_count: 1 }), "page");
+});
+
+test("every rendered scope, effort, and role stays inside the launch vocabulary", () => {
+  const items = [
+    { rule: "missing_meta_description", page_count: 49, page_template_family: "collection_page" },
+    { rule: "redirect_chain", page_count: 1 },
+    { rule: "thin_content", page_count: 12, shared_repair_confirmed: true },
+    { rule: "noindex_page", page_count: 1 },
+  ];
+
+  for (const item of items) {
+    const suggestion = repairSuggestion(item);
+    assert.ok(FIX_SCOPES.includes(suggestion.fixScope));
+    assert.ok(EFFORT_LEVELS.includes(suggestion.effort));
+    assert.ok(REPAIR_ROLES.includes(suggestion.role));
+    assert.ok(["Page", "Template", "Sitewide"].includes(suggestion.fixScopeLabel));
+    assert.ok(["Low", "Medium", "High"].includes(suggestion.effortLabel));
+  }
+});
+
+test("the library never invents an hour estimate; only the scanner may supply one", () => {
+  assert.equal(repairSuggestion({ rule: "missing_meta_description" }).effortDetail, "");
+  assert.equal(repairSuggestion({ rule: "missing_meta_description" }).effortDisplay, "Low");
+  assert.equal(
+    repairSuggestion({ rule: "missing_meta_description", estimated_time: "45 minutes" }).effortDisplay,
+    "Low · 45 minutes",
+  );
 });
 
 test("a single-page repair is not described as a template repair", () => {
@@ -149,7 +209,8 @@ test("a single-page repair is not described as a template repair", () => {
   });
 
   assert.equal(suggestion.fixScope, "page");
-  assert.equal(suggestion.fixStrategy, "page");
+  assert.equal(suggestion.fixScopeLabel, "Page");
+  assert.equal(suggestion.sharedRepairEvidence, false);
   assert.match(suggestion.suggestedFix, /this page/i);
 });
 
@@ -162,8 +223,8 @@ test("a confirmed shared repair is described as one template change", () => {
   });
 
   assert.equal(suggestion.fixScope, "template");
-  assert.equal(suggestion.fixStrategy, "template");
-  assert.equal(suggestion.fixStrategyLabel, "Fix the template once");
+  assert.equal(suggestion.fixScopeLabel, "Template");
+  assert.equal(suggestion.sharedRepairEvidence, true);
   assert.match(suggestion.suggestedFix, /template/i);
   assert.match(suggestion.bestApproach, /shared templates/i);
 });
@@ -178,18 +239,24 @@ test("scanner-published remediation, role, and effort outrank the library table"
 
   assert.equal(suggestion.suggestedFix, "Add the heading block back to the Funbooker activity layout.");
   assert.equal(suggestion.suggestedFixSource, "scanner_evidence");
-  assert.equal(suggestion.recommendedRole, "Front-end developer");
-  assert.equal(suggestion.recommendedRoleSource, "scanner_evidence");
+  assert.equal(suggestion.role, "Developer");
+  assert.equal(suggestion.roleSource, "scanner_evidence");
   assert.equal(suggestion.effortDetail, "45 minutes");
-  assert.equal(suggestion.effortSource, "scanner_evidence");
   // The library value stays available for comparison but is not what is shown.
   assert.notEqual(suggestion.librarySuggestedFix, suggestion.suggestedFix);
 });
 
 test("a scanner needs-developer bucket is honored as the recommended role", () => {
   const suggestion = repairSuggestion({ rule: "missing_meta_description", needsHelp: true });
-  assert.equal(suggestion.recommendedRole, "Web developer");
-  assert.equal(suggestion.recommendedRoleSource, "scanner_evidence");
+  assert.equal(suggestion.role, "Developer");
+  assert.equal(suggestion.roleSource, "scanner_evidence");
+});
+
+test("an unrecognized scanner role is passed through rather than overwritten", () => {
+  // Scanner text is evidence. Normalization maps known synonyms only.
+  const suggestion = repairSuggestion({ rule: "missing_h1", who_can_do_this: "Platform team" });
+  assert.equal(suggestion.role, "Platform team");
+  assert.equal(suggestion.roleSource, "scanner_evidence");
 });
 
 test("the suggestion layer never mutates the repair it reads", () => {

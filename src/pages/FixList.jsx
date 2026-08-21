@@ -27,7 +27,6 @@ import { prepareCustomerFixes, priorityBucket } from "@/lib/fixRanking";
 import { buildRepairWorkSurfacePresentation } from "@/lib/repairWorkSurfacePresentation";
 import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel } from "@/lib/fixVocabulary";
 import { repairSuggestion } from "@/lib/repairSuggestions";
-import { buildGrokRepairBrief, stashGrokRepairBrief } from "@/lib/grokRepairBrief";
 
 const CMS_OPTIONS = [
   { value: "wordpress", label: "WordPress" },
@@ -387,34 +386,6 @@ export default function FixList() {
     setDoneIds(next);
   }
 
-  /**
-   * Hand one repair to Grok as implementation help.
-   *
-   * FixList composes the brief from the repair it already diagnosed, grouped,
-   * and prioritized. Grok receives that context; it never produces the
-   * diagnosis, the priority, or the suggested fix. The message is prefilled for
-   * the customer to send, so nothing is asked of Grok automatically.
-   */
-  function askGrokAboutRepair({ item, model, suggestion } = {}) {
-    if (!item) return;
-    const resolved = suggestion || repairSuggestion(item);
-    const platform = CMS_OPTIONS.find((option) => option.value === selectedCms)?.label || "";
-    const brief = buildGrokRepairBrief({
-      item,
-      model: model || {},
-      suggestion: resolved,
-      scan: scanRecord || {},
-      platform,
-    });
-    stashGrokRepairBrief(brief);
-    trackEvent("repair_grok_help_requested", {
-      fix_id: item.id,
-      repair_type: resolved.repairType,
-      suggestion_library_version: resolved.libraryVersion,
-    });
-    navigate("/assistant");
-  }
-
   const ownerDebugVisible = isOwnerScanDebugUser(user) && Boolean(requestedScanId && scanRecord);
   const ownerScanActive = ACTIVE_SCAN_RUN_STATUSES.has(String(scanRecord?.status || "").toLowerCase());
 
@@ -601,15 +572,13 @@ export default function FixList() {
             ) : (
               <RepairWorkSurface
                 {...repairWorkSurface}
-                renderRow={({ item, model, suggestion }) => (
+                renderRow={({ item, suggestion }) => (
                   <FixRow
                     key={item.id}
                     item={item}
-                    model={model}
                     suggestion={suggestion}
                     cms={selectedCms}
                     onDone={() => markDone(item)}
-                    onAskGrok={askGrokAboutRepair}
                     embedded
                   />
                 )}
@@ -621,7 +590,7 @@ export default function FixList() {
                 <SectionEyebrow label="Your priorities" count={shownTopPriorities.length} />
                 <div className="mt-2">
                   {shownTopPriorities.map((item) => (
-                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} onAskGrok={askGrokAboutRepair} />
+                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
                   ))}
                 </div>
               </>
@@ -632,7 +601,7 @@ export default function FixList() {
                 <SectionEyebrow label="More important fixes" count={moreImportant.length} />
                 <div className="mt-2">
                   {moreImportant.map((item) => (
-                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} onAskGrok={askGrokAboutRepair} />
+                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
                   ))}
                 </div>
               </>
@@ -643,7 +612,7 @@ export default function FixList() {
                 <SectionEyebrow label="Improve next" count={improveNext.length} />
                 <div className="mt-2">
                   {improveNext.map((item) => (
-                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} onAskGrok={askGrokAboutRepair} />
+                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
                   ))}
                 </div>
               </>
@@ -654,7 +623,7 @@ export default function FixList() {
                 <SectionEyebrow label="Worth checking" count={worthChecking.length} />
                 <div className="mt-2">
                   {worthChecking.map((item) => (
-                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} onAskGrok={askGrokAboutRepair} />
+                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
                   ))}
                 </div>
               </>
@@ -847,7 +816,7 @@ function LockedResultState() {
   );
 }
 
-function FixRow({ item, cms, onDone, embedded = false, model, suggestion: suppliedSuggestion, onAskGrok }) {
+function FixRow({ item, cms, onDone, embedded = false, suggestion: suppliedSuggestion }) {
   const [open, setOpen] = useState(embedded);
   // The presentation seam already computed this for canonical rows. Legacy rows
   // reach the same deterministic suggestion here rather than going without one.
@@ -937,12 +906,16 @@ function FixRow({ item, cms, onDone, embedded = false, model, suggestion: suppli
             </>
           ) : null}
 
-          <SuggestedFix
-            suggestion={suggestion}
-            onAskGrok={typeof onAskGrok === "function"
-              ? () => onAskGrok({ item, model, suggestion })
-              : undefined}
-          />
+          {embedded ? (
+            suggestion.bestApproach ? (
+              <>
+                <div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">How to approach it</div>
+                <p className="mt-1 max-w-[56ch] text-[13.5px] leading-relaxed">{suggestion.bestApproach}</p>
+              </>
+            ) : null
+          ) : (
+            <SuggestedFix suggestion={suggestion} />
+          )}
 
           {cmsSteps.length > 0 ? (
             <>

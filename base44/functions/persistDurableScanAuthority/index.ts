@@ -4,13 +4,10 @@ import { authorityRowsFromSnapshot } from "./authorityRows.js";
 import { buildAuthoritySnapshot, firstFailedAuthorityPredicate } from "./authoritySnapshot.js";
 import { releaseAdmission } from "./admissionClient.js";
 
-// Attempts are 1-based; anything unparseable is attempt 1. Mirrors
-// normalize_attempt in scanner-api/app/scan_job.py.
 function normalizeAttempt(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.max(1, Math.trunc(parsed)) : 1;
 }
-
 
 const WORKER_VERSION = "scan_job_worker_v1_cloud_tasks";
 const COMPLETION_VERSION = "durable_standard150_completion_v1";
@@ -76,9 +73,6 @@ Deno.serve(async (req) => {
       now: stableSealedAt,
     });
     const authorityProof = await createAuthoritySeal(snapshot, secret);
-    // Attempt binding. The signed identity carries the attempt this worker was
-    // minted for; the durable row carries the attempt that currently owns it.
-    // A task from an earlier attempt must not persist, finalise or charge.
     const claimedAttempt = normalizeAttempt(identity.attempt_count);
     const rowAttempt = normalizeAttempt(scan.attempt_count);
     if (claimedAttempt !== rowAttempt) {
@@ -106,8 +100,6 @@ Deno.serve(async (req) => {
       throw new RequestProblem(409, "authority_immutable", "This scan is already terminal.");
     }
 
-    // A proof staged by this attempt is resumable. A staged proof owned by a
-    // different attempt is superseded and cannot be replaced.
     if (
       scan.authority_proof
       && scan.authority_proof !== authorityProof
@@ -132,12 +124,6 @@ Deno.serve(async (req) => {
     await reconcileFixItems(entities, fixList.id, rows.fixItems);
     await assertAttemptStillActive(entities, identity.scan_id, claimedAttempt);
 
-    // Stage the exact authority proof while the run remains non-terminal. This
-    // makes retries safe and lets us verify every authoritative row before any
-    // allowance is consumed.
-    // attempt_count belongs to the browser/dispatcher lifecycle, never to an
-    // authority row. Writing it back here would let a slow task resurrect an
-    // old attempt number onto a row that has already moved on.
     const { attempt_count: _stagedAttempt, ...scanRunFields } = rows.scanRun;
     const stagedScanFields = {
       ...scanRunFields,
@@ -175,8 +161,6 @@ Deno.serve(async (req) => {
       throw new RequestProblem(500, "authority_persistence_incomplete", "The durable authority rows were not completely staged.");
     }
 
-    // Paid admission happens before enqueue. Completion never creates, updates
-    // or consumes Access rows, so a persistence retry cannot affect billing.
     await assertAttemptStillActive(entities, identity.scan_id, claimedAttempt);
     await entities.ScanRun.update(identity.scan_id, scanRunFields);
     const persistedScan = await entities.ScanRun.get(identity.scan_id);
@@ -241,8 +225,6 @@ function normalizeIdentity(value) {
     request_id: cleanId(source.request_id),
     idempotency_key: cleanId(source.idempotency_key),
     normalized_domain: normalizeDomain(source.normalized_domain),
-    // Signed by the worker. Without it the attempt guard would compare
-    // undefined and silently pass, so a superseded task could still write.
     attempt_count: normalizeAttempt(source.attempt_count),
   };
 }

@@ -44,3 +44,6 @@ scanner-api/.venv/
 # GitHub Actions temporary Google Cloud credentials
 # Created by google-github-actions/auth inside the checkout and removed during post-job cleanup.
 gha-creds-*.json
+
+# Local release/auth artifacts created by release tooling and Base44 CLI.
+.release/

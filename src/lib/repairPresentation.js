@@ -1,4 +1,5 @@
 import { customerPriorityReason, priorityBucket } from "./fixRanking.js";
+import { buildRepairGroupSummaries, repairSuggestion } from "./repairSuggestions.js";
 import {
   REPAIR_PRESENTATION_MODES,
   explicitCanonicalActionPriorityOf,
@@ -217,13 +218,24 @@ export function repairRowModel(item = {}) {
   };
 }
 
+/**
+ * Attach the deterministic suggested fix to a presentation row.
+ *
+ * The suggestion is derived from evidence the repair already carries, so it is
+ * additive: nothing on the item, the row model, or the persisted repair is
+ * replaced by it.
+ */
+function presentationRow(item) {
+  return { item, model: repairRowModel(item), suggestion: repairSuggestion(item) };
+}
+
 export function sectionCustomerRepairs(items = [], { initialFixFirstLimit = 3 } = {}) {
   const buckets = new Map(SECTION_ORDER.map((key) => [key, []]));
   for (const item of Array.isArray(items) ? items : []) {
     if (!item) continue;
-    const model = repairRowModel(item);
-    const key = SECTION_ORDER.includes(model.actionPriority) ? model.actionPriority : "important";
-    buckets.get(key).push({ item, model });
+    const row = presentationRow(item);
+    const key = SECTION_ORDER.includes(row.model.actionPriority) ? row.model.actionPriority : "important";
+    buckets.get(key).push(row);
   }
 
   return SECTION_ORDER
@@ -237,6 +249,8 @@ export function sectionCustomerRepairs(items = [], { initialFixFirstLimit = 3 } 
         hiddenRows: rows.slice(visibleLimit),
         hiddenCount: Math.max(0, rows.length - visibleLimit),
         totalCount: rows.length,
+        // Summary only. Every row above stays visible with its own evidence.
+        groups: buildRepairGroupSummaries(rows),
       };
     })
     .filter((section) => section.totalCount > 0);
@@ -306,10 +320,11 @@ export function buildFixListPresentation(snapshotItems = [], options = {}) {
     ? [{
       key: "legacy_prioritized",
       label: "Prioritized repairs",
-      rows: visibleItems.map((item) => ({ item, model: repairRowModel(item) })),
+      rows: visibleItems.map(presentationRow),
       hiddenRows: [],
       hiddenCount: 0,
       totalCount: visibleItems.length,
+      groups: buildRepairGroupSummaries(visibleItems.map(presentationRow)),
     }]
     : [];
 

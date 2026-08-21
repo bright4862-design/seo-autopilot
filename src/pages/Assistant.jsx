@@ -19,6 +19,7 @@ import {
   selectLatestAuthoritativeGrokScan,
   sortGrokMessages,
 } from "@/lib/grokChat";
+import { takeGrokRepairBrief } from "@/lib/grokRepairBrief";
 import {
   AlertTriangle,
   Bot,
@@ -88,6 +89,16 @@ export default function Assistant() {
     }
     window.addEventListener(CUSTOMER_BOUNDARY_EVENT, clearCustomerWorkspace);
     return () => window.removeEventListener(CUSTOMER_BOUNDARY_EVENT, clearCustomerWorkspace);
+  }, []);
+
+  // A repair handed over from FixList arrives as a prefilled draft, never as a
+  // sent message: FixList owns the diagnosis, and the customer decides whether
+  // Grok is involved at all.
+  useEffect(() => {
+    const brief = takeGrokRepairBrief();
+    if (!brief) return;
+    setInput(brief.slice(0, GROK_MAX_MESSAGE_LENGTH));
+    trackEvent("assistant_repair_brief_loaded");
   }, []);
 
   useEffect(() => {

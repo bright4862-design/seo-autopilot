@@ -21,10 +21,12 @@ import ScoreRing from "@/components/fixlist/ScoreRing";
 import RecentScanRow from "@/components/fixlist/RecentScanRow";
 import RepairWorkSurface from "@/components/fixlist/RepairWorkSurface";
 import ExplicitPassedChecks from "@/components/fixlist/ExplicitPassedChecks";
+import SuggestedFix from "@/components/fixlist/SuggestedFix";
 import { deleteScanRun, pruneScanHistory } from "@/lib/scanHistory";
 import { prepareCustomerFixes, priorityBucket } from "@/lib/fixRanking";
 import { buildRepairWorkSurfacePresentation } from "@/lib/repairWorkSurfacePresentation";
 import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel } from "@/lib/fixVocabulary";
+import { repairSuggestion } from "@/lib/repairSuggestions";
 
 const CMS_OPTIONS = [
   { value: "wordpress", label: "WordPress" },
@@ -570,8 +572,15 @@ export default function FixList() {
             ) : (
               <RepairWorkSurface
                 {...repairWorkSurface}
-                renderRow={({ item }) => (
-                  <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} embedded />
+                renderRow={({ item, suggestion }) => (
+                  <FixRow
+                    key={item.id}
+                    item={item}
+                    suggestion={suggestion}
+                    cms={selectedCms}
+                    onDone={() => markDone(item)}
+                    embedded
+                  />
                 )}
               />
             )}
@@ -807,8 +816,14 @@ function LockedResultState() {
   );
 }
 
-function FixRow({ item, cms, onDone, embedded = false }) {
+function FixRow({ item, cms, onDone, embedded = false, suggestion: suppliedSuggestion }) {
   const [open, setOpen] = useState(embedded);
+  // The presentation seam already computed this for canonical rows. Legacy rows
+  // reach the same deterministic suggestion here rather than going without one.
+  const suggestion = useMemo(
+    () => suppliedSuggestion || repairSuggestion(item),
+    [suppliedSuggestion, item],
+  );
   const [showAllPages, setShowAllPages] = useState(false);
   const [copied, setCopied] = useState(false);
   const severe = item.priority === "critical" || item.priority === "high";
@@ -891,19 +906,27 @@ function FixRow({ item, cms, onDone, embedded = false }) {
             </>
           ) : null}
 
-          <div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">What to do</div>
-          <p className="mt-1 max-w-[56ch] leading-relaxed text-ink">{item.recommendation}</p>
-          <p className="mt-2 text-[12.5px] text-ink-faint">
-            {item.needsHelp ? "Best for: Web developer" : "Best for: You"}
-            {item.estimatedTime ? ` · Typical effort: ${item.estimatedTime}` : ""}
-          </p>
+          {embedded ? (
+            suggestion.bestApproach ? (
+              <>
+                <div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">How to approach it</div>
+                <p className="mt-1 max-w-[56ch] text-[13.5px] leading-relaxed">{suggestion.bestApproach}</p>
+              </>
+            ) : null
+          ) : (
+            <SuggestedFix suggestion={suggestion} />
+          )}
+
           {cmsSteps.length > 0 ? (
-            <details className="mt-4 max-w-[60ch]">
-              <summary className="cursor-pointer text-[13px] font-medium text-ink-muted underline decoration-hairline underline-offset-4">Step-by-step instructions</summary>
-              <ol className="mt-3 list-decimal space-y-2 pl-5 text-ink">
-                {cmsSteps.map((step, index) => <li key={`${step}-${index}`} className="pl-1 leading-relaxed">{step}</li>)}
-              </ol>
-            </details>
+            <>
+              <div className="mt-6 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">What to do</div>
+              <details className="mt-2 max-w-[60ch]">
+                <summary className="cursor-pointer text-[13px] font-medium text-ink-muted underline decoration-hairline underline-offset-4">Step-by-step instructions</summary>
+                <ol className="mt-3 list-decimal space-y-2 pl-5 text-ink">
+                  {cmsSteps.map((step, index) => <li key={`${step}-${index}`} className="pl-1 leading-relaxed">{step}</li>)}
+                </ol>
+              </details>
+            </>
           ) : null}
 
           {reportedCount > 0 ? (

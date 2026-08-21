@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 
 import CanonicalRepairRow from "@/components/fixlist/CanonicalRepairRow";
+import RepairGroupSummary from "@/components/fixlist/RepairGroupSummary";
 
 const SECTION_HELP = Object.freeze({
   fix_first: "Start here.",
@@ -71,12 +72,16 @@ export default function RepairSectionList({ sections = [], renderRow }) {
             </div>
             {help ? <p className="mt-1 text-[12px] leading-relaxed text-ink-faint">{help}</p> : null}
 
+            <RepairGroupSummary groups={section.groups || []} />
+
             <div className="mt-1.5">
               {visibleRows.map((row, index) => (
                 <CanonicalRepairRow
                   key={row?.model?.id || row?.item?.id || `${section.key}-${index}`}
                   item={row.item}
                   model={row.model}
+                  suggestion={row.suggestion}
+                  showSuggestion={!row.groupedUnderSummary}
                   renderDetails={() => renderRow(row, index)}
                 />
               ))}

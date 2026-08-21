@@ -43,3 +43,15 @@ test("FixItem stores grouped recommendation evidence as durable columns", () => 
     assert.ok(fixItemEntity.properties[field], `FixItem missing ${field}`);
   }
 });
+
+test("versioned saved repairs bypass legacy meta-description re-keying", () => {
+  assert.match(fixListSource, /function hasVersionedRepairContract/);
+  assert.match(fixListSource, /hasVersionedRepairContract\(item\) \|\| !META_DESCRIPTION_GAP_RULES/);
+});
+
+test("summary leverage copy requires explicit shared-repair confirmation", () => {
+  assert.match(fixListSource, /function hasExplicitSharedRepairConfirmation/);
+  assert.match(fixListSource, /recommendations\.filter\(hasExplicitSharedRepairConfirmation\)/);
+  assert.doesNotMatch(fixListSource, /const groupedCount = recommendations\.filter\(\(item\) => Number\(item\.pageCount/);
+});
+

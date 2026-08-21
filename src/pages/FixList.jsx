@@ -1179,6 +1179,22 @@ const META_DESCRIPTION_STATE_BY_RULE = {
   malformed_meta_description: "malformed",
 };
 
+function hasVersionedRepairContract(item = {}) {
+  const persisted = item?.original && typeof item.original === "object" ? item.original : item;
+  return Boolean(
+    cleanString(persisted?.repair_contract_version || persisted?.repairContractVersion)
+      || cleanString(persisted?.repair_snapshot_contract_version || persisted?.repairSnapshotContractVersion),
+  );
+}
+
+function hasExplicitSharedRepairConfirmation(item = {}) {
+  const persisted = item?.original && typeof item.original === "object" ? item.original : item;
+  const context = persisted?.priority_context || persisted?.priorityContext || {};
+  return persisted?.shared_repair_confirmed === true
+    || persisted?.sharedRepairConfirmed === true
+    || context?.shared_repair_confirmed === true;
+}
+
 function normalizeMetadataStateCounts(value = {}) {
   const input = value && typeof value === "object" ? value : {};
   return {
@@ -1234,7 +1250,10 @@ function mergeMetaDescriptionRecommendations(items = []) {
   const output = [];
   const groups = new Map();
   for (const item of items) {
-    if (!META_DESCRIPTION_GAP_RULES.has(String(item.rule || "").toLowerCase())) {
+    // Versioned repair snapshots already carry server-owned identity, grouping,
+    // and canonical order. Legacy meta-description synthesis must never re-key
+    // or merge those rows before the repair-contract gate sees them.
+    if (hasVersionedRepairContract(item) || !META_DESCRIPTION_GAP_RULES.has(String(item.rule || "").toLowerCase())) {
       output.push(item);
       continue;
     }
@@ -1685,7 +1704,7 @@ function getBestSummary(record, pagesScanned, pagesFound, recommendations = []) 
     return `FixList could not check enough usable pages to calculate a reliable score. It kept ${issueCount || 0} item${issueCount === 1 ? "" : "s"} for you to review.`;
   }
   const importantCount = recommendations.filter((item) => ["critical", "high"].includes(item.priority)).length;
-  const groupedCount = recommendations.filter((item) => Number(item.pageCount || 0) > 1 || ["family", "cross_cutting", "sitewide"].includes(item.pageScope)).length;
+  const groupedCount = recommendations.filter(hasExplicitSharedRepairConfirmation).length;
   const coverage = pagesFound > 0
     ? `FixList found ${formatCount(pagesFound)} pages and checked ${formatCount(pagesScanned)} representative pages.`
     : `FixList checked ${formatCount(pagesScanned)} representative pages.`;

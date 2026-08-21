@@ -14,12 +14,14 @@ failures raise so Cloud Tasks retries the same durable request.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import hmac
 import json
 import multiprocessing as mp
 import os
 import time
+from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import urlparse
 
@@ -41,6 +43,13 @@ HANDOFF_TIMEOUT_SECONDS = 60.0
 # Normal Standard 150 reviews finish far below this ceiling.
 LOCAL_REVIEW_WALL_TIMEOUT_SECONDS = 20.0
 LOCAL_REVIEW_PROCESS_JOIN_GRACE_SECONDS = 1.0
+
+# The reconciler closes any run whose heartbeat is older than 15 minutes. Each
+# worker phase is individually bounded well below that, but liveness used to be
+# written only at phase edges, so the row stayed silent for the whole of a slow
+# phase. A periodic beat keeps `worker_heartbeat_at` truthful for exactly as
+# long as real work is still running.
+WORKER_HEARTBEAT_INTERVAL_SECONDS = 60.0
 
 TERMINAL_STATUSES = frozenset({"complete", "limited", "failed", "cancelled"})
 
@@ -217,6 +226,56 @@ async def mark_scan_started(client: httpx.AsyncClient, scan: dict[str, Any]) -> 
     if not isinstance(persisted, dict):
         raise RuntimeError("The durable scan start response is missing its ScanRun.")
     return persisted
+
+
+@asynccontextmanager
+async def worker_liveness_heartbeat(
+    client: httpx.AsyncClient,
+    scan: dict[str, Any],
+    *,
+    interval: float = WORKER_HEARTBEAT_INTERVAL_SECONDS,
+):
+    """Keep worker liveness fresh for a whole job, not just at its phase edges.
+
+    A beat proves the worker is still alive. It never extends a phase deadline:
+    every external operation keeps its own bounded timeout, so this can carry an
+    honest slow run past 15 minutes but can never hide an infinite wait. A beat
+    that fails is logged and ignored -- liveness is best effort, and the
+    reconciler remains the backstop.
+
+    The beat only runs while the event loop is free. Post-crawl work must
+    therefore stay off the loop (see the worker's bounded ``to_thread`` phases),
+    or a blocked loop would silence the heartbeat exactly as it did before.
+    """
+    stop = asyncio.Event()
+    scan_id = str(scan.get("id") or scan.get("scan_id") or "")
+    # Floor mirrors await_hard_deadline: a guard against a pathological
+    # configured value, not a lower bound on how often a beat may occur.
+    beat_interval = max(0.001, float(interval))
+
+    async def _beat() -> None:
+        while True:
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=beat_interval)
+                return
+            except asyncio.TimeoutError:
+                pass
+            try:
+                await mark_scan_started(client, scan)
+                emit("scan_job_heartbeat", scan_id=scan_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - liveness must never fail a scan
+                emit("scan_job_heartbeat_failed", severity="WARNING", scan_id=scan_id)
+
+    task = asyncio.create_task(_beat())
+    try:
+        yield
+    finally:
+        stop.set()
+        task.cancel()
+        with contextlib.suppress(BaseException):
+            await task
 
 
 async def reconcile_stale_scans(client: httpx.AsyncClient) -> dict[str, Any]:

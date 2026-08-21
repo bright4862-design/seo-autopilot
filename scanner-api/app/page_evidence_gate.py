@@ -95,6 +95,13 @@ def page_evidence_class(page: dict[str, Any]) -> str:
         return "incomplete_html"
     if html_size <= 0 and not any(page.get(key) for key in ("title", "h1", "meta_description", "canonical")):
         return "incomplete_html"
+    # A security challenge served as an apparent 200 must never regain authority
+    # by being re-derived from a page dict that lost its stamp. Extraction
+    # normally stamps `page_evidence_class` via classify_page_evidence; this
+    # keeps the fallback path just as fail-closed when any body is still carried.
+    body = page.get("_html") or page.get("html") or page.get("raw_html") or ""
+    if isinstance(body, str) and body and _looks_like_challenge(body):
+        return "failed_access"
     return "usable_html"
 
 def page_has_usable_html(page: dict[str, Any]) -> bool:

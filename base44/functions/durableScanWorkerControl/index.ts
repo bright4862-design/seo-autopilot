@@ -121,9 +121,6 @@ Deno.serve(async (req) => {
           started_at: cleanText(scan?.started_at, 80) || heartbeatAt,
         });
       }
-      // Refresh liveness on every attempt/retry and after the crawl handoff.
-      // started_at remains immutable after first pickup, so total runtime still
-      // has the existing hard 35-minute reconciliation ceiling.
       await entities.ScanRun.update(identity.scan_id, startFields);
       const persisted = await entities.ScanRun.get(identity.scan_id);
       if (
@@ -212,10 +209,6 @@ async function reconcileDurableScans(entities) {
         else counts.errors += 1;
         continue;
       }
-
-      // Re-read immediately before the terminal write so a worker that advanced
-      // the row after the query wins. Reconciliation never overwrites a changed
-      // attempt/status or any terminal authority.
       const current = await entities.ScanRun.get(scanId).catch(() => null);
       if (!current || cleanId(current.id) !== scanId) { counts.skipped += 1; continue; }
       if (normalizeAttempt(current.attempt_count) !== normalizeAttempt(fresh.attempt_count)) { counts.skipped += 1; continue; }
@@ -284,8 +277,6 @@ function normalizeIdentity(value) {
     request_id: cleanId(source.request_id),
     idempotency_key: cleanId(source.idempotency_key),
     normalized_domain: normalizeDomain(source.normalized_domain),
-    // Signed by the worker. Without it the attempt guard would compare
-    // undefined and silently pass, so a superseded task could still write.
     attempt_count: normalizeAttempt(source.attempt_count),
   };
 }

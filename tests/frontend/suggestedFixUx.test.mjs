@@ -119,7 +119,7 @@ test("the presentation seam attaches suggestions without touching persisted repa
 test("a collapsed repair row answers what to do, at what scope, for what effort", () => {
   // The customer must not have to open a disclosure to learn the action. Only
   // evidence lives one level down.
-  assert.match(rowSource, /<SuggestedFix suggestion=\{suggestion\} compact showFix=\{showSuggestedFix\} \/>/);
+  assert.match(rowSource, /\{showSuggestion \? <SuggestedFix suggestion=\{suggestion\} compact \/> : null\}/);
   assert.match(suggestedFixSource, /if \(compact\) \{/);
   assert.match(suggestedFixSource, /Suggested fix · /);
   assert.match(suggestedFixSource, /facts\.map\(\(fact\) => `\$\{fact\.label\}: \$\{fact\.value\}`\)\.join\(" · "\)/);
@@ -141,9 +141,9 @@ test("the mobile card keeps title, impact, why, suggested fix, scope, then evide
   }
 });
 
-test("a grouped row does not repeat the shared fix its group summary already states", () => {
+test("a grouped row does not repeat the fix, scope, effort, or owner its group already states", () => {
   assert.match(presentationSource, /groupedUnderSummary: groupedIds\.has\(row\.model\.id\)/);
-  assert.match(sectionListSource, /showSuggestedFix=\{!row\.groupedUnderSummary\}/);
+  assert.match(sectionListSource, /showSuggestion=\{!row\.groupedUnderSummary\}/);
 
   const shared = ["activity_detail", "collection_page"].map((family, index) => ({
     id: `g${index}`,

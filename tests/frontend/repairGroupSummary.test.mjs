@@ -40,7 +40,22 @@ test("repairs that are the same template problem roll up into one fix-once summa
   assert.equal(group.repairCount, 3);
   assert.equal(group.pageCount, 5);
   assert.equal(group.templateCount, 3);
-  assert.match(group.fixOnce, /shared templates/i);
+  assert.equal(group.fixOnce, "Update shared templates once.");
+  assert.equal(group.fixScopeLabel, "Template");
+  assert.equal(group.effortDisplay, "Medium");
+  assert.equal(group.role, "SEO manager");
+});
+
+test("the group states the shared action in short form, not the per-row sentence", () => {
+  const [group] = buildRepairGroupSummaries([
+    { item: templateRepair("a", "activity_detail", ["/a/1"]) },
+    { item: templateRepair("b", "collection_page", ["/c/1"]) },
+  ]);
+
+  // Short enough to read at a glance, and never the long per-row wording.
+  assert.ok(group.fixOnce.length < 60, `group fix is ${group.fixOnce.length} characters`);
+  assert.notEqual(group.fixOnce, group.suggestion.suggestedFix);
+  assert.notEqual(group.fixOnce, group.suggestion.bestApproach);
 });
 
 test("group page counts are deduplicated across overlapping repairs", () => {
@@ -116,13 +131,26 @@ test("legacy presentation also receives group summaries and keeps every legacy r
 });
 
 test("the group summary component states that grouped repairs remain individually fixable", () => {
-  assert.match(componentSource, /Fix once: /);
+  assert.match(componentSource, /Suggested fix · /);
   assert.match(componentSource, /group\.title/);
+  // The action, not the section label, is the strongest element on the card:
+  // the group title outweighs both its own impact lines and the uppercase
+  // section eyebrow the section list renders above it.
+  const titleSize = Number(/text-\[(\d+)px\] font-semibold[^>]*>\s*\{group\.title\}/s.exec(componentSource)?.[1]);
+  const impactSize = Number(/text-\[(\d+)px\] tabular-nums/.exec(componentSource)?.[1]);
+  const eyebrowSize = Number(/text-\[(\d+)px\] font-semibold uppercase/.exec(sectionListSource)?.[1]);
+  assert.ok(Number.isFinite(titleSize), "group title must carry an explicit size");
+  assert.ok(titleSize > impactSize, `group title (${titleSize}) must outweigh its impact lines (${impactSize})`);
+  assert.ok(titleSize > eyebrowSize, `group title (${titleSize}) must outweigh the section eyebrow (${eyebrowSize})`);
   assert.match(componentSource, /group\.pageCount/);
   assert.match(componentSource, /group\.templateCount/);
   assert.match(componentSource, /"template" : "templates"/);
   assert.match(componentSource, /group\.pageCountExact === false \? "\+" : ""/);
-  assert.match(componentSource, /keeps its own evidence and affected URLs/);
+  assert.match(componentSource, /Evidence for each of the \{group\.repairCount\} repairs below/);
+  // The group carries scope, effort, and owner so its rows need not repeat them.
+  assert.match(componentSource, /label: "Fix scope", value: group\.fixScopeLabel/);
+  assert.match(componentSource, /label: "Effort", value: group\.effortDisplay/);
+  assert.match(componentSource, /label: "Who should fix", value: group\.role/);
   assert.doesNotMatch(componentSource, /fetch\(/);
   assert.doesNotMatch(componentSource, /base44/);
 });

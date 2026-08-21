@@ -11,7 +11,7 @@ import SuggestedFix from "@/components/fixlist/SuggestedFix";
  * already-authoritative repair item and may optionally provide expanded detail
  * content once that detail seam is migrated.
  */
-export default function CanonicalRepairRow({ item, model: suppliedModel, suggestion, showSuggestedFix = true, renderDetails }) {
+export default function CanonicalRepairRow({ item, model: suppliedModel, suggestion, showSuggestion = true, renderDetails }) {
   const model = useMemo(
     () => canonicalRepairDisplayModel(item, suppliedModel),
     [item, suppliedModel],
@@ -46,7 +46,7 @@ export default function CanonicalRepairRow({ item, model: suppliedModel, suggest
               <span className="text-ink-faint">Why this is here · </span>{model.reason}
             </span>
           ) : null}
-          <SuggestedFix suggestion={suggestion} compact showFix={showSuggestedFix} />
+          {showSuggestion ? <SuggestedFix suggestion={suggestion} compact /> : null}
           {model.leverage ? (
             <span className="mt-1.5 block text-[12px] leading-relaxed text-ink-muted">
               {model.leverage}

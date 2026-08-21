@@ -12,7 +12,7 @@ import React from "react";
  * This block never replaces evidence. It sits above the repair's affected URLs
  * and detection details, which remain the source of truth.
  */
-export default function SuggestedFix({ suggestion, compact = false, showFix = true }) {
+export default function SuggestedFix({ suggestion, compact = false }) {
   if (!suggestion) return null;
 
   const facts = [
@@ -27,12 +27,10 @@ export default function SuggestedFix({ suggestion, compact = false, showFix = tr
   if (compact) {
     return (
       <>
-        {showFix ? (
-          <span className="mt-1.5 block text-[13px] leading-relaxed text-ink-muted">
-            <span className="text-ink-faint">Suggested fix · </span>
-            <span className="text-ink">{suggestion.suggestedFix}</span>
-          </span>
-        ) : null}
+        <span className="mt-1.5 block text-[13px] leading-relaxed text-ink-muted">
+          <span className="text-ink-faint">Suggested fix · </span>
+          <span className="text-ink">{suggestion.suggestedFix}</span>
+        </span>
         {facts.length > 0 ? (
           <span className="mt-1.5 block text-[12px] leading-relaxed text-ink-faint">
             {facts.map((fact) => `${fact.label}: ${fact.value}`).join(" · ")}

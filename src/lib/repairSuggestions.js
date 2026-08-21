@@ -194,6 +194,7 @@ const SUGGESTION_LIBRARY = Object.freeze({
     },
     shared: {
       fixScope: "template",
+      groupFix: "Add titles in the shared template once.",
       suggestedFix: "Add a title rule to the template that builds these pages so every page generates its own title.",
       bestApproach: "Fix the shared template once instead of typing a title into each affected page.",
       effort: "medium",
@@ -212,6 +213,7 @@ const SUGGESTION_LIBRARY = Object.freeze({
     },
     shared: {
       fixScope: "template",
+      groupFix: "Update the shared title pattern once.",
       suggestedFix: "Update the shared title pattern so it includes the field that makes each page different, such as the product, place, or topic name.",
       bestApproach: "Change the one title pattern rather than editing each page by hand.",
       effort: "medium",
@@ -230,6 +232,7 @@ const SUGGESTION_LIBRARY = Object.freeze({
     },
     shared: {
       fixScope: "template",
+      groupFix: "Update shared templates once.",
       suggestedFix: "Update the page template to generate unique meta descriptions, so each page builds its own description from its own content.",
       bestApproach: "Update the shared templates once rather than writing a description for every affected page.",
       effort: "medium",
@@ -248,6 +251,7 @@ const SUGGESTION_LIBRARY = Object.freeze({
     },
     shared: {
       fixScope: "template",
+      groupFix: "Update the shared description pattern once.",
       suggestedFix: "Change the template's description pattern so it pulls page-specific content instead of repeating one fixed sentence.",
       bestApproach: "Fix the shared description pattern once; hand-editing each page will drift back over time.",
       effort: "medium",
@@ -266,6 +270,7 @@ const SUGGESTION_LIBRARY = Object.freeze({
     },
     shared: {
       fixScope: "template",
+      groupFix: "Add the heading to the shared template once.",
       suggestedFix: "Add one main heading to the template that builds these pages, filled from each page's own title field.",
       bestApproach: "Fix the shared template once so every page built from it gets a heading.",
       effort: "medium",
@@ -284,6 +289,7 @@ const SUGGESTION_LIBRARY = Object.freeze({
     },
     shared: {
       fixScope: "template",
+      groupFix: "Fix the shared template heading levels once.",
       suggestedFix: "Change the template or shared blocks so only the page title renders as the main heading and other blocks render as sub-headings.",
       bestApproach: "Fix the template or reusable block once; the duplicate heading is being generated, not typed.",
       effort: "medium",
@@ -302,6 +308,7 @@ const SUGGESTION_LIBRARY = Object.freeze({
     },
     shared: {
       fixScope: "template",
+      groupFix: "Correct the preferred-URL rule once.",
       suggestedFix: "Correct the preferred-URL rule in the template or CMS field that generates it, so each page points at its own final address.",
       bestApproach: "Fix the one rule that generates these values instead of editing pages individually.",
       effort: "medium",
@@ -322,6 +329,7 @@ const SUGGESTION_LIBRARY = Object.freeze({
     },
     shared: {
       fixScope: "sitewide",
+      groupFix: "Update link sources and redirect rules once.",
       suggestedFix: "Update the shared navigation, templates, and redirect rules so links point straight at the final URL in one hop.",
       bestApproach: "Fix the source links and templates instead of manually editing individual URLs.",
       effort: "medium",
@@ -340,6 +348,7 @@ const SUGGESTION_LIBRARY = Object.freeze({
     },
     shared: {
       fixScope: "sitewide",
+      groupFix: "Fix the shared navigation block once.",
       suggestedFix: "Correct the shared navigation, footer, or template block that repeats this broken link across pages.",
       bestApproach: "One shared block is generating most of these links; fix it there rather than page by page.",
       effort: "medium",
@@ -358,6 +367,7 @@ const SUGGESTION_LIBRARY = Object.freeze({
     },
     shared: {
       fixScope: "sitewide",
+      groupFix: "Add one hub or listing page.",
       suggestedFix: "Add these pages to a listing, hub, or navigation block so they are reachable by following links from your homepage.",
       bestApproach: "Add one listing or hub page that links to the whole set rather than adding links one at a time.",
       effort: "medium",
@@ -376,6 +386,7 @@ const SUGGESTION_LIBRARY = Object.freeze({
     },
     shared: {
       fixScope: "sitewide",
+      groupFix: "Fix the sitemap generator once.",
       suggestedFix: "Change the sitemap generator so it publishes each page's final working URL and drops redirected entries.",
       bestApproach: "Fix the generator once; hand-edited sitemaps are rebuilt and lose the change.",
       effort: "medium",
@@ -394,6 +405,7 @@ const SUGGESTION_LIBRARY = Object.freeze({
     },
     shared: {
       fixScope: "sitewide",
+      groupFix: "Correct the shared indexing rule once.",
       suggestedFix: "Review the template or site-wide rule applying this setting, and limit it to the pages that should genuinely stay out of search.",
       bestApproach: "One rule is affecting the whole group; correct that rule instead of overriding pages individually.",
       effort: "medium",
@@ -412,6 +424,7 @@ const SUGGESTION_LIBRARY = Object.freeze({
     },
     shared: {
       fixScope: "template",
+      groupFix: "Fix the template, then merge weak pages.",
       suggestedFix: "Change the template so each page renders its own details, and merge or remove the pages that cannot carry unique content.",
       bestApproach: "Decide which pages deserve to exist first, then fix the template that makes the survivors look identical.",
       effort: "high",
@@ -440,6 +453,7 @@ const UNMAPPED_SUGGESTION = Object.freeze({
   }),
   shared: Object.freeze({
     fixScope: "",
+    groupFix: "",
     suggestedFix: REPAIR_SUGGESTION_FALLBACK,
     bestApproach: "Use the evidence below to decide whether this is a single-page change or a shared template change.",
     effort: "",
@@ -660,6 +674,9 @@ export function repairSuggestion(item = {}) {
       : (suggestionAvailable ? "fixlist_library" : "manual_review_fallback"),
     librarySuggestedFix: clean(variant.suggestedFix),
     bestApproach: clean(variant.bestApproach),
+    // Short imperative used by a group summary, so the parent states the
+    // shared action once instead of repeating the full sentence per row.
+    groupFix: clean(variant.groupFix),
     effort,
     effortLabel,
     // Only ever a scanner-published estimate. The library does not guess hours.
@@ -757,7 +774,9 @@ export function buildRepairGroupSummaries(rows = [], { minimumRepairs = 2 } = {}
       templates: Array.from(group.templates),
       fixScope: group.suggestion.fixScope,
       fixScopeLabel: group.suggestion.fixScopeLabel,
-      fixOnce: group.suggestion.bestApproach,
+      effortDisplay: group.suggestion.effortDisplay,
+      role: group.suggestion.role,
+      fixOnce: group.suggestion.groupFix || group.suggestion.bestApproach,
       suggestion: group.suggestion,
     }));
 }

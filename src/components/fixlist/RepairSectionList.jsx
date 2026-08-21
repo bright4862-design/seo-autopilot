@@ -81,7 +81,7 @@ export default function RepairSectionList({ sections = [], renderRow }) {
                   item={row.item}
                   model={row.model}
                   suggestion={row.suggestion}
-                  showSuggestedFix={!row.groupedUnderSummary}
+                  showSuggestion={!row.groupedUnderSummary}
                   renderDetails={() => renderRow(row, index)}
                 />
               ))}

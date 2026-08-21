@@ -18,7 +18,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// RELEASE_CONTRACT_ROOT lets a test drive the generator against an isolated
+// copy. Tests run in parallel, so a check that mutated the real tree would race
+// with any other test importing a generated contract.
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT = process.env.RELEASE_CONTRACT_ROOT
+  ? path.resolve(process.env.RELEASE_CONTRACT_ROOT)
+  : REPO_ROOT;
 const REVISION_RECORD = "data/beta-crawler-revision.json";
 const CROSS_RUNTIME_INPUT = "data/cross-runtime-release-components.json";
 const CROSS_RUNTIME_SCHEMA = "cross_runtime_release_components_v1";

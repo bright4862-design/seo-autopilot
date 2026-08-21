@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -18,8 +19,10 @@ import { fileURLToPath } from "node:url";
  */
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const REVISION_RECORD = path.join(ROOT, "data/beta-crawler-revision.json");
-const CROSS_RUNTIME_INPUT = path.join(ROOT, "data/cross-runtime-release-components.json");
+const REVISION_RECORD_REL = "data/beta-crawler-revision.json";
+const CROSS_RUNTIME_REL = "data/cross-runtime-release-components.json";
+const REVISION_RECORD = path.join(ROOT, REVISION_RECORD_REL);
+const CROSS_RUNTIME_INPUT = path.join(ROOT, CROSS_RUNTIME_REL);
 const GENERATOR = path.join(ROOT, "scripts/generate_release_contracts.mjs");
 
 function readJson(file) {
@@ -98,19 +101,41 @@ test("every runtime consumer carries the recorded candidate fingerprint", () => 
 
 // ------------------------------------------------------ generated, not copied --
 
-test("the generator exists and is deterministic", () => {
-  assert.ok(fs.existsSync(GENERATOR), `missing ${GENERATOR}`);
-
-  const before = new Map();
+/**
+ * Drive the generator against an isolated copy of the inputs and consumers.
+ * `node --test` runs files in parallel, so a check that wrote to the real tree
+ * would race with any other test importing a generated contract.
+ */
+function isolatedRoot() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-contract-"));
   const emitted = execFileSync("node", [GENERATOR, "--list"], { cwd: ROOT, encoding: "utf8" })
     .split("\n").map((line) => line.trim()).filter(Boolean);
-  assert.ok(emitted.length > 0, "generator emits no consumers");
-
-  for (const rel of emitted) before.set(rel, fs.readFileSync(path.join(ROOT, rel), "utf8"));
-  execFileSync("node", [GENERATOR], { cwd: ROOT });
-  for (const [rel, previous] of before) {
-    assert.equal(fs.readFileSync(path.join(ROOT, rel), "utf8"), previous, `${rel} is not deterministic`);
+  for (const rel of [REVISION_RECORD_REL, CROSS_RUNTIME_REL, ...emitted]) {
+    const from = path.join(ROOT, rel);
+    if (!fs.existsSync(from)) continue;
+    const to = path.join(root, rel);
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.copyFileSync(from, to);
   }
+  return { root, emitted };
+}
+
+test("the generator exists and is deterministic", () => {
+  assert.ok(fs.existsSync(GENERATOR), `missing ${GENERATOR}`);
+  const { root, emitted } = isolatedRoot();
+  const env = { ...process.env, RELEASE_CONTRACT_ROOT: root };
+
+  execFileSync("node", [GENERATOR], { cwd: ROOT, env });
+  const first = emitted.map((rel) => fs.readFileSync(path.join(root, rel), "utf8"));
+  execFileSync("node", [GENERATOR], { cwd: ROOT, env });
+  const second = emitted.map((rel) => fs.readFileSync(path.join(root, rel), "utf8"));
+
+  assert.ok(emitted.length > 0, "generator emits no consumers");
+  assert.deepEqual(second, first, "generator output is not deterministic");
+});
+
+test("the committed contracts are already up to date with their inputs", () => {
+  execFileSync("node", [GENERATOR, "--check"], { cwd: ROOT, stdio: "pipe" });
 });
 
 test("generated consumers are marked do-not-edit and agree with the input", () => {
@@ -126,19 +151,16 @@ test("generated consumers are marked do-not-edit and agree with the input", () =
 });
 
 test("editing a generated consumer is detected as drift", () => {
-  const emitted = execFileSync("node", [GENERATOR, "--list"], { cwd: ROOT, encoding: "utf8" })
-    .split("\n").map((line) => line.trim()).filter(Boolean);
-  const target = path.join(ROOT, emitted[0]);
-  const original = fs.readFileSync(target, "utf8");
-  try {
-    fs.writeFileSync(target, `${original}\n// hand edit\n`);
-    assert.throws(
-      () => execFileSync("node", [GENERATOR, "--check"], { cwd: ROOT, stdio: "pipe" }),
-      "a hand-edited generated consumer must fail --check",
-    );
-  } finally {
-    fs.writeFileSync(target, original);
-  }
+  const { root, emitted } = isolatedRoot();
+  const env = { ...process.env, RELEASE_CONTRACT_ROOT: root };
+  execFileSync("node", [GENERATOR], { cwd: ROOT, env });
+
+  const target = path.join(root, emitted[0]);
+  fs.writeFileSync(target, `${fs.readFileSync(target, "utf8")}\n// hand edit\n`);
+  assert.throws(
+    () => execFileSync("node", [GENERATOR, "--check"], { cwd: ROOT, env, stdio: "pipe" }),
+    "a hand-edited generated consumer must fail --check",
+  );
 });
 
 // ------------------------------------------- python fingerprint authority --

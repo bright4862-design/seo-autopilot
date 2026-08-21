@@ -5,6 +5,8 @@ from hashlib import sha256
 import json
 from typing import Any, Mapping
 
+from .provider_payload_contract import validate_provider_payload
+
 REVIEW_ATTESTATION_VERSION = "standard_review_snapshot_hmac_v1"
 REPAIR_CONTRACT_V2 = "repair_contract_v2_shadow_calibrated"
 REPAIR_PRIORITY_MODEL_V2 = "repair_priority_v2_technical_severity"
@@ -125,11 +127,8 @@ class EvaluationCase:
     def __post_init__(self) -> None:
         object.__setattr__(self, "case_id", _require_non_empty("case_id", self.case_id))
         object.__setattr__(self, "question", _require_non_empty("question", self.question))
-        if self.evidence.get("release_gate_eligible") is not True:
-            raise ValueError("provider payload must have release_gate_eligible=true.")
+        validate_provider_payload(self.evidence)
         evidence_scan_id = str(self.evidence.get("scan_id") or "").strip()
-        if not evidence_scan_id:
-            raise ValueError("provider payload must include scan_id.")
         if evidence_scan_id != self.authority.scan_id:
             raise ValueError("provider payload scan_id does not match authority manifest.")
         object.__setattr__(self, "evidence_hash", sha256_json(dict(self.evidence)))

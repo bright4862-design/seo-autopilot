@@ -54,4 +54,3 @@ test("summary leverage copy requires explicit shared-repair confirmation", () =>
   assert.match(fixListSource, /recommendations\.filter\(hasExplicitSharedRepairConfirmation\)/);
   assert.doesNotMatch(fixListSource, /const groupedCount = recommendations\.filter\(\(item\) => Number\(item\.pageCount/);
 });
-

@@ -123,6 +123,19 @@ export function buildAuthoritySnapshot({ scan, review, identity, userId, now = n
       evidence_quality_state: text(review?.evidence_quality_state, 120),
       evidence_quality_score: number(review?.evidence_quality_score),
       evidence_quality_reasons: textArray(review?.evidence_quality_reasons, 12, 500),
+      // Coverage and inventory diagnostics. The review already computes all of
+      // these; the snapshot used to drop them, so every sealed row defaulted to
+      // zero and asserted a quality verdict it could not evidence. Persisted
+      // only -- nothing here participates in the authority predicates.
+      pages_retained: number(review?.usable_html_page_count),
+      usable_html_page_count: number(review?.usable_html_page_count),
+      representative_html_page_count: number(review?.representative_html_page_count),
+      default_route_page_count: number(review?.default_route_page_count),
+      discovery_quality_state: text(review?.discovery_quality_state, 120),
+      evidence_quality_gate_version: text(review?.evidence_quality_gate_version, 160),
+      crawl_timing: plainObject(scan?.crawl_timing ?? scan?.technical_audit_summary?.crawl_timing),
+      sampling_evidence: plainObject(scan?.sampling_evidence),
+      ...coverageAuthorityFields(review?.coverage_authority_evidence),
       health_score: healthScore,
       health_grade: healthGrade,
       customer_summary: customerSummary,
@@ -396,6 +409,25 @@ function verifiedUrls(value) {
 function firstArray(values) {
   for (const value of values || []) if (Array.isArray(value) && value.length > 0) return value;
   return [];
+}
+
+function plainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+/**
+ * The coverage assessment is absent-or-whole. A partial record would read as a
+ * verdict the scanner never reached, so an unversioned or empty assessment
+ * writes nothing rather than a fabricated default.
+ */
+function coverageAuthorityFields(evidence) {
+  const assessment = plainObject(evidence);
+  const version = text(assessment.coverage_authority_evidence_version, 160);
+  if (!version || !text(assessment.assessment, 120)) return {};
+  return {
+    coverage_authority_evidence_version: version,
+    coverage_authority_evidence: assessment,
+  };
 }
 
 function text(value, limit) {

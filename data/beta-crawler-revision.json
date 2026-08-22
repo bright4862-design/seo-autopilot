@@ -6,6 +6,7 @@
     "authority_seal_version": "scan_evidence_hmac_sha256_v1",
     "canonical_href_resolution_version": "canonical_href_resolution_v2_absolute_single_label_same_path",
     "canonical_target_evidence_version": "canonical_target_evidence_v2_origin_alias_equivalence",
+    "coverage_authority_evidence_version": "coverage_authority_evidence_v1",
     "crawler_acceptance_version": "crawler_acceptance_v1",
     "customer_projection_version": "customer_projection_v1",
     "durable_completion_contract_version": "durable_standard150_completion_v1",
@@ -44,10 +45,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "1f730bb039aef84e",
+  "fingerprint": "fbb06c2634b74ca6",
   "git_commit": "",
-  "note": "Standard 150 beta candidate. Patch A: one canonical release contract. Cross-runtime Base44/frontend component markers now participate in the same fingerprint, so a Base44/UI-only behavior change moves release identity exactly like a Python change. Production acceptance, deployed commit, workflow runs and artifact digests are pending.",
-  "recorded_at": "2026-08-21T20:16:36.541176+00:00",
+  "note": "Standard 150 beta candidate. Patch B: coverage/inventory diagnostics are computed and persisted as coverage_authority_evidence_v1. Observational only -- no scan status, provisional state, release eligibility or score changes. Production acceptance, deployed commit, workflow runs and artifact digests are pending.",
+  "recorded_at": "2026-08-21T21:10:20.153434+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

@@ -315,6 +315,18 @@ export function authoritySnapshotFromRows({ run, fixList, fixItems, userId }) {
       evidence_quality_state: text(run?.evidence_quality_state, 120),
       evidence_quality_score: number(run?.evidence_quality_score),
       evidence_quality_reasons: textArray(run?.evidence_quality_reasons, 12, 500),
+      // Coverage/inventory diagnostics. Mirrors buildAuthoritySnapshot exactly:
+      // the seal is recomputed over this reconstruction, so any field the
+      // snapshot writes must be rebuilt here with the identical value.
+      pages_retained: number(run?.pages_retained),
+      usable_html_page_count: number(run?.usable_html_page_count),
+      representative_html_page_count: number(run?.representative_html_page_count),
+      default_route_page_count: number(run?.default_route_page_count),
+      discovery_quality_state: text(run?.discovery_quality_state, 120),
+      evidence_quality_gate_version: text(run?.evidence_quality_gate_version, 160),
+      crawl_timing: plainObject(run?.crawl_timing),
+      sampling_evidence: plainObject(run?.sampling_evidence),
+      ...coverageAuthorityFields(run?.coverage_authority_evidence),
       health_score: number(run?.health_score),
       health_grade: text(run?.health_grade, 80),
       customer_summary: text(run?.customer_summary, 4_000),
@@ -526,6 +538,21 @@ function verifiedUrls(value) {
       status_code: number(item?.status_code),
       verification_state: text(item?.verification_state, 120),
     }).filter((item) => item.url || item.final_url);
+}
+
+function plainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+/** Mirrors coverageAuthorityFields in persistDurableScanAuthority/authoritySnapshot.js. */
+function coverageAuthorityFields(evidence) {
+  const assessment = plainObject(evidence);
+  const version = text(assessment.coverage_authority_evidence_version, 160);
+  if (!version || !text(assessment.assessment, 120)) return {};
+  return {
+    coverage_authority_evidence_version: version,
+    coverage_authority_evidence: assessment,
+  };
 }
 
 function text(value, limit) {

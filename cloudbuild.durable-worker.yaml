@@ -73,17 +73,24 @@ steps:
           echo "Release source mismatch: archive stamp $actual_sha, expected ${_RELEASE_SHA}." >&2
           exit 1
         fi
-        for path in Dockerfile scanner-api/requirements.txt scanner-api/app/main.py; do
+        for path in \
+          Dockerfile \
+          scanner-api/requirements.txt \
+          scanner-api/app/main.py \
+          data/cross-runtime-release-components.json; do
           test -e "/workspace/$path" || { echo "Missing worker build input: $path" >&2; exit 1; }
         done
         rm -rf "$verified_context"
-        mkdir -p "$verified_context/scanner-api"
+        mkdir -p "$verified_context/scanner-api" "$verified_context/data"
         cp /workspace/Dockerfile "$verified_context/Dockerfile"
         cp /workspace/scanner-api/requirements.txt "$verified_context/scanner-api/requirements.txt"
         cp -a /workspace/scanner-api/app "$verified_context/scanner-api/app"
+        cp /workspace/data/cross-runtime-release-components.json "$verified_context/data/cross-runtime-release-components.json"
         main_sha="$(sha256sum "$verified_context/scanner-api/app/main.py" | cut -d ' ' -f 1)"
+        components_sha="$(sha256sum "$verified_context/data/cross-runtime-release-components.json" | cut -d ' ' -f 1)"
         echo "Verified archived worker context for ${_RELEASE_SHA}."
         echo "Verified scanner-api/app/main.py sha256=$main_sha"
+        echo "Verified data/cross-runtime-release-components.json sha256=$components_sha"
 
   - id: build
     name: gcr.io/cloud-builders/docker

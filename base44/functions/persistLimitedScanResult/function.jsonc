@@ -1,0 +1,4 @@
+{
+  "name": "persistLimitedScanResult",
+  "entry": "index.ts"
+}

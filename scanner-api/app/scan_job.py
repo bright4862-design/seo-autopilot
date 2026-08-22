@@ -435,6 +435,62 @@ def build_scan_attestation(result: dict[str, Any], scan: dict[str, Any], signing
     }
 
 
+LIMITED_COMPLETION_VERSION = "durable_standard150_limited_v1"
+
+# Coverage states that produce a truthful limited result rather than a failure.
+LIMITED_COVERAGE_STATES = frozenset({"limited_coverage", "inventory_unproven", "access_limited"})
+
+
+def coverage_state_of(review: dict[str, Any]) -> str:
+    fingerprint = review.get("site_fingerprint") if isinstance(review, dict) else None
+    fingerprint = fingerprint if isinstance(fingerprint, dict) else {}
+    assessment = fingerprint.get("coverage_assessment")
+    if isinstance(assessment, dict):
+        return str(assessment.get("state") or "")
+    return str(review.get("coverage_state") or "") if isinstance(review, dict) else ""
+
+
+def limited_result_payload(review: dict[str, Any]) -> dict[str, Any]:
+    """The review fields the limited-result contract binds into its proof."""
+    fingerprint = review.get("site_fingerprint") if isinstance(review.get("site_fingerprint"), dict) else {}
+    assessment = fingerprint.get("coverage_assessment") if isinstance(fingerprint.get("coverage_assessment"), dict) else {}
+    return {
+        "scan_status": review.get("scan_status"),
+        "health_score": review.get("health_score"),
+        "health_grade": review.get("health_grade"),
+        "limitation": review.get("limitation"),
+        "release_gate_eligible": review.get("release_gate_eligible"),
+        "score_is_provisional": review.get("score_is_provisional"),
+        "coverage_state": assessment.get("state") or coverage_state_of(review),
+        "coverage_reasons": assessment.get("reasons") or [],
+        "coverage_authority_version": assessment.get("coverage_authority_version") or "",
+        "recommendations": review.get("recommendations") or review.get("fixes") or [],
+    }
+
+
+def build_limited_envelope(
+    scan: dict[str, Any],
+    result: dict[str, Any],
+    review: dict[str, Any],
+    signing_key: str,
+) -> dict[str, Any]:
+    identity = {
+        "owner_user_id": str(scan.get("owner_user_id") or ""),
+        "scan_id": str(scan.get("id") or ""),
+        "project_id": str(scan.get("project_id") or ""),
+        "request_id": str(scan.get("request_id") or result.get("request_id") or ""),
+        "normalized_domain": str(result.get("normalized_domain") or "").lower().removeprefix("www."),
+        "attempt_count": str(current_attempt(scan)),
+    }
+    signed = {
+        "version": LIMITED_COMPLETION_VERSION,
+        "identity": identity,
+        "scan": result,
+        "review": limited_result_payload(review),
+    }
+    return {**signed, "proof": create_authority_seal(signed, signing_key)}
+
+
 def build_completion_envelope(
     scan: dict[str, Any],
     result: dict[str, Any],
@@ -618,6 +674,60 @@ def terminal_review_limitation(review: dict[str, Any]) -> dict[str, str] | None:
     return None
 
 
+async def persist_limited_result(
+    client: httpx.AsyncClient,
+    scan: dict[str, Any],
+    result: dict[str, Any],
+    review: dict[str, Any],
+    signing_key: str,
+    *,
+    phase_started: float,
+) -> dict[str, Any]:
+    """Save a provisional result under its own integrity proof, never authority."""
+    scan_id = str(scan.get("id") or "")
+    attempt_count = current_attempt(scan)
+    envelope = build_limited_envelope(scan, result, review, signing_key)
+    emit(
+        "scan_job_completion_phase",
+        scan_id=scan_id,
+        attempt_count=attempt_count,
+        phase="limited_persist_start",
+        elapsed_ms=int((time.monotonic() - phase_started) * 1000),
+        coverage_state=coverage_state_of(review),
+    )
+    persisted = await invoke_function(client, "persistLimitedScanResult", envelope)
+    status_code = int(persisted.get("status_code") or 0)
+    emit(
+        "scan_job_completion_phase",
+        scan_id=scan_id,
+        attempt_count=attempt_count,
+        phase="limited_persist_done",
+        elapsed_ms=int((time.monotonic() - phase_started) * 1000),
+        status_code=status_code,
+    )
+    if status_code >= 500:
+        return {"ok": False, "transient": True, "failure_code": "persistence_unavailable"}
+    body = persisted.get("body") if isinstance(persisted.get("body"), dict) else {}
+    if status_code >= 400 or body.get("success") is False:
+        return {
+            "ok": False,
+            "transient": False,
+            "failure_code": str(body.get("error_code") or "limited_result_failed"),
+        }
+    scan_run = body.get("scanRun") if isinstance(body.get("scanRun"), dict) else {}
+    fix_list_id = str(body.get("fixListId") or scan_run.get("fix_list_id") or "")
+    if not fix_list_id or body.get("resultIntegrityVerified") is not True:
+        return {"ok": False, "transient": False, "failure_code": "limited_result_failed"}
+    return {
+        "ok": True,
+        "transient": False,
+        "failure_code": "",
+        "limited": True,
+        "fix_list_id": fix_list_id,
+        "result_integrity_proof": str(scan_run.get("result_integrity_proof") or ""),
+    }
+
+
 async def complete_authority(
     client: httpx.AsyncClient,
     scan: dict[str, Any],
@@ -729,6 +839,19 @@ async def complete_authority(
             "failure_code": limitation["code"],
             "customer_message": limitation["detail"],
         }
+
+    # A scan the coverage assessment limited is not authoritative, but it is not
+    # nothing either. Failing it here would throw away evidence the customer can
+    # act on, which is a worse answer than the overclaim it replaced -- so it
+    # takes the separate integrity-verified path. Only a scan with no useful
+    # evidence at all still ends as a failure, which persistLimitedScanResult
+    # enforces server-side rather than trusting this decision.
+    if reviewed.get("release_gate_eligible") is not True:
+        coverage_state = coverage_state_of(reviewed)
+        if coverage_state in LIMITED_COVERAGE_STATES and (reviewed.get("recommendations") or reviewed.get("fixes")):
+            return await persist_limited_result(
+                client, scan, result, reviewed, signing_key, phase_started=phase_started,
+            )
 
     envelope = build_completion_envelope(scan, result, reviewed, signing_key)
     emit(

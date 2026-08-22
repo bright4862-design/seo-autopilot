@@ -339,6 +339,22 @@
           }
         }
       }
+    },
+    "result_integrity_version": {
+      "type": "string",
+      "description": "Version of the limited-result integrity contract, when this row is a verified limited result."
+    },
+    "result_integrity_domain": {
+      "type": "string",
+      "description": "HMAC domain label bound into the limited-result proof. Never an authority domain."
+    },
+    "result_integrity_sealed_at": {
+      "type": "string",
+      "description": "Stable timestamp bound into the limited-result proof, so a retry reproduces it."
+    },
+    "result_integrity_proof": {
+      "type": "string",
+      "description": "Server-only HMAC over the limited result. Cryptographically unusable as an authority proof."
     }
   },
   "required": [

@@ -341,7 +341,10 @@ export default function FixList() {
   const pagesScanned = getPagesScanned(scanRecord, pages);
   const pagesFound = getPagesFound(scanRecord);
   const locked = scanRecord?.customer_access === "locked";
-  const hasUsefulScan = Boolean(
+  // An authoritative result and a verified limited result are both readable;
+  // only the first is authoritative. Keeping them as two conditions rather than
+  // relaxing one is what stops a provisional scan from being read as complete.
+  const hasAuthoritativeScan = Boolean(
     scanRecord
     && scanRecord.authority_verified === true
     && scanRecord.status === "complete"
@@ -350,6 +353,15 @@ export default function FixList() {
     && scanRecord.score_is_provisional !== true
     && scanRecord.evidence_quality_blocking !== true
   );
+  const hasVerifiedLimitedScan = Boolean(
+    scanRecord
+    && scanRecord.result_integrity_verified === true
+    && scanRecord.status === "limited"
+    && scanRecord.release_gate_eligible !== true
+    && scanRecord.authority_verified !== true
+    && (scanRecord.recommendations?.length || 0) > 0
+  );
+  const hasUsefulScan = hasAuthoritativeScan || hasVerifiedLimitedScan;
   const noHighConfidenceFindings = isNoHighConfidenceFindings(scanRecord, recommendations);
   const nextBestStep = getNextBestStep(scanRecord, noHighConfidenceFindings);
   const websiteKey = websiteKeyOf(scanRecord);
@@ -1605,6 +1617,7 @@ function normalizeDurableScanBundle(bundle = {}) {
     fix_list_id: fixList.id || run.fix_list_id || "",
     customer_access: bundle.access || "locked",
     authority_verified: bundle.authority_verified === true,
+    result_integrity_verified: bundle.result_integrity_verified === true,
     is_authoritative: fixList.is_authoritative === true,
     health_score: run.health_score ?? fixList.health_score ?? null,
     health_grade: run.health_grade || fixList.health_grade || "",

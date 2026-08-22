@@ -26,13 +26,8 @@ SOURCE_DIR="$REPO_ROOT/dispatch-gateway"
 
 # The claimed SOURCE_SHA must be the exact clean checkout whose bytes are sent
 # to source deploy. A label without this guard is not provenance.
-git -C "$REPO_ROOT" fetch origin main --quiet
-HEAD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
-REMOTE_MAIN_SHA="$(git -C "$REPO_ROOT" rev-parse origin/main)"
-if [[ "$HEAD_SHA" != "$SOURCE_SHA" || "$HEAD_SHA" != "$REMOTE_MAIN_SHA" || -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all)" ]]; then
-  echo "Refusing gateway deployment: checkout must be clean exact current main $SOURCE_SHA." >&2
-  exit 2
-fi
+source "$REPO_ROOT/scripts/lib/release-source-guard.sh"
+fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$CONFIRM"
 
 BUILD_SA_RAW="${CLOUD_BUILD_SERVICE_ACCOUNT:-$(gcloud builds get-default-service-account --project="$PROJECT" --format='value(serviceAccountEmail)')}"
 BUILD_SA_EMAIL="${BUILD_SA_RAW##*/}"

@@ -6,6 +6,7 @@ from collections import defaultdict
 from typing import Any
 from urllib.parse import urlparse
 
+from .coverage_authority import assess_coverage, coverage_inputs_from_payload
 from .page_evidence_gate import (
     PAGE_EVIDENCE_GATE_VERSION,
     page_evidence_class,
@@ -16,7 +17,7 @@ REVIEW_VERSION = "python_review_v2_structural_marketplace"
 SCORING_MODEL = "python_review_v2_group_dedup"
 ZERO_FIX_CONFIDENCE_VERSION = "python_review_v3_zero_fix_confidence"
 ZERO_FIX_HEALTH_GRADE = "No issues found in sample"
-QUALITY_GATE_VERSION = "review_quality_gate_v2_complete_small_site_inventory"
+QUALITY_GATE_VERSION = "review_quality_gate_v3_shared_coverage_decision"
 GROUPED_RECOMMENDATION_EVIDENCE_VERSION = "grouped_recommendation_evidence_v1_metadata_states"
 ORPHAN_ASSET_EVIDENCE_VERSION = "orphan_asset_evidence_v1"
 INCOMPLETE_REVIEW_WARNING = "Review received scan metadata, but no page evidence was passed into AI Review."
@@ -887,6 +888,20 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         "vertical_confidence": round(confidence, 2),
         "classification": classification,
         "classification_state": classification["state"],
+        # One coverage decision per crawl, taken here because this is where the
+        # full crawl body is available. Everything downstream reads this rather
+        # than re-deriving it from a summary that has already lost the sitemap
+        # and timing evidence the decision depends on.
+        "coverage_assessment": assess_coverage(coverage_inputs_from_payload(
+            {
+                "pages_found": pages_found,
+                "pages_crawled": pages_crawled,
+                "queued_remaining": int_or_zero(body.get("queued_remaining")),
+                "crawl_timing": crawl_timing,
+            },
+            retained_usable_html=usable_pages,
+            blocked_or_429_pages=blocked_or_429_pages,
+        )),
         "classification_evidence_sufficiency": classification["evidence_sufficiency"],
         "business_model": detect_business_model(text, primary),
         "size_band": "enterprise" if max(pages_found, pages_crawled, pages_received) >= 1000 else "mid_market" if max(pages_found, pages_crawled, pages_received) >= 150 else "smb" if max(pages_found, pages_crawled, pages_received) >= 30 else "micro",
@@ -931,6 +946,18 @@ def review_input_quality(body: dict[str, Any], site_fingerprint: dict[str, Any])
 
 
 def evidence_is_incomplete(site_fingerprint: dict[str, Any]) -> bool:
+    """Incomplete means no usable page evidence arrived at all.
+
+    Deliberately narrow. A thin-but-real crawl is *insufficient*, not
+    incomplete, and the two are different customer states: incomplete_evidence
+    says the review never saw pages, inconclusive_insufficient_evidence says it
+    saw some and could not conclude from them. Coverage is judged once, by
+    coverage_authority.assess_coverage, and reaches the result through
+    `insufficient` -- which is also what makes evidence_complete false.
+
+    The old thin-crawl clause here (fewer than 20 received pages) is what let
+    38/3,689 and 40/1,374 seal as complete; the shared assessment replaces it.
+    """
     received = int_or_zero(site_fingerprint.get("pages_received"))
     crawled = int_or_zero(site_fingerprint.get("pages_crawled"))
     found = int_or_zero(site_fingerprint.get("pages_found"))
@@ -938,9 +965,27 @@ def evidence_is_incomplete(site_fingerprint: dict[str, Any]) -> bool:
     sampled = int_or_zero(site_fingerprint.get("sampled_pages_sent_to_ai"))
     if reported > 0 and (received == 0 or sampled == 0):
         return True
+    # The original clause, kept exactly. It only ever caught the most extreme
+    # cases (7/900), and those already read as incomplete_evidence to customers;
+    # widening it would relabel them. The crawls it missed -- 38/3,689,
+    # 40/1,374 -- are caught by the shared coverage decision as *insufficient*,
+    # which is the honest state for a thin-but-real sample.
     if found >= 100 and received < 20 and received / max(found, 1) < 0.10:
         return True
     return False
+
+
+def coverage_state_for_fingerprint(site_fingerprint: dict[str, Any]) -> str:
+    """The shared coverage verdict recorded on the fingerprint.
+
+    Read, never recomputed. A summary has already lost the sitemap-source and
+    timing evidence the decision rests on, so re-deriving from it would quietly
+    produce a second, worse opinion -- exactly the split this patch removes.
+    """
+    assessment = site_fingerprint.get("coverage_assessment")
+    if isinstance(assessment, dict) and assessment.get("state"):
+        return str(assessment["state"])
+    return "sufficient"
 
 
 def crawl_is_blocked(site_fingerprint: dict[str, Any]) -> bool:
@@ -1991,10 +2036,22 @@ def has_rate_limit_evidence(fixes: list[dict[str, Any]]) -> bool:
 def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixes: list[dict[str, Any]], site_fingerprint: dict[str, Any], playbook: dict[str, Any], website_url: str) -> dict[str, Any]:
     incomplete = evidence_is_incomplete(site_fingerprint)
     blocked = crawl_is_blocked(site_fingerprint)
+    # Coverage insufficiency IS insufficient evidence, so it must reach the
+    # customer-facing state rather than being swallowed by the incompleteness
+    # guard -- incompleteness is now largely driven by coverage itself.
+    coverage_insufficient = coverage_state_for_fingerprint(site_fingerprint) in {
+        "limited_coverage",
+        "inventory_unproven",
+    }
     insufficient = bool(
-        site_fingerprint.get("classification_state") == "inconclusive_insufficient_evidence"
-        and not incomplete
-        and not blocked
+        not blocked
+        and (
+            coverage_insufficient
+            or (
+                site_fingerprint.get("classification_state") == "inconclusive_insufficient_evidence"
+                and not incomplete
+            )
+        )
     )
     rate_limited = has_rate_limit_evidence(fixes)
     quality = review_input_quality(body, site_fingerprint)

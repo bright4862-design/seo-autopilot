@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from copy import deepcopy
+
+from .coverage_authority import assess_coverage, coverage_inputs_from_payload
 from typing import Any
 from urllib.parse import urlparse
 
 from .review import unwrap_scan_payload
 
-EVIDENCE_QUALITY_GATE_VERSION = "evidence_quality_gate_v1_default_route_dominance"
+EVIDENCE_QUALITY_GATE_VERSION = "evidence_quality_gate_v2_shared_coverage_decision"
 
 LIMITED_SCAN_STATUSES = {
     "complete_with_access_limitations",
@@ -124,6 +126,19 @@ def _meaningful_root(page: dict[str, Any]) -> bool:
     )
 
 
+def _blocked_page_count(payload: dict[str, Any], pages: list[dict[str, Any]]) -> int:
+    """Challenged/rate-limited pages, from the crawl or counted from evidence."""
+    crawl_timing = payload.get("crawl_timing") if isinstance(payload.get("crawl_timing"), dict) else {}
+    reported = max(
+        _int(payload.get("blocked_or_429_pages")),
+        _int(payload.get("blocked_access_pages")),
+        _int(crawl_timing.get("blocked_or_429_pages")),
+    )
+    if reported:
+        return reported
+    return sum(1 for page in pages if _int(page.get("status_code")) in (401, 403, 429))
+
+
 def evaluate_evidence_quality(payload: dict[str, Any]) -> dict[str, Any]:
     pages = _pages_from_payload(payload)
     usable = [page for page in pages if _is_usable_html(page)]
@@ -136,33 +151,41 @@ def evaluate_evidence_quality(payload: dict[str, Any]) -> dict[str, Any]:
     reasons: list[str] = []
     blocking = False
 
+    # One shared coverage decision. This module does not form its own opinion
+    # about whether the crawl saw enough of the site; it reads the verdict and
+    # applies it. The previous local rule only guarded the one-page case when
+    # the single page was a "meaningful root", so a single page that was not
+    # fell straight through to the representative branch and scored 81,
+    # non-blocking. That is the path Habito took in production.
+    coverage = assess_coverage(coverage_inputs_from_payload(
+        payload,
+        retained_usable_html=usable_count,
+        blocked_or_429_pages=_blocked_page_count(payload, pages),
+    ))
+
     if usable_count == 0:
         state = "no_usable_html"
         discovery_state = "no_usable_html"
         score = 0
         blocking = True
         reasons.append("no_usable_html_pages")
-    elif usable_count == 1 and representative_count == 1 and _meaningful_root(representative[0]):
-        crawl_timing = payload.get("crawl_timing") if isinstance(payload.get("crawl_timing"), dict) else {}
-        discovery_complete = bool(
-            _int(payload.get("pages_found")) == 1
-            and _int(payload.get("pages_crawled")) == 1
-            and crawl_timing.get("queue_exhausted") is True
-            and not crawl_timing.get("sitemap_budget_exhausted")
-            and not crawl_timing.get("sitemap_fetch_limit_reached")
-            and _int(crawl_timing.get("failed_fetch_count")) == 0
+    elif coverage["state"] != "sufficient":
+        state = "access_limited" if coverage["state"] == "access_limited" else "insufficient_discovery"
+        # Keep the more specific published label where it applies; the coverage
+        # state is the general case, not a replacement vocabulary.
+        discovery_state = (
+            "single_page_inventory_unproven"
+            if coverage["state"] == "inventory_unproven" and usable_count == 1
+            else coverage["state"]
         )
-        if discovery_complete:
-            state = "small_site_supported"
-            discovery_state = "small_site_supported"
-            score = 85
-            reasons.append("meaningful_single_page_site")
-        else:
-            state = "insufficient_discovery"
-            discovery_state = "single_page_inventory_unproven"
-            score = 35
-            blocking = True
-            reasons.extend(["single_page_inventory_unproven", "representative_html_pages_below_minimum"])
+        score = 35
+        blocking = True
+        reasons.extend(coverage["reasons"])
+    elif usable_count == 1:
+        state = "small_site_supported"
+        discovery_state = "small_site_supported"
+        score = 85
+        reasons.append("proven_single_page_inventory")
     elif (
         2 <= usable_count <= 6
         and default_count >= 2
@@ -195,6 +218,9 @@ def evaluate_evidence_quality(payload: dict[str, Any]) -> dict[str, Any]:
         ],
         "evidence_quality_blocking": blocking,
         "evidence_quality_gate_version": EVIDENCE_QUALITY_GATE_VERSION,
+        "coverage_authority_version": coverage["coverage_authority_version"],
+        "coverage_state": coverage["state"],
+        "coverage_reasons": list(coverage["reasons"]),
     }
 
 

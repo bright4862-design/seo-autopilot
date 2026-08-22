@@ -3,7 +3,7 @@
 // Run that generator after changing either input; CI fails on drift.
 
 export const RELEASE_CONTRACT_SCHEMA_VERSION = "beta_crawler_revision_v1";
-export const RELEASE_FINGERPRINT = "fdd5906461a468d3";
+export const RELEASE_FINGERPRINT = "d23f6a2ad97da082";
 export const RELEASE_STATUS = "candidate";
 export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "archetype_classifier_version": "archetype_classifier_v9_local_business_hospitality",
@@ -11,13 +11,14 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "authority_seal_version": "scan_evidence_hmac_sha256_v1",
   "canonical_href_resolution_version": "canonical_href_resolution_v2_absolute_single_label_same_path",
   "canonical_target_evidence_version": "canonical_target_evidence_v2_origin_alias_equivalence",
-  "coverage_authority_evidence_version": "coverage_authority_evidence_v1",
+  "coverage_authority_evidence_version": "coverage_authority_evidence_v2_authoritative",
+  "coverage_authority_version": "coverage_authority_v1_shared_decision",
   "crawler_acceptance_version": "crawler_acceptance_v1",
   "customer_projection_version": "customer_projection_v1",
   "durable_completion_contract_version": "durable_standard150_completion_v1",
   "durable_control_contract_version": "durable_standard150_control_v1",
   "durable_worker_contract_version": "scan_job_worker_v1_cloud_tasks",
-  "evidence_quality_gate_version": "evidence_quality_gate_v1_default_route_dominance",
+  "evidence_quality_gate_version": "evidence_quality_gate_v2_shared_coverage_decision",
   "final_url_dedup_version": "final_url_dedup_v1_normalized_identity",
   "frontier_policy_version": "url_frontier_policy_v1_conservative_trap_guard",
   "grouped_recommendation_evidence_version": "grouped_recommendation_evidence_v1_metadata_states",
@@ -28,7 +29,7 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "orphan_asset_evidence_version": "orphan_asset_evidence_v1",
   "page_evidence_gate_version": "page_evidence_gate_v1",
   "page_level_asset_evidence_version": "page_level_asset_evidence_v3_markdown",
-  "quality_gate_version": "review_quality_gate_v2_complete_small_site_inventory",
+  "quality_gate_version": "review_quality_gate_v3_shared_coverage_decision",
   "redirect_evidence_version": "redirect_evidence_v3_origin_alias_identity",
   "render_evidence_quality_version": "render_evidence_quality_v1",
   "render_evidence_version": "render_evidence_v1",

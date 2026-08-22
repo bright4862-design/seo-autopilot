@@ -232,6 +232,16 @@ def test_complete_three_page_inventory_with_final_url_dedup_is_authoritative():
             "crawl_deadline_reached": False,
             "failed_fetch_count": 0,
             "final_url_duplicates_deduped": 1,
+            # A small inventory is only "complete" if something authoritative
+            # said how big it is. An exhausted frontier and zero fetch errors
+            # look identical whether the site really has three pages or its
+            # discovery was blocked.
+            "sitemap_sources": [{
+                "url": "https://tinysite.example/sitemap.xml",
+                "source": "robots_declared",
+                "outcome": "urls",
+                "loc_count": 4,
+            }],
         },
         "crawled_pages": pages,
     })

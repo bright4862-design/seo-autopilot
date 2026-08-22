@@ -242,7 +242,7 @@ if ! gcloud iam workload-identity-pools providers describe "$CONNECTIVITY_PROVID
   --project="$PROJECT" --location=global --workload-identity-pool="$POOL" >/dev/null 2>&1; then
   gcloud iam workload-identity-pools providers create-oidc "$CONNECTIVITY_PROVIDER" \
     --project="$PROJECT" --location=global --workload-identity-pool="$POOL" \
-    --display-name="FixList Base44 admission owner control" \
+    --display-name="FixList Base44 admission WIF" \
     --issuer-uri="https://token.actions.githubusercontent.com/" \
     --attribute-mapping="$EXPECTED_MAPPING" \
     --attribute-condition="$CONNECTIVITY_CONDITION" --quiet

@@ -22,9 +22,12 @@ on:
           - build-worker-candidate
           - promote-worker
           - rollback-worker
-          - pause-queue
-          - resume-queue
-          - activate-beta
+          - barrier-status
+          - verify-zero-admission-obligations
+          - cutover-pause
+          - cutover-resume
+          - open-claim-barrier
+          - acceptance-only
           - sync-base44-signing-key
       revision:
         description: "Exact Cloud Run revision for promote/rollback/activate. Prefilled for the currently verified Standard 150 worker candidate."
@@ -32,9 +35,55 @@ on:
         default: "fixlist-standard150-worker-00011-v7m"
         type: string
       confirm:
-        description: "Mutations require exact confirmation. Prefilled for the currently verified Standard 150 worker candidate."
+        description: "Exact operation-specific confirmation shown in the release runbook"
         required: true
-        default: "fixlist-standard150-worker-00011-v7m"
+        type: string
+      barrier_generation:
+        description: "Exact current coordinator barrier generation"
+        required: true
+        default: "0"
+        type: string
+      barrier_prior_mode:
+        description: "Exact intended prior barrier mode"
+        required: true
+        default: open
+        type: choice
+        options:
+          - open
+          - closed
+          - acceptance_only
+      change_ticket:
+        description: "Auditable release/change ticket identifier"
+        required: true
+        type: string
+      reason:
+        description: "Bounded operator reason recorded by the coordinator"
+        required: true
+        default: "Standard 150 controlled cutover"
+        type: string
+      acceptance_cohort_id:
+        description: "Acceptance-only cohort ID"
+        required: false
+        type: string
+      acceptance_release_id:
+        description: "Acceptance-only release ID"
+        required: false
+        type: string
+      acceptance_owner_user_ids:
+        description: "Comma-separated exact owner user IDs"
+        required: false
+        type: string
+      acceptance_expires_at:
+        description: "Acceptance-only expiry as epoch seconds"
+        required: false
+        type: string
+      acceptance_total_claim_budget:
+        description: "Bounded total acceptance claims"
+        required: false
+        type: string
+      acceptance_per_owner_claim_budget:
+        description: "Bounded claims per allowlisted owner"
+        required: false
         type: string
   issue_comment:
     types: [created]
@@ -58,6 +107,7 @@ env:
   GCP_REGION: europe-west1
   GCP_WIF_PROVIDER: projects/919035207432/locations/global/workloadIdentityPools/github/providers/github-actions
   GCP_OPERATOR_SERVICE_ACCOUNT: fixlist-github-operator@seo-autopilot-501517.iam.gserviceaccount.com
+  GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT: fixlist-admission-operator@seo-autopilot-501517.iam.gserviceaccount.com
   CLOUD_RUN_SERVICE: fixlist-standard150-worker
   CLOUD_TASKS_QUEUE: fixlist-standard150
   TASKS_INVOKER_SERVICE_ACCOUNT: fixlist-standard150-invoker@seo-autopilot-501517.iam.gserviceaccount.com
@@ -71,16 +121,16 @@ env:
 
 jobs:
   operate:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && github.actor == 'bright4862-design'
     name: ${{ inputs.operation }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Refuse to run outside main
-        if: github.ref != 'refs/heads/main'
+      - name: Refuse non-owner or non-main execution
         run: |
-          echo "The Cloud Operator runs only from refs/heads/main. Got: ${{ github.ref }}" >&2
-          exit 2
+          set -euo pipefail
+          test "${{ github.actor }}" = "bright4862-design"
+          test "${{ github.ref }}" = "refs/heads/main"
 
       - name: Checkout exact dispatched commit
         uses: actions/checkout@v6
@@ -88,6 +138,15 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify exact clean main source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          git fetch origin main --quiet
+          test "$(git rev-parse origin/main)" = "${{ github.sha }}"
 
       - name: Validate canonical gateway before deployment
         if: inputs.operation == 'deploy-dispatch-gateway'
@@ -115,7 +174,7 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT }}
           workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
-          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+          service_account: ${{ contains(fromJSON('["barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only"]'), inputs.operation) && env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT || env.GCP_OPERATOR_SERVICE_ACCOUNT }}
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
@@ -131,11 +190,24 @@ jobs:
           bash -n scripts/lib/release-source-guard.sh
 
       - name: Run allowlisted worker operation
-        if: inputs.operation != 'deploy-dispatch-gateway' && inputs.operation != 'deploy-admission-coordinator' && inputs.operation != 'build-worker-candidate'
+        if: inputs.operation != 'deploy-dispatch-gateway' && inputs.operation != 'deploy-admission-coordinator' && inputs.operation != 'build-worker-candidate' && inputs.operation != 'sync-base44-signing-key'
         env:
           OPERATION: ${{ inputs.operation }}
           CONFIRM: ${{ inputs.confirm }}
           TARGET_REVISION: ${{ inputs.revision }}
+          SOURCE_SHA: ${{ github.sha }}
+          BARRIER_EXPECTED_GENERATION: ${{ inputs.barrier_generation }}
+          BARRIER_EXPECTED_PRIOR_MODE: ${{ inputs.barrier_prior_mode }}
+          CHANGE_TICKET: ${{ inputs.change_ticket }}
+          CUTOVER_REASON: ${{ inputs.reason }}
+          ACCEPTANCE_COHORT_ID: ${{ inputs.acceptance_cohort_id }}
+          ACCEPTANCE_RELEASE_ID: ${{ inputs.acceptance_release_id }}
+          ACCEPTANCE_SOURCE_SHA: ${{ github.sha }}
+          ACCEPTANCE_OWNER_USER_IDS: ${{ inputs.acceptance_owner_user_ids }}
+          ACCEPTANCE_EXPIRES_AT: ${{ inputs.acceptance_expires_at }}
+          ACCEPTANCE_TOTAL_CLAIM_BUDGET: ${{ inputs.acceptance_total_claim_budget }}
+          ACCEPTANCE_PER_OWNER_CLAIM_BUDGET: ${{ inputs.acceptance_per_owner_claim_budget }}
+          GCP_OPERATOR_SERVICE_ACCOUNT: ${{ contains(fromJSON('["barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only"]'), inputs.operation) && env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT || env.GCP_OPERATOR_SERVICE_ACCOUNT }}
         shell: bash
         run: bash ./scripts/fixlist-cloud-operator.sh
 
@@ -643,6 +715,7 @@ jobs:
   sync-base44-signing-key:
     if: >-
       github.event_name == 'workflow_dispatch'
+      && github.actor == 'bright4862-design'
       && github.event.inputs.operation == 'sync-base44-signing-key'
       && github.event.inputs.confirm == 'SYNC-SIGNING-KEY'
     name: Synchronize Base44 signing key

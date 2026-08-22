@@ -8,6 +8,7 @@ COORDINATOR="${ADMISSION_COORDINATOR_SERVICE:-fixlist-scan-admission-coordinator
 DRAIN_QUEUE="${CLOUD_TASKS_DRAIN_QUEUE:-fixlist-standard150-drain}"
 SOURCE_SHA="${SOURCE_SHA:-}"
 CONFIRM="${CONFIRM:-}"
+BASE44_EXPECTED_OWNER="${BASE44_EXPECTED_OWNER:-}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$REPO_ROOT/scripts/lib/release-source-guard.sh"
@@ -32,8 +33,10 @@ gcloud tasks queues describe "$DRAIN_QUEUE" --project="$PROJECT" --location="$RE
 
 fixlist_install_base44_cli "$TMP"
 "$FIXLIST_BASE44_CLI" login
+fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami"
 
-# Additive only: set these exact four admission/control keys. Membership is
+# Additive only: set these exact four admission/control keys and the exact-main
+# release provenance used by durable reconciliation. Membership is
 # determined by the owner-bound Access entitlement, not a second static cohort
 # list. This intentionally does not touch the signing key, Stripe cohort/checkout
 # configuration, entities, site, or any unrelated function.
@@ -41,7 +44,8 @@ fixlist_install_base44_cli "$TMP"
   "BETA_SCAN_ADMISSION_ENABLED=false" \
   "BETA_CHECKOUT_ENABLED=false" \
   "SCAN_ADMISSION_COORDINATOR_URL=$COORD_URL" \
-  "SCAN_DRAIN_QUEUE_PATH=$DRAIN_QUEUE_PATH"
+  "SCAN_DRAIN_QUEUE_PATH=$DRAIN_QUEUE_PATH" \
+  "FIXLIST_RELEASE_SOURCE_SHA=$SOURCE_SHA"
 
 printf 'BASE44_BETA_CONFIGURED_DISABLED_FIRST\nsource_sha=%s\ncoordinator=%s\ndrain_queue=%s\n' \
   "$SOURCE_SHA" "$COORD_URL" "$DRAIN_QUEUE_PATH"

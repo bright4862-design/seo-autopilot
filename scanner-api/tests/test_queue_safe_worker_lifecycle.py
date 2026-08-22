@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from app import main
+from app import scan_job
 from app.main import ScanDrainRequest
 
 
@@ -190,16 +191,75 @@ async def test_reconcile_route_is_private_and_returns_only_safe_counts(monkeypat
     monkeypatch.setattr(main, "require_cloud_tasks_oidc", lambda _: None)
 
     async def reconcile(_client):
-        return {"examined": 4, "closed": 1, "released": 2, "skipped": 1, "errors": 0}
+        return {
+            "examined": 8,
+            "closed": 1,
+            "released": 2,
+            "superseded": 1,
+            "satisfied_unbound": 1,
+            "pending": 2,
+            "retryable": 0,
+            "paginated": 3,
+            "skipped": 1,
+            "errors": 0,
+        }
 
     monkeypatch.setattr(main, "reconcile_stale_scans", reconcile)
     result = await main.scan_reconcile(authorization="test")
     assert result["success"] is True
     assert result["reconciliation"] == {
-        "examined": 4,
+        "examined": 8,
         "closed": 1,
         "released": 2,
+        "superseded": 1,
+        "satisfied_unbound": 1,
+        "pending": 2,
+        "retryable": 0,
+        "paginated": 3,
         "skipped": 1,
+        "errors": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_reconcile_client_preserves_every_safe_durable_counter(monkeypatch):
+    monkeypatch.setenv("SCAN_EVIDENCE_SIGNING_KEY", "test-signing-key")
+
+    async def invoke(_client, function_name, _payload, *, timeout):
+        assert function_name == "durableScanWorkerControl"
+        assert timeout <= 60.0
+        return {
+            "status_code": 200,
+            "body": {
+                "success": True,
+                "reconciliation": {
+                    "examined": 61,
+                    "closed": 2,
+                    "released": 17,
+                    "superseded": 11,
+                    "satisfied_unbound": 7,
+                    "pending": 19,
+                    "retryable": 0,
+                    "paginated": 75,
+                    "skipped": 5,
+                    "errors": 0,
+                    "secret": "must-not-pass",
+                },
+            },
+        }
+
+    monkeypatch.setattr(scan_job, "invoke_function", invoke)
+    counts = await scan_job.reconcile_stale_scans(object())
+    assert counts == {
+        "examined": 61,
+        "closed": 2,
+        "released": 17,
+        "superseded": 11,
+        "satisfied_unbound": 7,
+        "pending": 19,
+        "retryable": 0,
+        "paginated": 75,
+        "skipped": 5,
         "errors": 0,
     }
 

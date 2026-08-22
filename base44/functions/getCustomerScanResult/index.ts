@@ -172,9 +172,19 @@ Deno.serve(async (req) => {
       || run.release_gate_eligible !== true
       || run.score_is_provisional === true
       || run.evidence_quality_blocking === true
-      || run.beta_revision_fingerprint !== RELEASE_FINGERPRINT
     ) {
       throw new RequestProblem(409, "result_not_authoritative", "This scan did not produce a verified customer result.");
+    }
+    // A release mismatch is an operational mixed-version state, not evidence
+    // that this individual scan failed. Keep the result sealed and hidden, but
+    // give the customer a retryable response instead of telling them to create
+    // another scan that the same mismatched reader would reject.
+    if (run.beta_revision_fingerprint !== RELEASE_FINGERPRINT) {
+      throw new RequestProblem(
+        503,
+        "result_release_mismatch",
+        "Saved results are temporarily unavailable while a release update completes.",
+      );
     }
 
     const fixList = await loadFixList(serviceEntities.FixList, run, user, proof);

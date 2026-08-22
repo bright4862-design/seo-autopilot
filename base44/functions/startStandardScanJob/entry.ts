@@ -15,7 +15,9 @@ import {
   bindAdmission,
   claimAdmission,
   releaseAdmission,
+  verifyAdmissionClaimEvidence,
 } from "./admissionClient.js";
+import { RELEASE_COMPONENT_VERSIONS } from "./generatedReleaseContract.js";
 
 const CORS_HEADERS = Object.freeze({
   "Access-Control-Allow-Origin": "*",
@@ -36,6 +38,19 @@ const PUBLIC_SCAN_MODE = "standard_150";
 const MAX_PAGES = 150;
 const ASYNC_WORKER_BUDGET_MS = 210_000;
 const TERMINAL_SCAN_STATUSES = new Set(["complete", "limited", "failed", "cancelled"]);
+const ADMISSION_RECONCILIATION_VERSION = RELEASE_COMPONENT_VERSIONS.admission_reconciliation_version;
+const SAFE_RELEASE_FAILURE_CODES = new Set([
+  "admission_release_failed",
+  "admission_unreachable",
+  "admission_disabled",
+  "admission_not_configured",
+  "admission_sign_failed",
+  "coordinator_rejected",
+  "coordinator_unavailable",
+  "scan_identity_conflict",
+  "scan_not_bound",
+  "barrier_generation_conflict",
+]);
 
 const CUSTOMER_STATUS_DETAIL: Record<string, string> = {
   paid_access_required: "A paid Standard 150 beta pass is required before this scan can start.",
@@ -46,6 +61,7 @@ const CUSTOMER_STATUS_DETAIL: Record<string, string> = {
   tasks_token_mint_failed: "The scan queue could not authenticate. No scan was started.",
   tasks_unreachable: "The scan queue could not be reached. Please retry.",
   scan_admission_paused: "New beta scans are temporarily paused.",
+  scan_intake_paused: "New beta scans are temporarily paused.",
   scan_admission_configuration_invalid: "The scan admission coordinator is not configured correctly.",
 };
 
@@ -419,11 +435,28 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
   }
   if (!claim?.ok) return coordinatorAdmissionFailure(claim);
 
+  const admissionEvidence = await verifiedAdmissionClaim({
+    claim,
+    ownerUserId: String(user.id),
+    requestId: request.request_id,
+    signingKey: String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || ""),
+  });
+  if (!admissionEvidence) {
+    return {
+      ok: false,
+      status: 503,
+      code: "admission_claim_evidence_invalid",
+      error: "Scan admission evidence could not be verified.",
+      retryable: true,
+      retryAfter: 2,
+    };
+  }
+
   const claimToken = String(claim.claim_token || "").trim();
   const claimedScanId = String(claim.scan_id || "").trim();
   if (claim.outcome === "replayed" && claimedScanId) {
     let scan = await base44.asServiceRole.entities.ScanRun.get(claimedScanId).catch(() => null);
-    const validation = validateServerScanContext({ scan, user, project, request, websiteUrl });
+    const validation = validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence });
     if (!validation.ok) return validation;
     scan = await normalizeRecoveredServerScan({ scans: base44.asServiceRole.entities.ScanRun, scan });
     return {
@@ -448,6 +481,7 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
       project,
       request,
       websiteUrl,
+      admissionEvidence,
     }).catch(() => null);
     if (!recovered) {
       return {
@@ -464,8 +498,13 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
       requestId: request.request_id,
       claimToken,
       scanId: String(recovered.id),
+      barrierGeneration: admissionEvidence.admission_barrier_generation,
     }).catch(() => ({ ok: false, outcomeUnknown: true, failureCode: "admission_unreachable" }));
-    if (!rebound?.ok || !["bound", "already_bound"].includes(String(rebound.outcome || ""))) {
+    if (!exactBindResult(rebound, {
+      requestId: request.request_id,
+      scanId: String(recovered.id),
+      admissionEvidence,
+    })) {
       const failure = coordinatorAdmissionFailure(rebound, "scan_admission_binding_lost");
       return { ...failure, error: "The recovered scan could not be bound to this request." };
     }
@@ -487,6 +526,7 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
       body,
       request,
       websiteUrl,
+      admissionEvidence,
     });
   } catch (error) {
     return {
@@ -506,11 +546,16 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
       requestId: request.request_id,
       claimToken,
       scanId: String(scan.id),
+      barrierGeneration: admissionEvidence.admission_barrier_generation,
     });
   } catch {
     bound = { ok: false, outcomeUnknown: true, failureCode: "admission_unreachable" };
   }
-  if (!bound?.ok || !["bound", "already_bound"].includes(String(bound.outcome || ""))) {
+  if (!exactBindResult(bound, {
+    requestId: request.request_id,
+    scanId: String(scan.id),
+    admissionEvidence,
+  })) {
     const failure = coordinatorAdmissionFailure(bound, "scan_admission_binding_lost");
     return { ...failure, error: "The durable scan record could not be bound to this request." };
   }
@@ -521,6 +566,86 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
     replayReason: claim.outcome === "replayed" ? "request_replay_recovered" : "server_admitted",
     context: { ok: true, scan, project, expectedDomain: authorityDomain(websiteUrl) },
   };
+}
+
+async function verifiedAdmissionClaim({ claim, ownerUserId, requestId, signingKey }) {
+  const evidence = claim?.cohort_evidence;
+  const proof = String(claim?.cohort_evidence_proof || "").trim().toLowerCase();
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return null;
+  const barrierGeneration = nonNegativeInteger(evidence.barrier_generation);
+  const claimSequence = nonNegativeInteger(evidence.claim_sequence);
+  const admissionMode = String(evidence.admission_mode || "");
+  const expiresAt = evidence.acceptance_expires_at === null
+    ? null
+    : nonNegativeInteger(evidence.acceptance_expires_at);
+  if (
+    String(evidence.version || "") !== "admission_claim_evidence_v1"
+    || String(evidence.owner_user_id || "") !== ownerUserId
+    || String(evidence.request_id || "") !== requestId
+    || String(claim?.request_id || "") !== requestId
+    || barrierGeneration === null
+    || claimSequence === null
+    || nonNegativeInteger(claim?.barrier_generation) !== barrierGeneration
+    || nonNegativeInteger(claim?.claim_sequence) !== claimSequence
+    || String(claim?.admission_mode || "") !== admissionMode
+    || !["open", "acceptance_only"].includes(admissionMode)
+    || !await verifyAdmissionClaimEvidence({ evidence, proof, signingKey })
+  ) return null;
+
+  const cohortId = String(evidence.acceptance_cohort_id || "");
+  const releaseId = String(evidence.acceptance_release_id || "");
+  const sourceSha = String(evidence.acceptance_source_sha || "").toLowerCase();
+  if (admissionMode === "open") {
+    if (cohortId || releaseId || sourceSha || expiresAt !== null) return null;
+  } else if (!cohortId || !releaseId || !/^[a-f0-9]{40}$/.test(sourceSha) || expiresAt === null) {
+    return null;
+  }
+
+  return {
+    admission_barrier_generation: barrierGeneration,
+    admission_claim_sequence: claimSequence,
+    admission_mode: admissionMode,
+    admission_acceptance_cohort_id: cohortId,
+    admission_acceptance_release_id: releaseId,
+    admission_acceptance_source_sha: sourceSha,
+    ...(expiresAt === null ? {} : { admission_acceptance_expires_at: expiresAt }),
+    admission_cohort_evidence_version: "admission_claim_evidence_v1",
+    admission_cohort_evidence_proof: proof,
+  };
+}
+
+function exactBindResult(result, { requestId, scanId, admissionEvidence }) {
+  return Boolean(
+    result?.ok === true
+    && ["bound", "already_bound"].includes(String(result?.outcome || ""))
+    && String(result?.request_id || "") === requestId
+    && String(result?.scan_id || "") === scanId
+    && nonNegativeInteger(result?.barrier_generation) === admissionEvidence.admission_barrier_generation
+    && nonNegativeInteger(result?.claim_sequence) === admissionEvidence.admission_claim_sequence
+  );
+}
+
+function matchesPersistedAdmissionEvidence(scan, expected) {
+  if (!expected) return false;
+  const persistedExpires = scan?.admission_acceptance_expires_at === undefined
+    || scan?.admission_acceptance_expires_at === null
+    ? null
+    : nonNegativeInteger(scan.admission_acceptance_expires_at);
+  const expectedExpires = expected.admission_acceptance_expires_at ?? null;
+  return nonNegativeInteger(scan?.admission_barrier_generation) === expected.admission_barrier_generation
+    && nonNegativeInteger(scan?.admission_claim_sequence) === expected.admission_claim_sequence
+    && String(scan?.admission_mode || "") === expected.admission_mode
+    && String(scan?.admission_acceptance_cohort_id || "") === expected.admission_acceptance_cohort_id
+    && String(scan?.admission_acceptance_release_id || "") === expected.admission_acceptance_release_id
+    && String(scan?.admission_acceptance_source_sha || "") === expected.admission_acceptance_source_sha
+    && persistedExpires === expectedExpires
+    && String(scan?.admission_cohort_evidence_version || "") === expected.admission_cohort_evidence_version
+    && String(scan?.admission_cohort_evidence_proof || "") === expected.admission_cohort_evidence_proof;
+}
+
+function nonNegativeInteger(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function coordinatorAdmissionFailure(result = {}, fallbackCode = "scan_admission_state_unavailable") {
@@ -554,7 +679,7 @@ async function buildAdmissionFingerprint(websiteUrl) {
   return `standard150:${Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
-async function recoverExistingServerScan({ base44, user, project, request, websiteUrl }) {
+async function recoverExistingServerScan({ base44, user, project, request, websiteUrl, admissionEvidence }) {
   const scans = base44.asServiceRole.entities.ScanRun;
   const matches = await scans.filter(
     { owner_user_id: String(user.id), request_id: request.request_id },
@@ -565,7 +690,14 @@ async function recoverExistingServerScan({ base44, user, project, request, websi
     throw Object.assign(new Error("scan_request_duplicate_rows"), { status: 409, code: "scan_request_duplicate_rows" });
   }
   if (matches.length === 0) return null;
-  const validation = validateServerScanContext({ scan: matches[0], user, project, request, websiteUrl });
+  const validation = validateServerScanContext({
+    scan: matches[0],
+    user,
+    project,
+    request,
+    websiteUrl,
+    admissionEvidence,
+  });
   if (!validation.ok) throw Object.assign(new Error(validation.code), validation);
   return normalizeRecoveredServerScan({ scans, scan: matches[0] });
 }
@@ -578,6 +710,7 @@ async function recoverOrCreateServerScan({
   body,
   request,
   websiteUrl,
+  admissionEvidence,
 }) {
   const scans = base44.asServiceRole.entities.ScanRun;
   let matches = await scans.filter(
@@ -591,7 +724,7 @@ async function recoverOrCreateServerScan({
 
   let scan = matches?.[0] || null;
   if (scan) {
-    const validation = validateServerScanContext({ scan, user, project, request, websiteUrl });
+    const validation = validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence });
     if (!validation.ok) throw Object.assign(new Error(validation.code), validation);
     return normalizeRecoveredServerScan({ scans, scan });
   }
@@ -625,6 +758,14 @@ async function recoverOrCreateServerScan({
       queued_at: now,
       owner_user_id: String(user.id),
       admission_access_id: String(access.id),
+      ...admissionEvidence,
+      admission_release_state: "pending",
+      admission_release_reconciled_at: "",
+      admission_release_last_attempt_at: "",
+      admission_release_coordinator_request_id: "",
+      admission_release_outcome: "",
+      admission_release_failure_code: "",
+      admission_reconciliation_version: ADMISSION_RECONCILIATION_VERSION,
     });
     return normalizeRecoveredServerScan({ scans, scan: created });
   } catch (error) {
@@ -637,7 +778,7 @@ async function recoverOrCreateServerScan({
     ).catch(() => []);
     if (matches.length === 1) {
       scan = matches[0];
-      const validation = validateServerScanContext({ scan, user, project, request, websiteUrl });
+      const validation = validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence });
       if (validation.ok) return normalizeRecoveredServerScan({ scans, scan });
     }
     throw error;
@@ -657,7 +798,7 @@ async function normalizeRecoveredServerScan({ scans, scan }) {
   return { ...scan, ...(updated || {}), ...fields, id, scan_id: id };
 }
 
-function validateServerScanContext({ scan, user, project, request, websiteUrl }) {
+function validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence }) {
   if (!scan || String(scan.owner_user_id || "") !== String(user.id)) {
     return { ok: false, status: 404, code: "scan_not_found", error: "This scan is not available to this account." };
   }
@@ -669,6 +810,7 @@ function validateServerScanContext({ scan, user, project, request, websiteUrl })
     || storedFingerprint !== request.request_fingerprint
     || String(scan.project_id || "") !== String(project.id)
     || authorityDomain(scan.website_url || scan.submitted_url) !== authorityDomain(websiteUrl)
+    || !matchesPersistedAdmissionEvidence(scan, admissionEvidence)
   ) {
     return { ok: false, status: 409, code: "scan_request_identity_conflict", error: "The scan request identity does not match." };
   }
@@ -752,12 +894,14 @@ async function failOwnedScanRun({ base44, context, identity, attemptCount, failu
       error_message: customerStatusDetail(failureCode),
       completed_at: new Date().toISOString(),
       release_gate_eligible: false,
+      admission_release_state: "pending",
+      admission_reconciliation_version: ADMISSION_RECONCILIATION_VERSION,
     });
-    if (context.scan?.admission_access_id) {
+    const terminal = await base44.asServiceRole.entities.ScanRun.get(context.scan.id).catch(() => null);
+    if (terminal?.admission_access_id) {
       await releaseCoordinatorAdmission({
-        ownerUserId: String(context.scan.owner_user_id || ""),
-        scanId: String(context.scan.id),
-        terminalStatus: "failed",
+        scans: base44.asServiceRole.entities.ScanRun,
+        scan: terminal,
       });
     }
     logBoundary("dispatcher_terminal_failed", identity, {
@@ -774,20 +918,101 @@ async function failOwnedScanRun({ base44, context, identity, attemptCount, failu
   }
 }
 
-async function releaseCoordinatorAdmission({ ownerUserId, scanId, terminalStatus }) {
-  const released = await releaseAdmission({ ownerUserId, scanId, terminalStatus }).catch(() => ({
+async function releaseCoordinatorAdmission({ scans, scan }) {
+  const expected = admissionReleaseIdentity(scan);
+  const attemptedAt = new Date().toISOString();
+  if (!expected) return false;
+  const released = await releaseAdmission({
+    ownerUserId: expected.ownerUserId,
+    scanId: expected.scanId,
+    terminalStatus: expected.terminalStatus,
+  }).catch(() => ({
     ok: false,
     failureCode: "admission_unreachable",
     outcomeUnknown: true,
   }));
-  if (released?.ok && ["released", "already_released"].includes(String(released.outcome || ""))) return true;
+  const exact = released?.ok === true
+    && ["released", "already_released"].includes(String(released?.outcome || ""))
+    && String(released?.request_id || "") === expected.requestId
+    && String(released?.scan_id || "") === expected.scanId
+    && nonNegativeInteger(released?.barrier_generation) === expected.barrierGeneration
+    && nonNegativeInteger(released?.claim_sequence) === expected.claimSequence;
+  const fresh = await scans.get(expected.scanId).catch(() => null);
+  if (!matchesAdmissionReleaseIdentity(fresh, expected)) return false;
+  if (exact) {
+    await scans.update(expected.scanId, {
+      admission_release_state: "released",
+      admission_release_reconciled_at: attemptedAt,
+      admission_release_last_attempt_at: attemptedAt,
+      admission_release_coordinator_request_id: expected.requestId,
+      admission_release_outcome: String(released.outcome),
+      admission_release_failure_code: "",
+      admission_reconciliation_version: ADMISSION_RECONCILIATION_VERSION,
+    });
+    const persisted = await scans.get(expected.scanId).catch(() => null);
+    return matchesAdmissionReleaseIdentity(persisted, expected)
+      && String(persisted?.admission_release_state || "") === "released";
+  }
+  const failureCode = released?.ok === true
+    ? "admission_release_identity_conflict"
+    : sanitizeFailureCode(released?.failureCode);
+  await scans.update(expected.scanId, {
+    admission_release_state: "pending",
+    admission_release_last_attempt_at: attemptedAt,
+    admission_release_outcome: String(released?.outcome || "").slice(0, 80),
+    admission_release_failure_code: failureCode,
+    admission_reconciliation_version: ADMISSION_RECONCILIATION_VERSION,
+  });
   console.error("startStandardScanJob admission release failed", {
-    scan_id: scanId,
-    terminal_status: terminalStatus,
-    failure_code: String(released?.failureCode || "admission_release_failed"),
+    scan_id: expected.scanId,
+    terminal_status: expected.terminalStatus,
+    failure_code: failureCode,
     outcome_unknown: released?.outcomeUnknown === true,
   });
   return false;
+}
+
+function admissionReleaseIdentity(scan) {
+  const status = String(scan?.status || "").trim().toLowerCase();
+  const barrierGeneration = nonNegativeInteger(scan?.admission_barrier_generation);
+  const claimSequence = nonNegativeInteger(scan?.admission_claim_sequence);
+  const scanId = String(scan?.id || "").trim();
+  const ownerUserId = String(scan?.owner_user_id || scan?.created_by_id || "").trim();
+  const requestId = String(scan?.request_id || "").trim();
+  const idempotencyKey = String(scan?.idempotency_key || scan?.request_id || "").trim();
+  if (
+    !scanId || !ownerUserId || !requestId || idempotencyKey !== requestId
+    || barrierGeneration === null || claimSequence === null
+    || !TERMINAL_SCAN_STATUSES.has(status)
+  ) return null;
+  return {
+    scanId,
+    ownerUserId,
+    requestId,
+    idempotencyKey,
+    attemptCount: normalizeAttemptCount(scan?.attempt_count),
+    barrierGeneration,
+    claimSequence,
+    terminalStatus: status,
+  };
+}
+
+function matchesAdmissionReleaseIdentity(scan, expected) {
+  const current = admissionReleaseIdentity(scan);
+  return Boolean(current
+    && current.scanId === expected.scanId
+    && current.ownerUserId === expected.ownerUserId
+    && current.requestId === expected.requestId
+    && current.idempotencyKey === expected.idempotencyKey
+    && current.attemptCount === expected.attemptCount
+    && current.barrierGeneration === expected.barrierGeneration
+    && current.claimSequence === expected.claimSequence
+    && current.terminalStatus === expected.terminalStatus);
+}
+
+function sanitizeFailureCode(value) {
+  const code = String(value || "").trim().toLowerCase();
+  return SAFE_RELEASE_FAILURE_CODES.has(code) ? code : "admission_release_failed";
 }
 
 function customerStatusDetail(failureCode) {

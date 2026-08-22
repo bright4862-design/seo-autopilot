@@ -43,6 +43,7 @@ const CUSTOMER_RECOVERY_KIND_BY_CODE = Object.freeze({
   paid_access_conflict: "access_conflict",
   paid_access_unavailable: "unavailable",
   result_authority_unavailable: "unavailable",
+  result_release_mismatch: "release_mismatch",
   result_authority_invalid: "authority_invalid",
   fix_list_unavailable: "authority_invalid",
   fix_list_mismatch: "authority_invalid",
@@ -53,7 +54,7 @@ const CUSTOMER_RECOVERY_KIND_BY_CODE = Object.freeze({
   result_load_failed: "load_failed",
 });
 
-const CUSTOMER_RECOVERY_RETRYABLE_KINDS = new Set(["unavailable", "load_failed"]);
+const CUSTOMER_RECOVERY_RETRYABLE_KINDS = new Set(["unavailable", "release_mismatch", "load_failed"]);
 const CUSTOMER_RECOVERY_NETWORK_CODES = new Set([
   "econnaborted",
   "econnreset",

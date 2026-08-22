@@ -3,6 +3,7 @@ import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
 import { authorityRowsFromSnapshot } from "./authorityRows.js";
 import { buildAuthoritySnapshot, firstFailedAuthorityPredicate } from "./authoritySnapshot.js";
 import { releaseAdmission } from "./admissionClient.js";
+import { persistExactAdmissionRelease } from "./admissionRelease.js";
 
 function normalizeAttempt(value) {
   const parsed = Number(value);
@@ -85,7 +86,14 @@ Deno.serve(async (req) => {
     }
     if (scanStatus === "complete") {
       if (scan.authority_proof === authorityProof && scan.fix_list_id) {
-        await releaseIfServerAdmitted(scan);
+        const release = await persistExactAdmissionRelease({
+          entities,
+          scan,
+          terminalStatus: "complete",
+          release: releaseAdmission,
+        });
+        const replayedScan = release?.scanRun
+          || await entities.ScanRun.get(identity.scan_id).catch(() => scan);
         return Response.json({
           success: true,
           replayed: true,
@@ -94,7 +102,7 @@ Deno.serve(async (req) => {
           fixListId: scan.fix_list_id,
           fixListVerified: true,
           allowanceConsumed: false,
-          scanRun: scan,
+          scanRun: replayedScan,
         });
       }
       throw new RequestProblem(409, "authority_immutable", "This scan is already terminal.");
@@ -175,7 +183,14 @@ Deno.serve(async (req) => {
     if (!authorityPersisted) {
       throw new RequestProblem(500, "authority_terminal_update_failed", "The authoritative scan could not be finalized.");
     }
-    await releaseIfServerAdmitted(persistedScan);
+    const release = await persistExactAdmissionRelease({
+      entities,
+      scan: persistedScan,
+      terminalStatus: "complete",
+      release: releaseAdmission,
+    });
+    const releasedScan = release?.scanRun
+      || await entities.ScanRun.get(identity.scan_id).catch(() => persistedScan);
 
     return Response.json({
       success: true,
@@ -185,7 +200,7 @@ Deno.serve(async (req) => {
       fixListId: fixList.id,
       fixListVerified: true,
       allowanceConsumed: false,
-      scanRun: persistedScan,
+      scanRun: releasedScan,
     });
   } catch (error) {
     if (error instanceof RequestProblem) return problemResponse(error);
@@ -193,22 +208,6 @@ Deno.serve(async (req) => {
     return problemResponse(new RequestProblem(500, "durable_authority_failed", "The durable scan authority could not be saved."));
   }
 });
-
-async function releaseIfServerAdmitted(scan) {
-  if (!cleanId(scan?.admission_access_id)) return true;
-  const released = await releaseAdmission({
-    ownerUserId: cleanId(scan?.owner_user_id || scan?.created_by_id),
-    scanId: cleanId(scan?.id),
-    terminalStatus: "complete",
-  }).catch(() => ({ ok: false, failureCode: "admission_unreachable", outcomeUnknown: true }));
-  if (released?.ok && ["released", "already_released"].includes(String(released.outcome || ""))) return true;
-  console.error("persistDurableScanAuthority admission release failed", {
-    scan_id: cleanId(scan?.id),
-    failure_code: cleanText(released?.failureCode, 120) || "admission_release_failed",
-    outcome_unknown: released?.outcomeUnknown === true,
-  });
-  return false;
-}
 
 function assertWorkerHeader(req: Request) {
   if (String(req.headers.get("X-FixList-Worker") || "") !== WORKER_VERSION) {

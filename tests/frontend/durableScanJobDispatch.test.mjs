@@ -27,7 +27,9 @@ const INVOKER = "fixlist-scan-invoker@seo-autopilot-501517.iam.gserviceaccount.c
 
 test("the Base44 dispatcher contains no crawl or post-response worker", () => {
   assert.doesNotMatch(dispatcher, /waitUntil|runScanJob|fetchScannerResult/);
-  assert.doesNotMatch(dispatcher, /SCANNER_API_URL|SCANNER_API_KEY|SCAN_EVIDENCE_SIGNING_KEY/);
+  assert.doesNotMatch(dispatcher, /SCANNER_API_URL|SCANNER_API_KEY/);
+  assert.match(dispatcher, /verifyAdmissionClaimEvidence/);
+  assert.match(dispatcher, /SCAN_EVIDENCE_SIGNING_KEY/);
   assert.match(dispatcher, /enqueueScanDrain\(\{/);
   assert.match(dispatcher, /enqueueScanJob\(\{/);
 });

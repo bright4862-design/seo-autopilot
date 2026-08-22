@@ -6,6 +6,11 @@ import ts from "typescript";
 import { normalizeAttemptCount } from "../../base44/functions/startStandardScanJob/cloudTasks.js";
 import { evaluatePaidAccess, uniqueAccessRows } from "../../base44/functions/startStandardScanJob/entitlement.js";
 import { betaScanAdmissionPolicy, normalizeAdmissionIdentity, scanIsTerminal } from "../../base44/functions/startStandardScanJob/admission.js";
+import {
+  admissionClaimEvidenceProof,
+  verifyAdmissionClaimEvidence,
+} from "../../base44/functions/startStandardScanJob/admissionClient.js";
+import { RELEASE_COMPONENT_VERSIONS } from "../../base44/functions/startStandardScanJob/generatedReleaseContract.js";
 
 const entrySource = readFileSync("base44/functions/startStandardScanJob/entry.ts", "utf8");
 
@@ -34,11 +39,19 @@ async function importHandler(harnessName) {
     claimAdmission,
     bindAdmission,
     releaseAdmission,
+    admissionClaimEvidenceProof,
+    verifyAdmissionClaimEvidence,
+    RELEASE_COMPONENT_VERSIONS,
   } = globalThis.${harnessName};`;
   return import(`data:text/javascript;base64,${Buffer.from(`${prelude}\n${javascript}`).toString("base64")}`);
 }
 
-function createHarness({ failScanEnqueue = false, createCommitsThenThrows = false } = {}) {
+function createHarness({
+  failScanEnqueue = false,
+  createCommitsThenThrows = false,
+  releaseFails = false,
+  corruptCohortProof = false,
+} = {}) {
   const access = {
     id: "access-1",
     owner_user_id: "user-1",
@@ -104,6 +117,18 @@ function createHarness({ failScanEnqueue = false, createCommitsThenThrows = fals
 
   async function claimAdmission({ ownerUserId, requestId, requestFingerprint }) {
     if (!admission || admission.state === "released") {
+      const cohortEvidence = {
+        version: "admission_claim_evidence_v1",
+        owner_user_id: ownerUserId,
+        request_id: requestId,
+        barrier_generation: 4,
+        claim_sequence: 23,
+        admission_mode: "open",
+        acceptance_cohort_id: "",
+        acceptance_release_id: "",
+        acceptance_source_sha: "",
+        acceptance_expires_at: null,
+      };
       admission = {
         owner_user_id: ownerUserId,
         request_id: requestId,
@@ -111,44 +136,95 @@ function createHarness({ failScanEnqueue = false, createCommitsThenThrows = fals
         claim_token: "claim-token",
         scan_id: "",
         state: "claimed",
+        barrier_generation: 4,
+        claim_sequence: 23,
+        admission_mode: "open",
+        cohort_evidence: cohortEvidence,
+        cohort_evidence_proof: "",
+        cohort_evidence_proof_promise: admissionClaimEvidenceProof(cohortEvidence, "test-signing-root"),
       };
-      return { ok: true, outcome: "claimed", claim_token: admission.claim_token, scan_id: "" };
+      admission.cohort_evidence_proof = corruptCohortProof
+        ? "0".repeat(64)
+        : await admission.cohort_evidence_proof_promise;
+      return {
+        ok: true,
+        outcome: "claimed",
+        request_id: requestId,
+        claim_token: admission.claim_token,
+        scan_id: "",
+        barrier_generation: 4,
+        claim_sequence: 23,
+        admission_mode: "open",
+        cohort_evidence: { ...cohortEvidence },
+        cohort_evidence_proof: admission.cohort_evidence_proof,
+      };
     }
     if (admission.request_id === requestId) {
       if (admission.request_fingerprint !== requestFingerprint) {
         return { ok: false, failureCode: "request_conflict", outcomeUnknown: false };
+      }
+      if (!admission.cohort_evidence_proof) {
+        admission.cohort_evidence_proof = corruptCohortProof
+          ? "0".repeat(64)
+          : await admission.cohort_evidence_proof_promise;
       }
       return {
         ok: true,
         outcome: "replayed",
         claim_token: admission.claim_token,
         scan_id: admission.scan_id,
+        request_id: admission.request_id,
+        barrier_generation: admission.barrier_generation,
+        claim_sequence: admission.claim_sequence,
+        admission_mode: admission.admission_mode,
+        cohort_evidence: { ...admission.cohort_evidence },
+        cohort_evidence_proof: admission.cohort_evidence_proof,
       };
     }
     return { ok: false, failureCode: "admission_busy", retryAfterSeconds: 30, outcomeUnknown: false };
   }
 
-  async function bindAdmission({ requestId, claimToken, scanId }) {
+  async function bindAdmission({ requestId, claimToken, scanId, barrierGeneration }) {
     if (!admission || admission.request_id !== requestId || admission.claim_token !== claimToken) {
       return { ok: false, failureCode: "invalid_claim_token", outcomeUnknown: false };
     }
     if (admission.scan_id && admission.scan_id !== scanId) {
       return { ok: false, failureCode: "scan_identity_conflict", outcomeUnknown: false };
     }
+    if (barrierGeneration !== admission.barrier_generation) {
+      return { ok: false, failureCode: "barrier_generation_conflict", outcomeUnknown: false };
+    }
     const outcome = admission.scan_id ? "already_bound" : "bound";
     admission.scan_id = scanId;
     admission.state = "bound";
-    return { ok: true, outcome, scan_id: scanId };
+    return {
+      ok: true,
+      outcome,
+      request_id: requestId,
+      scan_id: scanId,
+      barrier_generation: admission.barrier_generation,
+      claim_sequence: admission.claim_sequence,
+    };
   }
 
   async function releaseAdmission({ scanId, terminalStatus }) {
+    if (releaseFails) {
+      return { ok: false, failureCode: "admission_unreachable", outcomeUnknown: true };
+    }
     if (!admission || admission.scan_id !== scanId) {
       return { ok: false, failureCode: "scan_not_bound", outcomeUnknown: false };
     }
     const outcome = admission.state === "released" ? "already_released" : "released";
     admission.state = "released";
     releases.push({ scanId, terminalStatus });
-    return { ok: true, outcome };
+    return {
+      ok: true,
+      outcome,
+      request_id: admission.request_id,
+      scan_id: scanId,
+      barrier_generation: admission.barrier_generation,
+      claim_sequence: admission.claim_sequence,
+    };
   }
 
   return {
@@ -179,6 +255,9 @@ function createHarness({ failScanEnqueue = false, createCommitsThenThrows = fals
       claimAdmission,
       bindAdmission,
       releaseAdmission,
+      admissionClaimEvidenceProof,
+      verifyAdmissionClaimEvidence,
+      RELEASE_COMPONENT_VERSIONS,
     },
   };
 }
@@ -186,6 +265,7 @@ function createHarness({ failScanEnqueue = false, createCommitsThenThrows = fals
 function installEnv() {
   const priorDeno = globalThis.Deno;
   const env = new Map([
+    ["BETA_SCAN_INTAKE_ENABLED", "true"],
     ["BETA_SCAN_ADMISSION_ENABLED", "true"],
     ["BETA_COHORT_ALLOWED_USER_IDS", "user-1"],
     ["SCAN_ADMISSION_COORDINATOR_URL", "https://coordinator.example"],
@@ -233,15 +313,28 @@ test("two exact concurrent tabs share one canonical ScanRun and one deterministi
     assert.equal(harness.scans[0].status, "queued");
     assert.equal(harness.scans[0].started_at, undefined);
     assert.equal(harness.scans[0].admission_claim_token, undefined);
+    assert.equal(harness.scans[0].admission_release_state, "pending");
+    assert.equal(harness.scans[0].admission_barrier_generation, 4);
+    assert.equal(harness.scans[0].admission_claim_sequence, 23);
+    assert.equal(harness.scans[0].admission_mode, "open");
+    assert.equal(harness.scans[0].admission_cohort_evidence_version, "admission_claim_evidence_v1");
+    assert.equal(harness.scans[0].admission_cohort_evidence_proof.length, 64);
+    assert.match(harness.scans[0].admission_reconciliation_version, /^admission_reconciliation_v1_/);
     assert.equal(harness.admission().scan_id, "scan-1");
     assert.equal(harness.scanTasks.size, 1);
     assert.equal(harness.drainTasks.size, 1);
 
     const accepted = bodies.filter((body) => body.accepted === true);
-    assert.equal(accepted.length, 2);
+    const pending = bodies.filter((body) => body.failure_code === "scan_admission_pending");
+    // The exact replay may observe either side of the create/bind boundary. It
+    // may return the canonical row immediately, or a truthful 202 while the
+    // first caller finishes binding it. Neither outcome may create a second
+    // row/task, and the next replay below must resolve to the canonical row.
+    assert.ok(accepted.length === 1 || accepted.length === 2);
+    assert.equal(accepted.length + pending.length, 2);
     assert.ok(accepted.every((body) => body.scan_id === "scan-1" && body.scan_run_id === "scan-1"));
     assert.ok(accepted.every((body) => body.status === "queued"));
-    assert.ok(accepted.some((body) => body.replayed === true));
+    if (accepted.length === 2) assert.ok(accepted.some((body) => body.replayed === true));
 
     const replay = await invoke(handler);
     const replayBody = await replay.json();
@@ -262,6 +355,23 @@ test("two exact concurrent tabs share one canonical ScanRun and one deterministi
     assert.equal((await competing.json()).failure_code, "scan_admission_busy");
   } finally {
     delete globalThis.__serverOwnedAdmissionHarness;
+    restoreEnv();
+  }
+});
+
+test("an invalid coordinator cohort proof fails before durable creation", async () => {
+  const restoreEnv = installEnv();
+  const harness = createHarness({ corruptCohortProof: true });
+  globalThis.__serverOwnedInvalidProofHarness = harness.globals;
+  try {
+    const { default: handler } = await importHandler("__serverOwnedInvalidProofHarness");
+    const response = await invoke(handler, "scanreq_invalid_proof");
+    const body = await response.json();
+    assert.equal(response.status, 503);
+    assert.equal(body.failure_code, "admission_claim_evidence_invalid");
+    assert.equal(harness.scans.length, 0);
+  } finally {
+    delete globalThis.__serverOwnedInvalidProofHarness;
     restoreEnv();
   }
 });
@@ -299,10 +409,57 @@ test("a definite dispatch failure terminalizes the exact server-owned run and re
     assert.equal(harness.scans.length, 1);
     assert.equal(harness.scans[0].status, "failed");
     assert.equal(harness.scans[0].error_code, "tasks_http_403");
+    assert.equal(harness.scans[0].admission_release_state, "released");
+    assert.equal(harness.scans[0].admission_release_outcome, "released");
     assert.deepEqual(harness.releases, [{ scanId: "scan-1", terminalStatus: "failed" }]);
     assert.equal(harness.admission().state, "released");
   } finally {
     delete globalThis.__serverOwnedFailureHarness;
+    restoreEnv();
+  }
+});
+
+test("an uncertain dispatcher release remains durably pending for reconciliation", async () => {
+  const restoreEnv = installEnv();
+  const harness = createHarness({ failScanEnqueue: true, releaseFails: true });
+  globalThis.__serverOwnedPendingReleaseHarness = harness.globals;
+  try {
+    const { default: handler } = await importHandler("__serverOwnedPendingReleaseHarness");
+    const response = await invoke(handler, "scanreq_dispatch_release_pending");
+    assert.equal(response.status, 503);
+    assert.equal(harness.scans[0].status, "failed");
+    assert.equal(harness.scans[0].admission_release_state, "pending");
+    assert.equal(harness.scans[0].admission_release_failure_code, "admission_unreachable");
+  } finally {
+    delete globalThis.__serverOwnedPendingReleaseHarness;
+    restoreEnv();
+  }
+});
+
+test("intake pause refuses before coordinator claim or durable writes", async () => {
+  const restoreEnv = installEnv();
+  const priorGet = globalThis.Deno.env.get;
+  globalThis.Deno.env.get = (name) => name === "BETA_SCAN_INTAKE_ENABLED" ? "false" : priorGet(name);
+  const harness = createHarness();
+  let claims = 0;
+  const originalClaim = harness.globals.claimAdmission;
+  harness.globals.claimAdmission = async (...args) => {
+    claims += 1;
+    return originalClaim(...args);
+  };
+  globalThis.__serverOwnedPausedIntakeHarness = harness.globals;
+  try {
+    const { default: handler } = await importHandler("__serverOwnedPausedIntakeHarness");
+    const response = await invoke(handler, "scanreq_paused_intake");
+    const body = await response.json();
+    assert.equal(response.status, 503);
+    assert.equal(body.failure_code, "scan_intake_paused");
+    assert.equal(claims, 0);
+    assert.equal(harness.scans.length, 0);
+    assert.equal(harness.scanTasks.size, 0);
+    assert.equal(harness.drainTasks.size, 0);
+  } finally {
+    delete globalThis.__serverOwnedPausedIntakeHarness;
     restoreEnv();
   }
 });

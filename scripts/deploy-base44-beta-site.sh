@@ -11,6 +11,7 @@ set -euo pipefail
 APP_ID="${BASE44_APP_ID:-6a498732ec779dfaaeab0e53}"
 SOURCE_SHA="${SOURCE_SHA:-}"
 CONFIRM="${CONFIRM:-}"
+BASE44_EXPECTED_OWNER="${BASE44_EXPECTED_OWNER:-}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$REPO_ROOT/scripts/lib/release-source-guard.sh"
 source "$REPO_ROOT/scripts/lib/base44-pinned-cli.sh"
@@ -21,7 +22,8 @@ node "$REPO_ROOT/scripts/base44_release_manifest.mjs" verify
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 fixlist_install_base44_cli "$TMP"
-"$FIXLIST_BASE44_CLI" whoami >/dev/null
+fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami"
+fixlist_set_base44_release_source_sha "$APP_ID" "$SOURCE_SHA"
 
 cd "$REPO_ROOT"
 VITE_FIXLIST_SOURCE_SHA="$SOURCE_SHA" npm run build

@@ -1,8 +1,15 @@
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{8,180}$/;
 const TERMINAL_STATUSES = new Set(["complete", "limited", "failed", "cancelled"]);
 
+export function scanIntakeEnabled() {
+  return String(Deno.env.get("BETA_SCAN_INTAKE_ENABLED") || "") === "true";
+}
+
 export function betaScanAdmissionPolicy() {
-  if (String(Deno.env.get("BETA_SCAN_ADMISSION_ENABLED") || "").trim().toLowerCase() !== "true") {
+  if (!scanIntakeEnabled()) {
+    return { ok: false, code: "scan_intake_paused" };
+  }
+  if (String(Deno.env.get("BETA_SCAN_ADMISSION_ENABLED") || "") !== "true") {
     return { ok: false, code: "scan_admission_paused" };
   }
   const coordinatorUrl = String(Deno.env.get("SCAN_ADMISSION_COORDINATOR_URL") || "").trim();

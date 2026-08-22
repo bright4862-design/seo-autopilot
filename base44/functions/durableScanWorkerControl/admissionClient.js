@@ -43,12 +43,17 @@ export const SAFE_COORDINATOR_ERRORS = new Set([
   "admission_busy",
   "request_conflict",
   "scan_identity_conflict",
+  "barrier_generation_conflict",
   "invalid_claim_token",
   "claim_expired",
   "claim_not_found",
   "not_terminal_status",
   "scan_not_bound",
   "coordinator_unavailable",
+  "reconciliation_identity_conflict",
+  "invalid_reconciliation_invocation_id",
+  "invalid_reconciliation_source_sha",
+  "invalid_reconciliation_outcome",
 ]);
 
 function readEnv(name) {
@@ -180,7 +185,7 @@ export async function claimAdmission({ ownerUserId, requestId, requestFingerprin
  * Step 2. Binds the canonical server-created ScanRun id to the winning claim.
  * Requires the exact request id and claim token, so only the winner can bind.
  */
-export async function bindAdmission({ ownerUserId, requestId, claimToken, scanId, ...options } = {}) {
+export async function bindAdmission({ ownerUserId, requestId, claimToken, scanId, barrierGeneration, ...options } = {}) {
   if (!admissionEnabled(options.env ?? readEnv)) {
     return { ok: false, outcomeUnknown: false, failureCode: "admission_disabled" };
   }
@@ -189,6 +194,7 @@ export async function bindAdmission({ ownerUserId, requestId, claimToken, scanId
     request_id: String(requestId ?? ""),
     claim_token: String(claimToken ?? ""),
     scan_id: String(scanId ?? ""),
+    barrier_generation: Number(barrierGeneration),
   }, options);
 }
 
@@ -206,5 +212,47 @@ export async function releaseAdmission({ ownerUserId, scanId, terminalStatus, ..
     owner_user_id: String(ownerUserId ?? ""),
     scan_id: String(scanId ?? ""),
     terminal_status: String(terminalStatus ?? ""),
+  }, options);
+}
+
+export async function statusAdmission({ ownerUserId, ...options } = {}) {
+  if (!admissionEnabled(options.env ?? readEnv)) {
+    return { ok: false, outcomeUnknown: false, failureCode: "admission_disabled" };
+  }
+  return callCoordinator("/status", {
+    owner_user_id: String(ownerUserId ?? ""),
+  }, options);
+}
+
+export async function satisfyUnboundAdmission({ ownerUserId, requestId, barrierGeneration, ...options } = {}) {
+  if (!admissionEnabled(options.env ?? readEnv)) {
+    return { ok: false, outcomeUnknown: false, failureCode: "admission_disabled" };
+  }
+  return callCoordinator("/satisfy-unbound", {
+    owner_user_id: String(ownerUserId ?? ""),
+    request_id: String(requestId ?? ""),
+    barrier_generation: Number(barrierGeneration),
+  }, options);
+}
+
+export async function startReconciliationInvocation({ invocationId, sourceSha, leaseSeconds = 30, ...options } = {}) {
+  if (!admissionEnabled(options.env ?? readEnv)) {
+    return { ok: false, outcomeUnknown: false, failureCode: "admission_disabled" };
+  }
+  return callCoordinator("/reconciliation/start", {
+    invocation_id: String(invocationId ?? ""),
+    source_sha: String(sourceSha ?? ""),
+    lease_seconds: Number(leaseSeconds),
+  }, options);
+}
+
+export async function finishReconciliationInvocation({ invocationId, sourceSha, outcome, ...options } = {}) {
+  if (!admissionEnabled(options.env ?? readEnv)) {
+    return { ok: false, outcomeUnknown: false, failureCode: "admission_disabled" };
+  }
+  return callCoordinator("/reconciliation/finish", {
+    invocation_id: String(invocationId ?? ""),
+    source_sha: String(sourceSha ?? ""),
+    outcome: String(outcome ?? ""),
   }, options);
 }

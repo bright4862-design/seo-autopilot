@@ -1,5 +1,6 @@
 {
   "components": {
+    "admission_reconciliation_version": "admission_reconciliation_v1_exact_generation_barrier",
     "authority_seal_version": "scan_evidence_hmac_sha256_v1",
     "customer_projection_version": "customer_projection_v1",
     "durable_completion_contract_version": "durable_standard150_completion_v1",

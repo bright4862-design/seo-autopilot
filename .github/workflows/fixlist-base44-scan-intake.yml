@@ -1,0 +1,66 @@
+name: FixList Base44 Scan Intake Control
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Public scan-intake action"
+        required: true
+        type: choice
+        options:
+          - pause
+          - resume
+      confirm:
+        description: "Exact PAUSE/RESUME-BASE44-SCAN-INTAKE:<main-sha> confirmation"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fixlist-base44-owner-controls
+  cancel-in-progress: false
+
+jobs:
+  control-intake:
+    if: github.actor == 'bright4862-design' && github.ref == 'refs/heads/main'
+    environment: fixlist-production-owner
+    # Base44 supports device-code CLI authentication only. This protected
+    # owner runner holds the owner's existing local CLI session; hosted runners
+    # must never receive a serialized Base44 refresh token.
+    runs-on: [self-hosted, fixlist-base44-owner]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact main SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Deterministic toolchain and source preflight
+        shell: /bin/bash {0}
+        run: |
+          set -euo pipefail
+          test "${{ github.actor }}" = "bright4862-design"
+          test "${{ github.ref }}" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          git fetch origin main --quiet
+          test "$(git rev-parse origin/main)" = "${{ github.sha }}"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          /bin/bash -n scripts/set-base44-scan-intake.sh
+
+      - name: Set up pinned Node runtime
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20.19.5'
+
+      - name: Mutate only public scan intake
+        shell: /bin/bash {0}
+        env:
+          ACTION: ${{ inputs.action }}
+          CONFIRM: ${{ inputs.confirm }}
+          SOURCE_SHA: ${{ github.sha }}
+          BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
+        run: /bin/bash scripts/set-base44-scan-intake.sh

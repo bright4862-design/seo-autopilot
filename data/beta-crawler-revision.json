@@ -1,6 +1,7 @@
 {
   "acceptance_report": "",
   "component_versions": {
+    "admission_reconciliation_version": "admission_reconciliation_v1_exact_generation_barrier",
     "archetype_classifier_version": "archetype_classifier_v9_local_business_hospitality",
     "artifact_filter_version": "artifact_filter_v4_wordpress_route_noise",
     "authority_seal_version": "scan_evidence_hmac_sha256_v1",
@@ -47,10 +48,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "e5088c4055cb04e9",
+  "fingerprint": "6e0368d4ac5d2a6b",
   "git_commit": "",
-  "note": "Standard 150 beta candidate. Patch D: mixed-family evidence is partitioned rather than labelled with one family, and a coverage ratio is only shown when its numerator and denominator come from the same URL set. Production acceptance, deployed commit, workflow runs and artifact digests are pending.",
-  "recorded_at": "2026-08-22T10:29:18.938013+00:00",
+  "note": "Standard 150 beta candidate. Patch E adds exact-generation admission reconciliation, a global claim barrier with bounded signed drain snapshots, and independent intake/connectivity controls. Production acceptance, deployed commit, workflow runs and artifact digests are pending.",
+  "recorded_at": "2026-08-22T11:52:51.998840+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

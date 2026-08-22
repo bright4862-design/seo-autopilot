@@ -11,11 +11,27 @@ MAIN_REF="refs/heads/main"
 WORKFLOW_REF="${REPO}/.github/workflows/fixlist-cloud-operator.yml@${MAIN_REF}"
 POOL="github"
 PROVIDER="github-actions"
+CONNECTIVITY_PROVIDER="github-base44-admission-control"
 OPERATOR_ID="fixlist-github-operator"
 OPERATOR_SA="${OPERATOR_ID}@${PROJECT}.iam.gserviceaccount.com"
+ADMISSION_OPERATOR_ID="fixlist-admission-operator"
+ADMISSION_OPERATOR_SA="${ADMISSION_OPERATOR_ID}@${PROJECT}.iam.gserviceaccount.com"
+ADMISSION_OPERATOR_SECRET="${ADMISSION_OPERATOR_SIGNING_SECRET:-fixlist-admission-operator-signing-key}"
 WORKER="fixlist-standard150-worker"
 QUEUE="fixlist-standard150"
+DRAIN_QUEUE="fixlist-standard150-drain"
+RECONCILER_JOB="fixlist-standard150-reconcile"
+COORDINATOR="fixlist-scan-admission-coordinator"
 INVOKER_SA="fixlist-standard150-invoker@${PROJECT}.iam.gserviceaccount.com"
+CONNECTIVITY_WORKFLOW_REF="${REPO}/.github/workflows/fixlist-base44-admission-connectivity.yml@${MAIN_REF}"
+SECRET_TMP=""
+PROVIDER_JSON=""
+CONNECTIVITY_PROVIDER_JSON=""
+
+cleanup() {
+  rm -f "${SECRET_TMP:-}" "${PROVIDER_JSON:-}" "${CONNECTIVITY_PROVIDER_JSON:-}"
+}
+trap cleanup EXIT
 
 say() { printf '\n==> %s\n' "$*"; }
 
@@ -27,6 +43,10 @@ gcloud services enable \
   iamcredentials.googleapis.com \
   sts.googleapis.com \
   cloudresourcemanager.googleapis.com \
+  run.googleapis.com \
+  cloudtasks.googleapis.com \
+  cloudscheduler.googleapis.com \
+  secretmanager.googleapis.com \
   --project="$PROJECT" \
   --quiet
 
@@ -36,6 +56,15 @@ if ! gcloud iam service-accounts describe "$OPERATOR_SA" --project="$PROJECT" >/
     --project="$PROJECT" \
     --display-name="FixList GitHub Cloud Operator" \
     --description="Keyless exact-workflow release operator for FixList Standard 150" \
+    --quiet
+fi
+
+say "Create isolated admission operator service account if needed"
+if ! gcloud iam service-accounts describe "$ADMISSION_OPERATOR_SA" --project="$PROJECT" >/dev/null 2>&1; then
+  gcloud iam service-accounts create "$ADMISSION_OPERATOR_ID" \
+    --project="$PROJECT" \
+    --display-name="FixList Admission Barrier Operator" \
+    --description="Keyless owner-only cutover identity; no scan-evidence signing access" \
     --quiet
 fi
 
@@ -57,6 +86,57 @@ gcloud tasks queues add-iam-policy-binding "$QUEUE" \
   --member="serviceAccount:${OPERATOR_SA}" \
   --role="roles/cloudtasks.queueAdmin" \
   --quiet >/dev/null
+
+gcloud tasks queues add-iam-policy-binding "$DRAIN_QUEUE" \
+  --project="$PROJECT" \
+  --location="$REGION" \
+  --member="serviceAccount:${ADMISSION_OPERATOR_SA}" \
+  --role="roles/cloudtasks.queueAdmin" \
+  --quiet >/dev/null
+gcloud tasks queues add-iam-policy-binding "$QUEUE" \
+  --project="$PROJECT" \
+  --location="$REGION" \
+  --member="serviceAccount:${ADMISSION_OPERATOR_SA}" \
+  --role="roles/cloudtasks.queueAdmin" \
+  --quiet >/dev/null
+
+# Cloud Scheduler does not expose job-level IAM. This is the narrow predefined
+# role containing pause/resume; the dedicated identity has no deploy or secret
+# access beyond the exact operator secret below.
+gcloud projects add-iam-policy-binding "$PROJECT" \
+  --member="serviceAccount:${ADMISSION_OPERATOR_SA}" \
+  --role="roles/cloudscheduler.admin" \
+  --condition=None \
+  --quiet >/dev/null
+gcloud projects add-iam-policy-binding "$PROJECT" \
+  --member="serviceAccount:${ADMISSION_OPERATOR_SA}" \
+  --role="roles/run.viewer" \
+  --condition=None \
+  --quiet >/dev/null
+if gcloud run services describe "$COORDINATOR" --project="$PROJECT" --region="$REGION" >/dev/null 2>&1; then
+  gcloud run services add-iam-policy-binding "$COORDINATOR" \
+    --project="$PROJECT" --region="$REGION" \
+    --member="serviceAccount:${ADMISSION_OPERATOR_SA}" \
+    --role="roles/run.invoker" --condition=None --quiet >/dev/null
+fi
+
+say "Create an isolated operator signing secret without disclosing its value"
+if ! gcloud secrets describe "$ADMISSION_OPERATOR_SECRET" --project="$PROJECT" >/dev/null 2>&1; then
+  gcloud secrets create "$ADMISSION_OPERATOR_SECRET" --project="$PROJECT" \
+    --replication-policy=automatic --quiet
+fi
+if ! gcloud secrets versions list "$ADMISSION_OPERATOR_SECRET" --project="$PROJECT" \
+  --filter='state=ENABLED' --format='value(name)' --limit=1 | grep -Eq '/versions/[0-9]+$'; then
+  SECRET_TMP="$(mktemp)"
+  chmod 600 "$SECRET_TMP"
+  openssl rand -base64 48 > "$SECRET_TMP"
+  gcloud secrets versions add "$ADMISSION_OPERATOR_SECRET" --project="$PROJECT" \
+    --data-file="$SECRET_TMP" --quiet >/dev/null
+  rm -f "$SECRET_TMP"
+fi
+gcloud secrets add-iam-policy-binding "$ADMISSION_OPERATOR_SECRET" --project="$PROJECT" \
+  --member="serviceAccount:${ADMISSION_OPERATOR_SA}" \
+  --role="roles/secretmanager.secretAccessor" --condition=None --quiet >/dev/null
 
 say "Grant read-only visibility of the task invoker service account"
 gcloud iam service-accounts add-iam-policy-binding "$INVOKER_SA" \
@@ -104,7 +184,6 @@ if ! gcloud iam workload-identity-pools providers describe "$PROVIDER" \
 fi
 
 PROVIDER_JSON="$(mktemp)"
-trap 'rm -f "$PROVIDER_JSON"' EXIT
 gcloud iam workload-identity-pools providers describe "$PROVIDER" \
   --project="$PROJECT" \
   --location=global \
@@ -138,6 +217,28 @@ for key, value in expected.items():
 print(f"Exact workflow trust verified: {expected_workflow}")
 PY
 
+say "Create exact owner-only Base44 connectivity provider if needed"
+CONNECTIVITY_CONDITION="assertion.repository_id == '${REPO_ID}' && assertion.repository_owner_id == '${REPO_OWNER_ID}' && assertion.ref == '${MAIN_REF}' && assertion.workflow_ref == '${CONNECTIVITY_WORKFLOW_REF}'"
+if ! gcloud iam workload-identity-pools providers describe "$CONNECTIVITY_PROVIDER" \
+  --project="$PROJECT" --location=global --workload-identity-pool="$POOL" >/dev/null 2>&1; then
+  gcloud iam workload-identity-pools providers create-oidc "$CONNECTIVITY_PROVIDER" \
+    --project="$PROJECT" --location=global --workload-identity-pool="$POOL" \
+    --display-name="FixList Base44 admission owner control" \
+    --issuer-uri="https://token.actions.githubusercontent.com/" \
+    --attribute-mapping="$EXPECTED_MAPPING" \
+    --attribute-condition="$CONNECTIVITY_CONDITION" --quiet
+fi
+CONNECTIVITY_PROVIDER_JSON="$(mktemp)"
+gcloud iam workload-identity-pools providers describe "$CONNECTIVITY_PROVIDER" \
+  --project="$PROJECT" --location=global --workload-identity-pool="$POOL" \
+  --format=json > "$CONNECTIVITY_PROVIDER_JSON"
+python3 - "$CONNECTIVITY_PROVIDER_JSON" "$CONNECTIVITY_CONDITION" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+if value.get("state") != "ACTIVE" or value.get("attributeCondition") != sys.argv[2]:
+    raise SystemExit("Base44 admission-control WIF provider contract mismatch")
+PY
+
 POOL_NAME="$(gcloud iam workload-identity-pools describe "$POOL" \
   --project="$PROJECT" \
   --location=global \
@@ -147,6 +248,12 @@ PRINCIPAL="principalSet://iam.googleapis.com/${POOL_NAME}/attribute.repository_i
 
 say "Allow only this immutable repository identity to impersonate the operator"
 gcloud iam service-accounts add-iam-policy-binding "$OPERATOR_SA" \
+  --project="$PROJECT" \
+  --member="$PRINCIPAL" \
+  --role="roles/iam.workloadIdentityUser" \
+  --condition=None \
+  --quiet >/dev/null
+gcloud iam service-accounts add-iam-policy-binding "$ADMISSION_OPERATOR_SA" \
   --project="$PROJECT" \
   --member="$PRINCIPAL" \
   --role="roles/iam.workloadIdentityUser" \
@@ -162,6 +269,8 @@ gcloud iam workload-identity-pools providers describe "$PROVIDER" \
 
 printf '\nWIF_PROVIDER=%s\n' "$PROVIDER_NAME"
 printf 'OPERATOR_SA=%s\n' "$OPERATOR_SA"
+printf 'ADMISSION_OPERATOR_SA=%s\n' "$ADMISSION_OPERATOR_SA"
+printf 'CONNECTIVITY_WIF_PROVIDER=%s/providers/%s\n' "$POOL_NAME" "$CONNECTIVITY_PROVIDER"
 printf 'REPOSITORY=%s (id=%s owner_id=%s)\n' "$REPO" "$REPO_ID" "$REPO_OWNER_ID"
 printf 'AUTHORIZED_REF=%s\n' "$MAIN_REF"
 printf 'AUTHORIZED_WORKFLOW=%s\n' "$WORKFLOW_REF"

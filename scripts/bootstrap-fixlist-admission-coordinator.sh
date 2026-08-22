@@ -16,6 +16,8 @@ GATEWAY_RUNTIME_SA="${GATEWAY_RUNTIME_SERVICE_ACCOUNT:-fixlist-base44-dispatcher
 DEPLOYER_SA="${GCP_OPERATOR_SERVICE_ACCOUNT:-fixlist-github-operator@${PROJECT}.iam.gserviceaccount.com}"
 ADMISSION_OPERATOR_SA="${ADMISSION_OPERATOR_SERVICE_ACCOUNT:-fixlist-admission-operator@${PROJECT}.iam.gserviceaccount.com}"
 ADMISSION_OPERATOR_SECRET="${ADMISSION_OPERATOR_SIGNING_SECRET:-fixlist-admission-operator-signing-key}"
+ADMISSION_VERSION_ROLE_ID="${ADMISSION_OPERATOR_VERSION_ROLE_ID:-fixlistAdmissionVersionResolver}"
+ADMISSION_VERSION_ROLE="projects/${PROJECT}/roles/${ADMISSION_VERSION_ROLE_ID}"
 ADMISSION_OPERATOR_AUDIENCE="${ADMISSION_OPERATOR_AUDIENCE:-https://fixlist-admission-operator}"
 ADMISSION_OPERATOR_ID="${ADMISSION_OPERATOR_ID:-fixlist-cloud-operator}"
 DB_JSON=""
@@ -114,10 +116,21 @@ for SECRET_READER in "$COORDINATOR_SA" "$ADMISSION_OPERATOR_SA"; do
     --condition=None --quiet >/dev/null
 done
 # The dedicated operator resolves the `latest` alias through metadata before
-# the first coordinator deploy. Scope viewer permission to this one secret;
-# barrier signing still uses the separate payload-access grant above.
+# the first coordinator deploy. A one-permission custom role avoids granting
+# versions.list; barrier signing still uses the separate payload grant above.
+if gcloud iam roles describe "$ADMISSION_VERSION_ROLE_ID" --project="$PROJECT" >/dev/null 2>&1; then
+  gcloud iam roles update "$ADMISSION_VERSION_ROLE_ID" --project="$PROJECT" \
+    --title="FixList admission version resolver" \
+    --description="Read metadata for an exact admission signing-secret version only" \
+    --permissions="secretmanager.versions.get" --stage=GA --quiet >/dev/null
+else
+  gcloud iam roles create "$ADMISSION_VERSION_ROLE_ID" --project="$PROJECT" \
+    --title="FixList admission version resolver" \
+    --description="Read metadata for an exact admission signing-secret version only" \
+    --permissions="secretmanager.versions.get" --stage=GA --quiet >/dev/null
+fi
 gcloud secrets add-iam-policy-binding "$ADMISSION_OPERATOR_SECRET" --project="$PROJECT" \
-  --member="serviceAccount:${ADMISSION_OPERATOR_SA}" --role="roles/secretmanager.viewer" \
+  --member="serviceAccount:${ADMISSION_OPERATOR_SA}" --role="$ADMISSION_VERSION_ROLE" \
   --condition=None --quiet >/dev/null
 
 CONFIRM=SET-DRAIN-QUEUE-SAFE-BETA GCP_PROJECT="$PROJECT" GCP_REGION="$REGION" CLOUD_TASKS_DRAIN_QUEUE="$DRAIN_QUEUE" \

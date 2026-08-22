@@ -16,6 +16,8 @@ env:
   GCP_REGION: europe-west1
   GCP_WIF_PROVIDER: projects/919035207432/locations/global/workloadIdentityPools/github/providers/github-actions
   GCP_OPERATOR_SERVICE_ACCOUNT: fixlist-github-operator@seo-autopilot-501517.iam.gserviceaccount.com
+  GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT: fixlist-admission-operator@seo-autopilot-501517.iam.gserviceaccount.com
+  ADMISSION_OPERATOR_SIGNING_SECRET: fixlist-admission-operator-signing-key
   WORKER: fixlist-standard150-worker
   GATEWAY: fixlist-dispatch-gateway
   QUEUE: fixlist-standard150
@@ -68,3 +70,37 @@ jobs:
           echo '=== AGENT ENGINE INVENTORY ==='
           gcloud ai reasoning-engines list --project="$GCP_PROJECT" --region="$GCP_REGION" --format='table(name.basename(),displayName,createTime)' 2>&1
           echo "agent_inventory_exit=$?"
+
+  admission-identity:
+    name: Verify admission identity and metadata-only secret access
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact diagnostic source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Authenticate isolated admission operator
+        id: admission-auth
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT }}
+          token_format: access_token
+          create_credentials_file: false
+
+      - name: Resolve enabled signing-secret version without payload access
+        shell: bash
+        env:
+          ADMISSION_OPERATOR_ACCESS_TOKEN: ${{ steps.admission-auth.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          version="$(python3 scripts/resolve_admission_operator_signing_version.py \
+            "$GCP_PROJECT" "$ADMISSION_OPERATOR_SIGNING_SECRET")"
+          [[ "$version" =~ ^[0-9]+$ ]]
+          printf 'ADMISSION_IDENTITY_METADATA_PROBE=passed\n'
+          printf 'ADMISSION_OPERATOR_SIGNING_VERSION=%s\n' "$version"

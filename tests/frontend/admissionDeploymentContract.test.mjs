@@ -25,6 +25,8 @@ const connectivityWorkflow = read(".github/workflows/fixlist-base44-admission-co
 const cliHelper = read("scripts/lib/base44-pinned-cli.sh");
 const sourceGuard = read("scripts/lib/release-source-guard.sh");
 const resolveOperatorVersion = read("scripts/resolve_admission_operator_signing_version.py");
+const wifBootstrap = read("scripts/bootstrap-fixlist-cloud-operator-wif.sh");
+const readonlyDiagnostic = read(".github/workflows/fixlist-cloud-readonly-diagnostic.yml");
 
 const releaseMutationScripts = [
   bootstrap,
@@ -102,9 +104,23 @@ test("coordinator workflow resolves a numeric operator-secret pin with the dedic
   assert.doesNotMatch(resolveOperatorVersion, /open\([^)]*,\s*["']w/, "access response must not be written to disk");
 });
 
-test("owner bootstraps grant the dedicated operator metadata access only on its signing secret", () => {
-  assert.match(bootstrap, /ADMISSION_OPERATOR_SECRET[\s\S]*roles\/secretmanager\.viewer/);
+test("owner bootstraps grant exact-secret payload access and a metadata-only custom role", () => {
   assert.match(bootstrap, /ADMISSION_OPERATOR_SECRET[\s\S]*roles\/secretmanager\.secretAccessor/);
+  assert.match(bootstrap, /ADMISSION_VERSION_ROLE_ID[\s\S]*secretmanager\.versions\.get/);
+  assert.match(bootstrap, /--role="\$ADMISSION_VERSION_ROLE"/);
+  assert.doesNotMatch(bootstrap, /roles\/secretmanager\.viewer/);
+
+  assert.match(wifBootstrap, /ADMISSION_VERSION_ROLE_ID[\s\S]*secretmanager\.versions\.get/);
+  assert.match(wifBootstrap, /--role="\$ADMISSION_VERSION_ROLE"/);
+  assert.doesNotMatch(wifBootstrap, /roles\/secretmanager\.viewer/);
+});
+
+test("read-only diagnostic exercises admission WIF and metadata resolution end to end", () => {
+  assert.match(readonlyDiagnostic, /service_account: \$\{\{ env\.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT \}\}/);
+  assert.match(readonlyDiagnostic, /token_format: access_token/);
+  assert.match(readonlyDiagnostic, /create_credentials_file: false/);
+  assert.match(readonlyDiagnostic, /resolve_admission_operator_signing_version\.py/);
+  assert.doesNotMatch(readonlyDiagnostic, /secrets versions access|:access/);
 });
 
 test("Base44 admission configuration is disabled-first, entitlement-owned and additive", () => {

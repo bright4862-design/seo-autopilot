@@ -26,7 +26,6 @@ const cliHelper = read("scripts/lib/base44-pinned-cli.sh");
 const sourceGuard = read("scripts/lib/release-source-guard.sh");
 const resolveOperatorVersion = read("scripts/resolve_admission_operator_signing_version.py");
 const wifBootstrap = read("scripts/bootstrap-fixlist-cloud-operator-wif.sh");
-const readonlyDiagnostic = read(".github/workflows/fixlist-cloud-readonly-diagnostic.yml");
 
 const releaseMutationScripts = [
   bootstrap,
@@ -128,10 +127,7 @@ test("every workflow that hands over the admission token uses the name the resol
   const consumed = resolveOperatorVersion.match(/os\.environ\.get\(\s*"([A-Z0-9_]+)"/);
   assert.ok(consumed, "the resolver no longer reads its token from a named environment variable");
 
-  const handoffs = [
-    [".github/workflows/fixlist-cloud-operator.yml", workflow],
-    [".github/workflows/fixlist-cloud-readonly-diagnostic.yml", readonlyDiagnostic],
-  ];
+  const handoffs = [[".github/workflows/fixlist-cloud-operator.yml", workflow]];
 
   let handoverCount = 0;
   for (const [path, source] of handoffs) {
@@ -150,12 +146,12 @@ test("every workflow that hands over the admission token uses the name the resol
   assert.ok(handoverCount >= 2, "both the deploy path and the read-only probe must hand the token over");
 });
 
-test("read-only diagnostic exercises admission WIF and metadata resolution end to end", () => {
-  assert.match(readonlyDiagnostic, /service_account: \$\{\{ env\.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT \}\}/);
-  assert.match(readonlyDiagnostic, /token_format: access_token/);
-  assert.match(readonlyDiagnostic, /create_credentials_file: false/);
-  assert.match(readonlyDiagnostic, /resolve_admission_operator_signing_version\.py/);
-  assert.doesNotMatch(readonlyDiagnostic, /secrets versions access|:access/);
+test("the authorized Cloud Operator workflow probes admission WIF and metadata resolution end to end", () => {
+  assert.match(workflow, /- verify-admission-identity/);
+  assert.match(workflow, /inputs\.operation == 'verify-admission-identity'[\s\S]*service_account: \$\{\{ env\.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT \}\}/);
+  assert.match(workflow, /inputs\.operation == 'verify-admission-identity'[\s\S]*token_format: access_token[\s\S]*create_credentials_file: false/);
+  assert.match(workflow, /inputs\.operation == 'verify-admission-identity'[\s\S]*resolve_admission_operator_signing_version\.py/);
+  assert.doesNotMatch(workflow.match(/verify-admission-identity:[\s\S]*?(?=\n  [a-z][a-z0-9-]+:|$)/)?.[0] || "", /secrets versions access|:access/);
 });
 
 test("Base44 admission configuration is disabled-first, entitlement-owned and additive", () => {

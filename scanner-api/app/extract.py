@@ -447,6 +447,13 @@ def classify_template(
 ) -> str:
     """Classify structural templates first, then use article schema to break broad keyword ties."""
     p = str(path or "").lower()
+    # An absent path is not the homepage. Aggregate findings have no page of
+    # their own and are built with page_url="", so classifying that as
+    # "homepage" stamps a mixed group with a family it never had -- which is how
+    # 126 cross-family URLs came to be compared against one homepage. Absence of
+    # a path is unknown; only a real root is the root.
+    if not p.strip():
+        return "unknown"
     clean = p.split("?")[0].split("#")[0].rstrip("/") or "/"
     localized = strip_market_locale_prefix(clean).rstrip("/") or "/"
     if localized in ("", "/") or localized.count("/") == 0:

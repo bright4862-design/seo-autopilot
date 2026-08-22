@@ -12,7 +12,13 @@ import {
   verifyAuthoritySeal,
 } from "./projection.js";
 
-const AUTHORITY_VERSION = "standard_review_snapshot_hmac_v1";
+// Every seal version the writer has ever produced, because a reader pinned to
+// one of them turns intact results into "This scan has no verified result".
+// Reconstruction is version-dispatched per row, so both shapes verify.
+const ACCEPTED_AUTHORITY_VERSIONS = new Set([
+  "standard_review_snapshot_hmac_v1",
+  "standard_review_snapshot_hmac_v2_coverage",
+]);
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 const MAX_FIX_ITEMS = 100;
 
@@ -161,7 +167,7 @@ Deno.serve(async (req) => {
     const proof = cleanProof(run.authority_proof);
     if (
       !proof
-      || run.authority_seal_version !== AUTHORITY_VERSION
+      || !ACCEPTED_AUTHORITY_VERSIONS.has(cleanText(run.authority_seal_version, 160))
       || !cleanText(run.authority_sealed_at, 80)
       || run.release_gate_eligible !== true
       || run.score_is_provisional === true
@@ -353,7 +359,11 @@ async function loadFixItems(fixItemEntity, fixList, run, user, proof) {
 
 function assertSnapshotIdentity(snapshot, { run, fixList, user }) {
   if (
-    snapshot.version !== AUTHORITY_VERSION
+    !ACCEPTED_AUTHORITY_VERSIONS.has(snapshot.version)
+    // Accepting a set must not mean accepting a mismatch: the rebuilt snapshot
+    // has to carry the same version as the row it was rebuilt from, or the
+    // proof would be verified against a payload shape the row never had.
+    || snapshot.version !== cleanText(run.authority_seal_version, 160)
     || snapshot.owner_user_id !== cleanId(user.id)
     || snapshot.scan_id !== cleanId(run.id)
     || snapshot.project_id !== cleanId(run.project_id)

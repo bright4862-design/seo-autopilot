@@ -121,3 +121,39 @@ test("the limited branch returns authorityVerified false", () => {
   assert.match(call, /authorityVerified: false/);
   assert.match(call, /resultIntegrityVerified: true/);
 });
+
+// ------------------------------------ automation stays authoritative-only --
+
+test("Grok refuses a limited scan", () => {
+  /**
+   * A limited row is a shape that did not exist when this guard was written,
+   * so pin it: status "limited", release_gate_eligible false and
+   * score_is_provisional true each independently disqualify it.
+   */
+  const grok = readFileSync(
+    new URL("../../base44/functions/grokChat/index.ts", import.meta.url),
+    "utf8",
+  );
+  const guard = grok.slice(grok.indexOf("function assertAuthoritativeScan"));
+  const body = guard.slice(0, guard.indexOf("\n}"));
+
+  assert.match(body, /scan\.status !== "complete"/);
+  assert.match(body, /scan\.release_gate_eligible !== true/);
+  assert.match(body, /scan\.score_is_provisional === true/);
+});
+
+test("a marker mismatch on an otherwise sufficient crawl is still ineligible", () => {
+  const projection = buildCustomerProjection({
+    run: {
+      ...limitedRun({ status: "complete", release_gate_eligible: true, score_is_provisional: false }),
+      beta_revision_fingerprint: "0000000000000000",
+    },
+    fixList: { id: "fl_auth", is_authoritative: true },
+    fixItems: LIMITED_FIX_ITEMS,
+    fullAccess: true,
+    authorityVerified: true,
+  });
+
+  assert.equal(projection.release_contract_current, false,
+    "a stale release marker must not read as the current contract");
+});

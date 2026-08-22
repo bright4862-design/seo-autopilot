@@ -975,6 +975,37 @@ def evidence_is_incomplete(site_fingerprint: dict[str, Any]) -> bool:
     return False
 
 
+def coverage_limitation_text(site_fingerprint: dict[str, Any]) -> str:
+    """Plain-English reason a scan is not authoritative, from the shared verdict."""
+    assessment = site_fingerprint.get("coverage_assessment")
+    assessment = assessment if isinstance(assessment, dict) else {}
+    state = str(assessment.get("state") or "")
+    if not state or state == "sufficient":
+        return ""
+    inventory = assessment.get("inventory") if isinstance(assessment.get("inventory"), dict) else {}
+    retained = int_or_zero(inventory.get("retained_usable_html"))
+    discovered = int_or_zero(inventory.get("discovered_target"))
+    if state == "limited_coverage":
+        return (
+            f"FixList reviewed {retained:,} of {discovered:,} discovered pages, which is too small a share "
+            "of this site to support an authoritative result. The findings below are real for the pages "
+            "checked; they are not a complete picture of the site."
+        )
+    if state == "inventory_unproven":
+        return (
+            f"FixList reviewed {retained:,} page(s) and could not confirm how many pages this site actually "
+            "has, because no sitemap or inventory source answered. The findings below are real for the pages "
+            "checked, but the rest of the site was never established."
+        )
+    if state == "access_limited":
+        return (
+            "The site rate-limited or challenged the scanner for most requests, so FixList could not collect "
+            "enough verified HTML to support an authoritative result. The findings below cover only the pages "
+            "that did respond."
+        )
+    return ""
+
+
 def coverage_state_for_fingerprint(site_fingerprint: dict[str, Any]) -> str:
     """The shared coverage verdict recorded on the fingerprint.
 
@@ -2104,6 +2135,14 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
     limitations = [
         "This scan is read-only and cannot confirm private analytics, paid search data, conversions, or server logs."
     ]
+    # A limited result that does not say why it is limited is not a truthful
+    # result. The evidence-quality gate only writes a limitation when it is the
+    # thing doing the blocking; when the review has already marked the scan
+    # provisional the gate short-circuits, and the customer was left with a
+    # provisional score and no stated reason.
+    coverage_limitation = coverage_limitation_text(site_fingerprint)
+    if coverage_limitation:
+        limitations.append(coverage_limitation)
     if rate_limited:
         limitations.append(
             "HTTP 429 and connection-verification results need access-log confirmation before being treated as confirmed broken customer pages."
@@ -2159,6 +2198,7 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
         "quick_wins": quick_wins,
         "bigger_projects": bigger_projects,
         "limitations": limitations,
+        "coverage_limitation": coverage_limitation,
         "next_best_step": "Ask your web person to verify crawler access, rate limits, CDN, firewall, and bot-protection settings." if blocked else "Re-run the scan — page evidence did not reach AI Review." if incomplete else "Run a deeper scan or verify crawler access so FixList can review at least four usable pages." if insufficient else ((fixes[0].get("issue_title") or fixes[0].get("title")) if fixes else "Review the first FixList item."),
         "scan_status": scan_status,
         "review_confidence_state": review_confidence_state,
@@ -2168,6 +2208,7 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
     }
     pages_returned = pages[:80]
     return {
+        "limitation": coverage_limitation,
         "plain_english_summary": summary,
         "website_health_report": report,
         "health_explanation": summary,

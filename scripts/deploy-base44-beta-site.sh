@@ -34,6 +34,7 @@ FUNCTIONS=(
   startStandardScanJob
   durableScanWorkerControl
   persistDurableScanAuthority
+  persistLimitedScanResult
   getCustomerScanResult
   createAccessCheckout
   stripeWebhook
@@ -48,6 +49,7 @@ for required in \
   startStandardScanJob \
   durableScanWorkerControl \
   persistDurableScanAuthority \
+  persistLimitedScanResult \
   getCustomerScanResult \
   createAccessCheckout \
   stripeWebhook \

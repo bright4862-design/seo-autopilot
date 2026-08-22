@@ -211,6 +211,10 @@ export function buildScanRunFields(record = {}, { status, requireAuthorityProof 
     ai_review_backend: aiReviewBackend,
     python_review_fallback_used: pythonReviewFallbackUsed,
     release_gate_eligible: releaseGateEligible,
+    // Limited-result provenance. Carried through so a verified provisional row
+    // stays readable, and stays visibly distinct from an authoritative one.
+    result_integrity_version: toStr(record.result_integrity_version),
+    result_integrity_proof: toStr(record.result_integrity_proof),
     beta_revision_fingerprint: authorityMarkers.beta_revision_fingerprint,
     metadata_evidence_version: authorityMarkers.metadata_evidence_version,
     title_evidence_version: authorityMarkers.title_evidence_version,

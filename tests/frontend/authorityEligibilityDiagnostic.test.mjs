@@ -29,6 +29,14 @@ function eligiblePayload() {
       release_gate_eligible: true,
       score_is_provisional: false,
       evidence_quality_blocking: false,
+      // Authority now also requires the shared coverage verdict itself, so
+      // Base44 can refuse a thin crawl without trusting the summary boolean.
+      site_fingerprint: {
+        coverage_assessment: {
+          state: "sufficient",
+          coverage_authority_version: "coverage_authority_v1_shared_decision",
+        },
+      },
     },
   };
 }
@@ -49,6 +57,8 @@ const failures = [
   ["release_gate_eligible", ({ review }) => { review.release_gate_eligible = false; }],
   ["score_is_provisional", ({ review }) => { review.score_is_provisional = true; }],
   ["evidence_quality_blocking", ({ review }) => { review.evidence_quality_blocking = true; }],
+  ["coverage_state", ({ review }) => { review.site_fingerprint.coverage_assessment.state = "limited_coverage"; }],
+  ["coverage_authority_version", ({ review }) => { review.site_fingerprint.coverage_assessment.coverage_authority_version = ""; }],
 ];
 
 test("authority diagnostics preserve the existing eligible result", () => {

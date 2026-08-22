@@ -410,6 +410,14 @@ PY
     echo "Refusing operator request: authenticated workflow identity does not match coordinator policy." >&2
     exit 2
   fi
+  # The identity token is minted before the coordinator is read, so the audience
+  # it was bound to is checked against the one the coordinator actually
+  # declares. Without this a token for the wrong audience reaches the
+  # coordinator and is refused as a bare 401, naming nothing.
+  if [[ "$COORDINATOR_OPERATOR_AUDIENCE" != "${FIXLIST_OPERATOR_TOKEN_AUDIENCE:-}" ]]; then
+    echo "Refusing operator request: minted token audience does not match coordinator policy." >&2
+    exit 2
+  fi
 
   # Secret material is written only to a mode-600 temporary file and is never
   # passed as a command argument, environment value, digest log, or stdout.
@@ -507,9 +515,11 @@ derived = hmac.new(root, label.encode("utf-8"), hashlib.sha256).digest()
 print(hmac.new(derived, timestamp.encode("ascii") + b"\n" + body, hashlib.sha256).hexdigest())
 PY
 )"
-  token="$(gcloud auth print-identity-token \
-    --audiences="$COORDINATOR_OPERATOR_AUDIENCE" --include-email)"
-  test -n "$token"
+  token="${FIXLIST_OPERATOR_ID_TOKEN:-}"
+  if [[ -z "$token" ]]; then
+    echo "Refusing operator request: coordinator operator identity token is unavailable." >&2
+    exit 2
+  fi
 
   code="$(curl --silent --show-error --max-time 20 \
     --output "$response" --write-out '%{http_code}' \

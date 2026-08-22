@@ -377,3 +377,63 @@ test("worker provenance lookup uses the same regional Cloud Build scope as the c
     /gcloud builds list --project="\$GCP_PROJECT" --region="\$GCP_REGION" --limit=50/,
   );
 });
+
+/**
+ * The coordinator's operator identity token.
+ *
+ * `gcloud auth print-identity-token --audiences=...` cannot mint an
+ * audience-scoped token from the external_account credential that
+ * google-github-actions/auth writes for Workload Identity Federation -- it
+ * fails with "Invalid account type for `--audiences`". Every signed barrier
+ * call goes through that one line, so barrier-status, cutover-pause,
+ * cutover-resume, open-claim-barrier and acceptance-only were all unrunnable.
+ *
+ * This is the same shape as the admission secret resolver's access token: the
+ * workflow mints it where the federated credential can, and hands it over by
+ * name. Asserted here across both files, because each half is individually
+ * plausible while the two disagree.
+ */
+test("the coordinator operator token is minted by the workflow, not by gcloud", () => {
+  assert.doesNotMatch(
+    cloudOperator,
+    /print-identity-token/,
+    "an external_account credential cannot mint an audience-scoped identity token",
+  );
+
+  const consumed = cloudOperator.match(/token="\$\{([A-Z0-9_]+):-\}"/);
+  assert.ok(consumed, "the operator request no longer reads its token from a named environment variable");
+
+  const produced = workflow.match(
+    /([A-Z0-9_]+): \$\{\{ steps\.[A-Za-z0-9_-]+\.outputs\.id_token \}\}/,
+  );
+  assert.ok(produced, "the workflow never hands an id_token to the operator step");
+  assert.equal(
+    produced[1],
+    consumed[1],
+    `the workflow passes the operator token as ${produced[1]}, but the script reads ${consumed[1]}`,
+  );
+});
+
+test("the operator identity token is minted for the audience the coordinator declares", () => {
+  // The audience is discovered from the deployed coordinator, but the token is
+  // minted before that lookup. A token for the wrong audience is rejected by
+  // the coordinator with a generic 401, so the mismatch is checked here where
+  // it can name itself.
+  assert.match(workflow, /ADMISSION_OPERATOR_AUDIENCE: \S+/, "the minted audience is not declared");
+  assert.match(
+    workflow,
+    /id_token_audience: \$\{\{ env\.ADMISSION_OPERATOR_AUDIENCE \}\}/,
+    "the id_token is not bound to the declared audience",
+  );
+  assert.match(workflow, /id_token_include_email: true/, "the coordinator matches on the operator email");
+  assert.match(
+    workflow,
+    /token_format: id_token[\s\S]{0,200}?create_credentials_file: false/,
+    "minting the id_token must not replace the deployment credentials file",
+  );
+  assert.match(
+    cloudOperator,
+    /COORDINATOR_OPERATOR_AUDIENCE" != "\$\{FIXLIST_OPERATOR_TOKEN_AUDIENCE/,
+    "the discovered coordinator audience is never compared with the minted one",
+  );
+});

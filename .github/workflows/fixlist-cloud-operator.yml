@@ -118,6 +118,7 @@ env:
   CLOUD_TASKS_DRAIN_QUEUE: fixlist-standard150-drain
   ADMISSION_COORDINATOR_SERVICE: fixlist-scan-admission-coordinator
   ADMISSION_COORDINATOR_RUNTIME_SA: fixlist-admission-coordinator@seo-autopilot-501517.iam.gserviceaccount.com
+  ADMISSION_OPERATOR_AUDIENCE: https://fixlist-admission-operator
   FIRESTORE_DATABASE: fixlist-admission
 
 jobs:
@@ -176,6 +177,24 @@ jobs:
           project_id: ${{ env.GCP_PROJECT }}
           workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
           service_account: ${{ contains(fromJSON('["barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only"]'), inputs.operation) && env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT || env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      # gcloud cannot mint an audience-scoped identity token from the
+      # external_account credential written above, so the coordinator's operator
+      # token is minted here instead. create_credentials_file stays false: this
+      # step exists only to produce the token and must not replace the
+      # credentials the gcloud steps below authenticate with.
+      - name: Mint coordinator operator identity token
+        if: contains(fromJSON('["barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only"]'), inputs.operation)
+        id: operator-id-token
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ env.ADMISSION_OPERATOR_AUDIENCE }}
+          id_token_include_email: true
+          create_credentials_file: false
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
@@ -273,6 +292,8 @@ jobs:
           ACCEPTANCE_TOTAL_CLAIM_BUDGET: ${{ inputs.acceptance_total_claim_budget }}
           ACCEPTANCE_PER_OWNER_CLAIM_BUDGET: ${{ inputs.acceptance_per_owner_claim_budget }}
           GCP_OPERATOR_SERVICE_ACCOUNT: ${{ contains(fromJSON('["barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only"]'), inputs.operation) && env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT || env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+          FIXLIST_OPERATOR_ID_TOKEN: ${{ steps.operator-id-token.outputs.id_token }}
+          FIXLIST_OPERATOR_TOKEN_AUDIENCE: ${{ env.ADMISSION_OPERATOR_AUDIENCE }}
         shell: bash
         run: bash ./scripts/fixlist-cloud-operator.sh
 

@@ -74,23 +74,37 @@ test("coordinator redeploy reuses the deployed numeric operator-secret reference
 });
 
 test("coordinator workflow resolves a numeric operator-secret pin with the dedicated identity", () => {
+  const deployAuth = workflow.indexOf("Authenticate to Google Cloud");
+  const setupGcloud = workflow.indexOf("Set up gcloud");
+  const reusePin = workflow.indexOf("Reuse deployed admission signing-secret pin");
   const dedicatedAuth = workflow.indexOf("Authenticate dedicated admission secret resolver");
   const resolveVersion = workflow.indexOf("Resolve numeric admission signing-secret version");
-  const deployAuth = workflow.indexOf("Authenticate to Google Cloud");
+  const restoreAuth = workflow.indexOf("Restore coordinator deployment identity");
   const deploy = workflow.indexOf("Deploy admission coordinator");
-  assert.ok(dedicatedAuth >= 0, "dedicated admission authentication is missing");
+  assert.ok(deployAuth >= 0 && setupGcloud > deployAuth, "deployment authentication must initialize gcloud first");
+  assert.ok(reusePin > setupGcloud, "the deployed numeric pin must be checked before dedicated authentication");
+  assert.ok(dedicatedAuth > reusePin, "dedicated authentication must be a first-deploy fallback only");
   assert.ok(resolveVersion > dedicatedAuth, "version resolution must follow dedicated authentication");
-  assert.ok(deployAuth > resolveVersion, "deployment identity must be restored after version resolution");
-  assert.ok(deploy > deployAuth, "coordinator deployment must follow deployment authentication");
+  assert.ok(restoreAuth > resolveVersion, "deployment identity must be restored after version resolution");
+  assert.ok(deploy > restoreAuth, "coordinator deployment must follow deployment authentication");
   assert.match(workflow, /ADMISSION_OPERATOR_SIGNING_VERSION=%s\\n[^\n]*\$GITHUB_ENV/);
-  assert.match(workflow, /id: admission-secret-auth[\s\S]*token_format: access_token/);
+  assert.match(workflow, /id: existing-admission-pin[\s\S]*ADMISSION_OPERATOR_SIGNING_KEY/);
+  assert.match(workflow, /steps\.existing-admission-pin\.outputs\.version == ''[\s\S]*id: admission-secret-auth/);
+  assert.match(workflow, /id: admission-secret-auth[\s\S]*token_format: access_token[\s\S]*create_credentials_file: false/);
   assert.match(workflow, /FIXLIST_ADMISSION_ACCESS_TOKEN: \$\{\{ steps\.admission-secret-auth\.outputs\.access_token \}\}/);
-  assert.match(resolveOperatorVersion, /versions\/latest:access/);
+  assert.match(resolveOperatorVersion, /versions\/latest/);
+  assert.doesNotMatch(resolveOperatorVersion, /:access/);
   assert.match(resolveOperatorVersion, /os\.environ\.get\("FIXLIST_ADMISSION_ACCESS_TOKEN"/);
   assert.doesNotMatch(resolveOperatorVersion, /gcloud|subprocess/);
   assert.match(resolveOperatorVersion, /print\(match\.group\(1\)\)/);
+  assert.match(resolveOperatorVersion, /state != "ENABLED"/);
   assert.doesNotMatch(resolveOperatorVersion, /(?:get\(|\[)["']payload["']/, "resolver must not inspect or emit the payload field");
   assert.doesNotMatch(resolveOperatorVersion, /open\([^)]*,\s*["']w/, "access response must not be written to disk");
+});
+
+test("owner bootstraps grant the dedicated operator metadata access only on its signing secret", () => {
+  assert.match(bootstrap, /ADMISSION_OPERATOR_SECRET[\s\S]*roles\/secretmanager\.viewer/);
+  assert.match(bootstrap, /ADMISSION_OPERATOR_SECRET[\s\S]*roles\/secretmanager\.secretAccessor/);
 });
 
 test("Base44 admission configuration is disabled-first, entitlement-owned and additive", () => {

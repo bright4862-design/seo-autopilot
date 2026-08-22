@@ -169,28 +169,6 @@ jobs:
           python -m pip install -r admission-coordinator/requirements.txt pytest
           PYTHONPATH=admission-coordinator python -m pytest -q admission-coordinator
 
-      - name: Authenticate dedicated admission secret resolver
-        if: inputs.operation == 'deploy-admission-coordinator'
-        id: admission-secret-auth
-        uses: google-github-actions/auth@v3
-        with:
-          project_id: ${{ env.GCP_PROJECT }}
-          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
-          service_account: ${{ env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT }}
-          token_format: access_token
-
-      - name: Resolve numeric admission signing-secret version
-        if: inputs.operation == 'deploy-admission-coordinator'
-        env:
-          FIXLIST_ADMISSION_ACCESS_TOKEN: ${{ steps.admission-secret-auth.outputs.access_token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(python scripts/resolve_admission_operator_signing_version.py \
-            "$GCP_PROJECT" fixlist-admission-operator-signing-key)"
-          printf '%s' "$version" | grep -Eq '^[1-9][0-9]*$'
-          printf 'ADMISSION_OPERATOR_SIGNING_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
-
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
         with:
@@ -202,6 +180,70 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Reuse deployed admission signing-secret pin
+        if: inputs.operation == 'deploy-admission-coordinator'
+        id: existing-admission-pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp)"
+          trap 'rm -f "$tmp"' EXIT
+          version=""
+          if gcloud run services describe "$ADMISSION_COORDINATOR_SERVICE" \
+            --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > "$tmp" 2>/dev/null; then
+            version="$(python - "$tmp" <<'PY'
+          import json, sys
+          value = json.load(open(sys.argv[1], encoding="utf-8"))
+          containers = value.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+          if containers:
+              for item in containers[0].get("env", []):
+                  if item.get("name") != "ADMISSION_OPERATOR_SIGNING_KEY":
+                      continue
+                  ref = item.get("valueFrom", {}).get("secretKeyRef", {})
+                  if ref.get("name") == "fixlist-admission-operator-signing-key":
+                      version = str(ref.get("key") or "")
+                      if version.isdigit() and not version.startswith("0"):
+                          print(version)
+                  break
+          PY
+          )"
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          if [ -n "$version" ]; then
+            printf 'ADMISSION_OPERATOR_SIGNING_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+          fi
+
+      - name: Authenticate dedicated admission secret resolver
+        if: inputs.operation == 'deploy-admission-coordinator' && steps.existing-admission-pin.outputs.version == ''
+        id: admission-secret-auth
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT }}
+          token_format: access_token
+          create_credentials_file: false
+
+      - name: Resolve numeric admission signing-secret version
+        if: inputs.operation == 'deploy-admission-coordinator' && steps.existing-admission-pin.outputs.version == ''
+        env:
+          FIXLIST_ADMISSION_ACCESS_TOKEN: ${{ steps.admission-secret-auth.outputs.access_token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(python scripts/resolve_admission_operator_signing_version.py \
+            "$GCP_PROJECT" fixlist-admission-operator-signing-key)"
+          printf '%s' "$version" | grep -Eq '^[1-9][0-9]*$'
+          printf 'ADMISSION_OPERATOR_SIGNING_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+
+      - name: Restore coordinator deployment identity
+        if: inputs.operation == 'deploy-admission-coordinator' && steps.existing-admission-pin.outputs.version == ''
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
 
       - name: Validate worker candidate build path
         if: inputs.operation == 'build-worker-candidate'

@@ -137,6 +137,9 @@ fi
 gcloud secrets add-iam-policy-binding "$ADMISSION_OPERATOR_SECRET" --project="$PROJECT" \
   --member="serviceAccount:${ADMISSION_OPERATOR_SA}" \
   --role="roles/secretmanager.secretAccessor" --condition=None --quiet >/dev/null
+gcloud secrets add-iam-policy-binding "$ADMISSION_OPERATOR_SECRET" --project="$PROJECT" \
+  --member="serviceAccount:${ADMISSION_OPERATOR_SA}" \
+  --role="roles/secretmanager.viewer" --condition=None --quiet >/dev/null
 
 say "Grant read-only visibility of the task invoker service account"
 gcloud iam service-accounts add-iam-policy-binding "$INVOKER_SA" \

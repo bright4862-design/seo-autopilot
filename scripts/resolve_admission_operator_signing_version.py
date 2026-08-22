@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Resolve Secret Manager's ``latest`` alias to a numeric version.
+"""Resolve Secret Manager's ``latest`` alias to enabled numeric metadata.
 
 The caller must already be authenticated as the dedicated admission operator.
-Only the resolved version number is emitted. The access response (which also
-contains the secret payload) stays in process memory and is never logged or
-written to disk.
+Only the resolved version number is emitted. The metadata endpoint never sends
+secret payload bytes to this process.
 """
 
 from __future__ import annotations
@@ -33,7 +32,7 @@ def main() -> int:
 
     url = (
         "https://secretmanager.googleapis.com/v1/"
-        f"projects/{project}/secrets/{secret}/versions/latest:access"
+        f"projects/{project}/secrets/{secret}/versions/latest"
     )
     request = urllib.request.Request(
         url,
@@ -49,13 +48,16 @@ def main() -> int:
         token = ""
 
     name = str(value.get("name") or "")
+    state = str(value.get("state") or "")
     match = re.fullmatch(
-        rf"projects/{re.escape(project)}/secrets/{re.escape(secret)}/versions/([1-9][0-9]*)",
+        rf"projects/[^/]+(?:/locations/[^/]+)?/secrets/{re.escape(secret)}/versions/([1-9][0-9]*)",
         name,
     )
     value.clear()
     if not match:
         raise SystemExit("Secret Manager did not resolve latest to a numeric version")
+    if state != "ENABLED":
+        raise SystemExit("Secret Manager latest version is not enabled")
 
     print(match.group(1))
     return 0

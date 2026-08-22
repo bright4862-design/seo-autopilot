@@ -96,7 +96,7 @@ jobs:
       - name: Resolve enabled signing-secret version without payload access
         shell: bash
         env:
-          ADMISSION_OPERATOR_ACCESS_TOKEN: ${{ steps.admission-auth.outputs.access_token }}
+          FIXLIST_ADMISSION_ACCESS_TOKEN: ${{ steps.admission-auth.outputs.access_token }}
         run: |
           set -euo pipefail
           version="$(python3 scripts/resolve_admission_operator_signing_version.py \

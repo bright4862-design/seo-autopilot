@@ -171,14 +171,18 @@ jobs:
 
       - name: Authenticate dedicated admission secret resolver
         if: inputs.operation == 'deploy-admission-coordinator'
+        id: admission-secret-auth
         uses: google-github-actions/auth@v3
         with:
           project_id: ${{ env.GCP_PROJECT }}
           workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
           service_account: ${{ env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT }}
+          token_format: access_token
 
       - name: Resolve numeric admission signing-secret version
         if: inputs.operation == 'deploy-admission-coordinator'
+        env:
+          FIXLIST_ADMISSION_ACCESS_TOKEN: ${{ steps.admission-secret-auth.outputs.access_token }}
         shell: bash
         run: |
           set -euo pipefail

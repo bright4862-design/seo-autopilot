@@ -10,8 +10,8 @@ written to disk.
 from __future__ import annotations
 
 import json
+import os
 import re
-import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -27,14 +27,9 @@ def main() -> int:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,255}", secret):
         raise SystemExit("invalid Secret Manager secret name")
 
-    token = subprocess.run(
-        ["gcloud", "auth", "print-access-token"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    token = os.environ.get("FIXLIST_ADMISSION_ACCESS_TOKEN", "").strip()
     if not token:
-        raise SystemExit("Google Cloud access token is unavailable")
+        raise SystemExit("dedicated admission access token is unavailable")
 
     url = (
         "https://secretmanager.googleapis.com/v1/"

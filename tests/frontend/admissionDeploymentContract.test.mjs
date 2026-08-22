@@ -83,7 +83,11 @@ test("coordinator workflow resolves a numeric operator-secret pin with the dedic
   assert.ok(deployAuth > resolveVersion, "deployment identity must be restored after version resolution");
   assert.ok(deploy > deployAuth, "coordinator deployment must follow deployment authentication");
   assert.match(workflow, /ADMISSION_OPERATOR_SIGNING_VERSION=%s\\n[^\n]*\$GITHUB_ENV/);
+  assert.match(workflow, /id: admission-secret-auth[\s\S]*token_format: access_token/);
+  assert.match(workflow, /FIXLIST_ADMISSION_ACCESS_TOKEN: \$\{\{ steps\.admission-secret-auth\.outputs\.access_token \}\}/);
   assert.match(resolveOperatorVersion, /versions\/latest:access/);
+  assert.match(resolveOperatorVersion, /os\.environ\.get\("FIXLIST_ADMISSION_ACCESS_TOKEN"/);
+  assert.doesNotMatch(resolveOperatorVersion, /gcloud|subprocess/);
   assert.match(resolveOperatorVersion, /print\(match\.group\(1\)\)/);
   assert.doesNotMatch(resolveOperatorVersion, /(?:get\(|\[)["']payload["']/, "resolver must not inspect or emit the payload field");
   assert.doesNotMatch(resolveOperatorVersion, /open\([^)]*,\s*["']w/, "access response must not be written to disk");

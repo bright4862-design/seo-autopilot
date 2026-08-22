@@ -20,7 +20,7 @@ which is precisely how a mixed group came to be labelled Homepage.
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit
 
 REPAIR_COVERAGE_VERSION = "repair_coverage_v1_family_consistent"
 
@@ -35,20 +35,62 @@ CROSS_CUTTING_RULES = frozenset({"rate_limited_page", "broken_page", "server_err
 DEFAULT_MAX_AFFECTED = 150
 
 
-def evidence_url_key(value: Any) -> str:
-    """Path-only identity, which is what template family is defined over.
+# Parameters that identify a visitor or a campaign, never a page. Two URLs
+# differing only by these are the same evidence.
+TRACKING_PARAMETERS = frozenset({
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "utm_id",
+    "gclid", "gbraid", "wbraid", "fbclid", "msclkid", "mc_cid", "mc_eid",
+    "ref", "referrer", "source",
+})
 
-    Deliberately narrow: query and fragment do not change a page's template, and
-    including them here would fragment a family that is really one family.
-    """
+
+def _normalized_path(value: Any) -> str:
     raw = str(value or "").strip()
     if not raw:
         return ""
     path = urlsplit(raw).path if "//" in raw else raw.split("?")[0].split("#")[0]
-    path = path or "/"
+    path = unquote(path) or "/"
     if not path.startswith("/"):
         path = f"/{path}"
-    return path.rstrip("/") or "/"
+    # Case folded because a host filesystem is not the identity of a page, and
+    # /Doc.PDF and /doc.pdf were the same page in every production sample.
+    return (path.rstrip("/") or "/").lower()
+
+
+def template_family_key(value: Any) -> str:
+    """Path-only identity, which is what a template family is defined over.
+
+    Deliberately narrow: a query string does not change a page's template, so
+    including it here would split one family into many.
+    """
+    return _normalized_path(value)
+
+
+def _canonical_query(value: Any) -> str:
+    """Sorted, tracking-free query. Order is not identity; parameters are."""
+    raw = str(value or "")
+    query = urlsplit(raw).query if "//" in raw else (raw.split("?", 1)[1].split("#")[0] if "?" in raw else "")
+    if not query:
+        return ""
+    pairs = [
+        (unquote(key), unquote(val))
+        for key, val in parse_qsl(query, keep_blank_values=True)
+        if unquote(key).lower() not in TRACKING_PARAMETERS
+    ]
+    if not pairs:
+        return ""
+    # Duplicate keys are kept, both of them: dropping one would merge two pages
+    # that a server may well render differently.
+    return urlencode(sorted(pairs))
+
+
+def evidence_url_key(value: Any) -> str:
+    """Path plus canonical query: the identity of one piece of page evidence."""
+    path = _normalized_path(value)
+    if not path:
+        return ""
+    query = _canonical_query(value)
+    return f"{path}?{query}" if query else path
 
 
 def _page_family(page: dict[str, Any], resolver: Any = None) -> str:
@@ -87,7 +129,7 @@ def normalize_repair_scope(
     for page in pages or []:
         if not isinstance(page, dict):
             continue
-        key = evidence_url_key(page.get("final_url") or page.get("url") or page.get("path"))
+        key = template_family_key(page.get("final_url") or page.get("url") or page.get("path"))
         if key and key not in stamped:
             stamped[key] = _page_family(page, family_resolver)
 
@@ -96,7 +138,9 @@ def normalize_repair_scope(
     seen: set[str] = set()
     ordered: list[tuple[str, str]] = []
     for raw in normalized.get("affected_pages") or []:
-        key = evidence_url_key(raw)
+        # Family lookup is path-only; the evidence identity is stricter and
+        # would miss a page whose affected URL carries a query.
+        key = template_family_key(raw)
         if not key or key in seen:
             continue
         seen.add(key)

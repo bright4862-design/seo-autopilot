@@ -82,3 +82,105 @@ test("the customer result page renders every safe recovery state and retry actio
   assert.match(fixList, /loadedScanIdRef\.current === requestedScanId[\s\S]*?retryable/);
   assert.doesNotMatch(fixList, /owner_user_id|request_id|authority_proof/);
 });
+
+/**
+ * A history read covers every saved scan in the account; a result read covers
+ * one. Before this, only the button label varied by target, so an account-wide
+ * failure rendered "Your saved scan has not been replaced" above a button
+ * offering to "Retry loading saved scans" -- singular sentence, plural action,
+ * about a record the customer had not asked for.
+ *
+ * FixList.jsx cannot be imported here (node --test has no JSX loader), so the
+ * copy tables and the resolver are lifted out and evaluated, following the
+ * loadRecoveryHelpers pattern above. The real resolver runs: asserting the
+ * sentences with a regex would pass while the component still picked the wrong
+ * one.
+ */
+function loadRecoveryCopy() {
+  const parts = [
+    /const CUSTOMER_RECOVERY_COPY = Object\.freeze\(\{[\s\S]*?\n\}\);/,
+    /const CUSTOMER_RECOVERY_HISTORY_COPY = Object\.freeze\(\{[\s\S]*?\n\}\);/,
+    /export function resolveRecoveryCopy\([\s\S]*?\n\}/,
+  ].map((pattern) => {
+    const found = fixList.match(pattern);
+    assert.ok(found, `FixList.jsx no longer exposes ${pattern}`);
+    return found[0].replace(/^export\s+/, "");
+  });
+  return new Function(
+    `${parts.join("\n")}\nreturn { CUSTOMER_RECOVERY_COPY, CUSTOMER_RECOVERY_HISTORY_COPY, resolveRecoveryCopy };`,
+  )();
+}
+
+// getCustomerScanResult's list actions raise unauthorized and result_load_failed;
+// transport failures classify as unavailable. Those are the kinds a history read
+// can actually reach.
+const HISTORY_REACHABLE_KINDS = ["unauthorized", "unavailable", "load_failed"];
+
+test("an account-wide history failure never describes a single saved scan", () => {
+  const { resolveRecoveryCopy } = loadRecoveryCopy();
+  for (const kind of HISTORY_REACHABLE_KINDS) {
+    const copy = resolveRecoveryCopy(kind, "history");
+    const text = `${copy.title} ${copy.detail}`;
+    assert.doesNotMatch(
+      text,
+      /\b(this|your) (saved )?scan\b/i,
+      `history copy for ${kind} still describes one scan: ${text}`,
+    );
+  }
+});
+
+test("history copy keeps the recovery action its single-scan counterpart uses", () => {
+  const { CUSTOMER_RECOVERY_COPY, CUSTOMER_RECOVERY_HISTORY_COPY, resolveRecoveryCopy } = loadRecoveryCopy();
+  for (const kind of Object.keys(CUSTOMER_RECOVERY_HISTORY_COPY)) {
+    assert.equal(
+      resolveRecoveryCopy(kind, "history").action,
+      CUSTOMER_RECOVERY_COPY[kind].action,
+      `history copy for ${kind} changes the recovery action, so the button would stop matching the sentence`,
+    );
+  }
+});
+
+test("a single-scan failure keeps its own wording unchanged", () => {
+  const { CUSTOMER_RECOVERY_COPY, resolveRecoveryCopy } = loadRecoveryCopy();
+  for (const kind of Object.keys(CUSTOMER_RECOVERY_COPY)) {
+    assert.deepEqual(resolveRecoveryCopy(kind, "result"), CUSTOMER_RECOVERY_COPY[kind]);
+  }
+});
+
+test("an unrecognized kind still falls back to a retryable state on both targets", () => {
+  const { CUSTOMER_RECOVERY_COPY, CUSTOMER_RECOVERY_HISTORY_COPY, resolveRecoveryCopy } = loadRecoveryCopy();
+  assert.deepEqual(resolveRecoveryCopy("not_a_kind", "result"), CUSTOMER_RECOVERY_COPY.load_failed);
+  assert.deepEqual(resolveRecoveryCopy(undefined, "history"), CUSTOMER_RECOVERY_HISTORY_COPY.load_failed);
+  // A kind with no history override must not vanish; it falls back to the
+  // single-scan copy rather than rendering nothing.
+  assert.deepEqual(resolveRecoveryCopy("not_authoritative", "history"), CUSTOMER_RECOVERY_COPY.not_authoritative);
+});
+
+test("no saved-scan read replaces an error without recording it first", () => {
+  const fn = readFileSync("base44/functions/getCustomerScanResult/index.ts", "utf8");
+  // The top-level handler returns a RequestProblem before reaching its own
+  // console.error, so an error converted here leaves no server-side trace at
+  // all -- which is how a saved-scan read failure reached a customer as a
+  // support reference that could not be explained from either side.
+  assert.doesNotMatch(
+    fn,
+    /catch\s*\{\s*throw new RequestProblem/,
+    "an error replaced by a RequestProblem must be logged before it is discarded",
+  );
+  // Every read that converts a driver error into a customer-safe problem, not
+  // just the history list: the fix_list, fix_items and access paths are the ones
+  // whose copy tells the customer to contact support.
+  assert.deepEqual(
+    [...fn.matchAll(/logReplacedReadError\("([a-z_]+)"/g)].map((match) => match[1]).sort(),
+    ["access", "fix_items", "fix_list", "list", "list_all"],
+    "every saved-scan read that replaces an error must record it",
+  );
+
+  const logger = fn.match(/function logReplacedReadError\([\s\S]*?\n\}/);
+  assert.ok(logger, "the replaced-error logger is missing");
+  assert.doesNotMatch(
+    logger[0],
+    /message/,
+    "bounded fields only: the replaced-error log must not record a raw driver message",
+  );
+});

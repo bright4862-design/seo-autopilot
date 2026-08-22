@@ -220,6 +220,26 @@ Deno.serve(async (req) => {
   }
 });
 
+/**
+ * Record an error that is about to be replaced by a customer-safe problem.
+ *
+ * The top-level handler returns a RequestProblem before it reaches its own
+ * console.error, so an error converted here leaves no server-side trace at all.
+ * That is how a saved-scan read failure reached a customer as a support
+ * reference that could not be explained from either side.
+ *
+ * Bounded, non-payload fields only, matching the logging posture used elsewhere
+ * in these functions: a raw driver message is never recorded.
+ */
+function logReplacedReadError(scope, error) {
+  console.error("getCustomerScanResult read failed", {
+    scope: String(scope || "unknown").slice(0, 40),
+    name: String(error?.name || "unknown_error").slice(0, 80),
+    code: String(error?.code || "").slice(0, 80),
+    status: String(error?.status ?? error?.response?.status ?? "").slice(0, 8),
+  });
+}
+
 async function listCustomerScans({ serviceEntities, user, body }) {
   const projectId = cleanId(body?.project_id);
   if (!projectId) throw new RequestProblem(400, "project_id_required", "Choose a website project to view saved scans.");
@@ -244,7 +264,8 @@ async function listCustomerScans({ serviceEntities, user, body }) {
       .filter((run) => recordOwnedByUser(run, user.id))
       .sort((left, right) => scanTimestamp(right) - scanTimestamp(left))
       .slice(0, limit);
-  } catch {
+  } catch (error) {
+    logReplacedReadError("list", error);
     throw new RequestProblem(503, "result_load_failed", "Saved scans could not be loaded. Please retry.");
   }
 
@@ -276,7 +297,8 @@ async function listAllCustomerScans({ serviceEntities, user, body }) {
       .filter((run) => recordOwnedByUser(run, user.id))
       .sort((left, right) => scanTimestamp(right) - scanTimestamp(left))
       .slice(0, limit);
-  } catch {
+  } catch (error) {
+    logReplacedReadError("list_all", error);
     throw new RequestProblem(503, "result_load_failed", "Saved scans could not be loaded. Please retry.");
   }
   return Response.json({
@@ -305,7 +327,8 @@ async function loadAccessRows(accessEntity, user) {
       accessEntity.filter({ user_email: email }),
     ]);
     return [...(byUser || []), ...(byEmail || [])];
-  } catch {
+  } catch (error) {
+    logReplacedReadError("access", error);
     throw new RequestProblem(503, "paid_access_unavailable", "Access could not be confirmed. Please retry.");
   }
 }
@@ -350,7 +373,8 @@ async function loadFixList(fixListEntity, run, user, proof) {
       }, "-generated_at", 2);
       fixList = matches?.[0] || null;
     }
-  } catch {
+  } catch (error) {
+    logReplacedReadError("fix_list", error);
     throw new RequestProblem(409, "fix_list_unavailable", "The verified FixList for this scan is unavailable.");
   }
   if (
@@ -378,7 +402,8 @@ async function loadFixItems(fixItemEntity, fixList, run, user, proof) {
       owner_user_id: cleanId(user.id),
       authority_proof: proof,
     }, "created_date", MAX_FIX_ITEMS);
-  } catch {
+  } catch (error) {
+    logReplacedReadError("fix_items", error);
     throw new RequestProblem(409, "fix_items_unavailable", "The verified recommendations for this scan are unavailable.");
   }
 

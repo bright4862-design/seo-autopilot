@@ -1,6 +1,4 @@
 {
-  "schema_version": "cross_runtime_release_components_v1",
-  "note": "Canonical cross-runtime release components. Base44 and frontend behavior can change release truth, but Python cannot import those runtimes, so their markers are declared here and merged into the same fingerprint. A Base44/UI-only behavior change therefore moves the release fingerprint exactly like a Python change. Patch C adds the limited-result contract; Patch E adds admission reconciliation.",
   "components": {
     "authority_seal_version": "scan_evidence_hmac_sha256_v1",
     "customer_projection_version": "customer_projection_v1",
@@ -10,6 +8,8 @@
     "repair_presentation_contract_version": "repair_presentation_v1_compact_mobile",
     "repair_suggestion_library_version": "v1",
     "repair_write_contract_version": "repair_contract_v2_shadow_calibrated",
-    "review_attestation_version": "standard_review_snapshot_hmac_v1"
-  }
+    "review_attestation_version": "standard_review_snapshot_hmac_v2_coverage"
+  },
+  "note": "Canonical cross-runtime release components. Base44 and frontend behavior can change release truth, but Python cannot import those runtimes, so their markers are declared here and merged into the same fingerprint. A Base44/UI-only behavior change therefore moves the release fingerprint exactly like a Python change. Patch C adds the limited-result contract; Patch E adds admission reconciliation.",
+  "schema_version": "cross_runtime_release_components_v1"
 }

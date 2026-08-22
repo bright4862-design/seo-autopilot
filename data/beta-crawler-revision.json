@@ -32,7 +32,7 @@
     "repair_suggestion_library_version": "v1",
     "repair_write_contract_version": "repair_contract_v2_shadow_calibrated",
     "representative_page_version": "business_representative_page_v3_sitewide_archetype_ranking",
-    "review_attestation_version": "standard_review_snapshot_hmac_v1",
+    "review_attestation_version": "standard_review_snapshot_hmac_v2_coverage",
     "review_evidence_calibration_version": "review_evidence_calibration_v6_health_score_v2",
     "review_version": "python_review_v2_structural_marketplace",
     "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",
@@ -45,10 +45,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "fbb06c2634b74ca6",
+  "fingerprint": "fdd5906461a468d3",
   "git_commit": "",
-  "note": "Standard 150 beta candidate. Patch B: coverage/inventory diagnostics are computed and persisted as coverage_authority_evidence_v1. Observational only -- no scan status, provisional state, release eligibility or score changes. Production acceptance, deployed commit, workflow runs and artifact digests are pending.",
-  "recorded_at": "2026-08-21T21:10:20.153434+00:00",
+  "note": "Standard 150 beta candidate. Patch B follow-up: the authority snapshot attestation moves to standard_review_snapshot_hmac_v2_coverage so rows sealed under v1 stay verifiable while new rows carry coverage evidence. Production acceptance, deployed commit, workflow runs and artifact digests are pending.",
+  "recorded_at": "2026-08-22T01:30:10.673589+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

@@ -5,12 +5,11 @@ import test from "node:test";
 const fixList = readFileSync("src/pages/FixList.jsx", "utf8");
 const recentScanRow = readFileSync("src/components/fixlist/RecentScanRow.jsx", "utf8");
 
-test("the dashboard lists recent owner-scoped ScanRuns only when no exact scan is requested", () => {
-  assert.match(fixList, /import \{ getActiveProject \} from "@\/lib\/activeProject"/);
-  assert.match(fixList, /import \{ getScanRunWithFixList, listScanRuns \} from "@\/lib\/scanRuns"/);
+test("the dashboard lists recent account-wide ScanRuns only when no exact scan is requested", () => {
+  assert.doesNotMatch(fixList, /import \{ getActiveProject \} from "@\/lib\/activeProject"/);
+  assert.match(fixList, /import \{ getScanRunWithFixList, listAccountScanRuns \} from "@\/lib\/scanRuns"/);
   assert.match(fixList, /if \(requestedScanId\)[\s\S]*?setRecentScans\(\[\]\)[\s\S]*?return/);
-  assert.match(fixList, /const \{ project \} = await getActiveProject\(\)/);
-  assert.match(fixList, /await listScanRuns\(project\.id,/);
+  assert.match(fixList, /await listAccountScanRuns\(/);
 });
 
 test("recent scan rows reopen only their exact encoded durable scan id", () => {

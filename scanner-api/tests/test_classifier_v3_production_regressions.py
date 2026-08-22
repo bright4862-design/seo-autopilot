@@ -1,6 +1,6 @@
 """Classifier regressions reproduced from focused production retests."""
 
-from app.review import build_site_fingerprint, run_review
+from app.review import ARCHETYPE_CLASSIFIER_VERSION, build_site_fingerprint, run_review
 
 
 def page(url, title="", h1="", meta="", schema=None, status=200, family=""):
@@ -183,7 +183,7 @@ def test_global_editorial_portal_is_not_forced_to_retail_by_brand_context():
 
 def test_classification_debug_signals_are_exposed():
     classification = build_site_fingerprint({}, ikea_like_pages(), "https://furniture.example")["classification"]
-    assert classification["classifier_version"].startswith("archetype_classifier_v9")
+    assert classification["classifier_version"] == ARCHETYPE_CLASSIFIER_VERSION
     signals = classification["structural_signals"]
     for key in ("product_route_pages", "article_route_pages", "publisher_dominant", "retail_dominant", "saas_dominant", "finance"):
         assert key in signals

@@ -6,8 +6,8 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `6e0368d4ac5d2a6b` |
-| Classifier | `archetype_classifier_v9_local_business_hospitality` |
+| Candidate fingerprint | `400f68e10999fc59` |
+| Classifier | `archetype_classifier_v10_structural_finance_member_retail` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
 | Acceptance report | **not recorded** (`acceptance_report: ""`) |
@@ -15,13 +15,17 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The shipping code is
-fingerprint `6e0368d4ac5d2a6b` with classifier
-`archetype_classifier_v9_local_business_hospitality`, URL frontier policy
+fingerprint `400f68e10999fc59` with classifier
+`archetype_classifier_v10_structural_finance_member_retail`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded Patch D candidate was `e5088c4055cb04e9`. Patch E
-moved the fingerprint to `6e0368d4ac5d2a6b` by adding
+The immediately superseded Patch E candidate was `6e0368d4ac5d2a6b`. The
+stacked candidate moved the fingerprint to `400f68e10999fc59` by adding
+bounded multilingual page-family semantics, structural finance/member-retail
+classification, terminal failure-evidence deduplication, action-band-consistent
+summary copy, durable failure-state explanations, account-wide scan history,
+and shared count grammar. Patch E had added
 `admission_reconciliation_v1_exact_generation_barrier`: terminal admissions are
 reconciled by exact request, scan, barrier generation and claim sequence; a
 signed global claim barrier and independent intake/connectivity controls make

@@ -36,7 +36,7 @@ export default function RecentScanRow({ scan, status, occurredLabel, deleting, o
           <button
             type="button"
             disabled={deleting}
-            onClick={() => onDelete(scan.id)}
+            onClick={() => onDelete(scan.project_id, scan.id)}
             className="rounded-full bg-crit px-3 py-1.5 text-[12px] font-medium text-paper transition-opacity hover:opacity-80 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
           >
             {deleting ? "Deleting…" : "Delete"}

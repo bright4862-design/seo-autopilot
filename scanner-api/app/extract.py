@@ -351,6 +351,7 @@ def classify_confidence(discovery: dict, status_code: int) -> str:
 
 
 ROUTE_BOUNDARY_CLASSIFIER_VERSION = "route_boundary_classifier_v2_wordpress_author_archives"
+PAGE_TEMPLATE_CLASSIFIER_VERSION = "page_template_classifier_v3_bounded_multilingual_routes"
 ROUTE_BOUNDARY_RE = re.compile(
     # Token-bounded: a segment must BE the keyword, not merely start with it.
     # Unbounded "/cart" matched the French word "carte" (/fr/annonce/carte-all-inclusive.../voir),
@@ -430,6 +431,17 @@ BROAD_LOAN_SEGMENT_RE = re.compile(
 BOOKING_SEGMENT_RE = re.compile(
     r"(^|/)(booking|reservation|réservation|ticket|pass|cadeau|coffret|billet)(/|$)"
 )
+ACTIVITY_DETAIL_RE = re.compile(
+    r"/(?:annonce)(?:/|$)|"
+    r"/(?:activite|activité|activity|experience|expérience|atelier|stage|pilotage)(?:/|$)|"
+    r"/(?:listing)/[^/?#]+/(?:show)(?:/|$)"
+)
+LOCATION_LANDING_RE = re.compile(
+    r"/(?:locations?|agence|ville|region|store-locator)(?:/|$)"
+)
+CALCULATOR_ROUTE_RE = re.compile(
+    r"/(?:calcul|calculator|calculatrice|simulateur|simulation)(?:/|$)"
+)
 SERVICE_PATH_RE = re.compile(
     r"^(/[a-z]{2}(-[a-z]{2})?)?/(notre-service|our-service|our-services|services)(/|$)"
 )
@@ -466,7 +478,13 @@ def classify_template(
         return "guide_article"
     if re.search(r"^/(category|categorie|catégorie|categories|cat|theme|thème|collection|collections|marque|brand|univers)(/|$)", localized):
         return "collection_page"
-    if re.search(r"/annonce/.*?/voir|/annonce/|/activite|/activité|/activity|/experience|/expérience|/atelier|/stage/|/pilotage", localized):
+    if ACTIVITY_DETAIL_RE.search(localized):
+        return "activity_detail"
+    page_text = " ".join([str(title or ""), str(h1 or "")]).lower()
+    if (
+        re.search(r"/(?:simulateur|simulation)[-_]", localized)
+        and re.search(r"\b(expérience|experience|chute libre|pilotage|vol|activité|activity)\b", page_text)
+    ):
         return "activity_detail"
     if is_legal_page_path(localized):
         return "legal_info"
@@ -480,9 +498,9 @@ def classify_template(
         return "comparison_page"
     if re.search(r"/products?/|/produit/|/p/", localized):
         return "product_page"
-    if re.search(r"/collections?/|/category/|/categorie/|/catégorie/|/cat/|/marque/|/brand/|listing", localized):
+    if re.search(r"/(?:collections?|category|categorie|catégorie|cat|marque|brand|listing)(?:/|$)", localized):
         return "collection_page"
-    if re.search(r"/locations?/|/agence|/ville/|/region/|/store-locator", localized):
+    if LOCATION_LANDING_RE.search(localized):
         return "location_landing"
     if re.search(r"(^|/)(contact|contact-us|nous-contacter|contactez-nous)(/|$)", localized):
         return "contact"
@@ -490,10 +508,14 @@ def classify_template(
     # Article/NewsArticle is stronger evidence than incidental commercial words in a long editorial slug.
     if has_article_schema(schema_types):
         return "guide_article"
-    if BROAD_LOAN_SEGMENT_RE.search(localized):
+    broad_loan_match = BROAD_LOAN_SEGMENT_RE.search(localized)
+    credit_card_route = bool(re.search(r"/(?:credit|crédit)-cards?(?:[-/]|$)", localized))
+    if broad_loan_match and broad_loan_match.start() == 0 and not credit_card_route:
         return "loan_program"
-    if re.search(r"/calcul|/calculator|/simulateur|/simulation", localized):
+    if CALCULATOR_ROUTE_RE.search(localized):
         return "calculator"
+    if broad_loan_match and not credit_card_route:
+        return "loan_program"
     if BOOKING_SEGMENT_RE.search(localized) or re.search(r"ticket[_-]order|gift[_-]voucher", localized):
         return "booking_or_checkout"
     if any(x in localized for x in ["guide", "blog", "article", "conseils", "actualites", "/faq", "question"]):

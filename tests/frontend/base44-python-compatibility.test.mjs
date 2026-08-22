@@ -10,8 +10,8 @@ const scanFunction = readFileSync("base44/functions/runAdvancedScan/entry.ts", "
 test("Base44 accepts the deployed Python scanner, review, and calibration versions", () => {
   assert.match(scanFunction, /PYTHON_SCANNER_VERSION = "python_scanner_v3_bounded_request"/);
   assert.match(reviewFunction, /PYTHON_REVIEW_VERSION = "python_review_v2_structural_marketplace"/);
-  assert.match(durableAuthority, /review_version: "python_review_v2_structural_marketplace"/);
-  assert.match(durableAuthority, /review_evidence_calibration_version: "review_evidence_calibration_v6_health_score_v2"/);
+  assert.match(durableAuthority, /review_version: RELEASE_COMPONENT_VERSIONS\.review_version/);
+  assert.match(durableAuthority, /review_evidence_calibration_version: RELEASE_COMPONENT_VERSIONS\.review_evidence_calibration_version/);
   assert.match(durableAuthority, /beta_revision_fingerprint: RELEASE_FINGERPRINT/);
 });
 

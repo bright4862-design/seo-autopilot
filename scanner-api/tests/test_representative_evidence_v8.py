@@ -1,6 +1,6 @@
 """Production-derived representative URL and generic asset evidence regressions."""
 
-from app.review import build_site_fingerprint, get_playbook, prepare_fixes
+from app.review import ARCHETYPE_CLASSIFIER_VERSION, build_site_fingerprint, get_playbook, prepare_fixes
 
 
 def page(url, *, family="standard", status=200, title="Page", h1="Page", content_type="text/html"):
@@ -136,4 +136,4 @@ def test_classifier_marker_is_unchanged_by_evidence_patch():
         page("https://saas.example/integrations", family="collection_page"),
     ]
     fingerprint = build_site_fingerprint({}, pages, "https://saas.example")
-    assert fingerprint["classification"]["classifier_version"] == "archetype_classifier_v9_local_business_hospitality"
+    assert fingerprint["classification"]["classifier_version"] == ARCHETYPE_CLASSIFIER_VERSION

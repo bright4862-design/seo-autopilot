@@ -112,6 +112,48 @@ const CUSTOMER_RECOVERY_COPY = Object.freeze({
   },
 });
 
+/**
+ * The same failure kind describes two different things depending on what was
+ * being read: one saved scan, or the account's whole saved-scan history. Only
+ * the button label varied by target before, so a history read that failed for
+ * the entire account told the customer "your saved scan has not been replaced"
+ * -- singular, about a record they had not asked for -- above a button offering
+ * to retry loading saved scans, plural.
+ *
+ * Only the kinds a history read can actually produce are overridden.
+ * getCustomerScanResult's list actions raise unauthorized and
+ * result_load_failed, and transport failures classify as unavailable. Anything
+ * else falls back to the single-scan wording rather than inventing copy for a
+ * state that cannot be reached.
+ */
+const CUSTOMER_RECOVERY_HISTORY_COPY = Object.freeze({
+  unauthorized: {
+    title: "Sign in again to see your saved scans",
+    detail: "Your session could not be confirmed. Sign in again to load the scans saved to your account.",
+    action: "login",
+  },
+  unavailable: {
+    title: "Your saved scans are temporarily unavailable",
+    detail: "We couldn't reach the saved result service. None of your scans have been removed; try loading them again.",
+    action: "retry",
+  },
+  load_failed: {
+    title: "We couldn't load your saved scans",
+    detail: "An unexpected error interrupted the read. Your saved scans have not been changed; try loading them again.",
+    action: "retry",
+  },
+});
+
+export function resolveRecoveryCopy(kind, target) {
+  if (target !== "history") return CUSTOMER_RECOVERY_COPY[kind] || CUSTOMER_RECOVERY_COPY.load_failed;
+  // A known kind with no history override keeps its own accurate meaning; only
+  // an unrecognized one falls through, and it must land on the account-wide
+  // catch-all rather than back on the singular copy this exists to avoid.
+  return CUSTOMER_RECOVERY_HISTORY_COPY[kind]
+    || CUSTOMER_RECOVERY_COPY[kind]
+    || CUSTOMER_RECOVERY_HISTORY_COPY.load_failed;
+}
+
 export default function FixList() {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -704,7 +746,7 @@ function RequestedScanState({ title, detail, reference = "" }) {
 }
 
 function CustomerRecoveryState({ failure, target, onAction }) {
-  const copy = CUSTOMER_RECOVERY_COPY[failure?.kind] || CUSTOMER_RECOVERY_COPY.load_failed;
+  const copy = resolveRecoveryCopy(failure?.kind, target);
   const actionLabel = recoveryActionLabel(copy.action, target);
   return (
     <div className="mt-16 rounded-2xl border border-hairline-soft bg-white p-6">

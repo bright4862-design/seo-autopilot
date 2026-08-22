@@ -40,7 +40,13 @@ test("server kill control is separately gated and uses coordinator release/statu
   assert.match(source, /release_gate_eligible:\s*false/);
   assert.match(source, /function coordinatorLeaseReleased/);
   assert.match(source, /sanitizeAdmissionResult\(result\)/);
+  assert.match(source, /admission_release_state/);
+  assert.match(source, /admission_release_coordinator_request_id/);
+  assert.match(source, /ADMISSION_RECONCILIATION_VERSION/);
+  assert.match(source, /COORDINATOR_TIMEOUT_MS/);
+  assert.match(source, /persistExactRelease/);
   assert.doesNotMatch(source, /lease_released:\s*admission\.ok\s*===\s*true\s*&&\s*admission\.lease_active/);
+  assert.doesNotMatch(source, /return admission\.ok === true && admission\.lease_active === false/);
 });
 
 test("FixList surfaces owner-only Debug scan and Force stop scan controls", () => {

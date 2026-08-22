@@ -1,8 +1,12 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.41";
+import { RELEASE_COMPONENT_VERSIONS } from "./generatedReleaseContract.js";
+import { persistExactRelease } from "./admissionRelease.js";
 
 const OWNER_EMAIL = "bright4862@gmail.com";
 const OWNER_USER_ID = "6a498da58ef5cec1f5cd4486";
 const ADMISSION_LABEL = "fixlist-admission-coordinator-v1";
+const ADMISSION_RECONCILIATION_VERSION = RELEASE_COMPONENT_VERSIONS.admission_reconciliation_version;
+const COORDINATOR_TIMEOUT_MS = 5_000;
 const ACTIVE_STATUSES = new Set(["queued", "crawling", "reviewing"]);
 const TERMINAL_STATUSES = new Set(["complete", "limited", "failed", "cancelled"]);
 
@@ -58,13 +62,13 @@ Deno.serve(async (req) => {
 
     let status = cleanText(scan?.status, 30).toLowerCase();
     if (TERMINAL_STATUSES.has(status)) {
-      const release = await coordinatorRelease(user.id, scanId, status);
+      const release = await persistExactRelease({ entities, scan, release: coordinatorRelease });
       const admission = await coordinatorStatus(user.id);
       return Response.json({
         success: true,
         action,
         replayed: true,
-        scan: sanitizeScan(scan),
+        scan: sanitizeScan(release?.scanRun || await entities.ScanRun.get(scanId).catch(() => scan)),
         release: sanitizeCoordinatorResult(release),
         admission: sanitizeAdmissionResult(admission),
         lease_released: coordinatorLeaseReleased(admission),
@@ -86,13 +90,13 @@ Deno.serve(async (req) => {
     }
     status = cleanText(scan?.status, 30).toLowerCase();
     if (TERMINAL_STATUSES.has(status)) {
-      const release = await coordinatorRelease(user.id, scanId, status);
+      const release = await persistExactRelease({ entities, scan, release: coordinatorRelease });
       const admission = await coordinatorStatus(user.id);
       return Response.json({
         success: true,
         action,
         replayed: true,
-        scan: sanitizeScan(scan),
+        scan: sanitizeScan(release?.scanRun || await entities.ScanRun.get(scanId).catch(() => scan)),
         release: sanitizeCoordinatorResult(release),
         admission: sanitizeAdmissionResult(admission),
         lease_released: coordinatorLeaseReleased(admission),
@@ -115,6 +119,10 @@ Deno.serve(async (req) => {
       error_message: detail,
       completed_at: completedAt,
       release_gate_eligible: false,
+      admission_release_state: "pending",
+      admission_release_last_attempt_at: "",
+      admission_release_failure_code: "",
+      admission_reconciliation_version: ADMISSION_RECONCILIATION_VERSION,
     });
 
     const persisted = await entities.ScanRun.get(scanId).catch(() => null);
@@ -128,7 +136,8 @@ Deno.serve(async (req) => {
       throw new RequestProblem(500, "owner_kill_persistence_failed", "The manual stop could not be verified.");
     }
 
-    const release = await coordinatorRelease(user.id, scanId, "cancelled");
+    const release = await persistExactRelease({ entities, scan: persisted, release: coordinatorRelease });
+    const releasedScan = release?.scanRun || await entities.ScanRun.get(scanId).catch(() => persisted);
     const admission = await coordinatorStatus(user.id);
     console.info("ownerScanDebugControl kill", {
       scan_id: scanId,
@@ -140,7 +149,7 @@ Deno.serve(async (req) => {
       success: true,
       action,
       replayed: false,
-      scan: sanitizeScan(persisted),
+      scan: sanitizeScan(releasedScan),
       release: sanitizeCoordinatorResult(release),
       admission: sanitizeAdmissionResult(admission),
       lease_released: coordinatorLeaseReleased(admission),
@@ -188,6 +197,9 @@ function sanitizeScan(scan: any) {
     release_gate_eligible: scan?.release_gate_eligible === true,
     authority_sealed: Boolean(scan?.authority_sealed_at || scan?.authority_proof),
     admission_access_id: cleanId(scan?.admission_access_id),
+    admission_release_state: cleanText(scan?.admission_release_state, 40),
+    admission_release_coordinator_request_id: cleanId(scan?.admission_release_coordinator_request_id),
+    admission_reconciliation_version: cleanText(scan?.admission_reconciliation_version, 160),
   };
 }
 
@@ -219,19 +231,25 @@ function sanitizeAdmissionResult(result: any) {
 
 function coordinatorLeaseReleased(result: any) {
   const admission = sanitizeAdmissionResult(result);
-  return admission.ok === true && admission.lease_active === false;
+  const coordinatorSettled = admission.ok === true && admission.lease_active === false;
+  return coordinatorSettled;
 }
 
 async function coordinatorStatus(ownerUserId: string) {
   return callCoordinator("/status", { owner_user_id: ownerUserId });
 }
 
-async function coordinatorRelease(ownerUserId: string, scanId: string, terminalStatus: string) {
-  return callCoordinator("/release", {
+async function coordinatorRelease({ ownerUserId, scanId, terminalStatus }) {
+  const result = await callCoordinator("/release", {
     owner_user_id: ownerUserId,
     scan_id: scanId,
     terminal_status: terminalStatus,
   });
+  return result?.ok === true ? { ok: true, ...(result.body || {}) } : {
+    ok: false,
+    outcomeUnknown: result?.outcomeUnknown === true,
+    failureCode: cleanText(result?.error || result?.body?.error, 120) || "coordinator_rejected",
+  };
 }
 
 async function callCoordinator(path: string, payload: Record<string, unknown>) {
@@ -252,6 +270,8 @@ async function callCoordinator(path: string, payload: Record<string, unknown>) {
 
   let response: Response;
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), COORDINATOR_TIMEOUT_MS);
     response = await fetch(`${baseUrl}${path}`, {
       method: "POST",
       headers: {
@@ -260,9 +280,11 @@ async function callCoordinator(path: string, payload: Record<string, unknown>) {
         "x-fixlist-signature": signature,
       },
       body: payloadText,
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
   } catch {
-    return { ok: false, status: 0, error: "admission_unreachable", body: {} };
+    return { ok: false, status: 0, error: "admission_unreachable", outcomeUnknown: true, body: {} };
   }
 
   let body: any = {};

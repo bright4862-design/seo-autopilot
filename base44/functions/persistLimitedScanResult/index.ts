@@ -1,5 +1,6 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { verifyAuthoritySeal } from "./workerEnvelope.js";
+import { RELEASE_COMPONENT_VERSIONS } from "./generatedReleaseContract.js";
 import {
   buildLimitedResultSnapshot,
   createLimitedResultProof,
@@ -101,6 +102,8 @@ Deno.serve(async (req) => {
     const integrityProof = await createLimitedResultProof(snapshot, secret);
 
     if (scanStatus === "limited" && cleanProof(scan.result_integrity_proof) === integrityProof && scan.fix_list_id) {
+      const release = await persistLimitedAdmissionRelease(entities, scan);
+      const replayedScan = release?.scanRun || await entities.ScanRun.get(identity.scan_id).catch(() => scan);
       return Response.json({
         success: true,
         replayed: true,
@@ -108,7 +111,7 @@ Deno.serve(async (req) => {
         scanId: identity.scan_id,
         fixListId: scan.fix_list_id,
         resultIntegrityVerified: true,
-        scanRun: scan,
+        scanRun: replayedScan,
       });
     }
 
@@ -143,6 +146,9 @@ Deno.serve(async (req) => {
       throw new RequestProblem(500, "limited_persistence_incomplete", "The limited result rows were not completely saved.");
     }
 
+    const release = await persistLimitedAdmissionRelease(entities, persistedScan);
+    const releasedScan = release?.scanRun || await entities.ScanRun.get(identity.scan_id).catch(() => persistedScan);
+
     return Response.json({
       success: true,
       replayed: false,
@@ -150,7 +156,7 @@ Deno.serve(async (req) => {
       scanId: identity.scan_id,
       fixListId: fixList.id,
       resultIntegrityVerified: true,
-      scanRun: persistedScan,
+      scanRun: releasedScan,
     });
   } catch (error) {
     if (error instanceof RequestProblem) return problemResponse(error);
@@ -192,6 +198,172 @@ async function assertAttemptStillActive(entities, scanId, claimedAttempt) {
   if (!fresh || normalizeAttempt(fresh.attempt_count) !== claimedAttempt) {
     throw new RequestProblem(409, "superseded_attempt", "A newer attempt took over while saving.");
   }
+}
+
+const ADMISSION_LABEL = "fixlist-admission-coordinator-v1";
+const RELEASE_OUTCOMES = new Set(["released", "already_released"]);
+const SAFE_RELEASE_ERRORS = new Set([
+  "admission_not_configured",
+  "admission_sign_failed",
+  "admission_unreachable",
+  "coordinator_rejected",
+  "coordinator_unavailable",
+  "claim_not_found",
+  "scan_not_bound",
+  "scan_identity_conflict",
+  "barrier_generation_conflict",
+]);
+
+function releaseIdentity(scan) {
+  return {
+    scanId: cleanId(scan?.id),
+    ownerUserId: cleanId(scan?.owner_user_id || scan?.created_by_id),
+    requestId: cleanId(scan?.request_id),
+    idempotencyKey: cleanId(scan?.idempotency_key || scan?.request_id),
+    attemptCount: normalizeAttempt(scan?.attempt_count),
+    barrierGeneration: nonNegativeInteger(scan?.admission_barrier_generation),
+    claimSequence: nonNegativeInteger(scan?.admission_claim_sequence),
+    status: String(scan?.status || "").toLowerCase(),
+  };
+}
+
+function exactReleaseIdentity(scan, expected) {
+  const current = releaseIdentity(scan);
+  return Boolean(
+    current.scanId === expected.scanId
+    && current.ownerUserId === expected.ownerUserId
+    && current.requestId === expected.requestId
+    && current.idempotencyKey === expected.idempotencyKey
+    && current.attemptCount === expected.attemptCount
+    && current.barrierGeneration === expected.barrierGeneration
+    && current.claimSequence === expected.claimSequence
+    && current.status === expected.status
+  );
+}
+
+function releaseFailureCode(value) {
+  const code = cleanText(value, 120).toLowerCase();
+  return SAFE_RELEASE_ERRORS.has(code) ? code : "admission_release_failed";
+}
+
+async function persistLimitedAdmissionRelease(entities, scan) {
+  if (!cleanId(scan?.admission_access_id)) return { ok: true, skipped: true };
+  if (["released", "superseded", "satisfied_unbound"].includes(String(scan?.admission_release_state || ""))) {
+    return { ok: true, replayed: true, state: scan.admission_release_state, scanRun: scan };
+  }
+  const expected = releaseIdentity(scan);
+  if (
+    expected.status !== "limited" || !expected.scanId || !expected.ownerUserId || !expected.requestId
+    || expected.idempotencyKey !== expected.requestId
+    || expected.barrierGeneration === null || expected.claimSequence === null
+  ) return { ok: false, retryable: true, failureCode: "admission_release_identity_invalid" };
+
+  const attemptedAt = new Date().toISOString();
+  const result = await releaseAdmission(expected);
+  const outcome = cleanText(result?.outcome, 80).toLowerCase();
+  const exactResponse = Boolean(
+    result?.ok === true && RELEASE_OUTCOMES.has(outcome)
+    && cleanId(result?.request_id) === expected.requestId
+    && cleanId(result?.scan_id) === expected.scanId
+    && nonNegativeInteger(result?.barrier_generation) === expected.barrierGeneration
+    && nonNegativeInteger(result?.claim_sequence) === expected.claimSequence
+  );
+  const fresh = await entities.ScanRun.get(expected.scanId).catch(() => null);
+  if (!exactReleaseIdentity(fresh, expected)) {
+    return { ok: false, retryable: true, failureCode: "admission_release_scan_changed" };
+  }
+  const fields = exactResponse ? {
+    admission_release_state: "released",
+    admission_release_reconciled_at: attemptedAt,
+    admission_release_last_attempt_at: attemptedAt,
+    admission_release_coordinator_request_id: expected.requestId,
+    admission_release_outcome: outcome,
+    admission_release_failure_code: "",
+    admission_reconciliation_version: RELEASE_COMPONENT_VERSIONS.admission_reconciliation_version,
+  } : {
+    admission_release_state: "pending",
+    admission_release_last_attempt_at: attemptedAt,
+    admission_release_outcome: outcome,
+    admission_release_failure_code: result?.ok === true
+      ? "admission_release_identity_conflict"
+      : releaseFailureCode(result?.failureCode),
+    admission_reconciliation_version: RELEASE_COMPONENT_VERSIONS.admission_reconciliation_version,
+  };
+  await entities.ScanRun.update(expected.scanId, fields);
+  const persisted = await entities.ScanRun.get(expected.scanId).catch(() => null);
+  if (!exactReleaseIdentity(persisted, expected)) {
+    return { ok: false, retryable: true, failureCode: "admission_release_persistence_failed" };
+  }
+  return exactResponse
+    ? { ok: true, state: "released", scanRun: persisted }
+    : { ok: false, retryable: true, failureCode: fields.admission_release_failure_code, scanRun: persisted };
+}
+
+async function releaseAdmission(expected) {
+  const baseUrl = String(Deno.env.get("SCAN_ADMISSION_COORDINATOR_URL") || "").replace(/\/+$/, "");
+  const root = String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || "");
+  if (!baseUrl || !root || String(Deno.env.get("BETA_SCAN_ADMISSION_ENABLED") || "") !== "true") {
+    return { ok: false, failureCode: "admission_not_configured" };
+  }
+  const payloadText = JSON.stringify({
+    owner_user_id: expected.ownerUserId,
+    scan_id: expected.scanId,
+    terminal_status: expected.status,
+  });
+  const timestamp = String(Math.trunc(Date.now() / 1000));
+  let signature;
+  try {
+    const derived = await hmacBytes(new TextEncoder().encode(root), ADMISSION_LABEL);
+    signature = bytesToHex(await hmacBytes(derived, `${timestamp}\n${payloadText}`));
+  } catch {
+    return { ok: false, failureCode: "admission_sign_failed" };
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5_000);
+  let response;
+  try {
+    response = await fetch(`${baseUrl}/release`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-fixlist-timestamp": timestamp,
+        "x-fixlist-signature": signature,
+      },
+      body: payloadText,
+      signal: controller.signal,
+    });
+  } catch {
+    return { ok: false, outcomeUnknown: true, failureCode: "admission_unreachable" };
+  } finally {
+    clearTimeout(timeout);
+  }
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) return {
+    ok: false,
+    outcomeUnknown: response.status >= 500,
+    failureCode: releaseFailureCode(body?.error || "coordinator_rejected"),
+  };
+  return { ok: true, ...body };
+}
+
+async function hmacBytes(secretBytes, payloadText) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    secretBytes,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  return new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payloadText)));
+}
+
+function bytesToHex(bytes) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function nonNegativeInteger(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function stableTimestamp(scan) {

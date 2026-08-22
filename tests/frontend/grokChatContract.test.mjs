@@ -308,7 +308,7 @@ test("only trusted server worker evidence can enter the active durable authority
   assert.match(durablePersistenceSource, /entities\.FixItem\.(?:bulkCreate|create)/);
   assert.match(durablePersistenceSource, /entities\.ScanRun\.update/);
   assert.match(durablePersistenceSource, /authority_proof/);
-  assert.match(durablePersistenceSource, /releaseAdmission\(\{/);
+  assert.match(durablePersistenceSource, /persistExactAdmissionRelease\(\{/);
   const submitStart = scanFormSource.indexOf("async function handleSubmit");
   const submitEnd = scanFormSource.indexOf("\n  return (", submitStart);
   const submitSource = scanFormSource.slice(submitStart, submitEnd);

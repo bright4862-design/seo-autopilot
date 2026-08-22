@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `d23f6a2ad97da082` |
+| Candidate fingerprint | `6e0368d4ac5d2a6b` |
 | Classifier | `archetype_classifier_v9_local_business_hospitality` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,13 +15,20 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The shipping code is
-fingerprint `d23f6a2ad97da082` with classifier
+fingerprint `6e0368d4ac5d2a6b` with classifier
 `archetype_classifier_v9_local_business_hospitality`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded candidate was `d23f6a2ad97da082`. The fingerprint
-moved to `e5088c4055cb04e9` when Patch D made mixed-family evidence stay mixed:
+The immediately superseded Patch D candidate was `e5088c4055cb04e9`. Patch E
+moved the fingerprint to `6e0368d4ac5d2a6b` by adding
+`admission_reconciliation_v1_exact_generation_barrier`: terminal admissions are
+reconciled by exact request, scan, barrier generation and claim sequence; a
+signed global claim barrier and independent intake/connectivity controls make
+cutover drain state auditable. These operational authority changes require a
+new production acceptance gate.
+
+Patch D had previously made mixed-family evidence stay mixed:
 a repair spanning several page families is partitioned instead of being labelled
 with one family, and a coverage ratio is shown only when its numerator and
 denominator are counted over the same URL set. That changes customer-visible

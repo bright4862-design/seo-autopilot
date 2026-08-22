@@ -1,0 +1,107 @@
+name: FixList Base44 Admission Connectivity Control
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Coordinator-connectivity action"
+        required: true
+        type: choice
+        options:
+          - disable
+          - enable
+      barrier_generation:
+        description: "Exact closed barrier generation"
+        required: true
+        type: string
+      change_ticket:
+        description: "Auditable release/change ticket identifier"
+        required: true
+        type: string
+      reason:
+        description: "Reason recorded in the signed status snapshot"
+        required: true
+        default: "Base44 admission-connectivity control"
+        type: string
+      confirm:
+        description: "Exact DISABLE/ENABLE-BASE44-ADMISSION-CONNECTIVITY:<main-sha>:<generation> confirmation"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: fixlist-base44-owner-controls
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT: seo-autopilot-501517
+  GCP_REGION: europe-west1
+  GCP_WIF_PROVIDER: projects/919035207432/locations/global/workloadIdentityPools/github/providers/github-base44-admission-control
+  GCP_OPERATOR_SERVICE_ACCOUNT: fixlist-admission-operator@seo-autopilot-501517.iam.gserviceaccount.com
+  CLOUD_RUN_SERVICE: fixlist-standard150-worker
+  CLOUD_TASKS_QUEUE: fixlist-standard150
+  CLOUD_TASKS_DRAIN_QUEUE: fixlist-standard150-drain
+  STANDARD150_RECONCILER_JOB: fixlist-standard150-reconcile
+  ADMISSION_COORDINATOR_SERVICE: fixlist-scan-admission-coordinator
+  TASKS_INVOKER_SERVICE_ACCOUNT: fixlist-standard150-invoker@seo-autopilot-501517.iam.gserviceaccount.com
+
+jobs:
+  control-admission-connectivity:
+    if: github.actor == 'bright4862-design' && github.ref == 'refs/heads/main'
+    environment: fixlist-production-owner
+    # The protected owner runner is already authenticated with the Base44 CLI.
+    # A hosted runner cannot safely complete the documented device-code flow.
+    runs-on: [self-hosted, fixlist-base44-owner]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact main SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Deterministic toolchain and source preflight
+        shell: /bin/bash {0}
+        run: |
+          set -euo pipefail
+          test "${{ github.actor }}" = "bright4862-design"
+          test "${{ github.ref }}" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          git fetch origin main --quiet
+          test "$(git rev-parse origin/main)" = "${{ github.sha }}"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          /bin/bash -n scripts/set-base44-admission-connectivity.sh
+          /bin/bash -n scripts/fixlist-cloud-operator.sh
+
+      - name: Set up pinned Node runtime
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20.19.5'
+
+      - name: Authenticate keylessly as the isolated cloud operator
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Verify zero obligations then mutate only admission connectivity
+        shell: /bin/bash {0}
+        env:
+          ACTION: ${{ inputs.action }}
+          CONFIRM: ${{ inputs.confirm }}
+          SOURCE_SHA: ${{ github.sha }}
+          BARRIER_EXPECTED_GENERATION: ${{ inputs.barrier_generation }}
+          CHANGE_TICKET: ${{ inputs.change_ticket }}
+          CUTOVER_REASON: ${{ inputs.reason }}
+          BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
+        run: /bin/bash scripts/set-base44-admission-connectivity.sh

@@ -292,7 +292,18 @@ async def reconcile_stale_scans(client: httpx.AsyncClient) -> dict[str, Any]:
         raise RuntimeError("Durable scan reconciliation response is malformed.")
     return {
         key: max(0, int(counts.get(key) or 0))
-        for key in ("examined", "closed", "released", "skipped", "errors")
+        for key in (
+            "examined",
+            "closed",
+            "released",
+            "superseded",
+            "satisfied_unbound",
+            "pending",
+            "retryable",
+            "paginated",
+            "skipped",
+            "errors",
+        )
     }
 
 

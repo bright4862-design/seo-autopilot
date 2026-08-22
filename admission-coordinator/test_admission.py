@@ -292,6 +292,13 @@ class DocumentShape(unittest.TestCase):
                 "lease_expires_at",
                 "released_at",
                 "terminal_status",
+                "barrier_generation",
+                "claim_sequence",
+                "admission_mode",
+                "acceptance_cohort_id",
+                "acceptance_release_id",
+                "acceptance_source_sha",
+                "acceptance_expires_at",
             },
         )
 

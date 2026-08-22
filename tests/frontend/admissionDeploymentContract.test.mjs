@@ -18,6 +18,10 @@ const gatewayDeploy = read("scripts/deploy_dispatch_gateway.sh");
 const gatewayBootstrap = read("scripts/bootstrap-fixlist-dispatch-gateway.sh");
 const workflow = read(".github/workflows/fixlist-cloud-operator.yml");
 const cloudOperator = read("scripts/fixlist-cloud-operator.sh");
+const intakeControl = read("scripts/set-base44-scan-intake.sh");
+const connectivityControl = read("scripts/set-base44-admission-connectivity.sh");
+const intakeWorkflow = read(".github/workflows/fixlist-base44-scan-intake.yml");
+const connectivityWorkflow = read(".github/workflows/fixlist-base44-admission-connectivity.yml");
 const cliHelper = read("scripts/lib/base44-pinned-cli.sh");
 const sourceGuard = read("scripts/lib/release-source-guard.sh");
 
@@ -74,6 +78,7 @@ test("Base44 release deploy names the explicit durable functions and never recon
     "startStandardScanJob",
     "durableScanWorkerControl",
     "persistDurableScanAuthority",
+    "persistLimitedScanResult",
     "getCustomerScanResult",
     "createAccessCheckout",
     "stripeWebhook",
@@ -87,7 +92,7 @@ test("Base44 release deploy names the explicit durable functions and never recon
 });
 
 test("Base44 site publication restores the durable backend after the site deploy", () => {
-  const authIndex = deploySite.indexOf('"$FIXLIST_BASE44_CLI" whoami');
+  const authIndex = deploySite.indexOf('fixlist_require_base44_owner');
   const buildIndex = deploySite.indexOf('VITE_FIXLIST_SOURCE_SHA="$SOURCE_SHA" npm run build');
   const siteIndex = deploySite.indexOf('site deploy --no-build --yes');
   const functionsIndex = deploySite.indexOf('functions deploy "${FUNCTIONS[@]}"');
@@ -97,7 +102,7 @@ test("Base44 site publication restores the durable backend after the site deploy
   assert.ok(siteIndex >= 0, "missing Base44 site deployment");
   assert.ok(functionsIndex > siteIndex, "release functions must deploy after the site");
   assert.ok(verifyIndex > functionsIndex, "public source verification must run after backend restoration");
-  assert.equal((deploySite.match(/\"\$FIXLIST_BASE44_CLI\" whoami/g) || []).length, 1, "site publish must use one non-interactive auth check");
+  assert.equal((deploySite.match(/fixlist_require_base44_owner/g) || []).length, 1, "site publish must use one non-interactive owner check");
   assert.doesNotMatch(deploySite, /\"\$FIXLIST_BASE44_CLI\" login/);
   assert.match(mainEntry, /import\.meta\.env\.VITE_FIXLIST_SOURCE_SHA/);
   assert.match(mainEntry, /__FIXLIST_SOURCE_SHA__/);
@@ -107,6 +112,7 @@ test("Base44 site publication restores the durable backend after the site deploy
     "startStandardScanJob",
     "durableScanWorkerControl",
     "persistDurableScanAuthority",
+    "persistLimitedScanResult",
     "getCustomerScanResult",
     "createAccessCheckout",
     "stripeWebhook",
@@ -166,6 +172,45 @@ test("Cloud Operator may redeploy the coordinator after bootstrap but cannot run
 
 test("Cloud Operator invokes the allowlisted shell through bash so file mode cannot block verification", () => {
   assert.match(workflow, /run: bash \.\/scripts\/fixlist-cloud-operator\.sh/);
+});
+
+test("acceptance-only admission is exact-source, allowlisted, expiring and budget bounded", () => {
+  assert.match(workflow, /- acceptance-only/);
+  assert.match(workflow, /ACCEPTANCE_SOURCE_SHA: \$\{\{ github\.sha \}\}/);
+  assert.match(cloudOperator, /OPEN-STANDARD150-ACCEPTANCE:\$\{SOURCE_SHA\}:\$\{BARRIER_EXPECTED_GENERATION\}:\$\{ACCEPTANCE_COHORT_ID\}/);
+  assert.match(cloudOperator, /owner_user_ids/);
+  assert.match(cloudOperator, /expires_at/);
+  assert.match(cloudOperator, /total_claim_budget/);
+  assert.match(cloudOperator, /per_owner_claim_budget/);
+  assert.match(cloudOperator, /\[\[ "\$ACCEPTANCE_SOURCE_SHA" == "\$SOURCE_SHA" \]\]/);
+  assert.doesNotMatch(cloudOperator, /browser.*enroll|localStorage.*cohort/i);
+});
+
+test("cutover pause drains live obligations before pausing and resume is the exact inverse", () => {
+  const pause = cloudOperator.match(/cutover_pause\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  const resume = cloudOperator.match(/cutover_resume\(\) \{[\s\S]*?\n\}/)?.[0] || "";
+  assert.ok(pause.indexOf("call_barrier_operator close") < pause.indexOf("wait_for_barrier_drain"));
+  assert.ok(pause.indexOf('pause_queue_checked "$CLOUD_TASKS_QUEUE"') < pause.indexOf('pause_queue_checked "$CLOUD_TASKS_DRAIN_QUEUE"'));
+  assert.ok(pause.indexOf('pause_queue_checked "$CLOUD_TASKS_DRAIN_QUEUE"') < pause.indexOf("pause_scheduler_checked"));
+  assert.ok(resume.indexOf("resume_scheduler_checked") < resume.indexOf('resume_queue_checked "$CLOUD_TASKS_DRAIN_QUEUE"'));
+  assert.ok(resume.indexOf('resume_queue_checked "$CLOUD_TASKS_DRAIN_QUEUE"') < resume.indexOf('resume_queue_checked "$CLOUD_TASKS_QUEUE"'));
+  assert.match(cloudOperator, /BARRIER_CLAIMED_EXPIRED="\$\{_barrier_values\[7\]\}"/);
+  assert.doesNotMatch(cloudOperator.match(/require_closed_drained_barrier\(\) \{[\s\S]*?\n\}/)?.[0] || "", /CLAIMED_EXPIRED/);
+});
+
+test("Base44 intake and connectivity are isolated owner controls with no CI device login", () => {
+  assert.match(intakeControl, /secrets set[\s\S]*BETA_SCAN_INTAKE_ENABLED=\$VALUE/);
+  assert.doesNotMatch(intakeControl, /BETA_SCAN_ADMISSION_ENABLED=|secrets (list|delete)|"\$FIXLIST_BASE44_CLI" login/);
+  assert.match(connectivityControl, /verify-zero-admission-obligations/);
+  assert.match(connectivityControl, /secrets set[\s\S]*BETA_SCAN_ADMISSION_ENABLED=\$VALUE/);
+  assert.doesNotMatch(connectivityControl, /BETA_SCAN_INTAKE_ENABLED=|secrets (list|delete)|"\$FIXLIST_BASE44_CLI" login/);
+  for (const ownerWorkflow of [intakeWorkflow, connectivityWorkflow]) {
+    assert.match(ownerWorkflow, /runs-on: \[self-hosted, fixlist-base44-owner\]/);
+    assert.match(ownerWorkflow, /github\.actor == 'bright4862-design'/);
+    assert.match(ownerWorkflow, /github\.ref == 'refs\/heads\/main'/);
+    assert.match(ownerWorkflow, /environment: fixlist-production-owner/);
+    assert.doesNotMatch(ownerWorkflow, /runs-on:\s*ubuntu-latest|BASE44_AUTH\s*:|BASE44_REFRESH_TOKEN\s*:/i);
+  }
 });
 
 test("worker provenance lookup uses the same regional Cloud Build scope as the candidate build", () => {

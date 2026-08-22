@@ -61,7 +61,7 @@ test("durable authority is written server-side and the browser only reads the ex
   assert.match(durablePersistenceSource, /buildAuthoritySnapshot\(\{/);
   assert.match(durablePersistenceSource, /persistedScan\?\.status === "complete"/);
   assert.match(durablePersistenceSource, /authority_proof/);
-  assert.match(durablePersistenceSource, /releaseAdmission\(\{/);
+  assert.match(durablePersistenceSource, /persistExactAdmissionRelease\(\{/);
   assert.match(scanRunsSource, /base44\.functions\.invoke\("getCustomerScanResult"/);
   assert.match(scanFormSource, /submitStandardScanJob\(scanPayload\)/);
   assert.match(scanFormSource, /setWatchedScanId\(scanId\)/);

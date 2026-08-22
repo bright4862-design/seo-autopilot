@@ -5,7 +5,12 @@ import test from "node:test";
 import {
   betaScanAdmissionPolicy,
   normalizeAdmissionIdentity,
+  scanIntakeEnabled,
 } from "../../base44/functions/startStandardScanJob/admission.js";
+import {
+  admissionClaimEvidenceProof,
+  verifyAdmissionClaimEvidence,
+} from "../../base44/functions/startStandardScanJob/admissionClient.js";
 
 const admissionSource = readFileSync("base44/functions/startStandardScanJob/admission.js", "utf8");
 const entrySource = readFileSync("base44/functions/startStandardScanJob/entry.ts", "utf8");
@@ -24,6 +29,8 @@ function withEnv(values, fn) {
 test("scan admission is default-off and requires the coordinator, not an unproven Base44 atomic primitive", () => {
   const values = new Map();
   withEnv(values, () => {
+    assert.equal(betaScanAdmissionPolicy().code, "scan_intake_paused");
+    values.set("BETA_SCAN_INTAKE_ENABLED", "true");
     assert.equal(betaScanAdmissionPolicy().code, "scan_admission_paused");
     values.set("BETA_SCAN_ADMISSION_ENABLED", "true");
     assert.equal(betaScanAdmissionPolicy().code, "scan_admission_configuration_invalid");
@@ -41,8 +48,28 @@ test("scan admission is default-off and requires the coordinator, not an unprove
   assert.match(entrySource, /bindAdmission\(\{/);
 });
 
+test("new intake is independently fail-closed without disabling coordinator release", () => {
+  const values = new Map([
+    ["BETA_SCAN_ADMISSION_ENABLED", "true"],
+    ["SCAN_ADMISSION_COORDINATOR_URL", "https://coordinator.example"],
+    ["SCAN_EVIDENCE_SIGNING_KEY", "test-root"],
+  ]);
+  withEnv(values, () => {
+    assert.equal(scanIntakeEnabled(), false);
+    assert.equal(betaScanAdmissionPolicy().code, "scan_intake_paused");
+    values.set("BETA_SCAN_INTAKE_ENABLED", "true");
+    assert.equal(scanIntakeEnabled(), true);
+    assert.equal(betaScanAdmissionPolicy().ok, true);
+    values.set("BETA_SCAN_INTAKE_ENABLED", "TRUE");
+    assert.equal(scanIntakeEnabled(), false);
+  });
+  assert.match(admissionSource, /BETA_SCAN_INTAKE_ENABLED/);
+  assert.match(clientSource, /BETA_SCAN_ADMISSION_ENABLED/);
+});
+
 test("scan admission does not use the static cohort list as a membership gate", () => {
   const values = new Map([
+    ["BETA_SCAN_INTAKE_ENABLED", "true"],
     ["BETA_SCAN_ADMISSION_ENABLED", "true"],
     ["SCAN_ADMISSION_COORDINATOR_URL", "https://coordinator.example"],
     ["SCAN_EVIDENCE_SIGNING_KEY", "test-root"],
@@ -64,6 +91,30 @@ test("request identity is exact and bounded before coordinator admission", () =>
   assert.equal(good.ok, true);
   assert.equal(normalizeAdmissionIdentity({ ...good, idempotency_key: "scanreq_other" }).code, "scan_request_identity_conflict");
   assert.equal(normalizeAdmissionIdentity({ request_id: "short", idempotency_key: "short", request_fingerprint: "fp" }).ok, false);
+});
+
+test("acceptance cohort evidence is HMAC verified before persistence", async () => {
+  const evidence = {
+    version: "admission_claim_evidence_v1",
+    owner_user_id: "user-1",
+    request_id: "scanreq_request_1",
+    barrier_generation: 4,
+    claim_sequence: 23,
+    admission_mode: "acceptance_only",
+    acceptance_cohort_id: "cohort-1",
+    acceptance_release_id: "release-1",
+    acceptance_source_sha: "a".repeat(40),
+    acceptance_expires_at: 1_800_000_000,
+  };
+  const signingKey = "test-signing-root";
+  const proof = await admissionClaimEvidenceProof(evidence, signingKey);
+  assert.equal(proof.length, 64);
+  assert.equal(await verifyAdmissionClaimEvidence({ evidence, proof, signingKey }), true);
+  assert.equal(await verifyAdmissionClaimEvidence({
+    evidence: { ...evidence, acceptance_release_id: "tampered" },
+    proof,
+    signingKey,
+  }), false);
 });
 
 test("only a fresh coordinator claim may create; unbound exact replays recover or return pending", () => {

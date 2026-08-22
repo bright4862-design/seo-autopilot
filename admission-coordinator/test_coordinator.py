@@ -20,8 +20,9 @@ STORE: dict[str, dict] = {}
 
 
 class FakeSnapshot:
-    def __init__(self, data):
+    def __init__(self, data, key=""):
         self._data = data
+        self.id = key.rsplit("/", 1)[-1]
 
     @property
     def exists(self):
@@ -36,7 +37,7 @@ class FakeDocumentRef:
         self.key = key
 
     def get(self, transaction=None):
-        return FakeSnapshot(STORE.get(self.key))
+        return FakeSnapshot(STORE.get(self.key), self.key)
 
 
 class FakeCollection:
@@ -46,9 +47,49 @@ class FakeCollection:
     def document(self, key):
         return FakeDocumentRef(f"{self.name}/{key}")
 
+    def where(self, field, operator, value):
+        return FakeQuery(self.name, [(field, operator, value)])
+
+
+class FakeQuery:
+    def __init__(self, collection, filters=None, maximum=None):
+        self.collection = collection
+        self.filters = list(filters or [])
+        self.maximum = maximum
+
+    def where(self, field, operator, value):
+        return FakeQuery(self.collection, [*self.filters, (field, operator, value)], self.maximum)
+
+    def limit(self, maximum):
+        return FakeQuery(self.collection, self.filters, int(maximum))
+
 
 class FakeTransaction:
+    def get(self, query):
+        prefix = f"{query.collection}/"
+        snapshots = []
+        for key, value in sorted(STORE.items()):
+            if not key.startswith(prefix):
+                continue
+            matches = True
+            for field, operator, expected in query.filters:
+                actual = value.get(field)
+                if operator == "==":
+                    matches = matches and actual == expected
+                elif operator == "in":
+                    matches = matches and actual in expected
+                else:
+                    raise AssertionError(f"unsupported fake query operator: {operator}")
+            if matches:
+                snapshots.append(FakeSnapshot(value, key))
+        return snapshots[:query.maximum] if query.maximum is not None else snapshots
+
     def set(self, ref, value):
+        STORE[ref.key] = dict(value)
+
+    def create(self, ref, value):
+        if ref.key in STORE:
+            raise RuntimeError("document already exists")
         STORE[ref.key] = dict(value)
 
 
@@ -84,18 +125,39 @@ def _install_firestore_stub():
 _install_firestore_stub()
 
 SIGNING_ROOT = "unit-test-signing-root"
+OPERATOR_SIGNING_ROOT = "unit-test-operator-signing-root"
+OPERATOR_SERVICE_ACCOUNT = "fixlist-operator@example.iam.gserviceaccount.com"
+OPERATOR_AUDIENCE = "https://admission.example.test"
+OPERATOR_ID = "release_operator"
 os.environ.setdefault("SCAN_EVIDENCE_SIGNING_KEY", SIGNING_ROOT)
+os.environ.setdefault("ADMISSION_OPERATOR_SIGNING_KEY", OPERATOR_SIGNING_ROOT)
+os.environ.setdefault("ADMISSION_OPERATOR_SERVICE_ACCOUNT", OPERATOR_SERVICE_ACCOUNT)
+os.environ.setdefault("ADMISSION_OPERATOR_AUDIENCE", OPERATOR_AUDIENCE)
+os.environ.setdefault("ADMISSION_OPERATOR_ID", OPERATOR_ID)
 
 main = importlib.import_module("main")
 import admission  # noqa: E402  (imported after the stub is installed)
+import control  # noqa: E402
+
+main.OPERATOR_TOKEN_VERIFIER = lambda _token, _audience: {
+    "iss": "https://accounts.google.com",
+    "aud": OPERATOR_AUDIENCE,
+    "email": OPERATOR_SERVICE_ACCOUNT,
+    "email_verified": True,
+}
 
 OWNER = "6a498da58ef5cec1f5cd4486"
 FINGERPRINT = "standard_150|https://funbooker.com/"
 SCAN_ID = "6a7f606b1f3c36298704c439"
 
 
-def sign(body: bytes, timestamp: str, label: bytes = b"fixlist-admission-coordinator-v1") -> str:
-    key = hmac.new(SIGNING_ROOT.encode("utf-8"), label, hashlib.sha256).digest()
+def sign(
+    body: bytes,
+    timestamp: str,
+    label: bytes = b"fixlist-admission-coordinator-v1",
+    root: str = SIGNING_ROOT,
+) -> str:
+    key = hmac.new(root.encode("utf-8"), label, hashlib.sha256).digest()
     return hmac.new(key, timestamp.encode("ascii") + b"\n" + body, hashlib.sha256).hexdigest()
 
 
@@ -105,7 +167,26 @@ class CoordinatorTestCase(unittest.TestCase):
         main.app.config.update(TESTING=True)
         self.client = main.app.test_client()
 
-    def post(self, path, payload, *, timestamp=None, signature=None, label=None, raw=None):
+    def post(
+        self,
+        path,
+        payload,
+        *,
+        timestamp=None,
+        signature=None,
+        label=None,
+        raw=None,
+        inject_barrier=True,
+    ):
+        if (
+            inject_barrier
+            and path == "/bind"
+            and isinstance(payload, dict)
+            and "barrier_generation" not in payload
+        ):
+            owner = str(payload.get("owner_user_id") or "")
+            generation = STORE.get(f"scan_admission/{owner}", {}).get("barrier_generation", 0)
+            payload = {**payload, "barrier_generation": generation}
         body = raw if raw is not None else json.dumps(payload).encode("utf-8")
         stamp = timestamp if timestamp is not None else str(int(time.time()))
         sig = signature if signature is not None else sign(body, stamp, label or b"fixlist-admission-coordinator-v1")
@@ -116,6 +197,26 @@ class CoordinatorTestCase(unittest.TestCase):
                 "content-type": "application/json",
                 "x-fixlist-timestamp": stamp,
                 "x-fixlist-signature": sig,
+            },
+        )
+
+    def operator_post(self, path, payload, *, root=OPERATOR_SIGNING_ROOT, token="valid-oidc"):
+        body = json.dumps(payload).encode("utf-8")
+        stamp = str(int(time.time()))
+        signature = sign(
+            body,
+            stamp,
+            b"fixlist-admission-operator-v1",
+            root=root,
+        )
+        return self.client.post(
+            path,
+            data=body,
+            headers={
+                "authorization": f"Bearer {token}",
+                "content-type": "application/json",
+                "x-fixlist-operator-timestamp": stamp,
+                "x-fixlist-operator-signature": signature,
             },
         )
 

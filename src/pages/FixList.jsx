@@ -87,6 +87,11 @@ const CUSTOMER_RECOVERY_COPY = Object.freeze({
     detail: "We couldn't reach the saved result service. Your scan has not been removed; try loading it again.",
     action: "retry",
   },
+  release_mismatch: {
+    title: "Your result is waiting for an app update",
+    detail: "The scan finished, but the result service and this app are on different release versions. Your scan is saved; try loading it again after the update completes.",
+    action: "retry",
+  },
   authority_invalid: {
     title: "We couldn't verify this saved result",
     detail: "The result did not match its server verification seal, so no fix details are being shown. Contact support and include the reference below.",

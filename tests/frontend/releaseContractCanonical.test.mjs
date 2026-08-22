@@ -230,6 +230,7 @@ test("every declared cross-runtime component is a real marker in shipped code", 
    * in the code it claims to version.
    */
   const owners = {
+    admission_reconciliation_version: "base44/functions/durableScanWorkerControl/generatedReleaseContract.js",
     authority_seal_version: "base44/functions/persistDurableScanAuthority/authoritySeal.js",
     customer_projection_version: "base44/functions/getCustomerScanResult/projection.js",
     review_attestation_version: "base44/functions/persistDurableScanAuthority/authoritySnapshot.js",

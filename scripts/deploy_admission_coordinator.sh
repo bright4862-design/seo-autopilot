@@ -11,6 +11,11 @@ WORKER="${CLOUD_RUN_SERVICE:-fixlist-standard150-worker}"
 SOURCE_SHA="${SOURCE_SHA:-}"
 CONFIRM="${CONFIRM:-}"
 BUILD_SA_INPUT="${CLOUD_BUILD_SERVICE_ACCOUNT:-}"
+OPERATOR_SA="${ADMISSION_OPERATOR_SERVICE_ACCOUNT:-fixlist-admission-operator@${PROJECT}.iam.gserviceaccount.com}"
+OPERATOR_SECRET="${ADMISSION_OPERATOR_SIGNING_SECRET:-fixlist-admission-operator-signing-key}"
+OPERATOR_SECRET_VERSION="${ADMISSION_OPERATOR_SIGNING_VERSION:-}"
+OPERATOR_AUDIENCE="${ADMISSION_OPERATOR_AUDIENCE:-https://fixlist-admission-operator}"
+OPERATOR_ID="${ADMISSION_OPERATOR_ID:-fixlist-cloud-operator}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/lib/release-source-guard.sh
@@ -57,7 +62,23 @@ else: raise SystemExit('worker signing secret missing')
 PY
 )
 
-echo "signing_secret_ref=${SIGNING_SECRET}:${SIGNING_VERSION} (value not read)"
+if [[ "$OPERATOR_SECRET" == "$SIGNING_SECRET" ]]; then
+  echo "Refusing deployment: operator and scan-evidence secret references must differ." >&2
+  exit 2
+fi
+if [[ -z "$OPERATOR_SECRET_VERSION" ]]; then
+  OPERATOR_SECRET_VERSION="$(gcloud secrets versions list "$OPERATOR_SECRET" \
+    --project="$PROJECT" --filter='state=ENABLED' --sort-by='~createTime' \
+    --limit=1 --format='value(name)' | sed -n 's#^.*/versions/\([0-9][0-9]*\)$#\1#p')"
+fi
+if ! printf '%s' "$OPERATOR_SECRET_VERSION" | grep -Eq '^[0-9]+$'; then
+  echo "Refusing deployment: operator signing secret has no enabled numeric version." >&2
+  exit 2
+fi
+gcloud secrets versions describe "$OPERATOR_SECRET_VERSION" --secret="$OPERATOR_SECRET" \
+  --project="$PROJECT" --format='value(state)' | grep -qx ENABLED
+gcloud iam service-accounts describe "$OPERATOR_SA" --project="$PROJECT" >/dev/null
+printf 'coordinator_signing_refs=verified_numeric_pinned_and_distinct\n'
 
 gcloud run deploy "$SERVICE" \
   --project="$PROJECT" \
@@ -73,24 +94,27 @@ gcloud run deploy "$SERVICE" \
   --min-instances=0 \
   --max-instances=2 \
   --timeout=60 \
-  --set-env-vars="FIRESTORE_PROJECT=$PROJECT,FIRESTORE_DATABASE=$DATABASE,ADMISSION_COLLECTION=$COLLECTION,ADMISSION_LEASE_SECONDS=2400,ADMISSION_MAX_CLOCK_SKEW_SECONDS=300,ADMISSION_MAX_BODY_BYTES=65536,FIXLIST_COORDINATOR_SOURCE_SHA=$SOURCE_SHA" \
-  --set-secrets="SCAN_EVIDENCE_SIGNING_KEY=${SIGNING_SECRET}:${SIGNING_VERSION}" \
+  --set-env-vars="FIRESTORE_PROJECT=$PROJECT,FIRESTORE_DATABASE=$DATABASE,ADMISSION_COLLECTION=$COLLECTION,ADMISSION_LEASE_SECONDS=2400,ADMISSION_MAX_CLOCK_SKEW_SECONDS=300,ADMISSION_MAX_BODY_BYTES=65536,FIXLIST_COORDINATOR_SOURCE_SHA=$SOURCE_SHA,ADMISSION_OPERATOR_SERVICE_ACCOUNT=$OPERATOR_SA,ADMISSION_OPERATOR_AUDIENCE=$OPERATOR_AUDIENCE,ADMISSION_OPERATOR_ID=$OPERATOR_ID" \
+  --set-secrets="SCAN_EVIDENCE_SIGNING_KEY=${SIGNING_SECRET}:${SIGNING_VERSION},ADMISSION_OPERATOR_SIGNING_KEY=${OPERATOR_SECRET}:${OPERATOR_SECRET_VERSION}" \
   --quiet
 
 gcloud run services describe "$SERVICE" --project="$PROJECT" --region="$REGION" --format=json > "$COORD_JSON"
-COORD_URL="$(python3 - "$COORD_JSON" "$RUNTIME_SA" "$DATABASE" "$COLLECTION" "$SOURCE_SHA" "$SIGNING_SECRET" "$SIGNING_VERSION" <<'PY'
+COORD_URL="$(python3 - "$COORD_JSON" "$RUNTIME_SA" "$DATABASE" "$COLLECTION" "$SOURCE_SHA" "$SIGNING_SECRET" "$SIGNING_VERSION" "$OPERATOR_SA" "$OPERATOR_AUDIENCE" "$OPERATOR_ID" "$OPERATOR_SECRET" "$OPERATOR_SECRET_VERSION" <<'PY'
 import json,sys
-path,runtime,database,collection,source_sha,secret,version=sys.argv[1:]
+path,runtime,database,collection,source_sha,secret,version,operator_sa,audience,operator_id,operator_secret,operator_version=sys.argv[1:]
 v=json.load(open(path)); url=str(v.get('status',{}).get('url') or '')
 if not url.startswith('https://'): raise SystemExit('coordinator url missing')
 t=v.get('spec',{}).get('template',{}).get('spec',{})
 if t.get('serviceAccountName')!=runtime: raise SystemExit('coordinator runtime SA mismatch')
 c=(t.get('containers') or [{}])[0]; env={i.get('name'):i for i in c.get('env',[])}
-expected={'FIRESTORE_DATABASE':database,'ADMISSION_COLLECTION':collection,'ADMISSION_LEASE_SECONDS':'2400','FIXLIST_COORDINATOR_SOURCE_SHA':source_sha}
+expected={'FIRESTORE_DATABASE':database,'ADMISSION_COLLECTION':collection,'ADMISSION_LEASE_SECONDS':'2400','FIXLIST_COORDINATOR_SOURCE_SHA':source_sha,'ADMISSION_OPERATOR_SERVICE_ACCOUNT':operator_sa,'ADMISSION_OPERATOR_AUDIENCE':audience,'ADMISSION_OPERATOR_ID':operator_id}
 for k,val in expected.items():
     if str(env.get(k,{}).get('value') or '')!=val: raise SystemExit('coordinator env mismatch: '+k)
 ref=env.get('SCAN_EVIDENCE_SIGNING_KEY',{}).get('valueFrom',{}).get('secretKeyRef',{})
 if str(ref.get('name') or '')!=secret or str(ref.get('key') or '')!=version: raise SystemExit('coordinator secret ref mismatch')
+operator_ref=env.get('ADMISSION_OPERATOR_SIGNING_KEY',{}).get('valueFrom',{}).get('secretKeyRef',{})
+if str(operator_ref.get('name') or '')!=operator_secret or str(operator_ref.get('key') or '')!=operator_version: raise SystemExit('coordinator operator secret ref mismatch')
+if operator_secret==secret: raise SystemExit('coordinator signing domains reuse one secret')
 print(url)
 PY
 )"
@@ -110,6 +134,12 @@ HTTP_CODE="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-t
   -X POST -H 'content-type: application/json' --data '{}' "$COORD_URL/claim" || true)"
 if [[ "$HTTP_CODE" != "401" ]]; then
   echo "Refusing completion: unsigned coordinator mutation returned $HTTP_CODE, expected 401." >&2
+  exit 2
+fi
+OPERATOR_HTTP_CODE="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 20 \
+  -X POST -H 'content-type: application/json' --data '{}' "$COORD_URL/ops/barrier/status" || true)"
+if [[ "$OPERATOR_HTTP_CODE" != "401" ]]; then
+  echo "Refusing completion: unauthenticated operator request returned $OPERATOR_HTTP_CODE, expected 401." >&2
   exit 2
 fi
 printf 'ADMISSION_COORDINATOR_READY=%s\n' "$COORD_URL"

@@ -38,6 +38,9 @@ const CONSUMERS = [
   "src/lib/generatedReleaseContract.js",
   "base44/functions/persistDurableScanAuthority/generatedReleaseContract.js",
   "base44/functions/persistLimitedScanResult/generatedReleaseContract.js",
+  "base44/functions/startStandardScanJob/generatedReleaseContract.js",
+  "base44/functions/durableScanWorkerControl/generatedReleaseContract.js",
+  "base44/functions/ownerScanDebugControl/generatedReleaseContract.js",
   "base44/functions/getCustomerScanResult/generatedReleaseContract.js",
   // Not in RELEASE_FUNCTIONS and not reachable from the live app, but they must
   // not be able to ship a stale marker if they are ever republished.

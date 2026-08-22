@@ -15,6 +15,8 @@
 // is deployed and the browser path is retired.
 
 export const ADMISSION_LABEL = "fixlist-admission-coordinator-v1";
+export const ADMISSION_CLAIM_EVIDENCE_LABEL = "fixlist-admission-claim-evidence-v1";
+export const ADMISSION_CLAIM_EVIDENCE_VERSION = "admission_claim_evidence_v1";
 export const ADMISSION_FLAG = "BETA_SCAN_ADMISSION_ENABLED";
 export const COORDINATOR_TIMEOUT_MS = 8_000;
 
@@ -43,12 +45,14 @@ export const SAFE_COORDINATOR_ERRORS = new Set([
   "admission_busy",
   "request_conflict",
   "scan_identity_conflict",
+  "barrier_generation_conflict",
   "invalid_claim_token",
   "claim_expired",
   "claim_not_found",
   "not_terminal_status",
   "scan_not_bound",
   "coordinator_unavailable",
+  "scan_intake_paused",
 ]);
 
 function readEnv(name) {
@@ -92,6 +96,83 @@ export async function admissionSignature(rootSecret, timestamp, payloadText) {
   const derivedKey = await hmacBytes(new TextEncoder().encode(rootSecret), ADMISSION_LABEL);
   const signature = await hmacBytes(derivedKey, `${timestamp}\n${payloadText}`);
   return Array.from(signature, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]),
+    );
+  }
+  return value;
+}
+
+const CLAIM_EVIDENCE_KEYS = Object.freeze([
+  "version",
+  "owner_user_id",
+  "request_id",
+  "barrier_generation",
+  "claim_sequence",
+  "admission_mode",
+  "acceptance_cohort_id",
+  "acceptance_release_id",
+  "acceptance_source_sha",
+  "acceptance_expires_at",
+]);
+
+function exactClaimEvidenceShape(evidence) {
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return false;
+  const keys = Object.keys(evidence).sort();
+  if (keys.length !== CLAIM_EVIDENCE_KEYS.length) return false;
+  const expectedKeys = [...CLAIM_EVIDENCE_KEYS].sort();
+  if (!keys.every((key, index) => key === expectedKeys[index])) return false;
+  const barrier = Number(evidence.barrier_generation);
+  const sequence = Number(evidence.claim_sequence);
+  const expiresAt = evidence.acceptance_expires_at;
+  const mode = String(evidence.admission_mode || "");
+  return evidence.version === ADMISSION_CLAIM_EVIDENCE_VERSION
+    && typeof evidence.owner_user_id === "string"
+    && typeof evidence.request_id === "string"
+    && Number.isInteger(barrier) && barrier >= 0
+    && Number.isInteger(sequence) && sequence >= 0
+    && ["open", "acceptance_only"].includes(mode)
+    && typeof evidence.acceptance_cohort_id === "string"
+    && typeof evidence.acceptance_release_id === "string"
+    && typeof evidence.acceptance_source_sha === "string"
+    && (expiresAt === null || (Number.isInteger(Number(expiresAt)) && Number(expiresAt) >= 0));
+}
+
+export async function admissionClaimEvidenceProof(evidence, rootSecret) {
+  if (!exactClaimEvidenceShape(evidence) || !String(rootSecret || "")) return "";
+  const canonical = JSON.stringify(canonicalize(evidence));
+  const derivedKey = await hmacBytes(
+    new TextEncoder().encode(String(rootSecret)),
+    ADMISSION_CLAIM_EVIDENCE_LABEL,
+  );
+  const proof = await hmacBytes(derivedKey, canonical);
+  return Array.from(proof, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function constantTimeHexEqual(left, right) {
+  const a = String(left || "").toLowerCase();
+  const b = String(right || "").toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(a) || !/^[a-f0-9]{64}$/.test(b)) return false;
+  let mismatch = 0;
+  for (let index = 0; index < a.length; index += 1) {
+    mismatch |= a.charCodeAt(index) ^ b.charCodeAt(index);
+  }
+  return mismatch === 0;
+}
+
+export async function verifyAdmissionClaimEvidence({ evidence, proof, signingKey } = {}) {
+  if (!exactClaimEvidenceShape(evidence)) return false;
+  try {
+    const expected = await admissionClaimEvidenceProof(evidence, signingKey);
+    return constantTimeHexEqual(proof, expected);
+  } catch {
+    return false;
+  }
 }
 
 function normalizeError(value) {
@@ -180,7 +261,7 @@ export async function claimAdmission({ ownerUserId, requestId, requestFingerprin
  * Step 2. Binds the canonical server-created ScanRun id to the winning claim.
  * Requires the exact request id and claim token, so only the winner can bind.
  */
-export async function bindAdmission({ ownerUserId, requestId, claimToken, scanId, ...options } = {}) {
+export async function bindAdmission({ ownerUserId, requestId, claimToken, scanId, barrierGeneration, ...options } = {}) {
   if (!admissionEnabled(options.env ?? readEnv)) {
     return { ok: false, outcomeUnknown: false, failureCode: "admission_disabled" };
   }
@@ -189,6 +270,7 @@ export async function bindAdmission({ ownerUserId, requestId, claimToken, scanId
     request_id: String(requestId ?? ""),
     claim_token: String(claimToken ?? ""),
     scan_id: String(scanId ?? ""),
+    barrier_generation: Number(barrierGeneration),
   }, options);
 }
 
@@ -206,5 +288,25 @@ export async function releaseAdmission({ ownerUserId, scanId, terminalStatus, ..
     owner_user_id: String(ownerUserId ?? ""),
     scan_id: String(scanId ?? ""),
     terminal_status: String(terminalStatus ?? ""),
+  }, options);
+}
+
+export async function statusAdmission({ ownerUserId, ...options } = {}) {
+  if (!admissionEnabled(options.env ?? readEnv)) {
+    return { ok: false, outcomeUnknown: false, failureCode: "admission_disabled" };
+  }
+  return callCoordinator("/status", {
+    owner_user_id: String(ownerUserId ?? ""),
+  }, options);
+}
+
+export async function satisfyUnboundAdmission({ ownerUserId, requestId, barrierGeneration, ...options } = {}) {
+  if (!admissionEnabled(options.env ?? readEnv)) {
+    return { ok: false, outcomeUnknown: false, failureCode: "admission_disabled" };
+  }
+  return callCoordinator("/satisfy-unbound", {
+    owner_user_id: String(ownerUserId ?? ""),
+    request_id: String(requestId ?? ""),
+    barrier_generation: Number(barrierGeneration),
   }, options);
 }

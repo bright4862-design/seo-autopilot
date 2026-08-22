@@ -3,9 +3,10 @@
 // Run that generator after changing either input; CI fails on drift.
 
 export const RELEASE_CONTRACT_SCHEMA_VERSION = "beta_crawler_revision_v1";
-export const RELEASE_FINGERPRINT = "e5088c4055cb04e9";
+export const RELEASE_FINGERPRINT = "6e0368d4ac5d2a6b";
 export const RELEASE_STATUS = "candidate";
 export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
+  "admission_reconciliation_version": "admission_reconciliation_v1_exact_generation_barrier",
   "archetype_classifier_version": "archetype_classifier_v9_local_business_hospitality",
   "artifact_filter_version": "artifact_filter_v4_wordpress_route_noise",
   "authority_seal_version": "scan_evidence_hmac_sha256_v1",

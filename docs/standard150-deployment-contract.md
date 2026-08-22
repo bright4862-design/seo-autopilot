@@ -66,8 +66,10 @@ Base44-hosted. Supplied through Base44 function environment, **not** Cloud Build
 | `SCAN_DISPATCH_GATEWAY_URL` | **required for keyless dispatch** | `cloudTasks.js` `createTask()` | Unset selects the key-based route below. Set, it is the only enqueue path. |
 | `SCAN_EVIDENCE_SIGNING_KEY` | **required with the gateway** | `cloudTasks.js` `createTaskViaGateway()` | `dispatch_gateway_signing_key_missing`. Fail-closed before any network call. |
 | `BETA_SCAN_ADMISSION_ENABLED` | **required; default-off** | `admission.js`, package-local `admissionClient.js` | Any value other than exact `true` refuses new admission. No ScanRun is created. |
+| `BETA_SCAN_INTAKE_ENABLED` | **required; independently default-off** | `startStandardScanJob/admission.js` | Any value other than exact `true` refuses new customer intake before the coordinator is called; disabling it does not disable terminal release or reconciliation. |
 | `BETA_COHORT_ALLOWED_USER_IDS` | unrelated to scan admission; checkout-only legacy cohort input | not read by `startStandardScanJob/admission.js` | Scan membership is determined by the exact owner-bound active `Access` entitlement. The static cohort list must not be a second scan gate. |
 | `SCAN_ADMISSION_COORDINATOR_URL` | **required when admission is enabled** | package-local `admissionClient.js` | Admission fails closed; no new ScanRun is created or bound. |
+| `FIXLIST_RELEASE_SOURCE_SHA` | **required for reconciliation** | `durableScanWorkerControl` | A reconciliation sweep refuses before reading or mutating ScanRuns unless it can register the exact 40-character release source with the coordinator. |
 | `GCP_SERVICE_ACCOUNT_KEY` | **required only without the gateway** | `cloudTasks.js` `accessToken()` | `tasks_credentials_not_configured`. Distinct from a malformed key, which yields a `tasks_key_*` code, or `tasks_token_mint_failed` when the cause is not recognised. |
 
 ### Enqueue route selection
@@ -309,3 +311,18 @@ Deployment/verification scripts:
 - `scripts/verify-standard150-reconciler.sh` — read-only verification of enabled
   state, five-minute schedule, exact `/scan-reconcile` target, POST method,
   service account and OIDC audience.
+
+## Base44 owner controls
+
+Public intake and Base44-to-coordinator connectivity are independent switches.
+The exact-main scripts mutate only their named switch and verify the Base44
+owner identity before doing so. Connectivity may change only after the signed
+global barrier snapshot proves zero active claims, zero bound admissions and no
+live reconciliation invocation.
+
+The corresponding workflows run only on the protected
+`fixlist-base44-owner` self-hosted runner (or the scripts may be run directly
+from the authenticated owner workstation). Base44 CLI authentication uses a
+device-code session stored under the owner's home directory. Never copy that
+refresh-token-bearing auth file into a hosted Actions secret; the scripts use
+the existing session, verify it with `whoami`, and fail closed when it is absent.

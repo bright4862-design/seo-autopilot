@@ -244,11 +244,202 @@
     },
     "admission_access_id": {
       "type": "string",
-      "description": "Server-owned Access lease record that admitted this durable attempt."
+      "description": "Durable server-owned Access entitlement provenance for the admitted scan. This is not coordinator lease state and is never cleared."
     },
     "admission_claim_token": {
       "type": "string",
-      "description": "Server-owned fencing token binding this row to its admission lease."
+      "description": "Reserved legacy field. New admission paths never persist the coordinator bearer claim token."
+    },
+    "admission_barrier_generation": {
+      "type": "number",
+      "description": "Server-owned global claim-barrier generation returned by the coordinator for this admitted request.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "admission_claim_sequence": {
+      "type": "number",
+      "description": "Server-owned monotonic coordinator claim sequence used to prove that another request generation is newer.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "admission_mode": {
+      "type": "string",
+      "enum": [
+        "open",
+        "acceptance_only"
+      ],
+      "description": "Server-owned coordinator admission mode under which the request was claimed.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "admission_acceptance_cohort_id": {
+      "type": "string",
+      "description": "Server-owned acceptance cohort identifier; empty for ordinary public claims.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "admission_acceptance_release_id": {
+      "type": "string",
+      "description": "Immutable release identity attached by the coordinator to an acceptance-only claim.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "admission_acceptance_source_sha": {
+      "type": "string",
+      "description": "Exact source SHA attached by the coordinator to an acceptance-only claim.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "admission_acceptance_expires_at": {
+      "type": "number",
+      "description": "Immutable Unix expiry for the server-authorized acceptance-only cohort claim.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "admission_cohort_evidence_version": {
+      "type": "string",
+      "description": "Version of the coordinator-signed acceptance cohort evidence attached to this claim.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "admission_cohort_evidence_proof": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "Coordinator HMAC proof binding the immutable server-derived acceptance cohort evidence.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "admission_release_state": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "released",
+        "superseded",
+        "satisfied_unbound"
+      ],
+      "description": "Server-owned reconciliation state for the coordinator generation associated with this scan. A missing value on a legacy server-admitted row is treated as pending.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "admission_release_reconciled_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Server-owned time at which an exact coordinator release obligation was durably satisfied.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "admission_release_last_attempt_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Server-owned time of the latest bounded reconciliation attempt, used for starvation-free retry rotation.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "admission_release_coordinator_request_id": {
+      "type": "string",
+      "description": "Sanitized coordinator request generation observed when the release obligation was reconciled.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "admission_release_outcome": {
+      "type": "string",
+      "description": "Sanitized closed-set coordinator or reconciliation outcome; never contains an upstream response body.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "admission_release_failure_code": {
+      "type": "string",
+      "description": "Sanitized retryable coordinator failure code for operator diagnostics; contains no secret material.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "admission_reconciliation_version": {
+      "type": "string",
+      "description": "Generated release-contract marker identifying the durable admission reconciliation implementation.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
     },
     "resumable": {
       "type": "boolean",

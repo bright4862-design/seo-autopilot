@@ -145,7 +145,6 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
           test -z "$(git status --porcelain --untracked-files=all)"
-          git fetch origin main --quiet
           test "$(git rev-parse origin/main)" = "${{ github.sha }}"
 
       - name: Validate canonical gateway before deployment

@@ -471,6 +471,7 @@ def fix_list_belongs_to_scan(fix_list: dict[str, Any], scan: dict[str, Any]) -> 
 def build_local_review(result: dict[str, Any]) -> dict[str, Any]:
     """Run the exact Python review pipeline inside the durable worker."""
     from .beta_revision import live_revision
+    from .coverage_authority import attach_coverage_authority_evidence
     from .evidence_quality import apply_evidence_quality_gate
     from .repair_contract_v2 import apply_canonical_repair_contract
     from .review import run_review
@@ -481,6 +482,7 @@ def build_local_review(result: dict[str, Any]) -> dict[str, Any]:
     review = apply_trust_discovery_gate(review, result)
     review = apply_review_evidence_calibration(review, result)
     review = apply_evidence_quality_gate(review, result)
+    review = attach_coverage_authority_evidence(review, result)
     review.update({
         "success": True,
         "ai_review_backend": "python_review_api",

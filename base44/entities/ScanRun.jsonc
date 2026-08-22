@@ -195,6 +195,16 @@
     "evidence_quality_gate_version": {
       "type": "string"
     },
+    "coverage_authority_evidence_version": {
+      "type": "string",
+      "description": "Version of the coverage/inventory assessment sealed with this scan."
+    },
+    "coverage_authority_evidence": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "description": "Diagnostic record of how much of the site the crawl saw and whether anything positively established the site's size. Does not participate in authority."
+    },
     "no_high_confidence_findings": {
       "type": "boolean",
       "default": false

@@ -9,6 +9,7 @@ from fastapi import Body, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from .beta_revision import SCANNER_BUILD_REVISION, live_revision
+from .coverage_authority import attach_coverage_authority_evidence
 from .evidence_quality import EVIDENCE_QUALITY_GATE_VERSION, apply_evidence_quality_gate
 from .grok_chat import (
     GROK_CHAT_VERSION,
@@ -366,6 +367,7 @@ async def review(payload: dict[str, Any] = Body(default_factory=dict), x_scanner
         result = apply_trust_discovery_gate(result, payload)
         result = apply_review_evidence_calibration(result, payload)
         result = apply_evidence_quality_gate(result, payload)
+        result = attach_coverage_authority_evidence(result, payload)
         result["beta_revision_fingerprint"] = live_revision()["fingerprint"]
     except Exception as exc:  # noqa: BLE001 - customer-safe envelope, full detail logged
         return timer.failed(exc)

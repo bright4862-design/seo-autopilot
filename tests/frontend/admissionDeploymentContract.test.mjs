@@ -284,13 +284,21 @@ test("worker candidate is exact-SHA, explicit-build-SA, private and zero-traffic
 });
 
 test("gateway source deploy uses exact checkout, explicit build SA and both queues", () => {
-  assert.match(gatewayDeploy, /HEAD_SHA/);
-  assert.match(gatewayDeploy, /REMOTE_MAIN_SHA/);
+  assert.match(
+    gatewayDeploy,
+    /fixlist_require_exact_main "\$REPO_ROOT" "\$SOURCE_SHA" "\$CONFIRM"/,
+  );
   assert.match(gatewayDeploy, /--build-service-account="\$BUILD_SA_RESOURCE"/);
   assert.match(gatewayDeploy, /SCAN_DRAIN_QUEUE_PATH/);
   assert.match(gatewayBootstrap, /DRAIN_QUEUE="fixlist-standard150-drain"/);
   assert.ok((gatewayBootstrap.match(/roles\/cloudtasks\.enqueuer/g) || []).length >= 2);
   assert.match(gatewayBootstrap, /Allow the WIF operator to use only the resolved Cloud Build identity/);
+});
+
+test("gateway deployment uses the credential-free exact-main source guard", () => {
+  assert.match(gatewayDeploy, /source .*release-source-guard\.sh/);
+  assert.match(gatewayDeploy, /fixlist_require_exact_main/);
+  assert.doesNotMatch(gatewayDeploy, /git fetch origin main/);
 });
 
 test("Cloud Operator may redeploy the coordinator after bootstrap but cannot run the owner bootstrap", () => {

@@ -311,6 +311,19 @@ test("Cloud Operator invokes the allowlisted shell through bash so file mode can
   assert.match(workflow, /run: bash \.\/scripts\/fixlist-cloud-operator\.sh/);
 });
 
+test("the guarded staged-worker promotion carries the exact main source into the mutating operator", () => {
+  const promoteStep = workflow.match(
+    /- name: Promote exact candidate with automatic rollback on failed post-check[\s\S]*?(?=\n      - name: Publish exact promotion status)/,
+  )?.[0] || "";
+
+  assert.ok(promoteStep, "guarded staged-worker promotion step is missing");
+  assert.match(
+    promoteStep,
+    /SOURCE_SHA: \$\{\{ steps\.command\.outputs\.source_sha \}\}/,
+    "promote-worker fails closed unless the owner-bound main SHA reaches require_exact_main_owner_source",
+  );
+});
+
 test("credential-free release checkouts never attempt a network fetch", () => {
   for (const ownerWorkflow of [workflow, intakeWorkflow, connectivityWorkflow]) {
     assert.match(ownerWorkflow, /persist-credentials: false/);

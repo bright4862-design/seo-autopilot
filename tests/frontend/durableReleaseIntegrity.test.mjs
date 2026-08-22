@@ -23,6 +23,7 @@ const WORKER_SRC = "scanner-api/app/main.py";
 
 const tasksSource = fs.readFileSync(TASKS, "utf8");
 const workerBuild = fs.readFileSync(WORKER_BUILD, "utf8");
+const workerDockerfile = fs.readFileSync("Dockerfile", "utf8");
 const workerSrc = fs.readFileSync(WORKER_SRC, "utf8");
 
 // Comment-stripped view: documentation may name a thing precisely to forbid it.
@@ -178,6 +179,38 @@ test("Cloud Build proves the uploaded worker bytes match the claimed commit", ()
     buildCode,
     /args:\s*\["build",\s*"--tag",[^\n]*,\s*"\."\]/,
     "the uploaded workspace root must not remain the Docker build source",
+  );
+});
+
+test("the durable worker image contains the cross-runtime fingerprint input at its runtime path", () => {
+  const modulePath = "/app/app/beta_revision.py";
+  const repoRoot = path.posix.dirname(
+    path.posix.dirname(path.posix.dirname(modulePath)),
+  );
+  const runtimeInput = path.posix.join(
+    repoRoot,
+    "data/cross-runtime-release-components.json",
+  );
+
+  // beta_revision.py resolves parents[2] from /app/app/beta_revision.py, so
+  // the file belongs at /data. COPY data ./data would silently put it at
+  // /app/data and every /health, /revision, and /scan-job fingerprint lookup
+  // would fail at request time.
+  assert.equal(runtimeInput, "/data/cross-runtime-release-components.json");
+  assert.match(
+    workerBuild,
+    /data\/cross-runtime-release-components\.json/,
+    "the exact release-components file must be a verified build input",
+  );
+  assert.match(
+    workerBuild,
+    /cp .*\/workspace\/data\/cross-runtime-release-components\.json .*\$verified_context\/data\/cross-runtime-release-components\.json/,
+    "the verified Docker context must include the release-components file",
+  );
+  assert.match(
+    workerDockerfile,
+    /^COPY data\/cross-runtime-release-components\.json \/data\/cross-runtime-release-components\.json$/m,
+    "the image must place the file at /data, not beneath WORKDIR /app",
   );
 });
 

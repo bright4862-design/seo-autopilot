@@ -642,6 +642,7 @@ jobs:
           REVISION: ${{ steps.candidate.outputs.revision }}
           ROLLBACK_REVISION: ${{ steps.candidate.outputs.rollback_revision }}
           QUEUE_STATE_BEFORE: ${{ steps.candidate.outputs.queue_state }}
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
         shell: bash
         run: |
           set -euo pipefail

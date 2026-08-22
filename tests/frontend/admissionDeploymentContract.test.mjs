@@ -114,6 +114,17 @@ test("owner bootstraps grant exact-secret payload access and a metadata-only cus
   assert.doesNotMatch(wifBootstrap, /roles\/secretmanager\.viewer/);
 });
 
+test("WIF provider display names stay within Google's 32-character limit", () => {
+  const names = [...wifBootstrap.matchAll(
+    /providers create-oidc[\s\S]*?--display-name="([^"]+)"/g,
+  )].map(([, name]) => name);
+
+  assert.equal(names.length, 2, "both WIF providers must declare a display name");
+  for (const name of names) {
+    assert.ok(name.length <= 32, `WIF provider display name is too long (${name.length}): ${name}`);
+  }
+});
+
 /**
  * The access token is produced by a workflow step and consumed by a script in
  * another language, so nothing but this check reads both ends. Asserting each

@@ -102,7 +102,7 @@ if ! gcloud secrets describe "$ADMISSION_OPERATOR_SECRET" --project="$PROJECT" >
     --replication-policy=automatic --quiet
 fi
 if ! gcloud secrets versions list "$ADMISSION_OPERATOR_SECRET" --project="$PROJECT" \
-  --filter='state=ENABLED' --format='value(name)' --limit=1 | grep -Eq '/versions/[0-9]+$'; then
+  --filter='state:ENABLED' --format='value(name)' --limit=1 | grep -Eq '(^|/versions/)[0-9]+$'; then
   OPERATOR_SECRET_TMP="$(mktemp)"
   chmod 600 "$OPERATOR_SECRET_TMP"
   openssl rand -base64 48 > "$OPERATOR_SECRET_TMP"

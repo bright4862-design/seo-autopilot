@@ -66,6 +66,30 @@ if [[ "$OPERATOR_SECRET" == "$SIGNING_SECRET" ]]; then
   echo "Refusing deployment: operator and scan-evidence secret references must differ." >&2
   exit 2
 fi
+# The release operator is intentionally not allowed to enumerate Secret
+# Manager versions. Reuse the exact numeric reference already pinned on the
+# deployed coordinator before falling back to owner/bootstrap discovery.
+if [[ -z "$OPERATOR_SECRET_VERSION" ]] && gcloud run services describe "$SERVICE" \
+  --project="$PROJECT" --region="$REGION" --format=json > "$COORD_JSON" 2>/dev/null; then
+  OPERATOR_SECRET_VERSION="$(python3 - "$COORD_JSON" "$OPERATOR_SECRET" <<'PY'
+import json, sys
+
+value = json.load(open(sys.argv[1]))
+expected_name = sys.argv[2]
+containers = value.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+if containers:
+    for item in containers[0].get('env', []):
+        if item.get('name') != 'ADMISSION_OPERATOR_SIGNING_KEY':
+            continue
+        ref = item.get('valueFrom', {}).get('secretKeyRef', {})
+        name = str(ref.get('name') or '')
+        version = str(ref.get('key') or '')
+        if name == expected_name and version.isdigit():
+            print(version)
+        break
+PY
+)"
+fi
 if [[ -z "$OPERATOR_SECRET_VERSION" ]]; then
   OPERATOR_SECRET_VERSION="$(gcloud secrets versions list "$OPERATOR_SECRET" \
     --project="$PROJECT" --filter='state=ENABLED' --sort-by='~createTime' \

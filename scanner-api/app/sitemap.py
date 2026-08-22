@@ -48,6 +48,10 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
     diagnostics.setdefault("sitemap_fetch_limit_reached", False)
     diagnostics.setdefault("sitemap_budget_exhausted", False)
     diagnostics.setdefault("sitemap_failure_reason_buckets", {})
+    # Per-source outcomes. Inventory proof is judged per source: a failed
+    # speculative /sitemap.xml probe must not invalidate a robots-declared
+    # sitemap that actually worked, so both observations are preserved.
+    diagnostics.setdefault("sitemap_sources", [])
     request_interval = max(0.0, float(min_request_interval_seconds or 0.0))
     diagnostics["sitemap_request_interval_seconds"] = request_interval
     request_pacer = _SitemapRequestPacer(request_interval)
@@ -68,6 +72,7 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
     except Exception:
         pass
 
+    declared_roots = set(dedupe(roots))
     roots.append(f"{origin}/sitemap.xml")
 
     child_sitemaps: list[str] = []
@@ -80,6 +85,7 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
     for root in dedupe(roots):
         if _stop_sitemap_discovery(fetched, fetch_limit, deadline, diagnostics):
             break
+        failures_before = _sitemap_failure_total(diagnostics)
         locs = await fetch_sitemap_locs(
             client,
             root,
@@ -88,6 +94,13 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
             deadline=deadline,
             diagnostics=diagnostics,
             pacer=request_pacer,
+        )
+        _record_sitemap_source(
+            diagnostics,
+            url=root,
+            declared=root in declared_roots,
+            loc_count=len(locs),
+            failed=_sitemap_failure_total(diagnostics) > failures_before,
         )
         bucket = family_urls.setdefault(f"root:{sitemap_family_key(root)}", [])
         for loc in locs:
@@ -170,6 +183,38 @@ def _record_sitemap_failure(diagnostics: dict | None, reason: str) -> None:
         return
     buckets = diagnostics.setdefault("sitemap_failure_reason_buckets", {})
     buckets[reason] = int(buckets.get(reason, 0)) + 1
+
+
+def _sitemap_failure_total(diagnostics: dict | None) -> int:
+    if diagnostics is None:
+        return 0
+    buckets = diagnostics.get("sitemap_failure_reason_buckets") or {}
+    return sum(int(value) for value in buckets.values())
+
+
+def _record_sitemap_source(
+    diagnostics: dict | None,
+    *,
+    url: str,
+    declared: bool,
+    loc_count: int,
+    failed: bool,
+) -> None:
+    """One observation per inventory source, kept whatever the others did."""
+    if diagnostics is None:
+        return
+    if failed:
+        outcome = "failed"
+    elif loc_count > 0:
+        outcome = "urls"
+    else:
+        outcome = "empty"
+    diagnostics.setdefault("sitemap_sources", []).append({
+        "url": str(url),
+        "source": "robots_declared" if declared else "speculative_default",
+        "outcome": outcome,
+        "loc_count": int(loc_count),
+    })
 
 
 def _stop_sitemap_discovery(fetched: set[str], fetch_limit: int, deadline: float | None, diagnostics: dict | None) -> bool:

@@ -1,5 +1,9 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.41";
 import {
+  buildLimitedResultSnapshot,
+  verifyLimitedResultProof,
+} from "./limitedResultIntegrity.js";
+import {
   authoritySnapshotFromRows,
   buildCustomerProjection,
   buildScanHistoryProjection,
@@ -89,6 +93,56 @@ Deno.serve(async (req) => {
         fixItems: [],
         fullAccess: false,
         authorityVerified: false,
+      }));
+    }
+
+    // A limited result is a real, verified record of a scan that saw useful
+    // evidence but not enough to be authoritative. It is verified against its
+    // own integrity domain -- never the authority seal -- and is returned with
+    // authority_verified false so nothing downstream can promote it.
+    if (run.status === "limited") {
+      const integrityProof = cleanProof(run.result_integrity_proof);
+      if (!integrityProof || run.release_gate_eligible === true || cleanProof(run.authority_proof)) {
+        throw new RequestProblem(409, "limited_result_invalid", "This saved result could not be verified.");
+      }
+      const limitedFixList = await loadLimitedFixList(serviceEntities.FixList, run, user, integrityProof);
+      const limitedFixItems = await loadLimitedFixItems(serviceEntities.FixItem, limitedFixList, run, integrityProof);
+      const limitedSnapshot = buildLimitedResultSnapshot({
+        identity: {
+          scan_id: run.id,
+          project_id: run.project_id,
+          owner_user_id: user.id,
+          request_id: run.request_id,
+          attempt_count: run.attempt_count,
+          normalized_domain: run.normalized_domain,
+        },
+        scan: run,
+        review: {
+          scan_status: run.scan_status,
+          health_score: run.health_score,
+          health_grade: run.health_grade,
+          limitation: run.limitation || run.status_detail,
+          coverage_state: run.coverage_authority_evidence?.assessment,
+          coverage_reasons: run.coverage_authority_evidence?.reasons,
+          coverage_authority_version: run.coverage_authority_evidence?.coverage_authority_version,
+          recommendations: limitedFixItems,
+        },
+        now: cleanText(run.result_integrity_sealed_at, 80),
+      });
+      const secret = String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || "");
+      if (!secret) {
+        throw new RequestProblem(503, "result_authority_unavailable", "Verified results are temporarily unavailable.");
+      }
+      if (!await verifyLimitedResultProof(limitedSnapshot, secret, integrityProof)) {
+        throw new RequestProblem(409, "limited_result_invalid", "This saved result no longer matches its integrity proof.");
+      }
+      return Response.json(buildCustomerProjection({
+        run,
+        fixList: limitedFixList,
+        fixItems: limitedFixItems,
+        fullAccess: true,
+        authorityVerified: false,
+        resultIntegrityVerified: true,
       }));
     }
 
@@ -205,6 +259,32 @@ async function loadAccessRows(accessEntity, user) {
   } catch {
     throw new RequestProblem(503, "paid_access_unavailable", "Access could not be confirmed. Please retry.");
   }
+}
+
+async function loadLimitedFixList(fixListEntity, run, user, proof) {
+  const id = cleanId(run.fix_list_id);
+  const fixList = id ? await fixListEntity.get(id).catch(() => null) : null;
+  if (
+    !fixList
+    || fixList.is_authoritative === true
+    || cleanProof(fixList.result_integrity_proof) !== proof
+    || cleanId(fixList.scan_run_id) !== cleanId(run.id)
+    || cleanId(fixList.owner_user_id) !== cleanId(user.id)
+  ) {
+    throw new RequestProblem(409, "limited_result_invalid", "This saved result could not be verified.");
+  }
+  return fixList;
+}
+
+async function loadLimitedFixItems(fixItemEntity, fixList, run, proof) {
+  const items = await fixItemEntity
+    .filter({ fix_list_id: cleanId(fixList.id) }, "created_date", MAX_FIX_ITEMS)
+    .catch(() => []);
+  const owned = (items || []).filter((item) => cleanProof(item?.result_integrity_proof) === proof);
+  if (owned.length !== (items || []).length) {
+    throw new RequestProblem(409, "limited_result_invalid", "This saved result is incomplete.");
+  }
+  return owned;
 }
 
 async function loadFixList(fixListEntity, run, user, proof) {

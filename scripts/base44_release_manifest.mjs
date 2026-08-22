@@ -39,6 +39,7 @@ export const RELEASE_FUNCTIONS = [
   "startStandardScanJob",
   "durableScanWorkerControl",
   "persistDurableScanAuthority",
+  "persistLimitedScanResult",
   "getCustomerScanResult",
   "createAccessCheckout",
   "stripeWebhook",

@@ -294,6 +294,10 @@
     },
     "comparison_profile_version": {
       "type": "string"
+    },
+    "result_integrity_proof": {
+      "type": "string",
+      "description": "Server-only HMAC over the limited result. Cryptographically unusable as an authority proof."
     }
   },
   "required": [

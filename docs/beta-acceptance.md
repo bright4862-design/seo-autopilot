@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `fdd5906461a468d3` |
+| Candidate fingerprint | `d23f6a2ad97da082` |
 | Classifier | `archetype_classifier_v9_local_business_hospitality` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,13 +15,21 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The shipping code is
-fingerprint `fdd5906461a468d3` with classifier
+fingerprint `d23f6a2ad97da082` with classifier
 `archetype_classifier_v9_local_business_hospitality`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded candidate was `fbb06c2634b74ca6`. The fingerprint
-moved to `fdd5906461a468d3` when the authority snapshot attestation moved to
+The immediately superseded candidate was `fdd5906461a468d3`. The fingerprint
+moved to `d23f6a2ad97da082` when Patch C made the shared coverage decision
+authoritative: a materially thin sample (38/3,689, 40/1,374) or an
+inventory-unproven crawl is now provisional and release-ineligible instead of
+sealing as complete. This is a customer-visible scoring and authority change, so
+the freeze rule requires a new production acceptance gate before it can be
+anything other than a candidate.
+
+The candidate before that was `fbb06c2634b74ca6`, superseded when the authority
+snapshot attestation moved to
 `standard_review_snapshot_hmac_v2_coverage`. Patch B had added coverage fields
 to the v1 HMAC payload, which changes the payload for rows sealed before those
 fields existed and would have made every already-sealed result fail

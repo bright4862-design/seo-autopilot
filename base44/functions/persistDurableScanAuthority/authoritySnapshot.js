@@ -27,6 +27,11 @@ export const AUTHORITY_CONTRACT = Object.freeze({
   beta_revision_fingerprint: RELEASE_FINGERPRINT,
 });
 
+// The only coverage verdict that can carry authority. Anything else -- and
+// anything unrecognised or absent -- is refused here, independently of the
+// summary boolean Python derives from the same assessment.
+export const AUTHORITATIVE_COVERAGE_STATE = "sufficient";
+
 export function firstFailedAuthorityPredicate(scan, review) {
   const firstPage = firstArray([scan?.crawled_pages, scan?.pages, scan?.scanned_pages])[0] || {};
   const predicates = [
@@ -45,8 +50,19 @@ export function firstFailedAuthorityPredicate(scan, review) {
     ["release_gate_eligible", review?.release_gate_eligible === true],
     ["score_is_provisional", review?.score_is_provisional !== true],
     ["evidence_quality_blocking", review?.evidence_quality_blocking !== true],
+    // Base44 must be able to refuse a thin crawl on the coverage evidence
+    // itself. Trusting release_gate_eligible alone leaves the seal one stale
+    // worker or hand-built envelope away from covering a limited scan.
+    ["coverage_state", coverageAssessment(review).state === AUTHORITATIVE_COVERAGE_STATE],
+    ["coverage_authority_version", Boolean(text(coverageAssessment(review).coverage_authority_version, 160))],
   ];
   return predicates.find(([, passed]) => !passed)?.[0] || "";
+}
+
+function coverageAssessment(review) {
+  const fingerprint = review?.site_fingerprint;
+  const assessment = fingerprint && typeof fingerprint === "object" ? fingerprint.coverage_assessment : null;
+  return assessment && typeof assessment === "object" ? assessment : {};
 }
 
 export function isAuthorityEligible(scan, review) {

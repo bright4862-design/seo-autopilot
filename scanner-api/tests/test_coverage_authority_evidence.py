@@ -119,7 +119,8 @@ def complete_result() -> dict:
 
 
 def test_the_assessment_is_versioned():
-    assert COVERAGE_AUTHORITY_EVIDENCE_VERSION == "coverage_authority_evidence_v1"
+    """Bumped in Patch C: the assessment now decides rather than only describes."""
+    assert COVERAGE_AUTHORITY_EVIDENCE_VERSION == "coverage_authority_evidence_v2_authoritative"
 
 
 def test_the_assessment_reports_the_full_inventory_chain():

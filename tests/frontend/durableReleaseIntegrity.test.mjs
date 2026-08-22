@@ -49,6 +49,9 @@ test("every customer-release function package is portable, closed, pinned and sy
     "startStandardScanJob",
     "durableScanWorkerControl",
     "persistDurableScanAuthority",
+    // A limited result gets its own package rather than a provisional branch
+    // inside the authority function: there is no authority seal in it to weaken.
+    "persistLimitedScanResult",
     "getCustomerScanResult",
     "createAccessCheckout",
     "stripeWebhook",

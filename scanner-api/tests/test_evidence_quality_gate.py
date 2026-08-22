@@ -28,6 +28,16 @@ def payload(pages: list[dict]) -> dict:
             "sitemap_budget_exhausted": False,
             "sitemap_fetch_limit_reached": False,
             "failed_fetch_count": 0,
+            # A proven small site needs an inventory source that actually
+            # worked. Queue exhaustion alone is equally consistent with
+            # discovery having been blocked, which is how a real multi-page
+            # site (Habito) passed as a proven one-page site in production.
+            "sitemap_sources": [{
+                "url": "https://example.com/sitemap.xml",
+                "source": "robots_declared",
+                "outcome": "urls",
+                "loc_count": len(pages),
+            }],
         },
     }
 
@@ -86,9 +96,18 @@ def test_meaningful_one_page_site_remains_supported():
 
 
 def test_single_page_cannot_claim_small_site_when_discovery_is_unproven():
+    """The Habito shape: one page, and the sitemap that would have proved the
+    inventory did not answer. Queue exhaustion is no longer the knob -- an
+    exhausted frontier is equally consistent with discovery being blocked."""
     pages = [page("/", words=420, family="homepage", intent="money_or_conversion")]
     collapsed = payload(pages)
     collapsed["crawl_timing"]["queue_exhausted"] = False
+    collapsed["crawl_timing"]["sitemap_sources"] = [{
+        "url": "https://example.com/sitemap.xml",
+        "source": "speculative_default",
+        "outcome": "failed",
+        "loc_count": 0,
+    }]
     result = apply_evidence_quality_gate(complete_result(), collapsed)
     assert result["evidence_quality_state"] == "insufficient_discovery"
     assert result["discovery_quality_state"] == "single_page_inventory_unproven"

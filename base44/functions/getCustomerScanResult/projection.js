@@ -1,3 +1,4 @@
+import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 const ENCODER = new TextEncoder();
 
 export const ACCESS_APP_ID = "6a498732ec779dfaaeab0e53";
@@ -246,9 +247,13 @@ export function evaluatePaidAccess({ rows, user }) {
     : { ok: false, failureCode: "paid_access_required" };
 }
 
-export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, authorityVerified }) {
-  const canReadResult = fullAccess === true && authorityVerified === true;
-  const canonical = canReadResult
+export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, authorityVerified, resultIntegrityVerified }) {
+  // A verified limited result is readable and is never authoritative. The two
+  // flags stay separate all the way to the customer so nothing downstream can
+  // mistake "we verified this provisional record" for "this is authoritative".
+  const limitedVerified = fullAccess === true && resultIntegrityVerified === true;
+  const canReadResult = fullAccess === true && (authorityVerified === true || limitedVerified);
+  const canonical = fullAccess === true && authorityVerified === true
     && fixList?.repair_contract_version === REPAIR_CONTRACT_V2
     && fixList?.repair_snapshot_contract_version === REPAIR_CONTRACT_V2
     && fixList?.repair_snapshot_contract_complete === true;
@@ -259,7 +264,9 @@ export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, au
   return {
     success: true,
     access: fullAccess === true ? "full" : "locked",
-    authority_verified: canReadResult,
+    authority_verified: fullAccess === true && authorityVerified === true,
+    result_integrity_verified: limitedVerified,
+    release_contract_current: canReadResult && run?.beta_revision_fingerprint === RELEASE_FINGERPRINT,
     scan_id: text(run?.id, 160),
     fix_list_id: canReadResult ? text(fixList?.id, 160) : "",
     run: sanitizeRun(run, { detailed: canReadResult }),

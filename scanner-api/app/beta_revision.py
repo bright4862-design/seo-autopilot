@@ -74,7 +74,10 @@ def collect_component_versions() -> dict[str, str]:
     """
     from .artifact_filter import ARTIFACT_FILTER_VERSION
     from .canonical_validation import CANONICAL_TARGET_EVIDENCE_VERSION
-    from .coverage_authority import COVERAGE_AUTHORITY_EVIDENCE_VERSION
+    from .coverage_authority import (
+        COVERAGE_AUTHORITY_EVIDENCE_VERSION,
+        COVERAGE_AUTHORITY_VERSION,
+    )
     from .crawler_acceptance import CRAWLER_ACCEPTANCE_VERSION
     from .evidence_quality import EVIDENCE_QUALITY_GATE_VERSION
     from .extract import CANONICAL_HREF_RESOLUTION_VERSION, ROUTE_BOUNDARY_CLASSIFIER_VERSION
@@ -135,6 +138,7 @@ def collect_component_versions() -> dict[str, str]:
         "crawler_acceptance_version": CRAWLER_ACCEPTANCE_VERSION,
         "evidence_quality_gate_version": EVIDENCE_QUALITY_GATE_VERSION,
         "coverage_authority_evidence_version": COVERAGE_AUTHORITY_EVIDENCE_VERSION,
+        "coverage_authority_version": COVERAGE_AUTHORITY_VERSION,
         "frontier_policy_version": FRONTIER_POLICY_VERSION,
     }
 

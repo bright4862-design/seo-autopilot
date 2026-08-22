@@ -115,6 +115,14 @@
         "type": "string"
       },
       "default": []
+    },
+    "result_integrity_version": {
+      "type": "string",
+      "description": "Version of the limited-result integrity contract, when this row is a verified limited result."
+    },
+    "result_integrity_proof": {
+      "type": "string",
+      "description": "Server-only HMAC over the limited result. Cryptographically unusable as an authority proof."
     }
   },
   "required": [

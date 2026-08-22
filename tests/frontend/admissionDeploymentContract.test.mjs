@@ -61,6 +61,17 @@ test("coordinator source deployment pins exact main, build identity, database, s
   assert.match(coordinatorMain, /"source_sha": SOURCE_SHA/);
 });
 
+test("coordinator redeploy reuses the deployed numeric operator-secret reference before enumeration", () => {
+  const serviceLookup = deployCoordinator.indexOf('gcloud run services describe "$SERVICE"');
+  const operatorRef = deployCoordinator.indexOf("ADMISSION_OPERATOR_SIGNING_KEY");
+  const versionList = deployCoordinator.indexOf('gcloud secrets versions list "$OPERATOR_SECRET"');
+  assert.ok(serviceLookup >= 0, "existing coordinator lookup is missing");
+  assert.ok(operatorRef > serviceLookup, "operator secret reference is not read from the deployed coordinator");
+  assert.ok(versionList > operatorRef, "secret enumeration must remain a fallback only");
+  assert.match(deployCoordinator, /name == expected_name and version\.isdigit\(\)/);
+  assert.doesNotMatch(deployCoordinator, /secrets versions access/);
+});
+
 test("Base44 admission configuration is disabled-first, entitlement-owned and additive", () => {
   assert.match(configureBase44, /BETA_SCAN_ADMISSION_ENABLED=false/);
   assert.match(configureBase44, /BETA_CHECKOUT_ENABLED=false/);

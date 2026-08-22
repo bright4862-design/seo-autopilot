@@ -315,18 +315,10 @@ export function authoritySnapshotFromRows({ run, fixList, fixItems, userId }) {
       evidence_quality_state: text(run?.evidence_quality_state, 120),
       evidence_quality_score: number(run?.evidence_quality_score),
       evidence_quality_reasons: textArray(run?.evidence_quality_reasons, 12, 500),
-      // Coverage/inventory diagnostics. Mirrors buildAuthoritySnapshot exactly:
-      // the seal is recomputed over this reconstruction, so any field the
-      // snapshot writes must be rebuilt here with the identical value.
-      pages_retained: number(run?.pages_retained),
-      usable_html_page_count: number(run?.usable_html_page_count),
-      representative_html_page_count: number(run?.representative_html_page_count),
-      default_route_page_count: number(run?.default_route_page_count),
-      discovery_quality_state: text(run?.discovery_quality_state, 120),
-      evidence_quality_gate_version: text(run?.evidence_quality_gate_version, 160),
-      crawl_timing: plainObject(run?.crawl_timing),
-      sampling_evidence: plainObject(run?.sampling_evidence),
-      ...coverageAuthorityFields(run?.coverage_authority_evidence),
+      // Coverage/inventory diagnostics, present only in the v2 payload.
+      // A row sealed under v1 must be rebuilt exactly as v1 or its stored
+      // proof stops verifying and an intact result reads as tampered.
+      ...coverageSnapshotFields(run),
       health_score: number(run?.health_score),
       health_grade: text(run?.health_grade, 80),
       customer_summary: text(run?.customer_summary, 4_000),
@@ -542,6 +534,29 @@ function verifiedUrls(value) {
 
 function plainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+const REVIEW_ATTESTATION_VERSION_V2 = "standard_review_snapshot_hmac_v2_coverage";
+
+/**
+ * Reconstruction is version-dispatched, never inferred from which fields the
+ * row happens to carry: a v2 row whose coverage evidence is genuinely absent
+ * must still rebuild the v2 shape, and a v1 row must never gain a field its
+ * seal did not cover. The row's own authority_seal_version is the authority.
+ */
+function coverageSnapshotFields(row) {
+  if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V2) return {};
+  return {
+    pages_retained: number(row?.pages_retained),
+    usable_html_page_count: number(row?.usable_html_page_count),
+    representative_html_page_count: number(row?.representative_html_page_count),
+    default_route_page_count: number(row?.default_route_page_count),
+    discovery_quality_state: text(row?.discovery_quality_state, 120),
+    evidence_quality_gate_version: text(row?.evidence_quality_gate_version, 160),
+    crawl_timing: plainObject(row?.crawl_timing),
+    sampling_evidence: plainObject(row?.sampling_evidence),
+    ...coverageAuthorityFields(row?.coverage_authority_evidence),
+  };
 }
 
 /** Mirrors coverageAuthorityFields in persistDurableScanAuthority/authoritySnapshot.js. */

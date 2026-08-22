@@ -1,5 +1,11 @@
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
-export const REVIEW_ATTESTATION_VERSION = "standard_review_snapshot_hmac_v1";
+// Bumped when the snapshot gained coverage/inventory fields. The authority
+// proof is an HMAC over the whole snapshot, so adding a field changes the
+// payload for every row -- including rows sealed before it existed. Version
+// dispatch on reconstruction keeps those rows verifiable instead of turning
+// an intact result into 409 result_authority_invalid.
+export const REVIEW_ATTESTATION_VERSION = "standard_review_snapshot_hmac_v2_coverage";
+export const REVIEW_ATTESTATION_VERSION_V1 = "standard_review_snapshot_hmac_v1";
 export const MAX_AUTHORITY_FIXES = 100;
 
 export const REPAIR_CONTRACT_V2 = "repair_contract_v2_shadow_calibrated";

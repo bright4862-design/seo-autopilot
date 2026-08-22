@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `fbb06c2634b74ca6` |
+| Candidate fingerprint | `fdd5906461a468d3` |
 | Classifier | `archetype_classifier_v9_local_business_hospitality` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,13 +15,20 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The shipping code is
-fingerprint `fbb06c2634b74ca6` with classifier
+fingerprint `fdd5906461a468d3` with classifier
 `archetype_classifier_v9_local_business_hospitality`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded candidate was `1f730bb039aef84e`. The fingerprint
-moved to `fbb06c2634b74ca6` when Patch B added the
+The immediately superseded candidate was `fbb06c2634b74ca6`. The fingerprint
+moved to `fdd5906461a468d3` when the authority snapshot attestation moved to
+`standard_review_snapshot_hmac_v2_coverage`. Patch B had added coverage fields
+to the v1 HMAC payload, which changes the payload for rows sealed before those
+fields existed and would have made every already-sealed result fail
+re-verification. Reconstruction is now version-dispatched on the seal version
+stored on each row, so v1 rows stay verifiable and only new rows seal under v2.
+
+The candidate before that was `1f730bb039aef84e`, superseded when Patch B added the
 `coverage_authority_evidence_v1` contract, so a change to how crawl coverage is
 assessed and recorded moves release identity like any other component. Patch B
 is diagnostic only: it changes no scan status, provisional state, release

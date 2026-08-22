@@ -20,8 +20,16 @@ fingerprint `d23f6a2ad97da082` with classifier
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded candidate was `fdd5906461a468d3`. The fingerprint
-moved to `d23f6a2ad97da082` when Patch C made the shared coverage decision
+The immediately superseded candidate was `d23f6a2ad97da082`. The fingerprint
+moved to `e5088c4055cb04e9` when Patch D made mixed-family evidence stay mixed:
+a repair spanning several page families is partitioned instead of being labelled
+with one family, and a coverage ratio is shown only when its numerator and
+denominator are counted over the same URL set. That changes customer-visible
+repair scope and coverage wording, so it requires a new production acceptance
+gate.
+
+The candidate before that was `fdd5906461a468d3`, superseded when Patch C made
+the shared coverage decision
 authoritative: a materially thin sample (38/3,689, 40/1,374) or an
 inventory-unproven crawl is now provisional and release-ineligible instead of
 sealing as complete. This is a customer-visible scoring and authority change, so

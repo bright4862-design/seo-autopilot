@@ -108,9 +108,21 @@ def test_sitewide_canonical_uses_finance_business_page_not_contact():
             "affected_pages": urls,
             "issue_title": "Add canonical URLs",
         }
+        # Family-consistent groups, which is what build_page_pattern_findings
+        # actually emits: it buckets by (rule, family), so a group never spans
+        # families. The previous fixture labelled ["/contact", "/about", "/"] as
+        # family "contact" and ["/apply-now", "/locations/..."] as "conversion",
+        # asserting a family its own page evidence contradicted. Patch D reads
+        # the family from that evidence, so those groups now report as mixed --
+        # correctly -- and were excluded from the sitewide collapse. The test is
+        # about which representative the collapse picks, so the fixture is made
+        # truthful rather than the behaviour loosened.
         for family, urls in (
-            ("contact", ["/contact", "/about", "/"]),
-            ("conversion", ["/apply-now", "/locations/california", "/locations/texas"]),
+            ("homepage", ["/"]),
+            ("contact", ["/contact"]),
+            ("standard", ["/about"]),
+            ("conversion", ["/apply-now"]),
+            ("location_landing", ["/locations/california", "/locations/texas"]),
             ("loan_program", ["/loan-overview", "/bridge-loans", "/dscr-loans", "/fix-and-flip"]),
             ("guide_article", ["/blog/bridge-loan-guide", "/blog/dscr-guide"]),
         )

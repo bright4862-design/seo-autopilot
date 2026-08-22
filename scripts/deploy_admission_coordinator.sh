@@ -92,8 +92,9 @@ PY
 fi
 if [[ -z "$OPERATOR_SECRET_VERSION" ]]; then
   OPERATOR_SECRET_VERSION="$(gcloud secrets versions list "$OPERATOR_SECRET" \
-    --project="$PROJECT" --filter='state=ENABLED' --sort-by='~createTime' \
-    --limit=1 --format='value(name)' | sed -n 's#^.*/versions/\([0-9][0-9]*\)$#\1#p')"
+    --project="$PROJECT" --filter='state:ENABLED' --sort-by='~createTime' \
+    --limit=1 --format='value(name)')"
+  OPERATOR_SECRET_VERSION="${OPERATOR_SECRET_VERSION##*/}"
 fi
 if ! printf '%s' "$OPERATOR_SECRET_VERSION" | grep -Eq '^[0-9]+$'; then
   echo "Refusing deployment: operator signing secret has no enabled numeric version." >&2

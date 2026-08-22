@@ -125,6 +125,31 @@ test("WIF provider display names stay within Google's 32-character limit", () =>
   }
 });
 
+test("admission bootstraps reuse enabled numeric secret versions", () => {
+  for (const source of [bootstrap, wifBootstrap]) {
+    assert.match(source, /--filter='state:ENABLED'/);
+    assert.doesNotMatch(source, /--filter='state=ENABLED'/);
+
+    const match = source.match(
+      /secrets versions list[\s\S]*?\| grep -Eq '([^']+)'/,
+    );
+    assert.ok(match, "enabled-version guard is missing");
+    const pattern = new RegExp(match[1]);
+    assert.ok(pattern.test("2"), "gcloud's numeric version name must be recognized");
+    assert.ok(
+      pattern.test("projects/919035207432/secrets/example/versions/2"),
+      "fully-qualified version names must remain supported",
+    );
+  }
+
+  assert.match(deployCoordinator, /--filter='state:ENABLED'/);
+  assert.doesNotMatch(deployCoordinator, /--filter='state=ENABLED'/);
+  assert.match(
+    deployCoordinator,
+    /OPERATOR_SECRET_VERSION="\$\{OPERATOR_SECRET_VERSION##\*\/\}"/,
+  );
+});
+
 /**
  * The access token is produced by a workflow step and consumed by a script in
  * another language, so nothing but this check reads both ends. Asserting each

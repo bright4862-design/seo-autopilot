@@ -113,6 +113,12 @@ for SECRET_READER in "$COORDINATOR_SA" "$ADMISSION_OPERATOR_SA"; do
     --member="serviceAccount:${SECRET_READER}" --role="roles/secretmanager.secretAccessor" \
     --condition=None --quiet >/dev/null
 done
+# The dedicated operator resolves the `latest` alias through metadata before
+# the first coordinator deploy. Scope viewer permission to this one secret;
+# barrier signing still uses the separate payload-access grant above.
+gcloud secrets add-iam-policy-binding "$ADMISSION_OPERATOR_SECRET" --project="$PROJECT" \
+  --member="serviceAccount:${ADMISSION_OPERATOR_SA}" --role="roles/secretmanager.viewer" \
+  --condition=None --quiet >/dev/null
 
 CONFIRM=SET-DRAIN-QUEUE-SAFE-BETA GCP_PROJECT="$PROJECT" GCP_REGION="$REGION" CLOUD_TASKS_DRAIN_QUEUE="$DRAIN_QUEUE" \
   "$REPO_ROOT/scripts/set-standard150-drain-policy.sh"

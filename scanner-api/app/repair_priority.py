@@ -200,7 +200,7 @@ def _confidence(fix: dict[str, Any]) -> float:
 
 
 def _family_label(family: str) -> str:
-    return {
+    explicit = {
         "product_page": "product pages",
         "collection_page": "collection pages",
         "activity_detail": "activity pages",
@@ -209,7 +209,18 @@ def _family_label(family: str) -> str:
         "location_landing": "location pages",
         "booking_or_checkout": "booking pages",
         "conversion": "conversion pages",
-    }.get(family, family.replace("_", " ") + (" pages" if family else ""))
+        "homepage": "homepage",
+    }.get(family)
+    if explicit:
+        return explicit
+    label = family.replace("_", " ").strip()
+    if not label:
+        return ""
+    if label.endswith(" pages"):
+        return label
+    if label.endswith(" page"):
+        return f"{label}s"
+    return f"{label} pages"
 
 
 @dataclass(frozen=True)
@@ -399,9 +410,11 @@ def _priority_reason(
 
     # Only state "N of M" when N and M were counted over the same URLs.
     if search_facing and context.indexable_checked_eligible and context.indexable_affected and context.affected_universe_is_comparable:
-        return f"{context.indexable_affected} of {context.indexable_checked_eligible} searchable {label} checked are affected."
+        verb = "is" if context.indexable_affected == 1 else "are"
+        return f"{context.indexable_affected} of {context.indexable_checked_eligible} searchable {label} checked {verb} affected."
     if context.checked_eligible and context.affected_eligible and context.affected_universe_is_comparable:
-        return f"{context.affected_eligible} of {context.checked_eligible} {label} checked are affected."
+        verb = "is" if context.affected_eligible == 1 else "are"
+        return f"{context.affected_eligible} of {context.checked_eligible} {label} checked {verb} affected."
     if _shared_repair_confirmed(fix) and affected_count > 1:
         return f"One shared change may improve {affected_count} checked pages."
     if affected_count > 0 and not context.affected_universe_is_comparable:

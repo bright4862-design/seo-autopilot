@@ -1,13 +1,13 @@
-import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
+import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 export const REVIEW_ATTESTATION_VERSION = "standard_review_snapshot_hmac_v1";
 export const MAX_AUTHORITY_FIXES = 100;
 
 export const AUTHORITY_CONTRACT = Object.freeze({
-  scanner_version: "python_scanner_v3_bounded_request",
-  scanner_build_revision: "authenticated_health_probe_v1",
-  archetype_classifier_version: "archetype_classifier_v9_local_business_hospitality",
-  review_version: "python_review_v2_structural_marketplace",
-  review_evidence_calibration_version: "review_evidence_calibration_v5_utility_redirect",
+  scanner_version: RELEASE_COMPONENT_VERSIONS.scanner_version,
+  scanner_build_revision: RELEASE_COMPONENT_VERSIONS.scanner_build_revision,
+  archetype_classifier_version: RELEASE_COMPONENT_VERSIONS.archetype_classifier_version,
+  review_version: RELEASE_COMPONENT_VERSIONS.review_version,
+  review_evidence_calibration_version: RELEASE_COMPONENT_VERSIONS.review_evidence_calibration_version,
   beta_revision_fingerprint: RELEASE_FINGERPRINT,
 });
 

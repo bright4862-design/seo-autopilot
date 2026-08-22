@@ -51,6 +51,9 @@ Deno.serve(async (req) => {
     if (action === "list") {
       return await listCustomerScans({ serviceEntities, user, body });
     }
+    if (action === "list_all") {
+      return await listAllCustomerScans({ serviceEntities, user, body });
+    }
     if (action !== "get") {
       throw new RequestProblem(400, "result_action_invalid", "Choose one supported saved-scan action.");
     }
@@ -249,6 +252,36 @@ async function listCustomerScans({ serviceEntities, user, body }) {
     success: true,
     action: "list",
     project_id: projectId,
+    runs: buildScanHistoryProjection(rows),
+  });
+}
+
+async function listAllCustomerScans({ serviceEntities, user, body }) {
+  const limit = Math.min(Math.max(nonNegativeInteger(body?.limit) || 20, 1), 30);
+  let rows;
+  try {
+    const [owned, legacy] = await Promise.all([
+      serviceEntities.ScanRun.filter(
+        { owner_user_id: cleanId(user.id) },
+        "-queued_at",
+        limit,
+      ),
+      serviceEntities.ScanRun.filter(
+        { created_by_id: cleanId(user.id) },
+        "-queued_at",
+        limit,
+      ),
+    ]);
+    rows = uniqueRows([...(owned || []), ...(legacy || [])])
+      .filter((run) => recordOwnedByUser(run, user.id))
+      .sort((left, right) => scanTimestamp(right) - scanTimestamp(left))
+      .slice(0, limit);
+  } catch {
+    throw new RequestProblem(503, "result_load_failed", "Saved scans could not be loaded. Please retry.");
+  }
+  return Response.json({
+    success: true,
+    action: "list_all",
     runs: buildScanHistoryProjection(rows),
   });
 }

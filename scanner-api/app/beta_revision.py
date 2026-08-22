@@ -81,7 +81,11 @@ def collect_component_versions() -> dict[str, str]:
     )
     from .crawler_acceptance import CRAWLER_ACCEPTANCE_VERSION
     from .evidence_quality import EVIDENCE_QUALITY_GATE_VERSION
-    from .extract import CANONICAL_HREF_RESOLUTION_VERSION, ROUTE_BOUNDARY_CLASSIFIER_VERSION
+    from .extract import (
+        CANONICAL_HREF_RESOLUTION_VERSION,
+        PAGE_TEMPLATE_CLASSIFIER_VERSION,
+        ROUTE_BOUNDARY_CLASSIFIER_VERSION,
+    )
     from .indexability_quality import INDEXABILITY_QUALITY_VERSION
     from .navigation_indexability import NAVIGATION_INDEXABILITY_VERSION
     from .metadata_title_evidence import METADATA_EVIDENCE_VERSION, TITLE_EVIDENCE_VERSION
@@ -91,6 +95,7 @@ def collect_component_versions() -> dict[str, str]:
     from .render_followup import RENDER_FOLLOWUP_VERSION
     from .review import (
         ARCHETYPE_CLASSIFIER_VERSION,
+        FAILURE_EVIDENCE_DEDUP_VERSION,
         GROUPED_RECOMMENDATION_EVIDENCE_VERSION,
         ORPHAN_ASSET_EVIDENCE_VERSION,
         PAGE_LEVEL_ASSET_EVIDENCE_VERSION,
@@ -110,6 +115,7 @@ def collect_component_versions() -> dict[str, str]:
         "scanner_build_revision": SCANNER_BUILD_REVISION,
         "artifact_filter_version": ARTIFACT_FILTER_VERSION,
         "route_boundary_classifier_version": ROUTE_BOUNDARY_CLASSIFIER_VERSION,
+        "page_template_classifier_version": PAGE_TEMPLATE_CLASSIFIER_VERSION,
         "final_url_dedup_version": FINAL_URL_DEDUP_VERSION,
         "canonical_target_evidence_version": CANONICAL_TARGET_EVIDENCE_VERSION,
         "canonical_href_resolution_version": CANONICAL_HREF_RESOLUTION_VERSION,
@@ -120,6 +126,7 @@ def collect_component_versions() -> dict[str, str]:
         "render_followup_version": RENDER_FOLLOWUP_VERSION,
         "review_version": REVIEW_VERSION,
         "grouped_recommendation_evidence_version": GROUPED_RECOMMENDATION_EVIDENCE_VERSION,
+        "failure_evidence_dedup_version": FAILURE_EVIDENCE_DEDUP_VERSION,
         "archetype_classifier_version": ARCHETYPE_CLASSIFIER_VERSION,
         "representative_page_version": REPRESENTATIVE_PAGE_VERSION,
         "page_level_asset_evidence_version": PAGE_LEVEL_ASSET_EVIDENCE_VERSION,

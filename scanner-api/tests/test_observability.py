@@ -1,4 +1,5 @@
 from app.beta_revision import live_revision
+from app.review import ARCHETYPE_CLASSIFIER_VERSION
 
 # Read the canonical release identity instead of copying it: a copied
 # marker is exactly the drift this release contract exists to prevent.
@@ -128,7 +129,7 @@ def test_release_marker_endpoints_are_consistent():
     health = client.get("/health").json()
     revision = client.get("/revision").json()
 
-    assert health["archetype_classifier_version"] == "archetype_classifier_v9_local_business_hospitality"
+    assert health["archetype_classifier_version"] == ARCHETYPE_CLASSIFIER_VERSION
     assert health["beta_revision_fingerprint"] == CURRENT_FINGERPRINT
     assert health["review_version"] == "python_review_v2_structural_marketplace"
     assert health["review_evidence_calibration_version"] == "review_evidence_calibration_v6_health_score_v2"

@@ -1,4 +1,4 @@
-import { RELEASE_FINGERPRINT } from "../../src/lib/generatedReleaseContract.js";
+import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "../../src/lib/generatedReleaseContract.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -11,8 +11,8 @@ import {
 function eligiblePayload() {
   return {
     scan: {
-      scanner_version: "python_scanner_v3_bounded_request",
-      scanner_build_revision: "authenticated_health_probe_v1",
+      scanner_version: RELEASE_COMPONENT_VERSIONS.scanner_version,
+      scanner_build_revision: RELEASE_COMPONENT_VERSIONS.scanner_build_revision,
       advanced_scan_backend: "python_scanner_api",
       deno_fallback_used: false,
       beta_revision_fingerprint: RELEASE_FINGERPRINT,
@@ -20,9 +20,9 @@ function eligiblePayload() {
       title_evidence_version: "title_evidence_v1",
     },
     review: {
-      archetype_classifier_version: "archetype_classifier_v9_local_business_hospitality",
-      review_version: "python_review_v2_structural_marketplace",
-      review_evidence_calibration_version: "review_evidence_calibration_v6_health_score_v2",
+      archetype_classifier_version: RELEASE_COMPONENT_VERSIONS.archetype_classifier_version,
+      review_version: RELEASE_COMPONENT_VERSIONS.review_version,
+      review_evidence_calibration_version: RELEASE_COMPONENT_VERSIONS.review_evidence_calibration_version,
       beta_revision_fingerprint: RELEASE_FINGERPRINT,
       ai_review_backend: "python_review_api",
       python_review_fallback_used: false,

@@ -4,8 +4,7 @@ import { Copy, Download, ExternalLink } from "lucide-react";
 
 import { isRateLimitFinding, shouldUseLegacyRateLimitPresentation } from "@/lib/reviewContract";
 import { trackEvent } from "@/lib/analytics";
-import { getActiveProject } from "@/lib/activeProject";
-import { getScanRunWithFixList, listScanRuns } from "@/lib/scanRuns";
+import { getScanRunWithFixList, listAccountScanRuns } from "@/lib/scanRuns";
 import { customerRecoveryFailure } from "@/lib/scanRuns";
 import { ACTIVE_SCAN_RUN_STATUSES } from "@/lib/scanRunIdentity";
 import { UNLOCK_PRICE_LABEL } from "@/lib/access";
@@ -22,7 +21,7 @@ import RecentScanRow from "@/components/fixlist/RecentScanRow";
 import RepairWorkSurface from "@/components/fixlist/RepairWorkSurface";
 import ExplicitPassedChecks from "@/components/fixlist/ExplicitPassedChecks";
 import SuggestedFix from "@/components/fixlist/SuggestedFix";
-import { deleteScanRun, pruneScanHistory } from "@/lib/scanHistory";
+import { deleteScanRun } from "@/lib/scanHistory";
 import { prepareCustomerFixes, priorityBucket } from "@/lib/fixRanking";
 import { buildRepairWorkSurfacePresentation } from "@/lib/repairWorkSurfacePresentation";
 import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel } from "@/lib/fixVocabulary";
@@ -65,6 +64,10 @@ const CATEGORY_LABELS = {
 
 const ENERGY_PATH_HINTS = ["energie", "énergie", "electricite", "électricité", "gaz", "fournisseur", "kwh", "tarif"];
 const CREDIT_PATH_HINTS = ["rachat-de-credits", "rachat-de-credit", "credit", "crédit", "credits", "crédits", "pret", "prêt", "emprunt"];
+
+export const FAILURE_STATE_PRESENTATION_VERSION = "failure_state_presentation_v1_durable_reason";
+export const PRIORITY_SUMMARY_VERSION = "priority_summary_v1_action_band_consistent";
+export const COUNT_COPY_VERSION = "count_copy_v1_shared_pluralization";
 
 const CUSTOMER_RECOVERY_COPY = Object.freeze({
   unauthorized: {
@@ -128,7 +131,6 @@ export default function FixList() {
   const [recentScansState, setRecentScansState] = useState(requestedScanId ? "idle" : "loading");
   const [recentScansFailure, setRecentScansFailure] = useState(null);
   const [historyReloadToken, setHistoryReloadToken] = useState(0);
-  const [historyProjectId, setHistoryProjectId] = useState("");
   const [deletingScanId, setDeletingScanId] = useState("");
   const [ownerDebugBusy, setOwnerDebugBusy] = useState("");
   const [ownerDebugResult, setOwnerDebugResult] = useState(null);
@@ -277,24 +279,12 @@ export default function FixList() {
       setRecentScansFailure(null);
       setRecentScansState("loading");
       try {
-        const { project } = await getActiveProject();
-        if (cancelled) return;
-        if (!project?.id) {
-          setRecentScans([]);
-          setRecentScansFailure(null);
-          setRecentScansState("loaded");
-          return;
-        }
-        setHistoryProjectId(project.id);
-        // Keep only the three newest saved scans for this website.
-        await pruneScanHistory(project.id);
-        if (cancelled) return;
-        const historyResult = await listScanRuns(project.id, 3);
+        const historyResult = await listAccountScanRuns(20);
         if (cancelled) return;
         if (historyResult?.ok !== true) {
           const failure = historyResult?.ok === false
             ? historyResult
-            : customerRecoveryFailure({ error_code: "result_load_failed" }, `history:${project.id}`);
+            : customerRecoveryFailure({ error_code: "result_load_failed" }, "history:account");
           setRecentScans([]);
           setRecentScansFailure(failure);
           setRecentScansState(failure.kind);
@@ -305,7 +295,7 @@ export default function FixList() {
         setRecentScansState("loaded");
       } catch (error) {
         if (cancelled) return;
-        const failure = customerRecoveryFailure(error, "history:active-project");
+        const failure = customerRecoveryFailure(error, "history:account");
         console.warn("Saved scan history read failed.", failure.kind, failure.support_reference);
         setRecentScans([]);
         setRecentScansFailure(failure);
@@ -437,9 +427,9 @@ export default function FixList() {
     }
   }
 
-  async function handleDeleteScan(scanId) {
+  async function handleDeleteScan(projectId, scanId) {
     setDeletingScanId(scanId);
-    const result = await deleteScanRun(historyProjectId, scanId);
+    const result = await deleteScanRun(projectId, scanId);
     setDeletingScanId("");
     if (result.ok) setRecentScans((scans) => scans.filter((scan) => scan.id !== scanId));
   }
@@ -548,8 +538,9 @@ export default function FixList() {
           <LockedResultState />
         ) : scanRecord && !hasUsefulScan ? (
           <RequestedScanState
-            title={getDurableScanStateTitle(scanRecord.status)}
-            detail={getDurableScanStateDetail(scanRecord.status)}
+            title={getDurableScanStateTitle(scanRecord)}
+            detail={getDurableScanStateDetail(scanRecord)}
+            reference={scanRecord.scan_id || scanRecord.id}
           />
         ) : hasUsefulScan ? (
           <>
@@ -702,11 +693,12 @@ function SectionEyebrow({ label, count }) {
   );
 }
 
-function RequestedScanState({ title, detail }) {
+function RequestedScanState({ title, detail, reference = "" }) {
   return (
     <div className="mt-16 rounded-2xl border border-hairline-soft bg-white p-6">
       <h1 className="text-[22px] font-semibold tracking-tight">{title}</h1>
       <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{detail}</p>
+      {reference ? <p className="mt-4 text-[12px] text-ink-faint">Scan reference: <span className="font-mono tabular-nums">{reference}</span></p> : null}
     </div>
   );
 }
@@ -791,7 +783,7 @@ function RecentScansState({ scans, state, failure, onAction, onScan, onDelete, d
         ))}
       </div>
       <p className="mt-3 text-[12px] text-ink-faint">
-        Your three most recent scans are kept for each website. Older ones are removed automatically.
+        Showing up to 20 recent scans across your websites. You can delete a finished scan from this list.
       </p>
     </section>
   );
@@ -802,6 +794,7 @@ function toRecentScanSummary(run = {}) {
   if (!id) return null;
   return {
     id: id,
+    project_id: String(run.project_id || ""),
     website: safeHostname(run.website_url || run.submitted_url || run.final_url) || "Website scan",
     status: String(run.status || "").trim().toLowerCase(),
     occurredAt: run.queued_at || run.created_date || run.created_at || run.started_at || run.reviewing_at || run.completed_at || "",
@@ -1634,15 +1627,28 @@ function normalizeDurableScanBundle(bundle = {}) {
   };
 }
 
-function getDurableScanStateTitle(status) {
+function durableFailureKind(record = {}) {
+  const evidence = `${record.error_code || ""} ${record.status_detail || ""}`.toLowerCase();
+  if (/429|rate.?limit|challenge|bot.?protection|access.?limit|scanner.?blocked/.test(evidence)) return "access_limited";
+  if (/heartbeat|stalled|orphaned|vanished|no_terminal|progress stopped/.test(evidence)) return "worker_stalled";
+  if (/persist|save.?fail|authority.?write|result.?write/.test(evidence)) return "save_failed";
+  return "interrupted";
+}
+
+function getDurableScanStateTitle(record = {}) {
+  const status = String(record.status || "");
   if (["queued", "crawling", "reviewing"].includes(status)) return "This scan is still running";
   if (status === "limited") return "This scan finished with limited evidence";
+  if (status === "failed" && durableFailureKind(record) === "access_limited") return "The website limited this scan's access";
+  if (status === "failed" && durableFailureKind(record) === "worker_stalled") return "This scan stopped making progress";
+  if (status === "failed" && durableFailureKind(record) === "save_failed") return "The result could not be saved";
   if (status === "failed") return "This scan didn't finish";
   if (status === "cancelled") return "This scan was cancelled";
   return "No results saved for this scan";
 }
 
-function getDurableScanStateDetail(status) {
+function getDurableScanStateDetail(record = {}) {
+  const status = String(record.status || "");
   if (["queued", "crawling", "reviewing"].includes(status)) {
     return "FixList is still working. This page refreshes automatically and will show your saved result as soon as it is ready.";
   }
@@ -1650,6 +1656,10 @@ function getDurableScanStateDetail(status) {
     return "FixList couldn't verify enough representative page evidence to publish a reliable result. Run a fresh scan when you're ready to try again.";
   }
   if (status === "failed") {
+    const kind = durableFailureKind(record);
+    if (kind === "access_limited") return "The website returned a rate limit, challenge, or access block before FixList could collect enough evidence. No authoritative result was saved. Wait a while before retrying; if it repeats, ask your web person to review CDN, firewall, and bot-protection logs.";
+    if (kind === "worker_stalled") return "Progress stopped and FixList safely closed the run. No partial result was promoted. You can retry the scan; if it happens again, include the scan reference when contacting support.";
+    if (kind === "save_failed") return "Crawling finished, but FixList could not persist the verified result. Do not rely on a partial browser result; retry once and include the scan reference if saving fails again.";
     return "Something interrupted this scan before results could be saved. Run a fresh scan to get a complete FixList.";
   }
   if (status === "cancelled") {
@@ -1721,13 +1731,16 @@ function getBestSummary(record, pagesScanned, pagesFound, recommendations = []) 
   if (isHealthScoreUnavailable(record)) {
     return `FixList could not check enough usable pages to calculate a reliable score. It kept ${issueCount || 0} item${issueCount === 1 ? "" : "s"} for you to review.`;
   }
-  const importantCount = recommendations.filter((item) => ["critical", "high"].includes(item.priority)).length;
+  // The summary must count the same canonical action bands the customer sees.
+  // Raw scanner severity is evidence context, not the work-queue order.
+  const fixFirstCount = recommendations.filter((item) => priorityBucket(item) === "fix_first").length;
   const groupedCount = recommendations.filter(hasExplicitSharedRepairConfirmation).length;
+  const pagesLabel = (count, qualifier = "") => `${formatCount(count)}${qualifier ? ` ${qualifier}` : ""} ${Number(count) === 1 ? "page" : "pages"}`;
   const coverage = pagesFound > 0
-    ? `FixList found ${formatCount(pagesFound)} pages and checked ${formatCount(pagesScanned)} representative pages.`
-    : `FixList checked ${formatCount(pagesScanned)} representative pages.`;
-  const priorities = importantCount > 0
-    ? ` It found ${issueCount} improvement${issueCount === 1 ? "" : "s"}; ${importantCount} should be handled first.`
+    ? `FixList found ${pagesLabel(pagesFound)} and checked ${pagesLabel(pagesScanned, "representative")}.`
+    : `FixList checked ${pagesLabel(pagesScanned, "representative")}.`;
+  const priorities = fixFirstCount > 0
+    ? ` It found ${issueCount} improvement${issueCount === 1 ? "" : "s"}; ${fixFirstCount} ${fixFirstCount === 1 ? "is" : "are"} in Fix first.`
     : ` It found ${issueCount} improvement${issueCount === 1 ? "" : "s"} to work through.`;
   const grouping = groupedCount > 0 ? " Several affect shared page patterns, so one change can improve many pages at once." : "";
   return `${coverage}${priorities}${grouping}`;

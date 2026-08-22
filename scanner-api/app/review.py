@@ -7,7 +7,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .coverage_authority import assess_coverage, coverage_inputs_from_payload
-from .repair_coverage import REPAIR_COVERAGE_VERSION, normalize_repair_scope
+from .repair_coverage import REPAIR_COVERAGE_VERSION, evidence_url_key, normalize_repair_scope
 from .page_evidence_gate import (
     PAGE_EVIDENCE_GATE_VERSION,
     page_evidence_class,
@@ -21,6 +21,7 @@ ZERO_FIX_HEALTH_GRADE = "No issues found in sample"
 QUALITY_GATE_VERSION = "review_quality_gate_v3_shared_coverage_decision"
 GROUPED_RECOMMENDATION_EVIDENCE_VERSION = "grouped_recommendation_evidence_v1_metadata_states"
 ORPHAN_ASSET_EVIDENCE_VERSION = "orphan_asset_evidence_v1"
+FAILURE_EVIDENCE_DEDUP_VERSION = "failure_evidence_dedup_v1_terminal_remediation"
 INCOMPLETE_REVIEW_WARNING = "Review received scan metadata, but no page evidence was passed into AI Review."
 SUPPORT_RECLASS_FAMILIES = {"loan_program", "conversion", "standard", "guide", "category_listing", "qa", "product_detail", ""}
 
@@ -78,7 +79,7 @@ CATEGORY_MAP = {
     "duplicate_meta_description": "duplicate_content",
 }
 
-ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v9_local_business_hospitality"
+ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v10_structural_finance_member_retail"
 
 # Frequency cap for archetype keyword/pattern counting: template volume
 # (hundreds of /blog/ URLs) must not out-vote company-level evidence.
@@ -100,10 +101,12 @@ SAAS_STRUCTURAL_PATTERNS = (
 ECOMMERCE_STRUCTURAL_PATTERNS = (
     "/products/", "/product/", "/produit/", "/collections/", "/collection/",
     "/categorie/", "/cat/", "/p/", "/cart", "/checkout",
-    "/basket", "/shop/", "/boutique/", "/store/",
+    "/basket", "/shop/", "/boutique/", "/store/", "/wines/", "/wine/",
+    "/membership", "/members/", "/subscription",
 )
 PRODUCT_DETAIL_PATTERNS = (
     "/products/", "/product/", "/produit/", "/p/", "/itm/", "/buy/",
+    "/wine/", "/wines/",
 )
 ARTICLE_ROUTE_PATTERNS = (
     "/blog/", "/travel-blog/", "/travel-blogs/", "/article/", "/articles/",
@@ -156,22 +159,28 @@ FINANCE_STRUCTURAL_PATTERNS = (
     "/loan", "/loans", "/mortgage", "/credit", "/pret", "/assurance",
     "/insurance", "/quote", "/devis", "/calculator", "/simulation",
     "/apply", "/dscr", "/bridge", "/fix-and-flip", "/rental",
-    "/request-a-payoff", "/document-exchange",
+    "/request-a-payoff", "/document-exchange", "/bank-account", "/bank-accounts",
+    "/banking", "/debit-card", "/business-account",
 )
 # Listing-detail routes (owned inventory) — the marketplace tell.
-BOOKING_LISTING_PATTERNS = ("/annonce", "/activites/", "/activite/", "/listings/", "/listing/", "/experiences/")
+BOOKING_LISTING_PATTERNS = (
+    "/annonce", "/activites/", "/activite/", "/activities/", "/activity/",
+    "/listings/", "/listing/", "/experiences/", "/workshops/", "/workshop/",
+    "/ateliers/", "/atelier/", "/tours/", "/attractions/", "/venues/",
+    "/rooms/", "/stays/", "/homes/",
+)
 BOOKING_STRUCTURAL_PATTERNS = BOOKING_LISTING_PATTERNS + (
     "/booking", "/book/", "/reservation", "/availability", "/tickets", "/billetterie",
 )
 LOCAL_BUSINESS_ROUTE_PATTERNS = (
-    "/menu", "/menus", "/visit", "/tasting", "/tastings", "/wine-club",
-    "/our-club", "/vineyard", "/hours", "/directions", "/catering",
+    "/menu", "/menus", "/visit", "/tasting", "/tastings",
+    "/vineyard", "/hours", "/directions", "/catering",
     "/private-events", "/order-online", "/reservations", "/reserve-a-table",
     "/find-us", "/locations",
 )
 LOCAL_HOMEPAGE_IDENTITY_PATTERNS = (
     r"\bbakery\b", r"\brestaurant\b", r"\bwinery\b", r"\bvineyard\b",
-    r"\btasting room\b", r"\bwine club\b", r"\bdairy\b", r"\bcreamery\b",
+    r"\btasting room\b", r"\bdairy\b", r"\bcreamery\b",
     r"\bcaf[eé]\b", r"\bcoffee shop\b", r"\bbistro\b", r"\bpizzeria\b",
 )
 LOCAL_PUBLISHER_IDENTITY_TERMS = (
@@ -604,6 +613,7 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
     finance_homepage_identity = has_any(homepage_text, [
         "lending", "lender", "mortgage", "insurance", "assurance", "loan provider",
         "bridge loan", "hard money", "private lending", "credit broker",
+        "digital bank", "mobile bank", "bank account", "business account", "debit card",
     ])
     nonprofit_homepage_identity = has_any(homepage_text, [
         "nonprofit", "non-profit", "charity", "donate", "donation", "fundraising",
@@ -736,7 +746,7 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             score += 1.5 * min(article_schema_pages, 20)
         adjusted_scores.append((key, score))
 
-    structural_competitor = saas_dominant or retail_dominant or nonprofit_dominant or local_dominant
+    structural_competitor = saas_dominant or retail_dominant or finance_dominant or nonprofit_dominant or local_dominant
     if structural_competitor:
         adjusted_scores = [
             (key, min(score, CONTENT_BLOG_STRUCTURAL_CAP) if key == "content_blog" else score)
@@ -1182,6 +1192,14 @@ def build_scanner_evidence_findings(body: dict[str, Any], pages: list[dict[str, 
             ))
             continue
         is_server = bucket == "5xx"
+        repeated_observation = any(
+            int_or_zero(
+                page.get("failure_observation_count")
+                or page.get("terminal_observation_count")
+                or page.get("same_status_observation_count")
+            ) >= 2
+            for page in group
+        )
         fixes.append(make_fix(
             rule="server_error" if is_server else "410_error" if bucket == "410" else "broken_page",
             category="web_dev" if is_server else "404_error",
@@ -1193,7 +1211,18 @@ def build_scanner_evidence_findings(body: dict[str, Any], pages: list[dict[str, 
             affected_pages=[page_evidence_url(page) for page in group],
             difficulty="developer",
             source=f"scanner_verified_failed_pages:{bucket}",
-            extra=evidence_extra(group),
+            extra={
+                **evidence_extra(group),
+                **({
+                    "evidence_status": "needs_verification",
+                    "verification_state": "needs_verification",
+                    "limitation_code": "single_server_error_requires_confirmation",
+                    "non_scoring": True,
+                    "score_impact": 0,
+                    "confidence_score": 68,
+                } if is_server and not repeated_observation else {}),
+                "failure_evidence_dedup_version": FAILURE_EVIDENCE_DEDUP_VERSION,
+            },
         ))
     return fixes
 
@@ -2992,6 +3021,30 @@ def dedupe_fixes(fixes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return output
 
 
+def failure_remediation_family(fix: dict[str, Any]) -> str:
+    """Canonical customer action for overlapping terminal crawl evidence."""
+    rule = str(fix.get("rule") or "").lower()
+    raw_statuses = list(fix.get("status_codes") or []) + [
+        fix.get("status_code"),
+        fix.get("http_status"),
+    ]
+    statuses = {int_or_zero(value) for value in raw_statuses if int_or_zero(value)}
+    current = str(fix.get("current_value") or "").lower()
+    if rule in {"rate_limited_page", "blocked_page", "site_access_limited"} or 429 in statuses:
+        return "verify_crawler_access"
+    if (
+        rule == "server_error"
+        or any(500 <= status <= 599 for status in statuses)
+        or re.search(r"\b5(?:00|02|03|04)\b", current)
+    ):
+        return "restore_server_availability"
+    if rule in {"broken_page", "404_error", "410_error", "failed_page"}:
+        return "restore_or_redirect_unavailable_url"
+    if rule == "redirect_destination_failed":
+        return "repair_redirect_destination"
+    return ""
+
+
 def dedupe_pages(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen: set[str] = set()
     output = []
@@ -3128,6 +3181,9 @@ def stable_id(value: str) -> str:
     digest = hashlib.sha1(str(value or "").encode("utf-8")).hexdigest()[:10]
     return f"finding_{digest}"
 def fix_dedup_class(fix: dict[str, Any]) -> str:
+    remediation = failure_remediation_family(fix)
+    if remediation:
+        return remediation
     text = " ".join(str(fix.get(k, "")) for k in ["rule", "category", "issue_title", "title"]).lower()
     if "canonical" in text:
         return "canonical"
@@ -3153,7 +3209,7 @@ def suppress_duplicate_group_cards(fixes: list[dict[str, Any]]) -> list[dict[str
     """Collapse duplicate grouped cards of the same defect with substantial page overlap."""
 
     def pages_of(fix: dict[str, Any]) -> set[str]:
-        return {clean_path(u) for u in (fix.get("affected_pages") or []) if clean_path(u)}
+        return {evidence_url_key(u) for u in (fix.get("affected_pages") or []) if evidence_url_key(u)}
 
     grouped = [fix for fix in fixes if len(pages_of(fix)) > 1]
     if len(grouped) < 2:
@@ -3195,7 +3251,7 @@ def suppress_group_covered_singletons(fixes: list[dict[str, Any]]) -> list[dict[
     """Drop per-page fixes already covered by one of our grouped template/evidence cards of the same defect class."""
 
     def pages_of(fix: dict[str, Any]) -> list[str]:
-        return dedupe_strings([clean_path(u) for u in (fix.get("affected_pages") or []) if clean_path(u)])
+        return dedupe_strings([evidence_url_key(u) for u in (fix.get("affected_pages") or []) if evidence_url_key(u)])
 
     def is_generator_group(fix: dict[str, Any]) -> bool:
         return str(fix.get("source", "")).startswith(GENERATOR_GROUP_SOURCES)
@@ -3217,7 +3273,7 @@ def suppress_group_covered_singletons(fixes: list[dict[str, Any]]) -> list[dict[
             continue
         pages = pages_of(fix)
         if len(pages) <= 1:
-            page = pages[0] if pages else clean_path(fix.get("page_url") or "")
+            page = pages[0] if pages else evidence_url_key(fix.get("page_url") or "")
             if page and (fix_dedup_class(fix), page) in covered:
                 continue  # non-generator singleton already covered by a generator card
         output.append(fix)

@@ -3,6 +3,8 @@
 // queue or asynchronous recovery; Premium remains blocked on that coordinator.
 
 import { base44 } from "@/api/base44Client";
+
+export const SCAN_HISTORY_VERSION = "scan_history_v2_account_wide_recent";
 import { getActiveProject } from "@/lib/activeProject";
 import { clearCustomerAuthBoundary } from "@/lib/customerBrowserCache";
 import {
@@ -612,6 +614,43 @@ export async function listScanRuns(projectId, limit = 3) {
   } catch (error) {
     const failure = customerRecoveryFailure(error, scope);
     console.warn("Durable scan history read failed.", failure.kind, failure.support_reference);
+    if (failure.kind === "unauthorized") clearCustomerAuthBoundary({ status: 401 });
+    return failure;
+  }
+}
+
+export async function listAccountScanRuns(limit = 20) {
+  const scope = "history:account";
+  try {
+    await currentOwner();
+    const response = await base44.functions.invoke("getCustomerScanResult", {
+      action: "list_all",
+      limit: Math.min(Math.max(Number(limit) || 20, 1), 30),
+    });
+    const result = response?.data && typeof response.data === "object" ? response.data : response;
+    if (!result || result.success !== true || result.action !== "list_all" || !Array.isArray(result.runs)) {
+      return customerRecoveryFailure({
+        status: response?.status,
+        data: result && typeof result === "object" ? result : { error_code: "result_load_failed" },
+      }, scope);
+    }
+    const runs = result.runs.map((run) => ({
+      id: String(run?.id || ""),
+      project_id: String(run?.project_id || ""),
+      website_url: String(run?.website_url || ""),
+      normalized_domain: String(run?.normalized_domain || ""),
+      status: String(run?.status || ""),
+      pages_found: Math.max(0, Math.trunc(Number(run?.pages_found) || 0)),
+      pages_crawled: Math.max(0, Math.trunc(Number(run?.pages_crawled) || 0)),
+      queued_at: String(run?.queued_at || ""),
+      started_at: String(run?.started_at || ""),
+      reviewing_at: String(run?.reviewing_at || ""),
+      completed_at: String(run?.completed_at || ""),
+    })).filter((run) => run.id && run.project_id);
+    return { ok: true, kind: "loaded", runs };
+  } catch (error) {
+    const failure = customerRecoveryFailure(error, scope);
+    console.warn("Durable account scan history read failed.", failure.kind, failure.support_reference);
     if (failure.kind === "unauthorized") clearCustomerAuthBoundary({ status: 401 });
     return failure;
   }

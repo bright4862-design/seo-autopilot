@@ -1,4 +1,4 @@
-import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
+import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 // Pure mapping logic for the durable scan models (ScanRun / FixList / FixItem).
 // No Base44 imports so tests can exercise it directly; persistence lives in
 // scanRuns.js. Field names mirror base44/entities/*.jsonc and the
@@ -13,11 +13,11 @@ const LIMITED_SCAN_STATUSES = new Set([
 
 const MODE_PAGE_LIMITS = { standard_150: 150, advanced: 150 };
 export const RELEASE_AUTHORITY_CONTRACT = Object.freeze({
-  scannerVersion: "python_scanner_v3_bounded_request",
-  scannerBuildRevision: "authenticated_health_probe_v1",
-  archetypeClassifierVersion: "archetype_classifier_v9_local_business_hospitality",
-  reviewVersion: "python_review_v2_structural_marketplace",
-  calibrationVersion: "review_evidence_calibration_v6_health_score_v2",
+  scannerVersion: RELEASE_COMPONENT_VERSIONS.scanner_version,
+  scannerBuildRevision: RELEASE_COMPONENT_VERSIONS.scanner_build_revision,
+  archetypeClassifierVersion: RELEASE_COMPONENT_VERSIONS.archetype_classifier_version,
+  reviewVersion: RELEASE_COMPONENT_VERSIONS.review_version,
+  calibrationVersion: RELEASE_COMPONENT_VERSIONS.review_evidence_calibration_version,
   betaRevisionFingerprint: RELEASE_FINGERPRINT,
 });
 

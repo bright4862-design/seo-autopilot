@@ -46,7 +46,6 @@ jobs:
           test "${{ github.actor }}" = "bright4862-design"
           test "${{ github.ref }}" = "refs/heads/main"
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
-          git fetch origin main --quiet
           test "$(git rev-parse origin/main)" = "${{ github.sha }}"
           test -z "$(git status --porcelain --untracked-files=all)"
           /bin/bash -n scripts/set-base44-scan-intake.sh

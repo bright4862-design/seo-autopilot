@@ -174,6 +174,14 @@ test("Cloud Operator invokes the allowlisted shell through bash so file mode can
   assert.match(workflow, /run: bash \.\/scripts\/fixlist-cloud-operator\.sh/);
 });
 
+test("credential-free release checkouts never attempt a network fetch", () => {
+  for (const ownerWorkflow of [workflow, intakeWorkflow, connectivityWorkflow]) {
+    assert.match(ownerWorkflow, /persist-credentials: false/);
+    assert.match(ownerWorkflow, /git rev-parse origin\/main/);
+    assert.doesNotMatch(ownerWorkflow, /git fetch origin main/);
+  }
+});
+
 test("acceptance-only admission is exact-source, allowlisted, expiring and budget bounded", () => {
   assert.match(workflow, /- acceptance-only/);
   assert.match(workflow, /ACCEPTANCE_SOURCE_SHA: \$\{\{ github\.sha \}\}/);

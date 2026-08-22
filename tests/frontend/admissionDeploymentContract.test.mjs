@@ -24,6 +24,7 @@ const intakeWorkflow = read(".github/workflows/fixlist-base44-scan-intake.yml");
 const connectivityWorkflow = read(".github/workflows/fixlist-base44-admission-connectivity.yml");
 const cliHelper = read("scripts/lib/base44-pinned-cli.sh");
 const sourceGuard = read("scripts/lib/release-source-guard.sh");
+const resolveOperatorVersion = read("scripts/resolve_admission_operator_signing_version.py");
 
 const releaseMutationScripts = [
   bootstrap,
@@ -70,6 +71,22 @@ test("coordinator redeploy reuses the deployed numeric operator-secret reference
   assert.ok(versionList > operatorRef, "secret enumeration must remain a fallback only");
   assert.match(deployCoordinator, /name == expected_name and version\.isdigit\(\)/);
   assert.doesNotMatch(deployCoordinator, /secrets versions access/);
+});
+
+test("coordinator workflow resolves a numeric operator-secret pin with the dedicated identity", () => {
+  const dedicatedAuth = workflow.indexOf("Authenticate dedicated admission secret resolver");
+  const resolveVersion = workflow.indexOf("Resolve numeric admission signing-secret version");
+  const deployAuth = workflow.indexOf("Authenticate to Google Cloud");
+  const deploy = workflow.indexOf("Deploy admission coordinator");
+  assert.ok(dedicatedAuth >= 0, "dedicated admission authentication is missing");
+  assert.ok(resolveVersion > dedicatedAuth, "version resolution must follow dedicated authentication");
+  assert.ok(deployAuth > resolveVersion, "deployment identity must be restored after version resolution");
+  assert.ok(deploy > deployAuth, "coordinator deployment must follow deployment authentication");
+  assert.match(workflow, /ADMISSION_OPERATOR_SIGNING_VERSION=%s\\n[^\n]*\$GITHUB_ENV/);
+  assert.match(resolveOperatorVersion, /versions\/latest:access/);
+  assert.match(resolveOperatorVersion, /print\(match\.group\(1\)\)/);
+  assert.doesNotMatch(resolveOperatorVersion, /(?:get\(|\[)["']payload["']/, "resolver must not inspect or emit the payload field");
+  assert.doesNotMatch(resolveOperatorVersion, /open\([^)]*,\s*["']w/, "access response must not be written to disk");
 });
 
 test("Base44 admission configuration is disabled-first, entitlement-owned and additive", () => {

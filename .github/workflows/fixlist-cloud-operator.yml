@@ -165,8 +165,27 @@ jobs:
         run: |
           set -euo pipefail
           bash -n scripts/deploy_admission_coordinator.sh
+          python -m py_compile scripts/resolve_admission_operator_signing_version.py
           python -m pip install -r admission-coordinator/requirements.txt pytest
           PYTHONPATH=admission-coordinator python -m pytest -q admission-coordinator
+
+      - name: Authenticate dedicated admission secret resolver
+        if: inputs.operation == 'deploy-admission-coordinator'
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT }}
+
+      - name: Resolve numeric admission signing-secret version
+        if: inputs.operation == 'deploy-admission-coordinator'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(python scripts/resolve_admission_operator_signing_version.py \
+            "$GCP_PROJECT" fixlist-admission-operator-signing-key)"
+          printf '%s' "$version" | grep -Eq '^[1-9][0-9]*$'
+          printf 'ADMISSION_OPERATOR_SIGNING_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3

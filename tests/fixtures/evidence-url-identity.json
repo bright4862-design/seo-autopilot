@@ -1,0 +1,105 @@
+{
+  "_comment": "Shared URL identity table. Python (scanner-api/tests/test_evidence_url_identity.py) and JavaScript (tests/frontend/evidenceUrlIdentityParity.test.mjs) both assert against this file so the two runtimes cannot disagree about which URLs are the same page.",
+  "cases": [
+    {
+      "url": "https://ex.com/",
+      "template_family_key": "/",
+      "evidence_url_key": "/"
+    },
+    {
+      "url": "https://ex.com/a",
+      "template_family_key": "/a",
+      "evidence_url_key": "/a"
+    },
+    {
+      "url": "/a",
+      "template_family_key": "/a",
+      "evidence_url_key": "/a"
+    },
+    {
+      "url": "/a/",
+      "template_family_key": "/a",
+      "evidence_url_key": "/a"
+    },
+    {
+      "url": "/a#top",
+      "template_family_key": "/a",
+      "evidence_url_key": "/a"
+    },
+    {
+      "url": "/a?b=1&c=2",
+      "template_family_key": "/a",
+      "evidence_url_key": "/a?b=1&c=2"
+    },
+    {
+      "url": "/a?c=2&b=1",
+      "template_family_key": "/a",
+      "evidence_url_key": "/a?b=1&c=2"
+    },
+    {
+      "url": "/a?page=2",
+      "template_family_key": "/a",
+      "evidence_url_key": "/a?page=2"
+    },
+    {
+      "url": "/a?utm_source=x&utm_medium=y",
+      "template_family_key": "/a",
+      "evidence_url_key": "/a"
+    },
+    {
+      "url": "/a?gclid=123",
+      "template_family_key": "/a",
+      "evidence_url_key": "/a"
+    },
+    {
+      "url": "/a?utm_source=x&page=2",
+      "template_family_key": "/a",
+      "evidence_url_key": "/a?page=2"
+    },
+    {
+      "url": "/a?x=1&x=2",
+      "template_family_key": "/a",
+      "evidence_url_key": "/a?x=1&x=2"
+    },
+    {
+      "url": "/a?x=2&x=1",
+      "template_family_key": "/a",
+      "evidence_url_key": "/a?x=1&x=2"
+    },
+    {
+      "url": "/a?x=1",
+      "template_family_key": "/a",
+      "evidence_url_key": "/a?x=1"
+    },
+    {
+      "url": "/a%2Db",
+      "template_family_key": "/a-b",
+      "evidence_url_key": "/a-b"
+    },
+    {
+      "url": "/Doc.PDF",
+      "template_family_key": "/doc.pdf",
+      "evidence_url_key": "/doc.pdf"
+    },
+    {
+      "url": "/blog/Post-1/",
+      "template_family_key": "/blog/post-1",
+      "evidence_url_key": "/blog/post-1"
+    },
+    {
+      "url": "https://ex.com/locations/california?ref=nav",
+      "template_family_key": "/locations/california",
+      "evidence_url_key": "/locations/california"
+    },
+    {
+      "url": "/a?empty=",
+      "template_family_key": "/a",
+      "evidence_url_key": "/a?empty="
+    },
+    {
+      "url": "/products/wine?size=75cl&colour=red",
+      "template_family_key": "/products/wine",
+      "evidence_url_key": "/products/wine?colour=red&size=75cl"
+    }
+  ]
+}

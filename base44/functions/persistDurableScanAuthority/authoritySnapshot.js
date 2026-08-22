@@ -1,4 +1,5 @@
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
+import { firstFailedRepairInvariant } from "./repairInvariants.js";
 // Bumped when the snapshot gained coverage/inventory fields. The authority
 // proof is an HMAC over the whole snapshot, so adding a field changes the
 // payload for every row -- including rows sealed before it existed. Version
@@ -55,8 +56,27 @@ export function firstFailedAuthorityPredicate(scan, review) {
     // worker or hand-built envelope away from covering a limited scan.
     ["coverage_state", coverageAssessment(review).state === AUTHORITATIVE_COVERAGE_STATE],
     ["coverage_authority_version", Boolean(text(coverageAssessment(review).coverage_authority_version, 160))],
+    // Re-derived here, not trusted. A repair whose own arithmetic cannot be
+    // true must not reach a seal, whatever the producer claims about it.
+    ["repair_coverage_invariants", firstFailedRepairInvariant_forAll(review) === ""],
   ];
   return predicates.find(([, passed]) => !passed)?.[0] || "";
+}
+
+/**
+ * The first invariant any repair in this review violates, or "".
+ *
+ * Named separately so the failure is reportable: the predicate list only says
+ * which predicate failed, and "repair_coverage_invariants" alone would not say
+ * which repair or which rule.
+ */
+export function firstFailedRepairInvariant_forAll(review) {
+  const fixes = firstArray([review?.recommendations, review?.fixes, review?.cleaned_fixes]);
+  for (const fix of fixes) {
+    const failed = firstFailedRepairInvariant(fix);
+    if (failed) return failed;
+  }
+  return "";
 }
 
 function coverageAssessment(review) {

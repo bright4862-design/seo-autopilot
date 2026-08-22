@@ -214,7 +214,23 @@ def _family_label(family: str) -> str:
 
 @dataclass(frozen=True)
 class CoverageContext:
-    affected_checked: int
+    """Coverage counted over one URL universe, not two.
+
+    The customer-facing string is "N of M <family> pages checked are affected".
+    That is only a ratio if N and M are drawn from the same set. Production
+    shipped 126/1, 35/30 and 47/6 because the numerator counted every affected
+    URL while the denominator counted usable HTML pages in a single family.
+
+    So the counts are kept apart and named for what they are:
+      affected_reported  - every URL the detector listed
+      affected_observed  - those the crawl actually retained evidence for
+      affected_eligible  - those inside the denominator's own universe
+    Only affected_eligible may be divided by checked_eligible.
+    """
+
+    affected_reported: int
+    affected_observed: int
+    affected_eligible: int
     checked_eligible: int | None
     indexable_affected: int
     non_indexable_affected: int
@@ -223,16 +239,38 @@ class CoverageContext:
     important_affected: int
 
     @property
+    def affected_checked(self) -> int:
+        """Backwards-compatible alias for the reported total."""
+        return self.affected_reported
+
+    @property
+    def affected_universe_is_comparable(self) -> bool:
+        """True only when every observed affected page is in the denominator.
+
+        If some are outside it, the quotient understates rather than overstating
+        -- "0 of 1 homepage pages are affected" for 126 real affected pages is
+        arithmetically valid and substantively a lie. Suppressing the ratio and
+        stating the count is the honest answer; partitioning by family is the
+        better one and is the rest of this patch.
+        """
+        return self.affected_observed > 0 and self.affected_eligible == self.affected_observed
+
+    @property
     def checked_coverage(self) -> float | None:
-        if not self.checked_eligible:
+        # No measured universe means no ratio. Access and failure evidence lands
+        # here by design: those pages are deliberately outside the usable-HTML
+        # denominator, so an observation count is the only honest output.
+        if not self.checked_eligible or not self.affected_universe_is_comparable:
             return None
-        return self.affected_checked / max(1, self.checked_eligible)
+        ratio = self.affected_eligible / max(1, self.checked_eligible)
+        return ratio if 0.0 <= ratio <= 1.0 else None
 
     @property
     def searchable_coverage(self) -> float | None:
-        if not self.indexable_checked_eligible:
+        if not self.indexable_checked_eligible or not self.affected_universe_is_comparable:
             return None
-        return self.indexable_affected / max(1, self.indexable_checked_eligible)
+        ratio = self.indexable_affected / max(1, self.indexable_checked_eligible)
+        return ratio if 0.0 <= ratio <= 1.0 else None
 
 
 def build_coverage_context(fix: dict[str, Any], pages: list[dict[str, Any]]) -> CoverageContext:
@@ -257,10 +295,16 @@ def build_coverage_context(fix: dict[str, Any], pages: list[dict[str, Any]]) -> 
 
     checked_eligible = explicit_eligible_count if explicit_eligible_count and explicit_eligible_count > 0 else (len(eligible) if comparable_family and eligible else None)
 
-    states = [_indexability_state(page) for page in matched_affected]
+    # The numerator restricted to the denominator's own universe. Without this
+    # intersection the two counts describe different sets of URLs and their
+    # quotient is not a coverage figure at all.
+    eligible_keys = {_path(_page_url(page)) for page in eligible}
+    affected_eligible_pages = [page for page in matched_affected if _path(_page_url(page)) in eligible_keys]
+
+    states = [_indexability_state(page) for page in affected_eligible_pages]
     indexable_affected = states.count("indexable")
     non_indexable_affected = states.count("non_indexable")
-    unknown_affected = max(0, len(affected) - indexable_affected - non_indexable_affected)
+    unknown_affected = max(0, len(affected_eligible_pages) - indexable_affected - non_indexable_affected)
 
     indexable_eligible = None
     if checked_eligible is not None:
@@ -274,8 +318,19 @@ def build_coverage_context(fix: dict[str, Any], pages: list[dict[str, Any]]) -> 
 
     important_affected = sum(1 for page in matched_affected if _important_page(page))
 
+    # An explicit eligible count supplied by a detector has no URL set behind
+    # it, so the intersection cannot be computed and the observed count is the
+    # most that can honestly be claimed as eligible.
+    affected_eligible = (
+        min(len(matched_affected), checked_eligible)
+        if explicit_eligible_count is not None and checked_eligible is not None
+        else len(affected_eligible_pages)
+    )
+
     return CoverageContext(
-        affected_checked=len(affected),
+        affected_reported=len(affected),
+        affected_observed=len(matched_affected),
+        affected_eligible=affected_eligible,
         checked_eligible=checked_eligible,
         indexable_affected=indexable_affected,
         non_indexable_affected=non_indexable_affected,
@@ -342,12 +397,20 @@ def _priority_reason(
     label = _family_label(family) if family else "relevant pages"
     affected_count = max(context.affected_checked, len(_affected_pages(fix)))
 
-    if search_facing and context.indexable_checked_eligible and context.indexable_affected:
+    # Only state "N of M" when N and M were counted over the same URLs.
+    if search_facing and context.indexable_checked_eligible and context.indexable_affected and context.affected_universe_is_comparable:
         return f"{context.indexable_affected} of {context.indexable_checked_eligible} searchable {label} checked are affected."
-    if context.checked_eligible and context.affected_checked:
-        return f"{context.affected_checked} of {context.checked_eligible} {label} checked are affected."
+    if context.checked_eligible and context.affected_eligible and context.affected_universe_is_comparable:
+        return f"{context.affected_eligible} of {context.checked_eligible} {label} checked are affected."
     if _shared_repair_confirmed(fix) and affected_count > 1:
         return f"One shared change may improve {affected_count} checked pages."
+    if affected_count > 0 and not context.affected_universe_is_comparable:
+        # The affected pages sit outside this family's measured universe, so
+        # there is no denominator to divide by. Report what was observed. This
+        # sits after the shared-repair message, which says more about the same
+        # situation when the detector proved a shared surface.
+        noun = "page" if affected_count == 1 else "pages"
+        return f"{affected_count} checked {noun} are affected."
 
     # When the eligible denominator is unknown, keep the customer claim scoped
     # to the checked sample. Important-page evidence may refine the explanation,

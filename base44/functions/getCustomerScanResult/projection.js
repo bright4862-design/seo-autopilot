@@ -187,6 +187,8 @@ const FIX_ITEM_FIELDS = [
   "action_priority",
   "action_priority_score",
   "priority_reason",
+  "coverage_context_validity",
+  "coverage_context_note",
   "canonical_action_rank",
   "repair_identity_version",
   "repair_fingerprint",
@@ -500,11 +502,70 @@ function sanitizeRun(run, { detailed }) {
   return result;
 }
 
+const COVERAGE_UNAVAILABLE_NOTE = "Coverage detail unavailable for this saved scan.";
+
+/**
+ * Whether a saved repair's coverage arithmetic can be true.
+ *
+ * Records already sealed in production carry 126/1, 35/30 and 47/6. Their seal
+ * covers those numbers, so they cannot be corrected in place, and the browser
+ * must not recompute an authority it does not hold. What the server can do is
+ * decline to render an impossible ratio and state the absolute count instead.
+ *
+ *   valid       numerator and denominator can be counted over one universe
+ *   invalid     they cannot; the ratio is suppressed
+ *   unmeasured  there is no denominator, so there was never a ratio to show
+ */
+function coverageContextValidity(item) {
+  // The counts live in priority_context; the top-level fallback keeps this
+  // honest for any older row that carried them flat.
+  const context = item?.priority_context && typeof item.priority_context === "object" ? item.priority_context : item || {};
+  const affected = number(context.affected_checked ?? item?.affected_checked ?? item?.page_count);
+  const eligible = context.checked_eligible === null || context.checked_eligible === undefined
+    ? null
+    : number(context.checked_eligible);
+  const indexableAffected = number(context.indexable_affected);
+  const indexableEligible = context.indexable_checked_eligible === null || context.indexable_checked_eligible === undefined
+    ? null
+    : number(context.indexable_checked_eligible);
+
+  if (eligible === null && indexableEligible === null) return "unmeasured";
+  if (eligible !== null && (eligible <= 0 || affected > eligible)) return "invalid";
+  if (indexableEligible !== null && (indexableEligible <= 0 || indexableAffected > indexableEligible)) return "invalid";
+  return "valid";
+}
+
+/** Absolute count wording, used wherever a ratio cannot honestly be shown. */
+function neutralCoverageReason(item) {
+  const context = item?.priority_context && typeof item.priority_context === "object" ? item.priority_context : item || {};
+  const affected = number(context.affected_checked ?? item?.affected_checked ?? item?.page_count);
+  if (affected <= 0) return COVERAGE_UNAVAILABLE_NOTE;
+  const noun = affected === 1 ? "page" : "pages";
+  return `${affected} checked ${noun} are affected.`;
+}
+
+function applyCoverageValidity(result) {
+  const validity = coverageContextValidity(result);
+  result.coverage_context_validity = validity;
+  if (validity !== "invalid") return result;
+  // Suppressed, not corrected: the sealed record keeps its numbers, and the
+  // signed prose stays intact in owner diagnostics rather than being parsed
+  // apart here.
+  if (result.priority_context && typeof result.priority_context === "object") {
+    result.priority_context = { ...result.priority_context, checked_coverage: null, searchable_coverage: null };
+  }
+  result.checked_coverage = null;
+  result.searchable_coverage = null;
+  result.priority_reason = neutralCoverageReason(result);
+  result.coverage_context_note = COVERAGE_UNAVAILABLE_NOTE;
+  return result;
+}
+
 function sanitizeFixItem(item) {
   const result = pickFields(item, FIX_ITEM_FIELDS);
   const raw = item?.raw_finding && typeof item.raw_finding === "object" ? item.raw_finding : {};
   result.raw_finding = { verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence) };
-  return result;
+  return applyCoverageValidity(result);
 }
 
 function pickFields(value, fields) {

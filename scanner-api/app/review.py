@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .coverage_authority import assess_coverage, coverage_inputs_from_payload
+from .repair_coverage import REPAIR_COVERAGE_VERSION, normalize_repair_scope
 from .page_evidence_gate import (
     PAGE_EVIDENCE_GATE_VERSION,
     page_evidence_class,
@@ -1931,7 +1932,7 @@ def prepare_fixes(raw_fixes: list[dict[str, Any]], site_fingerprint: dict[str, A
     filtered = [filter_page_level_asset_evidence(fix, pages) for fix in normalized]
     normalized = [fix for fix in filtered if fix is not None]
     normalized = [select_representative_page(fix, pages, body, playbook) for fix in normalized]
-    scored = [score_fix(fix, site_fingerprint, body, playbook) for fix in normalized]
+    scored = [score_fix(fix, site_fingerprint, body, playbook, pages) for fix in normalized]
     scored = suppress_group_covered_singletons(scored)
     scored = suppress_duplicate_group_cards(scored)
     scored = collapse_sitewide_template_findings(scored, pages, site_fingerprint, body, playbook)
@@ -1997,7 +1998,21 @@ def is_cross_cutting_evidence(fix: dict[str, Any]) -> bool:
     return rule in {"rate_limited_page", "broken_page", "server_error", "blocked_page"}
 
 
-def score_fix(fix: dict[str, Any], site_fingerprint: dict[str, Any], body: dict[str, Any], playbook: dict[str, Any]) -> dict[str, Any]:
+def score_fix(
+    fix: dict[str, Any],
+    site_fingerprint: dict[str, Any],
+    body: dict[str, Any],
+    playbook: dict[str, Any],
+    pages: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    # The caller already holds the authoritative page list; deriving it from
+    # body keys here was guessing at the payload shape and silently resolved
+    # every affected URL to "unknown".
+    scope_evidence = normalize_repair_scope(
+        fix,
+        pages if pages is not None else (body.get("crawled_pages") or body.get("pages") or []),
+        family_resolver=normalize_template_family,
+    )
     page_url = clean_path(fix.get("page_url") or first_value(fix.get("affected_pages")) or "/")
     page_value = score_page_value(page_url, site_fingerprint, body, playbook)
     defect_class = classify_defect_class(fix)
@@ -2031,8 +2046,17 @@ def score_fix(fix: dict[str, Any], site_fingerprint: dict[str, Any], body: dict[
         "current_value": clean_str(fix.get("current_value")) or template_current_value(affected_pages),
         "priority": priority,
         "page_type": page_value["classification"],
-        "page_scope": "cross_cutting" if is_cross_cutting_evidence(fix) else fix.get("page_scope") or ("family" if len(affected_pages) > 1 else "page"),
-        "page_template_family": "mixed" if is_cross_cutting_evidence(fix) else fix.get("page_template_family") or get_template_family(page_url),
+        # Scope and family come from normalize_repair_scope, which reads the
+        # family stamped on authoritative page evidence. The previous inline
+        # rule fell back to the representative's own family, which is how a
+        # mixed group came to be labelled Homepage.
+        "page_scope": scope_evidence["page_scope"],
+        "page_template_family": scope_evidence["page_template_family"],
+        "page_count": scope_evidence["page_count"],
+        "family_breakdown": scope_evidence["family_breakdown"],
+        "representative_pages_by_family": scope_evidence["representative_pages_by_family"],
+        "affected_pages_complete": scope_evidence["affected_pages_complete"],
+        "repair_coverage_version": scope_evidence["repair_coverage_version"],
         "page_value_score": page_value["score"],
         "page_value_label": page_value["label"],
         "primary_defect_class": defect_class,

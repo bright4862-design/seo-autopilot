@@ -98,8 +98,12 @@ export function firstFailedRepairInvariant(repair) {
   const representatives = repair.representative_pages_by_family;
   if (representatives && typeof representatives === "object" && complete) {
     const affected = uniqueAffectedKeys(repair);
-    for (const [family, url] of Object.entries(representatives)) {
-      if (!affected.has(evidenceUrlKey(url))) return "representative_is_not_an_affected_page";
+    for (const [family, value] of Object.entries(representatives)) {
+      const urls = Array.isArray(value) ? value : [value];
+      if (urls.length === 0) return "representative_is_not_an_affected_page";
+      for (const url of urls) {
+        if (!affected.has(evidenceUrlKey(url))) return "representative_is_not_an_affected_page";
+      }
       if (namedFamilies.length && !(family in partitions)) return "representative_family_not_in_breakdown";
     }
   }

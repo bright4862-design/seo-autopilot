@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `400f68e10999fc59` |
+| Candidate fingerprint | `3fccb57bd367dcfb` |
 | Classifier | `archetype_classifier_v10_structural_finance_member_retail` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,13 +15,20 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The shipping code is
-fingerprint `400f68e10999fc59` with classifier
+fingerprint `3fccb57bd367dcfb` with classifier
 `archetype_classifier_v10_structural_finance_member_retail`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded Patch E candidate was `6e0368d4ac5d2a6b`. The
-stacked candidate moved the fingerprint to `400f68e10999fc59` by adding
+The immediately superseded stacked candidate was `400f68e10999fc59`. The
+current recovery candidate moved the fingerprint to `3fccb57bd367dcfb` by
+correcting single-page repair scope: one affected page remains page-scoped
+even when its template family is unknown, so an otherwise valid canonical
+repair snapshot is not discarded as an impossible mixed repair. This change
+requires focused production acceptance before the 50-site matrix resumes.
+
+The earlier Patch E candidate was `6e0368d4ac5d2a6b`. The stacked candidate
+moved the fingerprint to `400f68e10999fc59` by adding
 bounded multilingual page-family semantics, structural finance/member-retail
 classification, terminal failure-evidence deduplication, action-band-consistent
 summary copy, durable failure-state explanations, account-wide scan history,

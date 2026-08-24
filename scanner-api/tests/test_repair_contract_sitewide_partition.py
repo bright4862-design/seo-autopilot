@@ -83,6 +83,27 @@ def test_non_sitewide_repairs_are_reconciled_at_the_canonical_boundary():
     assert first_failed_repair_invariant(normalized) == ""
 
 
+def test_unknown_single_page_repair_is_valid_at_the_canonical_boundary():
+    repair = {
+        "fix_id": "sitemap-root-redirect",
+        "rule": "sitemap_redirect",
+        "page_scope": "mixed",
+        "page_template_family": "mixed",
+        "affected_pages": ["/"],
+        "page_count": 1,
+        "family_breakdown": {"unknown": 1},
+        "representative_pages_by_family": {"unknown": "/"},
+        "affected_pages_complete": True,
+    }
+
+    normalized = _normalize_canonical_repair_evidence(repair, [])
+
+    assert normalized["page_scope"] == "page"
+    assert normalized["page_template_family"] == "unknown"
+    assert normalized["family_breakdown"] == {"unknown": 1}
+    assert first_failed_repair_invariant(normalized) == ""
+
+
 def test_query_variants_use_the_same_evidence_identity_as_base44():
     pages = [_page("/a", "collection_page")]
     repair = {

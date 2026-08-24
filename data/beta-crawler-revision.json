@@ -35,7 +35,7 @@
     "render_evidence_quality_version": "render_evidence_quality_v1",
     "render_evidence_version": "render_evidence_v1",
     "render_followup_version": "render_followup_v1",
-    "repair_coverage_version": "repair_coverage_v1_family_consistent",
+    "repair_coverage_version": "repair_coverage_v2_single_page_scope",
     "repair_presentation_contract_version": "repair_presentation_v1_compact_mobile",
     "repair_suggestion_library_version": "v1",
     "repair_write_contract_version": "repair_contract_v2_shadow_calibrated",
@@ -54,10 +54,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "400f68e10999fc59",
+  "fingerprint": "3fccb57bd367dcfb",
   "git_commit": "",
-  "note": "Stacked beta candidate: exact-generation admission reconciliation; terminal failure-evidence dedup; action-band summary truth; durable failure copy; structural classifier v10; bounded multilingual page-family semantics; account-wide scan history; count grammar. Production acceptance and deployment are pending.",
-  "recorded_at": "2026-08-22T13:25:15.697273+00:00",
+  "note": "Scan recovery candidate: single affected pages remain page-scoped even when their template family is unknown, preventing otherwise valid canonical repair snapshots from failing durable persistence. Focused production acceptance is pending.",
+  "recorded_at": "2026-08-24T20:01:43.033823+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

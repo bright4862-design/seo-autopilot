@@ -166,13 +166,6 @@
       "additionalProperties": true,
       "default": {}
     },
-    "affected_pages_complete": {
-      "type": "boolean",
-      "default": true
-    },
-    "repair_coverage_version": {
-      "type": "string"
-    },
     "what_to_do_steps": {
       "type": "array",
       "items": {

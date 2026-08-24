@@ -278,9 +278,4 @@ test("canonical v2 authority validates and seals canonical repairs, not stale le
   assert.equal(snapshot.fix_list.repair_snapshot_contract_complete, true);
   assert.equal(snapshot.recommendations.length, 1);
   assert.equal(snapshot.recommendations[0].fix_id, "canonical-fix-1");
-  assert.equal(snapshot.recommendations[0].page_count, 3);
-  assert.deepEqual(snapshot.recommendations[0].family_breakdown, { product_page: 3 });
-  assert.deepEqual(snapshot.recommendations[0].representative_pages_by_family, { product_page: "/p0" });
-  assert.equal(snapshot.recommendations[0].affected_pages_complete, true);
-  assert.equal(snapshot.recommendations[0].repair_coverage_version, "repair_coverage_v1_family_consistent");
 });

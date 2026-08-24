@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import quote, unquote, unquote_to_bytes, urlsplit
 
-REPAIR_COVERAGE_VERSION = "repair_coverage_v2_single_page_scope"
+REPAIR_COVERAGE_VERSION = "repair_coverage_v3_unknown_mixed_scope"
 
 UNKNOWN_FAMILY = "unknown"
 
@@ -303,8 +303,14 @@ def first_failed_repair_invariant(repair: dict[str, Any] | None) -> str:
         return "page_scope_has_multiple_pages"
     if scope == "family" and len(partitions) > 1:
         return "family_scope_spans_multiple_families"
-    if scope == "mixed" and len(partitions) < 2:
-        return "mixed_scope_without_partitions"
+    if scope == "mixed":
+        partition_names = {str(family).strip().lower() for family in partitions}
+        unknown_only_multi_page = (
+            page_count > 1
+            and partition_names == {UNKNOWN_FAMILY}
+        )
+        if len(partitions) < 2 and not unknown_only_multi_page:
+            return "mixed_scope_without_partitions"
 
     representatives = repair.get("representative_pages_by_family")
     if isinstance(representatives, dict) and complete:

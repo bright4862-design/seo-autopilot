@@ -143,6 +143,26 @@ test("mixed scope must actually carry partitions", () => {
   );
 });
 
+test("Tiqets all-unknown multi-page evidence is a valid mixed scope", () => {
+  const affected = Array.from({ length: 22 }, (unused, index) => `/unknown/${index}`);
+  const tiqets = repair({
+    page_scope: "mixed",
+    page_template_family: "mixed",
+    affected_pages: affected,
+    page_count: 22,
+    family_breakdown: { unknown: 22 },
+    representative_pages_by_family: { unknown: "/unknown/0" },
+    affected_reported: 22,
+    affected_observed: 22,
+    affected_eligible: 22,
+    checked_eligible: null,
+    indexable_affected: 0,
+    indexable_checked_eligible: null,
+  });
+  assert.equal(firstFailedRepairInvariant(tiqets), "");
+  assert.equal(repairCoverageIsValid(tiqets), true);
+});
+
 test("a representative must be one of the affected pages in its own family", () => {
   assert.equal(
     firstFailedRepairInvariant(repair({ representative_pages_by_family: { product_page: "/never-affected" } })),
@@ -237,6 +257,86 @@ test("one bad repair among many blocks the whole seal", () => {
   assert.equal(firstFailedAuthorityPredicate(AUTHORITATIVE_SCAN, review), "repair_coverage_invariants");
 });
 
+
+test("attempted malformed canonical v2 is rejected instead of falling back to legacy", () => {
+  const validLegacy = repair();
+  const malformedCanonical = {
+    ...repair(),
+    fix_id: "canonical-bad",
+    repair_contract_version: "repair_contract_v2_shadow_calibrated",
+    repair_priority_model_version: "repair_priority_v2_technical_severity",
+    base_severity: "high",
+    evidence_class: "confirmed_problem",
+    action_priority: "fix_first",
+    canonical_action_rank: 1,
+    // Missing repair_fingerprint makes the attempted canonical contract invalid.
+    repair_identity_version: "repair_identity_v1",
+  };
+  const review = {
+    ...authoritativeReview([validLegacy]),
+    repair_contract_version: "repair_contract_v2_shadow_calibrated",
+    repair_snapshot_contract_version: "repair_contract_v2_shadow_calibrated",
+    repair_snapshot_contract_complete: true,
+    repair_priority_model_version: "repair_priority_v2_technical_severity",
+    canonical_repairs: [malformedCanonical],
+  };
+  assert.equal(firstFailedAuthorityPredicate(AUTHORITATIVE_SCAN, review), "canonical_repair_contract");
+  assert.throws(() => buildAuthoritySnapshot({
+    scan: { ...AUTHORITATIVE_SCAN, website_url: "https://example.com" },
+    review,
+    identity: { scan_id: "scan-bad", project_id: "project-1", normalized_domain: "example.com" },
+    userId: "owner-1",
+  }), /canonical repair contract is invalid/);
+});
+
+test("canonical v2 authority preserves Tiqets mixed scope and ignores stale legacy recommendations", () => {
+  const legacyImpossible = repair({ page_count: 0, family_breakdown: {}, representative_pages_by_family: {} });
+  const affected = Array.from({ length: 22 }, (unused, index) => `/unknown/${index}`);
+  const canonical = {
+    ...repair(),
+    fix_id: "tiqets-unknown-mixed",
+    page_scope: "mixed",
+    page_template_family: "mixed",
+    affected_pages: affected,
+    page_count: 22,
+    family_breakdown: { unknown: 22 },
+    representative_pages_by_family: { unknown: "/unknown/0" },
+    affected_reported: 22,
+    affected_observed: 22,
+    affected_eligible: 22,
+    checked_eligible: null,
+    indexable_affected: 0,
+    indexable_checked_eligible: null,
+    repair_contract_version: "repair_contract_v2_shadow_calibrated",
+    repair_priority_model_version: "repair_priority_v2_technical_severity",
+    base_severity: "high",
+    evidence_class: "confirmed_problem",
+    action_priority: "fix_first",
+    priority_reason: "22 checked pages are affected.",
+    canonical_action_rank: 1,
+    repair_identity_version: "repair_identity_v1",
+    repair_fingerprint: "tiqets-mixed-fingerprint",
+  };
+  const review = {
+    ...authoritativeReview([legacyImpossible]),
+    repair_contract_version: "repair_contract_v2_shadow_calibrated",
+    repair_snapshot_contract_version: "repair_contract_v2_shadow_calibrated",
+    repair_snapshot_contract_complete: true,
+    repair_priority_model_version: "repair_priority_v2_technical_severity",
+    canonical_repairs: [canonical],
+  };
+  assert.equal(firstFailedAuthorityPredicate(AUTHORITATIVE_SCAN, review), "");
+  const snapshot = buildAuthoritySnapshot({
+    scan: { ...AUTHORITATIVE_SCAN, website_url: "https://www.tiqets.com/", pages_found: 5000, pages_crawled: 150 },
+    review,
+    identity: { scan_id: "scan-tiqets", project_id: "project-1", normalized_domain: "tiqets.com" },
+    userId: "owner-1",
+    now: "2026-08-25T00:00:00.000Z",
+  });
+  assert.equal(snapshot.recommendations.length, 1);
+  assert.equal(snapshot.recommendations[0].fix_id, "tiqets-unknown-mixed");
+  assert.equal(snapshot.recommendations[0].page_scope, "mixed");
+});
 
 test("canonical v2 authority validates and seals canonical repairs, not stale legacy recommendations", () => {
   const legacyImpossible = repair({

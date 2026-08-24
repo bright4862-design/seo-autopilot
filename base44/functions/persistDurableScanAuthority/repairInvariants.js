@@ -93,7 +93,11 @@ export function firstFailedRepairInvariant(repair) {
   const namedFamilies = Object.keys(partitions).filter((family) => !NON_SPECIFIC_FAMILIES.has(family));
   if (scope === "page" && pageCount > 1) return "page_scope_has_multiple_pages";
   if (scope === "family" && Object.keys(partitions).length > 1) return "family_scope_spans_multiple_families";
-  if (scope === "mixed" && Object.keys(partitions).length < 2) return "mixed_scope_without_partitions";
+  if (scope === "mixed") {
+    const partitionNames = new Set(Object.keys(partitions).map((family) => String(family || "").trim().toLowerCase()));
+    const unknownOnlyMultiPage = pageCount > 1 && partitionNames.size === 1 && partitionNames.has("unknown");
+    if (Object.keys(partitions).length < 2 && !unknownOnlyMultiPage) return "mixed_scope_without_partitions";
+  }
 
   const representatives = repair.representative_pages_by_family;
   if (representatives && typeof representatives === "object" && complete) {

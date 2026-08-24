@@ -22,6 +22,10 @@ from .repair_coverage import evidence_url_key, first_failed_repair_invariant, no
 from .repair_shadow_calibration import build_calibrated_shadow_review_analysis
 
 
+class CanonicalRepairContractError(RuntimeError):
+    """Canonical-v2 synthesis was attempted but could not produce one complete snapshot."""
+
+
 def _diagnostic_count(value: Any, fallback: int = 0) -> int:
     try:
         return int(float(value))
@@ -89,13 +93,13 @@ def apply_canonical_repair_contract(
     proposed = analysis.get("proposed_fixes") if isinstance(analysis, dict) else None
     if not isinstance(proposed, list):
         emit("canonical_repair_contract_absent", severity="WARNING", reason="proposed_fixes_missing")
-        return review_result
+        raise CanonicalRepairContractError("canonical repair synthesis did not produce a list")
 
     canonical_items: list[dict[str, Any]] = []
     for rank, raw_fix in enumerate(proposed, start=1):
         if not isinstance(raw_fix, dict):
             emit("canonical_repair_contract_absent", severity="WARNING", reason="proposed_fix_not_object", canonical_action_rank=rank)
-            return review_result
+            raise CanonicalRepairContractError("canonical repair synthesis produced a non-object repair")
         canonical_fix = _normalize_canonical_repair_evidence(raw_fix, pages)
         failed_invariant = first_failed_repair_invariant(canonical_fix)
         if failed_invariant:
@@ -104,7 +108,7 @@ def apply_canonical_repair_contract(
                 severity="WARNING",
                 **_safe_repair_diagnostic(canonical_fix, failed_invariant, rank=rank),
             )
-            return review_result
+            raise CanonicalRepairContractError(f"canonical repair invariant rejected: {failed_invariant}")
         identity = canonical_fix.get("repair_identity") if isinstance(canonical_fix.get("repair_identity"), dict) else {}
         item = {
             **deepcopy(canonical_fix),
@@ -133,7 +137,7 @@ def apply_canonical_repair_contract(
             validation_code=str(validation.get("code") or validation.get("reason") or "")[:160],
             canonical_fix_count=len(canonical_items),
         )
-        return review_result
+        raise CanonicalRepairContractError("canonical repair persistence candidate was rejected")
 
     return {
         **review,

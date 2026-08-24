@@ -100,6 +100,16 @@
       "url": "/products/wine?size=75cl&colour=red",
       "template_family_key": "/products/wine",
       "evidence_url_key": "/products/wine?colour=red&size=75cl"
+    },
+    {
+      "url": "/a?q=hello%20world",
+      "template_family_key": "/a",
+      "evidence_url_key": "/a?q=hello%20world"
+    },
+    {
+      "url": "/a?q=hello+world",
+      "template_family_key": "/a",
+      "evidence_url_key": "/a?q=hello%2Bworld"
     }
   ]
 }

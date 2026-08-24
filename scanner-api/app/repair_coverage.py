@@ -20,7 +20,7 @@ which is precisely how a mixed group came to be labelled Homepage.
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import parse_qsl, unquote, urlencode, urlsplit
+from urllib.parse import quote, unquote, unquote_to_bytes, urlsplit
 
 REPAIR_COVERAGE_VERSION = "repair_coverage_v1_family_consistent"
 
@@ -66,22 +66,45 @@ def template_family_key(value: Any) -> str:
     return _normalized_path(value)
 
 
+def _safe_query_decode(value: str) -> str:
+    """Mirror decodeURIComponent: percent-decode UTF-8, but never treat + as space."""
+    try:
+        return unquote_to_bytes(value).decode("utf-8", errors="strict")
+    except (UnicodeDecodeError, ValueError):
+        return value
+
+
+def _encode_query_component(value: str) -> str:
+    # encodeURIComponent leaves exactly these punctuation characters unescaped.
+    return quote(value, safe="-_.!~*'()")
+
+
 def _canonical_query(value: Any) -> str:
-    """Sorted, tracking-free query. Order is not identity; parameters are."""
+    """Sorted, tracking-free query, byte-compatible with Base44 JavaScript."""
     raw = str(value or "")
     query = urlsplit(raw).query if "//" in raw else (raw.split("?", 1)[1].split("#")[0] if "?" in raw else "")
     if not query:
         return ""
-    pairs = [
-        (unquote(key), unquote(val))
-        for key, val in parse_qsl(query, keep_blank_values=True)
-        if unquote(key).lower() not in TRACKING_PARAMETERS
-    ]
+
+    pairs: list[tuple[str, str]] = []
+    for part in query.split("&"):
+        if not part:
+            continue
+        key_raw, separator, val_raw = part.partition("=")
+        key = _safe_query_decode(key_raw)
+        value = _safe_query_decode(val_raw if separator else "")
+        if key.lower() not in TRACKING_PARAMETERS:
+            pairs.append((key, value))
     if not pairs:
         return ""
+
     # Duplicate keys are kept, both of them: dropping one would merge two pages
     # that a server may well render differently.
-    return urlencode(sorted(pairs))
+    pairs.sort()
+    return "&".join(
+        f"{_encode_query_component(key)}={_encode_query_component(value)}"
+        for key, value in pairs
+    )
 
 
 def evidence_url_key(value: Any) -> str:
@@ -134,17 +157,17 @@ def normalize_repair_scope(
             stamped[key] = _page_family(page, family_resolver)
 
     # Deduplicate by evidence identity while keeping the detector's order, so a
-    # repeated URL cannot inflate the count the customer is shown.
+    # repeated URL cannot inflate the count the customer is shown. Family lookup
+    # remains path-only because query parameters do not change a page template.
     seen: set[str] = set()
     ordered: list[tuple[str, str]] = []
     for raw in normalized.get("affected_pages") or []:
-        # Family lookup is path-only; the evidence identity is stricter and
-        # would miss a page whose affected URL carries a query.
-        key = template_family_key(raw)
-        if not key or key in seen:
+        family_key = template_family_key(raw)
+        evidence_key = evidence_url_key(raw)
+        if not family_key or not evidence_key or evidence_key in seen:
             continue
-        seen.add(key)
-        ordered.append((key, str(raw)))
+        seen.add(evidence_key)
+        ordered.append((family_key, str(raw)))
 
     breakdown: dict[str, int] = {}
     representatives: dict[str, str] = {}
@@ -188,3 +211,102 @@ def normalize_repair_scope(
         "repair_coverage_version": REPAIR_COVERAGE_VERSION,
     })
     return normalized
+
+
+def _count(value: Any) -> int:
+    """Mirror JavaScript Number()+Math.trunc used by the Base44 invariant."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _optional_count(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _unique_affected_evidence(repair: dict[str, Any]) -> set[str]:
+    values = repair.get("affected_pages") if isinstance(repair.get("affected_pages"), list) else []
+    return {key for value in values if (key := evidence_url_key(value))}
+
+
+def first_failed_repair_invariant(repair: dict[str, Any] | None) -> str:
+    """Mirror Base44's fail-closed structural repair-coverage invariant.
+
+    The durable worker runs this after canonical normalization and before the
+    signed completion envelope is built. Base44 still re-runs its independent
+    JavaScript copy at persistence time; this mirror prevents a payload known to
+    be structurally impossible from crossing the worker/Base44 boundary.
+    """
+    if not isinstance(repair, dict):
+        return "repair_missing"
+
+    reported_raw = repair.get("affected_reported")
+    reported = _count(repair.get("page_count") if reported_raw is None else reported_raw)
+    observed_raw = repair.get("affected_observed")
+    observed = _count(reported if observed_raw is None else observed_raw)
+    eligible_raw = repair.get("affected_eligible")
+    eligible = _count(observed if eligible_raw is None else eligible_raw)
+    checked_eligible = _optional_count(repair.get("checked_eligible"))
+    indexable_affected = _count(repair.get("indexable_affected"))
+    indexable_eligible = _optional_count(repair.get("indexable_checked_eligible"))
+    page_count = _count(repair.get("page_count"))
+    scope = str(repair.get("page_scope") or "").lower()
+    partitions = repair.get("family_breakdown") if isinstance(repair.get("family_breakdown"), dict) else {}
+    complete = repair.get("affected_pages_complete") is not False
+
+    cardinalities = [reported, observed, eligible, indexable_affected, page_count]
+    if any(value < 0 for value in cardinalities):
+        return "negative_cardinality"
+    if checked_eligible is not None and checked_eligible < 0:
+        return "negative_cardinality"
+    if indexable_eligible is not None and indexable_eligible < 0:
+        return "negative_cardinality"
+
+    if observed > reported:
+        return "affected_observed_exceeds_reported"
+    if eligible > observed:
+        return "affected_eligible_exceeds_observed"
+    if checked_eligible is not None and eligible > checked_eligible:
+        return "affected_eligible_exceeds_checked_eligible"
+    if indexable_affected > eligible:
+        return "indexable_affected_exceeds_eligible"
+    if indexable_eligible is not None and checked_eligible is not None and indexable_eligible > checked_eligible:
+        return "indexable_checked_eligible_exceeds_checked_eligible"
+    if indexable_eligible is not None and indexable_affected > indexable_eligible:
+        return "indexable_affected_exceeds_indexable_checked_eligible"
+
+    partition_total = sum(_count(value) for value in partitions.values())
+    if partitions and partition_total != page_count:
+        return "family_breakdown_does_not_sum_to_page_count"
+
+    if complete and len(_unique_affected_evidence(repair)) != page_count:
+        return "page_count_disagrees_with_unique_affected_pages"
+
+    named_families = [family for family in partitions if family not in NON_SPECIFIC_FAMILIES]
+    if scope == "page" and page_count > 1:
+        return "page_scope_has_multiple_pages"
+    if scope == "family" and len(partitions) > 1:
+        return "family_scope_spans_multiple_families"
+    if scope == "mixed" and len(partitions) < 2:
+        return "mixed_scope_without_partitions"
+
+    representatives = repair.get("representative_pages_by_family")
+    if isinstance(representatives, dict) and complete:
+        affected = _unique_affected_evidence(repair)
+        for family, value in representatives.items():
+            urls = value if isinstance(value, list) else [value]
+            if not urls:
+                return "representative_is_not_an_affected_page"
+            for url in urls:
+                if evidence_url_key(url) not in affected:
+                    return "representative_is_not_an_affected_page"
+            if named_families and family not in partitions:
+                return "representative_family_not_in_breakdown"
+
+    return ""

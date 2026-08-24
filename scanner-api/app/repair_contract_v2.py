@@ -17,7 +17,7 @@ from .repair_persistence_shadow import (
     REPAIR_PRIORITY_MODEL_VERSION,
     validate_v2_persistence_candidate,
 )
-from .repair_coverage import normalize_repair_scope
+from .repair_coverage import first_failed_repair_invariant, normalize_repair_scope
 from .repair_shadow_calibration import build_calibrated_shadow_review_analysis
 
 
@@ -45,7 +45,9 @@ def apply_canonical_repair_contract(
     for rank, raw_fix in enumerate(proposed, start=1):
         if not isinstance(raw_fix, dict):
             return review_result
-        canonical_fix = _normalize_post_review_sitewide_evidence(raw_fix, pages)
+        canonical_fix = _normalize_canonical_repair_evidence(raw_fix, pages)
+        if first_failed_repair_invariant(canonical_fix):
+            return review_result
         identity = canonical_fix.get("repair_identity") if isinstance(canonical_fix.get("repair_identity"), dict) else {}
         item = {
             **deepcopy(canonical_fix),
@@ -86,23 +88,34 @@ def _first_pages(scan_result: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
-def _normalize_post_review_sitewide_evidence(
+def _normalize_canonical_repair_evidence(
     fix: dict[str, Any],
     pages: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Re-partition only sitewide rows synthesized after normal review scoring.
+    """Re-derive one canonical repair from one shared affected-page identity.
 
-    Ordinary repairs are normalized before scoring. The sitewide collapse is
-    deliberately created afterwards, so overlapping candidate groups can leave
-    its family totals larger than the globally deduplicated affected-page set.
-    Re-derive that synthesized row once from the authoritative page-family stamps
-    before canonical identity/persistence. Crawler and legacy review output stay
-    unchanged.
+    Normal review/scoring remains untouched. The durable cutover is the single
+    place that reconciles the finished repair's affected URLs, page count, family
+    partition and representatives before identity is re-annotated and the
+    completion envelope is signed.
+
+    The family resolver is imported lazily to reuse review's existing vocabulary
+    without creating a second classifier or changing crawler behavior.
     """
-    source = str(fix.get("source") or "")
-    if str(fix.get("page_scope") or "").lower() != "sitewide":
-        return fix
-    if not source.startswith("review_sitewide_collapse:"):
-        return fix
-    normalized = normalize_repair_scope(deepcopy(fix), pages)
+    from .review import normalize_template_family
+
+    snapshot = deepcopy(fix)
+    if snapshot.get("affected_pages_complete") is False:
+        # A truncated affected list is only a sample of a larger proven total.
+        # Re-normalizing from the sample would silently shrink page_count and
+        # falsely claim completeness. Base44 deliberately skips URL-cardinality
+        # and representative membership checks for this shape, so preserve it
+        # and only refresh repair identity.
+        return annotate_repair_identity(snapshot)
+
+    normalized = normalize_repair_scope(
+        snapshot,
+        pages,
+        family_resolver=normalize_template_family,
+    )
     return annotate_repair_identity(normalized)

@@ -170,6 +170,26 @@ def test_access_failure_evidence_is_cross_cutting_with_no_invented_family():
 # ------------------------------------------------------------- invariants --
 
 
+def test_query_variants_are_deduped_by_evidence_identity_not_template_path():
+    pages = [page("/a", "product_page")]
+    fix = normalize_repair_scope(
+        {
+            "rule": "missing_h1",
+            "affected_pages": [
+                "/a?b=1&c=2",
+                "/a?c=2&b=1",
+                "/a?b=1&c=2&utm_source=x",
+                "/a?b=9&c=2",
+            ],
+        },
+        pages,
+    )
+
+    assert fix["affected_pages"] == ["/a?b=1&c=2", "/a?b=9&c=2"]
+    assert fix["page_count"] == 2
+    assert fix["family_breakdown"] == {"product_page": 2}
+
+
 def test_the_breakdown_always_accounts_for_every_affected_page():
     """page_count == unique(affected_pages) == sum(family_breakdown)."""
     pages = [page("/a", "product_page"), page("/b", "guide_article")]

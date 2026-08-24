@@ -170,7 +170,7 @@ test("a ratio above one is refused however it is expressed", () => {
 
 // ------------------------------------- Base44 rejects independently of Python --
 
-import { firstFailedAuthorityPredicate } from "../../base44/functions/persistDurableScanAuthority/authoritySnapshot.js";
+import { buildAuthoritySnapshot, firstFailedAuthorityPredicate } from "../../base44/functions/persistDurableScanAuthority/authoritySnapshot.js";
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "../../src/lib/generatedReleaseContract.js";
 
 function authoritativeReview(recommendations) {
@@ -235,4 +235,52 @@ test("a forged 126-of-1 repair is refused even when everything else claims autho
 test("one bad repair among many blocks the whole seal", () => {
   const review = authoritativeReview([repair(), repair({ affected_eligible: 99, checked_eligible: 1 }), repair()]);
   assert.equal(firstFailedAuthorityPredicate(AUTHORITATIVE_SCAN, review), "repair_coverage_invariants");
+});
+
+
+test("canonical v2 authority validates and seals canonical repairs, not stale legacy recommendations", () => {
+  const legacyImpossible = repair({
+    page_count: 0,
+    family_breakdown: {},
+    representative_pages_by_family: {},
+  });
+  const canonical = {
+    ...repair(),
+    fix_id: "canonical-fix-1",
+    repair_contract_version: "repair_contract_v2_shadow_calibrated",
+    repair_priority_model_version: "repair_priority_v2_technical_severity",
+    base_severity: "high",
+    evidence_class: "confirmed_problem",
+    action_priority: "fix_first",
+    priority_reason: "3 of 20 product pages checked are affected.",
+    canonical_action_rank: 1,
+    repair_identity_version: "repair_identity_v1",
+    repair_fingerprint: "repair-fingerprint-1",
+    repair_coverage_version: "repair_coverage_v1_family_consistent",
+  };
+  const review = {
+    ...authoritativeReview([legacyImpossible]),
+    repair_contract_version: "repair_contract_v2_shadow_calibrated",
+    repair_snapshot_contract_version: "repair_contract_v2_shadow_calibrated",
+    repair_snapshot_contract_complete: true,
+    repair_priority_model_version: "repair_priority_v2_technical_severity",
+    canonical_repairs: [canonical],
+  };
+
+  assert.equal(firstFailedAuthorityPredicate(AUTHORITATIVE_SCAN, review), "");
+  const snapshot = buildAuthoritySnapshot({
+    scan: { ...AUTHORITATIVE_SCAN, website_url: "https://example.com", pages_found: 20, pages_crawled: 20 },
+    review,
+    identity: { scan_id: "scan-1", project_id: "project-1", normalized_domain: "example.com" },
+    userId: "owner-1",
+    now: "2026-08-24T09:00:00.000Z",
+  });
+  assert.equal(snapshot.fix_list.repair_snapshot_contract_complete, true);
+  assert.equal(snapshot.recommendations.length, 1);
+  assert.equal(snapshot.recommendations[0].fix_id, "canonical-fix-1");
+  assert.equal(snapshot.recommendations[0].page_count, 3);
+  assert.deepEqual(snapshot.recommendations[0].family_breakdown, { product_page: 3 });
+  assert.deepEqual(snapshot.recommendations[0].representative_pages_by_family, { product_page: "/p0" });
+  assert.equal(snapshot.recommendations[0].affected_pages_complete, true);
+  assert.equal(snapshot.recommendations[0].repair_coverage_version, "repair_coverage_v1_family_consistent");
 });

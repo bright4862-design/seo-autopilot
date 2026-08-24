@@ -71,7 +71,22 @@ export function firstFailedAuthorityPredicate(scan, review) {
  * which repair or which rule.
  */
 export function firstFailedRepairInvariant_forAll(review) {
-  const fixes = firstArray([review?.recommendations, review?.fixes, review?.cleaned_fixes]);
+  // Validate the same repair collection that buildAuthoritySnapshot will seal.
+  // Canonical v2 deliberately leaves the legacy recommendations untouched, so
+  // applying Patch D's stronger arithmetic to that stale legacy list can reject
+  // a valid canonical snapshot before persistence ever sees canonical_repairs.
+  const canonicalRequested = canonicalReviewRequested(review);
+  const canonicalMapped = canonicalRequested
+    ? suppressAggregateCoveredPageFixes(
+      (Array.isArray(review?.canonical_repairs) ? review.canonical_repairs : [])
+        .slice(0, MAX_AUTHORITY_FIXES)
+        .map(toAuthorityFix),
+    )
+    : [];
+  const canonical = canonicalRequested && canonicalAuthorityFixesValid(canonicalMapped);
+  const fixes = canonical
+    ? review.canonical_repairs.slice(0, MAX_AUTHORITY_FIXES)
+    : firstArray([review?.recommendations, review?.fixes, review?.cleaned_fixes]);
   for (const fix of fixes) {
     const failed = firstFailedRepairInvariant(fix);
     if (failed) return failed;
@@ -349,6 +364,14 @@ function toAuthorityFix(fix, index) {
     page_template_family: text(fix?.page_template_family, 200),
     page_url: text(fix?.page_url || affectedPages[0], 2_000),
     affected_pages: affectedPages,
+    // Patch D coverage evidence is part of the repair being sealed. Preserve the
+    // fields Python already produced instead of letting entity defaults erase
+    // them after the invariant check passes.
+    page_count: number(fix?.page_count),
+    family_breakdown: plainObject(fix?.family_breakdown),
+    representative_pages_by_family: plainObject(fix?.representative_pages_by_family),
+    affected_pages_complete: fix?.affected_pages_complete !== false,
+    repair_coverage_version: text(fix?.repair_coverage_version, 160),
     source_pages: textArray(fix?.source_pages, 150, 2_000),
     evidence_status: text(fix?.evidence_status, 120),
     verification_state: text(fix?.verification_state, 120),

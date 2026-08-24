@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import quote, unquote, unquote_to_bytes, urlsplit
 
-REPAIR_COVERAGE_VERSION = "repair_coverage_v1_family_consistent"
+REPAIR_COVERAGE_VERSION = "repair_coverage_v2_single_page_scope"
 
 UNKNOWN_FAMILY = "unknown"
 
@@ -189,8 +189,18 @@ def normalize_repair_scope(
         scope, family = "cross_cutting", "mixed"
     elif page_count == 0:
         scope, family = "page", UNKNOWN_FAMILY
+    elif page_count == 1:
+        # One piece of affected evidence is always page-scoped, even when the
+        # crawl could not assign it a template family. Calling that single
+        # unknown partition "mixed" creates an impossible repair: mixed scope
+        # requires multiple partitions, while the evidence proves there is
+        # exactly one page. This surfaced on Funbooker's sitemap redirect for
+        # the root URL and caused the complete canonical snapshot to be
+        # discarded before Base44 persistence.
+        scope = "page"
+        family = known_families[0] if len(known_families) == 1 else UNKNOWN_FAMILY
     elif len(breakdown) == 1 and len(known_families) == 1:
-        scope = "page" if page_count == 1 else "family"
+        scope = "family"
         family = known_families[0]
     else:
         # More than one family, or an unaccounted URL, means there is no single

@@ -142,6 +142,27 @@ def test_affected_urls_with_no_page_evidence_are_an_unknown_partition():
     assert fix["page_count"] == 2
 
 
+def test_one_unknown_affected_page_is_page_scoped_not_mixed():
+    """A single unknown partition cannot truthfully be a mixed repair."""
+    fix = normalize_repair_scope(
+        {
+            "rule": "sitemap_redirect",
+            "page_scope": "mixed",
+            "page_template_family": "mixed",
+            "affected_pages": ["/"],
+            "page_count": 1,
+            "family_breakdown": {"unknown": 1},
+            "representative_pages_by_family": {"unknown": "/"},
+        },
+        [],
+    )
+
+    assert fix["page_scope"] == "page"
+    assert fix["page_template_family"] == "unknown"
+    assert fix["page_count"] == 1
+    assert fix["family_breakdown"] == {"unknown": 1}
+
+
 # ------------------------------------------------------------ explicit scope --
 
 

@@ -52,13 +52,14 @@ def test_complete_contract_is_attached_without_reordering_legacy_recommendations
     assert all(item["evidence_class"] in {"confirmed_problem", "improvement", "opportunity"} for item in result["canonical_repairs"])
 
 
-def test_invalid_duplicate_fix_ids_fail_closed_to_legacy_review():
+def test_invalid_duplicate_fix_ids_fail_closed_without_legacy_fallback():
     duplicate = _fix("same-id", "internal_link_redirect", "high", ["https://example.com/a"])
     review = {"recommendations": [duplicate, {**duplicate}], "cleaned_fixes": [duplicate, {**duplicate}]}
     scan = {"crawled_pages": [_page("https://example.com/a")]}
 
     result = apply_canonical_repair_contract(review, scan)
 
-    assert "repair_contract_version" not in result
     assert "canonical_repairs" not in result
-    assert result == review
+    assert result["recommendations"] == review["recommendations"]
+    assert result["canonical_repair_contract_rejected"] is True
+    assert result["canonical_repair_contract_rejection"]["code"] == "persistence_candidate_invalid"

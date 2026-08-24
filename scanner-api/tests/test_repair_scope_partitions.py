@@ -14,6 +14,7 @@ import pytest
 
 from app.repair_coverage import (
     REPAIR_COVERAGE_VERSION,
+    first_failed_repair_invariant,
     normalize_repair_scope,
 )
 
@@ -80,7 +81,7 @@ def test_the_wecandoo_group_is_partitioned_not_labelled_homepage():
     )
     fix = normalize_repair_scope({"rule": "potential_orphan_pages", "affected_pages": affected}, pages)
 
-    assert fix["page_scope"] == "mixed"
+    assert fix["page_scope"] == "cross_cutting"
     assert fix["page_template_family"] == "mixed"
     assert fix["family_breakdown"] == {"product_page": 60, "category_listing": 40, "guide_article": 26}
     assert fix["page_count"] == 126
@@ -138,8 +139,57 @@ def test_affected_urls_with_no_page_evidence_are_an_unknown_partition():
     )
 
     assert fix["family_breakdown"] == {"product_page": 1, "unknown": 1}
-    assert fix["page_scope"] == "mixed"
+    assert fix["page_scope"] == "cross_cutting"
     assert fix["page_count"] == 2
+
+
+def test_tiqets_unknown_multi_page_redirect_chain_is_cross_cutting_and_valid():
+    affected = ["/ca/holiday-specials-pc199"] + [f"/unknown/{i}" for i in range(20)]
+    fix = normalize_repair_scope(
+        {
+            "fix_id": "finding_d66d79070b8b",
+            "rule": "redirect_chain",
+            "affected_pages": affected,
+        },
+        [],
+    )
+
+    assert fix["page_scope"] == "cross_cutting"
+    assert fix["page_template_family"] == "mixed"
+    assert fix["page_count"] == 21
+    assert fix["family_breakdown"] == {"unknown": 21}
+    assert first_failed_repair_invariant(fix) == ""
+
+
+def test_airbnb_unknown_two_page_canonical_missing_is_cross_cutting_and_valid():
+    fix = normalize_repair_scope(
+        {
+            "fix_id": "finding_8e72029e2f",
+            "rule": "canonical_missing",
+            "affected_pages": ["/trust", "/unknown-second"],
+        },
+        [],
+    )
+
+    assert fix["page_scope"] == "cross_cutting"
+    assert fix["page_template_family"] == "mixed"
+    assert fix["page_count"] == 2
+    assert fix["family_breakdown"] == {"unknown": 2}
+    assert first_failed_repair_invariant(fix) == ""
+
+
+def test_internal_mixed_scope_is_not_a_persistable_scope():
+    malformed = {
+        "rule": "potential_orphan_pages",
+        "page_scope": "mixed",
+        "page_template_family": "mixed",
+        "affected_pages": ["/a", "/b"],
+        "page_count": 2,
+        "family_breakdown": {"product_page": 1, "guide_article": 1},
+        "representative_pages_by_family": {"product_page": "/a", "guide_article": "/b"},
+        "affected_pages_complete": True,
+    }
+    assert first_failed_repair_invariant(malformed) == "unsupported_page_scope"
 
 
 def test_one_unknown_affected_page_is_page_scoped_not_mixed():

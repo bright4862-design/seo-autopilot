@@ -143,6 +143,52 @@ test("mixed scope must actually carry partitions", () => {
   );
 });
 
+test("Tiqets unknown multi-page repair is a valid cross-cutting partition", () => {
+  const tiqets = repair({
+    fix_id: "finding_d66d79070b8b",
+    rule: "redirect_chain",
+    page_scope: "cross_cutting",
+    page_template_family: "mixed",
+    affected_pages: Array.from({ length: 21 }, (_, index) => index === 0 ? "/ca/holiday-specials-pc199" : "/unknown/" + index),
+    page_count: 21,
+    family_breakdown: { unknown: 21 },
+    representative_pages_by_family: { unknown: "/ca/holiday-specials-pc199" },
+    affected_reported: 21, affected_observed: 21, affected_eligible: 21, checked_eligible: null,
+    indexable_affected: 0, indexable_checked_eligible: null,
+  });
+  assert.equal(firstFailedRepairInvariant(tiqets), "");
+});
+
+test("Airbnb unknown two-page repair is a valid cross-cutting partition", () => {
+  const airbnb = repair({
+    fix_id: "finding_8e72029e2f",
+    rule: "canonical_missing",
+    page_scope: "cross_cutting",
+    page_template_family: "mixed",
+    affected_pages: ["/trust", "/unknown-second"],
+    page_count: 2,
+    family_breakdown: { unknown: 2 },
+    representative_pages_by_family: { unknown: "/trust" },
+    affected_reported: 2, affected_observed: 2, affected_eligible: 2, checked_eligible: null,
+    indexable_affected: 0, indexable_checked_eligible: null,
+  });
+  assert.equal(firstFailedRepairInvariant(airbnb), "");
+});
+
+test("internal mixed scope is rejected before persistence can coerce it to page scope", () => {
+  const malformed = repair({
+    page_scope: "mixed",
+    page_template_family: "mixed",
+    affected_pages: ["/a", "/b"],
+    page_count: 2,
+    family_breakdown: { product_page: 1, guide_article: 1 },
+    representative_pages_by_family: { product_page: "/a", guide_article: "/b" },
+    affected_reported: 2, affected_observed: 2, affected_eligible: 2, checked_eligible: null,
+    indexable_affected: 0, indexable_checked_eligible: null,
+  });
+  assert.equal(firstFailedRepairInvariant(malformed), "unsupported_page_scope");
+});
+
 test("a representative must be one of the affected pages in its own family", () => {
   assert.equal(
     firstFailedRepairInvariant(repair({ representative_pages_by_family: { product_page: "/never-affected" } })),
@@ -237,6 +283,19 @@ test("one bad repair among many blocks the whole seal", () => {
   assert.equal(firstFailedAuthorityPredicate(AUTHORITATIVE_SCAN, review), "repair_coverage_invariants");
 });
 
+
+test("an explicitly rejected canonical contract cannot silently fall back to valid legacy recommendations", () => {
+  const review = {
+    ...authoritativeReview([repair()]),
+    canonical_repair_contract_rejected: true,
+    canonical_repair_contract_rejection: {
+      code: "repair_coverage_invariant",
+      fix_id: "finding_bad",
+      invariant: "unsupported_page_scope",
+    },
+  };
+  assert.equal(firstFailedAuthorityPredicate(AUTHORITATIVE_SCAN, review), "canonical_repair_contract");
+});
 
 test("canonical v2 authority validates and seals canonical repairs, not stale legacy recommendations", () => {
   const legacyImpossible = repair({

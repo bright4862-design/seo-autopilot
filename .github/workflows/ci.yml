@@ -78,6 +78,12 @@ jobs:
         working-directory: scanner-api
         run: pytest tests/
 
+      - name: Reproduce Tiqets repair persistence blocker (isolated)
+        if: github.event_name == 'pull_request' && github.head_ref == 'codex/persistence-blocker-diagnostics-20260825'
+        continue-on-error: true
+        working-directory: scanner-api
+        run: python scripts/reproduce_repair_persistence_blocker.py tiqets
+
       - name: Verify frozen beta revision matches code
         working-directory: scanner-api
         run: python scripts/freeze_beta_revision.py --check

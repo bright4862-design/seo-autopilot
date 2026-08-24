@@ -71,7 +71,22 @@ export function firstFailedAuthorityPredicate(scan, review) {
  * which repair or which rule.
  */
 export function firstFailedRepairInvariant_forAll(review) {
-  const fixes = firstArray([review?.recommendations, review?.fixes, review?.cleaned_fixes]);
+  // Validate the same repair collection that buildAuthoritySnapshot will seal.
+  // Canonical v2 deliberately leaves the legacy recommendations untouched, so
+  // applying Patch D's stronger arithmetic to that stale legacy list can reject
+  // a valid canonical snapshot before persistence ever sees canonical_repairs.
+  const canonicalRequested = canonicalReviewRequested(review);
+  const canonicalMapped = canonicalRequested
+    ? suppressAggregateCoveredPageFixes(
+      (Array.isArray(review?.canonical_repairs) ? review.canonical_repairs : [])
+        .slice(0, MAX_AUTHORITY_FIXES)
+        .map(toAuthorityFix),
+    )
+    : [];
+  const canonical = canonicalRequested && canonicalAuthorityFixesValid(canonicalMapped);
+  const fixes = canonical
+    ? review.canonical_repairs.slice(0, MAX_AUTHORITY_FIXES)
+    : firstArray([review?.recommendations, review?.fixes, review?.cleaned_fixes]);
   for (const fix of fixes) {
     const failed = firstFailedRepairInvariant(fix);
     if (failed) return failed;

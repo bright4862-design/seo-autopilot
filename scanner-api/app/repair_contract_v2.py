@@ -22,6 +22,13 @@ from .repair_coverage import evidence_url_key, first_failed_repair_invariant, no
 from .repair_shadow_calibration import build_calibrated_shadow_review_analysis
 
 
+def _diagnostic_count(value: Any, fallback: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+
+
 def _safe_repair_diagnostic(fix: dict[str, Any], invariant: str, *, rank: int) -> dict[str, Any]:
     """Return bounded, non-secret fields sufficient to diagnose invariant drift.
 
@@ -37,25 +44,28 @@ def _safe_repair_diagnostic(fix: dict[str, Any], invariant: str, *, rank: int) -
         if isinstance(fix.get("representative_pages_by_family"), dict)
         else {}
     )
+    page_count = _diagnostic_count(fix.get("page_count"))
+    reported = _diagnostic_count(fix.get("affected_reported"), page_count)
+    observed = _diagnostic_count(fix.get("affected_observed"), reported)
+    eligible = _diagnostic_count(fix.get("affected_eligible"), observed)
     return {
-        "event": "canonical_repair_invariant_rejected",
         "invariant": str(invariant or "unknown")[:160],
         "fix_id": str(fix.get("fix_id") or "")[:160],
         "canonical_action_rank": rank,
         "page_scope": str(fix.get("page_scope") or "")[:80],
-        "page_count": int(fix.get("page_count") or 0),
+        "page_count": page_count,
         "affected_page_cardinality": len(affected_keys),
         "affected_pages_complete": fix.get("affected_pages_complete") is not False,
         "family_breakdown": {
-            str(key)[:120]: int(value or 0)
+            str(key)[:120]: _diagnostic_count(value)
             for key, value in list(breakdown.items())[:20]
         },
         "representative_families": [str(key)[:120] for key in list(representatives.keys())[:20]],
-        "affected_reported": int(fix.get("affected_reported") or fix.get("page_count") or 0),
-        "affected_observed": int(fix.get("affected_observed") or fix.get("affected_reported") or fix.get("page_count") or 0),
-        "affected_eligible": int(fix.get("affected_eligible") or fix.get("affected_observed") or fix.get("affected_reported") or fix.get("page_count") or 0),
+        "affected_reported": reported,
+        "affected_observed": observed,
+        "affected_eligible": eligible,
         "checked_eligible": fix.get("checked_eligible"),
-        "indexable_affected": int(fix.get("indexable_affected") or 0),
+        "indexable_affected": _diagnostic_count(fix.get("indexable_affected")),
         "indexable_checked_eligible": fix.get("indexable_checked_eligible"),
     }
 
@@ -89,7 +99,11 @@ def apply_canonical_repair_contract(
         canonical_fix = _normalize_canonical_repair_evidence(raw_fix, pages)
         failed_invariant = first_failed_repair_invariant(canonical_fix)
         if failed_invariant:
-            emit(**_safe_repair_diagnostic(canonical_fix, failed_invariant, rank=rank), severity="WARNING")
+            emit(
+                "canonical_repair_invariant_rejected",
+                severity="WARNING",
+                **_safe_repair_diagnostic(canonical_fix, failed_invariant, rank=rank),
+            )
             return review_result
         identity = canonical_fix.get("repair_identity") if isinstance(canonical_fix.get("repair_identity"), dict) else {}
         item = {

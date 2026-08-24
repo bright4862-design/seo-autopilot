@@ -82,7 +82,7 @@ jobs:
         if: github.event_name == 'pull_request' && github.head_ref == 'codex/persistence-blocker-diagnostics-20260825'
         continue-on-error: true
         working-directory: scanner-api
-        run: python scripts/reproduce_repair_persistence_blocker.py tiqets
+        run: PYTHONPATH=. python scripts/reproduce_repair_persistence_blocker.py tiqets
 
       - name: Verify frozen beta revision matches code
         working-directory: scanner-api

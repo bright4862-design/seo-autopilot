@@ -156,8 +156,11 @@ def log_quality(scan_ids: list[str], since: datetime, project: str | None) -> di
 
 def _result_summary(item: Submission) -> dict[str, Any]:
     result = item.customer_result
-    fix_list = result.get("fix_list") if isinstance(result.get("fix_list"), dict) else {}
-    fix_items = result.get("fix_items") if isinstance(result.get("fix_items"), list) else []
+    # getCustomerScanResult intentionally exposes the persisted customer rows
+    # as camelCase and removes server-only authority proofs. Preserve those rows
+    # exactly instead of reconstructing or substituting them from ScanRun.
+    fix_list = result.get("fixList") if isinstance(result.get("fixList"), dict) else {}
+    fix_items = result.get("fixItems") if isinstance(result.get("fixItems"), list) else []
     return {
         "scan_id": item.scan_id,
         "status": str(item.run.get("status") or ""),
@@ -168,6 +171,8 @@ def _result_summary(item: Submission) -> dict[str, Any]:
         "fix_item_count": len(fix_items),
         "fix_list_id": str(item.run.get("fix_list_id") or fix_list.get("id") or ""),
         "error_code": str(item.run.get("error_code") or item.failure_code or ""),
+        "fixList": fix_list or None,
+        "fixItems": fix_items,
     }
 
 
@@ -192,9 +197,9 @@ def report(items: list[Submission], logs: dict[str, Any], before: set[str] | Non
                 failures.append(f"{item.scan_id}: complete result is not authority_verified")
             if result.get("release_contract_current") is not True:
                 failures.append(f"{item.scan_id}: complete result is not release_contract_current")
-            if not isinstance(result.get("fix_list"), dict):
+            if not isinstance(result.get("fixList"), dict):
                 failures.append(f"{item.scan_id}: complete result is missing persisted FixList")
-            if not isinstance(result.get("fix_items"), list):
+            if not isinstance(result.get("fixItems"), list):
                 failures.append(f"{item.scan_id}: complete result is missing FixItems")
         elif status == "limited":
             if result.get("result_integrity_verified") is not True:

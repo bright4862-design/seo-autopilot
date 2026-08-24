@@ -28,7 +28,6 @@ import httpx
 APP_ID = "6a498732ec779dfaaeab0e53"
 BASE44_API = "https://base44.app"
 TERMINAL = {"complete", "limited", "failed", "cancelled"}
-GOOD = {"complete", "limited"}
 
 
 def unwrap(value: Any) -> dict[str, Any]:
@@ -67,6 +66,7 @@ class Submission:
     accepted: bool = False
     failure_code: str = ""
     run: dict[str, Any] = field(default_factory=dict)
+    customer_result: dict[str, Any] = field(default_factory=dict)
     submitted_at: float = 0.0
     terminal_at: float = 0.0
 
@@ -95,6 +95,10 @@ async def submit(client: httpx.AsyncClient, token: str, item: Submission) -> Non
     item.accepted = body.get("accepted") is True
     item.failure_code = str(body.get("failure_code") or "")
     item.scan_id = str(body.get("scan_id") or body.get("scan_run_id") or "")
+    if item.scan_id:
+        # Exact ids are captured immediately. Never depend on list_all/list
+        # history for later recovery because the customer list is bounded.
+        print(json.dumps({"event": "scan_submitted", "scan_id": item.scan_id, "url": item.url}), flush=True)
 
 
 async def poll_one(client: httpx.AsyncClient, token: str, item: Submission) -> None:
@@ -105,6 +109,7 @@ async def poll_one(client: httpx.AsyncClient, token: str, item: Submission) -> N
     })
     if status != 200:
         return
+    item.customer_result = body
     run = body.get("run")
     if isinstance(run, dict):
         item.run = run
@@ -149,21 +154,51 @@ def log_quality(scan_ids: list[str], since: datetime, project: str | None) -> di
     }
 
 
+def _result_summary(item: Submission) -> dict[str, Any]:
+    result = item.customer_result
+    fix_list = result.get("fix_list") if isinstance(result.get("fix_list"), dict) else {}
+    fix_items = result.get("fix_items") if isinstance(result.get("fix_items"), list) else []
+    return {
+        "scan_id": item.scan_id,
+        "status": str(item.run.get("status") or ""),
+        "authority_verified": result.get("authority_verified") is True,
+        "result_integrity_verified": result.get("result_integrity_verified") is True,
+        "release_contract_current": result.get("release_contract_current") is True,
+        "fix_list_present": bool(fix_list),
+        "fix_item_count": len(fix_items),
+        "fix_list_id": str(item.run.get("fix_list_id") or fix_list.get("id") or ""),
+        "error_code": str(item.run.get("error_code") or item.failure_code or ""),
+    }
+
+
 def report(items: list[Submission], logs: dict[str, Any], before: set[str] | None = None, after: set[str] | None = None) -> dict[str, Any]:
     accepted = [i for i in items if i.accepted]
     terminal = [i for i in accepted if str(i.run.get("status") or "").lower() in TERMINAL]
-    good = [i for i in terminal if str(i.run.get("status") or "").lower() in GOOD]
-    scores = [float(i.run.get("evidence_quality_score") or 0) for i in good]
+    authoritative_complete = [
+        i for i in terminal
+        if str(i.run.get("status") or "").lower() == "complete"
+        and i.customer_result.get("authority_verified") is True
+    ]
+    limited = [i for i in terminal if str(i.run.get("status") or "").lower() == "limited"]
+    scores = [float(i.run.get("evidence_quality_score") or 0) for i in authoritative_complete]
     failures: list[str] = []
     if len(terminal) != len(accepted):
         failures.append(f"{len(accepted) - len(terminal)} accepted scan(s) did not terminalize")
-    for item in good:
-        if item.run.get("release_gate_eligible") is not True:
-            failures.append(f"{item.scan_id}: release_gate_eligible is not true")
-        if len(str(item.run.get("authority_proof") or "")) != 64:
-            failures.append(f"{item.scan_id}: missing 64-hex authority proof")
-        if not str(item.run.get("fix_list_id") or ""):
-            failures.append(f"{item.scan_id}: missing fix_list_id")
+    for item in terminal:
+        status = str(item.run.get("status") or "").lower()
+        result = item.customer_result
+        if status == "complete":
+            if result.get("authority_verified") is not True:
+                failures.append(f"{item.scan_id}: complete result is not authority_verified")
+            if result.get("release_contract_current") is not True:
+                failures.append(f"{item.scan_id}: complete result is not release_contract_current")
+            if not isinstance(result.get("fix_list"), dict):
+                failures.append(f"{item.scan_id}: complete result is missing persisted FixList")
+            if not isinstance(result.get("fix_items"), list):
+                failures.append(f"{item.scan_id}: complete result is missing FixItems")
+        elif status == "limited":
+            if result.get("result_integrity_verified") is not True:
+                failures.append(f"{item.scan_id}: limited result is not result_integrity_verified")
     bad_codes = {str(i.run.get("error_code") or "") for i in terminal}
     for code in {"worker_terminal_drain_timeout", "orphaned_no_terminal_state"} & bad_codes:
         failures.append(f"lifecycle failure observed: {code}")
@@ -172,9 +207,12 @@ def report(items: list[Submission], logs: dict[str, Any], before: set[str] | Non
         "submitted": len(items),
         "accepted": len(accepted),
         "terminal": len(terminal),
-        "good": len(good),
+        "authoritative_complete": len(authoritative_complete),
+        "limited": len(limited),
         "statuses": [str(i.run.get("status") or "") for i in items],
         "failure_codes": [i.failure_code for i in items if i.failure_code],
+        "exact_scan_ids": [i.scan_id for i in items if i.scan_id],
+        "results": [_result_summary(i) for i in items if i.scan_id],
         "new_scan_runs": new_runs,
         "evidence_quality_min": min(scores) if scores else None,
         "evidence_quality_mean": (sum(scores) / len(scores)) if scores else None,

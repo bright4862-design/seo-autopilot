@@ -11,11 +11,13 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from .repair_identity import annotate_repair_identity
 from .repair_persistence_shadow import (
     REPAIR_CONTRACT_VERSION,
     REPAIR_PRIORITY_MODEL_VERSION,
     validate_v2_persistence_candidate,
 )
+from .repair_coverage import normalize_repair_scope
 from .repair_shadow_calibration import build_calibrated_shadow_review_analysis
 
 
@@ -43,9 +45,10 @@ def apply_canonical_repair_contract(
     for rank, raw_fix in enumerate(proposed, start=1):
         if not isinstance(raw_fix, dict):
             return review_result
-        identity = raw_fix.get("repair_identity") if isinstance(raw_fix.get("repair_identity"), dict) else {}
+        canonical_fix = _normalize_post_review_sitewide_evidence(raw_fix, pages)
+        identity = canonical_fix.get("repair_identity") if isinstance(canonical_fix.get("repair_identity"), dict) else {}
         item = {
-            **deepcopy(raw_fix),
+            **deepcopy(canonical_fix),
             "repair_contract_version": REPAIR_CONTRACT_VERSION,
             "repair_priority_model_version": REPAIR_PRIORITY_MODEL_VERSION,
             "canonical_action_rank": rank,
@@ -81,3 +84,25 @@ def _first_pages(scan_result: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(value, list):
             return [item for item in value if isinstance(item, dict)]
     return []
+
+
+def _normalize_post_review_sitewide_evidence(
+    fix: dict[str, Any],
+    pages: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Re-partition only sitewide rows synthesized after normal review scoring.
+
+    Ordinary repairs are normalized before scoring. The sitewide collapse is
+    deliberately created afterwards, so overlapping candidate groups can leave
+    its family totals larger than the globally deduplicated affected-page set.
+    Re-derive that synthesized row once from the authoritative page-family stamps
+    before canonical identity/persistence. Crawler and legacy review output stay
+    unchanged.
+    """
+    source = str(fix.get("source") or "")
+    if str(fix.get("page_scope") or "").lower() != "sitewide":
+        return fix
+    if not source.startswith("review_sitewide_collapse:"):
+        return fix
+    normalized = normalize_repair_scope(deepcopy(fix), pages)
+    return annotate_repair_identity(normalized)

@@ -6,9 +6,6 @@ on:
   pull_request:
     branches: [main]
 
-permissions:
-  contents: write
-
 jobs:
   build:
     name: Lint, typecheck, contract tests, and build
@@ -87,48 +84,3 @@ jobs:
 
       - name: Build production scanner image
         run: docker build --tag fixlist-scanner:ci .
-
-  apply-focused-persistence-fix:
-    name: Apply focused persistence fix
-    if: github.event_name == 'pull_request' && github.head_ref == 'codex/persistence-blocker-diagnostics-20260825'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout exact PR head
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-
-      - name: Apply exact blocker patch and generate release contracts
-        run: |
-          if grep -q 'repair_coverage_v3_unknown_mixed_scope' scanner-api/app/repair_coverage.py; then
-            echo 'Focused patch already applied.'
-            exit 0
-          fi
-          python scripts/apply_persistence_blocker_fix.py
-          node scripts/generate_release_contracts.mjs
-          git diff --check
-
-      - name: Commit branch-only generated patch
-        env:
-          HEAD_BRANCH: ${{ github.head_ref }}
-        run: |
-          if git diff --quiet; then
-            echo 'No patch changes to commit.'
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add scanner-api/app/repair_coverage.py scanner-api/app/repair_contract_v2.py \
-            base44/functions/persistDurableScanAuthority/repairInvariants.js \
-            base44/functions/persistDurableScanAuthority/authoritySnapshot.js \
-            base44/entities/FixItem.jsonc \
-            scanner-api/tests/test_repair_scope_partitions.py \
-            scanner-api/tests/test_repair_contract_v2.py \
-            tests/frontend/repairCoverageInvariants.test.mjs \
-            data/beta-crawler-revision.json \
-            src/lib/generatedReleaseContract.js \
-            base44/functions/*/generatedReleaseContract.js
-          git commit -m 'Fix unknown mixed repair persistence blocker'
-          git push origin HEAD:"${HEAD_BRANCH}"

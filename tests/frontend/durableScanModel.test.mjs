@@ -90,7 +90,7 @@ test("FixList links to a scan run and tracks priority counts", () => {
 
 test("FixItem enums match the review-presentation contract", () => {
   const fixItem = loadEntity("FixItem");
-  assert.deepEqual(fixItem.properties.page_scope.enum, ["page", "family", "cross_cutting", "sitewide"]);
+  assert.deepEqual(fixItem.properties.page_scope.enum, ["page", "family", "mixed", "cross_cutting", "sitewide"]);
   assert.deepEqual(fixItem.properties.priority.enum, ["critical", "high", "medium", "low"]);
   assert.deepEqual(fixItem.properties.user_status.enum, ["open", "in_progress", "done", "dismissed"]);
 });

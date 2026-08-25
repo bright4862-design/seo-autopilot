@@ -7,6 +7,8 @@ on:
         description: "Exact current main SHA. Must equal the release source SHA."
         required: true
         type: string
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
@@ -17,7 +19,10 @@ concurrency:
 
 jobs:
   publish-base44-release:
-    if: github.actor == 'bright4862-design' && github.ref == 'refs/heads/main'
+    if: >-
+      github.actor == 'bright4862-design' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'issue_comment')
     environment: fixlist-production-owner
     # Base44 supports device-code CLI authentication only. The protected owner
     # runner holds the owner's existing local CLI session; hosted runners must
@@ -45,6 +50,38 @@ jobs:
           /bin/bash -n scripts/deploy-base44-beta-site.sh
           /bin/bash -n scripts/lib/release-source-guard.sh
 
+      - name: Resolve exact owner confirmation
+        id: confirm
+        shell: /bin/bash {0}
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_USER: ${{ github.event.comment.user.login }}
+          INPUT_CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          case "$EVENT_NAME" in
+            workflow_dispatch)
+              confirm="$INPUT_CONFIRM"
+              ;;
+            issue_comment)
+              test "$COMMENT_USER" = "bright4862-design"
+              expected="/publish-base44-release $source_sha"
+              if [ "$COMMENT_BODY" != "$expected" ]; then
+                echo "Refusing: comment must equal '$expected'." >&2
+                exit 2
+              fi
+              confirm="$source_sha"
+              ;;
+            *)
+              echo "Refusing unsupported event: $EVENT_NAME" >&2
+              exit 2
+              ;;
+          esac
+          test "$confirm" = "$source_sha"
+          echo "confirm=$confirm" >> "$GITHUB_OUTPUT"
+
       - name: Set up pinned Node runtime
         uses: actions/setup-node@v6
         with:
@@ -61,6 +98,6 @@ jobs:
         shell: /bin/bash {0}
         env:
           SOURCE_SHA: ${{ github.sha }}
-          CONFIRM: ${{ inputs.confirm }}
+          CONFIRM: ${{ steps.confirm.outputs.confirm }}
           BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
         run: /bin/bash scripts/deploy-base44-beta-site.sh

@@ -1,4 +1,6 @@
-from app.repair_contract_v2 import apply_canonical_repair_contract
+import pytest
+
+from app.repair_contract_v2 import CanonicalRepairContractError, apply_canonical_repair_contract
 from app.repair_persistence_shadow import REPAIR_CONTRACT_VERSION, REPAIR_PRIORITY_MODEL_VERSION
 
 
@@ -52,13 +54,10 @@ def test_complete_contract_is_attached_without_reordering_legacy_recommendations
     assert all(item["evidence_class"] in {"confirmed_problem", "improvement", "opportunity"} for item in result["canonical_repairs"])
 
 
-def test_invalid_duplicate_fix_ids_fail_closed_to_legacy_review():
+def test_invalid_duplicate_fix_ids_fail_closed_instead_of_publishing_legacy():
     duplicate = _fix("same-id", "internal_link_redirect", "high", ["https://example.com/a"])
     review = {"recommendations": [duplicate, {**duplicate}], "cleaned_fixes": [duplicate, {**duplicate}]}
     scan = {"crawled_pages": [_page("https://example.com/a")]}
 
-    result = apply_canonical_repair_contract(review, scan)
-
-    assert "repair_contract_version" not in result
-    assert "canonical_repairs" not in result
-    assert result == review
+    with pytest.raises(CanonicalRepairContractError):
+        apply_canonical_repair_contract(review, scan)

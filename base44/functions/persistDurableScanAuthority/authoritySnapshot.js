@@ -56,6 +56,7 @@ export function firstFailedAuthorityPredicate(scan, review) {
     // worker or hand-built envelope away from covering a limited scan.
     ["coverage_state", coverageAssessment(review).state === AUTHORITATIVE_COVERAGE_STATE],
     ["coverage_authority_version", Boolean(text(coverageAssessment(review).coverage_authority_version, 160))],
+    ["canonical_repair_contract", canonicalReviewIsAbsentOrValid(review)],
     // Re-derived here, not trusted. A repair whose own arithmetic cannot be
     // true must not reach a seal, whatever the producer claims about it.
     ["repair_coverage_invariants", firstFailedRepairInvariant_forAll(review) === ""],
@@ -106,6 +107,9 @@ export function isAuthorityEligible(scan, review) {
 
 export function buildAuthoritySnapshot({ scan, review, identity, userId, now = new Date().toISOString() }) {
   const firstPage = firstArray([scan?.crawled_pages, scan?.pages, scan?.scanned_pages])[0] || {};
+  if (!canonicalReviewIsAbsentOrValid(review)) {
+    throw new Error("canonical repair contract is invalid");
+  }
   const canonicalRequested = canonicalReviewRequested(review);
   const canonicalMapped = canonicalRequested
     ? suppressAggregateCoveredPageFixes(
@@ -318,7 +322,7 @@ function toAuthorityFix(fix, index) {
   const priority = ["critical", "high", "medium", "low"].includes(String(fix?.priority || "").toLowerCase())
     ? String(fix.priority).toLowerCase()
     : "medium";
-  const scope = ["page", "family", "cross_cutting", "sitewide"].includes(String(fix?.page_scope || ""))
+  const scope = ["page", "family", "mixed", "cross_cutting", "sitewide"].includes(String(fix?.page_scope || ""))
     ? String(fix.page_scope)
     : "page";
   const affectedPages = textArray(fix?.affected_pages, 150, 2_000);
@@ -390,6 +394,25 @@ function canonicalReviewRequested(review) {
     && review?.repair_priority_model_version === REPAIR_PRIORITY_MODEL_V2
     && Array.isArray(review?.canonical_repairs),
   );
+}
+
+function canonicalReviewAttempted(review) {
+  return Boolean(
+    review?.repair_contract_version !== undefined
+    || review?.repair_snapshot_contract_version !== undefined
+    || review?.repair_snapshot_contract_complete !== undefined
+    || review?.repair_priority_model_version !== undefined
+    || review?.canonical_repairs !== undefined
+  );
+}
+
+function canonicalReviewIsAbsentOrValid(review) {
+  if (!canonicalReviewAttempted(review)) return true;
+  if (!canonicalReviewRequested(review)) return false;
+  const mapped = suppressAggregateCoveredPageFixes(
+    review.canonical_repairs.slice(0, MAX_AUTHORITY_FIXES).map(toAuthorityFix),
+  );
+  return canonicalAuthorityFixesValid(mapped);
 }
 
 function canonicalAuthorityFixesValid(fixes) {

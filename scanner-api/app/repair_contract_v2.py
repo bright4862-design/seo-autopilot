@@ -11,14 +11,67 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from .observability import emit
 from .repair_identity import annotate_repair_identity
 from .repair_persistence_shadow import (
     REPAIR_CONTRACT_VERSION,
     REPAIR_PRIORITY_MODEL_VERSION,
     validate_v2_persistence_candidate,
 )
-from .repair_coverage import first_failed_repair_invariant, normalize_repair_scope
+from .repair_coverage import evidence_url_key, first_failed_repair_invariant, normalize_repair_scope
 from .repair_shadow_calibration import build_calibrated_shadow_review_analysis
+
+
+class CanonicalRepairContractError(RuntimeError):
+    """Canonical-v2 synthesis was attempted but could not produce one complete snapshot."""
+
+
+def _diagnostic_count(value: Any, fallback: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+
+
+def _safe_repair_diagnostic(fix: dict[str, Any], invariant: str, *, rank: int) -> dict[str, Any]:
+    """Return bounded, non-secret fields sufficient to diagnose invariant drift.
+
+    Never emit raw headers, authority material, tokens, or URL query strings.
+    The diagnostic intentionally reports cardinalities and family names rather
+    than representative URLs.
+    """
+    affected_pages = fix.get("affected_pages") if isinstance(fix.get("affected_pages"), list) else []
+    affected_keys = {key for value in affected_pages if (key := evidence_url_key(value))}
+    breakdown = fix.get("family_breakdown") if isinstance(fix.get("family_breakdown"), dict) else {}
+    representatives = (
+        fix.get("representative_pages_by_family")
+        if isinstance(fix.get("representative_pages_by_family"), dict)
+        else {}
+    )
+    page_count = _diagnostic_count(fix.get("page_count"))
+    reported = _diagnostic_count(fix.get("affected_reported"), page_count)
+    observed = _diagnostic_count(fix.get("affected_observed"), reported)
+    eligible = _diagnostic_count(fix.get("affected_eligible"), observed)
+    return {
+        "invariant": str(invariant or "unknown")[:160],
+        "fix_id": str(fix.get("fix_id") or "")[:160],
+        "canonical_action_rank": rank,
+        "page_scope": str(fix.get("page_scope") or "")[:80],
+        "page_count": page_count,
+        "affected_page_cardinality": len(affected_keys),
+        "affected_pages_complete": fix.get("affected_pages_complete") is not False,
+        "family_breakdown": {
+            str(key)[:120]: _diagnostic_count(value)
+            for key, value in list(breakdown.items())[:20]
+        },
+        "representative_families": [str(key)[:120] for key in list(representatives.keys())[:20]],
+        "affected_reported": reported,
+        "affected_observed": observed,
+        "affected_eligible": eligible,
+        "checked_eligible": fix.get("checked_eligible"),
+        "indexable_affected": _diagnostic_count(fix.get("indexable_affected")),
+        "indexable_checked_eligible": fix.get("indexable_checked_eligible"),
+    }
 
 
 def apply_canonical_repair_contract(
@@ -39,15 +92,23 @@ def apply_canonical_repair_contract(
     analysis = build_calibrated_shadow_review_analysis(review, pages)
     proposed = analysis.get("proposed_fixes") if isinstance(analysis, dict) else None
     if not isinstance(proposed, list):
-        return review_result
+        emit("canonical_repair_contract_absent", severity="WARNING", reason="proposed_fixes_missing")
+        raise CanonicalRepairContractError("canonical repair synthesis did not produce a list")
 
     canonical_items: list[dict[str, Any]] = []
     for rank, raw_fix in enumerate(proposed, start=1):
         if not isinstance(raw_fix, dict):
-            return review_result
+            emit("canonical_repair_contract_absent", severity="WARNING", reason="proposed_fix_not_object", canonical_action_rank=rank)
+            raise CanonicalRepairContractError("canonical repair synthesis produced a non-object repair")
         canonical_fix = _normalize_canonical_repair_evidence(raw_fix, pages)
-        if first_failed_repair_invariant(canonical_fix):
-            return review_result
+        failed_invariant = first_failed_repair_invariant(canonical_fix)
+        if failed_invariant:
+            emit(
+                "canonical_repair_invariant_rejected",
+                severity="WARNING",
+                **_safe_repair_diagnostic(canonical_fix, failed_invariant, rank=rank),
+            )
+            raise CanonicalRepairContractError(f"canonical repair invariant rejected: {failed_invariant}")
         identity = canonical_fix.get("repair_identity") if isinstance(canonical_fix.get("repair_identity"), dict) else {}
         item = {
             **deepcopy(canonical_fix),
@@ -69,7 +130,14 @@ def apply_canonical_repair_contract(
     }
     validation = validate_v2_persistence_candidate(parent, canonical_items)
     if validation.get("eligible") is not True:
-        return review_result
+        emit(
+            "canonical_repair_contract_absent",
+            severity="WARNING",
+            reason="persistence_candidate_rejected",
+            validation_code=str(validation.get("code") or validation.get("reason") or "")[:160],
+            canonical_fix_count=len(canonical_items),
+        )
+        raise CanonicalRepairContractError("canonical repair persistence candidate was rejected")
 
     return {
         **review,

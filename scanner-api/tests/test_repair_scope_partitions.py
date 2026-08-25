@@ -14,6 +14,7 @@ import pytest
 
 from app.repair_coverage import (
     REPAIR_COVERAGE_VERSION,
+    first_failed_repair_invariant,
     normalize_repair_scope,
 )
 
@@ -161,6 +162,39 @@ def test_one_unknown_affected_page_is_page_scoped_not_mixed():
     assert fix["page_template_family"] == "unknown"
     assert fix["page_count"] == 1
     assert fix["family_breakdown"] == {"unknown": 1}
+
+
+@pytest.mark.parametrize("page_count", [22, 17])
+def test_tiqets_unknown_only_multi_page_repairs_are_valid_mixed_scope(page_count):
+    """Exact cardinalities reproduced from the Tiqets production blocker."""
+    affected = [f"https://www.tiqets.com/unknown/{i}" for i in range(page_count)]
+    fix = normalize_repair_scope(
+        {"rule": "missing_h1", "affected_pages": affected},
+        [],
+    )
+
+    assert fix["page_scope"] == "mixed"
+    assert fix["page_template_family"] == "mixed"
+    assert fix["page_count"] == page_count
+    assert fix["family_breakdown"] == {"unknown": page_count}
+    assert len(fix["affected_pages"]) == page_count
+    assert first_failed_repair_invariant(fix) == ""
+
+
+def test_mixed_scope_with_one_known_family_still_fails_closed():
+    malformed = {
+        "page_scope": "mixed",
+        "page_template_family": "mixed",
+        "affected_pages": ["/a", "/b"],
+        "page_count": 2,
+        "family_breakdown": {"product_page": 2},
+        "representative_pages_by_family": {"product_page": "/a"},
+        "affected_reported": 2,
+        "affected_observed": 2,
+        "affected_eligible": 2,
+        "indexable_affected": 0,
+    }
+    assert first_failed_repair_invariant(malformed) == "mixed_scope_without_partitions"
 
 
 # ------------------------------------------------------------ explicit scope --

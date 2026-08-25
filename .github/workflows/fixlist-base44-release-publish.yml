@@ -1,0 +1,66 @@
+name: FixList Base44 Release Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Exact current main SHA. Must equal the release source SHA."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fixlist-base44-owner-controls
+  cancel-in-progress: false
+
+jobs:
+  publish-base44-release:
+    if: github.actor == 'bright4862-design' && github.ref == 'refs/heads/main'
+    environment: fixlist-production-owner
+    # Base44 supports device-code CLI authentication only. The protected owner
+    # runner holds the owner's existing local CLI session; hosted runners must
+    # never receive a serialized Base44 refresh token.
+    runs-on: [self-hosted, fixlist-base44-owner]
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout exact main SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact clean main source
+        shell: /bin/bash {0}
+        run: |
+          set -euo pipefail
+          test "${{ github.actor }}" = "bright4862-design"
+          test "${{ github.ref }}" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test "$(git rev-parse origin/main)" = "${{ github.sha }}"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          /bin/bash -n scripts/deploy-base44-beta-site.sh
+          /bin/bash -n scripts/lib/release-source-guard.sh
+
+      - name: Set up pinned Node runtime
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20.19.5'
+          cache: npm
+
+      - name: Install exact frontend dependencies
+        run: npm ci
+
+      - name: Verify Base44 release package manifest
+        run: node scripts/base44_release_manifest.mjs verify
+
+      - name: Publish exact Base44 site and canonical release functions
+        shell: /bin/bash {0}
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          CONFIRM: ${{ inputs.confirm }}
+          BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
+        run: /bin/bash scripts/deploy-base44-beta-site.sh

@@ -52,7 +52,14 @@ export default async function (req) {
       secrets.get("STRIPE_WEBHOOK_SECRET"),
     );
 
-    if (event.type === "checkout.session.completed") {
+    const isCheckoutCompleted = event.type === "checkout.session.completed";
+    const isAsyncPaymentSucceeded = event.type === "checkout.session.async_payment_succeeded";
+
+    if (isCheckoutCompleted && event.data.object?.payment_status !== "paid") {
+      return Response.json({ received: true });
+    }
+
+    if (isCheckoutCompleted || isAsyncPaymentSucceeded) {
       const session = event.data.object;
       assertPaidSession(session);
 

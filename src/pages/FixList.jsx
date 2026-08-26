@@ -1626,7 +1626,12 @@ function buildEvidenceItems(recommendation) {
   const metadataBreakdown = formatMetadataStateBreakdown(recommendation.metadataStateCounts);
   if (metadataBreakdown) items.push({ label: "Description status", value: metadataBreakdown });
   if (recommendation.pageScope) items.push({ label: "Scope", value: humanize(recommendation.pageScope) });
-  else if (recommendation.scopeRelationship) items.push({ label: "Scope", value: humanize(recommendation.scopeRelationship) });
+  else if (recommendation.scopeRelationship) items.push({
+    label: "Scope",
+    value: recommendation.scopeRelationship === "sibling_sous_dossier"
+      ? "Related site section"
+      : humanize(recommendation.scopeRelationship),
+  });
   if (recommendation.evidenceStatus) items.push({ label: "Evidence", value: humanize(recommendation.evidenceStatus) });
   if (recommendation.pageType) items.push({ label: "Page type", value: humanize(recommendation.pageType) });
   if (recommendation.pageValueLabel) items.push({ label: "Business value", value: recommendation.pageValueLabel });

@@ -1,5 +1,6 @@
 import asyncio
 import gzip
+import io
 import re
 import time
 from html import unescape
@@ -9,9 +10,10 @@ import httpx
 
 from .artifact_filter import is_artifact_url, record_artifact
 from .market_scope import market_pair_prefix, path_within_scope
-from .security import safe_get
+from .security import ResponseBodyTooLarge, safe_get
 
 MAX_SITEMAP_FETCHES = 60
+MAX_SITEMAP_DECODED_BYTES = 5_000_000
 
 SITEMAP_LOC_RE = re.compile(
     r"<(?:[A-Za-z_][\w.-]*:)?loc\b[^>]*>(.*?)</(?:[A-Za-z_][\w.-]*:)?loc\s*>",
@@ -288,11 +290,18 @@ async def fetch_sitemap_locs(client: httpx.AsyncClient, sitemap_url: str, fetche
             diagnostics["sitemap_budget_exhausted"] = True
         _record_sitemap_failure(diagnostics, "sitemap_timeout")
         return []
+    except ResponseBodyTooLarge:
+        _record_sitemap_failure(diagnostics, "sitemap_body_too_large")
+        return []
     except Exception:
         _record_sitemap_failure(diagnostics, "sitemap_fetch_exception")
         return []
 
-    body = decode_sitemap_body(response, sitemap_url)
+    try:
+        body = decode_sitemap_body(response, sitemap_url)
+    except ResponseBodyTooLarge:
+        _record_sitemap_failure(diagnostics, "sitemap_body_too_large")
+        return []
     if not body:
         _record_sitemap_failure(diagnostics, "empty_sitemap_body")
         return []
@@ -313,12 +322,23 @@ async def _safe_get_before_deadline(client: httpx.AsyncClient, url: str, deadlin
     if pacer is not None and not await pacer.wait_for_slot(deadline):
         return None
     if deadline is None:
-        return await safe_get(client, url)
+        return await safe_get(
+            client,
+            url,
+            max_decoded_bytes=MAX_SITEMAP_DECODED_BYTES,
+        )
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         return None
     try:
-        return await asyncio.wait_for(safe_get(client, url), timeout=max(0.05, remaining))
+        return await asyncio.wait_for(
+            safe_get(
+                client,
+                url,
+                max_decoded_bytes=MAX_SITEMAP_DECODED_BYTES,
+            ),
+            timeout=max(0.05, remaining),
+        )
     except asyncio.TimeoutError:
         return None
 
@@ -336,7 +356,15 @@ def decode_sitemap_body(response: httpx.Response, sitemap_url: str) -> str:
     gzip_candidate = raw.startswith(b"\x1f\x8b") or path.endswith(".gz")
     if gzip_candidate and raw:
         try:
-            raw = gzip.decompress(raw)
+            with gzip.GzipFile(fileobj=io.BytesIO(raw), mode="rb") as stream:
+                decoded = stream.read(MAX_SITEMAP_DECODED_BYTES + 1)
+            if len(decoded) > MAX_SITEMAP_DECODED_BYTES:
+                raise ResponseBodyTooLarge(
+                    f"decoded_sitemap_body_exceeded_{MAX_SITEMAP_DECODED_BYTES}_bytes"
+                )
+            raw = decoded
+        except ResponseBodyTooLarge:
+            raise
         except (OSError, EOFError):
             # A proxy or HTTP Content-Encoding layer may already have decoded a
             # .gz URL. In that case the bytes are plain XML and can be decoded.

@@ -19,6 +19,7 @@ SITEMAP_LOC_RE = re.compile(
     r"<(?:[A-Za-z_][\w.-]*:)?loc\b[^>]*>(.*?)</(?:[A-Za-z_][\w.-]*:)?loc\s*>",
     re.I | re.S,
 )
+SITEMAP_XML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 
 
 def parse_sitemap_locs(body: str) -> list[str]:
@@ -32,7 +33,8 @@ def parse_sitemap_locs(body: str) -> list[str]:
     retaining a DOM.
     """
     locs: list[str] = []
-    for match in SITEMAP_LOC_RE.finditer(str(body or "")):
+    source = SITEMAP_XML_COMMENT_RE.sub("", str(body or ""))
+    for match in SITEMAP_LOC_RE.finditer(source):
         value = match.group(1).strip()
         if value.startswith("<![CDATA[") and value.endswith("]]>"):
             value = value[9:-3]

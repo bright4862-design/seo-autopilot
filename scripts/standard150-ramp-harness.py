@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import subprocess
 import sys
 import time
@@ -25,9 +26,31 @@ from typing import Any
 
 import httpx
 
+from standard150_acceptance_matrix import (
+    _matrix_contract_gaps,
+    build_acceptance_matrix as _base_build_acceptance_matrix,
+)
+from standard150_exact_release import (
+    exact_release_dimension,
+    exact_release_matrix_failures,
+    load_expected_release_fingerprint,
+)
+
 APP_ID = "6a498732ec779dfaaeab0e53"
 BASE44_API = "https://base44.app"
 TERMINAL = {"complete", "limited", "failed", "cancelled"}
+EXPECTED_RELEASE_FINGERPRINT = load_expected_release_fingerprint()
+
+
+def build_acceptance_matrix(scan: dict[str, Any]) -> dict[str, Any]:
+    """Build the one canonical, tightened matrix used by final and checkpoint views."""
+    matrix = _base_build_acceptance_matrix(scan)
+    matrix["exact_release_markers"] = exact_release_dimension(
+        observed_fingerprint=scan.get("beta_revision_fingerprint"),
+        release_contract_current=scan.get("release_contract_current"),
+        expected_fingerprint=EXPECTED_RELEASE_FINGERPRINT,
+    )
+    return matrix
 
 
 def unwrap(value: Any) -> dict[str, Any]:
@@ -101,27 +124,41 @@ async def submit(client: httpx.AsyncClient, token: str, item: Submission) -> Non
         print(json.dumps({"event": "scan_submitted", "scan_id": item.scan_id, "url": item.url}), flush=True)
 
 
-async def poll_one(client: httpx.AsyncClient, token: str, item: Submission) -> None:
+async def poll_one(client: httpx.AsyncClient, token: str, item: Submission) -> bool:
     if not item.scan_id:
-        return
+        return False
     status, body = await invoke(client, token, "getCustomerScanResult", {
         "action": "get", "scan_id": item.scan_id,
     })
     if status != 200:
-        return
+        return False
     item.customer_result = body
     run = body.get("run")
     if isinstance(run, dict):
         item.run = run
         if str(run.get("status") or "").lower() in TERMINAL and not item.terminal_at:
             item.terminal_at = time.monotonic()
+            return True
+    return False
 
 
-async def wait_terminal(client: httpx.AsyncClient, tokens: dict[str, str], items: list[Submission], timeout_seconds: int) -> None:
+async def wait_terminal(
+    client: httpx.AsyncClient,
+    tokens: dict[str, str],
+    items: list[Submission],
+    timeout_seconds: int,
+    *,
+    checkpoint_path: str = "",
+) -> None:
     deadline = time.monotonic() + timeout_seconds
     pending = [item for item in items if item.accepted and item.scan_id]
     while pending and time.monotonic() < deadline:
-        await asyncio.gather(*(poll_one(client, tokens[item.email], item) for item in pending))
+        terminal_transitions = await asyncio.gather(*(
+            poll_one(client, tokens[item.email], item)
+            for item in pending
+        ))
+        if checkpoint_path and any(terminal_transitions):
+            write_checkpoint(checkpoint_path, items)
         pending = [item for item in pending if not item.terminal_at]
         if pending:
             await asyncio.sleep(5)
@@ -161,6 +198,8 @@ def _result_summary(item: Submission) -> dict[str, Any]:
     # exactly instead of reconstructing or substituting them from ScanRun.
     fix_list = result.get("fixList") if isinstance(result.get("fixList"), dict) else {}
     fix_items = result.get("fixItems") if isinstance(result.get("fixItems"), list) else []
+    matrix = build_acceptance_matrix(_matrix_observation(item))
+    matrix_failures = exact_release_matrix_failures(matrix)
     return {
         "scan_id": item.scan_id,
         "status": str(item.run.get("status") or ""),
@@ -171,9 +210,77 @@ def _result_summary(item: Submission) -> dict[str, Any]:
         "fix_item_count": len(fix_items),
         "fix_list_id": str(item.run.get("fix_list_id") or fix_list.get("id") or ""),
         "error_code": str(item.run.get("error_code") or item.failure_code or ""),
+        "acceptance_matrix": matrix,
+        "matrix_gaps": _matrix_contract_gaps(matrix),
+        "matrix_failures": matrix_failures,
         "fixList": fix_list or None,
         "fixItems": fix_items,
     }
+
+
+def _matrix_observation(item: Submission) -> dict[str, Any]:
+    return {
+        "scan_id": item.scan_id,
+        "http_status": item.http_status,
+        "accepted": item.accepted,
+        "failure_code": item.failure_code,
+        "submitted_at": item.submitted_at,
+        "terminal_at": item.terminal_at,
+        "run": item.run,
+        "customer_result": item.customer_result,
+        "beta_revision_fingerprint": item.run.get("beta_revision_fingerprint"),
+        "release_contract_current": item.customer_result.get("release_contract_current"),
+    }
+
+
+def _checkpoint_summary(item: Submission) -> dict[str, Any]:
+    matrix = build_acceptance_matrix(_matrix_observation(item))
+    return {
+        "scan_id": item.scan_id,
+        "project_id": item.project_id,
+        "url": item.url,
+        "status": str(item.run.get("status") or ""),
+        "error_code": str(item.run.get("error_code") or item.failure_code or ""),
+        "acceptance_matrix": matrix,
+        "matrix_gaps": _matrix_contract_gaps(matrix),
+    }
+
+
+def checkpoint_payload(items: list[Submission]) -> dict[str, Any]:
+    terminal = [
+        item
+        for item in items
+        if str(item.run.get("status") or "").lower() in TERMINAL
+    ]
+    return {
+        "version": "standard150_acceptance_checkpoint_v2",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "completed_sites": len(terminal),
+        "sites": [_checkpoint_summary(item) for item in terminal],
+    }
+
+
+def write_checkpoint(path: str, items: list[Submission]) -> None:
+    """Atomically and durably retain every terminal site's matrix evidence."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(checkpoint_payload(items), handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        directory_fd = os.open(target.parent, directory_flags)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def report(items: list[Submission], logs: dict[str, Any], before: set[str] | None = None, after: set[str] | None = None) -> dict[str, Any]:
@@ -192,6 +299,17 @@ def report(items: list[Submission], logs: dict[str, Any], before: set[str] | Non
     for item in terminal:
         status = str(item.run.get("status") or "").lower()
         result = item.customer_result
+        summary = _result_summary(item)
+        if summary["matrix_gaps"]:
+            failures.append(
+                f"{item.scan_id}: acceptance matrix missing required evidence: "
+                + ", ".join(summary["matrix_gaps"])
+            )
+        if summary["matrix_failures"]:
+            failures.append(
+                f"{item.scan_id}: acceptance matrix failed required evidence: "
+                + ", ".join(summary["matrix_failures"])
+            )
         if status == "complete":
             if result.get("authority_verified") is not True:
                 failures.append(f"{item.scan_id}: complete result is not authority_verified")
@@ -248,13 +366,20 @@ async def main_async(args: argparse.Namespace) -> int:
         if args.double_submit:
             before = {str(r.get("id") or r.get("scan_id") or "") for r in await list_runs(client, tokens[items[0].email], items[0].project_id)}
         await asyncio.gather(*(submit(client, tokens[i.email], i) for i in items))
-        await wait_terminal(client, tokens, items, args.timeout)
+        await wait_terminal(
+            client,
+            tokens,
+            items,
+            args.timeout,
+            checkpoint_path=args.checkpoint,
+        )
         after = set()
         if args.double_submit:
             after = {str(r.get("id") or r.get("scan_id") or "") for r in await list_runs(client, tokens[items[0].email], items[0].project_id)}
 
     logs = log_quality([i.scan_id for i in items if i.scan_id], started, args.gcp_project)
     result = report(items, logs, before if args.double_submit else None, after if args.double_submit else None)
+    write_checkpoint(args.checkpoint, items)
     if args.double_submit:
         if len(result["new_scan_runs"]) != 1:
             result["failures"].append(f"same-owner double-submit created {len(result['new_scan_runs'])} new ScanRuns; expected 1")
@@ -275,6 +400,11 @@ def main() -> int:
     parser.add_argument("--double-submit", action="store_true")
     parser.add_argument("--timeout", type=int, default=2400)
     parser.add_argument("--gcp-project", default="")
+    parser.add_argument(
+        "--checkpoint",
+        default="standard150-ramp-checkpoint.json",
+        help="Atomic durable JSON checkpoint containing each terminal site's acceptance matrix.",
+    )
     return asyncio.run(main_async(parser.parse_args()))
 
 

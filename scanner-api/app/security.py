@@ -60,12 +60,9 @@ async def _bounded_decoded_response(
 
         encoding = encodings[0] if encodings else ""
         decoder = None
-        deflate_first_attempt = False
+        deflate_prefix = bytearray()
         if encoding == "gzip":
             decoder = zlib.decompressobj(zlib.MAX_WBITS | 16)
-        elif encoding == "deflate":
-            decoder = zlib.decompressobj()
-            deflate_first_attempt = True
 
         chunks: list[bytes] = []
         total = 0
@@ -82,11 +79,27 @@ async def _bounded_decoded_response(
             chunks.append(chunk)
 
         async for raw_chunk in streamed.aiter_raw():
-            if decoder is None:
+            if encoding == "deflate" and decoder is None:
+                deflate_prefix.extend(raw_chunk)
+                if len(deflate_prefix) < 2:
+                    continue
+                cmf, flg = deflate_prefix[0], deflate_prefix[1]
+                zlib_wrapped = bool(
+                    (cmf & 0x0F) == 8
+                    and (cmf >> 4) <= 7
+                    and (((cmf << 8) + flg) % 31) == 0
+                )
+                decoder = zlib.decompressobj(
+                    zlib.MAX_WBITS if zlib_wrapped else -zlib.MAX_WBITS
+                )
+                pending = bytes(deflate_prefix)
+                deflate_prefix.clear()
+            elif decoder is None:
                 append_decoded(raw_chunk)
                 continue
+            else:
+                pending = raw_chunk
 
-            pending = raw_chunk
             while pending:
                 remaining = limit - total
                 try:
@@ -95,13 +108,8 @@ async def _bounded_decoded_response(
                         max_length=remaining + 1,
                     )
                 except zlib.error as exc:
-                    if encoding == "deflate" and deflate_first_attempt:
-                        decoder = zlib.decompressobj(-zlib.MAX_WBITS)
-                        deflate_first_attempt = False
-                        continue
                     raise httpx.DecodingError(str(exc)) from exc
 
-                deflate_first_attempt = False
                 append_decoded(decoded)
 
                 tail = decoder.unconsumed_tail
@@ -110,6 +118,9 @@ async def _bounded_decoded_response(
                 if tail == pending and not decoded:
                     raise httpx.DecodingError("content decoder made no progress")
                 pending = tail
+
+        if encoding == "deflate" and decoder is None and deflate_prefix:
+            raise httpx.DecodingError("incomplete deflate response body")
 
         body = b"".join(chunks)
 

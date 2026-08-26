@@ -17,7 +17,7 @@ import SuggestedFix from "@/components/fixlist/SuggestedFix";
 import { deleteScanRun } from "@/lib/scanHistory";
 import { prepareCustomerFixes, priorityBucket } from "@/lib/fixRanking";
 import { buildRepairWorkSurfacePresentation } from "@/lib/repairWorkSurfacePresentation";
-import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel } from "@/lib/fixVocabulary";
+import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel, customerScopeRelationshipLabel } from "@/lib/fixVocabulary";
 import { repairSuggestion } from "@/lib/repairSuggestions";
 
 const CMS_OPTIONS = [
@@ -1494,9 +1494,7 @@ function buildEvidenceItems(recommendation) {
   if (recommendation.pageScope) items.push({ label: "Scope", value: humanize(recommendation.pageScope) });
   else if (recommendation.scopeRelationship) items.push({
     label: "Scope",
-    value: recommendation.scopeRelationship === "sibling_sous_dossier"
-      ? "Related site section"
-      : humanize(recommendation.scopeRelationship),
+    value: customerScopeRelationshipLabel(recommendation.scopeRelationship),
   });
   if (recommendation.evidenceStatus) items.push({ label: "Evidence", value: humanize(recommendation.evidenceStatus) });
   if (recommendation.pageType) items.push({ label: "Page type", value: humanize(recommendation.pageType) });

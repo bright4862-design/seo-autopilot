@@ -200,13 +200,15 @@ async def test_robots_blocked_redirect_destination_is_not_fetched(monkeypatch):
 @pytest.mark.asyncio
 async def test_sitemap_and_internal_link_redirects_have_bounded_source_findings(monkeypatch):
     monkeypatch.setattr("app.redirect_validation.is_public_http_url", lambda _url: True)
-    responses = {
-        "https://example.com/old": _response("https://example.com/old", 301, location="/new"),
-        "https://example.com/new": _response("https://example.com/new", 200),
-    }
+    def responses():
+        return {
+            "https://example.com/old": _response("https://example.com/old", 301, location="/new"),
+            "https://example.com/new": _response("https://example.com/new", 200),
+        }
+
     policy = RobotsPolicy("https://example.com/robots.txt", "missing", 404)
-    sitemap_page = await fetch_and_extract(FakeClient(responses), "https://example.com/old", DISCOVERY_SITEMAP, robots_policy=policy)
-    internal_page = await fetch_and_extract(FakeClient(responses), "https://example.com/old", DISCOVERY_INTERNAL, robots_policy=policy)
+    sitemap_page = await fetch_and_extract(FakeClient(responses()), "https://example.com/old", DISCOVERY_SITEMAP, robots_policy=policy)
+    internal_page = await fetch_and_extract(FakeClient(responses()), "https://example.com/old", DISCOVERY_INTERNAL, robots_policy=policy)
     assert [item["rule"] for item in build_findings([sitemap_page])] == ["sitemap_redirect"]
     assert [item["rule"] for item in build_findings([internal_page])] == ["internal_link_redirect"]
 
@@ -215,12 +217,14 @@ async def test_sitemap_and_internal_link_redirects_have_bounded_source_findings(
 async def test_summary_counts_redirect_sources(monkeypatch):
     monkeypatch.setattr("app.redirect_validation.is_public_http_url", lambda _url: True)
     policy = RobotsPolicy("https://example.com/robots.txt", "missing", 404)
-    responses = {
-        "https://example.com/old": _response("https://example.com/old", 301, location="/new"),
-        "https://example.com/new": _response("https://example.com/new", 200),
-    }
-    sitemap_page = await fetch_and_extract(FakeClient(responses), "https://example.com/old", DISCOVERY_SITEMAP, robots_policy=policy)
-    internal_page = await fetch_and_extract(FakeClient(responses), "https://example.com/old", DISCOVERY_INTERNAL, robots_policy=policy)
+    def responses():
+        return {
+            "https://example.com/old": _response("https://example.com/old", 301, location="/new"),
+            "https://example.com/new": _response("https://example.com/new", 200),
+        }
+
+    sitemap_page = await fetch_and_extract(FakeClient(responses()), "https://example.com/old", DISCOVERY_SITEMAP, robots_policy=policy)
+    internal_page = await fetch_and_extract(FakeClient(responses()), "https://example.com/old", DISCOVERY_INTERNAL, robots_policy=policy)
     summary = summarize_redirect_evidence([sitemap_page, internal_page])
     assert summary["redirected_pages"] == 2
     assert summary["sitemap_redirects"] == 1

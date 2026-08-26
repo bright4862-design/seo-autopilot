@@ -119,8 +119,12 @@ async def _bounded_decoded_response(
                     raise httpx.DecodingError("content decoder made no progress")
                 pending = tail
 
-        if encoding == "deflate" and decoder is None and deflate_prefix:
+        if encoding == "deflate" and decoder is None:
             raise httpx.DecodingError("incomplete deflate response body")
+        if decoder is not None and not decoder.eof:
+            raise httpx.DecodingError(
+                f"incomplete_{encoding}_response_body"
+            )
 
         body = b"".join(chunks)
 

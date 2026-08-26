@@ -299,7 +299,10 @@ async def test_scheduler_is_detached_and_holds_task_until_completion(monkeypatch
 
 
 def test_migration_denies_client_roles_and_uses_scan_id_as_the_upsert_key():
-    migration = Path("../supabase/migrations/202608260001_scanner_telemetry_v1.sql").read_text(encoding="utf-8")
+    repository_root = Path(__file__).resolve().parents[2]
+    migration = (repository_root / "supabase/migrations/202608260001_scanner_telemetry_v1.sql").read_text(
+        encoding="utf-8"
+    )
     normalized = " ".join(migration.lower().split())
 
     assert "scan_id text primary key" in normalized

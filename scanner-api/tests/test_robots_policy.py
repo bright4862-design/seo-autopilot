@@ -46,7 +46,7 @@ def deterministic_public_dns(monkeypatch):
 def _response(status, text=""):
     return httpx.Response(
         status,
-        text=text,
+        stream=httpx.ByteStream(text.encode("utf-8")),
         request=httpx.Request("GET", "https://example.com/robots.txt"),
     )
 

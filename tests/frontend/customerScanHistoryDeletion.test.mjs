@@ -64,3 +64,22 @@ test("required child reads fail with a sanitized service error instead of deleti
   assert.match(helper, /Saved scan history is temporarily unavailable/);
   assert.doesNotMatch(helper, /error\.(?:message|stack)|JSON\.stringify/);
 });
+
+test("capped child reads are drained before the parent scan is deleted", () => {
+  const deletionStart = backend.indexOf("async function deleteOwnedTerminalScan");
+  const requiredRowsStart = backend.indexOf("async function requiredRows", deletionStart);
+  const deletion = backend.slice(deletionStart, requiredRowsStart);
+
+  assert.match(backend, /FIX_LIST_DELETE_BATCH\s*=\s*20/);
+  assert.match(backend, /FIX_ITEM_DELETE_BATCH\s*=\s*200/);
+  assert.match(deletion, /await drainRows\([\s\S]*?FixList\.filter/);
+  assert.match(deletion, /await drainRows\([\s\S]*?FixItem\.filter/);
+  assert.match(backend, /for \(let batch = 0; batch < MAX_DELETE_DRAIN_BATCHES; batch \+= 1\)/);
+  assert.match(backend, /if \(rows\.length < batchSize\) return/);
+  assert.ok(
+    deletion.lastIndexOf("await drainRows(") < deletion.indexOf("await entities.ScanRun.delete(scanId)"),
+    "all child drain loops must finish before parent deletion",
+  );
+  assert.match(backend, /history_child_identity_invalid/);
+  assert.match(backend, /history_delete_drain_exhausted/);
+});

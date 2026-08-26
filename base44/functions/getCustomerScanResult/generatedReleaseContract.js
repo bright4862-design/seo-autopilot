@@ -3,7 +3,7 @@
 // Run that generator after changing either input; CI fails on drift.
 
 export const RELEASE_CONTRACT_SCHEMA_VERSION = "beta_crawler_revision_v1";
-export const RELEASE_FINGERPRINT = "c0815d78c19d50db";
+export const RELEASE_FINGERPRINT = "1ddf8085bc7721c4";
 export const RELEASE_STATUS = "candidate";
 export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "admission_reconciliation_version": "admission_reconciliation_v1_exact_generation_barrier",
@@ -50,7 +50,7 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "review_version": "python_review_v2_structural_marketplace",
   "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",
   "sampling_version": "balanced_sitemap_buckets_v1",
-  "scan_history_delete_version": "scan_history_delete_v1_fail_closed_drain",
+  "scan_history_delete_version": "scan_history_delete_v2_drain_children",
   "scan_history_version": "scan_history_v2_account_wide_recent",
   "scanner_build_revision": "authenticated_health_probe_v1",
   "scanner_version": "python_scanner_v3_bounded_request",

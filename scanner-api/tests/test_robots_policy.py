@@ -10,12 +10,26 @@ from app.robots_policy import (
 from app.scanner import run_scan
 
 
+class _StreamContext:
+    def __init__(self, response):
+        self.response = response
+
+    async def __aenter__(self):
+        return self.response
+
+    async def __aexit__(self, _exc_type, _exc, _tb):
+        return False
+
+
 class _Client:
     def __init__(self, response):
         self.response = response
 
     async def get(self, _url, **_kwargs):
         return self.response
+
+    def stream(self, _method, _url, **_kwargs):
+        return _StreamContext(self.response)
 
 
 @pytest.fixture(autouse=True)
@@ -32,7 +46,7 @@ def deterministic_public_dns(monkeypatch):
 def _response(status, text=""):
     return httpx.Response(
         status,
-        text=text,
+        stream=httpx.ByteStream(text.encode("utf-8")),
         request=httpx.Request("GET", "https://example.com/robots.txt"),
     )
 

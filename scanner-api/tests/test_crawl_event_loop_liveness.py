@@ -48,8 +48,10 @@ def _discovery():
 
 @pytest.fixture
 def stub_fetch(monkeypatch):
+    monkeypatch.setattr(scanner, "is_public_http_url", lambda _url: True)
+
     def install(response):
-        async def fake_safe_get(_client, _url):
+        async def fake_safe_get(_client, _url, **_kwargs):
             return response
         monkeypatch.setattr(scanner, "safe_get", fake_safe_get)
     return install
@@ -141,6 +143,7 @@ async def test_a_normal_page_is_untouched_by_the_ceiling(stub_fetch):
     page = await scanner.fetch_and_extract(None, "https://example.com/", _discovery())
 
     assert page.get("raw_html_truncated") is not True
-    assert page["_html"] == REAL_HTML
+    assert "_html" not in page
+    assert page["title"] == "Tours"
     assert page["status_code"] == 200
     assert page_evidence_class(page) == "usable_html"

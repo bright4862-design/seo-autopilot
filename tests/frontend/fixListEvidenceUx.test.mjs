@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { customerScopeRelationshipLabel } from "../../src/lib/fixVocabulary.js";
 import { buildFixItemFields } from "../../src/lib/scanRunModel.js";
 
 const fixListSource = readFileSync(new URL("../../src/pages/FixList.jsx", import.meta.url), "utf8");
@@ -31,6 +32,26 @@ test("customer-facing URL evidence excludes obvious assets and system routes", (
   assert.ok(fixListSource.includes("cdn-cgi"));
   assert.match(fixListSource, /pdf\|png/);
   assert.match(fixListSource, /non-HTML or system URL/);
+});
+
+test("HTTP 429 customer copy is neutral and contains no cross-customer language", () => {
+  assert.equal(customerScopeRelationshipLabel("sibling_sous_dossier"), "Related site section");
+  assert.notEqual(customerScopeRelationshipLabel("sibling_sous_dossier"), "Sibling sous dossier");
+  assert.equal(customerScopeRelationshipLabel("same_parent_domain"), "Same parent domain");
+  assert.equal(customerScopeRelationshipLabel(""), "");
+  assert.match(fixListSource, /Related site section/);
+  assert.match(fixListSource, /same-parent-domain access evidence/);
+  assert.match(fixListSource, /Related section on the same parent domain/);
+  assert.match(
+    fixListSource,
+    /value: customerScopeRelationshipLabel\(recommendation\.scopeRelationship\)/,
+  );
+  assert.doesNotMatch(fixListSource, /value: humanize\(recommendation\.scopeRelationship\)/);
+  assert.doesNotMatch(fixListSource, /Meilleurtaux/i);
+  assert.doesNotMatch(fixListSource, /Sibling sous-dossier/i);
+  assert.doesNotMatch(fixListSource, /different business vertical/i);
+  assert.doesNotMatch(fixListSource, /primary energy-comparison customer page/i);
+  assert.doesNotMatch(fixListSource, /credit or loan content/i);
 });
 
 test("durable FixItems preserve the full 150-page crawl evidence and instructions", () => {

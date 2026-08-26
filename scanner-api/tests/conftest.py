@@ -30,10 +30,13 @@ def install_mock_network(monkeypatch, routes: dict):
             return httpx.Response(404, text="")
         response_headers = {"content-type": entry.get("content_type", "text/html")}
         response_headers.update(entry.get("headers", {}))
+        body = entry.get("body", "")
+        raw_body = body if isinstance(body, bytes) else str(body).encode("utf-8")
         return httpx.Response(
             entry.get("status", 200),
             headers=response_headers,
-            text=entry.get("body", ""),
+            stream=httpx.ByteStream(raw_body),
+            request=request,
         )
 
     transport = httpx.MockTransport(handler)

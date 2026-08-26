@@ -7,7 +7,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from .extract import extract_links, extract_page
-from .security import is_public_http_url, safe_get
+from .security import DEFAULT_MAX_DECODED_RESPONSE_BYTES, is_public_http_url, safe_get
 
 TRUST_DISCOVERY_VERSION = "trust_page_discovery_v1"
 TRUST_FINDING_GATE_VERSION = "trust_page_finding_gate_v1"
@@ -93,7 +93,11 @@ async def _fetch_page(client: httpx.AsyncClient, url: str, source: str, source_p
         "error": "",
     }
     try:
-        response = await safe_get(client, url)
+        response = await safe_get(
+            client,
+            url,
+            max_decoded_bytes=DEFAULT_MAX_DECODED_RESPONSE_BYTES,
+        )
         if response is None:
             evidence["error"] = "blocked_or_non_public_redirect"
             return None, evidence

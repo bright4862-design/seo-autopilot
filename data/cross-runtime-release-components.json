@@ -2,7 +2,7 @@
   "components": {
     "admission_reconciliation_version": "admission_reconciliation_v1_exact_generation_barrier",
     "authority_seal_version": "scan_evidence_hmac_sha256_v1",
-    "customer_projection_version": "customer_projection_v1",
+    "customer_projection_version": "customer_projection_v2_limited_score_context",
     "durable_completion_contract_version": "durable_standard150_completion_v1",
     "durable_control_contract_version": "durable_standard150_control_v1",
     "durable_worker_contract_version": "scan_job_worker_v1_cloud_tasks",
@@ -15,6 +15,6 @@
     "repair_write_contract_version": "repair_contract_v2_shadow_calibrated",
     "review_attestation_version": "standard_review_snapshot_hmac_v2_coverage"
   },
-  "note": "Canonical cross-runtime release components. Base44 and frontend behavior can change release truth, but Python cannot import those runtimes, so their markers are declared here and merged into the same fingerprint. A Base44/UI-only behavior change therefore moves the release fingerprint exactly like a Python change. Patch C adds the limited-result contract; Patch E adds admission reconciliation.",
+  "note": "Canonical cross-runtime release components. Base44 and frontend behavior can change release truth, but Python cannot import those runtimes, so their markers are declared here and merged into the same fingerprint. A Base44/UI-only behavior change therefore moves the release fingerprint exactly like a Python change. Patch C adds the limited-result contract; Patch E adds admission reconciliation. Final-core composition bumps the customer projection marker for limited-score evidence context.",
   "schema_version": "cross_runtime_release_components_v1"
 }

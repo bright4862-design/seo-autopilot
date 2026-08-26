@@ -29,7 +29,7 @@ async def test_final_url_dedup_keeps_one_homepage_and_backfills_unique_capacity(
     async def fake_load_robots_policy(client, origin):
         return Policy()
 
-    async def fake_safe_get(client, url):
+    async def fake_safe_get(client, url, **_kwargs):
         return LandingResponse("https://example.com/")
 
     async def fake_load_sitemap_urls(*args, **kwargs):
@@ -44,9 +44,15 @@ async def test_final_url_dedup_keeps_one_homepage_and_backfills_unique_capacity(
             if is_home
             else '<html><head><title>About</title></head><body><h1>About</h1><p>Useful about content.</p></body></html>'
         )
-        page = extract_page(html, url, final_url, 200, "text/html", discovery)
-        page["_html"] = html
-        return page
+        return extract_page(
+            html,
+            url,
+            final_url,
+            200,
+            "text/html",
+            discovery,
+            include_links=True,
+        )
 
     async def fake_validate(*args, **kwargs):
         return {}

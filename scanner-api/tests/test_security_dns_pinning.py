@@ -41,7 +41,7 @@ async def test_bounded_plain_html_preserves_downstream_response_semantics(monkey
                 "content-length": str(len(payload)),
                 "x-fixlist-test": "kept",
             },
-            content=payload,
+            stream=httpx.ByteStream(payload),
             request=request,
         )
 
@@ -93,7 +93,7 @@ async def test_bounded_gzip_response_is_decoded_once_and_preserves_logical_reque
                 "content-length": str(len(compressed)),
                 "x-fixlist-test": "kept",
             },
-            content=compressed,
+            stream=httpx.ByteStream(compressed),
             request=request,
         )
 
@@ -135,7 +135,7 @@ async def test_bounded_decoded_response_rejects_content_past_the_limit(monkeypat
         return httpx.Response(
             200,
             headers={"content-encoding": "gzip"},
-            content=payload,
+            stream=httpx.ByteStream(payload),
             request=request,
         )
 
@@ -172,7 +172,7 @@ async def test_bounded_gzip_limit_does_not_use_httpx_eager_decoding(monkeypatch)
         return httpx.Response(
             200,
             headers={"content-encoding": "gzip"},
-            content=payload,
+            stream=httpx.ByteStream(payload),
             request=request,
         )
 
@@ -278,7 +278,7 @@ async def test_bounded_compressed_response_rejects_truncated_streams(
         return httpx.Response(
             200,
             headers={"content-encoding": encoding},
-            content=compressed,
+            stream=httpx.ByteStream(compressed),
             request=request,
         )
 

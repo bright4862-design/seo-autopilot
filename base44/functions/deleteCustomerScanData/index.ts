@@ -44,11 +44,14 @@ Deno.serve(async (req) => {
     }
 
     if (action === "prune") {
-      const scans = await entities.ScanRun.filter(
-        { project_id: projectId, owner_user_id: cleanId(user.id) },
-        "-created_date",
-        MAX_HISTORY,
-      ).catch(() => []);
+      const scans = await requiredRows(
+        () => entities.ScanRun.filter(
+          { project_id: projectId, owner_user_id: cleanId(user.id) },
+          "-created_date",
+          MAX_HISTORY,
+        ),
+        "history_scan_read_failed",
+      );
       const ordered = Array.isArray(scans) ? scans : [];
       const keepIds = new Set(ordered.slice(0, KEEP_NEWEST).map((row) => cleanId(row?.id)).filter(Boolean));
       const deletedScanIds: string[] = [];
@@ -102,10 +105,19 @@ async function deleteOwnedTerminalScan({ entities, userId, projectId, scanId, kn
     throw new RequestProblem(409, "scan_not_terminal", "Only finished scan history can be deleted.");
   }
 
-  const fixLists = await entities.FixList.filter({ scan_run_id: scanId }, "-created_date", 20).catch(() => []);
+  // Deletion must never reinterpret a storage/read failure as "no children".
+  // Otherwise the parent ScanRun can disappear while its FixList/FixItems
+  // remain orphaned even though the customer received success.
+  const fixLists = await requiredRows(
+    () => entities.FixList.filter({ scan_run_id: scanId }, "-created_date", 20),
+    "history_fix_list_read_failed",
+  );
   for (const fixList of fixLists || []) {
     if (cleanId(fixList?.owner_user_id) !== cleanId(userId) || cleanId(fixList?.project_id) !== cleanId(projectId)) continue;
-    const items = await entities.FixItem.filter({ fix_list_id: cleanId(fixList.id) }, "-created_date", 200).catch(() => []);
+    const items = await requiredRows(
+      () => entities.FixItem.filter({ fix_list_id: cleanId(fixList.id) }, "-created_date", 200),
+      "history_fix_item_read_failed",
+    );
     for (const item of items || []) {
       if (
         cleanId(item?.owner_user_id) === cleanId(userId)
@@ -121,7 +133,10 @@ async function deleteOwnedTerminalScan({ entities, userId, projectId, scanId, kn
 
   // Defensive cleanup for any authority row whose list relation was lost but
   // whose scan/project/owner identity is still exact.
-  const remainingItems = await entities.FixItem.filter({ scan_run_id: scanId }, "-created_date", 200).catch(() => []);
+  const remainingItems = await requiredRows(
+    () => entities.FixItem.filter({ scan_run_id: scanId }, "-created_date", 200),
+    "history_orphan_item_read_failed",
+  );
   for (const item of remainingItems || []) {
     if (
       cleanId(item?.owner_user_id) === cleanId(userId)
@@ -134,6 +149,22 @@ async function deleteOwnedTerminalScan({ entities, userId, projectId, scanId, kn
 
   await entities.ScanRun.delete(scanId);
   return true;
+}
+
+async function requiredRows(read, code) {
+  try {
+    const rows = await read();
+    if (!Array.isArray(rows)) {
+      throw new Error("row_read_invalid");
+    }
+    return rows;
+  } catch {
+    throw new RequestProblem(
+      503,
+      code,
+      "Saved scan history is temporarily unavailable.",
+    );
+  }
 }
 
 function unwrap(body: any) {

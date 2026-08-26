@@ -31,6 +31,21 @@ def sitemap_xml(urls, *, index=False):
     return f'<?xml version="1.0" encoding="UTF-8"?><{outer}>{body}</{outer}>'
 
 
+def test_parse_sitemap_locs_ignores_commented_out_entries():
+    body = """<?xml version="1.0"?>
+    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <!-- <url><loc>https://example.com/commented-out</loc></url> -->
+      <url><loc>https://example.com/kept</loc></url>
+      <url><loc><![CDATA[https://example.com/cdata?x=1&y=2]]></loc></url>
+    </urlset>
+    """
+
+    assert sitemap.parse_sitemap_locs(body) == [
+        "https://example.com/kept",
+        "https://example.com/cdata?x=1&y=2",
+    ]
+
+
 def test_sitemap_page_urls_normalize_www_to_origin_host():
     assert normalize_sitemap_page_url(
         "https://www.centerstreetlending.com/blog/benefits-of-using-bridge-loans-for-real-estate-transactions",

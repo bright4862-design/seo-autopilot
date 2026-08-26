@@ -162,10 +162,22 @@ async def wait_terminal(
     deadline = time.monotonic() + timeout_seconds
     pending = [item for item in items if item.accepted and item.scan_id]
     while pending and time.monotonic() < deadline:
-        terminal_transitions = await asyncio.gather(*(
-            poll_one(client, tokens[item.email], item)
-            for item in pending
-        ))
+        poll_outcomes = await asyncio.gather(
+            *(poll_one(client, tokens[item.email], item) for item in pending),
+            return_exceptions=True,
+        )
+        terminal_transitions: list[bool] = []
+        for outcome in poll_outcomes:
+            if isinstance(outcome, asyncio.CancelledError):
+                raise outcome
+            if isinstance(outcome, BaseException):
+                print(json.dumps({
+                    "event": "poll_error",
+                    "error_type": type(outcome).__name__[:80],
+                }), flush=True)
+                terminal_transitions.append(False)
+                continue
+            terminal_transitions.append(outcome is True)
         if checkpoint_path and any(terminal_transitions):
             write_checkpoint(checkpoint_path, items)
         pending = [item for item in pending if not item.terminal_at]

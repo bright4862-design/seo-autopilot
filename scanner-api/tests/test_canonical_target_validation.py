@@ -70,7 +70,12 @@ def deterministic_public_dns(monkeypatch):
 
 
 def _response(url: str, status: int, *, body="<html><head><title>Target</title></head><body><h1>Target</h1></body></html>", headers=None):
-    return httpx.Response(status, text=body, headers=headers or {"content-type": "text/html"}, request=httpx.Request("GET", url))
+    return httpx.Response(
+        status,
+        headers=headers or {"content-type": "text/html"},
+        stream=httpx.ByteStream(body.encode("utf-8")),
+        request=httpx.Request("GET", url),
+    )
 
 
 @pytest.mark.asyncio

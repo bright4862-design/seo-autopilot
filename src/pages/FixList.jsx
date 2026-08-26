@@ -8,12 +8,6 @@ import { getScanRunWithFixList, listAccountScanRuns } from "@/lib/scanRuns";
 import { customerRecoveryFailure } from "@/lib/scanRuns";
 import { ACTIVE_SCAN_RUN_STATUSES } from "@/lib/scanRunIdentity";
 import { UNLOCK_PRICE_LABEL } from "@/lib/access";
-import { useAuth } from "@/lib/AuthContext";
-import {
-  debugScanRun,
-  forceStopScanRun,
-  isOwnerScanDebugUser,
-} from "@/lib/ownerScanDebugControl";
 import UnlockAccessButton from "@/components/billing/UnlockAccessButton";
 import { CUSTOMER_BOUNDARY_EVENT } from "@/lib/customerBrowserCache";
 import ScoreRing from "@/components/fixlist/ScoreRing";
@@ -156,7 +150,6 @@ export function resolveRecoveryCopy(kind, target) {
 
 export default function FixList() {
   const navigate = useNavigate();
-  const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const requestedScanId = searchParams.get("scan_id") || "";
   const [scanRecord, setScanRecord] = useState(null);
@@ -174,9 +167,6 @@ export default function FixList() {
   const [recentScansFailure, setRecentScansFailure] = useState(null);
   const [historyReloadToken, setHistoryReloadToken] = useState(0);
   const [deletingScanId, setDeletingScanId] = useState("");
-  const [ownerDebugBusy, setOwnerDebugBusy] = useState("");
-  const [ownerDebugResult, setOwnerDebugResult] = useState(null);
-
   useEffect(() => {
     let cancelled = false;
 
@@ -435,38 +425,10 @@ export default function FixList() {
     setDoneIds(next);
   }
 
-  const ownerDebugVisible = isOwnerScanDebugUser(user) && Boolean(requestedScanId && scanRecord);
-  const ownerScanActive = ACTIVE_SCAN_RUN_STATUSES.has(String(scanRecord?.status || "").toLowerCase());
-
   function retryRequestedScan() {
     setRequestedScanFailure(null);
     if (!scanRecord) setRequestedScanState("loading");
     setReloadToken((value) => value + 1);
-  }
-
-  async function handleOwnerDebugScan() {
-    if (!scanRecord?.id || ownerDebugBusy) return;
-    setOwnerDebugBusy("debug");
-    const result = await debugScanRun(scanRecord.id);
-    setOwnerDebugBusy("");
-    setOwnerDebugResult(result);
-  }
-
-  async function handleOwnerForceStopScan() {
-    if (!scanRecord?.id || !ownerScanActive || ownerDebugBusy) return;
-    const confirmed = window.confirm(
-      `Force stop scan ${scanRecord.id}? This cancels only the current attempt and releases its admission lease when the coordinator confirms it.`,
-    );
-    if (!confirmed) return;
-
-    setOwnerDebugBusy("kill");
-    const result = await forceStopScanRun(scanRecord.id, scanRecord.attempt_count || 1);
-    setOwnerDebugBusy("");
-    setOwnerDebugResult(result);
-    if (result?.ok) {
-      setReloadToken((value) => value + 1);
-      setHistoryReloadToken((value) => value + 1);
-    }
   }
 
   async function handleDeleteScan(projectId, scanId) {
@@ -513,46 +475,6 @@ export default function FixList() {
             {hasUsefulScan ? "Scan again" : "Run a scan"}
           </button>
         </div>
-
-        {ownerDebugVisible ? (
-          <div className="mt-5 rounded-2xl border border-ink/10 bg-white/60 p-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="mr-auto text-[12px] font-semibold uppercase tracking-[0.12em] text-ink-faint">Owner debug</span>
-              <button
-                type="button"
-                onClick={handleOwnerDebugScan}
-                disabled={Boolean(ownerDebugBusy)}
-                className="rounded-full border border-ink/15 px-3 py-1.5 text-[12px] font-medium text-ink transition-opacity hover:opacity-70 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {ownerDebugBusy === "debug" ? "Checking…" : "Debug scan"}
-              </button>
-              {ownerScanActive ? (
-                <button
-                  type="button"
-                  onClick={handleOwnerForceStopScan}
-                  disabled={Boolean(ownerDebugBusy)}
-                  className="rounded-full border border-red-500/30 px-3 py-1.5 text-[12px] font-medium text-red-700 transition-opacity hover:opacity-70 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  {ownerDebugBusy === "kill" ? "Stopping…" : "Force stop scan"}
-                </button>
-              ) : null}
-            </div>
-            {ownerDebugResult ? (
-              <div className="mt-3">
-                <p className="text-[12px] leading-relaxed text-ink-muted">
-                  {ownerDebugResult.ok
-                    ? ownerDebugResult.lease_released === false
-                      ? "Scan control completed, but the admission lease is not confirmed released yet."
-                      : "Owner scan control completed."
-                    : ownerDebugResult.message || "Owner scan control failed."}
-                </p>
-                <pre className="mt-2 max-h-72 overflow-auto rounded-xl bg-ink/[0.04] p-3 text-[11px] leading-relaxed text-ink-muted">
-                  {JSON.stringify(ownerDebugResult, null, 2)}
-                </pre>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
 
         {requestedScanId && scanRecord && requestedScanFailure?.retryable === true ? (
           <CustomerRecoveryNotice failure={requestedScanFailure} onRetry={retryRequestedScan} />

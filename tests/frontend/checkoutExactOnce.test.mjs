@@ -393,14 +393,16 @@ test("paid webhooks are idempotent in either historical session order", () => {
   assert.match(webhookSource, /duplicate_payment: true/);
 });
 
-test("the webhook handler grants once for either delivery order", async () => {
+test("the webhook handler grants once for immediate or delayed payment delivery", async () => {
   let accessRecord;
   let updates;
+  let accessReads;
   const base44 = {
     asServiceRole: {
       entities: {
         Access: {
           async filter(query) {
+            accessReads += 1;
             const matchesOwner = query.owner_user_id && query.owner_user_id === accessRecord.owner_user_id;
             const matchesEmail = query.user_email && query.user_email === accessRecord.user_email;
             return matchesOwner || matchesEmail ? [{ ...accessRecord }] : [];
@@ -434,15 +436,15 @@ test("the webhook handler grants once for either delivery order", async () => {
       webhookSource,
       "__stripeWebhookExactOnceHarness",
     );
-    const eventFor = (sessionId, sequence) => ({
+    const eventFor = (sessionId, sequence, overrides = {}) => ({
       id: `evt_${sequence}_${sessionId}`,
-      type: "checkout.session.completed",
+      type: overrides.type || "checkout.session.completed",
       created: 1_786_732_000 + sequence,
       data: {
         object: {
           id: sessionId,
-          payment_status: "paid",
-          amount_total: 5000,
+          payment_status: overrides.paymentStatus || "paid",
+          amount_total: overrides.amountTotal ?? 5000,
           currency: "usd",
           customer_email: "paid@example.com",
           client_reference_id: "user-1",
@@ -457,14 +459,81 @@ test("the webhook handler grants once for either delivery order", async () => {
         },
       },
     });
-    const deliver = async (sessionId, sequence) => {
+    const deliver = async (sessionId, sequence, overrides) => {
       const response = await webhookHandler(new Request("https://function.test", {
         method: "POST",
         headers: { "stripe-signature": "test-signature" },
-        body: JSON.stringify(eventFor(sessionId, sequence)),
+        body: JSON.stringify(eventFor(sessionId, sequence, overrides)),
       }));
       return { status: response.status, body: await response.json() };
     };
+
+    accessRecord = {
+      id: "access-1",
+      owner_user_id: "user-1",
+      user_email: "paid@example.com",
+      access_status: "pending",
+      has_full_access: false,
+      stripe_checkout_session_id: "cs_delayed",
+    };
+    updates = [];
+    accessReads = 0;
+
+    const delayedCompletion = await deliver("cs_delayed", 1, {
+      paymentStatus: "unpaid",
+    });
+    assert.equal(delayedCompletion.status, 200);
+    assert.deepEqual(delayedCompletion.body, { received: true });
+    assert.equal(accessReads, 0, "an unpaid completed session must not inspect entitlement state");
+    assert.equal(updates.length, 0, "an unpaid completed session must not grant entitlement");
+
+    const delayedFailure = await deliver("cs_delayed", 2, {
+      type: "checkout.session.async_payment_failed",
+      paymentStatus: "unpaid",
+    });
+    assert.equal(delayedFailure.status, 200);
+    assert.deepEqual(delayedFailure.body, { received: true });
+    assert.equal(accessReads, 0, "an async payment failure must not inspect entitlement state");
+    assert.equal(updates.length, 0, "an async payment failure must not grant entitlement");
+
+    const delayedSuccess = await deliver("cs_delayed", 3, {
+      type: "checkout.session.async_payment_succeeded",
+    });
+    assert.equal(delayedSuccess.status, 200);
+    assert.deepEqual(delayedSuccess.body, { received: true });
+    assert.equal(accessRecord.access_status, "active");
+    assert.equal(accessRecord.has_full_access, true);
+    assert.equal(accessRecord.stripe_checkout_session_id, "cs_delayed");
+    assert.equal(accessRecord.stripe_payment_intent_id, "pi_cs_delayed");
+    assert.equal(updates.length, 1, "the async success may grant the entitlement once");
+
+    const delayedReplay = await deliver("cs_delayed", 3, {
+      type: "checkout.session.async_payment_succeeded",
+    });
+    assert.equal(delayedReplay.status, 200);
+    assert.deepEqual(delayedReplay.body, { received: true, replay: true });
+    assert.equal(updates.length, 1, "an async success replay must not issue another grant");
+
+    const tamperedAsyncSuccess = await deliver("cs_delayed_tampered", 4, {
+      type: "checkout.session.async_payment_succeeded",
+      amountTotal: 4999,
+    });
+    assert.equal(tamperedAsyncSuccess.status, 400);
+    assert.deepEqual(tamperedAsyncSuccess.body, { error: "checkout_amount_mismatch" });
+    assert.equal(updates.length, 1, "invalid async success payloads must fail before writing");
+
+    accessRecord = {
+      ...accessRecord,
+      access_status: "revoked",
+      has_full_access: false,
+    };
+    updates = [];
+    const revokedAsyncSuccess = await deliver("cs_revoked", 5, {
+      type: "checkout.session.async_payment_succeeded",
+    });
+    assert.equal(revokedAsyncSuccess.status, 400);
+    assert.deepEqual(revokedAsyncSuccess.body, { error: "checkout_access_revoked" });
+    assert.equal(updates.length, 0, "async success must not reactivate a revoked entitlement");
 
     for (const order of [["cs_first", "cs_second"], ["cs_second", "cs_first"]]) {
       accessRecord = {
@@ -476,6 +545,7 @@ test("the webhook handler grants once for either delivery order", async () => {
         stripe_checkout_session_id: "cs_second",
       };
       updates = [];
+      accessReads = 0;
 
       const granted = await deliver(order[0], 1);
       assert.equal(granted.status, 200);

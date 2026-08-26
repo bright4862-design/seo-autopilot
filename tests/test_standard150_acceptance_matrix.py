@@ -251,6 +251,65 @@ def test_terminal_poll_durably_checkpoints_the_completed_site(
     )
 
 
+def test_poll_failure_does_not_cancel_sibling_or_lose_checkpoint(
+    tmp_path,
+    monkeypatch,
+):
+    first = _complete_item("scan_retry")
+    second = _complete_item("scan_complete")
+    for item in (first, second):
+        item.terminal_at = 0.0
+        item.run = {}
+        item.customer_result = {}
+
+    attempts = {"scan_retry": 0}
+
+    async def fake_invoke(_client, _token, function, payload):
+        assert function == "getCustomerScanResult"
+        scan_id = payload["scan_id"]
+        if scan_id == "scan_retry":
+            attempts[scan_id] += 1
+            if attempts[scan_id] == 1:
+                raise HARNESS.httpx.ReadTimeout("transient")
+        return 200, {
+            "scan_id": scan_id,
+            "run": {
+                "id": scan_id,
+                "status": "complete",
+                "fix_list_id": f"fixlist_{scan_id}",
+                "evidence_quality_state": "sufficient",
+                "beta_revision_fingerprint": "fingerprint_1",
+            },
+            "authority_verified": True,
+            "release_contract_current": True,
+            "fixList": {"id": f"fixlist_{scan_id}"},
+            "fixItems": [],
+        }
+
+    async def no_delay(_seconds):
+        return None
+
+    checkpoint = tmp_path / "acceptance.json"
+    monkeypatch.setattr(HARNESS, "invoke", fake_invoke)
+    monkeypatch.setattr(HARNESS.asyncio, "sleep", no_delay)
+
+    asyncio.run(HARNESS.wait_terminal(
+        object(),
+        {first.email: "token", second.email: "token"},
+        [first, second],
+        1,
+        checkpoint_path=str(checkpoint),
+    ))
+
+    persisted = json.loads(checkpoint.read_text(encoding="utf-8"))
+    assert attempts["scan_retry"] == 2
+    assert persisted["completed_sites"] == 2
+    assert {site["scan_id"] for site in persisted["sites"]} == {
+        "scan_retry",
+        "scan_complete",
+    }
+
+
 def test_checkpoint_is_atomic_fsynced_compact_and_preserves_prior_sites(
     tmp_path,
     monkeypatch,

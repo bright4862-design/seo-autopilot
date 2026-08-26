@@ -224,4 +224,3 @@ async def test_release_eligible_review_keeps_existing_authority_path(monkeypatch
         "authority_proof": "a" * 64,
     }
     assert [name for name, _payload in calls] == ["persistDurableScanAuthority"]
-

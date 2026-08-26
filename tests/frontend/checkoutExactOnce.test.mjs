@@ -192,7 +192,7 @@ test("pending checkout retries reuse one user-stable Stripe idempotency key", as
   );
 });
 
-test("the checkout handler rejects paused/uninvited users before writes and never creates Access", async () => {
+test("the checkout handler enforces admission without mutating durable entitlement state", async () => {
   const priorDeno = globalThis.Deno;
   const env = new Map([
     ["BETA_CHECKOUT_ENABLED", "true"],
@@ -208,8 +208,12 @@ test("the checkout handler rejects paused/uninvited users before writes and neve
     stripe_checkout_session_id: "",
   };
   let accessCreateCount = 0;
+  const accessUpdates = [];
   const sessionCreateCalls = [];
   const sessionsByKey = new Map();
+  let accessFilterCallCount = 0;
+  let beforeFilterCall = null;
+  let beforeNextUpdate = null;
   let synchronizePendingWrites = false;
   let pendingWriteCount = 0;
   let releasePendingWrites;
@@ -220,6 +224,9 @@ test("the checkout handler rejects paused/uninvited users before writes and neve
   const Access = {
     async filter(query) {
       if (!accessRecord) return [];
+      accessFilterCallCount += 1;
+      const filteredRecord = beforeFilterCall?.(accessFilterCallCount, { ...accessRecord });
+      if (filteredRecord) accessRecord = filteredRecord;
       const matchesOwner = query.owner_user_id && query.owner_user_id === accessRecord.owner_user_id;
       const matchesEmail = query.user_email && query.user_email === accessRecord.user_email;
       return matchesOwner || matchesEmail ? [{ ...accessRecord }] : [];
@@ -230,6 +237,12 @@ test("the checkout handler rejects paused/uninvited users before writes and neve
     },
     async update(id, fields) {
       assert.equal(id, accessRecord.id);
+      if (beforeNextUpdate) {
+        const updateHook = beforeNextUpdate;
+        beforeNextUpdate = null;
+        accessRecord = updateHook({ ...accessRecord }, { ...fields });
+      }
+      accessUpdates.push({ ...fields });
       accessRecord = { ...accessRecord, ...fields };
       if (synchronizePendingWrites && !fields.stripe_checkout_session_id) {
         pendingWriteCount += 1;
@@ -348,6 +361,153 @@ test("the checkout handler rejects paused/uninvited users before writes and neve
     });
     assert.equal(accessCreateCount, 0);
     assert.equal(sessionCreateCalls.length, 2, "the retry must reuse the stored session without a third create call");
+
+    accessRecord = {
+      id: "access-1",
+      owner_user_id: "user-1",
+      user_email: "paid@example.com",
+      access_status: "pending",
+      has_full_access: false,
+      stripe_checkout_session_id: "cs_expired_1",
+    };
+    accessFilterCallCount = 0;
+    accessUpdates.length = 0;
+    sessionsByKey.set("expired-session", {
+      id: "cs_expired_1",
+      status: "expired",
+      payment_status: "unpaid",
+      url: null,
+      customer_email: "paid@example.com",
+      client_reference_id: "user-1",
+      metadata: {
+        base44_app_id: "6a498732ec779dfaaeab0e53",
+        plan_id: "standard150_lifetime",
+        access_id: "access-1",
+        owner_user_id: "user-1",
+        user_email: "paid@example.com",
+      },
+    });
+    const stripeCallsBeforeRenewal = sessionCreateCalls.length;
+    const renewal = await invoke("https://rich-rank-pilot-flow.base44.app");
+    assert.equal(renewal.status, 200);
+    assert.deepEqual(await renewal.json(), { url: "https://checkout.stripe.test/cs_pending_1" });
+    assert.equal(sessionCreateCalls.length, stripeCallsBeforeRenewal + 1);
+    assert.deepEqual(accessUpdates, [{ stripe_checkout_session_id: "cs_pending_1" }]);
+    assert.equal(accessRecord.access_status, "pending");
+    assert.equal(accessRecord.has_full_access, false);
+
+    accessRecord = {
+      id: "access-1",
+      owner_user_id: "user-1",
+      user_email: "paid@example.com",
+      access_status: "revoked",
+      has_full_access: false,
+      stripe_checkout_session_id: "",
+    };
+    accessFilterCallCount = 0;
+    accessUpdates.length = 0;
+    const stripeCallsBeforeRevoked = sessionCreateCalls.length;
+    const revoked = await invoke("https://rich-rank-pilot-flow.base44.app");
+    assert.equal(revoked.status, 409);
+    assert.equal((await revoked.json()).code, "access_conflict");
+    assert.equal(accessRecord.access_status, "revoked");
+    assert.equal(accessRecord.has_full_access, false);
+    assert.equal(accessUpdates.length, 0, "revoked checkout must not mutate Access");
+    assert.equal(
+      sessionCreateCalls.length,
+      stripeCallsBeforeRevoked,
+      "revoked checkout must not create a Stripe session",
+    );
+
+    accessRecord = {
+      id: "access-1",
+      owner_user_id: "user-1",
+      user_email: "paid@example.com",
+      access_status: "pending",
+      has_full_access: false,
+      stripe_checkout_session_id: "",
+    };
+    accessFilterCallCount = 0;
+    accessUpdates.length = 0;
+    beforeFilterCall = (callCount, record) => callCount === 3
+      ? {
+        ...record,
+        access_status: "active",
+        has_full_access: true,
+        stripe_checkout_session_id: "cs_paid_before_fresh_read",
+      }
+      : null;
+    sessionsByKey.set("paid-before-fresh-read", {
+      id: "cs_paid_before_fresh_read",
+      status: "complete",
+      payment_status: "paid",
+      url: null,
+      customer_email: "paid@example.com",
+      client_reference_id: "user-1",
+      metadata: {
+        base44_app_id: "6a498732ec779dfaaeab0e53",
+        plan_id: "standard150_lifetime",
+        access_id: "access-1",
+        owner_user_id: "user-1",
+        user_email: "paid@example.com",
+      },
+    });
+    const stripeCallsBeforeFreshGrant = sessionCreateCalls.length;
+    const grantedBeforeFreshRead = await invoke("https://rich-rank-pilot-flow.base44.app");
+    beforeFilterCall = null;
+    assert.equal(grantedBeforeFreshRead.status, 409);
+    assert.equal((await grantedBeforeFreshRead.json()).code, "already_active");
+    assert.equal(accessRecord.access_status, "active");
+    assert.equal(accessRecord.has_full_access, true);
+    assert.equal(accessUpdates.length, 0, "freshly active checkout must not mutate Access");
+    assert.equal(
+      sessionCreateCalls.length,
+      stripeCallsBeforeFreshGrant,
+      "freshly active checkout must not create another Stripe session",
+    );
+
+    accessRecord = {
+      id: "access-1",
+      owner_user_id: "user-1",
+      user_email: "paid@example.com",
+      access_status: "pending",
+      has_full_access: false,
+      stripe_checkout_session_id: "",
+    };
+    accessFilterCallCount = 0;
+    accessUpdates.length = 0;
+    beforeNextUpdate = (record) => ({
+      ...record,
+      access_status: "active",
+      has_full_access: true,
+      stripe_checkout_session_id: "cs_paid_during_checkout_update",
+    });
+    sessionsByKey.set("paid-during-checkout-update", {
+      id: "cs_paid_during_checkout_update",
+      status: "complete",
+      payment_status: "paid",
+      url: null,
+      customer_email: "paid@example.com",
+      client_reference_id: "user-1",
+      metadata: {
+        base44_app_id: "6a498732ec779dfaaeab0e53",
+        plan_id: "standard150_lifetime",
+        access_id: "access-1",
+        owner_user_id: "user-1",
+        user_email: "paid@example.com",
+      },
+    });
+    await invoke("https://rich-rank-pilot-flow.base44.app");
+    assert.equal(accessRecord.access_status, "active");
+    assert.equal(accessRecord.has_full_access, true);
+    assert.ok(accessUpdates.length > 0);
+    for (const fields of accessUpdates) {
+      assert.deepEqual(
+        Object.keys(fields).sort(),
+        ["stripe_checkout_session_id"],
+        "checkout writes may bind only the Stripe session ID",
+      );
+    }
   } finally {
     delete globalThis.__checkoutExactOnceHarness;
     if (priorDeno === undefined) delete globalThis.Deno;

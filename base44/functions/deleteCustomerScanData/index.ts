@@ -4,6 +4,9 @@ const KEEP_NEWEST = 3;
 const MAX_HISTORY = 100;
 const TERMINAL_STATUSES = new Set(["complete", "limited", "failed", "cancelled"]);
 const ACTIVE_STATUSES = new Set(["queued", "crawling", "reviewing"]);
+const FIX_LIST_DELETE_BATCH = 20;
+const FIX_ITEM_DELETE_BATCH = 200;
+const MAX_DELETE_DRAIN_BATCHES = 1000;
 
 class RequestProblem extends Error {
   status: number;
@@ -105,50 +108,98 @@ async function deleteOwnedTerminalScan({ entities, userId, projectId, scanId, kn
     throw new RequestProblem(409, "scan_not_terminal", "Only finished scan history can be deleted.");
   }
 
-  // Deletion must never reinterpret a storage/read failure as "no children".
-  // Otherwise the parent ScanRun can disappear while its FixList/FixItems
-  // remain orphaned even though the customer received success.
-  const fixLists = await requiredRows(
-    () => entities.FixList.filter({ scan_run_id: scanId }, "-created_date", 20),
+  // Deletion must never reinterpret a storage/read failure or a capped page
+  // as "no children". Drain each bounded read completely before the parent
+  // ScanRun can disappear.
+  await drainRows(
+    () => entities.FixList.filter(
+      { scan_run_id: scanId },
+      "-created_date",
+      FIX_LIST_DELETE_BATCH,
+    ),
+    FIX_LIST_DELETE_BATCH,
     "history_fix_list_read_failed",
-  );
-  for (const fixList of fixLists || []) {
-    if (cleanId(fixList?.owner_user_id) !== cleanId(userId) || cleanId(fixList?.project_id) !== cleanId(projectId)) continue;
-    const items = await requiredRows(
-      () => entities.FixItem.filter({ fix_list_id: cleanId(fixList.id) }, "-created_date", 200),
-      "history_fix_item_read_failed",
-    );
-    for (const item of items || []) {
+    async (fixList) => {
       if (
-        cleanId(item?.owner_user_id) === cleanId(userId)
-        && cleanId(item?.project_id) === cleanId(projectId)
-        && cleanId(item?.scan_run_id) === cleanId(scanId)
-        && item?.id
+        cleanId(fixList?.owner_user_id) !== cleanId(userId)
+        || cleanId(fixList?.project_id) !== cleanId(projectId)
+        || cleanId(fixList?.scan_run_id) !== cleanId(scanId)
+        || !cleanId(fixList?.id)
       ) {
-        await entities.FixItem.delete(item.id);
+        throw new RequestProblem(
+          503,
+          "history_child_identity_invalid",
+          "Saved scan history is temporarily unavailable.",
+        );
       }
-    }
-    if (fixList?.id) await entities.FixList.delete(fixList.id);
-  }
 
-  // Defensive cleanup for any authority row whose list relation was lost but
-  // whose scan/project/owner identity is still exact.
-  const remainingItems = await requiredRows(
-    () => entities.FixItem.filter({ scan_run_id: scanId }, "-created_date", 200),
-    "history_orphan_item_read_failed",
+      const fixListId = cleanId(fixList.id);
+      await drainRows(
+        () => entities.FixItem.filter(
+          { fix_list_id: fixListId },
+          "-created_date",
+          FIX_ITEM_DELETE_BATCH,
+        ),
+        FIX_ITEM_DELETE_BATCH,
+        "history_fix_item_read_failed",
+        async (item) => {
+          requireOwnedItem(item, { userId, projectId, scanId });
+          await entities.FixItem.delete(cleanId(item.id));
+        },
+      );
+      await entities.FixList.delete(fixListId);
+    },
   );
-  for (const item of remainingItems || []) {
-    if (
-      cleanId(item?.owner_user_id) === cleanId(userId)
-      && cleanId(item?.project_id) === cleanId(projectId)
-      && item?.id
-    ) {
-      await entities.FixItem.delete(item.id);
-    }
-  }
+
+  // Defensive cleanup for authority rows whose list relation was lost but
+  // whose scan/project/owner identity remains exact.
+  await drainRows(
+    () => entities.FixItem.filter(
+      { scan_run_id: scanId },
+      "-created_date",
+      FIX_ITEM_DELETE_BATCH,
+    ),
+    FIX_ITEM_DELETE_BATCH,
+    "history_orphan_item_read_failed",
+    async (item) => {
+      requireOwnedItem(item, { userId, projectId, scanId });
+      await entities.FixItem.delete(cleanId(item.id));
+    },
+  );
 
   await entities.ScanRun.delete(scanId);
   return true;
+}
+
+function requireOwnedItem(item, { userId, projectId, scanId }) {
+  if (
+    cleanId(item?.owner_user_id) !== cleanId(userId)
+    || cleanId(item?.project_id) !== cleanId(projectId)
+    || cleanId(item?.scan_run_id) !== cleanId(scanId)
+    || !cleanId(item?.id)
+  ) {
+    throw new RequestProblem(
+      503,
+      "history_child_identity_invalid",
+      "Saved scan history is temporarily unavailable.",
+    );
+  }
+}
+
+async function drainRows(read, batchSize, readCode, deleteRow) {
+  for (let batch = 0; batch < MAX_DELETE_DRAIN_BATCHES; batch += 1) {
+    const rows = await requiredRows(read, readCode);
+    if (rows.length === 0) return;
+    for (const row of rows) {
+      await deleteRow(row);
+    }
+    if (rows.length < batchSize) return;
+  }
+  throw new RequestProblem(
+    503,
+    "history_delete_drain_exhausted",
+    "Saved scan history is temporarily unavailable.",
+  );
 }
 
 async function requiredRows(read, code) {

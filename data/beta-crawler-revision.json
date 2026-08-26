@@ -53,13 +53,13 @@
     "trust_discovery_version": "trust_page_discovery_v1",
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence",
-    "scan_history_delete_version": "scan_history_delete_v1_fail_closed_drain",
+    "scan_history_delete_version": "scan_history_delete_v2_drain_children",
     "sitemap_parser_version": "sitemap_parser_v1_xml_identity"
   },
-  "fingerprint": "c0815d78c19d50db",
+  "fingerprint": "1ddf8085bc7721c4",
   "git_commit": "",
-  "note": "Standard 150 final-core candidate: reviewed release stack plus fail-closed scan-history child draining and XML-identity-safe sitemap parsing. Exact-head validation and production acceptance must be rerun.",
-  "recorded_at": "2026-08-26T22:50:00+00:00",
+  "note": "Standard 150 final-core candidate after exact composition review fixes: limited-score customer projection, bounded transport/decompression, XML-identity sitemap parsing, fail-closed draining saved-scan deletion, authority fail-closed routing, and acceptance checkpoint resilience. Production acceptance pending.",
+  "recorded_at": "2026-08-26T23:01:00+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

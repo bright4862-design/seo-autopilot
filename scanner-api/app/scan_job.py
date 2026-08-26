@@ -863,6 +863,18 @@ async def complete_authority(
             return await persist_limited_result(
                 client, scan, result, reviewed, signing_key, phase_started=phase_started,
             )
+        # The local review already decided this result is not release-eligible.
+        # Useful limited evidence took the integrity-only path above. Every
+        # remaining noneligible review must fail closed before durable authority.
+        return {
+            "ok": False,
+            "transient": False,
+            "failure_code": "review_not_release_eligible",
+            "customer_message": (
+                "The scan finished, but there was not enough verified evidence "
+                "to save a trustworthy FixList. Please try again."
+            ),
+        }
 
     envelope = build_completion_envelope(scan, result, reviewed, signing_key)
     emit(

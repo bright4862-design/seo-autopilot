@@ -457,6 +457,7 @@ async def test_durable_worker_completion_wall_timeout_terminalizes_exact_attempt
             return {"ok": False, "transient": True}
 
     failures = []
+    scheduled_telemetry = []
 
     async def fail(*args, **kwargs):
         failures.append((args, kwargs))
@@ -476,6 +477,12 @@ async def test_durable_worker_completion_wall_timeout_terminalizes_exact_attempt
     monkeypatch.setattr(main, "live_revision", lambda: {"fingerprint": "test"})
     monkeypatch.setattr(main, "complete_authority", never_completes)
     monkeypatch.setattr(main, "write_terminal_failure", fail)
+    monkeypatch.setattr(
+        main,
+        "schedule_scan_telemetry",
+        lambda scan_id, result: scheduled_telemetry.append((scan_id, result.get("pages_crawled"))),
+        raising=False,
+    )
     monkeypatch.setattr(main, "WORKER_COMPLETION_WALL_TIMEOUT_SECONDS", 0.01)
 
     result = await main.scan_job(payload, authorization="test")
@@ -485,6 +492,7 @@ async def test_durable_worker_completion_wall_timeout_terminalizes_exact_attempt
     assert started_calls == 2
     assert result["success"] is False
     assert result["error_code"] == "worker_completion_wall_timeout"
+    assert scheduled_telemetry == [("scan-1", 1)]
     assert len(failures) == 1
     args, kwargs = failures[0]
     assert args[1] == "scan-1"

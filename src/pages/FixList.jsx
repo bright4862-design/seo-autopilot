@@ -3,17 +3,10 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { Copy, Download, ExternalLink } from "lucide-react";
 
 import { isRateLimitFinding, shouldUseLegacyRateLimitPresentation } from "@/lib/reviewContract";
-import { trackEvent } from "@/lib/analytics";
 import { getScanRunWithFixList, listAccountScanRuns } from "@/lib/scanRuns";
 import { customerRecoveryFailure } from "@/lib/scanRuns";
 import { ACTIVE_SCAN_RUN_STATUSES } from "@/lib/scanRunIdentity";
 import { UNLOCK_PRICE_LABEL } from "@/lib/access";
-import { useAuth } from "@/lib/AuthContext";
-import {
-  debugScanRun,
-  forceStopScanRun,
-  isOwnerScanDebugUser,
-} from "@/lib/ownerScanDebugControl";
 import UnlockAccessButton from "@/components/billing/UnlockAccessButton";
 import { CUSTOMER_BOUNDARY_EVENT } from "@/lib/customerBrowserCache";
 import ScoreRing from "@/components/fixlist/ScoreRing";
@@ -24,7 +17,7 @@ import SuggestedFix from "@/components/fixlist/SuggestedFix";
 import { deleteScanRun } from "@/lib/scanHistory";
 import { prepareCustomerFixes, priorityBucket } from "@/lib/fixRanking";
 import { buildRepairWorkSurfacePresentation } from "@/lib/repairWorkSurfacePresentation";
-import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel } from "@/lib/fixVocabulary";
+import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel, customerScopeRelationshipLabel } from "@/lib/fixVocabulary";
 import { repairSuggestion } from "@/lib/repairSuggestions";
 
 const CMS_OPTIONS = [
@@ -156,7 +149,6 @@ export function resolveRecoveryCopy(kind, target) {
 
 export default function FixList() {
   const navigate = useNavigate();
-  const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const requestedScanId = searchParams.get("scan_id") || "";
   const [scanRecord, setScanRecord] = useState(null);
@@ -168,15 +160,11 @@ export default function FixList() {
   const loadedScanIdRef = useRef("");
   const pollTimerRef = useRef(0);
   const [selectedCms, setSelectedCms] = useState("custom");
-  const [doneIds, setDoneIds] = useState([]);
   const [recentScans, setRecentScans] = useState([]);
   const [recentScansState, setRecentScansState] = useState(requestedScanId ? "idle" : "loading");
   const [recentScansFailure, setRecentScansFailure] = useState(null);
   const [historyReloadToken, setHistoryReloadToken] = useState(0);
   const [deletingScanId, setDeletingScanId] = useState("");
-  const [ownerDebugBusy, setOwnerDebugBusy] = useState("");
-  const [ownerDebugResult, setOwnerDebugResult] = useState(null);
-
   useEffect(() => {
     let cancelled = false;
 
@@ -198,8 +186,6 @@ export default function FixList() {
       if (cancelled) return;
       loadedScanIdRef.current = "";
       setScanRecord(null);
-      // Completed-fix ticks belong to the scan being cleared, not the next one.
-      setDoneIds([]);
     }
 
     async function loadRequestedScan() {
@@ -264,7 +250,6 @@ export default function FixList() {
       if (!requestedScanId) {
         loadedScanIdRef.current = "";
         setScanRecord(null);
-        setDoneIds([]);
         setRequestedScanFailure(null);
         setRequestedScanState("idle");
         return;
@@ -278,7 +263,6 @@ export default function FixList() {
         cancelled = true;
         loadedScanIdRef.current = "";
         setScanRecord(null);
-        setDoneIds([]);
         const failure = customerRecoveryFailure({ error_code: "unauthorized" }, `result:${requestedScanId}`);
         setRequestedScanFailure(failure);
         setRequestedScanState(failure.kind);
@@ -291,7 +275,6 @@ export default function FixList() {
       if (reason === "account_switch") {
         loadedScanIdRef.current = "";
         setScanRecord(null);
-        setDoneIds([]);
         setRequestedScanState("loading");
       }
       setRequestedScanFailure(null);
@@ -404,12 +387,12 @@ export default function FixList() {
   const websiteKey = websiteKeyOf(scanRecord);
   const websiteHost = safeHostname(scanRecord?.website_url) || websiteKey || "";
 
-  const active = recommendations.filter((item) => !doneIds.includes(item.id));
-  const doneItems = recommendations.filter((item) => doneIds.includes(item.id));
+  // Until customer workflow state has a durable, authorized mutation path,
+  // every saved recommendation remains part of the reloadable work surface.
+  const active = recommendations;
   const repairWorkSurface = buildRepairWorkSurfacePresentation({
     snapshotItems: recommendations,
     visibleItems: active,
-    doneIds,
     scan: scanRecord,
     initialFixFirstLimit: 3,
   });
@@ -424,49 +407,10 @@ export default function FixList() {
   const limitationNote = getLimitationNote(scanRecord);
   const summary = hasUsefulScan ? getBestSummary(scanRecord, pagesScanned, pagesFound, recommendations) : "";
 
-  function markDone(item) {
-    const next = [...doneIds, item.id];
-    setDoneIds(next);
-    trackEvent("recommendation_marked_reviewed", { fix_id: item.id, category: item.category });
-  }
-
-  function undoDone(item) {
-    const next = doneIds.filter((id) => id !== item.id);
-    setDoneIds(next);
-  }
-
-  const ownerDebugVisible = isOwnerScanDebugUser(user) && Boolean(requestedScanId && scanRecord);
-  const ownerScanActive = ACTIVE_SCAN_RUN_STATUSES.has(String(scanRecord?.status || "").toLowerCase());
-
   function retryRequestedScan() {
     setRequestedScanFailure(null);
     if (!scanRecord) setRequestedScanState("loading");
     setReloadToken((value) => value + 1);
-  }
-
-  async function handleOwnerDebugScan() {
-    if (!scanRecord?.id || ownerDebugBusy) return;
-    setOwnerDebugBusy("debug");
-    const result = await debugScanRun(scanRecord.id);
-    setOwnerDebugBusy("");
-    setOwnerDebugResult(result);
-  }
-
-  async function handleOwnerForceStopScan() {
-    if (!scanRecord?.id || !ownerScanActive || ownerDebugBusy) return;
-    const confirmed = window.confirm(
-      `Force stop scan ${scanRecord.id}? This cancels only the current attempt and releases its admission lease when the coordinator confirms it.`,
-    );
-    if (!confirmed) return;
-
-    setOwnerDebugBusy("kill");
-    const result = await forceStopScanRun(scanRecord.id, scanRecord.attempt_count || 1);
-    setOwnerDebugBusy("");
-    setOwnerDebugResult(result);
-    if (result?.ok) {
-      setReloadToken((value) => value + 1);
-      setHistoryReloadToken((value) => value + 1);
-    }
   }
 
   async function handleDeleteScan(projectId, scanId) {
@@ -514,46 +458,6 @@ export default function FixList() {
           </button>
         </div>
 
-        {ownerDebugVisible ? (
-          <div className="mt-5 rounded-2xl border border-ink/10 bg-white/60 p-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="mr-auto text-[12px] font-semibold uppercase tracking-[0.12em] text-ink-faint">Owner debug</span>
-              <button
-                type="button"
-                onClick={handleOwnerDebugScan}
-                disabled={Boolean(ownerDebugBusy)}
-                className="rounded-full border border-ink/15 px-3 py-1.5 text-[12px] font-medium text-ink transition-opacity hover:opacity-70 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {ownerDebugBusy === "debug" ? "Checking…" : "Debug scan"}
-              </button>
-              {ownerScanActive ? (
-                <button
-                  type="button"
-                  onClick={handleOwnerForceStopScan}
-                  disabled={Boolean(ownerDebugBusy)}
-                  className="rounded-full border border-red-500/30 px-3 py-1.5 text-[12px] font-medium text-red-700 transition-opacity hover:opacity-70 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  {ownerDebugBusy === "kill" ? "Stopping…" : "Force stop scan"}
-                </button>
-              ) : null}
-            </div>
-            {ownerDebugResult ? (
-              <div className="mt-3">
-                <p className="text-[12px] leading-relaxed text-ink-muted">
-                  {ownerDebugResult.ok
-                    ? ownerDebugResult.lease_released === false
-                      ? "Scan control completed, but the admission lease is not confirmed released yet."
-                      : "Owner scan control completed."
-                    : ownerDebugResult.message || "Owner scan control failed."}
-                </p>
-                <pre className="mt-2 max-h-72 overflow-auto rounded-xl bg-ink/[0.04] p-3 text-[11px] leading-relaxed text-ink-muted">
-                  {JSON.stringify(ownerDebugResult, null, 2)}
-                </pre>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-
         {requestedScanId && scanRecord && requestedScanFailure?.retryable === true ? (
           <CustomerRecoveryNotice failure={requestedScanFailure} onRetry={retryRequestedScan} />
         ) : null}
@@ -599,7 +503,7 @@ export default function FixList() {
                   {customerHealthLabel(healthScore, { unavailable: scoreUnavailable, noHighConfidenceFindings })}
                 </h1>
                 <p className="mt-1.5 text-[15px] text-ink-muted tabular-nums">
-                  {getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount: active.length, doneCount: doneItems.length })}
+                  {getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount: active.length })}
                 </p>
               </div>
             </div>
@@ -628,7 +532,6 @@ export default function FixList() {
                     item={item}
                     suggestion={suggestion}
                     cms={selectedCms}
-                    onDone={() => markDone(item)}
                     embedded
                   />
                 )}
@@ -640,7 +543,7 @@ export default function FixList() {
                 <SectionEyebrow label="Your priorities" count={shownTopPriorities.length} />
                 <div className="mt-2">
                   {shownTopPriorities.map((item) => (
-                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
+                    <FixRow key={item.id} item={item} cms={selectedCms} />
                   ))}
                 </div>
               </>
@@ -651,7 +554,7 @@ export default function FixList() {
                 <SectionEyebrow label="More important fixes" count={moreImportant.length} />
                 <div className="mt-2">
                   {moreImportant.map((item) => (
-                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
+                    <FixRow key={item.id} item={item} cms={selectedCms} />
                   ))}
                 </div>
               </>
@@ -662,7 +565,7 @@ export default function FixList() {
                 <SectionEyebrow label="Improve next" count={improveNext.length} />
                 <div className="mt-2">
                   {improveNext.map((item) => (
-                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
+                    <FixRow key={item.id} item={item} cms={selectedCms} />
                   ))}
                 </div>
               </>
@@ -673,42 +576,13 @@ export default function FixList() {
                 <SectionEyebrow label="Worth checking" count={worthChecking.length} />
                 <div className="mt-2">
                   {worthChecking.map((item) => (
-                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
+                    <FixRow key={item.id} item={item} cms={selectedCms} />
                   ))}
                 </div>
               </>
-            ) : null}
-
-            {repairPresentation.legacySections?.length === 0 && !repairPresentation.canonical && !repairPresentation.unsupported && active.length === 0 && doneItems.length > 0 ? (
-              <div className="mt-16 py-10">
-                <h2 className="text-[22px] font-semibold tracking-tight">All clear.</h2>
-                <p className="mt-2 max-w-[48ch] text-ink-muted">
-                  Every fix is marked done. Scan again once the changes are live and we&rsquo;ll confirm them.
-                </p>
-              </div>
             ) : null}
 
             <ExplicitPassedChecks scan={scanRecord} />
-
-            {doneItems.length > 0 ? (
-              <>
-                <SectionEyebrow label="Done" count={doneItems.length} />
-                <div className="mt-2">
-                  {doneItems.map((item) => (
-                    <div key={item.id} className="flex items-baseline justify-between border-b border-hairline-soft py-3.5 text-[14px] text-ink-faint">
-                      <span className="line-through">{item.title}</span>
-                      <button
-                        type="button"
-                        onClick={() => undoDone(item)}
-                        className="shrink-0 pl-4 text-[13px] text-ink-muted transition-colors hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
-                      >
-                        Undo
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </>
-            ) : null}
 
             {active.length > 0 ? <CmsPicker selectedCms={selectedCms} onChange={setSelectedCms} /> : null}
           </>
@@ -868,7 +742,7 @@ function LockedResultState() {
   );
 }
 
-function FixRow({ item, cms, onDone, embedded = false, suggestion: suppliedSuggestion }) {
+function FixRow({ item, cms, embedded = false, suggestion: suppliedSuggestion }) {
   const [open, setOpen] = useState(embedded);
   // The presentation seam already computed this for canonical rows. Legacy rows
   // reach the same deterministic suggestion here rather than going without one.
@@ -1033,13 +907,6 @@ function FixRow({ item, cms, onDone, embedded = false, suggestion: suppliedSugge
             </>
           ) : null}
 
-          <button
-            type="button"
-            onClick={onDone}
-            className="mt-6 rounded-full border border-hairline px-4 py-1.5 text-[13px] font-medium text-ink transition-colors hover:border-good/25 hover:bg-good/[0.07] hover:text-good focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
-          >
-            Mark as done
-          </button>
         </div>
       ) : null}
     </div>
@@ -1147,11 +1014,10 @@ function downloadTextFile(content, filename, type) {
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 }
 
-function getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount, doneCount }) {
-  if (noHighConfidenceFindings && activeCount === 0 && doneCount === 0) {
+function getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount }) {
+  if (noHighConfidenceFindings && activeCount === 0) {
     return nextBestStep || "No high-confidence issues were found in the pages we checked.";
   }
-  if (activeCount === 0 && doneCount > 0) return "Score will settle after your next scan.";
   const word = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"][activeCount] || activeCount;
   return `${word} fix${activeCount === 1 ? "" : "es"} to work through — start at the top.`;
 }
@@ -1206,7 +1072,7 @@ function normalizeRecommendation(item = {}, scanRecord = {}) {
     websiteUrl: cleanString(scanRecord?.website_url || scanRecord?.raw?.scanner?.website_url),
     templateFamily: cleanString(item.page_template_family),
     currentValue: legacyBlocked429 ? "HTTP 429 — crawler was rate-limited or blocked" : cleanString(item.current_value || item.current || item.detected_value),
-    pageType: legacyBlocked429 && evidence.scopeRelationship === "sibling_sous_dossier" ? "Sibling sous-dossier" : cleanString(item.page_type || item.page_value_label || item.business_importance),
+    pageType: legacyBlocked429 && evidence.scopeRelationship === "sibling_sous_dossier" ? "Related site section" : cleanString(item.page_type || item.page_value_label || item.business_importance),
     defectClass: legacyBlocked429 ? "Rate-limit / crawler access" : cleanString(item.primary_defect_class || item.meta_regeneration_gate),
     pageValueLabel: legacyBlocked429 ? evidence.businessValueLabel : cleanString(item.page_value_label),
     businessImportance: legacyBlocked429 ? evidence.businessImportance : cleanString(item.business_importance),
@@ -1356,7 +1222,7 @@ function extractRecommendationEvidence(item = {}, scanRecord = {}) {
   const sourcePages = firstArray([item.source_pages, item.evidence?.source_pages]);
   const affectedCount = allPages.length;
   const businessValueLabel = scopeRelationship === "sibling_sous_dossier"
-    ? "Same parent brand, different business vertical"
+    ? "Related section on the same parent domain"
     : isEnergyPath(path) || isImportantBusinessPath(path)
       ? "Potentially important path"
       : "Standard page";
@@ -1373,28 +1239,28 @@ function isBlocked429(item = {}) {
 }
 
 function build429Title(evidence) {
-  if (evidence.scopeRelationship === "sibling_sous_dossier") return "Check Meilleurtaux rate limiting on sibling sous-dossiers";
+  if (evidence.scopeRelationship === "sibling_sous_dossier") return "Check rate limiting on a related site section";
   if (evidence.affectedCount > 1) return "Check pages blocked by rate limiting";
   return "Check this HTTP 429 scan block";
 }
 
 function build429Explanation(evidence) {
   if (evidence.scopeRelationship === "sibling_sous_dossier") {
-    return "The scanner hit HTTP 429 on a Meilleurtaux parent-domain path that appears to be a sibling sous-dossier, such as credit or loan content, rather than the selected energy section. This usually means the broader Meilleurtaux server, CDN, firewall, or bot-protection layer rate-limited the crawler.";
+    return "The scanner hit HTTP 429 on a path under the same parent domain but outside the selected site section. This usually means a shared server, CDN, firewall, or bot-protection layer rate-limited the crawler.";
   }
   return "The page returned HTTP 429 during the scan. That usually means the server, CDN, firewall, or bot-protection layer rate-limited the crawler. Verify whether normal users and legitimate search crawlers can load it before treating it as a confirmed broken customer page.";
 }
 
 function build429Why(evidence) {
   if (evidence.scopeRelationship === "sibling_sous_dossier") {
-    return "This is useful parent-domain evidence, but it should not be described as a primary energy-comparison customer page unless the selected crawl scope or source-page evidence proves it belongs to that journey.";
+    return "This is useful same-parent-domain access evidence, but it should not be described as part of the selected customer journey unless the crawl scope or source-page evidence proves it belongs there.";
   }
   return "Rate limiting can hide pages from crawlers if configured too aggressively. But a 429 is not the same as a confirmed broken page, so the next step is to verify crawler and user access rather than rewrite the page.";
 }
 
 function build429Recommendation(evidence) {
   if (evidence.scopeRelationship === "sibling_sous_dossier") {
-    return "Ask your web person to review rate-limit and bot-protection rules for the Meilleurtaux parent domain and confirm whether this sibling sous-dossier should be part of the selected scan scope.";
+    return "Ask your web person to review rate-limit and bot-protection rules for the parent domain and confirm whether this related site section should be part of the selected scan scope.";
   }
   return "Ask your web person to check server, CDN, firewall, and bot-protection logs for this URL and confirm whether Googlebot and normal users can access it.";
 }
@@ -1408,7 +1274,7 @@ function build429Steps(evidence) {
   if (evidence.scopeRelationship === "sibling_sous_dossier") {
     return [
       ...base,
-      "Confirm whether this sibling sous-dossier should be included in the current scan scope or treated as parent-domain evidence only.",
+      "Confirm whether this related site section should be included in the current scan scope or treated as parent-domain evidence only.",
       "Adjust rate-limit rules only if legitimate crawlers or users are being blocked.",
     ];
   }
@@ -1626,7 +1492,10 @@ function buildEvidenceItems(recommendation) {
   const metadataBreakdown = formatMetadataStateBreakdown(recommendation.metadataStateCounts);
   if (metadataBreakdown) items.push({ label: "Description status", value: metadataBreakdown });
   if (recommendation.pageScope) items.push({ label: "Scope", value: humanize(recommendation.pageScope) });
-  else if (recommendation.scopeRelationship) items.push({ label: "Scope", value: humanize(recommendation.scopeRelationship) });
+  else if (recommendation.scopeRelationship) items.push({
+    label: "Scope",
+    value: customerScopeRelationshipLabel(recommendation.scopeRelationship),
+  });
   if (recommendation.evidenceStatus) items.push({ label: "Evidence", value: humanize(recommendation.evidenceStatus) });
   if (recommendation.pageType) items.push({ label: "Page type", value: humanize(recommendation.pageType) });
   if (recommendation.pageValueLabel) items.push({ label: "Business value", value: recommendation.pageValueLabel });

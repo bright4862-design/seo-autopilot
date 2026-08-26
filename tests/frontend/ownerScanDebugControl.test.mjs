@@ -49,9 +49,14 @@ test("server kill control is separately gated and uses coordinator release/statu
   assert.doesNotMatch(source, /return admission\.ok === true && admission\.lease_active === false/);
 });
 
-test("FixList surfaces owner-only Debug scan and Force stop scan controls", () => {
+test("customer FixList does not embed owner debug or kill controls", () => {
   const source = fs.readFileSync("src/pages/FixList.jsx", "utf8");
-  assert.match(source, /Debug scan/);
-  assert.match(source, /Force stop scan/);
-  assert.match(source, /isOwnerScanDebugUser/);
+  assert.doesNotMatch(source, /Owner debug/);
+  assert.doesNotMatch(source, /Debug scan/);
+  assert.doesNotMatch(source, /Force stop scan/);
+  assert.doesNotMatch(source, /ownerScanDebugControl/);
+  assert.doesNotMatch(source, /isOwnerScanDebugUser/);
+  assert.doesNotMatch(source, /ownerDebugResult/);
+  assert.doesNotMatch(source, /AuthContext/);
+  assert.doesNotMatch(source, /\buseAuth\b/);
 });

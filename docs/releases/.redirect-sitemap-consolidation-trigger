@@ -1,0 +1,2 @@
+trigger: redirect-sitemap-consolidation-v1
+stage: draft-pr-open

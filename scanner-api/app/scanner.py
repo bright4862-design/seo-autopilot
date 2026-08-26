@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import math
 import re
 import time
 from datetime import datetime, timezone
@@ -124,7 +125,9 @@ def parse_retry_after_seconds(value: str, *, now: datetime | None = None) -> flo
     if not raw:
         return 0.0
     try:
-        return max(0.0, float(raw))
+        numeric = float(raw)
+        if math.isfinite(numeric):
+            return max(0.0, numeric)
     except (TypeError, ValueError):
         pass
     try:

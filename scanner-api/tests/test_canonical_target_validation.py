@@ -26,12 +26,23 @@ def _page(url: str, *, canonical: str = "", robots: str = "", status: int = 200)
     )
 
 
+class _StreamContext:
+    def __init__(self, response):
+        self.response = response
+
+    async def __aenter__(self):
+        return self.response
+
+    async def __aexit__(self, _exc_type, _exc, _tb):
+        return False
+
+
 class FakeClient:
     def __init__(self, responses):
         self.responses = responses
         self.calls = []
 
-    async def get(self, url, *, headers=None, extensions=None):
+    def _response_for(self, url, headers=None):
         pinned = httpx.URL(url)
         logical_url = f"{pinned.scheme}://{(headers or {}).get('Host', '')}{pinned.raw_path.decode('ascii')}"
         self.calls.append(logical_url)
@@ -39,6 +50,12 @@ class FakeClient:
         if isinstance(response, Exception):
             raise response
         return response
+
+    async def get(self, url, *, headers=None, extensions=None):
+        return self._response_for(url, headers=headers)
+
+    def stream(self, _method, url, *, headers=None, extensions=None):
+        return _StreamContext(self._response_for(url, headers=headers))
 
 
 @pytest.fixture(autouse=True)

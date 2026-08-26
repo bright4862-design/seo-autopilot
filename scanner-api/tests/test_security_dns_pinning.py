@@ -234,6 +234,67 @@ async def test_bounded_raw_deflate_decodes_when_header_is_split_after_one_byte(m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("encoding", "compressed", "error_pattern"),
+    [
+        (
+            "gzip",
+            gzip.compress(b"<html><body>" + (b"x" * 1024) + b"</body></html>")[:-1],
+            "incomplete_gzip_response_body",
+        ),
+        (
+            "deflate",
+            zlib.compress(b"<html><body>" + (b"x" * 1024) + b"</body></html>")[:-1],
+            "incomplete_deflate_response_body",
+        ),
+        (
+            "deflate",
+            (
+                lambda compressor: (
+                    compressor.compress(
+                        b"<html><body>" + (b"x" * 1024) + b"</body></html>"
+                    )
+                    + compressor.flush()
+                )[:-1]
+            )(zlib.compressobj(wbits=-zlib.MAX_WBITS)),
+            "incomplete_deflate_response_body",
+        ),
+    ],
+    ids=["gzip", "zlib-deflate", "raw-deflate"],
+)
+async def test_bounded_compressed_response_rejects_truncated_streams(
+    monkeypatch,
+    encoding,
+    compressed,
+    error_pattern,
+):
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda _host, port, **_kwargs: [_answer("93.184.216.34", port)],
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-encoding": encoding},
+            content=compressed,
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        follow_redirects=False,
+    ) as client:
+        with pytest.raises(httpx.DecodingError, match=error_pattern):
+            await safe_get_once(
+                client,
+                f"https://truncated-{encoding}.example/catalog",
+                max_decoded_bytes=4096,
+            )
+
+
+@pytest.mark.asyncio
 async def test_fetch_uses_the_single_validated_dns_snapshot_not_a_rebind(monkeypatch):
     resolutions = 0
     observed = {}

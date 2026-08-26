@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 import httpx
 import pytest
 import socket
@@ -24,6 +25,11 @@ class FakeClient:
         if isinstance(response, Exception):
             raise response
         return response
+
+    @asynccontextmanager
+    async def stream(self, method, url, *, headers=None, extensions=None):
+        assert method == "GET"
+        yield await self.get(url, headers=headers, extensions=extensions)
 
 
 @pytest.fixture(autouse=True)

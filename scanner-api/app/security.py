@@ -11,6 +11,60 @@ REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 DEFAULT_MAX_REDIRECTS = 5
 
 
+class ResponseBodyTooLarge(Exception):
+    """The decoded response body exceeded the caller's evidence budget."""
+
+
+def _decoded_body_headers(headers: httpx.Headers) -> httpx.Headers:
+    """Return headers that truthfully describe an already-decoded body."""
+    decoded_headers = httpx.Headers(headers)
+    # Response.aiter_bytes() applies HTTP content decoding. Reusing these wire
+    # representation headers would decode the replacement body a second time
+    # and retain the compressed wire length.
+    decoded_headers.pop("content-encoding", None)
+    decoded_headers.pop("content-length", None)
+    return decoded_headers
+
+
+async def _bounded_decoded_response(
+    client,
+    resolved: ResolvedHTTPHop,
+    *,
+    max_decoded_bytes: int,
+):
+    limit = max(1, int(max_decoded_bytes))
+    async with client.stream(
+        "GET",
+        resolved.connect_url,
+        headers={
+            "Host": resolved.host_header,
+            "Connection": "close",
+        },
+        extensions={"sni_hostname": resolved.hostname},
+    ) as streamed:
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in streamed.aiter_bytes():
+            total += len(chunk)
+            if total > limit:
+                raise ResponseBodyTooLarge(
+                    f"decoded_response_body_exceeded_{limit}_bytes"
+                )
+            chunks.append(chunk)
+        body = b"".join(chunks)
+
+        request = getattr(streamed, "request", None)
+        if request is not None:
+            request.url = resolved.logical_url
+        return httpx.Response(
+            status_code=streamed.status_code,
+            headers=_decoded_body_headers(streamed.headers),
+            content=body,
+            request=request,
+            extensions=dict(getattr(streamed, "extensions", {}) or {}),
+        )
+
+
 @dataclass(frozen=True)
 class ResolvedHTTPHop:
     """A logical URL and the public address selected from one DNS snapshot."""
@@ -112,7 +166,7 @@ def is_public_http_url(url: str) -> bool:
     return resolve_public_http_url(url) is not None
 
 
-async def safe_get_once(client, url: str):
+async def safe_get_once(client, url: str, *, max_decoded_bytes: int | None = None):
     """Fetch one URL through its validated IP without a second DNS lookup.
 
     The socket connects to ``connect_url`` (the validated numeric address), while
@@ -123,6 +177,15 @@ async def safe_get_once(client, url: str):
     if resolved is None:
         return None
 
+    if max_decoded_bytes is not None:
+        return await _bounded_decoded_response(
+            client,
+            resolved,
+            max_decoded_bytes=max_decoded_bytes,
+        )
+
+    # Preserve the existing HTTPX object and representation semantics for every
+    # caller that did not request the decoded-body ceiling.
     response = await client.get(
         resolved.connect_url,
         headers={
@@ -144,7 +207,13 @@ async def safe_get_once(client, url: str):
     return response
 
 
-async def safe_get(client, url: str, max_redirects: int = DEFAULT_MAX_REDIRECTS):
+async def safe_get(
+    client,
+    url: str,
+    max_redirects: int = DEFAULT_MAX_REDIRECTS,
+    *,
+    max_decoded_bytes: int | None = None,
+):
     """GET with pinned DNS validation on every bounded redirect hop.
 
     The supplied client must have ``follow_redirects=False``. Returns the final
@@ -152,7 +221,11 @@ async def safe_get(client, url: str, max_redirects: int = DEFAULT_MAX_REDIRECTS)
     """
     current = str(url or "")
     for _ in range(max(0, int(max_redirects)) + 1):
-        response = await safe_get_once(client, current)
+        response = await safe_get_once(
+            client,
+            current,
+            max_decoded_bytes=max_decoded_bytes,
+        )
         if response is None:
             return None
         if response.status_code in REDIRECT_STATUSES:

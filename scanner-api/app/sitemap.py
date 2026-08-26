@@ -2,16 +2,42 @@ import asyncio
 import gzip
 import re
 import time
+from html import unescape
 from urllib.parse import urlparse, urlunparse
 
 import httpx
-from bs4 import BeautifulSoup
 
 from .artifact_filter import is_artifact_url, record_artifact
 from .market_scope import market_pair_prefix, path_within_scope
 from .security import safe_get
 
 MAX_SITEMAP_FETCHES = 60
+
+SITEMAP_LOC_RE = re.compile(
+    r"<(?:[A-Za-z_][\w.-]*:)?loc\b[^>]*>(.*?)</(?:[A-Za-z_][\w.-]*:)?loc\s*>",
+    re.I | re.S,
+)
+
+
+def parse_sitemap_locs(body: str) -> list[str]:
+    """Extract sitemap <loc> values without building a full XML DOM.
+
+    Large sitemap urlsets commonly contain tens of thousands of entries. The
+    HTTP response body is already bounded by the request layer, so building a
+    second BeautifulSoup XML tree only increases peak memory/CPU. Sitemap <loc>
+    elements contain text values; extracting those values directly preserves
+    discovery order, namespace prefixes, CDATA, and normal XML entities without
+    retaining a DOM.
+    """
+    locs: list[str] = []
+    for match in SITEMAP_LOC_RE.finditer(str(body or "")):
+        value = match.group(1).strip()
+        if value.startswith("<![CDATA[") and value.endswith("]]>"):
+            value = value[9:-3]
+        value = unescape(value).strip()
+        if value:
+            locs.append(value)
+    return locs
 
 
 class _SitemapRequestPacer:
@@ -270,12 +296,8 @@ async def fetch_sitemap_locs(client: httpx.AsyncClient, sitemap_url: str, fetche
     if not body:
         _record_sitemap_failure(diagnostics, "empty_sitemap_body")
         return []
-    soup = BeautifulSoup(body, "xml")
     locs: list[str] = []
-    for tag in soup.find_all("loc"):
-        loc = (tag.get_text() or "").strip()
-        if not loc:
-            continue
+    for loc in parse_sitemap_locs(body):
         if is_artifact_url(loc):
             record_artifact(artifacts, loc, "sitemap", sitemap_url, "")
             continue

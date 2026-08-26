@@ -1,10 +1,16 @@
+import gzip
 import ipaddress
 import socket
 
 import httpx
 import pytest
 
-from app.security import resolve_public_http_url, safe_get, safe_get_once
+from app.security import (
+    ResponseBodyTooLarge,
+    resolve_public_http_url,
+    safe_get,
+    safe_get_once,
+)
 
 
 def _answer(address: str, port: int):
@@ -12,6 +18,139 @@ def _answer(address: str, port: int):
     family = socket.AF_INET if parsed.version == 4 else socket.AF_INET6
     sockaddr = (address, port) if family == socket.AF_INET else (address, port, 0, 0)
     return (family, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", sockaddr)
+
+
+@pytest.mark.asyncio
+async def test_bounded_plain_html_preserves_downstream_response_semantics(monkeypatch):
+    payload = b"<html><head><title>Plain</title></head><body>ok</body></html>"
+    observed = {}
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda _host, port, **_kwargs: [_answer("93.184.216.34", port)],
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed["url"] = str(request.url)
+        observed["host"] = request.headers.get("host")
+        return httpx.Response(
+            200,
+            headers={
+                "content-type": "text/html; charset=utf-8",
+                "content-length": str(len(payload)),
+                "x-fixlist-test": "kept",
+            },
+            content=payload,
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        follow_redirects=False,
+    ) as client:
+        response = await safe_get_once(
+            client,
+            "https://plain.example/catalog",
+            max_decoded_bytes=1024,
+        )
+
+    assert observed == {
+        "url": "https://93.184.216.34/catalog",
+        "host": "plain.example",
+    }
+    assert response.status_code == 200
+    assert response.content == payload
+    assert response.text.startswith("<html>")
+    assert response.headers["content-type"] == "text/html; charset=utf-8"
+    assert response.headers["x-fixlist-test"] == "kept"
+    assert response.headers["content-length"] == str(len(payload))
+    assert str(response.url) == "https://plain.example/catalog"
+    assert response.request.headers["host"] == "plain.example"
+
+
+@pytest.mark.asyncio
+async def test_bounded_gzip_response_is_decoded_once_and_preserves_logical_request(
+    monkeypatch,
+):
+    payload = b"<html><head><title>Compressed</title></head><body>ok</body></html>"
+    compressed = gzip.compress(payload)
+    observed = {}
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda _host, port, **_kwargs: [_answer("93.184.216.34", port)],
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed["url"] = str(request.url)
+        observed["host"] = request.headers.get("host")
+        return httpx.Response(
+            200,
+            headers={
+                "content-type": "text/html; charset=utf-8",
+                "content-encoding": "gzip",
+                "content-length": str(len(compressed)),
+                "x-fixlist-test": "kept",
+            },
+            content=compressed,
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        follow_redirects=False,
+    ) as client:
+        response = await safe_get_once(
+            client,
+            "https://compressed.example/catalog",
+            max_decoded_bytes=1024,
+        )
+
+    assert observed == {
+        "url": "https://93.184.216.34/catalog",
+        "host": "compressed.example",
+    }
+    assert response.status_code == 200
+    assert response.content == payload
+    assert response.text.startswith("<html>")
+    assert "content-encoding" not in response.headers
+    assert response.headers["content-length"] == str(len(payload))
+    assert response.headers["content-type"] == "text/html; charset=utf-8"
+    assert response.headers["x-fixlist-test"] == "kept"
+    assert str(response.url) == "https://compressed.example/catalog"
+    assert response.request.headers["host"] == "compressed.example"
+
+
+@pytest.mark.asyncio
+async def test_bounded_decoded_response_rejects_content_past_the_limit(monkeypatch):
+    payload = gzip.compress(b"x" * 2048)
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda _host, port, **_kwargs: [_answer("93.184.216.34", port)],
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-encoding": "gzip"},
+            content=payload,
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        follow_redirects=False,
+    ) as client:
+        with pytest.raises(
+            ResponseBodyTooLarge,
+            match="decoded_response_body_exceeded_512_bytes",
+        ):
+            await safe_get_once(
+                client,
+                "https://oversized.example/catalog",
+                max_decoded_bytes=512,
+            )
 
 
 @pytest.mark.asyncio

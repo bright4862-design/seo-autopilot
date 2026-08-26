@@ -2,6 +2,8 @@ import { createClientFromRequest } from "npm:@base44/sdk@0.8.41";
 
 export const SCAN_HISTORY_DELETE_VERSION = "scan_history_delete_v1_fail_closed_drain";
 
+export const SCAN_HISTORY_DELETE_VERSION = "scan_history_delete_v2_drain_children";
+
 const KEEP_NEWEST = 3;
 const MAX_HISTORY = 100;
 const TERMINAL_STATUSES = new Set(["complete", "limited", "failed", "cancelled"]);

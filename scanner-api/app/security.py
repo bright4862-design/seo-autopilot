@@ -9,6 +9,7 @@ import httpx
 
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 DEFAULT_MAX_REDIRECTS = 5
+DEFAULT_MAX_DECODED_RESPONSE_BYTES = 5_000_000
 
 
 class ResponseBodyTooLarge(Exception):

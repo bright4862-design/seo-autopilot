@@ -161,6 +161,51 @@ def test_exact_result_route_mismatch_is_a_matrix_failure():
     assert "ui_result_route_mismatch" in _matrix_contract_gaps(matrix)
 
 
+def test_admission_failure_code_is_consistent_in_matrix_and_summary():
+    item = HARNESS.Submission(
+        email="acceptance@example.com",
+        url="https://example.com",
+        project_id="project_1",
+    )
+    item.http_status = 429
+    item.accepted = False
+    item.failure_code = "admission_capacity_limited"
+
+    summary = HARNESS._result_summary(item)
+
+    assert summary["error_code"] == "admission_capacity_limited"
+    assert (
+        summary["acceptance_matrix"]["infrastructure_outcome"]["failure_code"]
+        == "admission_capacity_limited"
+    )
+
+
+def test_exact_release_wrapper_preserves_base_release_markers(monkeypatch):
+    item = _complete_item("scan_exact_markers")
+    item.run.update({
+        "beta_revision_fingerprint": "0123456789abcdef",
+        "review_evidence_calibration_version": "calibration_1",
+        "archetype_classifier_version": "classifier_1",
+    })
+    item.customer_result["release_contract_current"] = True
+    monkeypatch.setattr(
+        HARNESS,
+        "EXPECTED_RELEASE_FINGERPRINT",
+        "0123456789abcdef",
+    )
+
+    exact = HARNESS.build_acceptance_matrix(
+        HARNESS._matrix_observation(item)
+    )["exact_release_markers"]
+
+    assert exact["state"] == "match"
+    assert exact["scanner_version"] == "scanner_1"
+    assert exact["scanner_build_revision"] == "build_1"
+    assert exact["review_version"] == "review_1"
+    assert exact["review_evidence_calibration_version"] == "calibration_1"
+    assert exact["archetype_classifier_version"] == "classifier_1"
+
+
 def test_terminal_poll_durably_checkpoints_the_completed_site(
     tmp_path,
     monkeypatch,

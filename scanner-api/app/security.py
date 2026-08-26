@@ -113,11 +113,21 @@ async def _bounded_decoded_response(
                 append_decoded(decoded)
 
                 tail = decoder.unconsumed_tail
-                if not tail:
-                    break
-                if tail == pending and not decoded:
-                    raise httpx.DecodingError("content decoder made no progress")
-                pending = tail
+                unused = (
+                    decoder.unused_data
+                    if encoding == "gzip" and decoder.eof
+                    else b""
+                )
+                if tail:
+                    if tail == pending and not decoded:
+                        raise httpx.DecodingError("content decoder made no progress")
+                    pending = tail
+                    continue
+                if unused:
+                    decoder = zlib.decompressobj(zlib.MAX_WBITS | 16)
+                    pending = unused
+                    continue
+                break
 
         if encoding == "deflate" and decoder is None:
             raise httpx.DecodingError("incomplete deflate response body")

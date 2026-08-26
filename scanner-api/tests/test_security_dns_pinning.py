@@ -123,6 +123,39 @@ async def test_bounded_gzip_response_is_decoded_once_and_preserves_logical_reque
 
 
 @pytest.mark.asyncio
+async def test_bounded_gzip_decodes_concatenated_members_under_one_limit(monkeypatch):
+    first = b"<html><body>"
+    second = b"complete evidence</body></html>"
+    compressed = gzip.compress(first) + gzip.compress(second)
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda _host, port, **_kwargs: [_answer("93.184.216.34", port)],
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-encoding": "gzip"},
+            stream=httpx.ByteStream(compressed),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        follow_redirects=False,
+    ) as client:
+        response = await safe_get_once(
+            client,
+            "https://concatenated-gzip.example/catalog",
+            max_decoded_bytes=1024,
+        )
+
+    assert response.content == first + second
+    assert "content-encoding" not in response.headers
+
+
+@pytest.mark.asyncio
 async def test_bounded_decoded_response_rejects_content_past_the_limit(monkeypatch):
     payload = gzip.compress(b"x" * 2048)
     monkeypatch.setattr(

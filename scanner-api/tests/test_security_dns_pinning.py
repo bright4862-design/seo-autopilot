@@ -154,6 +154,43 @@ async def test_bounded_decoded_response_rejects_content_past_the_limit(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_bounded_gzip_limit_does_not_use_httpx_eager_decoding(monkeypatch):
+    payload = gzip.compress(b"x" * 2_000_000)
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda _host, port, **_kwargs: [_answer("93.184.216.34", port)],
+    )
+
+    async def forbidden_aiter_bytes(_self, *args, **kwargs):
+        raise AssertionError("bounded fetch must not let HTTPX eagerly decode a compressed block")
+
+    monkeypatch.setattr(httpx.Response, "aiter_bytes", forbidden_aiter_bytes)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-encoding": "gzip"},
+            content=payload,
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        follow_redirects=False,
+    ) as client:
+        with pytest.raises(
+            ResponseBodyTooLarge,
+            match="decoded_response_body_exceeded_512_bytes",
+        ):
+            await safe_get_once(
+                client,
+                "https://single-block-bomb.example/catalog",
+                max_decoded_bytes=512,
+            )
+
+
+@pytest.mark.asyncio
 async def test_fetch_uses_the_single_validated_dns_snapshot_not_a_rebind(monkeypatch):
     resolutions = 0
     observed = {}

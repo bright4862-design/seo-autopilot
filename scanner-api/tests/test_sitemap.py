@@ -46,6 +46,24 @@ def test_parse_sitemap_locs_ignores_commented_out_entries():
     ]
 
 
+def test_parse_sitemap_locs_uses_xml_entities_and_preserves_cdata():
+    body = """<urlset>
+      <url><loc>https://example.com/p?a=1&amp;b=2</loc></url>
+      <url><loc>https://example.com/p?a=1&amp;copy=2</loc></url>
+      <url><loc>https://example.com/p?literal=&copy;2</loc></url>
+      <url><loc>https://example.com/p?decimal=&#65;&amp;hex=&#x42;</loc></url>
+      <url><loc><![CDATA[https://example.com/p?literal=&amp;&copy;]]></loc></url>
+    </urlset>"""
+
+    assert sitemap.parse_sitemap_locs(body) == [
+        "https://example.com/p?a=1&b=2",
+        "https://example.com/p?a=1&copy=2",
+        "https://example.com/p?literal=&copy;2",
+        "https://example.com/p?decimal=A&hex=B",
+        "https://example.com/p?literal=&amp;&copy;",
+    ]
+
+
 def test_sitemap_page_urls_normalize_www_to_origin_host():
     assert normalize_sitemap_page_url(
         "https://www.centerstreetlending.com/blog/benefits-of-using-bridge-loans-for-real-estate-transactions",

@@ -36,3 +36,31 @@ test("authority rows are removed only after exact owner project and scan checks"
   assert.match(backend, /await entities\.FixList\.delete/);
   assert.match(backend, /await entities\.ScanRun\.delete\(scanId\)/);
 });
+
+test("child read failures cannot be reinterpreted as empty data before parent deletion", () => {
+  const deletionStart = backend.indexOf("async function deleteOwnedTerminalScan");
+  const helperStart = backend.indexOf("async function requiredRows", deletionStart);
+  assert.ok(deletionStart >= 0, "deleteOwnedTerminalScan is missing");
+  assert.ok(helperStart > deletionStart, "requiredRows fail-closed helper is missing");
+  const deletion = backend.slice(deletionStart, helperStart);
+
+  assert.doesNotMatch(
+    deletion,
+    /\.filter\([\s\S]*?\)\.catch\(\(\)\s*=>\s*\[\]\)/,
+    "a failed child read must never become an empty child set",
+  );
+  assert.match(deletion, /requiredRows\([\s\S]*?FixList\.filter/);
+  assert.match(deletion, /requiredRows\([\s\S]*?FixItem\.filter/);
+  assert.ok(
+    deletion.lastIndexOf("requiredRows(") < deletion.indexOf("await entities.ScanRun.delete(scanId)"),
+    "every required child read must complete before the parent ScanRun can be deleted",
+  );
+});
+
+test("required child reads fail with a sanitized service error instead of deletion success", () => {
+  const helper = backend.match(/async function requiredRows[\s\S]*?\n\}/)?.[0] || "";
+  assert.ok(helper, "requiredRows fail-closed helper is missing");
+  assert.match(helper, /throw new RequestProblem\(\s*503,/);
+  assert.match(helper, /Saved scan history is temporarily unavailable/);
+  assert.doesNotMatch(helper, /error\.(?:message|stack)|JSON\.stringify/);
+});

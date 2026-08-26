@@ -65,7 +65,12 @@ def _response(url, status=200, *, location="", body=None, headers=None):
     if headers:
         response_headers.update(headers)
     html = body if body is not None else "<html><head><title>Page</title></head><body><h1>Page</h1></body></html>"
-    return httpx.Response(status, text=html, headers=response_headers, request=httpx.Request("GET", url))
+    return httpx.Response(
+        status,
+        headers=response_headers,
+        stream=httpx.ByteStream(html.encode("utf-8")),
+        request=httpx.Request("GET", url),
+    )
 
 
 @pytest.mark.asyncio

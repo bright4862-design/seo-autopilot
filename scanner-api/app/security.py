@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import ipaddress
 import socket
+import zlib
 
 import httpx
 
@@ -40,18 +41,76 @@ async def _bounded_decoded_response(
         headers={
             "Host": resolved.host_header,
             "Connection": "close",
+            # Keep the bounded decoder surface explicit. The scanner supports
+            # the encodings it can incrementally decode under a hard output cap.
+            "Accept-Encoding": "gzip, deflate",
         },
         extensions={"sni_hostname": resolved.hostname},
     ) as streamed:
+        raw_encoding = streamed.headers.get("content-encoding", "")
+        encodings = [
+            value.strip().lower()
+            for value in raw_encoding.split(",")
+            if value.strip() and value.strip().lower() != "identity"
+        ]
+        if len(encodings) > 1 or (encodings and encodings[0] not in {"gzip", "deflate"}):
+            raise httpx.DecodingError(
+                f"unsupported_content_encoding:{raw_encoding or 'unknown'}"
+            )
+
+        encoding = encodings[0] if encodings else ""
+        decoder = None
+        deflate_first_attempt = False
+        if encoding == "gzip":
+            decoder = zlib.decompressobj(zlib.MAX_WBITS | 16)
+        elif encoding == "deflate":
+            decoder = zlib.decompressobj()
+            deflate_first_attempt = True
+
         chunks: list[bytes] = []
         total = 0
-        async for chunk in streamed.aiter_bytes():
+
+        def append_decoded(chunk: bytes) -> None:
+            nonlocal total
+            if not chunk:
+                return
             total += len(chunk)
             if total > limit:
                 raise ResponseBodyTooLarge(
                     f"decoded_response_body_exceeded_{limit}_bytes"
                 )
             chunks.append(chunk)
+
+        async for raw_chunk in streamed.aiter_raw():
+            if decoder is None:
+                append_decoded(raw_chunk)
+                continue
+
+            pending = raw_chunk
+            while pending:
+                remaining = limit - total
+                try:
+                    decoded = decoder.decompress(
+                        pending,
+                        max_length=remaining + 1,
+                    )
+                except zlib.error as exc:
+                    if encoding == "deflate" and deflate_first_attempt:
+                        decoder = zlib.decompressobj(-zlib.MAX_WBITS)
+                        deflate_first_attempt = False
+                        continue
+                    raise httpx.DecodingError(str(exc)) from exc
+
+                deflate_first_attempt = False
+                append_decoded(decoded)
+
+                tail = decoder.unconsumed_tail
+                if not tail:
+                    break
+                if tail == pending and not decoded:
+                    raise httpx.DecodingError("content decoder made no progress")
+                pending = tail
+
         body = b"".join(chunks)
 
         request = getattr(streamed, "request", None)

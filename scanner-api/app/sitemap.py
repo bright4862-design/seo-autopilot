@@ -11,8 +11,6 @@ from .artifact_filter import is_artifact_url, record_artifact
 from .market_scope import market_pair_prefix, path_within_scope
 from .security import ResponseBodyTooLarge, safe_get
 
-SITEMAP_LOC_PARSER_VERSION = "sitemap_loc_parser_v2_xml_entities"
-
 MAX_SITEMAP_FETCHES = 60
 MAX_SITEMAP_DECODED_BYTES = 5_000_000
 SITEMAP_PARSER_VERSION = "sitemap_parser_v1_xml_identity"

@@ -29,9 +29,12 @@ test("automatic pruning keeps the newest three and only deletes terminal history
 });
 
 test("authority rows are removed only after exact owner project and scan checks", () => {
-  assert.match(backend, /cleanId\(item\?\.owner_user_id\) === cleanId\(userId\)/);
-  assert.match(backend, /cleanId\(item\?\.project_id\) === cleanId\(projectId\)/);
-  assert.match(backend, /cleanId\(item\?\.scan_run_id\) === cleanId\(scanId\)/);
+  const ownership = backend.match(/function requireOwnedItem[\s\S]*?\n\}/)?.[0] || "";
+  assert.ok(ownership, "requireOwnedItem fail-closed helper is missing");
+  assert.match(ownership, /cleanId\(item\?\.owner_user_id\) !== cleanId\(userId\)/);
+  assert.match(ownership, /cleanId\(item\?\.project_id\) !== cleanId\(projectId\)/);
+  assert.match(ownership, /cleanId\(item\?\.scan_run_id\) !== cleanId\(scanId\)/);
+  assert.match(backend, /requireOwnedItem\(item, \{ userId, projectId, scanId \}\)/);
   assert.match(backend, /await entities\.FixItem\.delete/);
   assert.match(backend, /await entities\.FixList\.delete/);
   assert.match(backend, /await entities\.ScanRun\.delete\(scanId\)/);
@@ -39,21 +42,24 @@ test("authority rows are removed only after exact owner project and scan checks"
 
 test("child read failures cannot be reinterpreted as empty data before parent deletion", () => {
   const deletionStart = backend.indexOf("async function deleteOwnedTerminalScan");
-  const helperStart = backend.indexOf("async function requiredRows", deletionStart);
+  const requiredRowsStart = backend.indexOf("async function requiredRows", deletionStart);
   assert.ok(deletionStart >= 0, "deleteOwnedTerminalScan is missing");
-  assert.ok(helperStart > deletionStart, "requiredRows fail-closed helper is missing");
-  const deletion = backend.slice(deletionStart, helperStart);
+  assert.ok(requiredRowsStart > deletionStart, "requiredRows fail-closed helper is missing");
+  const deletion = backend.slice(deletionStart, requiredRowsStart);
 
   assert.doesNotMatch(
     deletion,
     /\.filter\([\s\S]*?\)\.catch\(\(\)\s*=>\s*\[\]\)/,
     "a failed child read must never become an empty child set",
   );
-  assert.match(deletion, /requiredRows\([\s\S]*?FixList\.filter/);
-  assert.match(deletion, /requiredRows\([\s\S]*?FixItem\.filter/);
+  assert.match(deletion, /await drainRows\([\s\S]*?FixList\.filter/);
+  assert.match(deletion, /await drainRows\([\s\S]*?FixItem\.filter/);
+  const drainHelper = backend.match(/async function drainRows[\s\S]*?\n\}/)?.[0] || "";
+  assert.ok(drainHelper, "drainRows helper is missing");
+  assert.match(drainHelper, /const rows = await requiredRows\(read, readCode\)/);
   assert.ok(
-    deletion.lastIndexOf("requiredRows(") < deletion.indexOf("await entities.ScanRun.delete(scanId)"),
-    "every required child read must complete before the parent ScanRun can be deleted",
+    deletion.lastIndexOf("await drainRows(") < deletion.indexOf("await entities.ScanRun.delete(scanId)"),
+    "every child drain must complete before the parent ScanRun can be deleted",
   );
 });
 

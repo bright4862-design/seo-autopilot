@@ -37,6 +37,11 @@ test("HTTP 429 customer copy is neutral and contains no cross-customer language"
   assert.match(fixListSource, /Related site section/);
   assert.match(fixListSource, /same-parent-domain access evidence/);
   assert.match(fixListSource, /Related section on the same parent domain/);
+  assert.match(
+    fixListSource,
+    /scopeRelationship === "sibling_sous_dossier"[\\s\\S]*\\? "Related site section"[\\s\\S]*: humanize\\(recommendation\\.scopeRelationship\\)/,
+  );
+  assert.doesNotMatch(fixListSource, /value: humanize\\(recommendation\\.scopeRelationship\\)/);
   assert.doesNotMatch(fixListSource, /Meilleurtaux/i);
   assert.doesNotMatch(fixListSource, /Sibling sous-dossier/i);
   assert.doesNotMatch(fixListSource, /different business vertical/i);

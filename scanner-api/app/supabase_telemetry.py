@@ -47,6 +47,11 @@ def _optional_int(value: Any) -> int | None:
         return None
 
 
+def _optional_health_score(value: Any) -> int | None:
+    score = _optional_int(value)
+    return score if score is not None and 0 <= score <= 100 else None
+
+
 def _label(value: Any, *, fallback: str = "unknown") -> str:
     normalized = _SAFE_LABEL.sub("_", str(value or "").strip().lower()).strip("_")[:64]
     return normalized or fallback
@@ -134,7 +139,7 @@ def build_scan_telemetry(scan_id: str, result: dict[str, Any]) -> dict[str, Any]
         "scan_deadline_reached": deadline_reached,
         "pages_crawled": _bounded_int(source.get("pages_crawled") or len(pages)),
         "pages_found": _bounded_int(source.get("pages_found")),
-        "health_score": _optional_int(source.get("health_score")),
+        "health_score": _optional_health_score(source.get("health_score")),
         "page_type_counts": dict(sorted(page_types.items())),
         "response_class_counts": dict(sorted(response_classes.items())),
         "failure_reason_counts": _safe_counter(crawl_timing.get("failure_reason_buckets")),

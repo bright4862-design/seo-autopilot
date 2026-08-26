@@ -147,6 +147,19 @@ def test_payload_contains_only_allowlisted_aggregate_scanner_evidence():
         assert forbidden not in serialized
 
 
+@pytest.mark.parametrize(
+    ("score", "expected"),
+    [(-1, None), (0, 0), (81, 81), (100, 100), (101, None), (None, None), ("", None)],
+)
+def test_health_score_respects_the_database_range(score, expected):
+    result = scan_result()
+    result["health_score"] = score
+
+    payload = telemetry.build_scan_telemetry("scan-123", result)
+
+    assert payload["health_score"] == expected
+
+
 @pytest.mark.asyncio
 async def test_default_off_never_opens_a_supabase_client(monkeypatch):
     monkeypatch.delenv("SCANNER_SUPABASE_TELEMETRY_ENABLED", raising=False)

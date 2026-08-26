@@ -255,6 +255,9 @@ export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, au
   // mistake "we verified this provisional record" for "this is authoritative".
   const limitedVerified = fullAccess === true && resultIntegrityVerified === true;
   const canReadResult = fullAccess === true && (authorityVerified === true || limitedVerified);
+  const customerHealthScoreStatus = authorityVerified === true
+    ? "authoritative"
+    : limitedVerified ? "insufficient_evidence" : "";
   const canonical = fullAccess === true && authorityVerified === true
     && fixList?.repair_contract_version === REPAIR_CONTRACT_V2
     && fixList?.repair_snapshot_contract_version === REPAIR_CONTRACT_V2
@@ -271,7 +274,7 @@ export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, au
     release_contract_current: canReadResult && run?.beta_revision_fingerprint === RELEASE_FINGERPRINT,
     scan_id: text(run?.id, 160),
     fix_list_id: canReadResult ? text(fixList?.id, 160) : "",
-    run: sanitizeRun(run, { detailed: canReadResult }),
+    run: sanitizeRun(run, { detailed: canReadResult, healthScoreStatus: customerHealthScoreStatus }),
     fixList: canReadResult ? pickFields(fixList, FIX_LIST_FIELDS) : null,
     fixItems: customerFixItems,
   };
@@ -491,10 +494,13 @@ function nullableNumber(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function sanitizeRun(run, { detailed }) {
+function sanitizeRun(run, { detailed, healthScoreStatus = "" }) {
   const result = pickFields(run, detailed ? [...PUBLIC_RUN_FIELDS, ...DETAILED_RUN_FIELDS] : PUBLIC_RUN_FIELDS);
   result.id = text(run?.id, 160);
   result.scan_id = result.id;
+  if (detailed && healthScoreStatus) {
+    result.health_score_status = text(healthScoreStatus, 80);
+  }
   if (!detailed) {
     result.release_gate_eligible = false;
     result.is_authoritative = false;

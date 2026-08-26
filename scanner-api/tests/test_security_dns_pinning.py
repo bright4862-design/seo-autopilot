@@ -191,6 +191,48 @@ async def test_bounded_gzip_limit_does_not_use_httpx_eager_decoding(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_bounded_raw_deflate_decodes_when_header_is_split_after_one_byte(monkeypatch):
+    payload = b"<html><body>raw deflate works across chunk boundaries</body></html>"
+    compressor = __import__("zlib").compressobj(wbits=-__import__("zlib").MAX_WBITS)
+    compressed = compressor.compress(payload) + compressor.flush()
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda _host, port, **_kwargs: [_answer("93.184.216.34", port)],
+    )
+
+    class SplitStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield compressed[:1]
+            yield compressed[1:]
+
+        async def aclose(self):
+            return None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-encoding": "deflate"},
+            stream=SplitStream(),
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        follow_redirects=False,
+    ) as client:
+        response = await safe_get_once(
+            client,
+            "https://raw-deflate.example/catalog",
+            max_decoded_bytes=1024,
+        )
+
+    assert response.status_code == 200
+    assert response.content == payload
+    assert "content-encoding" not in response.headers
+
+
+@pytest.mark.asyncio
 async def test_fetch_uses_the_single_validated_dns_snapshot_not_a_rebind(monkeypatch):
     resolutions = 0
     observed = {}

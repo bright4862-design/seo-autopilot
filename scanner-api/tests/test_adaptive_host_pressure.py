@@ -15,6 +15,9 @@ def test_retry_after_accepts_seconds_and_http_date():
         now=now,
     ) == 7.0
     assert scanner.parse_retry_after_seconds("garbage", now=now) == 0.0
+    assert scanner.parse_retry_after_seconds("inf", now=now) == 0.0
+    assert scanner.parse_retry_after_seconds("-inf", now=now) == 0.0
+    assert scanner.parse_retry_after_seconds("nan", now=now) == 0.0
 
 
 def test_transient_pressure_classification_is_narrow():

@@ -13,6 +13,7 @@ from .security import ResponseBodyTooLarge, safe_get
 
 MAX_SITEMAP_FETCHES = 60
 MAX_SITEMAP_DECODED_BYTES = 5_000_000
+SITEMAP_PARSER_VERSION = "sitemap_parser_v1_xml_identity"
 
 SITEMAP_LOC_RE = re.compile(
     r"<(?:[A-Za-z_][\w.-]*:)?loc\b[^>]*>(.*?)</(?:[A-Za-z_][\w.-]*:)?loc\s*>",

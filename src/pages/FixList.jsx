@@ -3,7 +3,6 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { Copy, Download, ExternalLink } from "lucide-react";
 
 import { isRateLimitFinding, shouldUseLegacyRateLimitPresentation } from "@/lib/reviewContract";
-import { trackEvent } from "@/lib/analytics";
 import { getScanRunWithFixList, listAccountScanRuns } from "@/lib/scanRuns";
 import { customerRecoveryFailure } from "@/lib/scanRuns";
 import { ACTIVE_SCAN_RUN_STATUSES } from "@/lib/scanRunIdentity";
@@ -161,7 +160,6 @@ export default function FixList() {
   const loadedScanIdRef = useRef("");
   const pollTimerRef = useRef(0);
   const [selectedCms, setSelectedCms] = useState("custom");
-  const [doneIds, setDoneIds] = useState([]);
   const [recentScans, setRecentScans] = useState([]);
   const [recentScansState, setRecentScansState] = useState(requestedScanId ? "idle" : "loading");
   const [recentScansFailure, setRecentScansFailure] = useState(null);
@@ -188,8 +186,6 @@ export default function FixList() {
       if (cancelled) return;
       loadedScanIdRef.current = "";
       setScanRecord(null);
-      // Completed-fix ticks belong to the scan being cleared, not the next one.
-      setDoneIds([]);
     }
 
     async function loadRequestedScan() {
@@ -254,7 +250,6 @@ export default function FixList() {
       if (!requestedScanId) {
         loadedScanIdRef.current = "";
         setScanRecord(null);
-        setDoneIds([]);
         setRequestedScanFailure(null);
         setRequestedScanState("idle");
         return;
@@ -268,7 +263,6 @@ export default function FixList() {
         cancelled = true;
         loadedScanIdRef.current = "";
         setScanRecord(null);
-        setDoneIds([]);
         const failure = customerRecoveryFailure({ error_code: "unauthorized" }, `result:${requestedScanId}`);
         setRequestedScanFailure(failure);
         setRequestedScanState(failure.kind);
@@ -281,7 +275,6 @@ export default function FixList() {
       if (reason === "account_switch") {
         loadedScanIdRef.current = "";
         setScanRecord(null);
-        setDoneIds([]);
         setRequestedScanState("loading");
       }
       setRequestedScanFailure(null);
@@ -394,12 +387,12 @@ export default function FixList() {
   const websiteKey = websiteKeyOf(scanRecord);
   const websiteHost = safeHostname(scanRecord?.website_url) || websiteKey || "";
 
-  const active = recommendations.filter((item) => !doneIds.includes(item.id));
-  const doneItems = recommendations.filter((item) => doneIds.includes(item.id));
+  // Until customer workflow state has a durable, authorized mutation path,
+  // every saved recommendation remains part of the reloadable work surface.
+  const active = recommendations;
   const repairWorkSurface = buildRepairWorkSurfacePresentation({
     snapshotItems: recommendations,
     visibleItems: active,
-    doneIds,
     scan: scanRecord,
     initialFixFirstLimit: 3,
   });
@@ -413,17 +406,6 @@ export default function FixList() {
   const shownTopPriorities = topPriorities;
   const limitationNote = getLimitationNote(scanRecord);
   const summary = hasUsefulScan ? getBestSummary(scanRecord, pagesScanned, pagesFound, recommendations) : "";
-
-  function markDone(item) {
-    const next = [...doneIds, item.id];
-    setDoneIds(next);
-    trackEvent("recommendation_marked_reviewed", { fix_id: item.id, category: item.category });
-  }
-
-  function undoDone(item) {
-    const next = doneIds.filter((id) => id !== item.id);
-    setDoneIds(next);
-  }
 
   function retryRequestedScan() {
     setRequestedScanFailure(null);
@@ -521,7 +503,7 @@ export default function FixList() {
                   {customerHealthLabel(healthScore, { unavailable: scoreUnavailable, noHighConfidenceFindings })}
                 </h1>
                 <p className="mt-1.5 text-[15px] text-ink-muted tabular-nums">
-                  {getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount: active.length, doneCount: doneItems.length })}
+                  {getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount: active.length })}
                 </p>
               </div>
             </div>
@@ -550,7 +532,6 @@ export default function FixList() {
                     item={item}
                     suggestion={suggestion}
                     cms={selectedCms}
-                    onDone={() => markDone(item)}
                     embedded
                   />
                 )}
@@ -562,7 +543,7 @@ export default function FixList() {
                 <SectionEyebrow label="Your priorities" count={shownTopPriorities.length} />
                 <div className="mt-2">
                   {shownTopPriorities.map((item) => (
-                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
+                    <FixRow key={item.id} item={item} cms={selectedCms} />
                   ))}
                 </div>
               </>
@@ -573,7 +554,7 @@ export default function FixList() {
                 <SectionEyebrow label="More important fixes" count={moreImportant.length} />
                 <div className="mt-2">
                   {moreImportant.map((item) => (
-                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
+                    <FixRow key={item.id} item={item} cms={selectedCms} />
                   ))}
                 </div>
               </>
@@ -584,7 +565,7 @@ export default function FixList() {
                 <SectionEyebrow label="Improve next" count={improveNext.length} />
                 <div className="mt-2">
                   {improveNext.map((item) => (
-                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
+                    <FixRow key={item.id} item={item} cms={selectedCms} />
                   ))}
                 </div>
               </>
@@ -595,42 +576,13 @@ export default function FixList() {
                 <SectionEyebrow label="Worth checking" count={worthChecking.length} />
                 <div className="mt-2">
                   {worthChecking.map((item) => (
-                    <FixRow key={item.id} item={item} cms={selectedCms} onDone={() => markDone(item)} />
+                    <FixRow key={item.id} item={item} cms={selectedCms} />
                   ))}
                 </div>
               </>
-            ) : null}
-
-            {repairPresentation.legacySections?.length === 0 && !repairPresentation.canonical && !repairPresentation.unsupported && active.length === 0 && doneItems.length > 0 ? (
-              <div className="mt-16 py-10">
-                <h2 className="text-[22px] font-semibold tracking-tight">All clear.</h2>
-                <p className="mt-2 max-w-[48ch] text-ink-muted">
-                  Every fix is marked done. Scan again once the changes are live and we&rsquo;ll confirm them.
-                </p>
-              </div>
             ) : null}
 
             <ExplicitPassedChecks scan={scanRecord} />
-
-            {doneItems.length > 0 ? (
-              <>
-                <SectionEyebrow label="Done" count={doneItems.length} />
-                <div className="mt-2">
-                  {doneItems.map((item) => (
-                    <div key={item.id} className="flex items-baseline justify-between border-b border-hairline-soft py-3.5 text-[14px] text-ink-faint">
-                      <span className="line-through">{item.title}</span>
-                      <button
-                        type="button"
-                        onClick={() => undoDone(item)}
-                        className="shrink-0 pl-4 text-[13px] text-ink-muted transition-colors hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
-                      >
-                        Undo
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </>
-            ) : null}
 
             {active.length > 0 ? <CmsPicker selectedCms={selectedCms} onChange={setSelectedCms} /> : null}
           </>
@@ -790,7 +742,7 @@ function LockedResultState() {
   );
 }
 
-function FixRow({ item, cms, onDone, embedded = false, suggestion: suppliedSuggestion }) {
+function FixRow({ item, cms, embedded = false, suggestion: suppliedSuggestion }) {
   const [open, setOpen] = useState(embedded);
   // The presentation seam already computed this for canonical rows. Legacy rows
   // reach the same deterministic suggestion here rather than going without one.
@@ -955,13 +907,6 @@ function FixRow({ item, cms, onDone, embedded = false, suggestion: suppliedSugge
             </>
           ) : null}
 
-          <button
-            type="button"
-            onClick={onDone}
-            className="mt-6 rounded-full border border-hairline px-4 py-1.5 text-[13px] font-medium text-ink transition-colors hover:border-good/25 hover:bg-good/[0.07] hover:text-good focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
-          >
-            Mark as done
-          </button>
         </div>
       ) : null}
     </div>
@@ -1069,11 +1014,10 @@ function downloadTextFile(content, filename, type) {
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 }
 
-function getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount, doneCount }) {
-  if (noHighConfidenceFindings && activeCount === 0 && doneCount === 0) {
+function getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount }) {
+  if (noHighConfidenceFindings && activeCount === 0) {
     return nextBestStep || "No high-confidence issues were found in the pages we checked.";
   }
-  if (activeCount === 0 && doneCount > 0) return "Score will settle after your next scan.";
   const word = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"][activeCount] || activeCount;
   return `${word} fix${activeCount === 1 ? "" : "es"} to work through — start at the top.`;
 }

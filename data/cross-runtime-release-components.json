@@ -14,8 +14,8 @@
     "repair_suggestion_library_version": "v1",
     "repair_write_contract_version": "repair_contract_v2_shadow_calibrated",
     "review_attestation_version": "standard_review_snapshot_hmac_v2_coverage",
-    "scan_history_delete_version": "scan_history_delete_v1_fail_closed_drain"
+    "scan_history_delete_version": "scan_history_delete_v2_drain_children"
   },
-  "note": "Canonical cross-runtime release components. Base44 and frontend behavior changes participate in the release fingerprint. Final-core composition versions limited-score projection and fail-closed scan-history deletion; production acceptance remains pending.",
+  "note": "Canonical cross-runtime release components. Base44 and frontend behavior can change release truth, but Python cannot import those runtimes, so their markers are declared here and merged into the same fingerprint. A Base44/UI-only behavior change therefore moves the release fingerprint exactly like a Python change. Final-core composition versions limited-score customer projection and complete child-drain saved-scan deletion.",
   "schema_version": "cross_runtime_release_components_v1"
 }

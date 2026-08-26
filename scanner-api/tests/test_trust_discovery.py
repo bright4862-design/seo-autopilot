@@ -72,7 +72,7 @@ def gated_review(scan):
 
 @pytest.mark.asyncio
 async def test_existing_trust_page_is_preserved_and_reported(monkeypatch):
-    async def fake_safe_get(_client, url):
+    async def fake_safe_get(_client, url, **_kwargs):
         return FakeResponse(url, 404, "")
 
     monkeypatch.setattr("app.trust_discovery.is_public_http_url", lambda _url: True)
@@ -90,7 +90,7 @@ async def test_existing_trust_page_is_preserved_and_reported(monkeypatch):
 async def test_custom_homepage_trust_link_is_added_to_review_evidence(monkeypatch):
     homepage_html = '<html><body><footer><a href="/company">About us</a></footer></body></html>'
 
-    async def fake_safe_get(_client, url):
+    async def fake_safe_get(_client, url, **_kwargs):
         if url.rstrip("/") == "https://example.com":
             return FakeResponse("https://example.com/", 200, homepage_html)
         if url.endswith("/company"):
@@ -109,7 +109,7 @@ async def test_custom_homepage_trust_link_is_added_to_review_evidence(monkeypatc
 
 @pytest.mark.asyncio
 async def test_french_privacy_probe_prevents_sample_false_positive(monkeypatch):
-    async def fake_safe_get(_client, url):
+    async def fake_safe_get(_client, url, **_kwargs):
         if url.endswith("/politique-de-confidentialite"):
             return FakeResponse(url, 200, "<html><title>Confidentialité</title><h1>Politique de confidentialité</h1></html>")
         if url.rstrip("/") == "https://example.com":

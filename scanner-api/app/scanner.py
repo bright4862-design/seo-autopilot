@@ -1,7 +1,10 @@
 import asyncio
 import hashlib
+import math
 import re
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from urllib.parse import urldefrag, urlparse
 
 import httpx
@@ -80,6 +83,8 @@ RATE_LIMIT_INITIAL_COOLDOWN_SECONDS = 30.0
 RATE_LIMIT_BACKOFF_INTERVAL_SECONDS = 2.5
 RATE_LIMIT_MAX_INTERVAL_SECONDS = 4.0
 RATE_LIMIT_MAX_RETRIES = 8
+PRESSURE_RECOVERY_HEALTHY_RESPONSES = 6
+TRANSIENT_PRESSURE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 # A single pathological response must not be able to monopolize a parse. Beyond
@@ -87,6 +92,52 @@ RATE_LIMIT_MAX_RETRIES = 8
 # evidence gate already downgrades to `incomplete_html` -- non-authoritative
 # rather than a source of invented findings.
 MAX_PARSED_HTML_CHARS = 5_000_000
+MAX_DECODED_RESPONSE_BYTES = 5_000_000
+
+
+def transient_pressure_kind(page: dict | None) -> str:
+    """Classify host-pressure evidence that is safe to retry inside the crawl budget."""
+    if not isinstance(page, dict):
+        return ""
+    status = int(page.get("status_code") or 0)
+    if status == 429:
+        return "429"
+    if status in TRANSIENT_PRESSURE_STATUS_CODES:
+        return "5xx"
+    fetch_error = str(page.get("fetch_error") or "").lower()
+    if status <= 0 and fetch_error and not fetch_error.startswith("blocked_"):
+        if any(token in fetch_error for token in (
+            "timeout",
+            "timed out",
+            "connecterror",
+            "connecttimeout",
+            "readtimeout",
+            "connection reset",
+            "temporarily unavailable",
+        )):
+            return "network"
+    return ""
+
+
+def parse_retry_after_seconds(value: str, *, now: datetime | None = None) -> float:
+    """Parse Retry-After seconds or HTTP-date without extending the crawl deadline."""
+    raw = str(value or "").strip()
+    if not raw:
+        return 0.0
+    try:
+        numeric = float(raw)
+        if math.isfinite(numeric):
+            return max(0.0, numeric)
+    except (TypeError, ValueError):
+        pass
+    try:
+        target = parsedate_to_datetime(raw)
+        if target.tzinfo is None:
+            target = target.replace(tzinfo=timezone.utc)
+        current = now or datetime.now(timezone.utc)
+        return max(0.0, (target - current).total_seconds())
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
 
 
 def is_cloudflare_rate_limited_response(response) -> bool:
@@ -135,18 +186,35 @@ class _AdaptiveRateLimitPacer:
         self.next_request_at = 0.0
         self.retry_count = 0
         self.recovered_count = 0
+        self.pressure_event_count = 0
+        self.pressure_429_count = 0
+        self.pressure_5xx_count = 0
+        self.pressure_network_count = 0
+        self.retry_after_max_seconds = 0.0
+        self.healthy_streak = 0
+        self.saw_pressure = False
         self.saw_429 = False
+        self.floor_interval_seconds = self.request_interval_seconds
         self._lock = asyncio.Lock()
 
-    async def activate(self) -> None:
+    async def activate(self, kind: str = "429", *, retry_after_seconds: float = 0.0) -> None:
         if not self.enabled:
             return
         async with self._lock:
             now = time.monotonic()
-            first_429 = not self.saw_429
-            self.saw_429 = True
+            first_pressure = not self.saw_pressure
+            self.saw_pressure = True
+            self.saw_429 = self.saw_429 or kind == "429"
+            self.pressure_event_count += 1
+            if kind == "429":
+                self.pressure_429_count += 1
+            elif kind == "5xx":
+                self.pressure_5xx_count += 1
+            elif kind == "network":
+                self.pressure_network_count += 1
+            self.healthy_streak = 0
             self.active = True
-            if first_429:
+            if first_pressure:
                 self.request_interval_seconds = max(
                     self.request_interval_seconds,
                     float(RATE_LIMIT_BACKOFF_INTERVAL_SECONDS),
@@ -159,8 +227,25 @@ class _AdaptiveRateLimitPacer:
                         self.request_interval_seconds * 1.5,
                     ),
                 )
-            delay = RATE_LIMIT_COOLDOWN_SECONDS if first_429 else self.request_interval_seconds
+            retry_after = max(0.0, float(retry_after_seconds or 0.0))
+            self.retry_after_max_seconds = max(self.retry_after_max_seconds, retry_after)
+            delay = RATE_LIMIT_COOLDOWN_SECONDS if first_pressure else self.request_interval_seconds
+            delay = max(delay, retry_after)
             self.next_request_at = max(self.next_request_at, now + max(0.0, float(delay)))
+
+    async def note_success(self) -> None:
+        """Recover pacing gradually after sustained healthy responses."""
+        if not self.enabled or not self.active or not self.saw_pressure:
+            return
+        async with self._lock:
+            self.healthy_streak += 1
+            if self.healthy_streak < max(1, int(PRESSURE_RECOVERY_HEALTHY_RESPONSES)):
+                return
+            self.healthy_streak = 0
+            self.request_interval_seconds = max(
+                self.floor_interval_seconds,
+                self.request_interval_seconds * 0.75,
+            )
 
     async def wait_for_slot(self) -> bool:
         if not self.enabled or not self.active:
@@ -343,14 +428,22 @@ async def run_scan(
         initial_rate_limit_page = None
         if not path_prefix and prefix == "/":
             try:
-                landing = await safe_get(client, start_url)
+                landing = await safe_get(
+                    client,
+                    start_url,
+                    max_decoded_bytes=MAX_DECODED_RESPONSE_BYTES,
+                )
                 if job_mode and is_cloudflare_rate_limited_response(landing):
                     remaining_for_crawl = max(0.0, deadline - time.monotonic() - 20.0)
                     cooldown = min(RATE_LIMIT_INITIAL_COOLDOWN_SECONDS, remaining_for_crawl)
                     if cooldown > 0:
                         await asyncio.sleep(cooldown)
                         initial_rate_limit_retry_count = 1
-                        landing = await safe_get(client, start_url)
+                        landing = await safe_get(
+                            client,
+                            start_url,
+                            max_decoded_bytes=MAX_DECODED_RESPONSE_BYTES,
+                        )
                         initial_rate_limit_recovered = not is_cloudflare_rate_limited_response(landing)
                     if is_cloudflare_rate_limited_response(landing):
                         initial_rate_limit_blocked = True
@@ -514,10 +607,17 @@ async def run_scan(
                         if not await rate_limit_pacer.wait_for_slot():
                             return
                         page = await fetch_and_extract(client, target, snapshot, robots_policy=robots_policy)
-                        while rate_limit_pacer.enabled and int(page.get("status_code") or 0) == 429:
+                        while rate_limit_pacer.enabled:
+                            pressure_kind = transient_pressure_kind(page)
+                            if not pressure_kind:
+                                break
                             if rate_limit_pacer.retry_count >= RATE_LIMIT_MAX_RETRIES:
                                 break
-                            await rate_limit_pacer.activate()
+                            retry_after = parse_retry_after_seconds(page.pop("_retry_after", ""))
+                            await rate_limit_pacer.activate(
+                                pressure_kind,
+                                retry_after_seconds=retry_after,
+                            )
                             if not await rate_limit_pacer.wait_for_slot():
                                 break
                             # Another concurrent worker may have consumed the final retry
@@ -530,17 +630,14 @@ async def run_scan(
                             if 200 <= retry_status < 400:
                                 rate_limit_pacer.recovered_count += 1
                                 break
-                            if retry_status != 429:
-                                break
+                        page.pop("_retry_after", None)
+                        if 200 <= int(page.get("status_code") or 0) < 400:
+                            await rate_limit_pacer.note_success()
                     annotate_robots_evidence(page, robots_policy, target)
-                    html = page.pop("_html", "")
-                    # Off the event loop for the same reason as extract_page: link
-                    # parsing is CPU-bound, and blocking here starves the heartbeat.
-                    discovered = (
-                        await asyncio.to_thread(extract_links, html, page.get("final_url") or target)
-                        if (page.get("status_code") == 200 and html)
-                        else []
-                    )
+                    # fetch_and_extract asks extract_page to collect links from the
+                    # same BeautifulSoup tree used for SEO evidence. Do not retain
+                    # raw HTML between stages or parse large documents twice.
+                    discovered = page.pop("_links", [])
                 except Exception:
                     page = extract_page("", target, target, 0, "", snapshot, fetch_error="worker_processing_failed")
                     discovered = []
@@ -625,6 +722,12 @@ async def run_scan(
         "rate_limit_retry_count": rate_limit_pacer.retry_count,
         "rate_limit_recovered_count": rate_limit_pacer.recovered_count,
         "rate_limit_final_interval_seconds": round(rate_limit_pacer.request_interval_seconds, 3),
+        "crawl_pressure_event_count": rate_limit_pacer.pressure_event_count,
+        "crawl_pressure_429_count": rate_limit_pacer.pressure_429_count,
+        "crawl_pressure_5xx_count": rate_limit_pacer.pressure_5xx_count,
+        "crawl_pressure_network_count": rate_limit_pacer.pressure_network_count,
+        "crawl_pressure_retry_after_max_seconds": round(rate_limit_pacer.retry_after_max_seconds, 3),
+        "crawl_pressure_healthy_streak": rate_limit_pacer.healthy_streak,
         "final_url_dedup_version": FINAL_URL_DEDUP_VERSION,
         "final_url_duplicates_deduped": crawl_state["final_url_duplicates_deduped"],
         "final_url_duplicate_examples": crawl_state["final_url_duplicate_examples"],
@@ -762,7 +865,11 @@ async def fetch_and_extract(
     try:
         redirect_evidence = None
         if robots_policy is None:
-            response = await safe_get(client, url)
+            response = await safe_get(
+                client,
+                url,
+                max_decoded_bytes=MAX_DECODED_RESPONSE_BYTES,
+            )
             if response is None:
                 return extract_page("", url, url, 0, "", discovery, fetch_error="blocked_non_public_redirect")
         else:
@@ -770,6 +877,7 @@ async def fetch_and_extract(
                 client,
                 url,
                 robots_policy,
+                max_decoded_bytes=MAX_DECODED_RESPONSE_BYTES,
             )
             if response is None:
                 page = extract_page(
@@ -801,10 +909,13 @@ async def fetch_and_extract(
             discovery,
             response_headers={"x-robots-tag": response.headers.get_list("x-robots-tag")},
             body_truncated=html_truncated,
+            include_links=True,
         )
+        retry_after = str(response.headers.get("retry-after", "") or "").strip()
+        if retry_after and int(response.status_code or 0) in TRANSIENT_PRESSURE_STATUS_CODES:
+            page["_retry_after"] = retry_after
         if redirect_evidence is not None:
             apply_redirect_evidence(page, redirect_evidence)
-        page["_html"] = html
         return page
     except Exception as exc:
         return extract_page("", url, url, 0, "", discovery, fetch_error=str(exc)[:220])

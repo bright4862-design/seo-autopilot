@@ -1206,7 +1206,7 @@ function normalizeRecommendation(item = {}, scanRecord = {}) {
     websiteUrl: cleanString(scanRecord?.website_url || scanRecord?.raw?.scanner?.website_url),
     templateFamily: cleanString(item.page_template_family),
     currentValue: legacyBlocked429 ? "HTTP 429 — crawler was rate-limited or blocked" : cleanString(item.current_value || item.current || item.detected_value),
-    pageType: legacyBlocked429 && evidence.scopeRelationship === "sibling_sous_dossier" ? "Sibling sous-dossier" : cleanString(item.page_type || item.page_value_label || item.business_importance),
+    pageType: legacyBlocked429 && evidence.scopeRelationship === "sibling_sous_dossier" ? "Related site section" : cleanString(item.page_type || item.page_value_label || item.business_importance),
     defectClass: legacyBlocked429 ? "Rate-limit / crawler access" : cleanString(item.primary_defect_class || item.meta_regeneration_gate),
     pageValueLabel: legacyBlocked429 ? evidence.businessValueLabel : cleanString(item.page_value_label),
     businessImportance: legacyBlocked429 ? evidence.businessImportance : cleanString(item.business_importance),
@@ -1356,7 +1356,7 @@ function extractRecommendationEvidence(item = {}, scanRecord = {}) {
   const sourcePages = firstArray([item.source_pages, item.evidence?.source_pages]);
   const affectedCount = allPages.length;
   const businessValueLabel = scopeRelationship === "sibling_sous_dossier"
-    ? "Same parent brand, different business vertical"
+    ? "Related section on the same parent domain"
     : isEnergyPath(path) || isImportantBusinessPath(path)
       ? "Potentially important path"
       : "Standard page";
@@ -1373,28 +1373,28 @@ function isBlocked429(item = {}) {
 }
 
 function build429Title(evidence) {
-  if (evidence.scopeRelationship === "sibling_sous_dossier") return "Check Meilleurtaux rate limiting on sibling sous-dossiers";
+  if (evidence.scopeRelationship === "sibling_sous_dossier") return "Check rate limiting on a related site section";
   if (evidence.affectedCount > 1) return "Check pages blocked by rate limiting";
   return "Check this HTTP 429 scan block";
 }
 
 function build429Explanation(evidence) {
   if (evidence.scopeRelationship === "sibling_sous_dossier") {
-    return "The scanner hit HTTP 429 on a Meilleurtaux parent-domain path that appears to be a sibling sous-dossier, such as credit or loan content, rather than the selected energy section. This usually means the broader Meilleurtaux server, CDN, firewall, or bot-protection layer rate-limited the crawler.";
+    return "The scanner hit HTTP 429 on a path under the same parent domain but outside the selected site section. This usually means a shared server, CDN, firewall, or bot-protection layer rate-limited the crawler.";
   }
   return "The page returned HTTP 429 during the scan. That usually means the server, CDN, firewall, or bot-protection layer rate-limited the crawler. Verify whether normal users and legitimate search crawlers can load it before treating it as a confirmed broken customer page.";
 }
 
 function build429Why(evidence) {
   if (evidence.scopeRelationship === "sibling_sous_dossier") {
-    return "This is useful parent-domain evidence, but it should not be described as a primary energy-comparison customer page unless the selected crawl scope or source-page evidence proves it belongs to that journey.";
+    return "This is useful same-parent-domain access evidence, but it should not be described as part of the selected customer journey unless the crawl scope or source-page evidence proves it belongs there.";
   }
   return "Rate limiting can hide pages from crawlers if configured too aggressively. But a 429 is not the same as a confirmed broken page, so the next step is to verify crawler and user access rather than rewrite the page.";
 }
 
 function build429Recommendation(evidence) {
   if (evidence.scopeRelationship === "sibling_sous_dossier") {
-    return "Ask your web person to review rate-limit and bot-protection rules for the Meilleurtaux parent domain and confirm whether this sibling sous-dossier should be part of the selected scan scope.";
+    return "Ask your web person to review rate-limit and bot-protection rules for the parent domain and confirm whether this related site section should be part of the selected scan scope.";
   }
   return "Ask your web person to check server, CDN, firewall, and bot-protection logs for this URL and confirm whether Googlebot and normal users can access it.";
 }
@@ -1408,7 +1408,7 @@ function build429Steps(evidence) {
   if (evidence.scopeRelationship === "sibling_sous_dossier") {
     return [
       ...base,
-      "Confirm whether this sibling sous-dossier should be included in the current scan scope or treated as parent-domain evidence only.",
+      "Confirm whether this related site section should be included in the current scan scope or treated as parent-domain evidence only.",
       "Adjust rate-limit rules only if legitimate crawlers or users are being blocked.",
     ];
   }

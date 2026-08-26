@@ -33,6 +33,17 @@ test("customer-facing URL evidence excludes obvious assets and system routes", (
   assert.match(fixListSource, /non-HTML or system URL/);
 });
 
+test("HTTP 429 customer copy is neutral and contains no cross-customer language", () => {
+  assert.match(fixListSource, /Related site section/);
+  assert.match(fixListSource, /same-parent-domain access evidence/);
+  assert.match(fixListSource, /Related section on the same parent domain/);
+  assert.doesNotMatch(fixListSource, /Meilleurtaux/i);
+  assert.doesNotMatch(fixListSource, /Sibling sous-dossier/i);
+  assert.doesNotMatch(fixListSource, /different business vertical/i);
+  assert.doesNotMatch(fixListSource, /primary energy-comparison customer page/i);
+  assert.doesNotMatch(fixListSource, /credit or loan content/i);
+});
+
 test("durable FixItems preserve the full 150-page crawl evidence and instructions", () => {
   const affected = Array.from({ length: 150 }, (_, index) => `/page-${index + 1}`);
   const fields = buildFixItemFields({

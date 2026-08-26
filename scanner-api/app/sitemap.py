@@ -1,17 +1,47 @@
 import asyncio
 import gzip
+import io
 import re
 import time
+from html import unescape
 from urllib.parse import urlparse, urlunparse
 
 import httpx
-from bs4 import BeautifulSoup
 
 from .artifact_filter import is_artifact_url, record_artifact
 from .market_scope import market_pair_prefix, path_within_scope
-from .security import safe_get
+from .security import ResponseBodyTooLarge, safe_get
 
 MAX_SITEMAP_FETCHES = 60
+MAX_SITEMAP_DECODED_BYTES = 5_000_000
+
+SITEMAP_LOC_RE = re.compile(
+    r"<(?:[A-Za-z_][\w.-]*:)?loc\b[^>]*>(.*?)</(?:[A-Za-z_][\w.-]*:)?loc\s*>",
+    re.I | re.S,
+)
+SITEMAP_XML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+
+
+def parse_sitemap_locs(body: str) -> list[str]:
+    """Extract sitemap <loc> values without building a full XML DOM.
+
+    Large sitemap urlsets commonly contain tens of thousands of entries. The
+    HTTP response body is already bounded by the request layer, so building a
+    second BeautifulSoup XML tree only increases peak memory/CPU. Sitemap <loc>
+    elements contain text values; extracting those values directly preserves
+    discovery order, namespace prefixes, CDATA, and normal XML entities without
+    retaining a DOM.
+    """
+    locs: list[str] = []
+    source = SITEMAP_XML_COMMENT_RE.sub("", str(body or ""))
+    for match in SITEMAP_LOC_RE.finditer(source):
+        value = match.group(1).strip()
+        if value.startswith("<![CDATA[") and value.endswith("]]>"):
+            value = value[9:-3]
+        value = unescape(value).strip()
+        if value:
+            locs.append(value)
+    return locs
 
 
 class _SitemapRequestPacer:
@@ -262,20 +292,23 @@ async def fetch_sitemap_locs(client: httpx.AsyncClient, sitemap_url: str, fetche
             diagnostics["sitemap_budget_exhausted"] = True
         _record_sitemap_failure(diagnostics, "sitemap_timeout")
         return []
+    except ResponseBodyTooLarge:
+        _record_sitemap_failure(diagnostics, "sitemap_body_too_large")
+        return []
     except Exception:
         _record_sitemap_failure(diagnostics, "sitemap_fetch_exception")
         return []
 
-    body = decode_sitemap_body(response, sitemap_url)
+    try:
+        body = decode_sitemap_body(response, sitemap_url)
+    except ResponseBodyTooLarge:
+        _record_sitemap_failure(diagnostics, "sitemap_body_too_large")
+        return []
     if not body:
         _record_sitemap_failure(diagnostics, "empty_sitemap_body")
         return []
-    soup = BeautifulSoup(body, "xml")
     locs: list[str] = []
-    for tag in soup.find_all("loc"):
-        loc = (tag.get_text() or "").strip()
-        if not loc:
-            continue
+    for loc in parse_sitemap_locs(body):
         if is_artifact_url(loc):
             record_artifact(artifacts, loc, "sitemap", sitemap_url, "")
             continue
@@ -291,12 +324,23 @@ async def _safe_get_before_deadline(client: httpx.AsyncClient, url: str, deadlin
     if pacer is not None and not await pacer.wait_for_slot(deadline):
         return None
     if deadline is None:
-        return await safe_get(client, url)
+        return await safe_get(
+            client,
+            url,
+            max_decoded_bytes=MAX_SITEMAP_DECODED_BYTES,
+        )
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         return None
     try:
-        return await asyncio.wait_for(safe_get(client, url), timeout=max(0.05, remaining))
+        return await asyncio.wait_for(
+            safe_get(
+                client,
+                url,
+                max_decoded_bytes=MAX_SITEMAP_DECODED_BYTES,
+            ),
+            timeout=max(0.05, remaining),
+        )
     except asyncio.TimeoutError:
         return None
 
@@ -314,7 +358,15 @@ def decode_sitemap_body(response: httpx.Response, sitemap_url: str) -> str:
     gzip_candidate = raw.startswith(b"\x1f\x8b") or path.endswith(".gz")
     if gzip_candidate and raw:
         try:
-            raw = gzip.decompress(raw)
+            with gzip.GzipFile(fileobj=io.BytesIO(raw), mode="rb") as stream:
+                decoded = stream.read(MAX_SITEMAP_DECODED_BYTES + 1)
+            if len(decoded) > MAX_SITEMAP_DECODED_BYTES:
+                raise ResponseBodyTooLarge(
+                    f"decoded_sitemap_body_exceeded_{MAX_SITEMAP_DECODED_BYTES}_bytes"
+                )
+            raw = decoded
+        except ResponseBodyTooLarge:
+            raise
         except (OSError, EOFError):
             # A proxy or HTTP Content-Encoding layer may already have decoded a
             # .gz URL. In that case the bytes are plain XML and can be decoded.

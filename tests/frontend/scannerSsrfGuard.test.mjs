@@ -58,8 +58,11 @@ test("the SSRF guard pins one DNS snapshot and revalidates every redirect hop", 
   assert.match(src, /async def safe_get\(/, "bounded redirect walker must exist");
   assert.match(src, /for _ in range\(max\(0, int\(max_redirects\)\) \+ 1\)/,
     "redirect chain must be bounded");
-  assert.match(src, /response = await safe_get_once\(client, current\)/,
-    "every redirect hop must be re-resolved and re-validated");
+  assert.match(
+    src,
+    /response\s*=\s*await\s+safe_get_once\(\s*client,\s*current,\s*max_decoded_bytes\s*=\s*max_decoded_bytes,\s*\)/,
+    "every redirect hop must be re-resolved, re-validated, and response-budgeted",
+  );
 
   // Deny-list beyond is_global, which has classified multicast as global.
   for (const guard of ["is_private", "is_loopback", "is_link_local", "is_reserved", "is_multicast", "is_unspecified"]) {

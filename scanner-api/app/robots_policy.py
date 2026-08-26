@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from urllib import robotparser
 
-from .security import safe_get
+from .security import DEFAULT_MAX_DECODED_RESPONSE_BYTES, safe_get
 
 
 SCANNER_USER_AGENT = "FixListPythonScanner"
@@ -40,7 +40,11 @@ class RobotsPolicy:
 async def load_robots_policy(client, origin: str) -> RobotsPolicy:
     robots_url = f"{str(origin or '').rstrip('/')}/robots.txt"
     try:
-        response = await safe_get(client, robots_url)
+        response = await safe_get(
+            client,
+            robots_url,
+            max_decoded_bytes=DEFAULT_MAX_DECODED_RESPONSE_BYTES,
+        )
     except Exception:
         return RobotsPolicy(robots_url, "unavailable", 0)
     if response is None:

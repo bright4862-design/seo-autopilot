@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `3c9bd231295bc328` |
+| Candidate fingerprint | `0b609da10fca57c7` |
 | Classifier | `archetype_classifier_v10_structural_finance_member_retail` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,17 +15,19 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The shipping code is
-fingerprint `3c9bd231295bc328` with classifier
+fingerprint `0b609da10fca57c7` with classifier
 `archetype_classifier_v10_structural_finance_member_retail`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded recovery candidate was `3fccb57bd367dcfb`. The
-current recovery candidate moved the fingerprint to `3c9bd231295bc328` by
-preserving multi-page all-unknown repair evidence as truthful `mixed` scope and
-making attempted malformed canonical v2 snapshots fail closed instead of
-publishing legacy repairs. This change requires focused Tiqets production
-acceptance before the 50-site matrix resumes.
+The immediately superseded release candidate was `3c9bd231295bc328`. The
+current final-core candidate moved the fingerprint to `0b609da10fca57c7` by
+versioning the customer projection contract as
+`customer_projection_v2_limited_score_context`, so limited-score evidence
+cannot change under the prior release identity. This candidate also composes
+the reviewed billing, deletion, bounded-response, authority fail-closed,
+acceptance-matrix, and customer-truth changes. Production acceptance has not
+been run. The earlier recovery candidate `3fccb57bd367dcfb` is historical.
 
 The earlier Patch E candidate was `6e0368d4ac5d2a6b`. The stacked candidate
 moved the fingerprint to `400f68e10999fc59` by adding

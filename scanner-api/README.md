@@ -28,6 +28,29 @@ error envelopes with a correlated `error_id`. Cloud Run ingests these as
 structured logs; the log-based metrics and alert policies are defined in
 `docs/production-monitoring.md`.
 
+### Optional Supabase scanner telemetry
+
+The durable `/scan-job` can also schedule one aggregate-only Supabase upsert
+after crawl evidence is finalized. This integration is passive and defaults to
+OFF: it performs no Supabase reads, is not part of authority or customer result
+persistence, and every timeout or outage fails open as a structured warning.
+
+Apply `../supabase/migrations/202608260001_scanner_telemetry_v1.sql` to the
+target Supabase project, then configure the scanner worker with server-only
+secrets:
+
+```text
+SCANNER_SUPABASE_TELEMETRY_ENABLED=true
+SCANNER_TELEMETRY_SUPABASE_URL=https://<project-ref>.supabase.co
+SCANNER_TELEMETRY_SUPABASE_SECRET_KEY=<server secret key>
+SCANNER_SUPABASE_TELEMETRY_TIMEOUT_SECONDS=1.5
+```
+
+Never expose the secret key to the browser or Base44 frontend. The migration
+enables RLS, revokes all `anon` and `authenticated` access, and creates no
+client policy. The payload contains `scan_id` plus aggregate counts only—no
+domain, URL, raw HTML, customer identity, credentials, or authority evidence.
+
 ## Beta acceptance and freeze
 
 Phase 1 of the roadmap closes with three steps: deploy, run acceptance scans,

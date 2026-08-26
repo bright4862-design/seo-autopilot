@@ -51,6 +51,7 @@ from .scan_job import (
     write_terminal_failure,
 )
 from .scanner import VERSION, run_scan
+from .supabase_telemetry import schedule_scan_telemetry
 from .trust_discovery import apply_trust_discovery_gate, enrich_scan_with_trust_pages
 from .url_evidence import URL_EVIDENCE_VERSION, apply_verified_url_contract
 
@@ -673,6 +674,9 @@ async def scan_job(
                     "normalized_domain": payload.normalized_domain or website_host(payload.website_url),
                     "respect_robots_txt": True,
                 })
+                # Passive, default-off aggregate telemetry. This schedules one
+                # bounded write and never participates in scan authority.
+                schedule_scan_telemetry(scan_id, result)
             except asyncio.TimeoutError:
                 # This is an outer fail-safe, not a retry signal. If the scanner's
                 # own bounded deadline failed to return, redelivering the same task

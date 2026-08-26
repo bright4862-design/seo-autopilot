@@ -1,6 +1,7 @@
 import gzip
 import ipaddress
 import socket
+import zlib
 
 import httpx
 import pytest
@@ -193,7 +194,7 @@ async def test_bounded_gzip_limit_does_not_use_httpx_eager_decoding(monkeypatch)
 @pytest.mark.asyncio
 async def test_bounded_raw_deflate_decodes_when_header_is_split_after_one_byte(monkeypatch):
     payload = b"<html><body>raw deflate works across chunk boundaries</body></html>"
-    compressor = __import__("zlib").compressobj(wbits=-__import__("zlib").MAX_WBITS)
+    compressor = zlib.compressobj(wbits=-zlib.MAX_WBITS)
     compressed = compressor.compress(payload) + compressor.flush()
     monkeypatch.setattr(
         socket,

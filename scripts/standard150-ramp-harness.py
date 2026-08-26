@@ -45,11 +45,20 @@ EXPECTED_RELEASE_FINGERPRINT = load_expected_release_fingerprint()
 def build_acceptance_matrix(scan: dict[str, Any]) -> dict[str, Any]:
     """Build the one canonical, tightened matrix used by final and checkpoint views."""
     matrix = _base_build_acceptance_matrix(scan)
-    matrix["exact_release_markers"] = exact_release_dimension(
-        observed_fingerprint=scan.get("beta_revision_fingerprint"),
-        release_contract_current=scan.get("release_contract_current"),
-        expected_fingerprint=EXPECTED_RELEASE_FINGERPRINT,
-    )
+    run = scan.get("run") if isinstance(scan.get("run"), dict) else {}
+    base_markers = matrix.get("exact_release_markers")
+    base_markers = base_markers if isinstance(base_markers, dict) else {}
+    matrix["exact_release_markers"] = {
+        **base_markers,
+        **exact_release_dimension(
+            observed_fingerprint=(
+                scan.get("beta_revision_fingerprint")
+                or run.get("beta_revision_fingerprint")
+            ),
+            release_contract_current=scan.get("release_contract_current"),
+            expected_fingerprint=EXPECTED_RELEASE_FINGERPRINT,
+        ),
+    }
     return matrix
 
 
@@ -223,6 +232,7 @@ def _matrix_observation(item: Submission) -> dict[str, Any]:
         "scan_id": item.scan_id,
         "http_status": item.http_status,
         "accepted": item.accepted,
+        "error_code": item.run.get("error_code") or item.failure_code,
         "failure_code": item.failure_code,
         "submitted_at": item.submitted_at,
         "terminal_at": item.terminal_at,

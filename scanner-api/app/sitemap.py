@@ -3,7 +3,6 @@ import gzip
 import io
 import re
 import time
-from html import unescape
 from urllib.parse import urlparse, urlunparse
 
 import httpx
@@ -20,6 +19,34 @@ SITEMAP_LOC_RE = re.compile(
     re.I | re.S,
 )
 SITEMAP_XML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+XML_ENTITY_RE = re.compile(
+    r"&(?:(amp|lt|gt|quot|apos)|#([0-9]+)|#x([0-9A-Fa-f]+));"
+)
+XML_ENTITIES = {
+    "amp": "&",
+    "lt": "<",
+    "gt": ">",
+    "quot": '"',
+    "apos": "'",
+}
+
+
+def _unescape_xml(value: str) -> str:
+    def replace(match: re.Match) -> str:
+        named, decimal, hexadecimal = match.groups()
+        if named:
+            return XML_ENTITIES[named]
+        codepoint = int(decimal, 10) if decimal else int(hexadecimal, 16)
+        if (
+            codepoint in {0x9, 0xA, 0xD}
+            or 0x20 <= codepoint <= 0xD7FF
+            or 0xE000 <= codepoint <= 0xFFFD
+            or 0x10000 <= codepoint <= 0x10FFFF
+        ):
+            return chr(codepoint)
+        return match.group(0)
+
+    return XML_ENTITY_RE.sub(replace, value)
 
 
 def parse_sitemap_locs(body: str) -> list[str]:
@@ -37,8 +64,9 @@ def parse_sitemap_locs(body: str) -> list[str]:
     for match in SITEMAP_LOC_RE.finditer(source):
         value = match.group(1).strip()
         if value.startswith("<![CDATA[") and value.endswith("]]>"):
-            value = value[9:-3]
-        value = unescape(value).strip()
+            value = value[9:-3].strip()
+        else:
+            value = _unescape_xml(value).strip()
         if value:
             locs.append(value)
     return locs

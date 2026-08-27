@@ -62,7 +62,7 @@ export default function DashboardLayout() {
                   key={item.name}
                   to={item.href}
                   aria-current={active ? "page" : undefined}
-                  className={`text-[12.5px] font-medium transition-colors sm:text-[13px] ${
+                  className={`rounded-sm text-[12.5px] font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ink sm:text-[13px] ${
                     active ? "text-ink" : "text-ink-faint hover:text-ink"
                   }`}
                 >
@@ -73,7 +73,7 @@ export default function DashboardLayout() {
             <button
               type="button"
               onClick={handleLogout}
-              className="text-[12.5px] font-medium text-ink-faint transition-colors hover:text-ink sm:text-[13px]"
+              className="rounded-sm text-[12.5px] font-medium text-ink-faint transition-colors hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ink sm:text-[13px]"
             >
               Log out
             </button>

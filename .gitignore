@@ -47,3 +47,8 @@ gha-creds-*.json
 
 # Local release/auth artifacts created by release tooling and Base44 CLI.
 .release/
+
+# Base44 CLI device-authorization artifact.
+# `base44 login` writes a live OAuth device_code here; it must never be
+# committed, least of all from a public repository.
+.base44-device.json

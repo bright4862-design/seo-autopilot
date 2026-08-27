@@ -310,7 +310,7 @@ Checked against current code:
 There is no audit newer than 2026-08-21. The build that audit measured —
 fingerprint `03dbfa67f4b708cf` — is now **eight candidates back**:
 
-```
+```text
 03dbfa67f4b708cf  ← the only build with real-site evidence
   → 5caec7fdcabceee7 → 1f730bb039aef84e → fbb06c2634b74ca6
   → fdd5906461a468d3 → 6e0368d4ac5d2a6b → 400f68e10999fc59

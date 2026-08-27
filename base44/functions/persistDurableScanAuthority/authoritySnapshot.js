@@ -512,24 +512,52 @@ function coverageAuthorityFields(evidence) {
   };
 }
 
-function acceptanceEvidenceFields(scan, review) {
+export function hasCompleteAcceptanceEvidence(scan, review) {
+  const coverage = plainObject(review?.coverage_authority_evidence);
   const source = plainObject(review?.classification_integrity);
-  const state = text(source.state || source.verdict || review?.classification_verdict, 120);
-  const workerPeak = number(scan?.worker_peak_memory_bytes ?? scan?.peak_memory_bytes);
+  const state = text(source.state, 120);
+  const verdict = text(source.verdict, 120);
+  return Boolean(
+    text(coverage.coverage_authority_evidence_version, 160)
+    && text(coverage.assessment, 120)
+    && text(source.version, 160) === RELEASE_COMPONENT_VERSIONS.acceptance_evidence_version
+    && state
+    && verdict
+    && state === verdict
+    && text(source.classifier_version, 160)
+    && text(source.evidence_sufficiency, 120)
+    && finiteNonNegativeNumber(source.usable_pages) !== null
+    && typeof source.complete_small_site_inventory === "boolean"
+    && positiveNumber(scan?.worker_peak_memory_bytes ?? scan?.peak_memory_bytes) !== null
+  );
+}
+
+function acceptanceEvidenceFields(scan, review) {
+  if (!hasCompleteAcceptanceEvidence(scan, review)) return {};
+  const source = plainObject(review?.classification_integrity);
+  const workerPeak = positiveNumber(scan?.worker_peak_memory_bytes ?? scan?.peak_memory_bytes);
   return {
-    classification_integrity: state ? {
+    classification_integrity: {
       version: text(source.version, 160),
-      state,
-      verdict: text(source.verdict || state, 120),
+      state: text(source.state, 120),
+      verdict: text(source.verdict, 120),
       classifier_version: text(source.classifier_version, 160),
       evidence_sufficiency: text(source.evidence_sufficiency, 120),
-      usable_pages: number(source.usable_pages),
-      complete_small_site_inventory: source.complete_small_site_inventory === true,
-    } : {},
-    classification_verdict: state,
+      usable_pages: finiteNonNegativeNumber(source.usable_pages),
+      complete_small_site_inventory: source.complete_small_site_inventory,
+    },
+    classification_verdict: text(source.verdict, 120),
     peak_memory_bytes: workerPeak,
     worker_peak_memory_bytes: workerPeak,
   };
+}
+
+function finiteNonNegativeNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function positiveNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 function text(value, limit) {

@@ -179,7 +179,13 @@ async def wait_terminal(
                 continue
             terminal_transitions.append(outcome is True)
         if checkpoint_path and any(terminal_transitions):
-            write_checkpoint(checkpoint_path, items)
+            try:
+                write_checkpoint(checkpoint_path, items)
+            except (OSError, ValueError) as exc:
+                print(json.dumps({
+                    "event": "checkpoint_write_error",
+                    "error_type": type(exc).__name__[:80],
+                }), flush=True)
         pending = [item for item in pending if not item.terminal_at]
         if pending:
             await asyncio.sleep(5)

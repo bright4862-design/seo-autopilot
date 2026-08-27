@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `cd31b3c1e5f9dd7c` |
+| Candidate fingerprint | `e18b72b2d0e159b8` |
 | Classifier | `archetype_classifier_v10_structural_finance_member_retail` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,20 +15,24 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `cd31b3c1e5f9dd7c` with classifier
+fingerprint `e18b72b2d0e159b8` with classifier
 `archetype_classifier_v10_structural_finance_member_retail`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded final-core candidate was `1ddf8085bc7721c4`.
-The current candidate moved the fingerprint to `cd31b3c1e5f9dd7c` by binding
-coverage, classification-integrity, and measured worker-peak-memory evidence
-into the signed durable result contracts and the paid customer projection. It
-also preserves a completed acceptance report when the final local checkpoint
-write fails. The customer projection is versioned as
-`customer_projection_v3_acceptance_evidence`, the authoritative review
-attestation as `standard_review_snapshot_hmac_v3_acceptance_evidence`, and the
-limited-result integrity contract as
+The immediately superseded final-core candidate was `cd31b3c1e5f9dd7c`;
+before that was `1ddf8085bc7721c4`. The current candidate moved the fingerprint
+to `e18b72b2d0e159b8` by making acceptance evidence fail closed when coverage,
+classification, or measured worker memory is incomplete; measuring aggregate
+parent + active-review-child RSS per review instead of reusing process-lifetime
+child peaks; preserving historical limited-v1 signed reconstruction; and
+preserving the acceptance report when a terminal-transition checkpoint write
+fails. The customer projection is versioned as
+`customer_projection_v4_acceptance_evidence_fail_closed`, acceptance evidence
+as `standard150_acceptance_evidence_v2_aggregate_rss_fail_closed`, the
+authoritative review attestation remains
+`standard_review_snapshot_hmac_v3_acceptance_evidence`, and the limited-result
+integrity contract remains
 `standard_limited_result_integrity_v2_acceptance_evidence`. Production
 acceptance has not been run. Earlier candidates `c0815d78c19d50db`,
 `0b609da10fca57c7`, `3c9bd231295bc328`, and `3fccb57bd367dcfb` are historical.

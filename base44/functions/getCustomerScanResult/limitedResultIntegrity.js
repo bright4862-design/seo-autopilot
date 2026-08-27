@@ -179,26 +179,46 @@ function limitedIntegrityDomain(version) {
 function acceptanceEvidenceFields(scan, review) {
   const coverage = plainObject(review?.coverage_authority_evidence);
   const classification = plainObject(review?.classification_integrity);
-  const state = text(
-    classification.state || classification.verdict || review?.classification_verdict,
-    120,
-  );
-  const workerPeak = number(scan?.worker_peak_memory_bytes ?? scan?.peak_memory_bytes);
+  const state = text(classification.state, 120);
+  const verdict = text(classification.verdict, 120);
+  const usablePages = finiteNonNegativeNumber(classification.usable_pages);
+  const workerPeak = positiveNumber(scan?.worker_peak_memory_bytes ?? scan?.peak_memory_bytes);
+  if (
+    !text(coverage.coverage_authority_evidence_version, 160)
+    || !text(coverage.assessment, 120)
+    || !text(classification.version, 160)
+    || !state
+    || !verdict
+    || state !== verdict
+    || !text(classification.classifier_version, 160)
+    || !text(classification.evidence_sufficiency, 120)
+    || usablePages === null
+    || typeof classification.complete_small_site_inventory !== "boolean"
+    || workerPeak === null
+  ) return {};
   return {
     coverage_authority_evidence: coverage,
-    classification_integrity: state ? {
+    classification_integrity: {
       version: text(classification.version, 160),
       state,
-      verdict: text(classification.verdict || state, 120),
+      verdict,
       classifier_version: text(classification.classifier_version, 160),
       evidence_sufficiency: text(classification.evidence_sufficiency, 120),
-      usable_pages: number(classification.usable_pages),
-      complete_small_site_inventory: classification.complete_small_site_inventory === true,
-    } : {},
-    classification_verdict: state,
+      usable_pages: usablePages,
+      complete_small_site_inventory: classification.complete_small_site_inventory,
+    },
+    classification_verdict: verdict,
     peak_memory_bytes: workerPeak,
     worker_peak_memory_bytes: workerPeak,
   };
+}
+
+function finiteNonNegativeNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function positiveNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 function toLimitedFix(fix) {

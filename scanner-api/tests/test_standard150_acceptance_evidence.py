@@ -40,27 +40,27 @@ def test_classification_integrity_does_not_invent_a_verdict_from_an_archetype():
     }) == {}
 
 
-def test_worker_peak_memory_is_the_larger_parent_or_review_child_peak():
-    usages = {
-        0: SimpleNamespace(ru_maxrss=128 * 1024),
-        -1: SimpleNamespace(ru_maxrss=192 * 1024),
+def test_worker_peak_memory_sums_parent_and_active_review_child_rss():
+    rss = {
+        101: 128 * 1024 * 1024,
+        202: 192 * 1024 * 1024,
     }
 
     measured = measure_worker_peak_memory_bytes(
-        getrusage=lambda target: usages[target],
-        self_target=0,
-        children_target=-1,
+        child_pid=202,
+        rss_reader=lambda pid: rss.get(pid),
+        self_pid=101,
         platform="linux",
     )
 
-    assert measured == 192 * 1024 * 1024
+    assert measured == 320 * 1024 * 1024
 
 
-def test_worker_peak_memory_measurement_fails_closed_without_a_positive_value():
+def test_worker_peak_memory_measurement_fails_closed_when_child_rss_is_unavailable():
     assert measure_worker_peak_memory_bytes(
-        getrusage=lambda _target: SimpleNamespace(ru_maxrss=0),
-        self_target=0,
-        children_target=-1,
+        child_pid=202,
+        rss_reader=lambda pid: 128 * 1024 * 1024 if pid == 101 else None,
+        self_pid=101,
         platform="linux",
     ) is None
 

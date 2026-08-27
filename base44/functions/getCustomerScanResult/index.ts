@@ -126,6 +126,9 @@ Deno.serve(async (req) => {
       }
       const limitedFixList = await loadLimitedFixList(serviceEntities.FixList, run, user, integrityProof);
       const limitedFixItems = await loadLimitedFixItems(serviceEntities.FixItem, limitedFixList, run, integrityProof);
+      const limitedIntegrityVersion = cleanText(run.result_integrity_version, 160);
+      const limitedUsesAcceptanceEvidence =
+        limitedIntegrityVersion === "standard_limited_result_integrity_v2_acceptance_evidence";
       const limitedSnapshot = buildLimitedResultSnapshot({
         identity: {
           scan_id: run.id,
@@ -141,16 +144,20 @@ Deno.serve(async (req) => {
           health_score: run.health_score,
           health_grade: run.health_grade,
           limitation: run.limitation || run.status_detail,
-          coverage_state: run.coverage_authority_evidence?.assessment || run.coverage_state,
-          coverage_reasons: run.coverage_authority_evidence?.reasons || run.coverage_reasons,
-          coverage_authority_version: run.coverage_authority_evidence?.coverage_authority_version || run.coverage_authority_version,
-          coverage_authority_evidence: run.coverage_authority_evidence,
-          classification_integrity: run.classification_integrity,
-          classification_verdict: run.classification_verdict,
+          // These base fields are part of the historical signed shape. Never
+          // derive them from later diagnostic objects when reopening v1 rows.
+          coverage_state: run.coverage_state,
+          coverage_reasons: run.coverage_reasons,
+          coverage_authority_version: run.coverage_authority_version,
+          ...(limitedUsesAcceptanceEvidence ? {
+            coverage_authority_evidence: run.coverage_authority_evidence,
+            classification_integrity: run.classification_integrity,
+            classification_verdict: run.classification_verdict,
+          } : {}),
           recommendations: limitedFixItems,
         },
         now: cleanText(run.result_integrity_sealed_at, 80),
-        version: cleanText(run.result_integrity_version, 160),
+        version: limitedIntegrityVersion,
       });
       const secret = String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || "");
       if (!secret) {

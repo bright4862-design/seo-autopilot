@@ -8,13 +8,14 @@ and the Cloud Run worker's process peak memory.
 
 from __future__ import annotations
 
-import resource
+import os
 import sys
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 
-ACCEPTANCE_EVIDENCE_VERSION = "standard150_acceptance_evidence_v1"
+ACCEPTANCE_EVIDENCE_VERSION = "standard150_acceptance_evidence_v2_aggregate_rss_fail_closed"
 
 
 def build_classification_integrity(review: dict[str, Any]) -> dict[str, Any]:
@@ -48,29 +49,50 @@ def build_classification_integrity(review: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _linux_process_rss_bytes(pid: int) -> int | None:
+    """Return one process's current RSS from Linux /proc, or None if unknown."""
+    try:
+        status = Path(f"/proc/{int(pid)}/status").read_text(encoding="utf-8")
+    except (OSError, TypeError, ValueError):
+        return None
+    for line in status.splitlines():
+        if not line.startswith("VmRSS:"):
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            return None
+        try:
+            kib = int(parts[1])
+        except ValueError:
+            return None
+        return kib * 1024 if kib > 0 else None
+    return None
+
+
 def measure_worker_peak_memory_bytes(
     *,
-    getrusage: Callable[[int], Any] = resource.getrusage,
-    self_target: int = resource.RUSAGE_SELF,
-    children_target: int = resource.RUSAGE_CHILDREN,
+    child_pid: int | None = None,
+    rss_reader: Callable[[int], int | None] = _linux_process_rss_bytes,
+    self_pid: int | None = None,
     platform: str = sys.platform,
 ) -> int | None:
-    """Measure the larger worker/review-child maximum resident set size.
+    """Sample aggregate worker + active review-child RSS for one scan.
 
-    Cloud Run is Linux and reports ``ru_maxrss`` in KiB.  macOS reports bytes;
-    accepting the platform explicitly keeps the conversion testable.  The
-    durable worker deploy is concurrency=1, so the process peak is a truthful,
-    conservative resource observation for the active scan.
+    Cloud Run is Linux.  The caller owns peak tracking and invokes this while
+    the isolated review child is alive, so each review starts from a fresh local
+    maximum and cannot inherit a terminated child's prior peak.
     """
+    if not str(platform).startswith("linux"):
+        return None
+    parent_pid = int(self_pid or os.getpid())
     try:
-        peak = max(
-            float(getrusage(self_target).ru_maxrss),
-            float(getrusage(children_target).ru_maxrss),
-        )
-    except (AttributeError, OSError, TypeError, ValueError):
+        parent_rss = rss_reader(parent_pid)
+        child_rss = rss_reader(int(child_pid)) if child_pid is not None else 0
+    except (OSError, TypeError, ValueError):
         return None
-    if peak <= 0:
+    if parent_rss is None or parent_rss <= 0:
         return None
-    multiplier = 1 if platform == "darwin" else 1024
-    measured = int(peak * multiplier)
+    if child_pid is not None and (child_rss is None or child_rss <= 0):
+        return None
+    measured = int(parent_rss + (child_rss or 0))
     return measured if measured > 0 else None

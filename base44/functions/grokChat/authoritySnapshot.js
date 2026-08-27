@@ -231,22 +231,45 @@ function coverageSnapshotFields(row) {
 function acceptanceEvidenceSnapshotFields(row) {
   if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V3) return {};
   const source = plainObject(row?.classification_integrity);
-  const state = text(source.state || source.verdict || row?.classification_verdict, 120);
-  const workerPeak = number(row?.worker_peak_memory_bytes ?? row?.peak_memory_bytes);
+  const state = text(source.state, 120);
+  const verdict = text(source.verdict, 120);
+  const usablePages = acceptanceFiniteNonNegativeNumber(source.usable_pages);
+  const workerPeak = acceptancePositiveNumber(row?.worker_peak_memory_bytes ?? row?.peak_memory_bytes);
+  if (
+    !text(row?.coverage_authority_evidence?.coverage_authority_evidence_version, 160)
+    || !text(row?.coverage_authority_evidence?.assessment, 120)
+    || !text(source.version, 160)
+    || !state
+    || !verdict
+    || state !== verdict
+    || !text(source.classifier_version, 160)
+    || !text(source.evidence_sufficiency, 120)
+    || usablePages === null
+    || typeof source.complete_small_site_inventory !== "boolean"
+    || workerPeak === null
+  ) return {};
   return {
-    classification_integrity: state ? {
+    classification_integrity: {
       version: text(source.version, 160),
       state,
-      verdict: text(source.verdict || state, 120),
+      verdict,
       classifier_version: text(source.classifier_version, 160),
       evidence_sufficiency: text(source.evidence_sufficiency, 120),
-      usable_pages: number(source.usable_pages),
-      complete_small_site_inventory: source.complete_small_site_inventory === true,
-    } : {},
-    classification_verdict: state,
+      usable_pages: usablePages,
+      complete_small_site_inventory: source.complete_small_site_inventory,
+    },
+    classification_verdict: verdict,
     peak_memory_bytes: workerPeak,
     worker_peak_memory_bytes: workerPeak,
   };
+}
+
+function acceptanceFiniteNonNegativeNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function acceptancePositiveNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 /** Mirrors coverageAuthorityFields in persistDurableScanAuthority/authoritySnapshot.js. */

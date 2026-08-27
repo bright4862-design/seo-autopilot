@@ -8,7 +8,7 @@ export const OWNER_TEST_USER_ID = "6a498da58ef5cec1f5cd4486";
 // Versions the customer projection itself. Declared in
 // data/cross-runtime-release-components.json so a projection behavior change
 // moves the release fingerprint like any Python change would.
-export const CUSTOMER_PROJECTION_VERSION = "customer_projection_v3_acceptance_evidence";
+export const CUSTOMER_PROJECTION_VERSION = "customer_projection_v4_acceptance_evidence_fail_closed";
 export const REPAIR_CONTRACT_V2 = "repair_contract_v2_shadow_calibrated";
 export const REPAIR_PRIORITY_MODEL_V2 = "repair_priority_v2_technical_severity";
 
@@ -507,11 +507,53 @@ function sanitizeRun(run, { detailed, healthScoreStatus = "" }) {
   if (detailed && healthScoreStatus) {
     result.health_score_status = text(healthScoreStatus, 80);
   }
+  if (detailed && usesAcceptanceEvidenceContract(run) && !hasCompleteAcceptanceEvidence(run)) {
+    delete result.coverage_authority_evidence;
+    delete result.classification_integrity;
+    delete result.classification_verdict;
+    delete result.peak_memory_bytes;
+    delete result.worker_peak_memory_bytes;
+  }
   if (!detailed) {
     result.release_gate_eligible = false;
     result.is_authoritative = false;
   }
   return result;
+}
+
+function usesAcceptanceEvidenceContract(run) {
+  return text(run?.authority_seal_version, 160) === "standard_review_snapshot_hmac_v3_acceptance_evidence"
+    || text(run?.result_integrity_version, 160) === "standard_limited_result_integrity_v2_acceptance_evidence";
+}
+
+function hasCompleteAcceptanceEvidence(run) {
+  const coverage = plainObject(run?.coverage_authority_evidence);
+  const classification = plainObject(run?.classification_integrity);
+  const state = text(classification.state, 120);
+  const verdict = text(classification.verdict, 120);
+  const usablePages = acceptanceFiniteNonNegativeNumber(classification.usable_pages);
+  const workerPeak = acceptancePositiveNumber(run?.worker_peak_memory_bytes ?? run?.peak_memory_bytes);
+  return Boolean(
+    text(coverage.coverage_authority_evidence_version, 160)
+    && text(coverage.assessment, 120)
+    && text(classification.version, 160)
+    && state
+    && verdict
+    && state === verdict
+    && text(classification.classifier_version, 160)
+    && text(classification.evidence_sufficiency, 120)
+    && usablePages !== null
+    && typeof classification.complete_small_site_inventory === "boolean"
+    && workerPeak !== null
+  );
+}
+
+function acceptanceFiniteNonNegativeNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function acceptancePositiveNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 const COVERAGE_UNAVAILABLE_NOTE = "Coverage detail unavailable for this saved scan.";
@@ -645,22 +687,45 @@ function coverageSnapshotFields(row) {
 function acceptanceEvidenceSnapshotFields(row) {
   if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V3) return {};
   const source = plainObject(row?.classification_integrity);
-  const state = text(source.state || source.verdict || row?.classification_verdict, 120);
-  const workerPeak = number(row?.worker_peak_memory_bytes ?? row?.peak_memory_bytes);
+  const state = text(source.state, 120);
+  const verdict = text(source.verdict, 120);
+  const usablePages = acceptanceFiniteNonNegativeNumber(source.usable_pages);
+  const workerPeak = acceptancePositiveNumber(row?.worker_peak_memory_bytes ?? row?.peak_memory_bytes);
+  if (
+    !text(row?.coverage_authority_evidence?.coverage_authority_evidence_version, 160)
+    || !text(row?.coverage_authority_evidence?.assessment, 120)
+    || !text(source.version, 160)
+    || !state
+    || !verdict
+    || state !== verdict
+    || !text(source.classifier_version, 160)
+    || !text(source.evidence_sufficiency, 120)
+    || usablePages === null
+    || typeof source.complete_small_site_inventory !== "boolean"
+    || workerPeak === null
+  ) return {};
   return {
-    classification_integrity: state ? {
+    classification_integrity: {
       version: text(source.version, 160),
       state,
-      verdict: text(source.verdict || state, 120),
+      verdict,
       classifier_version: text(source.classifier_version, 160),
       evidence_sufficiency: text(source.evidence_sufficiency, 120),
-      usable_pages: number(source.usable_pages),
-      complete_small_site_inventory: source.complete_small_site_inventory === true,
-    } : {},
-    classification_verdict: state,
+      usable_pages: usablePages,
+      complete_small_site_inventory: source.complete_small_site_inventory,
+    },
+    classification_verdict: verdict,
     peak_memory_bytes: workerPeak,
     worker_peak_memory_bytes: workerPeak,
   };
+}
+
+function finiteNonNegativeNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function positiveNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 /** Mirrors coverageAuthorityFields in persistDurableScanAuthority/authoritySnapshot.js. */

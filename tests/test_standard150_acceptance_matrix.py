@@ -252,6 +252,57 @@ def test_terminal_poll_durably_checkpoints_the_completed_site(
     )
 
 
+
+
+def test_transition_checkpoint_failure_does_not_abort_terminal_reporting(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    item = _complete_item("scan_checkpoint_failure")
+    item.terminal_at = 0.0
+    item.run = {}
+    item.customer_result = {}
+
+    async def fake_invoke(_client, _token, function, payload):
+        assert function == "getCustomerScanResult"
+        return 200, {
+            "scan_id": payload["scan_id"],
+            "run": {
+                "id": payload["scan_id"],
+                "status": "complete",
+                "fix_list_id": "fixlist_checkpoint_failure",
+                "evidence_quality_state": "sufficient",
+                "beta_revision_fingerprint": "fingerprint_1",
+            },
+            "authority_verified": True,
+            "release_contract_current": True,
+            "fixList": {"id": "fixlist_checkpoint_failure"},
+            "fixItems": [],
+        }
+
+    def failed_checkpoint(*_args):
+        raise OSError("transition fsync failed")
+
+    monkeypatch.setattr(HARNESS, "invoke", fake_invoke)
+    monkeypatch.setattr(HARNESS, "write_checkpoint", failed_checkpoint)
+
+    asyncio.run(HARNESS.wait_terminal(
+        object(),
+        {item.email: "token"},
+        [item],
+        1,
+        checkpoint_path=str(tmp_path / "checkpoint.json"),
+    ))
+
+    assert item.terminal_at > 0
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    assert {
+        "event": "checkpoint_write_error",
+        "error_type": "OSError",
+    } in events
+
+
 def test_poll_failure_does_not_cancel_sibling_or_lose_checkpoint(
     tmp_path,
     monkeypatch,

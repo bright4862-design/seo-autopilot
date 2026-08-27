@@ -602,17 +602,28 @@ def run_local_review_isolated(
     send_conn.close()
     deadline = time.monotonic() + timeout
     payload: Any = None
+    review_peak_memory_bytes: int | None = None
+
+    def sample_review_memory() -> None:
+        nonlocal review_peak_memory_bytes
+        sampled = measure_worker_peak_memory_bytes(child_pid=process.pid)
+        if sampled is not None:
+            review_peak_memory_bytes = max(review_peak_memory_bytes or 0, sampled)
+
     try:
+        sample_review_memory()
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise LocalReviewProcessTimeout("local review exceeded its process wall time")
             if recv_conn.poll(min(0.05, remaining)):
+                sample_review_memory()
                 try:
                     payload = recv_conn.recv()
                 except EOFError as exc:
                     raise RuntimeError("local review process closed without a result") from exc
                 break
+            sample_review_memory()
             if not process.is_alive():
                 if recv_conn.poll():
                     payload = recv_conn.recv()
@@ -624,7 +635,10 @@ def run_local_review_isolated(
         state, value = payload
         if state != "ok" or not isinstance(value, dict):
             raise RuntimeError(f"local review process failed: {str(value or 'unknown_error')[:80]}")
-        return value
+        reviewed = dict(value)
+        if review_peak_memory_bytes is not None:
+            reviewed["_worker_peak_memory_bytes"] = review_peak_memory_bytes
+        return reviewed
     finally:
         try:
             recv_conn.close()
@@ -820,7 +834,8 @@ async def complete_authority(
             elapsed_ms=int((time.monotonic() - phase_started) * 1000),
             supplied_review=isinstance(review, dict),
         )
-        if isinstance(review, dict):
+        supplied_review = isinstance(review, dict)
+        if supplied_review:
             reviewed = review
         else:
             reviewed = await asyncio.wait_for(
@@ -849,12 +864,16 @@ async def complete_authority(
         elapsed_ms=int((time.monotonic() - phase_started) * 1000),
         release_gate_eligible=reviewed.get("release_gate_eligible") is True,
     )
+    worker_peak_memory = (
+        measure_worker_peak_memory_bytes()
+        if supplied_review
+        else reviewed.pop("_worker_peak_memory_bytes", None)
+    )
     classification_integrity = build_classification_integrity(reviewed)
     if classification_integrity:
         reviewed["classification_integrity"] = classification_integrity
         reviewed["classification_verdict"] = classification_integrity["state"]
-    worker_peak_memory = measure_worker_peak_memory_bytes()
-    if worker_peak_memory is not None:
+    if isinstance(worker_peak_memory, int) and worker_peak_memory > 0:
         result["peak_memory_bytes"] = worker_peak_memory
         result["worker_peak_memory_bytes"] = worker_peak_memory
     limitation = terminal_review_limitation(reviewed)

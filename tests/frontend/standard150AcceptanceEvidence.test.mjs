@@ -1,23 +1,27 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 import {
   REVIEW_ATTESTATION_VERSION,
   buildAuthoritySnapshot,
+  hasCompleteAcceptanceEvidence as hasCompleteAuthorityAcceptanceEvidence,
 } from "../../base44/functions/persistDurableScanAuthority/authoritySnapshot.js";
 import { authorityRowsFromSnapshot } from "../../base44/functions/persistDurableScanAuthority/authorityRows.js";
 import {
   LIMITED_RESULT_INTEGRITY_VERSION,
   buildLimitedResultSnapshot,
+  hasCompleteAcceptanceEvidence as hasCompleteLimitedAcceptanceEvidence,
   limitedRowsFromSnapshot,
+  requiresCompleteAcceptanceEvidence,
 } from "../../base44/functions/persistLimitedScanResult/limitedResultIntegrity.js";
 import {
   authoritySnapshotFromRows,
   buildCustomerProjection,
 } from "../../base44/functions/getCustomerScanResult/projection.js";
-import { RELEASE_FINGERPRINT } from "../../src/lib/generatedReleaseContract.js";
+import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "../../src/lib/generatedReleaseContract.js";
 
-const ACCEPTANCE_VERSION = "standard150_acceptance_evidence_v1";
+const ACCEPTANCE_VERSION = RELEASE_COMPONENT_VERSIONS.acceptance_evidence_version;
 
 function acceptedSnapshot() {
   return buildAuthoritySnapshot({
@@ -222,4 +226,118 @@ test("limited rows bind and project the same acceptance observations", () => {
   assert.equal(projected.run.coverage_authority_evidence.assessment, "insufficient_sample");
   assert.equal(projected.run.classification_verdict, "inconclusive_insufficient_evidence");
   assert.equal(projected.run.worker_peak_memory_bytes, 201_326_592);
+});
+
+
+test("new authoritative writes fail closed when measured memory is missing", () => {
+  const scan = {
+    worker_peak_memory_bytes: undefined,
+  };
+  const review = {
+    coverage_authority_evidence: {
+      coverage_authority_evidence_version: "coverage_authority_evidence_v2_authoritative",
+      assessment: "sufficient",
+    },
+    classification_integrity: {
+      version: ACCEPTANCE_VERSION,
+      state: "classified",
+      verdict: "classified",
+      classifier_version: "classifier-v1",
+      evidence_sufficiency: "sufficient",
+      usable_pages: 150,
+      complete_small_site_inventory: false,
+    },
+  };
+  assert.equal(hasCompleteAuthorityAcceptanceEvidence(scan, review), false);
+  const writerSource = readFileSync(
+    new URL("../../base44/functions/persistDurableScanAuthority/index.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(writerSource, /!hasCompleteAcceptanceEvidence\(scanResult, review\)/);
+  assert.match(writerSource, /authority_acceptance_evidence_incomplete/);
+});
+
+test("a verdict alone cannot manufacture classification integrity on a new limited write", () => {
+  assert.equal(hasCompleteLimitedAcceptanceEvidence(
+    { worker_peak_memory_bytes: 123_456_789 },
+    {
+      coverage_authority_evidence: {
+        coverage_authority_evidence_version: "coverage_authority_evidence_v2_authoritative",
+        assessment: "insufficient_sample",
+      },
+      classification_verdict: "classified",
+    },
+  ), false);
+});
+
+test("customer projection suppresses incomplete current-contract acceptance evidence", () => {
+  const projected = buildCustomerProjection({
+    run: {
+      id: "scan-incomplete",
+      project_id: "p",
+      status: "complete",
+      beta_revision_fingerprint: RELEASE_FINGERPRINT,
+      authority_seal_version: REVIEW_ATTESTATION_VERSION,
+      coverage_authority_evidence: {
+        coverage_authority_evidence_version: "coverage_authority_evidence_v2_authoritative",
+        assessment: "sufficient",
+      },
+      classification_verdict: "classified",
+      worker_peak_memory_bytes: 0,
+    },
+    fixList: { id: "f", is_authoritative: true },
+    fixItems: [],
+    fullAccess: true,
+    authorityVerified: true,
+  });
+
+  assert.equal("coverage_authority_evidence" in projected.run, false);
+  assert.equal("classification_integrity" in projected.run, false);
+  assert.equal("classification_verdict" in projected.run, false);
+  assert.equal("worker_peak_memory_bytes" in projected.run, false);
+});
+
+
+test("null or stale classification evidence cannot satisfy a new acceptance contract", () => {
+  const scan = { worker_peak_memory_bytes: 123_456_789 };
+  const baseReview = {
+    coverage_authority_evidence: {
+      coverage_authority_evidence_version: "coverage_authority_evidence_v2_authoritative",
+      assessment: "sufficient",
+    },
+    classification_integrity: {
+      version: ACCEPTANCE_VERSION,
+      state: "classified",
+      verdict: "classified",
+      classifier_version: "classifier-v1",
+      evidence_sufficiency: "sufficient",
+      usable_pages: null,
+      complete_small_site_inventory: false,
+    },
+  };
+  assert.equal(hasCompleteAuthorityAcceptanceEvidence(scan, baseReview), false);
+  assert.equal(hasCompleteLimitedAcceptanceEvidence(scan, baseReview), false);
+
+  const staleReview = {
+    ...baseReview,
+    classification_integrity: {
+      ...baseReview.classification_integrity,
+      usable_pages: 10,
+      version: "standard150_acceptance_evidence_v1",
+    },
+  };
+  assert.equal(hasCompleteAuthorityAcceptanceEvidence(scan, staleReview), false);
+  assert.equal(hasCompleteLimitedAcceptanceEvidence(scan, staleReview), false);
+});
+
+test("only genuine historical limited-v1 recovery is exempt from the new completeness gate", () => {
+  assert.equal(requiresCompleteAcceptanceEvidence(
+    "limited",
+    "standard_limited_result_integrity_v1",
+  ), false);
+  assert.equal(requiresCompleteAcceptanceEvidence(
+    "limited",
+    LIMITED_RESULT_INTEGRITY_VERSION,
+  ), true);
+  assert.equal(requiresCompleteAcceptanceEvidence("queued", ""), true);
 });

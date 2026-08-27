@@ -3,10 +3,10 @@
 // Run that generator after changing either input; CI fails on drift.
 
 export const RELEASE_CONTRACT_SCHEMA_VERSION = "beta_crawler_revision_v1";
-export const RELEASE_FINGERPRINT = "cd31b3c1e5f9dd7c";
+export const RELEASE_FINGERPRINT = "e18b72b2d0e159b8";
 export const RELEASE_STATUS = "candidate";
 export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
-  "acceptance_evidence_version": "standard150_acceptance_evidence_v1",
+  "acceptance_evidence_version": "standard150_acceptance_evidence_v2_aggregate_rss_fail_closed",
   "admission_reconciliation_version": "admission_reconciliation_v1_exact_generation_barrier",
   "archetype_classifier_version": "archetype_classifier_v10_structural_finance_member_retail",
   "artifact_filter_version": "artifact_filter_v4_wordpress_route_noise",
@@ -17,7 +17,7 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "coverage_authority_evidence_version": "coverage_authority_evidence_v2_authoritative",
   "coverage_authority_version": "coverage_authority_v1_shared_decision",
   "crawler_acceptance_version": "crawler_acceptance_v1",
-  "customer_projection_version": "customer_projection_v3_acceptance_evidence",
+  "customer_projection_version": "customer_projection_v4_acceptance_evidence_fail_closed",
   "durable_completion_contract_version": "durable_standard150_completion_v1",
   "durable_control_contract_version": "durable_standard150_control_v1",
   "durable_worker_contract_version": "scan_job_worker_v1_cloud_tasks",

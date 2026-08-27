@@ -205,6 +205,40 @@
       "default": {},
       "description": "Diagnostic record of how much of the site the crawl saw and whether anything positively established the site's size. Does not participate in authority."
     },
+    "coverage_state": {
+      "type": "string",
+      "description": "Coverage verdict bound into a verified limited result."
+    },
+    "coverage_reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Bounded reasons supporting a verified limited-result coverage verdict."
+    },
+    "coverage_authority_version": {
+      "type": "string",
+      "description": "Version of the shared coverage decision used for a limited result."
+    },
+    "classification_integrity": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "description": "Reviewed classifier verdict and evidence sufficiency bound into the result proof."
+    },
+    "classification_verdict": {
+      "type": "string",
+      "description": "Customer-safe state copied from classification_integrity for release acceptance."
+    },
+    "peak_memory_bytes": {
+      "type": "number",
+      "description": "Measured peak resident worker memory for this concurrency-one Standard 150 job."
+    },
+    "worker_peak_memory_bytes": {
+      "type": "number",
+      "description": "Measured peak resident worker memory including the isolated review child."
+    },
     "no_high_confidence_findings": {
       "type": "boolean",
       "default": false

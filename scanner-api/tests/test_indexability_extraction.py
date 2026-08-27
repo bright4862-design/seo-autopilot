@@ -95,7 +95,7 @@ async def test_fetch_and_extract_preserves_multiple_x_robots_headers(monkeypatch
         request=httpx.Request("GET", "https://example.com/page"),
     )
 
-    async def fake_safe_get(_client, _url):
+    async def fake_safe_get(_client, _url, **_kwargs):
         return response
 
     monkeypatch.setattr("app.scanner.is_public_http_url", lambda _url: True)

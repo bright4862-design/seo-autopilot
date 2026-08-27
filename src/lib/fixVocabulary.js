@@ -58,6 +58,16 @@ export function customerHealthLabel(score, { unavailable = false, noHighConfiden
   return "Needs work";
 }
 
+export function customerScopeRelationshipLabel(value = "") {
+  const relationship = String(value || "").trim();
+  if (!relationship) return "";
+  if (relationship === "sibling_sous_dossier") return "Related site section";
+  return relationship
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^\w/, (char) => char.toUpperCase());
+}
 export function customerCategoryLabel(item = {}) {
   const rule = normalizedRule(item);
   if (rule === "potential_orphan_pages") return "Site navigation";

@@ -31,6 +31,39 @@ def sitemap_xml(urls, *, index=False):
     return f'<?xml version="1.0" encoding="UTF-8"?><{outer}>{body}</{outer}>'
 
 
+def test_parse_sitemap_locs_ignores_commented_out_entries():
+    body = """<?xml version="1.0"?>
+    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <!-- <url><loc>https://example.com/commented-out</loc></url> -->
+      <url><loc>https://example.com/kept</loc></url>
+      <url><loc><![CDATA[https://example.com/cdata?x=1&y=2]]></loc></url>
+    </urlset>
+    """
+
+    assert sitemap.parse_sitemap_locs(body) == [
+        "https://example.com/kept",
+        "https://example.com/cdata?x=1&y=2",
+    ]
+
+
+def test_parse_sitemap_locs_uses_xml_entities_and_preserves_cdata():
+    body = """<urlset>
+      <url><loc>https://example.com/p?a=1&amp;b=2</loc></url>
+      <url><loc>https://example.com/p?a=1&amp;copy=2</loc></url>
+      <url><loc>https://example.com/p?literal=&copy;2</loc></url>
+      <url><loc>https://example.com/p?decimal=&#65;&amp;hex=&#x42;</loc></url>
+      <url><loc><![CDATA[https://example.com/p?literal=&amp;&copy;]]></loc></url>
+    </urlset>"""
+
+    assert sitemap.parse_sitemap_locs(body) == [
+        "https://example.com/p?a=1&b=2",
+        "https://example.com/p?a=1&copy=2",
+        "https://example.com/p?literal=&copy;2",
+        "https://example.com/p?decimal=A&hex=B",
+        "https://example.com/p?literal=&amp;&copy;",
+    ]
+
+
 def test_sitemap_page_urls_normalize_www_to_origin_host():
     assert normalize_sitemap_page_url(
         "https://www.centerstreetlending.com/blog/benefits-of-using-bridge-loans-for-real-estate-transactions",
@@ -74,7 +107,7 @@ def test_fetch_sitemap_locs_decodes_raw_xml_gzip(monkeypatch):
     ]
     compressed = gzip.compress(sitemap_xml(expected).encode("utf-8"))
 
-    async def fake_safe_get(client, url):
+    async def fake_safe_get(client, url, **kwargs):
         assert url == sitemap_url
         return FakeResponse(content=compressed)
 
@@ -82,6 +115,41 @@ def test_fetch_sitemap_locs_decodes_raw_xml_gzip(monkeypatch):
     actual = asyncio.run(fetch_sitemap_locs(object(), sitemap_url, set(), []))
 
     assert actual == expected
+
+
+def test_fetch_sitemap_locs_applies_decoded_body_limit(monkeypatch):
+    sitemap_url = "https://example.com/sitemap.xml"
+    seen = {}
+
+    async def fake_safe_get(client, url, **kwargs):
+        seen["limit"] = kwargs.get("max_decoded_bytes")
+        return FakeResponse(sitemap_xml(["https://example.com/page"]))
+
+    monkeypatch.setattr(sitemap, "safe_get", fake_safe_get)
+    actual = asyncio.run(fetch_sitemap_locs(object(), sitemap_url, set(), []))
+
+    assert actual == ["https://example.com/page"]
+    assert seen["limit"] == sitemap.MAX_SITEMAP_DECODED_BYTES
+
+
+def test_compressed_sitemap_expansion_is_bounded_and_isolated(monkeypatch):
+    sitemap_url = "https://example.com/product-sitemap.xml.gz"
+    expanded = sitemap_xml(["https://example.com/" + ("x" * 2048)]).encode("utf-8")
+    compressed = gzip.compress(expanded)
+    diagnostics = {}
+
+    async def fake_safe_get(client, url, **kwargs):
+        assert kwargs.get("max_decoded_bytes") == 128
+        return FakeResponse(content=compressed)
+
+    monkeypatch.setattr(sitemap, "MAX_SITEMAP_DECODED_BYTES", 128)
+    monkeypatch.setattr(sitemap, "safe_get", fake_safe_get)
+    actual = asyncio.run(
+        fetch_sitemap_locs(object(), sitemap_url, set(), [], diagnostics=diagnostics)
+    )
+
+    assert actual == []
+    assert diagnostics["sitemap_failure_reason_buckets"]["sitemap_body_too_large"] == 1
 
 
 def test_root_urlset_cannot_starve_later_compressed_child_families(monkeypatch):
@@ -107,7 +175,7 @@ def test_root_urlset_cannot_starve_later_compressed_child_families(monkeypatch):
         booking_child: FakeResponse(sitemap_xml(booking_pages)),
     }
 
-    async def fake_safe_get(client, url):
+    async def fake_safe_get(client, url, **kwargs):
         return responses.get(url, FakeResponse(status_code=404))
 
     monkeypatch.setattr(sitemap, "safe_get", fake_safe_get)
@@ -137,7 +205,7 @@ def test_market_scoped_sitemap_excludes_other_country_language_pairs(monkeypatch
         f"{origin}/sitemap.xml": FakeResponse(sitemap_xml(pages)),
     }
 
-    async def fake_safe_get(client, url):
+    async def fake_safe_get(client, url, **kwargs):
         return responses.get(url, FakeResponse(status_code=404))
 
     monkeypatch.setattr(sitemap, "safe_get", fake_safe_get)
@@ -162,7 +230,7 @@ def test_global_multimarket_root_requires_an_explicit_market(monkeypatch):
         f"{origin}/sitemap.xml": FakeResponse(sitemap_xml(pages)),
     }
 
-    async def fake_safe_get(client, url):
+    async def fake_safe_get(client, url, **kwargs):
         return responses.get(url, FakeResponse(status_code=404))
 
     monkeypatch.setattr(sitemap, "safe_get", fake_safe_get)

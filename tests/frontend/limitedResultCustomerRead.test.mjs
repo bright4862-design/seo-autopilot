@@ -112,7 +112,8 @@ test("the read path verifies the limited proof against its own domain", () => {
 
 test("a limited row carrying an authority proof is refused outright", () => {
   /** Nothing may arrive holding both; that would be a promotion path. */
-  assert.match(SOURCE, /run\.release_gate_eligible === true \|\| cleanProof\(run\.authority_proof\)/);
+  assert.match(SOURCE, /run\.release_gate_eligible === true/);
+  assert.match(SOURCE, /cleanProof\(run\.authority_proof\)/);
 });
 
 test("the limited branch returns authorityVerified false", () => {
@@ -156,4 +157,14 @@ test("a marker mismatch on an otherwise sufficient crawl is still ineligible", (
 
   assert.equal(projection.release_contract_current, false,
     "a stale release marker must not read as the current contract");
+});
+
+
+test("historical limited-v1 reconstruction never derives signed coverage from later diagnostics", () => {
+  const branch = SOURCE.slice(SOURCE.indexOf('run.status === "limited"'), SOURCE.indexOf("// Full access"));
+  assert.match(branch, /limitedIntegrityVersion/);
+  assert.match(branch, /coverage_state: run\.coverage_state/);
+  assert.match(branch, /coverage_reasons: run\.coverage_reasons/);
+  assert.match(branch, /coverage_authority_version: run\.coverage_authority_version/);
+  assert.doesNotMatch(branch, /coverage_authority_evidence\?\.assessment\s*\|\|\s*run\.coverage_state/);
 });

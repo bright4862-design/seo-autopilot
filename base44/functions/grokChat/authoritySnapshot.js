@@ -48,10 +48,11 @@ export function authoritySnapshotFromRows({ scan, fixList, fixItems, userId }) {
       evidence_quality_state: text(scan?.evidence_quality_state, 120),
       evidence_quality_score: number(scan?.evidence_quality_score),
       evidence_quality_reasons: textArray(scan?.evidence_quality_reasons, 12, 500),
-      // Coverage/inventory diagnostics, present only in the v2 payload.
+      // Coverage/inventory diagnostics, present in v2 and carried forward by v3.
       // A row sealed under v1 must be rebuilt exactly as v1 or its stored
       // proof stops verifying and an intact result reads as tampered.
       ...coverageSnapshotFields(scan),
+      ...acceptanceEvidenceSnapshotFields(scan),
       health_score: number(scan?.health_score),
       health_grade: text(scan?.health_grade, 80),
       customer_summary: text(scan?.customer_summary, 4_000),
@@ -202,6 +203,7 @@ function plainObject(value) {
 }
 
 const REVIEW_ATTESTATION_VERSION_V2 = "standard_review_snapshot_hmac_v2_coverage";
+const REVIEW_ATTESTATION_VERSION_V3 = "standard_review_snapshot_hmac_v3_acceptance_evidence";
 
 /**
  * Reconstruction is version-dispatched, never inferred from which fields the
@@ -210,7 +212,9 @@ const REVIEW_ATTESTATION_VERSION_V2 = "standard_review_snapshot_hmac_v2_coverage
  * seal did not cover. The row's own authority_seal_version is the authority.
  */
 function coverageSnapshotFields(row) {
-  if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V2) return {};
+  if (![REVIEW_ATTESTATION_VERSION_V2, REVIEW_ATTESTATION_VERSION_V3].includes(
+    text(row?.authority_seal_version, 160),
+  )) return {};
   return {
     pages_retained: number(row?.pages_retained),
     usable_html_page_count: number(row?.usable_html_page_count),
@@ -222,6 +226,50 @@ function coverageSnapshotFields(row) {
     sampling_evidence: plainObject(row?.sampling_evidence),
     ...coverageAuthorityFields(row?.coverage_authority_evidence),
   };
+}
+
+function acceptanceEvidenceSnapshotFields(row) {
+  if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V3) return {};
+  const source = plainObject(row?.classification_integrity);
+  const state = text(source.state, 120);
+  const verdict = text(source.verdict, 120);
+  const usablePages = acceptanceFiniteNonNegativeNumber(source.usable_pages);
+  const workerPeak = acceptancePositiveNumber(row?.worker_peak_memory_bytes ?? row?.peak_memory_bytes);
+  if (
+    !text(row?.coverage_authority_evidence?.coverage_authority_evidence_version, 160)
+    || !text(row?.coverage_authority_evidence?.assessment, 120)
+    || !text(source.version, 160)
+    || !state
+    || !verdict
+    || state !== verdict
+    || !text(source.classifier_version, 160)
+    || !text(source.evidence_sufficiency, 120)
+    || usablePages === null
+    || typeof source.complete_small_site_inventory !== "boolean"
+    || workerPeak === null
+  ) return {};
+  return {
+    classification_integrity: {
+      version: text(source.version, 160),
+      state,
+      verdict,
+      classifier_version: text(source.classifier_version, 160),
+      evidence_sufficiency: text(source.evidence_sufficiency, 120),
+      usable_pages: usablePages,
+      complete_small_site_inventory: source.complete_small_site_inventory,
+    },
+    classification_verdict: verdict,
+    peak_memory_bytes: workerPeak,
+    worker_peak_memory_bytes: workerPeak,
+  };
+}
+
+function acceptanceFiniteNonNegativeNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function acceptancePositiveNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 /** Mirrors coverageAuthorityFields in persistDurableScanAuthority/authoritySnapshot.js. */

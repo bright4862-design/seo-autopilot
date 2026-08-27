@@ -1,7 +1,7 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
 import { authorityRowsFromSnapshot } from "./authorityRows.js";
-import { buildAuthoritySnapshot, firstFailedAuthorityPredicate } from "./authoritySnapshot.js";
+import { buildAuthoritySnapshot, firstFailedAuthorityPredicate, hasCompleteAcceptanceEvidence } from "./authoritySnapshot.js";
 import { releaseAdmission } from "./admissionClient.js";
 import { persistExactAdmissionRelease } from "./admissionRelease.js";
 
@@ -63,6 +63,14 @@ Deno.serve(async (req) => {
     const failedPredicate = firstFailedAuthorityPredicate(scanResult, review);
     if (failedPredicate) {
       throw new RequestProblem(409, `authority_snapshot_not_eligible__${failedPredicate}`, "The reviewed scan is not release-authoritative.");
+    }
+
+    if (!hasCompleteAcceptanceEvidence(scanResult, review)) {
+      throw new RequestProblem(
+        409,
+        "authority_acceptance_evidence_incomplete",
+        "The scan did not produce complete measured acceptance evidence.",
+      );
     }
 
     const stableSealedAt = stableTimestamp(scan);

@@ -7,7 +7,9 @@ const source = fs.readFileSync(new URL("../../src/pages/FixList.jsx", import.met
 test("FixList routes the saved snapshot through the unified repair work surface", () => {
   assert.match(source, /import RepairWorkSurface from "@\/components\/fixlist\/RepairWorkSurface"/);
   assert.match(source, /import \{ buildRepairWorkSurfacePresentation \} from "@\/lib\/repairWorkSurfacePresentation"/);
-  assert.match(source, /buildRepairWorkSurfacePresentation\(\{[\s\S]*snapshotItems: recommendations,[\s\S]*visibleItems: active,[\s\S]*doneIds,[\s\S]*scan: scanRecord,[\s\S]*initialFixFirstLimit: 3/);
+  assert.match(source, /const active = recommendations/);
+  assert.match(source, /buildRepairWorkSurfacePresentation\(\{[\s\S]*snapshotItems: recommendations,[\s\S]*visibleItems: active,[\s\S]*scan: scanRecord,[\s\S]*initialFixFirstLimit: 3/);
+  assert.doesNotMatch(source, /\bdoneIds\b/);
   assert.match(source, /const repairPresentation = repairWorkSurface\.presentation/);
   assert.match(source, /<RepairWorkSurface[\s\S]*\{\.\.\.repairWorkSurface\}/);
   assert.doesNotMatch(source, /import RepairSectionList from "@\/components\/fixlist\/RepairSectionList"/);
@@ -20,7 +22,11 @@ test("FixList retains one frozen legacy path only for genuinely legacy repairs",
   assert.match(source, /priorityBucket\(item\.priority\) === "fix_first"/);
   assert.match(source, /priorityBucket\(item\.priority\) === "improve_next"/);
   assert.match(source, /priorityBucket\(item\.priority\) === "worth_checking"/);
-  assert.match(source, /!repairPresentation\.canonical && !repairPresentation\.unsupported && active\.length === 0 && doneItems\.length > 0/);
+  assert.match(source, /repairPresentation\.legacySections\?\.length === 0 && shownTopPriorities\.length > 0/);
+  assert.match(source, /repairPresentation\.legacySections\?\.length === 0 && moreImportant\.length > 0/);
+  assert.match(source, /repairPresentation\.legacySections\?\.length === 0 && improveNext\.length > 0/);
+  assert.match(source, /repairPresentation\.legacySections\?\.length === 0 && worthChecking\.length > 0/);
+  assert.doesNotMatch(source, /\bdoneItems\b/);
 });
 
 test("FixList fails closed on unsupported versioned repair contracts", () => {
@@ -29,7 +35,7 @@ test("FixList fails closed on unsupported versioned repair contracts", () => {
   assert.match(source, /No browser-ranked substitute is being shown/);
 });
 
-test("FixList delegates zero-repair and canonical all-Done states to the unified work surface", () => {
+test("FixList delegates zero-repair and canonical states to the unified work surface", () => {
   assert.doesNotMatch(source, /Nothing to fix in this sample\./);
   assert.doesNotMatch(source, /repairPresentation\.canonical \? \([\s\S]*<RepairSectionList/);
 });

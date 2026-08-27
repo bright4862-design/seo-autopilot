@@ -133,6 +133,20 @@ async function findOwnedAccess(base44, userId, email) {
   return uniqueRecords([...(byUser || []), ...(byEmail || [])]);
 }
 
+function checkoutAccessStateResponse(access) {
+  const status = String(access?.access_status || "").trim();
+  if (status === "revoked") {
+    return Response.json(
+      { error: "Your access record needs support before checkout can continue.", code: "access_conflict" },
+      { status: 409 },
+    );
+  }
+  if (status === "active" || access?.has_full_access === true) {
+    return Response.json({ error: "Full access is already active.", code: "already_active" }, { status: 409 });
+  }
+  return null;
+}
+
 export default async function (req) {
   try {
     const base44 = createClientFromRequest(req);
@@ -203,21 +217,8 @@ export default async function (req) {
         { status: 409 },
       );
     }
-    if (access?.has_full_access === true && access?.access_status === "active") {
-      return Response.json({ error: "Full access is already active.", code: "already_active" }, { status: 409 });
-    }
-
-    const pendingFields = {
-      user_email: email,
-      owner_user_id: userId,
-      access_status: "pending",
-      plan_id: PLAN_ID,
-      grant_source: "stripe_checkout",
-      app_id: APP_ID,
-      has_full_access: false,
-    };
-
-    access = await base44.asServiceRole.entities.Access.update(access.id, pendingFields);
+    const initialStateResponse = checkoutAccessStateResponse(access);
+    if (initialStateResponse) return initialStateResponse;
 
     rows = await findOwnedAccess(base44, userId, email);
     if (rows.length !== 1 || rows[0]?.id !== access?.id) {
@@ -227,6 +228,17 @@ export default async function (req) {
       );
     }
     access = rows[0];
+    if (
+      String(access.owner_user_id || "").trim() !== userId
+      || normalizeEmail(access.user_email) !== email
+    ) {
+      return Response.json(
+        { error: "Your access record needs support before checkout can continue.", code: "access_conflict" },
+        { status: 409 },
+      );
+    }
+    const freshStateResponse = checkoutAccessStateResponse(access);
+    if (freshStateResponse) return freshStateResponse;
 
     const stripe = new Stripe(secrets.get("STRIPE_SECRET_KEY"));
     const previousSessionId = String(access?.stripe_checkout_session_id || "").trim();

@@ -8,7 +8,7 @@ export const OWNER_TEST_USER_ID = "6a498da58ef5cec1f5cd4486";
 // Versions the customer projection itself. Declared in
 // data/cross-runtime-release-components.json so a projection behavior change
 // moves the release fingerprint like any Python change would.
-export const CUSTOMER_PROJECTION_VERSION = "customer_projection_v1";
+export const CUSTOMER_PROJECTION_VERSION = "customer_projection_v4_acceptance_evidence_fail_closed";
 export const REPAIR_CONTRACT_V2 = "repair_contract_v2_shadow_calibrated";
 export const REPAIR_PRIORITY_MODEL_V2 = "repair_priority_v2_technical_severity";
 
@@ -94,6 +94,11 @@ const DETAILED_RUN_FIELDS = [
   "default_route_page_count",
   "evidence_quality_blocking",
   "evidence_quality_gate_version",
+  "coverage_authority_evidence",
+  "classification_integrity",
+  "classification_verdict",
+  "peak_memory_bytes",
+  "worker_peak_memory_bytes",
   "no_high_confidence_findings",
   "limitation",
   "render_evidence",
@@ -255,6 +260,9 @@ export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, au
   // mistake "we verified this provisional record" for "this is authoritative".
   const limitedVerified = fullAccess === true && resultIntegrityVerified === true;
   const canReadResult = fullAccess === true && (authorityVerified === true || limitedVerified);
+  const customerHealthScoreStatus = authorityVerified === true
+    ? "authoritative"
+    : limitedVerified ? "insufficient_evidence" : "";
   const canonical = fullAccess === true && authorityVerified === true
     && fixList?.repair_contract_version === REPAIR_CONTRACT_V2
     && fixList?.repair_snapshot_contract_version === REPAIR_CONTRACT_V2
@@ -271,7 +279,7 @@ export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, au
     release_contract_current: canReadResult && run?.beta_revision_fingerprint === RELEASE_FINGERPRINT,
     scan_id: text(run?.id, 160),
     fix_list_id: canReadResult ? text(fixList?.id, 160) : "",
-    run: sanitizeRun(run, { detailed: canReadResult }),
+    run: sanitizeRun(run, { detailed: canReadResult, healthScoreStatus: customerHealthScoreStatus }),
     fixList: canReadResult ? pickFields(fixList, FIX_LIST_FIELDS) : null,
     fixItems: customerFixItems,
   };
@@ -324,10 +332,11 @@ export function authoritySnapshotFromRows({ run, fixList, fixItems, userId }) {
       evidence_quality_state: text(run?.evidence_quality_state, 120),
       evidence_quality_score: number(run?.evidence_quality_score),
       evidence_quality_reasons: textArray(run?.evidence_quality_reasons, 12, 500),
-      // Coverage/inventory diagnostics, present only in the v2 payload.
+      // Coverage/inventory diagnostics, present in v2 and carried forward by v3.
       // A row sealed under v1 must be rebuilt exactly as v1 or its stored
       // proof stops verifying and an intact result reads as tampered.
       ...coverageSnapshotFields(run),
+      ...acceptanceEvidenceSnapshotFields(run),
       health_score: number(run?.health_score),
       health_grade: text(run?.health_grade, 80),
       customer_summary: text(run?.customer_summary, 4_000),
@@ -491,15 +500,60 @@ function nullableNumber(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function sanitizeRun(run, { detailed }) {
+function sanitizeRun(run, { detailed, healthScoreStatus = "" }) {
   const result = pickFields(run, detailed ? [...PUBLIC_RUN_FIELDS, ...DETAILED_RUN_FIELDS] : PUBLIC_RUN_FIELDS);
   result.id = text(run?.id, 160);
   result.scan_id = result.id;
+  if (detailed && healthScoreStatus) {
+    result.health_score_status = text(healthScoreStatus, 80);
+  }
+  if (detailed && usesAcceptanceEvidenceContract(run) && !hasCompleteAcceptanceEvidence(run)) {
+    delete result.coverage_authority_evidence;
+    delete result.classification_integrity;
+    delete result.classification_verdict;
+    delete result.peak_memory_bytes;
+    delete result.worker_peak_memory_bytes;
+  }
   if (!detailed) {
     result.release_gate_eligible = false;
     result.is_authoritative = false;
   }
   return result;
+}
+
+function usesAcceptanceEvidenceContract(run) {
+  return text(run?.authority_seal_version, 160) === "standard_review_snapshot_hmac_v3_acceptance_evidence"
+    || text(run?.result_integrity_version, 160) === "standard_limited_result_integrity_v2_acceptance_evidence";
+}
+
+function hasCompleteAcceptanceEvidence(run) {
+  const coverage = plainObject(run?.coverage_authority_evidence);
+  const classification = plainObject(run?.classification_integrity);
+  const state = text(classification.state, 120);
+  const verdict = text(classification.verdict, 120);
+  const usablePages = acceptanceFiniteNonNegativeNumber(classification.usable_pages);
+  const workerPeak = acceptancePositiveNumber(run?.worker_peak_memory_bytes ?? run?.peak_memory_bytes);
+  return Boolean(
+    text(coverage.coverage_authority_evidence_version, 160)
+    && text(coverage.assessment, 120)
+    && text(classification.version, 160)
+    && state
+    && verdict
+    && state === verdict
+    && text(classification.classifier_version, 160)
+    && text(classification.evidence_sufficiency, 120)
+    && usablePages !== null
+    && typeof classification.complete_small_site_inventory === "boolean"
+    && workerPeak !== null
+  );
+}
+
+function acceptanceFiniteNonNegativeNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function acceptancePositiveNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 const COVERAGE_UNAVAILABLE_NOTE = "Coverage detail unavailable for this saved scan.";
@@ -605,6 +659,7 @@ function plainObject(value) {
 }
 
 const REVIEW_ATTESTATION_VERSION_V2 = "standard_review_snapshot_hmac_v2_coverage";
+const REVIEW_ATTESTATION_VERSION_V3 = "standard_review_snapshot_hmac_v3_acceptance_evidence";
 
 /**
  * Reconstruction is version-dispatched, never inferred from which fields the
@@ -613,7 +668,9 @@ const REVIEW_ATTESTATION_VERSION_V2 = "standard_review_snapshot_hmac_v2_coverage
  * seal did not cover. The row's own authority_seal_version is the authority.
  */
 function coverageSnapshotFields(row) {
-  if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V2) return {};
+  if (![REVIEW_ATTESTATION_VERSION_V2, REVIEW_ATTESTATION_VERSION_V3].includes(
+    text(row?.authority_seal_version, 160),
+  )) return {};
   return {
     pages_retained: number(row?.pages_retained),
     usable_html_page_count: number(row?.usable_html_page_count),
@@ -625,6 +682,50 @@ function coverageSnapshotFields(row) {
     sampling_evidence: plainObject(row?.sampling_evidence),
     ...coverageAuthorityFields(row?.coverage_authority_evidence),
   };
+}
+
+function acceptanceEvidenceSnapshotFields(row) {
+  if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V3) return {};
+  const source = plainObject(row?.classification_integrity);
+  const state = text(source.state, 120);
+  const verdict = text(source.verdict, 120);
+  const usablePages = acceptanceFiniteNonNegativeNumber(source.usable_pages);
+  const workerPeak = acceptancePositiveNumber(row?.worker_peak_memory_bytes ?? row?.peak_memory_bytes);
+  if (
+    !text(row?.coverage_authority_evidence?.coverage_authority_evidence_version, 160)
+    || !text(row?.coverage_authority_evidence?.assessment, 120)
+    || !text(source.version, 160)
+    || !state
+    || !verdict
+    || state !== verdict
+    || !text(source.classifier_version, 160)
+    || !text(source.evidence_sufficiency, 120)
+    || usablePages === null
+    || typeof source.complete_small_site_inventory !== "boolean"
+    || workerPeak === null
+  ) return {};
+  return {
+    classification_integrity: {
+      version: text(source.version, 160),
+      state,
+      verdict,
+      classifier_version: text(source.classifier_version, 160),
+      evidence_sufficiency: text(source.evidence_sufficiency, 120),
+      usable_pages: usablePages,
+      complete_small_site_inventory: source.complete_small_site_inventory,
+    },
+    classification_verdict: verdict,
+    peak_memory_bytes: workerPeak,
+    worker_peak_memory_bytes: workerPeak,
+  };
+}
+
+function finiteNonNegativeNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function positiveNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 /** Mirrors coverageAuthorityFields in persistDurableScanAuthority/authoritySnapshot.js. */

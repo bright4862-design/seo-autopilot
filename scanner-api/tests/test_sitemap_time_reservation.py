@@ -49,7 +49,7 @@ def test_sitemap_deadline_returns_partial_urls_and_records_budget(monkeypatch):
     slow_child = f"{origin}/blog-sitemap.xml"
     fast_pages = [f"{origin}/products/{index}" for index in range(3)]
 
-    async def fake_safe_get(client, url):
+    async def fake_safe_get(client, url, **kwargs):
         if url == f"{origin}/robots.txt":
             return FakeResponse(f"Sitemap: {index_url}")
         if url == index_url:
@@ -90,7 +90,7 @@ def test_sitemap_discovery_can_pace_request_starts(monkeypatch):
     child_url = f"{origin}/products.xml"
     starts = []
 
-    async def fake_safe_get(client, url):
+    async def fake_safe_get(client, url, **kwargs):
         starts.append((url, time.monotonic()))
         if url == f"{origin}/robots.txt":
             return FakeResponse(f"Sitemap: {index_url}")
@@ -129,7 +129,7 @@ def test_run_scan_continues_to_page_workers_after_sitemap_budget(monkeypatch):
     async def fake_load_robots_policy(client, origin):
         return Policy()
 
-    async def fake_safe_get(client, url):
+    async def fake_safe_get(client, url, **kwargs):
         return FakeResponse(url=url)
 
     async def fake_load_sitemap_urls(client, origin, prefix, limit, artifacts, scope_evidence=None, *, deadline=None, max_fetches=None, diagnostics=None, min_request_interval_seconds=0.0):

@@ -32,6 +32,11 @@ def _blocking_review_child(_result, _send_conn):
     time.sleep(30)
 
 
+def _successful_review_child(_result, send_conn):
+    send_conn.send(("ok", {"release_gate_eligible": True}))
+    send_conn.close()
+
+
 def _oidc(email: str) -> str:
     import base64
     import json
@@ -142,6 +147,34 @@ def test_eligible_review_never_gets_terminal_limitation():
         "release_gate_eligible": True,
         "access_evidence_state": "blocked",
     }) is None
+
+
+
+
+def test_isolated_review_memory_peak_is_fresh_for_each_scan(monkeypatch):
+    from app import scan_job
+
+    sampled = {"value": 320 * 1024 * 1024}
+    monkeypatch.setattr(
+        scan_job,
+        "measure_worker_peak_memory_bytes",
+        lambda **_kwargs: sampled["value"],
+    )
+
+    first = scan_job.run_local_review_isolated(
+        {"crawled_pages": [{"url": "https://example.com/a"}]},
+        5.0,
+        entrypoint=_successful_review_child,
+    )
+    sampled["value"] = 144 * 1024 * 1024
+    second = scan_job.run_local_review_isolated(
+        {"crawled_pages": [{"url": "https://example.com/b"}]},
+        5.0,
+        entrypoint=_successful_review_child,
+    )
+
+    assert first["_worker_peak_memory_bytes"] == 320 * 1024 * 1024
+    assert second["_worker_peak_memory_bytes"] == 144 * 1024 * 1024
 
 
 def test_blocking_local_review_process_is_killed_at_hard_deadline():

@@ -11,6 +11,44 @@
       "scan_id": "scan_e2e"
     },
     "review": {
+      "classification_integrity": {},
+      "classification_verdict": "",
+      "coverage_authority_evidence": {
+        "assessment": "insufficient_sample",
+        "coverage_authority_evidence_version": "coverage_authority_evidence_v2_authoritative",
+        "inventory": {
+          "attempted": 38,
+          "coverage_ratio": 0.010301,
+          "default_route_pages": 0,
+          "discovered_target": 3689,
+          "final_url_duplicates_deduped": 0,
+          "queued_remaining": 0,
+          "retained_representative_html": 38,
+          "retained_usable_html": 38
+        },
+        "inventory_proof": {
+          "failed_fetch_count": 0,
+          "positively_established": false,
+          "queue_exhausted": true,
+          "sitemap_budget_exhausted": false,
+          "sitemap_failed": false,
+          "sitemap_failure_reason_buckets": {},
+          "sitemap_fetch_count": 0,
+          "sitemap_fetch_limit_reached": false,
+          "sitemap_urls_discovered": 0
+        },
+        "reasons": [
+          "retained_pages_below_minimum",
+          "coverage_ratio_below_minimum"
+        ],
+        "terminal_reason": "queue_exhausted",
+        "thresholds": {
+          "min_inventory_for_ratio_test": 100,
+          "min_retained_pages": 50,
+          "min_retained_ratio": 0.1
+        },
+        "would_gate_as_insufficient": true
+      },
       "coverage_authority_version": "coverage_authority_v1_shared_decision",
       "coverage_reasons": [
         "retained_pages_below_minimum",

@@ -4,7 +4,9 @@ import { RELEASE_COMPONENT_VERSIONS } from "./generatedReleaseContract.js";
 import {
   buildLimitedResultSnapshot,
   createLimitedResultProof,
+  hasCompleteAcceptanceEvidence,
   limitedRowsFromSnapshot,
+  requiresCompleteAcceptanceEvidence,
   MAX_LIMITED_FIXES,
 } from "./limitedResultIntegrity.js";
 
@@ -89,12 +91,24 @@ Deno.serve(async (req) => {
 
     // One stable timestamp from durable state, so a retry rebuilds the same
     // payload and reaches the same proof instead of creating a second result.
+    if (requiresCompleteAcceptanceEvidence(scanStatus, scan.result_integrity_version)
+      && !hasCompleteAcceptanceEvidence(scanResult, review)) {
+      throw new RequestProblem(
+        409,
+        "limited_acceptance_evidence_incomplete",
+        "The scan did not produce complete measured acceptance evidence.",
+      );
+    }
+
     const sealedAt = cleanText(scan.result_integrity_sealed_at, 80) || stableTimestamp(scan);
     const snapshot = buildLimitedResultSnapshot({
       identity,
       scan: { ...scanResult, worker_source_sha: cleanText(body?.worker_source_sha, 80) },
       review,
       now: sealedAt,
+      version: scanStatus === "limited"
+        ? cleanText(scan.result_integrity_version, 160) || undefined
+        : undefined,
     });
     if (!snapshot.eligible_for_limited_result) {
       throw new RequestProblem(409, "limited_result_has_no_evidence", "There is no useful evidence to persist.");

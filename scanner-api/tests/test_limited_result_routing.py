@@ -6,6 +6,9 @@ Decathlon would stop being wrongly authoritative and start being outright
 failures -- losing evidence that was real. That is a worse answer than the
 overclaim it replaced, which is exactly what the blueprint warns about.
 """
+import pytest
+
+from app import scan_job
 from app.scan_job import (
     LIMITED_COMPLETION_VERSION,
     LIMITED_COVERAGE_STATES,
@@ -91,3 +94,133 @@ def test_the_worker_routes_limited_coverage_to_the_limited_function():
 
 def test_a_sufficient_scan_never_takes_the_limited_path():
     assert coverage_state_of(review("sufficient", eligible=True)) not in LIMITED_COVERAGE_STATES
+
+
+def _scan():
+    return {
+        "id": "scan_1",
+        "project_id": "project_1",
+        "owner_user_id": "owner_1",
+        "request_id": "request_1",
+        "idempotency_key": "request_1",
+        "normalized_domain": "example.com",
+        "attempt_count": 1,
+        "status": "running",
+    }
+
+
+@pytest.mark.asyncio
+async def test_noneligible_nonlimited_review_never_reaches_authority_persistence(monkeypatch):
+    calls = []
+
+    async def read_fresh(_client, _scan_id):
+        return _scan()
+
+    async def invoke(_client, name, _payload, *args, **kwargs):
+        calls.append(name)
+        raise AssertionError(f"noneligible review reached persistence: {name}")
+
+    monkeypatch.setattr(scan_job, "read_scan_run", read_fresh)
+    monkeypatch.setattr(scan_job, "invoke_function", invoke)
+
+    outcome = await scan_job.complete_authority(
+        object(),
+        _scan(),
+        {"pages": []},
+        "test-signing-key",
+        review={
+            "release_gate_eligible": False,
+            "coverage_state": "coverage_unverified",
+            "recommendations": [],
+        },
+    )
+
+    assert outcome["ok"] is False
+    assert outcome["transient"] is False
+    assert outcome["failure_code"] == "review_not_release_eligible"
+    assert "verified evidence" in outcome["customer_message"]
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_noneligible_useful_limited_review_still_uses_integrity_path(monkeypatch):
+    calls = []
+
+    async def read_fresh(_client, _scan_id):
+        return _scan()
+
+    async def persist_limited(_client, _scan_row, _result, reviewed, _key, *, phase_started):
+        calls.append(("limited", reviewed["release_gate_eligible"], phase_started > 0))
+        return {
+            "ok": True,
+            "transient": False,
+            "failure_code": "",
+            "limited": True,
+            "fix_list_id": "limited_fixlist_1",
+        }
+
+    async def forbidden_invoke(_client, name, _payload, *args, **kwargs):
+        raise AssertionError(f"limited review reached authority persistence: {name}")
+
+    monkeypatch.setattr(scan_job, "read_scan_run", read_fresh)
+    monkeypatch.setattr(scan_job, "persist_limited_result", persist_limited)
+    monkeypatch.setattr(scan_job, "invoke_function", forbidden_invoke)
+
+    outcome = await scan_job.complete_authority(
+        object(),
+        _scan(),
+        {"pages": []},
+        "test-signing-key",
+        review=review("limited_coverage", fixes=1, eligible=False),
+    )
+
+    assert outcome["ok"] is True
+    assert outcome["limited"] is True
+    assert outcome["fix_list_id"] == "limited_fixlist_1"
+    assert len(calls) == 1
+    assert calls[0][0:2] == ("limited", False)
+
+
+@pytest.mark.asyncio
+async def test_release_eligible_review_keeps_existing_authority_path(monkeypatch):
+    calls = []
+
+    async def read_fresh(_client, _scan_id):
+        return _scan()
+
+    async def invoke(_client, name, payload, *args, **kwargs):
+        calls.append((name, payload))
+        assert name == "persistDurableScanAuthority"
+        return {
+            "status_code": 200,
+            "body": {
+                "success": True,
+                "fixListId": "fixlist_1",
+                "fixListVerified": True,
+                "scanRun": {
+                    "fix_list_id": "fixlist_1",
+                    "authority_proof": "a" * 64,
+                },
+            },
+        }
+
+    monkeypatch.setattr(scan_job, "read_scan_run", read_fresh)
+    monkeypatch.setattr(scan_job, "invoke_function", invoke)
+
+    eligible = review("sufficient", fixes=1, eligible=True)
+    outcome = await scan_job.complete_authority(
+        object(),
+        _scan(),
+        {"pages": [], "normalized_domain": "example.com"},
+        "test-signing-key",
+        review=eligible,
+    )
+
+    assert outcome == {
+        "ok": True,
+        "transient": False,
+        "failure_code": "",
+        "fix_list_id": "fixlist_1",
+        "authority_proof": "a" * 64,
+    }
+    assert [name for name, _payload in calls] == ["persistDurableScanAuthority"]

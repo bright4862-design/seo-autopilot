@@ -106,8 +106,7 @@ def client_rendering_signals(html: str, status_code: int, word_count: int) -> li
     return [label for label, pattern in APP_SHELL_MARKERS if pattern.search(source)][:4]
 
 
-def extract_links(html: str, base_url: str) -> list[dict]:
-    soup = BeautifulSoup(html or "", "lxml")
+def extract_links_from_soup(soup: BeautifulSoup, base_url: str, limit: int = 2000) -> list[dict]:
     links: list[dict] = []
     for anchor in soup.find_all("a", href=True):
         try:
@@ -117,9 +116,15 @@ def extract_links(html: str, base_url: str) -> list[dict]:
         if not href:
             continue
         links.append({"href": href, "text": clean_text(anchor.get_text(" "))[:180]})
-        if len(links) >= 2000:
+        if len(links) >= max(1, int(limit or 2000)):
             break
     return links
+
+
+def extract_links(html: str, base_url: str) -> list[dict]:
+    """Compatibility wrapper for callers that only need links."""
+    soup = BeautifulSoup(html or "", "lxml")
+    return extract_links_from_soup(soup, base_url)
 
 
 def extract_schema_types(soup: BeautifulSoup) -> list[str]:
@@ -156,6 +161,7 @@ def extract_page(
     fetch_error: str = "",
     response_headers: Mapping[str, Any] | None = None,
     body_truncated: bool = False,
+    include_links: bool = False,
 ) -> dict:
     soup = BeautifulSoup(html or "", "lxml")
     title = clean_text(soup.title.string if soup.title else "")
@@ -214,7 +220,7 @@ def extract_page(
         body_truncated=body_truncated,
     )
 
-    return {
+    page = {
         "url": url,
         "final_url": final_url or url,
         "path": path,
@@ -275,6 +281,9 @@ def extract_page(
             path, title, h1s[0] if h1s else "", status_code, page_template_family, schema_types
         ),
     }
+    if include_links and 200 <= int(status_code or 0) < 300 and html:
+        page["_links"] = extract_links_from_soup(soup, final_url or url)
+    return page
 
 
 def parse_robots_directives(value: Any) -> list[str]:

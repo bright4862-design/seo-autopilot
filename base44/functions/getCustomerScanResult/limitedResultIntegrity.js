@@ -2,7 +2,8 @@ import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 
 const ENCODER = new TextEncoder();
 
-export const LIMITED_RESULT_INTEGRITY_VERSION = "standard_limited_result_integrity_v1";
+export const LIMITED_RESULT_INTEGRITY_VERSION = "standard_limited_result_integrity_v2_acceptance_evidence";
+export const LIMITED_RESULT_INTEGRITY_VERSION_V1 = "standard_limited_result_integrity_v1";
 
 /**
  * The HMAC domain label, bound *inside* the signed payload rather than kept as
@@ -11,7 +12,8 @@ export const LIMITED_RESULT_INTEGRITY_VERSION = "standard_limited_result_integri
  * an authority seal is that the two payloads can never be equal. Putting the
  * label in the payload is what guarantees that, whatever else the rows carry.
  */
-export const LIMITED_RESULT_HMAC_DOMAIN = "standard_limited_result_hmac_v1";
+export const LIMITED_RESULT_HMAC_DOMAIN = "standard_limited_result_hmac_v2_acceptance_evidence";
+export const LIMITED_RESULT_HMAC_DOMAIN_V1 = "standard_limited_result_hmac_v1";
 
 export const MAX_LIMITED_FIXES = 100;
 
@@ -23,7 +25,13 @@ const PRIORITIES = new Set(["critical", "high", "medium", "low"]);
  * there is no authority proof anywhere in it, and nothing here can be promoted
  * by editing rows.
  */
-export function buildLimitedResultSnapshot({ identity, scan, review, now }) {
+export function buildLimitedResultSnapshot({
+  identity,
+  scan,
+  review,
+  now,
+  version = LIMITED_RESULT_INTEGRITY_VERSION,
+}) {
   const fixes = firstArray([review?.recommendations, review?.fixes, review?.cleaned_fixes])
     .slice(0, MAX_LIMITED_FIXES)
     .map(toLimitedFix)
@@ -32,9 +40,10 @@ export function buildLimitedResultSnapshot({ identity, scan, review, now }) {
   const coverageReasons = textArray(review?.coverage_reasons, 12, 200);
   const scanStatus = text(review?.scan_status, 120);
 
+  const integrityDomain = limitedIntegrityDomain(version);
   return {
-    version: LIMITED_RESULT_INTEGRITY_VERSION,
-    integrity_domain: LIMITED_RESULT_HMAC_DOMAIN,
+    version,
+    integrity_domain: integrityDomain,
     // One stable timestamp, supplied by the caller from durable state, so a
     // retry rebuilds the identical payload and reaches the identical proof
     // instead of creating a second result.
@@ -70,6 +79,9 @@ export function buildLimitedResultSnapshot({ identity, scan, review, now }) {
       coverage_state: text(review?.coverage_state, 120),
       coverage_reasons: coverageReasons,
       coverage_authority_version: text(review?.coverage_authority_version, 160),
+      ...(version === LIMITED_RESULT_INTEGRITY_VERSION
+        ? acceptanceEvidenceFields(scan, review)
+        : {}),
     },
     fix_list: {
       is_authoritative: false,
@@ -148,10 +160,65 @@ export function limitedRowsFromSnapshot(snapshot, { fixListId, proof } = {}) {
  * never produce identical input, even if every other field somehow matched.
  */
 function limitedPayload(snapshot) {
+  const expectedDomain = limitedIntegrityDomain(snapshot?.version);
+  if (snapshot?.integrity_domain !== expectedDomain) {
+    throw new Error("Limited result integrity domain does not match its version.");
+  }
   return JSON.stringify(canonicalize({
-    integrity_domain: LIMITED_RESULT_HMAC_DOMAIN,
+    integrity_domain: expectedDomain,
     snapshot,
   }));
+}
+
+function limitedIntegrityDomain(version) {
+  if (version === LIMITED_RESULT_INTEGRITY_VERSION) return LIMITED_RESULT_HMAC_DOMAIN;
+  if (version === LIMITED_RESULT_INTEGRITY_VERSION_V1) return LIMITED_RESULT_HMAC_DOMAIN_V1;
+  throw new Error("Unsupported limited result integrity version.");
+}
+
+function acceptanceEvidenceFields(scan, review) {
+  const coverage = plainObject(review?.coverage_authority_evidence);
+  const classification = plainObject(review?.classification_integrity);
+  const state = text(classification.state, 120);
+  const verdict = text(classification.verdict, 120);
+  const usablePages = finiteNonNegativeNumber(classification.usable_pages);
+  const workerPeak = positiveNumber(scan?.worker_peak_memory_bytes ?? scan?.peak_memory_bytes);
+  if (
+    !text(coverage.coverage_authority_evidence_version, 160)
+    || !text(coverage.assessment, 120)
+    || !text(classification.version, 160)
+    || !state
+    || !verdict
+    || state !== verdict
+    || !text(classification.classifier_version, 160)
+    || !text(classification.evidence_sufficiency, 120)
+    || usablePages === null
+    || typeof classification.complete_small_site_inventory !== "boolean"
+    || workerPeak === null
+  ) return {};
+  return {
+    coverage_authority_evidence: coverage,
+    classification_integrity: {
+      version: text(classification.version, 160),
+      state,
+      verdict,
+      classifier_version: text(classification.classifier_version, 160),
+      evidence_sufficiency: text(classification.evidence_sufficiency, 120),
+      usable_pages: usablePages,
+      complete_small_site_inventory: classification.complete_small_site_inventory,
+    },
+    classification_verdict: verdict,
+    peak_memory_bytes: workerPeak,
+    worker_peak_memory_bytes: workerPeak,
+  };
+}
+
+function finiteNonNegativeNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function positiveNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 function toLimitedFix(fix) {
@@ -190,6 +257,10 @@ async function importHmacKey(secret, cryptoImpl, usages) {
 function firstArray(candidates) {
   for (const candidate of candidates) if (Array.isArray(candidate) && candidate.length) return candidate;
   return [];
+}
+
+function plainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
 function text(value, limit) {

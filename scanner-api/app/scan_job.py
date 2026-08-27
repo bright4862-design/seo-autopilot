@@ -27,6 +27,10 @@ from urllib.parse import urlparse
 
 import httpx
 
+from .acceptance_evidence import (
+    build_classification_integrity,
+    measure_worker_peak_memory_bytes,
+)
 from .observability import emit
 
 WORKER_VERSION = "scan_job_worker_v1_cloud_tasks"
@@ -475,6 +479,9 @@ def limited_result_payload(review: dict[str, Any]) -> dict[str, Any]:
         "coverage_state": assessment.get("state") or coverage_state_of(review),
         "coverage_reasons": assessment.get("reasons") or [],
         "coverage_authority_version": assessment.get("coverage_authority_version") or "",
+        "coverage_authority_evidence": review.get("coverage_authority_evidence") or {},
+        "classification_integrity": review.get("classification_integrity") or {},
+        "classification_verdict": review.get("classification_verdict") or "",
         "recommendations": review.get("recommendations") or review.get("fixes") or [],
     }
 
@@ -595,17 +602,28 @@ def run_local_review_isolated(
     send_conn.close()
     deadline = time.monotonic() + timeout
     payload: Any = None
+    review_peak_memory_bytes: int | None = None
+
+    def sample_review_memory() -> None:
+        nonlocal review_peak_memory_bytes
+        sampled = measure_worker_peak_memory_bytes(child_pid=process.pid)
+        if sampled is not None:
+            review_peak_memory_bytes = max(review_peak_memory_bytes or 0, sampled)
+
     try:
+        sample_review_memory()
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise LocalReviewProcessTimeout("local review exceeded its process wall time")
             if recv_conn.poll(min(0.05, remaining)):
+                sample_review_memory()
                 try:
                     payload = recv_conn.recv()
                 except EOFError as exc:
                     raise RuntimeError("local review process closed without a result") from exc
                 break
+            sample_review_memory()
             if not process.is_alive():
                 if recv_conn.poll():
                     payload = recv_conn.recv()
@@ -617,7 +635,10 @@ def run_local_review_isolated(
         state, value = payload
         if state != "ok" or not isinstance(value, dict):
             raise RuntimeError(f"local review process failed: {str(value or 'unknown_error')[:80]}")
-        return value
+        reviewed = dict(value)
+        if review_peak_memory_bytes is not None:
+            reviewed["_worker_peak_memory_bytes"] = review_peak_memory_bytes
+        return reviewed
     finally:
         try:
             recv_conn.close()
@@ -813,7 +834,8 @@ async def complete_authority(
             elapsed_ms=int((time.monotonic() - phase_started) * 1000),
             supplied_review=isinstance(review, dict),
         )
-        if isinstance(review, dict):
+        supplied_review = isinstance(review, dict)
+        if supplied_review:
             reviewed = review
         else:
             reviewed = await asyncio.wait_for(
@@ -842,6 +864,18 @@ async def complete_authority(
         elapsed_ms=int((time.monotonic() - phase_started) * 1000),
         release_gate_eligible=reviewed.get("release_gate_eligible") is True,
     )
+    worker_peak_memory = (
+        measure_worker_peak_memory_bytes()
+        if supplied_review
+        else reviewed.pop("_worker_peak_memory_bytes", None)
+    )
+    classification_integrity = build_classification_integrity(reviewed)
+    if classification_integrity:
+        reviewed["classification_integrity"] = classification_integrity
+        reviewed["classification_verdict"] = classification_integrity["state"]
+    if isinstance(worker_peak_memory, int) and worker_peak_memory > 0:
+        result["peak_memory_bytes"] = worker_peak_memory
+        result["worker_peak_memory_bytes"] = worker_peak_memory
     limitation = terminal_review_limitation(reviewed)
     if limitation is not None:
         return {
@@ -863,6 +897,26 @@ async def complete_authority(
             return await persist_limited_result(
                 client, scan, result, reviewed, signing_key, phase_started=phase_started,
             )
+        # The local review already decided this result is not release-eligible.
+        # Useful limited evidence took the integrity-only path above. Every
+        # remaining noneligible review must fail closed before durable authority.
+        emit(
+            "scan_job_completion_phase",
+            scan_id=scan_id,
+            attempt_count=attempt_count,
+            phase="not_release_eligible",
+            elapsed_ms=int((time.monotonic() - phase_started) * 1000),
+            coverage_state=coverage_state,
+        )
+        return {
+            "ok": False,
+            "transient": False,
+            "failure_code": "review_not_release_eligible",
+            "customer_message": (
+                "The scan finished, but there was not enough verified evidence "
+                "to save a trustworthy FixList. Please try again."
+            ),
+        }
 
     envelope = build_completion_envelope(scan, result, reviewed, signing_key)
     emit(

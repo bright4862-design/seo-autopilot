@@ -86,8 +86,9 @@ in Chromium and visually inspected.
 
 ## 2. Open PR — security
 
-**PR #194**, branch `claude/release-audit-design-arch-oeexdn`, head `93bc20f`.
-CI green. Draft, awaiting owner decision.
+**PR #194**, branch `claude/release-audit-design-arch-oeexdn`.
+Draft, awaiting owner decision. The branch head is intentionally not frozen in
+this document; use the live PR head and its exact-head checks.
 
 `.base44-device.json` is tracked in this repository, **which is public**. The
 Base44 CLI writes it during `base44 login`; it holds an OAuth `device_code` —
@@ -270,14 +271,15 @@ Covered by `scanner-api/tests/test_security_dns_pinning.py` and
 `tests/frontend/scannerSsrfGuard.test.mjs`. `scanner-api/SECURITY_BACKLOG.md`
 records it as CLOSED and the record matches the code.
 
-**The release pipeline is unusually well guarded.** Publishing is
-`workflow_dispatch` only and requires the exact `main` SHA as confirmation
-(`.github/workflows/fixlist-base44-release-publish.yml`), with
-`scripts/lib/release-source-guard.sh`, `deployment_preflight.sh`,
-`post_deploy_verify.sh`, and `verify-base44-site.sh` around it. **Merging to
-`main` does not deploy.** The only push-to-`main` triggers are `ci.yml` and two
-workflows path-scoped to `data/final-crawler-validation-trigger` and the IAM
-bootstrap workflow itself.
+**The release pipeline is unusually well guarded.** The Base44 publish
+workflow accepts either `workflow_dispatch` with the exact current `main` SHA or
+the owner-only exact `/publish-base44-release <sha>` issue-comment command
+(`.github/workflows/fixlist-base44-release-publish.yml`). Both paths still run
+the same exact-source guard, with `scripts/lib/release-source-guard.sh`,
+`deployment_preflight.sh`, `post_deploy_verify.sh`, and
+`verify-base44-site.sh` around the release. **Merging to `main` does not deploy.**
+The only push-to-`main` triggers are `ci.yml` and two workflows path-scoped to
+`data/final-crawler-validation-trigger` and the IAM bootstrap workflow itself.
 
 ### 4.2 The August 21 blockers are addressed in code
 
@@ -350,8 +352,8 @@ the single number that most affects how launch goes.
 | `npm run typecheck` | clean |
 | `npm run test:frontend` | **815 / 815** |
 | `npm run build` | succeeds (578 kB JS / 179 kB gzip, 1 chunk) |
-| GitHub CI "Lint, typecheck, contract tests, and build" | green on `93bc20f` |
-| GitHub CI "Scanner regression fixtures" | green on `93bc20f` |
+| GitHub CI "Lint, typecheck, contract tests, and build" | green on the PR head when recorded; rerun required after every head change |
+| GitHub CI "Scanner regression fixtures" | green on the PR head when recorded; rerun required after every head change |
 
 `scanner-api` pytest run **inside the audit sandbox** gave 744 passed / 8 failed.
 All 8 failures are `pyo3_runtime.PanicException` and `ModuleNotFound` from a

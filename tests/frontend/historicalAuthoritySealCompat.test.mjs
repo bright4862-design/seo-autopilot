@@ -35,6 +35,8 @@ import { RELEASE_FINGERPRINT } from "../../src/lib/generatedReleaseContract.js";
 
 const SECRET = "historical-compat-secret-never-deployed";
 const V1 = "standard_review_snapshot_hmac_v1";
+const V2 = "standard_review_snapshot_hmac_v2_coverage";
+const V3 = "standard_review_snapshot_hmac_v3_acceptance_evidence";
 const NOW = "2026-08-21T16:00:00.000Z";
 
 /** Fields Patch B added. A v1 payload must contain none of them. */
@@ -49,6 +51,13 @@ const COVERAGE_KEYS = [
   "sampling_evidence",
   "coverage_authority_evidence_version",
   "coverage_authority_evidence",
+];
+
+const ACCEPTANCE_KEYS = [
+  "classification_integrity",
+  "classification_verdict",
+  "peak_memory_bytes",
+  "worker_peak_memory_bytes",
 ];
 
 function snapshot() {
@@ -108,11 +117,26 @@ function snapshot() {
 async function historicalV1Row() {
   const legacy = structuredClone(snapshot());
   legacy.version = V1;
-  for (const key of COVERAGE_KEYS) delete legacy.scan[key];
+  for (const key of [...COVERAGE_KEYS, ...ACCEPTANCE_KEYS]) delete legacy.scan[key];
 
   const proof = await createAuthoritySeal(legacy, SECRET);
   const rows = authorityRowsFromSnapshot(legacy, {
     fixListId: "fl_hist",
+    ownerUserId: "user_hist",
+    proof,
+  });
+  return { legacy, proof, rows };
+}
+
+/** A row sealed after coverage v2 but before acceptance-evidence v3. */
+async function historicalV2Row() {
+  const legacy = structuredClone(snapshot());
+  legacy.version = V2;
+  for (const key of ACCEPTANCE_KEYS) delete legacy.scan[key];
+
+  const proof = await createAuthoritySeal(legacy, SECRET);
+  const rows = authorityRowsFromSnapshot(legacy, {
+    fixListId: "fl_v2",
     ownerUserId: "user_hist",
     proof,
   });
@@ -166,23 +190,17 @@ test("rebuilding a v1 row never introduces a field the v1 seal did not cover", a
 
 // ------------------------------------------------------------ new rows --
 
-test("new rows seal under the coverage attestation version", () => {
-  assert.equal(REVIEW_ATTESTATION_VERSION, "standard_review_snapshot_hmac_v2_coverage");
-  assert.equal(snapshot().version, "standard_review_snapshot_hmac_v2_coverage");
+test("new rows seal under the acceptance-evidence attestation version", () => {
+  assert.equal(REVIEW_ATTESTATION_VERSION, V3);
+  assert.equal(snapshot().version, V3);
 });
 
-test("a v2-sealed result verifies and carries the coverage evidence", async () => {
-  const fresh = snapshot();
-  const proof = await createAuthoritySeal(fresh, SECRET);
-  const rows = authorityRowsFromSnapshot(fresh, {
-    fixListId: "fl_new",
-    ownerUserId: "user_hist",
-    proof,
-  });
+test("a historical v2-sealed result still verifies and carries coverage evidence", async () => {
+  const { proof, rows } = await historicalV2Row();
 
   const rebuilt = authoritySnapshotFromRows({
     scan: { id: "scan_hist", project_id: "proj_hist", ...rows.scanRun },
-    fixList: { id: "fl_new", ...rows.fixList },
+    fixList: { id: "fl_v2", ...rows.fixList },
     fixItems: rows.fixItems,
     userId: "user_hist",
   });
@@ -192,11 +210,11 @@ test("a v2-sealed result verifies and carries the coverage evidence", async () =
   assert.equal(rebuilt.scan.coverage_authority_evidence.assessment, "sufficient");
 });
 
-test("a v1 proof cannot verify a v2 payload", async () => {
+test("a v1 proof cannot verify a v3 payload", async () => {
   /** The versions must be genuinely distinct domains, not cosmetic labels. */
   const { legacy, proof } = await historicalV1Row();
   const upgraded = structuredClone(legacy);
-  upgraded.version = "standard_review_snapshot_hmac_v2_coverage";
+  upgraded.version = V3;
 
   assert.equal(await verifyAuthoritySeal(upgraded, SECRET, proof), false);
 });

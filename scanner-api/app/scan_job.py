@@ -27,6 +27,10 @@ from urllib.parse import urlparse
 
 import httpx
 
+from .acceptance_evidence import (
+    build_classification_integrity,
+    measure_worker_peak_memory_bytes,
+)
 from .observability import emit
 
 WORKER_VERSION = "scan_job_worker_v1_cloud_tasks"
@@ -475,6 +479,9 @@ def limited_result_payload(review: dict[str, Any]) -> dict[str, Any]:
         "coverage_state": assessment.get("state") or coverage_state_of(review),
         "coverage_reasons": assessment.get("reasons") or [],
         "coverage_authority_version": assessment.get("coverage_authority_version") or "",
+        "coverage_authority_evidence": review.get("coverage_authority_evidence") or {},
+        "classification_integrity": review.get("classification_integrity") or {},
+        "classification_verdict": review.get("classification_verdict") or "",
         "recommendations": review.get("recommendations") or review.get("fixes") or [],
     }
 
@@ -842,6 +849,14 @@ async def complete_authority(
         elapsed_ms=int((time.monotonic() - phase_started) * 1000),
         release_gate_eligible=reviewed.get("release_gate_eligible") is True,
     )
+    classification_integrity = build_classification_integrity(reviewed)
+    if classification_integrity:
+        reviewed["classification_integrity"] = classification_integrity
+        reviewed["classification_verdict"] = classification_integrity["state"]
+    worker_peak_memory = measure_worker_peak_memory_bytes()
+    if worker_peak_memory is not None:
+        result["peak_memory_bytes"] = worker_peak_memory
+        result["worker_peak_memory_bytes"] = worker_peak_memory
     limitation = terminal_review_limitation(reviewed)
     if limitation is not None:
         return {
@@ -866,6 +881,14 @@ async def complete_authority(
         # The local review already decided this result is not release-eligible.
         # Useful limited evidence took the integrity-only path above. Every
         # remaining noneligible review must fail closed before durable authority.
+        emit(
+            "scan_job_completion_phase",
+            scan_id=scan_id,
+            attempt_count=attempt_count,
+            phase="not_release_eligible",
+            elapsed_ms=int((time.monotonic() - phase_started) * 1000),
+            coverage_state=coverage_state,
+        )
         return {
             "ok": False,
             "transient": False,

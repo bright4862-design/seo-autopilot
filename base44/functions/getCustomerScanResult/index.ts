@@ -18,6 +18,11 @@ import {
 const ACCEPTED_AUTHORITY_VERSIONS = new Set([
   "standard_review_snapshot_hmac_v1",
   "standard_review_snapshot_hmac_v2_coverage",
+  "standard_review_snapshot_hmac_v3_acceptance_evidence",
+]);
+const ACCEPTED_LIMITED_INTEGRITY_VERSIONS = new Set([
+  "standard_limited_result_integrity_v1",
+  "standard_limited_result_integrity_v2_acceptance_evidence",
 ]);
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 const MAX_FIX_ITEMS = 100;
@@ -111,7 +116,12 @@ Deno.serve(async (req) => {
     // authority_verified false so nothing downstream can promote it.
     if (run.status === "limited") {
       const integrityProof = cleanProof(run.result_integrity_proof);
-      if (!integrityProof || run.release_gate_eligible === true || cleanProof(run.authority_proof)) {
+      if (
+        !integrityProof
+        || !ACCEPTED_LIMITED_INTEGRITY_VERSIONS.has(cleanText(run.result_integrity_version, 160))
+        || run.release_gate_eligible === true
+        || cleanProof(run.authority_proof)
+      ) {
         throw new RequestProblem(409, "limited_result_invalid", "This saved result could not be verified.");
       }
       const limitedFixList = await loadLimitedFixList(serviceEntities.FixList, run, user, integrityProof);
@@ -131,12 +141,16 @@ Deno.serve(async (req) => {
           health_score: run.health_score,
           health_grade: run.health_grade,
           limitation: run.limitation || run.status_detail,
-          coverage_state: run.coverage_authority_evidence?.assessment,
-          coverage_reasons: run.coverage_authority_evidence?.reasons,
-          coverage_authority_version: run.coverage_authority_evidence?.coverage_authority_version,
+          coverage_state: run.coverage_authority_evidence?.assessment || run.coverage_state,
+          coverage_reasons: run.coverage_authority_evidence?.reasons || run.coverage_reasons,
+          coverage_authority_version: run.coverage_authority_evidence?.coverage_authority_version || run.coverage_authority_version,
+          coverage_authority_evidence: run.coverage_authority_evidence,
+          classification_integrity: run.classification_integrity,
+          classification_verdict: run.classification_verdict,
           recommendations: limitedFixItems,
         },
         now: cleanText(run.result_integrity_sealed_at, 80),
+        version: cleanText(run.result_integrity_version, 160),
       });
       const secret = String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || "");
       if (!secret) {

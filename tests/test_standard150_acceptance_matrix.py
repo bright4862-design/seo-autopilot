@@ -5,6 +5,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
@@ -372,6 +373,119 @@ def test_final_aggregate_cannot_pass_with_unmeasured_dimensions():
         and "memory_resource_result" in failure
         for failure in result["failures"]
     )
+
+
+def test_projected_acceptance_evidence_closes_the_three_observation_gaps():
+    item = _complete_item("scan_observed")
+    item.run.update({
+        "coverage_authority_evidence": {
+            "coverage_authority_evidence_version": "coverage_authority_evidence_v2_authoritative",
+            "assessment": "sufficient",
+        },
+        "classification_integrity": {
+            "state": "classified",
+            "classifier_version": "classifier_1",
+        },
+        "classification_verdict": "classified",
+        "worker_peak_memory_bytes": 268_435_456,
+    })
+
+    matrix = HARNESS.build_acceptance_matrix(HARNESS._matrix_observation(item))
+
+    assert matrix["coverage_sufficiency"]["state"] == "sufficient"
+    assert matrix["classification_verdict"]["state"] == "classified"
+    assert matrix["memory_resource_result"] == {
+        "available": True,
+        "state": "measured",
+        "peak_memory_bytes": 268_435_456,
+        "failure_code": "",
+        "reason": "",
+    }
+    assert not {
+        "coverage_sufficiency",
+        "classification_verdict",
+        "memory_resource_result",
+    } & set(_matrix_contract_gaps(matrix))
+
+
+class _DummyAsyncClient:
+    async def __aenter__(self):
+        return object()
+
+    async def __aexit__(self, *_args):
+        return None
+
+
+def _main_args(tmp_path, *, checkpoint):
+    tokens = tmp_path / "tokens.json"
+    targets = tmp_path / "targets.json"
+    tokens.write_text(json.dumps({"acceptance@example.com": "test-token"}), encoding="utf-8")
+    targets.write_text(json.dumps([{
+        "email": "acceptance@example.com",
+        "url": "https://example.com",
+        "project_id": "project_1",
+    }]), encoding="utf-8")
+    return SimpleNamespace(
+        tokens=str(tokens),
+        targets=str(targets),
+        count=1,
+        double_submit=False,
+        timeout=1,
+        checkpoint=checkpoint,
+        gcp_project="",
+    )
+
+
+def _stub_main_dependencies(monkeypatch):
+    async def no_submit(_client, _token, _item):
+        return None
+
+    async def no_wait(_client, _tokens, _items, _timeout, *, checkpoint_path=""):
+        return None
+
+    monkeypatch.setattr(HARNESS.httpx, "AsyncClient", _DummyAsyncClient)
+    monkeypatch.setattr(HARNESS, "submit", no_submit)
+    monkeypatch.setattr(HARNESS, "wait_terminal", no_wait)
+    monkeypatch.setattr(HARNESS, "log_quality", lambda *_args: {"available": False})
+    monkeypatch.setattr(HARNESS, "report", lambda *_args: {
+        "failures": [],
+        "passed": True,
+        "results": [],
+    })
+
+
+def test_final_report_prints_when_checkpoint_is_disabled(tmp_path, monkeypatch, capsys):
+    _stub_main_dependencies(monkeypatch)
+
+    def unexpected_checkpoint(*_args):
+        raise AssertionError("disabled checkpoint must not be written")
+
+    monkeypatch.setattr(HARNESS, "write_checkpoint", unexpected_checkpoint)
+
+    status = asyncio.run(HARNESS.main_async(_main_args(tmp_path, checkpoint="")))
+    printed = json.loads(capsys.readouterr().out)
+
+    assert status == 0
+    assert printed["passed"] is True
+
+
+def test_final_report_survives_checkpoint_failure(tmp_path, monkeypatch, capsys):
+    _stub_main_dependencies(monkeypatch)
+
+    def failed_checkpoint(*_args):
+        raise OSError("filesystem refused directory fsync")
+
+    monkeypatch.setattr(HARNESS, "write_checkpoint", failed_checkpoint)
+
+    status = asyncio.run(HARNESS.main_async(_main_args(
+        tmp_path,
+        checkpoint=str(tmp_path / "checkpoint.json"),
+    )))
+    printed = json.loads(capsys.readouterr().out)
+
+    assert status == 1
+    assert printed["passed"] is False
+    assert printed["failures"] == ["checkpoint write failed: OSError"]
 
 
 def test_real_harness_requires_the_exact_release_under_acceptance(monkeypatch):

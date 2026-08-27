@@ -95,6 +95,9 @@ Deno.serve(async (req) => {
       scan: { ...scanResult, worker_source_sha: cleanText(body?.worker_source_sha, 80) },
       review,
       now: sealedAt,
+      version: scanStatus === "limited"
+        ? cleanText(scan.result_integrity_version, 160) || undefined
+        : undefined,
     });
     if (!snapshot.eligible_for_limited_result) {
       throw new RequestProblem(409, "limited_result_has_no_evidence", "There is no useful evidence to persist.");

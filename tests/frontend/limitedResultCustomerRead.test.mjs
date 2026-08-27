@@ -112,7 +112,8 @@ test("the read path verifies the limited proof against its own domain", () => {
 
 test("a limited row carrying an authority proof is refused outright", () => {
   /** Nothing may arrive holding both; that would be a promotion path. */
-  assert.match(SOURCE, /run\.release_gate_eligible === true \|\| cleanProof\(run\.authority_proof\)/);
+  assert.match(SOURCE, /run\.release_gate_eligible === true/);
+  assert.match(SOURCE, /cleanProof\(run\.authority_proof\)/);
 });
 
 test("the limited branch returns authorityVerified false", () => {

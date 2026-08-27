@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   LIMITED_RESULT_INTEGRITY_VERSION,
+  LIMITED_RESULT_INTEGRITY_VERSION_V1,
   LIMITED_RESULT_HMAC_DOMAIN,
+  LIMITED_RESULT_HMAC_DOMAIN_V1,
   buildLimitedResultSnapshot,
   createLimitedResultProof,
   verifyLimitedResultProof,
@@ -30,7 +32,7 @@ import { RELEASE_FINGERPRINT } from "../../src/lib/generatedReleaseContract.js";
 const SECRET = "limited-result-secret-never-deployed";
 const NOW = "2026-08-22T02:00:00.000Z";
 
-function snapshot(overrides = {}) {
+function snapshot(overrides = {}, version = LIMITED_RESULT_INTEGRITY_VERSION) {
   return buildLimitedResultSnapshot({
     identity: {
       scan_id: "scan_tanners",
@@ -64,6 +66,7 @@ function snapshot(overrides = {}) {
       ...overrides,
     },
     now: NOW,
+    version,
   });
 }
 
@@ -98,8 +101,19 @@ test("an authority seal cannot be used as a limited proof", async () => {
 test("the signed payload binds the domain label", () => {
   const limited = snapshot();
   assert.equal(limited.integrity_domain, LIMITED_RESULT_HMAC_DOMAIN);
-  assert.equal(LIMITED_RESULT_HMAC_DOMAIN, "standard_limited_result_hmac_v1");
+  assert.equal(LIMITED_RESULT_HMAC_DOMAIN, "standard_limited_result_hmac_v2_acceptance_evidence");
   assert.equal(limited.version, LIMITED_RESULT_INTEGRITY_VERSION);
+});
+
+test("historical v1 limited results retain their original proof domain and shape", async () => {
+  const historical = snapshot({}, LIMITED_RESULT_INTEGRITY_VERSION_V1);
+  const proof = await createLimitedResultProof(historical, SECRET);
+
+  assert.equal(historical.version, "standard_limited_result_integrity_v1");
+  assert.equal(historical.integrity_domain, LIMITED_RESULT_HMAC_DOMAIN_V1);
+  assert.equal("classification_integrity" in historical.scan, false);
+  assert.equal("worker_peak_memory_bytes" in historical.scan, false);
+  assert.equal(await verifyLimitedResultProof(historical, SECRET, proof), true);
 });
 
 // ------------------------------------------------------- it is verifiable --

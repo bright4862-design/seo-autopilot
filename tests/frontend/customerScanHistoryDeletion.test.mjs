@@ -74,6 +74,8 @@ test("required child reads fail with a sanitized service error instead of deleti
 test("capped child reads are drained before the parent scan is deleted", () => {
   const deletionStart = backend.indexOf("async function deleteOwnedTerminalScan");
   const requiredRowsStart = backend.indexOf("async function requiredRows", deletionStart);
+  assert.ok(deletionStart >= 0, "deleteOwnedTerminalScan is missing");
+  assert.ok(requiredRowsStart > deletionStart, "requiredRows fail-closed helper is missing");
   const deletion = backend.slice(deletionStart, requiredRowsStart);
 
   assert.match(backend, /FIX_LIST_DELETE_BATCH\s*=\s*20/);

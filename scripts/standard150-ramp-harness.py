@@ -265,6 +265,7 @@ def _checkpoint_summary(item: Submission) -> dict[str, Any]:
         "error_code": str(item.run.get("error_code") or item.failure_code or ""),
         "acceptance_matrix": matrix,
         "matrix_gaps": _matrix_contract_gaps(matrix),
+        "matrix_failures": exact_release_matrix_failures(matrix),
     }
 
 
@@ -401,7 +402,11 @@ async def main_async(args: argparse.Namespace) -> int:
 
     logs = log_quality([i.scan_id for i in items if i.scan_id], started, args.gcp_project)
     result = report(items, logs, before if args.double_submit else None, after if args.double_submit else None)
-    write_checkpoint(args.checkpoint, items)
+    if args.checkpoint:
+        try:
+            write_checkpoint(args.checkpoint, items)
+        except (OSError, ValueError) as exc:
+            result["failures"].append(f"checkpoint write failed: {type(exc).__name__}")
     if args.double_submit:
         if len(result["new_scan_runs"]) != 1:
             result["failures"].append(f"same-owner double-submit created {len(result['new_scan_runs'])} new ScanRuns; expected 1")
@@ -409,7 +414,7 @@ async def main_async(args: argparse.Namespace) -> int:
             result["failures"].append("same-owner double-submit must accept exactly one request")
         if len([i for i in items if i.failure_code == "scan_admission_busy"]) != 1:
             result["failures"].append("losing same-owner request must return scan_admission_busy")
-        result["passed"] = not result["failures"]
+    result["passed"] = not result["failures"]
     print(json.dumps(result, indent=2))
     return 0 if result["passed"] else 1
 

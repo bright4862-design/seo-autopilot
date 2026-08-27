@@ -33,7 +33,7 @@ def _clean(value: Any, limit: int = 200) -> str:
 
 
 def _nonnegative_number(value: Any) -> int | float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
         return None
     return value
 

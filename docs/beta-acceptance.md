@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `1ddf8085bc7721c4` |
+| Candidate fingerprint | `cd31b3c1e5f9dd7c` |
 | Classifier | `archetype_classifier_v10_structural_finance_member_retail` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -14,20 +14,24 @@
 
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
-`archetype_classifier_v8_platform_product_routes`. The shipping code is
-fingerprint `1ddf8085bc7721c4` with classifier
+`archetype_classifier_v8_platform_product_routes`. The candidate code is
+fingerprint `cd31b3c1e5f9dd7c` with classifier
 `archetype_classifier_v10_structural_finance_member_retail`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded final-core candidate was `c0815d78c19d50db`.
-The current candidate moved the fingerprint to `1ddf8085bc7721c4` after the
-full composition review finalized `scan_history_delete_v2_drain_children` for
-bounded complete child draining and retained XML-identity-safe sitemap parsing.
-The limited-score customer projection remains versioned as
-`customer_projection_v2_limited_score_context`. Production acceptance has not
-been run. Earlier candidates `0b609da10fca57c7`, `3c9bd231295bc328`, and
-`3fccb57bd367dcfb` are historical.
+The immediately superseded final-core candidate was `1ddf8085bc7721c4`.
+The current candidate moved the fingerprint to `cd31b3c1e5f9dd7c` by binding
+coverage, classification-integrity, and measured worker-peak-memory evidence
+into the signed durable result contracts and the paid customer projection. It
+also preserves a completed acceptance report when the final local checkpoint
+write fails. The customer projection is versioned as
+`customer_projection_v3_acceptance_evidence`, the authoritative review
+attestation as `standard_review_snapshot_hmac_v3_acceptance_evidence`, and the
+limited-result integrity contract as
+`standard_limited_result_integrity_v2_acceptance_evidence`. Production
+acceptance has not been run. Earlier candidates `c0815d78c19d50db`,
+`0b609da10fca57c7`, `3c9bd231295bc328`, and `3fccb57bd367dcfb` are historical.
 
 The earlier Patch E candidate was `6e0368d4ac5d2a6b`. The stacked candidate
 moved the fingerprint to `400f68e10999fc59` by adding

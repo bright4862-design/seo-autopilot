@@ -8,7 +8,7 @@ export const OWNER_TEST_USER_ID = "6a498da58ef5cec1f5cd4486";
 // Versions the customer projection itself. Declared in
 // data/cross-runtime-release-components.json so a projection behavior change
 // moves the release fingerprint like any Python change would.
-export const CUSTOMER_PROJECTION_VERSION = "customer_projection_v2_limited_score_context";
+export const CUSTOMER_PROJECTION_VERSION = "customer_projection_v3_acceptance_evidence";
 export const REPAIR_CONTRACT_V2 = "repair_contract_v2_shadow_calibrated";
 export const REPAIR_PRIORITY_MODEL_V2 = "repair_priority_v2_technical_severity";
 
@@ -94,6 +94,11 @@ const DETAILED_RUN_FIELDS = [
   "default_route_page_count",
   "evidence_quality_blocking",
   "evidence_quality_gate_version",
+  "coverage_authority_evidence",
+  "classification_integrity",
+  "classification_verdict",
+  "peak_memory_bytes",
+  "worker_peak_memory_bytes",
   "no_high_confidence_findings",
   "limitation",
   "render_evidence",
@@ -327,10 +332,11 @@ export function authoritySnapshotFromRows({ run, fixList, fixItems, userId }) {
       evidence_quality_state: text(run?.evidence_quality_state, 120),
       evidence_quality_score: number(run?.evidence_quality_score),
       evidence_quality_reasons: textArray(run?.evidence_quality_reasons, 12, 500),
-      // Coverage/inventory diagnostics, present only in the v2 payload.
+      // Coverage/inventory diagnostics, present in v2 and carried forward by v3.
       // A row sealed under v1 must be rebuilt exactly as v1 or its stored
       // proof stops verifying and an intact result reads as tampered.
       ...coverageSnapshotFields(run),
+      ...acceptanceEvidenceSnapshotFields(run),
       health_score: number(run?.health_score),
       health_grade: text(run?.health_grade, 80),
       customer_summary: text(run?.customer_summary, 4_000),
@@ -611,6 +617,7 @@ function plainObject(value) {
 }
 
 const REVIEW_ATTESTATION_VERSION_V2 = "standard_review_snapshot_hmac_v2_coverage";
+const REVIEW_ATTESTATION_VERSION_V3 = "standard_review_snapshot_hmac_v3_acceptance_evidence";
 
 /**
  * Reconstruction is version-dispatched, never inferred from which fields the
@@ -619,7 +626,9 @@ const REVIEW_ATTESTATION_VERSION_V2 = "standard_review_snapshot_hmac_v2_coverage
  * seal did not cover. The row's own authority_seal_version is the authority.
  */
 function coverageSnapshotFields(row) {
-  if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V2) return {};
+  if (![REVIEW_ATTESTATION_VERSION_V2, REVIEW_ATTESTATION_VERSION_V3].includes(
+    text(row?.authority_seal_version, 160),
+  )) return {};
   return {
     pages_retained: number(row?.pages_retained),
     usable_html_page_count: number(row?.usable_html_page_count),
@@ -630,6 +639,27 @@ function coverageSnapshotFields(row) {
     crawl_timing: plainObject(row?.crawl_timing),
     sampling_evidence: plainObject(row?.sampling_evidence),
     ...coverageAuthorityFields(row?.coverage_authority_evidence),
+  };
+}
+
+function acceptanceEvidenceSnapshotFields(row) {
+  if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V3) return {};
+  const source = plainObject(row?.classification_integrity);
+  const state = text(source.state || source.verdict || row?.classification_verdict, 120);
+  const workerPeak = number(row?.worker_peak_memory_bytes ?? row?.peak_memory_bytes);
+  return {
+    classification_integrity: state ? {
+      version: text(source.version, 160),
+      state,
+      verdict: text(source.verdict || state, 120),
+      classifier_version: text(source.classifier_version, 160),
+      evidence_sufficiency: text(source.evidence_sufficiency, 120),
+      usable_pages: number(source.usable_pages),
+      complete_small_site_inventory: source.complete_small_site_inventory === true,
+    } : {},
+    classification_verdict: state,
+    peak_memory_bytes: workerPeak,
+    worker_peak_memory_bytes: workerPeak,
   };
 }
 

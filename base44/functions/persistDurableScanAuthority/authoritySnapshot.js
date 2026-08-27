@@ -5,8 +5,9 @@ import { firstFailedRepairInvariant } from "./repairInvariants.js";
 // payload for every row -- including rows sealed before it existed. Version
 // dispatch on reconstruction keeps those rows verifiable instead of turning
 // an intact result into 409 result_authority_invalid.
-export const REVIEW_ATTESTATION_VERSION = "standard_review_snapshot_hmac_v2_coverage";
+export const REVIEW_ATTESTATION_VERSION = "standard_review_snapshot_hmac_v3_acceptance_evidence";
 export const REVIEW_ATTESTATION_VERSION_V1 = "standard_review_snapshot_hmac_v1";
+export const REVIEW_ATTESTATION_VERSION_V2 = "standard_review_snapshot_hmac_v2_coverage";
 export const MAX_AUTHORITY_FIXES = 100;
 
 export const REPAIR_CONTRACT_V2 = "repair_contract_v2_shadow_calibrated";
@@ -197,6 +198,7 @@ export function buildAuthoritySnapshot({ scan, review, identity, userId, now = n
       crawl_timing: plainObject(scan?.crawl_timing ?? scan?.technical_audit_summary?.crawl_timing),
       sampling_evidence: plainObject(scan?.sampling_evidence),
       ...coverageAuthorityFields(review?.coverage_authority_evidence),
+      ...acceptanceEvidenceFields(scan, review),
       health_score: healthScore,
       health_grade: healthGrade,
       customer_summary: customerSummary,
@@ -507,6 +509,26 @@ function coverageAuthorityFields(evidence) {
   return {
     coverage_authority_evidence_version: version,
     coverage_authority_evidence: assessment,
+  };
+}
+
+function acceptanceEvidenceFields(scan, review) {
+  const source = plainObject(review?.classification_integrity);
+  const state = text(source.state || source.verdict || review?.classification_verdict, 120);
+  const workerPeak = number(scan?.worker_peak_memory_bytes ?? scan?.peak_memory_bytes);
+  return {
+    classification_integrity: state ? {
+      version: text(source.version, 160),
+      state,
+      verdict: text(source.verdict || state, 120),
+      classifier_version: text(source.classifier_version, 160),
+      evidence_sufficiency: text(source.evidence_sufficiency, 120),
+      usable_pages: number(source.usable_pages),
+      complete_small_site_inventory: source.complete_small_site_inventory === true,
+    } : {},
+    classification_verdict: state,
+    peak_memory_bytes: workerPeak,
+    worker_peak_memory_bytes: workerPeak,
   };
 }
 

@@ -87,6 +87,7 @@ def collect_component_versions() -> dict[str, str]:
         ROUTE_BOUNDARY_CLASSIFIER_VERSION,
     )
     from .indexability_quality import INDEXABILITY_QUALITY_VERSION
+    from .acceptance_evidence import ACCEPTANCE_EVIDENCE_VERSION
     from .navigation_indexability import NAVIGATION_INDEXABILITY_VERSION
     from .metadata_title_evidence import METADATA_EVIDENCE_VERSION, TITLE_EVIDENCE_VERSION
     from .page_evidence_gate import PAGE_EVIDENCE_GATE_VERSION
@@ -114,6 +115,7 @@ def collect_component_versions() -> dict[str, str]:
     components = {
         "scanner_version": VERSION,
         "scanner_build_revision": SCANNER_BUILD_REVISION,
+        "acceptance_evidence_version": ACCEPTANCE_EVIDENCE_VERSION,
         "artifact_filter_version": ARTIFACT_FILTER_VERSION,
         "route_boundary_classifier_version": ROUTE_BOUNDARY_CLASSIFIER_VERSION,
         "page_template_classifier_version": PAGE_TEMPLATE_CLASSIFIER_VERSION,

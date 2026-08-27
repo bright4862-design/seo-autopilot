@@ -3,9 +3,17 @@ import { Outlet } from 'react-router-dom';
 import { useAuth } from '@/lib/AuthContext';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 
+// Painted on every authenticated load before the app renders, so it uses the
+// same paper/ink palette as the surface that replaces it rather than the
+// template's slate.
 const DefaultFallback = () => (
-  <div className="fixed inset-0 flex items-center justify-center">
-    <div className="w-8 h-8 border-4 border-slate-200 border-t-slate-800 rounded-full animate-spin"></div>
+  <div
+    className="fixed inset-0 flex items-center justify-center bg-paper"
+    role="status"
+    aria-live="polite"
+  >
+    <div className="h-8 w-8 animate-spin rounded-full border-4 border-hairline border-t-ink" />
+    <span className="sr-only">Loading your account…</span>
   </div>
 );
 

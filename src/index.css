@@ -11,8 +11,15 @@
     --safe-area-right: env(safe-area-inset-right);
     --safe-area-bottom: env(safe-area-inset-bottom);
     --safe-area-left: env(safe-area-inset-left);
-    --background: 220 23% 97%;
-    --foreground: 222 47% 11%;
+    /* The shipped surfaces (Landing, DashboardLayout, AuthLayout, FixList,
+       Billing) all paint the warm `paper`/`ink` palette from tailwind.config.js.
+       The root tokens used to hold the cool blue-grey template defaults, so the
+       document behind those surfaces was a different colour than the surfaces
+       themselves — visible as a tint change on overscroll and as a flash on
+       every authenticated load, while ProtectedRoute's fallback painted before
+       the app did. These are the same two colours as `paper` and `ink`. */
+    --background: 60 9% 98%;
+    --foreground: 24 10% 10%;
     --card: 0 0% 100%;
     --card-foreground: 222 47% 11%;
     --popover: 0 0% 100%;

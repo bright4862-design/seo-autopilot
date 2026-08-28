@@ -1,12 +1,12 @@
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{8,180}$/;
 const TERMINAL_STATUSES = new Set(["complete", "limited", "failed", "cancelled"]);
 
-export function scanIntakeEnabled() {
-  return String(Deno.env.get("BETA_SCAN_INTAKE_ENABLED") || "") === "true";
+export function scanIntakeEnabled(intakeValue) {
+  return String(intakeValue || "") === "true";
 }
 
-export function betaScanAdmissionPolicy() {
-  if (!scanIntakeEnabled()) {
+export function betaScanAdmissionPolicy(intakeValue) {
+  if (!scanIntakeEnabled(intakeValue)) {
     return { ok: false, code: "scan_intake_paused" };
   }
   if (String(Deno.env.get("BETA_SCAN_ADMISSION_ENABLED") || "") !== "true") {

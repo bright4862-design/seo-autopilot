@@ -57,6 +57,6 @@ fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami"
 FIXLIST_BASE44_CLI="$FIXLIST_BASE44_CLI" \
 BASE44_APP_ID="$APP_ID" \
 ACTION="$ACTION" \
-"$REPO_ROOT/scripts/verify-base44-scan-intake-runtime.sh"
+/bin/bash "$REPO_ROOT/scripts/verify-base44-scan-intake-runtime.sh"
 
 printf 'BASE44_SCAN_INTAKE_UPDATED\naction=%s\nsource_sha=%s\n' "$ACTION" "$SOURCE_SHA"

@@ -19,6 +19,9 @@ const gatewayBootstrap = read("scripts/bootstrap-fixlist-dispatch-gateway.sh");
 const workflow = read(".github/workflows/fixlist-cloud-operator.yml");
 const cloudOperator = read("scripts/fixlist-cloud-operator.sh");
 const intakeControl = read("scripts/set-base44-scan-intake.sh");
+const intakeRuntimeVerifier = read("scripts/verify-base44-scan-intake-runtime.sh");
+const startStandardScanJobEntry = read("base44/functions/startStandardScanJob/entry.ts");
+const startStandardScanAdmission = read("base44/functions/startStandardScanJob/admission.js");
 const connectivityControl = read("scripts/set-base44-admission-connectivity.sh");
 const intakeWorkflow = read(".github/workflows/fixlist-base44-scan-intake.yml");
 const connectivityWorkflow = read(".github/workflows/fixlist-base44-admission-connectivity.yml");
@@ -356,9 +359,26 @@ test("cutover pause drains live obligations before pausing and resume is the exa
   assert.doesNotMatch(cloudOperator.match(/require_closed_drained_barrier\(\) \{[\s\S]*?\n\}/)?.[0] || "", /CLAIMED_EXPIRED/);
 });
 
-test("Base44 intake and connectivity are isolated owner controls with no CI device login", () => {
+test("Base44 intake and connectivity are isolated owner controls with verified runtime convergence", () => {
   assert.match(intakeControl, /secrets set[\s\S]*BETA_SCAN_INTAKE_ENABLED=\$VALUE/);
   assert.doesNotMatch(intakeControl, /BETA_SCAN_ADMISSION_ENABLED=|secrets (list|delete)|"\$FIXLIST_BASE44_CLI" login/);
+  const verifyIndex = intakeControl.indexOf("verify-base44-scan-intake-runtime.sh");
+  const successIndex = intakeControl.indexOf("BASE44_SCAN_INTAKE_UPDATED");
+  assert.ok(verifyIndex > -1 && successIndex > verifyIndex, "intake success must follow runtime convergence verification");
+  assert.match(intakeRuntimeVerifier, /exec --data-env prod/);
+  assert.match(intakeRuntimeVerifier, /fixlist-intake-probe-nonexistent/);
+  assert.match(intakeRuntimeVerifier, /scan_intake_paused/);
+  assert.match(intakeRuntimeVerifier, /project_not_found/);
+  assert.match(intakeRuntimeVerifier, /accepted === true|value\.accepted === true/);
+  assert.match(intakeRuntimeVerifier, /scan_id/);
+
+  assert.match(startStandardScanJobEntry, /import \{ secrets \} from "base44:runtime"/);
+  assert.match(startStandardScanJobEntry, /secrets\.get\("BETA_SCAN_INTAKE_ENABLED"\)/);
+  assert.doesNotMatch(startStandardScanAdmission, /Deno\.env\.get\("BETA_SCAN_INTAKE_ENABLED"\)/);
+  const projectLookup = startStandardScanJobEntry.indexOf("loadExactOwnedProject({");
+  const admissionClaim = startStandardScanJobEntry.indexOf("admitServerOwnedScan({", projectLookup);
+  assert.ok(projectLookup > -1 && admissionClaim > projectLookup, "runtime probe must stop at project lookup before admission claim");
+
   assert.match(connectivityControl, /verify-zero-admission-obligations/);
   assert.match(connectivityControl, /secrets set[\s\S]*BETA_SCAN_ADMISSION_ENABLED=\$VALUE/);
   assert.doesNotMatch(connectivityControl, /BETA_SCAN_INTAKE_ENABLED=|secrets (list|delete)|"\$FIXLIST_BASE44_CLI" login/);
@@ -369,6 +389,8 @@ test("Base44 intake and connectivity are isolated owner controls with no CI devi
     assert.match(ownerWorkflow, /environment: fixlist-production-owner/);
     assert.doesNotMatch(ownerWorkflow, /runs-on:\s*ubuntu-latest|BASE44_AUTH\s*:|BASE44_REFRESH_TOKEN\s*:/i);
   }
+  assert.match(intakeWorkflow, /denoland\/setup-deno@v2/);
+  assert.match(intakeWorkflow, /deno-version: v2\.4\.5/);
 });
 
 test("worker provenance lookup uses the same regional Cloud Build scope as the candidate build", () => {

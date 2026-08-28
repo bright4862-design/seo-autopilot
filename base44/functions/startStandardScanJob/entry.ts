@@ -1,4 +1,5 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.31";
+import { secrets } from "base44:runtime";
 import {
   DRAIN_DELAY_SECONDS,
   enqueueScanDrain,
@@ -31,6 +32,14 @@ function corsHeaders() {
 
 function jsonResponse(payload, status = 200) {
   return Response.json(payload, { status, headers: corsHeaders() });
+}
+
+function mutableScanIntakeValue() {
+  try {
+    return secrets.get("BETA_SCAN_INTAKE_ENABLED");
+  } catch {
+    return "";
+  }
 }
 
 const VERSION = "startStandardScanJob_v3_server_admission";
@@ -165,7 +174,7 @@ export default async function (req: Request): Promise<Response> {
         }, entitlement.failureCode === "paid_access_conflict" ? 409 : 402);
       }
     } else {
-      const policy = betaScanAdmissionPolicy();
+      const policy = betaScanAdmissionPolicy(mutableScanIntakeValue());
       if (!policy.ok) {
         return jsonResponse({
           success: false,

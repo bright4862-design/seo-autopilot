@@ -55,7 +55,12 @@ jobs:
         with:
           node-version: '20.19.5'
 
-      - name: Mutate only public scan intake
+      - name: Set up pinned Deno runtime
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.4.5
+
+      - name: Mutate and verify public scan intake
         shell: /bin/bash {0}
         env:
           ACTION: ${{ inputs.action }}

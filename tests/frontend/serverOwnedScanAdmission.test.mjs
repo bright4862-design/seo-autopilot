@@ -474,9 +474,8 @@ test("an uncertain dispatcher release remains durably pending for reconciliation
 
 test("intake pause refuses before coordinator claim or durable writes", async () => {
   const restoreEnv = installEnv();
-  const priorGet = globalThis.Deno.env.get;
-  globalThis.Deno.env.get = (name) => name === "BETA_SCAN_INTAKE_ENABLED" ? "false" : priorGet(name);
   const harness = createHarness();
+  harness.setIntakeSecret("false");
   let claims = 0;
   const originalClaim = harness.globals.claimAdmission;
   harness.globals.claimAdmission = async (...args) => {

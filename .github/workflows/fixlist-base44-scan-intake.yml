@@ -49,6 +49,7 @@ jobs:
           test "$(git rev-parse origin/main)" = "${{ github.sha }}"
           test -z "$(git status --porcelain --untracked-files=all)"
           /bin/bash -n scripts/set-base44-scan-intake.sh
+          /bin/bash -n scripts/verify-base44-scan-intake-runtime.sh
 
       - name: Set up pinned Node runtime
         uses: actions/setup-node@v6

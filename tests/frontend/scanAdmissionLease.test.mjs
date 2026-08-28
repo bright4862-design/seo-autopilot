@@ -29,18 +29,17 @@ function withEnv(values, fn) {
 test("scan admission is default-off and requires the coordinator, not an unproven Base44 atomic primitive", () => {
   const values = new Map();
   withEnv(values, () => {
-    assert.equal(betaScanAdmissionPolicy().code, "scan_intake_paused");
-    values.set("BETA_SCAN_INTAKE_ENABLED", "true");
-    assert.equal(betaScanAdmissionPolicy().code, "scan_admission_paused");
+    assert.equal(betaScanAdmissionPolicy(undefined).code, "scan_intake_paused");
+    assert.equal(betaScanAdmissionPolicy("true").code, "scan_admission_paused");
     values.set("BETA_SCAN_ADMISSION_ENABLED", "true");
-    assert.equal(betaScanAdmissionPolicy().code, "scan_admission_configuration_invalid");
+    assert.equal(betaScanAdmissionPolicy("true").code, "scan_admission_configuration_invalid");
     values.set("SCAN_ADMISSION_COORDINATOR_URL", "https://coordinator.example");
     values.set("SCAN_EVIDENCE_SIGNING_KEY", "test-root");
-    assert.deepEqual(betaScanAdmissionPolicy(), { ok: true, code: "" });
+    assert.deepEqual(betaScanAdmissionPolicy("true"), { ok: true, code: "" });
     values.set("BETA_COHORT_ALLOWED_USER_IDS", Array.from({ length: 150 }, (_, i) => `user-${i + 1}`).join(","));
-    assert.deepEqual(betaScanAdmissionPolicy(), { ok: true, code: "" });
+    assert.deepEqual(betaScanAdmissionPolicy("true"), { ok: true, code: "" });
     values.set("BASE44_ATOMIC_UPDATE_MANY_CONFIRMED", "false");
-    assert.deepEqual(betaScanAdmissionPolicy(), { ok: true, code: "" });
+    assert.deepEqual(betaScanAdmissionPolicy("true"), { ok: true, code: "" });
   });
   assert.doesNotMatch(admissionSource, /BASE44_ATOMIC_UPDATE_MANY_CONFIRMED|updateMany|scan_claim_/);
   assert.doesNotMatch(entrySource, /bindScanLease|claimScanLease|scan_claim_token/);
@@ -48,36 +47,38 @@ test("scan admission is default-off and requires the coordinator, not an unprove
   assert.match(entrySource, /bindAdmission\(\{/);
 });
 
-test("new intake is independently fail-closed without disabling coordinator release", () => {
+test("new intake is independently fail-closed and observes mutable runtime secret values without module reload", () => {
   const values = new Map([
     ["BETA_SCAN_ADMISSION_ENABLED", "true"],
     ["SCAN_ADMISSION_COORDINATOR_URL", "https://coordinator.example"],
     ["SCAN_EVIDENCE_SIGNING_KEY", "test-root"],
   ]);
+  let runtimeIntake = "";
   withEnv(values, () => {
-    assert.equal(scanIntakeEnabled(), false);
-    assert.equal(betaScanAdmissionPolicy().code, "scan_intake_paused");
-    values.set("BETA_SCAN_INTAKE_ENABLED", "true");
-    assert.equal(scanIntakeEnabled(), true);
-    assert.equal(betaScanAdmissionPolicy().ok, true);
-    values.set("BETA_SCAN_INTAKE_ENABLED", "TRUE");
-    assert.equal(scanIntakeEnabled(), false);
+    assert.equal(scanIntakeEnabled(runtimeIntake), false);
+    assert.equal(betaScanAdmissionPolicy(runtimeIntake).code, "scan_intake_paused");
+    runtimeIntake = "true";
+    assert.equal(scanIntakeEnabled(runtimeIntake), true);
+    assert.equal(betaScanAdmissionPolicy(runtimeIntake).ok, true);
+    runtimeIntake = "TRUE";
+    assert.equal(scanIntakeEnabled(runtimeIntake), false);
   });
-  assert.match(admissionSource, /BETA_SCAN_INTAKE_ENABLED/);
+  assert.doesNotMatch(admissionSource, /Deno\.env\.get\("BETA_SCAN_INTAKE_ENABLED"\)/);
+  assert.match(entrySource, /secrets\.get\("BETA_SCAN_INTAKE_ENABLED"\)/);
+  assert.match(entrySource, /betaScanAdmissionPolicy\(mutableScanIntakeValue\(\)\)/);
   assert.match(clientSource, /BETA_SCAN_ADMISSION_ENABLED/);
 });
 
 test("scan admission does not use the static cohort list as a membership gate", () => {
   const values = new Map([
-    ["BETA_SCAN_INTAKE_ENABLED", "true"],
     ["BETA_SCAN_ADMISSION_ENABLED", "true"],
     ["SCAN_ADMISSION_COORDINATOR_URL", "https://coordinator.example"],
     ["SCAN_EVIDENCE_SIGNING_KEY", "test-root"],
   ]);
   withEnv(values, () => {
-    assert.equal(betaScanAdmissionPolicy().ok, true);
+    assert.equal(betaScanAdmissionPolicy("true").ok, true);
     values.set("BETA_COHORT_ALLOWED_USER_IDS", "malformed/not-a-user-id");
-    assert.equal(betaScanAdmissionPolicy().ok, true);
+    assert.equal(betaScanAdmissionPolicy("true").ok, true);
   });
   assert.doesNotMatch(admissionSource, /BETA_COHORT_ALLOWED_USER_IDS/);
 });

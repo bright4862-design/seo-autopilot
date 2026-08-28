@@ -27,6 +27,7 @@ async function importHandler(harnessName) {
   }).outputText.replace(/^import[\s\S]*?;\s*$/gm, "");
   const prelude = `const {
     createClientFromRequest,
+    secrets,
     DRAIN_DELAY_SECONDS,
     enqueueScanDrain,
     enqueueScanJob,
@@ -69,6 +70,7 @@ function createHarness({
   const drainTasks = new Set();
   const releases = [];
   let admission = null;
+  let intakeSecret = "true";
   let createThrowSpent = false;
 
   const Access = {
@@ -234,8 +236,12 @@ function createHarness({
     drainTasks,
     releases,
     admission: () => admission && { ...admission },
+    setIntakeSecret: (value) => { intakeSecret = String(value ?? ""); },
     globals: {
       createClientFromRequest: () => base44,
+      secrets: {
+        get: (name) => name === "BETA_SCAN_INTAKE_ENABLED" ? intakeSecret : "",
+      },
       DRAIN_DELAY_SECONDS: 600,
       enqueueScanDrain: async ({ scanId, attemptCount }) => {
         drainTasks.add(`${scanId}:${attemptCount}`);
@@ -265,7 +271,6 @@ function createHarness({
 function installEnv() {
   const priorDeno = globalThis.Deno;
   const env = new Map([
-    ["BETA_SCAN_INTAKE_ENABLED", "true"],
     ["BETA_SCAN_ADMISSION_ENABLED", "true"],
     ["BETA_COHORT_ALLOWED_USER_IDS", "user-1"],
     ["SCAN_ADMISSION_COORDINATOR_URL", "https://coordinator.example"],
@@ -296,6 +301,37 @@ function invoke(handler, requestId = "scanreq_request_1", websiteUrl = "https://
     }),
   }));
 }
+
+test("loaded handler observes mutable intake secret changes on the next request", async () => {
+  const restoreEnv = installEnv();
+  const harness = createHarness();
+  harness.setIntakeSecret("false");
+  globalThis.__runtimeIntakeHarness = harness.globals;
+  try {
+    const { default: handler } = await importHandler("__runtimeIntakeHarness");
+
+    const paused = await invoke(handler, "scanreq_runtime_pause_1");
+    const pausedBody = await paused.json();
+    assert.equal(paused.status, 503);
+    assert.equal(pausedBody.failure_code, "scan_intake_paused");
+    assert.equal(harness.scans.length, 0);
+    assert.equal(harness.scanTasks.size, 0);
+    assert.equal(harness.drainTasks.size, 0);
+    assert.equal(harness.admission(), null);
+
+    harness.setIntakeSecret("true");
+    const resumed = await invoke(handler, "scanreq_runtime_resume_1");
+    const resumedBody = await resumed.json();
+    assert.equal(resumed.status, 200);
+    assert.equal(resumedBody.accepted, true);
+    assert.equal(harness.scans.length, 1);
+    assert.equal(harness.scanTasks.size, 1);
+    assert.equal(harness.drainTasks.size, 1);
+  } finally {
+    restoreEnv();
+    delete globalThis.__runtimeIntakeHarness;
+  }
+});
 
 test("two exact concurrent tabs share one canonical ScanRun and one deterministic task path", async () => {
   const restoreEnv = installEnv();

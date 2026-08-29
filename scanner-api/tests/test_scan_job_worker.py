@@ -10,6 +10,7 @@ failures are written to the exact scan, and transient failures raise so Cloud
 Tasks retries instead of burning the attempt.
 """
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -43,6 +44,91 @@ def _oidc(email: str) -> str:
 
     claims = base64.urlsafe_b64encode(json.dumps({"email": email}).encode()).decode().rstrip("=")
     return f"Bearer header.{claims}.signature"
+
+
+# --------------------------------------------------------------- handoff --
+
+def test_base44_handoff_defaults_to_the_fixlist_app_origin(monkeypatch):
+    from app import scan_job
+
+    monkeypatch.delenv("BASE44_API_URL", raising=False)
+    monkeypatch.setenv("BASE44_APP_ID", "app-1")
+
+    assert scan_job.base44_api_url() == "https://app--rich-rank-pilot-flow.base44.app"
+    assert scan_job._function_url("durableScanWorkerControl") == (
+        "https://app--rich-rank-pilot-flow.base44.app"
+        "/api/apps/app-1/functions/durableScanWorkerControl"
+    )
+    headers = scan_job._service_headers()
+    assert headers["User-Agent"] == "FixList-Standard150-Worker/scan_job_worker_v1_cloud_tasks"
+    assert headers["X-FixList-Worker"] == WORKER_VERSION
+
+
+@pytest.mark.asyncio
+async def test_base44_handoff_observability_never_logs_signed_payload(monkeypatch):
+    from app import scan_job
+
+    monkeypatch.delenv("BASE44_API_URL", raising=False)
+    monkeypatch.setenv("BASE44_APP_ID", "app-1")
+    events = []
+    seen = {}
+
+    def capture(event, **fields):
+        events.append((event, fields))
+        return fields
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["user_agent"] = request.headers.get("user-agent")
+        return httpx.Response(
+            404,
+            headers={
+                "content-type": "application/json; charset=utf-8",
+                "cf-ray": "safe-ray-id",
+            },
+            json={
+                "success": False,
+                "error_code": "worker_record_not_found",
+                "error": "The durable scan record was not found.",
+            },
+        )
+
+    monkeypatch.setattr(scan_job, "emit", capture)
+    transport = httpx.MockTransport(handler)
+    signed_payload = {
+        "version": "durable_standard150_control_v1",
+        "action": "read",
+        "scan_id": "customer-scan-id",
+        "proof": "a" * 64,
+    }
+    async with httpx.AsyncClient(transport=transport) as client:
+        result = await scan_job.invoke_function(
+            client,
+            "durableScanWorkerControl",
+            signed_payload,
+            timeout=1.0,
+        )
+
+    assert result["status_code"] == 404
+    assert result["body"]["error_code"] == "worker_record_not_found"
+    assert seen["url"].startswith("https://app--rich-rank-pilot-flow.base44.app/")
+    assert seen["user_agent"] == "FixList-Standard150-Worker/scan_job_worker_v1_cloud_tasks"
+    assert events == [
+        (
+            "base44_handoff_response",
+            {
+                "severity": "WARNING",
+                "function": "durableScanWorkerControl",
+                "response_status": 404,
+                "content_type": "application/json",
+                "request_id": "safe-ray-id",
+            },
+        ),
+    ]
+    serialized = repr(events)
+    assert "customer-scan-id" not in serialized
+    assert "a" * 64 not in serialized
+    assert "signed_payload" not in serialized
 
 
 # ---------------------------------------------------------------- identity --

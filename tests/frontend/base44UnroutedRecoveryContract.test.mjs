@@ -61,7 +61,7 @@ test("the four live functions are declared protected and never recovered", () =>
 });
 
 test("a function is deleted only after its route is proven unregistered", () => {
-  assert.match(recovery, /route_is_handled/);
+  assert.match(recovery, /route_is_recovered/);
   assert.match(recovery, /not deleting a live route/);
   assert.match(recovery, /ROUTER_MISSING_MARKER="user worker not found"/);
   // The delete must come after the pre-state check inside recover_one. Assert
@@ -84,7 +84,7 @@ test("each recreation is confirmed by inventory membership and a live probe", ()
   assert.match(recovery, /still present in the remote inventory after delete/);
   assert.match(recovery, /did not reappear in the remote inventory after deploy/);
   assert.match(recovery, /require_handled_route "\$name"/);
-  assert.match(recovery, /still answers the router-level 404 after recreation/);
+  assert.match(recovery, /did not answer 405 method_not_allowed after recreation/);
 });
 
 test("recovery keeps the release guards and adds no new privilege", () => {

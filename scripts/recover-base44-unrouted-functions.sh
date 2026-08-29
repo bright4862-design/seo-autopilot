@@ -112,7 +112,7 @@ probe_route() {
   status="$(curl -sS -o "$body_file" -w '%{http_code}' --max-time 25 \
     "$PROBE_ORIGIN/api/apps/$APP_ID/functions/$name" 2>/dev/null || echo 000)"
   PROBE_STATUS="$status"
-  PROBE_BODY="$(head -c 200 "$body_file" | tr -d '\n')"
+  PROBE_BODY="$(head -c 512 "$body_file" | tr -d '\n')"
   rm -f "$body_file"
 }
 
@@ -120,25 +120,49 @@ route_is_unregistered() {
   [[ "$PROBE_STATUS" == "404" && "$PROBE_BODY" == *"$ROUTER_MISSING_MARKER"* ]]
 }
 
-route_is_handled() {
-  [[ "$PROBE_STATUS" =~ ^[0-9]{3}$ && "$PROBE_STATUS" != "000" ]] \
+# Weak liveness: the response came from some Base44 function rather than the
+# router or an edge. Used only for the protected four, whose GET answers
+# legitimately differ (405 without an error_code, 400, 500), so their shape
+# cannot be pinned to one signature. Requiring a JSON object still rejects
+# Cloudflare/edge HTML, empty redirect bodies and transport failures.
+route_reaches_handler() {
+  [[ "$PROBE_STATUS" =~ ^[1-5][0-9]{2}$ ]] \
+    && [[ "$PROBE_BODY" == "{"* ]] \
     && [[ "$PROBE_BODY" != *"$ROUTER_MISSING_MARKER"* ]]
+}
+
+# Strong proof of recovery, required of the five before the next one is touched.
+# Each of their handlers rejects GET as its first statement, before any
+# try/catch or env access, via Response.json({success:false, error_code:
+# "method_not_allowed", ...}, {status: 405}) -- so the signature is
+# deterministic and anything else means the route did not reach the handler.
+#
+# Deliberately NOT "any response without the router marker": a Cloudflare 403,
+# an arbitrary 500, an unrelated 404, a redirect and an HTML login page all pass
+# that weaker test, and each would let the run delete the next function while
+# this one is still broken.
+route_is_recovered() {
+  [[ "$PROBE_STATUS" == "405" ]] \
+    && [[ "$PROBE_BODY" == "{"* ]] \
+    && grep -Eq '"success"[[:space:]]*:[[:space:]]*false' <<<"$PROBE_BODY" \
+    && grep -Eq '"error_code"[[:space:]]*:[[:space:]]*"method_not_allowed"' <<<"$PROBE_BODY"
 }
 
 require_handled_route() {
   local name="$1" attempt=1
   while (( attempt <= PROBE_ATTEMPTS )); do
     probe_route "$name"
-    if route_is_handled; then
-      printf '  probe %s: HTTP %s handler-level (attempt %s)\n' "$name" "$PROBE_STATUS" "$attempt"
+    if route_is_recovered; then
+      printf '  probe %s: HTTP %s method_not_allowed from the handler (attempt %s)\n' \
+        "$name" "$PROBE_STATUS" "$attempt"
       return 0
     fi
-    printf '  probe %s: HTTP %s not yet routed (attempt %s/%s)\n' \
+    printf '  probe %s: HTTP %s is not the handler 405 signature (attempt %s/%s)\n' \
       "$name" "$PROBE_STATUS" "$attempt" "$PROBE_ATTEMPTS"
     attempt=$(( attempt + 1 ))
     (( attempt <= PROBE_ATTEMPTS )) && sleep "$PROBE_DELAY_SECONDS"
   done
-  echo "Refusing to continue: $name still answers the router-level 404 after recreation." >&2
+  echo "Refusing to continue: $name did not answer 405 method_not_allowed after recreation (last HTTP $PROBE_STATUS)." >&2
   return 1
 }
 
@@ -148,15 +172,19 @@ recover_one() {
   printf '\n--- %s ---\n' "$name"
 
   probe_route "$name"
-  if route_is_handled; then
-    printf '  skip: already answering HTTP %s at handler level; not deleting a live route\n' "$PROBE_STATUS"
+  if route_is_recovered; then
+    printf '  skip: already answering the handler 405; not deleting a live route\n'
     return 0
   fi
+  # Anything that is neither the handler signature nor the exact router 404 --
+  # an edge 403, a 5xx, an unrelated 404 -- is an unknown state, and deleting a
+  # function whose real state is unknown is exactly what must not happen.
   if ! route_is_unregistered; then
     echo "Refusing recovery for $name: unexpected pre-state HTTP $PROBE_STATUS." >&2
     return 1
   fi
   printf '  pre-state: HTTP %s router-level 404, eligible for re-registration\n' "$PROBE_STATUS"
+  RECOVERY_ELIGIBLE=$(( RECOVERY_ELIGIBLE + 1 ))
 
   if [[ -n "$DRY_RUN" ]]; then
     printf '  DRY_RUN: would delete then deploy %s, then require a handler-level probe\n' "$name"
@@ -182,7 +210,18 @@ recover_one() {
   printf '  deployed: present in remote inventory\n'
 
   require_handled_route "$name"
+  RECOVERY_APPLIED=$(( RECOVERY_APPLIED + 1 ))
 }
+
+# Sourcing the script for its route classifiers must never run the recovery.
+# The regression tests exercise route_is_recovered/route_reaches_handler against
+# real response shapes, which is only possible if loading the file is inert.
+if [[ -n "${FIXLIST_RECOVERY_LIB_ONLY:-}" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
+
+RECOVERY_ELIGIBLE=0
+RECOVERY_APPLIED=0
 
 require_recovery_allowlist
 require_owner_session_mode
@@ -200,7 +239,7 @@ echo
 echo "Protected routes before recovery (must already answer):"
 for fn in "${PROTECTED_FUNCTIONS[@]}"; do
   probe_route "$fn"
-  if ! route_is_handled; then
+  if ! route_reaches_handler; then
     echo "Refusing recovery: protected function $fn is not answering (HTTP $PROBE_STATUS)." >&2
     exit 1
   fi
@@ -215,7 +254,7 @@ echo
 echo "Protected routes after recovery (must be unchanged):"
 for fn in "${PROTECTED_FUNCTIONS[@]}"; do
   probe_route "$fn"
-  if ! route_is_handled; then
+  if ! route_reaches_handler; then
     echo "Recovery damaged protected function $fn (HTTP $PROBE_STATUS)." >&2
     exit 1
   fi
@@ -230,5 +269,13 @@ for fn in "${RECOVERY_FUNCTIONS[@]}" "${PROTECTED_FUNCTIONS[@]}"; do
   }
 done
 
-printf '\nBASE44_UNROUTED_FUNCTIONS_RECOVERED\nsource_sha=%s\nrecovered=%s\n' \
-  "$SOURCE_SHA" "${#RECOVERY_FUNCTIONS[@]}"
+# A dry run mutates nothing, so it must never emit the recovered banner or a
+# non-zero recovered count -- the operator reads that line as proof of work.
+if [[ -n "$DRY_RUN" ]]; then
+  printf '\nBASE44_UNROUTED_FUNCTIONS_DRY_RUN_COMPLETE\nsource_sha=%s\neligible=%s\nrecovered=0\n' \
+    "$SOURCE_SHA" "$RECOVERY_ELIGIBLE"
+  exit 0
+fi
+
+printf '\nBASE44_UNROUTED_FUNCTIONS_RECOVERED\nsource_sha=%s\neligible=%s\nrecovered=%s\n' \
+  "$SOURCE_SHA" "$RECOVERY_ELIGIBLE" "$RECOVERY_APPLIED"

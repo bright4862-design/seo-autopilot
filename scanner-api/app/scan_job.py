@@ -56,6 +56,9 @@ LOCAL_REVIEW_PROCESS_JOIN_GRACE_SECONDS = 1.0
 WORKER_HEARTBEAT_INTERVAL_SECONDS = 60.0
 
 TERMINAL_STATUSES = frozenset({"complete", "limited", "failed", "cancelled"})
+BASE44_WORKER_USER_AGENT = (
+    "Mozilla/5.0 (compatible; FixListStandard150Worker/1.0; +https://getfixlist.com)"
+)
 
 
 def base44_api_url() -> str:
@@ -76,6 +79,7 @@ def _service_headers() -> dict[str, str]:
     return {
         "content-type": "application/json",
         "X-FixList-Worker": WORKER_VERSION,
+        "User-Agent": BASE44_WORKER_USER_AGENT,
     }
 
 
@@ -94,8 +98,33 @@ async def invoke_function(
         response = await client.post(
             _function_url(name), headers=_service_headers(), json=payload, timeout=timeout
         )
-    except httpx.HTTPError:
+    except httpx.HTTPError as error:
+        emit(
+            "base44_function_handoff",
+            severity="WARNING",
+            function=name,
+            transport_error_class=type(error).__name__,
+        )
         return {"status_code": 503, "body": {}}
+
+    response_headers = getattr(response, "headers", {}) or {}
+    content_type = str(response_headers.get("content-type") or "").split(";", 1)[0][:120]
+    base44_request_id = str(
+        response_headers.get("x-base44-request-id")
+        or response_headers.get("x-request-id")
+        or ""
+    )[:160]
+    cloudflare_ray_id = str(response_headers.get("cf-ray") or "")[:160]
+    emit(
+        "base44_function_handoff",
+        severity="WARNING" if response.status_code >= 400 else "INFO",
+        function=name,
+        response_status=int(response.status_code),
+        content_type=content_type,
+        base44_request_id=base44_request_id or None,
+        cloudflare_ray_id=cloudflare_ray_id or None,
+    )
+
     try:
         body = response.json()
     except ValueError:

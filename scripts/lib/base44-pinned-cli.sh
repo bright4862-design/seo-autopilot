@@ -29,14 +29,37 @@ fixlist_install_base44_cli() {
 # protected temporary file so a failed identity check cannot disclose account
 # details in Actions logs.
 fixlist_require_base44_owner() {
-  local expected_owner="$1" output="$2"
+  local expected_owner="$1" output="$2" app_id="${3:-${BASE44_APP_ID:-}}"
+  umask 077
+  : > "$output"
+  chmod 600 "$output"
+
+  # Hosted release controls authenticate with a workspace API key kept only in
+  # the protected GitHub environment. The pinned Base44 CLI natively supports
+  # BASE44_API_KEY and sends it as the api_key header. Prove the key can access
+  # this exact app before any mutation; never print the key or even its prefix.
+  if [[ -n "${BASE44_API_KEY:-}" ]]; then
+    if [[ "$BASE44_API_KEY" != b44k_* || "$BASE44_API_KEY" == *$'\n'* || ${#BASE44_API_KEY} -gt 512 ]]; then
+      echo "Refusing Base44 mutation: BASE44_API_KEY is malformed." >&2
+      return 2
+    fi
+    if [[ -z "$app_id" || ${#app_id} -gt 160 || "$app_id" == *$'\n'* ]]; then
+      echo "Refusing Base44 mutation: app identity is missing or invalid." >&2
+      return 2
+    fi
+    if ! "$FIXLIST_BASE44_CLI" --app-id "$app_id" functions list > "$output" 2>&1; then
+      echo "Refusing Base44 mutation: workspace API key cannot access the configured app." >&2
+      return 2
+    fi
+    printf 'base44_owner=workspace_key_verified\n'
+    return 0
+  fi
+
+  # Local/operator fallback for an explicitly authenticated owner session.
   if [[ -z "$expected_owner" || ${#expected_owner} -gt 200 || "$expected_owner" == *$'\n'* ]]; then
     echo "Refusing Base44 mutation: BASE44_EXPECTED_OWNER is missing or invalid." >&2
     return 2
   fi
-  umask 077
-  : > "$output"
-  chmod 600 "$output"
   if ! "$FIXLIST_BASE44_CLI" whoami > "$output" 2>&1; then
     echo "Refusing Base44 mutation: authenticated identity could not be verified." >&2
     return 2

@@ -26,8 +26,7 @@ FUNCTIONS=(
 node "$REPO_ROOT/scripts/base44_release_manifest.mjs" verify
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 fixlist_install_base44_cli "$TMP"
-"$FIXLIST_BASE44_CLI" login
-fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami"
+fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami" "$APP_ID"
 fixlist_set_base44_release_source_sha "$APP_ID" "$SOURCE_SHA"
 
 cd "$REPO_ROOT"

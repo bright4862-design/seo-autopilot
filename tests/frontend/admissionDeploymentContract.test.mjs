@@ -25,6 +25,7 @@ const startStandardScanAdmission = read("base44/functions/startStandardScanJob/a
 const connectivityControl = read("scripts/set-base44-admission-connectivity.sh");
 const intakeWorkflow = read(".github/workflows/fixlist-base44-scan-intake.yml");
 const connectivityWorkflow = read(".github/workflows/fixlist-base44-admission-connectivity.yml");
+const releasePublishWorkflow = read(".github/workflows/fixlist-base44-release-publish.yml");
 const cliHelper = read("scripts/lib/base44-pinned-cli.sh");
 const sourceGuard = read("scripts/lib/release-source-guard.sh");
 const resolveOperatorVersion = read("scripts/resolve_admission_operator_signing_version.py");
@@ -254,6 +255,29 @@ test("Base44 site publication restores the durable backend after the site deploy
   assert.doesNotMatch(deploySite, /deploy-base44-beta-functions\.sh|--force|entities\s+push/);
 });
 
+test("Base44 production controls use hosted runners and protected workspace-key auth", () => {
+  for (const ownerWorkflow of [releasePublishWorkflow, intakeWorkflow, connectivityWorkflow]) {
+    assert.match(ownerWorkflow, /runs-on: ubuntu-latest/);
+    assert.match(ownerWorkflow, /environment: fixlist-production-owner/);
+    assert.match(ownerWorkflow, /group: fixlist-base44-hosted-controls-v2/);
+    assert.match(ownerWorkflow, /BASE44_API_KEY: \$\{\{ secrets\.BASE44_API_KEY \}\}/);
+    assert.doesNotMatch(ownerWorkflow, /runs-on:\s*\[self-hosted[^\n]*fixlist-base44-owner/i);
+    assert.doesNotMatch(ownerWorkflow, /BASE44_REFRESH_TOKEN\s*:/i);
+  }
+
+  assert.doesNotMatch(releasePublishWorkflow, /issue_comment:/);
+  assert.match(releasePublishWorkflow, /github\.event_name == 'workflow_dispatch'/);
+  assert.match(releasePublishWorkflow, /test "\$INPUT_CONFIRM" = "\$source_sha"/);
+});
+
+test("workspace-key auth proves exact-app access without printing the credential", () => {
+  assert.match(cliHelper, /BASE44_API_KEY/);
+  assert.match(cliHelper, /b44k_\*/);
+  assert.match(cliHelper, /--app-id "\$app_id" functions list/);
+  assert.match(cliHelper, /workspace API key cannot access the configured app/);
+  assert.doesNotMatch(cliHelper, /whoami[^\n]*BASE44_API_KEY|slice\(0,\s*10\)/);
+});
+
 test("release Base44 CLI is version and digest pinned before login or deployment", () => {
   assert.match(cliHelper, /FIXLIST_BASE44_CLI_VERSION="0\.1\.8"/);
   assert.match(cliHelper, /FIXLIST_BASE44_CLI_SHA512="sha512-[A-Za-z0-9+/=]+"/);
@@ -383,11 +407,13 @@ test("Base44 intake and connectivity are isolated owner controls with verified r
   assert.match(connectivityControl, /secrets set[\s\S]*BETA_SCAN_ADMISSION_ENABLED=\$VALUE/);
   assert.doesNotMatch(connectivityControl, /BETA_SCAN_INTAKE_ENABLED=|secrets (list|delete)|"\$FIXLIST_BASE44_CLI" login/);
   for (const ownerWorkflow of [intakeWorkflow, connectivityWorkflow]) {
-    assert.match(ownerWorkflow, /runs-on: \[self-hosted, fixlist-base44-owner\]/);
+    assert.match(ownerWorkflow, /runs-on: ubuntu-latest/);
     assert.match(ownerWorkflow, /github\.actor == 'bright4862-design'/);
     assert.match(ownerWorkflow, /github\.ref == 'refs\/heads\/main'/);
     assert.match(ownerWorkflow, /environment: fixlist-production-owner/);
-    assert.doesNotMatch(ownerWorkflow, /runs-on:\s*ubuntu-latest|BASE44_AUTH\s*:|BASE44_REFRESH_TOKEN\s*:/i);
+    assert.match(ownerWorkflow, /BASE44_API_KEY: \$\{\{ secrets\.BASE44_API_KEY \}\}/);
+    assert.doesNotMatch(ownerWorkflow, /runs-on:\s*\[self-hosted[^\n]*fixlist-base44-owner/i);
+    assert.doesNotMatch(ownerWorkflow, /BASE44_REFRESH_TOKEN\s*:/i);
   }
   assert.match(intakeWorkflow, /denoland\/setup-deno@v2/);
   assert.match(intakeWorkflow, /deno-version: v2\.4\.5/);

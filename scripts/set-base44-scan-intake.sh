@@ -43,7 +43,7 @@ fixlist_install_base44_cli "$TMP"
 # Owner controls run only from a pre-authenticated owner workstation/runner.
 # Device login is deliberately not attempted here: it cannot be completed
 # safely or non-interactively by a hosted GitHub runner.
-fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami"
+fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami" "$APP_ID"
 
 # This is the sole mutation. In particular, do not list, delete, export, or
 # replace admission-connectivity or unrelated Base44 values.

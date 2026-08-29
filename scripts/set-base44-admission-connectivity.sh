@@ -61,7 +61,7 @@ trap 'rm -rf "$TMP"' EXIT
 fixlist_install_base44_cli "$TMP"
 # This control requires the protected self-hosted owner runner's existing CLI
 # session. Never serialize or inject Base44 refresh tokens into Actions.
-fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami"
+fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami" "$APP_ID"
 
 # This is the sole mutation. It never changes the public intake switch,
 # coordinator URL, signing keys, checkout state, or any unrelated value.

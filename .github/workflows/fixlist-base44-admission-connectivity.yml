@@ -33,7 +33,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: fixlist-base44-owner-controls
+  group: fixlist-base44-hosted-controls-v2
   cancel-in-progress: false
 
 env:
@@ -52,9 +52,9 @@ jobs:
   control-admission-connectivity:
     if: github.actor == 'bright4862-design' && github.ref == 'refs/heads/main'
     environment: fixlist-production-owner
-    # The protected owner runner is already authenticated with the Base44 CLI.
-    # A hosted runner cannot safely complete the documented device-code flow.
-    runs-on: [self-hosted, fixlist-base44-owner]
+    # Base44 mutation auth is non-interactive via a workspace API key stored
+    # only in the protected production environment.
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout exact main SHA
@@ -103,4 +103,5 @@ jobs:
           CHANGE_TICKET: ${{ inputs.change_ticket }}
           CUTOVER_REASON: ${{ inputs.reason }}
           BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
+          BASE44_API_KEY: ${{ secrets.BASE44_API_KEY }}
         run: /bin/bash scripts/set-base44-admission-connectivity.sh

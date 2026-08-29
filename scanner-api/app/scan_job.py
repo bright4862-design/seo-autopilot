@@ -36,6 +36,9 @@ from .observability import emit
 WORKER_VERSION = "scan_job_worker_v1_cloud_tasks"
 CONTROL_VERSION = "durable_standard150_control_v1"
 COMPLETION_VERSION = "durable_standard150_completion_v1"
+DEFAULT_BASE44_API_URL = "https://app--rich-rank-pilot-flow.base44.app"
+BASE44_HANDOFF_USER_AGENT = f"FixList-Standard150-Worker/{WORKER_VERSION}"
+BASE44_REQUEST_ID_HEADERS = ("x-base44-request-id", "x-request-id", "cf-ray")
 
 # Cloud Run allows 300s; leave room to review, persist, and write a terminal
 # state before the platform closes the request.
@@ -59,7 +62,7 @@ TERMINAL_STATUSES = frozenset({"complete", "limited", "failed", "cancelled"})
 
 
 def base44_api_url() -> str:
-    return str(os.getenv("BASE44_API_URL") or "https://base44.app").rstrip("/")
+    return str(os.getenv("BASE44_API_URL") or DEFAULT_BASE44_API_URL).rstrip("/")
 
 
 def base44_app_id() -> str:
@@ -75,6 +78,7 @@ def _service_headers() -> dict[str, str]:
     """
     return {
         "content-type": "application/json",
+        "User-Agent": BASE44_HANDOFF_USER_AGENT,
         "X-FixList-Worker": WORKER_VERSION,
     }
 
@@ -94,8 +98,33 @@ async def invoke_function(
         response = await client.post(
             _function_url(name), headers=_service_headers(), json=payload, timeout=timeout
         )
-    except httpx.HTTPError:
+    except httpx.HTTPError as exc:
+        emit(
+            "base44_handoff_transport_error",
+            severity="WARNING",
+            function=name,
+            transport_error_class=type(exc).__name__,
+        )
         return {"status_code": 503, "body": {}}
+
+    content_type = str(response.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    request_id = next(
+        (
+            str(response.headers.get(header) or "").strip()
+            for header in BASE44_REQUEST_ID_HEADERS
+            if str(response.headers.get(header) or "").strip()
+        ),
+        "",
+    )
+    emit(
+        "base44_handoff_response",
+        severity="WARNING" if response.status_code >= 400 else "INFO",
+        function=name,
+        response_status=response.status_code,
+        content_type=content_type,
+        request_id=request_id,
+    )
+
     try:
         body = response.json()
     except ValueError:

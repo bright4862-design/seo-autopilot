@@ -7,8 +7,6 @@ on:
         description: "Exact current main SHA. Must equal the release source SHA."
         required: true
         type: string
-  issue_comment:
-    types: [created]
 
 permissions:
   contents: read
@@ -22,7 +20,7 @@ jobs:
     if: >-
       github.actor == 'bright4862-design' &&
       github.ref == 'refs/heads/main' &&
-      (github.event_name == 'workflow_dispatch' || github.event_name == 'issue_comment')
+      github.event_name == 'workflow_dispatch'
     environment: fixlist-production-owner
     # Base44 supports device-code CLI authentication only. The protected owner
     # runner holds the owner's existing local CLI session; hosted runners must
@@ -54,33 +52,12 @@ jobs:
         id: confirm
         shell: /bin/bash {0}
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          COMMENT_BODY: ${{ github.event.comment.body }}
-          COMMENT_USER: ${{ github.event.comment.user.login }}
           INPUT_CONFIRM: ${{ inputs.confirm }}
         run: |
           set -euo pipefail
           source_sha="$(git rev-parse HEAD)"
-          case "$EVENT_NAME" in
-            workflow_dispatch)
-              confirm="$INPUT_CONFIRM"
-              ;;
-            issue_comment)
-              test "$COMMENT_USER" = "bright4862-design"
-              expected="/publish-base44-release $source_sha"
-              if [ "$COMMENT_BODY" != "$expected" ]; then
-                echo "Refusing: comment must equal '$expected'." >&2
-                exit 2
-              fi
-              confirm="$source_sha"
-              ;;
-            *)
-              echo "Refusing unsupported event: $EVENT_NAME" >&2
-              exit 2
-              ;;
-          esac
-          test "$confirm" = "$source_sha"
-          echo "confirm=$confirm" >> "$GITHUB_OUTPUT"
+          test "$INPUT_CONFIRM" = "$source_sha"
+          echo "confirm=$INPUT_CONFIRM" >> "$GITHUB_OUTPUT"
 
       - name: Set up pinned Node runtime
         uses: actions/setup-node@v6

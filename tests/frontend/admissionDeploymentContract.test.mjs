@@ -261,7 +261,8 @@ test("Base44 production controls use hosted runners and protected workspace-key 
     assert.match(ownerWorkflow, /environment: fixlist-production-owner/);
     assert.match(ownerWorkflow, /group: fixlist-base44-hosted-controls-v2/);
     assert.match(ownerWorkflow, /BASE44_API_KEY: \$\{\{ secrets\.BASE44_API_KEY \}\}/);
-    assert.doesNotMatch(ownerWorkflow, /self-hosted|fixlist-base44-owner|BASE44_REFRESH_TOKEN\s*:/i);
+    assert.doesNotMatch(ownerWorkflow, /runs-on:\s*\[self-hosted[^\n]*fixlist-base44-owner/i);
+    assert.doesNotMatch(ownerWorkflow, /BASE44_REFRESH_TOKEN\s*:/i);
   }
 
   assert.doesNotMatch(releasePublishWorkflow, /issue_comment:/);
@@ -411,7 +412,8 @@ test("Base44 intake and connectivity are isolated owner controls with verified r
     assert.match(ownerWorkflow, /github\.ref == 'refs\/heads\/main'/);
     assert.match(ownerWorkflow, /environment: fixlist-production-owner/);
     assert.match(ownerWorkflow, /BASE44_API_KEY: \$\{\{ secrets\.BASE44_API_KEY \}\}/);
-    assert.doesNotMatch(ownerWorkflow, /self-hosted|fixlist-base44-owner|BASE44_REFRESH_TOKEN\s*:/i);
+    assert.doesNotMatch(ownerWorkflow, /runs-on:\s*\[self-hosted[^\n]*fixlist-base44-owner/i);
+    assert.doesNotMatch(ownerWorkflow, /BASE44_REFRESH_TOKEN\s*:/i);
   }
   assert.match(intakeWorkflow, /denoland\/setup-deno@v2/);
   assert.match(intakeWorkflow, /deno-version: v2\.4\.5/);

@@ -41,11 +41,33 @@ function sdkImportLine(file) {
   return source.split("\n").find((line) => line.includes("@base44/sdk")) || "";
 }
 
+/**
+ * Base44 deploys only `entry.ts`, so a function whose handler lives in
+ * `index.ts` ships a shim that imports it for its side effects. The shim holds
+ * no SDK import of its own -- the pinned import is in the file it pulls in.
+ *
+ * Skipping it does not weaken this sweep: the skip requires the sibling
+ * `index.ts` to exist, and `entrypointsFor` returns that file too, so the
+ * pinned-version assertion below still runs against the code that actually
+ * imports the SDK.
+ */
+function isShimForIndex(file) {
+  if (path.basename(file) !== "entry.ts") return false;
+  if (!fs.existsSync(path.join(path.dirname(file), "index.ts"))) return false;
+  const body = fs.readFileSync(file, "utf8")
+    .split("\n")
+    .filter((line) => line.trim() && !line.trim().startsWith("//"))
+    .join("\n")
+    .trim();
+  return /^import\s+["']\.\/index\.ts["'];?$/.test(body);
+}
+
 test("every function in the durable release pins the Base44 SDK", () => {
   for (const fnName of DURABLE_RELEASE_FUNCTIONS) {
     const files = entrypointsFor(fnName);
     assert.ok(files.length > 0, `${fnName} has no entrypoint`);
     for (const file of files) {
+      if (isShimForIndex(file)) continue;
       const line = sdkImportLine(file);
       assert.ok(line, `${file} does not import the Base44 SDK`);
       assert.match(

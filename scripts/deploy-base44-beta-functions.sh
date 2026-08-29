@@ -34,4 +34,9 @@ cd "$REPO_ROOT"
 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions deploy "${FUNCTIONS[@]}"
 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions list
 
+# functions list can succeed even when the public dispatcher has no runnable
+# worker for a named function. Require a live, non-mutating route proof.
+BASE44_APP_ID="$APP_ID" \
+  bash "$REPO_ROOT/scripts/verify-base44-worker-control-route.sh"
+
 printf 'BASE44_RELEASE_FUNCTIONS_DEPLOYED\nsource_sha=%s\nfunction_count=%s\n' "$SOURCE_SHA" "${#FUNCTIONS[@]}"

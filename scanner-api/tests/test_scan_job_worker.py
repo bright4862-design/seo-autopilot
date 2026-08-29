@@ -131,6 +131,84 @@ async def test_base44_handoff_observability_never_logs_signed_payload(monkeypatc
     assert "signed_payload" not in serialized
 
 
+@pytest.mark.asyncio
+async def test_handoff_preflight_accepts_only_verified_missing_probe_record(monkeypatch):
+    from app import handoff_probe
+
+    monkeypatch.setenv("SCAN_EVIDENCE_SIGNING_KEY", "test-signing-key")
+    monkeypatch.setenv("BASE44_APP_ID", "app-1")
+    monkeypatch.setenv("BASE44_API_URL", "https://app--rich-rank-pilot-flow.base44.app")
+    seen = {}
+
+    async def invoke(_client, name, payload, timeout):
+        seen["name"] = name
+        seen["payload"] = payload
+        seen["timeout"] = timeout
+        return {
+            "status_code": 404,
+            "body": {
+                "success": False,
+                "error_code": "worker_record_not_found",
+            },
+        }
+
+    monkeypatch.setattr(handoff_probe, "invoke_function", invoke)
+    result = await handoff_probe.run_handoff_probe(client=object())
+
+    assert result == {
+        "ok": True,
+        "status_code": 404,
+        "error_code": "worker_record_not_found",
+    }
+    assert seen["name"] == "durableScanWorkerControl"
+    assert seen["payload"]["action"] == "read"
+    assert seen["payload"]["scan_id"] == "fixlist_handoff_probe_nonexistent"
+    assert len(seen["payload"]["proof"]) == 64
+    assert seen["timeout"] == 20.0
+
+
+@pytest.mark.asyncio
+async def test_handoff_preflight_fails_closed_on_platform_403_or_missing_function(monkeypatch):
+    from app import handoff_probe
+
+    monkeypatch.setenv("SCAN_EVIDENCE_SIGNING_KEY", "test-signing-key")
+    monkeypatch.setenv("BASE44_APP_ID", "app-1")
+    monkeypatch.setenv("BASE44_API_URL", "https://app--rich-rank-pilot-flow.base44.app")
+
+    responses = [
+        {"status_code": 403, "body": {}},
+        {"status_code": 404, "body": {"error": "not-found", "detail": "user worker not found"}},
+    ]
+
+    async def invoke(*_args, **_kwargs):
+        return responses.pop(0)
+
+    monkeypatch.setattr(handoff_probe, "invoke_function", invoke)
+
+    blocked = await handoff_probe.run_handoff_probe(client=object())
+    missing = await handoff_probe.run_handoff_probe(client=object())
+
+    assert blocked == {"ok": False, "status_code": 403, "error_code": "unexpected_response"}
+    assert missing == {"ok": False, "status_code": 404, "error_code": "unexpected_response"}
+
+
+@pytest.mark.asyncio
+async def test_handoff_preflight_refuses_noncanonical_base44_origin(monkeypatch):
+    from app import handoff_probe
+
+    monkeypatch.setenv("SCAN_EVIDENCE_SIGNING_KEY", "test-signing-key")
+    monkeypatch.setenv("BASE44_APP_ID", "app-1")
+    monkeypatch.setenv("BASE44_API_URL", "https://base44.app")
+
+    result = await handoff_probe.run_handoff_probe(client=object())
+
+    assert result == {
+        "ok": False,
+        "status_code": 0,
+        "error_code": "base44_app_origin_mismatch",
+    }
+
+
 # ---------------------------------------------------------------- identity --
 
 def test_identity_matches_accepts_the_same_durable_request():

@@ -25,6 +25,7 @@ const startStandardScanAdmission = read("base44/functions/startStandardScanJob/a
 const connectivityControl = read("scripts/set-base44-admission-connectivity.sh");
 const intakeWorkflow = read(".github/workflows/fixlist-base44-scan-intake.yml");
 const connectivityWorkflow = read(".github/workflows/fixlist-base44-admission-connectivity.yml");
+const releasePublishWorkflow = read(".github/workflows/fixlist-base44-release-publish.yml");
 const cliHelper = read("scripts/lib/base44-pinned-cli.sh");
 const sourceGuard = read("scripts/lib/release-source-guard.sh");
 const resolveOperatorVersion = read("scripts/resolve_admission_operator_signing_version.py");
@@ -252,6 +253,23 @@ test("Base44 site publication restores the durable backend after the site deploy
     "ownerScanDebugControl",
   ]) assert.match(deploySite, new RegExp(`\\b${required}\\b`));
   assert.doesNotMatch(deploySite, /deploy-base44-beta-functions\.sh|--force|entities\s+push/);
+});
+
+test("worker candidates pin the FixList app-specific Base44 ingress", () => {
+  assert.match(
+    workerCandidate,
+    /BASE44_API="https:\/\/app--rich-rank-pilot-flow\.base44\.app"/,
+  );
+  assert.doesNotMatch(workerCandidate, /BASE44_API="\$\{VALUES\[4\]\}"/);
+  assert.match(workerCandidate, /candidate Base44 app origin mismatch/);
+  assert.match(workerBuild, /BASE44_API_URL=\$\{_BASE44_API_URL\}/);
+});
+
+test("Base44 release publishing cannot be queued by incidental issue comments", () => {
+  assert.match(releasePublishWorkflow, /workflow_dispatch:/);
+  assert.doesNotMatch(releasePublishWorkflow, /issue_comment:/);
+  assert.match(releasePublishWorkflow, /group: fixlist-base44-owner-controls/);
+  assert.match(releasePublishWorkflow, /test "\$INPUT_CONFIRM" = "\$source_sha"/);
 });
 
 test("release Base44 CLI is version and digest pinned before login or deployment", () => {

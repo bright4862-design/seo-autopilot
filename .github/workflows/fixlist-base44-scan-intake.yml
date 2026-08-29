@@ -19,17 +19,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: fixlist-base44-owner-controls
+  group: fixlist-base44-hosted-controls-v2
   cancel-in-progress: false
 
 jobs:
   control-intake:
     if: github.actor == 'bright4862-design' && github.ref == 'refs/heads/main'
     environment: fixlist-production-owner
-    # Base44 supports device-code CLI authentication only. This protected
-    # owner runner holds the owner's existing local CLI session; hosted runners
-    # must never receive a serialized Base44 refresh token.
-    runs-on: [self-hosted, fixlist-base44-owner]
+    # Non-interactive Base44 auth uses a workspace API key from the protected
+    # production environment. No self-hosted runner or refresh token is used.
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout exact main SHA
@@ -68,4 +67,5 @@ jobs:
           CONFIRM: ${{ inputs.confirm }}
           SOURCE_SHA: ${{ github.sha }}
           BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
+          BASE44_API_KEY: ${{ secrets.BASE44_API_KEY }}
         run: /bin/bash scripts/set-base44-scan-intake.sh

@@ -32,8 +32,7 @@ DRAIN_QUEUE_PATH="projects/${PROJECT}/locations/${REGION}/queues/${DRAIN_QUEUE}"
 gcloud tasks queues describe "$DRAIN_QUEUE" --project="$PROJECT" --location="$REGION" >/dev/null
 
 fixlist_install_base44_cli "$TMP"
-"$FIXLIST_BASE44_CLI" login
-fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami"
+fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$TMP/whoami" "$APP_ID"
 
 # Additive only: set these exact four admission/control keys and the exact-main
 # release provenance used by durable reconciliation. Membership is

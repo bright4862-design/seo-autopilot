@@ -112,6 +112,7 @@ Deno.serve(async (req) => {
           terminalStatus: "complete",
           release: releaseAdmission,
         });
+        requireAdmissionRelease(release);
         const replayedScan = release?.scanRun
           || await entities.ScanRun.get(identity.scan_id).catch(() => scan);
         return Response.json({
@@ -209,6 +210,7 @@ Deno.serve(async (req) => {
       terminalStatus: "complete",
       release: releaseAdmission,
     });
+    requireAdmissionRelease(release);
     const releasedScan = release?.scanRun
       || await entities.ScanRun.get(identity.scan_id).catch(() => persistedScan);
 
@@ -228,6 +230,16 @@ Deno.serve(async (req) => {
     return problemResponse(new RequestProblem(500, "durable_authority_failed", "The durable scan authority could not be saved."));
   }
 });
+
+function requireAdmissionRelease(release) {
+  if (release?.ok !== true) {
+    throw new RequestProblem(
+      503,
+      "admission_release_pending",
+      "The scan completed but its admission release is still pending.",
+    );
+  }
+}
 
 function diagnosticMarker(value: unknown) {
   const marker = String(value || "missing").toLowerCase();

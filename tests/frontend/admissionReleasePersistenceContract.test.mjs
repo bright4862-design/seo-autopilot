@@ -9,7 +9,7 @@ import { buildLimitedResultSnapshot } from "../../base44/functions/persistLimite
 const schema = JSON.parse(readFileSync("base44/entities/ScanRun.jsonc", "utf8"));
 const completion = readFileSync("base44/functions/persistDurableScanAuthority/entry.ts", "utf8");
 const releaseHelper = readFileSync("base44/functions/persistDurableScanAuthority/admissionRelease.js", "utf8");
-const limitedWriter = readFileSync("base44/functions/persistLimitedScanResult/index.ts", "utf8");
+const limitedWriter = readFileSync("base44/functions/persistLimitedScanResult/entry.ts", "utf8");
 
 test("ScanRun exposes server-owned durable admission release state without reusing Access provenance", () => {
   const properties = schema.properties;
@@ -44,6 +44,13 @@ test("ScanRun exposes server-owned durable admission release state without reusi
 
 test("normal authoritative completion persists only exact coordinator release outcomes", () => {
   assert.match(completion, /persistExactAdmissionRelease/);
+  assert.equal(
+    completion.match(/requireAdmissionRelease\(release\)/g)?.length,
+    2,
+    "both durable completion paths must refuse success until exact admission release is persisted",
+  );
+  assert.match(completion, /release\?\.ok !== true/);
+  assert.match(completion, /admission_release_pending/);
   assert.match(releaseHelper, /released["']\s*,\s*["']already_released/);
   assert.match(releaseHelper, /admission_release_state/);
   assert.doesNotMatch(completion, /admission_release_state\s*:\s*["']superseded/);

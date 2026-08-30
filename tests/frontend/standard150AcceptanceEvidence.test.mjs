@@ -250,7 +250,7 @@ test("new authoritative writes fail closed when measured memory is missing", () 
   };
   assert.equal(hasCompleteAuthorityAcceptanceEvidence(scan, review), false);
   const writerSource = readFileSync(
-    new URL("../../base44/functions/persistDurableScanAuthority/index.ts", import.meta.url),
+    new URL("../../base44/functions/persistDurableScanAuthority/entry.ts", import.meta.url),
     "utf8",
   );
   assert.match(writerSource, /!hasCompleteAcceptanceEvidence\(scanResult, review\)/);

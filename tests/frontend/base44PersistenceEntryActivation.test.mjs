@@ -21,13 +21,13 @@ function source(relative, root = ROOT) {
 }
 
 function fingerprintFromContract(value) {
-  const match = value.match(/RELEASE_FINGERPRINT\\s*=\\s*"([0-9a-f]{16})"/);
+  const match = value.match(/RELEASE_FINGERPRINT\s*=\s*"([0-9a-f]{16})"/);
   assert.ok(match, "release fingerprint literal must exist");
   return match[1];
 }
 
 function fingerprintFromEntry(value) {
-  const match = value.match(/BASE44_HANDLER_RELEASE_FINGERPRINT\\s*=\\s*"([0-9a-f]{16})"/);
+  const match = value.match(/BASE44_HANDLER_RELEASE_FINGERPRINT\s*=\s*"([0-9a-f]{16})"/);
   assert.ok(match, "entry release fingerprint marker must exist");
   return match[1];
 }
@@ -41,7 +41,7 @@ test("all release-sensitive Base44 functions execute from entry.ts", () => {
     assert.match(entry, handlerPattern, `${name} entry.ts must contain the actual handler`);
     assert.doesNotMatch(
       entry,
-      /import\\s+["']\\.\\/index\\.ts["']/,
+      /import\s+["']\.\/index\.ts["']/,
       `${name} entry.ts must not delegate to an imported handler`,
     );
     assert.equal(fs.existsSync(path.join(ROOT, indexPath)), false, `${name} imported index.ts must not remain`);

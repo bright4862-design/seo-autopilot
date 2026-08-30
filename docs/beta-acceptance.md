@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `e18b72b2d0e159b8` |
+| Candidate fingerprint | `5d94e93c54a9efb6` |
 | Classifier | `archetype_classifier_v10_structural_finance_member_retail` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,14 +15,21 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `e18b72b2d0e159b8` with classifier
+fingerprint `5d94e93c54a9efb6` with classifier
 `archetype_classifier_v10_structural_finance_member_retail`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded final-core candidate was `cd31b3c1e5f9dd7c`;
-before that was `1ddf8085bc7721c4`. The current candidate moved the fingerprint
-to `e18b72b2d0e159b8` by making acceptance evidence fail closed when coverage,
+The immediately superseded final-core candidate was `e18b72b2d0e159b8`;
+before that were `cd31b3c1e5f9dd7c` and `1ddf8085bc7721c4`. The current candidate
+moved the fingerprint to `5d94e93c54a9efb6` by suppressing page-scope repair rows
+whose URLs a validated group card of the same rule already lists — the duplicate
+card defect seen on the Ike scan, where one `redirect_destination_noindex` family
+card shipped alongside ~27 page-scope copies of itself. That is recorded as
+`failure_evidence_dedup_v2_group_covered_page_rows`.
+
+The `e18b72b2d0e159b8` candidate had moved the fingerprint by making acceptance
+evidence fail closed when coverage,
 classification, or measured worker memory is incomplete; measuring aggregate
 parent + active-review-child RSS per review instead of reusing process-lifetime
 child peaks; preserving historical limited-v1 signed reconstruction; and

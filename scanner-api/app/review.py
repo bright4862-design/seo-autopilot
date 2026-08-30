@@ -21,7 +21,7 @@ ZERO_FIX_HEALTH_GRADE = "No issues found in sample"
 QUALITY_GATE_VERSION = "review_quality_gate_v3_shared_coverage_decision"
 GROUPED_RECOMMENDATION_EVIDENCE_VERSION = "grouped_recommendation_evidence_v1_metadata_states"
 ORPHAN_ASSET_EVIDENCE_VERSION = "orphan_asset_evidence_v1"
-FAILURE_EVIDENCE_DEDUP_VERSION = "failure_evidence_dedup_v1_terminal_remediation"
+FAILURE_EVIDENCE_DEDUP_VERSION = "failure_evidence_dedup_v2_group_covered_page_rows"
 INCOMPLETE_REVIEW_WARNING = "Review received scan metadata, but no page evidence was passed into AI Review."
 SUPPORT_RECLASS_FAMILIES = {"loan_program", "conversion", "standard", "guide", "category_listing", "qa", "product_detail", ""}
 
@@ -3204,6 +3204,11 @@ def fix_dedup_class(fix: dict[str, Any]) -> str:
 
 GENERATOR_GROUP_SOURCES = ("page_pattern:", "scanner_verified_failed_pages:", "archetype_")
 
+# Mirrors scanner.GROUP_MIN_AFFECTED, the threshold at which group_findings()
+# collapses a rule into one template card. review.py deliberately does not
+# import scanner, so the value is restated here and pinned by a contract test.
+GROUP_CARD_MIN_AFFECTED = 3
+
 
 def suppress_duplicate_group_cards(fixes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Collapse duplicate grouped cards of the same defect with substantial page overlap."""
@@ -3256,26 +3261,61 @@ def suppress_group_covered_singletons(fixes: list[dict[str, Any]]) -> list[dict[
     def is_generator_group(fix: dict[str, Any]) -> bool:
         return str(fix.get("source", "")).startswith(GENERATOR_GROUP_SOURCES)
 
+    def is_validated_group_card(fix: dict[str, Any]) -> bool:
+        """A card that explicitly lists a template's worth of pages it repairs.
+
+        `scanner.group_findings()` builds these by copying a member finding and
+        blanking `page_url`, but it never stamps a generator source -- so the
+        prefix test above cannot see them. That is how Ike's scan persisted one
+        redirect_destination_noindex family card *and* ~27 page-scope rows for
+        URLs that card already listed.
+
+        Blank `page_url` is deliberately NOT the signal: `normalize_fix` runs
+        first and backfills it from the first affected page, so by the time this
+        sees the card its page_url is populated again. Explicit page coverage is
+        the property that survives normalization.
+        """
+        if is_generator_group(fix):
+            return False
+        if not str(fix.get("rule") or "").strip():
+            return False
+        return len(pages_of(fix)) >= GROUP_CARD_MIN_AFFECTED
+
     covered: set[tuple[str, str]] = set()
+    # Keyed on the exact rule rather than the remediation family, so a group of
+    # one rule never suppresses a different rule that happens to share a family.
+    rule_covered: set[tuple[str, str]] = set()
     for fix in fixes:
         # A generator card is authoritative for its pages regardless of how many were sampled.
         if is_generator_group(fix):
             cls = fix_dedup_class(fix)
             for page in pages_of(fix):
                 covered.add((cls, page))
-    if not covered:
+        elif is_validated_group_card(fix):
+            rule = str(fix.get("rule")).strip()
+            for page in pages_of(fix):
+                rule_covered.add((rule, page))
+    if not covered and not rule_covered:
         return fixes
 
     output = []
     for fix in fixes:
-        if is_generator_group(fix):
-            output.append(fix)  # never suppress a generator card
+        if is_generator_group(fix) or is_validated_group_card(fix):
+            output.append(fix)  # never suppress a group card
             continue
         pages = pages_of(fix)
-        if len(pages) <= 1:
-            page = pages[0] if pages else evidence_url_key(fix.get("page_url") or "")
+        fallback = evidence_url_key(fix.get("page_url") or "")
+        scope = pages or ([fallback] if fallback else [])
+        if len(scope) <= 1:
+            page = scope[0] if scope else ""
             if page and (fix_dedup_class(fix), page) in covered:
                 continue  # non-generator singleton already covered by a generator card
+        # Every page this row names is already listed by a group card for the
+        # same exact rule, so the row duplicates that action. A row naming any
+        # page the group does not list is a real outlier and survives.
+        rule = str(fix.get("rule") or "").strip()
+        if rule and scope and all((rule, page) in rule_covered for page in scope):
+            continue
         output.append(fix)
     return output
 

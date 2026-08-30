@@ -8,7 +8,7 @@ const fixListPage = fs.readFileSync("src/pages/FixList.jsx", "utf8");
 const completionHook = fs.readFileSync("src/hooks/useDurableScanCompletion.js", "utf8");
 const workerMain = fs.readFileSync("scanner-api/app/main.py", "utf8");
 const workerJob = fs.readFileSync("scanner-api/app/scan_job.py", "utf8");
-const persist = fs.readFileSync("base44/functions/persistDurableScanAuthority/index.ts", "utf8");
+const persist = fs.readFileSync("base44/functions/persistDurableScanAuthority/entry.ts", "utf8");
 
 test("the browser cannot be held open by a crawl", () => {
   assert.doesNotMatch(job, /waitUntil|runScanJob|fetchScannerResult/);

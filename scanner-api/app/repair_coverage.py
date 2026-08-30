@@ -12,6 +12,14 @@ The family comes from the family already stamped on authoritative page evidence.
 Re-deriving it from the path here would be a second opinion competing with the
 crawl's own classification -- the same split that Patch C removed for coverage.
 
+The one exception is a gap, not a disagreement. A repair may name URLs the crawl
+never recorded as pages -- redirect destinations especially -- and treating those
+as a competing family let a single one collapse 119 agreeing pages to `mixed`.
+When a repair already carries at least one stamped family, those gaps are filled
+through the resolver the caller injects; a stamp is never overridden, and a
+repair with no stamped family at all still resolves to `mixed`, because there
+would be nothing to corroborate.
+
 The affected evidence decides the scope, not the representative. Production
 picked a representative first and let its family become the group's family,
 which is precisely how a mixed group came to be labelled Homepage.
@@ -22,7 +30,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import quote, unquote, unquote_to_bytes, urlsplit
 
-REPAIR_COVERAGE_VERSION = "repair_coverage_v3_unknown_mixed_scope"
+REPAIR_COVERAGE_VERSION = "repair_coverage_v4_corroborated_family_gap_fill"
 
 UNKNOWN_FAMILY = "unknown"
 
@@ -132,6 +140,36 @@ def _page_family(page: dict[str, Any], resolver: Any = None) -> str:
     return family if family and family not in NON_SPECIFIC_FAMILIES else UNKNOWN_FAMILY
 
 
+def _unstamped_family(url: Any, resolver: Any = None) -> str:
+    """The family of an affected URL that the crawl never recorded as a page.
+
+    A repair can name URLs that were never crawled as pages of their own --
+    redirect *destinations* are the common case, which is why
+    redirect_destination_noindex was hit hardest. Those URLs used to fall
+    straight to UNKNOWN_FAMILY, and because the scope rules treat an unaccounted
+    URL as a competing family, a single one of them collapsed an otherwise
+    uniform group to `mixed`: 119 agreeing `location_landing` pages plus one
+    unstamped URL produced no family at all.
+
+    Absence of page evidence is not evidence of a different family. This module
+    still derives nothing from a path itself -- it asks the resolver the caller
+    already injects, whose whole job is reconciling a stamp against a URL and
+    which falls back to path classification when there is no stamp. Without a
+    resolver the behaviour is unchanged.
+
+    The caller gates this on corroboration: it is only consulted for a repair
+    that already carries at least one stamped family, never to name a family for
+    a repair the crawl said nothing about.
+    """
+    if resolver is None:
+        return UNKNOWN_FAMILY
+    try:
+        family = str(resolver(None, url) or "").strip().lower()
+    except Exception:
+        return UNKNOWN_FAMILY
+    return family if family and family not in NON_SPECIFIC_FAMILIES else UNKNOWN_FAMILY
+
+
 def _is_cross_cutting(fix: dict[str, Any]) -> bool:
     if str(fix.get("source", "")).startswith("scanner_verified_failed_pages:"):
         return True
@@ -169,10 +207,21 @@ def normalize_repair_scope(
         seen.add(evidence_key)
         ordered.append((family_key, str(raw)))
 
+    # Gap-fill only corroborates evidence the crawl already produced. When at
+    # least one affected URL carries a real stamped family, an affected URL the
+    # crawl never recorded is a gap in that evidence, not a competing family --
+    # so the resolver is asked for it. When NO affected URL is stamped there is
+    # nothing to corroborate, and naming a family from paths alone would be the
+    # invented second opinion this pass exists to prevent (the Tiqets
+    # unknown-only repairs stay mixed).
+    evidenced = [stamped[key] for key, _ in ordered if stamped.get(key, UNKNOWN_FAMILY) != UNKNOWN_FAMILY]
+
     breakdown: dict[str, int] = {}
     representatives: dict[str, str] = {}
     for key, raw in ordered:
         family = stamped.get(key, UNKNOWN_FAMILY)
+        if family == UNKNOWN_FAMILY and evidenced:
+            family = _unstamped_family(raw, family_resolver)
         breakdown[family] = breakdown.get(family, 0) + 1
         representatives.setdefault(family, raw)
 

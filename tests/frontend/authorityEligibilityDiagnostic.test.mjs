@@ -83,7 +83,7 @@ test("authority diagnostics name the first failed predicate in gate order", () =
 
 test("durable persistence publishes only the fixed predicate name", () => {
   const source = readFileSync(
-    new URL("../../base44/functions/persistDurableScanAuthority/index.ts", import.meta.url),
+    new URL("../../base44/functions/persistDurableScanAuthority/entry.ts", import.meta.url),
     "utf8",
   );
   assert.match(source, /firstFailedAuthorityPredicate\(scanResult, review\)/);

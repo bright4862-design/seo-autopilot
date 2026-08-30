@@ -9,11 +9,11 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CONTRACT = "base44/functions/persistDurableScanAuthority/generatedReleaseContract.js";
 const ENTRY_MODULES = [
-  ["persistDurableScanAuthority", /Deno\\.serve\\(/],
-  ["persistLimitedScanResult", /Deno\\.serve\\(/],
+  ["persistDurableScanAuthority", /Deno\.serve\(/],
+  ["persistLimitedScanResult", /Deno\.serve\(/],
   ["startStandardScanJob", /export default async function/],
-  ["durableScanWorkerControl", /Deno\\.serve\\(/],
-  ["getCustomerScanResult", /Deno\\.serve\\(/],
+  ["durableScanWorkerControl", /Deno\.serve\(/],
+  ["getCustomerScanResult", /Deno\.serve\(/],
 ];
 
 function source(relative, root = ROOT) {

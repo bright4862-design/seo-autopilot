@@ -23,7 +23,7 @@ from app.scan_job import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SERVICE_SOURCE = REPO_ROOT / "base44/functions/persistDurableScanAuthority/entry.ts"
-CONTROL_SOURCE = REPO_ROOT / "base44/functions/durableScanWorkerControl/index.ts"
+CONTROL_SOURCE = REPO_ROOT / "base44/functions/durableScanWorkerControl/entry.ts"
 WORKER_SOURCE = REPO_ROOT / "scanner-api/app/scan_job.py"
 
 

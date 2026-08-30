@@ -124,7 +124,7 @@ function entryIdentitySource(source, fingerprint, relative) {
 function main() {
   const mode = process.argv[2] || "";
   if (mode === "--list") {
-    process.stdout.write(`${[...CONSUMERS, ...ENTRY_IDENTITY_CONSUMERS].join("\n")}\n`);
+    process.stdout.write(`${CONSUMERS.join("\n")}\n`);
     return 0;
   }
 

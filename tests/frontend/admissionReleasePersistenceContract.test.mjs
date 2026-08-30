@@ -45,7 +45,7 @@ test("ScanRun exposes server-owned durable admission release state without reusi
 test("normal authoritative completion persists only exact coordinator release outcomes", () => {
   assert.match(completion, /persistExactAdmissionRelease/);
   assert.equal(
-    completion.match(/requireAdmissionRelease\(release\)/g)?.length,
+    completion.match(/^\s*requireAdmissionRelease\(release\);$/gm)?.length,
     2,
     "both durable completion paths must refuse success until exact admission release is persisted",
   );

@@ -1,7 +1,7 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
 import { authorityRowsFromSnapshot } from "./authorityRows.js";
-import { buildAuthoritySnapshot, firstFailedAuthorityPredicate, hasCompleteAcceptanceEvidence } from "./authoritySnapshot.js";
+import { AUTHORITY_CONTRACT, buildAuthoritySnapshot, firstFailedAuthorityPredicate, hasCompleteAcceptanceEvidence } from "./authoritySnapshot.js";
 import { releaseAdmission } from "./admissionClient.js";
 import { persistExactAdmissionRelease } from "./admissionRelease.js";
 
@@ -62,7 +62,10 @@ Deno.serve(async (req) => {
 
     const failedPredicate = firstFailedAuthorityPredicate(scanResult, review);
     if (failedPredicate) {
-      throw new RequestProblem(409, `authority_snapshot_not_eligible__${failedPredicate}`, "The reviewed scan is not release-authoritative.");
+      const fingerprintDiagnostic = failedPredicate === "beta_revision_fingerprint"
+        ? `__expected_${diagnosticMarker(AUTHORITY_CONTRACT.beta_revision_fingerprint)}__received_${diagnosticMarker(review?.beta_revision_fingerprint || scanResult?.beta_revision_fingerprint)}`
+        : "";
+      throw new RequestProblem(409, `authority_snapshot_not_eligible__${failedPredicate}${fingerprintDiagnostic}`, "The reviewed scan is not release-authoritative.");
     }
 
     if (!hasCompleteAcceptanceEvidence(scanResult, review)) {
@@ -216,6 +219,11 @@ Deno.serve(async (req) => {
     return problemResponse(new RequestProblem(500, "durable_authority_failed", "The durable scan authority could not be saved."));
   }
 });
+
+function diagnosticMarker(value: unknown) {
+  const marker = String(value || "missing").toLowerCase();
+  return /^[0-9a-f]{16}$/.test(marker) ? marker : "missing";
+}
 
 function assertWorkerHeader(req: Request) {
   if (String(req.headers.get("X-FixList-Worker") || "") !== WORKER_VERSION) {

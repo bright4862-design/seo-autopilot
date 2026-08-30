@@ -1,0 +1,67 @@
+name: Materialize promotion product SHA fix
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: >-
+      github.event.pull_request.head.ref == 'release/fix-promotion-product-sha'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Render exact pinned cloud operator fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          workflow = Path('.github/workflows/fixlist-cloud-operator.yml')
+          out = Path('.tmp-materialized-fixlist-cloud-operator.yml.txt')
+          text = workflow.read_text()
+          old = '''          product_sha="$(git log -1 --format=%H -- . ':(exclude).github/workflows/fixlist-cloud-operator.yml')"
+          test -n "$product_sha"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "product_sha=$product_sha" >> "$GITHUB_OUTPUT"
+'''
+          new = '''          product_sha="b682c422cfaaada9ce0aa3e896c3e7146cf9e3a2"
+          git cat-file -e "${product_sha}^{commit}"
+          git merge-base --is-ancestor "$product_sha" "$source_sha"
+          unexpected="$(git diff --name-only "$product_sha" "$source_sha" -- | grep -v '^.github/workflows/fixlist-cloud-operator.yml$' || true)"
+          if [ -n "$unexpected" ]; then
+            echo "Refusing: changes since Base44 product SHA are not release-workflow-only:" >&2
+            printf '%s\\n' "$unexpected" >&2
+            exit 2
+          fi
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "product_sha=$product_sha" >> "$GITHUB_OUTPUT"
+'''
+          if text.count(old) != 1:
+              raise SystemExit('expected product_sha block must occur exactly once')
+          out.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check -- .tmp-materialized-fixlist-cloud-operator.yml.txt
+      - name: Push rendered normal file only
+        shell: bash
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .tmp-materialized-fixlist-cloud-operator.yml.txt
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'Render pinned Base44 product SHA promotion fix'
+          git push origin "HEAD:$HEAD_REF"

@@ -1,3 +1,434 @@
-// Platform entry point. Base44 deploys base44/functions/{name}/entry.ts only;
-// the full handler (including Deno.serve) lives in index.ts and runs on import.
-import "./index.ts";
+import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
+import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
+import { authorityRowsFromSnapshot } from "./authorityRows.js";
+import { AUTHORITY_CONTRACT, buildAuthoritySnapshot, firstFailedAuthorityPredicate, hasCompleteAcceptanceEvidence } from "./authoritySnapshot.js";
+import { releaseAdmission } from "./admissionClient.js";
+import { persistExactAdmissionRelease } from "./admissionRelease.js";
+
+// This literal is intentionally release-sensitive. Base44 has previously reused
+// a compiled worker when entry.ts stayed byte-identical while an imported
+// handler changed. Keeping the active release fingerprint in the entry module
+// guarantees every release-fingerprint move changes the deployed entry bytes.
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "5d94e93c54a9efb6";
+
+function normalizeAttempt(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(1, Math.trunc(parsed)) : 1;
+}
+
+const WORKER_VERSION = "scan_job_worker_v1_cloud_tasks";
+const COMPLETION_VERSION = "durable_standard150_completion_v1";
+const MAX_FIX_ITEMS = 100;
+
+class RequestProblem extends Error {
+  status: number;
+  code: string;
+
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+Deno.serve(async (req) => {
+  if (req.method !== "POST") {
+    return problemResponse(new RequestProblem(405, "method_not_allowed", "Use POST to persist durable scan authority."));
+  }
+
+  try {
+    if (AUTHORITY_CONTRACT.beta_revision_fingerprint !== BASE44_HANDLER_RELEASE_FINGERPRINT) {
+      throw new RequestProblem(503, "authority_release_activation_mismatch", "Server scan authority release activation is inconsistent.");
+    }
+    assertWorkerHeader(req);
+    const serviceBase44 = createClientFromRequest(req);
+    const entities = serviceBase44.asServiceRole.entities;
+    const body = await req.json().catch(() => ({}));
+    const signedDocument = {
+      version: body?.version,
+      identity: body?.identity,
+      scan: body?.scan,
+      review: body?.review,
+    };
+    const proof = cleanProof(body?.proof);
+    const secret = String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || "");
+    if (!secret) throw new RequestProblem(503, "authority_not_configured", "Server scan authority is not configured.");
+    if (body?.version !== COMPLETION_VERSION || !proof || !await verifyAuthoritySeal(signedDocument, secret, proof)) {
+      throw new RequestProblem(409, "worker_envelope_invalid", "The durable worker completion envelope could not be verified.");
+    }
+
+    const identity = normalizeIdentity(body?.identity);
+    const scanResult = objectValue(body?.scan);
+    const review = objectValue(body?.review);
+    if (!identity.scan_id || !identity.project_id || !identity.owner_user_id || !identity.normalized_domain) {
+      throw new RequestProblem(400, "worker_identity_missing", "The durable worker identity is incomplete.");
+    }
+
+    const scan = await entities.ScanRun.get(identity.scan_id).catch(() => null);
+    const project = await entities.BusinessProject.get(identity.project_id).catch(() => null);
+    if (!scan || !project) throw new RequestProblem(404, "authority_record_not_found", "The durable scan project was not found.");
+    validateCurrentIdentity({ scan, project, identity, scanResult });
+
+    const failedPredicate = firstFailedAuthorityPredicate(scanResult, review);
+    if (failedPredicate) {
+      const fingerprintDiagnostic = failedPredicate === "beta_revision_fingerprint"
+        ? `__expected_${diagnosticMarker(BASE44_HANDLER_RELEASE_FINGERPRINT)}__received_${diagnosticMarker(review?.beta_revision_fingerprint || scanResult?.beta_revision_fingerprint)}`
+        : "";
+      throw new RequestProblem(409, `authority_snapshot_not_eligible__${failedPredicate}${fingerprintDiagnostic}`, "The reviewed scan is not release-authoritative.");
+    }
+
+    if (!hasCompleteAcceptanceEvidence(scanResult, review)) {
+      throw new RequestProblem(
+        409,
+        "authority_acceptance_evidence_incomplete",
+        "The scan did not produce complete measured acceptance evidence.",
+      );
+    }
+
+    const stableSealedAt = stableTimestamp(scan);
+    const snapshot = buildAuthoritySnapshot({
+      scan: scanResult,
+      review,
+      identity,
+      userId: identity.owner_user_id,
+      now: stableSealedAt,
+    });
+    const authorityProof = await createAuthoritySeal(snapshot, secret);
+    const claimedAttempt = normalizeAttempt(identity.attempt_count);
+    const rowAttempt = normalizeAttempt(scan.attempt_count);
+    if (claimedAttempt !== rowAttempt) {
+      throw new RequestProblem(409, "superseded_attempt", "A newer attempt owns this scan.");
+    }
+
+    const scanStatus = String(scan.status || "").toLowerCase();
+    if (["failed", "cancelled", "limited"].includes(scanStatus)) {
+      throw new RequestProblem(409, "terminal_authority_rejected", "This scan attempt is already terminal.");
+    }
+    if (scanStatus === "complete") {
+      if (scan.authority_proof === authorityProof && scan.fix_list_id) {
+        const release = await persistExactAdmissionRelease({
+          entities,
+          scan,
+          terminalStatus: "complete",
+          release: releaseAdmission,
+        });
+        const replayedScan = release?.scanRun
+          || await entities.ScanRun.get(identity.scan_id).catch(() => scan);
+        return Response.json({
+          success: true,
+          replayed: true,
+          workerVersion: WORKER_VERSION,
+          scanId: identity.scan_id,
+          fixListId: scan.fix_list_id,
+          fixListVerified: true,
+          allowanceConsumed: false,
+          scanRun: replayedScan,
+        });
+      }
+      throw new RequestProblem(409, "authority_immutable", "This scan is already terminal.");
+    }
+
+    if (
+      scan.authority_proof
+      && scan.authority_proof !== authorityProof
+      && normalizeAttempt(scan.authority_attempt_count ?? rowAttempt) !== claimedAttempt
+    ) {
+      throw new RequestProblem(409, "superseded_attempt", "A different attempt staged this authority.");
+    }
+    const replayed = scan.authority_proof === authorityProof;
+
+    const rowsWithoutListId = authorityRowsFromSnapshot(snapshot, {
+      ownerUserId: identity.owner_user_id,
+      proof: authorityProof,
+    });
+    const fixList = await upsertSingleFixList(entities, rowsWithoutListId.fixList, identity, scan);
+    if (!fixList?.id) throw new RequestProblem(500, "authority_persistence_failed", "The authoritative FixList could not be saved.");
+
+    const rows = authorityRowsFromSnapshot(snapshot, {
+      fixListId: fixList.id,
+      ownerUserId: identity.owner_user_id,
+      proof: authorityProof,
+    });
+    await reconcileFixItems(entities, fixList.id, rows.fixItems);
+    await assertAttemptStillActive(entities, identity.scan_id, claimedAttempt);
+
+    const { attempt_count: _stagedAttempt, ...scanRunFields } = rows.scanRun;
+    const stagedScanFields = {
+      ...scanRunFields,
+      status: "reviewing",
+      status_detail: "Authority verified; finalizing this scan.",
+      release_gate_eligible: false,
+      completed_at: "",
+    };
+    await entities.ScanRun.update(identity.scan_id, stagedScanFields);
+
+    const stagedScan = await entities.ScanRun.get(identity.scan_id);
+    const persistedFixList = await entities.FixList.get(fixList.id);
+    const persistedItems = rows.fixItems.length > 0
+      ? await entities.FixItem.filter({ fix_list_id: fixList.id }, "created_date", MAX_FIX_ITEMS)
+      : [];
+    const canonicalRepairSnapshotExpected = snapshot?.fix_list?.repair_snapshot_contract_complete === true;
+    const authorityStaged = Boolean(
+      stagedScan?.status === "reviewing"
+      && normalizeAttempt(stagedScan?.attempt_count) === claimedAttempt
+      && stagedScan?.authority_proof === authorityProof
+      && stagedScan?.authority_seal_version === snapshot.version
+      && stagedScan?.authority_sealed_at === snapshot.sealed_at
+      && stagedScan?.fix_list_id === fixList.id
+      && stagedScan?.release_gate_eligible === false
+      && persistedFixList?.authority_proof === authorityProof
+      && persistedFixList?.is_authoritative === true
+      && String(persistedFixList?.scan_run_id || "") === identity.scan_id
+      && String(persistedFixList?.project_id || "") === identity.project_id
+      && String(persistedFixList?.owner_user_id || "") === identity.owner_user_id
+      && persistedItems.length === rows.fixItems.length
+      && persistedItems.every((item) => item?.authority_proof === authorityProof)
+      && (!canonicalRepairSnapshotExpected || canonicalRepairRowsPersisted(snapshot, persistedFixList, persistedItems))
+    );
+    if (!authorityStaged) {
+      throw new RequestProblem(500, "authority_persistence_incomplete", "The durable authority rows were not completely staged.");
+    }
+
+    await assertAttemptStillActive(entities, identity.scan_id, claimedAttempt);
+    await entities.ScanRun.update(identity.scan_id, scanRunFields);
+    const persistedScan = await entities.ScanRun.get(identity.scan_id);
+    const authorityPersisted = Boolean(
+      persistedScan?.status === "complete"
+      && persistedScan?.authority_proof === authorityProof
+      && persistedScan?.authority_seal_version === snapshot.version
+      && persistedScan?.authority_sealed_at === snapshot.sealed_at
+      && persistedScan?.fix_list_id === fixList.id
+      && persistedScan?.release_gate_eligible === true
+    );
+    if (!authorityPersisted) {
+      throw new RequestProblem(500, "authority_terminal_update_failed", "The authoritative scan could not be finalized.");
+    }
+    const release = await persistExactAdmissionRelease({
+      entities,
+      scan: persistedScan,
+      terminalStatus: "complete",
+      release: releaseAdmission,
+    });
+    const releasedScan = release?.scanRun
+      || await entities.ScanRun.get(identity.scan_id).catch(() => persistedScan);
+
+    return Response.json({
+      success: true,
+      replayed,
+      workerVersion: WORKER_VERSION,
+      scanId: identity.scan_id,
+      fixListId: fixList.id,
+      fixListVerified: true,
+      allowanceConsumed: false,
+      scanRun: releasedScan,
+    });
+  } catch (error) {
+    if (error instanceof RequestProblem) return problemResponse(error);
+    console.error("persistDurableScanAuthority failed", error instanceof Error ? error.name : "unknown_error");
+    return problemResponse(new RequestProblem(500, "durable_authority_failed", "The durable scan authority could not be saved."));
+  }
+});
+
+function diagnosticMarker(value: unknown) {
+  const marker = String(value || "missing").toLowerCase();
+  return /^[0-9a-f]{16}$/.test(marker) ? marker : "missing";
+}
+
+function assertWorkerHeader(req: Request) {
+  if (String(req.headers.get("X-FixList-Worker") || "") !== WORKER_VERSION) {
+    throw new RequestProblem(403, "worker_header_invalid", "The durable worker identity is invalid.");
+  }
+}
+
+function normalizeIdentity(value) {
+  const source = objectValue(value);
+  return {
+    owner_user_id: cleanId(source.owner_user_id),
+    scan_id: cleanId(source.scan_id),
+    project_id: cleanId(source.project_id),
+    request_id: cleanId(source.request_id),
+    idempotency_key: cleanId(source.idempotency_key),
+    normalized_domain: normalizeDomain(source.normalized_domain),
+    attempt_count: normalizeAttempt(source.attempt_count),
+  };
+}
+
+function validateCurrentIdentity({ scan, project, identity, scanResult }) {
+  if (
+    cleanId(scan.id) !== identity.scan_id
+    || cleanId(scan.project_id) !== identity.project_id
+    || !recordOwnedById(scan, identity.owner_user_id)
+    || !recordOwnedById(project, identity.owner_user_id)
+    || normalizeDomain(scan.website_url || scan.submitted_url) !== identity.normalized_domain
+    || normalizeDomain(project.website_url) !== identity.normalized_domain
+    || cleanId(scanResult.scan_id || scanResult.scan_run_id) !== identity.scan_id
+    || cleanId(scanResult.request_id) !== identity.request_id
+    || cleanId(scanResult.idempotency_key || scanResult.request_id) !== identity.idempotency_key
+    || normalizeDomain(scanResult.final_url || scanResult.website_url || scanResult.submitted_url) !== identity.normalized_domain
+  ) {
+    throw new RequestProblem(409, "authority_identity_mismatch", "The durable completion no longer matches this owner-bound scan.");
+  }
+}
+
+async function upsertSingleFixList(entities, desired, identity, scan) {
+  const existing = await entities.FixList.filter({
+    scan_run_id: identity.scan_id,
+    owner_user_id: identity.owner_user_id,
+  }, "-created_date", MAX_FIX_ITEMS);
+  const rows = Array.isArray(existing) ? existing.filter((row) => row?.id) : [];
+  const preferredId = String(scan?.fix_list_id || "");
+  const current = rows.find((row) => String(row.id) === preferredId)
+    || [...rows].sort((a, b) => String(a.id).localeCompare(String(b.id)))[0]
+    || null;
+
+  if (!current?.id) return entities.FixList.create(desired);
+
+  for (const duplicate of rows) {
+    if (duplicate.id === current.id) continue;
+    const duplicateItems = await entities.FixItem.filter(
+      { fix_list_id: duplicate.id },
+      "created_date",
+      MAX_FIX_ITEMS,
+    );
+    for (const item of duplicateItems || []) {
+      if (item?.id) await entities.FixItem.delete(item.id);
+    }
+    await entities.FixList.delete(duplicate.id);
+  }
+
+  const updated = await entities.FixList.update(current.id, desired);
+  return { ...current, ...(updated || {}), id: current.id };
+}
+
+async function reconcileFixItems(entities, fixListId, desiredRows) {
+  const existing = await entities.FixItem.filter(
+    { fix_list_id: fixListId },
+    "created_date",
+    MAX_FIX_ITEMS,
+  );
+  const groups = new Map();
+  for (const item of existing || []) {
+    const key = String(item?.fix_id || "");
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  const desiredIds = new Set(desiredRows.map((row) => String(row.fix_id || "")));
+
+  for (const [fixId, items] of groups) {
+    if (!desiredIds.has(fixId)) {
+      for (const item of items) if (item?.id) await entities.FixItem.delete(item.id);
+      continue;
+    }
+    for (const duplicate of items.slice(1)) {
+      if (duplicate?.id) await entities.FixItem.delete(duplicate.id);
+    }
+  }
+
+  for (const row of desiredRows) {
+    const current = groups.get(String(row.fix_id || ""))?.[0];
+    if (current?.id) await entities.FixItem.update(current.id, row);
+    else await entities.FixItem.create(row);
+  }
+}
+
+async function assertAttemptStillActive(entities, scanId, claimedAttempt) {
+  const current = await entities.ScanRun.get(scanId).catch(() => null);
+  if (!current || normalizeAttempt(current.attempt_count) !== claimedAttempt) {
+    throw new RequestProblem(409, "superseded_attempt", "A newer attempt owns this scan.");
+  }
+  if (["complete", "limited", "failed", "cancelled"].includes(String(current.status || "").toLowerCase())) {
+    throw new RequestProblem(409, "terminal_authority_rejected", "This scan attempt is already terminal.");
+  }
+}
+
+function canonicalRepairRowsPersisted(snapshot, fixList, items) {
+  const expectedList = snapshot?.fix_list || {};
+  const expectedItems = Array.isArray(snapshot?.recommendations) ? snapshot.recommendations : [];
+  if (
+    expectedList.repair_contract_version !== "repair_contract_v2_shadow_calibrated"
+    || expectedList.repair_snapshot_contract_version !== "repair_contract_v2_shadow_calibrated"
+    || expectedList.repair_snapshot_contract_complete !== true
+    || expectedList.repair_priority_model_version !== "repair_priority_v2_technical_severity"
+    || fixList?.repair_contract_version !== expectedList.repair_contract_version
+    || fixList?.repair_snapshot_contract_version !== expectedList.repair_snapshot_contract_version
+    || fixList?.repair_snapshot_contract_complete !== true
+    || fixList?.repair_priority_model_version !== expectedList.repair_priority_model_version
+  ) return false;
+
+  const expectedOrder = Array.isArray(expectedList.canonical_action_fix_ids)
+    ? expectedList.canonical_action_fix_ids.map((value) => String(value || ""))
+    : [];
+  const persistedOrder = Array.isArray(fixList?.canonical_action_fix_ids)
+    ? fixList.canonical_action_fix_ids.map((value) => String(value || ""))
+    : [];
+  if (expectedOrder.length !== expectedItems.length || JSON.stringify(expectedOrder) !== JSON.stringify(persistedOrder)) {
+    return false;
+  }
+
+  const byFixId = new Map((items || []).map((item) => [String(item?.fix_id || ""), item]));
+  return expectedItems.every((expected, index) => {
+    const row = byFixId.get(String(expected?.fix_id || ""));
+    return Boolean(
+      row
+      && row.repair_contract_version === expected.repair_contract_version
+      && row.repair_snapshot_contract_version === expected.repair_snapshot_contract_version
+      && row.repair_snapshot_contract_complete === true
+      && row.repair_priority_model_version === expected.repair_priority_model_version
+      && row.action_priority === expected.action_priority
+      && row.evidence_class === expected.evidence_class
+      && String(row.priority_reason || "") === String(expected.priority_reason || "")
+      && Number(row.canonical_action_rank || 0) === index + 1
+      && String(row.repair_identity_version || "") === String(expected.repair_identity_version || "")
+      && String(row.repair_fingerprint || "") === String(expected.repair_fingerprint || "")
+    );
+  });
+}
+
+function stableTimestamp(scan) {
+  for (const value of [scan?.started_at, scan?.queued_at, scan?.created_date]) {
+    if (Number.isFinite(Date.parse(String(value || "")))) return new Date(value).toISOString();
+  }
+  throw new RequestProblem(409, "scan_timestamp_missing", "The durable scan timestamp is unavailable.");
+}
+
+function recordOwnedById(record, ownerId) {
+  const owner = cleanId(ownerId);
+  return Boolean(owner && (
+    cleanId(record?.owner_user_id) === owner
+    || cleanId(record?.created_by_id) === owner
+  ));
+}
+
+function objectValue(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function normalizeDomain(value) {
+  const raw = cleanText(value, 2_000);
+  if (!raw) return "";
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    return ["http:", "https:"].includes(parsed.protocol)
+      ? parsed.hostname.toLowerCase().replace(/^www\./, "").replace(/\.$/, "")
+      : "";
+  } catch {
+    return "";
+  }
+}
+
+function cleanProof(value) {
+  const proof = cleanText(value, 64).toLowerCase();
+  return /^[a-f0-9]{64}$/.test(proof) ? proof : "";
+}
+
+function cleanText(value, limit) {
+  return typeof value === "string" ? value.trim().slice(0, limit) : "";
+}
+
+function cleanId(value) {
+  return cleanText(value, 160);
+}
+
+function problemResponse(error) {
+  return Response.json({ success: false, error_code: error.code, error: error.message }, { status: error.status });
+}

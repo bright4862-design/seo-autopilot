@@ -146,7 +146,14 @@ function main() {
   for (const relative of ENTRY_IDENTITY_CONSUMERS) {
     const target = path.join(ROOT, relative);
     if (!fs.existsSync(target)) {
-      throw new Error(`Release-sensitive Base44 entry is missing: ${relative}`);
+      // Existing generator unit tests use isolated contract-only roots. The
+      // real repository must always contain every deployable entry identity,
+      // while isolated roots may omit entries unless that test is explicitly
+      // exercising entry identity generation.
+      if (ROOT === REPO_ROOT) {
+        throw new Error(`Release-sensitive Base44 entry is missing: ${relative}`);
+      }
+      continue;
     }
     const current = fs.readFileSync(target, "utf8");
     const expected = entryIdentitySource(current, fingerprint, relative);

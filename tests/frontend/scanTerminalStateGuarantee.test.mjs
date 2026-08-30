@@ -41,7 +41,7 @@ const fixListSource = readFileSync(
 );
 const dispatcherSource = readFileSync(new URL("../../base44/functions/startStandardScanJob/entry.ts", import.meta.url), "utf8");
 const workerControlSource = readFileSync(new URL("../../base44/functions/durableScanWorkerControl/index.ts", import.meta.url), "utf8");
-const durablePersistenceSource = readFileSync(new URL("../../base44/functions/persistDurableScanAuthority/index.ts", import.meta.url), "utf8");
+const durablePersistenceSource = readFileSync(new URL("../../base44/functions/persistDurableScanAuthority/entry.ts", import.meta.url), "utf8");
 
 // Rebuild assertCurrentScanSession in an isolated scope with injected doubles.
 const guardMatch = scanFormSource.match(

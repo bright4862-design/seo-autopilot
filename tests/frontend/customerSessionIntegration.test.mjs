@@ -5,7 +5,7 @@ import test from "node:test";
 const auth = readFileSync("src/lib/AuthContext.jsx", "utf8");
 const activeProject = readFileSync("src/lib/activeProject.js", "utf8");
 const scanRuns = readFileSync("src/lib/scanRuns.js", "utf8");
-const customerResult = readFileSync("base44/functions/getCustomerScanResult/index.ts", "utf8");
+const customerResult = readFileSync("base44/functions/getCustomerScanResult/entry.ts", "utf8");
 const scanForm = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
 const fixList = readFileSync("src/pages/FixList.jsx", "utf8");
 const assistant = readFileSync("src/pages/Assistant.jsx", "utf8");

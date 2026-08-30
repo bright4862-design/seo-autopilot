@@ -16,7 +16,7 @@ import {
 
 const QUEUE = "projects/seo-autopilot-501517/locations/europe-west1/queues/standard150-scans";
 const dispatcher = readFileSync(new URL("../../base44/functions/startStandardScanJob/entry.ts", import.meta.url), "utf8");
-const control = readFileSync(new URL("../../base44/functions/durableScanWorkerControl/index.ts", import.meta.url), "utf8");
+const control = readFileSync(new URL("../../base44/functions/durableScanWorkerControl/entry.ts", import.meta.url), "utf8");
 const persist = readFileSync(new URL("../../base44/functions/persistDurableScanAuthority/entry.ts", import.meta.url), "utf8");
 const workerMain = readFileSync(new URL("../../scanner-api/app/main.py", import.meta.url), "utf8");
 const workerJob = readFileSync(new URL("../../scanner-api/app/scan_job.py", import.meta.url), "utf8");

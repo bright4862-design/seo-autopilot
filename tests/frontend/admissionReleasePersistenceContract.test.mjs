@@ -7,7 +7,7 @@ import { persistExactAdmissionRelease } from "../../base44/functions/persistDura
 import { buildLimitedResultSnapshot } from "../../base44/functions/persistLimitedScanResult/limitedResultIntegrity.js";
 
 const schema = JSON.parse(readFileSync("base44/entities/ScanRun.jsonc", "utf8"));
-const completion = readFileSync("base44/functions/persistDurableScanAuthority/index.ts", "utf8");
+const completion = readFileSync("base44/functions/persistDurableScanAuthority/entry.ts", "utf8");
 const releaseHelper = readFileSync("base44/functions/persistDurableScanAuthority/admissionRelease.js", "utf8");
 const limitedWriter = readFileSync("base44/functions/persistLimitedScanResult/index.ts", "utf8");
 

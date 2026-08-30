@@ -132,12 +132,10 @@ test("the canonical generator changes deployed entry identities when the fingerp
     ),
     (error) => {
       assert.notEqual(error.status, 0, "stale entry identity must make --check fail");
-      assert.match(String(error.stderr || ""), new RegExp(staleRelative.replace(/[.*+?^${}()|[\]\\]/g, "\\  execFileSync(
-    process.execPath,
-    [path.join(ROOT, "scripts/generate_release_contracts.mjs"), "--check"],
-    { cwd: ROOT, env: { ...process.env, RELEASE_CONTRACT_ROOT: tempRoot }, stdio: "pipe" },
-  );
-});")));
+      assert.ok(
+        String(error.stderr || "").includes(staleRelative),
+        `--check must report the stale entry path: ${staleRelative}`,
+      );
       return true;
     },
   );

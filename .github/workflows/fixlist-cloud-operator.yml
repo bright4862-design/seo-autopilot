@@ -657,6 +657,54 @@ jobs:
         shell: bash
         run: bash ./scripts/verify-base44-site.sh
 
+      - name: Verify signed Base44 worker-control handoff
+        env:
+          REVISION: ${{ steps.candidate.outputs.revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          chmod 700 "$tmp"
+
+          gcloud run revisions describe "$REVISION" \
+            --project="$GCP_PROJECT" --region="$GCP_REGION" --format=json > "$tmp/revision.json"
+
+          readarray -t values < <(python3 - "$tmp/revision.json" <<'PY'
+          import json, sys
+          value = json.load(open(sys.argv[1], encoding="utf-8"))
+          containers = (value.get("spec", {}).get("containers") or [{}])
+          env = {item.get("name"): item for item in containers[0].get("env", [])}
+          app_id = str((env.get("BASE44_APP_ID") or {}).get("value") or "")
+          api_url = str((env.get("BASE44_API_URL") or {}).get("value") or "")
+          ref = ((env.get("SCAN_EVIDENCE_SIGNING_KEY") or {}).get("valueFrom") or {}).get("secretKeyRef") or {}
+          secret_name = str(ref.get("name") or "")
+          secret_version = str(ref.get("key") or "")
+          for item in (app_id, api_url, secret_name, secret_version):
+              print(item)
+          PY
+          )
+          test "${#values[@]}" -eq 4
+          app_id="${values[0]}"
+          api_url="${values[1]}"
+          secret_name="${values[2]}"
+          secret_version="${values[3]}"
+          test -n "$app_id"
+          [[ "$api_url" == https://* ]]
+          test -n "$secret_name"
+          [[ "$secret_version" =~ ^[1-9][0-9]*$ ]]
+
+          secret_file="$tmp/signing-key"
+          gcloud secrets versions access "$secret_version" \
+            --secret="$secret_name" --project="$GCP_PROJECT" > "$secret_file"
+          chmod 600 "$secret_file"
+          test -s "$secret_file"
+
+          python3 scripts/verify-base44-worker-control.py \
+            --app-id "$app_id" \
+            --api-url "$api_url" \
+            --secret-file "$secret_file"
+
       - name: Promote exact candidate with automatic rollback on failed post-check
         id: promote
         env:

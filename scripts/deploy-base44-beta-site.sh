@@ -64,6 +64,14 @@ do
   }
 done
 
+# A listed function is not enough: Base44 can retain inventory metadata while
+# its public dispatcher has no runnable worker. Prove the control function is
+# routable through the same edge the Cloud Run worker uses before publishing a
+# successful release verdict. This deliberately uses an invalid worker header,
+# so it cannot read or mutate any scan state.
+BASE44_APP_ID="$APP_ID" \
+  bash "$REPO_ROOT/scripts/verify-base44-worker-control-route.sh"
+
 EXPECTED_SOURCE_SHA="$SOURCE_SHA" bash "$REPO_ROOT/scripts/verify-base44-site.sh"
 
 printf 'BASE44_SITE_AND_BACKEND_DEPLOYED\nsource_sha=%s\n' "$SOURCE_SHA"

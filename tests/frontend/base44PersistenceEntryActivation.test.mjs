@@ -105,4 +105,40 @@ test("the canonical generator changes deployed entry identities when the fingerp
     [path.join(ROOT, "scripts/generate_release_contracts.mjs"), "--check"],
     { cwd: ROOT, env: { ...process.env, RELEASE_CONTRACT_ROOT: tempRoot }, stdio: "pipe" },
   );
+
+  const staleRelative = `base44/functions/${ENTRY_MODULES[0][0]}/entry.ts`;
+  const stalePath = path.join(tempRoot, staleRelative);
+  const staleSource = fs.readFileSync(stalePath, "utf8");
+  const staleFingerprint = changedFingerprint === "cccccccccccccccc"
+    ? "dddddddddddddddd"
+    : "cccccccccccccccc";
+  const deliberatelyStale = staleSource.replace(
+    /const BASE44_HANDLER_RELEASE_FINGERPRINT = "[0-9a-f]{16}";/,
+    `const BASE44_HANDLER_RELEASE_FINGERPRINT = "${staleFingerprint}";`,
+  );
+  assert.notEqual(deliberatelyStale, staleSource, "test must actually stale one entry identity");
+  fs.writeFileSync(stalePath, deliberatelyStale);
+
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [path.join(ROOT, "scripts/generate_release_contracts.mjs"), "--check"],
+      {
+        cwd: ROOT,
+        env: { ...process.env, RELEASE_CONTRACT_ROOT: tempRoot },
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    ),
+    (error) => {
+      assert.notEqual(error.status, 0, "stale entry identity must make --check fail");
+      assert.match(String(error.stderr || ""), new RegExp(staleRelative.replace(/[.*+?^${}()|[\]\\]/g, "\\  execFileSync(
+    process.execPath,
+    [path.join(ROOT, "scripts/generate_release_contracts.mjs"), "--check"],
+    { cwd: ROOT, env: { ...process.env, RELEASE_CONTRACT_ROOT: tempRoot }, stdio: "pipe" },
+  );
+});")));
+      return true;
+    },
+  );
 });

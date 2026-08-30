@@ -21,7 +21,7 @@ import { REVIEW_ATTESTATION_VERSION } from "../../base44/functions/persistDurabl
  */
 
 const SOURCE = readFileSync(
-  new URL("../../base44/functions/getCustomerScanResult/index.ts", import.meta.url),
+  new URL("../../base44/functions/getCustomerScanResult/entry.ts", import.meta.url),
   "utf8",
 );
 

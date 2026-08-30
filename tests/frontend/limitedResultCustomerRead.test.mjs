@@ -16,7 +16,7 @@ import { RELEASE_FINGERPRINT } from "../../src/lib/generatedReleaseContract.js";
  */
 
 const SOURCE = readFileSync(
-  new URL("../../base44/functions/getCustomerScanResult/index.ts", import.meta.url),
+  new URL("../../base44/functions/getCustomerScanResult/entry.ts", import.meta.url),
   "utf8",
 );
 

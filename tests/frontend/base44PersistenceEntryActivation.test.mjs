@@ -1,30 +1,108 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
-const ENTRY = "base44/functions/persistDurableScanAuthority/entry.ts";
-const INDEX = "base44/functions/persistDurableScanAuthority/index.ts";
+const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CONTRACT = "base44/functions/persistDurableScanAuthority/generatedReleaseContract.js";
+const ENTRY_MODULES = [
+  ["persistDurableScanAuthority", /Deno\\.serve\\(/],
+  ["persistLimitedScanResult", /Deno\\.serve\\(/],
+  ["startStandardScanJob", /export default async function/],
+  ["durableScanWorkerControl", /Deno\\.serve\\(/],
+  ["getCustomerScanResult", /Deno\\.serve\\(/],
+];
 
-function fingerprintFrom(source) {
-  const match = source.match(/RELEASE_FINGERPRINT\s*=\s*"([0-9a-f]{16})"/);
+function source(relative, root = ROOT) {
+  return fs.readFileSync(path.join(root, relative), "utf8");
+}
+
+function fingerprintFromContract(value) {
+  const match = value.match(/RELEASE_FINGERPRINT\\s*=\\s*"([0-9a-f]{16})"/);
   assert.ok(match, "release fingerprint literal must exist");
   return match[1];
 }
 
-test("persistence handler executes directly from Base44 entry.ts", () => {
-  const entry = fs.readFileSync(ENTRY, "utf8");
-  assert.match(entry, /Deno\.serve\(/, "entry.ts must contain the actual handler");
-  assert.doesNotMatch(entry, /import\s+["']\.\/index\.ts["']/, "entry.ts must not delegate to the stale imported handler path");
-  assert.equal(fs.existsSync(INDEX), false, "imported index.ts handler must not remain in the package");
+function fingerprintFromEntry(value) {
+  const match = value.match(/BASE44_HANDLER_RELEASE_FINGERPRINT\\s*=\\s*"([0-9a-f]{16})"/);
+  assert.ok(match, "entry release fingerprint marker must exist");
+  return match[1];
+}
+
+test("all release-sensitive Base44 functions execute from entry.ts", () => {
+  for (const [name, handlerPattern] of ENTRY_MODULES) {
+    const entryPath = `base44/functions/${name}/entry.ts`;
+    const indexPath = `base44/functions/${name}/index.ts`;
+    const entry = source(entryPath);
+
+    assert.match(entry, handlerPattern, `${name} entry.ts must contain the actual handler`);
+    assert.doesNotMatch(
+      entry,
+      /import\\s+["']\\.\\/index\\.ts["']/,
+      `${name} entry.ts must not delegate to an imported handler`,
+    );
+    assert.equal(fs.existsSync(path.join(ROOT, indexPath)), false, `${name} imported index.ts must not remain`);
+  }
 });
 
-test("entry module identity moves whenever the release fingerprint moves", () => {
-  const entry = fs.readFileSync(ENTRY, "utf8");
-  const contract = fs.readFileSync(CONTRACT, "utf8");
-  const expected = fingerprintFrom(contract);
-  const marker = entry.match(/BASE44_HANDLER_RELEASE_FINGERPRINT\s*=\s*"([0-9a-f]{16})"/);
-  assert.ok(marker, "entry.ts must carry a release-sensitive fingerprint marker");
-  assert.equal(marker[1], expected, "entry.ts release marker must match generated release contract");
-  assert.match(entry, /authority_release_activation_mismatch/);
+test("all release-sensitive entry identities match the generated release contract", () => {
+  const expected = fingerprintFromContract(source(CONTRACT));
+  for (const [name] of ENTRY_MODULES) {
+    const entry = source(`base44/functions/${name}/entry.ts`);
+    assert.equal(fingerprintFromEntry(entry), expected, `${name} entry identity must match release fingerprint`);
+  }
+});
+
+test("the canonical generator changes deployed entry identities when the fingerprint changes", (t) => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "fixlist-release-entry-"));
+  t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
+
+  for (const relative of [
+    "data/beta-crawler-revision.json",
+    "data/cross-runtime-release-components.json",
+  ]) {
+    const target = path.join(tempRoot, relative);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.copyFileSync(path.join(ROOT, relative), target);
+  }
+
+  for (const [name] of ENTRY_MODULES) {
+    const relative = `base44/functions/${name}/entry.ts`;
+    const target = path.join(tempRoot, relative);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.copyFileSync(path.join(ROOT, relative), target);
+  }
+
+  const revisionPath = path.join(tempRoot, "data/beta-crawler-revision.json");
+  const revision = JSON.parse(fs.readFileSync(revisionPath, "utf8"));
+  const changedFingerprint = revision.fingerprint === "aaaaaaaaaaaaaaaa"
+    ? "bbbbbbbbbbbbbbbb"
+    : "aaaaaaaaaaaaaaaa";
+  revision.fingerprint = changedFingerprint;
+  fs.writeFileSync(revisionPath, JSON.stringify(revision, null, 2) + "\n");
+
+  execFileSync(process.execPath, [path.join(ROOT, "scripts/generate_release_contracts.mjs")], {
+    cwd: ROOT,
+    env: { ...process.env, RELEASE_CONTRACT_ROOT: tempRoot },
+    stdio: "pipe",
+  });
+
+  for (const [name] of ENTRY_MODULES) {
+    const entry = source(`base44/functions/${name}/entry.ts`, tempRoot);
+    assert.equal(fingerprintFromEntry(entry), changedFingerprint, `${name} entry identity did not move`);
+  }
+  assert.equal(
+    fingerprintFromContract(source(CONTRACT, tempRoot)),
+    changedFingerprint,
+    "generated release contract did not move with the entry identities",
+  );
+
+  execFileSync(
+    process.execPath,
+    [path.join(ROOT, "scripts/generate_release_contracts.mjs"), "--check"],
+    { cwd: ROOT, env: { ...process.env, RELEASE_CONTRACT_ROOT: tempRoot }, stdio: "pipe" },
+  );
 });

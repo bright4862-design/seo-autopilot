@@ -49,6 +49,19 @@ const CONSUMERS = [
   "base44/functions/grokChat/generatedReleaseContract.js",
 ];
 
+// These Base44 entry modules are the deployable module identities. Base44 has
+// previously reused a compiled release when entry.ts stayed byte-identical while
+// imported release-sensitive code changed. The canonical generator therefore
+// rewrites a fingerprint marker in each release-sensitive entry whenever the
+// frozen release fingerprint moves.
+const ENTRY_IDENTITY_CONSUMERS = [
+  "base44/functions/persistDurableScanAuthority/entry.ts",
+  "base44/functions/persistLimitedScanResult/entry.ts",
+  "base44/functions/startStandardScanJob/entry.ts",
+  "base44/functions/durableScanWorkerControl/entry.ts",
+  "base44/functions/getCustomerScanResult/entry.ts",
+];
+
 function readJson(relative) {
   return JSON.parse(fs.readFileSync(path.join(ROOT, relative), "utf8"));
 }
@@ -96,14 +109,27 @@ function contractSource() {
   ].join("\n");
 }
 
+
+function entryIdentitySource(source, fingerprint, relative) {
+  const marker = /const BASE44_HANDLER_RELEASE_FINGERPRINT = "[0-9a-f]{16}";/;
+  if (!marker.test(source)) {
+    throw new Error(`Release-sensitive Base44 entry has no fingerprint marker: ${relative}`);
+  }
+  return source.replace(
+    marker,
+    `const BASE44_HANDLER_RELEASE_FINGERPRINT = "${fingerprint}";`,
+  );
+}
+
 function main() {
   const mode = process.argv[2] || "";
   if (mode === "--list") {
-    process.stdout.write(`${CONSUMERS.join("\n")}\n`);
+    process.stdout.write(`${[...CONSUMERS, ...ENTRY_IDENTITY_CONSUMERS].join("\n")}\n`);
     return 0;
   }
 
   const source = contractSource();
+  const fingerprint = String(readJson(REVISION_RECORD).fingerprint || "");
   const drifted = [];
   for (const relative of CONSUMERS) {
     const target = path.join(ROOT, relative);
@@ -115,6 +141,21 @@ function main() {
     }
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, source);
+  }
+
+  for (const relative of ENTRY_IDENTITY_CONSUMERS) {
+    const target = path.join(ROOT, relative);
+    if (!fs.existsSync(target)) {
+      throw new Error(`Release-sensitive Base44 entry is missing: ${relative}`);
+    }
+    const current = fs.readFileSync(target, "utf8");
+    const expected = entryIdentitySource(current, fingerprint, relative);
+    if (current === expected) continue;
+    if (mode === "--check") {
+      drifted.push(relative);
+      continue;
+    }
+    fs.writeFileSync(target, expected);
   }
 
   if (mode === "--check" && drifted.length > 0) {

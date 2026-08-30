@@ -87,6 +87,7 @@ test("durable persistence publishes only the fixed predicate name", () => {
     "utf8",
   );
   assert.match(source, /firstFailedAuthorityPredicate\(scanResult, review\)/);
-  assert.match(source, /`authority_snapshot_not_eligible__\$\{failedPredicate\}`/);
+  assert.match(source, /`authority_snapshot_not_eligible__\$\{failedPredicate\}\$\{fingerprintDiagnostic\}`/);
+  assert.match(source, /__expected_\$\{diagnosticMarker\(AUTHORITY_CONTRACT\.beta_revision_fingerprint\)\}__received_\$\{diagnosticMarker\(review\?\.beta_revision_fingerprint \|\| scanResult\?\.beta_revision_fingerprint\)\}/);
   assert.doesNotMatch(source, /JSON\.stringify\((?:scanResult|review)\)/);
 });

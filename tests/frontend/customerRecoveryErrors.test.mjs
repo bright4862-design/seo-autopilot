@@ -157,7 +157,7 @@ test("an unrecognized kind still falls back to a retryable state on both targets
 });
 
 test("no saved-scan read replaces an error without recording it first", () => {
-  const fn = readFileSync("base44/functions/getCustomerScanResult/index.ts", "utf8");
+  const fn = readFileSync("base44/functions/getCustomerScanResult/entry.ts", "utf8");
   // The top-level handler returns a RequestProblem before reaching its own
   // console.error, so an error converted here leaves no server-side trace at
   // all -- which is how a saved-scan read failure reached a customer as a

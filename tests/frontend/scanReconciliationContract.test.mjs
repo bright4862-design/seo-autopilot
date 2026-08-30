@@ -25,7 +25,7 @@ import {
   uniqueRows,
 } from "../../base44/functions/durableScanWorkerControl/reconciliation.js";
 
-const control = readFileSync("base44/functions/durableScanWorkerControl/index.ts", "utf8");
+const control = readFileSync("base44/functions/durableScanWorkerControl/entry.ts", "utf8");
 const worker = readFileSync("scanner-api/app/main.py", "utf8");
 const workerJob = readFileSync("scanner-api/app/scan_job.py", "utf8");
 

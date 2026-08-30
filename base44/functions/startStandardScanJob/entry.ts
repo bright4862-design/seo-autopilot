@@ -18,7 +18,7 @@ import {
   releaseAdmission,
   verifyAdmissionClaimEvidence,
 } from "./admissionClient.js";
-import { RELEASE_COMPONENT_VERSIONS } from "./generatedReleaseContract.js";
+import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 
 const CORS_HEADERS = Object.freeze({
   "Access-Control-Allow-Origin": "*",
@@ -42,6 +42,7 @@ function mutableScanIntakeValue() {
   }
 }
 
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "5d94e93c54a9efb6";
 const VERSION = "startStandardScanJob_v3_server_admission";
 const PUBLIC_SCAN_MODE = "standard_150";
 const MAX_PAGES = 150;
@@ -78,6 +79,9 @@ export default async function (req: Request): Promise<Response> {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders() });
   if (req.method !== "POST") {
     return jsonResponse({ success: false, version: VERSION, error: "Method not allowed." }, 405);
+  }
+  if (RELEASE_FINGERPRINT !== BASE44_HANDLER_RELEASE_FINGERPRINT) {
+    return jsonResponse({ success: false, version: VERSION, error: "The scan service release is not active." }, 503);
   }
 
   try {

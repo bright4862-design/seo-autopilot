@@ -91,7 +91,7 @@ test("the browser never recomputes or writes terminal release authority", () => 
     "utf8"
   );
   const persistence = readFileSync(
-    new URL("../../base44/functions/persistDurableScanAuthority/index.ts", import.meta.url),
+    new URL("../../base44/functions/persistDurableScanAuthority/entry.ts", import.meta.url),
     "utf8"
   );
   const submitStart = source.indexOf("async function handleSubmit");

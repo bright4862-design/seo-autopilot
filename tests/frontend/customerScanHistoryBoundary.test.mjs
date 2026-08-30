@@ -7,7 +7,7 @@ import {
   recordOwnedByUser,
 } from "../../base44/functions/getCustomerScanResult/projection.js";
 
-const resultFunction = fs.readFileSync("base44/functions/getCustomerScanResult/index.ts", "utf8");
+const resultFunction = fs.readFileSync("base44/functions/getCustomerScanResult/entry.ts", "utf8");
 const scanRuns = fs.readFileSync("src/lib/scanRuns.js", "utf8");
 
 test("saved scan history is a strict progress-only projection", () => {

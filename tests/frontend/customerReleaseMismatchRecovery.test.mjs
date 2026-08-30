@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const reader = readFileSync("base44/functions/getCustomerScanResult/index.ts", "utf8");
+const reader = readFileSync("base44/functions/getCustomerScanResult/entry.ts", "utf8");
 const scanRuns = readFileSync("src/lib/scanRuns.js", "utf8");
 const fixList = readFileSync("src/pages/FixList.jsx", "utf8");
 

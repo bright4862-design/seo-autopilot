@@ -10,7 +10,7 @@ import {
   admissionClaimEvidenceProof,
   verifyAdmissionClaimEvidence,
 } from "../../base44/functions/startStandardScanJob/admissionClient.js";
-import { RELEASE_COMPONENT_VERSIONS } from "../../base44/functions/startStandardScanJob/generatedReleaseContract.js";
+import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "../../base44/functions/startStandardScanJob/generatedReleaseContract.js";
 
 const entrySource = readFileSync("base44/functions/startStandardScanJob/entry.ts", "utf8");
 
@@ -43,6 +43,7 @@ async function importHandler(harnessName) {
     admissionClaimEvidenceProof,
     verifyAdmissionClaimEvidence,
     RELEASE_COMPONENT_VERSIONS,
+    RELEASE_FINGERPRINT,
   } = globalThis.${harnessName};`;
   return import(`data:text/javascript;base64,${Buffer.from(`${prelude}\n${javascript}`).toString("base64")}`);
 }
@@ -264,6 +265,7 @@ function createHarness({
       admissionClaimEvidenceProof,
       verifyAdmissionClaimEvidence,
       RELEASE_COMPONENT_VERSIONS,
+      RELEASE_FINGERPRINT,
     },
   };
 }

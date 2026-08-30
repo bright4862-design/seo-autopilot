@@ -156,7 +156,7 @@ test("locked and non-authoritative projections never contain paid FixItems", () 
 });
 
 test("customer results cross one server projection and authority rows are admin-only", () => {
-  const entry = readFileSync("base44/functions/getCustomerScanResult/index.ts", "utf8");
+  const entry = readFileSync("base44/functions/getCustomerScanResult/entry.ts", "utf8");
   const scanRuns = readFileSync("src/lib/scanRuns.js", "utf8");
   const fixListSchema = JSON.parse(readFileSync("base44/entities/FixList.jsonc", "utf8"));
   const fixItemSchema = JSON.parse(readFileSync("base44/entities/FixItem.jsonc", "utf8"));
@@ -200,7 +200,7 @@ test("customer result verification preserves exact signing-key bytes", async () 
   assert.equal(await verifyAuthoritySeal(snapshot, secret, proof), true);
   assert.equal(await verifyAuthoritySeal(snapshot, secret.trim(), proof), false);
 
-  const entry = readFileSync("base44/functions/getCustomerScanResult/index.ts", "utf8");
+  const entry = readFileSync("base44/functions/getCustomerScanResult/entry.ts", "utf8");
   assert.match(entry, /String\(Deno\.env\.get\("SCAN_EVIDENCE_SIGNING_KEY"\) \|\| ""\)/);
   assert.doesNotMatch(entry, /cleanText\(Deno\.env\.get\("SCAN_EVIDENCE_SIGNING_KEY"\)/);
 });

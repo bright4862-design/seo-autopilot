@@ -6,7 +6,7 @@ const advanced = readFileSync("base44/functions/runAdvancedScan/entry.ts", "utf8
 const scannerForm = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
 const fixList = readFileSync("src/pages/FixList.jsx", "utf8");
 const scanRunModel = readFileSync("src/lib/scanRunModel.js", "utf8");
-const persistence = readFileSync("base44/functions/persistDurableScanAuthority/index.ts", "utf8");
+const persistence = readFileSync("base44/functions/persistDurableScanAuthority/entry.ts", "utf8");
 
 test("normal scans require Python and do not silently save Deno fallback", () => {
   assert.match(scannerForm, /require_python_scanner: true/);

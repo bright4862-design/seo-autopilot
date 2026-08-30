@@ -7,7 +7,7 @@ import { buildFixItemFields } from "../../src/lib/scanRunModel.js";
 
 const fixListSource = readFileSync(new URL("../../src/pages/FixList.jsx", import.meta.url), "utf8");
 const scanFormSource = readFileSync(new URL("../../src/components/scan/ScanWebsiteForm.jsx", import.meta.url), "utf8");
-const durablePersistenceSource = readFileSync(new URL("../../base44/functions/persistDurableScanAuthority/index.ts", import.meta.url), "utf8");
+const durablePersistenceSource = readFileSync(new URL("../../base44/functions/persistDurableScanAuthority/entry.ts", import.meta.url), "utf8");
 const scanRunsSource = readFileSync(new URL("../../src/lib/scanRuns.js", import.meta.url), "utf8");
 const fixItemEntity = JSON.parse(readFileSync(new URL("../../base44/entities/FixItem.jsonc", import.meta.url), "utf8"));
 

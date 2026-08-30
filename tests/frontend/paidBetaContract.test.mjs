@@ -16,7 +16,7 @@ const accessClient = readFileSync("src/lib/access.js", "utf8");
 const billing = readFileSync("src/pages/Billing.jsx", "utf8");
 const scanForm = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
 const fixList = readFileSync("src/pages/FixList.jsx", "utf8");
-const persistence = readFileSync("base44/functions/persistDurableScanAuthority/index.ts", "utf8");
+const persistence = readFileSync("base44/functions/persistDurableScanAuthority/entry.ts", "utf8");
 const accessSchema = JSON.parse(readFileSync("base44/entities/Access.jsonc", "utf8"));
 
 const user = { id: "user-1", email: "paid@example.com" };

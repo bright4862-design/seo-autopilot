@@ -24,6 +24,9 @@ from .repair_coverage import evidence_url_key, first_failed_repair_invariant, no
 from .repair_shadow_calibration import build_calibrated_shadow_review_analysis
 
 
+REPAIR_PERSISTENCE_GROUPING_VERSION = "repair_persistence_grouping_v1_stable_fingerprint_actions"
+
+
 class CanonicalRepairContractError(RuntimeError):
     """Canonical-v2 synthesis was attempted but could not produce one complete snapshot."""
 

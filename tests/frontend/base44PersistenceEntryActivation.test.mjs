@@ -14,7 +14,16 @@ const ENTRY_MODULES = [
   ["startStandardScanJob", /export default async function/],
   ["durableScanWorkerControl", /Deno\.serve\(/],
   ["getCustomerScanResult", /Deno\.serve\(/],
+  ["ownerScanDebugControl", /Deno\.serve\(/],
+  ["aiReviewScan", /Deno\.serve\(/],
 ];
+
+// Base44 routes entry.ts only, so a function without one is not deployed at
+// all. These two are legacy paths kept in the tree; naming them here is what
+// keeps "no entry identity" a deliberate state rather than an oversight, and
+// what makes adding an entry.ts to either one fail this test until it is also
+// given a maintained release identity.
+const UNROUTED_LEGACY = new Set(["persistScanAuthority", "grokChat"]);
 
 function source(relative, root = ROOT) {
   return fs.readFileSync(path.join(root, relative), "utf8");
@@ -139,4 +148,51 @@ test("the canonical generator changes deployed entry identities when the fingerp
       return true;
     },
   );
+});
+
+test("every function carrying a release contract has a maintained entry identity", () => {
+  // The generator writes generatedReleaseContract.js to nine functions but
+  // maintains entry identities separately. When those two lists drift, a
+  // fingerprint move changes only an *imported* module -- which is exactly the
+  // shape Base44 was observed to serve from a stale compiled worker. Deriving
+  // both from the filesystem means the drift cannot reappear silently.
+  const generator = source("scripts/generate_release_contracts.mjs");
+  const contractCarrying = fs
+    .readdirSync(path.join(ROOT, "base44/functions"))
+    .filter((name) => fs.existsSync(path.join(ROOT, `base44/functions/${name}/generatedReleaseContract.js`)))
+    .sort();
+  assert.ok(contractCarrying.length >= 9, "expected the full release-contract set");
+
+  const guarded = new Set(ENTRY_MODULES.map(([name]) => name));
+  for (const name of contractCarrying) {
+    const entryPath = path.join(ROOT, `base44/functions/${name}/entry.ts`);
+    if (UNROUTED_LEGACY.has(name)) {
+      assert.equal(
+        fs.existsSync(entryPath),
+        false,
+        `${name} is declared unrouted legacy but now has an entry.ts; give it a maintained release identity or drop it from UNROUTED_LEGACY`,
+      );
+      continue;
+    }
+    assert.ok(
+      guarded.has(name),
+      `${name} receives a generated release contract but has no entry identity, so a fingerprint move would change only an imported module`,
+    );
+    assert.match(
+      generator,
+      new RegExp(`base44/functions/${name}/entry\\.ts`),
+      `${name} entry identity is asserted here but the generator does not maintain it`,
+    );
+  }
+});
+
+test("the generator maintains an identity for exactly the guarded entries", () => {
+  // A name asserted here but absent from the generator would go stale on the
+  // next fingerprint move; a name in the generator but not asserted here would
+  // never be checked. Both directions have to hold.
+  const generator = source("scripts/generate_release_contracts.mjs");
+  const maintained = [...generator.matchAll(/"base44\/functions\/([A-Za-z0-9_]+)\/entry\.ts"/g)]
+    .map((match) => match[1])
+    .sort();
+  assert.deepEqual(maintained, ENTRY_MODULES.map(([name]) => name).sort());
 });

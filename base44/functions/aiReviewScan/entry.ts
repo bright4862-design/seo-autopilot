@@ -5,6 +5,14 @@ import {
   buildAuthoritySnapshot,
   isAuthorityEligible,
 } from "./authoritySnapshot.js";
+import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
+
+// This literal is intentionally release-sensitive. The handler already lives in
+// the routed module, but its bytes did not have to change when the release
+// fingerprint did -- so a release that moved only the imported
+// generatedReleaseContract.js could leave a stale compiled worker serving the
+// previous release's markers. scripts/generate_release_contracts.mjs maintains it.
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "7b0ec8c46654192b";
 
 const AI_REVIEW_VERSION = "aiReviewScan_v7_current_python_compatibility";
 const PYTHON_REVIEW_VERSION = "python_review_v2_structural_marketplace";
@@ -28,6 +36,18 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return jsonResponse({ success: false, ai_review_version: AI_REVIEW_VERSION, error: "Method not allowed" }, 405);
 
   try {
+    // Fail closed rather than review under a release identity this deployment
+    // cannot vouch for: a stale compiled worker would otherwise stamp the
+    // previous release's markers onto a review the rest of the pipeline treats
+    // as current.
+    if (RELEASE_FINGERPRINT !== BASE44_HANDLER_RELEASE_FINGERPRINT) {
+      return jsonResponse({
+        success: false,
+        ai_review_version: AI_REVIEW_VERSION,
+        error_code: "authority_release_activation_mismatch",
+        error: "Server review release activation is inconsistent.",
+      }, 503);
+    }
     const base44 = createClientFromRequest(req);
     const user = await base44.auth.me().catch(() => null);
     if (!user) return jsonResponse({ success: false, ai_review_version: AI_REVIEW_VERSION, error: "Unauthorized" }, 401);

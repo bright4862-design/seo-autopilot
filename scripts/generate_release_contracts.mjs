@@ -60,6 +60,8 @@ const ENTRY_IDENTITY_CONSUMERS = [
   "base44/functions/startStandardScanJob/entry.ts",
   "base44/functions/durableScanWorkerControl/entry.ts",
   "base44/functions/getCustomerScanResult/entry.ts",
+  "base44/functions/ownerScanDebugControl/entry.ts",
+  "base44/functions/aiReviewScan/entry.ts",
 ];
 
 function readJson(relative) {

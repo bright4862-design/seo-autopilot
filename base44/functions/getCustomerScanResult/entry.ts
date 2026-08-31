@@ -19,6 +19,7 @@ const ACCEPTED_AUTHORITY_VERSIONS = new Set([
   "standard_review_snapshot_hmac_v1",
   "standard_review_snapshot_hmac_v2_coverage",
   "standard_review_snapshot_hmac_v3_acceptance_evidence",
+  "standard_review_snapshot_hmac_v4_focused_scope",
 ]);
 const ACCEPTED_LIMITED_INTEGRITY_VERSIONS = new Set([
   "standard_limited_result_integrity_v1",

@@ -579,6 +579,7 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
       request,
       websiteUrl,
       admissionEvidence,
+      scope,
     });
   } catch (error) {
     return {
@@ -725,8 +726,10 @@ function coordinatorAdmissionFailure(result = {}, fallbackCode = "scan_admission
   };
 }
 
-async function buildAdmissionFingerprint(websiteUrl) {
-  const canonical = `${PUBLIC_SCAN_MODE}|${normalizeWebsiteUrl(websiteUrl)}`;
+async function buildAdmissionFingerprint(websiteUrl, pathPrefix = "") {
+  const normalizedPrefix = normalizeFocusedPathPrefix(pathPrefix);
+  const suffix = normalizedPrefix ? `|path:${normalizedPrefix}` : "";
+  const canonical = `${PUBLIC_SCAN_MODE}|${normalizeWebsiteUrl(websiteUrl)}${suffix}`;
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)));
   return `standard150:${Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
@@ -763,6 +766,7 @@ async function recoverOrCreateServerScan({
   request,
   websiteUrl,
   admissionEvidence,
+  scope,
 }) {
   const scans = base44.asServiceRole.entities.ScanRun;
   let matches = await scans.filter(
@@ -800,7 +804,13 @@ async function recoverOrCreateServerScan({
       submitted_url: String(body.submitted_url || body.requested_start_url || websiteUrl),
       final_url: "",
       normalized_domain: authorityDomain(websiteUrl),
-      path_prefix: String(body.path_prefix || body.requested_path_prefix || body.crawl_path_prefix || ""),
+      path_prefix: scope?.pathPrefix || "",
+      scope_type: scope?.focused ? "path_prefix" : "",
+      parent_scan_id: scope?.focused ? scope.parentScanId : "",
+      requested_origin: scope?.requestedOrigin || originOf(websiteUrl),
+      requested_path_prefix: scope?.pathPrefix || "",
+      discovered_from: scope?.focused ? scope.discoveredFrom : "",
+      user_confirmed: scope?.focused === true,
       scan_mode: PUBLIC_SCAN_MODE,
       scan_source: String(body.source || "scan_website_page"),
       status: "queued",

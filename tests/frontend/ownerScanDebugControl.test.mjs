@@ -29,7 +29,7 @@ test("owner scan debug UI is restricted to the exact owner admin identity", () =
 });
 
 test("server kill control is separately gated and uses coordinator release/status", () => {
-  const source = fs.readFileSync("base44/functions/ownerScanDebugControl/index.ts", "utf8");
+  const source = fs.readFileSync("base44/functions/ownerScanDebugControl/entry.ts", "utf8");
   assert.match(source, /bright4862@gmail\.com/);
   assert.match(source, /6a498da58ef5cec1f5cd4486/);
   assert.match(source, /role[^\n]+admin/i);

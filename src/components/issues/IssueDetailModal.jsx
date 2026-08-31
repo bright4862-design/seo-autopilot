@@ -2,6 +2,7 @@ import React from "react";
 import { Button } from "@/components/ui/button";
 import { trackEvent } from "@/lib/analytics";
 import { customerText, getStatusLabel } from "@/lib/friendlyLabels";
+import { evidenceLink } from "@/lib/evidenceUrl";
 import { ChevronLeft, Copy, X } from "lucide-react";
 
 export default function IssueDetailModal({ issue, onClose, onStatusUpdate }) {
@@ -9,10 +10,19 @@ export default function IssueDetailModal({ issue, onClose, onStatusUpdate }) {
   const affectedPages = Array.isArray(issue.affected_pages) ? issue.affected_pages.filter(Boolean) : [];
   const details = issue.details && typeof issue.details === "object" ? issue.details : {};
   const affectedCount = details.affected_count || affectedPages.length;
+  const siteOrigin = issue.website_url || issue.scope_origin || "";
 
   const copyRecommendation = async () => {
     await navigator.clipboard.writeText(nextStep);
     trackEvent("recommendation_copied", { recommendation_id: issue.id });
+  };
+
+  const copyAffectedUrl = async (page) => {
+    const link = evidenceLink(page, siteOrigin);
+    const value = link.href || page;
+    if (!value) return;
+    await navigator.clipboard.writeText(value);
+    trackEvent("affected_page_url_copied", { recommendation_id: issue.id });
   };
 
   const requestHelp = () => {
@@ -39,11 +49,42 @@ export default function IssueDetailModal({ issue, onClose, onStatusUpdate }) {
           <section className="px-6 py-5"><h3 className="text-sm font-semibold text-slate-950">Why it matters</h3><p className="mt-2 text-sm leading-6 text-slate-600">{customerText(issue.why_it_matters || "This may help customers and search engines understand your website more clearly.")}</p></section>
           <section className="px-6 py-5"><h3 className="text-sm font-semibold text-slate-950">Recommended next step</h3><p className="mt-2 text-sm leading-6 text-slate-600">{nextStep}</p></section>
 
-          {affectedPages.length > 1 && (
+          {affectedPages.length > 0 && (
             <section className="px-6 py-5">
               <h3 className="text-sm font-semibold text-slate-950">Affected pages</h3>
               <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600">
-                {affectedPages.map((page, index) => <li key={`${page}-${index}`} className="break-all">{page}</li>)}
+                {affectedPages.map((page, index) => {
+                  const link = evidenceLink(page, siteOrigin);
+                  return (
+                    <li key={`${page}-${index}`} className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 break-all">
+                        {link.isLinkable ? (
+                          <a
+                            href={link.href}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={link.title}
+                            aria-label={link.linkName}
+                            className="font-medium text-slate-700 underline decoration-slate-300 underline-offset-2 hover:text-slate-950"
+                          >
+                            {link.label}
+                          </a>
+                        ) : (
+                          <span title={link.title || undefined}>{link.label}</span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => copyAffectedUrl(page)}
+                        className="shrink-0 inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+                        aria-label={`Copy URL: ${link.label}`}
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                        Copy URL
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             </section>
           )}

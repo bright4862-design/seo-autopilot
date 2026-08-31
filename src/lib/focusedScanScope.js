@@ -122,6 +122,37 @@ export function focusedSectionOnboardingPath(parentScanId, section = {}) {
   return `/onboarding?${params.toString()}`;
 }
 
+export function orderFocusedScanHistory(scans = []) {
+  const rows = Array.isArray(scans) ? scans.filter((scan) => scan?.id) : [];
+  const byId = new Map(rows.map((scan) => [scan.id, scan]));
+  const children = new Map();
+  for (const scan of rows) {
+    const parentId = clean(scan.parent_scan_id);
+    if (!parentId || !byId.has(parentId)) continue;
+    if (!children.has(parentId)) children.set(parentId, []);
+    children.get(parentId).push(scan);
+  }
+  const time = (scan) => {
+    const value = Date.parse(scan?.occurredAt || scan?.queued_at || scan?.completed_at || "");
+    return Number.isFinite(value) ? value : 0;
+  };
+  for (const list of children.values()) list.sort((a, b) => time(b) - time(a));
+
+  const emitted = new Set();
+  const output = [];
+  for (const scan of rows) {
+    if (emitted.has(scan.id) || (clean(scan.parent_scan_id) && byId.has(clean(scan.parent_scan_id)))) continue;
+    output.push(scan);
+    emitted.add(scan.id);
+    for (const child of children.get(scan.id) || []) {
+      output.push(child);
+      emitted.add(child.id);
+    }
+  }
+  for (const scan of rows) if (!emitted.has(scan.id)) output.push(scan);
+  return output;
+}
+
 function sectionLabel(prefix) {
   const segment = normalizeRequestedPathPrefix(prefix).split("/").filter(Boolean)[0] || "";
   if (LOCALE_SEGMENT_RE.test(segment)) return `${segment.toUpperCase()} folder`;

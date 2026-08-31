@@ -51,7 +51,13 @@ fixlist_require_base44_owner() {
     [[ "$BASE44_API_KEY" == *$'\r'* ]] && key_problems+=" contains_carriage_return"
     [[ "$BASE44_API_KEY" != "${BASE44_API_KEY#[[:space:]]}" ]] && key_problems+=" leading_whitespace"
     [[ "$BASE44_API_KEY" != "${BASE44_API_KEY%[[:space:]]}" ]] && key_problems+=" trailing_whitespace"
-    [[ "$BASE44_API_KEY" == '"'* || "$BASE44_API_KEY" == "'"* ]] && key_problems+=" wrapped_in_quotes"
+    # Each boundary is reported separately. Checking only the leading character
+    # let a trailing quote through: b44k_...\" keeps the prefix, carries no
+    # whitespace, and is under length, so it reached the CLI and failed there as
+    # an opaque authentication error -- the exact confusion this guard exists to
+    # remove.
+    [[ "$BASE44_API_KEY" == '"'* || "$BASE44_API_KEY" == "'"* ]] && key_problems+=" leading_quote"
+    [[ "$BASE44_API_KEY" == *'"' || "$BASE44_API_KEY" == *"'" ]] && key_problems+=" trailing_quote"
     [[ "$BASE44_API_KEY" != b44k_* ]] && key_problems+=" missing_b44k_prefix"
     (( ${#BASE44_API_KEY} > 512 )) && key_problems+=" longer_than_512"
     if [[ -n "$key_problems" ]]; then

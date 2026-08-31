@@ -53,12 +53,32 @@ test("a pasted quote is distinguished from a genuinely wrong key", () => {
   // Both fail the prefix test; only the classification tells them apart, which
   // is the difference between "rotate the key" and "re-paste it".
   const quoted = guardStderr(`"b44k_${SECRET_BODY}"`);
-  assert.match(quoted, /wrapped_in_quotes/);
+  assert.match(quoted, /leading_quote/);
+  assert.match(quoted, /trailing_quote/);
   assert.ok(!quoted.includes(SECRET_BODY));
 
   const spaced = guardStderr(` b44k_${SECRET_BODY}`);
   assert.match(spaced, /leading_whitespace/);
   assert.ok(!spaced.includes(SECRET_BODY));
+});
+
+test("a quote on either boundary alone is still refused", () => {
+  // A trailing quote keeps the b44k_ prefix, carries no whitespace and is under
+  // length, so checking only the leading character let it reach the CLI and
+  // fail there as an opaque authentication error.
+  for (const [key, label] of [
+    [`b44k_${SECRET_BODY}"`, "trailing double quote"],
+    [`b44k_${SECRET_BODY}'`, "trailing single quote"],
+  ]) {
+    const stderr = guardStderr(key);
+    assert.match(stderr, /BASE44_API_KEY is malformed/, `${label} was accepted`);
+    assert.match(stderr, /trailing_quote/, label);
+    assert.ok(!stderr.includes(SECRET_BODY), `${label} leaked secret material`);
+  }
+
+  const leadingOnly = guardStderr(`"b44k_${SECRET_BODY}`);
+  assert.match(leadingOnly, /leading_quote/);
+  assert.doesNotMatch(leadingOnly, /trailing_quote/, "only the offending boundary is named");
 });
 
 test("a trailing newline is named rather than left to guesswork", () => {

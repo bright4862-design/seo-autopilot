@@ -103,16 +103,16 @@ test("a page with no resolvable origin still reads, it just does not link", () =
 
 test("issue modal uses the shared evidence URL contract", () => {
   const source = fs.readFileSync(new URL("../../src/components/issues/IssueDetailModal.jsx", import.meta.url), "utf8");
-  assert.match(source, /evidenceLink\\(page, siteOrigin\\)/);
-  assert.match(source, /target="_blank"/);
-  assert.match(source, /rel="noopener noreferrer"/);
-  assert.match(source, /Copy URL/);
-  assert.match(source, /aria-label=\\{link\\.linkName\\}/);
+  assert.equal(source.includes("evidenceLink(page, siteOrigin)"), true);
+  assert.equal(source.includes('target="_blank"'), true);
+  assert.equal(source.includes('rel="noopener noreferrer"'), true);
+  assert.equal(source.includes("Copy URL"), true);
+  assert.equal(source.includes("aria-label={link.linkName}"), true);
 });
 
 test("PDF export uses the shared evidence URL contract and real links", () => {
   const source = fs.readFileSync(new URL("../../src/lib/exportScanReport.js", import.meta.url), "utf8");
-  assert.match(source, /evidenceLink\\(page, siteOrigin\\)/);
-  assert.match(source, /textWithLink/);
+  assert.equal(source.includes("evidenceLink(page, siteOrigin)"), true);
+  assert.equal(source.includes("textWithLink"), true);
   assert.equal(source.includes("item.affected_pages.forEach(page => line"), false);
 });

@@ -48,7 +48,7 @@
     "review_evidence_calibration_version": "review_evidence_calibration_v6_health_score_v2",
     "review_version": "python_review_v2_structural_marketplace",
     "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",
-    "sampling_version": "balanced_sitemap_buckets_v1",
+    "sampling_version": "balanced_sitemap_buckets_v2_locale_collapsed_identity_reserve",
     "scan_history_delete_version": "scan_history_delete_v2_drain_children",
     "scan_history_version": "scan_history_v2_account_wide_recent",
     "scanner_build_revision": "authenticated_health_probe_v1",
@@ -60,10 +60,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "8e15935e48134961",
+  "fingerprint": "2927700484e48548",
   "git_commit": "",
   "note": "",
-  "recorded_at": "2026-08-31T16:56:15.847358+00:00",
+  "recorded_at": "2026-08-31T17:00:56.640895+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

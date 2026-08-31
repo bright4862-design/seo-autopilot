@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `8e15935e48134961` |
+| Candidate fingerprint | `2927700484e48548` |
 | Classifier | `archetype_classifier_v11_booking_competitor_finance_playbooks` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,7 +15,7 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `8e15935e48134961` with classifier
+fingerprint `2927700484e48548` with classifier
 `archetype_classifier_v11_booking_competitor_finance_playbooks`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
@@ -24,7 +24,7 @@ The immediately superseded candidate was `58275d24191cf1cb`; before that
 `7b0ec8c46654192b`, `5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and
 `1ddf8085bc7721c4`.
 
-The current candidate moved the fingerprint to `8e15935e48134961`. It keys one
+The current candidate moved the fingerprint to `2927700484e48548`. It keys one
 customer action on the scanner's own repair identity. The 35-site production
 audit of 2026-08-31 found ten sites rendering nineteen groups where several
 top-level FixItems carried a single `repair_fingerprint` — N26 showed one
@@ -61,6 +61,19 @@ and an insurance sub-playbook now refine the advice inside the archetype on
 homepage identity or more than one structural route; a correctly classified lender
 keeps the lending default. The decision travels on the site fingerprint because the
 review pipeline rebuilds the playbook from the archetype key alone.
+
+The same candidate spends the 150-page budget on the business rather than on its
+translation count. Translated copies of one route counted as independent members
+of a family, so Wise spent slots on one plug-types page in three languages and one
+about page in two markets; routes now collapse on their market prefix before the
+budget is allocated. Commercial identity was never reserved, so a large site could
+spend everything on whichever surface published the most URLs, which is why IKEA
+was sampled as corporate pages and Musement and Tiqets as city and editorial
+pages. Up to 24 identity and commercial routes are now reserved before
+proportional fill, and coverage is reported by route signature and market as well
+as by URL. That is recorded as
+`balanced_sitemap_buckets_v2_locale_collapsed_identity_reserve`. The 150-page cap
+is unchanged and still hard.
 
 The `58275d24191cf1cb` candidate had moved the fingerprint by grouping a
 repair on the artifact the customer actually edits rather than on the page family

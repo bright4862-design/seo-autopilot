@@ -32,7 +32,7 @@ function normalizeAttempt(value) {
 }
 
 
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "7a95768cc8ee2076";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "065e90c00b30a4f3";
 const WORKER_VERSION = "scan_job_worker_v1_cloud_tasks";
 const CONTROL_VERSION = "durable_standard150_control_v1";
 const TERMINAL_STATUSES = new Set(["complete", "limited", "failed", "cancelled"]);

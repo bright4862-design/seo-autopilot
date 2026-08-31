@@ -272,7 +272,7 @@ test("an untagged revision that does not hold all traffic yields no probe URL", 
 // Running the real operation end to end against stubbed gcloud/curl is the only
 // way to prove the refusal paths refuse. Asserting on their prose would pass a
 // guard that printed INDETERMINATE and then fell through to PASS.
-function runGuard({ service, revision = "", body, code = "200", token = "stub-token", audience = "", sourceSha = "" }) {
+function runGuard({ service, revision = "", body, code = "200", token = "stub-token", audience = "", probeUrl = "", sourceSha = "" }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-revision-e2e-"));
   const bin = path.join(dir, "bin");
   fs.mkdirSync(bin);
@@ -317,7 +317,8 @@ printf '%s' "${code}"
     OPERATION: "verify-worker-runtime-revision",
     TARGET_REVISION: revision,
     FIXLIST_WORKER_ID_TOKEN: token,
-    FIXLIST_WORKER_TOKEN_AUDIENCE: audience,
+    FIXLIST_WORKER_TOKEN_AUDIENCE: audience || service?.status?.url || "",
+    FIXLIST_WORKER_PROBE_URL: probeUrl,
     SOURCE_SHA: sourceSha,
   };
   try {
@@ -398,7 +399,7 @@ test("end to end: a tagged revision is addressed by its tag, never by the traffi
       traffic: [{ revisionName: "worker-00054-trs", percent: 100, tag: "candidate", url: TAG_URL }],
     },
   };
-  const live = runGuard({ service: tagged, revision: "worker-00054-trs", body: LIVE_MATCHING });
+  const live = runGuard({ service: tagged, revision: "worker-00054-trs", body: LIVE_MATCHING, probeUrl: TAG_URL });
   assert.equal(live.status, 0, live.stdout);
   assert.match(live.curl, new RegExp(`${TAG_URL}/revision`));
   assert.doesNotMatch(live.curl, new RegExp(`${SERVICE_URL}/revision`));
@@ -412,7 +413,7 @@ test("end to end: a tagged revision is addressed by its tag, never by the traffi
       ],
     },
   };
-  const zero = runGuard({ service: candidate, revision: "worker-00054-trs", body: LIVE_MATCHING });
+  const zero = runGuard({ service: candidate, revision: "worker-00054-trs", body: LIVE_MATCHING, probeUrl: TAG_URL });
   assert.equal(zero.status, 0, "a tag makes a zero-traffic candidate verifiable before promotion");
   assert.match(zero.curl, new RegExp(`${TAG_URL}/revision`));
 });
@@ -551,25 +552,29 @@ test("the candidate is verified before any traffic moves", () => {
   };
   const discover = at("Discover exact zero-traffic candidate and rollback revision");
   const tag = at("Tag the exact zero-traffic candidate");
+  const resolveAudience = at("Resolve candidate token audience");
   const mint = at("Mint candidate invoker identity token");
   const gate = at("Verify candidate runtime release identity before promotion");
   const promote = at("Promote exact candidate with automatic rollback on failed post-check");
 
   assert.ok(discover < tag, "the candidate must be discovered before it is tagged");
-  assert.ok(tag < mint, "the tag URL must exist before a token is minted for it");
+  assert.ok(tag < resolveAudience, "the tag URL must exist before the token audience is resolved");
+  assert.ok(resolveAudience < mint, "the canonical service URL must be resolved before the token is minted");
   assert.ok(mint < gate, "the token must exist before the gate probes with it");
   assert.ok(gate < promote, "the gate must run before promotion, not after it");
 
-  // The gate probes the tag, using a token minted for that same tag.
+  // The gate sends the request to the tag but spends a token minted for the canonical service audience.
   const gateStep = workflow.slice(gate, promote);
   assert.match(gateStep, /OPERATION: verify-worker-runtime-revision/);
-  assert.match(gateStep, /FIXLIST_WORKER_TOKEN_AUDIENCE: \$\{\{ steps\.candidate-tag\.outputs\.url \}\}/);
+  assert.match(gateStep, /FIXLIST_WORKER_PROBE_URL: \$\{\{ steps\.candidate-tag\.outputs\.url \}\}/);
+  assert.match(gateStep, /FIXLIST_WORKER_TOKEN_AUDIENCE: \$\{\{ steps\.candidate-service-url\.outputs\.url \}\}/);
   assert.match(gateStep, /SOURCE_SHA: \$\{\{ steps\.command\.outputs\.source_sha \}\}/);
   // Nothing may soften it: a failed gate has to fail the job before promotion.
   assert.doesNotMatch(gateStep, /continue-on-error|\|\| true/);
 
   const mintStep = workflow.slice(mint, gate);
-  assert.match(mintStep, /id_token_audience: \$\{\{ steps\.candidate-tag\.outputs\.url \}\}/);
+  assert.match(mintStep, /id_token_audience: \$\{\{ steps\.candidate-service-url\.outputs\.url \}\}/);
+  assert.doesNotMatch(mintStep, /id_token_audience: \$\{\{ steps\.candidate-tag\.outputs\.url \}\}/);
   assert.match(mintStep, /create_credentials_file: false/);
 });
 
@@ -628,15 +633,18 @@ test("the worker invoker token is minted by the workflow, not by gcloud", () => 
   const mint = workflow.match(new RegExp(`id: ${produced[2]}\\n[\\s\\S]*?create_credentials_file: false`));
   assert.ok(mint, "the worker token is not minted with create_credentials_file: false");
   assert.match(mint[0], /token_format: id_token/);
-  // The audience must be the URL the guard will actually probe, and the same
-  // resolved value has to reach the script, or the token is spent on a URL that
-  // rejects it.
-  const audienceStep = mint[0].match(/id_token_audience: \$\{\{ steps\.([A-Za-z0-9_-]+)\.outputs\.([a-z_]+) \}\}/);
-  assert.ok(audienceStep, "the worker token is not bound to the resolved worker URL");
+  // The audience must be the canonical Cloud Run service URL. A traffic-tag
+  // probe is a separate destination, so the workflow must not bind the token
+  // audience to the tag URL.
+  const gate = workflow.indexOf("- name: Verify candidate runtime release identity before promotion", mint);
+  assert.notEqual(gate, -1, "candidate runtime gate is missing after token mint");
+  const audienceStep = workflow.slice(mint, gate).match(/id_token_audience: \$\{\{ steps\.([A-Za-z0-9_-]+)\.outputs\.([a-z_]+) \}\}/);
+  assert.ok(audienceStep, "the worker token is not bound to the canonical service URL");
+  assert.equal(audienceStep[1], "candidate-service-url");
   assert.match(
     workflow,
-    new RegExp(`FIXLIST_WORKER_TOKEN_AUDIENCE: \\$\\{\\{ steps\\.${audienceStep[1]}\\.outputs\\.${audienceStep[2]} \\}\\}`),
-    "the script must be told the same audience the token was minted for",
+    /FIXLIST_WORKER_PROBE_URL: \$\{\{ steps\.candidate-tag\.outputs\.url \}\}/,
+    "the candidate request must still target the exact tagged revision",
   );
   assert.match(operator, /FIXLIST_WORKER_TOKEN_AUDIENCE="\$\{FIXLIST_WORKER_TOKEN_AUDIENCE:-\}"/);
 });

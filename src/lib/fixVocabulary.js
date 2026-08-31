@@ -270,6 +270,21 @@ export function customerCopyForFix(item = {}) {
     };
   }
 
+  // Must precede the generic canonical branch below: rule.includes("canonical")
+  // matches this rule too, and its copy told the customer to ADD a canonical URL
+  // to pages that already have one. The defect is where the existing canonical
+  // points, not that it is missing.
+  if (rule === "canonical_target_noindex") {
+    return {
+      customerCategory: "Search visibility",
+      title: "Point preferred-page settings at pages search engines can keep",
+      explanation: "These pages name a preferred version that is blocked from search, so the version they point at cannot be indexed.",
+      whyItMatters: "Naming a blocked page as the preferred one tells search engines to consolidate onto something they are not allowed to keep, so neither version earns credit.",
+      recommendation: "Point each preferred-page setting at a page that is allowed in search, or remove the block from that page if it should appear.",
+      technicalLabel: "Canonical URL",
+    };
+  }
+
   if (rule === "canonical_missing" || rule.includes("canonical")) {
     const title = count > 1 && family !== "pages"
       ? `Add canonical URLs to your ${family}`
@@ -297,6 +312,7 @@ export function customerCopyForFix(item = {}) {
       ? `Add image descriptions to ${titleFamily(family)}`
       : "Add descriptions to this page's images";
     return {
+      customerCategory: "Images",
       title,
       explanation: "Images on these pages have no alt text, so screen readers and search engines have nothing to describe them with.",
       whyItMatters: "Alt text is how visitors using assistive technology understand an image, and it is the only thing search engines can read from it.",
@@ -307,8 +323,9 @@ export function customerCopyForFix(item = {}) {
     };
   }
 
-  if (rule === "redirect_destination_noindex" || rule === "canonical_target_noindex") {
+  if (rule === "redirect_destination_noindex") {
     return {
+      customerCategory: "Page forwarding",
       title: "Fix redirects that lead to pages blocked from search",
       explanation: "These URLs redirect to a destination that tells search engines not to index it, so the redirect ends somewhere search engines will not keep.",
       whyItMatters: "A redirect into a blocked page throws away the value of the original URL: search engines follow it and then find nothing they are allowed to keep.",
@@ -319,6 +336,7 @@ export function customerCopyForFix(item = {}) {
 
   if (rule === "redirect_destination_failed" || rule === "redirect_destination_blocked") {
     return {
+      customerCategory: "Page forwarding",
       title: "Fix redirects that lead nowhere usable",
       explanation: "These URLs redirect to a destination that did not load successfully for the scanner.",
       whyItMatters: "Visitors and search engines following these links reach a dead end instead of the page you intended.",

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 
 import { buildRepairCards, mergeCustomerActions, whereLine } from "../../src/lib/repairCardModel.js";
+import { applyCustomerVocabulary, customerCopyForFix } from "../../src/lib/fixVocabulary.js";
 
 // The exact 14 persisted FixItems from Ike scan 6a9548bd0d7384cc66988ae4.
 // Rules, families and affected counts are the real persisted values, so this
@@ -215,4 +216,65 @@ test("merging never shrinks a total the scan already proved", () => {
   const [card] = buildRepairCards(capped);
   assert.equal(card.evidence.pageCount, 105);
   assert.match(card.where, /105 pages/);
+});
+
+test("every customer action stays traceable to its persisted rows", () => {
+  // The evidence panel promises the persisted IDs behind every action. Cards
+  // built from one row are the majority here, so traceability that held only
+  // for merged cards would be traceability for three cards out of seven.
+  const persisted = persistedCards();
+  const cards = buildRepairCards(persisted);
+  const claimed = new Set(cards.flatMap((card) => card.evidence.mergedFromFixIds));
+
+  for (const card of cards) {
+    assert.ok(card.evidence.mergedFromFixIds.length > 0, `${card.title} lists no persisted row`);
+  }
+  for (const row of persisted) {
+    assert.ok(claimed.has(row.fix_id), `${row.fix_id} is not reachable from any card`);
+  }
+  // Every persisted row is claimed exactly once, so none is double counted.
+  const all = cards.flatMap((card) => card.evidence.mergedFromFixIds);
+  assert.equal(all.length, persisted.length);
+  assert.equal(new Set(all).size, persisted.length);
+});
+
+test("a blocked canonical target is not treated as a missing canonical", () => {
+  // The generic `rule.includes("canonical")` branch matches this rule, and its
+  // copy told the customer to ADD a canonical URL to pages that already have
+  // one. The defect is where the existing canonical points, not that it is
+  // absent, so this rule must be handled before that branch.
+  const canonical = customerCopyForFix({ rule: "canonical_target_noindex", page_count: 4, affected_pages: ["/a"] });
+  assert.doesNotMatch(canonical.title, /^Add canonical URLs/i, "told to add a canonical that already exists");
+  assert.doesNotMatch(canonical.recommendation, /^Add the correct preferred-page setting/i);
+  assert.match(canonical.recommendation, /allowed in search|remove the block/i);
+  // Nor is it a redirect: there may be no redirect involved at all.
+  assert.doesNotMatch(canonical.title, /redirect/i);
+  assert.doesNotMatch(canonical.recommendation, /redirect/i);
+
+  // The two neighbouring rules keep their own distinct advice.
+  const missing = customerCopyForFix({ rule: "canonical_missing", page_count: 4, affected_pages: ["/a"] });
+  const redirect = customerCopyForFix({ rule: "redirect_destination_noindex", page_count: 4, affected_pages: ["/a"] });
+  assert.match(missing.title, /^Add canonical URLs/i);
+  assert.match(redirect.title, /redirect/i);
+  assert.equal(new Set([canonical.title, missing.title, redirect.title]).size, 3);
+});
+
+test("applying vocabulary never erases the customer category", () => {
+  // applyCustomerVocabulary copies customerCategory straight through, so a
+  // branch that omits it replaces the persisted category with undefined.
+  for (const rule of [
+    "image_alt_text",
+    "redirect_destination_noindex",
+    "canonical_target_noindex",
+    "redirect_destination_failed",
+    "redirect_destination_blocked",
+    "missing_meta_description",
+    "canonical_missing",
+    "missing_h1",
+  ]) {
+    const applied = applyCustomerVocabulary({ rule, category: "web_dev", page_count: 3, affected_pages: ["/a"] });
+    assert.ok(applied.customerCategory, `${rule} produced no customer category`);
+    assert.notEqual(applied.customerCategory, undefined, `${rule} erased the category`);
+    assert.doesNotMatch(applied.customerCategory, /_/, `${rule} produced an internal token`);
+  }
 });

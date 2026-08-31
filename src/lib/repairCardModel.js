@@ -144,7 +144,19 @@ export function mergeCustomerActions(items = []) {
 
   return order.map((key) => {
     const { lead, members } = groups.get(key);
-    if (members.length === 1) return lead;
+    // A card built from one persisted row is still traceable to that row. The
+    // evidence panel promises the persisted IDs behind every action, and
+    // returning the lead untouched left the four single-row Ike actions with an
+    // empty list -- traceability that held only for merged cards.
+    if (members.length === 1) {
+      const existing = Array.isArray(lead.mergedFromFixIds)
+        ? lead.mergedFromFixIds.map(clean).filter(Boolean)
+        : [];
+      return {
+        ...lead,
+        mergedFromFixIds: existing.length > 0 ? existing : [clean(lead.fix_id || lead.id)].filter(Boolean),
+      };
+    }
 
     const affected = [];
     const seen = new Set();

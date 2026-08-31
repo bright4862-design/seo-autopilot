@@ -105,6 +105,23 @@ export function focusedSectionUrl(scope = {}) {
   return `${origin}${prefix}/`;
 }
 
+
+export function focusedSectionOnboardingPath(parentScanId, section = {}) {
+  const parent = clean(parentScanId);
+  const origin = normalizeScopeOrigin(section.requested_origin);
+  const prefix = normalizeRequestedPathPrefix(section.requested_path_prefix);
+  const source = normalizeDiscoverySource(section.discovered_from);
+  if (!parent || !origin || !prefix) return "";
+  const params = new URLSearchParams({
+    scope_type: "path_prefix",
+    parent_scan_id: parent,
+    origin,
+    path_prefix: prefix,
+    discovered_from: source,
+  });
+  return `/onboarding?${params.toString()}`;
+}
+
 function sectionLabel(prefix) {
   const segment = normalizeRequestedPathPrefix(prefix).split("/").filter(Boolean)[0] || "";
   if (LOCALE_SEGMENT_RE.test(segment)) return `${segment.toUpperCase()} folder`;

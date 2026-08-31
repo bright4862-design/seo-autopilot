@@ -25,7 +25,7 @@ const ACCEPTED_LIMITED_INTEGRITY_VERSIONS = new Set([
   "standard_limited_result_integrity_v2_acceptance_evidence",
 ]);
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "5d94e93c54a9efb6";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "7b0ec8c46654192b";
 const MAX_FIX_ITEMS = 100;
 
 class RequestProblem extends Error {

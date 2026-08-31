@@ -6,6 +6,7 @@ from app.repair_contract_v2 import (
     apply_canonical_repair_contract,
 )
 from app.repair_persistence_shadow import REPAIR_CONTRACT_VERSION, REPAIR_PRIORITY_MODEL_VERSION
+from app.repair_identity import annotate_repair_identity
 
 
 def _page(url: str) -> dict:
@@ -69,25 +70,17 @@ def test_invalid_duplicate_fix_ids_fail_closed_instead_of_publishing_legacy():
 
 
 def test_stable_fingerprint_rows_persist_as_one_action_with_child_evidence():
-    first = {
+    first = annotate_repair_identity({
         **_fix("first", "missing_meta_description", "medium", ["https://example.com/fr/a"]),
-        "repair_fingerprint": "abc123",
-        "repair_identity_stable": True,
-        "repair_identity": {"version": "repair_identity_v2_technical", "stable": True, "fingerprint": "abc123"},
-        "repair_identity_version": "repair_identity_v2_technical",
         "action_priority": "improve",
         "base_severity": "medium",
         "evidence_class": "improvement",
         "page_template_family": "collection_page",
         "requires_developer": False,
         "difficulty": "easy",
-    }
-    second = {
+    })
+    second = annotate_repair_identity({
         **_fix("second", "missing_meta_description", "high", ["https://example.com/de/b"]),
-        "repair_fingerprint": "abc123",
-        "repair_identity_stable": True,
-        "repair_identity": {"version": "repair_identity_v2_technical", "stable": True, "fingerprint": "abc123"},
-        "repair_identity_version": "repair_identity_v2_technical",
         "action_priority": "important",
         "base_severity": "high",
         "evidence_class": "confirmed_problem",
@@ -95,7 +88,9 @@ def test_stable_fingerprint_rows_persist_as_one_action_with_child_evidence():
         "requires_developer": True,
         "who_can_do_this": "your_web_person",
         "difficulty": "hard",
-    }
+    })
+    assert first["repair_fingerprint"] == second["repair_fingerprint"]
+    expected_fingerprint = first["repair_fingerprint"]
     pages = [
         {**_page("https://example.com/fr/a"), "page_template_family": "collection_page"},
         {**_page("https://example.com/de/b"), "page_template_family": "product_detail"},
@@ -105,7 +100,7 @@ def test_stable_fingerprint_rows_persist_as_one_action_with_child_evidence():
 
     assert len(grouped) == 1
     action = grouped[0]
-    assert action["repair_fingerprint"] == "abc123"
+    assert action["repair_fingerprint"] == expected_fingerprint
     assert action["affected_pages"] == ["https://example.com/fr/a", "https://example.com/de/b"]
     assert action["page_count"] == 2
     assert action["action_priority"] == "important"

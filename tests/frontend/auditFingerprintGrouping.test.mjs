@@ -149,6 +149,63 @@ test("a locale is stated only when every page in the child agrees", () => {
   );
 });
 
+test("an unmerged action still carries one child evidence group", () => {
+  // The per-row evidence contract must hold for every action, not only merged
+  // ones: a consumer reconciling children against a count saw nothing at all
+  // for a card built from a single persisted row.
+  const cards = buildRepairCards([{
+    fix_id: "solo_1",
+    rule: "missing_h1",
+    repair_fingerprint: "aa11",
+    page_count: 3,
+    affected_pages: ["/a", "/b", "/c"],
+  }]);
+  assert.equal(cards.length, 1);
+  const children = cards[0].evidence.evidenceGroups;
+  assert.equal(children.length, 1, "one persisted row owes one child group");
+  assert.equal(children[0].fixId, "solo_1");
+  assert.equal(children[0].count, 3);
+  assert.deepEqual(children[0].affectedPages, ["/a", "/b", "/c"]);
+  assert.equal(
+    children.reduce((total, child) => total + child.count, 0),
+    cards[0].evidence.pageCount,
+    "children must reconcile against the card's own count",
+  );
+});
+
+test("a page with no market prefix is a disagreement, not an absent one", () => {
+  // ["/fr/page", "/about"] must not report "fr": /about never carried a market,
+  // so claiming one states something the evidence does not support.
+  const mixed = buildRepairCards([{
+    fix_id: "mixed_1",
+    rule: "missing_h1",
+    repair_fingerprint: "bb22",
+    page_count: 2,
+    affected_pages: ["/fr/page", "/about"],
+  }]);
+  assert.equal(mixed[0].evidence.evidenceGroups[0].locale, "");
+
+  // Agreement across every page is still reported.
+  const agreed = buildRepairCards([{
+    fix_id: "agreed_1",
+    rule: "missing_h1",
+    repair_fingerprint: "cc33",
+    page_count: 2,
+    affected_pages: ["/fr/page", "/fr/other"],
+  }]);
+  assert.equal(agreed[0].evidence.evidenceGroups[0].locale, "fr");
+
+  // No page carrying a market is not a market either.
+  const none = buildRepairCards([{
+    fix_id: "none_1",
+    rule: "missing_h1",
+    repair_fingerprint: "dd44",
+    page_count: 2,
+    affected_pages: ["/about", "/contact"],
+  }]);
+  assert.equal(none[0].evidence.evidenceGroups[0].locale, "");
+});
+
 test("rows the scan gave no fingerprint keep the rule-based key", () => {
   // An absent identity is not evidence that two repairs are the same one, so
   // the fingerprint branch must not swallow them into a single empty bucket.

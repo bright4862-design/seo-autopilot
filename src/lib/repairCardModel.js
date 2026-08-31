@@ -173,7 +173,10 @@ function localeOf(page) {
 function evidenceGroupsFor(members) {
   return members.map((member) => {
     const pages = affectedOf(member);
-    const locales = [...new Set(pages.map(localeOf).filter(Boolean))];
+    // A page with no market prefix is a disagreement, not an absence of one.
+    // Filtering the empty results out first let ["/fr/page", "/about"] report
+    // "fr", which claims a market for a page that never carried one.
+    const locales = [...new Set(pages.map(localeOf))];
     return {
       family: clean(member?.templateFamily || member?.page_template_family),
       count: countOf(member),
@@ -181,7 +184,7 @@ function evidenceGroupsFor(members) {
       affectedPages: pages,
       // Only stated when every page in this group agrees, so the label is a
       // description of the evidence rather than a guess about the site.
-      locale: locales.length === 1 ? locales[0] : "",
+      locale: locales.length === 1 && locales[0] ? locales[0] : "",
       fixId: clean(member?.fix_id || member?.id),
     };
   });
@@ -219,6 +222,11 @@ export function mergeCustomerActions(items = []) {
       return {
         ...lead,
         mergedFromFixIds: existing.length > 0 ? existing : [clean(lead.fix_id || lead.id)].filter(Boolean),
+        // One persisted row is still one row of evidence. Omitting the group
+        // here made the per-row contract hold only for merged actions, so a
+        // consumer reconciling children against a count saw nothing for every
+        // unmerged card -- the same uniformity mergedFromFixIds already keeps.
+        evidenceGroups: evidenceGroupsFor(members),
       };
     }
 

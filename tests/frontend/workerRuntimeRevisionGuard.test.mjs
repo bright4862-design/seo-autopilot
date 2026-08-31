@@ -103,7 +103,7 @@ test("a divergent fingerprint fails and names the component that diverged", () =
   });
   assert.equal(result.status, 1, "a divergent runtime fingerprint must fail");
   assert.match(result.stdout, /authority_snapshot_not_eligible__beta_revision_fingerprint/);
-  assert.match(result.stdout, /divergent components/);
+  assert.match(result.stdout, /divergent markers/);
   assert.match(
     result.stdout,
     /failure_evidence_dedup_version: failure_evidence_dedup_v0_stale -> failure_evidence_dedup_v1_generator_group/,
@@ -136,7 +136,7 @@ test("an identical component set behind a different fingerprint is called out as
   const result = compare({ component_versions: COMPONENTS, fingerprint: "3333333333333333" });
   assert.equal(result.status, 1);
   assert.match(result.stdout, /divergence is in how the fingerprint is/);
-  assert.doesNotMatch(result.stdout, /divergent components/);
+  assert.doesNotMatch(result.stdout, /divergent markers/);
 });
 
 test("a missing fingerprint is a failure, never a pass by absence", () => {
@@ -172,14 +172,46 @@ test("a container built from a different commit than its image provenance fails"
   assert.equal(compare({ ...live, source_sha: "a".repeat(40) }, RECORDED, "a".repeat(40)).status, 0);
 });
 
-test("an unstamped container warns but does not fail on the SHA alone", () => {
-  const result = compare(
-    { component_versions: COMPONENTS, fingerprint: "5d94e93c54a9efb6" },
-    RECORDED,
-    "a".repeat(40),
-  );
-  assert.equal(result.status, 0);
-  assert.match(result.stdout, /WARNING: the container declares no FIXLIST_WORKER_SOURCE_SHA/);
+test("an unstamped container is a hard failure, not a warning", () => {
+  // Tying running bytes to a reviewed commit is the whole point of the gate, so
+  // a container that cannot say what it was built from is unpromotable even
+  // when every marker it does carry matches.
+  for (const expected of ["a".repeat(40), ""]) {
+    const result = compare(
+      { component_versions: COMPONENTS, fingerprint: "5d94e93c54a9efb6" },
+      RECORDED,
+      expected,
+    );
+    assert.equal(result.status, 1, "an unstamped container must never pass");
+    assert.match(result.stdout, /FAIL: the container declares no FIXLIST_WORKER_SOURCE_SHA/);
+    assert.doesNotMatch(result.stdout, /WARNING/);
+  }
+});
+
+test("the release markers must match exactly, not merely hash to the same value", () => {
+  // The fingerprint is a hash of the marker set, so this is what catches a
+  // response carrying the right hash with a truncated or padded marker set --
+  // the shape a doctored or half-built container would produce.
+  const truncated = compare({
+    component_versions: { review_version: COMPONENTS.review_version },
+    fingerprint: RECORDED.fingerprint,
+    source_sha: "a".repeat(40),
+  });
+  assert.equal(truncated.status, 1, "a truncated marker set must fail");
+  assert.match(truncated.stdout, /release markers differ/);
+  assert.match(truncated.stdout, /divergent markers/);
+
+  const padded = compare({
+    component_versions: { ...COMPONENTS, extra_version: "v1" },
+    fingerprint: RECORDED.fingerprint,
+    source_sha: "a".repeat(40),
+  });
+  assert.equal(padded.status, 1, "an extra marker must fail");
+  assert.match(padded.stdout, /extra_version: v1 -> \(absent\)/);
+
+  const absent = compare({ fingerprint: RECORDED.fingerprint, source_sha: "a".repeat(40) });
+  assert.equal(absent.status, 1, "no marker set at all must fail");
+  assert.match(absent.stdout, /returned no release markers/);
 });
 
 function resolveProbeUrl(service, revision, audience = "") {
@@ -305,11 +337,12 @@ printf '%s' "${code}"
 // The committed freeze is the recorded side of every end-to-end comparison, so
 // the fixtures stay true when the release identity is re-frozen.
 const FREEZE = JSON.parse(fs.readFileSync("data/beta-crawler-revision.json", "utf8"));
+const PROMOTED_SHA = "a".repeat(40);
 const LIVE_MATCHING = {
   schema_version: FREEZE.schema_version,
   component_versions: FREEZE.component_versions,
   fingerprint: FREEZE.fingerprint,
-  source_sha: "",
+  source_sha: PROMOTED_SHA,
 };
 const serving = (revisionName, extra = {}) => ({
   status: {
@@ -505,6 +538,65 @@ test("the operator exposes the check as a read-only operation", () => {
     "the promotion step must pass the release SHA alongside the worker token",
   );
   assert.doesNotMatch(block, /require_confirmation|update-traffic|deploy/);
+});
+
+test("the candidate is verified before any traffic moves", () => {
+  // This is the ordering the whole gate rests on: a candidate that computes the
+  // wrong release identity must be caught while it still holds 0% traffic, so
+  // the failure costs a tag rather than a promotion and a rollback.
+  const at = (name) => {
+    const index = workflow.indexOf(`- name: ${name}`);
+    assert.notEqual(index, -1, `workflow step missing: ${name}`);
+    return index;
+  };
+  const discover = at("Discover exact zero-traffic candidate and rollback revision");
+  const tag = at("Tag the exact zero-traffic candidate");
+  const mint = at("Mint candidate invoker identity token");
+  const gate = at("Verify candidate runtime release identity before promotion");
+  const promote = at("Promote exact candidate with automatic rollback on failed post-check");
+
+  assert.ok(discover < tag, "the candidate must be discovered before it is tagged");
+  assert.ok(tag < mint, "the tag URL must exist before a token is minted for it");
+  assert.ok(mint < gate, "the token must exist before the gate probes with it");
+  assert.ok(gate < promote, "the gate must run before promotion, not after it");
+
+  // The gate probes the tag, using a token minted for that same tag.
+  const gateStep = workflow.slice(gate, promote);
+  assert.match(gateStep, /OPERATION: verify-worker-runtime-revision/);
+  assert.match(gateStep, /FIXLIST_WORKER_TOKEN_AUDIENCE: \$\{\{ steps\.candidate-tag\.outputs\.url \}\}/);
+  assert.match(gateStep, /SOURCE_SHA: \$\{\{ steps\.command\.outputs\.source_sha \}\}/);
+  // Nothing may soften it: a failed gate has to fail the job before promotion.
+  assert.doesNotMatch(gateStep, /continue-on-error|\|\| true/);
+
+  const mintStep = workflow.slice(mint, gate);
+  assert.match(mintStep, /id_token_audience: \$\{\{ steps\.candidate-tag\.outputs\.url \}\}/);
+  assert.match(mintStep, /create_credentials_file: false/);
+});
+
+test("tagging addresses the candidate without moving traffic", () => {
+  const tagFn = operator.match(/^tag_worker_candidate\(\) \{$[\s\S]*?^\}$/m)[0];
+  // --set-tags would drop every tag this release does not know about.
+  assert.match(tagFn, /--update-tags=/);
+  assert.doesNotMatch(tagFn, /--set-tags=/);
+  // Tagging a revision that already serves would prove nothing about a candidate.
+  assert.match(tagFn, /already receives \$\{percent\}% of traffic/);
+  // And it re-reads rather than trusting that tagging left traffic alone.
+  assert.equal(
+    (tagFn.match(/Tagging moved traffic to \$revision/g) || []).length,
+    1,
+    "the tag operation must verify traffic did not move",
+  );
+  assert.match(tagFn, /require_confirmation "\$revision"/, "tagging is a mutation and must be confirmed");
+  assert.doesNotMatch(tagFn, /update-traffic[\s\S]{0,120}--to-revisions/, "tagging must never route traffic");
+});
+
+test("a failed gate leaves the candidate at zero traffic", () => {
+  // The gate precedes promotion and the job stops on failure, so there is no
+  // path from a failed identity check to a revision serving customers.
+  const gate = workflow.indexOf("- name: Verify candidate runtime release identity before promotion");
+  const promote = workflow.indexOf("- name: Promote exact candidate with automatic rollback on failed post-check");
+  const between = workflow.slice(gate, promote);
+  assert.doesNotMatch(between, /update-traffic|to-revisions|promote-worker/, "nothing may route traffic between the gate and promotion");
 });
 
 test("promotion rolls back when the promoted revision computes the wrong identity", () => {

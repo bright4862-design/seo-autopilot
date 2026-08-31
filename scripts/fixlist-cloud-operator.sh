@@ -40,6 +40,7 @@ ACCEPTANCE_PER_OWNER_CLAIM_BUDGET="${ACCEPTANCE_PER_OWNER_CLAIM_BUDGET:-}"
 FIXLIST_RELEASE_OWNER="${FIXLIST_RELEASE_OWNER:-bright4862-design}"
 FIXLIST_WORKER_ID_TOKEN="${FIXLIST_WORKER_ID_TOKEN:-}"
 FIXLIST_WORKER_TOKEN_AUDIENCE="${FIXLIST_WORKER_TOKEN_AUDIENCE:-}"
+WORKER_CANDIDATE_TAG="${WORKER_CANDIDATE_TAG:-candidate}"
 
 # Operator API paths are intentionally isolated here. The coordinator may share
 # an internal handler, but the release shell never guesses or constructs a path
@@ -456,6 +457,9 @@ print("recorded fingerprint: %s" % (recorded_fingerprint or "(absent)"))
 print("runtime source_sha:   %s" % (live_sha or "(unset)"))
 
 failed = False
+live_components = live.get("component_versions")
+recorded_components = recorded.get("component_versions") or {}
+
 if not live_fingerprint or not recorded_fingerprint:
     print("FAIL: a fingerprint is missing, so the two cannot be compared.")
     failed = True
@@ -464,35 +468,47 @@ elif live_fingerprint != recorded_fingerprint:
     print("FAIL: the running worker computes a different release identity than the")
     print("one this commit records. Every scan it serves is rejected as")
     print("authority_snapshot_not_eligible__beta_revision_fingerprint.")
-    # Naming the divergent components is the whole diagnostic value: the
-    # fingerprint alone says only "different", and /revision returns the full
-    # component set precisely so the difference can be located.
-    live_components = live.get("component_versions") or {}
-    recorded_components = recorded.get("component_versions") or {}
+
+# The fingerprint is a hash of the marker set, so comparing the set itself is
+# not redundant: it is what catches a response that carries the right hash with
+# the wrong or a truncated marker set, and it is the only reading that can say
+# *which* marker moved.
+if not isinstance(live_components, dict) or not live_components:
+    failed = True
+    print("FAIL: /revision returned no release markers, so the running identity")
+    print("cannot be verified against the frozen one.")
+elif live_components != recorded_components:
+    failed = True
+    print("FAIL: the running worker's release markers differ from the frozen set.")
+
+if isinstance(live_components, dict) and live_components != recorded_components:
     divergent = [
         name
         for name in sorted(set(live_components) | set(recorded_components))
         if live_components.get(name) != recorded_components.get(name)
     ]
-    if divergent:
-        print("divergent components (runtime -> recorded):")
-        for name in divergent:
-            print("  %s: %s -> %s" % (
-                name,
-                live_components.get(name, "(absent)"),
-                recorded_components.get(name, "(absent)"),
-            ))
-    else:
-        print("No component differs, so the divergence is in how the fingerprint is")
-        print("computed rather than in the component set it is computed over.")
+    print("divergent markers (runtime -> recorded):")
+    for name in divergent:
+        print("  %s: %s -> %s" % (
+            name,
+            live_components.get(name, "(absent)"),
+            recorded_components.get(name, "(absent)"),
+        ))
+elif failed and live_fingerprint != recorded_fingerprint:
+    print("No marker differs, so the divergence is in how the fingerprint is")
+    print("computed rather than in the marker set it is computed over.")
 
-if expected_sha:
-    if not live_sha:
-        print("WARNING: the container declares no FIXLIST_WORKER_SOURCE_SHA.")
-    elif live_sha != expected_sha:
-        failed = True
-        print("FAIL: the container says it was built from %s, but this image's Cloud" % live_sha)
-        print("Build provenance says %s." % expected_sha)
+# A container that cannot say what it was built from must never be promoted:
+# tying running bytes to a reviewed commit is the whole point of the check, so
+# an unstamped container is a hard failure and not a warning.
+if not live_sha:
+    failed = True
+    print("FAIL: the container declares no FIXLIST_WORKER_SOURCE_SHA, so its")
+    print("running bytes cannot be tied to any reviewed commit.")
+elif expected_sha and live_sha != expected_sha:
+    failed = True
+    print("FAIL: the container says it was built from %s, but the release being" % live_sha)
+    print("promoted is %s." % expected_sha)
 
 raise SystemExit(1 if failed else 0)
 PY
@@ -501,6 +517,72 @@ PY
     return 1
   fi
   echo "PASS: the running worker computes the release identity this commit records."
+}
+
+# A candidate at 0% traffic has no address of its own, so its runtime identity
+# cannot be read before it is promoted -- which is the only moment the reading
+# is still cheap to act on. A revision tag gives it one without moving any
+# traffic, so the gate can run while a failure still costs nothing but a tag.
+#
+# --update-tags adds this one tag and leaves every other tag and the whole
+# traffic split untouched; --set-tags would silently drop tags this release
+# never knew about.
+tag_worker_candidate() {
+  local revision="$1" tag_url percent
+  [ -n "$revision" ] || { echo "No revision to tag." >&2; exit 2; }
+
+  # Tagging is a mutation of the live service, so it is confirmation-gated on
+  # the exact revision name like every other traffic operation here.
+  require_confirmation "$revision"
+
+  percent="$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
+    --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json \
+    | python3 -c '
+import json, sys
+traffic = (json.load(sys.stdin).get("status") or {}).get("traffic") or []
+revision = sys.argv[1]
+print(sum(int(t.get("percent") or 0) for t in traffic if t.get("revisionName") == revision))
+' "$revision")"
+  # Tagging a revision that already serves would make the gate prove nothing:
+  # the point is to verify a candidate *before* it can answer customer traffic.
+  if [ "$percent" != "0" ]; then
+    echo "Refusing to tag $revision: it already receives ${percent}% of traffic." >&2
+    exit 2
+  fi
+
+  gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
+    --region="$GCP_REGION" --project="$GCP_PROJECT" \
+    --update-tags="${WORKER_CANDIDATE_TAG}=${revision}" >/dev/null
+
+  tag_url="$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
+    --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json \
+    | python3 -c '
+import json, sys
+status = json.load(sys.stdin).get("status") or {}
+revision, tag = sys.argv[1], sys.argv[2]
+for entry in status.get("traffic") or []:
+    if entry.get("revisionName") == revision and entry.get("tag") == tag and entry.get("url"):
+        print(entry["url"])
+        break
+' "$revision" "$WORKER_CANDIDATE_TAG")"
+  [ -n "$tag_url" ] || { echo "Tag $WORKER_CANDIDATE_TAG did not resolve to a URL for $revision." >&2; exit 2; }
+
+  # Re-read rather than assume: --update-tags must not have moved traffic.
+  percent="$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
+    --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json \
+    | python3 -c '
+import json, sys
+traffic = (json.load(sys.stdin).get("status") or {}).get("traffic") or []
+revision = sys.argv[1]
+print(sum(int(t.get("percent") or 0) for t in traffic if t.get("revisionName") == revision))
+' "$revision")"
+  if [ "$percent" != "0" ]; then
+    echo "Tagging moved traffic to $revision (${percent}%); refusing to continue." >&2
+    exit 2
+  fi
+
+  echo "candidate_tag_url=$tag_url"
+  echo "WORKER_CANDIDATE_TAGGED revision=$revision tag=$WORKER_CANDIDATE_TAG percent=0"
 }
 
 require_confirmation() {
@@ -1014,6 +1096,10 @@ case "$OPERATION" in
 
   verify-worker-runtime-revision)
     verify_worker_runtime_revision "$TARGET_REVISION" "$SOURCE_SHA"
+    ;;
+
+  tag-worker-candidate)
+    tag_worker_candidate "$TARGET_REVISION"
     ;;
 
   promote-worker)

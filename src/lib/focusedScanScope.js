@@ -2,6 +2,11 @@ export const FOCUSED_SCAN_SCOPE_VERSION = "focused_scan_scope_v1_same_origin_pat
 
 const LOCALE_SEGMENT_RE = /^[a-z]{2}(?:-[a-z]{2})?$/i;
 const SAFE_DISCOVERY_SOURCES = new Set(["sitemap", "internal_link", "canonical", "hreflang"]);
+const BLOCKED_SECTION_SEGMENTS = new Set([
+  "api", "assets", "asset", "static", "media", "images", "img", "fonts", "scripts", "js", "css",
+  "cdn-cgi", "wp-admin", "wp-content", "login", "signin", "sign-in", "signup", "sign-up", "register",
+  "account", "my-account", "cart", "basket", "panier", "checkout", "admin", "auth",
+]);
 
 function clean(value) {
   return String(value || "").trim();
@@ -74,6 +79,32 @@ export function normalizeDiscoverySource(value) {
   return SAFE_DISCOVERY_SOURCES.has(source) ? source : "sitemap";
 }
 
+
+export function focusedScopeFromSearchParams(params) {
+  if (!params || typeof params.get !== "function") return null;
+  const scopeType = clean(params.get("scope_type")).toLowerCase();
+  if (scopeType !== "path_prefix") return null;
+  const parentScanId = clean(params.get("parent_scan_id"));
+  const requestedOrigin = normalizeScopeOrigin(params.get("origin") || params.get("requested_origin"));
+  const requestedPathPrefix = normalizeRequestedPathPrefix(params.get("path_prefix") || params.get("requested_path_prefix"));
+  const discoveredFrom = normalizeDiscoverySource(params.get("discovered_from"));
+  if (!parentScanId || !requestedOrigin || !requestedPathPrefix) return null;
+  return {
+    scope_type: "path_prefix",
+    parent_scan_id: parentScanId,
+    requested_origin: requestedOrigin,
+    requested_path_prefix: requestedPathPrefix,
+    discovered_from: discoveredFrom,
+  };
+}
+
+export function focusedSectionUrl(scope = {}) {
+  const origin = normalizeScopeOrigin(scope.requested_origin);
+  const prefix = normalizeRequestedPathPrefix(scope.requested_path_prefix);
+  if (!origin || !prefix) return "";
+  return `${origin}${prefix}/`;
+}
+
 function sectionLabel(prefix) {
   const segment = normalizeRequestedPathPrefix(prefix).split("/").filter(Boolean)[0] || "";
   if (LOCALE_SEGMENT_RE.test(segment)) return `${segment.toUpperCase()} folder`;
@@ -104,7 +135,8 @@ export function focusedPathSections(record = {}) {
   for (const [rawPrefix, count] of Object.entries(discovered)) {
     const prefix = normalizeRequestedPathPrefix(rawPrefix);
     const discoveredCount = Math.max(0, Number(count) || 0);
-    if (!prefix || discoveredCount < 8) continue;
+    const segment = prefix.split("/").filter(Boolean)[0]?.toLowerCase() || "";
+    if (!prefix || discoveredCount < 8 || BLOCKED_SECTION_SEGMENTS.has(segment)) continue;
     candidates.set(prefix, {
       prefix,
       discovered: discoveredCount,
@@ -115,7 +147,8 @@ export function focusedPathSections(record = {}) {
   for (const [market, count] of Object.entries(marketDiscovered)) {
     const prefix = normalizeRequestedPathPrefix(`/${market}`);
     const discoveredCount = Math.max(0, Number(count) || 0);
-    if (!prefix || discoveredCount < 8) continue;
+    const marketSegment = prefix.split("/").filter(Boolean)[0]?.toLowerCase() || "";
+    if (!prefix || discoveredCount < 8 || BLOCKED_SECTION_SEGMENTS.has(marketSegment)) continue;
     const existing = candidates.get(prefix);
     candidates.set(prefix, {
       prefix,

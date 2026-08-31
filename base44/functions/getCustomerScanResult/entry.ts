@@ -25,16 +25,8 @@ const ACCEPTED_LIMITED_INTEGRITY_VERSIONS = new Set([
   "standard_limited_result_integrity_v2_acceptance_evidence",
 ]);
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
+import { isReadableAuthorityReleaseFingerprint } from "./releaseCompatibility.js";
 const BASE44_HANDLER_RELEASE_FINGERPRINT = "d070321f388f69e9";
-// Historical authority is immutable. A reader upgrade must not strand a sealed
-// result merely because the scanner release advanced. Compatibility is explicit
-// and narrow: only releases whose persisted authority/FixList contract this
-// reader is known to understand are admitted here; everything else still fails
-// closed as result_release_mismatch.
-const READABLE_AUTHORITY_RELEASE_FINGERPRINTS = new Set([
-  RELEASE_FINGERPRINT,
-  "5d94e93c54a9efb6",
-]);
 const MAX_FIX_ITEMS = 100;
 
 class RequestProblem extends Error {
@@ -216,7 +208,7 @@ Deno.serve(async (req) => {
     // Unknown scanner releases remain hidden until the reader explicitly proves
     // it understands their signed contract. Known-compatible historical results
     // continue through the same full authority verification as current results.
-    if (!READABLE_AUTHORITY_RELEASE_FINGERPRINTS.has(runReleaseFingerprint)) {
+    if (!isReadableAuthorityReleaseFingerprint(runReleaseFingerprint, RELEASE_FINGERPRINT)) {
       throw new RequestProblem(
         503,
         "result_release_mismatch",
@@ -470,7 +462,7 @@ function assertSnapshotIdentity(snapshot, { run, fixList, user }) {
     || snapshot.owner_user_id !== cleanId(user.id)
     || snapshot.scan_id !== cleanId(run.id)
     || snapshot.project_id !== cleanId(run.project_id)
-    || !READABLE_AUTHORITY_RELEASE_FINGERPRINTS.has(runReleaseFingerprint)
+    || !isReadableAuthorityReleaseFingerprint(runReleaseFingerprint, RELEASE_FINGERPRINT)
     || snapshot.release_fingerprint !== runReleaseFingerprint
     || snapshot.normalized_domain !== normalizeDomain(run.normalized_domain || run.website_url)
     || snapshot.scan?.status !== "complete"

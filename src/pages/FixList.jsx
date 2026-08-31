@@ -22,6 +22,7 @@ import { repairSuggestion } from "@/lib/repairSuggestions";
 import { buildRepairCards } from "@/lib/repairCardModel";
 import { evidenceLink } from "@/lib/evidenceUrl";
 import { samplingDisclosure } from "@/lib/samplingDisclosure";
+import { displayPathPrefix, focusedPathSections, focusedSectionOnboardingPath } from "@/lib/focusedScanScope";
 
 const CMS_OPTIONS = [
   { value: "wordpress", label: "WordPress" },
@@ -416,6 +417,14 @@ export default function FixList() {
   const summaryItems = repairPresentation.canonical === true ? customerRepairCards : recommendations;
   const summary = hasUsefulScan ? getBestSummary(scanRecord, pagesScanned, pagesFound, summaryItems) : "";
   const sampleCoverage = hasUsefulScan ? samplingDisclosure(scanRecord) : null;
+  const focusedSections = useMemo(
+    () => hasAuthoritativeScan
+      && !String(scanRecord?.scope_type || "").trim()
+      && !String(scanRecord?.path_prefix || scanRecord?.requested_path_prefix || "").trim()
+      ? focusedPathSections(scanRecord)
+      : [],
+    [hasAuthoritativeScan, scanRecord],
+  );
 
   function retryRequestedScan() {
     setRequestedScanFailure(null);
@@ -547,6 +556,50 @@ export default function FixList() {
                   <p>This is a representative 150-page sample unless FixList covered the full discovered inventory.</p>
                 </div>
               </details>
+            ) : null}
+
+            {focusedSections.length > 0 ? (
+              <section className="mt-6 max-w-[60ch] rounded-2xl border border-hairline-soft bg-white/45 px-5 py-5" aria-labelledby="site-sections-discovered">
+                <div className="flex items-baseline justify-between gap-4">
+                  <h2 id="site-sections-discovered" className="text-[17px] font-semibold tracking-tight text-ink">
+                    Site sections discovered
+                  </h2>
+                  <span className="text-[11px] uppercase tracking-[0.08em] text-ink-faint">Optional</span>
+                </div>
+                <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
+                  This site is larger than one Standard 150 scan. You can give an underrepresented folder its own separate 150-page scan without mixing it into this FixList.
+                </p>
+                <div className="mt-4 divide-y divide-hairline-soft">
+                  {focusedSections.map((section) => {
+                    const coveragePercent = Math.round(section.coverage * 100);
+                    const target = focusedSectionOnboardingPath(scanRecord?.scan_id || scanRecord?.id, section);
+                    return (
+                      <div key={section.requested_path_prefix} className="flex flex-col gap-3 py-4 first:pt-1 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                            <span className="text-[13px] font-medium text-ink">{section.label}</span>
+                            <span className="break-all text-[12px] text-ink-faint">{displayPathPrefix(section.requested_path_prefix)}</span>
+                          </div>
+                          <p className="mt-1 text-[12px] leading-relaxed text-ink-faint">
+                            {formatCount(section.discovered)} discovered · {formatCount(section.sampled)} sampled · {coveragePercent}% represented
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => target && navigate(target)}
+                          disabled={!target}
+                          className="shrink-0 self-start rounded-full border border-hairline px-3.5 py-2 text-[12px] font-medium text-ink transition-colors hover:bg-ink/[0.035] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          Scan this section separately
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="mt-3 text-[11.5px] leading-relaxed text-ink-faint">
+                  Focused scans stay on this exact website origin and inside the selected folder. Subdomain scanning is not enabled in this release.
+                </p>
+              </section>
             ) : null}
 
             {limitationNote ? (
@@ -872,7 +925,7 @@ function RecentScansState({ scans, state, failure, onAction, onScan, onDelete, d
         Reopen a saved scan to see its current status or verified FixList.
       </p>
       <div className="mt-6 overflow-hidden rounded-2xl border border-hairline-soft bg-white">
-        {scans.map((scan) => (
+        {orderRecentScansWithChildren(scans).map((scan) => (
           <RecentScanRow
             key={scan.id}
             scan={scan}
@@ -880,6 +933,7 @@ function RecentScansState({ scans, state, failure, onAction, onScan, onDelete, d
             occurredLabel={scan.occurredAt ? formatDate(scan.occurredAt) : "Date unavailable"}
             deleting={deletingScanId === scan.id}
             onDelete={onDelete}
+            child={Boolean(scan.parent_scan_id)}
           />
         ))}
       </div>
@@ -893,13 +947,49 @@ function RecentScansState({ scans, state, failure, onAction, onScan, onDelete, d
 function toRecentScanSummary(run = {}) {
   const id = String(run.id || "").trim();
   if (!id) return null;
+  const scopeType = String(run.scope_type || "").trim();
+  const pathPrefix = String(run.requested_path_prefix || run.path_prefix || "").trim();
   return {
     id: id,
     project_id: String(run.project_id || ""),
     website: safeHostname(run.website_url || run.submitted_url || run.final_url) || "Website scan",
     status: String(run.status || "").trim().toLowerCase(),
+    scope_type: scopeType,
+    parent_scan_id: String(run.parent_scan_id || "").trim(),
+    requested_path_prefix: pathPrefix,
+    scopeLabel: scopeType === "path_prefix" && pathPrefix ? `Focused · ${displayPathPrefix(pathPrefix)}` : "",
     occurredAt: run.queued_at || run.created_date || run.created_at || run.started_at || run.reviewing_at || run.completed_at || "",
   };
+}
+
+function orderRecentScansWithChildren(scans = []) {
+  const rows = Array.isArray(scans) ? scans.filter(Boolean) : [];
+  const byId = new Map(rows.map((scan) => [scan.id, scan]));
+  const children = new Map();
+  for (const scan of rows) {
+    const parentId = String(scan.parent_scan_id || "").trim();
+    if (!parentId || !byId.has(parentId)) continue;
+    if (!children.has(parentId)) children.set(parentId, []);
+    children.get(parentId).push(scan);
+  }
+  for (const list of children.values()) {
+    list.sort((a, b) => Date.parse(b.occurredAt || 0) - Date.parse(a.occurredAt || 0));
+  }
+  const emitted = new Set();
+  const output = [];
+  for (const scan of rows) {
+    if (emitted.has(scan.id) || (scan.parent_scan_id && byId.has(scan.parent_scan_id))) continue;
+    output.push(scan);
+    emitted.add(scan.id);
+    for (const child of children.get(scan.id) || []) {
+      output.push(child);
+      emitted.add(child.id);
+    }
+  }
+  for (const scan of rows) {
+    if (!emitted.has(scan.id)) output.push(scan);
+  }
+  return output;
 }
 
 function getRecentScanStatus(status) {

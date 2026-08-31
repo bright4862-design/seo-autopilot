@@ -40,6 +40,7 @@
     "repair_coverage_version": "repair_coverage_v4_corroborated_family_gap_fill",
     "repair_presentation_contract_version": "repair_presentation_v1_compact_mobile",
     "repair_suggestion_library_version": "v1",
+    "repair_surface_grouping_version": "repair_surface_grouping_v1_shared_artifact",
     "repair_write_contract_version": "repair_contract_v2_shadow_calibrated",
     "representative_page_version": "business_representative_page_v3_sitewide_archetype_ranking",
     "review_attestation_version": "standard_review_snapshot_hmac_v3_acceptance_evidence",
@@ -58,10 +59,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "7b0ec8c46654192b",
+  "fingerprint": "d070321f388f69e9",
   "git_commit": "",
-  "note": "Standard 150 candidate plus corroborated family gap-fill for uncrawled affected URLs (repair_coverage_v4_corroborated_family_gap_fill).",
-  "recorded_at": "2026-08-30T17:02:28.588904+00:00",
+  "note": "",
+  "recorded_at": "2026-08-31T09:40:41.161756+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

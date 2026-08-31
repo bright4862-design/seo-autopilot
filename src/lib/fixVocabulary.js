@@ -6,8 +6,16 @@ function normalizedCategory(item = {}) {
   return String(item.category || item.original?.category || "").trim().toLowerCase();
 }
 
+// "unknown" and "mixed" are classifier states, not page types. Naming one to a
+// customer reads as a defect in the report rather than a fact about their site:
+// "Add a search description to this unknown page" tells them nothing and sounds
+// like the scan lost their URL. An uninformative classification falls back to
+// the neutral wording the empty case already produces.
+const UNINFORMATIVE_FAMILIES = new Set(["unknown", "mixed", "unclassified", "other", "none"]);
+
 function familyLabel(item = {}) {
   const family = String(item.templateFamily || item.page_template_family || item.original?.page_template_family || "").trim().toLowerCase();
+  if (UNINFORMATIVE_FAMILIES.has(family)) return "pages";
   const labels = {
     activity_detail: "activity pages",
     collection_page: "collection pages",
@@ -16,6 +24,16 @@ function familyLabel(item = {}) {
     standard: "standard pages",
   };
   return labels[family] || (family ? `${family.replace(/_/g, " ")} pages` : "pages");
+}
+
+/**
+ * The singular of a family label, for copy about one page.
+ *
+ * The word boundary matters: the bare fallback label is "pages" with no leading
+ * space, so a " pages" pattern left it plural and produced "to this pages".
+ */
+function singularFamilyLabel(label = "") {
+  return String(label).replace(/\bpages$/, "page");
 }
 
 function affectedCount(item = {}) {
@@ -89,7 +107,7 @@ export function customerCopyForFix(item = {}) {
       : family === "homepage"
         ? "Add a search description to the homepage"
         : family !== "pages"
-          ? `Add a search description to this ${family.replace(/ pages$/, " page")}`
+          ? `Add a search description to this ${singularFamilyLabel(family)}`
           : "Add a search description to this page";
     return {
       customerCategory: "Search appearance",
@@ -209,7 +227,7 @@ export function customerCopyForFix(item = {}) {
       : family === "homepage"
         ? "Add one clear main heading to the homepage"
         : family !== "pages"
-          ? `Add one clear main heading to this ${family.replace(/ pages$/, " page")}`
+          ? `Add one clear main heading to this ${singularFamilyLabel(family)}`
           : "Add one clear main heading to this page";
     return {
       customerCategory: "Page content",

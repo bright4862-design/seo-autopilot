@@ -114,5 +114,5 @@ test("PDF export uses the shared evidence URL contract and real links", () => {
   const source = fs.readFileSync(new URL("../../src/lib/exportScanReport.js", import.meta.url), "utf8");
   assert.match(source, /evidenceLink\\(page, siteOrigin\\)/);
   assert.match(source, /textWithLink/);
-  assert.doesNotMatch(source, /item\\.affected_pages\\.forEach\\(page => line/);
+  assert.equal(source.includes("item.affected_pages.forEach(page => line"), false);
 });

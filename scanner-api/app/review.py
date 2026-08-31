@@ -89,7 +89,7 @@ CATEGORY_MAP = {
     "duplicate_meta_description": "duplicate_content",
 }
 
-ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v11_booking_structural_competitor"
+ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v11_booking_competitor_finance_playbooks"
 
 # Frequency cap for archetype keyword/pattern counting: template volume
 # (hundreds of /blog/ URLs) must not out-vote company-level evidence.
@@ -393,6 +393,7 @@ def run_review(payload: dict[str, Any]) -> dict[str, Any]:
     site_fingerprint = build_site_fingerprint(body, pages, website_url)
     site_fingerprint["scoring_model"] = SCORING_MODEL
     playbook = get_playbook(site_fingerprint["primary_archetype"])
+    playbook = apply_finance_sub_playbook(playbook, site_fingerprint.get("finance_sub_playbook", ""))
     evidence_fixes = build_scanner_evidence_findings(body, pages, site_fingerprint)
     page_pattern_fixes = build_page_pattern_findings(pages)
     strategic_fixes = build_strategic_findings(body, pages, website_url, site_fingerprint, playbook)
@@ -795,6 +796,8 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
     secondary = scores[1][0] if len(scores) > 1 and scores[1][1] > max(3, scores[0][1] * 0.6) else ""
     confidence = min(0.96, 0.45 + (scores[0][1] / max(12, scores[0][1] + (scores[1][1] if len(scores) > 1 else 0)))) if scores and scores[0][1] > 0 else 0.35
     playbook = get_playbook(primary)
+    if primary == "finance_insurance_lead_gen":
+        playbook = resolve_finance_playbook(playbook, homepage_text, path_text)
     pages_found = first_number(
         deep_get(body, "scan_coverage", "pages_found"),
         body.get("pages_found"),
@@ -933,6 +936,7 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         "primary_archetype": primary,
         "secondary_archetype": secondary,
         "archetype_label": playbook["label"],
+        "finance_sub_playbook": playbook.get("finance_sub_playbook", ""),
         "vertical": primary,
         "vertical_label": playbook["label"],
         "vertical_confidence": round(confidence, 2),
@@ -2693,6 +2697,103 @@ def fix_sort_key(fix: dict[str, Any]) -> tuple[int, int]:
 
 def get_playbook(key: str) -> dict[str, Any]:
     return PLAYBOOKS.get(key) or PLAYBOOKS["general"]
+
+
+# One finance archetype covers businesses that share none of each other's work.
+# The 35-site production audit caught the cost: N26, a digital bank, and Alan, a
+# health insurer, were both told to start with "loan program pages" because the
+# lending playbook is the only one the archetype had. These refine the advice
+# inside the archetype rather than re-partitioning the scoring space, so a
+# correctly classified lender is unaffected.
+FINANCE_SUB_PLAYBOOKS = {
+    "digital_bank": {
+        "label": "digital bank / consumer fintech",
+        "homepage_terms": (
+            "digital bank", "mobile bank", "online bank", "bank account",
+            "current account", "checking account", "debit card", "banking app",
+            "money transfer", "send money", "international transfer",
+            "multi-currency account", "spending account",
+        ),
+        "route_patterns": (
+            "/bank-account", "/bank-accounts", "/current-account", "/checking",
+            "/cards", "/card/", "/debit", "/accounts/", "/send-money",
+            "/money-transfer", "/currency-converter", "/exchange-rate",
+        ),
+        "priority_pages": [
+            "account and card product pages", "pricing and fee pages",
+            "signup and onboarding paths", "supported-country and currency pages",
+            "legal, security and regulatory pages",
+        ],
+    },
+    "insurance": {
+        "label": "insurance",
+        "homepage_terms": (
+            "health insurance", "insurance", "assurance", "assurance sante",
+            "assurance santé", "mutuelle", "cover your team", "coverage for",
+            "insurer", "policyholder", "claims",
+        ),
+        "route_patterns": (
+            "/insurance", "/assurance", "/assurance-sante", "/mutuelle",
+            "/coverage/", "/cover/", "/claims", "/policy/", "/policies/",
+        ),
+        "priority_pages": [
+            "coverage and plan pages", "quote and enrolment paths",
+            "claims and member-support pages", "employer and team plan pages",
+            "legal, regulatory and trust pages",
+        ],
+    },
+}
+
+
+def apply_finance_sub_playbook(base: dict[str, Any], key: str) -> dict[str, Any]:
+    """Re-apply an already-decided finance sub-playbook.
+
+    The review pipeline rebuilds the playbook from the archetype key alone, so
+    the decision has to travel on the site fingerprint or the customer summary
+    silently reverts to the lending wording the fingerprint no longer claims.
+    """
+    sub = FINANCE_SUB_PLAYBOOKS.get(key or "")
+    if not sub:
+        return base
+    return {
+        **base,
+        "label": sub["label"],
+        "priority_pages": sub["priority_pages"],
+        "finance_sub_playbook": key,
+    }
+
+
+def resolve_finance_playbook(base: dict[str, Any], homepage_text: str, path_text: str) -> dict[str, Any]:
+    """Pick the finance playbook the evidence supports, defaulting to lending.
+
+    Evidence must be structural or explicit homepage identity. Where neither
+    names a bank or an insurer, the lending/lead-generation playbook stands: it
+    is the archetype's historical default and the audit's correctly classified
+    lender relies on it.
+    """
+    homepage = (homepage_text or "").lower()
+    paths = (path_text or "").lower()
+    best_key = ""
+    best_score = 0
+    for key, sub in FINANCE_SUB_PLAYBOOKS.items():
+        routes = sum(1 for pattern in sub["route_patterns"] if pattern in paths)
+        homepage_hit = any(term in homepage for term in sub["homepage_terms"])
+        score = routes + (2 if homepage_hit else 0)
+        # A single incidental route is not an identity; require either homepage
+        # identity or more than one distinct route before overriding the default.
+        if not homepage_hit and routes < 2:
+            continue
+        if score > best_score:
+            best_key, best_score = key, score
+    if not best_key:
+        return base
+    sub = FINANCE_SUB_PLAYBOOKS[best_key]
+    return {
+        **base,
+        "label": sub["label"],
+        "priority_pages": sub["priority_pages"],
+        "finance_sub_playbook": best_key,
+    }
 
 
 def detect_business_model(text: str, archetype: str) -> str:

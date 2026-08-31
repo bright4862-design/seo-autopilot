@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `32f8ba5d0dceefcc` |
+| Candidate fingerprint | `e03f990c2b25febc` |
 | Classifier | `archetype_classifier_v11_booking_competitor_finance_playbooks` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,7 +15,7 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `32f8ba5d0dceefcc` with classifier
+fingerprint `e03f990c2b25febc` with classifier
 `archetype_classifier_v11_booking_competitor_finance_playbooks`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
@@ -24,17 +24,19 @@ The immediately superseded candidate was `58275d24191cf1cb`; before that
 `7b0ec8c46654192b`, `5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and
 `1ddf8085bc7721c4`.
 
-The current candidate moved the fingerprint to `32f8ba5d0dceefcc`. It keys one
+The current candidate moved the fingerprint to `e03f990c2b25febc`. It keys one
 customer action on the scanner's own repair identity. The 35-site production
 audit of 2026-08-31 found ten sites rendering nineteen groups where several
 top-level FixItems carried a single `repair_fingerprint` — N26 showed one
-repeated-title repair as nine separate tasks, Wise showed one as five. A card is
-now keyed on that fingerprint wherever the scan recorded one, with each persisted
-row kept as a child evidence group carrying its family, count, representative
-page and affected URLs. Rows the scan gave no fingerprint keep the previous
-rule-and-repair-type key: an absent identity is not evidence that two repairs are
-the same one. That is recorded as
-`repair_presentation_v3_fingerprint_keyed_actions`.
+repeated-title repair as nine separate tasks, Wise showed one as five. New
+canonical scans now collapse stable, non-empty fingerprints before authority
+signing and persist one top-level action. The original repair rows are retained
+inside the signed finding evidence as child groups carrying family, locale,
+representative URL, affected URLs, count and evidence state. Historical rows
+remain readable through the bounded read-time projection path. Missing or
+unstable fingerprints are never persistence-merged. These semantics are recorded
+as `repair_persistence_grouping_v1_stable_fingerprint_actions` and
+`repair_presentation_v4_linked_evidence_pages`.
 
 The same candidate makes count copy agree with its count. The audit found
 "1 checked page are affected." on the customer projection: the noun agreed with

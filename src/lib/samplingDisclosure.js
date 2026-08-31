@@ -1,4 +1,4 @@
-export const SAMPLING_DISCLOSURE_VERSION = "sampling_disclosure_v1_customer_coverage";
+export const SAMPLING_DISCLOSURE_VERSION = "sampling_disclosure_v2_scope_discovery_compatible";
 
 const SUPPORTED_SAMPLING_VERSIONS = new Set([\n  "balanced_sitemap_buckets_v2_locale_collapsed_identity_reserve",\n  "balanced_sitemap_buckets_v3_locale_collapsed_identity_scope_discovery",\n]);
 

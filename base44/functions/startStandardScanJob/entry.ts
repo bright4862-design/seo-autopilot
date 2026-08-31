@@ -142,6 +142,28 @@ export default async function (req: Request): Promise<Response> {
       }, 400);
     }
 
+    const scope = resolveFocusedPathScope(body, websiteUrl);
+    if (!scope.ok) {
+      return jsonResponse({
+        success: false,
+        accepted: false,
+        version: VERSION,
+        failure_code: scope.code,
+        error: scope.error,
+        ...identity.fields,
+      }, scope.status);
+    }
+    if (scope.focused && identity.fields.scan_id) {
+      return jsonResponse({
+        success: false,
+        accepted: false,
+        version: VERSION,
+        failure_code: "focused_scope_requires_server_admission",
+        error: "Focused scans require a fresh server-admitted scan.",
+        ...identity.fields,
+      }, 409);
+    }
+
     let context;
     let entitlement;
     let admissionMeta = { replayed: false, replay_reason: "" };
@@ -212,6 +234,24 @@ export default async function (req: Request): Promise<Response> {
         }, project.status);
       }
 
+      const focusedParent = await validateFocusedParentScan({
+        base44,
+        user,
+        project: project.project,
+        scope,
+        websiteUrl,
+      });
+      if (!focusedParent.ok) {
+        return jsonResponse({
+          success: false,
+          accepted: false,
+          version: VERSION,
+          failure_code: focusedParent.code,
+          error: focusedParent.error,
+          ...identity.fields,
+        }, focusedParent.status);
+      }
+
       entitlement = await loadPaidEntitlement(base44, user);
       if (!entitlement.ok) {
         return jsonResponse({
@@ -233,6 +273,7 @@ export default async function (req: Request): Promise<Response> {
         body,
         identity,
         websiteUrl,
+        scope,
       });
       if (!admitted.ok) {
         return jsonResponse({
@@ -294,9 +335,7 @@ export default async function (req: Request): Promise<Response> {
       }, 503);
     }
 
-    const pathPrefix = String(
-      body.path_prefix || body.requested_path_prefix || body.crawl_path_prefix || "",
-    ) || null;
+    const pathPrefix = scope.pathPrefix || null;
     const drainAfter = new Date(Date.now() + DRAIN_DELAY_SECONDS * 1000).toISOString();
     const commonPayload = {
       scan_id: identity.fields.scan_id,
@@ -425,11 +464,11 @@ async function loadExactOwnedProject({ base44, user, projectId, websiteUrl }) {
   return { ok: true, project };
 }
 
-async function admitServerOwnedScan({ base44, user, access, project, body, identity, websiteUrl }) {
+async function admitServerOwnedScan({ base44, user, access, project, body, identity, websiteUrl, scope }) {
   const request = normalizeAdmissionIdentity({
     request_id: identity.fields.request_id,
     idempotency_key: identity.fields.idempotency_key,
-    request_fingerprint: await buildAdmissionFingerprint(websiteUrl),
+    request_fingerprint: await buildAdmissionFingerprint(websiteUrl, scope?.pathPrefix || ""),
   });
   if (!request.ok) {
     return { ok: false, status: 409, code: request.code, error: "The scan request identity is invalid." };

@@ -1,0 +1,220 @@
+{
+  "note": "The 19 same-repair_fingerprint split groups across 10 sites from the 35-site production audit of 2026-08-31 (source commit a067ce95bfb8e6e1c9d90a3c458f2919e9e33f33, beta_revision_fingerprint 58275d24191cf1cb). fix_id, repair_fingerprint, title, url and affected are the values the audit exported. The audit export did not carry rule or page_template_family per item, so those are absent here rather than invented; the fingerprint is the scanner's own repair identity and is what a customer action must key on.",
+  "source": "FIXLIST-35-SITE-PRODUCTION-AUDIT-2026-08-31.json",
+  "sites": [
+    {
+      "name": "Tiqets",
+      "scan_id": "6a959ca488c45275b250e19f",
+      "groups": [
+        {
+          "repair_fingerprint": "a0a70764028407d00098cb0b",
+          "note": "One fingerprint legitimately spans two page families: the titles say 'standard pages' and 'homepage pages'. Family therefore must not re-split this action.",
+          "items": [
+            { "fix_id": "finding_0bf6b9e4dd", "title": "Add missing image descriptions to standard pages", "url": "/cs/co-podniknout-ve-meste-new-york-c260932/skyscrapers-in-new-york-pc1024", "affected": 5 },
+            { "fix_id": "finding_55944fc7ab", "title": "Add missing image descriptions to homepage pages", "url": "/", "affected": 17 }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Funbooker",
+      "scan_id": "6a959e32acbdf6ef09af7ec4",
+      "groups": [
+        {
+          "repair_fingerprint": "e36c33700885bc162bd41678",
+          "items": [
+            { "fix_id": "finding_38af2105e5e8", "title": "Replace a redirecting URL in the sitemap", "url": "/es/home-es", "affected": 1 },
+            { "fix_id": "finding_9a211af7a899", "title": "Replace a redirecting URL in the sitemap", "url": "/", "affected": 1 }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Qonto",
+      "scan_id": "6a95a04e72c24b3e849a8673",
+      "groups": [
+        {
+          "repair_fingerprint": "b1179fa98564b1f63f618e04",
+          "items": [
+            { "fix_id": "finding_f5bdb15d8be5", "title": "Review repeated titles across localized pages", "url": "/fr-be/payment-methods/card/card-plus", "affected": 2 },
+            { "fix_id": "finding_b491cf5e78f8", "title": "Review repeated titles across localized pages", "url": "/de-at/impact/dei", "affected": 3 }
+          ]
+        },
+        {
+          "repair_fingerprint": "0424429d4cbaabdaf415c3fd",
+          "items": [
+            { "fix_id": "finding_7aaad159547b", "title": "Differentiate repeated titles across templates", "url": "/de/blog/unternehmensgruendung/selbstsaendige", "affected": 2 },
+            { "fix_id": "finding_ce53bd519455", "title": "Differentiate repeated titles across templates", "url": "/nl/blog/freelancers/boekhouding", "affected": 2 },
+            { "fix_id": "finding_54048fbfe135", "title": "Differentiate repeated titles across templates", "url": "/pt/blog/independentes/contabilidade", "affected": 2 }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Wise",
+      "scan_id": "6a95a093017e7cf9cc5bff11",
+      "groups": [
+        {
+          "repair_fingerprint": "86a9252fae4b34a522532517",
+          "items": [
+            { "fix_id": "finding_13dca8e0c34c", "title": "Add a clear search title", "url": "/au/about/our-story", "affected": 1 },
+            { "fix_id": "finding_7c6ce5ecde21", "title": "Add a clear search title", "url": "/br/about/our-story", "affected": 1 },
+            { "fix_id": "finding_bca38ec280f1", "title": "Add a clear search title", "url": "/br/about/relatorios", "affected": 1 },
+            { "fix_id": "finding_77bdd130fea3", "title": "Add a clear search title", "url": "/au/travel-money/holiday-cost-calculator", "affected": 1 },
+            { "fix_id": "finding_620c4b396e47", "title": "Add a clear search title", "url": "/au/features/auto-conversion", "affected": 1 }
+          ]
+        },
+        {
+          "repair_fingerprint": "0e3cf351f6a0e570ede817a7",
+          "note": "Same page in three locales: the customer edits one template, not three.",
+          "items": [
+            { "fix_id": "finding_99e410cc7a86", "title": "Add a clear search title", "url": "/fr/plug-types/democratic-republic-of-congo", "affected": 1 },
+            { "fix_id": "finding_98c2b9532721", "title": "Add a clear search title", "url": "/es/plug-types/democratic-republic-of-congo", "affected": 1 },
+            { "fix_id": "finding_61df6da05a46", "title": "Add a clear search title", "url": "/de/plug-types/democratic-republic-of-congo", "affected": 1 }
+          ]
+        },
+        {
+          "repair_fingerprint": "c16786b5d06ac120ef0042c3",
+          "items": [
+            { "fix_id": "finding_9703c491db2d", "title": "Add a clear search title", "url": "/fr/vat/tva/calcul", "affected": 1 },
+            { "fix_id": "finding_815cfd7c5ea8", "title": "Add a clear search title", "url": "/gb/import-duty/calculator", "affected": 1 }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Pennylane",
+      "scan_id": "6a95a17e7e60e660ad7a9ccc",
+      "groups": [
+        {
+          "repair_fingerprint": "98fb02363e4ff08fada97dd1",
+          "items": [
+            { "fix_id": "finding_4c6b63f9ed95", "title": "Shorten a search title likely to truncate", "url": "/fr/blog/contenu-dirigeants/codes-analytiques", "affected": 1 },
+            { "fix_id": "finding_4fc3b0c38c64", "title": "Shorten a search title likely to truncate", "url": "/fr/event-guide-evenement-rfe", "affected": 1 }
+          ]
+        },
+        {
+          "repair_fingerprint": "6c1005e5ce23224a029a910f",
+          "items": [
+            { "fix_id": "finding_a920bcce8414", "title": "Differentiate repeated titles across templates", "url": "/fr/expert-comptable-objectifdec", "affected": 2 },
+            { "fix_id": "finding_230d7cd29cfc", "title": "Differentiate repeated titles across templates", "url": "/fr/lp-ads-restaurant", "affected": 2 }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Pretto",
+      "scan_id": "6a95a1c842e822945ca88e0b",
+      "groups": [
+        {
+          "repair_fingerprint": "ec62aa791863b0176f081a26",
+          "items": [
+            { "fix_id": "finding_ac3897b03a7c", "title": "Update an internal link that passes through a redirect", "url": "/pret-immobilier", "affected": 1 },
+            { "fix_id": "finding_02500ab61fb5", "title": "Update an internal link that passes through a redirect", "url": "/simulation-pret-immobilier", "affected": 1 }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Smartbox",
+      "scan_id": "6a95a41bb0f256da8c34e2e6",
+      "groups": [
+        {
+          "repair_fingerprint": "112d271fa79cffb2a416ab48",
+          "items": [
+            { "fix_id": "finding_0912dcfd7822", "title": "Replace a canonicalized URL in the sitemap", "url": "/fr/nos-smartbox/sport-et-aventure/pilotage-circuits-mythiques-1754.html", "affected": 1 },
+            { "fix_id": "finding_e84f03a5b669", "title": "Replace a canonicalized URL in the sitemap", "url": "/fr/nos-smartbox/multi-themes/je-t-aime-1277.html", "affected": 1 }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Berry Bros. & Rudd",
+      "scan_id": "6a95a4b9d40cd29effd44716",
+      "groups": [
+        {
+          "repair_fingerprint": "20c79db861b45fd7c185d859",
+          "items": [
+            { "fix_id": "finding_b818c16957c7", "title": "Remove non-indexable URLs from the sitemap", "url": "/collecting-test", "affected": 1 },
+            { "fix_id": "finding_501f38c24f9a", "title": "Remove non-indexable URLs from the sitemap", "url": "/blue-hanger-whisky", "affected": 1 }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "N26",
+      "scan_id": "6a95a589c1d5cc150837c976",
+      "groups": [
+        {
+          "repair_fingerprint": "b1179fa98564b1f63f618e04",
+          "items": [
+            { "fix_id": "finding_4e2cdfd26f9f", "title": "Review repeated titles across localized pages", "url": "/de-at/legal-documents/partner-subscriptions", "affected": 2 },
+            { "fix_id": "finding_a74c8ecf4fe3", "title": "Review repeated titles across localized pages", "url": "/de-ch/team", "affected": 2 },
+            { "fix_id": "finding_da160c10749f", "title": "Review repeated titles across localized pages", "url": "/en-at/legal-documents/partner-subscriptions", "affected": 2 },
+            { "fix_id": "finding_dc8863e5c795", "title": "Review repeated titles across localized pages", "url": "/fr-be/legal-documents", "affected": 2 },
+            { "fix_id": "finding_8fbff6ef896d", "title": "Review repeated titles across localized pages", "url": "/de-at/legal-documents", "affected": 3 },
+            { "fix_id": "finding_0549b36e7813", "title": "Review repeated titles across localized pages", "url": "/en-at/team", "affected": 7 },
+            { "fix_id": "finding_4b8103911765", "title": "Review repeated titles across localized pages", "url": "/en-at/legal-documents", "affected": 8 }
+          ]
+        },
+        {
+          "repair_fingerprint": "150fd399d5499aacb80ce76f",
+          "items": [
+            { "fix_id": "finding_82eda95a119c", "title": "Review repeated titles across localized pages", "url": "/de-at/blog/so-eroeffnest-du-ein-girokonto-in-spanien", "affected": 2 },
+            { "fix_id": "finding_75d0f402b741", "title": "Review repeated titles across localized pages", "url": "/de-at/blog/leitfaden-fuer-begriffe-eu-banking", "affected": 2 },
+            { "fix_id": "finding_7259f9f342f0", "title": "Review repeated titles across localized pages", "url": "/de-at/blog/thema/etfs", "affected": 2 },
+            { "fix_id": "finding_69a05a492632", "title": "Review repeated titles across localized pages", "url": "/de-at/blog/einlagensicherung-warum-dein-geld-auf-dem-girokonto-sicher-ist", "affected": 3 },
+            { "fix_id": "finding_75ca994917d8", "title": "Review repeated titles across localized pages", "url": "/de-at/blog/thema/investmentbegriffe", "affected": 3 },
+            { "fix_id": "finding_af0cd00628a5", "title": "Review repeated titles across localized pages", "url": "/en-de/blog/category/travel", "affected": 4 },
+            { "fix_id": "finding_041f7ecbe00f", "title": "Review repeated titles across localized pages", "url": "/en-de/blog/topic/etfs", "affected": 4 },
+            { "fix_id": "finding_8ff2f794aaf0", "title": "Review repeated titles across localized pages", "url": "/en-at/blog/category/lifestyle", "affected": 7 },
+            { "fix_id": "finding_f266e66eef46", "title": "Review repeated titles across localized pages", "url": "/en-at/blog/topic/trading-terms", "affected": 7 }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Alan",
+      "scan_id": "6a95a5f1d928f084de6643f3",
+      "groups": [
+        {
+          "repair_fingerprint": "6c1005e5ce23224a029a910f",
+          "items": [
+            { "fix_id": "finding_0b8274e8c4c1", "title": "Differentiate repeated titles across templates", "url": "/nl-be/kmo", "affected": 2 },
+            { "fix_id": "finding_a410445c8d36", "title": "Differentiate repeated titles across templates", "url": "/en-be/trust-center", "affected": 5 }
+          ]
+        },
+        {
+          "repair_fingerprint": "86a9252fae4b34a522532517",
+          "items": [
+            { "fix_id": "finding_7a4765ba13c8", "title": "Add a clear search title", "url": "/coverage/v23720-nc", "affected": 1 },
+            { "fix_id": "finding_bf57314fb169", "title": "Add a clear search title", "url": "/app/employee-onboarding/reimbursement", "affected": 1 },
+            { "fix_id": "finding_3a61f86cd4ad", "title": "Add a clear search title", "url": "/coverage/v253437", "affected": 1 },
+            { "fix_id": "finding_21ee4aeb6e1f", "title": "Add a clear search title", "url": "/fr-fr/assurance-sante/fonction-publique-territoriale", "affected": 1 }
+          ]
+        },
+        {
+          "repair_fingerprint": "0fac4875f8d7d0b92e6e338d",
+          "items": [
+            { "fix_id": "finding_8d8bda5ca03c", "title": "Update an internal link that passes through a redirect", "url": "/en/healthybusiness", "affected": 1 },
+            { "fix_id": "finding_4a776e488d67", "title": "Update an internal link that passes through a redirect", "url": "/en/about/press-room", "affected": 1 }
+          ]
+        },
+        {
+          "repair_fingerprint": "78085ed9cc66bd52a7021a39",
+          "items": [
+            { "fix_id": "finding_28c33d3640d0", "title": "Choose between noindex and canonical consolidation", "url": "/coverage/v23720-nc", "affected": 1 },
+            { "fix_id": "finding_9bf73c3319fc", "title": "Choose between noindex and canonical consolidation", "url": "/coverage/v253437", "affected": 1 }
+          ]
+        },
+        {
+          "repair_fingerprint": "0fb3f9e742fe66c81627a1d5",
+          "items": [
+            { "fix_id": "finding_29431c5bf475", "title": "Fix a redirect to a noindexed destination", "url": "/sales-tools/*", "affected": 1 },
+            { "fix_id": "finding_1695359cf09b", "title": "Fix a redirect to a noindexed destination", "url": "/sales-tools", "affected": 1 }
+          ]
+        }
+      ]
+    }
+  ]
+}

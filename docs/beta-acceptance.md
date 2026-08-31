@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `58275d24191cf1cb` |
+| Candidate fingerprint | `2c94fb616d16de55` |
 | Classifier | `archetype_classifier_v10_structural_finance_member_retail` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,15 +15,28 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `58275d24191cf1cb` with classifier
+fingerprint `2c94fb616d16de55` with classifier
 `archetype_classifier_v10_structural_finance_member_retail`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded candidate was `7b0ec8c46654192b`; before that
-`5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and `1ddf8085bc7721c4`.
+The immediately superseded candidate was `58275d24191cf1cb`; before that
+`7b0ec8c46654192b`, `5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and
+`1ddf8085bc7721c4`.
 
-The current candidate moved the fingerprint to `58275d24191cf1cb` by grouping a
+The current candidate moved the fingerprint to `2c94fb616d16de55` by keying one
+customer action on the scanner's own repair identity. The 35-site production
+audit of 2026-08-31 found ten sites rendering nineteen groups where several
+top-level FixItems carried a single `repair_fingerprint` — N26 showed one
+repeated-title repair as nine separate tasks, Wise showed one as five. A card is
+now keyed on that fingerprint wherever the scan recorded one, with each persisted
+row kept as a child evidence group carrying its family, count, representative
+page and affected URLs. Rows the scan gave no fingerprint keep the previous
+rule-and-repair-type key: an absent identity is not evidence that two repairs are
+the same one. That is recorded as
+`repair_presentation_v3_fingerprint_keyed_actions`.
+
+The `58275d24191cf1cb` candidate had moved the fingerprint by grouping a
 repair on the artifact the customer actually edits rather than on the page family
 that happened to surface it. Ike's scan `6a9548bd0d7384cc66988ae4` persisted one
 sitemap edit as five cards, because its redirecting URLs spanned legal, standard,

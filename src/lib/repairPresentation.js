@@ -8,7 +8,7 @@ import {
   repairSnapshotPresentationMode,
 } from "./repairContractPresentation.js";
 
-export const REPAIR_PRESENTATION_VERSION = "repair_presentation_v2_customer_action_cards";
+export const REPAIR_PRESENTATION_VERSION = "repair_presentation_v3_fingerprint_keyed_actions";
 
 const SECTION_ORDER = ["fix_first", "important", "improve", "review"];
 

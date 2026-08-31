@@ -24,6 +24,8 @@ const REVISION_RECORD_REL = "data/beta-crawler-revision.json";
 const CROSS_RUNTIME_REL = "data/cross-runtime-release-components.json";
 const REVISION_RECORD = path.join(ROOT, REVISION_RECORD_REL);
 const CROSS_RUNTIME_INPUT = path.join(ROOT, CROSS_RUNTIME_REL);
+const HISTORICAL_COMPAT_REL = "base44/functions/getCustomerScanResult/releaseCompatibility.js";
+const HISTORICAL_COMPAT = path.join(ROOT, HISTORICAL_COMPAT_REL);
 const GENERATOR = path.join(ROOT, "scripts/generate_release_contracts.mjs");
 
 function readJson(file) {
@@ -74,23 +76,40 @@ test("the recorded candidate stays a candidate until production acceptance", () 
 
 // -------------------------------------------------- no stale marker path --
 
-test("no stale release fingerprint literal survives anywhere in shipped source", () => {
+test("old release fingerprints are isolated to the explicit historical reader registry", () => {
   const current = readJson(REVISION_RECORD).fingerprint;
   assert.match(current, /^[0-9a-f]{16}$/);
 
   const offenders = [];
   for (const file of sourceFiles()) {
+    const rel = path.relative(ROOT, file).replaceAll("\\", "/");
     const text = fs.readFileSync(file, "utf8");
     for (const match of text.matchAll(/\b[0-9a-f]{16}\b/g)) {
-      if (match[0] !== current) offenders.push(`${path.relative(ROOT, file)}: ${match[0]}`);
+      if (match[0] !== current && rel !== HISTORICAL_COMPAT_REL) {
+        offenders.push(`${rel}: ${match[0]}`);
+      }
     }
   }
-  assert.deepEqual(offenders, [], `stale release fingerprints still shipped:\n${offenders.join("\n")}`);
+  assert.deepEqual(
+    offenders,
+    [],
+    `old release fingerprints escaped the explicit historical compatibility registry:\n${offenders.join("\n")}`,
+  );
+
+  const compatibility = fs.readFileSync(HISTORICAL_COMPAT, "utf8");
+  const historical = [...compatibility.matchAll(/\b[0-9a-f]{16}\b/g)].map((match) => match[0]);
+  assert.ok(historical.length > 0, "historical compatibility registry is unexpectedly empty");
+  assert.ok(historical.every((value) => value !== current), "current fingerprint belongs in the generated release contract, not historical registry");
+  assert.match(compatibility, /HISTORICAL_READABLE_RELEASE_FINGERPRINTS/);
+  assert.match(compatibility, /CUSTOMER_RESULT_READER_VERSION/);
 });
 
-test("every runtime consumer carries the recorded candidate fingerprint", () => {
+test("every ordinary runtime fingerprint carrier uses the recorded candidate fingerprint", () => {
   const current = readJson(REVISION_RECORD).fingerprint;
-  const carriers = sourceFiles().filter((file) => /\b[0-9a-f]{16}\b/.test(fs.readFileSync(file, "utf8")));
+  const carriers = sourceFiles().filter((file) => {
+    const rel = path.relative(ROOT, file).replaceAll("\\", "/");
+    return rel !== HISTORICAL_COMPAT_REL && /\b[0-9a-f]{16}\b/.test(fs.readFileSync(file, "utf8"));
+  });
   assert.ok(carriers.length > 0, "no consumer carries a fingerprint at all");
   for (const file of carriers) {
     const found = [...fs.readFileSync(file, "utf8").matchAll(/\b[0-9a-f]{16}\b/g)].map((m) => m[0]);
@@ -233,6 +252,7 @@ test("every declared cross-runtime component is a real marker in shipped code", 
     admission_reconciliation_version: "base44/functions/durableScanWorkerControl/generatedReleaseContract.js",
     authority_seal_version: "base44/functions/persistDurableScanAuthority/authoritySeal.js",
     customer_projection_version: "base44/functions/getCustomerScanResult/projection.js",
+    customer_result_reader_version: "base44/functions/getCustomerScanResult/releaseCompatibility.js",
     limited_result_integrity_version: "base44/functions/persistLimitedScanResult/limitedResultIntegrity.js",
     review_attestation_version: "base44/functions/persistDurableScanAuthority/authoritySnapshot.js",
     durable_completion_contract_version: "base44/functions/persistDurableScanAuthority/entry.ts",

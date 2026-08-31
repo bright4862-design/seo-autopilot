@@ -31,7 +31,7 @@
     "orphan_asset_evidence_version": "orphan_asset_evidence_v1",
     "page_evidence_gate_version": "page_evidence_gate_v1",
     "page_level_asset_evidence_version": "page_level_asset_evidence_v3_markdown",
-    "page_template_classifier_version": "page_template_classifier_v3_bounded_multilingual_routes",
+    "page_template_classifier_version": "page_template_classifier_v4_bookable_inventory_routes",
     "priority_summary_version": "priority_summary_v1_action_band_consistent",
     "quality_gate_version": "review_quality_gate_v3_shared_coverage_decision",
     "redirect_evidence_version": "redirect_evidence_v3_origin_alias_identity",
@@ -60,10 +60,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "2927700484e48548",
+  "fingerprint": "2387b9470d23a050",
   "git_commit": "",
   "note": "",
-  "recorded_at": "2026-08-31T17:00:56.640895+00:00",
+  "recorded_at": "2026-08-31T17:04:48.669499+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

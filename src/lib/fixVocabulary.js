@@ -349,7 +349,9 @@ export function customerCopyForFix(item = {}) {
     return {
       customerCategory: "Site navigation",
       title: count > 1 ? "Check whether these pages need more internal links" : "Check whether this page needs more internal links",
-      explanation: `${count || "Some"} pages were found in your sitemap but were not reached through links in the pages FixList checked.`,
+      explanation: count === 1
+        ? "1 page was found in your sitemap but was not reached through links in the pages FixList checked."
+        : `${count || "Some"} pages were found in your sitemap but were not reached through links in the pages FixList checked.`,
       whyItMatters: "Important pages should be easy for visitors and search engines to reach from the rest of your website.",
       recommendation: "Check these pages with a full internal-link crawl or Search Console, then add useful internal links to any important pages that are genuinely isolated.",
       technicalLabel: "Potential orphan pages",

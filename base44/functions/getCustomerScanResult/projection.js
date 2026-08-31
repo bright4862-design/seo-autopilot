@@ -465,8 +465,31 @@ function authorityFixFromRow(item, { canonical = false } = {}) {
     ...(text(item?.repair_verification_state, 120) ? { repair_verification_state: text(item?.repair_verification_state, 120) } : {}),
     ...(text(item?.rule_definition_version, 160) ? { rule_definition_version: text(item?.rule_definition_version, 160) } : {}),
     ...(text(item?.comparison_profile_version, 160) ? { comparison_profile_version: text(item?.comparison_profile_version, 160) } : {}),
-    raw_finding: { verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence) },
+    raw_finding: {
+      verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence),
+      ...(canonicalRepairEvidenceGroups(raw.repair_evidence_groups).length > 0
+        ? { repair_evidence_groups: canonicalRepairEvidenceGroups(raw.repair_evidence_groups) }
+        : {}),
+    },
   };
+}
+
+function canonicalRepairEvidenceGroups(value) {
+  const groups = Array.isArray(value) ? value : [];
+  return groups.slice(0, 100).map((group) => ({
+    fix_id: text(group?.fix_id, 160),
+    family: text(group?.family, 160),
+    locale: text(group?.locale, 40),
+    representative_url: text(group?.representative_url, 2_000),
+    affected_urls: textArray(group?.affected_urls, 150, 2_000),
+    count: Math.max(0, number(group?.count)),
+    priority: text(group?.priority, 40),
+    action_priority: text(group?.action_priority, 80),
+    evidence_class: text(group?.evidence_class, 80),
+    evidence_status: text(group?.evidence_status, 120),
+    verification_state: text(group?.verification_state, 120),
+    repair_verification_state: text(group?.repair_verification_state, 120),
+  }));
 }
 
 function canonicalPriorityContext(value) {
@@ -559,6 +582,29 @@ function acceptancePositiveNumber(value) {
 const COVERAGE_UNAVAILABLE_NOTE = "Coverage detail unavailable for this saved scan.";
 
 /**
+ * Count copy agrees with its count.
+ *
+ * A count and the words around it are one sentence, so the noun and the verb
+ * have to move together. Pluralizing the noun alone produced "1 checked page
+ * are affected." on every single-page result in production.
+ *
+ * Base44 functions are self-contained deployables and cannot import the
+ * frontend's copy helpers, so `count_copy_version` is a shared contract
+ * implemented per runtime rather than a shared module.
+ */
+export function pluralNoun(count, singular, plural = `${singular}s`) {
+  return Number(count) === 1 ? singular : plural;
+}
+
+// English verbs whose plural is not formed by any rule worth guessing at. A
+// verb that is not listed is returned unchanged rather than mangled.
+const VERB_PLURALS = { is: "are", was: "were", has: "have", does: "do" };
+
+export function agreeingVerb(count, singular) {
+  return Number(count) === 1 ? singular : (VERB_PLURALS[singular] || singular);
+}
+
+/**
  * Whether a saved repair's coverage arithmetic can be true.
  *
  * Records already sealed in production carry 126/1, 35/30 and 47/6. Their seal
@@ -594,8 +640,7 @@ function neutralCoverageReason(item) {
   const context = item?.priority_context && typeof item.priority_context === "object" ? item.priority_context : item || {};
   const affected = number(context.affected_checked ?? item?.affected_checked ?? item?.page_count);
   if (affected <= 0) return COVERAGE_UNAVAILABLE_NOTE;
-  const noun = affected === 1 ? "page" : "pages";
-  return `${affected} checked ${noun} are affected.`;
+  return `${affected} checked ${pluralNoun(affected, "page")} ${agreeingVerb(affected, "is")} affected.`;
 }
 
 function applyCoverageValidity(result) {
@@ -618,7 +663,11 @@ function applyCoverageValidity(result) {
 function sanitizeFixItem(item) {
   const result = pickFields(item, FIX_ITEM_FIELDS);
   const raw = item?.raw_finding && typeof item.raw_finding === "object" ? item.raw_finding : {};
-  result.raw_finding = { verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence) };
+  const evidenceGroups = canonicalRepairEvidenceGroups(raw.repair_evidence_groups);
+  result.raw_finding = {
+    verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence),
+    ...(evidenceGroups.length > 0 ? { repair_evidence_groups: evidenceGroups } : {}),
+  };
   return applyCoverageValidity(result);
 }
 

@@ -3,17 +3,17 @@
 // Run that generator after changing either input; CI fails on drift.
 
 export const RELEASE_CONTRACT_SCHEMA_VERSION = "beta_crawler_revision_v1";
-export const RELEASE_FINGERPRINT = "58275d24191cf1cb";
+export const RELEASE_FINGERPRINT = "7a95768cc8ee2076";
 export const RELEASE_STATUS = "candidate";
 export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "acceptance_evidence_version": "standard150_acceptance_evidence_v2_aggregate_rss_fail_closed",
   "admission_reconciliation_version": "admission_reconciliation_v1_exact_generation_barrier",
-  "archetype_classifier_version": "archetype_classifier_v10_structural_finance_member_retail",
+  "archetype_classifier_version": "archetype_classifier_v11_booking_competitor_finance_playbooks",
   "artifact_filter_version": "artifact_filter_v4_wordpress_route_noise",
   "authority_seal_version": "scan_evidence_hmac_sha256_v1",
   "canonical_href_resolution_version": "canonical_href_resolution_v2_absolute_single_label_same_path",
   "canonical_target_evidence_version": "canonical_target_evidence_v2_origin_alias_equivalence",
-  "count_copy_version": "count_copy_v1_shared_pluralization",
+  "count_copy_version": "count_copy_v2_agreeing_verbs",
   "coverage_authority_evidence_version": "coverage_authority_evidence_v2_authoritative",
   "coverage_authority_version": "coverage_authority_v1_shared_decision",
   "crawler_acceptance_version": "crawler_acceptance_v1",
@@ -36,7 +36,7 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "orphan_asset_evidence_version": "orphan_asset_evidence_v1",
   "page_evidence_gate_version": "page_evidence_gate_v1",
   "page_level_asset_evidence_version": "page_level_asset_evidence_v3_markdown",
-  "page_template_classifier_version": "page_template_classifier_v3_bounded_multilingual_routes",
+  "page_template_classifier_version": "page_template_classifier_v4_bookable_inventory_routes",
   "priority_summary_version": "priority_summary_v1_action_band_consistent",
   "quality_gate_version": "review_quality_gate_v3_shared_coverage_decision",
   "redirect_evidence_version": "redirect_evidence_v3_origin_alias_identity",
@@ -44,7 +44,8 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "render_evidence_version": "render_evidence_v1",
   "render_followup_version": "render_followup_v1",
   "repair_coverage_version": "repair_coverage_v4_corroborated_family_gap_fill",
-  "repair_presentation_contract_version": "repair_presentation_v2_customer_action_cards",
+  "repair_persistence_grouping_version": "repair_persistence_grouping_v1_stable_fingerprint_actions",
+  "repair_presentation_contract_version": "repair_presentation_v4_linked_evidence_pages",
   "repair_suggestion_library_version": "v1",
   "repair_surface_grouping_version": "repair_surface_grouping_v1_shared_artifact",
   "repair_write_contract_version": "repair_contract_v2_shadow_calibrated",
@@ -53,7 +54,8 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "review_evidence_calibration_version": "review_evidence_calibration_v6_health_score_v2",
   "review_version": "python_review_v2_structural_marketplace",
   "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",
-  "sampling_version": "balanced_sitemap_buckets_v1",
+  "sampling_disclosure_version": "sampling_disclosure_v1_customer_coverage",
+  "sampling_version": "balanced_sitemap_buckets_v2_locale_collapsed_identity_reserve",
   "scan_history_delete_version": "scan_history_delete_v2_drain_children",
   "scan_history_version": "scan_history_v2_account_wide_recent",
   "scanner_build_revision": "authenticated_health_probe_v1",

@@ -360,7 +360,7 @@ def classify_confidence(discovery: dict, status_code: int) -> str:
 
 
 ROUTE_BOUNDARY_CLASSIFIER_VERSION = "route_boundary_classifier_v2_wordpress_author_archives"
-PAGE_TEMPLATE_CLASSIFIER_VERSION = "page_template_classifier_v3_bounded_multilingual_routes"
+PAGE_TEMPLATE_CLASSIFIER_VERSION = "page_template_classifier_v4_bookable_inventory_routes"
 ROUTE_BOUNDARY_RE = re.compile(
     # Token-bounded: a segment must BE the keyword, not merely start with it.
     # Unbounded "/cart" matched the French word "carte" (/fr/annonce/carte-all-inclusive.../voir),
@@ -443,6 +443,13 @@ BOOKING_SEGMENT_RE = re.compile(
 ACTIVITY_DETAIL_RE = re.compile(
     r"/(?:annonce)(?:/|$)|"
     r"/(?:activite|activité|activity|experience|expérience|atelier|stage|pilotage)(?:/|$)|"
+    # The bookable-inventory routes the archetype classifier already trusts as
+    # BOOKING_LISTING_PATTERNS. They were missing here, so a ticketing route
+    # classified as a plain "standard" page: the sampler could not reserve it as
+    # commercial identity, and the classifier never saw the surface that proves
+    # the business is a marketplace.
+    r"/(?:tickets?|billet|billets|attraction|attractions|tour|tours|excursion|excursions"
+    r"|venue|venues|workshop|workshops|listings?)(?:/|$)|"
     r"/(?:listing)/[^/?#]+/(?:show)(?:/|$)"
 )
 LOCATION_LANDING_RE = re.compile(

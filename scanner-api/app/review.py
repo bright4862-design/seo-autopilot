@@ -89,7 +89,7 @@ CATEGORY_MAP = {
     "duplicate_meta_description": "duplicate_content",
 }
 
-ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v10_structural_finance_member_retail"
+ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v11_booking_competitor_finance_playbooks"
 
 # Frequency cap for archetype keyword/pattern counting: template volume
 # (hundreds of /blog/ URLs) must not out-vote company-level evidence.
@@ -393,6 +393,7 @@ def run_review(payload: dict[str, Any]) -> dict[str, Any]:
     site_fingerprint = build_site_fingerprint(body, pages, website_url)
     site_fingerprint["scoring_model"] = SCORING_MODEL
     playbook = get_playbook(site_fingerprint["primary_archetype"])
+    playbook = apply_finance_sub_playbook(playbook, site_fingerprint.get("finance_sub_playbook", ""))
     evidence_fixes = build_scanner_evidence_findings(body, pages, site_fingerprint)
     page_pattern_fixes = build_page_pattern_findings(pages)
     strategic_fixes = build_strategic_findings(body, pages, website_url, site_fingerprint, playbook)
@@ -625,6 +626,12 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         "bridge loan", "hard money", "private lending", "credit broker",
         "digital bank", "mobile bank", "bank account", "business account", "debit card",
     ])
+    booking_homepage_identity = has_any(homepage_text, [
+        "things to do", "book tickets", "buy tickets", "museum tickets",
+        "skip the line", "skip-the-line", "guided tour", "guided tours",
+        "day trips", "excursions", "book an experience", "book your experience",
+        "activities and tours", "tours and activities", "book activities",
+    ])
     nonprofit_homepage_identity = has_any(homepage_text, [
         "nonprofit", "non-profit", "charity", "donate", "donation", "fundraising",
         "support our work", "monthly giving", "clean water", "our impact",
@@ -696,6 +703,16 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         or len(finance_structural) >= 2
         or (finance_homepage_identity and finance_route_pages >= 1)
     )
+    # A booking marketplace operates listing and reservation routes that only
+    # exist when the business actually sells the experience. This mirrors the
+    # threshold the booking score itself already trusts, so a site that scores
+    # as booking also counts as a structural competitor rather than ceding the
+    # result to whichever archetype sampled the most editorial pages.
+    booking_dominant = bool(
+        len(booking_structural) >= 2
+        or booking_listing_pages >= 2
+        or (booking_homepage_identity and booking_listing_pages >= 1)
+    )
 
     adjusted_scores = []
     for key, score in scores:
@@ -756,7 +773,18 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             score += 1.5 * min(article_schema_pages, 20)
         adjusted_scores.append((key, score))
 
-    structural_competitor = saas_dominant or retail_dominant or finance_dominant or nonprofit_dominant or local_dominant
+    # Booking belonged here from the start and was the one structural archetype
+    # missing: a marketplace whose sampled pages skewed editorial lost to
+    # content_blog on article volume alone, which is how the 35-site production
+    # audit saw Musement and Tiqets reported as publishers.
+    structural_competitor = (
+        saas_dominant
+        or retail_dominant
+        or booking_dominant
+        or finance_dominant
+        or nonprofit_dominant
+        or local_dominant
+    )
     if structural_competitor:
         adjusted_scores = [
             (key, min(score, CONTENT_BLOG_STRUCTURAL_CAP) if key == "content_blog" else score)
@@ -768,6 +796,8 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
     secondary = scores[1][0] if len(scores) > 1 and scores[1][1] > max(3, scores[0][1] * 0.6) else ""
     confidence = min(0.96, 0.45 + (scores[0][1] / max(12, scores[0][1] + (scores[1][1] if len(scores) > 1 else 0)))) if scores and scores[0][1] > 0 else 0.35
     playbook = get_playbook(primary)
+    if primary == "finance_insurance_lead_gen":
+        playbook = resolve_finance_playbook(playbook, homepage_text, path_text)
     pages_found = first_number(
         deep_get(body, "scan_coverage", "pages_found"),
         body.get("pages_found"),
@@ -873,6 +903,8 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             "nonprofit_route_pages": nonprofit_route_pages,
             "publisher_dominant": publisher_dominant,
             "retail_dominant": retail_dominant,
+            "booking_dominant": booking_dominant,
+            "booking_homepage_identity": booking_homepage_identity,
             "saas_dominant": saas_dominant,
             "nonprofit_dominant": nonprofit_dominant,
             "saas_core": saas_core_structural,
@@ -885,7 +917,7 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             f"ecommerce={len(ecommerce_structural)}, booking={len(booking_structural)}, "
             f"finance={len(finance_structural)}, nonprofit={len(nonprofit_structural)}, "
             f"local_routes={local_route_pages}, local_schema={local_schema_pages}; "
-            f"dominance publisher={publisher_dominant}, retail={retail_dominant}, local={local_dominant}, "
+            f"dominance publisher={publisher_dominant}, retail={retail_dominant}, booking={booking_dominant}, local={local_dominant}, "
             f"saas={saas_dominant}, app_distribution={saas_app_distribution_identity}, "
             f"platform_infrastructure={saas_platform_infrastructure_identity}, "
             f"nonprofit={nonprofit_dominant}; "
@@ -904,6 +936,7 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         "primary_archetype": primary,
         "secondary_archetype": secondary,
         "archetype_label": playbook["label"],
+        "finance_sub_playbook": playbook.get("finance_sub_playbook", ""),
         "vertical": primary,
         "vertical_label": playbook["label"],
         "vertical_confidence": round(confidence, 2),
@@ -2158,13 +2191,16 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
     blocked_ratio = blocked_count / max(1, reviewed_count)
     material_access_limited = rate_limited and not blocked and blocked_ratio >= 0.10
 
-    summary = f"FixList recognized this as {playbook['label']} and used the {playbook['label']} playbook. The scanner reviewed {site_fingerprint['pages_crawled']} pages"
+    crawled_count = int_or_zero(site_fingerprint.get("pages_crawled"))
+    crawled_noun = "page" if crawled_count == 1 else "pages"
+    summary = f"FixList recognized this as {playbook['label']} and used the {playbook['label']} playbook. The scanner reviewed {site_fingerprint['pages_crawled']} {crawled_noun}"
     if site_fingerprint.get("pages_found"):
         summary += f" out of about {site_fingerprint['pages_found']} discovered URLs"
     summary += f". Start with the highest-impact items on {', '.join(playbook['priority_pages'][:3])}."
     if blocked:
         summary = (
-            f"FixList could not complete a reliable page-quality review because {blocked_count} of {reviewed_count or blocked_count} reviewed pages "
+            f"FixList could not complete a reliable page-quality review because {blocked_count} of {reviewed_count or blocked_count} reviewed "
+            f"{'page' if (reviewed_count or blocked_count) == 1 else 'pages'} "
             "returned access blocks, rate limiting, bot-protection, or connection-verification responses. The score is provisional until server, CDN, "
             "firewall, or bot-protection logs confirm legitimate crawler access."
         )
@@ -2661,6 +2697,103 @@ def fix_sort_key(fix: dict[str, Any]) -> tuple[int, int]:
 
 def get_playbook(key: str) -> dict[str, Any]:
     return PLAYBOOKS.get(key) or PLAYBOOKS["general"]
+
+
+# One finance archetype covers businesses that share none of each other's work.
+# The 35-site production audit caught the cost: N26, a digital bank, and Alan, a
+# health insurer, were both told to start with "loan program pages" because the
+# lending playbook is the only one the archetype had. These refine the advice
+# inside the archetype rather than re-partitioning the scoring space, so a
+# correctly classified lender is unaffected.
+FINANCE_SUB_PLAYBOOKS = {
+    "digital_bank": {
+        "label": "digital bank / consumer fintech",
+        "homepage_terms": (
+            "digital bank", "mobile bank", "online bank", "bank account",
+            "current account", "checking account", "debit card", "banking app",
+            "money transfer", "send money", "international transfer",
+            "multi-currency account", "spending account",
+        ),
+        "route_patterns": (
+            "/bank-account", "/bank-accounts", "/current-account", "/checking",
+            "/cards", "/card/", "/debit", "/accounts/", "/send-money",
+            "/money-transfer", "/currency-converter", "/exchange-rate",
+        ),
+        "priority_pages": [
+            "account and card product pages", "pricing and fee pages",
+            "signup and onboarding paths", "supported-country and currency pages",
+            "legal, security and regulatory pages",
+        ],
+    },
+    "insurance": {
+        "label": "insurance",
+        "homepage_terms": (
+            "health insurance", "insurance", "assurance", "assurance sante",
+            "assurance santé", "mutuelle", "cover your team", "coverage for",
+            "insurer", "policyholder", "claims",
+        ),
+        "route_patterns": (
+            "/insurance", "/assurance", "/assurance-sante", "/mutuelle",
+            "/coverage/", "/cover/", "/claims", "/policy/", "/policies/",
+        ),
+        "priority_pages": [
+            "coverage and plan pages", "quote and enrolment paths",
+            "claims and member-support pages", "employer and team plan pages",
+            "legal, regulatory and trust pages",
+        ],
+    },
+}
+
+
+def apply_finance_sub_playbook(base: dict[str, Any], key: str) -> dict[str, Any]:
+    """Re-apply an already-decided finance sub-playbook.
+
+    The review pipeline rebuilds the playbook from the archetype key alone, so
+    the decision has to travel on the site fingerprint or the customer summary
+    silently reverts to the lending wording the fingerprint no longer claims.
+    """
+    sub = FINANCE_SUB_PLAYBOOKS.get(key or "")
+    if not sub:
+        return base
+    return {
+        **base,
+        "label": sub["label"],
+        "priority_pages": sub["priority_pages"],
+        "finance_sub_playbook": key,
+    }
+
+
+def resolve_finance_playbook(base: dict[str, Any], homepage_text: str, path_text: str) -> dict[str, Any]:
+    """Pick the finance playbook the evidence supports, defaulting to lending.
+
+    Evidence must be structural or explicit homepage identity. Where neither
+    names a bank or an insurer, the lending/lead-generation playbook stands: it
+    is the archetype's historical default and the audit's correctly classified
+    lender relies on it.
+    """
+    homepage = (homepage_text or "").lower()
+    paths = (path_text or "").lower()
+    best_key = ""
+    best_score = 0
+    for key, sub in FINANCE_SUB_PLAYBOOKS.items():
+        routes = sum(1 for pattern in sub["route_patterns"] if pattern in paths)
+        homepage_hit = any(term in homepage for term in sub["homepage_terms"])
+        score = routes + (2 if homepage_hit else 0)
+        # A single incidental route is not an identity; require either homepage
+        # identity or more than one distinct route before overriding the default.
+        if not homepage_hit and routes < 2:
+            continue
+        if score > best_score:
+            best_key, best_score = key, score
+    if not best_key:
+        return base
+    sub = FINANCE_SUB_PLAYBOOKS[best_key]
+    return {
+        **base,
+        "label": sub["label"],
+        "priority_pages": sub["priority_pages"],
+        "finance_sub_playbook": best_key,
+    }
 
 
 def detect_business_model(text: str, archetype: str) -> str:

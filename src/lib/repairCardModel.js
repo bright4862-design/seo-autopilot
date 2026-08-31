@@ -103,8 +103,14 @@ export function whereLine(item) {
 /**
  * Two persisted cards are one customer action when they are the same repair.
  *
- * The key is the rule and the repair type the library derives from it. A page
- * family is deliberately not part of it: the classifier labelling one group
+ * The scan's own `repair_fingerprint` decides that wherever it recorded one:
+ * it is the backend's statement of repair identity, and nothing re-derived
+ * here outranks it.
+ *
+ * Everything below is the fallback for rows with no recorded fingerprint.
+ *
+ * The key is then the rule and the repair type the library derives from it. A
+ * page family is deliberately not part of it: the classifier labelling one group
  * "legal" and another "standard" says nothing about whether the customer
  * performs one change or two, and splitting on it is what turned one repair
  * into several tasks.
@@ -119,8 +125,97 @@ export function whereLine(item) {
  * label.
  */
 export function customerActionKey(item) {
+  // The scanner's own repair identity wins when it recorded one. Two persisted
+  // rows carrying the same fingerprint are the same repair by the backend's
+  // statement, which is stronger evidence than anything re-derived here, and a
+  // production audit found ten sites rendering those as separate top-level
+  // tasks.
+  const fingerprint = repairFingerprintOf(item);
+  if (fingerprint) return `fingerprint|${fingerprint}`;
   const rule = lower(item?.rule || item?.original?.rule);
   return `${rule}|${lower(repairTypeOf(item))}`;
+}
+
+/**
+ * The persisted repair identity, or "" when the scan recorded none.
+ *
+ * Rows without a fingerprint are never merged *by* fingerprint: an absent
+ * identity is not evidence that two repairs are the same one, so they fall back
+ * to the rule/repair-type key rather than collapsing into a single unknown
+ * bucket.
+ */
+export function repairFingerprintOf(item) {
+  return clean(
+    item?.repair_fingerprint
+      || item?.repairFingerprint
+      || item?.original?.repair_fingerprint,
+  );
+}
+
+// A locale segment as it appears in a path: "fr", "de-at", "en-be". Derived
+// from the URL only, and only used to label evidence the customer can already
+// see in that URL -- it never becomes a claim the scanner did not record.
+const LOCALE_SEGMENT = /^[a-z]{2}(-[a-z]{2})?$/;
+
+function localeOf(page) {
+  const path = clean(page).replace(/^https?:\/\/[^/]+/i, "");
+  const first = path.split("/").filter(Boolean)[0];
+  return first && LOCALE_SEGMENT.test(first.toLowerCase()) ? first.toLowerCase() : "";
+}
+
+/**
+ * Child evidence groups for a merged action: one row per persisted card.
+ *
+ * The top-level card says what to change once; these preserve the template and
+ * page distinctions the scan actually recorded, so collapsing the action never
+ * costs evidence.
+ */
+function evidenceGroupsFor(members) {
+  return members.flatMap((member) => {
+    const raw = member?.raw_finding && typeof member.raw_finding === "object"
+      ? member.raw_finding
+      : {};
+    const persisted = Array.isArray(raw.repair_evidence_groups)
+      ? raw.repair_evidence_groups
+      : [];
+    if (persisted.length > 0) {
+      return persisted.map((group) => {
+        const pages = Array.isArray(group?.affected_urls)
+          ? group.affected_urls.map(clean).filter(Boolean)
+          : [];
+        return {
+          family: clean(group?.family),
+          count: Math.max(Number(group?.count) || 0, pages.length),
+          representativePage: clean(group?.representative_url) || pages[0] || "",
+          affectedPages: pages,
+          locale: clean(group?.locale),
+          fixId: clean(group?.fix_id),
+          priority: clean(group?.priority),
+          actionPriority: clean(group?.action_priority),
+          evidenceClass: clean(group?.evidence_class),
+          evidenceStatus: clean(group?.evidence_status),
+          verificationState: clean(group?.verification_state),
+          repairVerificationState: clean(group?.repair_verification_state),
+        };
+      });
+    }
+
+    const pages = affectedOf(member);
+    // A page with no market prefix is a disagreement, not an absence of one.
+    // Filtering the empty results out first let ["/fr/page", "/about"] report
+    // "fr", which claims a market for a page that never carried one.
+    const locales = [...new Set(pages.map(localeOf))];
+    return [{
+      family: clean(member?.templateFamily || member?.page_template_family),
+      count: countOf(member),
+      representativePage: pages[0] || "",
+      affectedPages: pages,
+      // Only stated when every page in this group agrees, so the label is a
+      // description of the evidence rather than a guess about the site.
+      locale: locales.length === 1 && locales[0] ? locales[0] : "",
+      fixId: clean(member?.fix_id || member?.id),
+    }];
+  });
 }
 
 /** Merge persisted cards that are one customer action, keeping all evidence. */
@@ -155,6 +250,11 @@ export function mergeCustomerActions(items = []) {
       return {
         ...lead,
         mergedFromFixIds: existing.length > 0 ? existing : [clean(lead.fix_id || lead.id)].filter(Boolean),
+        // One persisted row is still one row of evidence. Omitting the group
+        // here made the per-row contract hold only for merged actions, so a
+        // consumer reconciling children against a count saw nothing for every
+        // unmerged card -- the same uniformity mergedFromFixIds already keeps.
+        evidenceGroups: evidenceGroupsFor(members),
       };
     }
 
@@ -192,6 +292,7 @@ export function mergeCustomerActions(items = []) {
       page_count: Math.max(declared, affected.length),
       familyBreakdown: breakdown,
       family_breakdown: breakdown,
+      evidenceGroups: evidenceGroupsFor(members),
       mergedFromFixIds: members.map((member) => clean(member.fix_id || member.id)).filter(Boolean),
     };
   });
@@ -236,6 +337,9 @@ export function buildRepairCard(item = {}) {
       familyBreakdown: breakdownOf(item),
       representativePages: affected.slice(0, 3),
       mergedFromFixIds: Array.isArray(item.mergedFromFixIds) ? item.mergedFromFixIds : [],
+      // Present only on a merged action; a card built from one persisted row
+      // has no children to reconcile against its own count.
+      evidenceGroups: Array.isArray(item.evidenceGroups) ? item.evidenceGroups : [],
     },
   };
 }

@@ -329,6 +329,9 @@ function toAuthorityFix(fix, index) {
     : "page";
   const affectedPages = textArray(fix?.affected_pages, 150, 2_000);
   const raw = fix?.raw_finding && typeof fix.raw_finding === "object" ? fix.raw_finding : {};
+  const persistedEvidenceGroups = text(fix?.repair_contract_version, 160) === REPAIR_CONTRACT_V2
+    ? canonicalRepairEvidenceGroups(fix?.repair_evidence_groups || raw.repair_evidence_groups)
+    : [];
   const canonicalFields = text(fix?.repair_contract_version, 160) === REPAIR_CONTRACT_V2
     ? {
       repair_contract_version: REPAIR_CONTRACT_V2,
@@ -384,8 +387,29 @@ function toAuthorityFix(fix, index) {
     user_status: "open",
     what_to_do_steps: textArray(fix?.what_to_do_steps, 12, 1_000),
     ...canonicalFields,
-    raw_finding: { verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence) },
+    raw_finding: {
+      verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence),
+      ...(persistedEvidenceGroups.length > 0 ? { repair_evidence_groups: persistedEvidenceGroups } : {}),
+    },
   };
+}
+
+function canonicalRepairEvidenceGroups(value) {
+  const groups = Array.isArray(value) ? value : [];
+  return groups.slice(0, MAX_AUTHORITY_FIXES).map((group) => ({
+    fix_id: text(group?.fix_id, 160),
+    family: text(group?.family, 160),
+    locale: text(group?.locale, 40),
+    representative_url: text(group?.representative_url, 2_000),
+    affected_urls: textArray(group?.affected_urls, 150, 2_000),
+    count: Math.max(0, number(group?.count)),
+    priority: text(group?.priority, 40),
+    action_priority: text(group?.action_priority, 80),
+    evidence_class: text(group?.evidence_class, 80),
+    evidence_status: text(group?.evidence_status, 120),
+    verification_state: text(group?.verification_state, 120),
+    repair_verification_state: text(group?.repair_verification_state, 120),
+  }));
 }
 
 function canonicalReviewRequested(review) {

@@ -1,4 +1,5 @@
 import { jsPDF } from "jspdf";
+import { evidenceLink } from "./evidenceUrl.js";
 
 // Generates a customer-friendly PDF scan report and triggers download.
 export function exportScanReportPdf({ project, crawlJob, issues, devRecs, insights }) {
@@ -6,6 +7,7 @@ export function exportScanReportPdf({ project, crawlJob, issues, devRecs, insigh
   const pageW = doc.internal.pageSize.getWidth();
   const marginX = 16;
   const maxW = pageW - marginX * 2;
+  const siteOrigin = project?.website_url || crawlJob?.website_url || "";
   let y = 20;
 
   const ensureSpace = (needed = 10) => {
@@ -33,6 +35,29 @@ export function exportScanReportPdf({ project, crawlJob, issues, devRecs, insigh
     ensureSpace(wrapped.length * 5 + 2);
     doc.text(wrapped, marginX + (options.indent || 0), y);
     y += wrapped.length * 5 + (options.gap ?? 2);
+  };
+
+  const evidenceLine = (page, options = {}) => {
+    const link = evidenceLink(page, siteOrigin);
+    const prefix = options.prefix || "- ";
+    const text = `${prefix}${link.label}`;
+    const indent = options.indent || 0;
+    const size = options.size || 9;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(size);
+    doc.setTextColor(...(options.color || [107, 114, 128]));
+    const wrapped = doc.splitTextToSize(text, maxW - indent);
+    ensureSpace(wrapped.length * 5 + 2);
+    wrapped.forEach((part, index) => {
+      const x = marginX + indent;
+      if (index === 0 && link.isLinkable) {
+        doc.textWithLink(part, x, y, { url: link.href });
+      } else {
+        doc.text(part, x, y);
+      }
+      y += 5;
+    });
+    y += options.gap ?? 1;
   };
 
   const prepared = issues.filter(i => i.status === "auto_fixed");
@@ -78,11 +103,11 @@ export function exportScanReportPdf({ project, crawlJob, issues, devRecs, insigh
     }
     items.forEach(item => {
       line(`• ${item.issue_title}`, { bold: true });
-      if (item.page_url) line(`Page: ${item.page_url}`, { indent: 4, color: [107, 114, 128], size: 9 });
+      if (item.page_url) evidenceLine(item.page_url, { prefix: "Page: ", indent: 4, color: [107, 114, 128], size: 9 });
       if (item.plain_english_explanation) line(item.plain_english_explanation, { indent: 4, gap: 4 });
       if (Array.isArray(item.affected_pages) && item.affected_pages.length > 0) {
         line("Affected pages:", { indent: 4, bold: true, size: 9, gap: 1 });
-        item.affected_pages.forEach(page => line(`- ${page}`, { indent: 8, color: [107, 114, 128], size: 9, gap: 1 }));
+        item.affected_pages.forEach(page => evidenceLine(page, { indent: 8, color: [107, 114, 128], size: 9, gap: 1 }));
       }
     });
   };
@@ -100,7 +125,7 @@ export function exportScanReportPdf({ project, crawlJob, issues, devRecs, insigh
       if (r.description || r.plain_english_explanation) line(r.description || r.plain_english_explanation, { indent: 4 });
       if (Array.isArray(r.affected_pages) && r.affected_pages.length > 0) {
         line("Affected pages:", { indent: 4, bold: true, size: 9, gap: 1 });
-        r.affected_pages.forEach(page => line(`- ${page}`, { indent: 8, color: [107, 114, 128], size: 9, gap: 1 }));
+        r.affected_pages.forEach(page => evidenceLine(page, { indent: 8, color: [107, 114, 128], size: 9, gap: 1 }));
       }
       if (r.business_impact || r.why_it_matters) line(`Why it matters: ${r.business_impact || r.why_it_matters}`, { indent: 4, color: [107, 114, 128], size: 9, gap: 4 });
     });

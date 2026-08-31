@@ -6,8 +6,8 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `58275d24191cf1cb` |
-| Classifier | `archetype_classifier_v10_structural_finance_member_retail` |
+| Candidate fingerprint | `7a95768cc8ee2076` |
+| Classifier | `archetype_classifier_v11_booking_competitor_finance_playbooks` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
 | Acceptance report | **not recorded** (`acceptance_report: ""`) |
@@ -15,15 +15,94 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `58275d24191cf1cb` with classifier
-`archetype_classifier_v10_structural_finance_member_retail`, URL frontier policy
+fingerprint `7a95768cc8ee2076` with classifier
+`archetype_classifier_v11_booking_competitor_finance_playbooks`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded candidate was `7b0ec8c46654192b`; before that
-`5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and `1ddf8085bc7721c4`.
+The immediately superseded candidate was `58275d24191cf1cb`; before that
+`7b0ec8c46654192b`, `5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and
+`1ddf8085bc7721c4`.
 
-The current candidate moved the fingerprint to `58275d24191cf1cb` by grouping a
+The current candidate moved the fingerprint to `7a95768cc8ee2076`. It keys one
+customer action on the scanner's own repair identity. The 35-site production
+audit of 2026-08-31 found ten sites rendering nineteen groups where several
+top-level FixItems carried a single `repair_fingerprint` — N26 showed one
+repeated-title repair as nine separate tasks, Wise showed one as five. New
+canonical scans now collapse stable, non-empty fingerprints before authority
+signing and persist one top-level action. The original repair rows are retained
+inside the signed finding evidence as child groups carrying family, locale,
+representative URL, affected URLs, count and evidence state. Historical rows
+remain readable through the bounded read-time projection path. Missing or
+unstable fingerprints are never persistence-merged. These semantics are recorded
+as `repair_persistence_grouping_v1_stable_fingerprint_actions` and
+`repair_presentation_v4_linked_evidence_pages`.
+
+Sampling evidence from `balanced_sitemap_buckets_v2_locale_collapsed_identity_reserve`
+is now disclosed to the customer without changing the 150-page contract. The FixList
+shows route-pattern coverage, business-critical identity-page coverage, represented
+markets/languages and page families, plus any explicitly recorded unsampled markets
+or families. This customer-facing disclosure is versioned as
+`sampling_disclosure_v1_customer_coverage`.
+
+The same candidate makes count copy agree with its count. The audit found
+"1 checked page are affected." on the customer projection: the noun agreed with
+the count and the verb did not. The projection now derives both from the count,
+the sitemap-orphan explanation stops reading "1 pages were found" where its own
+title was already guarded, and the Python review summary singularises a
+one-page crawl. That is recorded as `count_copy_v2_agreeing_verbs`.
+
+The same candidate makes booking a structural competitor. `structural_competitor`
+capped content_blog when SaaS, retail, finance, nonprofit or local identity was
+present, and booking was the one structural archetype missing from that list, so
+a marketplace whose sample skewed editorial lost on article volume alone. That is
+recorded as `archetype_classifier_v11_booking_competitor_finance_playbooks`.
+
+This does not by itself resolve the audit's Musement and Tiqets cases. Booking
+dominance requires a listing or ticket route in the sample; where the 150-page
+sample surfaces none, the cap never applies. Those two need representative
+sampling, and the classifier fixture records that limit explicitly.
+
+The same candidate splits the finance playbook. One archetype covered businesses
+that share none of each other's work, so the audit found N26, a digital bank, and
+Alan, a health insurer, both told to start with loan program pages. A digital-bank
+and an insurance sub-playbook now refine the advice inside the archetype on
+homepage identity or more than one structural route; a correctly classified lender
+keeps the lending default. The decision travels on the site fingerprint because the
+review pipeline rebuilds the playbook from the archetype key alone.
+
+The same candidate spends the 150-page budget on the business rather than on its
+translation count. Translated copies of one route counted as independent members
+of a family, so Wise spent slots on one plug-types page in three languages and one
+about page in two markets; routes now collapse on their market prefix before the
+budget is allocated. Commercial identity was never reserved, so a large site could
+spend everything on whichever surface published the most URLs, which is why IKEA
+was sampled as corporate pages and Musement and Tiqets as city and editorial
+pages. Up to 24 identity and commercial routes are now reserved before
+proportional fill, and coverage is reported by route signature and market as well
+as by URL. That is recorded as
+`balanced_sitemap_buckets_v2_locale_collapsed_identity_reserve`. The 150-page cap
+is unchanged and still hard.
+
+That reserve needed a prerequisite the audit did not name. The bookable-inventory
+routes the archetype classifier already trusts -- tickets, attractions, tours,
+venues, workshops, listings -- were not recognised by the page-template
+classifier, so a ticketing route was a plain standard page. Neither family
+allocation nor an identity reserve could tell it from any other page, and the
+surface that proves a business is a marketplace was invisible to sampling. That is
+recorded as `page_template_classifier_v4_bookable_inventory_routes`.
+
+The same candidate makes affected pages reachable. Evidence URLs were plain text
+and the site root read as a bare slash, so a customer could not tell which page
+was affected or open it. One shared contract now decides how a page reads, whether
+it may be a link, and what a screen reader announces; the root reads
+"Homepage · /". A single protocol allowlist on the parsed URL decides linkability,
+so a javascript: or data: value in evidence can never become an anchor href, and a
+relative path with no trustworthy scanned origin is shown rather than resolved
+against the app's own host. That is recorded as
+`repair_presentation_v4_linked_evidence_pages`.
+
+The `58275d24191cf1cb` candidate had moved the fingerprint by grouping a
 repair on the artifact the customer actually edits rather than on the page family
 that happened to surface it. Ike's scan `6a9548bd0d7384cc66988ae4` persisted one
 sitemap edit as five cards, because its redirecting URLs spanned legal, standard,

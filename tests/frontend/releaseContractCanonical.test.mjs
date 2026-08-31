@@ -266,6 +266,7 @@ test("every declared cross-runtime component is a real marker in shipped code", 
     repair_presentation_contract_version: "src/lib/repairPresentation.js",
     repair_write_contract_version: "src/lib/repairContractPresentation.js",
     repair_suggestion_library_version: "src/lib/repairSuggestions.js",
+    sampling_disclosure_version: "src/lib/samplingDisclosure.js",
   };
   const input = readJson(CROSS_RUNTIME_INPUT);
 

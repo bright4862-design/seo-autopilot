@@ -20,6 +20,8 @@ import { buildRepairWorkSurfacePresentation } from "@/lib/repairWorkSurfacePrese
 import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel, customerScopeRelationshipLabel } from "@/lib/fixVocabulary";
 import { repairSuggestion } from "@/lib/repairSuggestions";
 import { buildRepairCards } from "@/lib/repairCardModel";
+import { evidenceLink } from "@/lib/evidenceUrl";
+import { samplingDisclosure } from "@/lib/samplingDisclosure";
 
 const CMS_OPTIONS = [
   { value: "wordpress", label: "WordPress" },
@@ -61,7 +63,7 @@ const CREDIT_PATH_HINTS = ["rachat-de-credits", "rachat-de-credit", "credit", "c
 
 export const FAILURE_STATE_PRESENTATION_VERSION = "failure_state_presentation_v1_durable_reason";
 export const PRIORITY_SUMMARY_VERSION = "priority_summary_v1_action_band_consistent";
-export const COUNT_COPY_VERSION = "count_copy_v1_shared_pluralization";
+export const COUNT_COPY_VERSION = "count_copy_v2_agreeing_verbs";
 
 const CUSTOMER_RECOVERY_COPY = Object.freeze({
   unauthorized: {
@@ -413,6 +415,7 @@ export default function FixList() {
   const limitationNote = getLimitationNote(scanRecord);
   const summaryItems = repairPresentation.canonical === true ? customerRepairCards : recommendations;
   const summary = hasUsefulScan ? getBestSummary(scanRecord, pagesScanned, pagesFound, summaryItems) : "";
+  const sampleCoverage = hasUsefulScan ? samplingDisclosure(scanRecord) : null;
 
   function retryRequestedScan() {
     setRequestedScanFailure(null);
@@ -517,6 +520,33 @@ export default function FixList() {
 
             {summary ? (
               <p className="mt-8 max-w-[56ch] text-[14px] leading-relaxed text-ink-muted">{summary}</p>
+            ) : null}
+
+            {sampleCoverage ? (
+              <details className="mt-5 max-w-[60ch] rounded-xl border border-hairline-soft bg-white/35 px-4 py-3">
+                <summary className="cursor-pointer text-[12.5px] font-medium text-ink-muted underline decoration-hairline underline-offset-4">
+                  What this representative sample covered
+                </summary>
+                <div className="mt-3 space-y-2 text-[12.5px] leading-relaxed text-ink-faint">
+                  <p>
+                    Route patterns: <span className="font-medium text-ink-muted">{sampleCoverage.routesSampled} of {sampleCoverage.routesDiscovered}</span>
+                    {sampleCoverage.localeVariantsCollapsed > 0
+                      ? ` · ${formatCount(sampleCoverage.localeVariantsCollapsed)} translated duplicate${sampleCoverage.localeVariantsCollapsed === 1 ? "" : "s"} collapsed for sampling`
+                      : ""}
+                  </p>
+                  {sampleCoverage.identityDiscovered > 0 ? (
+                    <p>
+                      Business-critical pages: <span className="font-medium text-ink-muted">{sampleCoverage.identitySampled} of {sampleCoverage.identityDiscovered}</span> sampled.
+                    </p>
+                  ) : null}
+                  {sampleCoverage.marketSummary ? <p>{sampleCoverage.marketSummary}</p> : null}
+                  {sampleCoverage.familySummary ? <p>{sampleCoverage.familySummary}</p> : null}
+                  {sampleCoverage.unsampledSummary ? (
+                    <p className="text-ink-muted">{sampleCoverage.unsampledSummary}</p>
+                  ) : null}
+                  <p>This is a representative 150-page sample unless FixList covered the full discovered inventory.</p>
+                </div>
+              </details>
             ) : null}
 
             {limitationNote ? (
@@ -1105,20 +1135,43 @@ function NoScanState({ onScan }) {
 }
 
 function AffectedPage({ page, websiteUrl, index }) {
-  const resolvedPage = toAbsolutePageUrl(page, websiteUrl);
-  const label = formatPageLabel(resolvedPage);
-  const path = formatPagePath(resolvedPage);
-  const showPath = cleanString(path) !== cleanString(label);
+  // One shared contract decides how a page reads and whether it may be a link,
+  // so a card, a modal and an export cannot describe the same page differently.
+  const link = evidenceLink(page, websiteUrl);
+  const host = formatPageLabel(link.href || page);
+  const showHost = link.isLinkable && cleanString(host) !== cleanString(link.label);
 
   return (
     <div className="flex items-start gap-2 rounded-md border border-hairline-soft px-2.5 py-2 text-[13px] tabular-nums">
       <span className="mt-0.5 w-5 shrink-0 text-right text-[11px] text-ink-faint">{index + 1}</span>
       <div className="min-w-0 flex-1">
-        <p className="truncate font-medium text-ink">{label}</p>
-        {showPath ? <p className="break-all text-ink-faint">{path}</p> : null}
+        {link.isLinkable ? (
+          // The label itself is the link: the audit found evidence rendered as
+          // plain text with only a small icon to click.
+          <a
+            href={link.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={link.title}
+            aria-label={link.linkName}
+            className="block truncate font-medium text-ink underline decoration-hairline underline-offset-4 transition-colors hover:text-ink"
+          >
+            {link.label}
+          </a>
+        ) : (
+          <p className="truncate font-medium text-ink" title={link.title}>{link.label}</p>
+        )}
+        {showHost ? <p className="break-all text-ink-faint">{host}</p> : null}
       </div>
-      {isFullUrl(resolvedPage) ? (
-        <a href={resolvedPage} target="_blank" rel="noreferrer" className="shrink-0 p-1 text-ink-faint transition-colors hover:text-ink" aria-label="Open page">
+      {link.isLinkable ? (
+        <a
+          href={link.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={link.title}
+          className="shrink-0 p-1 text-ink-faint transition-colors hover:text-ink"
+          aria-label={link.linkName}
+        >
           <ExternalLink className="h-3.5 w-3.5" />
         </a>
       ) : null}

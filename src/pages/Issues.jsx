@@ -23,7 +23,8 @@ export default function Issues() {
       const projects = await base44.entities.BusinessProject.list("-created_date", 1);
       if (projects.length > 0) {
         const iss = await base44.entities.SeoIssue.filter({ project_id: projects[0].id });
-        setIssues(iss);
+        const websiteUrl = projects[0]?.website_url || "";
+        setIssues(iss.map((issue) => ({ ...issue, website_url: issue.website_url || websiteUrl })));
       }
       setLoading(false);
     };

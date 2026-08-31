@@ -9,7 +9,7 @@
     "failure_state_presentation_version": "failure_state_presentation_v1_durable_reason",
     "priority_summary_version": "priority_summary_v1_action_band_consistent",
     "scan_history_version": "scan_history_v2_account_wide_recent",
-    "count_copy_version": "count_copy_v1_shared_pluralization",
+    "count_copy_version": "count_copy_v2_agreeing_verbs",
     "repair_presentation_contract_version": "repair_presentation_v3_fingerprint_keyed_actions",
     "repair_suggestion_library_version": "v1",
     "repair_write_contract_version": "repair_contract_v2_shadow_calibrated",

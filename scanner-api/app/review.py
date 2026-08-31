@@ -2158,13 +2158,16 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
     blocked_ratio = blocked_count / max(1, reviewed_count)
     material_access_limited = rate_limited and not blocked and blocked_ratio >= 0.10
 
-    summary = f"FixList recognized this as {playbook['label']} and used the {playbook['label']} playbook. The scanner reviewed {site_fingerprint['pages_crawled']} pages"
+    crawled_count = int_or_zero(site_fingerprint.get("pages_crawled"))
+    crawled_noun = "page" if crawled_count == 1 else "pages"
+    summary = f"FixList recognized this as {playbook['label']} and used the {playbook['label']} playbook. The scanner reviewed {site_fingerprint['pages_crawled']} {crawled_noun}"
     if site_fingerprint.get("pages_found"):
         summary += f" out of about {site_fingerprint['pages_found']} discovered URLs"
     summary += f". Start with the highest-impact items on {', '.join(playbook['priority_pages'][:3])}."
     if blocked:
         summary = (
-            f"FixList could not complete a reliable page-quality review because {blocked_count} of {reviewed_count or blocked_count} reviewed pages "
+            f"FixList could not complete a reliable page-quality review because {blocked_count} of {reviewed_count or blocked_count} reviewed "
+            f"{'page' if (reviewed_count or blocked_count) == 1 else 'pages'} "
             "returned access blocks, rate limiting, bot-protection, or connection-verification responses. The score is provisional until server, CDN, "
             "firewall, or bot-protection logs confirm legitimate crawler access."
         )

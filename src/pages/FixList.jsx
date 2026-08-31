@@ -61,7 +61,7 @@ const CREDIT_PATH_HINTS = ["rachat-de-credits", "rachat-de-credit", "credit", "c
 
 export const FAILURE_STATE_PRESENTATION_VERSION = "failure_state_presentation_v1_durable_reason";
 export const PRIORITY_SUMMARY_VERSION = "priority_summary_v1_action_band_consistent";
-export const COUNT_COPY_VERSION = "count_copy_v1_shared_pluralization";
+export const COUNT_COPY_VERSION = "count_copy_v2_agreeing_verbs";
 
 const CUSTOMER_RECOVERY_COPY = Object.freeze({
   unauthorized: {

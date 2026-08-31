@@ -3,7 +3,7 @@
 // Run that generator after changing either input; CI fails on drift.
 
 export const RELEASE_CONTRACT_SCHEMA_VERSION = "beta_crawler_revision_v1";
-export const RELEASE_FINGERPRINT = "2c94fb616d16de55";
+export const RELEASE_FINGERPRINT = "ad3c2b0a8185ee41";
 export const RELEASE_STATUS = "candidate";
 export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "acceptance_evidence_version": "standard150_acceptance_evidence_v2_aggregate_rss_fail_closed",
@@ -13,7 +13,7 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "authority_seal_version": "scan_evidence_hmac_sha256_v1",
   "canonical_href_resolution_version": "canonical_href_resolution_v2_absolute_single_label_same_path",
   "canonical_target_evidence_version": "canonical_target_evidence_v2_origin_alias_equivalence",
-  "count_copy_version": "count_copy_v1_shared_pluralization",
+  "count_copy_version": "count_copy_v2_agreeing_verbs",
   "coverage_authority_evidence_version": "coverage_authority_evidence_v2_authoritative",
   "coverage_authority_version": "coverage_authority_v1_shared_decision",
   "crawler_acceptance_version": "crawler_acceptance_v1",

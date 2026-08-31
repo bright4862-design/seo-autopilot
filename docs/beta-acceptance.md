@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `2c94fb616d16de55` |
+| Candidate fingerprint | `ad3c2b0a8185ee41` |
 | Classifier | `archetype_classifier_v10_structural_finance_member_retail` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,7 +15,7 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `2c94fb616d16de55` with classifier
+fingerprint `ad3c2b0a8185ee41` with classifier
 `archetype_classifier_v10_structural_finance_member_retail`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
@@ -24,7 +24,7 @@ The immediately superseded candidate was `58275d24191cf1cb`; before that
 `7b0ec8c46654192b`, `5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and
 `1ddf8085bc7721c4`.
 
-The current candidate moved the fingerprint to `2c94fb616d16de55` by keying one
+The current candidate moved the fingerprint to `ad3c2b0a8185ee41`. It keys one
 customer action on the scanner's own repair identity. The 35-site production
 audit of 2026-08-31 found ten sites rendering nineteen groups where several
 top-level FixItems carried a single `repair_fingerprint` — N26 showed one
@@ -35,6 +35,13 @@ page and affected URLs. Rows the scan gave no fingerprint keep the previous
 rule-and-repair-type key: an absent identity is not evidence that two repairs are
 the same one. That is recorded as
 `repair_presentation_v3_fingerprint_keyed_actions`.
+
+The same candidate makes count copy agree with its count. The audit found
+"1 checked page are affected." on the customer projection: the noun agreed with
+the count and the verb did not. The projection now derives both from the count,
+the sitemap-orphan explanation stops reading "1 pages were found" where its own
+title was already guarded, and the Python review summary singularises a
+one-page crawl. That is recorded as `count_copy_v2_agreeing_verbs`.
 
 The `58275d24191cf1cb` candidate had moved the fingerprint by grouping a
 repair on the artifact the customer actually edits rather than on the page family

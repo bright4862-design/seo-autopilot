@@ -8,7 +8,7 @@
     "authority_seal_version": "scan_evidence_hmac_sha256_v1",
     "canonical_href_resolution_version": "canonical_href_resolution_v2_absolute_single_label_same_path",
     "canonical_target_evidence_version": "canonical_target_evidence_v2_origin_alias_equivalence",
-    "count_copy_version": "count_copy_v1_shared_pluralization",
+    "count_copy_version": "count_copy_v2_agreeing_verbs",
     "coverage_authority_evidence_version": "coverage_authority_evidence_v2_authoritative",
     "coverage_authority_version": "coverage_authority_v1_shared_decision",
     "crawler_acceptance_version": "crawler_acceptance_v1",
@@ -60,10 +60,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "2c94fb616d16de55",
+  "fingerprint": "ad3c2b0a8185ee41",
   "git_commit": "",
   "note": "",
-  "recorded_at": "2026-08-31T16:38:38.286891+00:00",
+  "recorded_at": "2026-08-31T16:46:51.261308+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

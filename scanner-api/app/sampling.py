@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from .extract import is_legal_page_path
 
-SAMPLING_VERSION = "balanced_sitemap_buckets_v2_locale_collapsed_identity_reserve"
+SAMPLING_VERSION = "balanced_sitemap_buckets_v3_locale_collapsed_identity_scope_discovery"
 TRUST_PREFIXES = (
     "/about", "/contact", "/privacy", "/terms", "/legal", "/mentions-legales",
     "/cgv", "/security", "/impressum", "/conditions", "/a-propos",

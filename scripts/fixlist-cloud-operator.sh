@@ -40,6 +40,7 @@ ACCEPTANCE_PER_OWNER_CLAIM_BUDGET="${ACCEPTANCE_PER_OWNER_CLAIM_BUDGET:-}"
 FIXLIST_RELEASE_OWNER="${FIXLIST_RELEASE_OWNER:-bright4862-design}"
 FIXLIST_WORKER_ID_TOKEN="${FIXLIST_WORKER_ID_TOKEN:-}"
 FIXLIST_WORKER_TOKEN_AUDIENCE="${FIXLIST_WORKER_TOKEN_AUDIENCE:-}"
+FIXLIST_WORKER_PROBE_URL="${FIXLIST_WORKER_PROBE_URL:-}"
 WORKER_CANDIDATE_TAG="${WORKER_CANDIDATE_TAG:-candidate}"
 
 # Operator API paths are intentionally isolated here. The coordinator may share
@@ -324,10 +325,10 @@ for b in builds:
 #
 # The probe has to reach the revision under test rather than whatever holds
 # traffic. A revision tag addresses one revision directly; without a tag the
-# answer only stands when that revision already serves 100%; and when the caller
-# declares the audience its token was minted for, only that URL can be spent.
-# Anything else is INDETERMINATE, because an answer that cannot be attributed to
-# a revision is not evidence about that revision.
+# answer only stands when that revision already serves 100%. For Cloud Run
+# traffic tags, request destination and ID-token audience are deliberately
+# separate: the request targets the tag URL while the token uses the canonical
+# service audience. Anything unattributable remains INDETERMINATE.
 verify_worker_runtime_revision() {
   local revision="${1:-$TARGET_REVISION}" expected_sha="${2:-}"
   local service_json recorded response probe_url token code compare_status=0
@@ -359,7 +360,7 @@ PY
   fi
   echo "revision under test: $revision"
 
-  probe_url="$(python3 - "$service_json" "$revision" "$FIXLIST_WORKER_TOKEN_AUDIENCE" <<'PY'
+  probe_url="$(python3 - "$service_json" "$revision" "$FIXLIST_WORKER_PROBE_URL" <<'PY'
 # runtime-revision-probe-url
 import json, sys
 
@@ -405,7 +406,7 @@ PY
   token="$FIXLIST_WORKER_ID_TOKEN"
   if [ -z "$token" ]; then
     echo "INDETERMINATE: no identity token was supplied for the private worker."
-    echo "Set FIXLIST_WORKER_ID_TOKEN to a token minted for $probe_url by a"
+    echo "Set FIXLIST_WORKER_ID_TOKEN to a token minted for the canonical Cloud Run service URL by a"
     echo "principal holding roles/run.invoker on $CLOUD_RUN_SERVICE."
     return 1
   fi

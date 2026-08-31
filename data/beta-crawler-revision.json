@@ -49,6 +49,7 @@
     "review_evidence_calibration_version": "review_evidence_calibration_v6_health_score_v2",
     "review_version": "python_review_v2_structural_marketplace",
     "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",
+    "sampling_disclosure_version": "sampling_disclosure_v1_customer_coverage",
     "sampling_version": "balanced_sitemap_buckets_v2_locale_collapsed_identity_reserve",
     "scan_history_delete_version": "scan_history_delete_v2_drain_children",
     "scan_history_version": "scan_history_v2_account_wide_recent",
@@ -61,9 +62,9 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "e03f990c2b25febc",
+  "fingerprint": "7a95768cc8ee2076",
   "git_commit": "",
-  "note": "35-site audit candidate: persisted stable-fingerprint actions plus linked evidence surfaces",
+  "note": "35-site audit candidate: persisted stable-fingerprint actions, linked evidence, and customer sampling disclosure",
   "recorded_at": "2026-08-31T17:09:54.106658+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 
 import {
@@ -97,4 +98,21 @@ test("a page with no resolvable origin still reads, it just does not link", () =
   assert.equal(link.isLinkable, false);
   assert.equal(link.href, "");
   assert.equal(link.label, "/menu/", "the customer must still see which page is affected");
+});
+
+
+test("issue modal uses the shared evidence URL contract", () => {
+  const source = fs.readFileSync(new URL("../../src/components/issues/IssueDetailModal.jsx", import.meta.url), "utf8");
+  assert.match(source, /evidenceLink\\(page, siteOrigin\\)/);
+  assert.match(source, /target="_blank"/);
+  assert.match(source, /rel="noopener noreferrer"/);
+  assert.match(source, /Copy URL/);
+  assert.match(source, /aria-label=\\{link\\.linkName\\}/);
+});
+
+test("PDF export uses the shared evidence URL contract and real links", () => {
+  const source = fs.readFileSync(new URL("../../src/lib/exportScanReport.js", import.meta.url), "utf8");
+  assert.match(source, /evidenceLink\\(page, siteOrigin\\)/);
+  assert.match(source, /textWithLink/);
+  assert.doesNotMatch(source, /item\\.affected_pages\\.forEach\\(page => line/);
 });

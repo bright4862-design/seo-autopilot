@@ -3,18 +3,24 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const reader = readFileSync("base44/functions/getCustomerScanResult/entry.ts", "utf8");
+const compatibility = readFileSync("base44/functions/getCustomerScanResult/releaseCompatibility.js", "utf8");
 const scanRuns = readFileSync("src/lib/scanRuns.js", "utf8");
 const fixList = readFileSync("src/pages/FixList.jsx", "utf8");
 
 test("a known-compatible historical release remains readable after the app advances", () => {
   assert.match(
-    reader,
-    /READABLE_AUTHORITY_RELEASE_FINGERPRINTS = new Set\(\[[\s\S]*?RELEASE_FINGERPRINT,[\s\S]*?"5d94e93c54a9efb6"/,
+    compatibility,
+    /HISTORICAL_READABLE_RELEASE_FINGERPRINTS = Object\.freeze\(\[[\s\S]*?"5d94e93c54a9efb6"/,
     "the immediately previous verified Standard 150 release must stay explicitly readable",
   );
   assert.match(
+    compatibility,
+    /CUSTOMER_RESULT_READER_VERSION = "customer_result_reader_v2_historical_release_compatibility"/,
+    "historical reader semantics must carry an explicit release component version",
+  );
+  assert.match(
     reader,
-    /const runReleaseFingerprint = cleanText\(run\.beta_revision_fingerprint, 64\);[\s\S]*?!READABLE_AUTHORITY_RELEASE_FINGERPRINTS\.has\(runReleaseFingerprint\)[\s\S]*?503,[\s\S]*?"result_release_mismatch"/,
+    /const runReleaseFingerprint = cleanText\(run\.beta_revision_fingerprint, 64\);[\s\S]*?!isReadableAuthorityReleaseFingerprint\(runReleaseFingerprint, RELEASE_FINGERPRINT\)[\s\S]*?503,[\s\S]*?"result_release_mismatch"/,
     "unknown release fingerprints must still fail closed",
   );
   assert.match(

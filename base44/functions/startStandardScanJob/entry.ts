@@ -789,9 +789,12 @@ async function recoverOrCreateServerScan({
   const previous = await scans.filter(
     { owner_user_id: String(user.id), project_id: String(project.id) },
     "-completed_at",
-    20,
+    30,
   ).catch(() => []);
-  previousScanId = (previous || []).find((row) => ["complete", "limited"].includes(String(row.status || "")))?.id || "";
+  previousScanId = (previous || []).find((row) => (
+    ["complete", "limited"].includes(String(row.status || ""))
+    && scanMatchesRequestedScope(row, scope)
+  ))?.id || "";
 
   const now = new Date().toISOString();
   try {
@@ -1204,6 +1207,15 @@ function resolveFocusedPathScope(body = {}, websiteUrl = "") {
     parentScanId,
     discoveredFrom: source,
   };
+}
+
+function scanMatchesRequestedScope(row = {}, scope = {}) {
+  const rowType = String(row.scope_type || "").trim();
+  const rowPrefix = normalizeFocusedPathPrefix(row.requested_path_prefix || row.path_prefix || "");
+  if (scope?.focused) {
+    return rowType === "path_prefix" && rowPrefix === normalizeFocusedPathPrefix(scope.pathPrefix);
+  }
+  return !rowType && !rowPrefix;
 }
 
 function discoveredPrefixCount(parent = {}, pathPrefix = "") {

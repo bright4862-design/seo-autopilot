@@ -1,6 +1,10 @@
 import pytest
 
-from app.repair_contract_v2 import CanonicalRepairContractError, apply_canonical_repair_contract
+from app.repair_contract_v2 import (
+    CanonicalRepairContractError,
+    _group_canonical_repairs,
+    apply_canonical_repair_contract,
+)
 from app.repair_persistence_shadow import REPAIR_CONTRACT_VERSION, REPAIR_PRIORITY_MODEL_VERSION
 
 
@@ -61,3 +65,112 @@ def test_invalid_duplicate_fix_ids_fail_closed_instead_of_publishing_legacy():
 
     with pytest.raises(CanonicalRepairContractError):
         apply_canonical_repair_contract(review, scan)
+
+
+
+def test_stable_fingerprint_rows_persist_as_one_action_with_child_evidence():
+    first = {
+        **_fix("first", "missing_meta_description", "medium", ["https://example.com/fr/a"]),
+        "repair_fingerprint": "abc123",
+        "repair_identity_stable": True,
+        "repair_identity": {"version": "repair_identity_v2_technical", "stable": True, "fingerprint": "abc123"},
+        "repair_identity_version": "repair_identity_v2_technical",
+        "action_priority": "improve",
+        "base_severity": "medium",
+        "evidence_class": "improvement",
+        "page_template_family": "collection_page",
+        "requires_developer": False,
+        "difficulty": "easy",
+    }
+    second = {
+        **_fix("second", "missing_meta_description", "high", ["https://example.com/de/b"]),
+        "repair_fingerprint": "abc123",
+        "repair_identity_stable": True,
+        "repair_identity": {"version": "repair_identity_v2_technical", "stable": True, "fingerprint": "abc123"},
+        "repair_identity_version": "repair_identity_v2_technical",
+        "action_priority": "important",
+        "base_severity": "high",
+        "evidence_class": "confirmed_problem",
+        "page_template_family": "product_detail",
+        "requires_developer": True,
+        "who_can_do_this": "your_web_person",
+        "difficulty": "hard",
+    }
+    pages = [
+        {**_page("https://example.com/fr/a"), "page_template_family": "collection_page"},
+        {**_page("https://example.com/de/b"), "page_template_family": "product_detail"},
+    ]
+
+    grouped = _group_canonical_repairs([first, second], pages)
+
+    assert len(grouped) == 1
+    action = grouped[0]
+    assert action["repair_fingerprint"] == "abc123"
+    assert action["affected_pages"] == ["https://example.com/fr/a", "https://example.com/de/b"]
+    assert action["page_count"] == 2
+    assert action["action_priority"] == "important"
+    assert action["priority"] == "high"
+    assert action["requires_developer"] is True
+    assert action["difficulty"] == "hard"
+    assert [group["fix_id"] for group in action["repair_evidence_groups"]] == ["first", "second"]
+    assert [group["locale"] for group in action["repair_evidence_groups"]] == ["fr", "de"]
+    assert {group["family"] for group in action["repair_evidence_groups"]} == {"collection_page", "product_detail"}
+
+
+def test_unstable_or_missing_fingerprints_are_never_persistence_merged():
+    unstable_a = {
+        **_fix("a", "missing_meta_description", "medium", ["https://example.com/a"]),
+        "repair_fingerprint": "same",
+        "repair_identity_stable": False,
+    }
+    unstable_b = {
+        **_fix("b", "missing_meta_description", "medium", ["https://example.com/b"]),
+        "repair_fingerprint": "same",
+        "repair_identity_stable": False,
+    }
+    missing = {
+        **_fix("c", "missing_meta_description", "medium", ["https://example.com/c"]),
+        "repair_fingerprint": "",
+        "repair_identity_stable": False,
+    }
+
+    grouped = _group_canonical_repairs(
+        [unstable_a, unstable_b, missing],
+        [_page("https://example.com/a"), _page("https://example.com/b"), _page("https://example.com/c")],
+    )
+
+    assert [item["fix_id"] for item in grouped] == ["a", "b", "c"]
+    assert all(len(item["repair_evidence_groups"]) == 1 for item in grouped)
+
+
+def test_grouping_deduplicates_urls_without_losing_child_counts():
+    first = {
+        **_fix("first", "internal_link_redirect", "high", ["https://example.com/a", "https://example.com/shared"]),
+        "repair_fingerprint": "redirect-fp",
+        "repair_identity_stable": True,
+        "action_priority": "important",
+        "base_severity": "high",
+        "evidence_class": "confirmed_problem",
+    }
+    second = {
+        **_fix("second", "internal_link_redirect", "high", ["https://example.com/shared", "https://example.com/b"]),
+        "repair_fingerprint": "redirect-fp",
+        "repair_identity_stable": True,
+        "action_priority": "important",
+        "base_severity": "high",
+        "evidence_class": "confirmed_problem",
+    }
+
+    grouped = _group_canonical_repairs(
+        [first, second],
+        [_page("https://example.com/a"), _page("https://example.com/shared"), _page("https://example.com/b")],
+    )
+
+    assert len(grouped) == 1
+    assert grouped[0]["affected_pages"] == [
+        "https://example.com/a",
+        "https://example.com/shared",
+        "https://example.com/b",
+    ]
+    assert grouped[0]["page_count"] == 3
+    assert [child["count"] for child in grouped[0]["repair_evidence_groups"]] == [2, 2]

@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `d070321f388f69e9` |
+| Candidate fingerprint | `58275d24191cf1cb` |
 | Classifier | `archetype_classifier_v10_structural_finance_member_retail` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,7 +15,7 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `d070321f388f69e9` with classifier
+fingerprint `58275d24191cf1cb` with classifier
 `archetype_classifier_v10_structural_finance_member_retail`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
@@ -23,7 +23,7 @@ fingerprint `d070321f388f69e9` with classifier
 The immediately superseded candidate was `7b0ec8c46654192b`; before that
 `5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and `1ddf8085bc7721c4`.
 
-The current candidate moved the fingerprint to `d070321f388f69e9` by grouping a
+The current candidate moved the fingerprint to `58275d24191cf1cb` by grouping a
 repair on the artifact the customer actually edits rather than on the page family
 that happened to surface it. Ike's scan `6a9548bd0d7384cc66988ae4` persisted one
 sitemap edit as five cards, because its redirecting URLs spanned legal, standard,

@@ -25,7 +25,8 @@ const ACCEPTED_LIMITED_INTEGRITY_VERSIONS = new Set([
   "standard_limited_result_integrity_v2_acceptance_evidence",
 ]);
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "d070321f388f69e9";
+import { isReadableAuthorityReleaseFingerprint } from "./releaseCompatibility.js";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "58275d24191cf1cb";
 const MAX_FIX_ITEMS = 100;
 
 class RequestProblem extends Error {
@@ -203,11 +204,11 @@ Deno.serve(async (req) => {
     ) {
       throw new RequestProblem(409, "result_not_authoritative", "This scan did not produce a verified customer result.");
     }
-    // A release mismatch is an operational mixed-version state, not evidence
-    // that this individual scan failed. Keep the result sealed and hidden, but
-    // give the customer a retryable response instead of telling them to create
-    // another scan that the same mismatched reader would reject.
-    if (run.beta_revision_fingerprint !== RELEASE_FINGERPRINT) {
+    const runReleaseFingerprint = cleanText(run.beta_revision_fingerprint, 64);
+    // Unknown scanner releases remain hidden until the reader explicitly proves
+    // it understands their signed contract. Known-compatible historical results
+    // continue through the same full authority verification as current results.
+    if (!isReadableAuthorityReleaseFingerprint(runReleaseFingerprint, RELEASE_FINGERPRINT)) {
       throw new RequestProblem(
         503,
         "result_release_mismatch",
@@ -451,6 +452,7 @@ async function loadFixItems(fixItemEntity, fixList, run, user, proof) {
 }
 
 function assertSnapshotIdentity(snapshot, { run, fixList, user }) {
+  const runReleaseFingerprint = cleanText(run.beta_revision_fingerprint, 64);
   if (
     !ACCEPTED_AUTHORITY_VERSIONS.has(snapshot.version)
     // Accepting a set must not mean accepting a mismatch: the rebuilt snapshot
@@ -460,7 +462,8 @@ function assertSnapshotIdentity(snapshot, { run, fixList, user }) {
     || snapshot.owner_user_id !== cleanId(user.id)
     || snapshot.scan_id !== cleanId(run.id)
     || snapshot.project_id !== cleanId(run.project_id)
-    || snapshot.release_fingerprint !== RELEASE_FINGERPRINT
+    || !isReadableAuthorityReleaseFingerprint(runReleaseFingerprint, RELEASE_FINGERPRINT)
+    || snapshot.release_fingerprint !== runReleaseFingerprint
     || snapshot.normalized_domain !== normalizeDomain(run.normalized_domain || run.website_url)
     || snapshot.scan?.status !== "complete"
     || snapshot.scan?.release_gate_eligible !== true

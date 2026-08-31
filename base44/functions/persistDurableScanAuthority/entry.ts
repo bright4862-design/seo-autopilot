@@ -9,7 +9,7 @@ import { persistExactAdmissionRelease } from "./admissionRelease.js";
 // a compiled worker when entry.ts stayed byte-identical while an imported
 // handler changed. Keeping the active release fingerprint in the entry module
 // guarantees every release-fingerprint move changes the deployed entry bytes.
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "d070321f388f69e9";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "58275d24191cf1cb";
 
 function normalizeAttempt(value) {
   const parsed = Number(value);

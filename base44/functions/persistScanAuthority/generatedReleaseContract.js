@@ -3,7 +3,7 @@
 // Run that generator after changing either input; CI fails on drift.
 
 export const RELEASE_CONTRACT_SCHEMA_VERSION = "beta_crawler_revision_v1";
-export const RELEASE_FINGERPRINT = "d070321f388f69e9";
+export const RELEASE_FINGERPRINT = "58275d24191cf1cb";
 export const RELEASE_STATUS = "candidate";
 export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "acceptance_evidence_version": "standard150_acceptance_evidence_v2_aggregate_rss_fail_closed",
@@ -18,6 +18,7 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "coverage_authority_version": "coverage_authority_v1_shared_decision",
   "crawler_acceptance_version": "crawler_acceptance_v1",
   "customer_projection_version": "customer_projection_v4_acceptance_evidence_fail_closed",
+  "customer_result_reader_version": "customer_result_reader_v2_historical_release_compatibility",
   "durable_completion_contract_version": "durable_standard150_completion_v1",
   "durable_control_contract_version": "durable_standard150_control_v1",
   "durable_worker_contract_version": "scan_job_worker_v1_cloud_tasks",
@@ -43,7 +44,7 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "render_evidence_version": "render_evidence_v1",
   "render_followup_version": "render_followup_v1",
   "repair_coverage_version": "repair_coverage_v4_corroborated_family_gap_fill",
-  "repair_presentation_contract_version": "repair_presentation_v1_compact_mobile",
+  "repair_presentation_contract_version": "repair_presentation_v2_customer_action_cards",
   "repair_suggestion_library_version": "v1",
   "repair_surface_grouping_version": "repair_surface_grouping_v1_shared_artifact",
   "repair_write_contract_version": "repair_contract_v2_shadow_calibrated",

@@ -668,6 +668,15 @@ jobs:
           test -n "$url"
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve candidate token audience
+        id: candidate-service-url
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="$(gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format='value(status.url)')"
+          test -n "$url"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
       - name: Mint candidate invoker identity token
         id: candidate-id-token
         uses: google-github-actions/auth@v3
@@ -676,7 +685,7 @@ jobs:
           workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
           service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
           token_format: id_token
-          id_token_audience: ${{ steps.candidate-tag.outputs.url }}
+          id_token_audience: ${{ steps.candidate-service-url.outputs.url }}
           id_token_include_email: true
           create_credentials_file: false
 
@@ -689,7 +698,8 @@ jobs:
           TARGET_REVISION: ${{ steps.candidate.outputs.revision }}
           SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
           FIXLIST_WORKER_ID_TOKEN: ${{ steps.candidate-id-token.outputs.id_token }}
-          FIXLIST_WORKER_TOKEN_AUDIENCE: ${{ steps.candidate-tag.outputs.url }}
+          FIXLIST_WORKER_TOKEN_AUDIENCE: ${{ steps.candidate-service-url.outputs.url }}
+          FIXLIST_WORKER_PROBE_URL: ${{ steps.candidate-tag.outputs.url }}
         shell: bash
         run: bash ./scripts/fixlist-cloud-operator.sh
 

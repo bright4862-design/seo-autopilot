@@ -43,7 +43,7 @@ async function importHandler(harnessName) {
     RELEASE_FINGERPRINT,
     isReadableAuthorityReleaseFingerprint,
   } = globalThis.${harnessName};`;
-  await import(`data:text/javascript;base64,${Buffer.from(`${prelude}\n${javascript}`).toString("base64")}`);
+  await import(`data:text/javascript;base64,${Buffer.from(`${prelude}\n${javascript}\n// harness:${harnessName}`).toString("base64")}`);
 }
 
 async function sealedRows(fingerprint) {

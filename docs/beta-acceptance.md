@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `2387b9470d23a050` |
+| Candidate fingerprint | `32f8ba5d0dceefcc` |
 | Classifier | `archetype_classifier_v11_booking_competitor_finance_playbooks` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,7 +15,7 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `2387b9470d23a050` with classifier
+fingerprint `32f8ba5d0dceefcc` with classifier
 `archetype_classifier_v11_booking_competitor_finance_playbooks`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
@@ -24,7 +24,7 @@ The immediately superseded candidate was `58275d24191cf1cb`; before that
 `7b0ec8c46654192b`, `5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and
 `1ddf8085bc7721c4`.
 
-The current candidate moved the fingerprint to `2387b9470d23a050`. It keys one
+The current candidate moved the fingerprint to `32f8ba5d0dceefcc`. It keys one
 customer action on the scanner's own repair identity. The 35-site production
 audit of 2026-08-31 found ten sites rendering nineteen groups where several
 top-level FixItems carried a single `repair_fingerprint` — N26 showed one
@@ -82,6 +82,16 @@ classifier, so a ticketing route was a plain standard page. Neither family
 allocation nor an identity reserve could tell it from any other page, and the
 surface that proves a business is a marketplace was invisible to sampling. That is
 recorded as `page_template_classifier_v4_bookable_inventory_routes`.
+
+The same candidate makes affected pages reachable. Evidence URLs were plain text
+and the site root read as a bare slash, so a customer could not tell which page
+was affected or open it. One shared contract now decides how a page reads, whether
+it may be a link, and what a screen reader announces; the root reads
+"Homepage · /". A single protocol allowlist on the parsed URL decides linkability,
+so a javascript: or data: value in evidence can never become an anchor href, and a
+relative path with no trustworthy scanned origin is shown rather than resolved
+against the app's own host. That is recorded as
+`repair_presentation_v4_linked_evidence_pages`.
 
 The `58275d24191cf1cb` candidate had moved the fingerprint by grouping a
 repair on the artifact the customer actually edits rather than on the page family

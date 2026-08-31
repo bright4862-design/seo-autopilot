@@ -20,6 +20,7 @@ import { buildRepairWorkSurfacePresentation } from "@/lib/repairWorkSurfacePrese
 import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel, customerScopeRelationshipLabel } from "@/lib/fixVocabulary";
 import { repairSuggestion } from "@/lib/repairSuggestions";
 import { buildRepairCards } from "@/lib/repairCardModel";
+import { evidenceLink } from "@/lib/evidenceUrl";
 
 const CMS_OPTIONS = [
   { value: "wordpress", label: "WordPress" },
@@ -1105,20 +1106,43 @@ function NoScanState({ onScan }) {
 }
 
 function AffectedPage({ page, websiteUrl, index }) {
-  const resolvedPage = toAbsolutePageUrl(page, websiteUrl);
-  const label = formatPageLabel(resolvedPage);
-  const path = formatPagePath(resolvedPage);
-  const showPath = cleanString(path) !== cleanString(label);
+  // One shared contract decides how a page reads and whether it may be a link,
+  // so a card, a modal and an export cannot describe the same page differently.
+  const link = evidenceLink(page, websiteUrl);
+  const host = formatPageLabel(link.href || page);
+  const showHost = link.isLinkable && cleanString(host) !== cleanString(link.label);
 
   return (
     <div className="flex items-start gap-2 rounded-md border border-hairline-soft px-2.5 py-2 text-[13px] tabular-nums">
       <span className="mt-0.5 w-5 shrink-0 text-right text-[11px] text-ink-faint">{index + 1}</span>
       <div className="min-w-0 flex-1">
-        <p className="truncate font-medium text-ink">{label}</p>
-        {showPath ? <p className="break-all text-ink-faint">{path}</p> : null}
+        {link.isLinkable ? (
+          // The label itself is the link: the audit found evidence rendered as
+          // plain text with only a small icon to click.
+          <a
+            href={link.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={link.title}
+            aria-label={link.linkName}
+            className="block truncate font-medium text-ink underline decoration-hairline underline-offset-4 transition-colors hover:text-ink"
+          >
+            {link.label}
+          </a>
+        ) : (
+          <p className="truncate font-medium text-ink" title={link.title}>{link.label}</p>
+        )}
+        {showHost ? <p className="break-all text-ink-faint">{host}</p> : null}
       </div>
-      {isFullUrl(resolvedPage) ? (
-        <a href={resolvedPage} target="_blank" rel="noreferrer" className="shrink-0 p-1 text-ink-faint transition-colors hover:text-ink" aria-label="Open page">
+      {link.isLinkable ? (
+        <a
+          href={link.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={link.title}
+          className="shrink-0 p-1 text-ink-faint transition-colors hover:text-ink"
+          aria-label={link.linkName}
+        >
           <ExternalLink className="h-3.5 w-3.5" />
         </a>
       ) : null}

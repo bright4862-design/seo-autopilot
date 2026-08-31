@@ -8,6 +8,16 @@ from urllib.parse import urlparse
 
 from .coverage_authority import assess_coverage, coverage_inputs_from_payload
 from .repair_coverage import REPAIR_COVERAGE_VERSION, evidence_url_key, normalize_repair_scope
+from .repair_dedup import (  # re-exported: callers and tests import these from review
+    FAILURE_EVIDENCE_DEDUP_VERSION,
+    GENERATOR_GROUP_SOURCES,
+    GROUP_CARD_MIN_AFFECTED,
+    failure_remediation_family,
+    fix_dedup_class,
+    suppress_duplicate_group_cards,
+    suppress_group_covered_singletons,
+)
+from .review_primitives import clean_path, dedupe_strings, has_any, int_or_zero
 from .page_evidence_gate import (
     PAGE_EVIDENCE_GATE_VERSION,
     page_evidence_class,
@@ -21,7 +31,7 @@ ZERO_FIX_HEALTH_GRADE = "No issues found in sample"
 QUALITY_GATE_VERSION = "review_quality_gate_v3_shared_coverage_decision"
 GROUPED_RECOMMENDATION_EVIDENCE_VERSION = "grouped_recommendation_evidence_v1_metadata_states"
 ORPHAN_ASSET_EVIDENCE_VERSION = "orphan_asset_evidence_v1"
-FAILURE_EVIDENCE_DEDUP_VERSION = "failure_evidence_dedup_v2_group_covered_page_rows"
+
 INCOMPLETE_REVIEW_WARNING = "Review received scan metadata, but no page evidence was passed into AI Review."
 SUPPORT_RECLASS_FAMILIES = {"loan_program", "conversion", "standard", "guide", "category_listing", "qa", "product_detail", ""}
 
@@ -1227,7 +1237,6 @@ def build_scanner_evidence_findings(body: dict[str, Any], pages: list[dict[str, 
     return fixes
 
 
-
 def page_pattern_title(rule: str, family: str, is_group: bool) -> str:
     label = family_label(family)
     if rule == "canonical_missing":
@@ -1654,7 +1663,6 @@ def collapse_sitewide_template_findings(
     return output
 
 
-
 REPRESENTATIVE_PAGE_VERSION = "business_representative_page_v3_sitewide_archetype_ranking"
 PAGE_LEVEL_ASSET_EVIDENCE_VERSION = "page_level_asset_evidence_v3_markdown"
 DIRECT_EVIDENCE_RULES = {
@@ -1695,7 +1703,6 @@ def is_non_html_page_evidence(page: dict[str, Any]) -> bool:
     if content_type and "html" not in content_type and "xhtml" not in content_type:
         return True
     return any(url.endswith(extension) for extension in NON_HTML_ASSET_EXTENSIONS)
-
 
 
 ORPHAN_FINDING_HINTS = ("orphan", "sitemap_only", "sitemap-only", "sitemap only")
@@ -1823,7 +1830,6 @@ def representative_archetype_key(playbook: dict[str, Any]) -> str:
     if any(token in label for token in ("booking", "experience", "marketplace")):
         return "booking"
     return ""
-
 
 
 def representative_page_score(
@@ -2015,7 +2021,6 @@ def normalize_fix(fix: dict[str, Any], index: int) -> dict[str, Any]:
         "time_estimate": clean_str(fix.get("time_estimate") or fix.get("estimated_time")) or default_time("developer" if developer_owned else difficulty),
         "confidence_score": fix.get("confidence_score") if isinstance(fix.get("confidence_score"), (int, float)) else 88,
     }
-
 
 
 def is_cross_cutting_evidence(fix: dict[str, Any]) -> bool:
@@ -3021,30 +3026,6 @@ def dedupe_fixes(fixes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return output
 
 
-def failure_remediation_family(fix: dict[str, Any]) -> str:
-    """Canonical customer action for overlapping terminal crawl evidence."""
-    rule = str(fix.get("rule") or "").lower()
-    raw_statuses = list(fix.get("status_codes") or []) + [
-        fix.get("status_code"),
-        fix.get("http_status"),
-    ]
-    statuses = {int_or_zero(value) for value in raw_statuses if int_or_zero(value)}
-    current = str(fix.get("current_value") or "").lower()
-    if rule in {"rate_limited_page", "blocked_page", "site_access_limited"} or 429 in statuses:
-        return "verify_crawler_access"
-    if (
-        rule == "server_error"
-        or any(500 <= status <= 599 for status in statuses)
-        or re.search(r"\b5(?:00|02|03|04)\b", current)
-    ):
-        return "restore_server_availability"
-    if rule in {"broken_page", "404_error", "410_error", "failed_page"}:
-        return "restore_or_redirect_unavailable_url"
-    if rule == "redirect_destination_failed":
-        return "repair_redirect_destination"
-    return ""
-
-
 def dedupe_pages(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen: set[str] = set()
     output = []
@@ -3087,13 +3068,6 @@ def first_value(value: Any) -> Any:
     return value[0] if isinstance(value, list) and value else None
 
 
-def int_or_zero(value: Any) -> int:
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
 def parse_json_object(value: str) -> dict[str, Any]:
     try:
         import json
@@ -3105,25 +3079,6 @@ def parse_json_object(value: str) -> dict[str, Any]:
 
 def clean_str(value: Any) -> str:
     return value.strip() if isinstance(value, str) and value.strip() else ""
-
-
-def clean_path(value: Any) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    parsed = urlparse(raw)
-    if parsed.scheme and parsed.netloc:
-        path = parsed.path or "/"
-        query = ("?" + parsed.query) if parsed.query else ""
-    else:
-        path = raw if raw.startswith("/") else f"/{raw}"
-        query = ""
-        if "?" in path:
-            path, rest = path.split("?", 1)
-            query = "?" + rest
-    if len(path) > 1:
-        path = path.rstrip("/") or "/"
-    return f"{path}{query}"
 
 
 def safe_hostname(value: Any) -> str:
@@ -3140,11 +3095,6 @@ def deep_get(value: Any, *keys: str) -> Any:
     return current
 
 
-def has_any(text: str, needles: list[str]) -> bool:
-    haystack = str(text or "").lower()
-    return any(str(needle or "").lower() in haystack for needle in needles)
-
-
 def count_includes(text: str, keyword: str) -> int:
     needle = str(keyword or "").lower()
     if not needle:
@@ -3154,17 +3104,6 @@ def count_includes(text: str, keyword: str) -> int:
 
 def count_lists(*values: Any) -> int:
     return sum(len(value) for value in values if isinstance(value, list))
-
-
-def dedupe_strings(values: list[Any]) -> list[str]:
-    seen: set[str] = set()
-    output: list[str] = []
-    for value in values:
-        item = str(value)
-        if item and item not in seen:
-            seen.add(item)
-            output.append(item)
-    return output
 
 
 def dedupe_values(values: list[Any]) -> list[Any]:
@@ -3180,144 +3119,6 @@ def dedupe_values(values: list[Any]) -> list[Any]:
 def stable_id(value: str) -> str:
     digest = hashlib.sha1(str(value or "").encode("utf-8")).hexdigest()[:10]
     return f"finding_{digest}"
-def fix_dedup_class(fix: dict[str, Any]) -> str:
-    remediation = failure_remediation_family(fix)
-    if remediation:
-        return remediation
-    text = " ".join(str(fix.get(k, "")) for k in ["rule", "category", "issue_title", "title"]).lower()
-    if "canonical" in text:
-        return "canonical"
-    if has_any(text, ["h1", "heading"]):
-        return "h1"
-    if has_any(text, ["alt text", "image_alt", "alt_text", "image description"]):
-        return "image_alt"
-    if has_any(text, ["meta description", "meta_description"]):
-        return "meta_description"
-    if has_any(text, ["schema", "structured data"]):
-        return "schema"
-    if has_any(text, ["429", "blocked", "rate limit"]):
-        return "blocked_access"
-    if has_any(text, ["404", "410", "500", "503", "5xx", "broken", "server error", "not found"]):
-        return "broken_page"
-    return str(fix.get("rule") or fix.get("category") or "general")
-
-
-GENERATOR_GROUP_SOURCES = ("page_pattern:", "scanner_verified_failed_pages:", "archetype_")
-
-# Mirrors scanner.GROUP_MIN_AFFECTED, the threshold at which group_findings()
-# collapses a rule into one template card. review.py deliberately does not
-# import scanner, so the value is restated here and pinned by a contract test.
-GROUP_CARD_MIN_AFFECTED = 3
-
-
-def suppress_duplicate_group_cards(fixes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Collapse duplicate grouped cards of the same defect with substantial page overlap."""
-
-    def pages_of(fix: dict[str, Any]) -> set[str]:
-        return {evidence_url_key(u) for u in (fix.get("affected_pages") or []) if evidence_url_key(u)}
-
-    grouped = [fix for fix in fixes if len(pages_of(fix)) > 1]
-    if len(grouped) < 2:
-        return fixes
-
-    def strength(fix: dict[str, Any]) -> tuple[int, int, int, int]:
-        generator = 1 if str(fix.get("source", "")).startswith(GENERATOR_GROUP_SOURCES) else 0
-        return (
-            generator,
-            len(pages_of(fix)),
-            int_or_zero(fix.get("confidence_score")),
-            int_or_zero(fix.get("overall_priority_score") or fix.get("overall_score") or fix.get("score")),
-        )
-
-    kept: list[dict[str, Any]] = []
-    dropped: set[int] = set()
-    for fix in sorted(grouped, key=strength, reverse=True):
-        cls = fix_dedup_class(fix)
-        pf = pages_of(fix)
-        duplicate = False
-        for keep in kept:
-            if fix_dedup_class(keep) != cls:
-                continue
-            pk = pages_of(keep)
-            overlap = len(pf & pk) / max(1, min(len(pf), len(pk)))
-            if overlap >= 0.5:
-                duplicate = True
-                break
-        if duplicate:
-            dropped.add(id(fix))
-        else:
-            kept.append(fix)
-    if not dropped:
-        return fixes
-    return [fix for fix in fixes if id(fix) not in dropped]
-
-
-def suppress_group_covered_singletons(fixes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Drop per-page fixes already covered by one of our grouped template/evidence cards of the same defect class."""
-
-    def pages_of(fix: dict[str, Any]) -> list[str]:
-        return dedupe_strings([evidence_url_key(u) for u in (fix.get("affected_pages") or []) if evidence_url_key(u)])
-
-    def is_generator_group(fix: dict[str, Any]) -> bool:
-        return str(fix.get("source", "")).startswith(GENERATOR_GROUP_SOURCES)
-
-    def is_validated_group_card(fix: dict[str, Any]) -> bool:
-        """A card that explicitly lists a template's worth of pages it repairs.
-
-        `scanner.group_findings()` builds these by copying a member finding and
-        blanking `page_url`, but it never stamps a generator source -- so the
-        prefix test above cannot see them. That is how Ike's scan persisted one
-        redirect_destination_noindex family card *and* ~27 page-scope rows for
-        URLs that card already listed.
-
-        Blank `page_url` is deliberately NOT the signal: `normalize_fix` runs
-        first and backfills it from the first affected page, so by the time this
-        sees the card its page_url is populated again. Explicit page coverage is
-        the property that survives normalization.
-        """
-        if is_generator_group(fix):
-            return False
-        if not str(fix.get("rule") or "").strip():
-            return False
-        return len(pages_of(fix)) >= GROUP_CARD_MIN_AFFECTED
-
-    covered: set[tuple[str, str]] = set()
-    # Keyed on the exact rule rather than the remediation family, so a group of
-    # one rule never suppresses a different rule that happens to share a family.
-    rule_covered: set[tuple[str, str]] = set()
-    for fix in fixes:
-        # A generator card is authoritative for its pages regardless of how many were sampled.
-        if is_generator_group(fix):
-            cls = fix_dedup_class(fix)
-            for page in pages_of(fix):
-                covered.add((cls, page))
-        elif is_validated_group_card(fix):
-            rule = str(fix.get("rule")).strip()
-            for page in pages_of(fix):
-                rule_covered.add((rule, page))
-    if not covered and not rule_covered:
-        return fixes
-
-    output = []
-    for fix in fixes:
-        if is_generator_group(fix) or is_validated_group_card(fix):
-            output.append(fix)  # never suppress a group card
-            continue
-        pages = pages_of(fix)
-        fallback = evidence_url_key(fix.get("page_url") or "")
-        scope = pages or ([fallback] if fallback else [])
-        if len(scope) <= 1:
-            page = scope[0] if scope else ""
-            if page and (fix_dedup_class(fix), page) in covered:
-                continue  # non-generator singleton already covered by a generator card
-        # Every page this row names is already listed by a group card for the
-        # same exact rule, so the row duplicates that action. A row naming any
-        # page the group does not list is a real outlier and survives.
-        rule = str(fix.get("rule") or "").strip()
-        if rule and scope and all((rule, page) in rule_covered for page in scope):
-            continue
-        output.append(fix)
-    return output
 
 
 def apply_incomplete_evidence_state(review_payload: dict[str, Any]) -> None:

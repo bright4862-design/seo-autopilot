@@ -1,0 +1,24 @@
+{
+  "note": "The exact 14 persisted FixItems from Ike scan 6a9548bd0d7384cc66988ae4 (FixList 6a9548e744184c71444fec08), as reported by the release owner. Rules, families and affected counts are the real persisted values; affected URLs are synthesised to those counts because the URL list was not supplied.",
+  "scan_id": "6a9548bd0d7384cc66988ae4",
+  "fix_list_id": "6a9548e744184c71444fec08",
+  "cards": [
+    { "fix_id": "finding_5ed6fd394127", "rule": "sitemap_redirect", "page_template_family": "legal_info", "page_count": 3 },
+    { "fix_id": "finding_d459094e8269", "rule": "sitemap_redirect", "page_template_family": "standard", "page_count": 37 },
+    { "fix_id": "finding_ebbaa3019750", "rule": "sitemap_redirect", "page_template_family": "unknown", "page_count": 1 },
+    { "fix_id": "finding_69d9877c76f0", "rule": "sitemap_redirect", "page_template_family": "guide_article", "page_count": 1 },
+    { "fix_id": "finding_083e4d1502c9", "rule": "sitemap_redirect", "page_template_family": "contact", "page_count": 1 },
+
+    { "fix_id": "finding_1c7e125108", "rule": "missing_meta_description", "page_template_family": "standard", "page_count": 10 },
+    { "fix_id": "finding_3978b9ea39", "rule": "missing_meta_description", "page_template_family": "unknown", "page_count": 1 },
+    { "fix_id": "finding_7a53ad07cf", "rule": "missing_meta_description", "page_template_family": "legal_info", "page_count": 3 },
+
+    { "fix_id": "finding_7464d3462c", "rule": "image_alt_text", "page_template_family": "standard", "page_count": 22 },
+    { "fix_id": "finding_4656f14a20", "rule": "image_alt_text", "page_template_family": "location_landing", "page_count": 105 },
+
+    { "fix_id": "finding_c32ba14726", "rule": "missing_h1", "page_template_family": "standard", "page_count": 6 },
+    { "fix_id": "finding_9aa22dacdbe3", "rule": "internal_link_redirect", "page_template_family": "standard", "page_count": 1 },
+    { "fix_id": "finding_1058351074", "rule": "canonical_missing", "page_template_family": "location_landing", "page_count": 105 },
+    { "fix_id": "finding_d5187af3ff7d", "rule": "redirect_destination_noindex", "page_template_family": "mixed", "page_count": 105 }
+  ]
+}

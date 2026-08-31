@@ -19,6 +19,7 @@ import { prepareCustomerFixes, priorityBucket } from "@/lib/fixRanking";
 import { buildRepairWorkSurfacePresentation } from "@/lib/repairWorkSurfacePresentation";
 import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel, customerScopeRelationshipLabel } from "@/lib/fixVocabulary";
 import { repairSuggestion } from "@/lib/repairSuggestions";
+import { buildRepairCards } from "@/lib/repairCardModel";
 
 const CMS_OPTIONS = [
   { value: "wordpress", label: "WordPress" },
@@ -397,6 +398,11 @@ export default function FixList() {
     initialFixFirstLimit: 3,
   });
   const repairPresentation = repairWorkSurface.presentation;
+  const customerRepairCards = useMemo(
+    () => repairPresentation.canonical === true ? buildRepairCards(active) : [],
+    [active, repairPresentation.canonical],
+  );
+  const displayedRepairCount = repairPresentation.canonical === true ? customerRepairCards.length : active.length;
   const legacyActive = repairPresentation.canonical || repairPresentation.unsupported ? [] : repairPresentation.legacyItems;
   const topPriorities = legacyActive.slice(0, 3);
   const remaining = legacyActive.slice(3);
@@ -405,7 +411,8 @@ export default function FixList() {
   const worthChecking = remaining.filter((item) => priorityBucket(item.priority) === "worth_checking");
   const shownTopPriorities = topPriorities;
   const limitationNote = getLimitationNote(scanRecord);
-  const summary = hasUsefulScan ? getBestSummary(scanRecord, pagesScanned, pagesFound, recommendations) : "";
+  const summaryItems = repairPresentation.canonical === true ? customerRepairCards : recommendations;
+  const summary = hasUsefulScan ? getBestSummary(scanRecord, pagesScanned, pagesFound, summaryItems) : "";
 
   function retryRequestedScan() {
     setRequestedScanFailure(null);
@@ -503,7 +510,7 @@ export default function FixList() {
                   {customerHealthLabel(healthScore, { unavailable: scoreUnavailable, noHighConfidenceFindings })}
                 </h1>
                 <p className="mt-1.5 text-[15px] text-ink-muted tabular-nums">
-                  {getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount: active.length })}
+                  {getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount: displayedRepairCount })}
                 </p>
               </div>
             </div>
@@ -523,6 +530,8 @@ export default function FixList() {
                   This saved scan uses a repair format this interface does not understand. No browser-ranked substitute is being shown. Run a fresh scan to create a compatible FixList.
                 </p>
               </div>
+            ) : repairPresentation.canonical === true ? (
+              <CustomerRepairList cards={customerRepairCards} />
             ) : (
               <RepairWorkSurface
                 {...repairWorkSurface}
@@ -584,7 +593,7 @@ export default function FixList() {
 
             <ExplicitPassedChecks scan={scanRecord} />
 
-            {active.length > 0 ? <CmsPicker selectedCms={selectedCms} onChange={setSelectedCms} /> : null}
+            {active.length > 0 && repairPresentation.canonical !== true ? <CmsPicker selectedCms={selectedCms} onChange={setSelectedCms} /> : null}
           </>
         ) : (
           <NoScanState onScan={() => navigate("/onboarding")} />
@@ -597,6 +606,152 @@ export default function FixList() {
         </footer>
       </div>
     </div>
+  );
+}
+
+const CUSTOMER_REPAIR_SECTIONS = Object.freeze([
+  { key: "fix_first", label: "Fix first", help: "Start here." },
+  { key: "important", label: "Important", help: "Significant repairs to tackle next." },
+  { key: "improve", label: "Improve next", help: "Useful improvements after the important work." },
+  { key: "review", label: "Worth checking", help: "Lower-priority items to review when ready." },
+]);
+
+function customerRepairSectionKey(card = {}) {
+  const key = priorityBucket(card);
+  return CUSTOMER_REPAIR_SECTIONS.some((section) => section.key === key) ? key : "review";
+}
+
+function customerEvidenceClassLabel(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "confirmed_problem") return "Confirmed problem";
+  if (normalized === "improvement") return "Improvement";
+  if (normalized === "recommendation") return "Recommendation";
+  return "";
+}
+
+function CustomerRepairList({ cards = [] }) {
+  const list = Array.isArray(cards) ? cards.filter(Boolean) : [];
+  if (list.length === 0) return null;
+
+  const sections = CUSTOMER_REPAIR_SECTIONS
+    .map((section) => ({
+      ...section,
+      cards: list.filter((card) => customerRepairSectionKey(card) === section.key),
+    }))
+    .filter((section) => section.cards.length > 0);
+
+  return (
+    <div className="mt-10 sm:mt-12" aria-labelledby="customer-fixlist-heading">
+      <div className="mb-8">
+        <div className="flex items-baseline justify-between gap-4">
+          <h2 id="customer-fixlist-heading" className="text-[20px] font-semibold tracking-tight text-ink">
+            Your FixList
+          </h2>
+          <span className="shrink-0 text-[12px] tabular-nums text-ink-faint">
+            {list.length} remaining
+          </span>
+        </div>
+        <p className="mt-1.5 max-w-[52ch] text-[12px] leading-relaxed text-ink-faint">
+          Work through these actions in order. Open the evidence only when you need the affected URLs or technical detail.
+        </p>
+      </div>
+
+      {sections.map((section) => (
+        <section key={section.key} className="mt-10 first:mt-0 sm:mt-12" aria-labelledby={`customer-repair-section-${section.key}`}>
+          <div className="flex items-baseline justify-between gap-4">
+            <h3 id={`customer-repair-section-${section.key}`} className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
+              {section.label}
+            </h3>
+            <span className="text-[11px] tabular-nums text-ink-faint">
+              {section.cards.length} {section.cards.length === 1 ? "repair" : "repairs"}
+            </span>
+          </div>
+          <p className="mt-1 text-[12px] leading-relaxed text-ink-faint">{section.help}</p>
+          <div className="mt-1.5">
+            {section.cards.map((card, index) => (
+              <CustomerRepairCard key={card.evidence?.mergedFromFixIds?.join("|") || `${section.key}-${index}`} card={card} />
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function CustomerRepairCard({ card = {} }) {
+  const pages = Array.isArray(card?.evidence?.affectedPages) ? card.evidence.affectedPages.filter(Boolean) : [];
+  const reportedCount = Math.max(Number(card?.evidence?.pageCount || 0), pages.length);
+  const evidenceLabel = customerEvidenceClassLabel(card.evidenceClass);
+
+  return (
+    <article className="border-b border-hairline-soft py-6 first:pt-5">
+      <div className="flex flex-wrap items-start justify-between gap-x-5 gap-y-2">
+        <div className="min-w-0 flex-1">
+          <h4 className="text-[17px] font-medium leading-snug tracking-tight text-ink">{card.title}</h4>
+          <p className="mt-1 text-[12px] font-medium text-ink-faint">
+            {card.customerCategory}
+            {evidenceLabel ? ` · ${evidenceLabel}` : ""}
+          </p>
+        </div>
+        {reportedCount > 0 ? (
+          <span className="shrink-0 text-[12px] tabular-nums text-ink-faint">
+            {reportedCount} {reportedCount === 1 ? "page" : "pages"}
+          </span>
+        ) : null}
+      </div>
+
+      <dl className="mt-5 space-y-4">
+        <div>
+          <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Why it matters</dt>
+          <dd className="mt-1 max-w-[58ch] text-[14px] leading-relaxed text-ink-muted">{card.whyItMatters}</dd>
+        </div>
+        <div>
+          <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Where</dt>
+          <dd className="mt-1 max-w-[58ch] text-[14px] leading-relaxed text-ink-muted">{card.where}</dd>
+        </div>
+        <div>
+          <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">What to change</dt>
+          <dd className="mt-1 max-w-[58ch] text-[14px] leading-relaxed text-ink">{card.whatToChange}</dd>
+        </div>
+      </dl>
+
+      <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-[12.5px] text-ink-faint">
+        <span><span className="font-medium text-ink-muted">Who:</span> {card.who}</span>
+        {card.effort ? <span><span className="font-medium text-ink-muted">Effort:</span> {card.effort}</span> : null}
+      </div>
+
+      <details className="mt-4 max-w-[60ch]">
+        <summary className="cursor-pointer text-[12.5px] font-medium text-ink-muted underline decoration-hairline underline-offset-4">
+          View affected URLs &amp; evidence
+        </summary>
+        <div className="mt-3 rounded-lg border border-hairline-soft bg-white/40 px-3 py-3">
+          {card.technicalLabel ? (
+            <p className="text-[12px] leading-relaxed text-ink-faint">
+              Check: <span className="text-ink-muted">{card.technicalLabel}</span>
+            </p>
+          ) : null}
+          {reportedCount > 0 ? (
+            <p className={`${card.technicalLabel ? "mt-1.5 " : ""}text-[12px] leading-relaxed text-ink-faint`}>
+              {reportedCount} affected {reportedCount === 1 ? "page" : "pages"}.
+              {pages.length < reportedCount
+                ? ` This saved result contains ${pages.length} of those URLs in its evidence list.`
+                : ""}
+            </p>
+          ) : null}
+          {pages.length > 0 ? (
+            <ul className="mt-3 max-h-64 space-y-1.5 overflow-y-auto pr-1 text-[12px] text-ink-muted">
+              {pages.map((page) => (
+                <li key={page} className="break-all">{page}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-[12px] leading-relaxed text-ink-faint">
+              No affected URL list was persisted for this repair.
+            </p>
+          )}
+        </div>
+      </details>
+    </article>
   );
 }
 

@@ -13,6 +13,11 @@ function normalizedCategory(item = {}) {
 // the neutral wording the empty case already produces.
 const UNINFORMATIVE_FAMILIES = new Set(["unknown", "mixed", "unclassified", "other", "none"]);
 
+/** The family label as it reads inside a title. */
+function titleFamily(label = "") {
+  return label === "pages" ? "your pages" : label;
+}
+
 function familyLabel(item = {}) {
   const family = String(item.templateFamily || item.page_template_family || item.original?.page_template_family || "").trim().toLowerCase();
   if (UNINFORMATIVE_FAMILIES.has(family)) return "pages";
@@ -22,6 +27,19 @@ function familyLabel(item = {}) {
     homepage: "homepage",
     legal_info: "legal pages",
     standard: "standard pages",
+    // Without these the classifier's own key is shown with underscores
+    // swapped for spaces -- "location landing pages", "guide article pages" --
+    // which reads as internal vocabulary rather than the customer's.
+    location_landing: "location pages",
+    guide_article: "guide pages",
+    product_detail: "product pages",
+    category_listing: "category pages",
+    booking_or_checkout: "checkout pages",
+    route_boundary: "section pages",
+    contact: "contact pages",
+    qa: "FAQ pages",
+    conversion: "conversion pages",
+    archive: "archive pages",
   };
   return labels[family] || (family ? `${family.replace(/_/g, " ")} pages` : "pages");
 }
@@ -114,7 +132,7 @@ export function customerCopyForFix(item = {}) {
 
   if (["missing_meta_description", "empty_meta_description", "malformed_meta_description", "meta_description_unusable"].includes(rule)) {
     const title = count > 1
-      ? `Add search descriptions to ${family}`
+      ? `Add search descriptions to ${titleFamily(family)}`
       : family === "homepage"
         ? "Add a search description to the homepage"
         : family !== "pages"
@@ -234,7 +252,7 @@ export function customerCopyForFix(item = {}) {
 
   if (rule === "missing_h1") {
     const title = count > 1
-      ? `Add one clear main heading to ${family}`
+      ? `Add one clear main heading to ${titleFamily(family)}`
       : family === "homepage"
         ? "Add one clear main heading to the homepage"
         : family !== "pages"
@@ -252,14 +270,29 @@ export function customerCopyForFix(item = {}) {
     };
   }
 
+  // Must precede the generic canonical branch below: rule.includes("canonical")
+  // matches this rule too, and its copy told the customer to ADD a canonical URL
+  // to pages that already have one. The defect is where the existing canonical
+  // points, not that it is missing.
+  if (rule === "canonical_target_noindex") {
+    return {
+      customerCategory: "Search visibility",
+      title: "Point preferred-page settings at pages search engines can keep",
+      explanation: "These pages name a preferred version that is blocked from search, so the version they point at cannot be indexed.",
+      whyItMatters: "Naming a blocked page as the preferred one tells search engines to consolidate onto something they are not allowed to keep, so neither version earns credit.",
+      recommendation: "Point each preferred-page setting at a page that is allowed in search, or remove the block from that page if it should appear.",
+      technicalLabel: "Canonical URL",
+    };
+  }
+
   if (rule === "canonical_missing" || rule.includes("canonical")) {
     const title = count > 1 && family !== "pages"
-      ? `Tell search engines which ${family} are the main versions`
+      ? `Add canonical URLs to your ${family}`
       : count > 1
-        ? "Tell search engines which versions of these pages are the main ones"
+        ? "Add canonical URLs to these pages"
         : family === "homepage"
-          ? "Tell search engines which homepage URL is the main one"
-          : "Tell search engines which version of this page is the main one";
+          ? "Add a canonical URL to your homepage"
+          : "Add a canonical URL to this page";
     return {
       customerCategory: "Search visibility",
       title,
@@ -271,6 +304,44 @@ export function customerCopyForFix(item = {}) {
         ? "Add the correct preferred-page setting to the shared template or affected pages."
         : "Add the correct preferred-page setting for this page.",
       technicalLabel: "Canonical URL",
+    };
+  }
+
+  if (rule === "image_alt_text" || rule.includes("image_alt") || rule.includes("alt_text")) {
+    const title = count > 1
+      ? `Add image descriptions to ${titleFamily(family)}`
+      : "Add descriptions to this page's images";
+    return {
+      customerCategory: "Images",
+      title,
+      explanation: "Images on these pages have no alt text, so screen readers and search engines have nothing to describe them with.",
+      whyItMatters: "Alt text is how visitors using assistive technology understand an image, and it is the only thing search engines can read from it.",
+      recommendation: count > 1
+        ? "Add a short, specific description to each image, starting with the pages that matter most to visitors."
+        : "Add a short, specific description to each image on this page.",
+      technicalLabel: "Image alt text",
+    };
+  }
+
+  if (rule === "redirect_destination_noindex") {
+    return {
+      customerCategory: "Page forwarding",
+      title: "Fix redirects that lead to pages blocked from search",
+      explanation: "These URLs redirect to a destination that tells search engines not to index it, so the redirect ends somewhere search engines will not keep.",
+      whyItMatters: "A redirect into a blocked page throws away the value of the original URL: search engines follow it and then find nothing they are allowed to keep.",
+      recommendation: "Point each redirect at a final page that is allowed in search, or remove the block from the destination if it should be indexed.",
+      technicalLabel: "Redirect destination",
+    };
+  }
+
+  if (rule === "redirect_destination_failed" || rule === "redirect_destination_blocked") {
+    return {
+      customerCategory: "Page forwarding",
+      title: "Fix redirects that lead nowhere usable",
+      explanation: "These URLs redirect to a destination that did not load successfully for the scanner.",
+      whyItMatters: "Visitors and search engines following these links reach a dead end instead of the page you intended.",
+      recommendation: "Point each redirect at a final page that returns successfully.",
+      technicalLabel: "Redirect destination",
     };
   }
 

@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `e03f990c2b25febc` |
+| Candidate fingerprint | `7a95768cc8ee2076` |
 | Classifier | `archetype_classifier_v11_booking_competitor_finance_playbooks` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,7 +15,7 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `e03f990c2b25febc` with classifier
+fingerprint `7a95768cc8ee2076` with classifier
 `archetype_classifier_v11_booking_competitor_finance_playbooks`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
@@ -24,7 +24,7 @@ The immediately superseded candidate was `58275d24191cf1cb`; before that
 `7b0ec8c46654192b`, `5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and
 `1ddf8085bc7721c4`.
 
-The current candidate moved the fingerprint to `e03f990c2b25febc`. It keys one
+The current candidate moved the fingerprint to `7a95768cc8ee2076`. It keys one
 customer action on the scanner's own repair identity. The 35-site production
 audit of 2026-08-31 found ten sites rendering nineteen groups where several
 top-level FixItems carried a single `repair_fingerprint` — N26 showed one
@@ -37,6 +37,13 @@ remain readable through the bounded read-time projection path. Missing or
 unstable fingerprints are never persistence-merged. These semantics are recorded
 as `repair_persistence_grouping_v1_stable_fingerprint_actions` and
 `repair_presentation_v4_linked_evidence_pages`.
+
+Sampling evidence from `balanced_sitemap_buckets_v2_locale_collapsed_identity_reserve`
+is now disclosed to the customer without changing the 150-page contract. The FixList
+shows route-pattern coverage, business-critical identity-page coverage, represented
+markets/languages and page families, plus any explicitly recorded unsampled markets
+or families. This customer-facing disclosure is versioned as
+`sampling_disclosure_v1_customer_coverage`.
 
 The same candidate makes count copy agree with its count. The audit found
 "1 checked page are affected." on the customer projection: the noun agreed with

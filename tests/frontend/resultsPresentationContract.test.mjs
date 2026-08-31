@@ -144,3 +144,16 @@ test("customer result page hides internal debug controls and leads with prioriti
   assert.doesNotMatch(fixListSource, />Copy JSON</);
   assert.doesNotMatch(fixListSource, />Clear scans</);
 });
+
+
+test("canonical FixLists render merged implementation-plan cards rather than raw persisted rows", () => {
+  assert.match(fixListSource, /buildRepairCards/);
+  assert.match(fixListSource, /repairPresentation\.canonical === true \? \(\s*<CustomerRepairList/s);
+  assert.match(fixListSource, /Why it matters/);
+  assert.match(fixListSource, />Where</);
+  assert.match(fixListSource, /What to change/);
+  assert.match(fixListSource, /Who:/);
+  assert.match(fixListSource, /View affected URLs &amp; evidence/);
+  assert.match(fixListSource, /activeCount: displayedRepairCount/);
+  assert.match(fixListSource, /repairPresentation\.canonical !== true \? <CmsPicker/);
+});

@@ -207,8 +207,22 @@ export function buildRepairCard(item = {}) {
   const copy = customerCopyForFix(item) || {};
   const suggestion = repairSuggestion(item);
   const affected = affectedOf(item);
+  const priority = lower(item?.priority || item?.original?.priority) || "medium";
+  const actionPriority = lower(item?.actionPriority || item?.action_priority || item?.original?.action_priority);
+  const sharedRepairConfirmed = item?.sharedRepairConfirmed === true
+    || item?.shared_repair_confirmed === true
+    || item?.original?.shared_repair_confirmed === true;
 
   return {
+    rule: lower(item?.rule || item?.original?.rule),
+    priority,
+    actionPriority,
+    customerCategory: clean(copy.customerCategory)
+      || clean(item?.customerCategory || item?.customer_category || item?.original?.customer_category)
+      || "Website improvement",
+    technicalLabel: clean(copy.technicalLabel),
+    evidenceClass: lower(item?.evidenceClass || item?.evidence_class || item?.original?.evidence_class),
+    sharedRepairConfirmed,
     title: clean(copy.title) || clean(item.title) || clean(item.issue_title) || "Review this recommendation",
     whyItMatters: clean(copy.whyItMatters) || clean(item.whyItMatters) || clean(item.why_it_matters),
     where: whereLine(item),

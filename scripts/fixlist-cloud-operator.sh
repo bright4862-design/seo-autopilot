@@ -38,6 +38,9 @@ ACCEPTANCE_EXPIRES_AT="${ACCEPTANCE_EXPIRES_AT:-}"
 ACCEPTANCE_TOTAL_CLAIM_BUDGET="${ACCEPTANCE_TOTAL_CLAIM_BUDGET:-}"
 ACCEPTANCE_PER_OWNER_CLAIM_BUDGET="${ACCEPTANCE_PER_OWNER_CLAIM_BUDGET:-}"
 FIXLIST_RELEASE_OWNER="${FIXLIST_RELEASE_OWNER:-bright4862-design}"
+FIXLIST_WORKER_ID_TOKEN="${FIXLIST_WORKER_ID_TOKEN:-}"
+FIXLIST_WORKER_TOKEN_AUDIENCE="${FIXLIST_WORKER_TOKEN_AUDIENCE:-}"
+WORKER_CANDIDATE_TAG="${WORKER_CANDIDATE_TAG:-candidate}"
 
 # Operator API paths are intentionally isolated here. The coordinator may share
 # an internal handler, but the release shell never guesses or constructs a path
@@ -53,10 +56,14 @@ ADMISSION_DRAIN_POLL_SECONDS="${ADMISSION_DRAIN_POLL_SECONDS:-5}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OPERATOR_TMP=""
+RUNTIME_PROBE_TMP=""
 
 cleanup_operator_tmp() {
   if [[ -n "$OPERATOR_TMP" && -d "$OPERATOR_TMP" ]]; then
     rm -rf "$OPERATOR_TMP"
+  fi
+  if [[ -n "$RUNTIME_PROBE_TMP" && -d "$RUNTIME_PROBE_TMP" ]]; then
+    rm -rf "$RUNTIME_PROBE_TMP"
   fi
 }
 trap cleanup_operator_tmp EXIT
@@ -305,6 +312,277 @@ for b in builds:
     echo "WORKER NOT VERIFIED -- do not promote or resume the queue."
     return 1
   fi
+}
+
+# Build provenance proves which source the image was compiled from. It cannot
+# prove what the running container computes. persistDurableScanAuthority admits
+# a scan only when its beta_revision_fingerprint equals the fingerprint this
+# release records, so a revision that serves a different fingerprint passes
+# every check above and then fails every scan it is handed --
+# authority_snapshot_not_eligible__beta_revision_fingerprint, with a green
+# promotion behind it. GET /revision is the only reading of that runtime truth.
+#
+# The probe has to reach the revision under test rather than whatever holds
+# traffic. A revision tag addresses one revision directly; without a tag the
+# answer only stands when that revision already serves 100%; and when the caller
+# declares the audience its token was minted for, only that URL can be spent.
+# Anything else is INDETERMINATE, because an answer that cannot be attributed to
+# a revision is not evidence about that revision.
+verify_worker_runtime_revision() {
+  local revision="${1:-$TARGET_REVISION}" expected_sha="${2:-}"
+  local service_json recorded response probe_url token code compare_status=0
+
+  echo
+  echo "=== Runtime revision fingerprint ==="
+
+  RUNTIME_PROBE_TMP="$(mktemp -d)"
+  chmod 700 "$RUNTIME_PROBE_TMP"
+  service_json="$RUNTIME_PROBE_TMP/service.json"
+  response="$RUNTIME_PROBE_TMP/revision.json"
+  recorded="$REPO_ROOT/data/beta-crawler-revision.json"
+
+  gcloud run services describe "$CLOUD_RUN_SERVICE" \
+    --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json > "$service_json"
+
+  if [ -z "$revision" ]; then
+    revision="$(python3 - "$service_json" <<'PY'
+import json, sys
+status = json.load(open(sys.argv[1], encoding="utf-8")).get("status") or {}
+traffic = status.get("traffic") or []
+print(next((str(t.get("revisionName") or "") for t in traffic if int(t.get("percent") or 0) == 100), ""))
+PY
+)"
+  fi
+  if [ -z "$revision" ]; then
+    echo "INDETERMINATE: no revision was named and none serves 100% of traffic."
+    return 1
+  fi
+  echo "revision under test: $revision"
+
+  probe_url="$(python3 - "$service_json" "$revision" "$FIXLIST_WORKER_TOKEN_AUDIENCE" <<'PY'
+# runtime-revision-probe-url
+import json, sys
+
+service = json.load(open(sys.argv[1], encoding="utf-8"))
+revision = sys.argv[2]
+audience = sys.argv[3]
+status = service.get("status") or {}
+addressable = []
+for entry in status.get("traffic") or []:
+    if str(entry.get("revisionName") or "") != revision:
+        continue
+    # A revision tag resolves to one revision no matter how traffic is split,
+    # so it is the only URL that can address a candidate before promotion.
+    if entry.get("url"):
+        addressable.append(str(entry["url"]))
+    if int(entry.get("percent") or 0) == 100 and status.get("url"):
+        addressable.append(str(status["url"]))
+# A token minted for one audience is rejected by every other URL, so when the
+# caller declares one, that URL is the only usable probe -- and only if it
+# addresses the revision under test.
+if audience:
+    print(audience if audience in addressable else "")
+else:
+    print(addressable[0] if addressable else "")
+PY
+)"
+  if [ -z "$probe_url" ]; then
+    echo "INDETERMINATE: no URL both addresses $revision and matches the audience"
+    echo "the supplied token was minted for (${FIXLIST_WORKER_TOKEN_AUDIENCE:-none declared})."
+    echo "The revision needs a tag, or 100% of traffic, on that exact URL. To tag it:"
+    echo "  gcloud run services update-traffic $CLOUD_RUN_SERVICE \\"
+    echo "    --region=$GCP_REGION --project=$GCP_PROJECT --set-tags=candidate=$revision"
+    return 1
+  fi
+  echo "probe URL:           $probe_url"
+
+  # The worker is private: Cloud Run IAM rejects an unauthenticated probe before
+  # routing, so /revision is unreadable without an invoker token. The token is
+  # minted by the caller and handed over by name, never by gcloud here: the
+  # federated credential this script runs under is an external_account, which
+  # gcloud refuses to mint an audience-scoped identity token from. Same contract
+  # as FIXLIST_OPERATOR_ID_TOKEN.
+  token="$FIXLIST_WORKER_ID_TOKEN"
+  if [ -z "$token" ]; then
+    echo "INDETERMINATE: no identity token was supplied for the private worker."
+    echo "Set FIXLIST_WORKER_ID_TOKEN to a token minted for $probe_url by a"
+    echo "principal holding roles/run.invoker on $CLOUD_RUN_SERVICE."
+    return 1
+  fi
+
+  code="$(curl --silent --show-error --max-time 20 \
+    --output "$response" --write-out '%{http_code}' \
+    --header "authorization: Bearer ${token}" \
+    "${probe_url}/revision" || echo 000)"
+  token=""
+
+  case "$code" in
+    200) ;;
+    401|403)
+      echo "INDETERMINATE: /revision returned $code -- the identity token was rejected."
+      echo "Grant roles/run.invoker on $CLOUD_RUN_SERVICE to the calling principal."
+      return 1
+      ;;
+    404)
+      echo "FAIL: /revision returned 404. This build predates the runtime revision"
+      echo "endpoint, so what it computes cannot be read. Rebuild from current main."
+      return 1
+      ;;
+    *)
+      echo "INDETERMINATE: /revision returned ${code}; expected 200."
+      return 1
+      ;;
+  esac
+
+  python3 - "$response" "$recorded" "$expected_sha" <<'PY' || compare_status=$?
+# runtime-revision-comparator
+import json, sys
+
+response_path, recorded_path, expected_sha = sys.argv[1:4]
+try:
+    live = json.load(open(response_path, encoding="utf-8"))
+except Exception:
+    print("FAIL: /revision did not return JSON.")
+    raise SystemExit(1)
+if not isinstance(live, dict):
+    print("FAIL: /revision did not return a JSON object.")
+    raise SystemExit(1)
+recorded = json.load(open(recorded_path, encoding="utf-8"))
+
+live_fingerprint = str(live.get("fingerprint") or "")
+recorded_fingerprint = str(recorded.get("fingerprint") or "")
+live_sha = str(live.get("source_sha") or "")
+print("runtime fingerprint:  %s" % (live_fingerprint or "(absent)"))
+print("recorded fingerprint: %s" % (recorded_fingerprint or "(absent)"))
+print("runtime source_sha:   %s" % (live_sha or "(unset)"))
+
+failed = False
+live_components = live.get("component_versions")
+recorded_components = recorded.get("component_versions") or {}
+
+if not live_fingerprint or not recorded_fingerprint:
+    print("FAIL: a fingerprint is missing, so the two cannot be compared.")
+    failed = True
+elif live_fingerprint != recorded_fingerprint:
+    failed = True
+    print("FAIL: the running worker computes a different release identity than the")
+    print("one this commit records. Every scan it serves is rejected as")
+    print("authority_snapshot_not_eligible__beta_revision_fingerprint.")
+
+# The fingerprint is a hash of the marker set, so comparing the set itself is
+# not redundant: it is what catches a response that carries the right hash with
+# the wrong or a truncated marker set, and it is the only reading that can say
+# *which* marker moved.
+if not isinstance(live_components, dict) or not live_components:
+    failed = True
+    print("FAIL: /revision returned no release markers, so the running identity")
+    print("cannot be verified against the frozen one.")
+elif live_components != recorded_components:
+    failed = True
+    print("FAIL: the running worker's release markers differ from the frozen set.")
+
+if isinstance(live_components, dict) and live_components != recorded_components:
+    divergent = [
+        name
+        for name in sorted(set(live_components) | set(recorded_components))
+        if live_components.get(name) != recorded_components.get(name)
+    ]
+    print("divergent markers (runtime -> recorded):")
+    for name in divergent:
+        print("  %s: %s -> %s" % (
+            name,
+            live_components.get(name, "(absent)"),
+            recorded_components.get(name, "(absent)"),
+        ))
+elif failed and live_fingerprint != recorded_fingerprint:
+    print("No marker differs, so the divergence is in how the fingerprint is")
+    print("computed rather than in the marker set it is computed over.")
+
+# A container that cannot say what it was built from must never be promoted:
+# tying running bytes to a reviewed commit is the whole point of the check, so
+# an unstamped container is a hard failure and not a warning.
+if not live_sha:
+    failed = True
+    print("FAIL: the container declares no FIXLIST_WORKER_SOURCE_SHA, so its")
+    print("running bytes cannot be tied to any reviewed commit.")
+elif expected_sha and live_sha != expected_sha:
+    failed = True
+    print("FAIL: the container says it was built from %s, but the release being" % live_sha)
+    print("promoted is %s." % expected_sha)
+
+raise SystemExit(1 if failed else 0)
+PY
+
+  if [ "$compare_status" -ne 0 ]; then
+    return 1
+  fi
+  echo "PASS: the running worker computes the release identity this commit records."
+}
+
+# A candidate at 0% traffic has no address of its own, so its runtime identity
+# cannot be read before it is promoted -- which is the only moment the reading
+# is still cheap to act on. A revision tag gives it one without moving any
+# traffic, so the gate can run while a failure still costs nothing but a tag.
+#
+# --update-tags adds this one tag and leaves every other tag and the whole
+# traffic split untouched; --set-tags would silently drop tags this release
+# never knew about.
+tag_worker_candidate() {
+  local revision="$1" tag_url percent
+  [ -n "$revision" ] || { echo "No revision to tag." >&2; exit 2; }
+
+  # Tagging is a mutation of the live service, so it is confirmation-gated on
+  # the exact revision name like every other traffic operation here.
+  require_confirmation "$revision"
+
+  percent="$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
+    --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json \
+    | python3 -c '
+import json, sys
+traffic = (json.load(sys.stdin).get("status") or {}).get("traffic") or []
+revision = sys.argv[1]
+print(sum(int(t.get("percent") or 0) for t in traffic if t.get("revisionName") == revision))
+' "$revision")"
+  # Tagging a revision that already serves would make the gate prove nothing:
+  # the point is to verify a candidate *before* it can answer customer traffic.
+  if [ "$percent" != "0" ]; then
+    echo "Refusing to tag $revision: it already receives ${percent}% of traffic." >&2
+    exit 2
+  fi
+
+  gcloud run services update-traffic "$CLOUD_RUN_SERVICE" \
+    --region="$GCP_REGION" --project="$GCP_PROJECT" \
+    --update-tags="${WORKER_CANDIDATE_TAG}=${revision}" >/dev/null
+
+  tag_url="$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
+    --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json \
+    | python3 -c '
+import json, sys
+status = json.load(sys.stdin).get("status") or {}
+revision, tag = sys.argv[1], sys.argv[2]
+for entry in status.get("traffic") or []:
+    if entry.get("revisionName") == revision and entry.get("tag") == tag and entry.get("url"):
+        print(entry["url"])
+        break
+' "$revision" "$WORKER_CANDIDATE_TAG")"
+  [ -n "$tag_url" ] || { echo "Tag $WORKER_CANDIDATE_TAG did not resolve to a URL for $revision." >&2; exit 2; }
+
+  # Re-read rather than assume: --update-tags must not have moved traffic.
+  percent="$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
+    --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json \
+    | python3 -c '
+import json, sys
+traffic = (json.load(sys.stdin).get("status") or {}).get("traffic") or []
+revision = sys.argv[1]
+print(sum(int(t.get("percent") or 0) for t in traffic if t.get("revisionName") == revision))
+' "$revision")"
+  if [ "$percent" != "0" ]; then
+    echo "Tagging moved traffic to $revision (${percent}%); refusing to continue." >&2
+    exit 2
+  fi
+
+  echo "candidate_tag_url=$tag_url"
+  echo "WORKER_CANDIDATE_TAGGED revision=$revision tag=$WORKER_CANDIDATE_TAG percent=0"
 }
 
 require_confirmation() {
@@ -814,6 +1092,14 @@ case "$OPERATION" in
 
   verify-worker-routes)
     verify_worker_routes
+    ;;
+
+  verify-worker-runtime-revision)
+    verify_worker_runtime_revision "$TARGET_REVISION" "$SOURCE_SHA"
+    ;;
+
+  tag-worker-candidate)
+    tag_worker_candidate "$TARGET_REVISION"
     ;;
 
   promote-worker)

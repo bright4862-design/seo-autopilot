@@ -651,11 +651,74 @@ jobs:
         shell: bash
         run: bash ./scripts/fixlist-cloud-operator.sh
 
+      # A candidate at 0% traffic has no address, so its runtime identity cannot
+      # be read. The tag gives it one without moving traffic, which is what lets
+      # the identity gate run while a failure still costs nothing but a tag.
+      - name: Tag the exact zero-traffic candidate
+        id: candidate-tag
+        env:
+          OPERATION: tag-worker-candidate
+          TARGET_REVISION: ${{ steps.candidate.outputs.revision }}
+          CONFIRM: ${{ steps.candidate.outputs.revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash ./scripts/fixlist-cloud-operator.sh | tee /tmp/tag-output.txt
+          url="$(sed -n 's/^candidate_tag_url=//p' /tmp/tag-output.txt)"
+          test -n "$url"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Mint candidate invoker identity token
+        id: candidate-id-token
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.candidate-tag.outputs.url }}
+          id_token_include_email: true
+          create_credentials_file: false
+
+      # The gate. It runs before any traffic moves, so a candidate that computes
+      # the wrong release identity simply stays at 0% -- no promotion, no
+      # rollback, no customer scan served by it.
+      - name: Verify candidate runtime release identity before promotion
+        env:
+          OPERATION: verify-worker-runtime-revision
+          TARGET_REVISION: ${{ steps.candidate.outputs.revision }}
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+          FIXLIST_WORKER_ID_TOKEN: ${{ steps.candidate-id-token.outputs.id_token }}
+          FIXLIST_WORKER_TOKEN_AUDIENCE: ${{ steps.candidate-tag.outputs.url }}
+        shell: bash
+        run: bash ./scripts/fixlist-cloud-operator.sh
+
       - name: Verify matching Base44 product release is public
         env:
           EXPECTED_SOURCE_SHA: ${{ steps.command.outputs.product_sha }}
         shell: bash
         run: bash ./scripts/verify-base44-site.sh
+
+      - name: Resolve the worker's canonical service URL
+        id: worker-url
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="$(gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT" --region="$GCP_REGION" --format='value(status.url)')"
+          test -n "$url"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Mint promoted-service invoker identity token
+        id: promoted-id-token
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ steps.worker-url.outputs.url }}
+          id_token_include_email: true
+          create_credentials_file: false
 
       - name: Promote exact candidate with automatic rollback on failed post-check
         id: promote
@@ -664,6 +727,8 @@ jobs:
           ROLLBACK_REVISION: ${{ steps.candidate.outputs.rollback_revision }}
           QUEUE_STATE_BEFORE: ${{ steps.candidate.outputs.queue_state }}
           SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+          FIXLIST_WORKER_ID_TOKEN: ${{ steps.promoted-id-token.outputs.id_token }}
+          FIXLIST_WORKER_TOKEN_AUDIENCE: ${{ steps.worker-url.outputs.url }}
         shell: bash
         run: |
           set -euo pipefail
@@ -698,6 +763,18 @@ jobs:
             401|403) echo "Worker is reachable and private: HTTP $code" ;;
             *) echo "Unexpected private worker probe status: $code" >&2; rollback; exit 1 ;;
           esac
+
+          # Reachable and private says nothing about what the container computes.
+          # The authority gate admits a scan only when its beta_revision_fingerprint
+          # equals the fingerprint this commit records, so a revision that serves a
+          # different one is promoted green and then fails every scan. Read that
+          # runtime truth here, while a rollback is still one call away.
+          if ! OPERATION=verify-worker-runtime-revision TARGET_REVISION="$REVISION" \
+              bash ./scripts/fixlist-cloud-operator.sh; then
+            echo "Promoted revision does not compute the recorded release identity." >&2
+            rollback
+            exit 1
+          fi
 
           queue_state_after="$(gcloud tasks queues describe "$CLOUD_TASKS_QUEUE" --project="$GCP_PROJECT" --location="$GCP_REGION" --format='value(state)')"
           if [ "$queue_state_after" != "$QUEUE_STATE_BEFORE" ]; then

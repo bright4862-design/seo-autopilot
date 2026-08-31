@@ -25,6 +25,7 @@ const entrySource = readFileSync("base44/functions/getCustomerScanResult/entry.t
 const SECRET = "historical-reader-test-secret-never-deployed";
 const HISTORICAL_FINGERPRINT = "5d94e93c54a9efb6";
 const UNKNOWN_FINGERPRINT = "aaaaaaaaaaaaaaaa";
+let handlerInvocationSequence = 0;
 
 async function importHandler(harnessName) {
   const javascript = ts.transpileModule(entrySource, {
@@ -150,6 +151,8 @@ function matches(record, query) {
 }
 
 async function invokeWithFingerprint(fingerprint) {
+  const invocationId = ++handlerInvocationSequence;
+  const harnessName = `__customerHistoricalReaderHarness_${invocationId}`;
   const rows = await sealedRows(fingerprint);
   const access = {
     id: "access_hist",
@@ -192,7 +195,7 @@ async function invokeWithFingerprint(fingerprint) {
     env: { get: (name) => name === "SCAN_EVIDENCE_SIGNING_KEY" ? SECRET : "" },
     serve: (candidate) => { handler = candidate; },
   };
-  globalThis.__customerHistoricalReaderHarness = {
+  globalThis[harnessName] = {
     createClientFromRequest: () => base44,
     buildLimitedResultSnapshot,
     verifyLimitedResultProof,
@@ -207,7 +210,7 @@ async function invokeWithFingerprint(fingerprint) {
   };
 
   try {
-    await importHandler("__customerHistoricalReaderHarness");
+    await importHandler(harnessName);
     assert.equal(typeof handler, "function");
     return await handler(new Request("https://function.example", {
       method: "POST",
@@ -215,7 +218,7 @@ async function invokeWithFingerprint(fingerprint) {
       body: JSON.stringify({ action: "get", scan_id: "scan_hist" }),
     }));
   } finally {
-    delete globalThis.__customerHistoricalReaderHarness;
+    delete globalThis[harnessName];
     if (priorDeno === undefined) delete globalThis.Deno;
     else globalThis.Deno = priorDeno;
   }

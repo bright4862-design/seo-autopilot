@@ -1117,6 +1117,135 @@ function recordOwnedBy(record, user) {
   return Boolean(userEmail && String(record?.created_by || "").trim().toLowerCase() === userEmail);
 }
 
+const FOCUSED_SCOPE_SOURCES = new Set(["sitemap", "internal_link", "canonical", "hreflang"]);
+
+function originOf(value) {
+  const normalized = normalizeWebsiteUrl(value);
+  if (!normalized) return "";
+  try {
+    return new URL(normalized).origin;
+  } catch {
+    return "";
+  }
+}
+
+function normalizeFocusedPathPrefix(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw === "/") return "";
+  if (/^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith("//")) return "";
+  try {
+    const parsed = new URL(raw.startsWith("/") ? raw : `/${raw}`, "https://scope.invalid");
+    if (parsed.origin !== "https://scope.invalid" || parsed.search || parsed.hash) return "";
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    if (segments.length === 0) return "";
+    for (const segment of segments) {
+      let decoded;
+      try {
+        decoded = decodeURIComponent(segment);
+      } catch {
+        return "";
+      }
+      if (!decoded || decoded === "." || decoded === ".." || decoded.includes("/") || decoded.includes("\\")) return "";
+    }
+    return `/${segments.join("/")}`;
+  } catch {
+    return "";
+  }
+}
+
+function requestedPathPrefix(body = {}, websiteUrl = "") {
+  const explicit = String(body.path_prefix || body.requested_path_prefix || body.crawl_path_prefix || "").trim();
+  if (explicit) return normalizeFocusedPathPrefix(explicit);
+  try {
+    return normalizeFocusedPathPrefix(new URL(websiteUrl).pathname || "");
+  } catch {
+    return "";
+  }
+}
+
+function resolveFocusedPathScope(body = {}, websiteUrl = "") {
+  const pathPrefix = requestedPathPrefix(body, websiteUrl);
+  const scopeType = String(body.scope_type || "").trim().toLowerCase();
+  const parentScanId = String(body.parent_scan_id || "").trim();
+  const hasExplicitScope = Boolean(scopeType || parentScanId || body.requested_origin || body.discovered_from || body.user_confirmed === true);
+  if (!hasExplicitScope) {
+    return {
+      ok: true,
+      focused: false,
+      pathPrefix,
+      requestedOrigin: originOf(websiteUrl),
+      parentScanId: "",
+      discoveredFrom: "",
+    };
+  }
+  if (scopeType !== "path_prefix") {
+    return { ok: false, status: 400, code: "unsupported_focused_scope", error: "Only same-site folder scans are available in this release." };
+  }
+  if (!parentScanId || body.user_confirmed !== true) {
+    return { ok: false, status: 400, code: "focused_scope_confirmation_required", error: "Choose a discovered site section before starting a focused scan." };
+  }
+  if (!pathPrefix) {
+    return { ok: false, status: 400, code: "focused_scope_path_required", error: "The focused scan is missing its site-section path." };
+  }
+  const requestedOrigin = originOf(body.requested_origin || websiteUrl);
+  const websiteOrigin = originOf(websiteUrl);
+  if (!requestedOrigin || requestedOrigin !== websiteOrigin) {
+    return { ok: false, status: 409, code: "focused_scope_origin_mismatch", error: "Focused scans must stay on the same website origin." };
+  }
+  const source = String(body.discovered_from || "").trim().toLowerCase();
+  if (!FOCUSED_SCOPE_SOURCES.has(source)) {
+    return { ok: false, status: 400, code: "focused_scope_source_invalid", error: "This site section does not have supported discovery evidence." };
+  }
+  return {
+    ok: true,
+    focused: true,
+    pathPrefix,
+    requestedOrigin,
+    parentScanId,
+    discoveredFrom: source,
+  };
+}
+
+function discoveredPrefixCount(parent = {}, pathPrefix = "") {
+  const evidence = parent?.sampling_evidence && typeof parent.sampling_evidence === "object"
+    ? parent.sampling_evidence
+    : {};
+  const prefixes = evidence.path_prefixes_discovered && typeof evidence.path_prefixes_discovered === "object"
+    ? evidence.path_prefixes_discovered
+    : {};
+  const direct = Number(prefixes[pathPrefix] ?? prefixes[`${pathPrefix}/`]);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const segment = pathPrefix.split("/").filter(Boolean)[0] || "";
+  const markets = evidence.markets_discovered && typeof evidence.markets_discovered === "object"
+    ? evidence.markets_discovered
+    : {};
+  const marketCount = Number(markets[segment.toLowerCase()]);
+  return Number.isFinite(marketCount) && marketCount > 0 ? marketCount : 0;
+}
+
+async function validateFocusedParentScan({ base44, user, project, scope, websiteUrl }) {
+  if (!scope?.focused) return { ok: true };
+  const parent = await base44.asServiceRole.entities.ScanRun.get(scope.parentScanId).catch(() => null);
+  if (!parent || String(parent.owner_user_id || "") !== String(user.id)) {
+    return { ok: false, status: 404, code: "focused_parent_not_found", error: "The parent scan is not available to this account." };
+  }
+  if (String(parent.project_id || "") !== String(project.id)) {
+    return { ok: false, status: 409, code: "focused_parent_project_mismatch", error: "The focused scan does not match the parent website project." };
+  }
+  if (!["complete", "limited"].includes(String(parent.status || "").toLowerCase())) {
+    return { ok: false, status: 409, code: "focused_parent_not_terminal", error: "Wait for the parent scan to finish before scanning one section separately." };
+  }
+  if (String(parent.scope_type || "") || normalizeFocusedPathPrefix(parent.path_prefix || parent.requested_path_prefix || "")) {
+    return { ok: false, status: 409, code: "focused_parent_must_be_full_site", error: "Start focused scans from the original full-site scan." };
+  }
+  if (originOf(parent.website_url || parent.submitted_url) !== originOf(websiteUrl)) {
+    return { ok: false, status: 409, code: "focused_parent_origin_mismatch", error: "The focused scan must stay on the parent scan\'s website origin." };
+  }
+  if (discoveredPrefixCount(parent, scope.pathPrefix) <= 0) {
+    return { ok: false, status: 409, code: "focused_scope_not_discovered", error: "This folder was not discovered in the parent scan." };
+  }
+  return { ok: true, parent };
+}
 function authorityDomain(value) {
   const normalized = normalizeWebsiteUrl(value);
   if (!normalized) return "";

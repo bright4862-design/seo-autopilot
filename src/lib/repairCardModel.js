@@ -171,13 +171,41 @@ function localeOf(page) {
  * costs evidence.
  */
 function evidenceGroupsFor(members) {
-  return members.map((member) => {
+  return members.flatMap((member) => {
+    const raw = member?.raw_finding && typeof member.raw_finding === "object"
+      ? member.raw_finding
+      : {};
+    const persisted = Array.isArray(raw.repair_evidence_groups)
+      ? raw.repair_evidence_groups
+      : [];
+    if (persisted.length > 0) {
+      return persisted.map((group) => {
+        const pages = Array.isArray(group?.affected_urls)
+          ? group.affected_urls.map(clean).filter(Boolean)
+          : [];
+        return {
+          family: clean(group?.family),
+          count: Math.max(Number(group?.count) || 0, pages.length),
+          representativePage: clean(group?.representative_url) || pages[0] || "",
+          affectedPages: pages,
+          locale: clean(group?.locale),
+          fixId: clean(group?.fix_id),
+          priority: clean(group?.priority),
+          actionPriority: clean(group?.action_priority),
+          evidenceClass: clean(group?.evidence_class),
+          evidenceStatus: clean(group?.evidence_status),
+          verificationState: clean(group?.verification_state),
+          repairVerificationState: clean(group?.repair_verification_state),
+        };
+      });
+    }
+
     const pages = affectedOf(member);
     // A page with no market prefix is a disagreement, not an absence of one.
     // Filtering the empty results out first let ["/fr/page", "/about"] report
     // "fr", which claims a market for a page that never carried one.
     const locales = [...new Set(pages.map(localeOf))];
-    return {
+    return [{
       family: clean(member?.templateFamily || member?.page_template_family),
       count: countOf(member),
       representativePage: pages[0] || "",
@@ -186,7 +214,7 @@ function evidenceGroupsFor(members) {
       // description of the evidence rather than a guess about the site.
       locale: locales.length === 1 && locales[0] ? locales[0] : "",
       fixId: clean(member?.fix_id || member?.id),
-    };
+    }];
   });
 }
 

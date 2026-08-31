@@ -4,7 +4,7 @@
 
 import { base44 } from "@/api/base44Client";
 
-export const SCAN_HISTORY_VERSION = "scan_history_v2_account_wide_recent";
+export const SCAN_HISTORY_VERSION = "scan_history_v3_focused_parent_children";
 import { getActiveProject } from "@/lib/activeProject";
 import { clearCustomerAuthBoundary } from "@/lib/customerBrowserCache";
 import {

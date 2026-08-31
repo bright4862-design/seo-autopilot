@@ -76,17 +76,7 @@ Deno.serve(async (req) => {
 
     let status = cleanText(scan?.status, 30).toLowerCase();
     if (TERMINAL_STATUSES.has(status)) {
-      const release = await persistExactRelease({ entities, scan, release: coordinatorRelease });
-      const admission = await coordinatorStatus(user.id);
-      return Response.json({
-        success: true,
-        action,
-        replayed: true,
-        scan: sanitizeScan(release?.scanRun || await entities.ScanRun.get(scanId).catch(() => scan)),
-        release: sanitizeCoordinatorResult(release),
-        admission: sanitizeAdmissionResult(admission),
-        lease_released: coordinatorLeaseReleased(admission),
-      });
+      return await terminalReplayResponse({ entities, scan, scanId, action, ownerUserId: user.id });
     }
     if (!ACTIVE_STATUSES.has(status)) {
       throw new RequestProblem(409, "scan_not_stoppable", "This scan is not in a stoppable state.");
@@ -104,17 +94,7 @@ Deno.serve(async (req) => {
     }
     status = cleanText(scan?.status, 30).toLowerCase();
     if (TERMINAL_STATUSES.has(status)) {
-      const release = await persistExactRelease({ entities, scan, release: coordinatorRelease });
-      const admission = await coordinatorStatus(user.id);
-      return Response.json({
-        success: true,
-        action,
-        replayed: true,
-        scan: sanitizeScan(release?.scanRun || await entities.ScanRun.get(scanId).catch(() => scan)),
-        release: sanitizeCoordinatorResult(release),
-        admission: sanitizeAdmissionResult(admission),
-        lease_released: coordinatorLeaseReleased(admission),
-      });
+      return await terminalReplayResponse({ entities, scan, scanId, action, ownerUserId: user.id });
     }
     if (!ACTIVE_STATUSES.has(status)) {
       throw new RequestProblem(409, "scan_not_stoppable", "This scan changed state before it could be stopped.");
@@ -164,7 +144,7 @@ Deno.serve(async (req) => {
       action,
       replayed: false,
       scan: sanitizeScan(releasedScan),
-      release: sanitizeCoordinatorResult(release),
+      release: sanitizeReleaseResult(release),
       admission: sanitizeAdmissionResult(admission),
       lease_released: coordinatorLeaseReleased(admission),
     });
@@ -214,6 +194,38 @@ function sanitizeScan(scan: any) {
     admission_release_state: cleanText(scan?.admission_release_state, 40),
     admission_release_coordinator_request_id: cleanId(scan?.admission_release_coordinator_request_id),
     admission_reconciliation_version: cleanText(scan?.admission_reconciliation_version, 160),
+  };
+}
+
+// persistExactRelease returns {ok, retryable, failureCode, state}, not the
+// {status, body} shape a coordinator HTTP call returns. Sanitizing a release
+// through the coordinator sanitizer reported status 0 and an empty error for
+// every outcome, so a retryable failure like admission_release_persistence_failed
+// reached the owner as "something went wrong" with the reason discarded -- in
+// the one tool whose entire purpose is explaining a stuck scan.
+// Both terminal branches -- the one before the re-read fence and the one after
+// -- answer identically. Keeping one copy means a later change cannot update
+// only half of a replay path.
+async function terminalReplayResponse({ entities, scan, scanId, action, ownerUserId }: any) {
+  const release = await persistExactRelease({ entities, scan, release: coordinatorRelease });
+  const admission = await coordinatorStatus(ownerUserId);
+  return Response.json({
+    success: true,
+    action,
+    replayed: true,
+    scan: sanitizeScan(release?.scanRun || await entities.ScanRun.get(scanId).catch(() => scan)),
+    release: sanitizeReleaseResult(release),
+    admission: sanitizeAdmissionResult(admission),
+    lease_released: coordinatorLeaseReleased(admission),
+  });
+}
+
+function sanitizeReleaseResult(result: any) {
+  return {
+    ok: result?.ok === true,
+    state: cleanText(result?.state, 40),
+    retryable: result?.retryable === true,
+    failure_code: cleanText(result?.failureCode, 120),
   };
 }
 
@@ -283,9 +295,13 @@ async function callCoordinator(path: string, payload: Record<string, unknown>) {
   }
 
   let response: Response;
+  // The deadline has to outlive the fetch: a coordinator that answers headers
+  // and then stalls its body would otherwise hold this request forever, which
+  // is exactly the hang the owner is here to diagnose. The timer is cleared
+  // once, after the body is read or has failed to read.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), COORDINATOR_TIMEOUT_MS);
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), COORDINATOR_TIMEOUT_MS);
     response = await fetch(`${baseUrl}${path}`, {
       method: "POST",
       headers: {
@@ -296,8 +312,8 @@ async function callCoordinator(path: string, payload: Record<string, unknown>) {
       body: payloadText,
       signal: controller.signal,
     });
-    clearTimeout(timeout);
   } catch {
+    clearTimeout(timeout);
     return { ok: false, status: 0, error: "admission_unreachable", outcomeUnknown: true, body: {} };
   }
 
@@ -306,6 +322,8 @@ async function callCoordinator(path: string, payload: Record<string, unknown>) {
     body = await response.json();
   } catch {
     body = {};
+  } finally {
+    clearTimeout(timeout);
   }
   return { ok: response.ok, status: response.status, body };
 }

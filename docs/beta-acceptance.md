@@ -6,8 +6,8 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `ad3c2b0a8185ee41` |
-| Classifier | `archetype_classifier_v10_structural_finance_member_retail` |
+| Candidate fingerprint | `d75e95640abd87c1` |
+| Classifier | `archetype_classifier_v11_booking_structural_competitor` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
 | Acceptance report | **not recorded** (`acceptance_report: ""`) |
@@ -15,8 +15,8 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `ad3c2b0a8185ee41` with classifier
-`archetype_classifier_v10_structural_finance_member_retail`, URL frontier policy
+fingerprint `d75e95640abd87c1` with classifier
+`archetype_classifier_v11_booking_structural_competitor`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
@@ -24,7 +24,7 @@ The immediately superseded candidate was `58275d24191cf1cb`; before that
 `7b0ec8c46654192b`, `5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and
 `1ddf8085bc7721c4`.
 
-The current candidate moved the fingerprint to `ad3c2b0a8185ee41`. It keys one
+The current candidate moved the fingerprint to `d75e95640abd87c1`. It keys one
 customer action on the scanner's own repair identity. The 35-site production
 audit of 2026-08-31 found ten sites rendering nineteen groups where several
 top-level FixItems carried a single `repair_fingerprint` — N26 showed one
@@ -42,6 +42,17 @@ the count and the verb did not. The projection now derives both from the count,
 the sitemap-orphan explanation stops reading "1 pages were found" where its own
 title was already guarded, and the Python review summary singularises a
 one-page crawl. That is recorded as `count_copy_v2_agreeing_verbs`.
+
+The same candidate makes booking a structural competitor. `structural_competitor`
+capped content_blog when SaaS, retail, finance, nonprofit or local identity was
+present, and booking was the one structural archetype missing from that list, so
+a marketplace whose sample skewed editorial lost on article volume alone. That is
+recorded as `archetype_classifier_v11_booking_structural_competitor`.
+
+This does not by itself resolve the audit's Musement and Tiqets cases. Booking
+dominance requires a listing or ticket route in the sample; where the 150-page
+sample surfaces none, the cap never applies. Those two need representative
+sampling, and the classifier fixture records that limit explicitly.
 
 The `58275d24191cf1cb` candidate had moved the fingerprint by grouping a
 repair on the artifact the customer actually edits rather than on the page family

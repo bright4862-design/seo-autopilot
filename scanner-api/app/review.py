@@ -89,7 +89,7 @@ CATEGORY_MAP = {
     "duplicate_meta_description": "duplicate_content",
 }
 
-ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v10_structural_finance_member_retail"
+ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v11_booking_structural_competitor"
 
 # Frequency cap for archetype keyword/pattern counting: template volume
 # (hundreds of /blog/ URLs) must not out-vote company-level evidence.
@@ -625,6 +625,12 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         "bridge loan", "hard money", "private lending", "credit broker",
         "digital bank", "mobile bank", "bank account", "business account", "debit card",
     ])
+    booking_homepage_identity = has_any(homepage_text, [
+        "things to do", "book tickets", "buy tickets", "museum tickets",
+        "skip the line", "skip-the-line", "guided tour", "guided tours",
+        "day trips", "excursions", "book an experience", "book your experience",
+        "activities and tours", "tours and activities", "book activities",
+    ])
     nonprofit_homepage_identity = has_any(homepage_text, [
         "nonprofit", "non-profit", "charity", "donate", "donation", "fundraising",
         "support our work", "monthly giving", "clean water", "our impact",
@@ -696,6 +702,16 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         or len(finance_structural) >= 2
         or (finance_homepage_identity and finance_route_pages >= 1)
     )
+    # A booking marketplace operates listing and reservation routes that only
+    # exist when the business actually sells the experience. This mirrors the
+    # threshold the booking score itself already trusts, so a site that scores
+    # as booking also counts as a structural competitor rather than ceding the
+    # result to whichever archetype sampled the most editorial pages.
+    booking_dominant = bool(
+        len(booking_structural) >= 2
+        or booking_listing_pages >= 2
+        or (booking_homepage_identity and booking_listing_pages >= 1)
+    )
 
     adjusted_scores = []
     for key, score in scores:
@@ -756,7 +772,18 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             score += 1.5 * min(article_schema_pages, 20)
         adjusted_scores.append((key, score))
 
-    structural_competitor = saas_dominant or retail_dominant or finance_dominant or nonprofit_dominant or local_dominant
+    # Booking belonged here from the start and was the one structural archetype
+    # missing: a marketplace whose sampled pages skewed editorial lost to
+    # content_blog on article volume alone, which is how the 35-site production
+    # audit saw Musement and Tiqets reported as publishers.
+    structural_competitor = (
+        saas_dominant
+        or retail_dominant
+        or booking_dominant
+        or finance_dominant
+        or nonprofit_dominant
+        or local_dominant
+    )
     if structural_competitor:
         adjusted_scores = [
             (key, min(score, CONTENT_BLOG_STRUCTURAL_CAP) if key == "content_blog" else score)
@@ -873,6 +900,8 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             "nonprofit_route_pages": nonprofit_route_pages,
             "publisher_dominant": publisher_dominant,
             "retail_dominant": retail_dominant,
+            "booking_dominant": booking_dominant,
+            "booking_homepage_identity": booking_homepage_identity,
             "saas_dominant": saas_dominant,
             "nonprofit_dominant": nonprofit_dominant,
             "saas_core": saas_core_structural,
@@ -885,7 +914,7 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             f"ecommerce={len(ecommerce_structural)}, booking={len(booking_structural)}, "
             f"finance={len(finance_structural)}, nonprofit={len(nonprofit_structural)}, "
             f"local_routes={local_route_pages}, local_schema={local_schema_pages}; "
-            f"dominance publisher={publisher_dominant}, retail={retail_dominant}, local={local_dominant}, "
+            f"dominance publisher={publisher_dominant}, retail={retail_dominant}, booking={booking_dominant}, local={local_dominant}, "
             f"saas={saas_dominant}, app_distribution={saas_app_distribution_identity}, "
             f"platform_infrastructure={saas_platform_infrastructure_identity}, "
             f"nonprofit={nonprofit_dominant}; "

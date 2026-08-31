@@ -465,8 +465,31 @@ function authorityFixFromRow(item, { canonical = false } = {}) {
     ...(text(item?.repair_verification_state, 120) ? { repair_verification_state: text(item?.repair_verification_state, 120) } : {}),
     ...(text(item?.rule_definition_version, 160) ? { rule_definition_version: text(item?.rule_definition_version, 160) } : {}),
     ...(text(item?.comparison_profile_version, 160) ? { comparison_profile_version: text(item?.comparison_profile_version, 160) } : {}),
-    raw_finding: { verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence) },
+    raw_finding: {
+      verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence),
+      ...(canonicalRepairEvidenceGroups(raw.repair_evidence_groups).length > 0
+        ? { repair_evidence_groups: canonicalRepairEvidenceGroups(raw.repair_evidence_groups) }
+        : {}),
+    },
   };
+}
+
+function canonicalRepairEvidenceGroups(value) {
+  const groups = Array.isArray(value) ? value : [];
+  return groups.slice(0, 100).map((group) => ({
+    fix_id: text(group?.fix_id, 160),
+    family: text(group?.family, 160),
+    locale: text(group?.locale, 40),
+    representative_url: text(group?.representative_url, 2_000),
+    affected_urls: textArray(group?.affected_urls, 150, 2_000),
+    count: Math.max(0, number(group?.count)),
+    priority: text(group?.priority, 40),
+    action_priority: text(group?.action_priority, 80),
+    evidence_class: text(group?.evidence_class, 80),
+    evidence_status: text(group?.evidence_status, 120),
+    verification_state: text(group?.verification_state, 120),
+    repair_verification_state: text(group?.repair_verification_state, 120),
+  }));
 }
 
 function canonicalPriorityContext(value) {
@@ -640,7 +663,11 @@ function applyCoverageValidity(result) {
 function sanitizeFixItem(item) {
   const result = pickFields(item, FIX_ITEM_FIELDS);
   const raw = item?.raw_finding && typeof item.raw_finding === "object" ? item.raw_finding : {};
-  result.raw_finding = { verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence) };
+  const evidenceGroups = canonicalRepairEvidenceGroups(raw.repair_evidence_groups);
+  result.raw_finding = {
+    verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence),
+    ...(evidenceGroups.length > 0 ? { repair_evidence_groups: evidenceGroups } : {}),
+  };
   return applyCoverageValidity(result);
 }
 

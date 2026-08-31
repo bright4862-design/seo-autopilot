@@ -36,6 +36,17 @@ function singularFamilyLabel(label = "") {
   return String(label).replace(/\bpages$/, "page");
 }
 
+/**
+ * The template name inside a family label, or "" when there is none.
+ *
+ * The neutral fallback is the bare word "pages", which is not a template name.
+ * Interpolating it produced "Fix the shared pages template once" -- a claim the
+ * classifier never made. An empty result means the copy omits the phrase.
+ */
+function templateNameOf(label = "") {
+  return String(label).replace(/\bpages$/, "").trim();
+}
+
 function affectedCount(item = {}) {
   const list = Array.isArray(item.affectedPages) ? item.affectedPages : Array.isArray(item.affected_pages) ? item.affected_pages : [];
   const reported = Number(item.pageCount ?? item.page_count ?? 0);
@@ -117,7 +128,7 @@ export function customerCopyForFix(item = {}) {
         : "This page is missing a useful search description or outputs a blank one.",
       whyItMatters: "This is the short text that can appear below a page title in Google. If it is missing, Google may create its own version from the page.",
       recommendation: count > 1
-        ? `Fix the shared ${family.replace(/ pages$/, "")} template once so each page creates its own clear search description.`
+        ? `Fix the shared ${templateNameOf(family) ? `${templateNameOf(family)} ` : ""}template once so each page creates its own clear search description.`
         : "Add a clear, page-specific search description that explains what the visitor can do on this page.",
       technicalLabel: "Meta description",
     };
@@ -200,7 +211,7 @@ export function customerCopyForFix(item = {}) {
         : "This page uses a search title that is repeated elsewhere.",
       whyItMatters: "Distinct titles help people and search engines tell similar pages apart before they click.",
       recommendation: count > 1
-        ? `Update the shared ${family.replace(/ pages$/, "")} title pattern so each affected page describes its own topic or purpose.`
+        ? `Update the shared ${templateNameOf(family) ? `${templateNameOf(family)} ` : ""}title pattern so each affected page describes its own topic or purpose.`
         : "Rewrite the page title so it clearly describes this page rather than repeating another page's title.",
       technicalLabel: "Repeated page title",
     };
@@ -235,7 +246,7 @@ export function customerCopyForFix(item = {}) {
       explanation: count > 1 ? `${count} pages do not have a clear main heading.` : "This page does not have a clear main heading.",
       whyItMatters: "A clear main heading helps visitors and search engines understand the page's main topic immediately.",
       recommendation: count > 1
-        ? `Fix the shared ${family.replace(/ pages$/, "")} pattern so each affected page has one clear main heading.`
+        ? `Fix the shared ${templateNameOf(family) ? `${templateNameOf(family)} ` : ""}pattern so each affected page has one clear main heading.`
         : "Add one clear main heading that describes the page's main topic.",
       technicalLabel: "Missing H1",
     };

@@ -83,3 +83,26 @@ test("every owner value the scanner can emit has a customer-facing form", () => 
     assert.doesNotMatch(role, /_/, `${value} produced a snake_case role`);
   }
 });
+
+test("the neutral fallback is never used as a template name", () => {
+  // The grouped recommendation names a shared template. "pages" is the neutral
+  // fallback, not a template the classifier identified, so interpolating it
+  // would claim "Fix the shared pages template" -- a claim never made.
+  for (const state of ["unknown", "mixed", "unclassified", ""]) {
+    const copy = allCopy(fix({
+      page_template_family: state,
+      affected_pages: ["https://ikessandwich.com/a", "https://ikessandwich.com/b"],
+      page_count: 2,
+    }));
+    assert.doesNotMatch(copy, /shared pages template/i, `${state || "(empty)"} named the fallback as a template`);
+    assert.doesNotMatch(copy, /shared\s+template\s+template/i, "the phrase must not double up");
+    assert.doesNotMatch(copy, /unknown|unclassified/i);
+  }
+  // A real family is still named in the shared-template instruction.
+  const legal = allCopy(fix({
+    page_template_family: "legal_info",
+    affected_pages: ["https://ikessandwich.com/legal/a", "https://ikessandwich.com/legal/b"],
+    page_count: 2,
+  }));
+  assert.match(legal, /shared legal template/i);
+});

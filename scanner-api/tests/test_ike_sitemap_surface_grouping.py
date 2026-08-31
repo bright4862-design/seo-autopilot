@@ -8,6 +8,7 @@ those URLs happen to belong to is evidence, not another task.
 
 from app.scanner import (
     FAILURE_RULES,
+    SITE_SURFACE_GUIDANCE,
     GROUP_MIN_AFFECTED,
     SITE_SURFACE_RULES,
     TEMPLATE_RULES,
@@ -178,3 +179,50 @@ def test_group_threshold_is_unchanged():
     assert all(card.get("page_count") in (None, 1) for card in cards), (
         "below the threshold these stay individual findings, not a claimed group"
     )
+
+
+def test_a_sitemap_card_tells_the_customer_to_edit_the_sitemap():
+    """Guidance has to name the artifact, not a page template.
+
+    The template wording -- "fix one representative page/template first" -- is
+    not merely vague on a sitemap card, it is wrong: the entry list is generated
+    somewhere else, and following that advice would have the customer editing
+    pages that are not the defect.
+    """
+    card = group_findings(ike_sitemap_findings())[0]
+    recommendation = card["recommended_value"].lower()
+    assert "sitemap" in recommendation
+    assert "representative page" not in recommendation
+    assert "template" not in recommendation
+    assert "canonical" in recommendation, "the fix is the final 200-status canonical URL"
+
+
+def test_each_site_surface_has_its_own_guidance():
+    surfaces = set(SITE_SURFACE_RULES.values())
+    assert surfaces == set(SITE_SURFACE_GUIDANCE), (
+        "every surface needs artifact-specific guidance, or its cards fall back to template wording"
+    )
+    for surface, (explanation, recommendation) in SITE_SURFACE_GUIDANCE.items():
+        assert explanation.strip() and recommendation.strip(), surface
+        assert "representative page/template" not in recommendation, surface
+
+
+def test_template_repairs_keep_the_template_guidance():
+    # The template wording is right where the repair really is a template edit.
+    card = group_findings(
+        [finding("missing_meta_description", f"https://ikessandwich.com/locations/{i}") for i in range(5)]
+    )[0]
+    assert "template" in card["recommended_value"].lower()
+    # Both halves of the guidance, or a card can explain one repair and
+    # recommend another.
+    assert "template" in card["plain_english_explanation"].lower()
+    assert "sitemap" not in card["plain_english_explanation"].lower()
+    assert "sitemap" not in card["recommended_value"].lower()
+
+
+def test_internal_link_guidance_targets_links_not_pages():
+    card = group_findings(
+        [finding("internal_link_redirect", f"https://ikessandwich.com/menu/{i}") for i in range(4)]
+    )[0]
+    assert "link" in card["recommended_value"].lower()
+    assert "sitemap" not in card["recommended_value"].lower()

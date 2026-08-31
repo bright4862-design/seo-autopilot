@@ -1359,6 +1359,32 @@ SITE_SURFACE_RULES = {
     "canonical_cross_domain": "canonical_targets",
 }
 
+# Guidance has to name the artifact too. The template wording -- "fix one
+# representative page/template first" -- is actively wrong on a sitemap card:
+# the customer would go editing pages when the entry list is generated
+# somewhere else entirely.
+SITE_SURFACE_GUIDANCE = {
+    "xml_sitemap": (
+        "These URLs are published in the XML sitemap and redirect instead of returning the final page. "
+        "The sitemap is one artifact, so this is one fix rather than one task per page.",
+        "Update the sitemap source or generator so every entry is the final 200-status canonical URL, then resubmit the sitemap.",
+    ),
+    "redirect_rules": (
+        "These redirects resolve to something search engines cannot use. They are defined in one redirect "
+        "configuration, so they are corrected together rather than page by page.",
+        "Update the redirect rules so each source points in one hop to a final, indexable 200-status URL.",
+    ),
+    "internal_links": (
+        "These in-page links point at URLs that redirect. The link targets are the fix, not the pages they sit on.",
+        "Update the link targets to the final URL so visitors and crawlers reach it directly.",
+    ),
+    "canonical_targets": (
+        "These canonical tags point at URLs that cannot serve as the preferred version. "
+        "The canonical values are the fix, wherever the tags are generated.",
+        "Point each canonical at a final, indexable 200-status URL that returns itself as canonical.",
+    ),
+}
+
 
 def humanize(value: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[_-]+", " ", str(value or "template"))).strip()
@@ -1457,8 +1483,12 @@ def group_findings(findings: list[dict]) -> list[dict]:
             recommendation = "Ask your web person to check server, CDN, firewall, and rate-limit logs. Confirm Googlebot and normal users can access the affected URLs."
         else:
             title = group_template_title(sample.get("rule", ""), family)
-            explanation = "Several similar pages have the same template-level issue. Fix the shared template or pattern instead of creating one task per page."
-            recommendation = "Fix one representative page/template first, then roll out the same rule across the affected group."
+            surface_guidance = SITE_SURFACE_GUIDANCE.get(SITE_SURFACE_RULES.get(sample.get("rule", "")))
+            if surface_guidance:
+                explanation, recommendation = surface_guidance
+            else:
+                explanation = "Several similar pages have the same template-level issue. Fix the shared template or pattern instead of creating one task per page."
+                recommendation = "Fix one representative page/template first, then roll out the same rule across the affected group."
         group_id = stable_id(f"group|{key}")
         grouped = dict(sample)
         grouped.update({

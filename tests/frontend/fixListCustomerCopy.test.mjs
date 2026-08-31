@@ -48,7 +48,10 @@ test("a real page family is still named", () => {
   // Collapsing genuine classification would lose information the customer uses
   // to find the template, so only uninformative states fall back.
   assert.match(allCopy(fix({ page_template_family: "legal_info" })), /legal page/i);
-  assert.match(allCopy(fix({ page_template_family: "location_landing" })), /location landing page/i);
+  // "location landing" is the classifier's key with underscores swapped for
+  // spaces; the customer label is "location pages".
+  assert.match(allCopy(fix({ page_template_family: "location_landing" })), /location page/i);
+  assert.doesNotMatch(allCopy(fix({ page_template_family: "location_landing" })), /location landing/i);
   // "homepage" already ends in "page" and must not be mangled.
   assert.doesNotMatch(allCopy(fix({ page_template_family: "homepage" })), /homepag\b/);
 });

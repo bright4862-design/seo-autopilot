@@ -22,7 +22,7 @@ import { repairSuggestion } from "@/lib/repairSuggestions";
 import { buildRepairCards } from "@/lib/repairCardModel";
 import { evidenceLink } from "@/lib/evidenceUrl";
 import { samplingDisclosure } from "@/lib/samplingDisclosure";
-import { displayPathPrefix, focusedPathSections, focusedSectionOnboardingPath } from "@/lib/focusedScanScope";
+import { displayPathPrefix, focusedPathSections, focusedSectionOnboardingPath, orderFocusedScanHistory } from "@/lib/focusedScanScope";
 
 const CMS_OPTIONS = [
   { value: "wordpress", label: "WordPress" },
@@ -417,6 +417,13 @@ export default function FixList() {
   const summaryItems = repairPresentation.canonical === true ? customerRepairCards : recommendations;
   const summary = hasUsefulScan ? getBestSummary(scanRecord, pagesScanned, pagesFound, summaryItems) : "";
   const sampleCoverage = hasUsefulScan ? samplingDisclosure(scanRecord) : null;
+  const focusedRescanTarget = scanRecord?.scope_type === "path_prefix"
+    ? focusedSectionOnboardingPath(scanRecord?.parent_scan_id, {
+        requested_origin: scanRecord?.requested_origin || scanRecord?.website_url,
+        requested_path_prefix: scanRecord?.requested_path_prefix || scanRecord?.path_prefix,
+        discovered_from: scanRecord?.discovered_from || "sitemap",
+      })
+    : "";
   const focusedSections = useMemo(
     () => hasAuthoritativeScan
       && !String(scanRecord?.scope_type || "").trim()
@@ -470,7 +477,7 @@ export default function FixList() {
           <div className="text-[15px] font-medium tracking-tight text-ink-muted">{websiteHost || ""}</div>
           <button
             type="button"
-            onClick={() => navigate("/onboarding")}
+            onClick={() => navigate(focusedRescanTarget || "/onboarding")}
             className="rounded-full bg-ink px-4 py-2 text-[13px] font-medium text-paper transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
           >
             {hasUsefulScan ? "Scan again" : "Run a scan"}
@@ -925,7 +932,7 @@ function RecentScansState({ scans, state, failure, onAction, onScan, onDelete, d
         Reopen a saved scan to see its current status or verified FixList.
       </p>
       <div className="mt-6 overflow-hidden rounded-2xl border border-hairline-soft bg-white">
-        {orderRecentScansWithChildren(scans).map((scan) => (
+        {orderFocusedScanHistory(scans).map((scan) => (
           <RecentScanRow
             key={scan.id}
             scan={scan}
@@ -960,36 +967,6 @@ function toRecentScanSummary(run = {}) {
     scopeLabel: scopeType === "path_prefix" && pathPrefix ? `Focused · ${displayPathPrefix(pathPrefix)}` : "",
     occurredAt: run.queued_at || run.created_date || run.created_at || run.started_at || run.reviewing_at || run.completed_at || "",
   };
-}
-
-function orderRecentScansWithChildren(scans = []) {
-  const rows = Array.isArray(scans) ? scans.filter(Boolean) : [];
-  const byId = new Map(rows.map((scan) => [scan.id, scan]));
-  const children = new Map();
-  for (const scan of rows) {
-    const parentId = String(scan.parent_scan_id || "").trim();
-    if (!parentId || !byId.has(parentId)) continue;
-    if (!children.has(parentId)) children.set(parentId, []);
-    children.get(parentId).push(scan);
-  }
-  for (const list of children.values()) {
-    list.sort((a, b) => Date.parse(b.occurredAt || 0) - Date.parse(a.occurredAt || 0));
-  }
-  const emitted = new Set();
-  const output = [];
-  for (const scan of rows) {
-    if (emitted.has(scan.id) || (scan.parent_scan_id && byId.has(scan.parent_scan_id))) continue;
-    output.push(scan);
-    emitted.add(scan.id);
-    for (const child of children.get(scan.id) || []) {
-      output.push(child);
-      emitted.add(child.id);
-    }
-  }
-  for (const scan of rows) {
-    if (!emitted.has(scan.id)) output.push(scan);
-  }
-  return output;
 }
 
 function getRecentScanStatus(status) {

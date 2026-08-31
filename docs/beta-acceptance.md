@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `7b0ec8c46654192b` |
+| Candidate fingerprint | `d070321f388f69e9` |
 | Classifier | `archetype_classifier_v10_structural_finance_member_retail` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,14 +15,26 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `7b0ec8c46654192b` with classifier
+fingerprint `d070321f388f69e9` with classifier
 `archetype_classifier_v10_structural_finance_member_retail`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded final-core candidate was `5d94e93c54a9efb6`;
-before that were `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and `1ddf8085bc7721c4`. The
-current candidate moved the fingerprint to `7b0ec8c46654192b` by filling the page
+The immediately superseded candidate was `7b0ec8c46654192b`; before that
+`5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and `1ddf8085bc7721c4`.
+
+The current candidate moved the fingerprint to `d070321f388f69e9` by grouping a
+repair on the artifact the customer actually edits rather than on the page family
+that happened to surface it. Ike's scan `6a9548bd0d7384cc66988ae4` persisted one
+sitemap edit as five cards, because its redirecting URLs spanned legal, standard,
+guide, contact and unclassified pages. A repair whose remediation surface is a
+single shared artifact — the XML sitemap, the redirect map, canonical targets,
+internal links — is now one card, with the page-family spread kept as evidence
+inside it. Template repairs, where different templates genuinely need different
+edits, still separate by family. That is recorded as
+`repair_surface_grouping_v1_shared_artifact`.
+
+The `7b0ec8c46654192b` candidate had moved the fingerprint by filling the page
 family of affected URLs the crawl never recorded as pages, so that one uncrawled
 redirect destination can no longer collapse an otherwise uniform group to `mixed`.
 That is recorded as `repair_coverage_v4_corroborated_family_gap_fill`.

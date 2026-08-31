@@ -44,6 +44,12 @@ from .url_frontier_policy import FRONTIER_POLICY_VERSION, classify_frontier_url
 VERSION = "python_scanner_v3_bounded_request"
 RENDER_EVIDENCE_VERSION = "render_evidence_v1"
 FINAL_URL_DEDUP_VERSION = "final_url_dedup_v1_normalized_identity"
+# How findings become customer repair cards. A change here changes what the
+# customer is shown for identical crawl evidence, so it carries its own release
+# marker: reusing scanner_version would churn every historical seal fixture,
+# and leaving the release identity unmoved would ship two different grouping
+# behaviours under one fingerprint.
+REPAIR_SURFACE_GROUPING_VERSION = "repair_surface_grouping_v1_shared_artifact"
 
 # The Python crawler does not derive an AI crawl policy (no InvokeLLM here), but it
 # still emits the policy contract so AI Review keeps provenance. source="disabled"
@@ -1322,14 +1328,76 @@ FAILURE_RULES = {"rate_limited_page", "failed_page", "server_error", "404_error"
 TEMPLATE_RULES = {"client_rendering", "canonical_missing", "canonical_target_redirect", "canonical_target_failed", "canonical_target_noindex", "canonical_target_blocked", "canonical_chain", "canonical_loop", "canonical_cross_domain", "redirect_loop", "redirect_invalid_response", "redirect_chain_limit", "redirect_destination_failed", "redirect_destination_blocked", "redirect_destination_noindex", "redirect_chain", "sitemap_redirect", "internal_link_redirect", "schema", "missing_h1", "multiple_h1", "image_alt_text", "missing_meta_description", "empty_meta_description", "malformed_meta_description", "title_over_pixel_limit", "generic_fallback_title", "sitemap_indexability_conflict"}
 GROUP_MIN_AFFECTED = 3
 
+# A repair the customer performs once, on one shared artifact, however many page
+# templates happen to surface it. The XML sitemap is one file; the redirect map
+# is one configuration. Keying these by page family invents tasks: one sitemap
+# edit reached the customer as five cards because the redirecting URLs spanned
+# legal, guide, contact, standard and unclassified pages.
+#
+# The partition is not a new opinion. It is the one group_template_title already
+# encodes: a rule whose group title names a page family ("... on {family} pages")
+# is a template repair and stays family-keyed, and a rule whose title names a
+# shared artifact ("... in the sitemap") is a site-surface repair. A contract
+# test pins the two to each other so they cannot drift apart.
+SITE_SURFACE_RULES = {
+    "sitemap_redirect": "xml_sitemap",
+    "sitemap_indexability_conflict": "xml_sitemap",
+    "internal_link_redirect": "internal_links",
+    "redirect_loop": "redirect_rules",
+    "redirect_chain": "redirect_rules",
+    "redirect_chain_limit": "redirect_rules",
+    "redirect_invalid_response": "redirect_rules",
+    "redirect_destination_failed": "redirect_rules",
+    "redirect_destination_blocked": "redirect_rules",
+    "redirect_destination_noindex": "redirect_rules",
+    "canonical_target_redirect": "canonical_targets",
+    "canonical_target_failed": "canonical_targets",
+    "canonical_target_noindex": "canonical_targets",
+    "canonical_target_blocked": "canonical_targets",
+    "canonical_chain": "canonical_targets",
+    "canonical_loop": "canonical_targets",
+    "canonical_cross_domain": "canonical_targets",
+}
+
+# Guidance has to name the artifact too. The template wording -- "fix one
+# representative page/template first" -- is actively wrong on a sitemap card:
+# the customer would go editing pages when the entry list is generated
+# somewhere else entirely.
+SITE_SURFACE_GUIDANCE = {
+    "xml_sitemap": (
+        "These URLs are published in the XML sitemap and redirect instead of returning the final page. "
+        "The sitemap is one artifact, so this is one fix rather than one task per page.",
+        "Update the sitemap source or generator so every entry is the final 200-status canonical URL, then resubmit the sitemap.",
+    ),
+    "redirect_rules": (
+        "These redirects resolve to something search engines cannot use. They are defined in one redirect "
+        "configuration, so they are corrected together rather than page by page.",
+        "Update the redirect rules so each source points in one hop to a final, indexable 200-status URL.",
+    ),
+    "internal_links": (
+        "These in-page links point at URLs that redirect. The link targets are the fix, not the pages they sit on.",
+        "Update the link targets to the final URL so visitors and crawlers reach it directly.",
+    ),
+    "canonical_targets": (
+        "These canonical tags point at URLs that cannot serve as the preferred version. "
+        "The canonical values are the fix, wherever the tags are generated.",
+        "Point each canonical at a final, indexable 200-status URL that returns itself as canonical.",
+    ),
+}
+
 
 def humanize(value: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[_-]+", " ", str(value or "template"))).strip()
 
 
 def grouping_key(finding: dict) -> str:
-    family = classify_template(finding.get("page_url") or (finding.get("affected_pages") or [""])[0] or "")
     rule = finding.get("rule", "")
+    surface = SITE_SURFACE_RULES.get(rule)
+    if surface:
+        # One shared artifact, one repair. Which templates surfaced it is
+        # evidence inside the card, never a reason to raise another card.
+        return f"template|{rule}|{surface}"
+    family = classify_template(finding.get("page_url") or (finding.get("affected_pages") or [""])[0] or "")
     if rule in FAILURE_RULES:
         return f"failure|{rule}|{family}"
     if rule in TEMPLATE_RULES:
@@ -1415,8 +1483,12 @@ def group_findings(findings: list[dict]) -> list[dict]:
             recommendation = "Ask your web person to check server, CDN, firewall, and rate-limit logs. Confirm Googlebot and normal users can access the affected URLs."
         else:
             title = group_template_title(sample.get("rule", ""), family)
-            explanation = "Several similar pages have the same template-level issue. Fix the shared template or pattern instead of creating one task per page."
-            recommendation = "Fix one representative page/template first, then roll out the same rule across the affected group."
+            surface_guidance = SITE_SURFACE_GUIDANCE.get(SITE_SURFACE_RULES.get(sample.get("rule", "")))
+            if surface_guidance:
+                explanation, recommendation = surface_guidance
+            else:
+                explanation = "Several similar pages have the same template-level issue. Fix the shared template or pattern instead of creating one task per page."
+                recommendation = "Fix one representative page/template first, then roll out the same rule across the affected group."
         group_id = stable_id(f"group|{key}")
         grouped = dict(sample)
         grouped.update({

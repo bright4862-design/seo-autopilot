@@ -534,10 +534,34 @@ const ROLE_SYNONYMS = Object.freeze({
   seo: "SEO manager",
 });
 
+/**
+ * The scanner's own bucket names are internal identifiers, not customer copy.
+ *
+ * Passing unknown text through is right for human role text a scanner might
+ * legitimately publish ("Store manager"), but `your_web_person` reached FixList
+ * cards verbatim because it was simply unknown to the synonym table.
+ */
+const INTERNAL_ROLE_TOKENS = Object.freeze({
+  your_web_person: "Developer",
+  web_person: "Developer",
+  your_developer: "Developer",
+  content_editor: "Content team",
+  seo_specialist: "SEO manager",
+  you: "You",
+  owner: "You",
+});
+
 function normalizeRole(value = "") {
   const raw = clean(value);
   if (!raw) return "";
-  return ROLE_SYNONYMS[raw.toLowerCase()] || raw;
+  const lowered = raw.toLowerCase();
+  const known = ROLE_SYNONYMS[lowered] || INTERNAL_ROLE_TOKENS[lowered];
+  if (known) return known;
+  // A snake_case token that reached here is an internal identifier leaking, not
+  // evidence. Falling back to empty lets the curated library role fill in,
+  // which is always better copy than printing the enum.
+  if (/^[a-z0-9]+(?:_[a-z0-9]+)+$/.test(lowered)) return "";
+  return raw;
 }
 
 function scannerRoleOf(item = {}) {

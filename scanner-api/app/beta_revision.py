@@ -109,11 +109,17 @@ def collect_component_versions() -> dict[str, str]:
     from .sampling import SAMPLING_VERSION
     from .scan_timing import SITEMAP_TIME_RESERVATION_VERSION
     from .sitemap import SITEMAP_PARSER_VERSION
-    from .scanner import FINAL_URL_DEDUP_VERSION, RENDER_EVIDENCE_VERSION, VERSION
+    from .scanner import (
+        FINAL_URL_DEDUP_VERSION,
+        RENDER_EVIDENCE_VERSION,
+        REPAIR_SURFACE_GROUPING_VERSION,
+        VERSION,
+    )
     from .trust_discovery import TRUST_DISCOVERY_VERSION, TRUST_FINDING_GATE_VERSION
 
     components = {
         "scanner_version": VERSION,
+        "repair_surface_grouping_version": REPAIR_SURFACE_GROUPING_VERSION,
         "scanner_build_revision": SCANNER_BUILD_REVISION,
         "acceptance_evidence_version": ACCEPTANCE_EVIDENCE_VERSION,
         "artifact_filter_version": ARTIFACT_FILTER_VERSION,

@@ -345,6 +345,25 @@ verify_worker_runtime_revision() {
   gcloud run services describe "$CLOUD_RUN_SERVICE" \
     --region="$GCP_REGION" --project="$GCP_PROJECT" --format=json > "$service_json"
 
+  service_url="$(python3 - "$service_json" <<'PY'
+import json, sys
+status = json.load(open(sys.argv[1], encoding="utf-8")).get("status") or {}
+print(str(status.get("url") or ""))
+PY
+)"
+  if [ -z "$service_url" ]; then
+    echo "INDETERMINATE: Cloud Run reported no canonical service URL."
+    return 1
+  fi
+  if [ -z "$FIXLIST_WORKER_TOKEN_AUDIENCE" ]; then
+    echo "INDETERMINATE: no worker token audience was declared."
+    return 1
+  fi
+  if [ "$FIXLIST_WORKER_TOKEN_AUDIENCE" != "$service_url" ]; then
+    echo "INDETERMINATE: worker token audience does not match the canonical Cloud Run service URL."
+    return 1
+  fi
+
   if [ -z "$revision" ]; then
     revision="$(python3 - "$service_json" <<'PY'
 import json, sys

@@ -636,6 +636,8 @@ test("the worker invoker token is minted by the workflow, not by gcloud", () => 
   // The audience must be the canonical Cloud Run service URL. A traffic-tag
   // probe is a separate destination, so the workflow must not bind the token
   // audience to the tag URL.
+  const gate = workflow.indexOf("- name: Verify candidate runtime release identity before promotion", mint);
+  assert.notEqual(gate, -1, "candidate runtime gate is missing after token mint");
   const audienceStep = workflow.slice(mint, gate).match(/id_token_audience: \$\{\{ steps\.([A-Za-z0-9_-]+)\.outputs\.([a-z_]+) \}\}/);
   assert.ok(audienceStep, "the worker token is not bound to the canonical service URL");
   assert.equal(audienceStep[1], "candidate-service-url");

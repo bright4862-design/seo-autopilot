@@ -24,6 +24,7 @@ const ACCEPTED_AUTHORITY_VERSIONS = new Set([
 const ACCEPTED_LIMITED_INTEGRITY_VERSIONS = new Set([
   "standard_limited_result_integrity_v1",
   "standard_limited_result_integrity_v2_acceptance_evidence",
+  "standard_limited_result_integrity_v3_focused_scope",
 ]);
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { isReadableAuthorityReleaseFingerprint } from "./releaseCompatibility.js";
@@ -133,8 +134,10 @@ Deno.serve(async (req) => {
       const limitedFixList = await loadLimitedFixList(serviceEntities.FixList, run, user, integrityProof);
       const limitedFixItems = await loadLimitedFixItems(serviceEntities.FixItem, limitedFixList, run, integrityProof);
       const limitedIntegrityVersion = cleanText(run.result_integrity_version, 160);
-      const limitedUsesAcceptanceEvidence =
-        limitedIntegrityVersion === "standard_limited_result_integrity_v2_acceptance_evidence";
+      const limitedUsesAcceptanceEvidence = [
+        "standard_limited_result_integrity_v2_acceptance_evidence",
+        "standard_limited_result_integrity_v3_focused_scope",
+      ].includes(limitedIntegrityVersion);
       const limitedSnapshot = buildLimitedResultSnapshot({
         identity: {
           scan_id: run.id,

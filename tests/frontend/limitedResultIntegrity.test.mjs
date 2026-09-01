@@ -374,13 +374,19 @@ test("a scan with no useful evidence yields no limited result at all", () => {
 
 test("customer acceptance-evidence helper keeps one-argument projection compatibility", () => {
   const scan = {
+    worker_peak_memory_bytes: 1024,
     coverage_authority_evidence: {
-      coverage_authority_evidence_version: "coverage_authority_evidence_v1",
-      routes_observed: 12,
+      coverage_authority_evidence_version: "coverage_authority_evidence_v2_authoritative",
+      assessment: "sufficient",
     },
     classification_integrity: {
-      state: "verified",
-      verdict: "consistent",
+      version: "standard150_acceptance_evidence_v2_aggregate_rss_fail_closed",
+      state: "classified",
+      verdict: "classified",
+      classifier_version: "archetype_classifier_v12_locale_normalized_structural_routes",
+      evidence_sufficiency: "sufficient",
+      usable_pages: 12,
+      complete_small_site_inventory: false,
     },
   };
   assert.equal(hasCustomerCompleteAcceptanceEvidence(scan), true);

@@ -1,8 +1,30 @@
 import { jsPDF } from "jspdf";
 import { evidenceLink } from "./evidenceUrl.js";
+import {
+  buildRepairCards,
+  customerEvidenceGroupHeading,
+  customerEvidenceGroupRows,
+} from "./repairCardModel.js";
+
+export function buildExportRepairModel({ issues = [] } = {}) {
+  const repairs = buildRepairCards(Array.isArray(issues) ? issues : []);
+  const prepared = repairs.filter((item) => item.status === "auto_fixed");
+  const approval = repairs.filter((item) => item.status === "needs_approval");
+  const developer = repairs.filter((item) => item.status === "needs_developer");
+  const assigned = new Set([...prepared, ...approval, ...developer]);
+  const review = repairs.filter((item) => !assigned.has(item));
+  return {
+    repairs,
+    repairCount: repairs.length,
+    prepared,
+    approval,
+    developer,
+    review,
+  };
+}
 
 // Generates a customer-friendly PDF scan report and triggers download.
-export function exportScanReportPdf({ project, crawlJob, issues, devRecs, insights }) {
+export function exportScanReportPdf({ project, crawlJob, issues = [], devRecs = [], insights = [] }) {
   const doc = new jsPDF();
   const pageW = doc.internal.pageSize.getWidth();
   const marginX = 16;
@@ -60,9 +82,9 @@ export function exportScanReportPdf({ project, crawlJob, issues, devRecs, insigh
     y += options.gap ?? 1;
   };
 
-  const prepared = issues.filter(i => i.status === "auto_fixed");
-  const approval = issues.filter(i => i.status === "needs_approval");
-  const developer = issues.filter(i => i.status === "needs_developer");
+  const exportModel = buildExportRepairModel({ issues });
+  const { repairs, repairCount, prepared, approval, developer, review } = exportModel;
+  const supplementaryDevRecs = repairs.length === 0 && Array.isArray(devRecs) ? devRecs : [];
   const scanDate = crawlJob?.completed_at || crawlJob?.created_date || project.last_crawl_at;
 
   // Title
@@ -79,7 +101,7 @@ export function exportScanReportPdf({ project, crawlJob, issues, devRecs, insigh
   heading("At a glance");
   line(`Website health score: ${project.seo_score ?? crawlJob?.seo_score ?? "—"} / 100`);
   line(`Pages scanned: ${crawlJob?.pages_crawled ?? "—"}`);
-  line(`Total recommended improvements: ${issues.length}`);
+  line(`Total recommended improvements: ${repairCount}`);
   line(`Prepared fixes: ${prepared.length}`);
   line(`Needs your approval: ${approval.length}`);
   line(`Website improvements: ${developer.length}`);
@@ -89,6 +111,7 @@ export function exportScanReportPdf({ project, crawlJob, issues, devRecs, insigh
   if (approval.length > 0) actions.push("Review the items waiting for your approval first.");
   if (prepared.length > 0) actions.push("Review the fixes we prepared for you.");
   if (developer.length > 0) actions.push("Review the website improvements with your developer.");
+  if (review.length > 0) actions.push("Review the remaining recommendations when you are ready.");
   if (actions.length === 0) {
     line("No major issues found. Your site is looking good!");
   } else {
@@ -102,32 +125,38 @@ export function exportScanReportPdf({ project, crawlJob, issues, devRecs, insigh
       return;
     }
     items.forEach(item => {
-      line(`• ${item.issue_title}`, { bold: true });
-      if (item.page_url) evidenceLine(item.page_url, { prefix: "Page: ", indent: 4, color: [107, 114, 128], size: 9 });
-      if (item.plain_english_explanation) line(item.plain_english_explanation, { indent: 4, gap: 4 });
-      if (Array.isArray(item.affected_pages) && item.affected_pages.length > 0) {
+      line(`• ${item.title}`, { bold: true });
+      if (item.whyItMatters) line(item.whyItMatters, { indent: 4, gap: 4 });
+      const groups = customerEvidenceGroupRows(item, siteOrigin);
+      if (groups.length > 0) {
+        line(customerEvidenceGroupHeading(groups), { indent: 4, bold: true, size: 9, gap: 1 });
+        groups.forEach((group, index) => {
+          const groupName = group.familyLabel || `Group ${index + 1}`;
+          const locale = group.locale ? ` · ${group.locale.toUpperCase()}` : "";
+          line(`${groupName}${locale} · ${group.count} ${group.count === 1 ? "page" : "pages"}`, { indent: 8, size: 9, gap: 1 });
+          if (group.representativePage) evidenceLine(group.representativePage, { prefix: "Representative: ", indent: 12, color: [107, 114, 128], size: 9, gap: 1 });
+        });
+      }
+      const affectedPages = Array.isArray(item?.evidence?.affectedPages) ? item.evidence.affectedPages : [];
+      if (affectedPages.length > 0) {
         line("Affected pages:", { indent: 4, bold: true, size: 9, gap: 1 });
-        item.affected_pages.forEach(page => evidenceLine(page, { indent: 8, color: [107, 114, 128], size: 9, gap: 1 }));
+        affectedPages.forEach(page => evidenceLine(page, { indent: 8, color: [107, 114, 128], size: 9, gap: 1 }));
       }
     });
   };
 
   issueList("Top prepared fixes", prepared.slice(0, 10), "No prepared fixes in this scan.");
   issueList("Needs your approval", approval.slice(0, 10), "Nothing is waiting for your approval.");
+  issueList("Other recommended repairs", review.slice(0, 10), "No additional repairs to review.");
 
   heading("Website improvements");
-  if (devRecs.length === 0 && developer.length === 0) {
+  if (supplementaryDevRecs.length === 0 && developer.length === 0) {
     line("No website improvements needed right now.");
   } else {
-    const recs = devRecs.length > 0 ? devRecs : developer;
-    recs.slice(0, 10).forEach(r => {
+    if (developer.length > 0) issueList("Developer-owned repairs", developer.slice(0, 10), "No developer-owned repairs.");
+    supplementaryDevRecs.slice(0, 10).forEach(r => {
       line(`• ${r.title || r.issue_title}`, { bold: true });
       if (r.description || r.plain_english_explanation) line(r.description || r.plain_english_explanation, { indent: 4 });
-      if (Array.isArray(r.affected_pages) && r.affected_pages.length > 0) {
-        line("Affected pages:", { indent: 4, bold: true, size: 9, gap: 1 });
-        r.affected_pages.forEach(page => evidenceLine(page, { indent: 8, color: [107, 114, 128], size: 9, gap: 1 }));
-      }
-      if (r.business_impact || r.why_it_matters) line(`Why it matters: ${r.business_impact || r.why_it_matters}`, { indent: 4, color: [107, 114, 128], size: 9, gap: 4 });
     });
   }
 
@@ -144,7 +173,7 @@ export function exportScanReportPdf({ project, crawlJob, issues, devRecs, insigh
   const steps = [];
   if (approval.length > 0) steps.push("Approve or reject the fixes waiting for your review.");
   if (prepared.length > 0) steps.push("Apply the prepared fixes on your website.");
-  if (developer.length > 0 || devRecs.length > 0) steps.push("Share the website improvements list with your developer.");
+  if (developer.length > 0 || supplementaryDevRecs.length > 0) steps.push("Share the website improvements list with your developer.");
   if (insights.length > 0) steps.push("Close the competitor gaps above to catch up with stronger competitors.");
   steps.push("Run a new scan after making changes to track your progress.");
   steps.forEach((s, i) => line(`${i + 1}. ${s}`));

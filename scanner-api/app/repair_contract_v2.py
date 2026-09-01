@@ -24,7 +24,7 @@ from .repair_coverage import evidence_url_key, first_failed_repair_invariant, no
 from .repair_shadow_calibration import build_calibrated_shadow_review_analysis
 
 
-REPAIR_PERSISTENCE_GROUPING_VERSION = "repair_persistence_grouping_v1_stable_fingerprint_actions"
+REPAIR_PERSISTENCE_GROUPING_VERSION = "repair_persistence_grouping_v2_valid_fingerprint_actions"
 
 
 class CanonicalRepairContractError(RuntimeError):
@@ -90,10 +90,15 @@ def _clean_text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _stable_repair_fingerprint(item: dict[str, Any]) -> str:
-    """Return the persisted grouping identity only when it is safe to merge."""
-    fingerprint = _clean_text(item.get("repair_fingerprint"))
-    return fingerprint if fingerprint and item.get("repair_identity_stable") is True else ""
+def _persistence_repair_fingerprint(item: dict[str, Any]) -> str:
+    """Return the scanner-owned action identity used by every customer surface.
+
+    Stability is deliberately not required here. It remains the stricter gate
+    for cross-scan `verified_fixed`; requiring it for same-scan persistence made
+    canonical FixItems disagree with the customer read model on normal review
+    rows that carry a valid provisional fingerprint.
+    """
+    return _clean_text(item.get("repair_fingerprint"))
 
 
 def _dedupe_urls(values: Any) -> list[str]:
@@ -158,7 +163,8 @@ def _merge_repair_group(
     members: list[dict[str, Any]],
     pages: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Collapse one stable fingerprint into one canonical persisted action."""
+    """Collapse one non-empty fingerprint into one canonical persisted action."""
+    group_fingerprint = _persistence_repair_fingerprint(members[0]) if members else ""
     lead = deepcopy(_strictest_member(members))
     child_groups = [_repair_evidence_group(member) for member in members]
 
@@ -250,6 +256,11 @@ def _merge_repair_group(
             lead["representative_pages_by_family"] = representatives
         merged = annotate_repair_identity(lead)
 
+    if group_fingerprint:
+        identity = deepcopy(merged.get("repair_identity")) if isinstance(merged.get("repair_identity"), dict) else {}
+        identity["fingerprint"] = group_fingerprint
+        merged["repair_identity"] = identity
+        merged["repair_fingerprint"] = group_fingerprint
     merged["repair_evidence_groups"] = child_groups
     return merged
 
@@ -258,11 +269,11 @@ def _group_canonical_repairs(
     items: list[dict[str, Any]],
     pages: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Persist one top-level action per stable non-empty repair fingerprint."""
+    """Persist one top-level action per valid non-empty repair fingerprint."""
     groups: dict[str, list[dict[str, Any]]] = {}
     order: list[str] = []
     for index, item in enumerate(items):
-        fingerprint = _stable_repair_fingerprint(item)
+        fingerprint = _persistence_repair_fingerprint(item)
         key = f"fingerprint:{fingerprint}" if fingerprint else f"row:{index}"
         if key not in groups:
             groups[key] = []

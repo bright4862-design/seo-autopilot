@@ -12,6 +12,7 @@
  * better. Where the backend cannot support a claim, the claim is omitted.
  */
 import { customerCopyForFix } from "./fixVocabulary.js";
+import { evidenceLink } from "./evidenceUrl.js";
 import { repairSuggestion, repairTypeOf } from "./repairSuggestions.js";
 
 const clean = (value) => (typeof value === "string" ? value.trim() : "");
@@ -161,6 +162,47 @@ function localeOf(page) {
   const path = clean(page).replace(/^https?:\/\/[^/]+/i, "");
   const first = path.split("/").filter(Boolean)[0];
   return first && LOCALE_SEGMENT.test(first.toLowerCase()) ? first.toLowerCase() : "";
+}
+
+/** Customer-safe rows for the persisted child evidence inside one action. */
+export function customerEvidenceGroupRows(card = {}, siteOrigin = "") {
+  const groups = Array.isArray(card?.evidence?.evidenceGroups)
+    ? card.evidence.evidenceGroups
+    : [];
+  return groups.map((group, index) => {
+    const affectedPages = [...new Set(
+      (Array.isArray(group?.affectedPages) ? group.affectedPages : [])
+        .map(clean)
+        .filter(Boolean),
+    )];
+    const representativePage = clean(group?.representativePage) || affectedPages[0] || "";
+    const localeEvidence = affectedPages.length > 0
+      ? affectedPages
+      : representativePage ? [representativePage] : [];
+    const locales = [...new Set(localeEvidence.map(localeOf))];
+    const persistedLocale = lower(group?.locale);
+    const locale = persistedLocale
+      && locales.length === 1
+      && locales[0] === persistedLocale
+      ? persistedLocale
+      : "";
+    const family = clean(group?.family);
+    return {
+      id: clean(group?.fixId) || `evidence-group-${index + 1}`,
+      family,
+      familyLabel: familyWord(family),
+      locale,
+      count: Math.max(Number(group?.count) || 0, affectedPages.length),
+      representativePage,
+      representativeLink: evidenceLink(representativePage, siteOrigin),
+      affectedPages,
+    };
+  });
+}
+
+export function customerEvidenceGroupHeading(rows = []) {
+  const count = Array.isArray(rows) ? rows.length : 0;
+  return `Evidence groups (${count})`;
 }
 
 /**
@@ -318,6 +360,7 @@ export function buildRepairCard(item = {}) {
     rule: lower(item?.rule || item?.original?.rule),
     priority,
     actionPriority,
+    status: lower(item?.status || item?.user_status || item?.original?.status || item?.original?.user_status),
     customerCategory: clean(copy.customerCategory)
       || clean(item?.customerCategory || item?.customer_category || item?.original?.customer_category)
       || "Website improvement",
@@ -337,8 +380,8 @@ export function buildRepairCard(item = {}) {
       familyBreakdown: breakdownOf(item),
       representativePages: affected.slice(0, 3),
       mergedFromFixIds: Array.isArray(item.mergedFromFixIds) ? item.mergedFromFixIds : [],
-      // Present only on a merged action; a card built from one persisted row
-      // has no children to reconcile against its own count.
+      // Every canonical action has child evidence, including a single-row
+      // action, so rendering and export use one uniform contract.
       evidenceGroups: Array.isArray(item.evidenceGroups) ? item.evidenceGroups : [],
     },
   };

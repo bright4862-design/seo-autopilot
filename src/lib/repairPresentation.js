@@ -8,7 +8,7 @@ import {
   repairSnapshotPresentationMode,
 } from "./repairContractPresentation.js";
 
-export const REPAIR_PRESENTATION_VERSION = "repair_presentation_v4_linked_evidence_pages";
+export const REPAIR_PRESENTATION_VERSION = "repair_presentation_v5_evidence_groups_canonical_export";
 
 const SECTION_ORDER = ["fix_first", "important", "improve", "review"];
 

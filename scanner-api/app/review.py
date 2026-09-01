@@ -23,6 +23,7 @@ from .page_evidence_gate import (
     page_evidence_class,
     page_has_usable_html,
 )
+from .market_scope import strip_market_locale_prefix
 
 REVIEW_VERSION = "python_review_v2_structural_marketplace"
 SCORING_MODEL = "python_review_v2_group_dedup"
@@ -89,7 +90,7 @@ CATEGORY_MAP = {
     "duplicate_meta_description": "duplicate_content",
 }
 
-ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v11_booking_competitor_finance_playbooks"
+ARCHETYPE_CLASSIFIER_VERSION = "archetype_classifier_v12_locale_normalized_structural_routes"
 
 # Frequency cap for archetype keyword/pattern counting: template volume
 # (hundreds of /blog/ URLs) must not out-vote company-level evidence.
@@ -208,6 +209,8 @@ PLAYBOOKS = {
             "courtier", "broker", "hard money", "bridge loan", "fix and flip",
             "fix-and-flip", "rental", "dscr", "real estate investor", "private lending",
             "payoff", "document exchange", "apply now", "loan overview",
+            "money transfer", "international transfer", "multi-currency account",
+            "currency converter",
         ],
         "money_patterns": [
             "/devis", "/quote", "/simulation", "/simulateur", "/calcul",
@@ -494,6 +497,24 @@ def looks_like_scan_payload(value: Any) -> bool:
     )
 
 
+def normalized_structural_route_paths(pages: list[dict[str, Any]]) -> list[str]:
+    """Return one structural route vote per locale-equivalent HTML path.
+
+    Raw page copy remains available to the keyword classifier. Only structural
+    route counts use this identity, so twelve translations of `/blog/etfs`
+    contribute one route while twelve different article slugs remain twelve.
+    """
+    paths: list[str] = []
+    seen: set[str] = set()
+    for page in pages[:220]:
+        raw_path = clean_path(page_evidence_url(page)).lower()
+        normalized = strip_market_locale_prefix(raw_path).rstrip("/") or "/"
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            paths.append(normalized)
+    return paths
+
+
 def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], website_url: str) -> dict[str, Any]:
     # Only HTML evidence may define a business route family. Asset filenames such
     # as signup-form.png or demo-site.png are crawl evidence, not product routes.
@@ -543,8 +564,8 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         score += archetype_boost(key, text, pages)
         scores.append((key, score))
 
-    page_paths = [clean_path(page_evidence_url(page)).lower() for page in classifier_pages]
-    path_text = " ".join(page_paths)
+    structural_page_paths = normalized_structural_route_paths(classifier_pages)
+    path_text = " ".join(structural_page_paths)
     saas_structural = [pattern for pattern in SAAS_STRUCTURAL_PATTERNS if pattern in path_text]
     ecommerce_structural = [pattern for pattern in ECOMMERCE_STRUCTURAL_PATTERNS if pattern in path_text]
     booking_structural = [pattern for pattern in BOOKING_STRUCTURAL_PATTERNS if pattern in path_text]
@@ -559,12 +580,12 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
     app_distribution_platforms = [
         pattern
         for pattern in APP_DISTRIBUTION_PLATFORM_PATTERNS
-        if any(pattern in path for path in page_paths)
+        if any(pattern in path for path in structural_page_paths)
     ]
     platform_product_routes = [
         pattern
         for pattern in PLATFORM_PRODUCT_PATTERNS
-        if any(path == pattern or path.startswith(pattern + "/") for path in page_paths)
+        if any(path == pattern or path.startswith(pattern + "/") for path in structural_page_paths)
     ]
     ecommerce_marketplace_patterns = ("/itm/", "/sch/", "/b/", "/buy/", "/seller/", "/listing/")
     ecommerce_structural.extend(
@@ -583,28 +604,28 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         ("localbusiness", "restaurant", "winery", "bakery", "foodestablishment", "cafeorcoffeeshop"),
     )
     product_route_pages = sum(
-        1 for path in page_paths if any(pattern in path for pattern in PRODUCT_DETAIL_PATTERNS)
+        1 for path in structural_page_paths if any(pattern in path for pattern in PRODUCT_DETAIL_PATTERNS)
     )
     article_route_pages = sum(
-        1 for path in page_paths
+        1 for path in structural_page_paths
         if any(pattern in path for pattern in ARTICLE_ROUTE_PATTERNS)
         or bool(re.search(r"/20\d{2}/(?:0?[1-9]|1[0-2])/", path))
     )
     saas_route_pages = sum(
-        1 for path in page_paths if any(pattern in path for pattern in SAAS_STRUCTURAL_PATTERNS)
+        1 for path in structural_page_paths if any(pattern in path for pattern in SAAS_STRUCTURAL_PATTERNS)
     )
     finance_route_pages = sum(
-        1 for path in page_paths if any(pattern in path for pattern in FINANCE_STRUCTURAL_PATTERNS)
+        1 for path in structural_page_paths if any(pattern in path for pattern in FINANCE_STRUCTURAL_PATTERNS)
     )
     nonprofit_route_pages = sum(
-        1 for path in page_paths if any(pattern in path for pattern in NONPROFIT_STRUCTURAL_PATTERNS)
+        1 for path in structural_page_paths if any(pattern in path for pattern in NONPROFIT_STRUCTURAL_PATTERNS)
     )
     local_route_pages = sum(
-        1 for path in page_paths if any(pattern in path for pattern in LOCAL_BUSINESS_ROUTE_PATTERNS)
+        1 for path in structural_page_paths if any(pattern in path for pattern in LOCAL_BUSINESS_ROUTE_PATTERNS)
     )
     booking_listing_pages = sum(
-        1 for page in classifier_pages
-        if any(pattern in clean_path(page_evidence_url(page)).lower() for pattern in BOOKING_LISTING_PATTERNS)
+        1 for path in structural_page_paths
+        if any(pattern in path for pattern in BOOKING_LISTING_PATTERNS)
     )
     if product_schema_pages >= 3:
         ecommerce_structural = ecommerce_structural + ["schema:Product"]
@@ -625,6 +646,10 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
         "lending", "lender", "mortgage", "insurance", "assurance", "loan provider",
         "bridge loan", "hard money", "private lending", "credit broker",
         "digital bank", "mobile bank", "bank account", "business account", "debit card",
+        "money transfer", "international transfer", "multi-currency account", "currency converter",
+    ])
+    finance_operations_homepage_identity = has_any(homepage_text, [
+        "money transfer", "international transfer", "multi-currency account", "currency converter",
     ])
     booking_homepage_identity = has_any(homepage_text, [
         "things to do", "book tickets", "buy tickets", "museum tickets",
@@ -751,6 +776,8 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
                 score += 2.0 * min(finance_route_pages, 20)
                 if finance_homepage_identity:
                     score += 20.0
+                if finance_operations_homepage_identity:
+                    score += 12.0
         if key == "nonprofit_fundraising":
             if not nonprofit_dominant:
                 score = min(score, 4.0)
@@ -890,6 +917,7 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             "product_route_pages": product_route_pages,
             "article_route_pages": article_route_pages,
             "classifier_html_route_pages": len(classifier_pages),
+            "normalized_structural_route_pages": len(structural_page_paths),
             "saas_route_pages": saas_route_pages,
             "saas_business_families": saas_business_families,
             "app_distribution_platforms": app_distribution_platforms,
@@ -900,6 +928,7 @@ def build_site_fingerprint(body: dict[str, Any], pages: list[dict[str, Any]], we
             "saas_diverse_structure": saas_diverse_structure,
             "saas_app_distribution_identity": saas_app_distribution_identity,
             "finance_route_pages": finance_route_pages,
+            "finance_operations_homepage_identity": finance_operations_homepage_identity,
             "nonprofit_route_pages": nonprofit_route_pages,
             "publisher_dominant": publisher_dominant,
             "retail_dominant": retail_dominant,
@@ -1156,7 +1185,9 @@ def count_schema_pages(pages: list[dict[str, Any]], schema_needles: tuple[str, .
 
 
 def archetype_boost(key: str, text: str, pages: list[dict[str, Any]]) -> float:
-    path_text = " ".join(clean_path(page_evidence_url(page)).lower() for page in pages[:220])
+    path_text = " ".join(normalized_structural_route_paths([
+        page for page in pages[:220] if not is_non_html_page_evidence(page)
+    ]))
     if key == "booking_experiences_marketplace":
         score = min(count_includes(path_text, "/annonce/"), KEYWORD_COUNT_CAP) * 8
         score += min(count_includes(path_text, "/voir"), KEYWORD_COUNT_CAP) * 5

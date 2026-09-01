@@ -108,42 +108,36 @@ export function whereLine(item) {
  * it is the backend's statement of repair identity, and nothing re-derived
  * here outranks it.
  *
- * Everything below is the fallback for rows with no recorded fingerprint.
- *
- * The key is then the rule and the repair type the library derives from it. A
- * page family is deliberately not part of it: the classifier labelling one group
- * "legal" and another "standard" says nothing about whether the customer
- * performs one change or two, and splitting on it is what turned one repair
- * into several tasks.
- *
- * The instruction text is not part of it either, for the same reason -- the
- * scanner's grouped wording interpolates the family, so keying on it would
- * reintroduce the split through the back door.
- *
- * repairType is kept in the key rather than assumed away: it is the library's
- * own statement of what kind of repair this is, so if one rule ever maps to two
- * repair types by context, those stay two actions on evidence rather than on a
- * label.
+ * Rows with no recorded fingerprint remain separate. Missing identity cannot
+ * prove that two findings are one customer action, even when their rule/type
+ * labels happen to match.
  */
-export function customerActionKey(item) {
+export function customerActionKey(item, fallbackRowIdentity = "") {
   // The scanner's own repair identity wins when it recorded one. Two persisted
   // rows carrying the same fingerprint are the same repair by the backend's
-  // statement, which is stronger evidence than anything re-derived here, and a
-  // production audit found ten sites rendering those as separate top-level
-  // tasks.
+  // statement, which is stronger evidence than anything re-derived here.
   const fingerprint = repairFingerprintOf(item);
   if (fingerprint) return `fingerprint|${fingerprint}`;
-  const rule = lower(item?.rule || item?.original?.rule);
-  return `${rule}|${lower(repairTypeOf(item))}`;
+
+  // An absent fingerprint is explicitly *not* evidence of shared repair
+  // identity. Keep every such persisted row separate. Prefer its durable ID;
+  // mergeCustomerActions supplies a deterministic per-input fallback for legacy
+  // rows with no usable identifier.
+  const rowIdentity = clean(
+    item?.fix_id
+      || item?.id
+      || item?.original?.fix_id
+      || item?.original?.id
+      || fallbackRowIdentity,
+  );
+  return `row|${rowIdentity || "unidentified"}`;
 }
 
 /**
  * The persisted repair identity, or "" when the scan recorded none.
  *
- * Rows without a fingerprint are never merged *by* fingerprint: an absent
- * identity is not evidence that two repairs are the same one, so they fall back
- * to the rule/repair-type key rather than collapsing into a single unknown
- * bucket.
+ * Rows without a fingerprint are never merged: an absent identity is not
+ * evidence that two repairs are the same one.
  */
 export function repairFingerprintOf(item) {
   return clean(
@@ -214,8 +208,9 @@ export function customerEvidenceGroupHeading(rows = []) {
  */
 function evidenceGroupsFor(members) {
   return members.flatMap((member) => {
-    const raw = member?.raw_finding && typeof member.raw_finding === "object"
-      ? member.raw_finding
+    const rawCandidate = member?.raw_finding ?? member?.original?.raw_finding;
+    const raw = rawCandidate && typeof rawCandidate === "object"
+      ? rawCandidate
       : {};
     const persisted = Array.isArray(raw.repair_evidence_groups)
       ? raw.repair_evidence_groups
@@ -265,9 +260,10 @@ export function mergeCustomerActions(items = []) {
   const order = [];
   const groups = new Map();
 
-  for (const item of Array.isArray(items) ? items : []) {
+  const sourceItems = Array.isArray(items) ? items : [];
+  for (const [index, item] of sourceItems.entries()) {
     if (!item || typeof item !== "object") continue;
-    const key = customerActionKey(item);
+    const key = customerActionKey(item, `index:${index}`);
     if (!groups.has(key)) {
       groups.set(key, { lead: item, members: [] });
       order.push(key);

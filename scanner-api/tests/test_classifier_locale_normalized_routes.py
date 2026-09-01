@@ -50,6 +50,21 @@ def test_translated_copies_of_one_article_cast_one_structural_vote():
     assert signals["normalized_structural_route_pages"] == 2
 
 
+def test_tracking_variants_do_not_multiply_structural_route_votes():
+    pages = [
+        page("/", "Business home"),
+        page("/fr/blog/etfs?utm_source=a", "ETF article"),
+        page("/en/blog/etfs?utm_source=b", "ETF article"),
+        page("/blog/etfs?ref=newsletter", "ETF article"),
+    ]
+
+    signals = fingerprint(pages)["classification"]["structural_signals"]
+
+    assert signals["article_route_pages"] == 1
+    assert signals["classifier_html_route_pages"] == 4
+    assert signals["normalized_structural_route_pages"] == 2
+
+
 def test_twelve_genuinely_different_articles_still_cast_twelve_votes():
     pages = [page("/", "Publisher home")]
     pages += [page(f"/fr/blog/article-{index}", f"Article {index}") for index in range(12)]

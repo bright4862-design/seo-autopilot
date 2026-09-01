@@ -31,6 +31,7 @@ const cliHelper = read("scripts/lib/base44-pinned-cli.sh");
 const sourceGuard = read("scripts/lib/release-source-guard.sh");
 const resolveOperatorVersion = read("scripts/resolve_admission_operator_signing_version.py");
 const wifBootstrap = read("scripts/bootstrap-fixlist-cloud-operator-wif.sh");
+const forbiddenHostedBase44SecretInterpolation = /\$\{\{\s*secrets\.(?:BASE44_API_KEY|BASE44_REFRESH_TOKEN|BASE44_ACCESS_TOKEN)\s*\}\}/;
 
 const releaseMutationScripts = [
   bootstrap,
@@ -263,9 +264,8 @@ test("Base44 production controls use hosted runners and ephemeral owner-device a
     assert.match(ownerWorkflow, /group: fixlist-base44-hosted-controls-v2/);
     assert.match(ownerWorkflow, /scripts\/authenticate-base44-owner-session\.sh/);
     assert.match(ownerWorkflow, /BASE44_EXPECTED_OWNER: \$\{\{ secrets\.BASE44_EXPECTED_OWNER \}\}/);
-    assert.doesNotMatch(ownerWorkflow, /BASE44_API_KEY:\s*\$\{\{ secrets\.BASE44_API_KEY \}\}/);
+    assert.doesNotMatch(ownerWorkflow, forbiddenHostedBase44SecretInterpolation);
     assert.doesNotMatch(ownerWorkflow, /runs-on:\s*\[self-hosted[^\n]*fixlist-base44-owner/i);
-    assert.doesNotMatch(ownerWorkflow, /BASE44_(?:REFRESH|ACCESS)_TOKEN\s*:/i);
     assert.match(ownerWorkflow, /Remove ephemeral Base44 owner session[\s\S]*rm -rf "\$HOME\/\.base44"/);
   }
 
@@ -427,9 +427,8 @@ test("Base44 intake and connectivity are isolated owner controls with verified r
     assert.match(ownerWorkflow, /environment: fixlist-production-owner/);
     assert.match(ownerWorkflow, /scripts\/authenticate-base44-owner-session\.sh/);
     assert.match(ownerWorkflow, /BASE44_EXPECTED_OWNER: \$\{\{ secrets\.BASE44_EXPECTED_OWNER \}\}/);
-    assert.doesNotMatch(ownerWorkflow, /BASE44_API_KEY:\s*\$\{\{ secrets\.BASE44_API_KEY \}\}/);
+    assert.doesNotMatch(ownerWorkflow, forbiddenHostedBase44SecretInterpolation);
     assert.doesNotMatch(ownerWorkflow, /runs-on:\s*\[self-hosted[^\n]*fixlist-base44-owner/i);
-    assert.doesNotMatch(ownerWorkflow, /BASE44_(?:REFRESH|ACCESS)_TOKEN\s*:/i);
   }
   assert.match(intakeWorkflow, /denoland\/setup-deno@v2/);
   assert.match(intakeWorkflow, /deno-version: v2\.4\.5/);

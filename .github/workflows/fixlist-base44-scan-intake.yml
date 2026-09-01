@@ -26,8 +26,8 @@ jobs:
   control-intake:
     if: github.actor == 'bright4862-design' && github.ref == 'refs/heads/main'
     environment: fixlist-production-owner
-    # Non-interactive Base44 auth uses a workspace API key from the protected
-    # production environment. No self-hosted runner or refresh token is used.
+    # Builder-compatible Base44 auth uses an ephemeral owner device session on
+    # the hosted runner. No serialized refresh/access token is used.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -48,12 +48,19 @@ jobs:
           test "$(git rev-parse origin/main)" = "${{ github.sha }}"
           test -z "$(git status --porcelain --untracked-files=all)"
           /bin/bash -n scripts/set-base44-scan-intake.sh
+          /bin/bash -n scripts/authenticate-base44-owner-session.sh
           /bin/bash -n scripts/verify-base44-scan-intake-runtime.sh
 
       - name: Set up pinned Node runtime
         uses: actions/setup-node@v6
         with:
           node-version: '20.19.5'
+
+      - name: Authenticate Base44 owner with ephemeral device code
+        shell: /bin/bash {0}
+        env:
+          BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
+        run: /bin/bash scripts/authenticate-base44-owner-session.sh
 
       - name: Set up pinned Deno runtime
         uses: denoland/setup-deno@v2
@@ -67,5 +74,9 @@ jobs:
           CONFIRM: ${{ inputs.confirm }}
           SOURCE_SHA: ${{ github.sha }}
           BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
-          BASE44_API_KEY: ${{ secrets.BASE44_API_KEY }}
         run: /bin/bash scripts/set-base44-scan-intake.sh
+
+      - name: Remove ephemeral Base44 owner session
+        if: ${{ always() }}
+        shell: /bin/bash {0}
+        run: rm -rf "$HOME/.base44"

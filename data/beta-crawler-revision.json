@@ -12,7 +12,7 @@
     "coverage_authority_evidence_version": "coverage_authority_evidence_v2_authoritative",
     "coverage_authority_version": "coverage_authority_v1_shared_decision",
     "crawler_acceptance_version": "crawler_acceptance_v1",
-    "customer_projection_version": "customer_projection_v5_focused_scope_lineage",
+    "customer_projection_version": "customer_projection_v6_effective_scope_visible",
     "customer_result_reader_version": "customer_result_reader_v5_acceptance_projection_parity",
     "durable_completion_contract_version": "durable_standard150_completion_v1",
     "durable_control_contract_version": "durable_standard150_control_v1",
@@ -64,10 +64,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "a43a71c61f32d9fb",
+  "fingerprint": "68a16802a9c7a543",
   "git_commit": "",
-  "note": "P1-B1 final review candidate: scope-type full-site parity, case-preserved candidates, bounded prefix evidence, limited effective scope, and customer acceptance projection parity; subdomains disabled",
-  "recorded_at": "2026-09-01T11:35:26.366094+00:00",
+  "note": "P1-B1 final review candidate: scope-type full-site parity, case-preserved candidates, bounded prefix evidence, limited effective scope, customer acceptance projection parity, and customer-visible effective scope; subdomains disabled",
+  "recorded_at": "2026-09-01T13:03:29.672979+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

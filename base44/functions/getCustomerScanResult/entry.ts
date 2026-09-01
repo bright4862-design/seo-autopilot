@@ -29,7 +29,7 @@ const ACCEPTED_LIMITED_INTEGRITY_VERSIONS = new Set([
 ]);
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { isReadableAuthorityReleaseFingerprint } from "./releaseCompatibility.js";
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "a43a71c61f32d9fb";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "68a16802a9c7a543";
 const MAX_FIX_ITEMS = 100;
 
 class RequestProblem extends Error {

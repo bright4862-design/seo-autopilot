@@ -1231,10 +1231,11 @@ function resolveFocusedPathScope(body = {}, websiteUrl = "") {
 function scanMatchesRequestedScope(row = {}, scope = {}) {
   const rowType = String(row.scope_type || "").trim();
   const rowPrefix = normalizeFocusedPathPrefix(row.requested_path_prefix || row.path_prefix || "");
+  const requestedPrefix = normalizeFocusedPathPrefix(scope?.pathPrefix || "");
   if (scope?.focused) {
-    return rowType === "path_prefix" && rowPrefix === normalizeFocusedPathPrefix(scope.pathPrefix);
+    return rowType === "path_prefix" && rowPrefix === requestedPrefix;
   }
-  return !rowType && !rowPrefix;
+  return !rowType && rowPrefix === requestedPrefix;
 }
 
 function discoveredPrefixCount(parent = {}, pathPrefix = "") {
@@ -1266,7 +1267,7 @@ async function validateFocusedParentScan({ base44, user, project, scope, website
   if (!["complete", "limited"].includes(String(parent.status || "").toLowerCase())) {
     return { ok: false, status: 409, code: "focused_parent_not_terminal", error: "Wait for the parent scan to finish before scanning one section separately." };
   }
-  if (String(parent.scope_type || "") || normalizeFocusedPathPrefix(parent.path_prefix || parent.requested_path_prefix || "")) {
+  if (String(parent.scope_type || "").trim()) {
     return { ok: false, status: 409, code: "focused_parent_must_be_full_site", error: "Start focused scans from the original full-site scan." };
   }
   if (originOf(parent.website_url || parent.submitted_url) !== originOf(websiteUrl)) {

@@ -49,3 +49,17 @@ test("distinct fingerprints on the same URL stay distinct in both surfaces", () 
   assert.equal(buildRepairCards(issues).length, 2);
   assert.equal(buildExportRepairModel({ issues }).repairCount, 2);
 });
+
+test("empty fingerprints stay separate in FixList and PDF export", () => {
+  const issues = [
+    row("missing-one", "", "/first"),
+    row("missing-two", "", "/second"),
+  ];
+
+  const fixListCards = buildRepairCards(issues);
+  const exported = buildExportRepairModel({ issues });
+
+  assert.equal(fixListCards.length, 2);
+  assert.equal(exported.repairCount, 2);
+  assert.equal(exported.repairs.length, 2);
+});

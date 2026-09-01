@@ -281,7 +281,7 @@ test("hosted Base44 owner authentication is pinned, exact-app verified, and ephe
   assert.match(ownerSessionAuth, /--app-id "\$APP_ID" functions list/);
   assert.match(ownerSessionAuth, /BASE44_API_KEY must be unset/);
   assert.doesNotMatch(ownerSessionAuth, /BASE44_(?:REFRESH|ACCESS)_TOKEN/);
-  assert.doesNotMatch(ownerSessionAuth, /echo[^\n]*(?:BASE44_EXPECTED_OWNER|accessToken|refreshToken)/);
+  assert.doesNotMatch(ownerSessionAuth, /echo[^\n]*(?:\\$BASE44_EXPECTED_OWNER|\\$\\{BASE44_EXPECTED_OWNER\\}|accessToken|refreshToken)/);
 });
 
 test("workspace-key auth proves exact-app access without printing the credential", () => {

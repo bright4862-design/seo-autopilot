@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from .extract import is_legal_page_path
 
-SAMPLING_VERSION = "balanced_sitemap_buckets_v3_locale_collapsed_identity_scope_discovery"
+SAMPLING_VERSION = "balanced_sitemap_buckets_v4_locale_collapsed_identity_scope_discovery_case_preserved"
 TRUST_PREFIXES = (
     "/about", "/contact", "/privacy", "/terms", "/legal", "/mentions-legales",
     "/cgv", "/security", "/impressum", "/conditions", "/a-propos",
@@ -209,11 +209,11 @@ def sampling_report(
     for url in all_urls:
         segments = [segment for segment in str(path_of(url) or "/").split("/") if segment]
         if segments:
-            path_prefixes[f"/{segments[0].lower()}"] += 1
+            path_prefixes[f"/{segments[0]}"] += 1
     for url in selected:
         segments = [segment for segment in str(path_of(url) or "/").split("/") if segment]
         if segments:
-            sampled_path_prefixes[f"/{segments[0].lower()}"] += 1
+            sampled_path_prefixes[f"/{segments[0]}"] += 1
 
     identity_selected = [url for url in selected if family_of(url) in MONEY_FAMILIES]
     identity_all = [url for url in all_urls if family_of(url) in MONEY_FAMILIES]

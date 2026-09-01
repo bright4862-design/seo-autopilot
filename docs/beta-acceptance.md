@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `ea87341cb434d834` |
+| Candidate fingerprint | `0544ce395811cbd5` |
 | Classifier | `archetype_classifier_v12_locale_normalized_structural_routes` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,7 +15,7 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `ea87341cb434d834` with classifier
+fingerprint `0544ce395811cbd5` with classifier
 `archetype_classifier_v12_locale_normalized_structural_routes`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
@@ -25,7 +25,7 @@ The immediately superseded candidate was `0fa7d98734efb3f2`; before that
 `7b0ec8c46654192b`, `5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and
 `1ddf8085bc7721c4`.
 
-The current candidate moved the fingerprint to `ea87341cb434d834` by adding
+The current candidate moved the fingerprint to `0544ce395811cbd5` by adding
 P1-B1 focused same-origin path scans on top of the reviewed `0fa7d98734efb3f2`
 Standard 150 candidate. A focused child is explicitly confirmed, bound to a
 discovered path prefix on the exact parent origin, admitted under a scope-aware
@@ -34,8 +34,13 @@ request fingerprint, and persisted as its own ScanRun/FixList with its own
 `standard_review_snapshot_hmac_v4_focused_scope` for authoritative results and
 `standard_limited_result_integrity_v3_focused_scope` for limited results.
 History exposes only the bounded parent/path lineage needed to reopen the child.
-Subdomains remain disabled. This is versioned as
-`focused_scan_scope_v1_same_origin_path_prefix`,
+Subdomains remain disabled. Path-prefix discovery now preserves the original
+first-segment case so /Products and /products remain distinct on
+case-sensitive sites, and server admission rejects traversal-like path segments
+before URL parsing can normalize them away. This is versioned as
+`focused_scan_scope_v2_same_origin_path_prefix_traversal_parity`,
+`balanced_sitemap_buckets_v4_locale_collapsed_identity_scope_discovery_case_preserved`,
+`sampling_disclosure_v3_scope_discovery_case_preserved`,
 `scan_history_v3_focused_parent_children`, and
 `customer_projection_v5_focused_scope_lineage`. **Production acceptance has
 not been run for this candidate.**

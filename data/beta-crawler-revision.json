@@ -21,7 +21,7 @@
     "failure_evidence_dedup_version": "failure_evidence_dedup_v2_group_covered_page_rows",
     "failure_state_presentation_version": "failure_state_presentation_v1_durable_reason",
     "final_url_dedup_version": "final_url_dedup_v1_normalized_identity",
-    "focused_scan_scope_version": "focused_scan_scope_v1_same_origin_path_prefix",
+    "focused_scan_scope_version": "focused_scan_scope_v2_same_origin_path_prefix_traversal_parity",
     "frontier_policy_version": "url_frontier_policy_v1_conservative_trap_guard",
     "grouped_recommendation_evidence_version": "grouped_recommendation_evidence_v1_metadata_states",
     "image_alt_evidence_version": "material_image_alt_v1",
@@ -51,8 +51,8 @@
     "review_evidence_calibration_version": "review_evidence_calibration_v6_health_score_v2",
     "review_version": "python_review_v2_structural_marketplace",
     "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",
-    "sampling_disclosure_version": "sampling_disclosure_v2_scope_discovery_compatible",
-    "sampling_version": "balanced_sitemap_buckets_v3_locale_collapsed_identity_scope_discovery",
+    "sampling_disclosure_version": "sampling_disclosure_v3_scope_discovery_case_preserved",
+    "sampling_version": "balanced_sitemap_buckets_v4_locale_collapsed_identity_scope_discovery_case_preserved",
     "scan_history_delete_version": "scan_history_delete_v2_drain_children",
     "scan_history_version": "scan_history_v3_focused_parent_children",
     "scanner_build_revision": "authenticated_health_probe_v1",
@@ -64,10 +64,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "ea87341cb434d834",
+  "fingerprint": "0544ce395811cbd5",
   "git_commit": "",
-  "note": "P1-B1 focused same-origin path scans rebuilt after Standard 150 A1-A3; subdomains disabled",
-  "recorded_at": "2026-09-01T10:08:22.793810+00:00",
+  "note": "P1-B1 focused same-origin path scans; preserve path case and reject traversal before URL parsing; subdomains disabled",
+  "recorded_at": "2026-09-01T10:35:10.528698+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

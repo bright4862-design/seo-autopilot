@@ -104,6 +104,21 @@ def test_the_budget_is_still_a_hard_cap():
     assert select_balanced_urls(urls, family_of, path_of, 0) == []
 
 
+def test_path_prefix_discovery_preserves_case_sensitive_first_segments():
+    all_urls = [
+        f"{HOST}/Products/item-a",
+        f"{HOST}/products/item-b",
+        f"{HOST}/Products/item-c",
+    ]
+    selected = list(all_urls)
+    report = sampling_report(all_urls, selected, family_of, path_of)
+
+    assert report["path_prefixes_discovered"]["/Products"] == 2
+    assert report["path_prefixes_discovered"]["/products"] == 1
+    assert report["path_prefixes_sampled"]["/Products"] == 2
+    assert report["path_prefixes_sampled"]["/products"] == 1
+
+
 def test_coverage_is_reported_by_route_and_market():
     translated = [f"{HOST}/{m}/plug-types/congo" for m in ("fr", "de", "es")]
     distinct = [f"{HOST}/products/item-{i}" for i in range(5)]

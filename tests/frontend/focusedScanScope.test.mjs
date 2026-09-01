@@ -17,7 +17,7 @@ import {
 import { buildScanRequestIdentity, resolveScanRunReplay } from "../../src/lib/scanRunIdentity.js";
 
 test("focused scope normalization rejects traversal, origins, query strings, and encoded separators", () => {
-  assert.equal(FOCUSED_SCAN_SCOPE_VERSION, "focused_scan_scope_v1_same_origin_path_prefix");
+  assert.equal(FOCUSED_SCAN_SCOPE_VERSION, "focused_scan_scope_v2_same_origin_path_prefix_traversal_parity");
   assert.equal(normalizeRequestedPathPrefix("/fr/"), "/fr");
   assert.equal(normalizeRequestedPathPrefix("fr/guides/"), "/fr/guides");
   assert.equal(displayPathPrefix("/fr"), "/fr/");
@@ -121,6 +121,8 @@ test("server admission requires owned discovered parent scope and does not enabl
   assert.equal(source.includes("focused_scope_not_discovered"), true);
   assert.equal(source.includes("scanMatchesRequestedScope(row, scope)"), true);
   assert.equal(source.includes("focused_parent_must_be_full_site"), true);
+  assert.equal(source.includes('raw.replace(/^\\/+/, "").split("/")'), true);
+  assert.equal(source.includes('rawDecoded === ".."'), true);
   assert.equal(source.includes("scope_type: \"subdomain\""), false);
   assert.deepEqual(schema.properties.scope_type.enum, ["", "path_prefix"]);
   assert.deepEqual(schema.properties.discovered_from.enum, ["", "sitemap", "internal_link", "canonical", "hreflang"]);

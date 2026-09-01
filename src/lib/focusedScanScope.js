@@ -1,4 +1,4 @@
-export const FOCUSED_SCAN_SCOPE_VERSION = "focused_scan_scope_v1_same_origin_path_prefix";
+export const FOCUSED_SCAN_SCOPE_VERSION = "focused_scan_scope_v2_same_origin_path_prefix_traversal_parity";
 
 const LOCALE_SEGMENT_RE = /^[a-z]{2}(?:-[a-z]{2})?$/i;
 const SAFE_DISCOVERY_SOURCES = new Set(["sitemap", "internal_link", "canonical", "hreflang"]);

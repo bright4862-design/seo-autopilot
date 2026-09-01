@@ -42,7 +42,7 @@ function mutableScanIntakeValue() {
   }
 }
 
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "ea87341cb434d834";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "0544ce395811cbd5";
 const VERSION = "startStandardScanJob_v3_server_admission";
 const PUBLIC_SCAN_MODE = "standard_150";
 const MAX_PAGES = 150;
@@ -1136,6 +1136,25 @@ function normalizeFocusedPathPrefix(value) {
   const raw = String(value || "").trim();
   if (!raw || raw === "/") return "";
   if (/^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith("//")) return "";
+
+  // Reject traversal/separator encodings before URL parsing can normalize
+  // dot-segments away and hide the original unsafe request.
+  for (const segment of raw.replace(/^\/+/, "").split("/").filter(Boolean)) {
+    let rawDecoded;
+    try {
+      rawDecoded = decodeURIComponent(segment);
+    } catch {
+      return "";
+    }
+    if (
+      !rawDecoded
+      || rawDecoded === "."
+      || rawDecoded === ".."
+      || rawDecoded.includes("/")
+      || rawDecoded.includes("\\")
+    ) return "";
+  }
+
   try {
     const parsed = new URL(raw.startsWith("/") ? raw : `/${raw}`, "https://scope.invalid");
     if (parsed.origin !== "https://scope.invalid" || parsed.search || parsed.hash) return "";

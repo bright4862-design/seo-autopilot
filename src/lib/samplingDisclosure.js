@@ -1,8 +1,9 @@
-export const SAMPLING_DISCLOSURE_VERSION = "sampling_disclosure_v2_scope_discovery_compatible";
+export const SAMPLING_DISCLOSURE_VERSION = "sampling_disclosure_v3_scope_discovery_case_preserved";
 
 const SUPPORTED_SAMPLING_VERSIONS = new Set([
   "balanced_sitemap_buckets_v2_locale_collapsed_identity_reserve",
   "balanced_sitemap_buckets_v3_locale_collapsed_identity_scope_discovery",
+  "balanced_sitemap_buckets_v4_locale_collapsed_identity_scope_discovery_case_preserved",
 ]);
 
 function clean(value) {

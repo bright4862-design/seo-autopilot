@@ -213,7 +213,7 @@ export function requiresCompleteAcceptanceEvidence(scanStatus, resultIntegrityVe
   );
 }
 
-export function hasCompleteAcceptanceEvidence(scan, review) {
+export function hasCompleteAcceptanceEvidence(scan, review = scan) {
   const coverage = plainObject(review?.coverage_authority_evidence);
   const classification = plainObject(review?.classification_integrity);
   const state = text(classification.state, 120);

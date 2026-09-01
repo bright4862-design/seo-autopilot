@@ -104,6 +104,20 @@ def test_the_budget_is_still_a_hard_cap():
     assert select_balanced_urls(urls, family_of, path_of, 0) == []
 
 
+def test_path_prefix_discovery_is_bounded_to_top_fifty_segments():
+    all_urls = []
+    for index in range(70):
+        count = 70 - index
+        all_urls.extend([f"{HOST}/section-{index}/page-{n}" for n in range(count)])
+    selected = all_urls[:150]
+    report = sampling_report(all_urls, selected, family_of, path_of)
+
+    assert len(report["path_prefixes_discovered"]) == 50
+    assert set(report["path_prefixes_sampled"]) == set(report["path_prefixes_discovered"])
+    assert "/section-0" in report["path_prefixes_discovered"]
+    assert "/section-69" not in report["path_prefixes_discovered"]
+
+
 def test_path_prefix_discovery_preserves_case_sensitive_first_segments():
     all_urls = [
         f"{HOST}/Products/item-a",

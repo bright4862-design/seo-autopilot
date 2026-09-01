@@ -36,6 +36,38 @@
     "path_prefix": {
       "type": "string"
     },
+    "scope_type": {
+      "type": "string",
+      "enum": ["", "path_prefix"],
+      "default": "",
+      "description": "Focused-scan scope type. This release supports same-origin path_prefix only."
+    },
+    "parent_scan_id": {
+      "type": "string",
+      "description": "Full-site ScanRun that discovered and authorized this focused section."
+    },
+    "requested_origin": {
+      "type": "string",
+      "description": "Canonical same-origin authority boundary for a focused scan."
+    },
+    "requested_path_prefix": {
+      "type": "string",
+      "description": "Normalized path prefix requested for this focused scan."
+    },
+    "effective_path_prefix": {
+      "type": "string",
+      "description": "Actual path prefix enforced by the worker after any verified same-origin scope adjustment."
+    },
+    "discovered_from": {
+      "type": "string",
+      "enum": ["", "sitemap", "internal_link", "canonical", "hreflang"],
+      "default": ""
+    },
+    "user_confirmed": {
+      "type": "boolean",
+      "default": false,
+      "description": "True only when the customer explicitly chose the discovered section."
+    },
     "scan_mode": {
       "type": "string",
       "enum": [

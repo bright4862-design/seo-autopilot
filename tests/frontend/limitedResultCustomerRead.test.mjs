@@ -59,6 +59,25 @@ test("a verified limited result returns its evidence to the customer", () => {
   assert.equal(projection.fix_list_id, "fl_limited");
 });
 
+test("verified limited result exposes requested and effective focused scope", () => {
+  const projection = buildCustomerProjection({
+    run: limitedRun({
+      result_integrity_version: "standard_limited_result_integrity_v4_focused_scope_effective_path",
+      scope_type: "path_prefix",
+      requested_path_prefix: "/fr",
+      effective_path_prefix: "/de",
+    }),
+    fixList: LIMITED_FIX_LIST,
+    fixItems: LIMITED_FIX_ITEMS,
+    fullAccess: true,
+    authorityVerified: false,
+    resultIntegrityVerified: true,
+  });
+
+  assert.equal(projection.run.requested_path_prefix, "/fr");
+  assert.equal(projection.run.effective_path_prefix, "/de");
+});
+
 test("a limited result never reports itself as authoritative", () => {
   const projection = buildCustomerProjection({
     run: limitedRun(),
@@ -108,6 +127,7 @@ test("without paid access a limited result stays locked", () => {
 test("the read path verifies the limited proof against its own domain", () => {
   assert.match(SOURCE, /verifyLimitedResultProof\(limitedSnapshot, secret, integrityProof\)/);
   assert.match(SOURCE, /buildLimitedResultSnapshot\(/);
+  assert.match(SOURCE, /standard_limited_result_integrity_v4_focused_scope_effective_path/);
 });
 
 test("a limited row carrying an authority proof is refused outright", () => {

@@ -4,14 +4,23 @@ import test from "node:test";
 import {
   LIMITED_RESULT_INTEGRITY_VERSION,
   LIMITED_RESULT_INTEGRITY_VERSION_V1,
+  LIMITED_RESULT_INTEGRITY_VERSION_V2,
+  LIMITED_RESULT_INTEGRITY_VERSION_V3,
   LIMITED_RESULT_HMAC_DOMAIN,
   LIMITED_RESULT_HMAC_DOMAIN_V1,
+  LIMITED_RESULT_HMAC_DOMAIN_V2,
+  LIMITED_RESULT_HMAC_DOMAIN_V3,
   buildLimitedResultSnapshot,
   createLimitedResultProof,
   verifyLimitedResultProof,
   limitedRowsFromSnapshot,
 } from "../../base44/functions/persistLimitedScanResult/limitedResultIntegrity.js";
 import { createAuthoritySeal, verifyAuthoritySeal } from "../../base44/functions/persistDurableScanAuthority/authoritySeal.js";
+import {
+  buildLimitedResultSnapshot as buildCustomerLimitedResultSnapshot,
+  hasCompleteAcceptanceEvidence as hasCustomerCompleteAcceptanceEvidence,
+  verifyLimitedResultProof as verifyCustomerLimitedResultProof,
+} from "../../base44/functions/getCustomerScanResult/limitedResultIntegrity.js";
 import { RELEASE_FINGERPRINT } from "../../src/lib/generatedReleaseContract.js";
 
 /**
@@ -101,7 +110,7 @@ test("an authority seal cannot be used as a limited proof", async () => {
 test("the signed payload binds the domain label", () => {
   const limited = snapshot();
   assert.equal(limited.integrity_domain, LIMITED_RESULT_HMAC_DOMAIN);
-  assert.equal(LIMITED_RESULT_HMAC_DOMAIN, "standard_limited_result_hmac_v2_acceptance_evidence");
+  assert.equal(LIMITED_RESULT_HMAC_DOMAIN, "standard_limited_result_hmac_v4_focused_scope_effective_path");
   assert.equal(limited.version, LIMITED_RESULT_INTEGRITY_VERSION);
 });
 
@@ -114,6 +123,124 @@ test("historical v1 limited results retain their original proof domain and shape
   assert.equal("classification_integrity" in historical.scan, false);
   assert.equal("worker_peak_memory_bytes" in historical.scan, false);
   assert.equal(await verifyLimitedResultProof(historical, SECRET, proof), true);
+});
+
+test("historical v2 limited results retain the acceptance-evidence proof domain without scope fields", async () => {
+  const historical = snapshot({}, LIMITED_RESULT_INTEGRITY_VERSION_V2);
+  const proof = await createLimitedResultProof(historical, SECRET);
+
+  assert.equal(historical.version, "standard_limited_result_integrity_v2_acceptance_evidence");
+  assert.equal(historical.integrity_domain, LIMITED_RESULT_HMAC_DOMAIN_V2);
+  assert.equal("scope_type" in historical.scan, false);
+  assert.equal("requested_path_prefix" in historical.scan, false);
+  assert.equal(await verifyLimitedResultProof(historical, SECRET, proof), true);
+});
+
+test("historical v3 focused results keep the old scope shape without an effective path", async () => {
+  const historical = buildLimitedResultSnapshot({
+    identity: {
+      scan_id: "scan_hist_v3",
+      project_id: "proj_hist_v3",
+      owner_user_id: "user_hist_v3",
+      request_id: "req_hist_v3",
+      attempt_count: 1,
+      normalized_domain: "example.com",
+    },
+    scan: {
+      submitted_url: "https://example.com/fr/",
+      beta_revision_fingerprint: RELEASE_FINGERPRINT,
+      scope_type: "path_prefix",
+      parent_scan_id: "parent_hist",
+      requested_origin: "https://example.com",
+      requested_path_prefix: "/fr",
+      path_prefix: "/fr",
+      effective_path_prefix: "/de",
+      discovered_from: "sitemap",
+      user_confirmed: true,
+    },
+    review: {
+      scan_status: "inconclusive_insufficient_evidence",
+      recommendations: [{ fix_id: "fix_hist", issue_title: "Historical", priority: "medium" }],
+    },
+    now: NOW,
+    version: LIMITED_RESULT_INTEGRITY_VERSION_V3,
+  });
+  const proof = await createLimitedResultProof(historical, SECRET);
+
+  assert.equal(historical.integrity_domain, LIMITED_RESULT_HMAC_DOMAIN_V3);
+  assert.equal(historical.scan.requested_path_prefix, "/fr");
+  assert.equal("effective_path_prefix" in historical.scan, false);
+  assert.equal(await verifyLimitedResultProof(historical, SECRET, proof), true);
+});
+
+test("current focused limited results bind requested and effective path prefixes end to end", async () => {
+  const current = buildLimitedResultSnapshot({
+    identity: {
+      scan_id: "scan_scope_v4",
+      project_id: "proj_scope_v4",
+      owner_user_id: "user_scope_v4",
+      request_id: "req_scope_v4",
+      attempt_count: 1,
+      normalized_domain: "example.com",
+    },
+    scan: {
+      submitted_url: "https://example.com/fr/",
+      beta_revision_fingerprint: RELEASE_FINGERPRINT,
+      scope_type: "path_prefix",
+      parent_scan_id: "parent_scope",
+      requested_origin: "https://example.com",
+      requested_path_prefix: "/fr",
+      path_prefix: "/fr",
+      effective_path_prefix: "/de",
+      discovered_from: "sitemap",
+      user_confirmed: true,
+    },
+    review: {
+      scan_status: "inconclusive_insufficient_evidence",
+      limitation: "The verified landing redirect changed the effective market scope.",
+      coverage_state: "limited_coverage",
+      recommendations: [{ fix_id: "fix_scope", issue_title: "Scoped finding", priority: "medium" }],
+    },
+    now: NOW,
+  });
+  const proof = await createLimitedResultProof(current, SECRET);
+  const rows = limitedRowsFromSnapshot(current, { fixListId: "fl_scope_v4", proof });
+
+  assert.equal(current.scan.requested_path_prefix, "/fr");
+  assert.equal(current.scan.effective_path_prefix, "/de");
+  assert.equal(rows.scanRun.requested_path_prefix, "/fr");
+  assert.equal(rows.scanRun.effective_path_prefix, "/de");
+
+  const reconstructed = buildCustomerLimitedResultSnapshot({
+    identity: {
+      scan_id: current.scan_id,
+      project_id: current.project_id,
+      owner_user_id: current.owner_user_id,
+      request_id: current.request_id,
+      attempt_count: current.attempt_count,
+      normalized_domain: current.normalized_domain,
+    },
+    scan: rows.scanRun,
+    review: {
+      scan_status: rows.scanRun.scan_status,
+      health_score: rows.scanRun.health_score,
+      health_grade: rows.scanRun.health_grade,
+      limitation: rows.scanRun.limitation,
+      coverage_state: rows.scanRun.coverage_state,
+      coverage_reasons: rows.scanRun.coverage_reasons,
+      coverage_authority_version: rows.scanRun.coverage_authority_version,
+      recommendations: rows.fixItems,
+    },
+    now: current.sealed_at,
+    version: current.version,
+  });
+
+  assert.deepEqual(reconstructed, current);
+  assert.equal(await verifyCustomerLimitedResultProof(reconstructed, SECRET, proof), true);
+
+  const tampered = structuredClone(current);
+  tampered.scan.effective_path_prefix = "/shop";
+  assert.equal(await verifyLimitedResultProof(tampered, SECRET, proof), false);
 });
 
 // ------------------------------------------------------- it is verifiable --
@@ -242,4 +369,25 @@ test("a scan with no useful evidence yields no limited result at all", () => {
     }).eligible_for_limited_result,
     false,
   );
+});
+
+
+test("customer acceptance-evidence helper keeps one-argument projection compatibility", () => {
+  const scan = {
+    worker_peak_memory_bytes: 1024,
+    coverage_authority_evidence: {
+      coverage_authority_evidence_version: "coverage_authority_evidence_v2_authoritative",
+      assessment: "sufficient",
+    },
+    classification_integrity: {
+      version: "standard150_acceptance_evidence_v2_aggregate_rss_fail_closed",
+      state: "classified",
+      verdict: "classified",
+      classifier_version: "archetype_classifier_v12_locale_normalized_structural_routes",
+      evidence_sufficiency: "sufficient",
+      usable_pages: 12,
+      complete_small_site_inventory: false,
+    },
+  };
+  assert.equal(hasCustomerCompleteAcceptanceEvidence(scan), true);
 });

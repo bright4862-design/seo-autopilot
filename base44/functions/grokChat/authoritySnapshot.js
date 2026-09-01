@@ -28,6 +28,7 @@ export function authoritySnapshotFromRows({ scan, fixList, fixItems, userId }) {
       evidence_quality_blocking: scan?.evidence_quality_blocking === true,
       website_url: text(scan?.website_url, 2_000),
       normalized_domain: domain(scan?.normalized_domain || scan?.website_url),
+      ...scopeSnapshotFields(scan),
       scanner_version: text(scan?.scanner_version, 160),
       scanner_build_revision: text(scan?.scanner_build_revision, 160),
       scanner_wrapper_version: text(scan?.scanner_wrapper_version, 160),
@@ -204,6 +205,7 @@ function plainObject(value) {
 
 const REVIEW_ATTESTATION_VERSION_V2 = "standard_review_snapshot_hmac_v2_coverage";
 const REVIEW_ATTESTATION_VERSION_V3 = "standard_review_snapshot_hmac_v3_acceptance_evidence";
+const REVIEW_ATTESTATION_VERSION_V4 = "standard_review_snapshot_hmac_v4_focused_scope";
 
 /**
  * Reconstruction is version-dispatched, never inferred from which fields the
@@ -211,8 +213,20 @@ const REVIEW_ATTESTATION_VERSION_V3 = "standard_review_snapshot_hmac_v3_acceptan
  * must still rebuild the v2 shape, and a v1 row must never gain a field its
  * seal did not cover. The row's own authority_seal_version is the authority.
  */
+function scopeSnapshotFields(row) {
+  if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V4) return {};
+  return {
+    scope_type: text(row?.scope_type, 40),
+    parent_scan_id: text(row?.parent_scan_id, 160),
+    requested_origin: text(row?.requested_origin, 2_000),
+    requested_path_prefix: text(row?.requested_path_prefix || row?.path_prefix, 1_000),
+    discovered_from: text(row?.discovered_from, 80),
+    user_confirmed: row?.user_confirmed === true,
+  };
+}
+
 function coverageSnapshotFields(row) {
-  if (![REVIEW_ATTESTATION_VERSION_V2, REVIEW_ATTESTATION_VERSION_V3].includes(
+  if (![REVIEW_ATTESTATION_VERSION_V2, REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4].includes(
     text(row?.authority_seal_version, 160),
   )) return {};
   return {
@@ -229,7 +243,9 @@ function coverageSnapshotFields(row) {
 }
 
 function acceptanceEvidenceSnapshotFields(row) {
-  if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V3) return {};
+  if (![REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4].includes(
+    text(row?.authority_seal_version, 160),
+  )) return {};
   const source = plainObject(row?.classification_integrity);
   const state = text(source.state, 120);
   const verdict = text(source.verdict, 120);

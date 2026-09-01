@@ -19,14 +19,17 @@ const ACCEPTED_AUTHORITY_VERSIONS = new Set([
   "standard_review_snapshot_hmac_v1",
   "standard_review_snapshot_hmac_v2_coverage",
   "standard_review_snapshot_hmac_v3_acceptance_evidence",
+  "standard_review_snapshot_hmac_v4_focused_scope",
 ]);
 const ACCEPTED_LIMITED_INTEGRITY_VERSIONS = new Set([
   "standard_limited_result_integrity_v1",
   "standard_limited_result_integrity_v2_acceptance_evidence",
+  "standard_limited_result_integrity_v3_focused_scope",
+  "standard_limited_result_integrity_v4_focused_scope_effective_path",
 ]);
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { isReadableAuthorityReleaseFingerprint } from "./releaseCompatibility.js";
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "0fa7d98734efb3f2";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "68a16802a9c7a543";
 const MAX_FIX_ITEMS = 100;
 
 class RequestProblem extends Error {
@@ -132,8 +135,11 @@ Deno.serve(async (req) => {
       const limitedFixList = await loadLimitedFixList(serviceEntities.FixList, run, user, integrityProof);
       const limitedFixItems = await loadLimitedFixItems(serviceEntities.FixItem, limitedFixList, run, integrityProof);
       const limitedIntegrityVersion = cleanText(run.result_integrity_version, 160);
-      const limitedUsesAcceptanceEvidence =
-        limitedIntegrityVersion === "standard_limited_result_integrity_v2_acceptance_evidence";
+      const limitedUsesAcceptanceEvidence = [
+        "standard_limited_result_integrity_v2_acceptance_evidence",
+        "standard_limited_result_integrity_v3_focused_scope",
+        "standard_limited_result_integrity_v4_focused_scope_effective_path",
+      ].includes(limitedIntegrityVersion);
       const limitedSnapshot = buildLimitedResultSnapshot({
         identity: {
           scan_id: run.id,

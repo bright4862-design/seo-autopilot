@@ -3,7 +3,7 @@
 // Run that generator after changing either input; CI fails on drift.
 
 export const RELEASE_CONTRACT_SCHEMA_VERSION = "beta_crawler_revision_v1";
-export const RELEASE_FINGERPRINT = "0fa7d98734efb3f2";
+export const RELEASE_FINGERPRINT = "68a16802a9c7a543";
 export const RELEASE_STATUS = "candidate";
 export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "acceptance_evidence_version": "standard150_acceptance_evidence_v2_aggregate_rss_fail_closed",
@@ -17,8 +17,8 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "coverage_authority_evidence_version": "coverage_authority_evidence_v2_authoritative",
   "coverage_authority_version": "coverage_authority_v1_shared_decision",
   "crawler_acceptance_version": "crawler_acceptance_v1",
-  "customer_projection_version": "customer_projection_v4_acceptance_evidence_fail_closed",
-  "customer_result_reader_version": "customer_result_reader_v2_historical_release_compatibility",
+  "customer_projection_version": "customer_projection_v6_effective_scope_visible",
+  "customer_result_reader_version": "customer_result_reader_v5_acceptance_projection_parity",
   "durable_completion_contract_version": "durable_standard150_completion_v1",
   "durable_control_contract_version": "durable_standard150_control_v1",
   "durable_worker_contract_version": "scan_job_worker_v1_cloud_tasks",
@@ -26,11 +26,13 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "failure_evidence_dedup_version": "failure_evidence_dedup_v2_group_covered_page_rows",
   "failure_state_presentation_version": "failure_state_presentation_v1_durable_reason",
   "final_url_dedup_version": "final_url_dedup_v1_normalized_identity",
+  "focused_scan_scope_version": "focused_scan_scope_v3_fullsite_scope_type_case_preserved_candidates",
   "frontier_policy_version": "url_frontier_policy_v1_conservative_trap_guard",
   "grouped_recommendation_evidence_version": "grouped_recommendation_evidence_v1_metadata_states",
   "image_alt_evidence_version": "material_image_alt_v1",
   "indexability_quality_version": "indexability_quality_v1",
-  "limited_result_integrity_version": "standard_limited_result_integrity_v2_acceptance_evidence",
+  "limited_result_integrity_version": "standard_limited_result_integrity_v4_focused_scope_effective_path",
+  "market_scope_version": "market_scope_v2_traversal_safe_path_prefix",
   "metadata_evidence_version": "metadata_evidence_v1_description_states",
   "navigation_indexability_version": "navigation_indexability_v1",
   "orphan_asset_evidence_version": "orphan_asset_evidence_v1",
@@ -50,14 +52,14 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "repair_surface_grouping_version": "repair_surface_grouping_v1_shared_artifact",
   "repair_write_contract_version": "repair_contract_v2_shadow_calibrated",
   "representative_page_version": "business_representative_page_v3_sitewide_archetype_ranking",
-  "review_attestation_version": "standard_review_snapshot_hmac_v3_acceptance_evidence",
+  "review_attestation_version": "standard_review_snapshot_hmac_v4_focused_scope",
   "review_evidence_calibration_version": "review_evidence_calibration_v6_health_score_v2",
   "review_version": "python_review_v2_structural_marketplace",
   "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",
-  "sampling_disclosure_version": "sampling_disclosure_v1_customer_coverage",
-  "sampling_version": "balanced_sitemap_buckets_v2_locale_collapsed_identity_reserve",
+  "sampling_disclosure_version": "sampling_disclosure_v4_bounded_prefix_inventory_compatible",
+  "sampling_version": "balanced_sitemap_buckets_v5_locale_collapsed_identity_scope_discovery_bounded_prefixes",
   "scan_history_delete_version": "scan_history_delete_v2_drain_children",
-  "scan_history_version": "scan_history_v2_account_wide_recent",
+  "scan_history_version": "scan_history_v3_focused_parent_children",
   "scanner_build_revision": "authenticated_health_probe_v1",
   "scanner_version": "python_scanner_v3_bounded_request",
   "sitemap_parser_version": "sitemap_parser_v1_xml_identity",

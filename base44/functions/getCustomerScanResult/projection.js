@@ -8,7 +8,7 @@ export const OWNER_TEST_USER_ID = "6a498da58ef5cec1f5cd4486";
 // Versions the customer projection itself. Declared in
 // data/cross-runtime-release-components.json so a projection behavior change
 // moves the release fingerprint like any Python change would.
-export const CUSTOMER_PROJECTION_VERSION = "customer_projection_v4_acceptance_evidence_fail_closed";
+export const CUSTOMER_PROJECTION_VERSION = "customer_projection_v6_effective_scope_visible";
 export const REPAIR_CONTRACT_V2 = "repair_contract_v2_shadow_calibrated";
 export const REPAIR_PRIORITY_MODEL_V2 = "repair_priority_v2_technical_severity";
 
@@ -19,6 +19,14 @@ const PUBLIC_RUN_FIELDS = [
   "submitted_url",
   "final_url",
   "normalized_domain",
+  "path_prefix",
+  "scope_type",
+  "parent_scan_id",
+  "requested_origin",
+  "requested_path_prefix",
+  "effective_path_prefix",
+  "discovered_from",
+  "user_confirmed",
   "scan_mode",
   "status",
   "status_detail",
@@ -38,12 +46,27 @@ const PUBLIC_RUN_FIELDS = [
 // History is intentionally narrower than the progress projection used for one
 // exact ScanRun. It must remain safe before entitlement is checked and never
 // carry score, evidence, request identity, release identity, or authority data.
+function focusedHistoryFields(run) {
+  const scopeType = text(run?.scope_type, 40);
+  const pathPrefix = text(run?.requested_path_prefix || run?.path_prefix, 1_000);
+  if (scopeType !== "path_prefix" || !pathPrefix) return {};
+  return {
+    scope_type: "path_prefix",
+    parent_scan_id: text(run?.parent_scan_id, 160),
+    requested_origin: text(run?.requested_origin, 2_000),
+    requested_path_prefix: pathPrefix,
+    discovered_from: text(run?.discovered_from, 80),
+    user_confirmed: run?.user_confirmed === true,
+  };
+}
+
 export function buildScanHistoryProjection(rows = []) {
   return uniqueRows(rows).map((run) => ({
     id: text(run?.id, 160),
     project_id: text(run?.project_id, 160),
     website_url: text(run?.website_url || run?.submitted_url, 2_000),
     normalized_domain: domain(run?.normalized_domain || run?.website_url || run?.submitted_url),
+    ...focusedHistoryFields(run),
     status: text(run?.status, 80),
     pages_found: nonNegativeInteger(run?.pages_found),
     pages_crawled: nonNegativeInteger(run?.pages_crawled),
@@ -312,6 +335,7 @@ export function authoritySnapshotFromRows({ run, fixList, fixItems, userId }) {
       evidence_quality_blocking: run?.evidence_quality_blocking === true,
       website_url: text(run?.website_url, 2_000),
       normalized_domain: domain(run?.normalized_domain || run?.website_url),
+      ...scopeSnapshotFields(run),
       scanner_version: text(run?.scanner_version, 160),
       scanner_build_revision: text(run?.scanner_build_revision, 160),
       scanner_wrapper_version: text(run?.scanner_wrapper_version, 160),
@@ -545,8 +569,14 @@ function sanitizeRun(run, { detailed, healthScoreStatus = "" }) {
 }
 
 function usesAcceptanceEvidenceContract(run) {
-  return text(run?.authority_seal_version, 160) === "standard_review_snapshot_hmac_v3_acceptance_evidence"
-    || text(run?.result_integrity_version, 160) === "standard_limited_result_integrity_v2_acceptance_evidence";
+  return ["standard_review_snapshot_hmac_v3_acceptance_evidence", "standard_review_snapshot_hmac_v4_focused_scope"].includes(text(run?.authority_seal_version, 160))
+    || [
+      "standard_limited_result_integrity_v2_acceptance_evidence",
+      "standard_limited_result_integrity_v3_focused_scope",
+      "standard_limited_result_integrity_v4_focused_scope_effective_path",
+    ].includes(
+      text(run?.result_integrity_version, 160),
+    );
 }
 
 function hasCompleteAcceptanceEvidence(run) {
@@ -709,6 +739,7 @@ function plainObject(value) {
 
 const REVIEW_ATTESTATION_VERSION_V2 = "standard_review_snapshot_hmac_v2_coverage";
 const REVIEW_ATTESTATION_VERSION_V3 = "standard_review_snapshot_hmac_v3_acceptance_evidence";
+const REVIEW_ATTESTATION_VERSION_V4 = "standard_review_snapshot_hmac_v4_focused_scope";
 
 /**
  * Reconstruction is version-dispatched, never inferred from which fields the
@@ -716,8 +747,19 @@ const REVIEW_ATTESTATION_VERSION_V3 = "standard_review_snapshot_hmac_v3_acceptan
  * must still rebuild the v2 shape, and a v1 row must never gain a field its
  * seal did not cover. The row's own authority_seal_version is the authority.
  */
+function scopeSnapshotFields(row) {
+  if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V4) return {};
+  return {
+    scope_type: text(row?.scope_type, 40),
+    parent_scan_id: text(row?.parent_scan_id, 160),
+    requested_origin: text(row?.requested_origin, 2_000),
+    requested_path_prefix: text(row?.requested_path_prefix || row?.path_prefix, 1_000),
+    discovered_from: text(row?.discovered_from, 80),
+    user_confirmed: row?.user_confirmed === true,
+  };
+}
 function coverageSnapshotFields(row) {
-  if (![REVIEW_ATTESTATION_VERSION_V2, REVIEW_ATTESTATION_VERSION_V3].includes(
+  if (![REVIEW_ATTESTATION_VERSION_V2, REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4].includes(
     text(row?.authority_seal_version, 160),
   )) return {};
   return {
@@ -734,7 +776,7 @@ function coverageSnapshotFields(row) {
 }
 
 function acceptanceEvidenceSnapshotFields(row) {
-  if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V3) return {};
+  if (![REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4].includes(text(row?.authority_seal_version, 160))) return {};
   const source = plainObject(row?.classification_integrity);
   const state = text(source.state, 120);
   const verdict = text(source.verdict, 120);

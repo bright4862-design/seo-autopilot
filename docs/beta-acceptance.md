@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `0fa7d98734efb3f2` |
+| Candidate fingerprint | `68a16802a9c7a543` |
 | Classifier | `archetype_classifier_v12_locale_normalized_structural_routes` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,18 +15,44 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `0fa7d98734efb3f2` with classifier
+fingerprint `68a16802a9c7a543` with classifier
 `archetype_classifier_v12_locale_normalized_structural_routes`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded candidate was `7a95768cc8ee2076`; before that
-`58275d24191cf1cb`,
+The immediately superseded candidate was `a43a71c61f32d9fb`; before that `2f4238b4989f3fd9`, `0544ce395811cbd5`,
+`0fa7d98734efb3f2`, `7a95768cc8ee2076`, `58275d24191cf1cb`,
 `7b0ec8c46654192b`, `5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and
 `1ddf8085bc7721c4`.
 
-The current candidate moved the fingerprint to `0fa7d98734efb3f2`. Structural
-classifier evidence now collapses locale and market prefixes before route counts
+The current candidate moved the fingerprint to `68a16802a9c7a543` by completing
+P1-B1 focused same-origin path scans on top of the reviewed `0fa7d98734efb3f2`
+Standard 150 candidate. A focused child is explicitly confirmed, bound to a
+discovered path prefix on the exact parent origin, admitted under a scope-aware
+request fingerprint, and persisted as its own ScanRun/FixList with its own
+150-page budget. Scope lineage is HMAC-bound under
+`standard_review_snapshot_hmac_v4_focused_scope` for authoritative results and
+`standard_limited_result_integrity_v4_focused_scope_effective_path` for limited results.
+Limited focused results also bind the worker-observed
+`effective_path_prefix` separately from the requested prefix, so a verified
+same-origin market redirect cannot be lost or rewritten after sealing. The
+customer reader reconstructs this as
+`customer_result_reader_v5_acceptance_projection_parity` while keeping
+historical limited v1/v2/v3 proof shapes readable. History exposes only the
+bounded parent/path lineage needed to reopen the child. Subdomains remain
+disabled. Path-prefix discovery now preserves the original
+first-segment case so /Products and /products remain distinct on
+case-sensitive sites, and server admission rejects traversal-like path segments
+before URL parsing can normalize them away. This is versioned as
+`focused_scan_scope_v3_fullsite_scope_type_case_preserved_candidates`,
+`balanced_sitemap_buckets_v5_locale_collapsed_identity_scope_discovery_bounded_prefixes`,
+`sampling_disclosure_v4_bounded_prefix_inventory_compatible`,
+`scan_history_v3_focused_parent_children`, and
+`customer_projection_v6_effective_scope_visible`. **Production acceptance has
+not been run for this candidate.**
+
+The immediately preceding `0fa7d98734efb3f2` candidate changed structural
+classifier evidence so locale and market prefixes collapse before route counts
 are evaluated, while raw page text remains unchanged. Repeated `/en/`, `/fr/`,
 or country-prefixed copies of one route can no longer manufacture independent
 structural evidence; distinct business routes remain distinct. This is recorded

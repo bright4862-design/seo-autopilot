@@ -1,9 +1,11 @@
-import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
+import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 
 const ENCODER = new TextEncoder();
 
-export const LIMITED_RESULT_INTEGRITY_VERSION = "standard_limited_result_integrity_v2_acceptance_evidence";
+export const LIMITED_RESULT_INTEGRITY_VERSION = "standard_limited_result_integrity_v4_focused_scope_effective_path";
 export const LIMITED_RESULT_INTEGRITY_VERSION_V1 = "standard_limited_result_integrity_v1";
+export const LIMITED_RESULT_INTEGRITY_VERSION_V2 = "standard_limited_result_integrity_v2_acceptance_evidence";
+export const LIMITED_RESULT_INTEGRITY_VERSION_V3 = "standard_limited_result_integrity_v3_focused_scope";
 
 /**
  * The HMAC domain label, bound *inside* the signed payload rather than kept as
@@ -12,8 +14,10 @@ export const LIMITED_RESULT_INTEGRITY_VERSION_V1 = "standard_limited_result_inte
  * an authority seal is that the two payloads can never be equal. Putting the
  * label in the payload is what guarantees that, whatever else the rows carry.
  */
-export const LIMITED_RESULT_HMAC_DOMAIN = "standard_limited_result_hmac_v2_acceptance_evidence";
+export const LIMITED_RESULT_HMAC_DOMAIN = "standard_limited_result_hmac_v4_focused_scope_effective_path";
 export const LIMITED_RESULT_HMAC_DOMAIN_V1 = "standard_limited_result_hmac_v1";
+export const LIMITED_RESULT_HMAC_DOMAIN_V2 = "standard_limited_result_hmac_v2_acceptance_evidence";
+export const LIMITED_RESULT_HMAC_DOMAIN_V3 = "standard_limited_result_hmac_v3_focused_scope";
 
 export const MAX_LIMITED_FIXES = 100;
 
@@ -64,6 +68,7 @@ export function buildLimitedResultSnapshot({
       release_gate_eligible: false,
       score_is_provisional: true,
       website_url: text(scan?.submitted_url || scan?.website_url, 2_000),
+      ...focusedScopeFields(scan, version),
       scanner_version: text(scan?.scanner_version, 160),
       scanner_build_revision: text(scan?.scanner_build_revision, 160),
       worker_source_sha: text(scan?.worker_source_sha, 80),
@@ -79,7 +84,11 @@ export function buildLimitedResultSnapshot({
       coverage_state: text(review?.coverage_state, 120),
       coverage_reasons: coverageReasons,
       coverage_authority_version: text(review?.coverage_authority_version, 160),
-      ...(version === LIMITED_RESULT_INTEGRITY_VERSION
+      ...([
+        LIMITED_RESULT_INTEGRITY_VERSION,
+        LIMITED_RESULT_INTEGRITY_VERSION_V3,
+        LIMITED_RESULT_INTEGRITY_VERSION_V2,
+      ].includes(version)
         ? acceptanceEvidenceFields(scan, review)
         : {}),
     },
@@ -172,42 +181,75 @@ function limitedPayload(snapshot) {
 
 function limitedIntegrityDomain(version) {
   if (version === LIMITED_RESULT_INTEGRITY_VERSION) return LIMITED_RESULT_HMAC_DOMAIN;
+  if (version === LIMITED_RESULT_INTEGRITY_VERSION_V3) return LIMITED_RESULT_HMAC_DOMAIN_V3;
+  if (version === LIMITED_RESULT_INTEGRITY_VERSION_V2) return LIMITED_RESULT_HMAC_DOMAIN_V2;
   if (version === LIMITED_RESULT_INTEGRITY_VERSION_V1) return LIMITED_RESULT_HMAC_DOMAIN_V1;
   throw new Error("Unsupported limited result integrity version.");
 }
 
-function acceptanceEvidenceFields(scan, review) {
+function focusedScopeFields(scan, version) {
+  if (![LIMITED_RESULT_INTEGRITY_VERSION, LIMITED_RESULT_INTEGRITY_VERSION_V3].includes(version)) return {};
+  const fields = {
+    scope_type: text(scan?.scope_type, 40),
+    parent_scan_id: text(scan?.parent_scan_id, 160),
+    requested_origin: text(scan?.requested_origin, 2_000),
+    requested_path_prefix: text(scan?.requested_path_prefix || scan?.path_prefix, 1_000),
+    discovered_from: text(scan?.discovered_from, 80),
+    user_confirmed: scan?.user_confirmed === true,
+  };
+  if (version === LIMITED_RESULT_INTEGRITY_VERSION) {
+    fields.effective_path_prefix = text(
+      scan?.effective_path_prefix || scan?.path_prefix || scan?.requested_path_prefix,
+      1_000,
+    );
+  }
+  return fields;
+}
+
+export function requiresCompleteAcceptanceEvidence(scanStatus, resultIntegrityVersion) {
+  return !(
+    String(scanStatus || "").toLowerCase() === "limited"
+    && text(resultIntegrityVersion, 160) === LIMITED_RESULT_INTEGRITY_VERSION_V1
+  );
+}
+
+export function hasCompleteAcceptanceEvidence(scan, review = scan) {
   const coverage = plainObject(review?.coverage_authority_evidence);
   const classification = plainObject(review?.classification_integrity);
   const state = text(classification.state, 120);
   const verdict = text(classification.verdict, 120);
-  const usablePages = finiteNonNegativeNumber(classification.usable_pages);
+  return Boolean(
+    text(coverage.coverage_authority_evidence_version, 160)
+    && text(coverage.assessment, 120)
+    && text(classification.version, 160) === RELEASE_COMPONENT_VERSIONS.acceptance_evidence_version
+    && state
+    && verdict
+    && state === verdict
+    && text(classification.classifier_version, 160)
+    && text(classification.evidence_sufficiency, 120)
+    && finiteNonNegativeNumber(classification.usable_pages) !== null
+    && typeof classification.complete_small_site_inventory === "boolean"
+    && positiveNumber(scan?.worker_peak_memory_bytes ?? scan?.peak_memory_bytes) !== null
+  );
+}
+
+function acceptanceEvidenceFields(scan, review) {
+  if (!hasCompleteAcceptanceEvidence(scan, review)) return {};
+  const coverage = plainObject(review?.coverage_authority_evidence);
+  const classification = plainObject(review?.classification_integrity);
   const workerPeak = positiveNumber(scan?.worker_peak_memory_bytes ?? scan?.peak_memory_bytes);
-  if (
-    !text(coverage.coverage_authority_evidence_version, 160)
-    || !text(coverage.assessment, 120)
-    || !text(classification.version, 160)
-    || !state
-    || !verdict
-    || state !== verdict
-    || !text(classification.classifier_version, 160)
-    || !text(classification.evidence_sufficiency, 120)
-    || usablePages === null
-    || typeof classification.complete_small_site_inventory !== "boolean"
-    || workerPeak === null
-  ) return {};
   return {
     coverage_authority_evidence: coverage,
     classification_integrity: {
       version: text(classification.version, 160),
-      state,
-      verdict,
+      state: text(classification.state, 120),
+      verdict: text(classification.verdict, 120),
       classifier_version: text(classification.classifier_version, 160),
       evidence_sufficiency: text(classification.evidence_sufficiency, 120),
-      usable_pages: usablePages,
+      usable_pages: finiteNonNegativeNumber(classification.usable_pages),
       complete_small_site_inventory: classification.complete_small_site_inventory,
     },
-    classification_verdict: verdict,
+    classification_verdict: text(classification.verdict, 120),
     peak_memory_bytes: workerPeak,
     worker_peak_memory_bytes: workerPeak,
   };

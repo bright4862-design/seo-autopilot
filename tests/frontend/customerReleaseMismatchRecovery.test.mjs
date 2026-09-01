@@ -4,6 +4,8 @@ import test from "node:test";
 
 const reader = readFileSync("base44/functions/getCustomerScanResult/entry.ts", "utf8");
 const compatibility = readFileSync("base44/functions/getCustomerScanResult/releaseCompatibility.js", "utf8");
+const CURRENT_PRE_P1B_FINGERPRINT = "0fa7d98734efb3f2";
+const FOCUSED_DESIGN_BASE_FINGERPRINT = "7a95768cc8ee2076";
 const scanRuns = readFileSync("src/lib/scanRuns.js", "utf8");
 const fixList = readFileSync("src/pages/FixList.jsx", "utf8");
 
@@ -15,8 +17,18 @@ test("a known-compatible historical release remains readable after the app advan
   );
   assert.match(
     compatibility,
-    /CUSTOMER_RESULT_READER_VERSION = "customer_result_reader_v2_historical_release_compatibility"/,
+    /CUSTOMER_RESULT_READER_VERSION = "customer_result_reader_v5_acceptance_projection_parity"/,
     "historical reader semantics must carry an explicit release component version",
+  );
+  assert.match(
+    compatibility,
+    new RegExp(CURRENT_PRE_P1B_FINGERPRINT),
+    "the immediately preceding reviewed Standard 150 release must stay readable",
+  );
+  assert.match(
+    compatibility,
+    new RegExp(FOCUSED_DESIGN_BASE_FINGERPRINT),
+    "the accepted P1-B1 design base remains an explicit historical reader target",
   );
   assert.match(
     reader,

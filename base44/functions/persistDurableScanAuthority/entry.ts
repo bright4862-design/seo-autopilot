@@ -9,7 +9,7 @@ import { persistExactAdmissionRelease } from "./admissionRelease.js";
 // a compiled worker when entry.ts stayed byte-identical while an imported
 // handler changed. Keeping the active release fingerprint in the entry module
 // guarantees every release-fingerprint move changes the deployed entry bytes.
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "0fa7d98734efb3f2";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "68a16802a9c7a543";
 
 function normalizeAttempt(value) {
   const parsed = Number(value);
@@ -68,8 +68,18 @@ Deno.serve(async (req) => {
     const project = await entities.BusinessProject.get(identity.project_id).catch(() => null);
     if (!scan || !project) throw new RequestProblem(404, "authority_record_not_found", "The durable scan project was not found.");
     validateCurrentIdentity({ scan, project, identity, scanResult });
+    const authorityScanResult = {
+      ...scanResult,
+      scope_type: String(scan.scope_type || ""),
+      parent_scan_id: String(scan.parent_scan_id || ""),
+      requested_origin: String(scan.requested_origin || ""),
+      requested_path_prefix: String(scan.requested_path_prefix || scan.path_prefix || ""),
+      path_prefix: String(scan.path_prefix || scan.requested_path_prefix || ""),
+      discovered_from: String(scan.discovered_from || ""),
+      user_confirmed: scan.user_confirmed === true,
+    };
 
-    const failedPredicate = firstFailedAuthorityPredicate(scanResult, review);
+    const failedPredicate = firstFailedAuthorityPredicate(authorityScanResult, review);
     if (failedPredicate) {
       const fingerprintDiagnostic = failedPredicate === "beta_revision_fingerprint"
         ? `__expected_${diagnosticMarker(BASE44_HANDLER_RELEASE_FINGERPRINT)}__received_${diagnosticMarker(review?.beta_revision_fingerprint || scanResult?.beta_revision_fingerprint)}`
@@ -77,7 +87,7 @@ Deno.serve(async (req) => {
       throw new RequestProblem(409, `authority_snapshot_not_eligible__${failedPredicate}${fingerprintDiagnostic}`, "The reviewed scan is not release-authoritative.");
     }
 
-    if (!hasCompleteAcceptanceEvidence(scanResult, review)) {
+    if (!hasCompleteAcceptanceEvidence(authorityScanResult, review)) {
       throw new RequestProblem(
         409,
         "authority_acceptance_evidence_incomplete",
@@ -87,7 +97,7 @@ Deno.serve(async (req) => {
 
     const stableSealedAt = stableTimestamp(scan);
     const snapshot = buildAuthoritySnapshot({
-      scan: scanResult,
+      scan: authorityScanResult,
       review,
       identity,
       userId: identity.owner_user_id,

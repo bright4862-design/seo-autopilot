@@ -19,11 +19,7 @@ import {
  * authority path to weaken, because none exists in this file.
  */
 
-<<<<<<< ours
 const BASE44_HANDLER_RELEASE_FINGERPRINT = "0fa7d98734efb3f2";
-=======
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "065e90c00b30a4f3";
->>>>>>> theirs
 const WORKER_VERSION = "scan_job_worker_v1_cloud_tasks";
 const LIMITED_COMPLETION_VERSION = "durable_standard150_limited_v1";
 const LIMITED_COVERAGE_STATES = new Set(["limited_coverage", "inventory_unproven", "access_limited"]);

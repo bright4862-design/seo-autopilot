@@ -42,7 +42,7 @@ function mutableScanIntakeValue() {
   }
 }
 
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "2f4238b4989f3fd9";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "a43a71c61f32d9fb";
 const VERSION = "startStandardScanJob_v3_server_admission";
 const PUBLIC_SCAN_MODE = "standard_150";
 const MAX_PAGES = 150;

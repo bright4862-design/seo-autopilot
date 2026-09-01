@@ -3,7 +3,7 @@
 // Run that generator after changing either input; CI fails on drift.
 
 export const RELEASE_CONTRACT_SCHEMA_VERSION = "beta_crawler_revision_v1";
-export const RELEASE_FINGERPRINT = "2f4238b4989f3fd9";
+export const RELEASE_FINGERPRINT = "a43a71c61f32d9fb";
 export const RELEASE_STATUS = "candidate";
 export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "acceptance_evidence_version": "standard150_acceptance_evidence_v2_aggregate_rss_fail_closed",
@@ -18,7 +18,7 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "coverage_authority_version": "coverage_authority_v1_shared_decision",
   "crawler_acceptance_version": "crawler_acceptance_v1",
   "customer_projection_version": "customer_projection_v5_focused_scope_lineage",
-  "customer_result_reader_version": "customer_result_reader_v4_limited_effective_scope_compatibility",
+  "customer_result_reader_version": "customer_result_reader_v5_acceptance_projection_parity",
   "durable_completion_contract_version": "durable_standard150_completion_v1",
   "durable_control_contract_version": "durable_standard150_control_v1",
   "durable_worker_contract_version": "scan_job_worker_v1_cloud_tasks",
@@ -26,7 +26,7 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "failure_evidence_dedup_version": "failure_evidence_dedup_v2_group_covered_page_rows",
   "failure_state_presentation_version": "failure_state_presentation_v1_durable_reason",
   "final_url_dedup_version": "final_url_dedup_v1_normalized_identity",
-  "focused_scan_scope_version": "focused_scan_scope_v2_same_origin_path_prefix_traversal_parity",
+  "focused_scan_scope_version": "focused_scan_scope_v3_fullsite_scope_type_case_preserved_candidates",
   "frontier_policy_version": "url_frontier_policy_v1_conservative_trap_guard",
   "grouped_recommendation_evidence_version": "grouped_recommendation_evidence_v1_metadata_states",
   "image_alt_evidence_version": "material_image_alt_v1",
@@ -56,8 +56,8 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "review_evidence_calibration_version": "review_evidence_calibration_v6_health_score_v2",
   "review_version": "python_review_v2_structural_marketplace",
   "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",
-  "sampling_disclosure_version": "sampling_disclosure_v3_scope_discovery_case_preserved",
-  "sampling_version": "balanced_sitemap_buckets_v4_locale_collapsed_identity_scope_discovery_case_preserved",
+  "sampling_disclosure_version": "sampling_disclosure_v4_bounded_prefix_inventory_compatible",
+  "sampling_version": "balanced_sitemap_buckets_v5_locale_collapsed_identity_scope_discovery_bounded_prefixes",
   "scan_history_delete_version": "scan_history_delete_v2_drain_children",
   "scan_history_version": "scan_history_v3_focused_parent_children",
   "scanner_build_revision": "authenticated_health_probe_v1",

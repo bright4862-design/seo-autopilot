@@ -1,9 +1,10 @@
-export const SAMPLING_DISCLOSURE_VERSION = "sampling_disclosure_v3_scope_discovery_case_preserved";
+export const SAMPLING_DISCLOSURE_VERSION = "sampling_disclosure_v4_bounded_prefix_inventory_compatible";
 
 const SUPPORTED_SAMPLING_VERSIONS = new Set([
   "balanced_sitemap_buckets_v2_locale_collapsed_identity_reserve",
   "balanced_sitemap_buckets_v3_locale_collapsed_identity_scope_discovery",
   "balanced_sitemap_buckets_v4_locale_collapsed_identity_scope_discovery_case_preserved",
+  "balanced_sitemap_buckets_v5_locale_collapsed_identity_scope_discovery_bounded_prefixes",
 ]);
 
 function clean(value) {

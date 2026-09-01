@@ -6,8 +6,8 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `7a95768cc8ee2076` |
-| Classifier | `archetype_classifier_v11_booking_competitor_finance_playbooks` |
+| Candidate fingerprint | `0fa7d98734efb3f2` |
+| Classifier | `archetype_classifier_v12_locale_normalized_structural_routes` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
 | Acceptance report | **not recorded** (`acceptance_report: ""`) |
@@ -15,16 +15,37 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `7a95768cc8ee2076` with classifier
-`archetype_classifier_v11_booking_competitor_finance_playbooks`, URL frontier policy
+fingerprint `0fa7d98734efb3f2` with classifier
+`archetype_classifier_v12_locale_normalized_structural_routes`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded candidate was `58275d24191cf1cb`; before that
+The immediately superseded candidate was `7a95768cc8ee2076`; before that
+`58275d24191cf1cb`,
 `7b0ec8c46654192b`, `5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and
 `1ddf8085bc7721c4`.
 
-The current candidate moved the fingerprint to `7a95768cc8ee2076`. It keys one
+The current candidate moved the fingerprint to `0fa7d98734efb3f2`. Structural
+classifier evidence now collapses locale and market prefixes before route counts
+are evaluated, while raw page text remains unchanged. Repeated `/en/`, `/fr/`,
+or country-prefixed copies of one route can no longer manufacture independent
+structural evidence; distinct business routes remain distinct. This is recorded
+as `archetype_classifier_v12_locale_normalized_structural_routes`.
+
+The same candidate groups production repair rows on every valid, non-empty
+`repair_fingerprint`, including rows whose identity is not marked stable. It
+preserves the strictest priority, owner and effort, unions affected URLs, and
+keeps the original family/locale evidence as child groups. Missing fingerprints
+stay separate. This is recorded as
+`repair_persistence_grouping_v2_valid_fingerprint_actions`.
+
+The customer FixList now renders those child groups explicitly, links one safe
+representative HTML page per group, and labels a locale only when the affected
+URLs support it. PDF/export output is derived from the same canonical repair-card
+model and reports the same action count as the customer FixList. This is recorded
+as `repair_presentation_v5_evidence_groups_canonical_export`.
+
+The `7a95768cc8ee2076` candidate keyed one
 customer action on the scanner's own repair identity. The 35-site production
 audit of 2026-08-31 found ten sites rendering nineteen groups where several
 top-level FixItems carried a single `repair_fingerprint` — N26 showed one
@@ -34,7 +55,7 @@ signing and persist one top-level action. The original repair rows are retained
 inside the signed finding evidence as child groups carrying family, locale,
 representative URL, affected URLs, count and evidence state. Historical rows
 remain readable through the bounded read-time projection path. Missing or
-unstable fingerprints are never persistence-merged. These semantics are recorded
+unstable fingerprints were not persistence-merged. Those semantics were recorded
 as `repair_persistence_grouping_v1_stable_fingerprint_actions` and
 `repair_presentation_v4_linked_evidence_pages`.
 
@@ -52,7 +73,7 @@ the sitemap-orphan explanation stops reading "1 pages were found" where its own
 title was already guarded, and the Python review summary singularises a
 one-page crawl. That is recorded as `count_copy_v2_agreeing_verbs`.
 
-The same candidate makes booking a structural competitor. `structural_competitor`
+The earlier v11 classifier candidate made booking a structural competitor. `structural_competitor`
 capped content_blog when SaaS, retail, finance, nonprofit or local identity was
 present, and booking was the one structural archetype missing from that list, so
 a marketplace whose sample skewed editorial lost on article volume alone. That is
@@ -99,8 +120,9 @@ it may be a link, and what a screen reader announces; the root reads
 "Homepage · /". A single protocol allowlist on the parsed URL decides linkability,
 so a javascript: or data: value in evidence can never become an anchor href, and a
 relative path with no trustworthy scanned origin is shown rather than resolved
-against the app's own host. That is recorded as
-`repair_presentation_v4_linked_evidence_pages`.
+against the app's own host. That earlier behavior was recorded as
+`repair_presentation_v4_linked_evidence_pages`; the current customer/export
+contract is `repair_presentation_v5_evidence_groups_canonical_export`.
 
 The `58275d24191cf1cb` candidate had moved the fingerprint by grouping a
 repair on the artifact the customer actually edits rather than on the page family

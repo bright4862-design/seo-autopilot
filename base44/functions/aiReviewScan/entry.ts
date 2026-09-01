@@ -12,7 +12,7 @@ import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 // fingerprint did -- so a release that moved only the imported
 // generatedReleaseContract.js could leave a stale compiled worker serving the
 // previous release's markers. scripts/generate_release_contracts.mjs maintains it.
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "7a95768cc8ee2076";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "0fa7d98734efb3f2";
 
 const AI_REVIEW_VERSION = "aiReviewScan_v7_current_python_compatibility";
 const PYTHON_REVIEW_VERSION = "python_review_v2_structural_marketplace";

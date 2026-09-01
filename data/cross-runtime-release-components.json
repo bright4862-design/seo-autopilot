@@ -11,7 +11,7 @@
     "failure_state_presentation_version": "failure_state_presentation_v1_durable_reason",
     "limited_result_integrity_version": "standard_limited_result_integrity_v2_acceptance_evidence",
     "priority_summary_version": "priority_summary_v1_action_band_consistent",
-    "repair_presentation_contract_version": "repair_presentation_v4_linked_evidence_pages",
+    "repair_presentation_contract_version": "repair_presentation_v5_evidence_groups_canonical_export",
     "repair_suggestion_library_version": "v1",
     "repair_write_contract_version": "repair_contract_v2_shadow_calibrated",
     "review_attestation_version": "standard_review_snapshot_hmac_v3_acceptance_evidence",

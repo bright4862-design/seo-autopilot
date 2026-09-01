@@ -19,7 +19,11 @@ import { prepareCustomerFixes, priorityBucket } from "@/lib/fixRanking";
 import { buildRepairWorkSurfacePresentation } from "@/lib/repairWorkSurfacePresentation";
 import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel, customerScopeRelationshipLabel } from "@/lib/fixVocabulary";
 import { repairSuggestion } from "@/lib/repairSuggestions";
-import { buildRepairCards } from "@/lib/repairCardModel";
+import {
+  buildRepairCards,
+  customerEvidenceGroupHeading,
+  customerEvidenceGroupRows,
+} from "@/lib/repairCardModel";
 import { evidenceLink } from "@/lib/evidenceUrl";
 import { samplingDisclosure } from "@/lib/samplingDisclosure";
 
@@ -561,7 +565,7 @@ export default function FixList() {
                 </p>
               </div>
             ) : repairPresentation.canonical === true ? (
-              <CustomerRepairList cards={customerRepairCards} />
+              <CustomerRepairList cards={customerRepairCards} websiteUrl={scanRecord?.website_url} />
             ) : (
               <RepairWorkSurface
                 {...repairWorkSurface}
@@ -659,7 +663,7 @@ function customerEvidenceClassLabel(value = "") {
   return "";
 }
 
-function CustomerRepairList({ cards = [] }) {
+function CustomerRepairList({ cards = [], websiteUrl = "" }) {
   const list = Array.isArray(cards) ? cards.filter(Boolean) : [];
   if (list.length === 0) return null;
 
@@ -699,7 +703,11 @@ function CustomerRepairList({ cards = [] }) {
           <p className="mt-1 text-[12px] leading-relaxed text-ink-faint">{section.help}</p>
           <div className="mt-1.5">
             {section.cards.map((card, index) => (
-              <CustomerRepairCard key={card.evidence?.mergedFromFixIds?.join("|") || `${section.key}-${index}`} card={card} />
+              <CustomerRepairCard
+                key={card.evidence?.mergedFromFixIds?.join("|") || `${section.key}-${index}`}
+                card={card}
+                websiteUrl={websiteUrl}
+              />
             ))}
           </div>
         </section>
@@ -708,10 +716,11 @@ function CustomerRepairList({ cards = [] }) {
   );
 }
 
-function CustomerRepairCard({ card = {} }) {
+function CustomerRepairCard({ card = {}, websiteUrl = "" }) {
   const pages = Array.isArray(card?.evidence?.affectedPages) ? card.evidence.affectedPages.filter(Boolean) : [];
   const reportedCount = Math.max(Number(card?.evidence?.pageCount || 0), pages.length);
   const evidenceLabel = customerEvidenceClassLabel(card.evidenceClass);
+  const evidenceGroups = customerEvidenceGroupRows(card, websiteUrl);
 
   return (
     <article className="border-b border-hairline-soft py-6 first:pt-5">
@@ -768,12 +777,61 @@ function CustomerRepairCard({ card = {} }) {
                 : ""}
             </p>
           ) : null}
+          {evidenceGroups.length > 0 ? (
+            <section className="mt-3 border-t border-hairline-soft pt-3" aria-label={customerEvidenceGroupHeading(evidenceGroups)}>
+              <h5 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
+                {customerEvidenceGroupHeading(evidenceGroups)}
+              </h5>
+              <ul className="mt-2 space-y-2">
+                {evidenceGroups.map((group, index) => {
+                  const link = group.representativeLink;
+                  return (
+                    <li key={group.id || `${group.representativePage}-${index}`} className="rounded-md border border-hairline-soft px-2.5 py-2">
+                      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                        <p className="text-[12px] font-medium text-ink-muted">
+                          {group.familyLabel || `Page group ${index + 1}`}
+                          {group.locale ? ` · ${group.locale.toUpperCase()}` : ""}
+                        </p>
+                        {group.count > 0 ? (
+                          <span className="text-[11px] tabular-nums text-ink-faint">
+                            {group.count} {group.count === 1 ? "page" : "pages"}
+                          </span>
+                        ) : null}
+                      </div>
+                      {group.representativePage ? (
+                        <div className="mt-1.5 text-[12px]">
+                          <span className="text-ink-faint">Representative: </span>
+                          {link.isLinkable ? (
+                            <a
+                              href={link.href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title={link.title}
+                              aria-label={link.linkName}
+                              className="break-all font-medium text-ink underline decoration-hairline underline-offset-4"
+                            >
+                              {link.label}
+                            </a>
+                          ) : (
+                            <span className="break-all font-medium text-ink-muted">{link.label}</span>
+                          )}
+                        </div>
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ) : null}
           {pages.length > 0 ? (
-            <ul className="mt-3 max-h-64 space-y-1.5 overflow-y-auto pr-1 text-[12px] text-ink-muted">
-              {pages.map((page) => (
-                <li key={page} className="break-all">{page}</li>
-              ))}
-            </ul>
+            <div className="mt-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">All affected URLs</p>
+              <ul className="mt-2 max-h-64 space-y-1.5 overflow-y-auto pr-1 text-[12px] text-ink-muted">
+                {pages.map((page) => (
+                  <li key={page} className="break-all">{page}</li>
+                ))}
+              </ul>
+            </div>
           ) : (
             <p className="mt-2 text-[12px] leading-relaxed text-ink-faint">
               No affected URL list was persisted for this repair.

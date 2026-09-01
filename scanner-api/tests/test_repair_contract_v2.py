@@ -6,7 +6,7 @@ from app.repair_contract_v2 import (
     apply_canonical_repair_contract,
 )
 from app.repair_persistence_shadow import REPAIR_CONTRACT_VERSION, REPAIR_PRIORITY_MODEL_VERSION
-from app.repair_identity import annotate_repair_identity
+from app.repair_identity import annotate_repair_identity, compare_repair_runs
 
 
 def _page(url: str) -> dict:
@@ -112,29 +112,93 @@ def test_stable_fingerprint_rows_persist_as_one_action_with_child_evidence():
     assert {group["family"] for group in action["repair_evidence_groups"]} == {"collection_page", "product_detail"}
 
 
-def test_unstable_or_missing_fingerprints_are_never_persistence_merged():
-    unstable_a = {
-        **_fix("a", "missing_meta_description", "medium", ["https://example.com/a"]),
-        "repair_fingerprint": "same",
-        "repair_identity_stable": False,
+def test_production_shaped_nonempty_fingerprint_persists_as_one_action_without_enabling_fixed_state():
+    # Production review rows carry the scanner's repair_fingerprint but do not
+    # generally carry repair_surface or repair_identity_stable=True. The old
+    # persistence gate therefore wrote one FixItem per row even though the
+    # customer read path correctly rendered this fingerprint as one action.
+    first = {
+        "fix_id": "audit_first",
+        "rule": "missing_meta_description",
+        "category": "meta_description",
+        "priority": "medium",
+        "base_severity": "medium",
+        "action_priority": "improve",
+        "evidence_class": "improvement",
+        "page_scope": "page",
+        "page_template_family": "collection_page",
+        "affected_pages": ["https://example.com/fr/category/a"],
+        "page_count": 1,
+        "difficulty": "easy",
+        "repair_fingerprint": "production-fingerprint",
     }
-    unstable_b = {
-        **_fix("b", "missing_meta_description", "medium", ["https://example.com/b"]),
-        "repair_fingerprint": "same",
-        "repair_identity_stable": False,
+    second = {
+        **first,
+        "fix_id": "audit_second",
+        "priority": "high",
+        "base_severity": "high",
+        "action_priority": "important",
+        "evidence_class": "confirmed_problem",
+        "page_template_family": "product_detail",
+        "affected_pages": ["https://example.com/de/product/b"],
+        "difficulty": "hard",
+        "requires_developer": True,
+        "who_can_do_this": "your_web_person",
     }
-    missing = {
-        **_fix("c", "missing_meta_description", "medium", ["https://example.com/c"]),
-        "repair_fingerprint": "",
-        "repair_identity_stable": False,
-    }
+    pages = [
+        {**_page("https://example.com/fr/category/a"), "page_template_family": "collection_page"},
+        {**_page("https://example.com/de/product/b"), "page_template_family": "product_detail"},
+    ]
 
-    grouped = _group_canonical_repairs(
-        [unstable_a, unstable_b, missing],
-        [_page("https://example.com/a"), _page("https://example.com/b"), _page("https://example.com/c")],
-    )
+    grouped = _group_canonical_repairs([first, second], pages)
 
-    assert [item["fix_id"] for item in grouped] == ["a", "b", "c"]
+    assert len(grouped) == 1
+    action = grouped[0]
+    assert action["repair_fingerprint"] == "production-fingerprint"
+    assert action["affected_pages"] == [
+        "https://example.com/fr/category/a",
+        "https://example.com/de/product/b",
+    ]
+    assert action["page_count"] == 2
+    assert action["action_priority"] == "important"
+    assert action["priority"] == "high"
+    assert action["requires_developer"] is True
+    assert action["difficulty"] == "hard"
+    assert [group["fix_id"] for group in action["repair_evidence_groups"]] == [
+        "audit_first",
+        "audit_second",
+    ]
+
+    # Grouping is presentation/persistence identity only. With no explicit
+    # technical repair surface the cross-scan fixed-state contract stays closed.
+    assert action["repair_identity_stable"] is False
+    comparison = compare_repair_runs(action, [], pages)
+    assert comparison["state"] == "could_not_verify"
+
+
+def test_missing_fingerprints_remain_separate_persistence_rows():
+    rows = [
+        {
+            "fix_id": fix_id,
+            "rule": "missing_meta_description",
+            "category": "meta_description",
+            "priority": "medium",
+            "base_severity": "medium",
+            "action_priority": "improve",
+            "evidence_class": "improvement",
+            "page_scope": "page",
+            "page_template_family": "standard",
+            "affected_pages": [f"https://example.com/{fix_id}"],
+            "page_count": 1,
+            "difficulty": "easy",
+            "repair_fingerprint": "",
+        }
+        for fix_id in ("missing_a", "missing_b")
+    ]
+
+    grouped = _group_canonical_repairs(rows, [_page("https://example.com/missing_a"), _page("https://example.com/missing_b")])
+
+    assert [item["fix_id"] for item in grouped] == ["missing_a", "missing_b"]
     assert all(len(item["repair_evidence_groups"]) == 1 for item in grouped)
 
 

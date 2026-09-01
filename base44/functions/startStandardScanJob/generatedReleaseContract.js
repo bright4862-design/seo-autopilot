@@ -3,12 +3,12 @@
 // Run that generator after changing either input; CI fails on drift.
 
 export const RELEASE_CONTRACT_SCHEMA_VERSION = "beta_crawler_revision_v1";
-export const RELEASE_FINGERPRINT = "7a95768cc8ee2076";
+export const RELEASE_FINGERPRINT = "0fa7d98734efb3f2";
 export const RELEASE_STATUS = "candidate";
 export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "acceptance_evidence_version": "standard150_acceptance_evidence_v2_aggregate_rss_fail_closed",
   "admission_reconciliation_version": "admission_reconciliation_v1_exact_generation_barrier",
-  "archetype_classifier_version": "archetype_classifier_v11_booking_competitor_finance_playbooks",
+  "archetype_classifier_version": "archetype_classifier_v12_locale_normalized_structural_routes",
   "artifact_filter_version": "artifact_filter_v4_wordpress_route_noise",
   "authority_seal_version": "scan_evidence_hmac_sha256_v1",
   "canonical_href_resolution_version": "canonical_href_resolution_v2_absolute_single_label_same_path",
@@ -44,8 +44,8 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "render_evidence_version": "render_evidence_v1",
   "render_followup_version": "render_followup_v1",
   "repair_coverage_version": "repair_coverage_v4_corroborated_family_gap_fill",
-  "repair_persistence_grouping_version": "repair_persistence_grouping_v1_stable_fingerprint_actions",
-  "repair_presentation_contract_version": "repair_presentation_v4_linked_evidence_pages",
+  "repair_persistence_grouping_version": "repair_persistence_grouping_v2_valid_fingerprint_actions",
+  "repair_presentation_contract_version": "repair_presentation_v5_evidence_groups_canonical_export",
   "repair_suggestion_library_version": "v1",
   "repair_surface_grouping_version": "repair_surface_grouping_v1_shared_artifact",
   "repair_write_contract_version": "repair_contract_v2_shadow_calibrated",

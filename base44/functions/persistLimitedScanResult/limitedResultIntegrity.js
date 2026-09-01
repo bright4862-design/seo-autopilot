@@ -2,8 +2,9 @@ import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedRele
 
 const ENCODER = new TextEncoder();
 
-export const LIMITED_RESULT_INTEGRITY_VERSION = "standard_limited_result_integrity_v2_acceptance_evidence";
+export const LIMITED_RESULT_INTEGRITY_VERSION = "standard_limited_result_integrity_v3_focused_scope";
 export const LIMITED_RESULT_INTEGRITY_VERSION_V1 = "standard_limited_result_integrity_v1";
+export const LIMITED_RESULT_INTEGRITY_VERSION_V2 = "standard_limited_result_integrity_v2_acceptance_evidence";
 
 /**
  * The HMAC domain label, bound *inside* the signed payload rather than kept as
@@ -12,8 +13,9 @@ export const LIMITED_RESULT_INTEGRITY_VERSION_V1 = "standard_limited_result_inte
  * an authority seal is that the two payloads can never be equal. Putting the
  * label in the payload is what guarantees that, whatever else the rows carry.
  */
-export const LIMITED_RESULT_HMAC_DOMAIN = "standard_limited_result_hmac_v2_acceptance_evidence";
+export const LIMITED_RESULT_HMAC_DOMAIN = "standard_limited_result_hmac_v3_focused_scope";
 export const LIMITED_RESULT_HMAC_DOMAIN_V1 = "standard_limited_result_hmac_v1";
+export const LIMITED_RESULT_HMAC_DOMAIN_V2 = "standard_limited_result_hmac_v2_acceptance_evidence";
 
 export const MAX_LIMITED_FIXES = 100;
 
@@ -64,6 +66,14 @@ export function buildLimitedResultSnapshot({
       release_gate_eligible: false,
       score_is_provisional: true,
       website_url: text(scan?.submitted_url || scan?.website_url, 2_000),
+      ...(version === LIMITED_RESULT_INTEGRITY_VERSION ? {
+        scope_type: text(scan?.scope_type, 40),
+        parent_scan_id: text(scan?.parent_scan_id, 160),
+        requested_origin: text(scan?.requested_origin, 2_000),
+        requested_path_prefix: text(scan?.requested_path_prefix || scan?.path_prefix, 1_000),
+        discovered_from: text(scan?.discovered_from, 80),
+        user_confirmed: scan?.user_confirmed === true,
+      } : {}),
       scanner_version: text(scan?.scanner_version, 160),
       scanner_build_revision: text(scan?.scanner_build_revision, 160),
       worker_source_sha: text(scan?.worker_source_sha, 80),
@@ -79,7 +89,7 @@ export function buildLimitedResultSnapshot({
       coverage_state: text(review?.coverage_state, 120),
       coverage_reasons: coverageReasons,
       coverage_authority_version: text(review?.coverage_authority_version, 160),
-      ...(version === LIMITED_RESULT_INTEGRITY_VERSION
+      ...([LIMITED_RESULT_INTEGRITY_VERSION, LIMITED_RESULT_INTEGRITY_VERSION_V2].includes(version)
         ? acceptanceEvidenceFields(scan, review)
         : {}),
     },
@@ -172,6 +182,7 @@ function limitedPayload(snapshot) {
 
 function limitedIntegrityDomain(version) {
   if (version === LIMITED_RESULT_INTEGRITY_VERSION) return LIMITED_RESULT_HMAC_DOMAIN;
+  if (version === LIMITED_RESULT_INTEGRITY_VERSION_V2) return LIMITED_RESULT_HMAC_DOMAIN_V2;
   if (version === LIMITED_RESULT_INTEGRITY_VERSION_V1) return LIMITED_RESULT_HMAC_DOMAIN_V1;
   throw new Error("Unsupported limited result integrity version.");
 }

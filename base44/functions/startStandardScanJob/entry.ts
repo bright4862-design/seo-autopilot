@@ -42,7 +42,7 @@ function mutableScanIntakeValue() {
   }
 }
 
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "0fa7d98734efb3f2";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "ea87341cb434d834";
 const VERSION = "startStandardScanJob_v3_server_admission";
 const PUBLIC_SCAN_MODE = "standard_150";
 const MAX_PAGES = 150;
@@ -142,6 +142,28 @@ export default async function (req: Request): Promise<Response> {
       }, 400);
     }
 
+    const scope = resolveFocusedPathScope(body, websiteUrl);
+    if (!scope.ok) {
+      return jsonResponse({
+        success: false,
+        accepted: false,
+        version: VERSION,
+        failure_code: scope.code,
+        error: scope.error,
+        ...identity.fields,
+      }, scope.status);
+    }
+    if (scope.focused && identity.fields.scan_id) {
+      return jsonResponse({
+        success: false,
+        accepted: false,
+        version: VERSION,
+        failure_code: "focused_scope_requires_server_admission",
+        error: "Focused scans require a fresh server-admitted scan.",
+        ...identity.fields,
+      }, 409);
+    }
+
     let context;
     let entitlement;
     let admissionMeta = { replayed: false, replay_reason: "" };
@@ -212,6 +234,24 @@ export default async function (req: Request): Promise<Response> {
         }, project.status);
       }
 
+      const focusedParent = await validateFocusedParentScan({
+        base44,
+        user,
+        project: project.project,
+        scope,
+        websiteUrl,
+      });
+      if (!focusedParent.ok) {
+        return jsonResponse({
+          success: false,
+          accepted: false,
+          version: VERSION,
+          failure_code: focusedParent.code,
+          error: focusedParent.error,
+          ...identity.fields,
+        }, focusedParent.status);
+      }
+
       entitlement = await loadPaidEntitlement(base44, user);
       if (!entitlement.ok) {
         return jsonResponse({
@@ -233,6 +273,7 @@ export default async function (req: Request): Promise<Response> {
         body,
         identity,
         websiteUrl,
+        scope,
       });
       if (!admitted.ok) {
         return jsonResponse({
@@ -294,9 +335,7 @@ export default async function (req: Request): Promise<Response> {
       }, 503);
     }
 
-    const pathPrefix = String(
-      body.path_prefix || body.requested_path_prefix || body.crawl_path_prefix || "",
-    ) || null;
+    const pathPrefix = scope.pathPrefix || null;
     const drainAfter = new Date(Date.now() + DRAIN_DELAY_SECONDS * 1000).toISOString();
     const commonPayload = {
       scan_id: identity.fields.scan_id,
@@ -425,11 +464,11 @@ async function loadExactOwnedProject({ base44, user, projectId, websiteUrl }) {
   return { ok: true, project };
 }
 
-async function admitServerOwnedScan({ base44, user, access, project, body, identity, websiteUrl }) {
+async function admitServerOwnedScan({ base44, user, access, project, body, identity, websiteUrl, scope }) {
   const request = normalizeAdmissionIdentity({
     request_id: identity.fields.request_id,
     idempotency_key: identity.fields.idempotency_key,
-    request_fingerprint: await buildAdmissionFingerprint(websiteUrl),
+    request_fingerprint: await buildAdmissionFingerprint(websiteUrl, scope?.pathPrefix || ""),
   });
   if (!request.ok) {
     return { ok: false, status: 409, code: request.code, error: "The scan request identity is invalid." };
@@ -540,6 +579,7 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
       request,
       websiteUrl,
       admissionEvidence,
+      scope,
     });
   } catch (error) {
     return {
@@ -686,8 +726,10 @@ function coordinatorAdmissionFailure(result = {}, fallbackCode = "scan_admission
   };
 }
 
-async function buildAdmissionFingerprint(websiteUrl) {
-  const canonical = `${PUBLIC_SCAN_MODE}|${normalizeWebsiteUrl(websiteUrl)}`;
+async function buildAdmissionFingerprint(websiteUrl, pathPrefix = "") {
+  const normalizedPrefix = normalizeFocusedPathPrefix(pathPrefix);
+  const suffix = normalizedPrefix ? `|path:${normalizedPrefix}` : "";
+  const canonical = `${PUBLIC_SCAN_MODE}|${normalizeWebsiteUrl(websiteUrl)}${suffix}`;
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)));
   return `standard150:${Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
@@ -724,6 +766,7 @@ async function recoverOrCreateServerScan({
   request,
   websiteUrl,
   admissionEvidence,
+  scope,
 }) {
   const scans = base44.asServiceRole.entities.ScanRun;
   let matches = await scans.filter(
@@ -746,9 +789,12 @@ async function recoverOrCreateServerScan({
   const previous = await scans.filter(
     { owner_user_id: String(user.id), project_id: String(project.id) },
     "-completed_at",
-    20,
+    30,
   ).catch(() => []);
-  previousScanId = (previous || []).find((row) => ["complete", "limited"].includes(String(row.status || "")))?.id || "";
+  previousScanId = (previous || []).find((row) => (
+    ["complete", "limited"].includes(String(row.status || ""))
+    && scanMatchesRequestedScope(row, scope)
+  ))?.id || "";
 
   const now = new Date().toISOString();
   try {
@@ -761,7 +807,13 @@ async function recoverOrCreateServerScan({
       submitted_url: String(body.submitted_url || body.requested_start_url || websiteUrl),
       final_url: "",
       normalized_domain: authorityDomain(websiteUrl),
-      path_prefix: String(body.path_prefix || body.requested_path_prefix || body.crawl_path_prefix || ""),
+      path_prefix: scope?.pathPrefix || "",
+      scope_type: scope?.focused ? "path_prefix" : "",
+      parent_scan_id: scope?.focused ? scope.parentScanId : "",
+      requested_origin: scope?.requestedOrigin || originOf(websiteUrl),
+      requested_path_prefix: scope?.pathPrefix || "",
+      discovered_from: scope?.focused ? scope.discoveredFrom : "",
+      user_confirmed: scope?.focused === true,
       scan_mode: PUBLIC_SCAN_MODE,
       scan_source: String(body.source || "scan_website_page"),
       status: "queued",
@@ -1068,6 +1120,144 @@ function recordOwnedBy(record, user) {
   return Boolean(userEmail && String(record?.created_by || "").trim().toLowerCase() === userEmail);
 }
 
+const FOCUSED_SCOPE_SOURCES = new Set(["sitemap", "internal_link", "canonical", "hreflang"]);
+
+function originOf(value) {
+  const normalized = normalizeWebsiteUrl(value);
+  if (!normalized) return "";
+  try {
+    return new URL(normalized).origin;
+  } catch {
+    return "";
+  }
+}
+
+function normalizeFocusedPathPrefix(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw === "/") return "";
+  if (/^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith("//")) return "";
+  try {
+    const parsed = new URL(raw.startsWith("/") ? raw : `/${raw}`, "https://scope.invalid");
+    if (parsed.origin !== "https://scope.invalid" || parsed.search || parsed.hash) return "";
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    if (segments.length === 0) return "";
+    for (const segment of segments) {
+      let decoded;
+      try {
+        decoded = decodeURIComponent(segment);
+      } catch {
+        return "";
+      }
+      if (!decoded || decoded === "." || decoded === ".." || decoded.includes("/") || decoded.includes("\\")) return "";
+    }
+    return `/${segments.join("/")}`;
+  } catch {
+    return "";
+  }
+}
+
+function requestedPathPrefix(body = {}, websiteUrl = "") {
+  const explicit = String(body.path_prefix || body.requested_path_prefix || body.crawl_path_prefix || "").trim();
+  if (explicit) return normalizeFocusedPathPrefix(explicit);
+  try {
+    return normalizeFocusedPathPrefix(new URL(websiteUrl).pathname || "");
+  } catch {
+    return "";
+  }
+}
+
+function resolveFocusedPathScope(body = {}, websiteUrl = "") {
+  const pathPrefix = requestedPathPrefix(body, websiteUrl);
+  const scopeType = String(body.scope_type || "").trim().toLowerCase();
+  const parentScanId = String(body.parent_scan_id || "").trim();
+  const hasExplicitScope = Boolean(scopeType || parentScanId || body.requested_origin || body.discovered_from || body.user_confirmed === true);
+  if (!hasExplicitScope) {
+    return {
+      ok: true,
+      focused: false,
+      pathPrefix,
+      requestedOrigin: originOf(websiteUrl),
+      parentScanId: "",
+      discoveredFrom: "",
+    };
+  }
+  if (scopeType !== "path_prefix") {
+    return { ok: false, status: 400, code: "unsupported_focused_scope", error: "Only same-site folder scans are available in this release." };
+  }
+  if (!parentScanId || body.user_confirmed !== true) {
+    return { ok: false, status: 400, code: "focused_scope_confirmation_required", error: "Choose a discovered site section before starting a focused scan." };
+  }
+  if (!pathPrefix) {
+    return { ok: false, status: 400, code: "focused_scope_path_required", error: "The focused scan is missing its site-section path." };
+  }
+  const requestedOrigin = originOf(body.requested_origin || websiteUrl);
+  const websiteOrigin = originOf(websiteUrl);
+  if (!requestedOrigin || requestedOrigin !== websiteOrigin) {
+    return { ok: false, status: 409, code: "focused_scope_origin_mismatch", error: "Focused scans must stay on the same website origin." };
+  }
+  const source = String(body.discovered_from || "").trim().toLowerCase();
+  if (!FOCUSED_SCOPE_SOURCES.has(source)) {
+    return { ok: false, status: 400, code: "focused_scope_source_invalid", error: "This site section does not have supported discovery evidence." };
+  }
+  return {
+    ok: true,
+    focused: true,
+    pathPrefix,
+    requestedOrigin,
+    parentScanId,
+    discoveredFrom: source,
+  };
+}
+
+function scanMatchesRequestedScope(row = {}, scope = {}) {
+  const rowType = String(row.scope_type || "").trim();
+  const rowPrefix = normalizeFocusedPathPrefix(row.requested_path_prefix || row.path_prefix || "");
+  if (scope?.focused) {
+    return rowType === "path_prefix" && rowPrefix === normalizeFocusedPathPrefix(scope.pathPrefix);
+  }
+  return !rowType && !rowPrefix;
+}
+
+function discoveredPrefixCount(parent = {}, pathPrefix = "") {
+  const evidence = parent?.sampling_evidence && typeof parent.sampling_evidence === "object"
+    ? parent.sampling_evidence
+    : {};
+  const prefixes = evidence.path_prefixes_discovered && typeof evidence.path_prefixes_discovered === "object"
+    ? evidence.path_prefixes_discovered
+    : {};
+  const direct = Number(prefixes[pathPrefix] ?? prefixes[`${pathPrefix}/`]);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const segment = pathPrefix.split("/").filter(Boolean)[0] || "";
+  const markets = evidence.markets_discovered && typeof evidence.markets_discovered === "object"
+    ? evidence.markets_discovered
+    : {};
+  const marketCount = Number(markets[segment.toLowerCase()]);
+  return Number.isFinite(marketCount) && marketCount > 0 ? marketCount : 0;
+}
+
+async function validateFocusedParentScan({ base44, user, project, scope, websiteUrl }) {
+  if (!scope?.focused) return { ok: true };
+  const parent = await base44.asServiceRole.entities.ScanRun.get(scope.parentScanId).catch(() => null);
+  if (!parent || String(parent.owner_user_id || "") !== String(user.id)) {
+    return { ok: false, status: 404, code: "focused_parent_not_found", error: "The parent scan is not available to this account." };
+  }
+  if (String(parent.project_id || "") !== String(project.id)) {
+    return { ok: false, status: 409, code: "focused_parent_project_mismatch", error: "The focused scan does not match the parent website project." };
+  }
+  if (!["complete", "limited"].includes(String(parent.status || "").toLowerCase())) {
+    return { ok: false, status: 409, code: "focused_parent_not_terminal", error: "Wait for the parent scan to finish before scanning one section separately." };
+  }
+  if (String(parent.scope_type || "") || normalizeFocusedPathPrefix(parent.path_prefix || parent.requested_path_prefix || "")) {
+    return { ok: false, status: 409, code: "focused_parent_must_be_full_site", error: "Start focused scans from the original full-site scan." };
+  }
+  if (originOf(parent.website_url || parent.submitted_url) !== originOf(websiteUrl)) {
+    return { ok: false, status: 409, code: "focused_parent_origin_mismatch", error: "The focused scan must stay on the parent scan\'s website origin." };
+  }
+  if (discoveredPrefixCount(parent, scope.pathPrefix) <= 0) {
+    return { ok: false, status: 409, code: "focused_scope_not_discovered", error: "This folder was not discovered in the parent scan." };
+  }
+  return { ok: true, parent };
+}
 function authorityDomain(value) {
   const normalized = normalizeWebsiteUrl(value);
   if (!normalized) return "";

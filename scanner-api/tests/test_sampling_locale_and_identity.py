@@ -116,3 +116,5 @@ def test_coverage_is_reported_by_route_and_market():
     assert set(report["markets_discovered"]) == {"fr", "de", "es"}
     assert report["identity_pages_in_sitemap"] == 5
     assert report["identity_pages_sampled"] >= 1
+    assert report["path_prefixes_discovered"]["/products"] == 5
+    assert sum(report["path_prefixes_sampled"].values()) == len(selected)

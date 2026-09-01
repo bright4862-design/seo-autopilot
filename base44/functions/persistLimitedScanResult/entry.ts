@@ -19,7 +19,7 @@ import {
  * authority path to weaken, because none exists in this file.
  */
 
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "0fa7d98734efb3f2";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "ea87341cb434d834";
 const WORKER_VERSION = "scan_job_worker_v1_cloud_tasks";
 const LIMITED_COMPLETION_VERSION = "durable_standard150_limited_v1";
 const LIMITED_COVERAGE_STATES = new Set(["limited_coverage", "inventory_unproven", "access_limited"]);
@@ -105,9 +105,20 @@ Deno.serve(async (req) => {
     }
 
     const sealedAt = cleanText(scan.result_integrity_sealed_at, 80) || stableTimestamp(scan);
+    const limitedScanResult = {
+      ...scanResult,
+      worker_source_sha: cleanText(body?.worker_source_sha, 80),
+      scope_type: String(scan.scope_type || ""),
+      parent_scan_id: String(scan.parent_scan_id || ""),
+      requested_origin: String(scan.requested_origin || ""),
+      requested_path_prefix: String(scan.requested_path_prefix || scan.path_prefix || ""),
+      path_prefix: String(scan.path_prefix || scan.requested_path_prefix || ""),
+      discovered_from: String(scan.discovered_from || ""),
+      user_confirmed: scan.user_confirmed === true,
+    };
     const snapshot = buildLimitedResultSnapshot({
       identity,
-      scan: { ...scanResult, worker_source_sha: cleanText(body?.worker_source_sha, 80) },
+      scan: limitedScanResult,
       review,
       now: sealedAt,
       version: scanStatus === "limited"

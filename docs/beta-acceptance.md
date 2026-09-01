@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `0fa7d98734efb3f2` |
+| Candidate fingerprint | `ea87341cb434d834` |
 | Classifier | `archetype_classifier_v12_locale_normalized_structural_routes` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,18 +15,33 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `0fa7d98734efb3f2` with classifier
+fingerprint `ea87341cb434d834` with classifier
 `archetype_classifier_v12_locale_normalized_structural_routes`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded candidate was `7a95768cc8ee2076`; before that
-`58275d24191cf1cb`,
+The immediately superseded candidate was `0fa7d98734efb3f2`; before that
+`7a95768cc8ee2076`, `58275d24191cf1cb`,
 `7b0ec8c46654192b`, `5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and
 `1ddf8085bc7721c4`.
 
-The current candidate moved the fingerprint to `0fa7d98734efb3f2`. Structural
-classifier evidence now collapses locale and market prefixes before route counts
+The current candidate moved the fingerprint to `ea87341cb434d834` by adding
+P1-B1 focused same-origin path scans on top of the reviewed `0fa7d98734efb3f2`
+Standard 150 candidate. A focused child is explicitly confirmed, bound to a
+discovered path prefix on the exact parent origin, admitted under a scope-aware
+request fingerprint, and persisted as its own ScanRun/FixList with its own
+150-page budget. Scope lineage is HMAC-bound under
+`standard_review_snapshot_hmac_v4_focused_scope` for authoritative results and
+`standard_limited_result_integrity_v3_focused_scope` for limited results.
+History exposes only the bounded parent/path lineage needed to reopen the child.
+Subdomains remain disabled. This is versioned as
+`focused_scan_scope_v1_same_origin_path_prefix`,
+`scan_history_v3_focused_parent_children`, and
+`customer_projection_v5_focused_scope_lineage`. **Production acceptance has
+not been run for this candidate.**
+
+The immediately preceding `0fa7d98734efb3f2` candidate changed structural
+classifier evidence so locale and market prefixes collapse before route counts
 are evaluated, while raw page text remains unchanged. Repeated `/en/`, `/fr/`,
 or country-prefixed copies of one route can no longer manufacture independent
 structural evidence; distinct business routes remain distinct. This is recorded

@@ -5,9 +5,10 @@ import { firstFailedRepairInvariant } from "./repairInvariants.js";
 // payload for every row -- including rows sealed before it existed. Version
 // dispatch on reconstruction keeps those rows verifiable instead of turning
 // an intact result into 409 result_authority_invalid.
-export const REVIEW_ATTESTATION_VERSION = "standard_review_snapshot_hmac_v3_acceptance_evidence";
+export const REVIEW_ATTESTATION_VERSION = "standard_review_snapshot_hmac_v4_focused_scope";
 export const REVIEW_ATTESTATION_VERSION_V1 = "standard_review_snapshot_hmac_v1";
 export const REVIEW_ATTESTATION_VERSION_V2 = "standard_review_snapshot_hmac_v2_coverage";
+export const REVIEW_ATTESTATION_VERSION_V3 = "standard_review_snapshot_hmac_v3_acceptance_evidence";
 export const MAX_AUTHORITY_FIXES = 100;
 
 export const REPAIR_CONTRACT_V2 = "repair_contract_v2_shadow_calibrated";
@@ -165,6 +166,12 @@ export function buildAuthoritySnapshot({ scan, review, identity, userId, now = n
       evidence_quality_blocking: false,
       website_url: websiteUrl,
       normalized_domain: domain(identity?.normalized_domain),
+      scope_type: text(scan?.scope_type, 40),
+      parent_scan_id: text(scan?.parent_scan_id, 160),
+      requested_origin: text(scan?.requested_origin, 2_000),
+      requested_path_prefix: text(scan?.requested_path_prefix || scan?.path_prefix, 1_000),
+      discovered_from: text(scan?.discovered_from, 80),
+      user_confirmed: scan?.user_confirmed === true,
       scanner_version: text(scan?.scanner_version, 160),
       scanner_build_revision: text(scan?.scanner_build_revision || scan?.technical_audit_summary?.scanner_build_revision, 160),
       scanner_wrapper_version: text(scan?.scanner_wrapper_version || scan?.version, 160),

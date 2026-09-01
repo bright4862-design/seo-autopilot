@@ -4,8 +4,10 @@ import test from "node:test";
 import {
   LIMITED_RESULT_INTEGRITY_VERSION,
   LIMITED_RESULT_INTEGRITY_VERSION_V1,
+  LIMITED_RESULT_INTEGRITY_VERSION_V2,
   LIMITED_RESULT_HMAC_DOMAIN,
   LIMITED_RESULT_HMAC_DOMAIN_V1,
+  LIMITED_RESULT_HMAC_DOMAIN_V2,
   buildLimitedResultSnapshot,
   createLimitedResultProof,
   verifyLimitedResultProof,
@@ -101,7 +103,7 @@ test("an authority seal cannot be used as a limited proof", async () => {
 test("the signed payload binds the domain label", () => {
   const limited = snapshot();
   assert.equal(limited.integrity_domain, LIMITED_RESULT_HMAC_DOMAIN);
-  assert.equal(LIMITED_RESULT_HMAC_DOMAIN, "standard_limited_result_hmac_v2_acceptance_evidence");
+  assert.equal(LIMITED_RESULT_HMAC_DOMAIN, "standard_limited_result_hmac_v3_focused_scope");
   assert.equal(limited.version, LIMITED_RESULT_INTEGRITY_VERSION);
 });
 
@@ -113,6 +115,17 @@ test("historical v1 limited results retain their original proof domain and shape
   assert.equal(historical.integrity_domain, LIMITED_RESULT_HMAC_DOMAIN_V1);
   assert.equal("classification_integrity" in historical.scan, false);
   assert.equal("worker_peak_memory_bytes" in historical.scan, false);
+  assert.equal(await verifyLimitedResultProof(historical, SECRET, proof), true);
+});
+
+test("historical v2 limited results retain the acceptance-evidence proof domain without scope fields", async () => {
+  const historical = snapshot({}, LIMITED_RESULT_INTEGRITY_VERSION_V2);
+  const proof = await createLimitedResultProof(historical, SECRET);
+
+  assert.equal(historical.version, "standard_limited_result_integrity_v2_acceptance_evidence");
+  assert.equal(historical.integrity_domain, LIMITED_RESULT_HMAC_DOMAIN_V2);
+  assert.equal("scope_type" in historical.scan, false);
+  assert.equal("requested_path_prefix" in historical.scan, false);
   assert.equal(await verifyLimitedResultProof(historical, SECRET, proof), true);
 });
 

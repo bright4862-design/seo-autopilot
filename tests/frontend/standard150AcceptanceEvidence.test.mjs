@@ -93,7 +93,7 @@ function acceptedSnapshot() {
 test("authoritative rows seal and project every Standard 150 observation", () => {
   const snapshot = acceptedSnapshot();
 
-  assert.equal(REVIEW_ATTESTATION_VERSION, "standard_review_snapshot_hmac_v3_acceptance_evidence");
+  assert.equal(REVIEW_ATTESTATION_VERSION, "standard_review_snapshot_hmac_v4_focused_scope");
   assert.equal(snapshot.version, REVIEW_ATTESTATION_VERSION);
   assert.equal(snapshot.scan.coverage_authority_evidence.assessment, "sufficient");
   assert.equal(snapshot.scan.classification_integrity.state, "classified");
@@ -202,7 +202,7 @@ test("limited rows bind and project the same acceptance observations", () => {
 
   assert.equal(
     LIMITED_RESULT_INTEGRITY_VERSION,
-    "standard_limited_result_integrity_v2_acceptance_evidence",
+    "standard_limited_result_integrity_v3_focused_scope",
   );
   assert.equal(snapshot.scan.coverage_authority_evidence.assessment, "insufficient_sample");
   assert.equal(snapshot.scan.classification_integrity.state, "inconclusive_insufficient_evidence");
@@ -253,7 +253,7 @@ test("new authoritative writes fail closed when measured memory is missing", () 
     new URL("../../base44/functions/persistDurableScanAuthority/entry.ts", import.meta.url),
     "utf8",
   );
-  assert.match(writerSource, /!hasCompleteAcceptanceEvidence\(scanResult, review\)/);
+  assert.match(writerSource, /!hasCompleteAcceptanceEvidence\(authorityScanResult, review\)/);
   assert.match(writerSource, /authority_acceptance_evidence_incomplete/);
 });
 

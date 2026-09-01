@@ -87,3 +87,34 @@ test("one child remains one evidence group without creating another top-level ac
   assert.equal(rows[0].familyLabel, "homepage");
   assert.equal(rows[0].representativeLink.label, "Homepage · /");
 });
+
+test("persisted evidence groups survive normalized members with raw_finding under original", () => {
+  const groups = [{
+    fix_id: "persisted_child",
+    family: "guide_article",
+    locale: "fr",
+    representative_url: "/fr/guide",
+    affected_urls: ["/fr/guide"],
+    count: 1,
+  }];
+  const normalized = {
+    id: "normalized_row",
+    fix_id: "normalized_action",
+    rule: "missing_meta_description",
+    repair_fingerprint: "normalized-fingerprint",
+    page_count: 1,
+    affected_pages: ["/fr/guide"],
+    original: {
+      raw_finding: { repair_evidence_groups: groups },
+    },
+  };
+
+  const card = buildRepairCards([normalized])[0];
+  const rows = customerEvidenceGroupRows(card, SITE);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].id, "persisted_child");
+  assert.equal(rows[0].familyLabel, "guide");
+  assert.equal(rows[0].locale, "fr");
+  assert.equal(rows[0].representativeLink.href, "https://example.com/fr/guide");
+});

@@ -8,7 +8,7 @@ export const OWNER_TEST_USER_ID = "6a498da58ef5cec1f5cd4486";
 // Versions the customer projection itself. Declared in
 // data/cross-runtime-release-components.json so a projection behavior change
 // moves the release fingerprint like any Python change would.
-export const CUSTOMER_PROJECTION_VERSION = "customer_projection_v5_focused_scope_lineage";
+export const CUSTOMER_PROJECTION_VERSION = "customer_projection_v6_effective_scope_visible";
 export const REPAIR_CONTRACT_V2 = "repair_contract_v2_shadow_calibrated";
 export const REPAIR_PRIORITY_MODEL_V2 = "repair_priority_v2_technical_severity";
 
@@ -24,6 +24,7 @@ const PUBLIC_RUN_FIELDS = [
   "parent_scan_id",
   "requested_origin",
   "requested_path_prefix",
+  "effective_path_prefix",
   "discovered_from",
   "user_confirmed",
   "scan_mode",

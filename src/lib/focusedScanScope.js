@@ -1,4 +1,4 @@
-export const FOCUSED_SCAN_SCOPE_VERSION = "focused_scan_scope_v2_same_origin_path_prefix_traversal_parity";
+export const FOCUSED_SCAN_SCOPE_VERSION = "focused_scan_scope_v3_fullsite_scope_type_case_preserved_candidates";
 
 const LOCALE_SEGMENT_RE = /^[a-z]{2}(?:-[a-z]{2})?$/i;
 const SAFE_DISCOVERY_SOURCES = new Set(["sitemap", "internal_link", "canonical", "hreflang"]);
@@ -211,6 +211,12 @@ export function focusedPathSections(record = {}) {
     const discoveredCount = Math.max(0, Number(count) || 0);
     const marketSegment = prefix.split("/").filter(Boolean)[0]?.toLowerCase() || "";
     if (!prefix || discoveredCount < 8 || BLOCKED_SECTION_SEGMENTS.has(marketSegment)) continue;
+
+    const casePreserved = [...candidates.keys()].find(
+      (key) => key.split("/").filter(Boolean)[0]?.toLowerCase() === marketSegment,
+    );
+    if (casePreserved && casePreserved !== prefix) continue;
+
     const existing = candidates.get(prefix);
     candidates.set(prefix, {
       prefix,

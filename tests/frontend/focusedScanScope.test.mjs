@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const readSource = (relative) => fs.readFileSync(path.join(ROOT, relative), "utf8");
 
 import {
   FOCUSED_SCAN_SCOPE_VERSION,
@@ -125,8 +130,8 @@ test("focused children are displayed immediately after their durable parent", ()
 });
 
 test("server admission requires owned discovered parent scope and does not enable subdomains", () => {
-  const source = fs.readFileSync("base44/functions/startStandardScanJob/entry.ts", "utf8");
-  const schema = JSON.parse(fs.readFileSync("base44/entities/ScanRun.jsonc", "utf8"));
+  const source = readSource("base44/functions/startStandardScanJob/entry.ts");
+  const schema = JSON.parse(readSource("base44/entities/ScanRun.jsonc"));
   assert.equal(source.includes("buildAdmissionFingerprint(websiteUrl, scope?.pathPrefix || \"\")"), true);
   assert.equal(source.includes("scopeType !== \"path_prefix\""), true);
   assert.equal(source.includes("body.user_confirmed !== true"), true);
@@ -147,12 +152,12 @@ test("server admission requires owned discovered parent scope and does not enabl
 });
 
 test("focused scope is bound into authoritative and limited result proofs", () => {
-  const authority = fs.readFileSync("base44/functions/persistDurableScanAuthority/authoritySnapshot.js", "utf8");
-  const authorityWriter = fs.readFileSync("base44/functions/persistDurableScanAuthority/entry.ts", "utf8");
-  const limited = fs.readFileSync("base44/functions/persistLimitedScanResult/limitedResultIntegrity.js", "utf8");
-  const limitedWriter = fs.readFileSync("base44/functions/persistLimitedScanResult/entry.ts", "utf8");
-  const reader = fs.readFileSync("base44/functions/getCustomerScanResult/entry.ts", "utf8");
-  const readerIntegrity = fs.readFileSync("base44/functions/getCustomerScanResult/limitedResultIntegrity.js", "utf8");
+  const authority = readSource("base44/functions/persistDurableScanAuthority/authoritySnapshot.js");
+  const authorityWriter = readSource("base44/functions/persistDurableScanAuthority/entry.ts");
+  const limited = readSource("base44/functions/persistLimitedScanResult/limitedResultIntegrity.js");
+  const limitedWriter = readSource("base44/functions/persistLimitedScanResult/entry.ts");
+  const reader = readSource("base44/functions/getCustomerScanResult/entry.ts");
+  const readerIntegrity = readSource("base44/functions/getCustomerScanResult/limitedResultIntegrity.js");
   assert.equal(authority.includes("standard_review_snapshot_hmac_v4_focused_scope"), true);
   assert.equal(authority.includes("requested_path_prefix"), true);
   assert.equal(authorityWriter.includes("scope_type: String(scan.scope_type || \"\")"), true);
@@ -165,7 +170,7 @@ test("focused scope is bound into authoritative and limited result proofs", () =
   assert.equal(reader.includes("standard_limited_result_integrity_v4_focused_scope_effective_path"), true);
   assert.equal(readerIntegrity.includes("standard_limited_result_integrity_v4_focused_scope_effective_path"), true);
   assert.equal(readerIntegrity.includes("effective_path_prefix"), true);
-  const projection = fs.readFileSync("base44/functions/getCustomerScanResult/projection.js", "utf8");
+  const projection = readSource("base44/functions/getCustomerScanResult/projection.js");
   assert.equal(projection.includes('"standard_limited_result_integrity_v4_focused_scope_effective_path"'), true);
 });
 
@@ -199,7 +204,7 @@ function extractNamedFunction(source, name) {
 }
 
 test("browser and server focused path normalizers stay behaviorally identical", () => {
-  const source = fs.readFileSync("base44/functions/startStandardScanJob/entry.ts", "utf8");
+  const source = readSource("base44/functions/startStandardScanJob/entry.ts");
   const fnSource = extractNamedFunction(source, "normalizeFocusedPathPrefix");
   const serverNormalize = new Function(`${fnSource}; return normalizeFocusedPathPrefix;`)();
   const cases = [

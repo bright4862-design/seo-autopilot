@@ -4,13 +4,13 @@
     "authority_seal_version": "scan_evidence_hmac_sha256_v1",
     "count_copy_version": "count_copy_v2_agreeing_verbs",
     "customer_projection_version": "customer_projection_v5_focused_scope_lineage",
-    "customer_result_reader_version": "customer_result_reader_v3_p1b_historical_compatibility",
+    "customer_result_reader_version": "customer_result_reader_v4_limited_effective_scope_compatibility",
     "durable_completion_contract_version": "durable_standard150_completion_v1",
     "durable_control_contract_version": "durable_standard150_control_v1",
     "durable_worker_contract_version": "scan_job_worker_v1_cloud_tasks",
     "failure_state_presentation_version": "failure_state_presentation_v1_durable_reason",
     "focused_scan_scope_version": "focused_scan_scope_v2_same_origin_path_prefix_traversal_parity",
-    "limited_result_integrity_version": "standard_limited_result_integrity_v3_focused_scope",
+    "limited_result_integrity_version": "standard_limited_result_integrity_v4_focused_scope_effective_path",
     "priority_summary_version": "priority_summary_v1_action_band_consistent",
     "repair_presentation_contract_version": "repair_presentation_v5_evidence_groups_canonical_export",
     "repair_suggestion_library_version": "v1",
@@ -20,6 +20,6 @@
     "scan_history_delete_version": "scan_history_delete_v2_drain_children",
     "scan_history_version": "scan_history_v3_focused_parent_children"
   },
-  "note": "Canonical cross-runtime release components. P1-B1 focused same-origin path scans preserve case-sensitive discovered prefixes and reject traversal before URL parsing. Subdomains remain disabled; Standard 150 A1-A3 classifier/grouping/presentation remain in force.",
+  "note": "Canonical cross-runtime release components. P1-B1 focused same-origin path scans preserve case-sensitive prefixes, reject traversal before parsing, and bind requested plus effective worker path scope into limited-result integrity. Subdomains remain disabled.",
   "schema_version": "cross_runtime_release_components_v1"
 }

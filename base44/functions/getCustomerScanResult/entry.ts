@@ -25,10 +25,11 @@ const ACCEPTED_LIMITED_INTEGRITY_VERSIONS = new Set([
   "standard_limited_result_integrity_v1",
   "standard_limited_result_integrity_v2_acceptance_evidence",
   "standard_limited_result_integrity_v3_focused_scope",
+  "standard_limited_result_integrity_v4_focused_scope_effective_path",
 ]);
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { isReadableAuthorityReleaseFingerprint } from "./releaseCompatibility.js";
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "0544ce395811cbd5";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "2f4238b4989f3fd9";
 const MAX_FIX_ITEMS = 100;
 
 class RequestProblem extends Error {
@@ -137,6 +138,7 @@ Deno.serve(async (req) => {
       const limitedUsesAcceptanceEvidence = [
         "standard_limited_result_integrity_v2_acceptance_evidence",
         "standard_limited_result_integrity_v3_focused_scope",
+        "standard_limited_result_integrity_v4_focused_scope_effective_path",
       ].includes(limitedIntegrityVersion);
       const limitedSnapshot = buildLimitedResultSnapshot({
         identity: {

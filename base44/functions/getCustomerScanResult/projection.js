@@ -569,7 +569,11 @@ function sanitizeRun(run, { detailed, healthScoreStatus = "" }) {
 
 function usesAcceptanceEvidenceContract(run) {
   return ["standard_review_snapshot_hmac_v3_acceptance_evidence", "standard_review_snapshot_hmac_v4_focused_scope"].includes(text(run?.authority_seal_version, 160))
-    || ["standard_limited_result_integrity_v2_acceptance_evidence", "standard_limited_result_integrity_v3_focused_scope"].includes(
+    || [
+      "standard_limited_result_integrity_v2_acceptance_evidence",
+      "standard_limited_result_integrity_v3_focused_scope",
+      "standard_limited_result_integrity_v4_focused_scope_effective_path",
+    ].includes(
       text(run?.result_integrity_version, 160),
     );
 }

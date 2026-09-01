@@ -202,7 +202,7 @@ test("limited rows bind and project the same acceptance observations", () => {
 
   assert.equal(
     LIMITED_RESULT_INTEGRITY_VERSION,
-    "standard_limited_result_integrity_v3_focused_scope",
+    "standard_limited_result_integrity_v4_focused_scope_effective_path",
   );
   assert.equal(snapshot.scan.coverage_authority_evidence.assessment, "insufficient_sample");
   assert.equal(snapshot.scan.classification_integrity.state, "inconclusive_insufficient_evidence");

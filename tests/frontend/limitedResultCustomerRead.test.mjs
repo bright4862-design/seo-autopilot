@@ -108,6 +108,7 @@ test("without paid access a limited result stays locked", () => {
 test("the read path verifies the limited proof against its own domain", () => {
   assert.match(SOURCE, /verifyLimitedResultProof\(limitedSnapshot, secret, integrityProof\)/);
   assert.match(SOURCE, /buildLimitedResultSnapshot\(/);
+  assert.match(SOURCE, /standard_limited_result_integrity_v4_focused_scope_effective_path/);
 });
 
 test("a limited row carrying an authority proof is refused outright", () => {

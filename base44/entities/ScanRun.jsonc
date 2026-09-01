@@ -52,7 +52,11 @@
     },
     "requested_path_prefix": {
       "type": "string",
-      "description": "Normalized path prefix enforced by the scanner for this focused scan."
+      "description": "Normalized path prefix requested for this focused scan."
+    },
+    "effective_path_prefix": {
+      "type": "string",
+      "description": "Actual path prefix enforced by the worker after any verified same-origin scope adjustment."
     },
     "discovered_from": {
       "type": "string",

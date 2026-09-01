@@ -10,6 +10,7 @@ import { ensureScanProject } from "@/lib/activeProject";
 import { normalizeActionPriority, normalizeFindingEvidence, normalizeReviewEvidenceState, normalizeReviewScope, selectFinalReviewFixes } from "@/lib/reviewContract";
 import { RELEASE_AUTHORITY_CONTRACT, buildAuthorityMarkers, buildScanRunFields } from "@/lib/scanRunModel";
 import { createScanRequestId, normalizedScanDomain, scanReleaseIdentity } from "@/lib/scanRunIdentity";
+import { displayPathPrefix, focusedSectionUrl, normalizeRequestedPathPrefix } from "@/lib/focusedScanScope";
 import { getScanRunWithFixList } from "@/lib/scanRuns";
 import { UNLOCK_PRICE_LABEL, loadAccess } from "@/lib/access";
 import { trackEvent } from "@/lib/analytics";
@@ -50,9 +51,11 @@ const isRouteBoundaryPath = (value = "") => { const path = String(value || "").s
 const MONEY_PAGE_PATTERNS = ["devis", "quote", "pricing", "tarif", "contact", "booking", "reservation", "checkout", "ticket", "voucher", "pass", "show", "listing", "product", "produit", "collection", "category", "simulation", "simulateur", "calcul", "calculator", "comparateur", "demo", "signup", "energie", "énergie", "electricite", "électricité", "gaz", "fournisseur"];
 const TEMPLATE_RULES = new Set(["client_rendering", "js_rendering", "canonical_missing", "canonical_to_other_url", "schema", "missing_h1", "image_alt_text", "missing_meta_description", "empty_meta_description", "malformed_meta_description", "meta_description_unusable", "route_boundary_candidate_indexable", "internal_route_indexable"]);
 
-export default function ScanWebsiteForm({ project = null, saving = false }) {
+export default function ScanWebsiteForm({ project = null, saving = false, focusedScope = null }) {
   const navigate = useNavigate();
-  const [websiteUrl, setWebsiteUrl] = useState(project?.website_url || "");
+  const focusedUrl = focusedSectionUrl(focusedScope || {});
+  const isFocusedScan = Boolean(focusedUrl && focusedScope?.parent_scan_id);
+  const [websiteUrl, setWebsiteUrl] = useState(focusedUrl || project?.website_url || "");
   const [businessName, setBusinessName] = useState(project?.business_name || "");
   const [cmsPlatform, setCmsPlatform] = useState(normalizeCmsValue(project?.cms_platform || "custom"));
   const [keywordsText, setKeywordsText] = useState(Array.isArray(project?.important_keywords) ? project.important_keywords.join("\n") : "");
@@ -83,6 +86,12 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
   // Show the customer their own domain the moment the scan starts. Momentum
   // comes from something real and personal, not from a bar sitting at zero.
   const scanTargetLabel = durableScan.domain || safeHostname(websiteUrl) || "";
+
+  useEffect(() => {
+    if (!isFocusedScan || isLoading) return;
+    setWebsiteUrl(focusedUrl);
+    setUrlError("");
+  }, [focusedUrl, isFocusedScan, isLoading]);
 
   useEffect(() => {
     if (!isLoading) {
@@ -159,7 +168,9 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
     setErrorAction("");
     const submittedUrl = String(websiteUrl || "").trim();
     const normalizedUrl = normalizeWebsiteUrl(websiteUrl);
-    const requestedPathPrefix = getRequestedPathPrefix(normalizedUrl);
+    const requestedPathPrefix = isFocusedScan
+      ? normalizeRequestedPathPrefix(focusedScope.requested_path_prefix)
+      : getRequestedPathPrefix(normalizedUrl);
     // Optional field: fall back to the site's hostname so downstream project
     // identity and review context always have a usable name.
     const trimmedBusinessName = businessName.trim() || safeHostname(normalizedUrl).replace(/^www\./, "");
@@ -250,13 +261,21 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
         max_competitors: 0,
         max_browser_render_attempts: safeScanBudget.max_browser_render_attempts,
         crawl_timeout_ms: safeScanBudget.crawl_timeout_ms,
-        source: "scan_website_page",
+        source: isFocusedScan ? "focused_path_scan" : "scan_website_page",
         project_id: scanProject.id,
         requested_at: new Date().toISOString(),
         request_id: requestId,
         idempotency_key: idempotencyKey,
         submitted_url: submittedUrl,
         normalized_domain: normalizedScanDomain(normalizedUrl),
+        ...(isFocusedScan ? {
+          scope_type: "path_prefix",
+          parent_scan_id: String(focusedScope.parent_scan_id || ""),
+          requested_origin: String(focusedScope.requested_origin || ""),
+          requested_path_prefix: requestedPathPrefix,
+          discovered_from: String(focusedScope.discovered_from || "sitemap"),
+          user_confirmed: true,
+        } : {}),
         require_python_scanner: true,
         allow_deno_fallback: false,
       };
@@ -298,6 +317,13 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
           submitted_url: submittedUrl,
           normalized_domain: normalizedScanDomain(normalizedUrl),
           scan_mode: scanMode,
+          path_prefix: requestedPathPrefix,
+          scope_type: isFocusedScan ? "path_prefix" : "",
+          parent_scan_id: isFocusedScan ? String(focusedScope.parent_scan_id || "") : "",
+          requested_origin: isFocusedScan ? String(focusedScope.requested_origin || "") : "",
+          requested_path_prefix: isFocusedScan ? requestedPathPrefix : "",
+          discovered_from: isFocusedScan ? String(focusedScope.discovered_from || "sitemap") : "",
+          user_confirmed: isFocusedScan,
           status: String(jobData.status || "crawling"),
           replayed: jobData.replayed === true,
           replay_reason: String(jobData.replay_reason || ""),
@@ -378,8 +404,19 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
       <form onSubmit={handleSubmit} noValidate aria-busy={isLoading} className="flex flex-col gap-8">
         <div className="flex flex-col gap-4">
           <p className="text-[13px] text-ink-faint">Read-only scan · no site changes</p>
-          <h1 className="text-[32px] font-semibold leading-tight tracking-tight text-ink sm:text-[38px]">Create your FixList</h1>
-          <p className="max-w-[52ch] text-[15px] leading-relaxed text-ink-muted">Enter a website URL and we’ll turn the scan into a plain-English list of what to fix, what matters most, and what may need a developer.</p>
+          <h1 className="text-[32px] font-semibold leading-tight tracking-tight text-ink sm:text-[38px]">{isFocusedScan ? "Scan this site section" : "Create your FixList"}</h1>
+          <p className="max-w-[52ch] text-[15px] leading-relaxed text-ink-muted">
+            {isFocusedScan
+              ? `FixList will use a separate 150-page budget and stay inside ${displayPathPrefix(focusedScope.requested_path_prefix)} on this website.`
+              : "Enter a website URL and we’ll turn the scan into a plain-English list of what to fix, what matters most, and what may need a developer."}
+          </p>
+          {isFocusedScan ? (
+            <div className="rounded-xl border border-hairline-soft bg-white px-4 py-3 text-[13px] leading-relaxed text-ink-muted">
+              <div className="font-medium text-ink">Focused section</div>
+              <div className="mt-1 break-all">{focusedUrl}</div>
+              <div className="mt-1 text-[12px] text-ink-faint">This creates a separate FixList. It will not replace or merge with the parent scan.</div>
+            </div>
+          ) : null}
         </div>
 
         <div className="flex flex-col gap-6">
@@ -395,8 +432,8 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
               autoComplete="url"
               aria-invalid={Boolean(urlError)}
               aria-describedby={urlError ? "fixlist-website-url-error" : undefined}
-              disabled={isLoading}
-              className={`mt-2 h-11 rounded-lg border bg-white px-3 text-[15px] text-ink shadow-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 ${urlError ? "border-crit/50 focus-visible:ring-crit/20" : "border-hairline focus-visible:border-ink focus-visible:ring-ink/10"}`}
+              disabled={isLoading || isFocusedScan}
+              className={`mt-2 h-11 rounded-lg border bg-white px-3 text-[15px] text-ink shadow-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 disabled:bg-ink/[0.025] disabled:text-ink-muted ${urlError ? "border-crit/50 focus-visible:ring-crit/20" : "border-hairline focus-visible:border-ink focus-visible:ring-ink/10"}`}
             />
             {urlError ? (
               <p id="fixlist-website-url-error" className="mt-2 flex items-start gap-1.5 text-[13px] text-crit">
@@ -462,10 +499,10 @@ export default function ScanWebsiteForm({ project = null, saving = false }) {
             disabled={isLoading}
             className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-ink px-5 py-2.5 text-[13px] font-medium text-paper transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink disabled:opacity-50 sm:w-auto sm:self-start"
           >
-            {isLoading ? <><Loader2 className="h-4 w-4 animate-spin" />Building FixList…</> : "Create FixList"}
+            {isLoading ? <><Loader2 className="h-4 w-4 animate-spin" />Building FixList…</> : isFocusedScan ? "Scan this section" : "Create FixList"}
           </button>
           <p className="text-[13px] leading-relaxed text-ink-muted">Scan time varies by site. FixList will tell you when it’s safe to leave this page.</p>
-          <p className="text-[12px] text-ink-faint">Scans up to 150 pages. Larger sites coming soon.</p>
+          <p className="text-[12px] text-ink-faint">{isFocusedScan ? "This section gets its own 150-page scan budget." : "Scans up to 150 pages. Larger sites can be scanned section by section when FixList discovers a useful folder."}</p>
         </div>
 
         <div className="border-t border-hairline-soft pt-6">

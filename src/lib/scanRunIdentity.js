@@ -1,3 +1,5 @@
+import { focusedScanFingerprintTarget, normalizeRequestedPathPrefix } from "./focusedScanScope.js";
+
 export const ACTIVE_SCAN_RUN_STATUSES = new Set(["queued", "crawling", "reviewing"]);
 export const STANDARD_SCAN_MODE = "standard_150";
 
@@ -53,7 +55,7 @@ export function normalizedScanDomain(value) {
   }
 }
 
-export function buildScanRequestIdentity({ websiteUrl, scanMode, requestId, idempotencyKey } = {}) {
+export function buildScanRequestIdentity({ websiteUrl, scanMode, requestId, idempotencyKey, pathPrefix = "" } = {}) {
   const normalizedTarget = normalizeScanTarget(websiteUrl);
   const normalizedMode = normalizeScanMode(scanMode);
   const stableRequestId = String(requestId || idempotencyKey || "").trim();
@@ -64,19 +66,25 @@ export function buildScanRequestIdentity({ websiteUrl, scanMode, requestId, idem
   }
   if (!normalizedTarget) throw new Error("A valid website URL is required before starting a durable scan.");
   if (normalizedMode !== STANDARD_SCAN_MODE) throw new Error("Only the Standard 150 scan is available.");
+  const normalizedPathPrefix = normalizeRequestedPathPrefix(pathPrefix);
+  const fingerprintTarget = focusedScanFingerprintTarget(normalizedTarget, normalizedPathPrefix);
   return {
     request_id: stableRequestId,
     idempotency_key: stableIdempotencyKey,
     normalized_target: normalizedTarget,
     normalized_domain: normalizedScanDomain(normalizedTarget),
     scan_mode: STANDARD_SCAN_MODE,
-    request_fingerprint: `${STANDARD_SCAN_MODE}|${normalizedTarget}`,
+    path_prefix: normalizedPathPrefix,
+    request_fingerprint: `${STANDARD_SCAN_MODE}|${fingerprintTarget}`,
   };
 }
 
 function storedFingerprint(run = {}) {
-  return String(run.request_fingerprint || "").trim()
-    || `${normalizeScanMode(run.scan_mode)}|${normalizeScanTarget(run.website_url || run.submitted_url)}`;
+  const stored = String(run.request_fingerprint || "").trim();
+  if (stored) return stored;
+  const target = normalizeScanTarget(run.website_url || run.submitted_url);
+  const pathPrefix = normalizeRequestedPathPrefix(run.path_prefix || run.requested_path_prefix || "");
+  return `${normalizeScanMode(run.scan_mode)}|${focusedScanFingerprintTarget(target, pathPrefix)}`;
 }
 
 function sameTargetAndMode(run = {}, identity = {}) {
@@ -129,6 +137,7 @@ export function buildStaleScanRetryFields(run = {}, identity = {}, { now = Date.
     website_url: identity.normalized_target,
     normalized_domain: identity.normalized_domain,
     scan_mode: identity.scan_mode,
+    path_prefix: identity.path_prefix || "",
     status: "crawling",
     status_detail: "Restarted after the prior Standard attempt expired.",
     attempt_count: currentAttempt + 1,

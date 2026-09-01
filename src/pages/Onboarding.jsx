@@ -1,5 +1,8 @@
-import React from "react";
+import React, { useMemo } from "react";
+import { useSearchParams } from "react-router-dom";
+
 import ScanWebsiteForm from "@/components/scan/ScanWebsiteForm";
+import { focusedScopeFromSearchParams } from "@/lib/focusedScanScope";
 
 // The New Scan page. Layout lives in the form itself (the same centred 680px
 // paper-and-ink column the landing page and dashboard header use); the old
@@ -7,5 +10,11 @@ import ScanWebsiteForm from "@/components/scan/ScanWebsiteForm";
 // `form > div:first-child > div:first-child`, which is what stripped the input
 // borders and left the orphaned selection-card thumb behind.
 export default function Onboarding() {
-  return <ScanWebsiteForm />;
+  const [searchParams] = useSearchParams();
+  const focusedScope = useMemo(
+    () => focusedScopeFromSearchParams(searchParams),
+    [searchParams],
+  );
+
+  return <ScanWebsiteForm focusedScope={focusedScope} />;
 }

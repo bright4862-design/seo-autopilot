@@ -7,6 +7,7 @@ from app.acceptance_evidence import (
     build_classification_integrity,
     measure_worker_peak_memory_bytes,
 )
+from app.beta_revision import live_revision
 
 
 def test_classification_integrity_uses_the_reviewed_classifier_verdict():
@@ -96,8 +97,10 @@ async def test_completion_envelope_carries_measured_classification_and_memory(mo
             },
         },
         "archetype_classifier_version": "classifier_v10",
+        "beta_revision_fingerprint": live_revision()["fingerprint"],
     }
     captured = {}
+    events = []
 
     async def read(*_args, **_kwargs):
         return dict(scan)
@@ -118,9 +121,14 @@ async def test_completion_envelope_carries_measured_classification_and_memory(mo
             },
         }
 
+    def capture_event(event, **fields):
+        events.append((event, fields))
+        return fields
+
     monkeypatch.setattr(scan_job, "read_scan_run", read)
     monkeypatch.setattr(scan_job, "invoke_function", persist)
     monkeypatch.setattr(scan_job, "measure_worker_peak_memory_bytes", lambda: 268_435_456)
+    monkeypatch.setattr(scan_job, "emit", capture_event)
 
     outcome = await scan_job.complete_authority(
         object(),
@@ -136,6 +144,16 @@ async def test_completion_envelope_carries_measured_classification_and_memory(mo
     assert captured["envelope"]["scan"]["worker_peak_memory_bytes"] == 268_435_456
     assert captured["envelope"]["review"]["classification_verdict"] == "classified"
     assert captured["envelope"]["review"]["classification_integrity"]["classifier_version"] == "classifier_v10"
+    persist_start = next(
+        fields for event, fields in events
+        if event == "scan_job_completion_phase" and fields.get("phase") == "persist_start"
+    )
+    assert persist_start["archetype_classifier_version"] == "classifier_v10"
+    assert persist_start["beta_revision_fingerprint"] == captured["envelope"]["review"]["beta_revision_fingerprint"]
+    assert persist_start["scan_id"] == "scan-acceptance"
+    assert persist_start["attempt_count"] == 1
+    assert "review" not in persist_start
+    assert "envelope" not in persist_start
 
 
 @pytest.mark.asyncio

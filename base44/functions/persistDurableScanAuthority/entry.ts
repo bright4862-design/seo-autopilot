@@ -81,10 +81,13 @@ Deno.serve(async (req) => {
 
     const failedPredicate = firstFailedAuthorityPredicate(authorityScanResult, review);
     if (failedPredicate) {
+      const classifierDiagnostic = failedPredicate === "archetype_classifier_version"
+        ? `__expected_${diagnosticClassifierMarker(AUTHORITY_CONTRACT.archetype_classifier_version)}__received_${diagnosticClassifierMarker(review?.archetype_classifier_version || review?.site_fingerprint?.classification?.classifier_version)}`
+        : "";
       const fingerprintDiagnostic = failedPredicate === "beta_revision_fingerprint"
         ? `__expected_${diagnosticMarker(BASE44_HANDLER_RELEASE_FINGERPRINT)}__received_${diagnosticMarker(review?.beta_revision_fingerprint || scanResult?.beta_revision_fingerprint)}`
         : "";
-      throw new RequestProblem(409, `authority_snapshot_not_eligible__${failedPredicate}${fingerprintDiagnostic}`, "The reviewed scan is not release-authoritative.");
+      throw new RequestProblem(409, `authority_snapshot_not_eligible__${failedPredicate}${classifierDiagnostic}${fingerprintDiagnostic}`, "The reviewed scan is not release-authoritative.");
     }
 
     if (!hasCompleteAcceptanceEvidence(authorityScanResult, review)) {
@@ -254,6 +257,13 @@ function requireAdmissionRelease(release) {
 function diagnosticMarker(value: unknown) {
   const marker = String(value || "missing").toLowerCase();
   return /^[0-9a-f]{16}$/.test(marker) ? marker : "missing";
+}
+
+function diagnosticClassifierMarker(value: unknown) {
+  const marker = String(value || "missing").toLowerCase();
+  return /^archetype_classifier_v[0-9]+_[a-z0-9_]+$/.test(marker) && marker.length <= 160
+    ? marker
+    : "missing";
 }
 
 function assertWorkerHeader(req: Request) {

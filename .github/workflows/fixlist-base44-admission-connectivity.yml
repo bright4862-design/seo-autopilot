@@ -52,8 +52,8 @@ jobs:
   control-admission-connectivity:
     if: github.actor == 'bright4862-design' && github.ref == 'refs/heads/main'
     environment: fixlist-production-owner
-    # Base44 mutation auth is non-interactive via a workspace API key stored
-    # only in the protected production environment.
+    # Builder-compatible Base44 mutation auth uses an ephemeral owner device
+    # session on the hosted runner; no serialized refresh/access token is used.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -74,12 +74,19 @@ jobs:
           test "$(git rev-parse origin/main)" = "${{ github.sha }}"
           test -z "$(git status --porcelain --untracked-files=all)"
           /bin/bash -n scripts/set-base44-admission-connectivity.sh
+          /bin/bash -n scripts/authenticate-base44-owner-session.sh
           /bin/bash -n scripts/fixlist-cloud-operator.sh
 
       - name: Set up pinned Node runtime
         uses: actions/setup-node@v6
         with:
           node-version: '20.19.5'
+
+      - name: Authenticate Base44 owner with ephemeral device code
+        shell: /bin/bash {0}
+        env:
+          BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
+        run: /bin/bash scripts/authenticate-base44-owner-session.sh
 
       - name: Authenticate keylessly as the isolated cloud operator
         uses: google-github-actions/auth@v3
@@ -103,5 +110,9 @@ jobs:
           CHANGE_TICKET: ${{ inputs.change_ticket }}
           CUTOVER_REASON: ${{ inputs.reason }}
           BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
-          BASE44_API_KEY: ${{ secrets.BASE44_API_KEY }}
         run: /bin/bash scripts/set-base44-admission-connectivity.sh
+
+      - name: Remove ephemeral Base44 owner session
+        if: ${{ always() }}
+        shell: /bin/bash {0}
+        run: rm -rf "$HOME/.base44"

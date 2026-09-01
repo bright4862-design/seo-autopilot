@@ -26,6 +26,7 @@ const connectivityControl = read("scripts/set-base44-admission-connectivity.sh")
 const intakeWorkflow = read(".github/workflows/fixlist-base44-scan-intake.yml");
 const connectivityWorkflow = read(".github/workflows/fixlist-base44-admission-connectivity.yml");
 const releasePublishWorkflow = read(".github/workflows/fixlist-base44-release-publish.yml");
+const ownerSessionAuth = read("scripts/authenticate-base44-owner-session.sh");
 const cliHelper = read("scripts/lib/base44-pinned-cli.sh");
 const sourceGuard = read("scripts/lib/release-source-guard.sh");
 const resolveOperatorVersion = read("scripts/resolve_admission_operator_signing_version.py");
@@ -255,19 +256,32 @@ test("Base44 site publication restores the durable backend after the site deploy
   assert.doesNotMatch(deploySite, /deploy-base44-beta-functions\.sh|--force|entities\s+push/);
 });
 
-test("Base44 production controls use hosted runners and protected workspace-key auth", () => {
+test("Base44 production controls use hosted runners and ephemeral owner-device auth", () => {
   for (const ownerWorkflow of [releasePublishWorkflow, intakeWorkflow, connectivityWorkflow]) {
     assert.match(ownerWorkflow, /runs-on: ubuntu-latest/);
     assert.match(ownerWorkflow, /environment: fixlist-production-owner/);
     assert.match(ownerWorkflow, /group: fixlist-base44-hosted-controls-v2/);
-    assert.match(ownerWorkflow, /BASE44_API_KEY: \$\{\{ secrets\.BASE44_API_KEY \}\}/);
+    assert.match(ownerWorkflow, /scripts\/authenticate-base44-owner-session\.sh/);
+    assert.match(ownerWorkflow, /BASE44_EXPECTED_OWNER: \$\{\{ secrets\.BASE44_EXPECTED_OWNER \}\}/);
+    assert.doesNotMatch(ownerWorkflow, /BASE44_API_KEY:\s*\$\{\{ secrets\.BASE44_API_KEY \}\}/);
     assert.doesNotMatch(ownerWorkflow, /runs-on:\s*\[self-hosted[^\n]*fixlist-base44-owner/i);
-    assert.doesNotMatch(ownerWorkflow, /BASE44_REFRESH_TOKEN\s*:/i);
+    assert.doesNotMatch(ownerWorkflow, /BASE44_(?:REFRESH|ACCESS)_TOKEN\s*:/i);
+    assert.match(ownerWorkflow, /Remove ephemeral Base44 owner session[\s\S]*rm -rf "\$HOME\/\.base44"/);
   }
 
   assert.doesNotMatch(releasePublishWorkflow, /issue_comment:/);
   assert.match(releasePublishWorkflow, /github\.event_name == 'workflow_dispatch'/);
   assert.match(releasePublishWorkflow, /test "\$INPUT_CONFIRM" = "\$source_sha"/);
+});
+
+test("hosted Base44 owner authentication is pinned, exact-app verified, and ephemeral", () => {
+  assert.match(ownerSessionAuth, /fixlist_install_base44_cli "\$TMP"/);
+  assert.match(ownerSessionAuth, /cd "\$TMP"[\s\S]*"\$FIXLIST_BASE44_CLI" login/);
+  assert.match(ownerSessionAuth, /fixlist_require_base44_owner "\$BASE44_EXPECTED_OWNER" "\$TMP\/whoami" "\$APP_ID"/);
+  assert.match(ownerSessionAuth, /--app-id "\$APP_ID" functions list/);
+  assert.match(ownerSessionAuth, /BASE44_API_KEY must be unset/);
+  assert.doesNotMatch(ownerSessionAuth, /BASE44_(?:REFRESH|ACCESS)_TOKEN/);
+  assert.doesNotMatch(ownerSessionAuth, /echo[^\n]*(?:BASE44_EXPECTED_OWNER|accessToken|refreshToken)/);
 });
 
 test("workspace-key auth proves exact-app access without printing the credential", () => {
@@ -411,9 +425,11 @@ test("Base44 intake and connectivity are isolated owner controls with verified r
     assert.match(ownerWorkflow, /github\.actor == 'bright4862-design'/);
     assert.match(ownerWorkflow, /github\.ref == 'refs\/heads\/main'/);
     assert.match(ownerWorkflow, /environment: fixlist-production-owner/);
-    assert.match(ownerWorkflow, /BASE44_API_KEY: \$\{\{ secrets\.BASE44_API_KEY \}\}/);
+    assert.match(ownerWorkflow, /scripts\/authenticate-base44-owner-session\.sh/);
+    assert.match(ownerWorkflow, /BASE44_EXPECTED_OWNER: \$\{\{ secrets\.BASE44_EXPECTED_OWNER \}\}/);
+    assert.doesNotMatch(ownerWorkflow, /BASE44_API_KEY:\s*\$\{\{ secrets\.BASE44_API_KEY \}\}/);
     assert.doesNotMatch(ownerWorkflow, /runs-on:\s*\[self-hosted[^\n]*fixlist-base44-owner/i);
-    assert.doesNotMatch(ownerWorkflow, /BASE44_REFRESH_TOKEN\s*:/i);
+    assert.doesNotMatch(ownerWorkflow, /BASE44_(?:REFRESH|ACCESS)_TOKEN\s*:/i);
   }
   assert.match(intakeWorkflow, /denoland\/setup-deno@v2/);
   assert.match(intakeWorkflow, /deno-version: v2\.4\.5/);

@@ -22,9 +22,9 @@ jobs:
       github.ref == 'refs/heads/main' &&
       github.event_name == 'workflow_dispatch'
     environment: fixlist-production-owner
-    # Base44's pinned CLI supports non-interactive workspace API-key auth.
-    # The key is stored only in the protected production environment; no
-    # serialized refresh token or self-hosted owner runner is required.
+    # Builder-compatible Base44 auth uses an ephemeral device-code owner session
+    # on the hosted runner. No refresh/access token is serialized into GitHub
+    # secrets, and no self-hosted runner is required.
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -46,6 +46,7 @@ jobs:
           test "$(git rev-parse origin/main)" = "${{ github.sha }}"
           test -z "$(git status --porcelain --untracked-files=all)"
           /bin/bash -n scripts/deploy-base44-beta-site.sh
+          /bin/bash -n scripts/authenticate-base44-owner-session.sh
           /bin/bash -n scripts/lib/release-source-guard.sh
 
       - name: Resolve exact owner confirmation
@@ -65,6 +66,12 @@ jobs:
           node-version: '20.19.5'
           cache: npm
 
+      - name: Authenticate Base44 owner with ephemeral device code
+        shell: /bin/bash {0}
+        env:
+          BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
+        run: /bin/bash scripts/authenticate-base44-owner-session.sh
+
       - name: Install exact frontend dependencies
         run: npm ci
 
@@ -77,5 +84,9 @@ jobs:
           SOURCE_SHA: ${{ github.sha }}
           CONFIRM: ${{ steps.confirm.outputs.confirm }}
           BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
-          BASE44_API_KEY: ${{ secrets.BASE44_API_KEY }}
         run: /bin/bash scripts/deploy-base44-beta-site.sh
+
+      - name: Remove ephemeral Base44 owner session
+        if: ${{ always() }}
+        shell: /bin/bash {0}
+        run: rm -rf "$HOME/.base44"

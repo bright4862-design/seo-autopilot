@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from .extract import is_legal_page_path
 
-SAMPLING_VERSION = "balanced_sitemap_buckets_v4_locale_collapsed_identity_scope_discovery_case_preserved"
+SAMPLING_VERSION = "balanced_sitemap_buckets_v5_locale_collapsed_identity_scope_discovery_bounded_prefixes"
 TRUST_PREFIXES = (
     "/about", "/contact", "/privacy", "/terms", "/legal", "/mentions-legales",
     "/cgv", "/security", "/impressum", "/conditions", "/a-propos",
@@ -215,6 +215,13 @@ def sampling_report(
         if segments:
             sampled_path_prefixes[f"/{segments[0]}"] += 1
 
+    top_path_prefixes = dict(
+        sorted(path_prefixes.items(), key=lambda item: (-item[1], item[0]))[:50]
+    )
+    top_sampled_path_prefixes = {
+        key: sampled_path_prefixes.get(key, 0) for key in top_path_prefixes
+    }
+
     identity_selected = [url for url in selected if family_of(url) in MONEY_FAMILIES]
     identity_all = [url for url in all_urls if family_of(url) in MONEY_FAMILIES]
     return {
@@ -232,8 +239,8 @@ def sampling_report(
         "markets_discovered": dict(markets),
         "markets_sampled": dict(sampled_markets),
         "markets_never_sampled": sorted(market for market in markets if not sampled_markets.get(market)),
-        "path_prefixes_discovered": dict(path_prefixes),
-        "path_prefixes_sampled": dict(sampled_path_prefixes),
+        "path_prefixes_discovered": top_path_prefixes,
+        "path_prefixes_sampled": top_sampled_path_prefixes,
         "identity_pages_in_sitemap": len(identity_all),
         "identity_pages_sampled": len(identity_selected),
     }

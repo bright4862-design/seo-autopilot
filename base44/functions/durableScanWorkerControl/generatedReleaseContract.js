@@ -3,7 +3,7 @@
 // Run that generator after changing either input; CI fails on drift.
 
 export const RELEASE_CONTRACT_SCHEMA_VERSION = "beta_crawler_revision_v1";
-export const RELEASE_FINGERPRINT = "0544ce395811cbd5";
+export const RELEASE_FINGERPRINT = "2f4238b4989f3fd9";
 export const RELEASE_STATUS = "candidate";
 export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "acceptance_evidence_version": "standard150_acceptance_evidence_v2_aggregate_rss_fail_closed",
@@ -18,7 +18,7 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "coverage_authority_version": "coverage_authority_v1_shared_decision",
   "crawler_acceptance_version": "crawler_acceptance_v1",
   "customer_projection_version": "customer_projection_v5_focused_scope_lineage",
-  "customer_result_reader_version": "customer_result_reader_v3_p1b_historical_compatibility",
+  "customer_result_reader_version": "customer_result_reader_v4_limited_effective_scope_compatibility",
   "durable_completion_contract_version": "durable_standard150_completion_v1",
   "durable_control_contract_version": "durable_standard150_control_v1",
   "durable_worker_contract_version": "scan_job_worker_v1_cloud_tasks",
@@ -31,7 +31,7 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "grouped_recommendation_evidence_version": "grouped_recommendation_evidence_v1_metadata_states",
   "image_alt_evidence_version": "material_image_alt_v1",
   "indexability_quality_version": "indexability_quality_v1",
-  "limited_result_integrity_version": "standard_limited_result_integrity_v3_focused_scope",
+  "limited_result_integrity_version": "standard_limited_result_integrity_v4_focused_scope_effective_path",
   "market_scope_version": "market_scope_v2_traversal_safe_path_prefix",
   "metadata_evidence_version": "metadata_evidence_v1_description_states",
   "navigation_indexability_version": "navigation_indexability_v1",

@@ -18,6 +18,14 @@ import test from "node:test";
 
 const HELPER = path.resolve("scripts/lib/base44-pinned-cli.sh");
 
+/**
+ * Runs the real guard against one candidate key and returns exactly what an
+ * operator would read in the Actions log: its stderr plus the exit status,
+ * with stdout discarded.
+ *
+ * The identity file lives in a fresh temporary directory that is removed
+ * afterwards, so no candidate key outlives the assertion inspecting it.
+ */
 function guardStderr(key) {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), "b44guard-"));
   const outFile = path.join(out, "identity");

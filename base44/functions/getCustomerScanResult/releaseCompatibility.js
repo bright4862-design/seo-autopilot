@@ -3,7 +3,7 @@
 // proof, ownership, FixList identity, FixItem identity, and completeness checks
 // all pass. It is never treated as evidence that the old release is currently
 // deployed or accepted.
-export const CUSTOMER_RESULT_READER_VERSION = "customer_result_reader_v4_limited_effective_scope_compatibility";
+export const CUSTOMER_RESULT_READER_VERSION = "customer_result_reader_v5_acceptance_projection_parity";
 
 export const HISTORICAL_READABLE_RELEASE_FINGERPRINTS = Object.freeze([
   "5d94e93c54a9efb6",

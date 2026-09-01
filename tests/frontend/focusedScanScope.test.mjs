@@ -17,7 +17,7 @@ import {
 import { buildScanRequestIdentity, resolveScanRunReplay } from "../../src/lib/scanRunIdentity.js";
 
 test("focused scope normalization rejects traversal, origins, query strings, and encoded separators", () => {
-  assert.equal(FOCUSED_SCAN_SCOPE_VERSION, "focused_scan_scope_v2_same_origin_path_prefix_traversal_parity");
+  assert.equal(FOCUSED_SCAN_SCOPE_VERSION, "focused_scan_scope_v3_fullsite_scope_type_case_preserved_candidates");
   assert.equal(normalizeRequestedPathPrefix("/fr/"), "/fr");
   assert.equal(normalizeRequestedPathPrefix("fr/guides/"), "/fr/guides");
   assert.equal(displayPathPrefix("/fr"), "/fr/");
@@ -83,6 +83,20 @@ test("onboarding scope round-trips only a same-origin path scope", () => {
   assert.equal(focusedSectionUrl(scope), "https://example.com/fr/");
 });
 
+test("market-derived candidates never duplicate a case-preserved path prefix", () => {
+  const sections = focusedPathSections({
+    website_url: "https://example.com/",
+    pages_found: 1200,
+    sampling_evidence: {
+      path_prefixes_discovered: { "/DE": 120 },
+      path_prefixes_sampled: { "/DE": 12 },
+      markets_discovered: { de: 120 },
+      markets_sampled: { de: 12 },
+    },
+  });
+  assert.deepEqual(sections.map((section) => section.requested_path_prefix), ["/DE"]);
+});
+
 test("section suggestions are bounded and suppress system folders", () => {
   const sections = focusedPathSections({
     website_url: "https://example.com/",
@@ -121,6 +135,8 @@ test("server admission requires owned discovered parent scope and does not enabl
   assert.equal(source.includes("focused_scope_not_discovered"), true);
   assert.equal(source.includes("scanMatchesRequestedScope(row, scope)"), true);
   assert.equal(source.includes("focused_parent_must_be_full_site"), true);
+  assert.equal(source.includes("return !rowType && rowPrefix === requestedPrefix;"), true);
+  assert.equal(source.includes('if (String(parent.scope_type || "").trim())'), true);
   assert.equal(source.includes('raw.replace(/^\\/+/, "").split("/")'), true);
   assert.equal(source.includes('rawDecoded === ".."'), true);
   assert.equal(source.includes("scope_type: \"subdomain\""), false);
@@ -151,4 +167,47 @@ test("focused scope is bound into authoritative and limited result proofs", () =
   assert.equal(readerIntegrity.includes("effective_path_prefix"), true);
   const projection = fs.readFileSync("base44/functions/getCustomerScanResult/projection.js", "utf8");
   assert.equal(projection.includes('"standard_limited_result_integrity_v4_focused_scope_effective_path"'), true);
+});
+
+
+function extractNamedFunction(source, name) {
+  const start = source.indexOf(`function ${name}(`);
+  assert.notEqual(start, -1, `${name} must exist in server source`);
+  const brace = source.indexOf("{", start);
+  let depth = 0;
+  let quote = "";
+  let escaped = false;
+  for (let i = brace; i < source.length; i += 1) {
+    const ch = source[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, i + 1);
+    }
+  }
+  throw new Error(`Could not extract ${name}`);
+}
+
+test("browser and server focused path normalizers stay behaviorally identical", () => {
+  const source = fs.readFileSync("base44/functions/startStandardScanJob/entry.ts", "utf8");
+  const fnSource = extractNamedFunction(source, "normalizeFocusedPathPrefix");
+  const serverNormalize = new Function(`${fnSource}; return normalizeFocusedPathPrefix;`)();
+  const cases = [
+    "/fr/", "fr/guides/", "/", "/fr?preview=1", "/fr#top",
+    "/%2e%2e/private", "/../private", "/%2Fprivate", "/%5Cprivate",
+    "https://evil.example/fr", "//evil.example/fr", "/Products",
+  ];
+  for (const value of cases) {
+    assert.equal(serverNormalize(value), normalizeRequestedPathPrefix(value), value);
+  }
 });

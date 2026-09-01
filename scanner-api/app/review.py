@@ -507,7 +507,9 @@ def normalized_structural_route_paths(pages: list[dict[str, Any]]) -> list[str]:
     paths: list[str] = []
     seen: set[str] = set()
     for page in pages[:220]:
-        raw_path = clean_path(page_evidence_url(page)).lower()
+        # Structural identity ignores query/fragment variants. Tracking
+        # parameters are crawl/discovery detail, not distinct business routes.
+        raw_path = clean_path(page_evidence_url(page)).split("?", 1)[0].split("#", 1)[0].lower()
         normalized = strip_market_locale_prefix(raw_path).rstrip("/") or "/"
         if normalized and normalized not in seen:
             seen.add(normalized)

@@ -87,7 +87,11 @@ test("durable persistence publishes only the fixed predicate name", () => {
     "utf8",
   );
   assert.match(source, /firstFailedAuthorityPredicate\(authorityScanResult, review\)/);
-  assert.match(source, /`authority_snapshot_not_eligible__\$\{failedPredicate\}\$\{fingerprintDiagnostic\}`/);
+  assert.match(source, /`authority_snapshot_not_eligible__\$\{failedPredicate\}\$\{classifierDiagnostic\}\$\{fingerprintDiagnostic\}`/);
+  assert.match(source, /failedPredicate === "archetype_classifier_version"/);
+  assert.match(source, /__expected_\$\{diagnosticClassifierMarker\(AUTHORITY_CONTRACT\.archetype_classifier_version\)\}__received_\$\{diagnosticClassifierMarker\(review\?\.archetype_classifier_version \|\| review\?\.site_fingerprint\?\.classification\?\.classifier_version\)\}/);
+  assert.match(source, /function diagnosticClassifierMarker\(value: unknown\)/);
+  assert.match(source, /\^archetype_classifier_v\[0-9\]\+_\[a-z0-9_\]\+\$/);
   assert.match(source, /__expected_\$\{diagnosticMarker\(BASE44_HANDLER_RELEASE_FINGERPRINT\)\}__received_\$\{diagnosticMarker\(review\?\.beta_revision_fingerprint \|\| scanResult\?\.beta_revision_fingerprint\)\}/);
   assert.doesNotMatch(source, /JSON\.stringify\((?:scanResult|review)\)/);
 });

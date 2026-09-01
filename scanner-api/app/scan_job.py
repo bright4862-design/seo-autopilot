@@ -20,6 +20,7 @@ import hmac
 import json
 import multiprocessing as mp
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 from typing import Any
@@ -56,6 +57,26 @@ LOCAL_REVIEW_PROCESS_JOIN_GRACE_SECONDS = 1.0
 WORKER_HEARTBEAT_INTERVAL_SECONDS = 60.0
 
 TERMINAL_STATUSES = frozenset({"complete", "limited", "failed", "cancelled"})
+
+
+def diagnostic_classifier_marker(review: dict[str, Any]) -> str:
+    """Return a bounded, non-secret classifier marker for persistence logs."""
+    classification = (
+        review.get("site_fingerprint", {}).get("classification", {})
+        if isinstance(review.get("site_fingerprint"), dict)
+        else {}
+    )
+    raw = review.get("archetype_classifier_version") or (
+        classification.get("classifier_version") if isinstance(classification, dict) else None
+    )
+    marker = str(raw or "missing").strip().lower()
+    return marker if re.fullmatch(r"[a-z0-9_]{1,160}", marker) else "missing"
+
+
+def diagnostic_fingerprint_marker(review: dict[str, Any]) -> str:
+    """Return only a valid frozen fingerprint, never arbitrary review data."""
+    marker = str(review.get("beta_revision_fingerprint") or "missing").strip().lower()
+    return marker if re.fullmatch(r"[0-9a-f]{16}", marker) else "missing"
 
 
 def base44_api_url() -> str:
@@ -932,6 +953,8 @@ async def complete_authority(
         attempt_count=attempt_count,
         phase="persist_start",
         elapsed_ms=int((time.monotonic() - phase_started) * 1000),
+        archetype_classifier_version=diagnostic_classifier_marker(reviewed),
+        beta_revision_fingerprint=diagnostic_fingerprint_marker(reviewed),
     )
     persisted = await invoke_function(client, "persistDurableScanAuthority", envelope)
     emit(

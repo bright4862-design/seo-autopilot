@@ -1,22 +1,23 @@
+"""Regression contract for the signed durable worker boundaries."""
+
+import json
+import subprocess
+from pathlib import Path
+
 from app.beta_revision import live_revision
 
 # Read the canonical release identity instead of copying it: a copied
 # marker is exactly the drift this release contract exists to prevent.
 CURRENT_FINGERPRINT = live_revision()["fingerprint"]
 
-"""Regression contract for the signed durable worker boundaries."""
-
-from pathlib import Path
-
 from app.scan_job import (
-
-
     COMPLETION_VERSION,
     CONTROL_VERSION,
     WORKER_VERSION,
     _service_headers,
     build_completion_envelope,
     build_control_envelope,
+    build_local_review,
     create_authority_seal,
 )
 
@@ -99,6 +100,55 @@ def test_review_changes_the_completion_proof():
     changed = {**_review(), "health_score": 77}
     second = build_completion_envelope(scan, _scan_result(), changed, "secret")
     assert first["proof"] != second["proof"]
+
+
+def test_production_shaped_funbooker_review_reaches_current_authority_predicate_with_v12():
+    """Exercise the real Python review/envelope before the deployed JS predicate."""
+    result = json.loads((REPO_ROOT / "tests/fixtures/funbooker.scan.json").read_text())
+    review = build_local_review(result)
+    scan = {
+        "id": "diagnostic-funbooker",
+        "project_id": "diagnostic-project",
+        "owner_user_id": "diagnostic-owner",
+        "request_id": "diagnostic-request",
+        "idempotency_key": "diagnostic-request",
+        "attempt_count": 1,
+    }
+    envelope = build_completion_envelope(scan, result, review, "diagnostic-nonproduction-key")
+    script = r"""
+      import { readFileSync } from "node:fs";
+      import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./src/lib/generatedReleaseContract.js";
+      import { firstFailedAuthorityPredicate } from "./base44/functions/persistDurableScanAuthority/authoritySnapshot.js";
+      const envelope = JSON.parse(readFileSync(0, "utf8"));
+      const review = envelope.review;
+      const scan = {
+        ...envelope.scan,
+        scanner_version: RELEASE_COMPONENT_VERSIONS.scanner_version,
+        scanner_build_revision: RELEASE_COMPONENT_VERSIONS.scanner_build_revision,
+        advanced_scan_backend: "python_scanner_api",
+        deno_fallback_used: false,
+        beta_revision_fingerprint: RELEASE_FINGERPRINT,
+        metadata_evidence_version: review.metadata_evidence_version || "present",
+        title_evidence_version: review.title_evidence_version || "present",
+      };
+      console.log(JSON.stringify({
+        actual: review.archetype_classifier_version,
+        expected: RELEASE_COMPONENT_VERSIONS.archetype_classifier_version,
+        firstFailed: firstFailedAuthorityPredicate(scan, review),
+      }));
+    """
+    completed = subprocess.run(
+        ["node", "--input-type=module", "-e", script],
+        input=json.dumps(envelope),
+        text=True,
+        capture_output=True,
+        check=True,
+        cwd=REPO_ROOT,
+    )
+    authority = json.loads(completed.stdout)
+    assert authority["actual"] == "archetype_classifier_v12_locale_normalized_structural_routes"
+    assert authority["actual"] == authority["expected"]
+    assert authority["firstFailed"] != "archetype_classifier_version"
 
 
 def test_control_envelopes_bind_action_scan_and_failure():

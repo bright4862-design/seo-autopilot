@@ -53,3 +53,8 @@ test("legacy scanner URL redirects to the Standard 150 onboarding route", () => 
   assert.match(app, /path="\/ScanWebsite" element=\{<Navigate to="\/onboarding" replace \/>\}/);
   assert.match(app, /path="\/onboarding" element=\{<Onboarding \/>\}/);
 });
+
+test("legacy scanner URL redirects to the Standard 150 onboarding route", () => {
+  assert.match(app, /path="\/ScanWebsite" element=\{<Navigate to="\/onboarding" replace \/>\}/);
+  assert.match(app, /path="\/onboarding" element=\{<Onboarding \/>\}/);
+});

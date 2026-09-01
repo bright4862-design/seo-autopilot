@@ -18,6 +18,7 @@ import {
 import { createAuthoritySeal, verifyAuthoritySeal } from "../../base44/functions/persistDurableScanAuthority/authoritySeal.js";
 import {
   buildLimitedResultSnapshot as buildCustomerLimitedResultSnapshot,
+  hasCompleteAcceptanceEvidence as hasCustomerCompleteAcceptanceEvidence,
   verifyLimitedResultProof as verifyCustomerLimitedResultProof,
 } from "../../base44/functions/getCustomerScanResult/limitedResultIntegrity.js";
 import { RELEASE_FINGERPRINT } from "../../src/lib/generatedReleaseContract.js";
@@ -368,4 +369,19 @@ test("a scan with no useful evidence yields no limited result at all", () => {
     }).eligible_for_limited_result,
     false,
   );
+});
+
+
+test("customer acceptance-evidence helper keeps one-argument projection compatibility", () => {
+  const scan = {
+    coverage_authority_evidence: {
+      coverage_authority_evidence_version: "coverage_authority_evidence_v1",
+      routes_observed: 12,
+    },
+    classification_integrity: {
+      state: "verified",
+      verdict: "consistent",
+    },
+  };
+  assert.equal(hasCustomerCompleteAcceptanceEvidence(scan), true);
 });

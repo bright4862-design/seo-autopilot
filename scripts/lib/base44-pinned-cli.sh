@@ -39,8 +39,33 @@ fixlist_require_base44_owner() {
   # BASE44_API_KEY and sends it as the api_key header. Prove the key can access
   # this exact app before any mutation; never print the key or even its prefix.
   if [[ -n "${BASE44_API_KEY:-}" ]]; then
-    if [[ "$BASE44_API_KEY" != b44k_* || "$BASE44_API_KEY" == *$'\n'* || ${#BASE44_API_KEY} -gt 512 ]]; then
+    # Classify the malformation without disclosing any secret material. The
+    # value is never printed, sliced, or hashed: only shape facts, so an
+    # operator who cannot read the secret can still tell a wrong key from a
+    # pasted quote or a stray newline. A single undifferentiated "malformed"
+    # left the hosted release lane undiagnosable.
+    local key_problems=""
+    [[ "$BASE44_API_KEY" == *$'\n'* ]] && key_problems+=" contains_newline"
+    # A carriage return passes a newline-only check, then breaks or injects
+    # into the api_key header downstream. Reject it here instead.
+    [[ "$BASE44_API_KEY" == *$'\r'* ]] && key_problems+=" contains_carriage_return"
+    [[ "$BASE44_API_KEY" != "${BASE44_API_KEY#[[:space:]]}" ]] && key_problems+=" leading_whitespace"
+    [[ "$BASE44_API_KEY" != "${BASE44_API_KEY%[[:space:]]}" ]] && key_problems+=" trailing_whitespace"
+    # Each boundary is reported separately. Checking only the leading character
+    # let a trailing quote through: b44k_...\" keeps the prefix, carries no
+    # whitespace, and is under length, so it reached the CLI and failed there as
+    # an opaque authentication error -- the exact confusion this guard exists to
+    # remove.
+    [[ "$BASE44_API_KEY" == '"'* || "$BASE44_API_KEY" == "'"* ]] && key_problems+=" leading_quote"
+    [[ "$BASE44_API_KEY" == *'"' || "$BASE44_API_KEY" == *"'" ]] && key_problems+=" trailing_quote"
+    [[ "$BASE44_API_KEY" != b44k_* ]] && key_problems+=" missing_b44k_prefix"
+    (( ${#BASE44_API_KEY} > 512 )) && key_problems+=" longer_than_512"
+    if [[ -n "$key_problems" ]]; then
       echo "Refusing Base44 mutation: BASE44_API_KEY is malformed." >&2
+      # Length and boolean shape only. Never the value, never a prefix of it.
+      echo "  shape (no secret material): length=${#BASE44_API_KEY} problems:${key_problems}" >&2
+      echo "  a workspace API key is expected: starts b44k_, single line, <=512 chars." >&2
+      echo "  the value is never trimmed or repaired here; fix the secret at source." >&2
       return 2
     fi
     if [[ -z "$app_id" || ${#app_id} -gt 160 || "$app_id" == *$'\n'* ]]; then

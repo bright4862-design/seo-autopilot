@@ -55,16 +55,18 @@ test("the fixture is the reported persisted shape, not a model of it", () => {
   });
 });
 
-test("fourteen persisted rows become seven customer actions", () => {
+test("historical rows without repair fingerprints remain separate", () => {
   const cards = buildRepairCards(persistedCards());
-  assert.equal(cards.length, 7, cards.map((c) => c.title).join(" | "));
-  const titles = cards.map((c) => c.title);
-  assert.equal(new Set(titles).size, 7, "no two customer actions may share a title");
+  assert.equal(cards.length, 14, "missing repair identity must not be guessed from rule/type");
+  for (const card of cards) {
+    assert.equal(card.evidence.mergedFromFixIds.length, 1);
+  }
 });
 
-test("no evidence is lost when rows merge", () => {
-  const merged = mergeCustomerActions(persistedCards());
-  const totals = Object.fromEntries(merged.map((card) => [card.rule, card.pageCount]));
+test("no historical evidence is lost when unidentified rows stay separate", () => {
+  const projected = mergeCustomerActions(persistedCards());
+  const totals = {};
+  for (const card of projected) totals[card.rule] = (totals[card.rule] || 0) + card.pageCount;
   assert.equal(totals.sitemap_redirect, 43);
   assert.equal(totals.missing_meta_description, 14);
   assert.equal(totals.image_alt_text, 127);
@@ -73,20 +75,22 @@ test("no evidence is lost when rows merge", () => {
 
   // Every affected URL from every persisted row survives.
   const persistedUrls = new Set(persistedCards().flatMap((card) => card.affectedPages));
-  const mergedUrls = new Set(merged.flatMap((card) => card.affectedPages));
-  assert.equal(mergedUrls.size, persistedUrls.size);
-  for (const url of persistedUrls) assert.ok(mergedUrls.has(url), `${url} was dropped`);
+  const projectedUrls = new Set(projected.flatMap((card) => card.affectedPages));
+  assert.equal(projectedUrls.size, persistedUrls.size);
+  for (const url of persistedUrls) assert.ok(projectedUrls.has(url), `${url} was dropped`);
 });
 
-test("the family breakdown survives as evidence inside the merged card", () => {
+test("historical family evidence stays attached to its persisted row", () => {
   const cards = buildRepairCards(persistedCards());
-  const sitemap = cards.find((card) => card.title.includes("sitemap"));
-  assert.deepEqual(sitemap.evidence.familyBreakdown, {
-    legal_info: 3, standard: 37, unknown: 1, guide_article: 1, contact: 1,
-  });
-  assert.equal(sitemap.evidence.mergedFromFixIds.length, 5);
-  // The persisted rows remain traceable from the customer card.
-  assert.ok(sitemap.evidence.mergedFromFixIds.includes("finding_d459094e8269"));
+  const sitemapRows = cards.filter((card) => card.rule === "sitemap_redirect");
+  assert.equal(sitemapRows.length, 5);
+  assert.deepEqual(
+    sitemapRows.map((card) => card.evidence.familyBreakdown),
+    [{ legal_info: 3 }, { standard: 37 }, { unknown: 1 }, { guide_article: 1 }, { contact: 1 }],
+  );
+  const claimed = sitemapRows.flatMap((card) => card.evidence.mergedFromFixIds);
+  assert.equal(new Set(claimed).size, 5);
+  assert.ok(claimed.includes("finding_d459094e8269"));
 });
 
 test("every card answers the five questions", () => {
@@ -123,17 +127,15 @@ test("no classifier vocabulary reaches the customer", () => {
   assert.doesNotMatch(text, /\bunknown pages?\b/i);
 });
 
-test("a merged card never claims one family's identity", () => {
-  // Left carrying the lead row's family, the merged meta-description card would
-  // be titled after "standard" and instruct "fix the shared standard template
-  // once" for pages spanning three families -- a shared template the evidence
-  // does not support.
-  const cards = buildRepairCards(persistedCards());
-  const meta = cards.find((card) => card.title.includes("search descriptions"));
+test("a proven merged action never claims one family's identity", () => {
+  // A shared fingerprint is the evidence that these rows are one action.
+  const rows = persistedCards()
+    .filter((card) => card.rule === "missing_meta_description")
+    .map((card) => ({ ...card, repair_fingerprint: "shared-meta-action" }));
+  const [meta] = buildRepairCards(rows);
   assert.match(meta.title, /your pages/, `merged card named one family: ${meta.title}`);
   assert.doesNotMatch(meta.whatToChange, /shared standard template/i);
   assert.doesNotMatch(meta.whatToChange, /shared legal template/i);
-  // But it still reports the spread honestly in Where.
   assert.match(meta.where, /14 pages/);
   assert.match(meta.where, /standard/);
   assert.match(meta.where, /legal/);
@@ -168,15 +170,13 @@ test("owner is always a human label", () => {
 });
 
 test("genuinely different repairs stay separate", () => {
-  // Sitemap redirects and internal-link redirects are the same symptom in
-  // different places, and must remain two actions.
+  // Sitemap redirects and internal-link redirects are different repairs.
   const cards = buildRepairCards(persistedCards());
-  assert.ok(cards.some((card) => card.title.includes("sitemap")));
-  assert.ok(cards.some((card) => /internal|links/i.test(card.title)));
-  const sitemap = cards.find((card) => card.title.includes("sitemap"));
-  const links = cards.find((card) => /links/i.test(card.title));
-  assert.notEqual(sitemap.title, links.title);
-  assert.equal(sitemap.evidence.pageCount, 43);
+  const sitemapRows = cards.filter((card) => card.rule === "sitemap_redirect");
+  const links = cards.find((card) => card.rule === "internal_link_redirect");
+  assert.equal(sitemapRows.length, 5);
+  assert.ok(links);
+  assert.equal(sitemapRows.reduce((sum, card) => sum + card.evidence.pageCount, 0), 43);
   assert.equal(links.evidence.pageCount, 1);
 });
 
@@ -198,12 +198,14 @@ test("merging never shrinks a total the scan already proved", () => {
   const capped = [
     {
       fix_id: "a", rule: "image_alt_text", category: "image_alt_text",
+      repair_fingerprint: "shared-image-alt-action",
       page_template_family: "standard", templateFamily: "standard",
       affectedPages: ["https://x.test/1", "https://x.test/2"], affected_pages: ["https://x.test/1", "https://x.test/2"],
       pageCount: 60, page_count: 60,
     },
     {
       fix_id: "b", rule: "image_alt_text", category: "image_alt_text",
+      repair_fingerprint: "shared-image-alt-action",
       page_template_family: "location_landing", templateFamily: "location_landing",
       affectedPages: ["https://x.test/3"], affected_pages: ["https://x.test/3"],
       pageCount: 45, page_count: 45,

@@ -344,6 +344,7 @@ export default async function (req: Request): Promise<Response> {
     const drainQueuePath = String(Deno.env.get("SCAN_DRAIN_QUEUE_PATH") || "");
     const workerUrl = String(Deno.env.get("SCAN_WORKER_URL") || "");
     const invokerServiceAccount = String(Deno.env.get("TASKS_INVOKER_SERVICE_ACCOUNT") || "");
+    const dispatchSigningKey = String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || "");
     if (!queuePath || !drainQueuePath || queuePath === drainQueuePath || !workerUrl || !invokerServiceAccount) {
       await failOwnedScanRun({
         base44,
@@ -386,6 +387,7 @@ export default async function (req: Request): Promise<Response> {
       scanId: identity.fields.scan_id,
       attemptCount,
       payload: { ...commonPayload, drain_after: drainAfter },
+      signingKey: dispatchSigningKey,
     });
     if (!drain.ok) {
       await failOwnedScanRun({
@@ -420,6 +422,7 @@ export default async function (req: Request): Promise<Response> {
         scan_mode: PUBLIC_SCAN_MODE,
         respect_robots_txt: true,
       },
+      signingKey: dispatchSigningKey,
     });
 
     if (!enqueued.ok && enqueued.outcomeUnknown !== true) {

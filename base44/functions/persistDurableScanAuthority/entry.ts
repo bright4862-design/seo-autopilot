@@ -1,9 +1,27 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
+import { secrets } from "base44:runtime";
 import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
 import { authorityRowsFromSnapshot } from "./authorityRows.js";
 import { AUTHORITY_CONTRACT, buildAuthoritySnapshot, firstFailedAuthorityPredicate, hasCompleteAcceptanceEvidence } from "./authoritySnapshot.js";
-import { releaseAdmission } from "./admissionClient.js";
+import { releaseAdmission as releaseAdmissionClient } from "./admissionClient.js";
 import { persistExactAdmissionRelease } from "./admissionRelease.js";
+
+function mutableScanAdmissionValue() {
+  try {
+    return secrets.get("BETA_SCAN_ADMISSION_ENABLED");
+  } catch {
+    return "";
+  }
+}
+
+function mutableScanAdmissionEnv(name) {
+  if (name === "BETA_SCAN_ADMISSION_ENABLED") return mutableScanAdmissionValue();
+  return String(Deno.env.get(name) || "");
+}
+
+function releaseAdmission(options = {}) {
+  return releaseAdmissionClient({ ...options, env: mutableScanAdmissionEnv });
+}
 
 // This literal is intentionally release-sensitive. Base44 has previously reused
 // a compiled worker when entry.ts stayed byte-identical while an imported

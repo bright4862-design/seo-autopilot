@@ -482,7 +482,7 @@ test("mutable Base44 admission connectivity is read per request across the full 
   );
   assert.match(
     persistDurableAuthorityEntry,
-    /releaseAdmission\(\{[\s\S]*env:\s*mutableScanAdmissionEnv/,
+    /releaseAdmissionClient\(\{[\s\S]*env:\s*mutableScanAdmissionEnv/,
   );
   assert.doesNotMatch(persistLimitedResultEntry, /Deno\.env\.get\("BETA_SCAN_ADMISSION_ENABLED"\)/);
 

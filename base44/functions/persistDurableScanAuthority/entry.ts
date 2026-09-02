@@ -79,7 +79,7 @@ Deno.serve(async (req) => {
       review: body?.review,
     };
     const proof = cleanProof(body?.proof);
-    const secret = String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || "");
+    const secret = String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || "");
     if (!secret) throw new RequestProblem(503, "authority_not_configured", "Server scan authority is not configured.");
     if (body?.version !== COMPLETION_VERSION || !proof || !await verifyAuthoritySeal(signedDocument, secret, proof)) {
       throw new RequestProblem(409, "worker_envelope_invalid", "The durable worker completion envelope could not be verified.");

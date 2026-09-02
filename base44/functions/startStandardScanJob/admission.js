@@ -5,15 +5,15 @@ export function scanIntakeEnabled(intakeValue) {
   return String(intakeValue || "") === "true";
 }
 
-export function betaScanAdmissionPolicy(intakeValue, admissionValue) {
+export function betaScanAdmissionPolicy(intakeValue, admissionValue, coordinatorValue, signingKeyValue) {
   if (!scanIntakeEnabled(intakeValue)) {
     return { ok: false, code: "scan_intake_paused" };
   }
   if (String(admissionValue || "") !== "true") {
     return { ok: false, code: "scan_admission_paused" };
   }
-  const coordinatorUrl = String(Deno.env.get("SCAN_ADMISSION_COORDINATOR_URL") || "").trim();
-  const signingKey = String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || "");
+  const coordinatorUrl = String(coordinatorValue || "").trim();
+  const signingKey = String(signingKeyValue || "");
   if (!coordinatorUrl || !signingKey) {
     return { ok: false, code: "scan_admission_configuration_invalid" };
   }

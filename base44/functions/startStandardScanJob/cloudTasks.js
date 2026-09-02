@@ -219,14 +219,14 @@ async function createTaskViaGateway({ gatewayUrl, signingKey, queuePath, body, t
   };
 }
 
-async function createTask({ queuePath, body, taskName, attemptCount }) {
+async function createTask({ queuePath, body, taskName, attemptCount, signingKey }) {
   const gatewayUrl = String(Deno.env.get("SCAN_DISPATCH_GATEWAY_URL") || "").trim();
-  const signingKey = String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || "");
+  const gatewaySigningKey = String(signingKey ?? Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") ?? "");
   if (gatewayUrl) {
-    if (!signingKey) {
+    if (!gatewaySigningKey) {
       return { ok: false, outcomeUnknown: false, failureCode: "dispatch_gateway_signing_key_missing" };
     }
-    return createTaskViaGateway({ gatewayUrl, signingKey, queuePath, body, taskName, attemptCount });
+    return createTaskViaGateway({ gatewayUrl, signingKey: gatewaySigningKey, queuePath, body, taskName, attemptCount });
   }
 
   const { token, failureCode: tokenFailureCode } = await accessToken();
@@ -277,6 +277,7 @@ export async function enqueueScanJob(args) {
     body,
     taskName: taskNameForScan(args.queuePath, args.scanId, attempt),
     attemptCount: attempt,
+    signingKey: args.signingKey,
   });
 }
 
@@ -293,5 +294,6 @@ export async function enqueueScanDrain(args) {
     body,
     taskName: taskNameForDrain(args.queuePath, args.scanId, attempt),
     attemptCount: attempt,
+    signingKey: args.signingKey,
   });
 }

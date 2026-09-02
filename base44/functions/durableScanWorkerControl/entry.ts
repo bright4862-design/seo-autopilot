@@ -1,12 +1,13 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
+import { secrets } from "base44:runtime";
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { verifyAuthoritySeal } from "./authoritySeal.js";
 import {
-  finishReconciliationInvocation,
-  releaseAdmission,
-  satisfyUnboundAdmission,
-  startReconciliationInvocation,
-  statusAdmission,
+  finishReconciliationInvocation as finishReconciliationInvocationClient,
+  releaseAdmission as releaseAdmissionClient,
+  satisfyUnboundAdmission as satisfyUnboundAdmissionClient,
+  startReconciliationInvocation as startReconciliationInvocationClient,
+  statusAdmission as statusAdmissionClient,
 } from "./admissionClient.js";
 import {
   ADMISSION_RECONCILIATION_VERSION,
@@ -24,6 +25,39 @@ import {
   releaseExactTerminalAdmission,
   uniqueRows,
 } from "./reconciliation.js";
+
+function mutableScanAdmissionValue() {
+  try {
+    return secrets.get("BETA_SCAN_ADMISSION_ENABLED");
+  } catch {
+    return "";
+  }
+}
+
+function mutableScanAdmissionEnv(name) {
+  if (name === "BETA_SCAN_ADMISSION_ENABLED") return mutableScanAdmissionValue();
+  return String(Deno.env.get(name) || "");
+}
+
+function finishReconciliationInvocation(options = {}) {
+  return finishReconciliationInvocationClient({ ...options, env: mutableScanAdmissionEnv });
+}
+
+function releaseAdmission(options = {}) {
+  return releaseAdmissionClient({ ...options, env: mutableScanAdmissionEnv });
+}
+
+function satisfyUnboundAdmission(options = {}) {
+  return satisfyUnboundAdmissionClient({ ...options, env: mutableScanAdmissionEnv });
+}
+
+function startReconciliationInvocation(options = {}) {
+  return startReconciliationInvocationClient({ ...options, env: mutableScanAdmissionEnv });
+}
+
+function statusAdmission(options = {}) {
+  return statusAdmissionClient({ ...options, env: mutableScanAdmissionEnv });
+}
 
 // Attempts are 1-based; anything unparseable is attempt 1.
 function normalizeAttempt(value) {

@@ -9,6 +9,8 @@ import {
 } from "../../base44/functions/startStandardScanJob/admission.js";
 import {
   admissionClaimEvidenceProof,
+  admissionSignature,
+  claimAdmission,
   verifyAdmissionClaimEvidence,
 } from "../../base44/functions/startStandardScanJob/admissionClient.js";
 
@@ -83,6 +85,55 @@ test("scan admission does not use the static cohort list as a membership gate", 
     assert.equal(betaScanAdmissionPolicy("true", "true").ok, true);
   });
   assert.doesNotMatch(admissionSource, /BETA_COHORT_ALLOWED_USER_IDS/);
+});
+
+test("claim admission uses request-time coordinator URL and signing key instead of a stale module env snapshot", async () => {
+  const priorDeno = globalThis.Deno;
+  const stale = new Map([
+    ["BETA_SCAN_ADMISSION_ENABLED", "true"],
+    ["SCAN_ADMISSION_COORDINATOR_URL", "https://stale-coordinator.example"],
+    ["SCAN_EVIDENCE_SIGNING_KEY", "stale-signing-root"],
+  ]);
+  const live = new Map([
+    ["BETA_SCAN_ADMISSION_ENABLED", "true"],
+    ["SCAN_ADMISSION_COORDINATOR_URL", "https://live-coordinator.example"],
+    ["SCAN_EVIDENCE_SIGNING_KEY", "live-signing-root"],
+  ]);
+  globalThis.Deno = { env: { get: (name) => stale.get(name) } };
+
+  let seenUrl = "";
+  let seenInit = null;
+  try {
+    const result = await claimAdmission({
+      ownerUserId: "user-1",
+      requestId: "scanreq_runtime_config_1",
+      requestFingerprint: `standard150:${"a".repeat(64)}`,
+      env: (name) => String(live.get(name) ?? ""),
+      fetchImpl: async (url, init) => {
+        seenUrl = String(url);
+        seenInit = init;
+        return new Response(JSON.stringify({
+          success: false,
+          error: "scan_intake_paused",
+        }), {
+          status: 423,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.failureCode, "scan_intake_paused");
+    assert.equal(seenUrl, "https://live-coordinator.example/claim");
+
+    const timestamp = String(seenInit?.headers?.["x-fixlist-timestamp"] || "");
+    const payloadText = String(seenInit?.body || "");
+    const expected = await admissionSignature("live-signing-root", timestamp, payloadText);
+    assert.equal(seenInit?.headers?.["x-fixlist-signature"], expected);
+  } finally {
+    if (priorDeno === undefined) delete globalThis.Deno;
+    else globalThis.Deno = priorDeno;
+  }
 });
 
 test("request identity is exact and bounded before coordinator admission", () => {

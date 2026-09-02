@@ -11,12 +11,16 @@ import {
   MAX_LIMITED_FIXES,
 } from "./limitedResultIntegrity.js";
 
-function mutableScanAdmissionValue() {
+function mutableScanAdmissionSecret(name) {
   try {
-    return secrets.get("BETA_SCAN_ADMISSION_ENABLED");
+    return secrets.get(name);
   } catch {
     return "";
   }
+}
+
+function mutableScanAdmissionValue() {
+  return mutableScanAdmissionSecret("BETA_SCAN_ADMISSION_ENABLED");
 }
 
 /**
@@ -64,7 +68,7 @@ Deno.serve(async (req) => {
       review: body?.review,
     };
     const proof = cleanProof(body?.proof);
-    const secret = String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || "");
+    const secret = String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || "");
     if (!secret) throw new RequestProblem(503, "limited_not_configured", "Server result integrity is not configured.");
     if (body?.version !== LIMITED_COMPLETION_VERSION || !proof || !await verifyAuthoritySeal(signedDocument, secret, proof)) {
       throw new RequestProblem(409, "worker_envelope_invalid", "The limited-result envelope could not be verified.");
@@ -350,8 +354,8 @@ async function persistLimitedAdmissionRelease(entities, scan) {
 }
 
 async function releaseAdmission(expected) {
-  const baseUrl = String(Deno.env.get("SCAN_ADMISSION_COORDINATOR_URL") || "").replace(/\/+$/, "");
-  const root = String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || "");
+  const baseUrl = String(mutableScanAdmissionSecret("SCAN_ADMISSION_COORDINATOR_URL") || "").replace(/\/+$/, "");
+  const root = String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || "");
   if (!baseUrl || !root || String(mutableScanAdmissionValue() || "") !== "true") {
     return { ok: false, failureCode: "admission_not_configured" };
   }

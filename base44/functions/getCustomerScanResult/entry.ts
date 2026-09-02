@@ -33,6 +33,12 @@ import { isReadableAuthorityReleaseFingerprint } from "./releaseCompatibility.js
 const BASE44_HANDLER_RELEASE_FINGERPRINT = "68a16802a9c7a543";
 const MAX_FIX_ITEMS = 100;
 
+// Runtime-secret convergence must not be confused with cryptographic key
+// rotation. Persisted authority and limited-result proofs are not key-versioned,
+// so the release contract requires SCAN_EVIDENCE_SIGNING_KEY bytes to remain
+// stable across Base44, the gateway, and the worker. This helper changes only
+// where the current canonical bytes are read from; it must never silently
+// substitute a different key for already-sealed customer history.
 function mutableSigningKey() {
   try {
     return secrets.get("SCAN_EVIDENCE_SIGNING_KEY");

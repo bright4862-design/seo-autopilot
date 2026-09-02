@@ -75,6 +75,7 @@ function createHarness({
   let admissionSecret = "true";
   let coordinatorSecret = "https://coordinator.example";
   let signingSecret = "test-signing-root";
+  let lastClaimEnv = null;
   let createThrowSpent = false;
 
   const Access = {
@@ -121,7 +122,11 @@ function createHarness({
     asServiceRole: { entities: { Access, ScanRun, BusinessProject } },
   };
 
-  async function claimAdmission({ ownerUserId, requestId, requestFingerprint }) {
+  async function claimAdmission({ ownerUserId, requestId, requestFingerprint, env }) {
+    lastClaimEnv = {
+      coordinator: String(env?.("SCAN_ADMISSION_COORDINATOR_URL") || ""),
+      signing: String(env?.("SCAN_EVIDENCE_SIGNING_KEY") || ""),
+    };
     if (!admission || admission.state === "released") {
       const cohortEvidence = {
         version: "admission_claim_evidence_v1",
@@ -147,7 +152,7 @@ function createHarness({
         admission_mode: "open",
         cohort_evidence: cohortEvidence,
         cohort_evidence_proof: "",
-        cohort_evidence_proof_promise: admissionClaimEvidenceProof(cohortEvidence, "test-signing-root"),
+        cohort_evidence_proof_promise: admissionClaimEvidenceProof(cohortEvidence, lastClaimEnv.signing),
       };
       admission.cohort_evidence_proof = corruptCohortProof
         ? "0".repeat(64)
@@ -240,8 +245,11 @@ function createHarness({
     drainTasks,
     releases,
     admission: () => admission && { ...admission },
+    lastClaimEnv: () => lastClaimEnv && { ...lastClaimEnv },
     setIntakeSecret: (value) => { intakeSecret = String(value ?? ""); },
     setAdmissionSecret: (value) => { admissionSecret = String(value ?? ""); },
+    setCoordinatorSecret: (value) => { coordinatorSecret = String(value ?? ""); },
+    setSigningSecret: (value) => { signingSecret = String(value ?? ""); },
     globals: {
       createClientFromRequest: () => base44,
       secrets: {
@@ -375,6 +383,39 @@ test("loaded handler observes mutable admission connectivity secret changes even
   } finally {
     globalThis.Deno.env.get = priorGet;
     delete globalThis.__runtimeAdmissionHarness;
+    restoreEnv();
+  }
+});
+
+test("loaded handler uses request-time coordinator and signing secrets when Deno.env is stale", async () => {
+  const restoreEnv = installEnv();
+  const priorGet = globalThis.Deno.env.get;
+  globalThis.Deno.env.get = (name) => {
+    if (name === "SCAN_ADMISSION_COORDINATOR_URL") return "https://stale-coordinator.example";
+    if (name === "SCAN_EVIDENCE_SIGNING_KEY") return "stale-process-signing-root";
+    return priorGet(name);
+  };
+  const harness = createHarness();
+  harness.setCoordinatorSecret("https://runtime-coordinator.example");
+  harness.setSigningSecret("runtime-signing-root");
+  globalThis.__runtimeAdmissionConfigHarness = harness.globals;
+  try {
+    const { default: handler } = await importHandler("__runtimeAdmissionConfigHarness");
+    const response = await invoke(handler, "scanreq_runtime_config_1");
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.accepted, true);
+    assert.deepEqual(harness.lastClaimEnv(), {
+      coordinator: "https://runtime-coordinator.example",
+      signing: "runtime-signing-root",
+    });
+    assert.equal(harness.scans.length, 1);
+    assert.equal(harness.scanTasks.size, 1);
+    assert.equal(harness.drainTasks.size, 1);
+  } finally {
+    globalThis.Deno.env.get = priorGet;
+    delete globalThis.__runtimeAdmissionConfigHarness;
     restoreEnv();
   }
 });

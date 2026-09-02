@@ -229,6 +229,19 @@ only. Before submission, `scripts/deployment_preflight.sh` requires
 
 ### Signing-key version pinning
 
+**In-place cryptographic rotation is not supported by this release contract.**
+Persisted authority seals and limited-result proofs do not carry a signing-key
+version, so changing the bytes of `SCAN_EVIDENCE_SIGNING_KEY` would make valid
+historical results unverifiable. The key must therefore remain byte-identical
+across Base44, the dispatch gateway, and the durable worker for the lifetime of
+results this reader must reopen.
+
+Runtime-secret convergence is different from key rotation: Base44 may refresh
+where it reads the canonical key from, but the canonical key bytes themselves
+must not change. A future real key rotation requires an explicit versioned proof
+format or a bounded previous-key verification grace path before any secret
+version is changed.
+
 `_SIGNING_KEY_VERSION` must be a **numeric, ENABLED** Secret Manager version of
 `_SIGNING_KEY_SECRET`. **`latest` is prohibited for the immutable release.**
 

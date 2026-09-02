@@ -26,16 +26,26 @@ import {
   uniqueRows,
 } from "./reconciliation.js";
 
-function mutableScanAdmissionValue() {
+function mutableScanAdmissionSecret(name) {
   try {
-    return secrets.get("BETA_SCAN_ADMISSION_ENABLED");
+    return secrets.get(name);
   } catch {
     return "";
   }
 }
 
+function mutableScanAdmissionValue() {
+  return mutableScanAdmissionSecret("BETA_SCAN_ADMISSION_ENABLED");
+}
+
 function mutableScanAdmissionEnv(name) {
-  if (name === "BETA_SCAN_ADMISSION_ENABLED") return mutableScanAdmissionValue();
+  if (
+    name === "BETA_SCAN_ADMISSION_ENABLED"
+    || name === "SCAN_ADMISSION_COORDINATOR_URL"
+    || name === "SCAN_EVIDENCE_SIGNING_KEY"
+  ) {
+    return mutableScanAdmissionSecret(name);
+  }
   return String(Deno.env.get(name) || "");
 }
 

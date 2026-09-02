@@ -23,6 +23,7 @@ import { isReadableAuthorityReleaseFingerprint } from "../../base44/functions/ge
 
 const entrySource = readFileSync("base44/functions/getCustomerScanResult/entry.ts", "utf8");
 const SECRET = "historical-reader-test-secret-never-deployed";
+const STALE_PROCESS_SECRET = "stale-process-signing-key-never-deployed";
 const HISTORICAL_FINGERPRINT = "5d94e93c54a9efb6";
 const UNKNOWN_FINGERPRINT = "aaaaaaaaaaaaaaaa";
 let handlerInvocationSequence = 0;
@@ -193,7 +194,7 @@ async function invokeWithFingerprint(fingerprint) {
   let handler = null;
   const priorDeno = globalThis.Deno;
   globalThis.Deno = {
-    env: { get: (name) => name === "SCAN_EVIDENCE_SIGNING_KEY" ? SECRET : "" },
+    env: { get: (name) => name === "SCAN_EVIDENCE_SIGNING_KEY" ? STALE_PROCESS_SECRET : "" },
     serve: (candidate) => { handler = candidate; },
   };
   globalThis[harnessName] = {

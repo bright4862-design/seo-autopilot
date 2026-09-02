@@ -180,9 +180,9 @@ function normalizeError(value) {
   return SAFE_COORDINATOR_ERRORS.has(code) ? code : "coordinator_rejected";
 }
 
-async function callCoordinator(path, payload, { coordinatorUrl, signingKey, fetchImpl, timeoutMs = COORDINATOR_TIMEOUT_MS } = {}) {
-  const baseUrl = String(coordinatorUrl ?? readEnv("SCAN_ADMISSION_COORDINATOR_URL")).replace(/\/+$/, "");
-  const root = String(signingKey ?? readEnv("SCAN_EVIDENCE_SIGNING_KEY"));
+async function callCoordinator(path, payload, { coordinatorUrl, signingKey, fetchImpl, timeoutMs = COORDINATOR_TIMEOUT_MS, env = readEnv } = {}) {
+  const baseUrl = String(coordinatorUrl ?? env("SCAN_ADMISSION_COORDINATOR_URL")).replace(/\/+$/, "");
+  const root = String(signingKey ?? env("SCAN_EVIDENCE_SIGNING_KEY"));
   if (!baseUrl || !root) {
     return { ok: false, outcomeUnknown: false, failureCode: "admission_not_configured" };
   }

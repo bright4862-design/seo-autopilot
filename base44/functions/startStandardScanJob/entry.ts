@@ -42,6 +42,19 @@ function mutableScanIntakeValue() {
   }
 }
 
+function mutableScanAdmissionValue() {
+  try {
+    return secrets.get("BETA_SCAN_ADMISSION_ENABLED");
+  } catch {
+    return "";
+  }
+}
+
+function mutableScanAdmissionEnv(name) {
+  if (name === "BETA_SCAN_ADMISSION_ENABLED") return mutableScanAdmissionValue();
+  return String(Deno.env.get(name) || "");
+}
+
 const BASE44_HANDLER_RELEASE_FINGERPRINT = "68a16802a9c7a543";
 const VERSION = "startStandardScanJob_v3_server_admission";
 const PUBLIC_SCAN_MODE = "standard_150";
@@ -200,7 +213,7 @@ export default async function (req: Request): Promise<Response> {
         }, entitlement.failureCode === "paid_access_conflict" ? 409 : 402);
       }
     } else {
-      const policy = betaScanAdmissionPolicy(mutableScanIntakeValue());
+      const policy = betaScanAdmissionPolicy(mutableScanIntakeValue(), mutableScanAdmissionValue());
       if (!policy.ok) {
         return jsonResponse({
           success: false,
@@ -481,6 +494,7 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
       ownerUserId: String(user.id),
       requestId: request.request_id,
       requestFingerprint: request.request_fingerprint,
+      env: mutableScanAdmissionEnv,
     });
   } catch {
     claim = { ok: false, outcomeUnknown: true, failureCode: "admission_unreachable" };
@@ -551,6 +565,7 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
       claimToken,
       scanId: String(recovered.id),
       barrierGeneration: admissionEvidence.admission_barrier_generation,
+      env: mutableScanAdmissionEnv,
     }).catch(() => ({ ok: false, outcomeUnknown: true, failureCode: "admission_unreachable" }));
     if (!exactBindResult(rebound, {
       requestId: request.request_id,
@@ -600,6 +615,7 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
       claimToken,
       scanId: String(scan.id),
       barrierGeneration: admissionEvidence.admission_barrier_generation,
+      env: mutableScanAdmissionEnv,
     });
   } catch {
     bound = { ok: false, outcomeUnknown: true, failureCode: "admission_unreachable" };
@@ -991,6 +1007,7 @@ async function releaseCoordinatorAdmission({ scans, scan }) {
     ownerUserId: expected.ownerUserId,
     scanId: expected.scanId,
     terminalStatus: expected.terminalStatus,
+    env: mutableScanAdmissionEnv,
   }).catch(() => ({
     ok: false,
     failureCode: "admission_unreachable",

@@ -42,16 +42,26 @@ function mutableScanIntakeValue() {
   }
 }
 
-function mutableScanAdmissionValue() {
+function mutableScanAdmissionSecret(name) {
   try {
-    return secrets.get("BETA_SCAN_ADMISSION_ENABLED");
+    return secrets.get(name);
   } catch {
     return "";
   }
 }
 
+function mutableScanAdmissionValue() {
+  return mutableScanAdmissionSecret("BETA_SCAN_ADMISSION_ENABLED");
+}
+
 function mutableScanAdmissionEnv(name) {
-  if (name === "BETA_SCAN_ADMISSION_ENABLED") return mutableScanAdmissionValue();
+  if (
+    name === "BETA_SCAN_ADMISSION_ENABLED"
+    || name === "SCAN_ADMISSION_COORDINATOR_URL"
+    || name === "SCAN_EVIDENCE_SIGNING_KEY"
+  ) {
+    return mutableScanAdmissionSecret(name);
+  }
   return String(Deno.env.get(name) || "");
 }
 
@@ -213,7 +223,12 @@ export default async function (req: Request): Promise<Response> {
         }, entitlement.failureCode === "paid_access_conflict" ? 409 : 402);
       }
     } else {
-      const policy = betaScanAdmissionPolicy(mutableScanIntakeValue(), mutableScanAdmissionValue());
+      const policy = betaScanAdmissionPolicy(
+        mutableScanIntakeValue(),
+        mutableScanAdmissionValue(),
+        mutableScanAdmissionEnv("SCAN_ADMISSION_COORDINATOR_URL"),
+        mutableScanAdmissionEnv("SCAN_EVIDENCE_SIGNING_KEY"),
+      );
       if (!policy.ok) {
         return jsonResponse({
           success: false,
@@ -329,6 +344,7 @@ export default async function (req: Request): Promise<Response> {
     const drainQueuePath = String(Deno.env.get("SCAN_DRAIN_QUEUE_PATH") || "");
     const workerUrl = String(Deno.env.get("SCAN_WORKER_URL") || "");
     const invokerServiceAccount = String(Deno.env.get("TASKS_INVOKER_SERVICE_ACCOUNT") || "");
+    const dispatchSigningKey = String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || "");
     if (!queuePath || !drainQueuePath || queuePath === drainQueuePath || !workerUrl || !invokerServiceAccount) {
       await failOwnedScanRun({
         base44,
@@ -371,6 +387,7 @@ export default async function (req: Request): Promise<Response> {
       scanId: identity.fields.scan_id,
       attemptCount,
       payload: { ...commonPayload, drain_after: drainAfter },
+      signingKey: dispatchSigningKey,
     });
     if (!drain.ok) {
       await failOwnedScanRun({
@@ -405,6 +422,7 @@ export default async function (req: Request): Promise<Response> {
         scan_mode: PUBLIC_SCAN_MODE,
         respect_robots_txt: true,
       },
+      signingKey: dispatchSigningKey,
     });
 
     if (!enqueued.ok && enqueued.outcomeUnknown !== true) {
@@ -505,7 +523,7 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
     claim,
     ownerUserId: String(user.id),
     requestId: request.request_id,
-    signingKey: String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || ""),
+    signingKey: String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || ""),
   });
   if (!admissionEvidence) {
     return {

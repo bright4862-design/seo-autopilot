@@ -9,6 +9,8 @@ import {
 } from "../../base44/functions/startStandardScanJob/admission.js";
 import {
   admissionClaimEvidenceProof,
+  admissionSignature,
+  claimAdmission,
   verifyAdmissionClaimEvidence,
 } from "../../base44/functions/startStandardScanJob/admissionClient.js";
 
@@ -29,17 +31,17 @@ function withEnv(values, fn) {
 test("scan admission is default-off and requires the coordinator, not an unproven Base44 atomic primitive", () => {
   const values = new Map();
   withEnv(values, () => {
-    assert.equal(betaScanAdmissionPolicy(undefined, "").code, "scan_intake_paused");
-    assert.equal(betaScanAdmissionPolicy("true", "").code, "scan_admission_paused");
+    assert.equal(betaScanAdmissionPolicy(undefined, "", "", "").code, "scan_intake_paused");
+    assert.equal(betaScanAdmissionPolicy("true", "", "", "").code, "scan_admission_paused");
     values.set("BETA_SCAN_ADMISSION_ENABLED", "true");
-    assert.equal(betaScanAdmissionPolicy("true", "true").code, "scan_admission_configuration_invalid");
+    assert.equal(betaScanAdmissionPolicy("true", "true", "", "").code, "scan_admission_configuration_invalid");
     values.set("SCAN_ADMISSION_COORDINATOR_URL", "https://coordinator.example");
     values.set("SCAN_EVIDENCE_SIGNING_KEY", "test-root");
-    assert.deepEqual(betaScanAdmissionPolicy("true", "true"), { ok: true, code: "" });
+    assert.deepEqual(betaScanAdmissionPolicy("true", "true", values.get("SCAN_ADMISSION_COORDINATOR_URL"), values.get("SCAN_EVIDENCE_SIGNING_KEY")), { ok: true, code: "" });
     values.set("BETA_COHORT_ALLOWED_USER_IDS", Array.from({ length: 150 }, (_, i) => `user-${i + 1}`).join(","));
-    assert.deepEqual(betaScanAdmissionPolicy("true", "true"), { ok: true, code: "" });
+    assert.deepEqual(betaScanAdmissionPolicy("true", "true", values.get("SCAN_ADMISSION_COORDINATOR_URL"), values.get("SCAN_EVIDENCE_SIGNING_KEY")), { ok: true, code: "" });
     values.set("BASE44_ATOMIC_UPDATE_MANY_CONFIRMED", "false");
-    assert.deepEqual(betaScanAdmissionPolicy("true", "true"), { ok: true, code: "" });
+    assert.deepEqual(betaScanAdmissionPolicy("true", "true", values.get("SCAN_ADMISSION_COORDINATOR_URL"), values.get("SCAN_EVIDENCE_SIGNING_KEY")), { ok: true, code: "" });
   });
   assert.doesNotMatch(admissionSource, /BASE44_ATOMIC_UPDATE_MANY_CONFIRMED|updateMany|scan_claim_/);
   assert.doesNotMatch(entrySource, /bindScanLease|claimScanLease|scan_claim_token/);
@@ -56,19 +58,25 @@ test("new intake is independently fail-closed and observes mutable runtime secre
   let runtimeIntake = "";
   withEnv(values, () => {
     assert.equal(scanIntakeEnabled(runtimeIntake), false);
-    assert.equal(betaScanAdmissionPolicy(runtimeIntake, "true").code, "scan_intake_paused");
+    assert.equal(betaScanAdmissionPolicy(runtimeIntake, "true", values.get("SCAN_ADMISSION_COORDINATOR_URL"), values.get("SCAN_EVIDENCE_SIGNING_KEY")).code, "scan_intake_paused");
     runtimeIntake = "true";
     assert.equal(scanIntakeEnabled(runtimeIntake), true);
-    assert.equal(betaScanAdmissionPolicy(runtimeIntake, "true").ok, true);
+    assert.equal(betaScanAdmissionPolicy(runtimeIntake, "true", values.get("SCAN_ADMISSION_COORDINATOR_URL"), values.get("SCAN_EVIDENCE_SIGNING_KEY")).ok, true);
     runtimeIntake = "TRUE";
     assert.equal(scanIntakeEnabled(runtimeIntake), false);
   });
   assert.doesNotMatch(admissionSource, /Deno\.env\.get\("BETA_SCAN_INTAKE_ENABLED"\)/);
   assert.doesNotMatch(admissionSource, /Deno\.env\.get\("BETA_SCAN_ADMISSION_ENABLED"\)/);
+  assert.doesNotMatch(admissionSource, /Deno\.env\.get\("SCAN_ADMISSION_COORDINATOR_URL"\)/);
+  assert.doesNotMatch(admissionSource, /Deno\.env\.get\("SCAN_EVIDENCE_SIGNING_KEY"\)/);
   assert.match(entrySource, /secrets\.get\("BETA_SCAN_INTAKE_ENABLED"\)/);
-  assert.match(entrySource, /secrets\.get\("BETA_SCAN_ADMISSION_ENABLED"\)/);
-  assert.match(entrySource, /betaScanAdmissionPolicy\(mutableScanIntakeValue\(\), mutableScanAdmissionValue\(\)\)/);
+  assert.match(entrySource, /secrets\.get\(name\)/);
+  assert.match(entrySource, /SCAN_ADMISSION_COORDINATOR_URL/);
+  assert.match(entrySource, /SCAN_EVIDENCE_SIGNING_KEY/);
+  assert.match(entrySource, /betaScanAdmissionPolicy\([\s\S]*mutableScanAdmissionEnv\("SCAN_ADMISSION_COORDINATOR_URL"\)[\s\S]*mutableScanAdmissionEnv\("SCAN_EVIDENCE_SIGNING_KEY"\)/);
   assert.match(clientSource, /BETA_SCAN_ADMISSION_ENABLED/);
+  assert.match(clientSource, /env\("SCAN_ADMISSION_COORDINATOR_URL"\)/);
+  assert.match(clientSource, /env\("SCAN_EVIDENCE_SIGNING_KEY"\)/);
 });
 
 test("scan admission does not use the static cohort list as a membership gate", () => {
@@ -78,11 +86,60 @@ test("scan admission does not use the static cohort list as a membership gate", 
     ["SCAN_EVIDENCE_SIGNING_KEY", "test-root"],
   ]);
   withEnv(values, () => {
-    assert.equal(betaScanAdmissionPolicy("true", "true").ok, true);
+    assert.equal(betaScanAdmissionPolicy("true", "true", values.get("SCAN_ADMISSION_COORDINATOR_URL"), values.get("SCAN_EVIDENCE_SIGNING_KEY")).ok, true);
     values.set("BETA_COHORT_ALLOWED_USER_IDS", "malformed/not-a-user-id");
-    assert.equal(betaScanAdmissionPolicy("true", "true").ok, true);
+    assert.equal(betaScanAdmissionPolicy("true", "true", values.get("SCAN_ADMISSION_COORDINATOR_URL"), values.get("SCAN_EVIDENCE_SIGNING_KEY")).ok, true);
   });
   assert.doesNotMatch(admissionSource, /BETA_COHORT_ALLOWED_USER_IDS/);
+});
+
+test("claim admission uses request-time coordinator URL and signing key instead of a stale module env snapshot", async () => {
+  const priorDeno = globalThis.Deno;
+  const stale = new Map([
+    ["BETA_SCAN_ADMISSION_ENABLED", "true"],
+    ["SCAN_ADMISSION_COORDINATOR_URL", "https://stale-coordinator.example"],
+    ["SCAN_EVIDENCE_SIGNING_KEY", "stale-signing-root"],
+  ]);
+  const live = new Map([
+    ["BETA_SCAN_ADMISSION_ENABLED", "true"],
+    ["SCAN_ADMISSION_COORDINATOR_URL", "https://live-coordinator.example"],
+    ["SCAN_EVIDENCE_SIGNING_KEY", "live-signing-root"],
+  ]);
+  globalThis.Deno = { env: { get: (name) => stale.get(name) } };
+
+  let seenUrl = "";
+  let seenInit = null;
+  try {
+    const result = await claimAdmission({
+      ownerUserId: "user-1",
+      requestId: "scanreq_runtime_config_1",
+      requestFingerprint: `standard150:${"a".repeat(64)}`,
+      env: (name) => String(live.get(name) ?? ""),
+      fetchImpl: async (url, init) => {
+        seenUrl = String(url);
+        seenInit = init;
+        return new Response(JSON.stringify({
+          success: false,
+          error: "scan_intake_paused",
+        }), {
+          status: 423,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.failureCode, "scan_intake_paused");
+    assert.equal(seenUrl, "https://live-coordinator.example/claim");
+
+    const timestamp = String(seenInit?.headers?.["x-fixlist-timestamp"] || "");
+    const payloadText = String(seenInit?.body || "");
+    const expected = await admissionSignature("live-signing-root", timestamp, payloadText);
+    assert.equal(seenInit?.headers?.["x-fixlist-signature"], expected);
+  } finally {
+    if (priorDeno === undefined) delete globalThis.Deno;
+    else globalThis.Deno = priorDeno;
+  }
 });
 
 test("request identity is exact and bounded before coordinator admission", () => {

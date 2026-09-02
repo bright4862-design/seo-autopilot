@@ -201,8 +201,9 @@ test("customer result verification preserves exact signing-key bytes", async () 
   assert.equal(await verifyAuthoritySeal(snapshot, secret.trim(), proof), false);
 
   const entry = readFileSync("base44/functions/getCustomerScanResult/entry.ts", "utf8");
-  assert.match(entry, /String\(Deno\.env\.get\("SCAN_EVIDENCE_SIGNING_KEY"\) \|\| ""\)/);
-  assert.doesNotMatch(entry, /cleanText\(Deno\.env\.get\("SCAN_EVIDENCE_SIGNING_KEY"\)/);
+  assert.match(entry, /secrets\.get\("SCAN_EVIDENCE_SIGNING_KEY"\)/);
+  assert.match(entry, /String\(mutableSigningKey\(\) \|\| ""\)/);
+  assert.doesNotMatch(entry, /cleanText\(mutableSigningKey\(\)/);
 });
 
 

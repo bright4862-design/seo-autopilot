@@ -6,16 +6,26 @@ import { AUTHORITY_CONTRACT, buildAuthoritySnapshot, firstFailedAuthorityPredica
 import { releaseAdmission as releaseAdmissionClient } from "./admissionClient.js";
 import { persistExactAdmissionRelease } from "./admissionRelease.js";
 
-function mutableScanAdmissionValue() {
+function mutableScanAdmissionSecret(name) {
   try {
-    return secrets.get("BETA_SCAN_ADMISSION_ENABLED");
+    return secrets.get(name);
   } catch {
     return "";
   }
 }
 
+function mutableScanAdmissionValue() {
+  return mutableScanAdmissionSecret("BETA_SCAN_ADMISSION_ENABLED");
+}
+
 function mutableScanAdmissionEnv(name) {
-  if (name === "BETA_SCAN_ADMISSION_ENABLED") return mutableScanAdmissionValue();
+  if (
+    name === "BETA_SCAN_ADMISSION_ENABLED"
+    || name === "SCAN_ADMISSION_COORDINATOR_URL"
+    || name === "SCAN_EVIDENCE_SIGNING_KEY"
+  ) {
+    return mutableScanAdmissionSecret(name);
+  }
   return String(Deno.env.get(name) || "");
 }
 
@@ -69,7 +79,7 @@ Deno.serve(async (req) => {
       review: body?.review,
     };
     const proof = cleanProof(body?.proof);
-    const secret = String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || "");
+    const secret = String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || "");
     if (!secret) throw new RequestProblem(503, "authority_not_configured", "Server scan authority is not configured.");
     if (body?.version !== COMPLETION_VERSION || !proof || !await verifyAuthoritySeal(signedDocument, secret, proof)) {
       throw new RequestProblem(409, "worker_envelope_invalid", "The durable worker completion envelope could not be verified.");

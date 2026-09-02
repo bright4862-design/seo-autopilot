@@ -22,6 +22,12 @@ const intakeControl = read("scripts/set-base44-scan-intake.sh");
 const intakeRuntimeVerifier = read("scripts/verify-base44-scan-intake-runtime.sh");
 const startStandardScanJobEntry = read("base44/functions/startStandardScanJob/entry.ts");
 const startStandardScanAdmission = read("base44/functions/startStandardScanJob/admission.js");
+const startStandardScanAdmissionClient = read("base44/functions/startStandardScanJob/admissionClient.js");
+const durableControlEntry = read("base44/functions/durableScanWorkerControl/entry.ts");
+const durableControlAdmissionClient = read("base44/functions/durableScanWorkerControl/admissionClient.js");
+const persistDurableAuthorityEntry = read("base44/functions/persistDurableScanAuthority/entry.ts");
+const persistDurableAuthorityAdmissionClient = read("base44/functions/persistDurableScanAuthority/admissionClient.js");
+const persistLimitedResultEntry = read("base44/functions/persistLimitedScanResult/entry.ts");
 const connectivityControl = read("scripts/set-base44-admission-connectivity.sh");
 const intakeWorkflow = read(".github/workflows/fixlist-base44-scan-intake.yml");
 const connectivityWorkflow = read(".github/workflows/fixlist-base44-admission-connectivity.yml");
@@ -451,6 +457,42 @@ test("Base44 intake and connectivity are isolated owner controls with verified r
   }
   assert.match(intakeWorkflow, /denoland\/setup-deno@v2/);
   assert.match(intakeWorkflow, /deno-version: v2\.4\.5/);
+});
+
+test("mutable Base44 admission connectivity is read per request across the full Standard 150 release path", () => {
+  for (const entry of [
+    startStandardScanJobEntry,
+    durableControlEntry,
+    persistDurableAuthorityEntry,
+    persistLimitedResultEntry,
+  ]) {
+    assert.match(entry, /import \{ secrets \} from "base44:runtime"/);
+    assert.match(entry, /secrets\.get\("BETA_SCAN_ADMISSION_ENABLED"\)/);
+  }
+
+  assert.doesNotMatch(startStandardScanAdmission, /Deno\.env\.get\("BETA_SCAN_ADMISSION_ENABLED"\)/);
+  assert.match(startStandardScanJobEntry, /betaScanAdmissionPolicy\(mutableScanIntakeValue\(\), mutableScanAdmissionValue\(\)\)/);
+  assert.ok(
+    (startStandardScanJobEntry.match(/env:\s*mutableScanAdmissionEnv/g) || []).length >= 4,
+    "startStandardScanJob must pass the per-request admission secret to claim, bind, and release",
+  );
+  assert.ok(
+    (durableControlEntry.match(/env:\s*mutableScanAdmissionEnv/g) || []).length >= 5,
+    "durable worker reconciliation must pass the per-request admission secret to every coordinator call",
+  );
+  assert.match(
+    persistDurableAuthorityEntry,
+    /releaseAdmissionClient\(\{[\s\S]*env:\s*mutableScanAdmissionEnv/,
+  );
+  assert.doesNotMatch(persistLimitedResultEntry, /Deno\.env\.get\("BETA_SCAN_ADMISSION_ENABLED"\)/);
+
+  for (const client of [
+    startStandardScanAdmissionClient,
+    durableControlAdmissionClient,
+    persistDurableAuthorityAdmissionClient,
+  ]) {
+    assert.match(client, /options\.env \?\? readEnv/);
+  }
 });
 
 test("worker provenance lookup uses the same regional Cloud Build scope as the candidate build", () => {

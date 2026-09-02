@@ -29,17 +29,17 @@ function withEnv(values, fn) {
 test("scan admission is default-off and requires the coordinator, not an unproven Base44 atomic primitive", () => {
   const values = new Map();
   withEnv(values, () => {
-    assert.equal(betaScanAdmissionPolicy(undefined).code, "scan_intake_paused");
-    assert.equal(betaScanAdmissionPolicy("true").code, "scan_admission_paused");
+    assert.equal(betaScanAdmissionPolicy(undefined, "").code, "scan_intake_paused");
+    assert.equal(betaScanAdmissionPolicy("true", "").code, "scan_admission_paused");
     values.set("BETA_SCAN_ADMISSION_ENABLED", "true");
-    assert.equal(betaScanAdmissionPolicy("true").code, "scan_admission_configuration_invalid");
+    assert.equal(betaScanAdmissionPolicy("true", "true").code, "scan_admission_configuration_invalid");
     values.set("SCAN_ADMISSION_COORDINATOR_URL", "https://coordinator.example");
     values.set("SCAN_EVIDENCE_SIGNING_KEY", "test-root");
-    assert.deepEqual(betaScanAdmissionPolicy("true"), { ok: true, code: "" });
+    assert.deepEqual(betaScanAdmissionPolicy("true", "true"), { ok: true, code: "" });
     values.set("BETA_COHORT_ALLOWED_USER_IDS", Array.from({ length: 150 }, (_, i) => `user-${i + 1}`).join(","));
-    assert.deepEqual(betaScanAdmissionPolicy("true"), { ok: true, code: "" });
+    assert.deepEqual(betaScanAdmissionPolicy("true", "true"), { ok: true, code: "" });
     values.set("BASE44_ATOMIC_UPDATE_MANY_CONFIRMED", "false");
-    assert.deepEqual(betaScanAdmissionPolicy("true"), { ok: true, code: "" });
+    assert.deepEqual(betaScanAdmissionPolicy("true", "true"), { ok: true, code: "" });
   });
   assert.doesNotMatch(admissionSource, /BASE44_ATOMIC_UPDATE_MANY_CONFIRMED|updateMany|scan_claim_/);
   assert.doesNotMatch(entrySource, /bindScanLease|claimScanLease|scan_claim_token/);
@@ -56,16 +56,18 @@ test("new intake is independently fail-closed and observes mutable runtime secre
   let runtimeIntake = "";
   withEnv(values, () => {
     assert.equal(scanIntakeEnabled(runtimeIntake), false);
-    assert.equal(betaScanAdmissionPolicy(runtimeIntake).code, "scan_intake_paused");
+    assert.equal(betaScanAdmissionPolicy(runtimeIntake, "true").code, "scan_intake_paused");
     runtimeIntake = "true";
     assert.equal(scanIntakeEnabled(runtimeIntake), true);
-    assert.equal(betaScanAdmissionPolicy(runtimeIntake).ok, true);
+    assert.equal(betaScanAdmissionPolicy(runtimeIntake, "true").ok, true);
     runtimeIntake = "TRUE";
     assert.equal(scanIntakeEnabled(runtimeIntake), false);
   });
   assert.doesNotMatch(admissionSource, /Deno\.env\.get\("BETA_SCAN_INTAKE_ENABLED"\)/);
+  assert.doesNotMatch(admissionSource, /Deno\.env\.get\("BETA_SCAN_ADMISSION_ENABLED"\)/);
   assert.match(entrySource, /secrets\.get\("BETA_SCAN_INTAKE_ENABLED"\)/);
-  assert.match(entrySource, /betaScanAdmissionPolicy\(mutableScanIntakeValue\(\)\)/);
+  assert.match(entrySource, /secrets\.get\("BETA_SCAN_ADMISSION_ENABLED"\)/);
+  assert.match(entrySource, /betaScanAdmissionPolicy\(mutableScanIntakeValue\(\), mutableScanAdmissionValue\(\)\)/);
   assert.match(clientSource, /BETA_SCAN_ADMISSION_ENABLED/);
 });
 
@@ -76,9 +78,9 @@ test("scan admission does not use the static cohort list as a membership gate", 
     ["SCAN_EVIDENCE_SIGNING_KEY", "test-root"],
   ]);
   withEnv(values, () => {
-    assert.equal(betaScanAdmissionPolicy("true").ok, true);
+    assert.equal(betaScanAdmissionPolicy("true", "true").ok, true);
     values.set("BETA_COHORT_ALLOWED_USER_IDS", "malformed/not-a-user-id");
-    assert.equal(betaScanAdmissionPolicy("true").ok, true);
+    assert.equal(betaScanAdmissionPolicy("true", "true").ok, true);
   });
   assert.doesNotMatch(admissionSource, /BETA_COHORT_ALLOWED_USER_IDS/);
 });

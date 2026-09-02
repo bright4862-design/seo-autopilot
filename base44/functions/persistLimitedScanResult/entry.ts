@@ -1,4 +1,5 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
+import { secrets } from "base44:runtime";
 import { verifyAuthoritySeal } from "./workerEnvelope.js";
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import {
@@ -9,6 +10,14 @@ import {
   requiresCompleteAcceptanceEvidence,
   MAX_LIMITED_FIXES,
 } from "./limitedResultIntegrity.js";
+
+function mutableScanAdmissionValue() {
+  try {
+    return secrets.get("BETA_SCAN_ADMISSION_ENABLED");
+  } catch {
+    return "";
+  }
+}
 
 /**
  * Persist a scan that saw real evidence but not enough to be authoritative.
@@ -343,7 +352,7 @@ async function persistLimitedAdmissionRelease(entities, scan) {
 async function releaseAdmission(expected) {
   const baseUrl = String(Deno.env.get("SCAN_ADMISSION_COORDINATOR_URL") || "").replace(/\/+$/, "");
   const root = String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || "");
-  if (!baseUrl || !root || String(Deno.env.get("BETA_SCAN_ADMISSION_ENABLED") || "") !== "true") {
+  if (!baseUrl || !root || String(mutableScanAdmissionValue() || "") !== "true") {
     return { ok: false, failureCode: "admission_not_configured" };
   }
   const payloadText = JSON.stringify({

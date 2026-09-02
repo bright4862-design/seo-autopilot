@@ -5,11 +5,11 @@ export function scanIntakeEnabled(intakeValue) {
   return String(intakeValue || "") === "true";
 }
 
-export function betaScanAdmissionPolicy(intakeValue) {
+export function betaScanAdmissionPolicy(intakeValue, admissionValue) {
   if (!scanIntakeEnabled(intakeValue)) {
     return { ok: false, code: "scan_intake_paused" };
   }
-  if (String(Deno.env.get("BETA_SCAN_ADMISSION_ENABLED") || "") !== "true") {
+  if (String(admissionValue || "") !== "true") {
     return { ok: false, code: "scan_admission_paused" };
   }
   const coordinatorUrl = String(Deno.env.get("SCAN_ADMISSION_COORDINATOR_URL") || "").trim();

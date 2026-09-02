@@ -355,7 +355,7 @@ test("Cloud Operator invokes the allowlisted shell through bash so file mode can
 test("Base44 admission connectivity invokes the Cloud Operator through bash so file mode cannot block zero-obligation verification", () => {
   assert.match(
     connectivityControl,
-    /\/bin\/bash "\\$REPO_ROOT\/scripts\/fixlist-cloud-operator\.sh"/,
+    /\/bin\/bash "\$REPO_ROOT\/scripts\/fixlist-cloud-operator\.sh"/,
   );
 });
 

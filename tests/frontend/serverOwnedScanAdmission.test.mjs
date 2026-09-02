@@ -72,6 +72,7 @@ function createHarness({
   const releases = [];
   let admission = null;
   let intakeSecret = "true";
+  let admissionSecret = "true";
   let createThrowSpent = false;
 
   const Access = {
@@ -238,10 +239,15 @@ function createHarness({
     releases,
     admission: () => admission && { ...admission },
     setIntakeSecret: (value) => { intakeSecret = String(value ?? ""); },
+    setAdmissionSecret: (value) => { admissionSecret = String(value ?? ""); },
     globals: {
       createClientFromRequest: () => base44,
       secrets: {
-        get: (name) => name === "BETA_SCAN_INTAKE_ENABLED" ? intakeSecret : "",
+        get: (name) => {
+          if (name === "BETA_SCAN_INTAKE_ENABLED") return intakeSecret;
+          if (name === "BETA_SCAN_ADMISSION_ENABLED") return admissionSecret;
+          return "";
+        },
       },
       DRAIN_DELAY_SECONDS: 600,
       enqueueScanDrain: async ({ scanId, attemptCount }) => {
@@ -332,6 +338,40 @@ test("loaded handler observes mutable intake secret changes on the next request"
   } finally {
     restoreEnv();
     delete globalThis.__runtimeIntakeHarness;
+  }
+});
+
+test("loaded handler observes mutable admission connectivity secret changes even when the Deno env snapshot is stale", async () => {
+  const restoreEnv = installEnv();
+  const priorGet = globalThis.Deno.env.get;
+  globalThis.Deno.env.get = (name) => name === "BETA_SCAN_ADMISSION_ENABLED" ? "false" : priorGet(name);
+  const harness = createHarness();
+  harness.setAdmissionSecret("false");
+  globalThis.__runtimeAdmissionHarness = harness.globals;
+  try {
+    const { default: handler } = await importHandler("__runtimeAdmissionHarness");
+
+    const paused = await invoke(handler, "scanreq_admission_pause_1");
+    const pausedBody = await paused.json();
+    assert.equal(paused.status, 503);
+    assert.equal(pausedBody.failure_code, "scan_admission_paused");
+    assert.equal(harness.scans.length, 0);
+    assert.equal(harness.scanTasks.size, 0);
+    assert.equal(harness.drainTasks.size, 0);
+    assert.equal(harness.admission(), null);
+
+    harness.setAdmissionSecret("true");
+    const resumed = await invoke(handler, "scanreq_admission_resume_1");
+    const resumedBody = await resumed.json();
+    assert.equal(resumed.status, 200);
+    assert.equal(resumedBody.accepted, true);
+    assert.equal(harness.scans.length, 1);
+    assert.equal(harness.scanTasks.size, 1);
+    assert.equal(harness.drainTasks.size, 1);
+  } finally {
+    globalThis.Deno.env.get = priorGet;
+    delete globalThis.__runtimeAdmissionHarness;
+    restoreEnv();
   }
 });
 

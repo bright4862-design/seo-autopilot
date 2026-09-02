@@ -73,6 +73,8 @@ function createHarness({
   let admission = null;
   let intakeSecret = "true";
   let admissionSecret = "true";
+  let coordinatorSecret = "https://coordinator.example";
+  let signingSecret = "test-signing-root";
   let createThrowSpent = false;
 
   const Access = {
@@ -246,6 +248,8 @@ function createHarness({
         get: (name) => {
           if (name === "BETA_SCAN_INTAKE_ENABLED") return intakeSecret;
           if (name === "BETA_SCAN_ADMISSION_ENABLED") return admissionSecret;
+          if (name === "SCAN_ADMISSION_COORDINATOR_URL") return coordinatorSecret;
+          if (name === "SCAN_EVIDENCE_SIGNING_KEY") return signingSecret;
           return "";
         },
       },

@@ -54,7 +54,7 @@ BARRIER_EXPECTED_GENERATION="$BARRIER_EXPECTED_GENERATION" \
 BARRIER_EXPECTED_PRIOR_MODE=closed \
 CHANGE_TICKET="$CHANGE_TICKET" \
 CUTOVER_REASON="$CUTOVER_REASON" \
-  "$REPO_ROOT/scripts/fixlist-cloud-operator.sh"
+  /bin/bash "$REPO_ROOT/scripts/fixlist-cloud-operator.sh"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

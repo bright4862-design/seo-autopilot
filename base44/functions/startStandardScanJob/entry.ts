@@ -523,7 +523,7 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
     claim,
     ownerUserId: String(user.id),
     requestId: request.request_id,
-    signingKey: String(Deno.env.get("SCAN_EVIDENCE_SIGNING_KEY") || ""),
+    signingKey: String(mutableScanAdmissionSecret("SCAN_EVIDENCE_SIGNING_KEY") || ""),
   });
   if (!admissionEvidence) {
     return {

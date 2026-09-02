@@ -467,31 +467,50 @@ test("mutable Base44 admission connectivity is read per request across the full 
     persistLimitedResultEntry,
   ]) {
     assert.match(entry, /import \{ secrets \} from "base44:runtime"/);
-    assert.match(entry, /secrets\.get\("BETA_SCAN_ADMISSION_ENABLED"\)/);
+    assert.match(entry, /secrets\.get\(name\)/);
+  }
+
+  for (const name of [
+    "BETA_SCAN_ADMISSION_ENABLED",
+    "SCAN_ADMISSION_COORDINATOR_URL",
+    "SCAN_EVIDENCE_SIGNING_KEY",
+  ]) {
+    assert.match(startStandardScanJobEntry, new RegExp(name));
+    assert.match(durableControlEntry, new RegExp(name));
+    assert.match(persistDurableAuthorityEntry, new RegExp(name));
   }
 
   assert.doesNotMatch(startStandardScanAdmission, /Deno\.env\.get\("BETA_SCAN_ADMISSION_ENABLED"\)/);
-  assert.match(startStandardScanJobEntry, /betaScanAdmissionPolicy\(mutableScanIntakeValue\(\), mutableScanAdmissionValue\(\)\)/);
+  assert.doesNotMatch(startStandardScanAdmission, /Deno\.env\.get\("SCAN_ADMISSION_COORDINATOR_URL"\)/);
+  assert.doesNotMatch(startStandardScanAdmission, /Deno\.env\.get\("SCAN_EVIDENCE_SIGNING_KEY"\)/);
+  assert.match(
+    startStandardScanJobEntry,
+    /betaScanAdmissionPolicy\([\s\S]*mutableScanAdmissionEnv\("SCAN_ADMISSION_COORDINATOR_URL"\)[\s\S]*mutableScanAdmissionEnv\("SCAN_EVIDENCE_SIGNING_KEY"\)/,
+  );
   assert.ok(
     (startStandardScanJobEntry.match(/env:\s*mutableScanAdmissionEnv/g) || []).length >= 4,
-    "startStandardScanJob must pass the per-request admission secret to claim, bind, and release",
+    "startStandardScanJob must pass request-time admission config to claim, bind, and release",
   );
   assert.ok(
     (durableControlEntry.match(/env:\s*mutableScanAdmissionEnv/g) || []).length >= 5,
-    "durable worker reconciliation must pass the per-request admission secret to every coordinator call",
+    "durable worker reconciliation must pass request-time admission config to every coordinator call",
   );
   assert.match(
     persistDurableAuthorityEntry,
     /releaseAdmissionClient\(\{[\s\S]*env:\s*mutableScanAdmissionEnv/,
   );
   assert.doesNotMatch(persistLimitedResultEntry, /Deno\.env\.get\("BETA_SCAN_ADMISSION_ENABLED"\)/);
+  assert.doesNotMatch(persistLimitedResultEntry, /Deno\.env\.get\("SCAN_ADMISSION_COORDINATOR_URL"\)/);
+  assert.doesNotMatch(persistLimitedResultEntry, /Deno\.env\.get\("SCAN_EVIDENCE_SIGNING_KEY"\)/);
 
   for (const client of [
     startStandardScanAdmissionClient,
     durableControlAdmissionClient,
     persistDurableAuthorityAdmissionClient,
   ]) {
-    assert.match(client, /options\.env \?\? readEnv/);
+    assert.match(client, /env = readEnv/);
+    assert.match(client, /env\("SCAN_ADMISSION_COORDINATOR_URL"\)/);
+    assert.match(client, /env\("SCAN_EVIDENCE_SIGNING_KEY"\)/);
   }
 });
 

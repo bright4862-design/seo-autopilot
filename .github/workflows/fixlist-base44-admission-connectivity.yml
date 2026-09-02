@@ -41,6 +41,7 @@ env:
   GCP_REGION: europe-west1
   GCP_WIF_PROVIDER: projects/919035207432/locations/global/workloadIdentityPools/github/providers/github-base44-admission-control
   GCP_OPERATOR_SERVICE_ACCOUNT: fixlist-admission-operator@seo-autopilot-501517.iam.gserviceaccount.com
+  ADMISSION_OPERATOR_AUDIENCE: https://fixlist-admission-operator
   CLOUD_RUN_SERVICE: fixlist-standard150-worker
   CLOUD_TASKS_QUEUE: fixlist-standard150
   CLOUD_TASKS_DRAIN_QUEUE: fixlist-standard150-drain
@@ -95,6 +96,18 @@ jobs:
           workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
           service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
 
+      - name: Mint coordinator operator identity token
+        id: operator-id-token
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ env.ADMISSION_OPERATOR_AUDIENCE }}
+          id_token_include_email: true
+          create_credentials_file: false
+
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
         with:
@@ -110,6 +123,8 @@ jobs:
           CHANGE_TICKET: ${{ inputs.change_ticket }}
           CUTOVER_REASON: ${{ inputs.reason }}
           BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
+          FIXLIST_OPERATOR_ID_TOKEN: ${{ steps.operator-id-token.outputs.id_token }}
+          FIXLIST_OPERATOR_TOKEN_AUDIENCE: ${{ env.ADMISSION_OPERATOR_AUDIENCE }}
         run: /bin/bash scripts/set-base44-admission-connectivity.sh
 
       - name: Remove ephemeral Base44 owner session

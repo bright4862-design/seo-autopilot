@@ -352,6 +352,13 @@ test("Cloud Operator invokes the allowlisted shell through bash so file mode can
   assert.match(workflow, /run: bash \.\/scripts\/fixlist-cloud-operator\.sh/);
 });
 
+test("Base44 admission connectivity invokes the Cloud Operator through bash so file mode cannot block zero-obligation verification", () => {
+  assert.match(
+    connectivityControl,
+    /\/bin\/bash "\$REPO_ROOT\/scripts\/fixlist-cloud-operator\.sh"/,
+  );
+});
+
 test("the guarded staged-worker promotion carries the exact main source into the mutating operator", () => {
   const promoteStep = workflow.match(
     /- name: Promote exact candidate with automatic rollback on failed post-check[\s\S]*?(?=\n      - name: Publish exact promotion status)/,

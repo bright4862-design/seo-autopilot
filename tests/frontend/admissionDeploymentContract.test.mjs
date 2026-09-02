@@ -359,6 +359,18 @@ test("Base44 admission connectivity invokes the Cloud Operator through bash so f
   );
 });
 
+test("Base44 admission connectivity mints and hands off the coordinator operator identity token", () => {
+  assert.match(connectivityWorkflow, /ADMISSION_OPERATOR_AUDIENCE: https:\/\/fixlist-admission-operator/);
+  assert.match(connectivityWorkflow, /name: Mint coordinator operator identity token/);
+  assert.match(connectivityWorkflow, /id: operator-id-token/);
+  assert.match(connectivityWorkflow, /token_format: id_token/);
+  assert.match(connectivityWorkflow, /id_token_audience: \$\{\{ env\.ADMISSION_OPERATOR_AUDIENCE \}\}/);
+  assert.match(connectivityWorkflow, /id_token_include_email: true/);
+  assert.match(connectivityWorkflow, /create_credentials_file: false/);
+  assert.match(connectivityWorkflow, /FIXLIST_OPERATOR_ID_TOKEN: \$\{\{ steps\.operator-id-token\.outputs\.id_token \}\}/);
+  assert.match(connectivityWorkflow, /FIXLIST_OPERATOR_TOKEN_AUDIENCE: \$\{\{ env\.ADMISSION_OPERATOR_AUDIENCE \}\}/);
+});
+
 test("the guarded staged-worker promotion carries the exact main source into the mutating operator", () => {
   const promoteStep = workflow.match(
     /- name: Promote exact candidate with automatic rollback on failed post-check[\s\S]*?(?=\n      - name: Publish exact promotion status)/,

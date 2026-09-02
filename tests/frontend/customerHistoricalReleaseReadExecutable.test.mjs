@@ -33,6 +33,7 @@ async function importHandler(harnessName) {
   }).outputText.replace(/^import[\s\S]*?;\s*$/gm, "");
   const prelude = `const {
     createClientFromRequest,
+    secrets,
     buildLimitedResultSnapshot,
     verifyLimitedResultProof,
     authoritySnapshotFromRows,
@@ -197,6 +198,7 @@ async function invokeWithFingerprint(fingerprint) {
   };
   globalThis[harnessName] = {
     createClientFromRequest: () => base44,
+    secrets: { get: (name) => name === "SCAN_EVIDENCE_SIGNING_KEY" ? SECRET : "" },
     buildLimitedResultSnapshot,
     verifyLimitedResultProof,
     authoritySnapshotFromRows,

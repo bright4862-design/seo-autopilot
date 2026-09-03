@@ -102,14 +102,19 @@ PY
   rm -f "$body_file"
 }
 
+probe_body_is_json_object() {
+  printf '%s' "$PROBE_BODY" | python3 -c 'import json, sys; value = json.load(sys.stdin); raise SystemExit(0 if isinstance(value, dict) else 1)' >/dev/null 2>&1
+}
+
 route_reaches_json_handler() {
   [[ "$PROBE_STATUS" =~ ^[1-5][0-9]{2}$ ]] \
-    && [[ "$PROBE_BODY" == "{"* ]] \
+    && probe_body_is_json_object \
     && [[ "$PROBE_BODY" != *"user worker not found"* ]]
 }
 
 route_is_known_stale_handler() {
   local name="$1"
+  probe_body_is_json_object || return 1
   case "$name" in
     startStandardScanJob)
       [[ "$PROBE_STATUS" == "405" ]] \

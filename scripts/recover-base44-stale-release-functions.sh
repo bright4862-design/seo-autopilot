@@ -99,9 +99,36 @@ PY
 }
 
 route_reaches_json_handler() {
-  [[ "$PROBE_STATUS" =~ ^(400|401|403|404|405|409|500|503)$ ]] \
+  [[ "$PROBE_STATUS" =~ ^[1-5][0-9]{2}$ ]] \
     && [[ "$PROBE_BODY" == "{"* ]] \
     && [[ "$PROBE_BODY" != *"user worker not found"* ]]
+}
+
+route_is_known_stale_handler() {
+  local name="$1"
+  case "$name" in
+    startStandardScanJob)
+      [[ "$PROBE_STATUS" == "405" ]] \
+        && grep -Eq '"version"[[:space:]]*:[[:space:]]*"startStandardScanJob_v3_server_admission"' <<<"$PROBE_BODY" \
+        && grep -Eq '"error"[[:space:]]*:[[:space:]]*"Method not allowed\."' <<<"$PROBE_BODY"
+      ;;
+    durableScanWorkerControl|persistDurableScanAuthority|persistLimitedScanResult|getCustomerScanResult|deleteCustomerScanData|ownerScanDebugControl)
+      [[ "$PROBE_STATUS" == "405" ]] \
+        && grep -Eq '"success"[[:space:]]*:[[:space:]]*false' <<<"$PROBE_BODY" \
+        && grep -Eq '"error_code"[[:space:]]*:[[:space:]]*"method_not_allowed"' <<<"$PROBE_BODY"
+      ;;
+    createAccessCheckout)
+      [[ "$PROBE_STATUS" == "500" ]] \
+        && grep -Eq '"code"[[:space:]]*:[[:space:]]*"checkout_failed"' <<<"$PROBE_BODY"
+      ;;
+    stripeWebhook)
+      [[ "$PROBE_STATUS" == "400" ]] \
+        && grep -Fq '"error":"Neither apiKey nor config.authenticator provided"' <<<"$PROBE_BODY"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 route_serves_expected_build() {
@@ -137,8 +164,8 @@ recover_one() {
     printf '  skip: already serves expected build %s\n' "$expected"
     return 0
   fi
-  if ! route_reaches_json_handler; then
-    echo "Refusing recovery for $name: pre-state is not a trusted Base44 JSON handler response (HTTP $PROBE_STATUS)." >&2
+  if ! route_is_known_stale_handler "$name"; then
+    echo "Refusing recovery for $name: pre-state does not match the proven stale handler signature (HTTP $PROBE_STATUS)." >&2
     return 1
   fi
 

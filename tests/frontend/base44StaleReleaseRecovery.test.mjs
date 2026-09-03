@@ -98,6 +98,30 @@ test("owner debug GET runtime returns the activation marker and exact generated 
   assert.equal(body.error_code, "method_not_allowed");
 });
 
+test("every remaining release function carries a runtime reactivation marker in its probe response", () => {
+  const targets = [
+    ["durableScanWorkerControl", "base44/functions/durableScanWorkerControl/entry.ts", "durable-worker-prod-reactivation-20260903-v1"],
+    ["persistDurableScanAuthority", "base44/functions/persistDurableScanAuthority/entry.ts", "durable-authority-prod-reactivation-20260903-v1"],
+    ["persistLimitedScanResult", "base44/functions/persistLimitedScanResult/entry.ts", "limited-result-prod-reactivation-20260903-v1"],
+    ["deleteCustomerScanData", "base44/functions/deleteCustomerScanData/index.ts", "delete-history-prod-reactivation-20260903-v1"],
+    ["getCustomerScanResult", "base44/functions/getCustomerScanResult/entry.ts", "customer-result-prod-reactivation-20260903-v1"],
+    ["startStandardScanJob", "base44/functions/startStandardScanJob/entry.ts", "start-standard-prod-reactivation-20260903-v1"],
+    ["createAccessCheckout", "base44/functions/createAccessCheckout/entry.ts", "checkout-prod-reactivation-20260903-v1"],
+    ["stripeWebhook", "base44/functions/stripeWebhook/entry.ts", "stripe-webhook-prod-reactivation-20260903-v1"],
+  ];
+
+  for (const [name, sourcePath, marker] of targets) {
+    const source = fs.readFileSync(sourcePath, "utf8");
+    const buildSource = fs.readFileSync(`base44/functions/${name}/generatedBuildId.js`, "utf8");
+    assert.ok(source.includes(`BASE44_RUNTIME_ACTIVATION_ID = "${marker}"`), name);
+    assert.match(source, /runtime_activation_id:\s*BASE44_RUNTIME_ACTIVATION_ID/, name);
+    assert.match(buildSource, /FUNCTION_BUILD_ID = "[0-9a-f]{64}"/, name);
+  }
+
+  const deleteEntry = fs.readFileSync("base44/functions/deleteCustomerScanData/entry.ts", "utf8");
+  assert.match(deleteEntry, /export const BASE44_RUNTIME_ACTIVATION_ID = "delete-history-prod-reactivation-20260903-v1";/);
+});
+
 test("stale recovery covers exactly the nine published release functions", () => {
   const list = recovery.match(/RECOVERY_FUNCTIONS=\(([^)]*)\)/s)[1]
     .split("\n").map((line) => line.trim()).filter(Boolean);

@@ -152,16 +152,16 @@ test("all nine are preflighted before the first delete and each recovery is veri
   assert.ok(deployAt > deleteAt);
   assert.ok(verifyAt > deployAt);
 
-  const preflightBannerAt = recovery.indexOf("BASE44_STALE_RECOVERY_PREFLIGHT_VERIFIED");
-  const firstDeleteAt = recovery.indexOf('functions delete "$name"');
-  assert.ok(preflightBannerAt >= 0);
-  assert.ok(preflightBannerAt < firstDeleteAt, "all-nine preflight must complete before any delete path is reachable");
-
   const loops = [...recovery.matchAll(/for fn in "\$\{RECOVERY_FUNCTIONS\[@\]\}"; do\n([\s\S]*?)\ndone/g)];
-  const preflightLoop = loops.find((match) => match[1].trim() === 'require_recoverable_prestate "$fn"');
-  const recoveryLoop = loops.find((match) => match[1].trim() === 'recover_one "$fn"');
-  assert.ok(preflightLoop, "the driver must preflight every release function");
-  assert.ok(recoveryLoop, "the recovery driver must call recover_one bare under set -e");
+  const preflightLoopIndex = loops.findIndex((match) => match[1].trim() === 'require_recoverable_prestate "$fn"');
+  const recoveryLoopIndex = loops.findIndex((match) => match[1].trim() === 'recover_one "$fn"');
+  assert.ok(preflightLoopIndex >= 0, "the driver must preflight every release function");
+  assert.ok(recoveryLoopIndex >= 0, "the recovery driver must call recover_one bare under set -e");
+  assert.ok(
+    preflightLoopIndex < recoveryLoopIndex,
+    "the all-nine preflight loop must execute before the first recovery loop",
+  );
+  assert.match(recovery, /BASE44_STALE_RECOVERY_PREFLIGHT_VERIFIED/);
 });
 
 test("recovery is exact-main, owner-session and explicit-action gated", () => {

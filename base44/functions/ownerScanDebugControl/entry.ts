@@ -3,6 +3,7 @@
 // served from a stale compiled worker, and this file's bytes cannot.
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.41";
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
+import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
 import { persistExactRelease } from "./admissionRelease.js";
 
 // This literal is intentionally release-sensitive. Base44 has previously reused
@@ -33,7 +34,7 @@ class RequestProblem extends Error {
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") {
-    return problem(new RequestProblem(405, "method_not_allowed", "Use POST for owner scan controls."));
+    return Response.json({ success: false, error_code: "method_not_allowed", error: "Use POST for owner scan controls.", build_id: FUNCTION_BUILD_ID }, { status: 405 });
   }
 
   try {

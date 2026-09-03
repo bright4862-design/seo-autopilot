@@ -18,6 +18,7 @@ source "$REPO_ROOT/scripts/lib/base44-pinned-cli.sh"
 
 fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$CONFIRM"
 SOURCE_SHA="$FIXLIST_EXACT_SOURCE_SHA"
+node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --check
 node "$REPO_ROOT/scripts/base44_release_manifest.mjs" verify
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -43,7 +44,12 @@ FUNCTIONS=(
   deleteCustomerScanData
   ownerScanDebugControl
 )
-"$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions deploy "${FUNCTIONS[@]}"
+DEPLOY_STATUS=0
+DEPLOY_REPORT="$("$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions deploy "${FUNCTIONS[@]}" 2>&1)" || DEPLOY_STATUS=$?
+printf '%s\n' "$DEPLOY_REPORT"
+if (( DEPLOY_STATUS != 0 )); then
+  exit "$DEPLOY_STATUS"
+fi
 
 INVENTORY="$($FIXLIST_BASE44_CLI --app-id "$APP_ID" functions list 2>&1)"
 printf '%s\n' "$INVENTORY"
@@ -65,5 +71,6 @@ do
 done
 
 EXPECTED_SOURCE_SHA="$SOURCE_SHA" bash "$REPO_ROOT/scripts/verify-base44-site.sh"
+bash "$REPO_ROOT/scripts/verify-base44-functions.sh"
 
 printf 'BASE44_SITE_AND_BACKEND_DEPLOYED\nsource_sha=%s\n' "$SOURCE_SHA"

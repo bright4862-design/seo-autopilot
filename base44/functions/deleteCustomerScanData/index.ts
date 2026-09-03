@@ -1,4 +1,5 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.41";
+import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
 
 export const SCAN_HISTORY_DELETE_VERSION = "scan_history_delete_v2_drain_children";
 
@@ -22,7 +23,7 @@ class RequestProblem extends Error {
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") {
-    return problem(new RequestProblem(405, "method_not_allowed", "Use POST to manage saved scan history."));
+    return Response.json({ success: false, error_code: "method_not_allowed", error: "Use POST to manage saved scan history.", build_id: FUNCTION_BUILD_ID }, { status: 405 });
   }
 
   try {

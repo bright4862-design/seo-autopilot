@@ -2,6 +2,7 @@ import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { secrets } from "base44:runtime";
 import { verifyAuthoritySeal } from "./workerEnvelope.js";
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
+import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
 import {
   buildLimitedResultSnapshot,
   createLimitedResultProof,
@@ -50,7 +51,7 @@ class RequestProblem extends Error {
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") {
-    return problemResponse(new RequestProblem(405, "method_not_allowed", "Use POST to persist a limited scan result."));
+    return Response.json({ success: false, error_code: "method_not_allowed", error: "Use POST to persist a limited scan result.", build_id: FUNCTION_BUILD_ID }, { status: 405 });
   }
 
   try {

@@ -12,14 +12,14 @@ fixlist_require_exact_main "$REPO_ROOT" "$SOURCE_SHA" "$CONFIRM"
 SOURCE_SHA="$FIXLIST_EXACT_SOURCE_SHA"
 
 FUNCTIONS=(
-  startStandardScanJob
-  durableScanWorkerControl
-  persistDurableScanAuthority
-  persistLimitedScanResult
-  getCustomerScanResult
+  startStandardScanJobV2
+  durableScanWorkerControlV2
+  persistDurableScanAuthorityV2
+  persistLimitedScanResultV2
+  getCustomerScanResultV2
+  deleteCustomerScanDataV2
   createAccessCheckout
   stripeWebhook
-  deleteCustomerScanData
   ownerScanDebugControl
 )
 

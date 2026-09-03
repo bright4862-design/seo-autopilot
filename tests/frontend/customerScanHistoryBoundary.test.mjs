@@ -69,7 +69,7 @@ test("the history endpoint service-reads ScanRun after an owned project check", 
 
 test("the browser history wrapper invokes the server boundary instead of ScanRun CRUD", () => {
   const listFunction = scanRuns.match(/export async function listScanRuns[\s\S]*?\n\}/)?.[0] || "";
-  assert.match(listFunction, /functions\.invoke\(["']getCustomerScanResult["']/);
+  assert.match(listFunction, /functions\.invoke\(["']getCustomerScanResultV2["']/);
   assert.match(listFunction, /action:\s*["']list["']/);
   assert.doesNotMatch(listFunction, /entities\.ScanRun/);
 });

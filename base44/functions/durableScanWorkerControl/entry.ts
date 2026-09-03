@@ -2,6 +2,7 @@ import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { secrets } from "base44:runtime";
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
+const BASE44_RUNTIME_ACTIVATION_ID = "durable-worker-prod-reactivation-20260903-v1";
 import { verifyAuthoritySeal } from "./authoritySeal.js";
 import {
   finishReconciliationInvocation as finishReconciliationInvocationClient,
@@ -95,7 +96,7 @@ class RequestProblem extends Error {
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") {
-    return Response.json({ success: false, error_code: "method_not_allowed", error: "Use POST for durable worker control.", build_id: FUNCTION_BUILD_ID }, { status: 405 });
+    return Response.json({ success: false, error_code: "method_not_allowed", error: "Use POST for durable worker control.", build_id: FUNCTION_BUILD_ID, runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID }, { status: 405 });
   }
 
   try {

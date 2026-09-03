@@ -1,0 +1,98 @@
+name: FixList Base44 Stale Function Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Exact current main SHA. Must equal the recovery source SHA."
+        required: true
+        type: string
+      action_confirm:
+        description: "Exact destructive-action confirmation from the release runbook."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fixlist-base44-hosted-controls-v2
+  cancel-in-progress: false
+
+jobs:
+  recover-stale-base44-functions:
+    if: >-
+      github.actor == 'bright4862-design' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch'
+    environment: fixlist-production-owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout exact main SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact clean main source
+        shell: /bin/bash {0}
+        env:
+          ACTOR: ${{ github.actor }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$ACTOR" = "bright4862-design"
+          test "$REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$SHA"
+          test "$(git rev-parse origin/main)" = "$SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          /bin/bash -n scripts/recover-base44-stale-release-functions.sh
+          /bin/bash -n scripts/authenticate-base44-owner-session.sh
+          /bin/bash -n scripts/lib/release-source-guard.sh
+
+      - name: Resolve exact recovery confirmations
+        id: confirm
+        shell: /bin/bash {0}
+        env:
+          INPUT_CONFIRM: ${{ inputs.confirm }}
+          INPUT_ACTION_CONFIRM: ${{ inputs.action_confirm }}
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          test "$INPUT_CONFIRM" = "$source_sha"
+          test "$INPUT_ACTION_CONFIRM" = "RECREATE-STALE-BASE44-RELEASE-FUNCTIONS"
+          echo "confirm=$INPUT_CONFIRM" >> "$GITHUB_OUTPUT"
+          echo "action_confirm=$INPUT_ACTION_CONFIRM" >> "$GITHUB_OUTPUT"
+
+      - name: Set up pinned Node runtime
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20.19.5'
+          cache: npm
+
+      - name: Install exact frontend dependencies
+        run: npm ci
+
+      - name: Authenticate Base44 owner with ephemeral device code
+        shell: /bin/bash {0}
+        env:
+          BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
+        run: /bin/bash scripts/authenticate-base44-owner-session.sh
+
+      - name: Recover stale Base44 release functions one at a time
+        shell: /bin/bash {0}
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          CONFIRM: ${{ steps.confirm.outputs.confirm }}
+          ACTION_CONFIRM: ${{ steps.confirm.outputs.action_confirm }}
+          BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
+        run: /bin/bash scripts/recover-base44-stale-release-functions.sh
+
+      - name: Remove ephemeral Base44 owner session
+        if: ${{ always() }}
+        shell: /bin/bash {0}
+        run: rm -rf "$HOME/.base44"

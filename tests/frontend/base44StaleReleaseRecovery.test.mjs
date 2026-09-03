@@ -140,6 +140,28 @@ test("only the proven live stale signatures are eligible for deletion", () => {
     "refuse",
     "generic method_not_allowed JSON must not authorize deletion",
   );
+  assert.equal(
+    classify(
+      "durableScanWorkerControl",
+      405,
+      '<html>{"success":false,"error_code":"method_not_allowed","error":"Use POST for durable worker control."}</html>',
+      "",
+      expected,
+    ),
+    "refuse",
+    "a complete stale signature embedded in non-JSON content must not authorize deletion",
+  );
+  assert.equal(
+    classify(
+      "durableScanWorkerControl",
+      405,
+      '{"success":false,"error_code":"method_not_allowed","error":"Use POST for durable worker control."',
+      "",
+      expected,
+    ),
+    "refuse",
+    "malformed JSON must not authorize deletion",
+  );
 });
 
 test("all nine are preflighted before the first delete and each recovery is verified before advancing", () => {
@@ -182,6 +204,7 @@ test("recovery is exact-main, owner-session and explicit-action gated", () => {
   assert.match(recovery, /generate_release_contracts\.mjs" --check/);
   assert.match(recovery, /base44_release_manifest\.mjs" verify/);
   assert.match(recovery, /valid_build_id\(\)/);
+  assert.match(recovery, /probe_body_is_json_object\(\)/);
   assert.match(recovery, /Refusing final verification: expected build id for \$fn is not a 64-hex digest/);
 });
 

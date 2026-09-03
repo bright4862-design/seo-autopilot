@@ -1,6 +1,7 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { secrets } from "base44:runtime";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
+const BASE44_RUNTIME_ACTIVATION_ID = "durable-authority-prod-reactivation-20260903-v1";
 import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
 import { authorityRowsFromSnapshot } from "./authorityRows.js";
 import { AUTHORITY_CONTRACT, buildAuthoritySnapshot, firstFailedAuthorityPredicate, hasCompleteAcceptanceEvidence } from "./authoritySnapshot.js";
@@ -62,7 +63,7 @@ class RequestProblem extends Error {
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") {
-    return Response.json({ success: false, error_code: "method_not_allowed", error: "Use POST to persist durable scan authority.", build_id: FUNCTION_BUILD_ID }, { status: 405 });
+    return Response.json({ success: false, error_code: "method_not_allowed", error: "Use POST to persist durable scan authority.", build_id: FUNCTION_BUILD_ID, runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID }, { status: 405 });
   }
 
   try {

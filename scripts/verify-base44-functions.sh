@@ -47,7 +47,7 @@ trap 'rm -rf "$TMP"' EXIT
 read_build_id() {
   local body_file="$1"
   node - "$body_file" <<'NODE'
-import fs from "node:fs";
+const fs = require("node:fs");
 
 const file = process.argv[2];
 let value;

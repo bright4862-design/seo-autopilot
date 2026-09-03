@@ -135,10 +135,14 @@ test("each stale function is delete-recreated one at a time and verified before 
   assert.match(recovery, /^set -euo pipefail$/m);
   assert.doesNotMatch(recovery, /set \+e/);
   const recoverOne = recovery.match(/recover_one\(\) \{([\s\S]*?)\n\}/)[1];
+  const validateAt = recoverOne.indexOf('valid_build_id "$expected"');
+  const probeAt = recoverOne.indexOf('probe_route "$name"');
   const deleteAt = recoverOne.indexOf('functions delete "$name"');
   const deployAt = recoverOne.indexOf('functions deploy "$name"');
   const verifyAt = recoverOne.indexOf('require_expected_build "$name" "$expected"');
-  assert.ok(deleteAt >= 0);
+  assert.ok(validateAt >= 0, "expected build ID must be validated");
+  assert.ok(probeAt > validateAt, "build ID validation must happen before stale classification");
+  assert.ok(deleteAt > probeAt);
   assert.ok(deployAt > deleteAt);
   assert.ok(verifyAt > deployAt);
   const loops = [...recovery.matchAll(/for fn in "\$\{RECOVERY_FUNCTIONS\[@\]\}"; do\n([\s\S]*?)\ndone/g)];
@@ -153,6 +157,8 @@ test("recovery is exact-main, owner-session and explicit-action gated", () => {
   assert.match(recovery, /RECREATE-STALE-BASE44-RELEASE-FUNCTIONS/);
   assert.match(recovery, /generate_release_contracts\.mjs" --check/);
   assert.match(recovery, /base44_release_manifest\.mjs" verify/);
+  assert.match(recovery, /valid_build_id\(\)/);
+  assert.match(recovery, /Refusing final verification: expected build id for \$fn is not a 64-hex digest/);
 });
 
 test("recovery cannot widen into unrelated production mutation", () => {
@@ -170,6 +176,12 @@ test("workflow is owner-dispatched from exact main and passes both confirmations
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /github\.actor == 'bright4862-design'/);
   assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
+  assert.match(workflow, /ACTOR: \$\{\{ github\.actor \}\}/);
+  assert.match(workflow, /REF: \$\{\{ github\.ref \}\}/);
+  assert.match(workflow, /SHA: \$\{\{ github\.sha \}\}/);
+  assert.match(workflow, /test "\$ACTOR" = "bright4862-design"/);
+  assert.match(workflow, /test "\$REF" = "refs\/heads\/main"/);
+  assert.doesNotMatch(workflow, /test "\$\{\{ github\.(actor|ref|sha) \}\}"/);
   assert.match(workflow, /test "\$INPUT_CONFIRM" = "\$source_sha"/);
   assert.match(workflow, /RECREATE-STALE-BASE44-RELEASE-FUNCTIONS/);
   assert.match(workflow, /environment: fixlist-production-owner/);

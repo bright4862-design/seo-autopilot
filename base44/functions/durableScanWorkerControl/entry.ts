@@ -1,6 +1,7 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { secrets } from "base44:runtime";
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
+import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
 import { verifyAuthoritySeal } from "./authoritySeal.js";
 import {
   finishReconciliationInvocation as finishReconciliationInvocationClient,
@@ -94,7 +95,7 @@ class RequestProblem extends Error {
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") {
-    return problemResponse(new RequestProblem(405, "method_not_allowed", "Use POST for durable worker control."));
+    return Response.json({ success: false, error_code: "method_not_allowed", error: "Use POST for durable worker control.", build_id: FUNCTION_BUILD_ID }, { status: 405 });
   }
 
   try {

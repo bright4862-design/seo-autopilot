@@ -1,6 +1,7 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import Stripe from "npm:stripe@17.5.0";
 import { secrets } from "base44:runtime";
+import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
 
 const APP_ID = "6a498732ec779dfaaeab0e53";
 const PLAN_ID = "standard150_lifetime";
@@ -148,6 +149,10 @@ function checkoutAccessStateResponse(access) {
 }
 
 export default async function (req) {
+  if (req.method !== "POST") {
+    return Response.json({ success: false, error_code: "method_not_allowed", error: "Use POST to create checkout.", build_id: FUNCTION_BUILD_ID }, { status: 405 });
+  }
+
   try {
     const base44 = createClientFromRequest(req);
     const user = await base44.auth.me();

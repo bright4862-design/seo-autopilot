@@ -74,14 +74,14 @@ jobs:
           node-version: '20.19.5'
           cache: npm
 
+      - name: Install exact frontend dependencies
+        run: npm ci
+
       - name: Authenticate Base44 owner with ephemeral device code
         shell: /bin/bash {0}
         env:
           BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
         run: /bin/bash scripts/authenticate-base44-owner-session.sh
-
-      - name: Install exact frontend dependencies
-        run: npm ci
 
       - name: Recover stale Base44 release functions one at a time
         shell: /bin/bash {0}

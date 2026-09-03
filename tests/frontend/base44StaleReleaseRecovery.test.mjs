@@ -8,22 +8,23 @@ const WORKFLOW = ".github/workflows/fixlist-base44-stale-function-recovery.yml";
 const recovery = fs.readFileSync(SCRIPT, "utf8");
 const workflow = fs.readFileSync(WORKFLOW, "utf8");
 
-function classify(status, body, buildId, expected) {
+function classify(name, status, body, buildId, expected) {
   const out = execFileSync(
     "bash",
     [
       "-c",
       [
         'FIXLIST_STALE_RECOVERY_LIB_ONLY=1 source "$0"',
-        'PROBE_STATUS="$1"',
-        'PROBE_BODY="$2"',
-        'PROBE_BUILD_ID="$3"',
-        'if route_reaches_json_handler && route_serves_expected_build "$4"; then echo exact',
-        'elif route_reaches_json_handler; then echo stale',
+        'PROBE_STATUS="$2"',
+        'PROBE_BODY="$3"',
+        'PROBE_BUILD_ID="$4"',
+        'if route_reaches_json_handler && route_serves_expected_build "$5"; then echo exact',
+        'elif route_is_known_stale_handler "$1"; then echo stale',
         'else echo refuse',
         'fi',
       ].join("; "),
       SCRIPT,
+      name,
       String(status),
       body,
       buildId,
@@ -53,15 +54,33 @@ test("stale recovery covers exactly the nine published release functions", () =>
 test("only an exact build match skips recreation", () => {
   const expected = "a".repeat(64);
   assert.equal(
-    classify(405, '{"success":false,"build_id":"' + expected + '"}', expected, expected),
+    classify(
+      "startStandardScanJob",
+      405,
+      '{"success":false,"version":"startStandardScanJob_v3_server_admission","error":"Method not allowed.","build_id":"' + expected + '"}',
+      expected,
+      expected,
+    ),
     "exact",
   );
   assert.equal(
-    classify(405, '{"success":false,"error":"Method not allowed"}', "", expected),
+    classify(
+      "startStandardScanJob",
+      405,
+      '{"success":false,"version":"startStandardScanJob_v3_server_admission","error":"Method not allowed."}',
+      "",
+      expected,
+    ),
     "stale",
   );
   assert.equal(
-    classify(405, '{"success":false,"build_id":"' + "b".repeat(64) + '"}', "b".repeat(64), expected),
+    classify(
+      "startStandardScanJob",
+      405,
+      '{"success":false,"version":"startStandardScanJob_v3_server_admission","error":"Method not allowed.","build_id":"' + "b".repeat(64) + '"}',
+      "b".repeat(64),
+      expected,
+    ),
     "stale",
   );
 });
@@ -77,8 +96,39 @@ test("edge, transport and router failures are never eligible for deletion", () =
     [200, "<html>login</html>"],
   ];
   for (const [status, body] of refused) {
-    assert.equal(classify(status, body, "", expected), "refuse");
+    assert.equal(classify("startStandardScanJob", status, body, "", expected), "refuse");
   }
+});
+
+test("only the proven live stale signatures are eligible for deletion", () => {
+  const expected = "a".repeat(64);
+  const stale = [
+    ["startStandardScanJob", 405, '{"success":false,"version":"startStandardScanJob_v3_server_admission","error":"Method not allowed."}'],
+    ["durableScanWorkerControl", 405, '{"success":false,"error_code":"method_not_allowed","error":"Use POST for durable worker control."}'],
+    ["persistDurableScanAuthority", 405, '{"success":false,"error_code":"method_not_allowed","error":"Use POST to persist durable scan authority."}'],
+    ["persistLimitedScanResult", 405, '{"success":false,"error_code":"method_not_allowed","error_message":"Use POST to persist a limited scan result."}'],
+    ["getCustomerScanResult", 405, '{"success":false,"error_code":"method_not_allowed","error":"Use POST to load a saved scan."}'],
+    ["deleteCustomerScanData", 405, '{"success":false,"error_code":"method_not_allowed","error":"Use POST to manage saved scan history."}'],
+    ["ownerScanDebugControl", 405, '{"success":false,"error_code":"method_not_allowed","error":"Use POST for owner scan controls."}'],
+    ["createAccessCheckout", 500, '{"error":"Checkout is temporarily unavailable.","code":"checkout_failed"}'],
+    ["stripeWebhook", 400, '{"error":"Neither apiKey nor config.authenticator provided"}'],
+  ];
+  for (const [name, status, body] of stale) {
+    assert.equal(classify(name, status, body, "", expected), "stale", name);
+  }
+
+  assert.equal(
+    classify("createAccessCheckout", 500, '{"error":"unrelated"}', "", expected),
+    "refuse",
+  );
+  assert.equal(
+    classify("stripeWebhook", 403, '{"error":"forbidden"}', "", expected),
+    "refuse",
+  );
+  assert.equal(
+    classify("startStandardScanJob", 404, '{"error":"not-found","detail":"app not found"}', "", expected),
+    "refuse",
+  );
 });
 
 test("each stale function is delete-recreated one at a time and verified before advancing", () => {

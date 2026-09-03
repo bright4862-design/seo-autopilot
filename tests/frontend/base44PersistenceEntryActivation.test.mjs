@@ -14,6 +14,11 @@ const ENTRY_MODULES = [
   ["startStandardScanJob", /export default async function/],
   ["durableScanWorkerControl", /Deno\.serve\(/],
   ["getCustomerScanResult", /Deno\.serve\(/],
+  ["persistDurableScanAuthorityV2", /Deno\.serve\(/],
+  ["persistLimitedScanResultV2", /Deno\.serve\(/],
+  ["startStandardScanJobV2", /export default async function/],
+  ["durableScanWorkerControlV2", /Deno\.serve\(/],
+  ["getCustomerScanResultV2", /Deno\.serve\(/],
   ["ownerScanDebugControl", /Deno\.serve\(/],
   ["aiReviewScan", /Deno\.serve\(/],
 ];

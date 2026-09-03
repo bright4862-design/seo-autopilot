@@ -579,7 +579,7 @@ export async function listScanRuns(projectId, limit = 3) {
   const scope = `history:${requestedProjectId}`;
   try {
     await currentOwner();
-    const response = await base44.functions.invoke("getCustomerScanResult", {
+    const response = await base44.functions.invoke("getCustomerScanResultV2", {
       action: "list",
       project_id: requestedProjectId,
       limit: Math.min(Math.max(Number(limit) || 3, 1), 3),
@@ -630,7 +630,7 @@ export async function listAccountScanRuns(limit = 20) {
   const scope = "history:account";
   try {
     await currentOwner();
-    const response = await base44.functions.invoke("getCustomerScanResult", {
+    const response = await base44.functions.invoke("getCustomerScanResultV2", {
       action: "list_all",
       limit: Math.min(Math.max(Number(limit) || 20, 1), 30),
     });
@@ -678,7 +678,7 @@ export async function getScanRunWithFixList(scanRunId) {
 
   try {
     await currentOwner();
-    const response = await base44.functions.invoke("getCustomerScanResult", {
+    const response = await base44.functions.invoke("getCustomerScanResultV2", {
       scan_id: requestedScanId,
     });
     const result = response?.data && typeof response.data === "object" ? response.data : response;

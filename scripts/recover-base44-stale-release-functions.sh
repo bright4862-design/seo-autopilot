@@ -157,6 +157,27 @@ require_expected_build() {
   return 1
 }
 
+require_recoverable_prestate() {
+  local name="$1" expected
+  expected="$(expected_build_id "$name")"
+  if ! valid_build_id "$expected"; then
+    echo "Refusing recovery preflight for $name: expected build id is not a 64-hex digest." >&2
+    return 1
+  fi
+  probe_route "$name"
+  if route_reaches_json_handler && route_serves_expected_build "$expected"; then
+    printf 'PREFLIGHT_BUILD_CURRENT name=%s build_id=%s\n' "$name" "$expected"
+    return 0
+  fi
+  if route_is_known_stale_handler "$name"; then
+    printf 'PREFLIGHT_STALE_CONFIRMED name=%s http_status=%s expected=%s\n' \
+      "$name" "$PROBE_STATUS" "$expected"
+    return 0
+  fi
+  echo "Refusing recovery preflight for $name: runtime is neither exact-current nor the proven stale handler (HTTP $PROBE_STATUS)." >&2
+  return 1
+}
+
 recover_one() {
   local name="$1" expected inventory
   expected="$(expected_build_id "$name")"
@@ -232,6 +253,13 @@ for fn in "${RECOVERY_FUNCTIONS[@]}"; do
     exit 1
   }
 done
+
+# Complete a non-mutating all-nine preflight before the first deletion. This
+# prevents a later ambiguous handler from leaving the release half-recovered.
+for fn in "${RECOVERY_FUNCTIONS[@]}"; do
+  require_recoverable_prestate "$fn"
+done
+printf 'BASE44_STALE_RECOVERY_PREFLIGHT_VERIFIED\n'
 
 RECOVERED=0
 for fn in "${RECOVERY_FUNCTIONS[@]}"; do

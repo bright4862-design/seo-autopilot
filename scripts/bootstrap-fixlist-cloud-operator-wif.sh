@@ -157,6 +157,18 @@ gcloud secrets add-iam-policy-binding "$ADMISSION_OPERATOR_SECRET" --project="$P
   --member="serviceAccount:${ADMISSION_OPERATOR_SA}" \
   --role="$ADMISSION_VERSION_ROLE" --condition=None --quiet >/dev/null
 
+# deploy-admission-coordinator authenticates as the cloud operator, not the
+# admission operator, and refuses to deploy until it has confirmed the pinned
+# operator signing version is ENABLED. Granting the resolver role only to the
+# admission operator left the deploying identity without it, so that check died
+# with PERMISSION_DENIED on secretmanager.versions.get and the coordinator could
+# not be deployed at all -- it sat on a revision built 2026-08-15 while every
+# attempt failed before reaching Cloud Run. This is the same metadata-only role,
+# so the deploying identity reads a version's state and never its value.
+gcloud secrets add-iam-policy-binding "$ADMISSION_OPERATOR_SECRET" --project="$PROJECT" \
+  --member="serviceAccount:${OPERATOR_SA}" \
+  --role="$ADMISSION_VERSION_ROLE" --condition=None --quiet >/dev/null
+
 say "Grant read-only visibility of the task invoker service account"
 gcloud iam service-accounts add-iam-policy-binding "$INVOKER_SA" \
   --project="$PROJECT" \

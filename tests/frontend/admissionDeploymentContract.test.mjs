@@ -37,6 +37,7 @@ const cliHelper = read("scripts/lib/base44-pinned-cli.sh");
 const sourceGuard = read("scripts/lib/release-source-guard.sh");
 const resolveOperatorVersion = read("scripts/resolve_admission_operator_signing_version.py");
 const wifBootstrap = read("scripts/bootstrap-fixlist-cloud-operator-wif.sh");
+const operatorWorkflow = read(".github/workflows/fixlist-cloud-operator.yml");
 const forbiddenHostedBase44SecretInterpolation = /\$\{\{\s*secrets\.(?:BASE44_API_KEY|BASE44_REFRESH_TOKEN|BASE44_ACCESS_TOKEN)\s*\}\}/;
 
 const releaseMutationScripts = [
@@ -124,6 +125,58 @@ test("owner bootstraps grant exact-secret payload access and a metadata-only cus
   assert.match(wifBootstrap, /ADMISSION_VERSION_ROLE_ID[\s\S]*secretmanager\.versions\.get/);
   assert.match(wifBootstrap, /--role="\$ADMISSION_VERSION_ROLE"/);
   assert.doesNotMatch(wifBootstrap, /roles\/secretmanager\.viewer/);
+});
+
+// deploy-admission-coordinator refuses to deploy until it has confirmed the
+// pinned operator signing version is ENABLED, and it authenticates as the cloud
+// operator rather than the admission operator. The resolver role was bound only
+// to the admission operator, so that check died with PERMISSION_DENIED on
+// secretmanager.versions.get and the coordinator could not be deployed at all --
+// it sat on a revision built 2026-08-15 while every attempt failed before ever
+// reaching Cloud Run. Asserting the role exists is not enough; it has to reach
+// the identity that actually runs the deploy.
+test("the coordinator's deploying identity can resolve the signing version's state", () => {
+  const deployIdentity = operatorWorkflow.match(
+    /GCP_OPERATOR_SERVICE_ACCOUNT:\s*(\S+)/,
+  );
+  assert.ok(deployIdentity, "the operator workflow must name its deploying service account");
+  const account = deployIdentity[1];
+
+  // deploy-admission-coordinator is absent from the read-only operation list, so
+  // it runs as GCP_OPERATOR_SERVICE_ACCOUNT. If it were ever added there this
+  // test would be asserting against the wrong identity.
+  const readOnlyOps = operatorWorkflow.match(/contains\(fromJSON\('(\[[^)]*?\])'\),\s*inputs\.operation\)[\s\S]{0,200}?GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT/);
+  if (readOnlyOps) {
+    assert.doesNotMatch(
+      readOnlyOps[1],
+      /"deploy-admission-coordinator"/,
+      "coordinator deploys must not silently switch to the admission operator identity",
+    );
+  }
+
+  const bindings = [...wifBootstrap.matchAll(
+    /secrets add-iam-policy-binding "\$ADMISSION_OPERATOR_SECRET"[\s\S]*?--member="serviceAccount:\$\{(\w+)\}"[\s\S]*?--role="([^"]+)"/g,
+  )].map(([, member, role]) => ({ member, role }));
+
+  const operatorVar = wifBootstrap.match(/^(\w+)="\$\{OPERATOR_ID\}@/m);
+  assert.ok(operatorVar, "the WIF bootstrap must derive the cloud operator account");
+  assert.match(account, new RegExp(`^${wifBootstrap.match(/^OPERATOR_ID="([^"]+)"/m)[1]}@`),
+    "the workflow's deploying account must be the bootstrap's cloud operator");
+
+  const resolver = bindings.filter((entry) => entry.role === "$ADMISSION_VERSION_ROLE");
+  assert.ok(
+    resolver.some((entry) => entry.member === operatorVar[1]),
+    "the deploying identity must hold the metadata-only version resolver role",
+  );
+
+  // Metadata only. The deploying identity must never be able to read the value.
+  const payloadAccess = bindings.filter(
+    (entry) => entry.role === "roles/secretmanager.secretAccessor",
+  );
+  assert.ok(
+    !payloadAccess.some((entry) => entry.member === operatorVar[1]),
+    "the deploying identity must not be granted the signing secret's payload",
+  );
 });
 
 test("WIF provider display names stay within Google's 32-character limit", () => {

@@ -129,6 +129,17 @@ test("only the proven live stale signatures are eligible for deletion", () => {
     classify("startStandardScanJob", 404, '{"error":"not-found","detail":"app not found"}', "", expected),
     "refuse",
   );
+  assert.equal(
+    classify(
+      "durableScanWorkerControl",
+      405,
+      '{"success":false,"error_code":"method_not_allowed"}',
+      "",
+      expected,
+    ),
+    "refuse",
+    "generic method_not_allowed JSON must not authorize deletion",
+  );
 });
 
 test("all nine are preflighted before the first delete and each recovery is verified before advancing", () => {
@@ -199,6 +210,10 @@ test("workflow is owner-dispatched from exact main and passes both confirmations
   assert.match(workflow, /RECREATE-STALE-BASE44-RELEASE-FUNCTIONS/);
   assert.match(workflow, /environment: fixlist-production-owner/);
   assert.match(workflow, /authenticate-base44-owner-session\.sh/);
+  const installAt = workflow.indexOf("Install exact frontend dependencies");
+  const loginAt = workflow.indexOf("Authenticate Base44 owner with ephemeral device code");
+  assert.ok(installAt >= 0 && loginAt >= 0);
+  assert.ok(installAt < loginAt, "npm ci must complete before the owner session is established");
   assert.match(workflow, /recover-base44-stale-release-functions\.sh/);
   assert.match(workflow, /rm -rf "\$HOME\/\.base44"/);
 });

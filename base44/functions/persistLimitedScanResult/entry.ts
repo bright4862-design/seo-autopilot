@@ -3,6 +3,7 @@ import { secrets } from "base44:runtime";
 import { verifyAuthoritySeal } from "./workerEnvelope.js";
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
+const BASE44_RUNTIME_ACTIVATION_ID = "limited-result-prod-reactivation-20260903-v1";
 import {
   buildLimitedResultSnapshot,
   createLimitedResultProof,
@@ -51,7 +52,7 @@ class RequestProblem extends Error {
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") {
-    return Response.json({ success: false, error_code: "method_not_allowed", error: "Use POST to persist a limited scan result.", build_id: FUNCTION_BUILD_ID }, { status: 405 });
+    return Response.json({ success: false, error_code: "method_not_allowed", error: "Use POST to persist a limited scan result.", build_id: FUNCTION_BUILD_ID, runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID }, { status: 405 });
   }
 
   try {

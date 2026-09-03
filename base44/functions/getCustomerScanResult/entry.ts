@@ -30,6 +30,7 @@ const ACCEPTED_LIMITED_INTEGRITY_VERSIONS = new Set([
 ]);
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
+const BASE44_RUNTIME_ACTIVATION_ID = "customer-result-prod-reactivation-20260903-v1";
 import { isReadableAuthorityReleaseFingerprint } from "./releaseCompatibility.js";
 const BASE44_HANDLER_RELEASE_FINGERPRINT = "68a16802a9c7a543";
 const MAX_FIX_ITEMS = 100;
@@ -61,7 +62,7 @@ class RequestProblem extends Error {
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") {
-    return Response.json({ success: false, error_code: "method_not_allowed", error: "Use POST to load a saved scan.", build_id: FUNCTION_BUILD_ID }, { status: 405 });
+    return Response.json({ success: false, error_code: "method_not_allowed", error: "Use POST to load a saved scan.", build_id: FUNCTION_BUILD_ID, runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID }, { status: 405 });
   }
 
   try {

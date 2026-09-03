@@ -127,3 +127,22 @@ test("status reads the admission coordinator's own logs, not only the worker's",
     "both coordinator reads must be non-fatal so status still reports the rest",
   );
 });
+
+test("every status log read is bounded to a recent window, not the oldest entries", () => {
+  // gcloud does not apply --freshness when entries are ordered ascending: the
+  // read returns the OLDEST matching entries. On 2026-09-03 that made a live
+  // status read report coordinator activity from 2026-08-15 while an operator
+  // waited on the last half hour -- the log was readable and still answered the
+  // wrong question.
+  assert.doesNotMatch(
+    source.replace(/^\s*#.*$/gm, ""),
+    /--freshness/,
+    "no log read may rely on --freshness while ordering ascending",
+  );
+  const reads = source.match(/gcloud logging read[\s\S]*?--format=/g) || [];
+  assert.ok(reads.length >= 4, "expected the worker and coordinator log reads");
+  for (const read of reads) {
+    assert.match(read, /timestamp>=\\"\$log_since\\"/, "each read must bound its own window");
+  }
+  assert.match(source, /log_since="\$\(date -u -d '-30 minutes'/, "the window must be computed once");
+});

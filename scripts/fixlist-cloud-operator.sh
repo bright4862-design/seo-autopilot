@@ -185,6 +185,14 @@ show_status() {
   describe_or_explain "$STANDARD150_RECONCILER_JOB" \
     gcloud scheduler jobs describe "$STANDARD150_RECONCILER_JOB" --location="$GCP_REGION" --project="$GCP_PROJECT" --format='yaml(name,state,schedule,httpTarget.uri,httpTarget.oidcToken.serviceAccountEmail)'
 
+  # --freshness is not applied when entries are ordered ascending: the read
+  # returns the OLDEST matching entries instead of recent ones, so these reads
+  # were quietly reporting 2026-08-15 while an operator waited for the last
+  # half hour. An explicit timestamp predicate in the filter is unambiguous and
+  # keeps chronological order readable.
+  local log_since
+  log_since="$(date -u -d '-30 minutes' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-30M +%Y-%m-%dT%H:%M:%SZ)"
+
   # The admission coordinator decides whether a scan is claimed at all, so when
   # a customer is refused with "Scan admission is temporarily unavailable" the
   # reason exists only here. status read the worker and never the coordinator,
@@ -194,29 +202,29 @@ show_status() {
   echo
   echo "=== Recent admission coordinator logs ==="
   gcloud logging read \
-    "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"$ADMISSION_COORDINATOR_SERVICE\"" \
-    --project="$GCP_PROJECT" --freshness=30m --limit=100 --order=asc \
+    "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"$ADMISSION_COORDINATOR_SERVICE\" AND timestamp>=\"$log_since\"" \
+    --project="$GCP_PROJECT" --limit=100 --order=asc \
     --format='table(timestamp,severity,jsonPayload.event,jsonPayload.outcome,jsonPayload.error_code,jsonPayload.owner_user_id,jsonPayload.mode,jsonPayload.generation,textPayload)' || true
 
   echo
   echo "=== Recent admission coordinator requests ==="
   gcloud logging read \
-    "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"$ADMISSION_COORDINATOR_SERVICE\" AND logName:\"run.googleapis.com%2Frequests\"" \
-    --project="$GCP_PROJECT" --freshness=30m --limit=100 --order=asc \
+    "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"$ADMISSION_COORDINATOR_SERVICE\" AND logName:\"run.googleapis.com%2Frequests\" AND timestamp>=\"$log_since\"" \
+    --project="$GCP_PROJECT" --limit=100 --order=asc \
     --format='table(timestamp,httpRequest.requestUrl,httpRequest.requestMethod,httpRequest.status,httpRequest.latency)' || true
 
   echo
   echo "=== Recent worker structured logs ==="
   gcloud logging read \
-    'resource.type="cloud_run_revision" AND resource.labels.service_name="fixlist-standard150-worker"' \
-    --project="$GCP_PROJECT" --freshness=30m --limit=200 --order=asc \
+    "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"$CLOUD_RUN_SERVICE\" AND timestamp>=\"$log_since\"" \
+    --project="$GCP_PROJECT" --limit=200 --order=asc \
     --format='table(timestamp,resource.labels.revision_name,severity,jsonPayload.event,jsonPayload.scan_id,jsonPayload.attempt_count,jsonPayload.pages_found,jsonPayload.pages_crawled,textPayload)' || true
 
   echo
   echo "=== Recent worker requests ==="
   gcloud logging read \
-    'resource.type="cloud_run_revision" AND resource.labels.service_name="fixlist-standard150-worker" AND logName:"run.googleapis.com%2Frequests"' \
-    --project="$GCP_PROJECT" --freshness=30m --limit=100 --order=asc \
+    "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"$CLOUD_RUN_SERVICE\" AND logName:\"run.googleapis.com%2Frequests\" AND timestamp>=\"$log_since\"" \
+    --project="$GCP_PROJECT" --limit=100 --order=asc \
     --format='table(timestamp,resource.labels.revision_name,httpRequest.requestMethod,httpRequest.status,httpRequest.latency)' || true
 }
 

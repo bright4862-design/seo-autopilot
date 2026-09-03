@@ -7,6 +7,7 @@ const SCRIPT = "scripts/recover-base44-stale-release-functions.sh";
 const WORKFLOW = ".github/workflows/fixlist-base44-stale-function-recovery.yml";
 const recovery = fs.readFileSync(SCRIPT, "utf8");
 const workflow = fs.readFileSync(WORKFLOW, "utf8");
+const ownerDebugEntry = fs.readFileSync("base44/functions/ownerScanDebugControl/entry.ts", "utf8");
 
 function classify(name, status, body, buildId, expected) {
   const out = execFileSync(
@@ -34,6 +35,13 @@ function classify(name, status, body, buildId, expected) {
   );
   return out.trim();
 }
+
+
+test("owner debug GET exposes an explicit runtime activation marker with its build identity", () => {
+  assert.match(ownerDebugEntry, /const BASE44_RUNTIME_ACTIVATION_ID = "owner-debug-sandbox-activation-20260903-v1";/);
+  assert.match(ownerDebugEntry, /runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID/);
+  assert.match(ownerDebugEntry, /build_id: FUNCTION_BUILD_ID/);
+});
 
 test("stale recovery covers exactly the nine published release functions", () => {
   const list = recovery.match(/RECOVERY_FUNCTIONS=\(([^)]*)\)/s)[1]

@@ -25,6 +25,8 @@ const CROSS_RUNTIME_REL = "data/cross-runtime-release-components.json";
 const REVISION_RECORD = path.join(ROOT, REVISION_RECORD_REL);
 const CROSS_RUNTIME_INPUT = path.join(ROOT, CROSS_RUNTIME_REL);
 const HISTORICAL_COMPAT_REL = "base44/functions/getCustomerScanResult/releaseCompatibility.js";
+const HISTORICAL_COMPAT_ALIAS_REL = "base44/functions/getCustomerScanResultV2/releaseCompatibility.js";
+const HISTORICAL_COMPAT_RELS = new Set([HISTORICAL_COMPAT_REL, HISTORICAL_COMPAT_ALIAS_REL]);
 const HISTORICAL_COMPAT = path.join(ROOT, HISTORICAL_COMPAT_REL);
 const GENERATOR = path.join(ROOT, "scripts/generate_release_contracts.mjs");
 
@@ -85,7 +87,7 @@ test("old release fingerprints are isolated to the explicit historical reader re
     const rel = path.relative(ROOT, file).replaceAll("\\", "/");
     const text = fs.readFileSync(file, "utf8");
     for (const match of text.matchAll(/\b[0-9a-f]{16}\b/g)) {
-      if (match[0] !== current && rel !== HISTORICAL_COMPAT_REL) {
+      if (match[0] !== current && !HISTORICAL_COMPAT_RELS.has(rel)) {
         offenders.push(`${rel}: ${match[0]}`);
       }
     }
@@ -102,13 +104,14 @@ test("old release fingerprints are isolated to the explicit historical reader re
   assert.ok(historical.every((value) => value !== current), "current fingerprint belongs in the generated release contract, not historical registry");
   assert.match(compatibility, /HISTORICAL_READABLE_RELEASE_FINGERPRINTS/);
   assert.match(compatibility, /CUSTOMER_RESULT_READER_VERSION/);
+  assert.equal(fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_ALIAS_REL), "utf8"), compatibility, "V2 reader must mirror the canonical historical compatibility registry");
 });
 
 test("every ordinary runtime fingerprint carrier uses the recorded candidate fingerprint", () => {
   const current = readJson(REVISION_RECORD).fingerprint;
   const carriers = sourceFiles().filter((file) => {
     const rel = path.relative(ROOT, file).replaceAll("\\", "/");
-    return rel !== HISTORICAL_COMPAT_REL && /\b[0-9a-f]{16}\b/.test(fs.readFileSync(file, "utf8"));
+    return !HISTORICAL_COMPAT_RELS.has(rel) && /\b[0-9a-f]{16}\b/.test(fs.readFileSync(file, "utf8"));
   });
   assert.ok(carriers.length > 0, "no consumer carries a fingerprint at all");
   for (const file of carriers) {

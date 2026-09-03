@@ -230,7 +230,7 @@ async def read_scan_run(client: httpx.AsyncClient, scan_id: str) -> dict[str, An
     if not signing_key or not clean_scan_id:
         return None
     envelope = build_control_envelope("read", signing_key, scan_id=clean_scan_id)
-    response = await invoke_function(client, "durableScanWorkerControl", envelope, timeout=20.0)
+    response = await invoke_function(client, "durableScanWorkerControlV2", envelope, timeout=20.0)
     if response["status_code"] != 200 or response["body"].get("success") is not True:
         return None
     scan = response["body"].get("scanRun")
@@ -244,7 +244,7 @@ async def mark_scan_started(client: httpx.AsyncClient, scan: dict[str, Any]) -> 
     if not signing_key or not all(identity.values()):
         raise RuntimeError("Durable scan start signing is not configured.")
     envelope = build_control_envelope("start", signing_key, identity=identity)
-    response = await invoke_function(client, "durableScanWorkerControl", envelope, timeout=20.0)
+    response = await invoke_function(client, "durableScanWorkerControlV2", envelope, timeout=20.0)
     if response["status_code"] >= 300 or response["body"].get("success") is not True:
         raise RuntimeError("The durable scan start state could not be verified.")
     persisted = response["body"].get("scanRun")
@@ -309,7 +309,7 @@ async def reconcile_stale_scans(client: httpx.AsyncClient) -> dict[str, Any]:
     if not signing_key:
         raise RuntimeError("Durable reconciliation signing is not configured.")
     envelope = build_control_envelope("sweep", signing_key)
-    response = await invoke_function(client, "durableScanWorkerControl", envelope, timeout=60.0)
+    response = await invoke_function(client, "durableScanWorkerControlV2", envelope, timeout=60.0)
     if response["status_code"] >= 300 or response["body"].get("success") is not True:
         raise RuntimeError("Durable scan reconciliation could not be verified.")
     counts = response["body"].get("reconciliation")
@@ -361,7 +361,7 @@ async def write_terminal_failure(
         identity=identity,
         failure={"code": str(failure_code or "scan_failed"), "detail": str(detail or "")},
     )
-    response = await invoke_function(client, "durableScanWorkerControl", envelope, timeout=20.0)
+    response = await invoke_function(client, "durableScanWorkerControlV2", envelope, timeout=20.0)
     if response["status_code"] >= 300 or response["body"].get("success") is not True:
         raise RuntimeError("The durable failure state could not be verified.")
     return True
@@ -748,7 +748,7 @@ async def persist_limited_result(
         elapsed_ms=int((time.monotonic() - phase_started) * 1000),
         coverage_state=coverage_state_of(review),
     )
-    persisted = await invoke_function(client, "persistLimitedScanResult", envelope)
+    persisted = await invoke_function(client, "persistLimitedScanResultV2", envelope)
     status_code = int(persisted.get("status_code") or 0)
     emit(
         "scan_job_completion_phase",
@@ -956,7 +956,7 @@ async def complete_authority(
         archetype_classifier_version=diagnostic_classifier_marker(reviewed),
         beta_revision_fingerprint=diagnostic_fingerprint_marker(reviewed),
     )
-    persisted = await invoke_function(client, "persistDurableScanAuthority", envelope)
+    persisted = await invoke_function(client, "persistDurableScanAuthorityV2", envelope)
     emit(
         "scan_job_completion_phase",
         scan_id=scan_id,

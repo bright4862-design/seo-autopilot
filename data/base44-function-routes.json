@@ -1,0 +1,12 @@
+{
+  "schema_version": "base44_function_routes_v1",
+  "generation": "v2",
+  "routes": {
+    "startStandardScanJob": "startStandardScanJobV2",
+    "durableScanWorkerControl": "durableScanWorkerControlV2",
+    "persistDurableScanAuthority": "persistDurableScanAuthorityV2",
+    "persistLimitedScanResult": "persistLimitedScanResultV2",
+    "getCustomerScanResult": "getCustomerScanResultV2",
+    "deleteCustomerScanData": "deleteCustomerScanDataV2"
+  }
+}

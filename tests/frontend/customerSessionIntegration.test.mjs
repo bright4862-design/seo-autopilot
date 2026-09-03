@@ -45,7 +45,7 @@ test("refresh and browser history reopen only an exact owner-authorized server s
   assert.match(fixList, /searchParams\.get\("scan_id"\)/);
   assert.match(fixList, /getScanRunWithFixList\(requestedScanId\)/);
   assert.doesNotMatch(fixList, /latest local|readBestScanRecord|loaded_local/);
-  assert.match(scanRuns, /base44\.functions\.invoke\("getCustomerScanResult"/);
+  assert.match(scanRuns, /base44\.functions\.invoke\("getCustomerScanResultV2"/);
   assert.doesNotMatch(scanRuns.match(/export async function getScanRunWithFixList[\s\S]*?\n\}/)?.[0] || "", /entities\.(?:FixList|FixItem)/);
   assert.match(customerResult, /const exactOwner = cleanId\(run\?\.owner_user_id\) === cleanId\(user\.id\)/);
   assert.match(customerResult, /\(!exactOwner && !legacyOwner\)/);

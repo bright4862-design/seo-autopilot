@@ -226,7 +226,7 @@ async def test_reconcile_client_preserves_every_safe_durable_counter(monkeypatch
     monkeypatch.setenv("SCAN_EVIDENCE_SIGNING_KEY", "test-signing-key")
 
     async def invoke(_client, function_name, _payload, *, timeout):
-        assert function_name == "durableScanWorkerControl"
+        assert function_name == "durableScanWorkerControlV2"
         assert timeout <= 60.0
         return {
             "status_code": 200,

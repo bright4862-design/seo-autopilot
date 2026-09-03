@@ -122,7 +122,7 @@ test("the page cap is 150 and is not customer-controlled", () => {
 });
 
 test("the customer scan is routed through the Standard 150 server admission dispatcher", () => {
-  assert.match(scanFormSource, /const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJob"/);
+  assert.match(scanFormSource, /const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV2"/);
   assert.match(scanFormSource, /submitStandardScanJob\(scanPayload\)/);
   assert.match(scanFormSource, /require_python_scanner: true/);
   assert.match(scanFormSource, /allow_deno_fallback: false/);

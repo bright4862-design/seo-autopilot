@@ -170,7 +170,7 @@ test("customer results cross one server projection and authority rows are admin-
   assert.ok(entry.indexOf("evaluatePaidAccess") < entry.indexOf("serviceEntities.FixItem"));
 
   const reopen = scanRuns.match(/export async function getScanRunWithFixList[\s\S]*?\n\}/)?.[0] || "";
-  assert.match(reopen, /base44\.functions\.invoke\("getCustomerScanResult"/);
+  assert.match(reopen, /base44\.functions\.invoke\("getCustomerScanResultV2"/);
   assert.doesNotMatch(reopen, /entities\.(?:FixList|FixItem)/);
 
   for (const schema of [fixListSchema, fixItemSchema]) {

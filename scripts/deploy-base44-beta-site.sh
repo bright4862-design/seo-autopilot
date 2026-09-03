@@ -34,14 +34,14 @@ VITE_FIXLIST_SOURCE_SHA="$SOURCE_SHA" npm run build
 # afterwards using the SAME authenticated CLI session so a second interactive
 # login can never strand production with the older site-snapshot inventory.
 FUNCTIONS=(
-  startStandardScanJob
-  durableScanWorkerControl
-  persistDurableScanAuthority
-  persistLimitedScanResult
-  getCustomerScanResult
+  startStandardScanJobV2
+  durableScanWorkerControlV2
+  persistDurableScanAuthorityV2
+  persistLimitedScanResultV2
+  getCustomerScanResultV2
+  deleteCustomerScanDataV2
   createAccessCheckout
   stripeWebhook
-  deleteCustomerScanData
   ownerScanDebugControl
 )
 DEPLOY_STATUS=0
@@ -54,14 +54,14 @@ fi
 INVENTORY="$($FIXLIST_BASE44_CLI --app-id "$APP_ID" functions list 2>&1)"
 printf '%s\n' "$INVENTORY"
 for required in \
-  startStandardScanJob \
-  durableScanWorkerControl \
-  persistDurableScanAuthority \
-  persistLimitedScanResult \
-  getCustomerScanResult \
+  startStandardScanJobV2 \
+  durableScanWorkerControlV2 \
+  persistDurableScanAuthorityV2 \
+  persistLimitedScanResultV2 \
+  getCustomerScanResultV2 \
+  deleteCustomerScanDataV2 \
   createAccessCheckout \
   stripeWebhook \
-  deleteCustomerScanData \
   ownerScanDebugControl
 do
   grep -Eq "(^|[[:space:]])${required}([[:space:]]|$)" <<<"$INVENTORY" || {

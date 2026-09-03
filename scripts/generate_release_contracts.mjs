@@ -43,6 +43,11 @@ const CONSUMERS = [
   "base44/functions/durableScanWorkerControl/generatedReleaseContract.js",
   "base44/functions/ownerScanDebugControl/generatedReleaseContract.js",
   "base44/functions/getCustomerScanResult/generatedReleaseContract.js",
+  "base44/functions/persistDurableScanAuthorityV2/generatedReleaseContract.js",
+  "base44/functions/persistLimitedScanResultV2/generatedReleaseContract.js",
+  "base44/functions/startStandardScanJobV2/generatedReleaseContract.js",
+  "base44/functions/durableScanWorkerControlV2/generatedReleaseContract.js",
+  "base44/functions/getCustomerScanResultV2/generatedReleaseContract.js",
   // Not in RELEASE_FUNCTIONS and not reachable from the live app, but they must
   // not be able to ship a stale marker if they are ever republished.
   "base44/functions/aiReviewScan/generatedReleaseContract.js",
@@ -61,6 +66,11 @@ const ENTRY_IDENTITY_CONSUMERS = [
   "base44/functions/startStandardScanJob/entry.ts",
   "base44/functions/durableScanWorkerControl/entry.ts",
   "base44/functions/getCustomerScanResult/entry.ts",
+  "base44/functions/persistDurableScanAuthorityV2/entry.ts",
+  "base44/functions/persistLimitedScanResultV2/entry.ts",
+  "base44/functions/startStandardScanJobV2/entry.ts",
+  "base44/functions/durableScanWorkerControlV2/entry.ts",
+  "base44/functions/getCustomerScanResultV2/entry.ts",
   "base44/functions/ownerScanDebugControl/entry.ts",
   "base44/functions/aiReviewScan/entry.ts",
 ];

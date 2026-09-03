@@ -225,6 +225,18 @@ verify_iam() {
     --format=yaml
 }
 
+# Which Base44 functions the worker source at a given commit posts to. Read out
+# of the source rather than kept as a list here, so this cannot drift from the
+# cutover it exists to police. Prints one name per line, sorted.
+base44_routes_called() {
+  local ref="$1"
+  git -C "$REPO_ROOT" show "${ref}:scanner-api/app/scan_job.py" 2>/dev/null \
+    | grep -oE 'invoke_function\([[:space:]]*client,[[:space:]]*"[A-Za-z0-9_]+"' \
+    | grep -oE '"[A-Za-z0-9_]+"' \
+    | tr -d '"' \
+    | sort -u
+}
+
 # The durable pipeline sends every Cloud Task to POST /scan-job and the
 # watchdog to POST /scan-job-drain. Those routes exist only in builds that
 # contain scanner-api/app/scan_job.py. A worker built from older source without
@@ -234,6 +246,7 @@ verify_iam() {
 # only external proof is the image's build provenance.
 verify_worker_routes() {
   local revision image digest timeout release_sha verdict=0
+  local want_routes got_routes
   revision="${TARGET_REVISION:-$(gcloud run services describe "$CLOUD_RUN_SERVICE" \
     --region="$GCP_REGION" --project="$GCP_PROJECT" \
     --format='value(status.latestReadyRevisionName)')}"
@@ -300,6 +313,32 @@ for b in builds:
       echo "Every Cloud Task would 404, and the drain watchdog would 404 too,"
       echo "so runs would never reach a terminal state. Rebuild the worker from"
       echo "cloudbuild.durable-worker.yaml at current main before promoting."
+      verdict=1
+    fi
+
+    # The 2026-09-03 cutover moved the browser and the worker onto the V2 Base44
+    # function names. An image built before it still posts to the legacy names,
+    # which Base44 serves from an older compiled handler -- so a scan would be
+    # accepted, persist nothing, and never reach a terminal state. Publishing
+    # Base44 does not move the worker, so provenance is the only place to catch
+    # this before traffic moves.
+    echo
+    echo "=== Base44 route generation ==="
+    want_routes="$(base44_routes_called HEAD)"
+    got_routes="$(base44_routes_called "$release_sha")"
+    printf 'release source calls: %s\n' "$(echo "$want_routes" | tr '\n' ' ')"
+    printf 'running image calls:  %s\n' "$(echo "$got_routes" | tr '\n' ' ')"
+    if [ -z "$want_routes" ]; then
+      echo "FAIL: the release source declares no Base44 worker routes, so there is"
+      echo "nothing to compare the running image against."
+      verdict=1
+    elif [ "$want_routes" = "$got_routes" ]; then
+      echo "PASS"
+    else
+      echo "FAIL: the running worker calls a different Base44 route generation than"
+      echo "this release source. Every scan would be accepted and then persist"
+      echo "nothing. Rebuild the worker from cloudbuild.durable-worker.yaml at"
+      echo "current main and promote that revision before opening intake."
       verdict=1
     fi
   fi

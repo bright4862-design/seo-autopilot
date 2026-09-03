@@ -7,7 +7,11 @@ set -euo pipefail
 
 APP_ID="${BASE44_APP_ID:-6a498732ec779dfaaeab0e53}"
 PROBE_ORIGIN="${BASE44_FUNCTION_ORIGIN:-https://base44.app}"
-PROBE_ATTEMPTS="${PROBE_ATTEMPTS:-6}"
+# A route that has never been compiled under this name can take longer to
+# activate than one Base44 has served before, and the probe is fail-closed:
+# waiting longer can only avoid a false NO-GO, never manufacture a pass. The
+# loop exits on the first mismatch, so the worst case is one function.
+PROBE_ATTEMPTS="${PROBE_ATTEMPTS:-12}"
 PROBE_DELAY_SECONDS="${PROBE_DELAY_SECONDS:-5}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 

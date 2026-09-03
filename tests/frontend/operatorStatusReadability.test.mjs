@@ -95,3 +95,35 @@ test("status authenticates as the identity that can actually read every resource
   assert.ok(mintLine, "coordinator token-mint guard is missing");
   assert.ok(!mintLine.includes('"status"'), "status must not mint a coordinator identity token");
 });
+
+test("status reads the admission coordinator's own logs, not only the worker's", () => {
+  // The coordinator decides admission. When it refuses, the browser shows one
+  // deliberately vague message ("Scan admission is temporarily unavailable")
+  // for admission_unreachable, a rejected signature, and an unexpected upstream
+  // code alike -- so the coordinator's log is the only place the actual reason
+  // exists. On 2026-09-03 a refused Funbooker scan could not be diagnosed at
+  // all: status read the worker service and never the coordinator.
+  const reads = [...source.matchAll(/gcloud logging read/g)];
+  assert.ok(reads.length >= 4, "status must read both worker and coordinator logs");
+
+  assert.match(
+    source,
+    /service_name=\\"\$ADMISSION_COORDINATOR_SERVICE\\"/,
+    "the coordinator's structured logs must be read by service name",
+  );
+  assert.match(
+    source,
+    /ADMISSION_COORDINATOR_SERVICE[\s\S]*?run\.googleapis\.com%2Frequests/,
+    "the coordinator's request log must be read too, so a rejection's status code is visible",
+  );
+  // A refusal reason is useless if the read aborts the whole status operation.
+  const coordinatorBlock = source.slice(
+    source.indexOf("=== Recent admission coordinator logs ==="),
+    source.indexOf("=== Recent worker structured logs ==="),
+  );
+  assert.equal(
+    (coordinatorBlock.match(/\|\| true/g) || []).length,
+    2,
+    "both coordinator reads must be non-fatal so status still reports the rest",
+  );
+});

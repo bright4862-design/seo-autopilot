@@ -185,6 +185,26 @@ show_status() {
   describe_or_explain "$STANDARD150_RECONCILER_JOB" \
     gcloud scheduler jobs describe "$STANDARD150_RECONCILER_JOB" --location="$GCP_REGION" --project="$GCP_PROJECT" --format='yaml(name,state,schedule,httpTarget.uri,httpTarget.oidcToken.serviceAccountEmail)'
 
+  # The admission coordinator decides whether a scan is claimed at all, so when
+  # a customer is refused with "Scan admission is temporarily unavailable" the
+  # reason exists only here. status read the worker and never the coordinator,
+  # which left every such refusal undiagnosable from CI: the browser shows one
+  # deliberately vague message for admission_unreachable, an unexpected upstream
+  # code, and a rejected signature alike.
+  echo
+  echo "=== Recent admission coordinator logs ==="
+  gcloud logging read \
+    "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"$ADMISSION_COORDINATOR_SERVICE\"" \
+    --project="$GCP_PROJECT" --freshness=30m --limit=100 --order=asc \
+    --format='table(timestamp,severity,jsonPayload.event,jsonPayload.outcome,jsonPayload.error_code,jsonPayload.owner_user_id,jsonPayload.mode,jsonPayload.generation,textPayload)' || true
+
+  echo
+  echo "=== Recent admission coordinator requests ==="
+  gcloud logging read \
+    "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"$ADMISSION_COORDINATOR_SERVICE\" AND logName:\"run.googleapis.com%2Frequests\"" \
+    --project="$GCP_PROJECT" --freshness=30m --limit=100 --order=asc \
+    --format='table(timestamp,httpRequest.requestUrl,httpRequest.requestMethod,httpRequest.status,httpRequest.latency)' || true
+
   echo
   echo "=== Recent worker structured logs ==="
   gcloud logging read \

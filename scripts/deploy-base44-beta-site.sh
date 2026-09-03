@@ -44,8 +44,12 @@ FUNCTIONS=(
   deleteCustomerScanData
   ownerScanDebugControl
 )
-DEPLOY_REPORT="$("$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions deploy "${FUNCTIONS[@]}" 2>&1)"
+DEPLOY_STATUS=0
+DEPLOY_REPORT="$("$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions deploy "${FUNCTIONS[@]}" 2>&1)" || DEPLOY_STATUS=$?
 printf '%s\n' "$DEPLOY_REPORT"
+if (( DEPLOY_STATUS != 0 )); then
+  exit "$DEPLOY_STATUS"
+fi
 
 INVENTORY="$($FIXLIST_BASE44_CLI --app-id "$APP_ID" functions list 2>&1)"
 printf '%s\n' "$INVENTORY"

@@ -13,6 +13,7 @@ import { persistExactRelease } from "./admissionRelease.js";
 // active fingerprint here guarantees every fingerprint move changes the bytes
 // Base44 recompiles. scripts/generate_release_contracts.mjs maintains it.
 const BASE44_HANDLER_RELEASE_FINGERPRINT = "68a16802a9c7a543";
+const BASE44_RUNTIME_ACTIVATION_ID = "owner-debug-sandbox-activation-20260903-v1";
 
 const OWNER_EMAIL = "bright4862@gmail.com";
 const OWNER_USER_ID = "6a498da58ef5cec1f5cd4486";
@@ -34,7 +35,7 @@ class RequestProblem extends Error {
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") {
-    return Response.json({ success: false, error_code: "method_not_allowed", error: "Use POST for owner scan controls.", build_id: FUNCTION_BUILD_ID }, { status: 405 });
+    return Response.json({ success: false, error_code: "method_not_allowed", error: "Use POST for owner scan controls.", build_id: FUNCTION_BUILD_ID, runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID }, { status: 405 });
   }
 
   try {

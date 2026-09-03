@@ -131,9 +131,15 @@ test("only the proven live stale signatures are eligible for deletion", () => {
   );
 });
 
-test("each stale function is delete-recreated one at a time and verified before advancing", () => {
+test("all nine are preflighted before the first delete and each recovery is verified before advancing", () => {
   assert.match(recovery, /^set -euo pipefail$/m);
   assert.doesNotMatch(recovery, /set \+e/);
+
+  const preflight = recovery.match(/require_recoverable_prestate\(\) \{([\s\S]*?)\n\}/)[1];
+  assert.match(preflight, /valid_build_id "\$expected"/);
+  assert.match(preflight, /probe_route "\$name"/);
+  assert.match(preflight, /route_is_known_stale_handler "\$name"/);
+
   const recoverOne = recovery.match(/recover_one\(\) \{([\s\S]*?)\n\}/)[1];
   const validateAt = recoverOne.indexOf('valid_build_id "$expected"');
   const probeAt = recoverOne.indexOf('probe_route "$name"');
@@ -145,9 +151,16 @@ test("each stale function is delete-recreated one at a time and verified before 
   assert.ok(deleteAt > probeAt);
   assert.ok(deployAt > deleteAt);
   assert.ok(verifyAt > deployAt);
+
+  const preflightBannerAt = recovery.indexOf("BASE44_STALE_RECOVERY_PREFLIGHT_VERIFIED");
+  const firstDeleteAt = recovery.indexOf('functions delete "$name"');
+  assert.ok(preflightBannerAt >= 0);
+  assert.ok(preflightBannerAt < firstDeleteAt, "all-nine preflight must complete before any delete path is reachable");
+
   const loops = [...recovery.matchAll(/for fn in "\$\{RECOVERY_FUNCTIONS\[@\]\}"; do\n([\s\S]*?)\ndone/g)];
-  assert.ok(loops.length >= 2, "expected preflight/final loops plus the recovery driver");
+  const preflightLoop = loops.find((match) => match[1].trim() === 'require_recoverable_prestate "$fn"');
   const recoveryLoop = loops.find((match) => match[1].trim() === 'recover_one "$fn"');
+  assert.ok(preflightLoop, "the driver must preflight every release function");
   assert.ok(recoveryLoop, "the recovery driver must call recover_one bare under set -e");
 });
 

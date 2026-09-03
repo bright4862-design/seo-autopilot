@@ -139,7 +139,7 @@ async def test_completion_envelope_carries_measured_classification_and_memory(mo
     )
 
     assert outcome["ok"] is True
-    assert captured["function"] == "persistDurableScanAuthority"
+    assert captured["function"] == "persistDurableScanAuthorityV2"
     assert captured["envelope"]["scan"]["peak_memory_bytes"] == 268_435_456
     assert captured["envelope"]["scan"]["worker_peak_memory_bytes"] == 268_435_456
     assert captured["envelope"]["review"]["classification_verdict"] == "classified"
@@ -223,7 +223,7 @@ async def test_limited_envelope_carries_the_same_measured_acceptance_evidence(mo
 
     assert outcome["ok"] is True
     assert outcome["limited"] is True
-    assert captured["function"] == "persistLimitedScanResult"
+    assert captured["function"] == "persistLimitedScanResultV2"
     assert captured["envelope"]["scan"]["worker_peak_memory_bytes"] == 201_326_592
     assert captured["envelope"]["review"]["coverage_authority_evidence"]["assessment"] == "insufficient_sample"
     assert captured["envelope"]["review"]["classification_verdict"] == "classified"

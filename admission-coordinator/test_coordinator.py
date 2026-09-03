@@ -460,9 +460,27 @@ class AuthenticationRejectionLogging(CoordinatorTestCase):
         self.assertGreater(entry["body_bytes"], 0)
 
     def test_operator_leg_is_named_separately_from_the_base44_leg(self):
-        _response, entry = self.rejecting(
-            lambda: self.operator_post("/ops/barrier/status", {}, root="wrong-operator-root")
-        )
+        # The operator leg is only reached once the Google identity check passes,
+        # and the module reads its audience and service account from the ambient
+        # environment via setdefault. A runner that already exports either of
+        # them -- the release workflow exports the audience -- leaves the module
+        # holding one value while this file's constants hold another, and the
+        # request is refused at the identity check before the HMAC layer under
+        # test runs at all. Binding the claims to whatever the module actually
+        # loaded makes the test assert on the signature boundary either way.
+        verifier = main.OPERATOR_TOKEN_VERIFIER
+        main.OPERATOR_TOKEN_VERIFIER = lambda _token, _audience: {
+            "iss": "https://accounts.google.com",
+            "aud": main.OPERATOR_AUDIENCE,
+            "email": main.OPERATOR_SERVICE_ACCOUNT,
+            "email_verified": True,
+        }
+        try:
+            _response, entry = self.rejecting(
+                lambda: self.operator_post("/ops/barrier/status", {}, root="wrong-operator-root")
+            )
+        finally:
+            main.OPERATOR_TOKEN_VERIFIER = verifier
         self.assertEqual(entry["reason"], "invalid_signature")
         self.assertEqual(entry["auth_label"], "fixlist-admission-operator-v1")
 

@@ -136,11 +136,12 @@ function writeFunctionBuildIds({ check = false } = {}) {
     }
     const relative = `base44/functions/${fnName}/${FUNCTION_BUILD_ID_FILE}`;
     const target = path.join(ROOT, relative);
-    const expected = functionBuildIdSource(fnName, computeFunctionBuildId(fnName));
+    const buildId = computeFunctionBuildId(fnName);
+    const expected = functionBuildIdSource(fnName, buildId);
     const current = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
     if (current === expected) continue;
     if (check) {
-      drifted.push(relative);
+      drifted.push(`${relative} expected_build_id=${buildId}`);
       continue;
     }
     fs.writeFileSync(target, expected);

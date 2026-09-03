@@ -77,6 +77,10 @@ expected_build_id() {
   node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --build-id "$1"
 }
 
+valid_build_id() {
+  [[ "$1" =~ ^[0-9a-f]{64}$ ]]
+}
+
 probe_route() {
   local name="$1" body_file status
   body_file="$(mktemp)"
@@ -156,6 +160,10 @@ require_expected_build() {
 recover_one() {
   local name="$1" expected inventory
   expected="$(expected_build_id "$name")"
+  if ! valid_build_id "$expected"; then
+    echo "Refusing recovery for $name: expected build id is not a 64-hex digest." >&2
+    return 1
+  fi
 
   printf '\n--- %s ---\n' "$name"
   probe_route "$name"
@@ -232,6 +240,10 @@ done
 
 for fn in "${RECOVERY_FUNCTIONS[@]}"; do
   expected="$(expected_build_id "$fn")"
+  if ! valid_build_id "$expected"; then
+    echo "Refusing final verification: expected build id for $fn is not a 64-hex digest." >&2
+    exit 1
+  fi
   require_expected_build "$fn" "$expected"
 done
 

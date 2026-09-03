@@ -146,3 +146,29 @@ test("every status log read is bounded to a recent window, not the oldest entrie
   }
   assert.match(source, /log_since="\$\(date -u -d '-30 minutes'/, "the window must be computed once");
 });
+
+test("status reports whether the coordinator can be reached at all", () => {
+  // On 2026-09-03 every customer scan died with a 401 in ~3ms and no coordinator
+  // application log, because run.invoker was held only by the admission operator
+  // and Base44 -- which signs claims with an HMAC and holds no Google
+  // credentials by design -- had no principal it could present. Every other
+  // status field showed a healthy coordinator: correct revision, 100% traffic,
+  // operator calls returning 200. Reachability is the one thing that decides
+  // whether a customer scan can start, and status did not report it.
+  const block = source.slice(
+    source.indexOf("=== Admission coordinator reachability ==="),
+    source.indexOf("=== Reconciler ==="),
+  );
+  assert.ok(block.length > 0, "status must report coordinator reachability");
+  assert.match(block, /run\.googleapis\.com\/ingress/, "ingress must be reported");
+  assert.match(block, /get-iam-policy "\$ADMISSION_COORDINATOR_SERVICE"/, "the invoker policy must be reported");
+
+  // Both reads go through the classifier, so a denied read can never be
+  // mistaken for an absent setting -- the same failure that made a live status
+  // read announce not_deployed= for a queue the operator simply could not see.
+  assert.equal(
+    (block.match(/describe_or_explain/g) || []).length,
+    2,
+    "both reachability reads must classify a denied read rather than reporting absence",
+  );
+});

@@ -180,6 +180,26 @@ show_status() {
   describe_or_explain "$ADMISSION_COORDINATOR_SERVICE" \
     gcloud run services describe "$ADMISSION_COORDINATOR_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT" --format='yaml(metadata.name,status.url,status.latestReadyRevisionName,status.traffic)'
 
+  # A 401 returned in single-digit milliseconds with no application log entry is
+  # Cloud Run refusing a request before the container runs, and the two settings
+  # that cause it appear in no other status field: who holds run.invoker, and
+  # whether ingress admits an external caller at all. Base44 authenticates its
+  # claims with an HMAC envelope and holds no Google credentials by design, so
+  # if neither allUsers nor a principal it can present is an invoker, every
+  # customer scan dies at the door while operator calls carrying a minted ID
+  # token still succeed -- which reads as a healthy coordinator everywhere else.
+  # An empty ingress value is Cloud Run's default, "all".
+  echo
+  echo "=== Admission coordinator reachability ==="
+  printf 'ingress: '
+  describe_or_explain "${ADMISSION_COORDINATOR_SERVICE}-ingress" \
+    gcloud run services describe "$ADMISSION_COORDINATOR_SERVICE" \
+      --region="$GCP_REGION" --project="$GCP_PROJECT" \
+      --format="value(metadata.annotations['run.googleapis.com/ingress'])"
+  describe_or_explain "${ADMISSION_COORDINATOR_SERVICE}-invoker" \
+    gcloud run services get-iam-policy "$ADMISSION_COORDINATOR_SERVICE" \
+      --region="$GCP_REGION" --project="$GCP_PROJECT" --format='yaml(bindings)'
+
   echo
   echo "=== Reconciler ==="
   describe_or_explain "$STANDARD150_RECONCILER_JOB" \

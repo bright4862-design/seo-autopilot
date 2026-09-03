@@ -29,6 +29,7 @@ const ACCEPTED_LIMITED_INTEGRITY_VERSIONS = new Set([
   "standard_limited_result_integrity_v4_focused_scope_effective_path",
 ]);
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
+import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
 import { isReadableAuthorityReleaseFingerprint } from "./releaseCompatibility.js";
 const BASE44_HANDLER_RELEASE_FINGERPRINT = "68a16802a9c7a543";
 const MAX_FIX_ITEMS = 100;
@@ -60,7 +61,7 @@ class RequestProblem extends Error {
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") {
-    return problemResponse(new RequestProblem(405, "method_not_allowed", "Use POST to load a saved scan."));
+    return Response.json({ success: false, error_code: "method_not_allowed", error: "Use POST to load a saved scan.", build_id: FUNCTION_BUILD_ID }, { status: 405 });
   }
 
   try {

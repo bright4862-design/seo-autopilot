@@ -20,6 +20,7 @@ import {
 } from "./admissionClient.js";
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
+const BASE44_RUNTIME_ACTIVATION_ID = "start-standard-prod-reactivation-20260903-v1";
 
 const CORS_HEADERS = Object.freeze({
   "Access-Control-Allow-Origin": "*",
@@ -102,7 +103,7 @@ const CUSTOMER_STATUS_DETAIL: Record<string, string> = {
 export default async function (req: Request): Promise<Response> {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders() });
   if (req.method !== "POST") {
-    return jsonResponse({ success: false, version: VERSION, build_id: FUNCTION_BUILD_ID, error: "Method not allowed." }, 405);
+    return jsonResponse({ success: false, version: VERSION, build_id: FUNCTION_BUILD_ID, runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID, error: "Method not allowed." }, 405);
   }
   if (RELEASE_FINGERPRINT !== BASE44_HANDLER_RELEASE_FINGERPRINT) {
     return jsonResponse({ success: false, version: VERSION, error: "The scan service release is not active." }, 503);

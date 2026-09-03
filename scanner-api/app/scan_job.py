@@ -303,6 +303,20 @@ async def worker_liveness_heartbeat(
             await task
 
 
+def bounded_upstream_code(value: Any) -> str:
+    """Clamp an upstream error code before it reaches a log line.
+
+    The value crosses a trust boundary, so it is bounded to the identifier shape
+    the control function actually emits. Anything else is recorded as its shape
+    rather than its content, which keeps an unexpected upstream body out of the
+    log without turning it into a blind spot.
+    """
+    code = str(value or "").strip()
+    if re.fullmatch(r"[a-z0-9_]{1,64}", code):
+        return code
+    return "unrecognized" if code else "absent"
+
+
 async def reconcile_stale_scans(client: httpx.AsyncClient) -> dict[str, Any]:
     """Run one signed, parameter-free stale-scan reconciliation sweep."""
     signing_key = str(os.getenv("SCAN_EVIDENCE_SIGNING_KEY") or "")
@@ -311,6 +325,17 @@ async def reconcile_stale_scans(client: httpx.AsyncClient) -> dict[str, Any]:
     envelope = build_control_envelope("sweep", signing_key)
     response = await invoke_function(client, "durableScanWorkerControlV2", envelope, timeout=60.0)
     if response["status_code"] >= 300 or response["body"].get("success") is not True:
+        # The sweep's first act is a coordinator call, made before a single scan
+        # row is read, so a rejected signing root, a missing release identity and
+        # a failed candidate query all reach this line as one opaque 503. The
+        # code the control function actually returned is what separates them,
+        # and discarding it here is what made these sweeps unexplainable.
+        emit(
+            "scan_reconcile_rejected",
+            severity="WARNING",
+            status_code=response["status_code"],
+            upstream_error_code=bounded_upstream_code(response["body"].get("error_code")),
+        )
         raise RuntimeError("Durable scan reconciliation could not be verified.")
     counts = response["body"].get("reconciliation")
     if not isinstance(counts, dict):

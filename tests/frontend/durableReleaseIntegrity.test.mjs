@@ -693,3 +693,61 @@ test("the Base44 CLI is pinned and digest-verified before it handles the signing
   assert.ok(loginAt < readAt,
     "Base44 login must happen before the signing key is read from Secret Manager");
 });
+
+// The Base44 leg of admission signs with SCAN_EVIDENCE_SIGNING_KEY, and Base44
+// receives that key through an env file. Cloud Run hands the worker and the
+// coordinator the secret payload verbatim, trailing newline included, but
+// `KEY=<payload>\n` and `KEY=<payload>` parse to the same string, so an env file
+// cannot carry one. A payload with surrounding whitespace therefore gives Base44
+// a different signing root than Cloud Run holds; every admission call 401s with
+// invalid_signature while the sync still prints KEY_SYNC_COMPLETE over the top.
+test("the signing-key sync refuses a payload the env file cannot carry", () => {
+  const sync = fs.readFileSync("scripts/sync-base44-signing-key.sh", "utf8");
+
+  const guard = sync.match(
+    /echo "\[6\/8\] Verifying the secret can survive the env-file round trip\.\.\."[\s\S]*?\nfi\n/,
+  );
+  assert.ok(guard, "the env-file round-trip guard is missing from the sync script");
+
+  // A guard that runs after the env file is written would not stop the bad
+  // value being sent, so ordering is part of the contract.
+  assert.ok(
+    sync.indexOf(guard[0]) < sync.indexOf('} > "$TMP/base44.env"'),
+    "the round-trip guard must run before the env file is written",
+  );
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fixlist-key-shape-"));
+  const check = (bytes) => {
+    fs.writeFileSync(path.join(dir, "signing-key"), bytes);
+    return spawnSync(
+      "bash",
+      [
+        "-c",
+        `set -euo pipefail\nTMP="${dir}"\nSIGNING_SECRET=SCAN_EVIDENCE_SIGNING_KEY\nPROJECT=p\nWORKER=w\n${guard[0]}`,
+      ],
+      { encoding: "utf8" },
+    );
+  };
+
+  const clean = check("0123456789abcdef");
+  assert.equal(clean.status, 0, `a whitespace-free payload must pass: ${clean.stderr}`);
+
+  for (const [label, bytes] of [
+    ["a trailing newline", "0123456789abcdef\n"],
+    ["a leading space", " 0123456789abcdef"],
+    ["trailing whitespace", "0123456789abcdef \t"],
+  ]) {
+    const rejected = check(bytes);
+    assert.equal(rejected.status, 1, `${label} must fail the sync closed`);
+    assert.match(rejected.stderr, /surrounding whitespace/, `${label} must say why`);
+    // The operator has to be told the repair spans all three consumers, or
+    // repointing one of them silently splits the signing root instead.
+    assert.match(rejected.stderr, /versions add/, `${label} must name the repair`);
+
+    // Diagnosing a secret must never print it.
+    const output = `${rejected.stdout}${rejected.stderr}`;
+    assert.doesNotMatch(output, /0123456789abcdef/, `${label} must not echo the payload`);
+  }
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});

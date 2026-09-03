@@ -1,5 +1,6 @@
 """Queue-safe worker lifecycle regression tests."""
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -275,3 +276,52 @@ async def test_reconcile_route_fails_transiently_when_base44_sweep_is_unavailabl
     with pytest.raises(HTTPException) as exc:
         await main.scan_reconcile(authorization="test")
     assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        ({"success": False, "error_code": "worker_reconciliation_tracking_failed"},
+         "worker_reconciliation_tracking_failed"),
+        ({"success": False, "error_code": "worker_reconciliation_source_invalid"},
+         "worker_reconciliation_source_invalid"),
+        ({"success": False, "error_code": "worker_reconciliation_query_failed"},
+         "worker_reconciliation_query_failed"),
+        ({"success": False}, "absent"),
+        ({"success": False, "error_code": "Not an identifier!"}, "unrecognized"),
+        ({"success": False, "error_code": "x" * 200}, "unrecognized"),
+    ],
+)
+async def test_reconcile_records_the_code_base44_actually_returned(monkeypatch, capsys, body, expected):
+    """A rejected sweep must name its upstream cause.
+
+    The sweep's first act is a coordinator call, made before any scan row is
+    read, so a rejected signing root, a missing release identity and a failed
+    candidate query all reach the worker as one opaque 503. Without the upstream
+    code in the log the three are indistinguishable from Cloud Logging alone.
+    """
+    monkeypatch.setenv("SCAN_EVIDENCE_SIGNING_KEY", "test-signing-key")
+
+    async def invoke(_client, _function_name, _payload, *, timeout):
+        return {"status_code": 503, "body": body}
+
+    monkeypatch.setattr(scan_job, "invoke_function", invoke)
+    with pytest.raises(RuntimeError):
+        await scan_job.reconcile_stale_scans(object())
+
+    records = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("{")
+    ]
+    rejected = [r for r in records if r.get("event") == "scan_reconcile_rejected"]
+    assert len(rejected) == 1, records
+    assert rejected[0]["severity"] == "WARNING"
+    assert rejected[0]["status_code"] == 503
+    assert rejected[0]["upstream_error_code"] == expected
+
+    # An unrecognized upstream body must be reported by shape, never by content.
+    if expected == "unrecognized":
+        assert "x" * 200 not in json.dumps(rejected[0])
+        assert "Not an identifier!" not in json.dumps(rejected[0])

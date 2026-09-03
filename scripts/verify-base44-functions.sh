@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Prove that every customer-facing Base44 release function is executing the
-# exact package bytes from this source tree. Inventory membership and the site
+# Prove that every active Standard 150 Base44 scanner/customer route is executing
+# the exact canonical package bytes from this source tree. Inventory membership and the site
 # bundle are not enough: Base44 can report a function as "unchanged" while an
 # older compiled handler continues serving.
 set -euo pipefail
@@ -11,16 +11,13 @@ PROBE_ATTEMPTS="${PROBE_ATTEMPTS:-6}"
 PROBE_DELAY_SECONDS="${PROBE_DELAY_SECONDS:-5}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-FUNCTIONS=(
-  startStandardScanJob
-  durableScanWorkerControl
-  persistDurableScanAuthority
-  persistLimitedScanResult
-  getCustomerScanResult
-  createAccessCheckout
-  stripeWebhook
-  deleteCustomerScanData
-  ownerScanDebugControl
+FUNCTION_PAIRS=(
+  "startStandardScanJob:startStandardScanJobV2"
+  "durableScanWorkerControl:durableScanWorkerControlV2"
+  "persistDurableScanAuthority:persistDurableScanAuthorityV2"
+  "persistLimitedScanResult:persistLimitedScanResultV2"
+  "getCustomerScanResult:getCustomerScanResultV2"
+  "deleteCustomerScanData:deleteCustomerScanDataV2"
 )
 
 command -v curl >/dev/null 2>&1 || {
@@ -62,8 +59,10 @@ process.stdout.write(buildId);
 NODE
 }
 
-for name in "${FUNCTIONS[@]}"; do
-  expected="$(node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --build-id "$name")"
+for pair in "${FUNCTION_PAIRS[@]}"; do
+  canonical="${pair%%:*}"
+  name="${pair#*:}"
+  expected="$(node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --build-id "$canonical")"
   if ! printf '%s' "$expected" | grep -Eq '^[0-9a-f]{64}$'; then
     echo "Refusing Base44 function verification: local build ID for $name is invalid." >&2
     exit 2

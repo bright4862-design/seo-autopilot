@@ -39,12 +39,16 @@ jobs:
 
       - name: Verify exact clean main source
         shell: /bin/bash {0}
+        env:
+          ACTOR: ${{ github.actor }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          test "${{ github.actor }}" = "bright4862-design"
-          test "${{ github.ref }}" = "refs/heads/main"
-          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
-          test "$(git rev-parse origin/main)" = "${{ github.sha }}"
+          test "$ACTOR" = "bright4862-design"
+          test "$REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$SHA"
+          test "$(git rev-parse origin/main)" = "$SHA"
           test -z "$(git status --porcelain --untracked-files=all)"
           /bin/bash -n scripts/recover-base44-stale-release-functions.sh
           /bin/bash -n scripts/authenticate-base44-owner-session.sh

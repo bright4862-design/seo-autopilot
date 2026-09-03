@@ -91,8 +91,10 @@ test("each stale function is delete-recreated one at a time and verified before 
   assert.ok(deleteAt >= 0);
   assert.ok(deployAt > deleteAt);
   assert.ok(verifyAt > deployAt);
-  const loop = recovery.match(/for fn in "\$\{RECOVERY_FUNCTIONS\[@\]\}"; do\n([\s\S]*?)\ndone/)[1];
-  assert.match(loop.trim(), /^recover_one "\$fn"$/);
+  const loops = [...recovery.matchAll(/for fn in "\$\{RECOVERY_FUNCTIONS\[@\]\}"; do\n([\s\S]*?)\ndone/g)];
+  assert.ok(loops.length >= 2, "expected preflight/final loops plus the recovery driver");
+  const recoveryLoop = loops.find((match) => match[1].trim() === 'recover_one "$fn"');
+  assert.ok(recoveryLoop, "the recovery driver must call recover_one bare under set -e");
 });
 
 test("recovery is exact-main, owner-session and explicit-action gated", () => {
@@ -104,10 +106,14 @@ test("recovery is exact-main, owner-session and explicit-action gated", () => {
 });
 
 test("recovery cannot widen into unrelated production mutation", () => {
-  assert.doesNotMatch(recovery, /\bsite\s+deploy\b/);
-  assert.doesNotMatch(recovery, /\bsecrets\s+set\b/);
-  assert.doesNotMatch(recovery, /--force/);
-  assert.doesNotMatch(recovery, /gcloud\s/);
+  const executable = recovery
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("#"))
+    .join("\n");
+  assert.doesNotMatch(executable, /\bsite\s+deploy\b/);
+  assert.doesNotMatch(executable, /\bsecrets\s+set\b/);
+  assert.doesNotMatch(executable, /--force/);
+  assert.doesNotMatch(executable, /gcloud\s/);
 });
 
 test("workflow is owner-dispatched from exact main and passes both confirmations", () => {

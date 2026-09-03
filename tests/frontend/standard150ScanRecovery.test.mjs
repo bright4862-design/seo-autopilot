@@ -38,7 +38,7 @@ const { pageLimit, SCAN_GATEWAY_FUNCTIONS } = recoveryHarness;
 
 test("the active Standard 150 form uses server-owned admission instead of the legacy scanner recovery boundary", () => {
   assert.equal(SCAN_GATEWAY_FUNCTIONS.has("runStandard150Scan"), true);
-  assert.match(scanFormSource, /const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJob"/);
+  assert.match(scanFormSource, /const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV2"/);
   assert.match(scanFormSource, /submitStandardScanJob\(scanPayload\)/);
   assert.doesNotMatch(scanFormSource, /\bSTANDARD_SCANNER_FUNCTION\b|\bAI_REVIEW_FUNCTION\b/,
     "retired scanner/review constants must not survive in the active customer form");

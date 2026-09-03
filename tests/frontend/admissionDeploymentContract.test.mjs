@@ -216,11 +216,11 @@ test("Base44 admission configuration is disabled-first, entitlement-owned and ad
 
 test("Base44 release deploy names the explicit durable functions and never reconciles entities or the site", () => {
   const expected = [
-    "startStandardScanJob",
-    "durableScanWorkerControl",
-    "persistDurableScanAuthority",
-    "persistLimitedScanResult",
-    "getCustomerScanResult",
+    "startStandardScanJobV2",
+    "durableScanWorkerControlV2",
+    "persistDurableScanAuthorityV2",
+    "persistLimitedScanResultV2",
+    "getCustomerScanResultV2",
     "createAccessCheckout",
     "stripeWebhook",
     "ownerScanDebugControl",
@@ -250,14 +250,14 @@ test("Base44 site publication restores the durable backend after the site deploy
   assert.match(verifySite, /\/assets\/index-/);
   assert.match(verifySite, /grep -Fq "\$EXPECTED_SOURCE_SHA"/);
   for (const required of [
-    "startStandardScanJob",
-    "durableScanWorkerControl",
-    "persistDurableScanAuthority",
-    "persistLimitedScanResult",
-    "getCustomerScanResult",
+    "startStandardScanJobV2",
+    "durableScanWorkerControlV2",
+    "persistDurableScanAuthorityV2",
+    "persistLimitedScanResultV2",
+    "getCustomerScanResultV2",
     "createAccessCheckout",
     "stripeWebhook",
-    "deleteCustomerScanData",
+    "deleteCustomerScanDataV2",
     "ownerScanDebugControl",
   ]) assert.match(deploySite, new RegExp(`\\b${required}\\b`));
   assert.doesNotMatch(deploySite, /deploy-base44-beta-functions\.sh|--force|entities\s+push/);

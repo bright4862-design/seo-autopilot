@@ -176,7 +176,7 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT }}
           workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
-          service_account: ${{ contains(fromJSON('["barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only"]'), inputs.operation) && env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT || env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+          service_account: ${{ contains(fromJSON('["status","barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only"]'), inputs.operation) && env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT || env.GCP_OPERATOR_SERVICE_ACCOUNT }}
 
       # gcloud cannot mint an audience-scoped identity token from the
       # external_account credential written above, so the coordinator's operator
@@ -291,7 +291,7 @@ jobs:
           ACCEPTANCE_EXPIRES_AT: ${{ inputs.acceptance_expires_at }}
           ACCEPTANCE_TOTAL_CLAIM_BUDGET: ${{ inputs.acceptance_total_claim_budget }}
           ACCEPTANCE_PER_OWNER_CLAIM_BUDGET: ${{ inputs.acceptance_per_owner_claim_budget }}
-          GCP_OPERATOR_SERVICE_ACCOUNT: ${{ contains(fromJSON('["barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only"]'), inputs.operation) && env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT || env.GCP_OPERATOR_SERVICE_ACCOUNT }}
+          GCP_OPERATOR_SERVICE_ACCOUNT: ${{ contains(fromJSON('["status","barrier-status","verify-zero-admission-obligations","cutover-pause","cutover-resume","open-claim-barrier","acceptance-only"]'), inputs.operation) && env.GCP_ADMISSION_OPERATOR_SERVICE_ACCOUNT || env.GCP_OPERATOR_SERVICE_ACCOUNT }}
           FIXLIST_OPERATOR_ID_TOKEN: ${{ steps.operator-id-token.outputs.id_token }}
           FIXLIST_OPERATOR_TOKEN_AUDIENCE: ${{ env.ADMISSION_OPERATOR_AUDIENCE }}
         shell: bash

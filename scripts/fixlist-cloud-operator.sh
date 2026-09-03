@@ -135,6 +135,27 @@ require_barrier_inputs() {
   fi
 }
 
+# `describe` failing tells an operator nothing about why it failed, but a missing
+# resource and an unreadable one need opposite responses: create it, or fix the
+# reader's access. Collapsing both into "not_deployed" invites someone to
+# recreate a queue that already exists, so classify the failure instead.
+describe_or_explain() {
+  local label="$1"; shift
+  local out err_file
+  err_file="$(mktemp)"
+  if out="$("$@" 2>"$err_file")"; then
+    printf '%s\n' "$out"
+    rm -f "$err_file"
+    return 0
+  fi
+  if grep -q 'PERMISSION_DENIED' "$err_file"; then
+    echo "read_denied=$label"
+  else
+    echo "not_deployed=$label"
+  fi
+  rm -f "$err_file"
+}
+
 show_status() {
   echo "=== Cloud Run ==="
   gcloud run services describe "$CLOUD_RUN_SERVICE" \
@@ -151,27 +172,18 @@ show_status() {
 
   echo
   echo "=== Drain queue ==="
-  if gcloud tasks queues describe "$CLOUD_TASKS_DRAIN_QUEUE" --location="$GCP_REGION" --project="$GCP_PROJECT" >/dev/null 2>&1; then
+  describe_or_explain "$CLOUD_TASKS_DRAIN_QUEUE" \
     gcloud tasks queues describe "$CLOUD_TASKS_DRAIN_QUEUE" --location="$GCP_REGION" --project="$GCP_PROJECT" --format='yaml(name,state,rateLimits,retryConfig)'
-  else
-    echo "not_deployed=$CLOUD_TASKS_DRAIN_QUEUE"
-  fi
 
   echo
   echo "=== Admission coordinator ==="
-  if gcloud run services describe "$ADMISSION_COORDINATOR_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT" >/dev/null 2>&1; then
+  describe_or_explain "$ADMISSION_COORDINATOR_SERVICE" \
     gcloud run services describe "$ADMISSION_COORDINATOR_SERVICE" --region="$GCP_REGION" --project="$GCP_PROJECT" --format='yaml(metadata.name,status.url,status.latestReadyRevisionName,status.traffic)'
-  else
-    echo "not_deployed=$ADMISSION_COORDINATOR_SERVICE"
-  fi
 
   echo
   echo "=== Reconciler ==="
-  if gcloud scheduler jobs describe "$STANDARD150_RECONCILER_JOB" --location="$GCP_REGION" --project="$GCP_PROJECT" >/dev/null 2>&1; then
+  describe_or_explain "$STANDARD150_RECONCILER_JOB" \
     gcloud scheduler jobs describe "$STANDARD150_RECONCILER_JOB" --location="$GCP_REGION" --project="$GCP_PROJECT" --format='yaml(name,state,schedule,httpTarget.uri,httpTarget.oidcToken.serviceAccountEmail)'
-  else
-    echo "not_deployed=$STANDARD150_RECONCILER_JOB"
-  fi
 
   echo
   echo "=== Recent worker structured logs ==="

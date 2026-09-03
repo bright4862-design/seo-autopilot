@@ -236,13 +236,18 @@ test("Base44 site publication restores the durable backend after the site deploy
   const authIndex = deploySite.indexOf('fixlist_require_base44_owner');
   const buildIndex = deploySite.indexOf('VITE_FIXLIST_SOURCE_SHA="$SOURCE_SHA" npm run build');
   const siteIndex = deploySite.indexOf('site deploy --no-build --yes');
-  const functionsIndex = deploySite.indexOf('functions deploy "${FUNCTIONS[@]}"');
+  const functionsIndex = deploySite.indexOf('deploy_functions "${FUNCTIONS[@]}"');
   const verifyIndex = deploySite.indexOf('verify-base44-site.sh');
+  const provenIndex = deploySite.indexOf("BASE44_RELEASE_ROUTES_ACTIVE_PRE_SITE");
   assert.ok(authIndex >= 0 && authIndex < buildIndex, "non-interactive auth verification must precede the build");
   assert.ok(buildIndex >= 0 && buildIndex < siteIndex, "exact source SHA must be compiled before the site deploy");
   assert.ok(siteIndex >= 0, "missing Base44 site deployment");
   assert.ok(functionsIndex > siteIndex, "release functions must deploy after the site");
   assert.ok(verifyIndex > functionsIndex, "public source verification must run after backend restoration");
+  // The published frontend calls the V2 routes, so they are also proven live
+  // before the site is cut over -- a publish that fails verification must leave
+  // the live site untouched rather than pointing it at unproven handlers.
+  assert.ok(provenIndex >= 0 && provenIndex < siteIndex, "release routes must be proven live before the site deploy");
   assert.equal((deploySite.match(/fixlist_require_base44_owner/g) || []).length, 1, "site publish must use one non-interactive owner check");
   assert.doesNotMatch(deploySite, /\"\$FIXLIST_BASE44_CLI\" login/);
   assert.match(mainEntry, /import\.meta\.env\.VITE_FIXLIST_SOURCE_SHA/);

@@ -98,23 +98,48 @@ test("generatedBuildId.js is excluded from its own package hash", (t) => {
   assert.equal(after, before, "generatedBuildId.js must never participate in its own hash");
 });
 
-test("publish verifies deployed function source before the success marker", () => {
+test("publish proves the release routes live before the site is cut over", () => {
   const deploy = source("scripts/deploy-base44-beta-site.sh");
-  const verifyAt = deploy.indexOf('verify-base44-functions.sh');
-  const successAt = deploy.indexOf("BASE44_SITE_AND_BACKEND_DEPLOYED");
-  const deployCaptureAt = deploy.indexOf("DEPLOY_REPORT=");
-  const deployPrintAt = deploy.indexOf("printf '%s\\n' \"$DEPLOY_REPORT\"");
-  const deployExitAt = deploy.indexOf('exit "$DEPLOY_STATUS"');
+  const at = (needle) => deploy.indexOf(needle);
 
-  assert.ok(verifyAt >= 0, "publish must call the function build verifier");
+  const preSiteDeploy = at('deploy_functions "${VERIFIED_FUNCTIONS[@]}"');
+  const preSiteVerify = at("verify-base44-functions.sh");
+  const siteDeploy = at("site deploy --no-build --yes");
+  const successAt = at("BASE44_SITE_AND_BACKEND_DEPLOYED");
+  const lastVerify = deploy.lastIndexOf("verify-base44-functions.sh");
+
+  assert.ok(preSiteDeploy >= 0, "the release routes must be deployed on their own first");
+  assert.ok(preSiteVerify >= 0, "publish must call the function build verifier");
+  assert.ok(siteDeploy >= 0, "publish must deploy the site");
   assert.ok(successAt >= 0, "publish success marker must remain explicit");
-  assert.ok(verifyAt < successAt, "function verification must happen before deployment success is reported");
+
+  // The published frontend calls the V2 routes. Verifying them only after the
+  // site is live means a failed publish leaves getfixlist.com in front of
+  // handlers that were never proven to run this source.
+  assert.ok(preSiteDeploy < preSiteVerify, "the routes must be deployed before they are probed");
+  assert.ok(preSiteVerify < siteDeploy, "the routes must be proven live before the site is published");
+
+  // `site deploy` can reconcile the function inventory back to an older
+  // snapshot, so the routes are re-deployed and re-proven after it too.
+  assert.ok(lastVerify > siteDeploy, "the routes must be re-verified after the site deploy");
+  assert.ok(lastVerify < successAt, "verification must happen before deployment success is reported");
+
   assert.match(deploy, /generate_release_contracts\.mjs" --check/);
-  assert.match(deploy, /DEPLOY_STATUS=0/);
-  assert.match(deploy, /\|\| DEPLOY_STATUS=\$\?/);
-  assert.ok(deployCaptureAt >= 0, "the Base44 function deploy report must be retained");
-  assert.ok(deployPrintAt > deployCaptureAt, "the captured deploy report must be printed");
-  assert.ok(deployExitAt > deployPrintAt, "a failed deploy must print diagnostics before returning its status");
+});
+
+test("a failed function deploy prints its diagnostics before it aborts", () => {
+  const deploy = source("scripts/deploy-base44-beta-site.sh");
+  const helper = deploy.slice(deploy.indexOf("deploy_functions() {"));
+  const body = helper.slice(0, helper.indexOf("\n}"));
+
+  const capture = body.indexOf("report=");
+  const print = body.indexOf('printf \'%s\\n\' "$report"');
+  const propagate = body.indexOf('return "$status"');
+
+  assert.ok(capture >= 0, "the Base44 function deploy report must be retained");
+  assert.ok(print > capture, "the captured deploy report must be printed");
+  assert.ok(propagate > print, "a failed deploy must print diagnostics before returning its status");
+  assert.match(body, /\|\| status=\$\?/, "the deploy status must be captured, not swallowed");
 });
 
 test("--build-id returns exit 2 when a known function has no source package", (t) => {

@@ -18,7 +18,7 @@ BASE44_CLI_SHA512="${BASE44_CLI_SHA512:-sha512-o1IFePlQHvUARUVr19FiYEakkPrwDf6IV
 
 echo
 echo "========== FIXLIST KEY SYNC =========="
-echo "[1/6] Setting Google Cloud project..."
+echo "[1/8] Setting Google Cloud project..."
 gcloud config set project "$PROJECT" >/dev/null
 echo "OK — project set to $PROJECT"
 
@@ -28,7 +28,7 @@ cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 
 echo
-echo "[2/6] Reading the signing-secret reference from the LIVE Python worker..."
+echo "[2/8] Reading the signing-secret reference from the LIVE Python worker..."
 gcloud run services describe "$WORKER" \
   --project="$PROJECT" \
   --region="$REGION" \
@@ -66,7 +66,7 @@ PY
 read -r SIGNING_SECRET SIGNING_VERSION < "$TMP/ref.txt"
 
 echo
-echo "[3/7] Installing and verifying the pinned Base44 CLI..."
+echo "[3/8] Installing and verifying the pinned Base44 CLI..."
 npm pack "base44@${BASE44_CLI_VERSION}" --pack-destination "$TMP" >/dev/null
 TGZ="$TMP/base44-${BASE44_CLI_VERSION}.tgz"
 test -s "$TGZ"
@@ -104,7 +104,7 @@ test -x "$CLI"
 echo "OK — base44@${BASE44_CLI_VERSION} installed from the verified tarball"
 
 echo
-echo "[4/7] Base44 login required — BEFORE any secret is read"
+echo "[4/8] Base44 login required — BEFORE any secret is read"
 echo "A DEVICE CODE SHOULD APPEAR BELOW."
 echo "Open https://app.base44.com/login/device and approve it."
 echo
@@ -113,7 +113,7 @@ echo
 echo "OK — Base44 authenticated"
 
 echo
-echo "[5/7] Reading that exact pinned secret version from Secret Manager..."
+echo "[5/8] Reading that exact pinned secret version from Secret Manager..."
 echo "The secret VALUE will NOT be displayed."
 gcloud secrets versions access "$SIGNING_VERSION" \
   --secret="$SIGNING_SECRET" \
@@ -123,7 +123,43 @@ test -s "$TMP/signing-key"
 echo "OK — canonical signing key retrieved securely"
 
 echo
-echo "[6/7] Preparing protected Base44 import file..."
+echo "[6/8] Verifying the secret can survive the env-file round trip..."
+# Cloud Run injects a secret payload verbatim, so the worker and the coordinator
+# both sign with whatever bytes the version holds, trailing newline included.
+# An env file cannot carry a trailing newline in a value: `KEY=<payload>\n` and
+# `KEY=<payload>` parse to the same string. So a payload with surrounding
+# whitespace hands Base44 a DIFFERENT signing root than Cloud Run holds, every
+# admission call fails `invalid_signature` with a 401, and this script would
+# otherwise print KEY_SYNC_COMPLETE over the top of it. Fail closed instead.
+if ! python3 - "$TMP/signing-key" <<'SHAPE'
+import sys
+
+payload = open(sys.argv[1], "rb").read()
+stripped = payload.strip()
+if payload == stripped:
+    print("OK — no surrounding whitespace; the env-file round trip is exact")
+    raise SystemExit(0)
+print("ERROR: the pinned secret version has surrounding whitespace.", file=sys.stderr)
+print(f"  payload length:          {len(payload)} bytes", file=sys.stderr)
+print(f"  length once stripped:    {len(stripped)} bytes", file=sys.stderr)
+print("Cloud Run gives the worker and the coordinator the full payload, but an", file=sys.stderr)
+print("env file can only carry the stripped form, so Base44 would sign with a", file=sys.stderr)
+print("different root and every scan would fail admission with invalid_signature.", file=sys.stderr)
+raise SystemExit(1)
+SHAPE
+then
+  echo
+  echo "REPAIR: add a whitespace-free version of the signing secret, then repoint" >&2
+  echo "all three consumers at it in the same change:" >&2
+  echo "  1. printf '%s' \"\$KEY\" | gcloud secrets versions add $SIGNING_SECRET --data-file=- --project=$PROJECT" >&2
+  echo "  2. redeploy $WORKER and fixlist-scan-admission-coordinator pinned to the new version" >&2
+  echo "  3. re-run this script so Base44 receives the same bytes" >&2
+  echo "Repointing only some of them splits the signing root and breaks admission." >&2
+  exit 1
+fi
+
+echo
+echo "[7/8] Preparing protected Base44 import file..."
 {
   printf 'SCAN_EVIDENCE_SIGNING_KEY='
   cat "$TMP/signing-key"
@@ -133,7 +169,7 @@ chmod 600 "$TMP/signing-key" "$TMP/base44.env"
 echo "OK — protected temporary import file created"
 
 echo
-echo "[7/7] Synchronizing Base44 with the LIVE worker signing key..."
+echo "[8/8] Synchronizing Base44 with the LIVE worker signing key..."
 "$CLI" --app-id "$APP_ID" secrets set --env-file "$TMP/base44.env"
 
 echo

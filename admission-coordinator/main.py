@@ -107,6 +107,30 @@ def response_error(code: str, status: int):
     return jsonify({"success": False, "error": code}), status
 
 
+def _log_auth_rejection(reason: str, *, label: bytes, **fields: Any) -> None:
+    """Emit one structured line whenever authentication rejects a request.
+
+    Cloud Run turns a JSON object on stdout into a structured log entry. Until
+    this existed the coordinator rejected every request in total silence, and
+    an empty log was repeatedly misread as "the request never reached the
+    application" -- which sent an outage investigation after the network path
+    while the application was in fact running and returning 401.
+
+    Only non-secret discriminators are recorded. The supplied signature, the
+    expected signature, the signing roots and the request body never appear.
+    """
+    entry = {
+        "severity": "WARNING",
+        "message": f"admission authentication rejected: {reason}",
+        "event": "admission_auth_rejected",
+        "reason": reason,
+        "auth_label": label.decode("ascii"),
+        "path": request.path,
+        **fields,
+    }
+    print(json.dumps(entry, sort_keys=True, default=str), flush=True)
+
+
 @app.errorhandler(413)
 def request_too_large(_error):
     return response_error("request_too_large", 413)
@@ -148,12 +172,51 @@ def _authenticate_hmac(
     try:
         request_time = int(timestamp)
     except (TypeError, ValueError):
+        _log_auth_rejection(
+            "invalid_timestamp",
+            label=label,
+            timestamp_present=bool(timestamp),
+        )
         return None, response_error("invalid_timestamp", 401)
-    if abs(int(time.time()) - request_time) > MAX_CLOCK_SKEW_SECONDS:
+    skew_seconds = int(time.time()) - request_time
+    if abs(skew_seconds) > MAX_CLOCK_SKEW_SECONDS:
+        _log_auth_rejection(
+            "stale_request",
+            label=label,
+            skew_seconds=skew_seconds,
+            max_clock_skew_seconds=MAX_CLOCK_SKEW_SECONDS,
+        )
         return None, response_error("stale_request", 401)
 
     expected = _expected_signature(timestamp, raw, root=root, label=label)
     if not supplied or not hmac.compare_digest(supplied, expected):
+        # A signing root that carries surrounding whitespace is a server-side
+        # configuration fact, not a property of the caller. Cloud Run injects a
+        # secret payload verbatim, while an env-file round trip cannot carry a
+        # trailing newline, so a payload with one leaves this service and a
+        # caller configured from an env file holding different roots. Reporting
+        # whether the caller signed with the stripped root names that mismatch
+        # directly instead of leaving it to be guessed. It is computed only when
+        # this service's own root is affected, so it discloses nothing about a
+        # caller's key, and the request is rejected either way.
+        whitespace_fields: dict[str, Any] = {}
+        if root != root.strip():
+            whitespace_fields["root_has_surrounding_whitespace"] = True
+            whitespace_fields["matches_whitespace_stripped_root"] = bool(
+                supplied
+                and hmac.compare_digest(
+                    supplied,
+                    _expected_signature(timestamp, raw, root=root.strip(), label=label),
+                )
+            )
+        _log_auth_rejection(
+            "invalid_signature",
+            label=label,
+            signature_present=bool(supplied),
+            signature_length=len(supplied),
+            body_bytes=len(raw),
+            **whitespace_fields,
+        )
         return None, response_error("invalid_signature", 401)
 
     try:

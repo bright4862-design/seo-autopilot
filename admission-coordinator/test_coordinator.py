@@ -6,9 +6,11 @@ network, an emulator or credentials. The fake is installed into ``sys.modules``
 before ``main`` is imported, because ``main`` binds ``firestore`` at import time.
 """
 
+import contextlib
 import hashlib
 import hmac
 import importlib
+import io
 import json
 import os
 import sys
@@ -419,6 +421,132 @@ class StatusSurface(CoordinatorTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json["lease_active"])
         self.assertEqual(response.json["admission"]["state"], "")
+
+
+class AuthenticationRejectionLogging(CoordinatorTestCase):
+    """A 401 must say why in the log, not only in the response body.
+
+    The coordinator used to reject every request in silence. Cloud Logging then
+    showed nothing for a service that was running and answering 401, and that
+    empty log was read as proof the request had never arrived -- sending an
+    outage investigation after the network path for days. These tests pin the
+    rejection log so that silence can never be mistaken for absence again.
+    """
+
+    def rejecting(self, send):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            response = send()
+        entries = [
+            json.loads(line)
+            for line in buffer.getvalue().splitlines()
+            if line.startswith("{")
+        ]
+        rejections = [e for e in entries if e.get("event") == "admission_auth_rejected"]
+        self.assertEqual(len(rejections), 1, buffer.getvalue())
+        return response, rejections[0]
+
+    def test_invalid_signature_is_logged_with_discriminators(self):
+        response, entry = self.rejecting(
+            lambda: self.post("/claim", {"owner_user_id": OWNER}, signature="ab" * 32)
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(entry["reason"], "invalid_signature")
+        self.assertEqual(entry["severity"], "WARNING")
+        self.assertEqual(entry["path"], "/claim")
+        self.assertEqual(entry["auth_label"], "fixlist-admission-coordinator-v1")
+        self.assertTrue(entry["signature_present"])
+        self.assertEqual(entry["signature_length"], 64)
+        self.assertGreater(entry["body_bytes"], 0)
+
+    def test_operator_leg_is_named_separately_from_the_base44_leg(self):
+        _response, entry = self.rejecting(
+            lambda: self.operator_post("/ops/barrier/status", {}, root="wrong-operator-root")
+        )
+        self.assertEqual(entry["reason"], "invalid_signature")
+        self.assertEqual(entry["auth_label"], "fixlist-admission-operator-v1")
+
+    def test_missing_signature_is_logged_as_absent(self):
+        def send():
+            return self.client.post(
+                "/claim",
+                data=b"{}",
+                headers={
+                    "content-type": "application/json",
+                    "x-fixlist-timestamp": str(int(time.time())),
+                },
+            )
+
+        _response, entry = self.rejecting(send)
+        self.assertEqual(entry["reason"], "invalid_signature")
+        self.assertFalse(entry["signature_present"])
+        self.assertEqual(entry["signature_length"], 0)
+
+    def test_stale_request_logs_the_measured_skew(self):
+        stamp = str(int(time.time()) - (main.MAX_CLOCK_SKEW_SECONDS + 120))
+        response, entry = self.rejecting(
+            lambda: self.post("/claim", {"owner_user_id": OWNER}, timestamp=stamp)
+        )
+        self.assertEqual(response.json["error"], "stale_request")
+        self.assertEqual(entry["reason"], "stale_request")
+        self.assertEqual(entry["max_clock_skew_seconds"], main.MAX_CLOCK_SKEW_SECONDS)
+        # The measured skew is what tells an operator a clock is wrong rather
+        # than a key, so it has to be the real number, not a boolean.
+        self.assertAlmostEqual(entry["skew_seconds"], main.MAX_CLOCK_SKEW_SECONDS + 120, delta=5)
+
+    def test_invalid_timestamp_is_logged(self):
+        response, entry = self.rejecting(
+            lambda: self.post("/claim", {"owner_user_id": OWNER}, timestamp="not-a-number")
+        )
+        self.assertEqual(response.json["error"], "invalid_timestamp")
+        self.assertEqual(entry["reason"], "invalid_timestamp")
+        self.assertTrue(entry["timestamp_present"])
+
+    def test_a_whitespace_bearing_root_names_the_env_file_round_trip(self):
+        """The exact shape that breaks the Base44 leg must be reported by name.
+
+        Cloud Run injects a secret payload verbatim, so a version ending in a
+        newline reaches this service with that newline. An env file cannot carry
+        it, so a peer configured from one signs with the stripped root. Both
+        sides then believe they hold "the" signing key and every call 401s.
+        """
+        body = json.dumps({"owner_user_id": OWNER}).encode("utf-8")
+        stamp = str(int(time.time()))
+        stripped_signature = sign(body, stamp, root=SIGNING_ROOT)
+        original = main.SIGNING_ROOT
+        main.SIGNING_ROOT = SIGNING_ROOT + "\n"
+        try:
+            response, entry = self.rejecting(
+                lambda: self.post("/claim", None, raw=body, timestamp=stamp, signature=stripped_signature)
+            )
+        finally:
+            main.SIGNING_ROOT = original
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(entry["reason"], "invalid_signature")
+        self.assertTrue(entry["root_has_surrounding_whitespace"])
+        self.assertTrue(entry["matches_whitespace_stripped_root"])
+
+    def test_a_clean_root_reports_no_whitespace_diagnosis(self):
+        """The diagnosis is computed only when this service's own root is
+        affected, so a forged signature against a clean root discloses nothing
+        about what the caller signed with."""
+        _response, entry = self.rejecting(
+            lambda: self.post("/claim", {"owner_user_id": OWNER}, signature="cd" * 32)
+        )
+        self.assertNotIn("root_has_surrounding_whitespace", entry)
+        self.assertNotIn("matches_whitespace_stripped_root", entry)
+
+    def test_rejection_log_never_carries_signing_material(self):
+        body = json.dumps({"owner_user_id": OWNER, "request_id": "req_secret_body"}).encode("utf-8")
+        stamp = str(int(time.time()))
+        supplied = "ef" * 32
+        expected = sign(body, stamp)
+        _response, entry = self.rejecting(
+            lambda: self.post("/claim", None, raw=body, timestamp=stamp, signature=supplied)
+        )
+        serialized = json.dumps(entry)
+        for forbidden in (SIGNING_ROOT, OPERATOR_SIGNING_ROOT, supplied, expected, "req_secret_body"):
+            self.assertNotIn(forbidden, serialized)
 
 
 if __name__ == "__main__":

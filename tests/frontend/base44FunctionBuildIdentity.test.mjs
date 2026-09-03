@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -102,12 +102,37 @@ test("publish verifies deployed function source before the success marker", () =
   const deploy = source("scripts/deploy-base44-beta-site.sh");
   const verifyAt = deploy.indexOf('verify-base44-functions.sh');
   const successAt = deploy.indexOf("BASE44_SITE_AND_BACKEND_DEPLOYED");
+  const deployCaptureAt = deploy.indexOf("DEPLOY_REPORT=");
+  const deployPrintAt = deploy.indexOf("printf '%s\\n' \"$DEPLOY_REPORT\"");
+  const deployExitAt = deploy.indexOf('exit "$DEPLOY_STATUS"');
 
   assert.ok(verifyAt >= 0, "publish must call the function build verifier");
   assert.ok(successAt >= 0, "publish success marker must remain explicit");
   assert.ok(verifyAt < successAt, "function verification must happen before deployment success is reported");
   assert.match(deploy, /generate_release_contracts\.mjs" --check/);
-  assert.match(deploy, /DEPLOY_REPORT=/, "the Base44 function deploy report must be retained");
+  assert.match(deploy, /DEPLOY_STATUS=0/);
+  assert.match(deploy, /\|\| DEPLOY_STATUS=\$\?/);
+  assert.ok(deployCaptureAt >= 0, "the Base44 function deploy report must be retained");
+  assert.ok(deployPrintAt > deployCaptureAt, "the captured deploy report must be printed");
+  assert.ok(deployExitAt > deployPrintAt, "a failed deploy must print diagnostics before returning its status");
+});
+
+test("--build-id returns exit 2 when a known function has no source package", (t) => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "fixlist-build-id-missing-"));
+  t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
+
+  const result = spawnSync(
+    process.execPath,
+    [GENERATOR, "--build-id", "startStandardScanJob"],
+    {
+      cwd: ROOT,
+      env: { ...process.env, RELEASE_CONTRACT_ROOT: tempRoot },
+      encoding: "utf8",
+    },
+  );
+
+  assert.equal(result.status, 2, result.stderr || result.stdout);
+  assert.match(result.stderr, /Release Base44 function has no source files: startStandardScanJob/);
 });
 
 test("runtime verifier requires the handler 405 and the exact build id", () => {

@@ -220,8 +220,20 @@ function main() {
       process.stderr.write(`Unknown release Base44 function: ${fnName || "(missing)"}\n`);
       return 2;
     }
-    process.stdout.write(`${computeFunctionBuildId(fnName)}\n`);
-    return 0;
+    try {
+      process.stdout.write(`${computeFunctionBuildId(fnName)}\n`);
+      return 0;
+    } catch (error) {
+      const message = String(error?.message || error || "");
+      if (
+        message.startsWith("Release Base44 function is missing:")
+        || message.startsWith("Release Base44 function has no source files:")
+      ) {
+        process.stderr.write(`${message}\n`);
+        return 2;
+      }
+      throw error;
+    }
   }
 
   const source = contractSource();

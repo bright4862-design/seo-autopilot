@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import vm from "node:vm";
 import test from "node:test";
+import ts from "typescript";
 
 const SCRIPT = "scripts/recover-base44-stale-release-functions.sh";
 const WORKFLOW = ".github/workflows/fixlist-base44-stale-function-recovery.yml";
 const recovery = fs.readFileSync(SCRIPT, "utf8");
 const workflow = fs.readFileSync(WORKFLOW, "utf8");
+const ownerDebugEntry = fs.readFileSync("base44/functions/ownerScanDebugControl/entry.ts", "utf8");
+const ownerDebugBuildSource = fs.readFileSync("base44/functions/ownerScanDebugControl/generatedBuildId.js", "utf8");
+const ownerDebugBuildId = ownerDebugBuildSource.match(/FUNCTION_BUILD_ID = "([0-9a-f]{64})"/)?.[1] || "";
 
 function classify(name, status, body, buildId, expected) {
   const out = execFileSync(
@@ -34,6 +39,64 @@ function classify(name, status, body, buildId, expected) {
   );
   return out.trim();
 }
+
+
+async function invokeOwnerDebugGet() {
+  assert.match(ownerDebugBuildId, /^[0-9a-f]{64}$/);
+
+  let handler = null;
+  const source = ownerDebugEntry
+    .replace(
+      'import { createClientFromRequest } from "npm:@base44/sdk@0.8.41";',
+      'const createClientFromRequest = () => { throw new Error("POST path must not run"); };',
+    )
+    .replace(
+      'import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";',
+      'const RELEASE_COMPONENT_VERSIONS = { admission_reconciliation_version: "test" }; const RELEASE_FINGERPRINT = "68a16802a9c7a543";',
+    )
+    .replace(
+      'import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";',
+      `const FUNCTION_BUILD_ID = "${ownerDebugBuildId}";`,
+    )
+    .replace(
+      'import { persistExactRelease } from "./admissionRelease.js";',
+      'const persistExactRelease = async () => { throw new Error("POST path must not run"); };',
+    );
+
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.None,
+    },
+  }).outputText;
+
+  vm.runInNewContext(compiled, {
+    Deno: {
+      env: { get: () => "" },
+      serve: (candidate) => { handler = candidate; },
+    },
+    Request,
+    Response,
+    TextEncoder,
+    clearTimeout,
+    console,
+    crypto: globalThis.crypto,
+    fetch,
+    setTimeout,
+  });
+
+  assert.equal(typeof handler, "function");
+  return handler(new Request("https://example.invalid", { method: "GET" }));
+}
+
+test("owner debug GET runtime returns the activation marker and exact generated build identity", async () => {
+  const response = await invokeOwnerDebugGet();
+  assert.equal(response.status, 405);
+  const body = await response.json();
+  assert.equal(body.runtime_activation_id, "owner-debug-sandbox-activation-20260903-v1");
+  assert.equal(body.build_id, ownerDebugBuildId);
+  assert.equal(body.error_code, "method_not_allowed");
+});
 
 test("stale recovery covers exactly the nine published release functions", () => {
   const list = recovery.match(/RECOVERY_FUNCTIONS=\(([^)]*)\)/s)[1]

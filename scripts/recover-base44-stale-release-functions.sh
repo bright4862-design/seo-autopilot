@@ -116,10 +116,41 @@ route_is_known_stale_handler() {
         && grep -Eq '"version"[[:space:]]*:[[:space:]]*"startStandardScanJob_v3_server_admission"' <<<"$PROBE_BODY" \
         && grep -Eq '"error"[[:space:]]*:[[:space:]]*"Method not allowed\."' <<<"$PROBE_BODY"
       ;;
-    durableScanWorkerControl|persistDurableScanAuthority|persistLimitedScanResult|getCustomerScanResult|deleteCustomerScanData|ownerScanDebugControl)
+    durableScanWorkerControl)
       [[ "$PROBE_STATUS" == "405" ]] \
         && grep -Eq '"success"[[:space:]]*:[[:space:]]*false' <<<"$PROBE_BODY" \
-        && grep -Eq '"error_code"[[:space:]]*:[[:space:]]*"method_not_allowed"' <<<"$PROBE_BODY"
+        && grep -Eq '"error_code"[[:space:]]*:[[:space:]]*"method_not_allowed"' <<<"$PROBE_BODY" \
+        && grep -Fq '"error":"Use POST for durable worker control."' <<<"$PROBE_BODY"
+      ;;
+    persistDurableScanAuthority)
+      [[ "$PROBE_STATUS" == "405" ]] \
+        && grep -Eq '"success"[[:space:]]*:[[:space:]]*false' <<<"$PROBE_BODY" \
+        && grep -Eq '"error_code"[[:space:]]*:[[:space:]]*"method_not_allowed"' <<<"$PROBE_BODY" \
+        && grep -Fq '"error":"Use POST to persist durable scan authority."' <<<"$PROBE_BODY"
+      ;;
+    persistLimitedScanResult)
+      [[ "$PROBE_STATUS" == "405" ]] \
+        && grep -Eq '"success"[[:space:]]*:[[:space:]]*false' <<<"$PROBE_BODY" \
+        && grep -Eq '"error_code"[[:space:]]*:[[:space:]]*"method_not_allowed"' <<<"$PROBE_BODY" \
+        && grep -Fq '"error_message":"Use POST to persist a limited scan result."' <<<"$PROBE_BODY"
+      ;;
+    getCustomerScanResult)
+      [[ "$PROBE_STATUS" == "405" ]] \
+        && grep -Eq '"success"[[:space:]]*:[[:space:]]*false' <<<"$PROBE_BODY" \
+        && grep -Eq '"error_code"[[:space:]]*:[[:space:]]*"method_not_allowed"' <<<"$PROBE_BODY" \
+        && grep -Fq '"error":"Use POST to load a saved scan."' <<<"$PROBE_BODY"
+      ;;
+    deleteCustomerScanData)
+      [[ "$PROBE_STATUS" == "405" ]] \
+        && grep -Eq '"success"[[:space:]]*:[[:space:]]*false' <<<"$PROBE_BODY" \
+        && grep -Eq '"error_code"[[:space:]]*:[[:space:]]*"method_not_allowed"' <<<"$PROBE_BODY" \
+        && grep -Fq '"error":"Use POST to manage saved scan history."' <<<"$PROBE_BODY"
+      ;;
+    ownerScanDebugControl)
+      [[ "$PROBE_STATUS" == "405" ]] \
+        && grep -Eq '"success"[[:space:]]*:[[:space:]]*false' <<<"$PROBE_BODY" \
+        && grep -Eq '"error_code"[[:space:]]*:[[:space:]]*"method_not_allowed"' <<<"$PROBE_BODY" \
+        && grep -Fq '"error":"Use POST for owner scan controls."' <<<"$PROBE_BODY"
       ;;
     createAccessCheckout)
       [[ "$PROBE_STATUS" == "500" ]] \

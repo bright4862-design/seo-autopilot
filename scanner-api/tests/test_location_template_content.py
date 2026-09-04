@@ -100,6 +100,17 @@ def test_state_location_page_flags_wrong_state_lender_copy():
     assert any("Georgia hard money lenders" in sample for sample in page["template_content_issue_evidence"])
 
 
+def test_wrong_state_lender_heading_identifies_page_as_wrong_market():
+    page = _location_page(
+        "alaska",
+        "Georgia Hard Money Lenders",
+        "Fast financing for real estate investors.",
+    )
+
+    assert "wrong_location_copy" in page["template_content_issue_types"]
+    assert any("Georgia Hard Money Lenders" in sample for sample in page["template_content_issue_evidence"])
+
+
 def test_location_copy_does_not_flag_legitimate_interstate_mentions_or_matching_state():
     alaska = _location_page(
         "alaska",

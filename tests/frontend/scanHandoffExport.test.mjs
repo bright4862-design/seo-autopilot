@@ -28,11 +28,15 @@ const SCAN = {
   created_at: "2026-09-04T10:20:45Z",
 };
 
-/** Every leaf value in the export, so a check can compare values not characters. */
-function exportedValues(node, found = []) {
-  if (Array.isArray(node)) node.forEach((entry) => exportedValues(entry, found));
-  else if (node && typeof node === "object") Object.values(node).forEach((entry) => exportedValues(entry, found));
-  else found.push(node);
+/**
+ * Every leaf in the export paired with the field name holding it, so a check can
+ * compare values rather than characters and still say which field it means.
+ */
+function exportedFields(node, key = "", found = []) {
+  if (Array.isArray(node)) node.forEach((entry) => exportedFields(entry, key, found));
+  else if (node && typeof node === "object") {
+    Object.entries(node).forEach(([name, entry]) => exportedFields(entry, name, found));
+  } else found.push([key, node]);
   return found;
 }
 
@@ -91,15 +95,22 @@ test("a score the page could not measure is never exported as a number", () => {
   assert.equal(handoff.health_score, null);
   assert.equal(handoff.health_score_available, false);
 
-  // Walked as values rather than searched as text. Sweeping the serialized
-  // string for "62" also matched the millisecond field of `generated_at`, which
-  // defaults to the current time -- so this assertion failed on roughly one run
-  // in sixty, on a document whose score was correctly null. Comparing values
-  // catches the leak this is actually about, at any depth, and cannot be
-  // tripped by a clock.
+  // Read as score fields, not as text and not as bare values.
+  //
+  // Sweeping the serialized string for "62" also matched the millisecond field
+  // of `generated_at`, which defaults to the current time, so the check failed
+  // on about one run in sixty against a document whose score was correctly
+  // null. Rejecting the value 62 anywhere trades that for a different false
+  // positive: `pages_affected`, `pages_found` and `fix_count` are all free to
+  // be 62 on a real site, and a correct export of one would fail.
+  //
+  // Every field whose name carries the score is checked, at any depth, so a
+  // leak into a nested or renamed score field is still caught.
+  const scoreFields = exportedFields(handoff).filter(([key]) => /score/i.test(key));
+  assert.ok(scoreFields.length > 0, "the export must carry score fields for this to mean anything");
   assert.ok(
-    !exportedValues(handoff).some((value) => value === 62 || value === "62"),
-    "an unavailable score must not survive anywhere in the export",
+    !scoreFields.some(([, value]) => value === 62 || value === "62"),
+    `an unavailable score must not survive in any score field: ${JSON.stringify(scoreFields)}`,
   );
 });
 

@@ -107,6 +107,11 @@ def test_location_template_findings_group_into_one_developer_repair():
             "Alabama Hard Money Lenders",
             "Your {var-location} team is ready. As New Jersey hard money lenders, we can help.",
         ),
+        _location_page(
+            "houston",
+            "Houston Hard Money Lenders",
+            "Talk with {{market}} specialists about your next investment.",
+        ),
     ]
 
     result = run_review({
@@ -127,7 +132,8 @@ def test_location_template_findings_group_into_one_developer_repair():
 
     assert len(fixes) == 1
     fix = fixes[0]
-    assert len(fix["affected_pages"]) == 2
+    assert len(fix["affected_pages"]) == 3
+    assert any("/locations/houston" in page for page in fix["affected_pages"])
     assert fix["who_can_do_this"] == "your_web_person"
     assert fix["requires_developer"] is True
     assert "location" in str(fix.get("issue_title") or fix.get("title") or "").lower()

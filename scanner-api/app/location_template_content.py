@@ -4,6 +4,8 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
+from .page_evidence_gate import page_has_usable_html
+
 
 TEMPLATE_CONTENT_EVIDENCE_LIMIT = 4
 _LOCATION_TOKEN_NAMES = "location|city|state|region|market|area"
@@ -190,15 +192,7 @@ def build_location_template_raw_fixes(pages: list[dict[str, Any]]) -> list[dict[
         url = _page_url(page)
         if not url or not _location_state_from_path(url):
             continue
-        status = page.get("status_code") or page.get("status") or 0
-        try:
-            status_code = int(status)
-        except (TypeError, ValueError):
-            status_code = 0
-        if status_code < 200 or status_code >= 400 or page.get("fetch_error"):
-            continue
-        content_type = str(page.get("content_type") or "").lower()
-        if content_type and "html" not in content_type and "xhtml" not in content_type:
+        if not page_has_usable_html(page):
             continue
 
         affected.append(url)

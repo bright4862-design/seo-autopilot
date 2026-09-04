@@ -692,62 +692,77 @@ test("the Base44 CLI is pinned and digest-verified before it handles the signing
   assert.ok(loginAt > 0 && readAt > 0, "both steps must be present");
   assert.ok(loginAt < readAt,
     "Base44 login must happen before the signing key is read from Secret Manager");
+
+  const encodeAt = sync.indexOf("encode-base44-signing-key-env.py");
+  const setAt = sync.indexOf('secrets set --env-file "$TMP/base44.env"');
+  assert.ok(encodeAt > readAt && setAt > encodeAt,
+    "the canonical key must be encoded exactly before Base44 imports it");
 });
 
-// The Base44 leg of admission signs with SCAN_EVIDENCE_SIGNING_KEY, and Base44
-// receives that key through an env file. Cloud Run hands the worker and the
-// coordinator the secret payload verbatim, trailing newline included, but
-// `KEY=<payload>\n` and `KEY=<payload>` parse to the same string, so an env file
-// cannot carry one. A payload with surrounding whitespace therefore gives Base44
-// a different signing root than Cloud Run holds; every admission call 401s with
-// invalid_signature while the sync still prints KEY_SYNC_COMPLETE over the top.
-test("the signing-key sync refuses a payload the env file cannot carry", () => {
-  const sync = fs.readFileSync("scripts/sync-base44-signing-key.sh", "utf8");
-
-  const guard = sync.match(
-    /echo "\[6\/8\] Verifying the secret can survive the env-file round trip\.\.\."[\s\S]*?\nfi\n/,
-  );
-  assert.ok(guard, "the env-file round-trip guard is missing from the sync script");
-
-  // A guard that runs after the env file is written would not stop the bad
-  // value being sent, so ordering is part of the contract.
-  assert.ok(
-    sync.indexOf(guard[0]) < sync.indexOf('} > "$TMP/base44.env"'),
-    "the round-trip guard must run before the env file is written",
-  );
-
+// The Base44 leg and Cloud Run must receive byte-identical HMAC roots. An
+// unquoted dotenv value drops surrounding whitespace, including the trailing
+// newline currently present in the canonical secret. The encoder uses a quoted
+// multiline dotenv value so the pinned Base44 CLI parser retains those bytes.
+test("the Base44 signing-key env encoder preserves surrounding whitespace exactly", () => {
+  const encoder = "scripts/encode-base44-signing-key-env.py";
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fixlist-key-shape-"));
-  const check = (bytes) => {
-    fs.writeFileSync(path.join(dir, "signing-key"), bytes);
-    return spawnSync(
-      "bash",
-      [
-        "-c",
-        `set -euo pipefail\nTMP="${dir}"\nSIGNING_SECRET=SCAN_EVIDENCE_SIGNING_KEY\nPROJECT=p\nWORKER=w\n${guard[0]}`,
-      ],
-      { encoding: "utf8" },
-    );
-  };
 
-  const clean = check("0123456789abcdef");
-  assert.equal(clean.status, 0, `a whitespace-free payload must pass: ${clean.stderr}`);
+  try {
+    for (const [label, bytes, delimiter] of [
+      ["a whitespace-free key", Buffer.from("0123456789abcdef"), "'"],
+      ["a trailing newline", Buffer.from("0123456789abcdef\n"), "'"],
+      ["a leading space", Buffer.from(" 0123456789abcdef"), "'"],
+      ["trailing spaces and tabs", Buffer.from("0123456789abcdef \t"), "'"],
+      ["multiple surrounding newlines", Buffer.from("\n0123456789abcdef\n\n"), "'"],
+      ["an apostrophe", Buffer.from("0123'456789abcdef\n"), "`"],
+    ]) {
+      const input = path.join(dir, "signing-key");
+      const output = path.join(dir, "base44.env");
+      fs.writeFileSync(input, bytes, { mode: 0o600 });
 
-  for (const [label, bytes] of [
-    ["a trailing newline", "0123456789abcdef\n"],
-    ["a leading space", " 0123456789abcdef"],
-    ["trailing whitespace", "0123456789abcdef \t"],
-  ]) {
-    const rejected = check(bytes);
-    assert.equal(rejected.status, 1, `${label} must fail the sync closed`);
-    assert.match(rejected.stderr, /surrounding whitespace/, `${label} must say why`);
-    // The operator has to be told the repair spans all three consumers, or
-    // repointing one of them silently splits the signing root instead.
-    assert.match(rejected.stderr, /versions add/, `${label} must name the repair`);
-
-    // Diagnosing a secret must never print it.
-    const output = `${rejected.stdout}${rejected.stderr}`;
-    assert.doesNotMatch(output, /0123456789abcdef/, `${label} must not echo the payload`);
+      const result = spawnSync("python3", [encoder, input, output], { encoding: "utf8" });
+      assert.equal(result.status, 0, `${label} must be representable: ${result.stderr}`);
+      assert.deepEqual(
+        fs.readFileSync(output),
+        Buffer.concat([
+          Buffer.from(`SCAN_EVIDENCE_SIGNING_KEY=${delimiter}`),
+          bytes,
+          Buffer.from(`${delimiter}\n`),
+        ]),
+        `${label} changed during Base44 env encoding`,
+      );
+      assert.equal(fs.statSync(output).mode & 0o777, 0o600, "the encoded secret file must stay private");
+      assert.doesNotMatch(`${result.stdout}${result.stderr}`, /0123456789abcdef/,
+        `${label} must not print the signing key`);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
+});
 
-  fs.rmSync(dir, { recursive: true, force: true });
+test("the Base44 signing-key env encoder fails closed on bytes dotenv would change", () => {
+  const encoder = "scripts/encode-base44-signing-key-env.py";
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fixlist-key-unrepresentable-"));
+
+  try {
+    for (const [label, bytes] of [
+      ["an empty payload", Buffer.alloc(0)],
+      ["a carriage return", Buffer.from("0123456789abcdef\r\n")],
+      ["a NUL byte", Buffer.from("01234567\0abcdef")],
+      ["both supported literal delimiters", Buffer.from("0123'456`789")],
+      ["invalid UTF-8", Buffer.from([0xff, 0xfe])],
+    ]) {
+      const input = path.join(dir, "signing-key");
+      const output = path.join(dir, "base44.env");
+      fs.writeFileSync(input, bytes, { mode: 0o600 });
+      fs.rmSync(output, { force: true });
+
+      const result = spawnSync("python3", [encoder, input, output], { encoding: "utf8" });
+      assert.equal(result.status, 1, `${label} must fail closed`);
+      assert.equal(fs.existsSync(output), false, `${label} must not leave an import file`);
+      assert.doesNotMatch(`${result.stdout}${result.stderr}`, /0123/, `${label} must not print key material`);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

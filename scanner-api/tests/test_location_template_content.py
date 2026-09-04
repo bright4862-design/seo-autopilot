@@ -75,7 +75,9 @@ def test_location_placeholder_in_h1_is_counted_once():
     page = extract_page(html, url, url, 200, "text/html", _discovery())
 
     assert page["template_content_issue_count"] == 1
+    assert page["template_content_issue_types"] == ["unresolved_location_token"]
     assert len(page["template_content_issue_evidence"]) == 1
+    assert "#location#" in page["template_content_issue_evidence"][0]
 
 
 def test_city_location_page_still_flags_unresolved_template_tokens():

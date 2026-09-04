@@ -1,5 +1,6 @@
 from app.extract import extract_page
 from app.review import run_review
+from app.scanner import build_findings
 
 
 def _discovery():
@@ -88,6 +89,7 @@ def test_location_template_findings_group_into_one_developer_repair():
     result = run_review({
         "website_url": "https://example.com",
         "pages": pages,
+        "raw_findings": build_findings(pages),
         "scan_coverage": {
             "pages_found": len(pages),
             "pages_crawled": len(pages),

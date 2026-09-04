@@ -90,12 +90,15 @@ def _clean_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
-def _location_state_from_path(path: str) -> str:
+def _location_slug_from_path(path: str) -> str:
+    """Return one explicit /locations/<market> slug, or empty outside that surface."""
     clean_path = urlparse(str(path or "")).path.lower().rstrip("/")
     match = re.search(r"(?:^|/)locations/([^/?#]+)$", clean_path)
-    if not match:
-        return ""
-    return STATE_BY_SLUG.get(match.group(1).strip("/"), "")
+    return match.group(1).strip("/") if match else ""
+
+
+def _location_state_from_path(path: str) -> str:
+    return STATE_BY_SLUG.get(_location_slug_from_path(path), "")
 
 
 def _evidence_snippet(text: str, start: int, end: int, radius: int = 72) -> str:
@@ -116,9 +119,9 @@ def detect_location_template_content(
     h1: str,
     visible_text: str,
 ) -> dict[str, Any]:
-    """Return bounded, high-confidence broken-template evidence for state pages."""
-    intended_state = _location_state_from_path(path)
-    if not intended_state:
+    """Return bounded broken-template evidence for explicit location landing pages."""
+    location_slug = _location_slug_from_path(path)
+    if not location_slug:
         return {
             "template_content_issue_types": [],
             "template_content_issue_count": 0,
@@ -138,17 +141,22 @@ def detect_location_template_content(
         if snippet and snippet not in evidence and len(evidence) < TEMPLATE_CONTENT_EVIDENCE_LIMIT:
             evidence.append(snippet)
 
-    intended_key = intended_state.casefold()
-    for match in STRONG_WRONG_LOCATION_COPY_RE.finditer(source):
-        observed_state = _clean_text(match.group("state"))
-        if observed_state.casefold() == intended_key:
-            continue
-        issue_count += 1
-        if "wrong_location_copy" not in issue_types:
-            issue_types.append("wrong_location_copy")
-        snippet = _evidence_snippet(source, match.start(), match.end())
-        if snippet and snippet not in evidence and len(evidence) < TEMPLATE_CONTENT_EVIDENCE_LIMIT:
-            evidence.append(snippet)
+    # Wrong-state inference stays deliberately narrower than placeholder detection.
+    # A city/market slug proves this is a location template, but it does not prove
+    # which U.S. state is intended. Only a state/DC slug can support this claim.
+    intended_state = STATE_BY_SLUG.get(location_slug, "")
+    if intended_state:
+        intended_key = intended_state.casefold()
+        for match in STRONG_WRONG_LOCATION_COPY_RE.finditer(source):
+            observed_state = _clean_text(match.group("state"))
+            if observed_state.casefold() == intended_key:
+                continue
+            issue_count += 1
+            if "wrong_location_copy" not in issue_types:
+                issue_types.append("wrong_location_copy")
+            snippet = _evidence_snippet(source, match.start(), match.end())
+            if snippet and snippet not in evidence and len(evidence) < TEMPLATE_CONTENT_EVIDENCE_LIMIT:
+                evidence.append(snippet)
 
     return {
         "template_content_issue_types": issue_types,
@@ -176,7 +184,7 @@ def _dedupe(values: list[str], limit: int) -> list[str]:
 
 
 def build_location_template_raw_fixes(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Group broken state-location copy into one developer-owned root-cause repair."""
+    """Group broken location copy into one developer-owned root-cause repair."""
     affected: list[str] = []
     evidence: list[str] = []
     issue_types: list[str] = []
@@ -190,7 +198,7 @@ def build_location_template_raw_fixes(pages: list[dict[str, Any]]) -> list[dict[
         if not page_issue_types:
             continue
         url = _page_url(page)
-        if not url or not _location_state_from_path(url):
+        if not url or not _location_slug_from_path(url):
             continue
         if not page_has_usable_html(page):
             continue
@@ -229,14 +237,14 @@ def build_location_template_raw_fixes(pages: list[dict[str, Any]]) -> list[dict[
             f"{'s' if len(affected) != 1 else ''}. This points to a shared location template or variable-mapping problem, not separate copy edits."
         ),
         "why_it_matters": (
-            "Publishing unresolved placeholders or copy for the wrong state can confuse customers and search engines about which market the page serves, weakening trust and local relevance."
+            "Publishing unresolved placeholders or copy for the wrong market can confuse customers and search engines about which location the page serves, weakening trust and local relevance."
         ),
         "current_value": evidence_summary or f"{len(affected)} location pages contain broken geographic template content.",
         "recommended_value": (
-            "Fix the shared location template and its geographic variables so each page renders the intended market name, then verify representative state pages before publishing."
+            "Fix the shared location template and its geographic variables so each page renders the intended market name, then verify representative location pages before publishing."
         ),
         "recommendation": (
-            "Fix the shared location template and its geographic variables so each page renders the intended market name, then verify representative state pages before publishing."
+            "Fix the shared location template and its geographic variables so each page renders the intended market name, then verify representative location pages before publishing."
         ),
         "affected_pages": affected,
         "source_pages": affected[:30],
@@ -252,7 +260,7 @@ def build_location_template_raw_fixes(pages: list[dict[str, Any]]) -> list[dict[
         "confidence_score": 96,
         "what_to_do_steps": [
             "Open the shared location-page template or CMS component that supplies state and market variables.",
-            "Replace unresolved placeholder output and correct the geographic variable mapping that is inserting another market's lender copy.",
+            "Replace unresolved placeholder output and correct any geographic variable mapping that is inserting another market's copy.",
             "Verify several representative location pages, including every example shown by FixList, before publishing.",
             "Publish the shared-template fix and run FixList again to confirm the broken location content is gone.",
         ],

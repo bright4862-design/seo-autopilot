@@ -1,0 +1,76 @@
+name: PR250 Wire Location Template Repair
+
+on:
+  push:
+    branches:
+      - fix/location-template-content
+    paths:
+      - .github/workflows/pr250-wire-location-template.yml
+
+permissions:
+  contents: write
+
+jobs:
+  wire-and-verify:
+    if: github.event.head_commit.message != 'fix(scanner): wire location template repair into review'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/location-template-content
+          fetch-depth: 0
+
+      - name: Verify feature branch only
+        run: |
+          test "$(git branch --show-current)" = "fix/location-template-content"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+
+      - name: Wire grouped location repair into review
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('scanner-api/app/review.py')
+          source = path.read_text()
+
+          import_anchor = 'from .market_scope import strip_market_locale_prefix\n'
+          import_line = 'from .location_template_content import build_location_template_raw_fixes\n'
+          if import_line not in source:
+              if import_anchor not in source:
+                  raise SystemExit('review import anchor not found')
+              source = source.replace(import_anchor, import_anchor + import_line, 1)
+
+          old = '''    page_pattern_fixes = build_page_pattern_findings(pages)\n    strategic_fixes = build_strategic_findings(body, pages, website_url, site_fingerprint, playbook)\n    canonical_fixes = prepare_fixes(raw_fixes + evidence_fixes + page_pattern_fixes + strategic_fixes, site_fingerprint, body, playbook, pages)\n'''
+          new = '''    page_pattern_fixes = build_page_pattern_findings(pages)\n    location_template_fixes = build_location_template_raw_fixes(pages)\n    strategic_fixes = build_strategic_findings(body, pages, website_url, site_fingerprint, playbook)\n    canonical_fixes = prepare_fixes(raw_fixes + evidence_fixes + page_pattern_fixes + location_template_fixes + strategic_fixes, site_fingerprint, body, playbook, pages)\n'''
+          if 'location_template_fixes = build_location_template_raw_fixes(pages)' not in source:
+              if old not in source:
+                  raise SystemExit('run_review wiring anchor not found')
+              source = source.replace(old, new, 1)
+
+          path.write_text(source)
+          PY
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install scanner dependencies
+        run: |
+          python -m pip install --upgrade pip pytest pytest-asyncio
+          pip install -r scanner-api/requirements.txt
+
+      - name: Run focused location-template regressions
+        working-directory: scanner-api
+        run: pytest -q tests/test_location_template_content.py
+
+      - name: Commit verified wiring and remove one-shot workflow
+        run: |
+          rm .github/workflows/pr250-wire-location-template.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scanner-api/app/review.py .github/workflows/pr250-wire-location-template.yml
+          git diff --cached --check
+          git commit -m 'fix(scanner): wire location template repair into review'
+          git push origin HEAD:fix/location-template-content

@@ -10,10 +10,15 @@ import { REPAIR_SUGGESTION_FALLBACK, repairSuggestion, repairTypeOf } from "../.
  * The scanner learned to detect broken location-page template content, and the
  * browser did not learn anything. A rule with no entry in the repair tables
  * still renders -- that is what the fallbacks are for -- but it renders as an
- * unrecognized repair: no effort, no scope, the raw rule name as its technical
- * label, and a "decide whether this is a single-page or template change"
- * placeholder sitting directly under a scanner explanation that already says it
- * is a shared template problem.
+ * unrecognized repair: the generic "Website improvement" category, the raw rule
+ * name as its technical label, no fix scope, and a "decide whether this is a
+ * single-page or template change" placeholder sitting directly under a scanner
+ * explanation that already says it is a shared template problem.
+ *
+ * A real export of centerstreetlending.com carried this finding as the site's
+ * top recommendation, categorized "Website improvement", while the rule was
+ * still unmapped. The effort line survived the gap, because normalize_fix
+ * supplies an estimate for every fix regardless.
  *
  * These prove the two halves agree.
  */
@@ -43,6 +48,10 @@ function scannerFix(overrides = {}) {
     difficulty: "developer",
     requires_developer: true,
     who_can_do_this: "your_web_person",
+    // normalize_fix fills these downstream for every fix, so a fixture without
+    // them is not the shape the browser actually receives.
+    estimated_time: "about 1\u20132 hours",
+    time_estimate: "about 1\u20132 hours",
     ...overrides,
   };
 }
@@ -95,8 +104,15 @@ test("the card carries an effort and an owner the customer can act on", () => {
   const suggestion = repairSuggestion(scannerFix());
   const [card] = buildRepairCards([applyCustomerVocabulary(scannerFix())]);
 
-  assert.notEqual(suggestion.effortLabel, "", "an unmapped repair reports no effort at all");
-  assert.equal(card.effort, "Medium");
+  // The scanner's own estimate is what the card shows, and it arrives whether
+  // or not this rule is mapped -- a real export of centerstreetlending.com
+  // carried "about 1-2 hours" on this finding while the rule was still
+  // unmapped. What the library adds is the scale beside it: an unmapped repair
+  // has no effortLabel, so effortDisplay is the bare estimate with nothing to
+  // read it against.
+  assert.equal(card.effort, "about 1\u20132 hours");
+  assert.equal(suggestion.effortLabel, "Medium");
+  assert.equal(suggestion.effortDisplay, "Medium \u00b7 about 1\u20132 hours");
   assert.equal(card.who, "Developer");
   assert.equal(suggestion.roleSource, "scanner_evidence");
 });

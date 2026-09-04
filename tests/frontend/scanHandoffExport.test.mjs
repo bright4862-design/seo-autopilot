@@ -28,6 +28,14 @@ const SCAN = {
   created_at: "2026-09-04T10:20:45Z",
 };
 
+/** Every leaf value in the export, so a check can compare values not characters. */
+function exportedValues(node, found = []) {
+  if (Array.isArray(node)) node.forEach((entry) => exportedValues(entry, found));
+  else if (node && typeof node === "object") Object.values(node).forEach((entry) => exportedValues(entry, found));
+  else found.push(node);
+  return found;
+}
+
 function row(fixId, fingerprint, pages, overrides = {}) {
   return {
     id: fixId,
@@ -82,9 +90,16 @@ test("a score the page could not measure is never exported as a number", () => {
 
   assert.equal(handoff.health_score, null);
   assert.equal(handoff.health_score_available, false);
+
+  // Walked as values rather than searched as text. Sweeping the serialized
+  // string for "62" also matched the millisecond field of `generated_at`, which
+  // defaults to the current time -- so this assertion failed on roughly one run
+  // in sixty, on a document whose score was correctly null. Comparing values
+  // catches the leak this is actually about, at any depth, and cannot be
+  // tripped by a clock.
   assert.ok(
-    !serializeScanHandoff(handoff).includes("62"),
-    "an unavailable score must not survive anywhere in the serialized file",
+    !exportedValues(handoff).some((value) => value === 62 || value === "62"),
+    "an unavailable score must not survive anywhere in the export",
   );
 });
 

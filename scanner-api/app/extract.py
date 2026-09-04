@@ -6,6 +6,7 @@ from urllib.parse import urljoin, urldefrag, urlparse
 
 from bs4 import BeautifulSoup
 
+from .location_template_content import detect_location_template_content
 from .market_scope import strip_market_locale_prefix
 from .page_evidence_gate import PAGE_EVIDENCE_GATE_VERSION, classify_page_evidence
 from .metadata_title_evidence import (
@@ -208,6 +209,12 @@ def extract_page(
     indexable = 200 <= status_code < 300 and not fetch_error and not noindexed
     indexability_state = classify_indexability_state(status_code, fetch_error, noindexed)
     page_template_family = classify_template(path, title, h1s[0] if h1s else "", schema_types)
+    template_content = detect_location_template_content(
+        path,
+        title,
+        h1s[0] if h1s else "",
+        visible_text,
+    )
 
     rendering_signals = client_rendering_signals(html, status_code, word_count)
     page_evidence_class = classify_page_evidence(
@@ -250,6 +257,9 @@ def extract_page(
         "metadata_evidence_version": METADATA_EVIDENCE_VERSION,
         "h1": h1s[0] if h1s else "",
         "h1_count": len(h1s),
+        "template_content_issue_types": template_content["template_content_issue_types"],
+        "template_content_issue_count": template_content["template_content_issue_count"],
+        "template_content_issue_evidence": template_content["template_content_issue_evidence"],
         "canonical": canonical,
         "canonical_url": canonical,
         "canonical_href_resolution_version": CANONICAL_HREF_RESOLUTION_VERSION,

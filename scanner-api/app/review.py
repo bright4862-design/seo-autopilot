@@ -24,6 +24,7 @@ from .page_evidence_gate import (
     page_has_usable_html,
 )
 from .market_scope import strip_market_locale_prefix
+from .location_template_content import build_location_template_raw_fixes
 
 REVIEW_VERSION = "python_review_v2_structural_marketplace"
 SCORING_MODEL = "python_review_v2_group_dedup"
@@ -399,8 +400,9 @@ def run_review(payload: dict[str, Any]) -> dict[str, Any]:
     playbook = apply_finance_sub_playbook(playbook, site_fingerprint.get("finance_sub_playbook", ""))
     evidence_fixes = build_scanner_evidence_findings(body, pages, site_fingerprint)
     page_pattern_fixes = build_page_pattern_findings(pages)
+    location_template_fixes = build_location_template_raw_fixes(pages)
     strategic_fixes = build_strategic_findings(body, pages, website_url, site_fingerprint, playbook)
-    canonical_fixes = prepare_fixes(raw_fixes + evidence_fixes + page_pattern_fixes + strategic_fixes, site_fingerprint, body, playbook, pages)
+    canonical_fixes = prepare_fixes(raw_fixes + evidence_fixes + page_pattern_fixes + location_template_fixes + strategic_fixes, site_fingerprint, body, playbook, pages)
     no_page_evidence = (
         int_or_zero(site_fingerprint.get("pages_received")) <= 0
         or int_or_zero(site_fingerprint.get("pages_crawled")) <= 0

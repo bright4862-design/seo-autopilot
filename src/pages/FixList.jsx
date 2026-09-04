@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Copy, Download, ExternalLink } from "lucide-react";
+import { Check, Copy, Download, ExternalLink, FileText } from "lucide-react";
 
 import { isRateLimitFinding, shouldUseLegacyRateLimitPresentation } from "@/lib/reviewContract";
 import { getScanRunWithFixList, listAccountScanRuns } from "@/lib/scanRuns";
@@ -25,6 +25,8 @@ import {
   customerEvidenceGroupRows,
 } from "@/lib/repairCardModel";
 import { evidenceLink } from "@/lib/evidenceUrl";
+import { buildScanHandoff, scanHandoffFilename, serializeScanHandoff } from "@/lib/scanHandoff";
+import { trackEvent } from "@/lib/analytics";
 import { samplingDisclosure } from "@/lib/samplingDisclosure";
 import { displayPathPrefix, focusedPathSections, focusedSectionOnboardingPath, orderFocusedScanHistory } from "@/lib/focusedScanScope";
 
@@ -421,6 +423,16 @@ export default function FixList() {
   const summaryItems = repairPresentation.canonical === true ? customerRepairCards : recommendations;
   const summary = hasUsefulScan ? getBestSummary(scanRecord, pagesScanned, pagesFound, summaryItems) : "";
   const sampleCoverage = hasUsefulScan ? samplingDisclosure(scanRecord) : null;
+  // What an assistant reading the export must not overclaim. Each of these is
+  // already stated on this page; carrying them into the file is what stops a
+  // model from answering confidently for pages nobody looked at.
+  const handoffLimitations = useMemo(() => {
+    const notes = [limitationNote, sampleCoverage?.unsampledSummary];
+    if (pagesFound > pagesScanned && pagesScanned > 0) {
+      notes.push(`This scan checked ${formatCount(pagesScanned)} of the ${formatCount(pagesFound)} pages found on this site. Pages outside that sample were not examined, so nothing here describes them.`);
+    }
+    return notes.map((note) => cleanString(note)).filter(Boolean);
+  }, [limitationNote, sampleCoverage?.unsampledSummary, pagesFound, pagesScanned]);
   const focusedRescanTarget = scanRecord?.scope_type === "path_prefix"
     ? focusedSectionOnboardingPath(scanRecord?.parent_scan_id, {
         requested_origin: scanRecord?.requested_origin || scanRecord?.website_url,
@@ -540,6 +552,22 @@ export default function FixList() {
 
             {summary ? (
               <p className="mt-8 max-w-[56ch] text-[14px] leading-relaxed text-ink-muted">{summary}</p>
+            ) : null}
+
+            {repairPresentation.canonical === true && customerRepairCards.length > 0 ? (
+              <ScanExportControls
+                scanRecord={scanRecord}
+                cards={customerRepairCards}
+                issues={active}
+                businessName={scanRecord?.business_name || websiteHost || "Your website"}
+                healthScore={healthScore}
+                scoreUnavailable={scoreUnavailable}
+                pagesScanned={pagesScanned}
+                pagesFound={pagesFound}
+                summary={summary}
+                nextBestStep={nextBestStep}
+                limitations={handoffLimitations}
+              />
             ) : null}
 
             {sampleCoverage ? (
@@ -721,6 +749,160 @@ function customerEvidenceClassLabel(value = "") {
   if (normalized === "improvement") return "Improvement";
   if (normalized === "recommendation") return "Recommendation";
   return "";
+}
+
+/**
+ * The FixList is the deliverable, and until now it only existed on this screen.
+ * A customer who wants an assistant to walk them through it has to retype it,
+ * and a customer who wants their web person to do the work has nothing to send.
+ *
+ * Both exports are built from `cards` -- the same array rendered above them --
+ * so a downloaded file can never describe a different scan than the one on the
+ * page.
+ */
+function ScanExportControls({
+  scanRecord,
+  cards = [],
+  issues = [],
+  businessName = "",
+  healthScore = null,
+  scoreUnavailable = false,
+  pagesScanned = 0,
+  pagesFound = 0,
+  summary = "",
+  nextBestStep = "",
+  limitations = [],
+}) {
+  const [copied, setCopied] = useState(false);
+  const [pdfPending, setPdfPending] = useState(false);
+  const [failure, setFailure] = useState("");
+
+  const scanId = cleanString(scanRecord?.scan_id || scanRecord?.id);
+
+  function buildHandoff() {
+    return buildScanHandoff({
+      scanRecord,
+      cards,
+      healthScore,
+      scoreUnavailable,
+      pagesScanned,
+      pagesFound,
+      summary,
+      nextBestStep,
+      limitations,
+    });
+  }
+
+  // Deliberately narrow: the admin report counts exports by format, and the
+  // scan id is already the customer's own. Nothing about the findings goes out.
+  function recordExport(format, fixCount) {
+    trackEvent("report_exported", { format, fix_count: fixCount, scan_id: scanId });
+  }
+
+  function handleDownloadJson() {
+    setFailure("");
+    const handoff = buildHandoff();
+    try {
+      downloadTextFile(serializeScanHandoff(handoff), scanHandoffFilename(scanRecord), "application/json;charset=utf-8");
+    } catch (error) {
+      console.warn("Could not download the FixList export.", error);
+      setFailure("That download could not start. Copying it to your clipboard still works.");
+      return;
+    }
+    recordExport("json", handoff.fix_count);
+  }
+
+  async function handleCopyJson() {
+    setFailure("");
+    const handoff = buildHandoff();
+    try {
+      await navigator.clipboard.writeText(serializeScanHandoff(handoff));
+    } catch (error) {
+      console.warn("Could not copy the FixList export.", error);
+      setFailure("Your browser blocked the clipboard. Use the download instead.");
+      return;
+    }
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1800);
+    recordExport("json_clipboard", handoff.fix_count);
+  }
+
+  async function handleDownloadPdf() {
+    setFailure("");
+    setPdfPending(true);
+    try {
+      // The PDF writer pulls in a document library that nothing else on this
+      // page needs, so it is fetched when someone asks for a PDF rather than by
+      // every reader of every FixList.
+      const { exportScanReportPdf } = await import("@/lib/exportScanReport");
+      exportScanReportPdf({
+        project: {
+          business_name: businessName,
+          website_url: scanRecord?.website_url || "",
+          // A provisional or unmeasured score must print as an em dash, never
+          // as a number a reader would take for a measurement.
+          seo_score: scoreUnavailable ? null : healthScore,
+          last_crawl_at: scanRecord?.created_at || "",
+        },
+        crawlJob: {
+          website_url: scanRecord?.website_url || "",
+          pages_crawled: pagesScanned || null,
+          completed_at: scanRecord?.completed_at || scanRecord?.created_at || "",
+        },
+        issues,
+      });
+    } catch (error) {
+      console.warn("Could not build the FixList PDF.", error);
+      setFailure("The PDF could not be created. The other two options still work.");
+      return;
+    } finally {
+      setPdfPending(false);
+    }
+    recordExport("pdf", cards.length);
+  }
+
+  return (
+    <section className="mt-8 max-w-[60ch] rounded-2xl border border-hairline-soft bg-white/45 px-5 py-5" aria-labelledby="take-this-list-with-you">
+      <h2 id="take-this-list-with-you" className="text-[17px] font-semibold tracking-tight text-ink">
+        Take this list with you
+      </h2>
+      <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
+        Download the file and upload it to ChatGPT or Claude, and it will walk you through the list one fix at a time. The PDF is the version to send to whoever looks after your website.
+      </p>
+
+      <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-3">
+        <button
+          type="button"
+          onClick={handleDownloadJson}
+          className="flex items-center gap-2 rounded-full border border-hairline px-4 py-2 text-[13px] font-medium text-ink transition-colors hover:bg-ink/[0.035] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+        >
+          <Download className="h-3.5 w-3.5" />
+          Download for ChatGPT or Claude
+        </button>
+        <button
+          type="button"
+          onClick={handleCopyJson}
+          className="flex items-center gap-1.5 text-[12.5px] text-ink-muted transition-colors hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+        >
+          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+          {copied ? "Copied" : "Copy instead"}
+        </button>
+        <button
+          type="button"
+          onClick={handleDownloadPdf}
+          disabled={pdfPending}
+          className="flex items-center gap-1.5 text-[12.5px] text-ink-muted transition-colors hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <FileText className="h-3.5 w-3.5" />
+          {pdfPending ? "Preparing PDF…" : "Download PDF"}
+        </button>
+      </div>
+
+      {failure ? (
+        <p role="status" className="mt-3 text-[12.5px] leading-relaxed text-warnink">{failure}</p>
+      ) : null}
+    </section>
+  );
 }
 
 function CustomerRepairList({ cards = [], websiteUrl = "" }) {

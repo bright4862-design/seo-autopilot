@@ -142,9 +142,83 @@ test("every status log read is bounded to a recent window, not the oldest entrie
   const reads = source.match(/gcloud logging read[\s\S]*?--format=/g) || [];
   assert.ok(reads.length >= 4, "expected the worker and coordinator log reads");
   for (const read of reads) {
-    assert.match(read, /timestamp>=\\"\$log_since\\"/, "each read must bound its own window");
+    assert.match(
+      read,
+      /timestamp>=\\"\$(log_since|coordinator_log_since)\\"/,
+      "each read must bound its own window",
+    );
   }
-  assert.match(source, /log_since="\$\(date -u -d '-30 minutes'/, "the window must be computed once");
+});
+
+test("the coordinator's log window reaches further back than the worker's", () => {
+  // The two services differ in volume by orders of magnitude, and every read
+  // here is --order=asc with a bounded --limit, which returns the OLDEST
+  // entries in the window. Widening the worker's window would therefore
+  // reintroduce the 2026-08-15 failure this file already guards. The
+  // coordinator writes almost nothing -- a few lines per instance lifecycle
+  // plus one per rejected request -- so the limit binds long before the window.
+  //
+  // Width matters on the coordinator because a rejection is written once, when
+  // a customer's scan is refused. A half-hour window routinely closes over it
+  // before anyone can dispatch a read, and the read then reports silence for a
+  // failure sitting in Cloud Logging -- which is how a running service
+  // answering 401 was repeatedly mistaken for one never reached at all.
+  const coordinatorReads = (source.match(/gcloud logging read[\s\S]*?--format=/g) || [])
+    .filter((read) => read.includes("$ADMISSION_COORDINATOR_SERVICE"));
+  const workerReads = (source.match(/gcloud logging read[\s\S]*?--format=/g) || [])
+    .filter((read) => read.includes("$CLOUD_RUN_SERVICE"));
+
+  assert.equal(coordinatorReads.length, 2, "expected both coordinator reads");
+  assert.equal(workerReads.length, 2, "expected both worker reads");
+  for (const read of coordinatorReads) {
+    assert.match(read, /\$coordinator_log_since/, "coordinator reads use the wide window");
+  }
+  for (const read of workerReads) {
+    assert.match(read, /timestamp>=\\"\$log_since\\"/, "worker reads keep the narrow window");
+    assert.doesNotMatch(read, /\$coordinator_log_since/, "a wide window would return stale worker entries");
+  }
+
+  assert.match(source, /log_since="\$\(window_start 30\)"/, "the worker window stays at 30 minutes");
+  assert.match(
+    source,
+    /coordinator_log_minutes="\$\{FIXLIST_COORDINATOR_LOG_MINUTES:-(\d+)\}"/,
+    "the coordinator window must be overridable with a default",
+  );
+  const configured = Number(
+    source.match(/FIXLIST_COORDINATOR_LOG_MINUTES:-(\d+)\}/)[1],
+  );
+  assert.ok(configured >= 120, `the coordinator default window is too narrow: ${configured} minutes`);
+
+  // A malformed override must fail closed rather than silently producing an
+  // empty or absurd window, which would read as "nothing happened".
+  const guard = source.slice(
+    source.indexOf("coordinator_log_minutes=\"${FIXLIST_COORDINATOR_LOG_MINUTES"),
+    source.indexOf("coordinator_log_since=\"$(window_start"),
+  );
+  assert.match(guard, /grep -Eq '\^\[1-9\]/, "the override must be validated as a positive integer");
+  assert.match(guard, /exit 2/, "an invalid window must abort the read");
+});
+
+test("a coordinator authentication rejection is legible in the status table", () => {
+  // The coordinator now emits one structured WARNING per rejected request. The
+  // status table printed jsonPayload.event but not jsonPayload.reason, so the
+  // read would have shown that a rejection happened while omitting which one --
+  // invalid_signature, stale_request and invalid_timestamp each point at a
+  // different repair, and the whitespace flag names a split signing root
+  // outright.
+  const block = source.slice(
+    source.indexOf("=== Recent admission coordinator logs ==="),
+    source.indexOf("=== Recent admission coordinator requests ==="),
+  );
+  assert.ok(block.length > 0, "the coordinator log read must exist");
+  for (const field of [
+    "jsonPayload.reason",
+    "jsonPayload.auth_label",
+    "jsonPayload.matches_whitespace_stripped_root",
+    "jsonPayload.skew_seconds",
+  ]) {
+    assert.ok(block.includes(field), `the status table must surface ${field}`);
+  }
 });
 
 test("status reports whether the coordinator can be reached at all", () => {

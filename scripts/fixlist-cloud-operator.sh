@@ -210,8 +210,36 @@ show_status() {
   # were quietly reporting 2026-08-15 while an operator waited for the last
   # half hour. An explicit timestamp predicate in the filter is unambiguous and
   # keeps chronological order readable.
-  local log_since
-  log_since="$(date -u -d '-30 minutes' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-30M +%Y-%m-%dT%H:%M:%SZ)"
+  window_start() {
+    local minutes="$1"
+    date -u -d "-${minutes} minutes" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+      || date -u -v-"${minutes}"M +%Y-%m-%dT%H:%M:%SZ
+  }
+
+  local log_since coordinator_log_since coordinator_log_minutes
+  log_since="$(window_start 30)"
+
+  # The coordinator gets a much wider window than the worker, because the two
+  # differ in volume by orders of magnitude. The worker logs continuously, so
+  # with --order=asc and a bounded --limit a wide window would return the OLDEST
+  # entries in it and report stale state -- the failure mode #242 fixed. The
+  # coordinator writes almost nothing: a few lines per instance lifecycle, plus
+  # one per rejected request. A hundred entries there span many hours, so the
+  # limit binds long before the window does.
+  #
+  # Width matters here because a coordinator rejection is written once, at the
+  # moment a customer's scan is refused. By the time someone has noticed the
+  # refusal, opened CI and dispatched a status read, a half-hour window has
+  # usually already closed over it, and the read then reports silence for a
+  # failure sitting in Cloud Logging.
+  coordinator_log_minutes="${FIXLIST_COORDINATOR_LOG_MINUTES:-720}"
+  if ! printf '%s' "$coordinator_log_minutes" | grep -Eq '^[1-9][0-9]{0,4}$'; then
+    echo "Refusing status read: coordinator log window must be a positive whole number of minutes." >&2
+    exit 2
+  fi
+  coordinator_log_since="$(window_start "$coordinator_log_minutes")"
+  printf 'coordinator_log_window_minutes=%s coordinator_log_since=%s\n' \
+    "$coordinator_log_minutes" "$coordinator_log_since"
 
   # The admission coordinator decides whether a scan is claimed at all, so when
   # a customer is refused with "Scan admission is temporarily unavailable" the
@@ -222,14 +250,14 @@ show_status() {
   echo
   echo "=== Recent admission coordinator logs ==="
   gcloud logging read \
-    "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"$ADMISSION_COORDINATOR_SERVICE\" AND timestamp>=\"$log_since\"" \
+    "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"$ADMISSION_COORDINATOR_SERVICE\" AND timestamp>=\"$coordinator_log_since\"" \
     --project="$GCP_PROJECT" --limit=100 --order=asc \
-    --format='table(timestamp,severity,jsonPayload.event,jsonPayload.outcome,jsonPayload.error_code,jsonPayload.owner_user_id,jsonPayload.mode,jsonPayload.generation,textPayload)' || true
+    --format='table(timestamp,severity,jsonPayload.event,jsonPayload.reason,jsonPayload.auth_label,jsonPayload.matches_whitespace_stripped_root,jsonPayload.skew_seconds,jsonPayload.error_code,textPayload)' || true
 
   echo
   echo "=== Recent admission coordinator requests ==="
   gcloud logging read \
-    "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"$ADMISSION_COORDINATOR_SERVICE\" AND logName:\"run.googleapis.com%2Frequests\" AND timestamp>=\"$log_since\"" \
+    "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"$ADMISSION_COORDINATOR_SERVICE\" AND logName:\"run.googleapis.com%2Frequests\" AND timestamp>=\"$coordinator_log_since\"" \
     --project="$GCP_PROJECT" --limit=100 --order=asc \
     --format='table(timestamp,httpRequest.requestUrl,httpRequest.requestMethod,httpRequest.status,httpRequest.latency)' || true
 

@@ -45,6 +45,17 @@ def test_location_page_extracts_unresolved_template_tokens_with_bounded_evidence
     )
 
 
+def test_city_location_page_still_flags_unresolved_template_tokens():
+    page = _location_page(
+        "houston",
+        "Houston Hard Money Lenders",
+        "Talk with {var-location} specialists about your next investment.",
+    )
+
+    assert "unresolved_location_token" in page["template_content_issue_types"]
+    assert "wrong_location_copy" not in page["template_content_issue_types"]
+
+
 def test_state_location_page_flags_wrong_state_lender_copy():
     page = _location_page(
         "alaska",

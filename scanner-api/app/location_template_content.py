@@ -79,6 +79,11 @@ STATE_BY_SLUG["dc"] = "District of Columbia"
 _STATE_ALTERNATION = "|".join(
     re.escape(state) for state in sorted(US_STATE_NAMES, key=len, reverse=True)
 )
+STATE_LENDER_PHRASE_RE = re.compile(
+    rf"\b(?P<state>{_STATE_ALTERNATION})\s+"
+    r"(?:(?:hard|private)\s+money\s+)?lenders?\b",
+    re.I,
+)
 STRONG_WRONG_LOCATION_COPY_RE = re.compile(
     r"\b(?:as|we(?:\s+are|'re)|our\s+(?:team|company)\s+(?:is|are))\s+"
     rf"(?P<state>{_STATE_ALTERNATION})\s+"
@@ -130,7 +135,7 @@ def detect_location_template_content(
         }
 
     # extract.py's visible_text already contains the document title and headings.
-    # Scan that source once so counts and bounded evidence are not duplicated.
+    # Scan that source once so placeholder counts and evidence are not duplicated.
     source = _clean_text(visible_text)
     issue_types: list[str] = []
     evidence: list[str] = []
@@ -147,21 +152,35 @@ def detect_location_template_content(
     # Wrong-state inference stays deliberately narrower than placeholder detection.
     # A city/market slug proves this is a location template, but it does not prove
     # which U.S. state is intended. Only a state/DC slug can support this claim.
-    # The phrase must also identify this lender/page as the other state; generic
-    # partner, nationwide, or service-area references are not mismatches.
+    # Page identity (title/H1) may use the direct state+lender phrase; body copy
+    # must explicitly identify this lender/page as the other state. This keeps
+    # partner, nationwide, and service-area references out of the finding.
     intended_state = STATE_BY_SLUG.get(location_slug, "")
     if intended_state:
         intended_key = intended_state.casefold()
-        for match in STRONG_WRONG_LOCATION_COPY_RE.finditer(source):
-            observed_state = _clean_text(match.group("state"))
-            if observed_state.casefold() == intended_key:
-                continue
-            issue_count += 1
-            if "wrong_location_copy" not in issue_types:
-                issue_types.append("wrong_location_copy")
-            snippet = _evidence_snippet(source, match.start(), match.end())
-            if snippet and snippet not in evidence and len(evidence) < TEMPLATE_CONTENT_EVIDENCE_LIMIT:
-                evidence.append(snippet)
+        wrong_state_keys: set[str] = set()
+        identity_source = _clean_text(" ".join([str(title or ""), str(h1 or "")]))
+        wrong_location_sources = (
+            (identity_source, STATE_LENDER_PHRASE_RE),
+            (source, STRONG_WRONG_LOCATION_COPY_RE),
+        )
+        for match_source, pattern in wrong_location_sources:
+            for match in pattern.finditer(match_source):
+                observed_state = _clean_text(match.group("state"))
+                observed_key = observed_state.casefold()
+                if observed_key == intended_key or observed_key in wrong_state_keys:
+                    continue
+                wrong_state_keys.add(observed_key)
+                issue_count += 1
+                if "wrong_location_copy" not in issue_types:
+                    issue_types.append("wrong_location_copy")
+                snippet = _evidence_snippet(match_source, match.start(), match.end())
+                if (
+                    snippet
+                    and snippet not in evidence
+                    and len(evidence) < TEMPLATE_CONTENT_EVIDENCE_LIMIT
+                ):
+                    evidence.append(snippet)
 
     return {
         "template_content_issue_types": issue_types,

@@ -54,6 +54,7 @@ export const REPAIR_TYPES = Object.freeze({
   SITEMAP_REDIRECT: "sitemap_redirect",
   NOINDEX_ISSUE: "noindex_issue",
   THIN_OR_DUPLICATE_TEMPLATE: "thin_or_duplicate_template",
+  BROKEN_LOCATION_TEMPLATE_CONTENT: "broken_location_template_content",
 });
 
 /** Where the repair is applied. Deliberately three values, not a taxonomy. */
@@ -152,6 +153,7 @@ const RULE_REPAIR_TYPES = Object.freeze({
   duplicate_content: REPAIR_TYPES.THIN_OR_DUPLICATE_TEMPLATE,
   near_duplicate_content: REPAIR_TYPES.THIN_OR_DUPLICATE_TEMPLATE,
   template_duplicate_content: REPAIR_TYPES.THIN_OR_DUPLICATE_TEMPLATE,
+  broken_location_template_content: REPAIR_TYPES.BROKEN_LOCATION_TEMPLATE_CONTENT,
 });
 
 /**
@@ -429,6 +431,36 @@ const SUGGESTION_LIBRARY = Object.freeze({
       bestApproach: "Decide which pages deserve to exist first, then fix the template that makes the survivors look identical.",
       effort: "high",
       role: "SEO manager",
+    },
+  },
+
+  /**
+   * The scanner raises this only after grouping the evidence into one
+   * shared-template root cause: a location template printing an unresolved
+   * variable, or another market's name, across several pages.
+   *
+   * Both variants are therefore template-scoped. Editing one page by hand
+   * leaves the template printing the same defect on every other location page,
+   * so offering a page-level approach here would send the owner to do work that
+   * does not hold.
+   */
+  [REPAIR_TYPES.BROKEN_LOCATION_TEMPLATE_CONTENT]: {
+    label: "Broken location page text",
+    groupTitle: "Fix the location template printing the wrong text",
+    single: {
+      fixScope: "template",
+      suggestedFix: "Fix the shared location template and the variables that feed it, so the page renders the market it is meant to serve.",
+      bestApproach: "Repair the template and its variable mapping, then check the example pages before publishing.",
+      effort: "medium",
+      role: "Developer",
+    },
+    shared: {
+      fixScope: "template",
+      groupFix: "Repair the shared location template once.",
+      suggestedFix: "Fix the shared location template and the variables that feed it, so every location page renders the market it is meant to serve.",
+      bestApproach: "Repair the template and its variable mapping once, then check the example pages before publishing rather than editing pages one at a time.",
+      effort: "medium",
+      role: "Developer",
     },
   },
 });

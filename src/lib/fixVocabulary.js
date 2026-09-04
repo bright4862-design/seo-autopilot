@@ -358,6 +358,35 @@ export function customerCopyForFix(item = {}) {
     };
   }
 
+  // The scanner writes its own customer-facing explanation for this rule, and
+  // that text names which defect it actually found -- an unresolved placeholder,
+  // another market's copy, or both. The browser cannot reconstruct that
+  // distinction: `template_content_issue_types` is dropped before the fix
+  // reaches it. So this branch supplies only what the scanner does not publish
+  // -- the category, a readable technical label, and a title in customer
+  // vocabulary -- and passes the specific findings through untouched.
+  if (rule === "broken_location_template_content") {
+    return {
+      customerCategory: "Page content",
+      title: count > 1
+        ? "Fix the wrong or unfinished text on your location pages"
+        : "Fix the wrong or unfinished text on this location page",
+      explanation: item.explanation
+        || item.plain_english_explanation
+        || (count > 1
+          ? `${count} location pages show text that was never filled in, or that names a different area than the page is for.`
+          : "This location page shows text that was never filled in, or that names a different area than the page is for."),
+      whyItMatters: item.whyItMatters
+        || item.why_it_matters
+        || "Visitors and search engines read this text to work out which area the page serves. Leftover placeholders or another area's name make the page look unfinished and blur which location it is for.",
+      recommendation: item.recommendation
+        || item.simple_next_step
+        || item.recommended_value
+        || "Fix the shared location template and the values it fills in, then check the example pages before publishing.",
+      technicalLabel: "Location page template",
+    };
+  }
+
   return {
     customerCategory: customerCategoryLabel(item),
     title: item.title || item.issue_title || "Review this website improvement",

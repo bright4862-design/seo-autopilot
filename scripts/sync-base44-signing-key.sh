@@ -5,6 +5,7 @@ PROJECT="seo-autopilot-501517"
 REGION="europe-west1"
 WORKER="fixlist-standard150-worker"
 APP_ID="6a498732ec779dfaaeab0e53"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # The Base44 CLI handles the plaintext signing key, so it is pinned by version
 # AND verified by tarball digest before it is installed. `npx -y pkg@ver` would
@@ -123,50 +124,37 @@ test -s "$TMP/signing-key"
 echo "OK — canonical signing key retrieved securely"
 
 echo
-echo "[6/8] Verifying the secret can survive the env-file round trip..."
+echo "[6/8] Encoding the exact signing-key bytes for Base44..."
 # Cloud Run injects a secret payload verbatim, so the worker and the coordinator
 # both sign with whatever bytes the version holds, trailing newline included.
-# An env file cannot carry a trailing newline in a value: `KEY=<payload>\n` and
-# `KEY=<payload>` parse to the same string. So a payload with surrounding
-# whitespace hands Base44 a DIFFERENT signing root than Cloud Run holds, every
-# admission call fails `invalid_signature` with a 401, and this script would
-# otherwise print KEY_SYNC_COMPLETE over the top of it. Fail closed instead.
-if ! python3 - "$TMP/signing-key" <<'SHAPE'
+# The pinned Base44 CLI's dotenv parser preserves literal bytes inside quoted,
+# multiline values. Use that form so Base44 receives the canonical root exactly,
+# rather than the stripped value produced by the former unquoted env entry.
+python3 "$REPO_ROOT/scripts/encode-base44-signing-key-env.py" \
+  "$TMP/signing-key" \
+  "$TMP/base44.env"
+chmod 600 "$TMP/signing-key" "$TMP/base44.env"
+echo "OK — protected temporary import file created"
+
+echo
+echo "[7/8] Verifying protected Base44 import byte identity..."
+python3 - "$TMP/signing-key" "$TMP/base44.env" <<'VERIFY'
+import hmac
 import sys
 
 payload = open(sys.argv[1], "rb").read()
-stripped = payload.strip()
-if payload == stripped:
-    print("OK — no surrounding whitespace; the env-file round trip is exact")
-    raise SystemExit(0)
-print("ERROR: the pinned secret version has surrounding whitespace.", file=sys.stderr)
-print(f"  payload length:          {len(payload)} bytes", file=sys.stderr)
-print(f"  length once stripped:    {len(stripped)} bytes", file=sys.stderr)
-print("Cloud Run gives the worker and the coordinator the full payload, but an", file=sys.stderr)
-print("env file can only carry the stripped form, so Base44 would sign with a", file=sys.stderr)
-print("different root and every scan would fail admission with invalid_signature.", file=sys.stderr)
-raise SystemExit(1)
-SHAPE
-then
-  echo
-  echo "REPAIR: add a whitespace-free version of the signing secret, then repoint" >&2
-  echo "all three consumers at it in the same change:" >&2
-  echo "  1. printf '%s' \"\$KEY\" | gcloud secrets versions add $SIGNING_SECRET --data-file=- --project=$PROJECT" >&2
-  echo "  2. redeploy $WORKER and fixlist-scan-admission-coordinator pinned to the new version" >&2
-  echo "  3. re-run this script so Base44 receives the same bytes" >&2
-  echo "Repointing only some of them splits the signing root and breaks admission." >&2
-  exit 1
-fi
+encoded = open(sys.argv[2], "rb").read()
+prefix = b"SCAN_EVIDENCE_SIGNING_KEY="
 
-echo
-echo "[7/8] Preparing protected Base44 import file..."
-{
-  printf 'SCAN_EVIDENCE_SIGNING_KEY='
-  cat "$TMP/signing-key"
-  printf '\n'
-} > "$TMP/base44.env"
-chmod 600 "$TMP/signing-key" "$TMP/base44.env"
-echo "OK — protected temporary import file created"
+if not encoded.startswith(prefix) or not encoded.endswith(b"\n"):
+    raise SystemExit("ERROR: protected Base44 import has an invalid envelope")
+quoted = encoded[len(prefix):-1]
+if len(quoted) < 2 or quoted[:1] not in (b"'", b"`") or quoted[-1:] != quoted[:1]:
+    raise SystemExit("ERROR: protected Base44 import has an invalid delimiter")
+if not hmac.compare_digest(payload, quoted[1:-1]):
+    raise SystemExit("ERROR: protected Base44 import changed the signing-key bytes")
+print("OK — Base44 import contains the canonical signing-key bytes exactly")
+VERIFY
 
 echo
 echo "[8/8] Synchronizing Base44 with the LIVE worker signing key..."

@@ -520,13 +520,14 @@ class AuthenticationRejectionLogging(CoordinatorTestCase):
         self.assertEqual(entry["reason"], "invalid_timestamp")
         self.assertTrue(entry["timestamp_present"])
 
-    def test_a_whitespace_bearing_root_names_the_env_file_round_trip(self):
+    def test_a_whitespace_bearing_root_names_the_unquoted_env_file_round_trip(self):
         """The exact shape that breaks the Base44 leg must be reported by name.
 
         Cloud Run injects a secret payload verbatim, so a version ending in a
-        newline reaches this service with that newline. An env file cannot carry
-        it, so a peer configured from one signs with the stripped root. Both
-        sides then believe they hold "the" signing key and every call 401s.
+        newline reaches this service with that newline. The former unquoted env
+        entry dropped it, so a peer configured from that entry signed with the
+        stripped root. Both sides then believed they held "the" signing key and
+        every call returned a 401.
         """
         body = json.dumps({"owner_user_id": OWNER}).encode("utf-8")
         stamp = str(int(time.time()))

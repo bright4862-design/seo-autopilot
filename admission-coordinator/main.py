@@ -192,13 +192,13 @@ def _authenticate_hmac(
     if not supplied or not hmac.compare_digest(supplied, expected):
         # A signing root that carries surrounding whitespace is a server-side
         # configuration fact, not a property of the caller. Cloud Run injects a
-        # secret payload verbatim, while an env-file round trip cannot carry a
-        # trailing newline, so a payload with one leaves this service and a
-        # caller configured from an env file holding different roots. Reporting
-        # whether the caller signed with the stripped root names that mismatch
-        # directly instead of leaving it to be guessed. It is computed only when
-        # this service's own root is affected, so it discloses nothing about a
-        # caller's key, and the request is rejected either way.
+        # secret payload verbatim. A caller configured through an unquoted dotenv
+        # entry can instead receive the stripped root, leaving the two services
+        # with different bytes. Reporting whether the caller signed with that
+        # stripped root names the mismatch directly instead of leaving it to be
+        # guessed. It is computed only when this service's own root is affected,
+        # so it discloses nothing about a caller's key, and the request is
+        # rejected either way.
         whitespace_fields: dict[str, Any] = {}
         if root != root.strip():
             whitespace_fields["root_has_surrounding_whitespace"] = True

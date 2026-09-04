@@ -57,6 +57,27 @@ def test_location_page_detects_all_approved_placeholder_shapes():
     assert len(page["template_content_issue_evidence"]) <= 4
 
 
+def test_location_placeholder_in_h1_is_counted_once():
+    url = "https://example.com/locations/alaska"
+    html = f"""
+    <html>
+      <head>
+        <title>Alaska Lending | Example Lending</title>
+        <meta name="description" content="Private real estate lending for Alaska." />
+        <link rel="canonical" href="{url}" />
+      </head>
+      <body>
+        <h1>Alaska #location# lenders</h1>
+        <p>Fast financing for local investors.</p>
+      </body>
+    </html>
+    """
+    page = extract_page(html, url, url, 200, "text/html", _discovery())
+
+    assert page["template_content_issue_count"] == 1
+    assert len(page["template_content_issue_evidence"]) == 1
+
+
 def test_city_location_page_still_flags_unresolved_template_tokens():
     page = _location_page(
         "houston",
@@ -85,6 +106,11 @@ def test_location_copy_does_not_flag_legitimate_interstate_mentions_or_matching_
         "Alaska Hard Money Lenders",
         "We lend nationwide, including Georgia and Texas, while serving Alaska investors locally.",
     )
+    partner_network = _location_page(
+        "alaska",
+        "Alaska Hard Money Lenders",
+        "We partner with Georgia hard money lenders when an investor needs help outside Alaska.",
+    )
     georgia = _location_page(
         "georgia",
         "Georgia Hard Money Lenders",
@@ -92,6 +118,7 @@ def test_location_copy_does_not_flag_legitimate_interstate_mentions_or_matching_
     )
 
     assert "wrong_location_copy" not in alaska["template_content_issue_types"]
+    assert "wrong_location_copy" not in partner_network["template_content_issue_types"]
     assert "wrong_location_copy" not in georgia["template_content_issue_types"]
 
 

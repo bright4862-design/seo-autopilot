@@ -115,6 +115,8 @@ export function buildScanHandoff({
 } = {}) {
   const siteOrigin = clean(scanRecord?.website_url);
   const list = Array.isArray(cards) ? cards.slice(0, MAX_FIXES) : [];
+  const healthScoreAvailable =
+    !scoreUnavailable && healthScore != null && Number.isFinite(Number(healthScore));
 
   return {
     schema: SCAN_HANDOFF_SCHEMA,
@@ -124,10 +126,10 @@ export function buildScanHandoff({
     scanned_at: isoOrEmpty(scanRecord?.created_at),
     pages_found: positiveInt(pagesFound),
     pages_checked: positiveInt(pagesScanned),
-    // A provisional or unavailable score must not be exported as a number an
-    // assistant would then reason about as if it were measured.
-    health_score: scoreUnavailable ? null : (Number.isFinite(Number(healthScore)) ? Number(healthScore) : null),
-    health_score_available: !scoreUnavailable,
+    // A provisional, unavailable, or missing score must not be exported as a
+    // number an assistant would then reason about as if it were measured.
+    health_score: healthScoreAvailable ? Number(healthScore) : null,
+    health_score_available: healthScoreAvailable,
     summary: clean(summary),
     next_best_step: clean(nextBestStep),
     limitations: textList(limitations, MAX_LIMITATIONS),

@@ -45,6 +45,18 @@ def test_location_page_extracts_unresolved_template_tokens_with_bounded_evidence
     )
 
 
+def test_location_page_detects_all_approved_placeholder_shapes():
+    page = _location_page(
+        "alaska",
+        "Alaska Hard Money Lenders",
+        "#CITY# {var-state} {{region}} ${market} {{ area }}",
+    )
+
+    assert "unresolved_location_token" in page["template_content_issue_types"]
+    assert page["template_content_issue_count"] >= 5
+    assert len(page["template_content_issue_evidence"]) <= 4
+
+
 def test_city_location_page_still_flags_unresolved_template_tokens():
     page = _location_page(
         "houston",

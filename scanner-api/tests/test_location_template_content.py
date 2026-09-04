@@ -177,3 +177,50 @@ def test_location_template_findings_group_into_one_developer_repair():
     assert fix["who_can_do_this"] == "your_web_person"
     assert fix["requires_developer"] is True
     assert "location" in str(fix.get("issue_title") or fix.get("title") or "").lower()
+
+
+def test_redirected_location_page_uses_final_url_in_grouped_repair():
+    requested_url = "https://example.com/legacy/alaska"
+    final_url = "https://example.com/locations/alaska"
+    html = f"""
+    <html>
+      <head>
+        <title>Alaska Hard Money Lenders | Example Lending</title>
+        <meta name="description" content="Private real estate lending for Alaska." />
+        <link rel="canonical" href="{final_url}" />
+      </head>
+      <body>
+        <h1>Alaska Hard Money Lenders</h1>
+        <p>Talk with #location# specialists about financing.</p>
+      </body>
+    </html>
+    """
+    page = extract_page(
+        html,
+        requested_url,
+        final_url,
+        200,
+        "text/html",
+        _discovery(),
+    )
+
+    assert page["template_content_issue_types"] == ["unresolved_location_token"]
+
+    result = run_review({
+        "website_url": "https://example.com",
+        "pages": [page],
+        "raw_findings": build_findings([page]),
+        "scan_coverage": {
+            "pages_found": 1,
+            "pages_crawled": 1,
+            "sampled_pages_sent_to_ai": 1,
+        },
+    })
+
+    fixes = [
+        fix for fix in result["cleaned_fixes"]
+        if fix.get("rule") == "broken_location_template_content"
+    ]
+
+    assert len(fixes) == 1
+    assert fixes[0]["affected_pages"] == ["/locations/alaska"]

@@ -190,7 +190,7 @@ def detect_location_template_content(
 
 
 def _page_url(page: dict[str, Any]) -> str:
-    return str(page.get("url") or page.get("final_url") or page.get("path") or "").strip()
+    return str(page.get("final_url") or page.get("url") or page.get("path") or "").strip()
 
 
 def _dedupe(values: list[str], limit: int) -> list[str]:

@@ -80,7 +80,8 @@ _STATE_ALTERNATION = "|".join(
     re.escape(state) for state in sorted(US_STATE_NAMES, key=len, reverse=True)
 )
 STRONG_WRONG_LOCATION_COPY_RE = re.compile(
-    rf"\b(?P<state>{_STATE_ALTERNATION})\s+"
+    r"\b(?:as|we(?:\s+are|'re)|our\s+(?:team|company)\s+(?:is|are))\s+"
+    rf"(?P<state>{_STATE_ALTERNATION})\s+"
     r"(?:(?:hard|private)\s+money\s+)?lenders?\b",
     re.I,
 )
@@ -128,7 +129,9 @@ def detect_location_template_content(
             "template_content_issue_evidence": [],
         }
 
-    source = _clean_text(" ".join([str(title or ""), str(h1 or ""), str(visible_text or "")]))
+    # extract.py's visible_text already contains the document title and headings.
+    # Scan that source once so counts and bounded evidence are not duplicated.
+    source = _clean_text(visible_text)
     issue_types: list[str] = []
     evidence: list[str] = []
     issue_count = 0
@@ -144,6 +147,8 @@ def detect_location_template_content(
     # Wrong-state inference stays deliberately narrower than placeholder detection.
     # A city/market slug proves this is a location template, but it does not prove
     # which U.S. state is intended. Only a state/DC slug can support this claim.
+    # The phrase must also identify this lender/page as the other state; generic
+    # partner, nationwide, or service-area references are not mismatches.
     intended_state = STATE_BY_SLUG.get(location_slug, "")
     if intended_state:
         intended_key = intended_state.casefold()

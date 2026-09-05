@@ -168,7 +168,7 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
             elif len(bucket) < limit:
                 normalized = normalize_sitemap_page_url(loc, origin)
                 record_market_prefix(scope_evidence, normalized)
-                if is_same_prefix(normalized, path_prefix):
+                if is_scannable_sitemap_url(normalized, origin) and is_same_prefix(normalized, path_prefix):
                     bucket.append(normalized)
                 else:
                     scope_evidence["sitemap_urls_excluded_outside_scope"] += 1
@@ -195,7 +195,7 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
             if not is_sitemap_url(loc):
                 normalized = normalize_sitemap_page_url(loc, origin)
                 record_market_prefix(scope_evidence, normalized)
-                if is_same_prefix(normalized, path_prefix):
+                if is_scannable_sitemap_url(normalized, origin) and is_same_prefix(normalized, path_prefix):
                     bucket.append(normalized)
                 else:
                     scope_evidence["sitemap_urls_excluded_outside_scope"] += 1
@@ -417,6 +417,41 @@ def is_sitemap_url(url: str) -> bool:
 def is_same_prefix(url: str, path_prefix: str) -> bool:
     try:
         return path_within_scope(urlparse(url).path or "/", path_prefix)
+    except Exception:
+        return False
+
+
+def is_scannable_sitemap_url(url: str, origin: str) -> bool:
+    """True when a sitemap URL names a page this scan can actually fetch.
+
+    A sitemap index routinely lists other subdomains -- blog., shop., docs. --
+    and `normalize_sitemap_page_url` deliberately leaves those on their own
+    host, because rewriting them onto the scanned origin would invent pages
+    that do not exist there. Nothing downstream then re-checked the host:
+    `is_same_prefix` compares the path only, so a foreign-subdomain URL whose
+    path happened to sit inside the scope was accepted into the discovery
+    inventory.
+
+    The crawler's own `same_origin` guard is strict, so those URLs were never
+    fetched. They only ever reached `pages_found`, which is how a site could
+    report thousands of pages discovered against a hundred and fifty crawled --
+    and how a 600-page subdomain inflated a 5,000-page total for a site that
+    does not have 5,000 pages on the host being scanned.
+
+    Counting a page the scan cannot reach is not caution, it is a wrong number:
+    it overstates the site, understates coverage, and drags the score's coverage
+    ceiling down for a shortfall that never existed.
+    """
+    try:
+        parsed = urlparse(str(url or ""))
+        origin_parsed = urlparse(str(origin or ""))
+        if not origin_parsed.hostname:
+            return True
+        if not parsed.hostname:
+            # A relative or malformed entry carries no competing host, so the
+            # path check downstream is the honest arbiter.
+            return True
+        return comparable_host(parsed.hostname) == comparable_host(origin_parsed.hostname)
     except Exception:
         return False
 

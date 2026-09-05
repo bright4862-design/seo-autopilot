@@ -1068,10 +1068,36 @@ function CustomerRepairCard({ card = {}, websiteUrl = "" }) {
           {pages.length > 0 ? (
             <div className="mt-3">
               <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">All affected URLs</p>
+              {/*
+                This is the list a customer actually works from, and it rendered
+                every URL as plain text -- only the one representative page per
+                group was clickable. Someone fixing twelve pages had to retype
+                each of them. Both surfaces resolve through the same
+                `evidenceLink` contract, so a page cannot read one way here and
+                another in the group above it or in the export.
+              */}
               <ul className="mt-2 max-h-64 space-y-1.5 overflow-y-auto pr-1 text-[12px] text-ink-muted">
-                {pages.map((page) => (
-                  <li key={page} className="break-all">{page}</li>
-                ))}
+                {pages.map((page) => {
+                  const pageLink = evidenceLink(page, websiteUrl);
+                  return (
+                    <li key={page} className="break-all">
+                      {pageLink.isLinkable ? (
+                        <a
+                          href={pageLink.href}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={pageLink.title}
+                          aria-label={pageLink.linkName}
+                          className="text-ink-muted underline decoration-hairline underline-offset-4 transition-colors hover:text-ink"
+                        >
+                          {pageLink.label}
+                        </a>
+                      ) : (
+                        <span title={pageLink.title}>{pageLink.label}</span>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           ) : (

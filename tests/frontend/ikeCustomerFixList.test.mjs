@@ -136,26 +136,35 @@ test("a proven merged action never claims one family's identity", () => {
   assert.match(meta.title, /your pages/, `merged card named one family: ${meta.title}`);
   assert.doesNotMatch(meta.whatToChange, /shared standard template/i);
   assert.doesNotMatch(meta.whatToChange, /shared legal template/i);
+  // The classifier's default bucket has no customer-facing name, so it cannot
+  // be listed -- but its pages still exist, and the sentence must not read as
+  // though the families it *can* name account for all 14.
   assert.match(meta.where, /14 pages/);
-  assert.match(meta.where, /standard/);
   assert.match(meta.where, /legal/);
+  assert.match(meta.where, /\bother\b/, `unnamed pages absorbed into a named family: ${meta.where}`);
+  assert.doesNotMatch(meta.where, /^14 legal pages/, "a mixed card claimed one family's identity");
 });
 
 test("a single-family card still names its family", () => {
   const cards = buildRepairCards(persistedCards());
-  const canonical = cards.find((card) => card.title.includes("canonical"));
-  assert.equal(canonical.title, "Add canonical URLs to your location pages");
+  const canonical = cards.find((card) => card.technicalLabel === "Canonical URL");
+  assert.equal(canonical.title, "Tell search engines which version of your location pages to show");
   assert.match(canonical.where, /105 location pages/);
 });
 
 test("Where reports the count once, with what kind of pages", () => {
   // The current cards repeat the count twice and add nothing: "1 affected page
   // found in this scan" then "1 checked page is affected".
-  assert.equal(whereLine({ pageCount: 1, page_template_family: "standard", affected_pages: ["/a"] }), "1 standard page.");
-  assert.equal(whereLine({ pageCount: 6, page_template_family: "standard", affected_pages: [] }), "6 standard pages.");
+  // "standard" is the classifier's default bucket, so it drops out of the
+  // sentence rather than being named -- "6 standard pages" told an owner
+  // nothing about which pages to open.
+  assert.equal(whereLine({ pageCount: 1, page_template_family: "standard", affected_pages: ["/a"] }), "1 page on your site.");
+  assert.equal(whereLine({ pageCount: 6, page_template_family: "standard", affected_pages: [] }), "6 pages on your site.");
+  // 5 of these 9 are in the unnamed default bucket, so the sentence says so
+  // rather than presenting all 9 as legal pages.
   assert.equal(
     whereLine({ pageCount: 9, family_breakdown: { standard: 5, legal_info: 4 }, affected_pages: [] }),
-    "9 pages, across standard and legal pages.",
+    "9 pages, across legal and other pages.",
   );
   // An opaque classification drops out of the sentence rather than being named.
   assert.equal(whereLine({ pageCount: 4, page_template_family: "mixed", affected_pages: [] }), "4 pages on your site.");
@@ -246,7 +255,7 @@ test("a blocked canonical target is not treated as a missing canonical", () => {
   // one. The defect is where the existing canonical points, not that it is
   // absent, so this rule must be handled before that branch.
   const canonical = customerCopyForFix({ rule: "canonical_target_noindex", page_count: 4, affected_pages: ["/a"] });
-  assert.doesNotMatch(canonical.title, /^Add canonical URLs/i, "told to add a canonical that already exists");
+  assert.doesNotMatch(canonical.title, /which version of (these|this|your)/i, "told to set a canonical that already exists");
   assert.doesNotMatch(canonical.recommendation, /^Add the correct preferred-page setting/i);
   assert.match(canonical.recommendation, /allowed in search|remove the block/i);
   // Nor is it a redirect: there may be no redirect involved at all.
@@ -256,7 +265,7 @@ test("a blocked canonical target is not treated as a missing canonical", () => {
   // The two neighbouring rules keep their own distinct advice.
   const missing = customerCopyForFix({ rule: "canonical_missing", page_count: 4, affected_pages: ["/a"] });
   const redirect = customerCopyForFix({ rule: "redirect_destination_noindex", page_count: 4, affected_pages: ["/a"] });
-  assert.match(missing.title, /^Add canonical URLs/i);
+  assert.match(missing.title, /which version/i);
   assert.match(redirect.title, /redirect/i);
   assert.equal(new Set([canonical.title, missing.title, redirect.title]).size, 3);
 });

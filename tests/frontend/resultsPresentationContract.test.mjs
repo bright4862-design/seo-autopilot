@@ -76,12 +76,15 @@ test("same customer action collapses repeated evidence groups without hiding aff
 
 test("rule-specific vocabulary keeps SEO jargon out of primary customer copy", () => {
   const canonical = applyCustomerVocabulary({ rule: "canonical_missing", category: "canonical", pageScope: "family", pageCount: 2, affectedPages: ["/terms", "/privacy"] });
-  // The title names the action rather than its effect. "Canonical URL" is kept
-  // here deliberately: the release owner asked for this wording, and this card
-  // is developer-owned, which is the exception the vocabulary guidance allows.
-  // The jargon rule still holds everywhere it is not the name of the thing to
-  // add -- see the orphan assertion below.
-  assert.equal(canonical.title, "Add canonical URLs to these pages");
+  // This title used to read "Add canonical URLs to these pages", pinned here
+  // because the release owner had asked for that exact wording and this card is
+  // developer-owned. A 30-site matrix run reversed that call: jargon in the
+  // headline was the top copy complaint, and the card's own body already
+  // explained the fix as a "preferred-page setting" without the word. The term
+  // itself is not lost -- it stays on the Check line asserted below, which is
+  // where someone briefing a developer looks for it.
+  assert.equal(canonical.title, "Tell search engines which version of these pages to show");
+  assert.doesNotMatch(canonical.title, /canonical/i);
   assert.equal(canonical.customerCategory, "Search visibility");
   assert.equal(canonical.technicalLabel, "Canonical URL");
 

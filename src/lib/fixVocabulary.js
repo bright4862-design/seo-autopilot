@@ -26,7 +26,9 @@ function familyLabel(item = {}) {
     collection_page: "collection pages",
     homepage: "homepage",
     legal_info: "legal pages",
-    standard: "standard pages",
+    // "standard pages" names the classifier's default bucket, not anything an
+    // owner would call a page. The neutral word is the honest one.
+    standard: "pages",
     // Without these the classifier's own key is shown with underscores
     // swapped for spaces -- "location landing pages", "guide article pages" --
     // which reads as internal vocabulary rather than the customer's.
@@ -38,7 +40,9 @@ function familyLabel(item = {}) {
     route_boundary: "section pages",
     contact: "contact pages",
     qa: "FAQ pages",
-    conversion: "conversion pages",
+    // "conversion pages" is marketing vocabulary. An owner knows these as the
+    // pages where someone gets in touch or applies.
+    conversion: "sign-up and contact pages",
     archive: "archive pages",
   };
   return labels[family] || (family ? `${family.replace(/_/g, " ")} pages` : "pages");
@@ -286,13 +290,18 @@ export function customerCopyForFix(item = {}) {
   }
 
   if (rule === "canonical_missing" || rule.includes("canonical")) {
+    // "Canonical URL" is the correct technical name and it stays on the Check
+    // line, where someone briefing a developer can find it. It has no business
+    // in the headline: it is the loudest text on the card and the one line a
+    // non-technical owner reads, and this card's own body already explains the
+    // fix without the word.
     const title = count > 1 && family !== "pages"
-      ? `Add canonical URLs to your ${family}`
+      ? `Tell search engines which version of your ${family} to show`
       : count > 1
-        ? "Add canonical URLs to these pages"
+        ? "Tell search engines which version of these pages to show"
         : family === "homepage"
-          ? "Add a canonical URL to your homepage"
-          : "Add a canonical URL to this page";
+          ? "Tell search engines which version of your homepage to show"
+          : "Tell search engines which version of this page to show";
     return {
       customerCategory: "Search visibility",
       title,

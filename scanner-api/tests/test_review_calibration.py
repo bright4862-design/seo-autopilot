@@ -136,7 +136,7 @@ def test_verification_only_findings_stay_low_non_scoring_and_do_not_outrank_conf
     assert result["next_best_step"] == "Add a canonical URL"
 
 
-def test_funbooker_narrow_issues_calibrate_to_needs_work_without_score_noise():
+def test_funbooker_narrow_issues_calibrate_to_good_without_score_noise():
     body = payload([page("/fr/fr/p/healthy-product", 4, 0)])
     reviewed = run_review(body)
     reviewed["recommendations"] = [
@@ -249,8 +249,16 @@ def test_funbooker_narrow_issues_calibrate_to_needs_work_without_score_noise():
     assert priorities["missing_meta_description"] == "medium"
     assert priorities["missing_h1"] == "medium"
     assert priorities["potential_orphan_pages"] == "low"
-    assert result["health_score"] == 64
-    assert result["health_grade"] == "Needs work"
+    # health_score_v3: cosmetic buckets capped, medium/low weights softened.
+    # This site has five findings, all narrow: a canonical gap on two legal
+    # pages, a sitemap redirect, a missing description, a missing heading, and
+    # some pages that are hard to reach. Under v2 that scored 64 and read
+    # "Needs work", which overstates it -- nothing here is stopping the site
+    # being found. 79 and "Good" is a site with a to-do list, which is what it
+    # is. The point of the assertion is unchanged: narrow issues must not
+    # generate score noise, and the same set must land in the same place.
+    assert result["health_score"] == 79
+    assert result["health_grade"] == "Good"
     assert result["next_best_step"] == "Add canonical URLs to legal info pages"
     assert result["review_evidence_calibration_version"] == "review_evidence_calibration_v6_health_score_v2"
     assert len([fix for fix in result["recommendations"] if fix["rule"] == "sitemap_redirect"]) == 2
@@ -335,7 +343,7 @@ def test_health_score_uses_the_strongest_priority_once_per_rule():
         {"id": "verification", "rule": "potential_orphan_pages", "priority": "critical", "non_scoring": True},
     ]
 
-    assert compute_health_score(fixes, fingerprint) == 85
+    assert compute_health_score(fixes, fingerprint) == 92
 
 
 def test_health_score_v2_clean_complete_site_starts_at_100():
@@ -348,7 +356,7 @@ def test_health_score_v2_clean_complete_site_starts_at_100():
         "blocked_or_429_pages": 0,
     }
     breakdown = compute_health_score_breakdown([], fingerprint)
-    assert breakdown["version"] == "health_score_v2_action_weighted"
+    assert breakdown["version"] == "health_score_v3_cosmetic_capped"
     assert breakdown["score"] == 100
     assert breakdown["total_penalty"] == 0
 
@@ -451,7 +459,7 @@ def test_large_trailing_slash_internal_redirect_group_is_medium_not_critical():
     assert fix["priority"] == "medium"
     assert fix["overall_priority_score"] <= 67
     assert fix["severity_calibration_reason"] == "trailing_slash_only_healthy_redirect"
-    assert result["health_score"] == 90
+    assert result["health_score"] == 94
 
 
 def test_pdf_and_cloudflare_utility_targets_do_not_create_page_semantic_tasks():

@@ -26,7 +26,11 @@ const lower = (value) => clean(value).toLowerCase();
  * internals. They are dropped from customer scope wording; the underlying
  * counts stay in the evidence breakdown.
  */
-const OPAQUE_FAMILIES = new Set(["unknown", "mixed", "unclassified", "other", "none", ""]);
+// Families that name the classifier's own bookkeeping rather than a kind of
+// page an owner would recognise. "standard" is the default bucket: saying
+// "6 standard pages" tells someone nothing they did not already know, and the
+// unmapped-family fallback below would otherwise print the key verbatim.
+const OPAQUE_FAMILIES = new Set(["unknown", "mixed", "unclassified", "other", "none", "standard", ""]);
 
 /** Family labels a customer can act on, in their own words. */
 const FAMILY_WORDS = Object.freeze({
@@ -34,14 +38,16 @@ const FAMILY_WORDS = Object.freeze({
   location_landing: "location",
   guide_article: "guide",
   contact: "contact",
-  standard: "standard",
+  // "standard" names the classifier's default bucket, not a kind of page an
+  // owner recognises. An unmapped family drops out of the sentence, which is
+  // the honest result: "6 pages." rather than "6 standard pages."
   homepage: "homepage",
   product_detail: "product",
   category_listing: "category",
   booking_or_checkout: "checkout",
   qa: "FAQ",
   archive: "archive",
-  conversion: "conversion",
+  conversion: "sign-up and contact",
   route_boundary: "section",
   collection_page: "collection",
   activity_detail: "activity",
@@ -88,16 +94,24 @@ export function whereLine(item) {
   const count = countOf(item);
   if (count <= 0) return "";
   const noun = count === 1 ? "page" : "pages";
-  const named = Object.entries(breakdownOf(item))
+  const breakdown = Object.entries(breakdownOf(item));
+  const named = breakdown
     .filter(([family]) => familyWord(family))
     .sort((a, b) => b[1] - a[1])
     .map(([family]) => familyWord(family));
+  // Families the classifier cannot name still hold pages. Dropping them and
+  // then reading the sentence as though the named families cover the whole
+  // count is how "105 pages, 60 of them unclassified and 45 location pages"
+  // became "105 location pages" -- a card claiming one family's identity for
+  // pages that do not belong to it.
+  const hasUnnamed = breakdown.length > named.length;
 
   if (named.length === 0) return `${count} ${noun} on your site.`;
-  if (named.length === 1) return `${count} ${named[0]} ${noun}.`;
-  const spread = named.length <= 3
-    ? `${named.slice(0, -1).join(", ")} and ${named[named.length - 1]}`
-    : `${named.slice(0, 3).join(", ")} and other`;
+  if (named.length === 1 && !hasUnnamed) return `${count} ${named[0]} ${noun}.`;
+  const listed = hasUnnamed ? [...named, "other"] : named;
+  const spread = listed.length <= 3
+    ? `${listed.slice(0, -1).join(", ")} and ${listed[listed.length - 1]}`
+    : `${listed.slice(0, 3).join(", ")} and other`;
   return `${count} ${noun}, across ${spread} pages.`;
 }
 

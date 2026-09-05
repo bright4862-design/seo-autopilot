@@ -2516,15 +2516,40 @@ def score_evidence_confidence(fix: dict[str, Any]) -> int:
     return max(0, min(100, round(score)))
 
 
-HEALTH_SCORE_VERSION = "health_score_v2_action_weighted"
-HEALTH_SCORE_SEVERITY_PENALTIES = {"critical": 12.0, "high": 8.0, "medium": 5.0, "low": 1.5}
+HEALTH_SCORE_VERSION = "health_score_v3_cosmetic_capped"
+# What a finding costs, and the most any one area can cost in total.
+#
+# The old table summed to 100 against a floor of 20, so a site whose only
+# problems were image descriptions and repeated headings could reach the high
+# twenties. A production scan of a working lending site scored 28 on nineteen
+# findings, almost all of them alt text and duplicate H1s -- real work, but not
+# a site in trouble, and a number that reads as a verdict rather than a to-do
+# list. FixList tells owners "a perfect score isn't the goal -- a shorter list
+# is", and then hands them a figure that contradicts it.
+#
+# Search visibility keeps its full weight: a page search engines cannot index
+# or that names the wrong canonical is genuine damage, and a site with that
+# should still score badly. The cosmetic buckets are capped so that together
+# they cannot take a healthy site below the sixties, and the floor rises to 40
+# so the worst case still reads as a score rather than a zero.
+HEALTH_SCORE_SEVERITY_PENALTIES = {"critical": 12.0, "high": 8.0, "medium": 3.0, "low": 1.0}
 HEALTH_SCORE_BUCKET_CAPS = {
-    "search_visibility": 30.0,
-    "site_structure": 20.0,
-    "search_appearance": 20.0,
-    "page_content": 15.0,
-    "technical_quality": 15.0,
+    # Raised, not lowered. Under the old table a site whose pages were broadly
+    # cosmetically imperfect scored *worse* than one whose pages search engines
+    # could not index at all -- nineteen small findings spread over five buckets
+    # out-penalized two catastrophic ones confined to a single bucket. Breadth
+    # was beating severity. Search visibility has to be able to sink a score on
+    # its own for the ordering to mean anything.
+    "search_visibility": 45.0,
+    "site_structure": 16.0,
+    # The three cosmetic buckets together cap at 28, so alt text, headings and
+    # descriptions cannot drag a working site out of the sixties no matter how
+    # many pages carry them.
+    "search_appearance": 12.0,
+    "page_content": 8.0,
+    "technical_quality": 8.0,
 }
+HEALTH_SCORE_FLOOR = 40
 
 
 def _health_score_rule_name(fix: dict[str, Any], index: int) -> str:
@@ -2687,7 +2712,7 @@ def compute_health_score_breakdown(fixes: list[dict[str, Any]], site_fingerprint
         for bucket, penalty in bucket_raw.items()
     }
     total_penalty = sum(bucket_penalties.values())
-    score = max(20, min(100, round(100 - total_penalty)))
+    score = max(HEALTH_SCORE_FLOOR, min(100, round(100 - total_penalty)))
 
     # A small representative sample can show that nothing urgent was found,
     # but it should not claim a perfect whole-site score. Full small-site
@@ -2704,6 +2729,12 @@ def compute_health_score_breakdown(fixes: list[dict[str, Any]], site_fingerprint
             coverage_ceiling = 92
         score = min(score, coverage_ceiling)
 
+    # These ceilings describe how much the scan could see, not how good the site
+    # is. Each sits above the floor, so what they actually do is pull a
+    # high-looking score down: a blocked crawl finds few problems precisely
+    # because it saw few pages, and must not be rewarded for it. They cannot
+    # push below the floor, and are not meant to -- the floor is the harshest a
+    # findings-based score gets.
     if crawl_is_blocked(site_fingerprint):
         score = min(score, 45)
     if evidence_is_incomplete(site_fingerprint):

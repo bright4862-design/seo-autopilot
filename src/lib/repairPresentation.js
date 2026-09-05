@@ -128,8 +128,11 @@ export function repairSurfaceLabel(item = {}) {
     guide_article: "Guide pages",
     location_landing: "Location pages",
     booking_or_checkout: "Booking pages",
-    conversion: "Conversion pages",
-    route_boundary: "Website routes",
+    // Matches the customer vocabulary used on the card itself: "conversion" and
+    // "route boundary" are both internal names for things an owner recognises
+    // by what they do.
+    conversion: "Sign-up and contact pages",
+    route_boundary: "Website sections",
     mixed: "Multiple page types",
     sitewide: "Site-wide",
   })[family] || "";

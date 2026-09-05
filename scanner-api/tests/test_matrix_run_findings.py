@@ -51,6 +51,15 @@ def test_a_relative_entry_is_left_to_the_path_check():
     # A sitemap entry with no host carries no competing origin, so rejecting it
     # here would drop real pages. The prefix check remains the arbiter.
     assert is_scannable_sitemap_url("/pricing", ORIGIN) is True
+    assert is_scannable_sitemap_url("pricing.html", ORIGIN) is True
+
+
+def test_a_malformed_entry_is_not_mistaken_for_a_relative_one():
+    # These name a scheme or an authority and still parse with no hostname.
+    # Treating them as relative let them through the host check and into the
+    # discovery inventory, which is the count this guard exists to keep honest.
+    for url in ("http://:80/path", "https://", "http://@/x"):
+        assert is_scannable_sitemap_url(url, ORIGIN) is False, url
 
 
 def test_a_subdomain_that_merely_contains_the_scanned_host_is_still_foreign():
@@ -131,7 +140,9 @@ def test_the_three_cosmetic_buckets_cannot_sink_a_working_site_between_them():
         + HEALTH_SCORE_BUCKET_CAPS["page_content"]
         + HEALTH_SCORE_BUCKET_CAPS["technical_quality"]
     )
-    assert cosmetic_total <= 30, f"cosmetic buckets can cost {cosmetic_total} points combined"
+    # The exact documented figure, not a range. Slack here would let the cap
+    # drift to 30 while the comment above the table still claimed 28.
+    assert cosmetic_total == 28, f"cosmetic buckets can cost {cosmetic_total} points combined"
     # Search visibility must be able to sink a score by itself, or the ordering
     # above is an accident of these particular fixtures.
     assert HEALTH_SCORE_BUCKET_CAPS["search_visibility"] > cosmetic_total

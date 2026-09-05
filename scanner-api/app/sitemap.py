@@ -448,9 +448,14 @@ def is_scannable_sitemap_url(url: str, origin: str) -> bool:
         if not origin_parsed.hostname:
             return True
         if not parsed.hostname:
-            # A relative or malformed entry carries no competing host, so the
-            # path check downstream is the honest arbiter.
-            return True
+            # A genuinely relative entry -- "/pricing", "pricing.html" -- carries
+            # no competing host, so the path check downstream is the honest
+            # arbiter. An entry that names a scheme or an authority and still
+            # has no hostname is malformed, not relative: "http://:80/path" and
+            # "https://" both parse this way, and neither describes a page on
+            # the scanned origin. Counting those inflates the same inventory
+            # this guard exists to keep honest.
+            return not (parsed.scheme or parsed.netloc)
         return comparable_host(parsed.hostname) == comparable_host(origin_parsed.hostname)
     except Exception:
         return False

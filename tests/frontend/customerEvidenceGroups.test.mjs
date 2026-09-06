@@ -85,7 +85,7 @@ test("one child remains one evidence group without creating another top-level ac
   const rows = customerEvidenceGroupRows(cards[0], SITE);
   assert.equal(rows.length, 1);
   assert.equal(rows[0].familyLabel, "homepage");
-  assert.equal(rows[0].representativeLink.label, "Homepage · /");
+  assert.equal(rows[0].representativeLink.label, "Homepage (/)");
 });
 
 test("persisted evidence groups survive normalized members with raw_finding under original", () => {

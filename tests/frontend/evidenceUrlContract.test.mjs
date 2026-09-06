@@ -15,9 +15,9 @@ const SITE = "https://www.ikessandwich.com";
 
 test("the site root is named, not shown as a bare slash", () => {
   // The audit's finding: "/" tells a customer nothing about which page is meant.
-  assert.equal(evidenceDisplayLabel(`${SITE}/`), "Homepage · /");
-  assert.equal(evidenceDisplayLabel("/"), "Homepage · /");
-  assert.equal(evidenceDisplayLabel(""), "Homepage · /");
+  assert.equal(evidenceDisplayLabel(`${SITE}/`), "Homepage (/)");
+  assert.equal(evidenceDisplayLabel("/"), "Homepage (/)");
+  assert.equal(evidenceDisplayLabel(""), "Homepage (/)");
 });
 
 test("any other page reads as the path someone editing the site recognises", () => {
@@ -70,7 +70,7 @@ test("the path is shown without the origin", () => {
 });
 
 test("the accessible name says what opening the link does", () => {
-  assert.equal(evidenceLinkName(`${SITE}/`), "Open affected page: Homepage · /");
+  assert.equal(evidenceLinkName(`${SITE}/`), "Open affected page: Homepage (/)");
   assert.equal(evidenceLinkName(`${SITE}/menu/`), "Open affected page: /menu/");
 });
 
@@ -88,7 +88,7 @@ test("one page renders the same way wherever a surface asks for it", () => {
 
 test("the full URL is available for a tooltip even on the homepage", () => {
   const link = evidenceLink("/", SITE);
-  assert.equal(link.label, "Homepage · /");
+  assert.equal(link.label, "Homepage (/)");
   assert.equal(link.title, `${SITE}/`, "the tooltip must carry the full URL, not the label");
   assert.equal(link.isLinkable, true);
 });

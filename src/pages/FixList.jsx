@@ -29,6 +29,7 @@ import { buildScanHandoff, scanHandoffFilename, serializeScanHandoff } from "@/l
 import { trackEvent } from "@/lib/analytics";
 import { samplingDisclosure } from "@/lib/samplingDisclosure";
 import { displayPathPrefix, focusedPathSections, focusedSectionOnboardingPath, orderFocusedScanHistory } from "@/lib/focusedScanScope";
+import { buildPageAccounting } from "@/lib/pageAccounting";
 
 const CMS_OPTIONS = [
   { value: "wordpress", label: "WordPress" },
@@ -448,6 +449,16 @@ export default function FixList() {
       : [],
     [hasAuthoritativeScan, scanRecord],
   );
+  const pageAccounting = useMemo(
+    () => buildPageAccounting(scanRecord, focusedSections),
+    [scanRecord, focusedSections],
+  );
+  const showPageAccounting = Boolean(
+    hasAuthoritativeScan
+    && pageAccounting.total > 150
+    && !String(scanRecord?.scope_type || "").trim()
+    && !String(scanRecord?.path_prefix || scanRecord?.requested_path_prefix || "").trim()
+  );
 
   function retryRequestedScan() {
     setRequestedScanFailure(null);
@@ -597,16 +608,47 @@ export default function FixList() {
               </details>
             ) : null}
 
+            {showPageAccounting ? (
+              <section className="mt-6 max-w-[60ch] rounded-2xl border border-hairline-soft bg-white/45 px-5 py-5" aria-labelledby="pages-found-accounting">
+                <h2 id="pages-found-accounting" className="text-[17px] font-semibold tracking-tight text-ink">
+                  Pages found
+                </h2>
+                <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
+                  FixList found {formatCount(pageAccounting.total)} pages. The counts below add up to that total; pages without a clear folder are kept in the final row.
+                </p>
+                <dl className="mt-4 divide-y divide-hairline-soft">
+                  {pageAccounting.rows.map((row) => (
+                    <div key={row.key} className="flex items-baseline justify-between gap-4 py-2.5 first:pt-1">
+                      <dt className="min-w-0 text-[13px] text-ink-muted">
+                        <span className="font-medium text-ink">{row.label}</span>
+                        {row.path ? <span className="ml-2 break-all text-[12px] text-ink-faint">{displayPathPrefix(row.path)}</span> : null}
+                      </dt>
+                      <dd className="shrink-0 text-[13px] font-medium tabular-nums text-ink">{formatCount(row.count)}</dd>
+                    </div>
+                  ))}
+                  <div className="flex items-baseline justify-between gap-4 py-2.5">
+                    <dt className="text-[13px] font-semibold text-ink">Total pages found</dt>
+                    <dd className="text-[13px] font-semibold tabular-nums text-ink">{formatCount(pageAccounting.total)}</dd>
+                  </div>
+                </dl>
+                {pageAccounting.isPartial ? (
+                  <p className="mt-3 text-[11.5px] leading-relaxed text-ink-faint">
+                    The site only supplied a partial folder breakdown. The remaining pages are included above instead of being hidden from the total.
+                  </p>
+                ) : null}
+              </section>
+            ) : null}
+
             {focusedSections.length > 0 ? (
-              <section className="mt-6 max-w-[60ch] rounded-2xl border border-hairline-soft bg-white/45 px-5 py-5" aria-labelledby="site-sections-discovered">
+              <section className="mt-6 max-w-[60ch] rounded-2xl border border-hairline-soft bg-white/45 px-5 py-5" aria-labelledby="sections-to-scan-next">
                 <div className="flex items-baseline justify-between gap-4">
-                  <h2 id="site-sections-discovered" className="text-[17px] font-semibold tracking-tight text-ink">
-                    Site sections discovered
+                  <h2 id="sections-to-scan-next" className="text-[17px] font-semibold tracking-tight text-ink">
+                    Sections to scan next
                   </h2>
                   <span className="text-[11px] uppercase tracking-[0.08em] text-ink-faint">Optional</span>
                 </div>
                 <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
-                  This site is larger than one Standard 150 scan. You can give an underrepresented folder its own separate 150-page scan without mixing it into this FixList.
+                  These suggested folders received less coverage in this FixList. You can give one its own separate 150-page scan; this is a short priority list, not the complete page breakdown above.
                 </p>
                 <div className="mt-4 divide-y divide-hairline-soft">
                   {focusedSections.map((section) => {

@@ -63,13 +63,13 @@ export function evidencePath(page) {
 /**
  * What the customer reads for this page.
  *
- * The root is named, not punctuated: "Homepage · /" says which page it is and
+ * The root is named, not punctuated: "Homepage (/)" says which page it is and
  * still shows the path it lives at. Everything else reads as its own path,
  * which is what someone editing the site actually recognises.
  */
 export function evidenceDisplayLabel(page) {
   const path = evidencePath(page);
-  if (!path || path === "/") return "Homepage · /";
+  if (!path || path === "/") return "Homepage (/)";
   return path;
 }
 

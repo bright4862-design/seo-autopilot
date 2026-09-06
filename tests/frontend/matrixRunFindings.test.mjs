@@ -107,3 +107,11 @@ test("the section headings match the vocabulary on the cards beneath them", () =
   assert.match(presentation, /conversion: "Sign-up and contact pages"/);
   assert.doesNotMatch(presentation, /route_boundary: "Website routes"/, '"routes" is developer vocabulary');
 });
+
+test("page accounting is separate from ranked follow-up scan suggestions", () => {
+  assert.match(page, /buildPageAccounting\(scanRecord, focusedSections\)/);
+  assert.match(page, />\s*Pages found\s*</);
+  assert.match(page, />\s*Sections to scan next\s*</);
+  assert.doesNotMatch(page, />\s*Site sections discovered\s*</);
+  assert.match(page, /suggested folders/i);
+});

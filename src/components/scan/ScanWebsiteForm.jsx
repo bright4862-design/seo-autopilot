@@ -14,6 +14,7 @@ import { focusedScopeFromSearchParams, focusedSectionUrl, normalizeRequestedPath
 import { getScanRunWithFixList } from "@/lib/scanRuns";
 import { UNLOCK_PRICE_LABEL, loadAccess } from "@/lib/access";
 import { trackEvent } from "@/lib/analytics";
+import { refreshGroupedCountEvidence } from "@/lib/groupedCountCopy";
 import {
   CUSTOMER_BOUNDARY_EVENT,
   clearCustomerAuthBoundary,
@@ -1178,7 +1179,8 @@ function groupAndSortFixes(fixes, options = {}) {
     }
     groups.set(key, existing);
   }
-  return dedupeFixes([...keep, ...Array.from(groups.values())]).sort((a, b) => businessSortScore(b, options) - businessSortScore(a, options));
+  const grouped = Array.from(groups.values()).map(refreshGroupedCountEvidence);
+  return dedupeFixes([...keep, ...grouped]).sort((a, b) => businessSortScore(b, options) - businessSortScore(a, options));
 }
 
 function applyBusinessPriorityRules(fix = {}, options = {}) {

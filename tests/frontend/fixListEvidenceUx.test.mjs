@@ -28,6 +28,10 @@ test("FixList instructions are action-oriented and rule specific", () => {
   assert.match(fixListSource, /Run FixList again/);
 });
 
+test("legacy grouped findings refresh count-bearing evidence after aggregation", () => {
+  assert.match(scanFormSource, /refreshGroupedCountEvidence/);
+});
+
 test("customer-facing URL evidence excludes obvious assets and system routes", () => {
   assert.ok(fixListSource.includes("cdn-cgi"));
   assert.match(fixListSource, /pdf\|png/);

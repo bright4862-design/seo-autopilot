@@ -2718,6 +2718,18 @@ def compute_health_score_breakdown(fixes: list[dict[str, Any]], site_fingerprint
     # but it should not claim a perfect whole-site score. Full small-site
     # inventories and 100+ page representative crawls may reach 100.
     coverage_ceiling = 100
+    # Which limit actually decided the score, for the customer explanation. The
+    # ceilings were applied silently, so a scan whose number came from what the
+    # crawl could see was indistinguishable from one whose number came from what
+    # the crawl found -- and only the second is a statement about the site.
+    applied_ceiling = 100
+    ceiling_reason = ""
+
+    def _bind(limit: int, reason: str) -> None:
+        nonlocal applied_ceiling, ceiling_reason
+        if limit < applied_ceiling:
+            applied_ceiling, ceiling_reason = limit, reason
+
     if pages_found > pages_crawled > 0:
         if pages_crawled >= 100:
             coverage_ceiling = 100
@@ -2727,6 +2739,8 @@ def compute_health_score_breakdown(fixes: list[dict[str, Any]], site_fingerprint
             coverage_ceiling = 95
         else:
             coverage_ceiling = 92
+        if coverage_ceiling < score:
+            _bind(coverage_ceiling, "sample_size")
         score = min(score, coverage_ceiling)
 
     # These ceilings describe how much the scan could see, not how good the site
@@ -2736,16 +2750,26 @@ def compute_health_score_breakdown(fixes: list[dict[str, Any]], site_fingerprint
     # push below the floor, and are not meant to -- the floor is the harshest a
     # findings-based score gets.
     if crawl_is_blocked(site_fingerprint):
+        if 45 < score:
+            _bind(45, "blocked_access")
         score = min(score, 45)
     if evidence_is_incomplete(site_fingerprint):
+        if 55 < score:
+            _bind(55, "incomplete_evidence")
         score = min(score, 55)
     if pages_crawled == 0:
+        if 86 < score:
+            _bind(86, "no_pages_crawled")
         score = min(score, 86)
 
     return {
         "version": HEALTH_SCORE_VERSION,
         "score": score,
         "coverage_ceiling": coverage_ceiling,
+        # The ceiling that actually bound this score, and why. 100/"" when the
+        # findings alone decided it.
+        "applied_ceiling": applied_ceiling,
+        "ceiling_reason": ceiling_reason,
         "total_penalty": round(total_penalty, 2),
         "bucket_penalties": bucket_penalties,
         "action_penalties": action_penalties,

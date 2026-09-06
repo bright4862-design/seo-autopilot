@@ -32,6 +32,7 @@ import { samplingDisclosure } from "@/lib/samplingDisclosure";
 import { displayPathPrefix, focusedPathSections, focusedSectionOnboardingPath, orderFocusedScanHistory } from "@/lib/focusedScanScope";
 import { buildPageAccounting } from "@/lib/pageAccounting";
 import { customerSafeLimitationLine, durableScanStatePresentation } from "@/lib/durableScanStatePresentation";
+import { healthScoreExplanation } from "@/lib/healthScoreExplanation";
 
 const CMS_OPTIONS = [
   { value: "wordpress", label: "WordPress" },
@@ -563,6 +564,8 @@ export default function FixList() {
                 </p>
               </div>
             </div>
+
+            <ScoreExplanation explanation={healthScoreExplanation(scanRecord)} />
 
             {summary ? (
               <p className="mt-8 max-w-[56ch] text-[14px] leading-relaxed text-ink-muted">{summary}</p>
@@ -1186,6 +1189,75 @@ function SectionEyebrow({ label, count }) {
       {label}
       {typeof count === "number" ? <span className="font-normal tabular-nums">{count}</span> : null}
     </div>
+  );
+}
+
+
+/**
+ * Where the score's points went.
+ *
+ * Collapsed, because most owners want the list of work rather than the
+ * arithmetic -- but the number is the first thing they argue with, and until
+ * now there was nothing to open. Everything here was computed and sealed by the
+ * scanner; nothing is derived in the browser.
+ */
+function ScoreExplanation({ explanation }) {
+  if (!explanation?.available) {
+    return explanation?.legacy ? (
+      <p className="mt-3 text-[12.5px] text-ink-faint">{explanation.legacyNote}</p>
+    ) : null;
+  }
+
+  const { deductions, totalDeduction, remainingDeduction, ceilingNote, floorNote, verificationExcluded } = explanation;
+
+  return (
+    <details className="mt-4 max-w-[56ch]">
+      <summary className="cursor-pointer text-[12.5px] font-medium text-ink-muted underline decoration-hairline underline-offset-4">
+        Why this score?
+      </summary>
+      <div className="mt-3 rounded-lg border border-hairline-soft bg-white/40 px-3.5 py-3">
+        <p className="text-[12.5px] leading-relaxed text-ink-faint">
+          This number weighs the technical work this scan found. It is not a mark out of a hundred for your business.
+        </p>
+
+        {deductions.length > 0 ? (
+          <dl className="mt-3 space-y-1.5">
+            <div className="flex items-baseline justify-between gap-4 border-b border-hairline-soft pb-1.5">
+              <dt className="text-[13px] text-ink-muted">Starting from</dt>
+              <dd className="text-[13px] tabular-nums text-ink-muted">100</dd>
+            </div>
+            {deductions.map((row) => (
+              <div key={row.category} className="flex items-baseline justify-between gap-4">
+                <dt className="text-[13px] text-ink-muted">{row.category}</dt>
+                <dd className="text-[13px] tabular-nums text-ink-muted">&minus;{row.points}</dd>
+              </div>
+            ))}
+            {remainingDeduction > 0 ? (
+              <div className="flex items-baseline justify-between gap-4">
+                <dt className="text-[13px] text-ink-faint">Everything else</dt>
+                <dd className="text-[13px] tabular-nums text-ink-faint">&minus;{remainingDeduction}</dd>
+              </div>
+            ) : null}
+            <div className="flex items-baseline justify-between gap-4 border-t border-hairline-soft pt-1.5">
+              <dt className="text-[13px] font-medium text-ink">This scan</dt>
+              <dd className="text-[13px] font-medium tabular-nums text-ink">{explanation.finalScore}</dd>
+            </div>
+          </dl>
+        ) : (
+          <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
+            Nothing this scan found took points off{totalDeduction === 0 ? "" : ""}.
+          </p>
+        )}
+
+        {floorNote ? <p className="mt-3 text-[12.5px] leading-relaxed text-ink-faint">{floorNote}</p> : null}
+        {ceilingNote ? <p className="mt-3 text-[12.5px] leading-relaxed text-ink-faint">{ceilingNote}</p> : null}
+        {verificationExcluded ? (
+          <p className="mt-3 text-[12.5px] leading-relaxed text-ink-faint">
+            Items below that only ask you to check something did not reduce this score.
+          </p>
+        ) : null}
+      </div>
+    </details>
   );
 }
 

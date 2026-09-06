@@ -5,7 +5,8 @@ import { firstFailedRepairInvariant } from "./repairInvariants.js";
 // payload for every row -- including rows sealed before it existed. Version
 // dispatch on reconstruction keeps those rows verifiable instead of turning
 // an intact result into 409 result_authority_invalid.
-export const REVIEW_ATTESTATION_VERSION = "standard_review_snapshot_hmac_v4_focused_scope";
+export const REVIEW_ATTESTATION_VERSION = "standard_review_snapshot_hmac_v5_score_explanation";
+export const REVIEW_ATTESTATION_VERSION_V4 = "standard_review_snapshot_hmac_v4_focused_scope";
 export const REVIEW_ATTESTATION_VERSION_V1 = "standard_review_snapshot_hmac_v1";
 export const REVIEW_ATTESTATION_VERSION_V2 = "standard_review_snapshot_hmac_v2_coverage";
 export const REVIEW_ATTESTATION_VERSION_V3 = "standard_review_snapshot_hmac_v3_acceptance_evidence";
@@ -208,6 +209,10 @@ export function buildAuthoritySnapshot({ scan, review, identity, userId, now = n
       ...acceptanceEvidenceFields(scan, review),
       health_score: healthScore,
       health_grade: healthGrade,
+      // Sealed with the score it explains. Outside the seal the displayed
+      // breakdown could be edited without breaking the proof, which would make
+      // it a decoration next to the number rather than evidence for it.
+      health_score_explanation: scoreExplanation(review?.health_score_explanation),
       customer_summary: customerSummary,
       next_best_step: text(review?.next_best_step || review?.website_health_report?.next_best_step, 2_000),
       no_high_confidence_findings: review?.no_high_confidence_findings === true,
@@ -524,6 +529,8 @@ function firstArray(values) {
   return [];
 }
 
+const SCORE_EXPLANATION_VERSION = "health_score_explanation_v1";
+
 function plainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
@@ -533,6 +540,37 @@ function plainObject(value) {
  * verdict the scanner never reached, so an unversioned or empty assessment
  * writes nothing rather than a fabricated default.
  */
+/**
+ * The bounded score explanation, normalized identically on both sides.
+ *
+ * The seal covers whatever this returns, and reconstruction has to produce the
+ * same object byte for byte or an intact result reads as tampered -- so this
+ * function is duplicated verbatim in getCustomerScanResultV2/projection.js and
+ * a test pins the two copies together. Anything malformed collapses to {},
+ * which is also what a scan with no breakdown produces: an absent explanation
+ * is a state the page already renders honestly.
+ */
+function scoreExplanation(value) {
+  const source = plainObject(value);
+  if (text(source.version, 80) !== SCORE_EXPLANATION_VERSION) return {};
+  const deductions = (Array.isArray(source.deductions) ? source.deductions : [])
+    .slice(0, 5)
+    .map((row) => ({ category: text(plainObject(row).category, 80), points: number(plainObject(row).points) }))
+    .filter((row) => row.category && row.points > 0);
+  return {
+    version: SCORE_EXPLANATION_VERSION,
+    starting_score: number(source.starting_score),
+    final_score: number(source.final_score),
+    total_deduction: number(source.total_deduction),
+    deductions,
+    coverage_ceiling: number(source.coverage_ceiling),
+    applied_ceiling: number(source.applied_ceiling),
+    ceiling_reason: text(source.ceiling_reason, 40),
+    floor_applied: source.floor_applied === true,
+    verification_findings_excluded: source.verification_findings_excluded === true,
+  };
+}
+
 function coverageAuthorityFields(evidence) {
   const assessment = plainObject(evidence);
   const version = text(assessment.coverage_authority_evidence_version, 160);

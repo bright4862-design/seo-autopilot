@@ -38,6 +38,7 @@ const V1 = "standard_review_snapshot_hmac_v1";
 const V2 = "standard_review_snapshot_hmac_v2_coverage";
 const V3 = "standard_review_snapshot_hmac_v3_acceptance_evidence";
 const V4 = "standard_review_snapshot_hmac_v4_focused_scope";
+const V5 = "standard_review_snapshot_hmac_v5_score_explanation";
 const NOW = "2026-08-21T16:00:00.000Z";
 
 /** Fields Patch B added. A v1 payload must contain none of them. */
@@ -69,6 +70,9 @@ const SCOPE_KEYS = [
   "discovered_from",
   "user_confirmed",
 ];
+
+/** The field v5 added: where the health score's points went. */
+const SCORE_EXPLANATION_KEYS = ["health_score_explanation"];
 
 function snapshot() {
   return buildAuthoritySnapshot({
@@ -127,7 +131,7 @@ function snapshot() {
 async function historicalV1Row() {
   const legacy = structuredClone(snapshot());
   legacy.version = V1;
-  for (const key of [...COVERAGE_KEYS, ...ACCEPTANCE_KEYS, ...SCOPE_KEYS]) delete legacy.scan[key];
+  for (const key of [...COVERAGE_KEYS, ...ACCEPTANCE_KEYS, ...SCOPE_KEYS, ...SCORE_EXPLANATION_KEYS]) delete legacy.scan[key];
 
   const proof = await createAuthoritySeal(legacy, SECRET);
   const rows = authorityRowsFromSnapshot(legacy, {
@@ -142,7 +146,7 @@ async function historicalV1Row() {
 async function historicalV2Row() {
   const legacy = structuredClone(snapshot());
   legacy.version = V2;
-  for (const key of [...ACCEPTANCE_KEYS, ...SCOPE_KEYS]) delete legacy.scan[key];
+  for (const key of [...ACCEPTANCE_KEYS, ...SCOPE_KEYS, ...SCORE_EXPLANATION_KEYS]) delete legacy.scan[key];
 
   const proof = await createAuthoritySeal(legacy, SECRET);
   const rows = authorityRowsFromSnapshot(legacy, {
@@ -157,11 +161,26 @@ async function historicalV2Row() {
 async function historicalV3Row() {
   const legacy = structuredClone(snapshot());
   legacy.version = V3;
-  for (const key of SCOPE_KEYS) delete legacy.scan[key];
+  for (const key of [...SCOPE_KEYS, ...SCORE_EXPLANATION_KEYS]) delete legacy.scan[key];
 
   const proof = await createAuthoritySeal(legacy, SECRET);
   const rows = authorityRowsFromSnapshot(legacy, {
     fixListId: "fl_v3",
+    ownerUserId: "user_hist",
+    proof,
+  });
+  return { legacy, proof, rows };
+}
+
+/** A row sealed under focused scope v4, before the score explanation v5. */
+async function historicalV4Row() {
+  const legacy = structuredClone(snapshot());
+  legacy.version = V4;
+  for (const key of SCORE_EXPLANATION_KEYS) delete legacy.scan[key];
+
+  const proof = await createAuthoritySeal(legacy, SECRET);
+  const rows = authorityRowsFromSnapshot(legacy, {
+    fixListId: "fl_v4",
     ownerUserId: "user_hist",
     proof,
   });
@@ -215,9 +234,9 @@ test("rebuilding a v1 row never introduces a field the v1 seal did not cover", a
 
 // ------------------------------------------------------------ new rows --
 
-test("new rows seal under the focused-scope attestation version", () => {
-  assert.equal(REVIEW_ATTESTATION_VERSION, V4);
-  assert.equal(snapshot().version, V4);
+test("new rows seal under the score-explanation attestation version", () => {
+  assert.equal(REVIEW_ATTESTATION_VERSION, V5);
+  assert.equal(snapshot().version, V5);
 });
 
 test("a historical v2-sealed result still verifies and carries coverage evidence", async () => {
@@ -233,6 +252,27 @@ test("a historical v2-sealed result still verifies and carries coverage evidence
   assert.equal(await verifyAuthoritySeal(rebuilt, SECRET, proof), true);
   assert.equal(rebuilt.scan.usable_html_page_count, 150);
   assert.equal(rebuilt.scan.coverage_authority_evidence.assessment, "sufficient");
+});
+
+test("a historical v4-sealed result still verifies without a score explanation", async () => {
+  // The row this release supersedes. Every completed production scan before
+  // today is one of these, so the assertion that matters is that adding the
+  // breakdown did not silently invalidate all of them.
+  const { legacy, proof, rows } = await historicalV4Row();
+  const rebuilt = customerSnapshotFromRows({
+    run: { id: "scan_hist", project_id: "proj_hist", ...rows.scanRun },
+    fixList: { id: "fl_v4", ...rows.fixList },
+    fixItems: rows.fixItems,
+    userId: "user_hist",
+  });
+
+  assert.equal(await verifyAuthoritySeal(rebuilt, SECRET, proof), true);
+  assert.ok(!("health_score_explanation" in rebuilt.scan),
+    "a v4 row must not gain the field its seal did not cover");
+  assert.ok(!("health_score_explanation" in legacy.scan));
+  // The v4 fields it does carry are still there.
+  assert.equal(rebuilt.scan.scope_type, legacy.scan.scope_type);
+  assert.equal(rebuilt.scan.usable_html_page_count, 150);
 });
 
 test("a historical v3-sealed result still verifies without focused-scope fields", async () => {

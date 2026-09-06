@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `b3345916049979a1` |
+| Candidate fingerprint | `cc385c397c97d579` |
 | Classifier | `archetype_classifier_v12_locale_normalized_structural_routes` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,18 +15,28 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `b3345916049979a1` with classifier
+fingerprint `cc385c397c97d579` with classifier
 `archetype_classifier_v12_locale_normalized_structural_routes`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded candidate was `77588ce93276d608`; before that `68a16802a9c7a543`, `a43a71c61f32d9fb`, `2f4238b4989f3fd9`, `0544ce395811cbd5`,
+The immediately superseded candidate was `b3345916049979a1`; before that `77588ce93276d608`, `68a16802a9c7a543`, `a43a71c61f32d9fb`, `2f4238b4989f3fd9`, `0544ce395811cbd5`,
 `0fa7d98734efb3f2`, `7a95768cc8ee2076`, `58275d24191cf1cb`,
 `7b0ec8c46654192b`, `5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and
 `1ddf8085bc7721c4`.
 
-The current candidate moved the fingerprint to `b3345916049979a1` by making a
-scan that produced no result say which reason it stopped for. Every limited or
+The current candidate moved the fingerprint to `cc385c397c97d579` by persisting where the
+health score's points went. `compute_health_score_breakdown()` has always known
+which area cost what and which ceilings bound the result, and none of it left
+the scanner: the page showed a number and a grade, and the number is the first
+thing an owner argues with. `health_score_explanation_v1` records the breakdown
+alongside the score, sealed with it under
+`standard_review_snapshot_hmac_v5_score_explanation` so the displayed
+arithmetic cannot drift from the signed result. Rows sealed under v1 through v4
+rebuild exactly as they were sealed and keep verifying.
+
+The preceding `b3345916049979a1` candidate made a scan that produced no result
+say which reason it stopped for. Every limited or
 failed run previously rendered the same paragraph and the same advice, so a site
 rate-limiting the scanner and a site whose sitemap never answered were
 indistinguishable, and the owner of the first was told to retry into the same

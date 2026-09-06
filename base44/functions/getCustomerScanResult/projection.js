@@ -127,6 +127,7 @@ const DETAILED_RUN_FIELDS = [
   "render_evidence",
   "health_score",
   "health_grade",
+  "health_score_explanation",
   "customer_summary",
   "next_best_step",
   "fix_list_id",
@@ -363,6 +364,7 @@ export function authoritySnapshotFromRows({ run, fixList, fixItems, userId }) {
       ...acceptanceEvidenceSnapshotFields(run),
       health_score: number(run?.health_score),
       health_grade: text(run?.health_grade, 80),
+      ...scoreExplanationSnapshotFields(run),
       customer_summary: text(run?.customer_summary, 4_000),
       next_best_step: text(run?.next_best_step, 2_000),
       no_high_confidence_findings: run?.no_high_confidence_findings === true,
@@ -569,7 +571,7 @@ function sanitizeRun(run, { detailed, healthScoreStatus = "" }) {
 }
 
 function usesAcceptanceEvidenceContract(run) {
-  return ["standard_review_snapshot_hmac_v3_acceptance_evidence", "standard_review_snapshot_hmac_v4_focused_scope"].includes(text(run?.authority_seal_version, 160))
+  return ["standard_review_snapshot_hmac_v3_acceptance_evidence", "standard_review_snapshot_hmac_v4_focused_scope", "standard_review_snapshot_hmac_v5_score_explanation"].includes(text(run?.authority_seal_version, 160))
     || [
       "standard_limited_result_integrity_v2_acceptance_evidence",
       "standard_limited_result_integrity_v3_focused_scope",
@@ -733,6 +735,8 @@ function verifiedUrls(value) {
     }).filter((item) => item.url || item.final_url);
 }
 
+const SCORE_EXPLANATION_VERSION = "health_score_explanation_v1";
+
 function plainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
@@ -740,6 +744,10 @@ function plainObject(value) {
 const REVIEW_ATTESTATION_VERSION_V2 = "standard_review_snapshot_hmac_v2_coverage";
 const REVIEW_ATTESTATION_VERSION_V3 = "standard_review_snapshot_hmac_v3_acceptance_evidence";
 const REVIEW_ATTESTATION_VERSION_V4 = "standard_review_snapshot_hmac_v4_focused_scope";
+const REVIEW_ATTESTATION_VERSION_V5 = "standard_review_snapshot_hmac_v5_score_explanation";
+// Every version from V4 on carries the focused-scope fields; V5 adds the score
+// explanation. Listing them keeps each gate below explicit about which seals it
+// covers, rather than "V4 or later", which is how a v4 row silently gains a field.
 
 /**
  * Reconstruction is version-dispatched, never inferred from which fields the
@@ -748,7 +756,9 @@ const REVIEW_ATTESTATION_VERSION_V4 = "standard_review_snapshot_hmac_v4_focused_
  * seal did not cover. The row's own authority_seal_version is the authority.
  */
 function scopeSnapshotFields(row) {
-  if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V4) return {};
+  if (![REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5].includes(
+    text(row?.authority_seal_version, 160),
+  )) return {};
   return {
     scope_type: text(row?.scope_type, 40),
     parent_scan_id: text(row?.parent_scan_id, 160),
@@ -758,8 +768,15 @@ function scopeSnapshotFields(row) {
     user_confirmed: row?.user_confirmed === true,
   };
 }
+function scoreExplanationSnapshotFields(row) {
+  // V5 only. A v4 row must rebuild exactly as v4: giving it a field its seal
+  // did not cover turns an intact result into a tampered one.
+  if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V5) return {};
+  return { health_score_explanation: scoreExplanation(row?.health_score_explanation) };
+}
+
 function coverageSnapshotFields(row) {
-  if (![REVIEW_ATTESTATION_VERSION_V2, REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4].includes(
+  if (![REVIEW_ATTESTATION_VERSION_V2, REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5].includes(
     text(row?.authority_seal_version, 160),
   )) return {};
   return {
@@ -776,7 +793,7 @@ function coverageSnapshotFields(row) {
 }
 
 function acceptanceEvidenceSnapshotFields(row) {
-  if (![REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4].includes(text(row?.authority_seal_version, 160))) return {};
+  if (![REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5].includes(text(row?.authority_seal_version, 160))) return {};
   const source = plainObject(row?.classification_integrity);
   const state = text(source.state, 120);
   const verdict = text(source.verdict, 120);
@@ -820,6 +837,37 @@ function positiveNumber(value) {
 }
 
 /** Mirrors coverageAuthorityFields in persistDurableScanAuthority/authoritySnapshot.js. */
+/**
+ * The bounded score explanation, normalized identically on both sides.
+ *
+ * The seal covers whatever this returns, and reconstruction has to produce the
+ * same object byte for byte or an intact result reads as tampered -- so this
+ * function is duplicated verbatim in getCustomerScanResultV2/projection.js and
+ * a test pins the two copies together. Anything malformed collapses to {},
+ * which is also what a scan with no breakdown produces: an absent explanation
+ * is a state the page already renders honestly.
+ */
+function scoreExplanation(value) {
+  const source = plainObject(value);
+  if (text(source.version, 80) !== SCORE_EXPLANATION_VERSION) return {};
+  const deductions = (Array.isArray(source.deductions) ? source.deductions : [])
+    .slice(0, 5)
+    .map((row) => ({ category: text(plainObject(row).category, 80), points: number(plainObject(row).points) }))
+    .filter((row) => row.category && row.points > 0);
+  return {
+    version: SCORE_EXPLANATION_VERSION,
+    starting_score: number(source.starting_score),
+    final_score: number(source.final_score),
+    total_deduction: number(source.total_deduction),
+    deductions,
+    coverage_ceiling: number(source.coverage_ceiling),
+    applied_ceiling: number(source.applied_ceiling),
+    ceiling_reason: text(source.ceiling_reason, 40),
+    floor_applied: source.floor_applied === true,
+    verification_findings_excluded: source.verification_findings_excluded === true,
+  };
+}
+
 function coverageAuthorityFields(evidence) {
   const assessment = plainObject(evidence);
   const version = text(assessment.coverage_authority_evidence_version, 160);

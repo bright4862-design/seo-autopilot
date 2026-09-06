@@ -21,6 +21,7 @@ const ACCEPTED_AUTHORITY_VERSIONS = new Set([
   "standard_review_snapshot_hmac_v2_coverage",
   "standard_review_snapshot_hmac_v3_acceptance_evidence",
   "standard_review_snapshot_hmac_v4_focused_scope",
+  "standard_review_snapshot_hmac_v5_score_explanation",
 ]);
 const ACCEPTED_LIMITED_INTEGRITY_VERSIONS = new Set([
   "standard_limited_result_integrity_v1",
@@ -32,7 +33,7 @@ import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
 const BASE44_RUNTIME_ACTIVATION_ID = "customer-result-prod-reactivation-20260903-v1";
 import { isReadableAuthorityReleaseFingerprint } from "./releaseCompatibility.js";
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "b3345916049979a1";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "cc385c397c97d579";
 const MAX_FIX_ITEMS = 100;
 
 // Runtime-secret convergence must not be confused with cryptographic key

@@ -289,6 +289,11 @@
     "health_grade": {
       "type": "string"
     },
+    "health_score_explanation": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
     "customer_summary": {
       "type": "string"
     },

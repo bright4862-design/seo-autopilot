@@ -114,23 +114,21 @@ function renderingUnverified(record) {
 /**
  * Which of the closed set explains this record.
  *
- * Order is not arbitrary. A save failure and a stalled worker are terminal
- * infrastructure states that say nothing about the site, so they are settled
- * first. Access limiting comes next because it explains everything downstream
- * of it: a blocked crawl also runs short of pages and also runs out of time,
- * and telling the owner about the symptom would send them to fix the wrong
- * thing. A deadline outranks a thin page count for the same reason -- it is the
- * cause, the page count is what it left behind. Rendering evidence is last of
- * the real reasons because it describes how the pages that did arrive were
- * evaluated, which only matters once pages arrived.
+ * Structured producer evidence is authoritative when it exists. Legacy free
+ * text is only a fallback for older rows that carry no usable structured
+ * reason: letting a stale heartbeat or write-failure fragment win first can
+ * overwrite a current access or coverage verdict and send the customer to fix
+ * the wrong thing. Within structured evidence, access limiting comes first
+ * because it explains everything downstream of it; a blocked crawl also runs
+ * short of pages and may run out of time. A recorded deadline outranks a thin
+ * page count for the same reason. Rendering evidence is considered after page
+ * and coverage states because it describes how the pages that did arrive were
+ * evaluated. Only after those structured channels fail do historical text
+ * patterns classify save failures, stalls, access blocks, or deadlines.
  */
 export function durableScanLimitationKind(record) {
   const source = plainObject(record);
   const text = failureText(source);
-
-  if (SAVE_FAILED_TEXT.test(text)) return "save_failed";
-  if (WORKER_STALLED_TEXT.test(text)) return "worker_stalled";
-
   const states = new Set([
     cleanText(source.evidence_quality_state).toLowerCase(),
     cleanText(source.coverage_state).toLowerCase(),
@@ -144,12 +142,15 @@ export function durableScanLimitationKind(record) {
   if (intersects(states, ACCESS_LIMITED_STATES) || intersects(reasons, ACCESS_LIMITED_REASONS)) {
     return "access_limited";
   }
-  if (ACCESS_LIMITED_TEXT.test(text)) return "access_limited";
   if (deadlineReached(source)) return "deadline_reached";
   if (intersects(states, TOO_FEW_PAGES_STATES) || intersects(reasons, TOO_FEW_PAGES_REASONS)) {
     return "too_few_usable_pages";
   }
   if (renderingUnverified(source)) return "rendering_not_verified";
+
+  if (SAVE_FAILED_TEXT.test(text)) return "save_failed";
+  if (WORKER_STALLED_TEXT.test(text)) return "worker_stalled";
+  if (ACCESS_LIMITED_TEXT.test(text)) return "access_limited";
   if (DEADLINE_TEXT.test(text)) return "deadline_reached";
   return "unknown_limited";
 }

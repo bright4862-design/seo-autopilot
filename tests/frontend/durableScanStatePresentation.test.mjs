@@ -310,12 +310,22 @@ test("every pattern in the gate is load-bearing", () => {
 // ---------------------------------------------- the states that are not it --
 
 test("a running scan is not described as a failure", () => {
+  // The title is now the phase the scan is actually in, from the progress
+  // model -- "This scan is still running" said the same thing for all three.
+  // What must not change is that none of them read as something going wrong.
+  const titles = new Set();
   for (const status of ["queued", "crawling", "reviewing"]) {
     const view = durableScanStatePresentation({ status });
     assert.equal(view.kind, "in_progress");
-    assert.match(view.title, /still running/i);
-    assert.doesNotMatch(view.detail, /failed|couldn't|could not/i);
+    assert.ok(view.title.length > 0);
+    assert.doesNotMatch(
+      `${view.title} ${view.detail}`,
+      /failed|couldn't|could not|stopped|problem/i,
+      `${status}: ${view.title}`,
+    );
+    titles.add(view.title);
   }
+  assert.equal(titles.size, 3, "the three phases must be distinguishable");
 });
 
 test("a cancelled scan says who stopped it", () => {

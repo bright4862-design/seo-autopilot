@@ -1,3 +1,5 @@
+import { scanProgressModel } from "./scanProgressPresentation.js";
+
 // The release component that names how a scan without a result is explained.
 // It lived in FixList.jsx while the copy did; it moves here with the copy, and
 // v2 records that the explanation is now derived from the producer's structured
@@ -224,17 +226,83 @@ const COPY = {
   },
 };
 
-export function durableScanStatePresentation(record) {
+/**
+ * How long a run may take before saying so, and how fresh a heartbeat must be
+ * for "still progressing" to be a claim rather than a hope.
+ */
+const SLOW_SCAN_AFTER_MS = 6 * 60 * 1000;
+const FRESH_HEARTBEAT_WITHIN_MS = 90 * 1000;
+
+function timestamp(value) {
+  const parsed = Date.parse(cleanText(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * "Taking longer than usual, but still progressing" -- only where both halves
+ * are evidenced.
+ *
+ * Neither half may come from the browser. A tab left open overnight proves
+ * nothing about the run, and a long-running scan with a stale heartbeat is not
+ * something to reassure anyone about. The clock is passed in so this is a pure
+ * function of the record; started_at and worker_heartbeat_at are the run's own
+ * persisted timestamps.
+ *
+ * A stale heartbeat returns "" rather than a warning: calling a scan stalled is
+ * the durable failure evidence's job, and guessing at it here would put a
+ * failure on the page for a run that is merely between heartbeats.
+ */
+function slowButHealthyNote(record, now) {
+  const started = timestamp(record.started_at) ?? timestamp(record.queued_at);
+  const heartbeat = timestamp(record.worker_heartbeat_at);
+  // Both explicitly, rather than leaning on the freshness check below. A
+  // missing heartbeat would happen to fail that check -- `now - null` is `now`,
+  // which is older than any threshold -- but only by coercion, and a guard that
+  // works by accident is one the next edit breaks silently.
+  if (started === null || heartbeat === null) return "";
+  if (now - started < SLOW_SCAN_AFTER_MS) return "";
+  if (now - heartbeat > FRESH_HEARTBEAT_WITHIN_MS) return "";
+  return "This is taking longer than usual, but the scan is still progressing.";
+}
+
+/**
+ * What an active run is doing, from the model that already knows.
+ *
+ * scanProgressModel() is careful about exactly the thing this page kept getting
+ * wrong -- pages_found, the 150 cap and the queue length are not denominators --
+ * so the numbers are taken from it rather than recomputed. Two readers of the
+ * same record forming their own opinion is how a page comes to show "38 pages
+ * checked" beside "12% complete".
+ */
+function inProgressPresentation(record, now) {
+  const model = scanProgressModel(record);
+  const canLeavePage = model.canLeavePage === true;
+  return {
+    kind: "in_progress",
+    title: model.phaseLabel,
+    detail: COPY.in_progress.detail,
+    nextStep: canLeavePage
+      ? "You can close this page and come back to it from your scan history; the scan keeps running."
+      : "Leave this page open — it updates on its own as the scan works through the site.",
+    retryAdvice: COPY.in_progress.retryAdvice,
+    countLabel: model.countLabel,
+    percent: model.percent,
+    canLeavePage,
+    slowNote: slowButHealthyNote(record, now),
+  };
+}
+
+export function durableScanStatePresentation(record, { now = Date.now() } = {}) {
   const source = plainObject(record);
   const status = cleanText(source.status);
 
-  if (RUNNING_STATUSES.has(status)) return { kind: "in_progress", ...COPY.in_progress };
-  if (status === "cancelled") return { kind: "cancelled", ...COPY.cancelled };
-  if (status === "limited" || status === "failed") {
-    const kind = durableScanLimitationKind(source);
-    return { kind, ...COPY[kind] };
-  }
-  return { kind: "no_results", ...COPY.no_results };
+  if (RUNNING_STATUSES.has(status)) return inProgressPresentation(source, now);
+  // Every branch returns the same keys, so the page never has to guard a
+  // progress field that only exists on one of them.
+  const settled = (kind) => ({ kind, ...COPY[kind], countLabel: "", percent: null, canLeavePage: false, slowNote: "" });
+  if (status === "cancelled") return settled("cancelled");
+  if (status === "limited" || status === "failed") return settled(durableScanLimitationKind(source));
+  return settled("no_results");
 }
 
 /**

@@ -1288,6 +1288,30 @@ function RequestedScanState({ title = "", detail = "", presentation = null, limi
         <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{limitation}</p>
       ) : null}
 
+      {/*
+        A count is shown whenever the scan has one; a bar only where the backend
+        called the total final. Discovery runs while crawling, so 38 of 3,689
+        discovered URLs is not 1% done -- the count is real, the ratio is not.
+      */}
+      {presentation.countLabel ? (
+        <p className="mt-3 text-[13px] tabular-nums text-ink-muted">{presentation.countLabel}</p>
+      ) : null}
+      {presentation.percent !== null ? (
+        <div
+          className="mt-2 h-1 w-full max-w-[52ch] overflow-hidden rounded-full bg-hairline-soft"
+          role="progressbar"
+          aria-valuenow={presentation.percent}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label="Scan progress"
+        >
+          <div className="h-full rounded-full bg-ink/60 transition-[width] duration-500" style={{ width: `${presentation.percent}%` }} />
+        </div>
+      ) : null}
+      {presentation.slowNote ? (
+        <p className="mt-3 max-w-[52ch] text-[13px] leading-relaxed text-ink-faint">{presentation.slowNote}</p>
+      ) : null}
+
       <h2 className="mt-5 text-[12px] font-medium uppercase tracking-wide text-ink-faint">What to do next</h2>
       <p className="mt-1.5 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{presentation.nextStep}</p>
       <p className="mt-1.5 max-w-[52ch] text-[13.5px] leading-relaxed text-ink-faint">{presentation.retryAdvice}</p>

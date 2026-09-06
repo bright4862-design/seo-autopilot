@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 
 const CIRCUMFERENCE = 2 * Math.PI * 42;
 
@@ -6,44 +6,41 @@ function ringColor(score) {
   return score >= 85 ? "#15803D" : "#B45309";
 }
 
-// Animated health-score ring. When evidence is insufficient, the component
-// renders a neutral unavailable state instead of inventing a zero score.
+/**
+ * The health score, with the ring animated and the number held still.
+ *
+ * The number used to count from 0 up to the score over 900ms. For most of a
+ * second the page showed a figure that was not this site's score -- and screen
+ * readers were told the real one at the same moment, so what was seen and what
+ * was announced disagreed. On a slow render, or a scroll away and back, a
+ * customer's first sight of their score was a 0 they had to watch climb.
+ *
+ * The stroke still sweeps, because that reads as the page arriving rather than
+ * as a value changing. The digits are the score from the first paint.
+ *
+ * When evidence is insufficient this renders a neutral unavailable state rather
+ * than inventing a zero.
+ */
 export default function ScoreRing({ score = null, size = 96, unavailable = false }) {
   const numericScore = Number(score);
   const hasScore = !unavailable && score !== null && score !== undefined && Number.isFinite(numericScore);
   const target = hasScore ? Math.max(0, Math.min(100, Math.round(numericScore))) : 0;
   const reduced = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-  const [displayed, setDisplayed] = useState(reduced ? target : 0);
   const [offset, setOffset] = useState(hasScore && reduced ? CIRCUMFERENCE * (1 - target / 100) : CIRCUMFERENCE);
-  const frame = useRef(null);
 
   useEffect(() => {
     if (!hasScore) {
-      setDisplayed(0);
       setOffset(CIRCUMFERENCE);
       return undefined;
     }
     if (reduced) {
-      setDisplayed(target);
       setOffset(CIRCUMFERENCE * (1 - target / 100));
       return undefined;
     }
-    const timer = window.setTimeout(() => {
-      setOffset(CIRCUMFERENCE * (1 - target / 100));
-      const started = performance.now();
-      const duration = 900;
-      function step(now) {
-        const raw = Math.min((now - started) / duration, 1);
-        const eased = 1 - Math.pow(1 - raw, 3);
-        setDisplayed(Math.round(target * eased));
-        if (raw < 1) frame.current = requestAnimationFrame(step);
-      }
-      frame.current = requestAnimationFrame(step);
-    }, 150);
-    return () => {
-      window.clearTimeout(timer);
-      if (frame.current) cancelAnimationFrame(frame.current);
-    };
+    // One frame at full offset so the CSS transition has something to sweep
+    // from; the number below has been correct the whole time.
+    const timer = window.setTimeout(() => setOffset(CIRCUMFERENCE * (1 - target / 100)), 150);
+    return () => window.clearTimeout(timer);
   }, [target, reduced, hasScore]);
 
   return (
@@ -70,7 +67,7 @@ export default function ScoreRing({ score = null, size = 96, unavailable = false
         style={{ fontSize: hasScore ? size / 3 : size / 3.6 }}
         aria-label={hasScore ? `Site health score ${target}` : "Site health score unavailable"}
       >
-        {hasScore ? displayed : "—"}
+        {hasScore ? target : "—"}
       </div>
     </div>
   );

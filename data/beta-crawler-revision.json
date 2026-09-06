@@ -12,7 +12,7 @@
     "coverage_authority_evidence_version": "coverage_authority_evidence_v2_authoritative",
     "coverage_authority_version": "coverage_authority_v1_shared_decision",
     "crawler_acceptance_version": "crawler_acceptance_v1",
-    "customer_projection_version": "customer_projection_v6_effective_scope_visible",
+    "customer_projection_version": "customer_projection_v7_progress_heartbeat",
     "customer_result_reader_version": "customer_result_reader_v5_acceptance_projection_parity",
     "durable_completion_contract_version": "durable_standard150_completion_v1",
     "durable_control_contract_version": "durable_standard150_control_v1",
@@ -64,10 +64,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "cc385c397c97d579",
+  "fingerprint": "821d211419fd327e",
   "git_commit": "",
   "note": "",
-  "recorded_at": "2026-09-06T17:41:00.640825+00:00",
+  "recorded_at": "2026-09-06T17:52:24.185364+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

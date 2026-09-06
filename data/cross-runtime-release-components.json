@@ -3,7 +3,7 @@
     "admission_reconciliation_version": "admission_reconciliation_v1_exact_generation_barrier",
     "authority_seal_version": "scan_evidence_hmac_sha256_v1",
     "count_copy_version": "count_copy_v2_agreeing_verbs",
-    "customer_projection_version": "customer_projection_v6_effective_scope_visible",
+    "customer_projection_version": "customer_projection_v7_progress_heartbeat",
     "customer_result_reader_version": "customer_result_reader_v5_acceptance_projection_parity",
     "durable_completion_contract_version": "durable_standard150_completion_v1",
     "durable_control_contract_version": "durable_standard150_control_v1",

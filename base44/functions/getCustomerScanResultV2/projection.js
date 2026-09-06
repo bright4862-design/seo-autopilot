@@ -8,7 +8,7 @@ export const OWNER_TEST_USER_ID = "6a498da58ef5cec1f5cd4486";
 // Versions the customer projection itself. Declared in
 // data/cross-runtime-release-components.json so a projection behavior change
 // moves the release fingerprint like any Python change would.
-export const CUSTOMER_PROJECTION_VERSION = "customer_projection_v6_effective_scope_visible";
+export const CUSTOMER_PROJECTION_VERSION = "customer_projection_v7_progress_heartbeat";
 export const REPAIR_CONTRACT_V2 = "repair_contract_v2_shadow_calibrated";
 export const REPAIR_PRIORITY_MODEL_V2 = "repair_priority_v2_technical_severity";
 
@@ -37,6 +37,9 @@ const PUBLIC_RUN_FIELDS = [
   "queued_at",
   "started_at",
   "reviewing_at",
+  // The run's own heartbeat. Without it the browser can only time itself, and
+  // a tab left open overnight says nothing about whether the scan is alive.
+  "worker_heartbeat_at",
   "completed_at",
   "created_date",
   "updated_date",

@@ -5,7 +5,8 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-from .review import compute_health_score, group_page_recommendations, unwrap_scan_payload
+from .health_score_explanation import apply_score_ceiling, build_health_score_explanation
+from .review import compute_health_score_breakdown, group_page_recommendations, unwrap_scan_payload
 
 CALIBRATION_VERSION = "review_evidence_calibration_v6_health_score_v2"
 IMAGE_ALT_EVIDENCE_VERSION = "material_image_alt_v1"
@@ -569,8 +570,16 @@ def apply_review_evidence_calibration(result: dict[str, Any], payload: dict[str,
     fingerprint = calibrated_result.get("site_fingerprint")
     if not isinstance(fingerprint, dict):
         fingerprint = {}
-    score = compute_health_score(scoring_fixes, fingerprint) if fingerprint else _int(calibrated_result.get("health_score"))
+    # One breakdown, used for both the score and its explanation. Computing the
+    # score here and the explanation from a second call would let the two drift
+    # the moment either input changed.
+    breakdown = compute_health_score_breakdown(scoring_fixes, fingerprint) if fingerprint else None
+    score = _int(breakdown["score"]) if breakdown else _int(calibrated_result.get("health_score"))
     score = max(0, min(100, score))
+    explanation = build_health_score_explanation(
+        breakdown,
+        verification_findings_excluded=len(scoring_fixes) != len(fixes),
+    )
 
     for key in ("recommended_actions", "cleaned_fixes", "raw_fixes", "fixes", "findings", "recommendations"):
         calibrated_result[key] = fixes
@@ -585,6 +594,14 @@ def apply_review_evidence_calibration(result: dict[str, Any], payload: dict[str,
         score = min(score, 55)
         calibrated_result["health_score"] = score
         calibrated_result["seo_score"] = score
+        explanation = apply_score_ceiling(explanation, score, "incomplete_evidence")
+
+    # Written after every ceiling this function applies, so `final_score` is the
+    # score the record actually carries.
+    if explanation:
+        calibrated_result["health_score_explanation"] = explanation
+    else:
+        calibrated_result.pop("health_score_explanation", None)
     report = calibrated_result.get("website_health_report")
     if not isinstance(report, dict):
         report = {}

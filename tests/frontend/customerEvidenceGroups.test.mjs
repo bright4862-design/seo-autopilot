@@ -46,7 +46,11 @@ test("persisted evidence groups produce the exact visible child rows", () => {
 
   assert.equal(rows.length, 2, "header count must equal the child rows customers can see");
   assert.equal(customerEvidenceGroupHeading(rows), "Evidence groups (2)");
-  assert.deepEqual(rows.map((row) => row.familyLabel), ["category", "product"]);
+  // A group heading stands on its own, so it carries the whole noun phrase --
+  // singular, because the row prints its own count immediately beside it. The
+  // bare modifier ("category", "product") belongs in the "across X and Y pages"
+  // list, where a second "pages" follows it.
+  assert.deepEqual(rows.map((row) => row.familyLabel), ["category page", "product page"]);
   assert.deepEqual(rows.map((row) => row.locale), ["fr", "de"]);
   assert.deepEqual(rows.map((row) => row.representativePage), ["/fr/category/a", "/de/product/b"]);
   assert.deepEqual(rows.map((row) => row.representativeLink.href), [

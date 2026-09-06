@@ -6,6 +6,7 @@ from .coverage_authority import assess_coverage, coverage_inputs_from_payload
 from typing import Any
 from urllib.parse import urlparse
 
+from .health_score_explanation import apply_score_ceiling
 from .review import unwrap_scan_payload
 
 EVIDENCE_QUALITY_GATE_VERSION = "evidence_quality_gate_v2_shared_coverage_decision"
@@ -254,6 +255,16 @@ def apply_evidence_quality_gate(result: dict[str, Any], payload: dict[str, Any])
         )
         next_step = "Verify sitemap and internal navigation coverage"
         score = min(55, _int(calibrated.get("health_score") or calibrated.get("seo_score")))
+        # This gate runs after calibration sealed the explanation. Clamping the
+        # score without moving the explanation with it would put a breakdown on
+        # the page that adds up to a different number than the score above it.
+        explanation = apply_score_ceiling(
+            calibrated.get("health_score_explanation"),
+            score,
+            "incomplete_evidence",
+        )
+        if explanation:
+            calibrated["health_score_explanation"] = explanation
         calibrated.update({
             "scan_status": "inconclusive_insufficient_evidence",
             "review_confidence_state": "insufficient_discovery_quality",

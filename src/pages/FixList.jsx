@@ -21,6 +21,7 @@ import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel, cu
 import { repairSuggestion } from "@/lib/repairSuggestions";
 import {
   buildRepairCards,
+  withRepeatedTitleScopeHints,
   customerEvidenceGroupHeading,
   customerEvidenceGroupRows,
 } from "@/lib/repairCardModel";
@@ -30,6 +31,8 @@ import { trackEvent } from "@/lib/analytics";
 import { samplingDisclosure } from "@/lib/samplingDisclosure";
 import { displayPathPrefix, focusedPathSections, focusedSectionOnboardingPath, orderFocusedScanHistory } from "@/lib/focusedScanScope";
 import { buildPageAccounting } from "@/lib/pageAccounting";
+import { customerSafeLimitationLine, durableScanStatePresentation } from "@/lib/durableScanStatePresentation";
+import { healthScoreExplanation } from "@/lib/healthScoreExplanation";
 
 const CMS_OPTIONS = [
   { value: "wordpress", label: "WordPress" },
@@ -69,7 +72,6 @@ const CATEGORY_LABELS = {
 const ENERGY_PATH_HINTS = ["energie", "énergie", "electricite", "électricité", "gaz", "fournisseur", "kwh", "tarif"];
 const CREDIT_PATH_HINTS = ["rachat-de-credits", "rachat-de-credit", "credit", "crédit", "credits", "crédits", "pret", "prêt", "emprunt"];
 
-export const FAILURE_STATE_PRESENTATION_VERSION = "failure_state_presentation_v1_durable_reason";
 export const PRIORITY_SUMMARY_VERSION = "priority_summary_v1_action_band_consistent";
 export const COUNT_COPY_VERSION = "count_copy_v2_agreeing_verbs";
 
@@ -409,7 +411,9 @@ export default function FixList() {
   });
   const repairPresentation = repairWorkSurface.presentation;
   const customerRepairCards = useMemo(
-    () => repairPresentation.canonical === true ? buildRepairCards(active) : [],
+    // The hints are applied to the finished set, not per card: whether a title
+    // needs disambiguating is a fact about the whole FixList.
+    () => repairPresentation.canonical === true ? withRepeatedTitleScopeHints(buildRepairCards(active)) : [],
     [active, repairPresentation.canonical],
   );
   const displayedRepairCount = repairPresentation.canonical === true ? customerRepairCards.length : active.length;
@@ -537,8 +541,8 @@ export default function FixList() {
           <LockedResultState />
         ) : scanRecord && !hasUsefulScan ? (
           <RequestedScanState
-            title={getDurableScanStateTitle(scanRecord)}
-            detail={getDurableScanStateDetail(scanRecord)}
+            presentation={durableScanStatePresentation(scanRecord)}
+            limitation={customerSafeLimitationLine(scanRecord)}
             reference={scanRecord.scan_id || scanRecord.id}
           />
         ) : hasUsefulScan ? (
@@ -560,6 +564,8 @@ export default function FixList() {
                 </p>
               </div>
             </div>
+
+            <ScoreExplanation explanation={healthScoreExplanation(scanRecord)} />
 
             {summary ? (
               <p className="mt-8 max-w-[56ch] text-[14px] leading-relaxed text-ink-muted">{summary}</p>
@@ -584,26 +590,26 @@ export default function FixList() {
             {sampleCoverage ? (
               <details className="mt-5 max-w-[60ch] rounded-xl border border-hairline-soft bg-white/35 px-4 py-3">
                 <summary className="cursor-pointer text-[12.5px] font-medium text-ink-muted underline decoration-hairline underline-offset-4">
-                  What this representative sample covered
+                  How this scan chose what to look at
                 </summary>
                 <div className="mt-3 space-y-2 text-[12.5px] leading-relaxed text-ink-faint">
                   <p>
-                    Route patterns: <span className="font-medium text-ink-muted">{sampleCoverage.routesSampled} of {sampleCoverage.routesDiscovered}</span>
+                    Route patterns: <span className="font-medium text-ink-muted">{sampleCoverage.routesSelected} of {sampleCoverage.routesDiscovered}</span> chosen for this scan
                     {sampleCoverage.localeVariantsCollapsed > 0
-                      ? ` · ${formatCount(sampleCoverage.localeVariantsCollapsed)} translated duplicate${sampleCoverage.localeVariantsCollapsed === 1 ? "" : "s"} collapsed for sampling`
+                      ? ` · ${formatCount(sampleCoverage.localeVariantsCollapsed)} translated duplicate${sampleCoverage.localeVariantsCollapsed === 1 ? "" : "s"} treated as one page`
                       : ""}
                   </p>
                   {sampleCoverage.identityDiscovered > 0 ? (
                     <p>
-                      Business-critical pages: <span className="font-medium text-ink-muted">{sampleCoverage.identitySampled} of {sampleCoverage.identityDiscovered}</span> sampled.
+                      Business-critical pages: <span className="font-medium text-ink-muted">{sampleCoverage.identitySelected} of {sampleCoverage.identityDiscovered}</span> chosen for this scan.
                     </p>
                   ) : null}
                   {sampleCoverage.marketSummary ? <p>{sampleCoverage.marketSummary}</p> : null}
                   {sampleCoverage.familySummary ? <p>{sampleCoverage.familySummary}</p> : null}
-                  {sampleCoverage.unsampledSummary ? (
-                    <p className="text-ink-muted">{sampleCoverage.unsampledSummary}</p>
+                  {sampleCoverage.notChosenSummary ? (
+                    <p className="text-ink-muted">{sampleCoverage.notChosenSummary}</p>
                   ) : null}
-                  <p>This is a representative 150-page sample unless FixList covered the full discovered inventory.</p>
+                  <p>These are the pages this scan set out to check, up to its 150-page limit. The counts above the fix list say how many it reached.</p>
                 </div>
               </details>
             ) : null}
@@ -652,7 +658,15 @@ export default function FixList() {
                 </p>
                 <div className="mt-4 divide-y divide-hairline-soft">
                   {focusedSections.map((section) => {
-                    const coveragePercent = Math.round(section.coverage * 100);
+                    // "sampled" and "represented" were both computed from the
+                    // URLs chosen before the crawl, so a section could read
+                    // "30 sampled · 60% represented" on a scan that checked
+                    // seven of its pages. A percentage is shown only where an
+                    // outcome was actually recorded; a record that only knows
+                    // what it intended says exactly that.
+                    const checkedCoveragePercent = section.checkedCoverage === null
+                      ? null
+                      : Math.round(section.checkedCoverage * 100);
                     const target = focusedSectionOnboardingPath(scanRecord?.scan_id || scanRecord?.id, section);
                     return (
                       <div key={section.requested_path_prefix} className="flex flex-col gap-3 py-4 first:pt-1 sm:flex-row sm:items-center sm:justify-between">
@@ -662,7 +676,9 @@ export default function FixList() {
                             <span className="break-all text-[12px] text-ink-faint">{displayPathPrefix(section.requested_path_prefix)}</span>
                           </div>
                           <p className="mt-1 text-[12px] leading-relaxed text-ink-faint">
-                            {formatCount(section.discovered)} discovered · {formatCount(section.sampled)} sampled · {coveragePercent}% represented
+                            {section.coverageEvidence === "checked"
+                              ? `${formatCount(section.discovered)} found · ${formatCount(section.checked)} checked here · ${checkedCoveragePercent}% checked`
+                              : `${formatCount(section.discovered)} found · ${formatCount(section.selected)} chosen for this scan`}
                           </p>
                         </div>
                         <button
@@ -1011,9 +1027,17 @@ function CustomerRepairCard({ card = {}, websiteUrl = "" }) {
       <div className="flex flex-wrap items-start justify-between gap-x-5 gap-y-2">
         <div className="min-w-0 flex-1">
           <h4 className="text-[17px] font-medium leading-snug tracking-tight text-ink">{card.title}</h4>
+          {/*
+            The scope hint appears only on cards whose title is repeated in this
+            FixList, which is where a customer otherwise has no way to tell two
+            entries apart without opening both. It is metadata, not part of the
+            repair title: the title stays exactly as analytics and screen
+            readers see it.
+          */}
           <p className="mt-1 text-[12px] font-medium text-ink-faint">
             {card.customerCategory}
             {evidenceLabel ? ` · ${evidenceLabel}` : ""}
+            {card.scopeHint ? ` · ${card.scopeHint}` : ""}
           </p>
         </div>
         {reportedCount > 0 ? (
@@ -1028,10 +1052,18 @@ function CustomerRepairCard({ card = {}, websiteUrl = "" }) {
           <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Why it matters</dt>
           <dd className="mt-1 max-w-[58ch] text-[14px] leading-relaxed text-ink-muted">{card.whyItMatters}</dd>
         </div>
-        <div>
-          <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Where</dt>
-          <dd className="mt-1 max-w-[58ch] text-[14px] leading-relaxed text-ink-muted">{card.where}</dd>
-        </div>
+        {/*
+          whereLine() returns "" for a card with no page count, and the row was
+          rendered regardless -- a heading with nothing under it, which reads as
+          missing data rather than as an answer that does not apply. The
+          affected URLs and evidence are still below either way.
+        */}
+        {String(card.where || "").trim() ? (
+          <div>
+            <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Where</dt>
+            <dd className="mt-1 max-w-[58ch] text-[14px] leading-relaxed text-ink-muted">{card.where}</dd>
+          </div>
+        ) : null}
         <div>
           <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">What to change</dt>
           <dd className="mt-1 max-w-[58ch] text-[14px] leading-relaxed text-ink">{card.whatToChange}</dd>
@@ -1160,12 +1192,131 @@ function SectionEyebrow({ label, count }) {
   );
 }
 
-function RequestedScanState({ title, detail, reference = "" }) {
+
+/**
+ * Where the score's points went.
+ *
+ * Collapsed, because most owners want the list of work rather than the
+ * arithmetic -- but the number is the first thing they argue with, and until
+ * now there was nothing to open. Everything here was computed and sealed by the
+ * scanner; nothing is derived in the browser.
+ */
+function ScoreExplanation({ explanation }) {
+  if (!explanation?.available) {
+    return explanation?.legacy ? (
+      <p className="mt-3 text-[12.5px] text-ink-faint">{explanation.legacyNote}</p>
+    ) : null;
+  }
+
+  const { deductions, totalDeduction, remainingDeduction, ceilingNote, floorNote, verificationExcluded } = explanation;
+
+  return (
+    <details className="mt-4 max-w-[56ch]">
+      <summary className="cursor-pointer text-[12.5px] font-medium text-ink-muted underline decoration-hairline underline-offset-4">
+        Why this score?
+      </summary>
+      <div className="mt-3 rounded-lg border border-hairline-soft bg-white/40 px-3.5 py-3">
+        <p className="text-[12.5px] leading-relaxed text-ink-faint">
+          This number weighs the technical work this scan found. It is not a mark out of a hundred for your business.
+        </p>
+
+        {deductions.length > 0 ? (
+          <dl className="mt-3 space-y-1.5">
+            <div className="flex items-baseline justify-between gap-4 border-b border-hairline-soft pb-1.5">
+              <dt className="text-[13px] text-ink-muted">Starting from</dt>
+              <dd className="text-[13px] tabular-nums text-ink-muted">100</dd>
+            </div>
+            {deductions.map((row) => (
+              <div key={row.category} className="flex items-baseline justify-between gap-4">
+                <dt className="text-[13px] text-ink-muted">{row.category}</dt>
+                <dd className="text-[13px] tabular-nums text-ink-muted">&minus;{row.points}</dd>
+              </div>
+            ))}
+            {remainingDeduction > 0 ? (
+              <div className="flex items-baseline justify-between gap-4">
+                <dt className="text-[13px] text-ink-faint">Everything else</dt>
+                <dd className="text-[13px] tabular-nums text-ink-faint">&minus;{remainingDeduction}</dd>
+              </div>
+            ) : null}
+            <div className="flex items-baseline justify-between gap-4 border-t border-hairline-soft pt-1.5">
+              <dt className="text-[13px] font-medium text-ink">This scan</dt>
+              <dd className="text-[13px] font-medium tabular-nums text-ink">{explanation.finalScore}</dd>
+            </div>
+          </dl>
+        ) : (
+          <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
+            Nothing this scan found took points off{totalDeduction === 0 ? "" : ""}.
+          </p>
+        )}
+
+        {floorNote ? <p className="mt-3 text-[12.5px] leading-relaxed text-ink-faint">{floorNote}</p> : null}
+        {ceilingNote ? <p className="mt-3 text-[12.5px] leading-relaxed text-ink-faint">{ceilingNote}</p> : null}
+        {verificationExcluded ? (
+          <p className="mt-3 text-[12.5px] leading-relaxed text-ink-faint">
+            Items below that only ask you to check something did not reduce this score.
+          </p>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
+function RequestedScanState({ title = "", detail = "", presentation = null, limitation = "", reference = "" }) {
+  // Either a plain title/detail pair, for the states that have nothing to
+  // explain -- loading, mostly -- or a full presentation, which answers what
+  // happened, whether the saved evidence is worth anything, and what to do.
+  // The headings exist because those are three separate questions and running
+  // them together as one paragraph is how every limited scan came to read the
+  // same as every other one.
+  if (!presentation) {
+    return (
+      <div className="mt-16 rounded-2xl border border-hairline-soft bg-white p-6">
+        <h1 className="text-[22px] font-semibold tracking-tight">{title}</h1>
+        <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{detail}</p>
+        {reference ? <p className="mt-4 text-[12px] text-ink-faint">Scan reference: <span className="font-mono tabular-nums">{reference}</span></p> : null}
+      </div>
+    );
+  }
+
   return (
     <div className="mt-16 rounded-2xl border border-hairline-soft bg-white p-6">
-      <h1 className="text-[22px] font-semibold tracking-tight">{title}</h1>
-      <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{detail}</p>
-      {reference ? <p className="mt-4 text-[12px] text-ink-faint">Scan reference: <span className="font-mono tabular-nums">{reference}</span></p> : null}
+      <h1 className="text-[22px] font-semibold tracking-tight">{presentation.title}</h1>
+
+      <h2 className="mt-5 text-[12px] font-medium uppercase tracking-wide text-ink-faint">What happened</h2>
+      <p className="mt-1.5 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{presentation.detail}</p>
+      {limitation ? (
+        <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{limitation}</p>
+      ) : null}
+
+      {/*
+        A count is shown whenever the scan has one; a bar only where the backend
+        called the total final. Discovery runs while crawling, so 38 of 3,689
+        discovered URLs is not 1% done -- the count is real, the ratio is not.
+      */}
+      {presentation.countLabel ? (
+        <p className="mt-3 text-[13px] tabular-nums text-ink-muted">{presentation.countLabel}</p>
+      ) : null}
+      {presentation.percent !== null ? (
+        <div
+          className="mt-2 h-1 w-full max-w-[52ch] overflow-hidden rounded-full bg-hairline-soft"
+          role="progressbar"
+          aria-valuenow={presentation.percent}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label="Scan progress"
+        >
+          <div className="h-full rounded-full bg-ink/60 transition-[width] duration-500" style={{ width: `${presentation.percent}%` }} />
+        </div>
+      ) : null}
+      {presentation.slowNote ? (
+        <p className="mt-3 max-w-[52ch] text-[13px] leading-relaxed text-ink-faint">{presentation.slowNote}</p>
+      ) : null}
+
+      <h2 className="mt-5 text-[12px] font-medium uppercase tracking-wide text-ink-faint">What to do next</h2>
+      <p className="mt-1.5 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{presentation.nextStep}</p>
+      <p className="mt-1.5 max-w-[52ch] text-[13.5px] leading-relaxed text-ink-faint">{presentation.retryAdvice}</p>
+
+      {reference ? <p className="mt-5 text-[12px] text-ink-faint">Scan reference: <span className="font-mono tabular-nums">{reference}</span></p> : null}
     </div>
   );
 }
@@ -1603,7 +1754,10 @@ function getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount }) {
 
 function getLimitationNote(record) {
   if (isHealthScoreUnavailable(record)) return "We couldn't verify enough usable pages to calculate a reliable score. The access item below describes the scan limitation, not a confirmed on-page SEO defect.";
-  const limitation = cleanString(record?.limitation);
+  // The scanner's own sentence carries the concrete numbers, so it is worth
+  // showing -- but it is passed through rather than written here, so it goes
+  // through the same gate as the limited-state copy.
+  const limitation = customerSafeLimitationLine(record);
   if (limitation) return limitation;
   if (record?.score_is_provisional === true) return "Scan coverage was limited, so this score is provisional. Fix what's below, then scan again for a fuller picture.";
   return "";
@@ -2115,47 +2269,6 @@ function normalizeDurableScanBundle(bundle = {}) {
     created_at: run.completed_at || run.created_date || run.queued_at || "",
     recommendations: Array.isArray(bundle.fixItems) ? bundle.fixItems : [],
   };
-}
-
-function durableFailureKind(record = {}) {
-  const evidence = `${record.error_code || ""} ${record.status_detail || ""}`.toLowerCase();
-  if (/429|rate.?limit|challenge|bot.?protection|access.?limit|scanner.?blocked/.test(evidence)) return "access_limited";
-  if (/heartbeat|stalled|orphaned|vanished|no_terminal|progress stopped/.test(evidence)) return "worker_stalled";
-  if (/persist|save.?fail|authority.?write|result.?write/.test(evidence)) return "save_failed";
-  return "interrupted";
-}
-
-function getDurableScanStateTitle(record = {}) {
-  const status = String(record.status || "");
-  if (["queued", "crawling", "reviewing"].includes(status)) return "This scan is still running";
-  if (status === "limited") return "This scan finished with limited evidence";
-  if (status === "failed" && durableFailureKind(record) === "access_limited") return "The website limited this scan's access";
-  if (status === "failed" && durableFailureKind(record) === "worker_stalled") return "This scan stopped making progress";
-  if (status === "failed" && durableFailureKind(record) === "save_failed") return "The result could not be saved";
-  if (status === "failed") return "This scan didn't finish";
-  if (status === "cancelled") return "This scan was cancelled";
-  return "No results saved for this scan";
-}
-
-function getDurableScanStateDetail(record = {}) {
-  const status = String(record.status || "");
-  if (["queued", "crawling", "reviewing"].includes(status)) {
-    return "FixList is still working. This page refreshes automatically and will show your saved result as soon as it is ready.";
-  }
-  if (status === "limited") {
-    return "FixList couldn't verify enough representative page evidence to publish a reliable result. Run a fresh scan when you're ready to try again.";
-  }
-  if (status === "failed") {
-    const kind = durableFailureKind(record);
-    if (kind === "access_limited") return "The website returned a rate limit, challenge, or access block before FixList could collect enough evidence. No authoritative result was saved. Wait a while before retrying; if it repeats, ask your web person to review CDN, firewall, and bot-protection logs.";
-    if (kind === "worker_stalled") return "Progress stopped and FixList safely closed the run. No partial result was promoted. You can retry the scan; if it happens again, include the scan reference when contacting support.";
-    if (kind === "save_failed") return "Crawling finished, but FixList could not persist the verified result. Do not rely on a partial browser result; retry once and include the scan reference if saving fails again.";
-    return "Something interrupted this scan before results could be saved. Run a fresh scan to get a complete FixList.";
-  }
-  if (status === "cancelled") {
-    return "This scan was stopped before it finished, so no results were saved. Run a fresh scan when you're ready.";
-  }
-  return "This scan finished without any saved results to show. Run a fresh scan to get an up-to-date FixList.";
 }
 
 function getRecommendations(record) {

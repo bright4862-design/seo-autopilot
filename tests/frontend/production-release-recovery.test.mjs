@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { durableScanStatePresentation } from "../../src/lib/durableScanStatePresentation.js";
+
 const advanced = readFileSync("base44/functions/runAdvancedScan/entry.ts", "utf8");
 const scannerForm = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
 const fixList = readFileSync("src/pages/FixList.jsx", "utf8");
@@ -57,6 +59,13 @@ test("active result pages poll automatically until the saved FixList is ready", 
   assert.match(fixList, /ACTIVE_SCAN_RUN_STATUSES\.has\(String\(durableBundle\.run\.status/);
   assert.match(fixList, /setReloadToken\(\(value\) => value \+ 1\)/);
   assert.match(fixList, /}, 2500\);/);
-  assert.match(fixList, /This page refreshes automatically/);
-  assert.doesNotMatch(fixList, /Check back in a minute or run a fresh scan/);
+  // The copy moved into the shared presentation module, so this asks the
+  // function what an active run says rather than grepping the page for it.
+  const running = durableScanStatePresentation({ status: "crawling" });
+  assert.equal(running.kind, "in_progress");
+  assert.match(running.detail, /This page refreshes automatically/);
+  assert.doesNotMatch(
+    `${running.detail} ${running.nextStep} ${running.retryAdvice}`,
+    /Check back in a minute or run a fresh scan/,
+  );
 });

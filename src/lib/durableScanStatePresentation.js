@@ -1,0 +1,339 @@
+import { scanProgressModel } from "./scanProgressPresentation.js";
+
+// The release component that names how a scan without a result is explained.
+// It lived in FixList.jsx while the copy did; it moves here with the copy, and
+// v2 records that the explanation is now derived from the producer's structured
+// reason codes rather than from one status string.
+export const FAILURE_STATE_PRESENTATION_VERSION = "failure_state_presentation_v2_structured_limitation_reasons";
+
+/**
+ * Why a scan produced no publishable result, in the customer's terms.
+ *
+ * Every one of these ended the same way on the page -- "This scan finished with
+ * limited evidence", then advice to run a fresh scan -- so a site that is
+ * rate-limiting the scanner and a site whose sitemap never answered read
+ * identically, and the owner of the first was sent round a loop that cannot
+ * terminate. The producer has recorded the difference in structured codes the
+ * whole time; this module is the reader.
+ *
+ * The set is closed. A producer state that maps to nothing here lands on
+ * `unknown_limited`, which says plainly that FixList cannot explain this one,
+ * rather than borrowing the nearest-looking explanation.
+ */
+export const LIMITATION_KINDS = Object.freeze([
+  "access_limited",
+  "too_few_usable_pages",
+  "deadline_reached",
+  "rendering_not_verified",
+  "save_failed",
+  "worker_stalled",
+  "unknown_limited",
+]);
+
+const RUNNING_STATUSES = new Set(["queued", "crawling", "reviewing"]);
+
+// Structured codes, read first and preferred over any text. These are the
+// values app/coverage_authority.py and app/evidence_quality.py publish.
+const ACCESS_LIMITED_STATES = new Set(["access_limited"]);
+const TOO_FEW_PAGES_STATES = new Set([
+  "no_usable_html",
+  "insufficient_discovery",
+  "inventory_unproven",
+  "limited_coverage",
+  // discovery_quality_state keeps its own two labels where they are more
+  // specific than the coverage state, so a row carrying only that field still
+  // has to resolve. Missing them sent it to unknown_limited.
+  "default_route_dominated",
+  "single_page_inventory_unproven",
+]);
+const ACCESS_LIMITED_REASONS = new Set(["access_limited"]);
+const TOO_FEW_PAGES_REASONS = new Set([
+  "no_usable_html_pages",
+  "small_site_inventory_unproven",
+  "no_working_inventory_source",
+  "inventory_source_truncated",
+  "discovered_urls_unaccounted",
+  "single_page_inventory_unproven",
+  "sitemap_discovery_failed",
+  "sitemap_never_fetched",
+  "link_frontier_not_exhausted",
+  "default_route_dominance",
+  "representative_html_pages_below_minimum",
+  "retained_pages_below_minimum",
+  "coverage_ratio_below_minimum",
+]);
+
+// Historical rows carry no structured code at all, only free text a human wrote
+// into status_detail or error_code. These patterns exist for those rows and are
+// consulted last; nothing matched here is ever displayed, only classified.
+const SAVE_FAILED_TEXT = /persist|save.?fail|authority.?write|result.?write/;
+const WORKER_STALLED_TEXT = /heartbeat|stalled|orphaned|vanished|no_terminal|progress stopped/;
+const ACCESS_LIMITED_TEXT = /429|rate.?limit|challenge|bot.?protection|access.?limit|scanner.?blocked/;
+const DEADLINE_TEXT = /deadline|timed?.?out|time limit/;
+
+function cleanText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function codeSet(value) {
+  return new Set(
+    (Array.isArray(value) ? value : [])
+      .map((entry) => cleanText(entry).toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+function plainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function intersects(codes, allowed) {
+  for (const code of codes) if (allowed.has(code)) return true;
+  return false;
+}
+
+/** Free-text failure evidence, lowercased for matching and never for display. */
+function failureText(record) {
+  return `${cleanText(record.error_code)} ${cleanText(record.status_detail)}`.toLowerCase();
+}
+
+function deadlineReached(record) {
+  const timing = plainObject(record.crawl_timing);
+  return timing.crawl_deadline_reached === true
+    || record.scan_deadline_reached === true
+    || timing.scan_deadline_reached === true;
+}
+
+function renderingUnverified(record) {
+  const evidence = plainObject(record.render_evidence);
+  const coverage = plainObject(evidence.coverage);
+  return cleanText(evidence.evidence_state) === "insufficient_raw_html_evidence"
+    || coverage.sufficient === false;
+}
+
+/**
+ * Which of the closed set explains this record.
+ *
+ * Structured producer evidence is authoritative when it exists. Legacy free
+ * text is only a fallback for older rows that carry no usable structured
+ * reason: letting a stale heartbeat or write-failure fragment win first can
+ * overwrite a current access or coverage verdict and send the customer to fix
+ * the wrong thing. Within structured evidence, access limiting comes first
+ * because it explains everything downstream of it; a blocked crawl also runs
+ * short of pages and may run out of time. A recorded deadline outranks a thin
+ * page count for the same reason. Rendering evidence is considered after page
+ * and coverage states because it describes how the pages that did arrive were
+ * evaluated. Only after those structured channels fail do historical text
+ * patterns classify save failures, stalls, access blocks, or deadlines.
+ */
+export function durableScanLimitationKind(record) {
+  const source = plainObject(record);
+  const text = failureText(source);
+  const states = new Set([
+    cleanText(source.evidence_quality_state).toLowerCase(),
+    cleanText(source.coverage_state).toLowerCase(),
+    cleanText(source.discovery_quality_state).toLowerCase(),
+  ].filter(Boolean));
+  const reasons = new Set([
+    ...codeSet(source.evidence_quality_reasons),
+    ...codeSet(source.coverage_reasons),
+  ]);
+
+  if (intersects(states, ACCESS_LIMITED_STATES) || intersects(reasons, ACCESS_LIMITED_REASONS)) {
+    return "access_limited";
+  }
+  if (deadlineReached(source)) return "deadline_reached";
+  if (intersects(states, TOO_FEW_PAGES_STATES) || intersects(reasons, TOO_FEW_PAGES_REASONS)) {
+    return "too_few_usable_pages";
+  }
+  if (renderingUnverified(source)) return "rendering_not_verified";
+
+  if (SAVE_FAILED_TEXT.test(text)) return "save_failed";
+  if (WORKER_STALLED_TEXT.test(text)) return "worker_stalled";
+  if (ACCESS_LIMITED_TEXT.test(text)) return "access_limited";
+  if (DEADLINE_TEXT.test(text)) return "deadline_reached";
+  return "unknown_limited";
+}
+
+/**
+ * What happened, whether the saved evidence is worth anything, and what to do.
+ *
+ * Every string here is written in this file. Nothing is interpolated from
+ * status_detail or error_code, which is where exception text, worker
+ * identifiers and upstream URLs end up; those fields classify and never
+ * publish. The retry advice is tailored per reason and never promises that
+ * running the scan again will work, because for most of these it will not.
+ */
+const COPY = {
+  access_limited: {
+    title: "The website limited automated access",
+    detail: "The website answered FixList with rate limits or a bot challenge before enough pages could be checked, so no complete FixList was published. What did get through is not a fair sample of the site.",
+    nextStep: "Ask whoever manages the site's CDN, firewall, or bot protection to allow the scan, then run it again.",
+    retryAdvice: "A scan started now would most likely be limited the same way. Wait for the limit to lift, or get the scanner allowed through first.",
+  },
+  too_few_usable_pages: {
+    title: "Too few usable pages to judge the site",
+    detail: "FixList found URLs for this site but could only verify a small number of usable HTML pages, and most of what it did reach was default, archive, or internal routes. That is not enough evidence to describe the site as a whole.",
+    nextStep: "Check that the sitemap is reachable and lists real pages, and that the main sections are linked from the homepage.",
+    retryAdvice: "Running the same scan again will find the same pages. Fix the sitemap or internal linking first, or scan one section directly.",
+  },
+  deadline_reached: {
+    title: "The scan reached its time limit",
+    detail: "FixList stopped at its safe time limit before it had verified enough pages to publish a result. The pages it did check are real; there were not enough of them to describe the site.",
+    nextStep: "Scan a single section instead of the whole site, so the time budget is spent where you need the answer.",
+    retryAdvice: "A whole-site scan is likely to reach the same limit again on a site this size or this slow to respond.",
+  },
+  rendering_not_verified: {
+    title: "Not enough pages could be read to publish a result",
+    detail: "Pages responded, but too few of them returned HTML FixList could evaluate, so it cannot tell whether this site's content is present in the page source or added afterwards in the browser. Judging the site on that would be a guess.",
+    nextStep: "Ask your web person whether the main content is rendered on the server or in the browser, then scan a section that returns full HTML.",
+    retryAdvice: "Repeating the scan will read the same pages the same way, so the outcome would be the same.",
+  },
+  save_failed: {
+    title: "The result could not be saved",
+    detail: "Crawling finished, but FixList could not store the verified result, so nothing was published. Anything a browser tab showed mid-run was partial and was never saved.",
+    nextStep: "Run the scan again. If saving fails a second time, send support the scan reference below.",
+    retryAdvice: "This is a FixList-side fault rather than something about your site, so a new scan is worth trying now.",
+  },
+  worker_stalled: {
+    title: "The scan stopped making progress",
+    detail: "The scan stopped reporting progress and FixList closed it rather than publish a partial result. No partial FixList was promoted.",
+    nextStep: "Run the scan again. If it stalls a second time, send support the scan reference below.",
+    retryAdvice: "This is a FixList-side fault rather than something about your site, so a new scan is worth trying now.",
+  },
+  unknown_limited: {
+    title: "This scan finished without enough evidence",
+    detail: "FixList did not collect enough verified evidence to publish a result, and this run did not record a reason specific enough to explain which part fell short.",
+    nextStep: "Run the scan again, and send support the scan reference below if the same thing happens.",
+    retryAdvice: "Without a recorded reason there is nothing to fix first, so a new scan is the next thing to try.",
+  },
+  in_progress: {
+    title: "This scan is still running",
+    detail: "FixList is still working. This page refreshes automatically and will show your saved result as soon as it is ready.",
+    nextStep: "Leave this page open, or come back to it from your scan history.",
+    retryAdvice: "Starting a second scan of the same site now would compete with this one for the same time budget.",
+  },
+  cancelled: {
+    title: "This scan was cancelled",
+    detail: "This scan was stopped before it finished, so nothing was saved.",
+    nextStep: "Run a fresh scan when you're ready.",
+    retryAdvice: "Nothing about the site stopped this one, so a new scan can start whenever you want.",
+  },
+  no_results: {
+    title: "No results saved for this scan",
+    detail: "This scan finished with nothing saved against it, so there is no FixList to show.",
+    nextStep: "Run a fresh scan to get an up-to-date FixList.",
+    retryAdvice: "Nothing here says the site is at fault, so a new scan is worth running.",
+  },
+};
+
+/**
+ * How long a run may take before saying so, and how fresh a heartbeat must be
+ * for "still progressing" to be a claim rather than a hope.
+ */
+const SLOW_SCAN_AFTER_MS = 6 * 60 * 1000;
+const FRESH_HEARTBEAT_WITHIN_MS = 90 * 1000;
+
+function timestamp(value) {
+  const parsed = Date.parse(cleanText(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * "Taking longer than usual, but still progressing" -- only where both halves
+ * are evidenced.
+ *
+ * Neither half may come from the browser. A tab left open overnight proves
+ * nothing about the run, and a long-running scan with a stale heartbeat is not
+ * something to reassure anyone about. The clock is passed in so this is a pure
+ * function of the record; started_at and worker_heartbeat_at are the run's own
+ * persisted timestamps.
+ *
+ * A stale heartbeat returns "" rather than a warning: calling a scan stalled is
+ * the durable failure evidence's job, and guessing at it here would put a
+ * failure on the page for a run that is merely between heartbeats.
+ */
+function slowButHealthyNote(record, now) {
+  const started = timestamp(record.started_at) ?? timestamp(record.queued_at);
+  const heartbeat = timestamp(record.worker_heartbeat_at);
+  // Both explicitly, rather than leaning on the freshness check below. A
+  // missing heartbeat would happen to fail that check -- `now - null` is `now`,
+  // which is older than any threshold -- but only by coercion, and a guard that
+  // works by accident is one the next edit breaks silently.
+  if (started === null || heartbeat === null) return "";
+  if (now - started < SLOW_SCAN_AFTER_MS) return "";
+  if (now - heartbeat > FRESH_HEARTBEAT_WITHIN_MS) return "";
+  return "This is taking longer than usual, but the scan is still progressing.";
+}
+
+/**
+ * What an active run is doing, from the model that already knows.
+ *
+ * scanProgressModel() is careful about exactly the thing this page kept getting
+ * wrong -- pages_found, the 150 cap and the queue length are not denominators --
+ * so the numbers are taken from it rather than recomputed. Two readers of the
+ * same record forming their own opinion is how a page comes to show "38 pages
+ * checked" beside "12% complete".
+ */
+function inProgressPresentation(record, now) {
+  const model = scanProgressModel(record);
+  const canLeavePage = model.canLeavePage === true;
+  return {
+    kind: "in_progress",
+    title: model.phaseLabel,
+    detail: COPY.in_progress.detail,
+    nextStep: canLeavePage
+      ? "You can close this page and come back to it from your scan history; the scan keeps running."
+      : "Leave this page open — it updates on its own as the scan works through the site.",
+    retryAdvice: COPY.in_progress.retryAdvice,
+    countLabel: model.countLabel,
+    percent: model.percent,
+    canLeavePage,
+    slowNote: slowButHealthyNote(record, now),
+  };
+}
+
+export function durableScanStatePresentation(record, { now = Date.now() } = {}) {
+  const source = plainObject(record);
+  const status = cleanText(source.status);
+
+  if (RUNNING_STATUSES.has(status)) return inProgressPresentation(source, now);
+  // Every branch returns the same keys, so the page never has to guard a
+  // progress field that only exists on one of them.
+  const settled = (kind) => ({ kind, ...COPY[kind], countLabel: "", percent: null, canLeavePage: false, slowNote: "" });
+  if (status === "cancelled") return settled("cancelled");
+  if (status === "limited" || status === "failed") return settled(durableScanLimitationKind(source));
+  return settled("no_results");
+}
+
+/**
+ * The scanner's own limitation sentence, published only if it is safe to.
+ *
+ * This is the one field carrying the concrete numbers -- "reviewed 38 of 3,689
+ * discovered pages" -- that answer whether the saved evidence is worth
+ * anything, and it is passed through rather than paraphrased, so it needs a
+ * gate. The gate rejects; it does not sanitise. A value that trips any of these
+ * is withheld whole, because a scrubbed sentence is one the scanner never wrote
+ * and the reader has no way to tell it was edited.
+ */
+export const LIMITATION_MAX_LENGTH = 400;
+export const UNSAFE_LIMITATION = Object.freeze([
+  /[a-z][a-z0-9+.-]*:\/\/|(?:^|\s)\/\//i, // any URL, credentialed, schemeless or otherwise
+  /\b[0-9a-f]{16,}\b/i,       // hex digests, signatures, ids
+  /\bey[A-Za-z0-9_-]{8,}\./,  // a JWT
+  /Traceback|File "|at [A-Za-z$_][\w.$<>]*\s*\(/,
+  /\b\w*(Error|Exception)\b\s*[:(]/,
+  /:\d+:\d+\)/,               // a stack frame position
+  /\b[\w.-]+@[\w.-]+\.\w+\b/, // an address
+  /\bBearer\b|\btoken\b|\bsecret\b|\bapi[_-]?key\b/i,
+  /\bworker\b|\bcloud ?run\b|\brevision\b/i,
+  /\b[a-z]+-[a-z]+\d\b/i,     // a deployment region, e.g. europe-west1
+]);
+
+export function customerSafeLimitationLine(record) {
+  const limitation = cleanText(plainObject(record).limitation);
+  if (!limitation) return "";
+  if (limitation.length > LIMITATION_MAX_LENGTH) return "";
+  if (UNSAFE_LIMITATION.some((pattern) => pattern.test(limitation))) return "";
+  return limitation;
+}

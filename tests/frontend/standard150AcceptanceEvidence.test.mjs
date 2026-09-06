@@ -93,7 +93,7 @@ function acceptedSnapshot() {
 test("authoritative rows seal and project every Standard 150 observation", () => {
   const snapshot = acceptedSnapshot();
 
-  assert.equal(REVIEW_ATTESTATION_VERSION, "standard_review_snapshot_hmac_v4_focused_scope");
+  assert.equal(REVIEW_ATTESTATION_VERSION, "standard_review_snapshot_hmac_v5_score_explanation");
   assert.equal(snapshot.version, REVIEW_ATTESTATION_VERSION);
   assert.equal(snapshot.scan.coverage_authority_evidence.assessment, "sufficient");
   assert.equal(snapshot.scan.classification_integrity.state, "classified");

@@ -1,7 +1,13 @@
 """Balanced sitemap-bucket sampling regressions using measured site distributions."""
 import pytest
 
-from app.sampling import SAMPLING_VERSION, is_trust_path, sampling_report, select_balanced_urls
+from app.sampling import (
+    SAMPLING_VERSION,
+    enrich_checked_coverage,
+    is_trust_path,
+    sampling_report,
+    select_balanced_urls,
+)
 
 BUDGET = 150
 
@@ -153,3 +159,111 @@ def test_funbooker_legal_pages_are_reserved_and_reported():
     assert report["trust_pages_in_sitemap"] == 2
     assert report["trust_pages_sampled"] == 2
     assert report["family_sampled"]["legal_info"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Selected URLs are not checked pages.
+#
+# The September 6 matrix stopped on this: Salt & Straw reported 345 pages found
+# and 39 checked, while the section rows underneath claimed 54 + 29 + 35 + 30 =
+# 148 "sampled". Stumptown, Fly By Jing and Fishwife all showed the same 148
+# against 39 or 40. `sampling_report()` builds those prefix counts from the
+# URLs chosen before the crawl, so the number measures an intention, and the
+# page labelled it an observation.
+# ---------------------------------------------------------------------------
+
+SALT_AND_STRAW_PREFIXES = {"/products": 55, "/collections": 40, "/blogs": 33, "/pages": 20}
+
+
+def _salt_and_straw():
+    """345 discovered URLs, 148 selected for the attempt, 39 pages actually returned."""
+    all_urls, selected = [], []
+    for prefix, count in SALT_AND_STRAW_PREFIXES.items():
+        for index in range(count):
+            all_urls.append(f"https://x.com{prefix}/{index}")
+    all_urls += [f"https://x.com/other/{index}" for index in range(197)]
+    for prefix, count in (("/products", 54), ("/collections", 29), ("/blogs", 35), ("/pages", 30)):
+        selected += [f"https://x.com{prefix}/{index}" for index in range(count)]
+    # What the crawler actually came back with: far fewer, and not proportional.
+    checked = (
+        [{"url": f"https://x.com/products/{index}"} for index in range(12)]
+        + [{"url": f"https://x.com/collections/{index}"} for index in range(9)]
+        + [{"url": f"https://x.com/blogs/{index}"} for index in range(8)]
+        + [{"url": f"https://x.com/pages/{index}"} for index in range(7)]
+        + [{"url": "https://x.com/"}, {"url": "https://x.com/about"}, {"url": "https://x.com/contact"}]
+    )
+    return all_urls, selected, checked
+
+
+def _path_of(url):
+    return url.replace("https://x.com", "") or "/"
+
+
+def test_sampling_evidence_separates_selected_urls_from_checked_pages():
+    all_urls, selected, checked = _salt_and_straw()
+    report = sampling_report(all_urls, selected, lambda url: "standard", _path_of)
+    enrich_checked_coverage(report, checked, _path_of)
+
+    assert report["sitemap_urls_selected"] == 148
+    assert report["pages_checked"] == 39
+    # The invariant the UI depends on: no section may claim more checked pages
+    # than the crawl produced in total.
+    assert sum(report["path_prefixes_checked"].values()) <= 39
+    assert report["path_prefixes_selected"] != report["path_prefixes_checked"]
+
+
+def test_no_prefix_claims_more_checked_pages_than_the_crawl_returned():
+    all_urls, selected, checked = _salt_and_straw()
+    report = sampling_report(all_urls, selected, lambda url: "standard", _path_of)
+    enrich_checked_coverage(report, checked, _path_of)
+
+    assert report["path_prefixes_selected"]["/products"] == 54
+    assert report["path_prefixes_checked"]["/products"] == 12
+    for prefix, count in report["path_prefixes_checked"].items():
+        assert count <= report["pages_checked"], prefix
+
+
+def test_pages_without_a_first_segment_are_counted_but_not_attributed():
+    """The homepage is checked; it belongs to no prefix.
+
+    Forcing selected and checked to reconcile per-prefix would either invent a
+    section for the root or drop the page from the total. Neither is honest, so
+    the sum of prefix counts is bounded by, not equal to, pages_checked.
+    """
+    all_urls, selected, checked = _salt_and_straw()
+    report = sampling_report(all_urls, selected, lambda url: "standard", _path_of)
+    enrich_checked_coverage(report, checked, _path_of)
+
+    assert sum(report["path_prefixes_checked"].values()) < report["pages_checked"]
+
+
+def test_the_selection_fields_keep_their_historical_meaning():
+    all_urls, selected, checked = _salt_and_straw()
+    report = sampling_report(all_urls, selected, lambda url: "standard", _path_of)
+    before = dict(report["path_prefixes_selected"])
+    enrich_checked_coverage(report, checked, _path_of)
+
+    assert report["path_prefixes_selected"] == before, "enrichment must not rewrite selection evidence"
+    assert report["sampling_version"] != "balanced_sitemap_buckets_v5_locale_collapsed_identity_scope_discovery_bounded_prefixes", (
+        "a semantic split in this payload needs its own version marker"
+    )
+
+
+def test_the_crawler_records_checked_coverage_after_the_page_cap():
+    """A helper nothing calls is not a fix.
+
+    The enrichment has to run once, after `pages = pages[:max_pages]`, because
+    that cap is the last thing that can remove a page. Called earlier it would
+    count pages the result never contains -- overstating coverage in the
+    opposite direction from the bug it exists to fix.
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "app" / "scanner.py").read_text(encoding="utf-8")
+    cap = source.index("pages = pages[:max_pages]")
+    call = source.index("enrich_checked_coverage(sampling_evidence, pages, path_of)")
+    assert call > cap, "checked coverage is recorded before the page cap is applied"
+    assert source.count("enrich_checked_coverage(") == 1, "checked coverage must be recorded exactly once"
+
+    # And the population must be the one pages_crawled counts.
+    assert '"pages_crawled": len(pages)' in source

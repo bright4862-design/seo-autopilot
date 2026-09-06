@@ -28,7 +28,7 @@ from .metadata_title_evidence import (
     normalize_title_key,
     relative_evidence_url,
 )
-from .sampling import SAMPLING_VERSION, sampling_report, select_balanced_urls
+from .sampling import SAMPLING_VERSION, enrich_checked_coverage, sampling_report, select_balanced_urls
 from .scan_timing import (
     SITEMAP_TIME_RESERVATION_VERSION,
     allocate_scan_time_budget,
@@ -679,6 +679,11 @@ async def run_scan(
         # Downstream validation and review must never receive more pages than the mode allows.
         if len(pages) > max_pages:
             pages = pages[:max_pages]
+        # `pages` is final here, and only here: the cap above is the last thing
+        # that can remove one. Recording checked coverage any earlier would
+        # count pages the result never contains, which is the same class of
+        # overstatement the selection counts were already making.
+        enrich_checked_coverage(sampling_evidence, pages, path_of)
         canonical_target_evidence = await validate_canonical_targets(
             client,
             pages,

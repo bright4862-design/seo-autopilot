@@ -183,14 +183,31 @@ export function focusedPathSections(record = {}) {
   const discovered = evidence.path_prefixes_discovered && typeof evidence.path_prefixes_discovered === "object"
     ? evidence.path_prefixes_discovered
     : {};
-  const sampled = evidence.path_prefixes_sampled && typeof evidence.path_prefixes_sampled === "object"
-    ? evidence.path_prefixes_sampled
-    : {};
+  // Selection: the URLs chosen before the crawl. Real, but not evidence that a
+  // page was fetched. `path_prefixes_sampled` is the historical name for the
+  // same thing and is read only as selection.
+  const selected = evidence.path_prefixes_selected && typeof evidence.path_prefixes_selected === "object"
+    ? evidence.path_prefixes_selected
+    : (evidence.path_prefixes_sampled && typeof evidence.path_prefixes_sampled === "object"
+      ? evidence.path_prefixes_sampled
+      : {});
+  // Outcome: what the crawl actually returned. Absent on every record written
+  // before the producer recorded it, and absence must stay visible rather than
+  // being filled in from selection.
+  const hasCheckedEvidence = Boolean(
+    evidence.path_prefixes_checked && typeof evidence.path_prefixes_checked === "object",
+  );
+  const checked = hasCheckedEvidence ? evidence.path_prefixes_checked : {};
   const marketDiscovered = evidence.markets_discovered && typeof evidence.markets_discovered === "object"
     ? evidence.markets_discovered
     : {};
-  const marketSampled = evidence.markets_sampled && typeof evidence.markets_sampled === "object"
-    ? evidence.markets_sampled
+  const marketSelected = evidence.markets_selected && typeof evidence.markets_selected === "object"
+    ? evidence.markets_selected
+    : (evidence.markets_sampled && typeof evidence.markets_sampled === "object"
+      ? evidence.markets_sampled
+      : {});
+  const marketChecked = evidence.markets_checked && typeof evidence.markets_checked === "object"
+    ? evidence.markets_checked
     : {};
 
   const candidates = new Map();
@@ -202,7 +219,10 @@ export function focusedPathSections(record = {}) {
     candidates.set(prefix, {
       prefix,
       discovered: discoveredCount,
-      sampled: Math.max(0, Number(sampled[rawPrefix] ?? sampled[prefix]) || 0),
+      selected: Math.max(0, Number(selected[rawPrefix] ?? selected[prefix]) || 0),
+      checked: hasCheckedEvidence
+        ? Math.max(0, Number(checked[rawPrefix] ?? checked[prefix]) || 0)
+        : null,
       discoveredFrom: "sitemap",
     });
   }
@@ -221,7 +241,10 @@ export function focusedPathSections(record = {}) {
     candidates.set(prefix, {
       prefix,
       discovered: Math.max(existing?.discovered || 0, discoveredCount),
-      sampled: Math.max(existing?.sampled || 0, Math.max(0, Number(marketSampled[market]) || 0)),
+      selected: Math.max(existing?.selected || 0, Math.max(0, Number(marketSelected[market]) || 0)),
+      checked: hasCheckedEvidence
+        ? Math.max(existing?.checked || 0, Math.max(0, Number(marketChecked[market]) || 0))
+        : null,
       discoveredFrom: "sitemap",
     });
   }
@@ -238,9 +261,26 @@ export function focusedPathSections(record = {}) {
       user_confirmed: true,
       label: sectionLabel(section.prefix),
       discovered: section.discovered,
-      sampled: section.sampled,
-      coverage: section.discovered > 0 ? Math.min(1, section.sampled / section.discovered) : 0,
+      selected: section.selected,
+      checked: section.checked,
+      // A percentage is a claim about what was observed, so it exists only when
+      // an observation does. Deriving one from selection is what let four sites
+      // report 148 pages covered against 39 crawled.
+      checkedCoverage: section.checked === null || section.discovered <= 0
+        ? null
+        : Math.min(1, section.checked / section.discovered),
+      coverageEvidence: section.checked === null ? "selected_only" : "checked",
     }))
-    .sort((a, b) => (a.coverage - b.coverage) || (b.discovered - a.discovered) || a.requested_path_prefix.localeCompare(b.requested_path_prefix))
+    // Measured coverage ranks the follow-up scan recommendation. Without it,
+    // fall back to discovered size: selection is not a proxy for successful
+    // coverage, and ordering by it would recommend the wrong folder while
+    // looking authoritative.
+    .sort((a, b) => (
+      (a.checkedCoverage === null || b.checkedCoverage === null
+        ? 0
+        : a.checkedCoverage - b.checkedCoverage)
+      || (b.discovered - a.discovered)
+      || a.requested_path_prefix.localeCompare(b.requested_path_prefix)
+    ))
     .slice(0, 8);
 }

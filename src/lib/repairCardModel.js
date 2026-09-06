@@ -32,31 +32,66 @@ const lower = (value) => clean(value).toLowerCase();
 // unmapped-family fallback below would otherwise print the key verbatim.
 const OPAQUE_FAMILIES = new Set(["unknown", "mixed", "unclassified", "other", "none", "standard", ""]);
 
-/** Family labels a customer can act on, in their own words. */
+/**
+ * Family labels a customer can act on, in their own words.
+ *
+ * Two forms, because one does not fit both sentences. `one`/`many` are complete
+ * noun phrases and are used when a card names a single kind of page: a family
+ * whose own name already ends in "page" was previously handed to a template
+ * that appended another one, producing "3 product page pages", and "homepage"
+ * became "1 homepage page". `word` is the bare modifier used in the "across X
+ * and Y pages" list, so it must never itself contain "page".
+ *
+ * The keys are app/extract.py classify_template's complete return set plus the
+ * legacy names still held in persisted rows. "standard" and "unknown" are
+ * absent deliberately -- see OPAQUE_FAMILIES.
+ */
 const FAMILY_WORDS = Object.freeze({
-  legal_info: "legal",
-  location_landing: "location",
-  guide_article: "guide",
-  contact: "contact",
-  // "standard" names the classifier's default bucket, not a kind of page an
-  // owner recognises. An unmapped family drops out of the sentence, which is
-  // the honest result: "6 pages." rather than "6 standard pages."
-  homepage: "homepage",
-  product_detail: "product",
-  category_listing: "category",
-  booking_or_checkout: "checkout",
-  qa: "FAQ",
-  archive: "archive",
-  conversion: "sign-up and contact",
-  route_boundary: "section",
-  collection_page: "collection",
-  activity_detail: "activity",
+  activity_detail: { word: "activity", one: "activity page", many: "activity pages" },
+  archive: { word: "archive", one: "archive page", many: "archive pages" },
+  booking_or_checkout: { word: "checkout", one: "checkout page", many: "checkout pages" },
+  calculator: { word: "calculator", one: "calculator page", many: "calculator pages" },
+  category_listing: { word: "category", one: "category page", many: "category pages" },
+  collection_page: { word: "collection", one: "collection page", many: "collection pages" },
+  comparison_page: { word: "comparison", one: "comparison page", many: "comparison pages" },
+  contact: { word: "contact", one: "contact page", many: "contact pages" },
+  conversion: { word: "sign-up and contact", one: "sign-up or contact page", many: "sign-up and contact pages" },
+  guide: { word: "guide", one: "guide", many: "guides" },
+  guide_article: { word: "guide", one: "guide", many: "guides" },
+  homepage: { word: "home", one: "homepage", many: "homepages" },
+  legal_info: { word: "legal", one: "legal page", many: "legal pages" },
+  loan_program: { word: "loan", one: "loan page", many: "loan pages" },
+  location_landing: { word: "location", one: "location page", many: "location pages" },
+  product_detail: { word: "product", one: "product page", many: "product pages" },
+  product_page: { word: "product", one: "product page", many: "product pages" },
+  qa: { word: "FAQ", one: "FAQ page", many: "FAQ pages" },
+  route_boundary: { word: "section", one: "section page", many: "section pages" },
 });
 
+/**
+ * The bare modifier for a family, or "" when this build cannot name it.
+ *
+ * An unmapped key used to be printed with its underscores swapped for spaces,
+ * which is how "internal or auth pages" and "loan program pages" reached the
+ * customer. Silence is the safe failure: a family this build does not know is
+ * one it cannot describe, and the count still reaches the sentence through the
+ * unnamed-pages branch below.
+ */
 function familyWord(family) {
+  const entry = FAMILY_WORDS[familyKey(family)];
+  return entry ? entry.word : "";
+}
+
+function familyKey(family) {
   const key = lower(family).replace(/\s+/g, "_");
-  if (OPAQUE_FAMILIES.has(key)) return "";
-  return FAMILY_WORDS[key] || key.replace(/_/g, " ");
+  return OPAQUE_FAMILIES.has(key) ? "" : key;
+}
+
+/** The complete noun phrase for a family at a given count. */
+function familyNoun(family, count) {
+  const entry = FAMILY_WORDS[familyKey(family)];
+  if (!entry) return "";
+  return count === 1 ? entry.one : entry.many;
 }
 
 const affectedOf = (item) => {
@@ -107,7 +142,12 @@ export function whereLine(item) {
   const hasUnnamed = breakdown.length > named.length;
 
   if (named.length === 0) return `${count} ${noun} on your site.`;
-  if (named.length === 1 && !hasUnnamed) return `${count} ${named[0]} ${noun}.`;
+  // One named family gets the complete noun phrase, so a label that is already
+  // a kind of page ("homepage", "product page") is not handed another "pages".
+  if (named.length === 1 && !hasUnnamed) {
+    const only = breakdown.find(([family]) => familyWord(family));
+    return `${count} ${familyNoun(only[0], count)}.`;
+  }
   const listed = hasUnnamed ? [...named, "other"] : named;
   const spread = listed.length <= 3
     ? `${listed.slice(0, -1).join(", ")} and ${listed[listed.length - 1]}`
@@ -198,7 +238,12 @@ export function customerEvidenceGroupRows(card = {}, siteOrigin = "") {
     return {
       id: clean(group?.fixId) || `evidence-group-${index + 1}`,
       family,
-      familyLabel: familyWord(family),
+      // A standalone group heading, so it takes the complete noun phrase rather
+      // than the bare modifier the "across X and Y pages" list needs -- the two
+      // forms diverged when "homepage" stopped being usable as a modifier. It
+      // is always the singular: the row prints its own count right beside it,
+      // and "product pages · 3 pages" says the same thing twice.
+      familyLabel: familyNoun(family, 1),
       locale,
       count: Math.max(Number(group?.count) || 0, affectedPages.length),
       representativePage,
@@ -376,6 +421,8 @@ export function buildRepairCard(item = {}) {
       || "Website improvement",
     technicalLabel: clean(copy.technicalLabel),
     evidenceClass: lower(item?.evidenceClass || item?.evidence_class || item?.original?.evidence_class),
+    // Read by the repeated-title hint. Persisted scope, not re-derived.
+    pageScope: lower(item?.pageScope || item?.page_scope || item?.original?.page_scope),
     sharedRepairConfirmed,
     title: clean(copy.title) || clean(item.title) || clean(item.issue_title) || "Review this recommendation",
     whyItMatters: clean(copy.whyItMatters) || clean(item.whyItMatters) || clean(item.why_it_matters),
@@ -395,6 +442,72 @@ export function buildRepairCard(item = {}) {
       evidenceGroups: Array.isArray(item.evidenceGroups) ? item.evidenceGroups : [],
     },
   };
+}
+
+/**
+ * Scope wording for one card, from persisted evidence only.
+ *
+ * The order is a preference, not a fallback chain of equal options: a named
+ * page family is the most useful thing a customer can be told, a recorded scope
+ * is the next, a count is at least a number they can compare, and the evidence
+ * class is the last thing that is still true. Nothing is derived from the
+ * affected URLs -- reading "/products/" out of a path and calling the card
+ * "Product pages" is a claim the scan never made, and wrong on any site that
+ * uses that word for something else.
+ */
+function scopeHintFor(card = {}) {
+  const families = Object.entries(card?.evidence?.familyBreakdown || {})
+    .filter(([family]) => familyWord(family));
+  if (families.length === 1) {
+    const [family, count] = families[0];
+    const noun = familyNoun(family, Number(count) === 1 ? 1 : 2);
+    return noun ? noun.charAt(0).toUpperCase() + noun.slice(1) : "";
+  }
+
+  const scope = lower(card?.pageScope || card?.page_scope);
+  if (scope === "sitewide") return "Across the site";
+  if (scope === "section" || scope === "path_prefix") return "One section";
+
+  const count = Number(card?.evidence?.pageCount || 0);
+  if (count > 0) return `${count} specific ${count === 1 ? "page" : "pages"}`;
+
+  const label = customerEvidenceClassLabel(card?.evidenceClass);
+  return label || "";
+}
+
+const EVIDENCE_CLASS_LABELS = Object.freeze({
+  confirmed_problem: "Confirmed problem",
+  improvement: "Improvement",
+  opportunity: "Review opportunity",
+});
+
+function customerEvidenceClassLabel(value) {
+  return EVIDENCE_CLASS_LABELS[lower(value)] || "";
+}
+
+/**
+ * Tell apart the cards that need telling apart, and only those.
+ *
+ * Identical titles do not prove identical repairs -- a redirect in a sitemap
+ * and a redirect in a navigation link are different jobs -- so the cards stay
+ * separate and the disambiguation is presentational. This runs after card
+ * construction, never before grouping: moving it earlier would let a display
+ * concern reach customerActionKey and start splitting rows the backend said
+ * were one repair.
+ *
+ * A card whose title already stands alone gets nothing. A hint on every card
+ * is noise, and noise is what the metadata line is competing with.
+ */
+export function withRepeatedTitleScopeHints(cards = []) {
+  const counts = new Map();
+  for (const card of cards) {
+    const key = lower(card?.title);
+    if (key) counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return cards.map((card) => ({
+    ...card,
+    scopeHint: counts.get(lower(card?.title)) > 1 ? scopeHintFor(card) : "",
+  }));
 }
 
 /** The customer-facing FixList: merged actions, each as five answers. */

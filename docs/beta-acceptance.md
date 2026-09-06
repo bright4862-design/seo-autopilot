@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `68a16802a9c7a543` |
+| Candidate fingerprint | `053180f4bdc70857` |
 | Classifier | `archetype_classifier_v12_locale_normalized_structural_routes` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,19 +15,68 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `68a16802a9c7a543` with classifier
+fingerprint `053180f4bdc70857` with classifier
 `archetype_classifier_v12_locale_normalized_structural_routes`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded candidate was `a43a71c61f32d9fb`; before that `2f4238b4989f3fd9`, `0544ce395811cbd5`,
+The immediately superseded candidate was `821d211419fd327e`; before that `cc385c397c97d579`, `b3345916049979a1`, `77588ce93276d608`, `68a16802a9c7a543`, `a43a71c61f32d9fb`, `2f4238b4989f3fd9`, `0544ce395811cbd5`,
 `0fa7d98734efb3f2`, `7a95768cc8ee2076`, `58275d24191cf1cb`,
 `7b0ec8c46654192b`, `5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and
 `1ddf8085bc7721c4`.
 
-The current candidate moved the fingerprint to `68a16802a9c7a543` by completing
-P1-B1 focused same-origin path scans on top of the reviewed `0fa7d98734efb3f2`
-Standard 150 candidate. A focused child is explicitly confirmed, bound to a
+The current candidate moved the fingerprint to `053180f4bdc70857` by finishing the job the
+selected-versus-checked split started. The section rows were corrected first;
+the sample-coverage disclosure beside them was not, and it is fed by exactly the
+same pre-crawl selection fields -- it said "represented in the sample" and
+"sampled" about numbers that describe an intention. There is no outcome to
+substitute, because the crawl records checked coverage per path prefix and not
+per market or page family, so `sampling_disclosure_v5_selection_language` says
+"chosen for this scan" and "not chosen", which is what the producer actually
+recorded.
+
+The preceding `821d211419fd327e` candidate told a running
+scan's owner what it is doing. Every active run said "This scan is still
+working" whether it was queued, crawling or reviewing, while
+`scanProgressModel()` sat unused beside it -- already careful that
+`pages_found`, the Standard 150 cap and queue length are not progress
+denominators. The result page now reads its phase, count and percentage from
+that model, promises background durability only where the backend confirms it,
+and calls a run slow only on its own persisted timestamps with a fresh
+heartbeat (`customer_projection_v7_progress_heartbeat` carries that heartbeat
+to the browser). The score number no longer counts up from zero: the digits are
+the score from the first paint and only the ring stroke sweeps.
+
+The preceding `cc385c397c97d579` candidate persisted where the
+health score's points went. `compute_health_score_breakdown()` has always known
+which area cost what and which ceilings bound the result, and none of it left
+the scanner: the page showed a number and a grade, and the number is the first
+thing an owner argues with. `health_score_explanation_v1` records the breakdown
+alongside the score, sealed with it under
+`standard_review_snapshot_hmac_v5_score_explanation` so the displayed
+arithmetic cannot drift from the signed result. Rows sealed under v1 through v4
+rebuild exactly as they were sealed and keep verifying.
+
+The preceding `b3345916049979a1` candidate made a scan that produced no result
+say which reason it stopped for. Every limited or
+failed run previously rendered the same paragraph and the same advice, so a site
+rate-limiting the scanner and a site whose sitemap never answered were
+indistinguishable, and the owner of the first was told to retry into the same
+block. `failure_state_presentation_v2_structured_limitation_reasons` reads the
+producer's own structured codes into a closed taxonomy and publishes copy
+written per reason, with the scanner's limitation sentence passed through a gate
+rather than trusted.
+
+The preceding `77588ce93276d608` candidate separated the URLs a scan *selects*
+from the pages it actually *checks*. Sampling evidence previously reported only
+pre-crawl selection, and the FixList labelled those counts "sampled" and
+"represented"; on the September 6 matrix that made four sites show section rows
+totalling 148 pages covered against 39 or 40 crawled. The crawler now records
+outcome counts after the page cap, and coverage percentages are shown only where
+an outcome exists.
+
+The preceding `68a16802a9c7a543` candidate completed P1-B1 focused same-origin
+path scans on top of the reviewed `0fa7d98734efb3f2` Standard 150 candidate. A focused child is explicitly confirmed, bound to a
 discovered path prefix on the exact parent origin, admitted under a scope-aware
 request fingerprint, and persisted as its own ScanRun/FixList with its own
 150-page budget. Scope lineage is HMAC-bound under

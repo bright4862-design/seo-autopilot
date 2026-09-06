@@ -333,16 +333,17 @@ test("without paid access no breakdown is projected", () => {
   assert.equal(locked.run.health_score_explanation, undefined);
 });
 
-test("the three copies of the seal normalizer are the same function", () => {
-  // The seal is an HMAC over whatever scoreExplanation() returns, so the writer,
-  // the customer reader and the Grok reader must produce byte-identical output.
-  // They are separate Base44 packages with no shared module, so the function is
-  // duplicated -- which means a change to one copy silently turns every
-  // v5-sealed result into "no longer matches its server authority seal".
+test("all five copies of the seal normalizer are the same function", () => {
+  // The seal is an HMAC over whatever scoreExplanation() returns, so every
+  // writer and customer/Grok reader that handles v5 must produce byte-identical
+  // output. They are separate Base44 packages with no shared module, so drift
+  // in any one copy can make an intact result fail its authority seal.
   const copies = [
     "base44/functions/persistDurableScanAuthorityV2/authoritySnapshot.js",
     "base44/functions/getCustomerScanResultV2/projection.js",
     "base44/functions/grokChat/authoritySnapshot.js",
+    "base44/functions/persistDurableScanAuthority/authoritySnapshot.js",
+    "base44/functions/getCustomerScanResult/projection.js",
   ].map((file) => {
     const source = fs.readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
     const from = source.indexOf("function scoreExplanation(value) {");

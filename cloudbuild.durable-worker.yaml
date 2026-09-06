@@ -111,6 +111,7 @@ steps:
       - --region=${_REGION}
       - --no-allow-unauthenticated
       - --service-account=${_RUNTIME_SA}
+      - --memory=1Gi
       - --timeout=480
       - --concurrency=1
       - --min-instances=0

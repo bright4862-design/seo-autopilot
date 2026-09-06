@@ -1,11 +1,25 @@
+import { RELEASE_COMPONENT_VERSIONS } from "./generatedReleaseContract.js";
+
 export const SAMPLING_DISCLOSURE_VERSION = "sampling_disclosure_v4_bounded_prefix_inventory_compatible";
 
-const SUPPORTED_SAMPLING_VERSIONS = new Set([
+// Samplers whose evidence this module knows how to read. The versions below
+// are historical records still held in the database; the sampler this build
+// actually ships is taken from the release contract rather than restated here.
+//
+// It used to be restated here, and the checked-coverage change bumped
+// SAMPLING_VERSION to v6 without touching the list -- so every new scan fell
+// through to `return null` and the disclosure block vanished from the page.
+// Nothing failed, because an absent block is indistinguishable from a scan with
+// nothing to disclose. Deriving the shipped entry removes the step that has to
+// be remembered; a genuinely incompatible rename would still have to add its
+// predecessor here, which is a change a reader can see.
+export const SUPPORTED_SAMPLING_VERSIONS = new Set([
   "balanced_sitemap_buckets_v2_locale_collapsed_identity_reserve",
   "balanced_sitemap_buckets_v3_locale_collapsed_identity_scope_discovery",
   "balanced_sitemap_buckets_v4_locale_collapsed_identity_scope_discovery_case_preserved",
   "balanced_sitemap_buckets_v5_locale_collapsed_identity_scope_discovery_bounded_prefixes",
-]);
+  RELEASE_COMPONENT_VERSIONS.sampling_version,
+].filter(Boolean));
 
 function clean(value) {
   return String(value || "").trim();

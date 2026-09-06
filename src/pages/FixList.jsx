@@ -21,6 +21,7 @@ import { applyCustomerVocabulary, customerHealthLabel, customerPriorityLabel, cu
 import { repairSuggestion } from "@/lib/repairSuggestions";
 import {
   buildRepairCards,
+  withRepeatedTitleScopeHints,
   customerEvidenceGroupHeading,
   customerEvidenceGroupRows,
 } from "@/lib/repairCardModel";
@@ -409,7 +410,9 @@ export default function FixList() {
   });
   const repairPresentation = repairWorkSurface.presentation;
   const customerRepairCards = useMemo(
-    () => repairPresentation.canonical === true ? buildRepairCards(active) : [],
+    // The hints are applied to the finished set, not per card: whether a title
+    // needs disambiguating is a fact about the whole FixList.
+    () => repairPresentation.canonical === true ? withRepeatedTitleScopeHints(buildRepairCards(active)) : [],
     [active, repairPresentation.canonical],
   );
   const displayedRepairCount = repairPresentation.canonical === true ? customerRepairCards.length : active.length;
@@ -1021,9 +1024,17 @@ function CustomerRepairCard({ card = {}, websiteUrl = "" }) {
       <div className="flex flex-wrap items-start justify-between gap-x-5 gap-y-2">
         <div className="min-w-0 flex-1">
           <h4 className="text-[17px] font-medium leading-snug tracking-tight text-ink">{card.title}</h4>
+          {/*
+            The scope hint appears only on cards whose title is repeated in this
+            FixList, which is where a customer otherwise has no way to tell two
+            entries apart without opening both. It is metadata, not part of the
+            repair title: the title stays exactly as analytics and screen
+            readers see it.
+          */}
           <p className="mt-1 text-[12px] font-medium text-ink-faint">
             {card.customerCategory}
             {evidenceLabel ? ` · ${evidenceLabel}` : ""}
+            {card.scopeHint ? ` · ${card.scopeHint}` : ""}
           </p>
         </div>
         {reportedCount > 0 ? (
@@ -1038,10 +1049,18 @@ function CustomerRepairCard({ card = {}, websiteUrl = "" }) {
           <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Why it matters</dt>
           <dd className="mt-1 max-w-[58ch] text-[14px] leading-relaxed text-ink-muted">{card.whyItMatters}</dd>
         </div>
-        <div>
-          <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Where</dt>
-          <dd className="mt-1 max-w-[58ch] text-[14px] leading-relaxed text-ink-muted">{card.where}</dd>
-        </div>
+        {/*
+          whereLine() returns "" for a card with no page count, and the row was
+          rendered regardless -- a heading with nothing under it, which reads as
+          missing data rather than as an answer that does not apply. The
+          affected URLs and evidence are still below either way.
+        */}
+        {String(card.where || "").trim() ? (
+          <div>
+            <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Where</dt>
+            <dd className="mt-1 max-w-[58ch] text-[14px] leading-relaxed text-ink-muted">{card.where}</dd>
+          </div>
+        ) : null}
         <div>
           <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">What to change</dt>
           <dd className="mt-1 max-w-[58ch] text-[14px] leading-relaxed text-ink">{card.whatToChange}</dd>

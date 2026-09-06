@@ -12,7 +12,7 @@ import { persistExactRelease } from "./admissionRelease.js";
 // generatedReleaseContract.js could leave a stale handler serving. Carrying the
 // active fingerprint here guarantees every fingerprint move changes the bytes
 // Base44 recompiles. scripts/generate_release_contracts.mjs maintains it.
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "77588ce93276d608";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "b3345916049979a1";
 const BASE44_RUNTIME_ACTIVATION_ID = "owner-debug-sandbox-activation-20260903-v1";
 
 const OWNER_EMAIL = "bright4862@gmail.com";

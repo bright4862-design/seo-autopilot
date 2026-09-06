@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { durableScanStatePresentation } from "../../src/lib/durableScanStatePresentation.js";
+
 const fixList = readFileSync("src/pages/FixList.jsx", "utf8");
 const recentScanRow = readFileSync("src/components/fixlist/RecentScanRow.jsx", "utf8");
 
@@ -50,6 +52,21 @@ test("history copy distinguishes active, complete, failed, limited, and cancelle
 });
 
 test("opening a limited run explains the evidence limitation instead of claiming no saved result", () => {
-  assert.match(fixList, /status === "limited"\) return "This scan finished with limited evidence"/);
-  assert.match(fixList, /status === "limited"\)[\s\S]*?couldn.t verify enough representative page evidence/i);
+  // A limited run used to fall through to the same "no results saved" copy as
+  // a run that never happened. It now resolves to a stated reason -- and the
+  // reason is read from the record, so this checks two different limited runs
+  // do not arrive at the same explanation.
+  const blocked = durableScanStatePresentation({ status: "limited", evidence_quality_state: "access_limited" });
+  const thin = durableScanStatePresentation({ status: "limited", evidence_quality_state: "insufficient_discovery" });
+
+  for (const view of [blocked, thin]) {
+    assert.notEqual(view.kind, "no_results");
+    assert.doesNotMatch(view.title, /No results saved/i);
+    assert.ok(view.detail.length > 0 && view.nextStep.length > 0);
+  }
+  assert.notEqual(blocked.kind, thin.kind);
+  assert.notEqual(blocked.detail, thin.detail);
+
+  // The page hands the whole presentation over rather than picking a title.
+  assert.match(fixList, /presentation=\{durableScanStatePresentation\(scanRecord\)\}/);
 });

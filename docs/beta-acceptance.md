@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `77588ce93276d608` |
+| Candidate fingerprint | `b3345916049979a1` |
 | Classifier | `archetype_classifier_v12_locale_normalized_structural_routes` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,23 +15,33 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `77588ce93276d608` with classifier
+fingerprint `b3345916049979a1` with classifier
 `archetype_classifier_v12_locale_normalized_structural_routes`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded candidate was `68a16802a9c7a543`; before that `a43a71c61f32d9fb`, `2f4238b4989f3fd9`, `0544ce395811cbd5`,
+The immediately superseded candidate was `77588ce93276d608`; before that `68a16802a9c7a543`, `a43a71c61f32d9fb`, `2f4238b4989f3fd9`, `0544ce395811cbd5`,
 `0fa7d98734efb3f2`, `7a95768cc8ee2076`, `58275d24191cf1cb`,
 `7b0ec8c46654192b`, `5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and
 `1ddf8085bc7721c4`.
 
-The current candidate moved the fingerprint to `77588ce93276d608` by separating
-the URLs a scan *selects* from the pages it actually *checks*. Sampling evidence
-previously reported only pre-crawl selection, and the FixList labelled those
-counts "sampled" and "represented"; on the September 6 matrix that made four
-sites show section rows totalling 148 pages covered against 39 or 40 crawled.
-The crawler now records outcome counts after the page cap, and coverage
-percentages are shown only where an outcome exists.
+The current candidate moved the fingerprint to `b3345916049979a1` by making a
+scan that produced no result say which reason it stopped for. Every limited or
+failed run previously rendered the same paragraph and the same advice, so a site
+rate-limiting the scanner and a site whose sitemap never answered were
+indistinguishable, and the owner of the first was told to retry into the same
+block. `failure_state_presentation_v2_structured_limitation_reasons` reads the
+producer's own structured codes into a closed taxonomy and publishes copy
+written per reason, with the scanner's limitation sentence passed through a gate
+rather than trusted.
+
+The preceding `77588ce93276d608` candidate separated the URLs a scan *selects*
+from the pages it actually *checks*. Sampling evidence previously reported only
+pre-crawl selection, and the FixList labelled those counts "sampled" and
+"represented"; on the September 6 matrix that made four sites show section rows
+totalling 148 pages covered against 39 or 40 crawled. The crawler now records
+outcome counts after the page cap, and coverage percentages are shown only where
+an outcome exists.
 
 The preceding `68a16802a9c7a543` candidate completed P1-B1 focused same-origin
 path scans on top of the reviewed `0fa7d98734efb3f2` Standard 150 candidate. A focused child is explicitly confirmed, bound to a

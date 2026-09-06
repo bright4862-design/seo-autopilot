@@ -30,6 +30,7 @@ import { trackEvent } from "@/lib/analytics";
 import { samplingDisclosure } from "@/lib/samplingDisclosure";
 import { displayPathPrefix, focusedPathSections, focusedSectionOnboardingPath, orderFocusedScanHistory } from "@/lib/focusedScanScope";
 import { buildPageAccounting } from "@/lib/pageAccounting";
+import { customerSafeLimitationLine, durableScanStatePresentation } from "@/lib/durableScanStatePresentation";
 
 const CMS_OPTIONS = [
   { value: "wordpress", label: "WordPress" },
@@ -69,7 +70,6 @@ const CATEGORY_LABELS = {
 const ENERGY_PATH_HINTS = ["energie", "énergie", "electricite", "électricité", "gaz", "fournisseur", "kwh", "tarif"];
 const CREDIT_PATH_HINTS = ["rachat-de-credits", "rachat-de-credit", "credit", "crédit", "credits", "crédits", "pret", "prêt", "emprunt"];
 
-export const FAILURE_STATE_PRESENTATION_VERSION = "failure_state_presentation_v1_durable_reason";
 export const PRIORITY_SUMMARY_VERSION = "priority_summary_v1_action_band_consistent";
 export const COUNT_COPY_VERSION = "count_copy_v2_agreeing_verbs";
 
@@ -537,8 +537,8 @@ export default function FixList() {
           <LockedResultState />
         ) : scanRecord && !hasUsefulScan ? (
           <RequestedScanState
-            title={getDurableScanStateTitle(scanRecord)}
-            detail={getDurableScanStateDetail(scanRecord)}
+            presentation={durableScanStatePresentation(scanRecord)}
+            limitation={customerSafeLimitationLine(scanRecord)}
             reference={scanRecord.scan_id || scanRecord.id}
           />
         ) : hasUsefulScan ? (
@@ -1170,12 +1170,38 @@ function SectionEyebrow({ label, count }) {
   );
 }
 
-function RequestedScanState({ title, detail, reference = "" }) {
+function RequestedScanState({ title = "", detail = "", presentation = null, limitation = "", reference = "" }) {
+  // Either a plain title/detail pair, for the states that have nothing to
+  // explain -- loading, mostly -- or a full presentation, which answers what
+  // happened, whether the saved evidence is worth anything, and what to do.
+  // The headings exist because those are three separate questions and running
+  // them together as one paragraph is how every limited scan came to read the
+  // same as every other one.
+  if (!presentation) {
+    return (
+      <div className="mt-16 rounded-2xl border border-hairline-soft bg-white p-6">
+        <h1 className="text-[22px] font-semibold tracking-tight">{title}</h1>
+        <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{detail}</p>
+        {reference ? <p className="mt-4 text-[12px] text-ink-faint">Scan reference: <span className="font-mono tabular-nums">{reference}</span></p> : null}
+      </div>
+    );
+  }
+
   return (
     <div className="mt-16 rounded-2xl border border-hairline-soft bg-white p-6">
-      <h1 className="text-[22px] font-semibold tracking-tight">{title}</h1>
-      <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{detail}</p>
-      {reference ? <p className="mt-4 text-[12px] text-ink-faint">Scan reference: <span className="font-mono tabular-nums">{reference}</span></p> : null}
+      <h1 className="text-[22px] font-semibold tracking-tight">{presentation.title}</h1>
+
+      <h2 className="mt-5 text-[12px] font-medium uppercase tracking-wide text-ink-faint">What happened</h2>
+      <p className="mt-1.5 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{presentation.detail}</p>
+      {limitation ? (
+        <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{limitation}</p>
+      ) : null}
+
+      <h2 className="mt-5 text-[12px] font-medium uppercase tracking-wide text-ink-faint">What to do next</h2>
+      <p className="mt-1.5 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">{presentation.nextStep}</p>
+      <p className="mt-1.5 max-w-[52ch] text-[13.5px] leading-relaxed text-ink-faint">{presentation.retryAdvice}</p>
+
+      {reference ? <p className="mt-5 text-[12px] text-ink-faint">Scan reference: <span className="font-mono tabular-nums">{reference}</span></p> : null}
     </div>
   );
 }
@@ -1613,7 +1639,10 @@ function getHeroSub({ noHighConfidenceFindings, nextBestStep, activeCount }) {
 
 function getLimitationNote(record) {
   if (isHealthScoreUnavailable(record)) return "We couldn't verify enough usable pages to calculate a reliable score. The access item below describes the scan limitation, not a confirmed on-page SEO defect.";
-  const limitation = cleanString(record?.limitation);
+  // The scanner's own sentence carries the concrete numbers, so it is worth
+  // showing -- but it is passed through rather than written here, so it goes
+  // through the same gate as the limited-state copy.
+  const limitation = customerSafeLimitationLine(record);
   if (limitation) return limitation;
   if (record?.score_is_provisional === true) return "Scan coverage was limited, so this score is provisional. Fix what's below, then scan again for a fuller picture.";
   return "";
@@ -2125,47 +2154,6 @@ function normalizeDurableScanBundle(bundle = {}) {
     created_at: run.completed_at || run.created_date || run.queued_at || "",
     recommendations: Array.isArray(bundle.fixItems) ? bundle.fixItems : [],
   };
-}
-
-function durableFailureKind(record = {}) {
-  const evidence = `${record.error_code || ""} ${record.status_detail || ""}`.toLowerCase();
-  if (/429|rate.?limit|challenge|bot.?protection|access.?limit|scanner.?blocked/.test(evidence)) return "access_limited";
-  if (/heartbeat|stalled|orphaned|vanished|no_terminal|progress stopped/.test(evidence)) return "worker_stalled";
-  if (/persist|save.?fail|authority.?write|result.?write/.test(evidence)) return "save_failed";
-  return "interrupted";
-}
-
-function getDurableScanStateTitle(record = {}) {
-  const status = String(record.status || "");
-  if (["queued", "crawling", "reviewing"].includes(status)) return "This scan is still running";
-  if (status === "limited") return "This scan finished with limited evidence";
-  if (status === "failed" && durableFailureKind(record) === "access_limited") return "The website limited this scan's access";
-  if (status === "failed" && durableFailureKind(record) === "worker_stalled") return "This scan stopped making progress";
-  if (status === "failed" && durableFailureKind(record) === "save_failed") return "The result could not be saved";
-  if (status === "failed") return "This scan didn't finish";
-  if (status === "cancelled") return "This scan was cancelled";
-  return "No results saved for this scan";
-}
-
-function getDurableScanStateDetail(record = {}) {
-  const status = String(record.status || "");
-  if (["queued", "crawling", "reviewing"].includes(status)) {
-    return "FixList is still working. This page refreshes automatically and will show your saved result as soon as it is ready.";
-  }
-  if (status === "limited") {
-    return "FixList couldn't verify enough representative page evidence to publish a reliable result. Run a fresh scan when you're ready to try again.";
-  }
-  if (status === "failed") {
-    const kind = durableFailureKind(record);
-    if (kind === "access_limited") return "The website returned a rate limit, challenge, or access block before FixList could collect enough evidence. No authoritative result was saved. Wait a while before retrying; if it repeats, ask your web person to review CDN, firewall, and bot-protection logs.";
-    if (kind === "worker_stalled") return "Progress stopped and FixList safely closed the run. No partial result was promoted. You can retry the scan; if it happens again, include the scan reference when contacting support.";
-    if (kind === "save_failed") return "Crawling finished, but FixList could not persist the verified result. Do not rely on a partial browser result; retry once and include the scan reference if saving fails again.";
-    return "Something interrupted this scan before results could be saved. Run a fresh scan to get a complete FixList.";
-  }
-  if (status === "cancelled") {
-    return "This scan was stopped before it finished, so no results were saved. Run a fresh scan when you're ready.";
-  }
-  return "This scan finished without any saved results to show. Run a fresh scan to get an up-to-date FixList.";
 }
 
 function getRecommendations(record) {

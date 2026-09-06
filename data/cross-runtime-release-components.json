@@ -8,7 +8,7 @@
     "durable_completion_contract_version": "durable_standard150_completion_v1",
     "durable_control_contract_version": "durable_standard150_control_v1",
     "durable_worker_contract_version": "scan_job_worker_v1_cloud_tasks",
-    "failure_state_presentation_version": "failure_state_presentation_v1_durable_reason",
+    "failure_state_presentation_version": "failure_state_presentation_v2_structured_limitation_reasons",
     "focused_scan_scope_version": "focused_scan_scope_v3_fullsite_scope_type_case_preserved_candidates",
     "limited_result_integrity_version": "standard_limited_result_integrity_v4_focused_scope_effective_path",
     "priority_summary_version": "priority_summary_v1_action_band_consistent",

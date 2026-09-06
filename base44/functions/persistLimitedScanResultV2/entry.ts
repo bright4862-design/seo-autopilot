@@ -3,7 +3,7 @@ import { secrets } from "base44:runtime";
 import { verifyAuthoritySeal } from "./workerEnvelope.js";
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "limited-result-prod-reactivation-20260903-v1";
+const BASE44_RUNTIME_ACTIVATION_ID = "limited-result-v2-activation-refresh-20260907-v1";
 import {
   buildLimitedResultSnapshot,
   createLimitedResultProof,

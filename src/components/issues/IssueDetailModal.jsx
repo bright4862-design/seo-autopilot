@@ -61,7 +61,6 @@ export default function IssueDetailModal({ issue, onClose, onStatusUpdate }) {
                         {link.isLinkable ? (
                           <a
                             href={link.href}
-                            target="_blank"
                             rel="noopener noreferrer"
                             title={link.title}
                             aria-label={link.linkName}

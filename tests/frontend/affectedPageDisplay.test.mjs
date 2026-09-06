@@ -49,11 +49,11 @@ test("a resolvable page carries a label and a distinct full URL", () => {
 
 test("the affected-page row links the label itself, not only an icon", () => {
   // The audit found evidence URLs rendered as plain text. The label is now an
-  // anchor, and every anchor opens safely in a new tab.
+  // anchor, and every anchor navigates directly without relying on a popup.
   const anchors = affectedPageSource.match(/<a\b[^>]*>/gs) || [];
   assert.ok(anchors.length >= 2, `expected the label and the icon to be links, saw ${anchors.length}`);
   for (const anchor of anchors) {
-    assert.match(anchor, /target="_blank"/, anchor);
+    assert.doesNotMatch(anchor, /target="_blank"/, anchor);
     assert.match(anchor, /rel="noopener noreferrer"/, anchor);
     assert.match(anchor, /aria-label=\{link\.linkName\}/, anchor);
   }

@@ -104,7 +104,7 @@ test("a page with no resolvable origin still reads, it just does not link", () =
 test("issue modal uses the shared evidence URL contract", () => {
   const source = fs.readFileSync(new URL("../../src/components/issues/IssueDetailModal.jsx", import.meta.url), "utf8");
   assert.equal(source.includes("evidenceLink(page, siteOrigin)"), true);
-  assert.equal(source.includes('target="_blank"'), true);
+  assert.equal(source.includes('target="_blank"'), false, "affected-page navigation must not rely on a popup");
   assert.equal(source.includes('rel="noopener noreferrer"'), true);
   assert.equal(source.includes("Copy URL"), true);
   assert.equal(source.includes("aria-label={link.linkName}"), true);

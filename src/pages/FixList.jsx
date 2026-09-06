@@ -1088,7 +1088,6 @@ function CustomerRepairCard({ card = {}, websiteUrl = "" }) {
                           {link.isLinkable ? (
                             <a
                               href={link.href}
-                              target="_blank"
                               rel="noopener noreferrer"
                               title={link.title}
                               aria-label={link.linkName}
@@ -1126,7 +1125,6 @@ function CustomerRepairCard({ card = {}, websiteUrl = "" }) {
                       {pageLink.isLinkable ? (
                         <a
                           href={pageLink.href}
-                          target="_blank"
                           rel="noopener noreferrer"
                           title={pageLink.title}
                           aria-label={pageLink.linkName}
@@ -1525,7 +1523,6 @@ function AffectedPage({ page, websiteUrl, index }) {
           // plain text with only a small icon to click.
           <a
             href={link.href}
-            target="_blank"
             rel="noopener noreferrer"
             title={link.title}
             aria-label={link.linkName}
@@ -1541,7 +1538,6 @@ function AffectedPage({ page, websiteUrl, index }) {
       {link.isLinkable ? (
         <a
           href={link.href}
-          target="_blank"
           rel="noopener noreferrer"
           title={link.title}
           className="shrink-0 p-1 text-ink-faint transition-colors hover:text-ink"

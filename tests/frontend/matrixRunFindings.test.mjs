@@ -21,7 +21,7 @@ function customerCard(start, end) {
   return page.slice(from, page.indexOf(end, from));
 }
 
-test("every affected URL is clickable, not just the representative one", () => {
+test("every affected URL is clickable without relying on a blocked new-tab popup", () => {
   // The card showed one linked "Representative" page per group and then a plain
   // <li> for each of the rest. The list under "All affected URLs" is the one an
   // owner actually works from.
@@ -35,9 +35,21 @@ test("every affected URL is clickable, not just the representative one", () => {
   assert.match(list, /aria-label=\{pageLink\.linkName\}/);
   assert.doesNotMatch(
     list,
+    /target="_blank"/,
+    "embedded and privacy-focused browsers may suppress new-tab navigation even for a valid anchor",
+  );
+  assert.doesNotMatch(
+    list,
     /<li key=\{page\} className="break-all">\{page\}<\/li>/,
     "a raw page string rendered as text is what this test exists to prevent",
   );
+});
+
+test("the representative affected URL also opens without a new-tab popup", () => {
+  const representative = customerCard("Representative: ", "All affected URLs");
+  assert.ok(representative.length > 0, "the representative URL must exist");
+  assert.match(representative, /href=\{link\.href\}/);
+  assert.doesNotMatch(representative, /target="_blank"/);
 });
 
 test("an unlinkable page still renders, as text rather than a dead link", () => {

@@ -59,7 +59,7 @@ test("a partial focused inventory exposes its full unexplained remainder", () =>
 
 - [ ] **Step 2: Run the test and confirm RED**
 
-Run: `node --test tests/frontend/pageAccounting.test.mjs`  
+Run: `node --test tests/frontend/pageAccounting.test.mjs`
 Expected: FAIL because `src/lib/pageAccounting.js` does not exist.
 
 - [ ] **Step 3: Implement bounded, deduplicated accounting**
@@ -111,7 +111,7 @@ test("duplicate and over-total rows never exceed pages_found", () => {
 
 - [ ] **Step 5: Run tests and commit**
 
-Run: `node --test tests/frontend/pageAccounting.test.mjs`  
+Run: `node --test tests/frontend/pageAccounting.test.mjs`
 Expected: PASS.
 
 ```bash
@@ -148,7 +148,7 @@ test("follow-up sections are not presented as a complete inventory", () => {
 
 - [ ] **Step 2: Run focused tests and confirm RED**
 
-Run: `node --test tests/frontend/matrixRunFindings.test.mjs tests/frontend/resultsPresentationContract.test.mjs`  
+Run: `node --test tests/frontend/matrixRunFindings.test.mjs tests/frontend/resultsPresentationContract.test.mjs`
 Expected: FAIL on the old heading and `Homepage · /` label.
 
 - [ ] **Step 3: Change the shared root label**
@@ -168,7 +168,7 @@ Render a “Pages found” block whose rows show `row.label` and `formatCount(ro
 
 - [ ] **Step 5: Run focused tests and commit**
 
-Run: `node --test tests/frontend/evidenceUrl.test.mjs tests/frontend/matrixRunFindings.test.mjs tests/frontend/resultsPresentationContract.test.mjs tests/frontend/focusedScanScope.test.mjs`  
+Run: `node --test tests/frontend/evidenceUrl.test.mjs tests/frontend/matrixRunFindings.test.mjs tests/frontend/resultsPresentationContract.test.mjs tests/frontend/focusedScanScope.test.mjs`
 Expected: PASS.
 
 ```bash
@@ -206,7 +206,7 @@ Add a source-contract assertion that grouped legacy records initialize `current_
 
 - [ ] **Step 2: Run focused tests and confirm RED**
 
-Run: `node --test tests/frontend/repairPriorityPresentation.test.mjs tests/frontend/repairGroupSummary.test.mjs`  
+Run: `node --test tests/frontend/repairPriorityPresentation.test.mjs tests/frontend/repairGroupSummary.test.mjs`
 Expected: at least the legacy stale-count assertion fails.
 
 - [ ] **Step 3: Generate legacy grouped current text after aggregation**
@@ -221,7 +221,7 @@ Keep canonical `buildRepairCard` count and `whereLine` derivation unchanged exce
 
 - [ ] **Step 4: Run focused tests and commit**
 
-Run: `node --test tests/frontend/repairPriorityPresentation.test.mjs tests/frontend/repairGroupSummary.test.mjs tests/frontend/ikeCustomerFixList.test.mjs`  
+Run: `node --test tests/frontend/repairPriorityPresentation.test.mjs tests/frontend/repairGroupSummary.test.mjs tests/frontend/ikeCustomerFixList.test.mjs`
 Expected: PASS.
 
 ```bash
@@ -252,7 +252,7 @@ Retain the existing headline jargon allowlist test and extend it only for custom
 
 - [ ] **Step 2: Run score and vocabulary tests**
 
-Run: `python -m pytest scanner-api/tests/test_matrix_run_findings.py -q && node --test tests/frontend/matrixRunFindings.test.mjs`  
+Run: `python -m pytest scanner-api/tests/test_matrix_run_findings.py -q && node --test tests/frontend/matrixRunFindings.test.mjs`
 Expected: PASS without changing production score constants.
 
 - [ ] **Step 3: Commit regression coverage**
@@ -273,16 +273,15 @@ git commit -m "test: freeze matrix score and vocabulary fixes"
 
 - [ ] **Step 1: Run frontend gates**
 
-Run: `pnpm lint && pnpm typecheck && pnpm test:frontend && pnpm build`  
+Run: `pnpm lint && pnpm typecheck && pnpm test:frontend && pnpm build`
 Expected: all commands exit 0.
 
 - [ ] **Step 2: Run focused scanner gates**
 
-Run: `python -m pytest scanner-api/tests/test_matrix_run_findings.py scanner-api/tests/test_review_calibration.py -q`  
+Run: `python -m pytest scanner-api/tests/test_matrix_run_findings.py scanner-api/tests/test_review_calibration.py -q`
 Expected: PASS.
 
 - [ ] **Step 3: Inspect scope and commit only necessary repairs**
 
-Run: `git diff --check && git status --short && git diff --stat origin/main...HEAD`  
+Run: `git diff --check && git status --short && git diff --stat origin/main...HEAD`
 Expected: no unrelated Base44, reconciliation, classifier, or Premium changes.
-

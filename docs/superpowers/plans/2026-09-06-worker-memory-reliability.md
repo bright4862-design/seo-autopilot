@@ -49,7 +49,7 @@ test("the Standard 150 worker has bounded release resources", () => {
 
 - [ ] **Step 2: Run the test and confirm RED**
 
-Run: `node --test tests/frontend/workerMemoryDeploymentContract.test.mjs`  
+Run: `node --test tests/frontend/workerMemoryDeploymentContract.test.mjs`
 Expected: FAIL because the manifest does not declare memory.
 
 - [ ] **Step 3: Add the memory pin**
@@ -58,7 +58,7 @@ Add `--memory=1Gi` to the `deploy-private-worker` arguments beside `--timeout=48
 
 - [ ] **Step 4: Run the test and commit**
 
-Run: `node --test tests/frontend/workerMemoryDeploymentContract.test.mjs`  
+Run: `node --test tests/frontend/workerMemoryDeploymentContract.test.mjs`
 Expected: PASS.
 
 ```bash
@@ -100,12 +100,12 @@ test("an abandoned heartbeat is terminalized by signed reconciliation", () => {
 
 - [ ] **Step 2: Run focused reliability tests**
 
-Run: `node --test tests/frontend/scanReconciliationContract.test.mjs tests/frontend/workerMemoryDeploymentContract.test.mjs`  
+Run: `node --test tests/frontend/scanReconciliationContract.test.mjs tests/frontend/workerMemoryDeploymentContract.test.mjs`
 Expected: PASS on current V2 behavior. If RED exposes a real gap, make the smallest change in the listed V2 files; do not transplant the separate legacy reconciliation branch.
 
 - [ ] **Step 3: Run Python durable-job tests**
 
-Run: `python -m pytest scanner-api/tests -q -k 'scan_job or durable or worker'`  
+Run: `python -m pytest scanner-api/tests -q -k 'scan_job or durable or worker'`
 Expected: PASS.
 
 - [ ] **Step 4: Commit only if the task changed tests or runtime**
@@ -126,24 +126,24 @@ git commit -m "test(worker): prove terminal failure recovery"
 
 - [ ] **Step 1: Refresh `origin/main` and inspect concurrent changes**
 
-Run: `git fetch origin main && git log --oneline --left-right HEAD...origin/main`  
+Run: `git fetch origin main && git log --oneline --left-right HEAD...origin/main`
 Expected: review any new reconciliation merge before rebasing; never discard or overwrite it.
 
 - [ ] **Step 2: Rebase and rerun focused contracts**
 
-Run: `git rebase origin/main`  
-Then: `node --test tests/frontend/workerMemoryDeploymentContract.test.mjs tests/frontend/scanReconciliationContract.test.mjs tests/frontend/pageAccounting.test.mjs`  
+Run: `git rebase origin/main`
+Then: `node --test tests/frontend/workerMemoryDeploymentContract.test.mjs tests/frontend/scanReconciliationContract.test.mjs tests/frontend/pageAccounting.test.mjs`
 Expected: PASS.
 
 - [ ] **Step 3: Run full local gates**
 
-Run: `pnpm lint && pnpm typecheck && pnpm test:frontend && pnpm build`  
-Then: `python -m pytest scanner-api/tests -q`  
+Run: `pnpm lint && pnpm typecheck && pnpm test:frontend && pnpm build`
+Then: `python -m pytest scanner-api/tests -q`
 Expected: all commands exit 0.
 
 - [ ] **Step 4: Verify release scope**
 
-Run: `git diff --check && git status --short && git diff --stat origin/main...HEAD`  
+Run: `git diff --check && git status --short && git diff --stat origin/main...HEAD`
 Expected: only the approved customer-result truthfulness, worker memory, regression tests, spec, and plans.
 
 - [ ] **Step 5: Prepare the exact deployment handoff**

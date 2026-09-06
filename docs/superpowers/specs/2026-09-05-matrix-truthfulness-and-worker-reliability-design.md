@@ -1,7 +1,7 @@
 # Matrix Truthfulness and Worker Reliability Design
 
-Date: 2026-09-05  
-Status: Approved in chat  
+Date: 2026-09-05
+Status: Approved in chat
 Base revision: `e0a7cb855e8747a95bdf04118f422b925920541e`
 
 ## Objective

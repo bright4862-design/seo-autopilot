@@ -99,12 +99,12 @@ test("the hint comes from persisted evidence, in a fixed order of preference", (
   // singular or plural from the count -- a zero-page row beside a three-page one
   // does not share a title, and would not be a repeated title to disambiguate.
   const classed = withRepeatedTitleScopeHints(buildRepairCards([
-    redirectRow({ fix_id: "a", page_count: 0, affected_pages: [], evidence_class: "verified" }),
-    redirectRow({ fix_id: "b", page_count: 0, affected_pages: [], evidence_class: "inferred" }),
+    redirectRow({ fix_id: "a", page_count: 0, affected_pages: [], evidence_class: "confirmed_problem" }),
+    redirectRow({ fix_id: "b", page_count: 0, affected_pages: [], evidence_class: "opportunity" }),
   ]));
   assert.equal(classed.length, 2);
-  assert.equal(classed[0].scopeHint, "Verified");
-  assert.equal(classed[1].scopeHint, "Inferred");
+  assert.equal(classed[0].scopeHint, "Confirmed problem");
+  assert.equal(classed[1].scopeHint, "Review opportunity");
 });
 
 test("a hint is never guessed from the URLs themselves", () => {

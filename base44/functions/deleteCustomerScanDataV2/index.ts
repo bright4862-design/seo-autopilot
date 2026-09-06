@@ -1,6 +1,6 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.41";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "delete-history-prod-reactivation-20260903-v1";
+const BASE44_RUNTIME_ACTIVATION_ID = "delete-history-v2-activation-refresh-20260907-v1";
 
 export const SCAN_HISTORY_DELETE_VERSION = "scan_history_delete_v2_drain_children";
 

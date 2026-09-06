@@ -2,7 +2,7 @@ import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { secrets } from "base44:runtime";
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "durable-worker-prod-reactivation-20260903-v1";
+const BASE44_RUNTIME_ACTIVATION_ID = "durable-worker-v2-activation-refresh-20260907-v1";
 import { verifyAuthoritySeal } from "./authoritySeal.js";
 import {
   finishReconciliationInvocation as finishReconciliationInvocationClient,

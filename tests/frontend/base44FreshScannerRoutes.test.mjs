@@ -27,6 +27,10 @@ test("Base44 scanner route generation is explicit and complete", () => {
 });
 
 test("fresh Base44 routes ship the same executable source as their canonical packages", () => {
+  const withoutActivationNonce = (value) => value.replace(
+    /(BASE44_RUNTIME_ACTIVATION_ID\s*=\s*)["'][^"']+["']/g,
+    '$1"<deployment-activation-nonce>"',
+  );
   for (const [canonical, active] of Object.entries(routes)) {
     const canonicalDir = path.join("base44/functions", canonical);
     const activeDir = path.join("base44/functions", active);
@@ -38,7 +42,11 @@ test("fresh Base44 routes ship the same executable source as their canonical pac
       .sort();
     assert.deepEqual(activeFiles, canonicalFiles, active);
     for (const file of canonicalFiles) {
-      assert.equal(source(path.join(activeDir, file)), source(path.join(canonicalDir, file)), `${active}/${file}`);
+      assert.equal(
+        withoutActivationNonce(source(path.join(activeDir, file))),
+        withoutActivationNonce(source(path.join(canonicalDir, file))),
+        `${active}/${file}`,
+      );
     }
     const canonicalBuild = source(path.join(canonicalDir, "generatedBuildId.js")).match(/FUNCTION_BUILD_ID = "([0-9a-f]{64})"/)?.[1];
     const aliasBuild = source(path.join(activeDir, "generatedBuildId.js")).match(/FUNCTION_BUILD_ID = "([0-9a-f]{64})"/)?.[1];

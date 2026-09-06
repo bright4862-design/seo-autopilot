@@ -20,7 +20,7 @@ import {
 } from "./admissionClient.js";
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "start-standard-prod-reactivation-20260903-v1";
+const BASE44_RUNTIME_ACTIVATION_ID = "start-standard-v2-activation-refresh-20260907-v1";
 
 const CORS_HEADERS = Object.freeze({
   "Access-Control-Allow-Origin": "*",

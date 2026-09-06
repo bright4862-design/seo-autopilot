@@ -476,10 +476,9 @@ function scopeHintFor(card = {}) {
 }
 
 const EVIDENCE_CLASS_LABELS = Object.freeze({
-  verified: "Verified",
-  observed: "Observed",
-  inferred: "Inferred",
-  reported: "Reported",
+  confirmed_problem: "Confirmed problem",
+  improvement: "Improvement",
+  opportunity: "Review opportunity",
 });
 
 function customerEvidenceClassLabel(value) {

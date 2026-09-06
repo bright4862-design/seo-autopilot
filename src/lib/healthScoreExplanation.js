@@ -72,8 +72,11 @@ export function healthScoreExplanation(record) {
 
   if (!sealed.version) {
     // Two different silences, and they read differently on the page: a scan
-    // that predates the breakdown, and one that was never scored at all.
-    return score === null ? UNAVAILABLE : {
+    // that predates the breakdown, and one that was never scored at all. A
+    // current row may intentionally persist an empty explanation object; field
+    // presence distinguishes that from a genuinely legacy record.
+    const legacy = source.health_score_explanation === undefined;
+    return score === null || !legacy ? UNAVAILABLE : {
       ...UNAVAILABLE,
       legacy: true,
       legacyNote: "This older result does not include a score breakdown.",

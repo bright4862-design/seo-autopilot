@@ -34,10 +34,13 @@ test("sampling disclosure reports route, market, family and identity coverage", 
   assert.equal(disclosure.localeVariantsCollapsed, 48);
   assert.equal(disclosure.identityDiscovered, 30);
   assert.equal(disclosure.identitySampled, 20);
-  assert.equal(disclosure.marketSummary, "Markets/languages: 2 of 3 represented in the sample.");
-  assert.equal(disclosure.familySummary, "Page families: 2 of 3 represented in the sample.");
-  assert.match(disclosure.unsampledSummary, /Unsampled markets: de/);
-  assert.match(disclosure.unsampledSummary, /Unsampled page families: legal info/);
+  // Selection language throughout: every number in this module comes from
+  // the pre-crawl half of sampling_report(), so none of it may claim a page
+  // was looked at.
+  assert.equal(disclosure.marketSummary, "Markets/languages: 2 of 3 chosen for this scan.");
+  assert.equal(disclosure.familySummary, "Page families: 2 of 3 chosen for this scan.");
+  assert.match(disclosure.notChosenSummary, /Markets not chosen: de/);
+  assert.match(disclosure.notChosenSummary, /Page families not chosen: legal info/);
 });
 
 test("sampling disclosure refuses old or evidence-free samplers", () => {
@@ -92,7 +95,7 @@ test("the disclosure survives the sampling version bump that ships with it", () 
   });
   assert.notEqual(disclosure, null, "the shipped sampler must produce a disclosure");
   assert.equal(disclosure.routesDiscovered, 120);
-  assert.match(disclosure.unsampledSummary, /Unsampled markets: de/);
+  assert.match(disclosure.notChosenSummary, /Markets not chosen: de/);
 });
 
 test("an unrecognised sampler is still refused", () => {

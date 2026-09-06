@@ -51,7 +51,7 @@
     "review_evidence_calibration_version": "review_evidence_calibration_v6_health_score_v2",
     "review_version": "python_review_v2_structural_marketplace",
     "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",
-    "sampling_disclosure_version": "sampling_disclosure_v4_bounded_prefix_inventory_compatible",
+    "sampling_disclosure_version": "sampling_disclosure_v5_selection_language",
     "sampling_version": "balanced_sitemap_buckets_v6_selected_and_checked_split",
     "scan_history_delete_version": "scan_history_delete_v2_drain_children",
     "scan_history_version": "scan_history_v3_focused_parent_children",
@@ -64,10 +64,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "821d211419fd327e",
+  "fingerprint": "053180f4bdc70857",
   "git_commit": "",
   "note": "",
-  "recorded_at": "2026-09-06T17:52:24.185364+00:00",
+  "recorded_at": "2026-09-06T17:59:38.979760+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

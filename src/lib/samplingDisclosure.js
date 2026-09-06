@@ -1,6 +1,21 @@
 import { RELEASE_COMPONENT_VERSIONS } from "./generatedReleaseContract.js";
 
-export const SAMPLING_DISCLOSURE_VERSION = "sampling_disclosure_v4_bounded_prefix_inventory_compatible";
+export const SAMPLING_DISCLOSURE_VERSION = "sampling_disclosure_v5_selection_language";
+
+/**
+ * What a scan chose to look at, in words that say so.
+ *
+ * Every number here comes from `sampling_report()`'s pre-crawl half -- the URLs
+ * selected before the crawl ran -- and the copy called them "represented in the
+ * sample" and "sampled", which a customer reads as an observation. It is the
+ * same overstatement the section rows carried, in a block the section fix did
+ * not reach.
+ *
+ * There is no outcome to substitute: the crawl records checked coverage per
+ * path prefix, not per market or per page family. So the honest correction is
+ * the wording. These say "chosen for this scan" and "not chosen", which is
+ * exactly what the producer recorded.
+ */
 
 // Samplers whose evidence this module knows how to read. The versions below
 // are historical records still held in the database; the sampler this build
@@ -68,29 +83,32 @@ export function samplingDisclosure(record = {}) {
   const sampledFamilyNames = Object.keys(familySampled).filter((family) => Number(familySampled[family]) > 0);
 
   const marketSummary = marketNames.length > 0
-    ? `Markets/languages: ${sampledMarketNames.length} of ${marketNames.length} represented in the sample.`
+    ? `Markets/languages: ${sampledMarketNames.length} of ${marketNames.length} chosen for this scan.`
     : "";
   const familySummary = familyNames.length > 0
-    ? `Page families: ${sampledFamilyNames.length} of ${familyNames.length} represented in the sample.`
+    ? `Page families: ${sampledFamilyNames.length} of ${familyNames.length} chosen for this scan.`
     : "";
 
   const gaps = [];
   if (unsampledMarkets.length > 0) {
-    gaps.push(`Unsampled markets: ${unsampledMarkets.slice(0, 6).join(", ")}${unsampledMarkets.length > 6 ? ` +${unsampledMarkets.length - 6} more` : ""}.`);
+    gaps.push(`Markets not chosen: ${unsampledMarkets.slice(0, 6).join(", ")}${unsampledMarkets.length > 6 ? ` +${unsampledMarkets.length - 6} more` : ""}.`);
   }
   if (unsampledFamilies.length > 0) {
-    gaps.push(`Unsampled page families: ${unsampledFamilies.slice(0, 4).map(labelFamily).join(", ")}${unsampledFamilies.length > 4 ? ` +${unsampledFamilies.length - 4} more` : ""}.`);
+    gaps.push(`Page families not chosen: ${unsampledFamilies.slice(0, 4).map(labelFamily).join(", ")}${unsampledFamilies.length > 4 ? ` +${unsampledFamilies.length - 4} more` : ""}.`);
   }
 
   return {
     version: SAMPLING_DISCLOSURE_VERSION,
     routesDiscovered,
+    routesSelected: routesSampled,
     routesSampled,
     localeVariantsCollapsed,
     identityDiscovered,
+    identitySelected: identitySampled,
     identitySampled,
     marketSummary,
     familySummary,
+    notChosenSummary: gaps.join(" "),
     unsampledSummary: gaps.join(" "),
   };
 }

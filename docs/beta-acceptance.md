@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `821d211419fd327e` |
+| Candidate fingerprint | `053180f4bdc70857` |
 | Classifier | `archetype_classifier_v12_locale_normalized_structural_routes` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,17 +15,27 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `821d211419fd327e` with classifier
+fingerprint `053180f4bdc70857` with classifier
 `archetype_classifier_v12_locale_normalized_structural_routes`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded candidate was `cc385c397c97d579`; before that `b3345916049979a1`, `77588ce93276d608`, `68a16802a9c7a543`, `a43a71c61f32d9fb`, `2f4238b4989f3fd9`, `0544ce395811cbd5`,
+The immediately superseded candidate was `821d211419fd327e`; before that `cc385c397c97d579`, `b3345916049979a1`, `77588ce93276d608`, `68a16802a9c7a543`, `a43a71c61f32d9fb`, `2f4238b4989f3fd9`, `0544ce395811cbd5`,
 `0fa7d98734efb3f2`, `7a95768cc8ee2076`, `58275d24191cf1cb`,
 `7b0ec8c46654192b`, `5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and
 `1ddf8085bc7721c4`.
 
-The current candidate moved the fingerprint to `821d211419fd327e` by telling a running
+The current candidate moved the fingerprint to `053180f4bdc70857` by finishing the job the
+selected-versus-checked split started. The section rows were corrected first;
+the sample-coverage disclosure beside them was not, and it is fed by exactly the
+same pre-crawl selection fields -- it said "represented in the sample" and
+"sampled" about numbers that describe an intention. There is no outcome to
+substitute, because the crawl records checked coverage per path prefix and not
+per market or page family, so `sampling_disclosure_v5_selection_language` says
+"chosen for this scan" and "not chosen", which is what the producer actually
+recorded.
+
+The preceding `821d211419fd327e` candidate told a running
 scan's owner what it is doing. Every active run said "This scan is still
 working" whether it was queued, crawling or reviewing, while
 `scanProgressModel()` sat unused beside it -- already careful that

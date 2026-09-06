@@ -199,3 +199,35 @@ test("the section rows never say sampled or represented again", () => {
   assert.match(block, /chosen for this scan/, "a selection-only record must say so");
   assert.match(block, /section\.coverageEvidence === "checked"/, "the percentage is gated on real evidence");
 });
+
+test("the sample disclosure describes a selection, because that is all it holds", () => {
+  // The section rows were fixed; this block was not, and it is fed by exactly
+  // the same selection fields -- route_signatures_sampled, markets_sampled,
+  // identity_pages_sampled all come from `sampling_report()`'s pre-crawl half.
+  // It said "represented in the sample" and "sampled", which are the two words
+  // this release exists to remove, about numbers that describe an intention.
+  //
+  // There is no outcome to substitute here: the crawl records checked coverage
+  // per path prefix, not per market or per page family. So the honest fix is
+  // the wording, not a number.
+  const disclosure = fs.readFileSync(new URL("../../src/lib/samplingDisclosure.js", import.meta.url), "utf8");
+  const emitted = [...disclosure.matchAll(/"([^"]*\$\{[^"]*)"|`([^`]*)`/g)]
+    .map((match) => match[1] || match[2] || "")
+    .filter((text) => /[a-z]{4}/i.test(text));
+  assert.ok(emitted.length > 0, "the module must emit some customer copy");
+  for (const text of emitted) {
+    assert.doesNotMatch(text, /\brepresented\b/i, `selection described as observation: ${text}`);
+    assert.doesNotMatch(text, /\bsampled\b/i, `selection described as observation: ${text}`);
+  }
+
+  const page = fs.readFileSync(new URL("../../src/pages/FixList.jsx", import.meta.url), "utf8");
+  const from = page.indexOf("{sampleCoverage ? (");
+  const block = page
+    .slice(from, page.indexOf("</details>", from))
+    .replace(/\/\/.*$/gm, "")
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+  assert.ok(from > -1, "the disclosure block must exist");
+  assert.doesNotMatch(block, /\bsampled\b/i, `the page still calls a selection sampled: ${block}`);
+  assert.doesNotMatch(block, /\brepresented\b/i);
+  assert.match(block, /chosen for this scan/, "it must say what the numbers actually are");
+});

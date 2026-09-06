@@ -590,26 +590,26 @@ export default function FixList() {
             {sampleCoverage ? (
               <details className="mt-5 max-w-[60ch] rounded-xl border border-hairline-soft bg-white/35 px-4 py-3">
                 <summary className="cursor-pointer text-[12.5px] font-medium text-ink-muted underline decoration-hairline underline-offset-4">
-                  What this representative sample covered
+                  How this scan chose what to look at
                 </summary>
                 <div className="mt-3 space-y-2 text-[12.5px] leading-relaxed text-ink-faint">
                   <p>
-                    Route patterns: <span className="font-medium text-ink-muted">{sampleCoverage.routesSampled} of {sampleCoverage.routesDiscovered}</span>
+                    Route patterns: <span className="font-medium text-ink-muted">{sampleCoverage.routesSelected} of {sampleCoverage.routesDiscovered}</span> chosen for this scan
                     {sampleCoverage.localeVariantsCollapsed > 0
-                      ? ` · ${formatCount(sampleCoverage.localeVariantsCollapsed)} translated duplicate${sampleCoverage.localeVariantsCollapsed === 1 ? "" : "s"} collapsed for sampling`
+                      ? ` · ${formatCount(sampleCoverage.localeVariantsCollapsed)} translated duplicate${sampleCoverage.localeVariantsCollapsed === 1 ? "" : "s"} treated as one page`
                       : ""}
                   </p>
                   {sampleCoverage.identityDiscovered > 0 ? (
                     <p>
-                      Business-critical pages: <span className="font-medium text-ink-muted">{sampleCoverage.identitySampled} of {sampleCoverage.identityDiscovered}</span> sampled.
+                      Business-critical pages: <span className="font-medium text-ink-muted">{sampleCoverage.identitySelected} of {sampleCoverage.identityDiscovered}</span> chosen for this scan.
                     </p>
                   ) : null}
                   {sampleCoverage.marketSummary ? <p>{sampleCoverage.marketSummary}</p> : null}
                   {sampleCoverage.familySummary ? <p>{sampleCoverage.familySummary}</p> : null}
-                  {sampleCoverage.unsampledSummary ? (
-                    <p className="text-ink-muted">{sampleCoverage.unsampledSummary}</p>
+                  {sampleCoverage.notChosenSummary ? (
+                    <p className="text-ink-muted">{sampleCoverage.notChosenSummary}</p>
                   ) : null}
-                  <p>This is a representative 150-page sample unless FixList covered the full discovered inventory.</p>
+                  <p>These are the pages this scan set out to check, up to its 150-page limit. The counts above the fix list say how many it reached.</p>
                 </div>
               </details>
             ) : null}

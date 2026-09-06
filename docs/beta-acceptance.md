@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `68a16802a9c7a543` |
+| Candidate fingerprint | `77588ce93276d608` |
 | Classifier | `archetype_classifier_v12_locale_normalized_structural_routes` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,19 +15,26 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `68a16802a9c7a543` with classifier
+fingerprint `77588ce93276d608` with classifier
 `archetype_classifier_v12_locale_normalized_structural_routes`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded candidate was `a43a71c61f32d9fb`; before that `2f4238b4989f3fd9`, `0544ce395811cbd5`,
+The immediately superseded candidate was `68a16802a9c7a543`; before that `a43a71c61f32d9fb`, `2f4238b4989f3fd9`, `0544ce395811cbd5`,
 `0fa7d98734efb3f2`, `7a95768cc8ee2076`, `58275d24191cf1cb`,
 `7b0ec8c46654192b`, `5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and
 `1ddf8085bc7721c4`.
 
-The current candidate moved the fingerprint to `68a16802a9c7a543` by completing
-P1-B1 focused same-origin path scans on top of the reviewed `0fa7d98734efb3f2`
-Standard 150 candidate. A focused child is explicitly confirmed, bound to a
+The current candidate moved the fingerprint to `77588ce93276d608` by separating
+the URLs a scan *selects* from the pages it actually *checks*. Sampling evidence
+previously reported only pre-crawl selection, and the FixList labelled those
+counts "sampled" and "represented"; on the September 6 matrix that made four
+sites show section rows totalling 148 pages covered against 39 or 40 crawled.
+The crawler now records outcome counts after the page cap, and coverage
+percentages are shown only where an outcome exists.
+
+The preceding `68a16802a9c7a543` candidate completed P1-B1 focused same-origin
+path scans on top of the reviewed `0fa7d98734efb3f2` Standard 150 candidate. A focused child is explicitly confirmed, bound to a
 discovered path prefix on the exact parent origin, admitted under a scope-aware
 request fingerprint, and persisted as its own ScanRun/FixList with its own
 150-page budget. Scope lineage is HMAC-bound under

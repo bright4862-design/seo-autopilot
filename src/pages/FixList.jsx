@@ -652,7 +652,15 @@ export default function FixList() {
                 </p>
                 <div className="mt-4 divide-y divide-hairline-soft">
                   {focusedSections.map((section) => {
-                    const coveragePercent = Math.round(section.coverage * 100);
+                    // "sampled" and "represented" were both computed from the
+                    // URLs chosen before the crawl, so a section could read
+                    // "30 sampled · 60% represented" on a scan that checked
+                    // seven of its pages. A percentage is shown only where an
+                    // outcome was actually recorded; a record that only knows
+                    // what it intended says exactly that.
+                    const checkedCoveragePercent = section.checkedCoverage === null
+                      ? null
+                      : Math.round(section.checkedCoverage * 100);
                     const target = focusedSectionOnboardingPath(scanRecord?.scan_id || scanRecord?.id, section);
                     return (
                       <div key={section.requested_path_prefix} className="flex flex-col gap-3 py-4 first:pt-1 sm:flex-row sm:items-center sm:justify-between">
@@ -662,7 +670,9 @@ export default function FixList() {
                             <span className="break-all text-[12px] text-ink-faint">{displayPathPrefix(section.requested_path_prefix)}</span>
                           </div>
                           <p className="mt-1 text-[12px] leading-relaxed text-ink-faint">
-                            {formatCount(section.discovered)} discovered · {formatCount(section.sampled)} sampled · {coveragePercent}% represented
+                            {section.coverageEvidence === "checked"
+                              ? `${formatCount(section.discovered)} found · ${formatCount(section.checked)} checked here · ${checkedCoveragePercent}% checked`
+                              : `${formatCount(section.discovered)} found · ${formatCount(section.selected)} chosen for this scan`}
                           </p>
                         </div>
                         <button

@@ -91,6 +91,20 @@ const RELEASE_FUNCTIONS = [
   "deleteCustomerScanData",
   "ownerScanDebugControl",
 ];
+
+// The V2 routes are the packages Base44 actually executes. Each is a mirror of
+// a canonical package, and `base44FreshScannerRoutes` proves that by requiring
+// the alias to declare its canonical's build id -- the alias cannot hash its
+// own directory, because `function.jsonc` names the function and so always
+// differs.
+//
+// Only the canonical names were regenerated here, so any contract change
+// rewrote one side of the pair and left the other stamped with a superseded
+// identity. The invariant then failed on the next release rather than being
+// maintained by the generator that owns both files.
+const ROUTE_ALIASES = JSON.parse(
+  fs.readFileSync(path.join(REPO_ROOT, "data/base44-function-routes.json"), "utf8"),
+).routes;
 const FUNCTION_BUILD_ID_FILE = "generatedBuildId.js";
 
 function functionBuildIdFiles(fnName) {
@@ -148,6 +162,24 @@ function writeFunctionBuildIds({ check = false } = {}) {
     const target = path.join(ROOT, relative);
     const buildId = computeFunctionBuildId(fnName);
     const expected = functionBuildIdSource(fnName, buildId);
+    const current = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
+    if (current === expected) continue;
+    if (check) {
+      drifted.push(`${relative} expected_build_id=${buildId}`);
+      continue;
+    }
+    fs.writeFileSync(target, expected);
+  }
+
+  // Stamp each alias with the identity of the package it mirrors, so the two
+  // move together and a stale alias cannot survive a regeneration.
+  for (const [canonical, alias] of Object.entries(ROUTE_ALIASES)) {
+    const aliasDir = path.join(ROOT, "base44/functions", alias);
+    if (!fs.existsSync(aliasDir) || !fs.existsSync(path.join(ROOT, "base44/functions", canonical))) continue;
+    const relative = `base44/functions/${alias}/${FUNCTION_BUILD_ID_FILE}`;
+    const target = path.join(ROOT, relative);
+    const buildId = computeFunctionBuildId(canonical);
+    const expected = functionBuildIdSource(canonical, buildId);
     const current = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : null;
     if (current === expected) continue;
     if (check) {

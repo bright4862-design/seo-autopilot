@@ -52,7 +52,7 @@
     "review_version": "python_review_v2_structural_marketplace",
     "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",
     "sampling_disclosure_version": "sampling_disclosure_v4_bounded_prefix_inventory_compatible",
-    "sampling_version": "balanced_sitemap_buckets_v5_locale_collapsed_identity_scope_discovery_bounded_prefixes",
+    "sampling_version": "balanced_sitemap_buckets_v6_selected_and_checked_split",
     "scan_history_delete_version": "scan_history_delete_v2_drain_children",
     "scan_history_version": "scan_history_v3_focused_parent_children",
     "scanner_build_revision": "authenticated_health_probe_v1",
@@ -64,10 +64,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "68a16802a9c7a543",
+  "fingerprint": "77588ce93276d608",
   "git_commit": "",
-  "note": "P1-B1 final review candidate: scope-type full-site parity, case-preserved candidates, bounded prefix evidence, limited effective scope, customer acceptance projection parity, and customer-visible effective scope; subdomains disabled",
-  "recorded_at": "2026-09-01T13:03:29.672979+00:00",
+  "note": "",
+  "recorded_at": "2026-09-06T16:55:23.842003+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

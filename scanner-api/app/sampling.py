@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from .extract import is_legal_page_path
 
-SAMPLING_VERSION = "balanced_sitemap_buckets_v5_locale_collapsed_identity_scope_discovery_bounded_prefixes"
+SAMPLING_VERSION = "balanced_sitemap_buckets_v6_selected_and_checked_split"
 TRUST_PREFIXES = (
     "/about", "/contact", "/privacy", "/terms", "/legal", "/mentions-legales",
     "/cgv", "/security", "/impressum", "/conditions", "/a-propos",
@@ -224,23 +224,89 @@ def sampling_report(
 
     identity_selected = [url for url in selected if family_of(url) in MONEY_FAMILIES]
     identity_all = [url for url in all_urls if family_of(url) in MONEY_FAMILIES]
+
+    # Every count below is built from `selected` -- the URLs chosen for an
+    # attempt, before a single page has been fetched. The word "sampled" read as
+    # an observation to whoever consumed it, and the FixList went on to label it
+    # "sampled" and "represented" to customers. On the September 6 matrix that
+    # made four sites claim 148 pages covered against 39 or 40 actually checked.
+    #
+    # The values are unchanged and still correct for the question they answer.
+    # Only the names now say which question that is. The `*_sampled` keys stay
+    # for one release so existing readers keep working; new readers must use
+    # `*_selected`, and must not read either as evidence a page was checked.
+    selection = {
+        "sitemap_urls_selected": len(selected),
+        "family_selected": dict(selected_families),
+        "families_never_selected": sorted(family for family in all_families if not selected_families.get(family)),
+        "trust_pages_selected": len(trust_selected),
+        "route_signatures_selected": len(selected_signatures),
+        "markets_selected": dict(sampled_markets),
+        "markets_never_selected": sorted(market for market in markets if not sampled_markets.get(market)),
+        "path_prefixes_selected": top_sampled_path_prefixes,
+        "identity_pages_selected": len(identity_selected),
+    }
+    legacy_aliases = {
+        "sitemap_urls_sampled": selection["sitemap_urls_selected"],
+        "family_sampled": selection["family_selected"],
+        "families_never_sampled": selection["families_never_selected"],
+        "trust_pages_sampled": selection["trust_pages_selected"],
+        "route_signatures_sampled": selection["route_signatures_selected"],
+        "markets_sampled": selection["markets_selected"],
+        "markets_never_sampled": selection["markets_never_selected"],
+        "path_prefixes_sampled": selection["path_prefixes_selected"],
+        "identity_pages_sampled": selection["identity_pages_selected"],
+    }
     return {
         "sampling_version": SAMPLING_VERSION,
         "sitemap_urls_discovered": len(all_urls),
-        "sitemap_urls_sampled": len(selected),
         "family_totals": dict(all_families),
-        "family_sampled": dict(selected_families),
-        "families_never_sampled": sorted(family for family in all_families if not selected_families.get(family)),
         "trust_pages_in_sitemap": len(trust_all),
-        "trust_pages_sampled": len(trust_selected),
         "route_signatures_discovered": len(all_signatures),
-        "route_signatures_sampled": len(selected_signatures),
         "locale_variants_collapsed": max(0, len(all_urls) - len(all_signatures)),
         "markets_discovered": dict(markets),
-        "markets_sampled": dict(sampled_markets),
-        "markets_never_sampled": sorted(market for market in markets if not sampled_markets.get(market)),
         "path_prefixes_discovered": top_path_prefixes,
-        "path_prefixes_sampled": top_sampled_path_prefixes,
         "identity_pages_in_sitemap": len(identity_all),
-        "identity_pages_sampled": len(identity_selected),
+        **selection,
+        **legacy_aliases,
     }
+
+
+def enrich_checked_coverage(
+    report: dict[str, Any],
+    checked_pages: list[dict[str, Any]],
+    path_of: Callable[[str], str],
+) -> dict[str, Any]:
+    """Record what the crawl actually returned, in place, after the page cap.
+
+    Selection evidence answers "what did we mean to look at". Nothing in the
+    payload answered "what did we look at", so the UI used selection and called
+    it coverage.
+
+    The population here must be the same one `pages_crawled` counts, so this is
+    called once, after the hard cap has been applied and `pages` is final.
+    Passing a partial list would understate the site as confidently as selection
+    overstated it.
+
+    The prefix counts are bounded by, never equal to, `pages_checked`: the
+    homepage has no first path segment, and pages outside the top discovered
+    prefixes have nowhere to be attributed. Forcing the two to reconcile would
+    mean inventing a section for the root or dropping a checked page from the
+    total. The remainder is real and belongs in an "other checked pages" row.
+    """
+    pages = [page for page in (checked_pages or []) if isinstance(page, dict)]
+    prefix_counts: dict[str, int] = defaultdict(int)
+    for page in pages:
+        url = str(page.get("final_url") or page.get("url") or "").strip()
+        if not url:
+            continue
+        segments = [segment for segment in str(path_of(url) or "/").split("/") if segment]
+        if segments:
+            prefix_counts[f"/{segments[0]}"] += 1
+
+    # Keyed on the discovered prefixes the UI already renders, so a row can show
+    # found, selected and checked side by side without a second lookup.
+    discovered = report.get("path_prefixes_discovered") or {}
+    report["pages_checked"] = len(pages)
+    report["path_prefixes_checked"] = {key: prefix_counts.get(key, 0) for key in discovered}
+    return report

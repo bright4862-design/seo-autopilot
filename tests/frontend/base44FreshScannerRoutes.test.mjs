@@ -2,12 +2,52 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import ts from "typescript";
+import { execFileSync } from "node:child_process";
 import { normalizeScopeOrigin } from "../../src/lib/focusedScanScope.js";
 
 const contract = JSON.parse(fs.readFileSync("data/base44-function-routes.json", "utf8"));
 const routes = contract.routes;
 
 const source = (p) => fs.readFileSync(p, "utf8");
+
+test("every V3 effective handler returns its expected runtime identity before authentication", async () => {
+  for (const active of Object.values(routes)) {
+    const root = path.resolve("base44/functions", active);
+    const cache = new Map();
+    let handler;
+    const forbidden = () => { throw new Error("GET identity probe must not access authentication or secrets"); };
+    const deno = { serve: (fn) => { handler = fn; }, env: { get: forbidden } };
+    function load(file) {
+      if (cache.has(file)) return cache.get(file).exports;
+      const module = { exports: {} };
+      cache.set(file, module);
+      const javascript = ts.transpileModule(source(file), {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+      }).outputText;
+      const requireLocal = (specifier) => {
+        if (specifier.startsWith("npm:@base44/sdk@")) return { createClientFromRequest: forbidden };
+        if (specifier === "base44:runtime") return { secrets: { get: forbidden } };
+        assert.ok(specifier.startsWith("./"), `unexpected dependency: ${specifier}`);
+        const dependency = path.resolve(path.dirname(file), specifier);
+        assert.ok(dependency.startsWith(`${root}${path.sep}`));
+        return load(dependency);
+      };
+      new Function("require", "module", "exports", "Deno", javascript)(requireLocal, module, module.exports, deno);
+      return module.exports;
+    }
+    const entry = load(path.join(root, "entry.ts"));
+    handler ||= entry.default;
+    assert.equal(typeof handler, "function", active);
+    const response = await handler(new Request("https://identity.example", { method: "GET" }));
+    assert.equal(response.status, 405, active);
+    const body = await response.json();
+    for (const [field, option] of [["build_id", "--build-id"], ["runtime_activation_id", "--activation-id"]]) {
+      const expected = execFileSync(process.execPath, ["scripts/generate_release_contracts.mjs", option, active], { encoding: "utf8" }).trim();
+      assert.equal(body[field], expected, `${active} effective ${field}`);
+    }
+  }
+});
 
 test("Base44 scanner route generation is explicit and complete", () => {
   assert.equal(contract.schema_version, "base44_function_routes_v1");

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { normalizeScopeOrigin } from "../../src/lib/focusedScanScope.js";
 
 const contract = JSON.parse(fs.readFileSync("data/base44-function-routes.json", "utf8"));
 const routes = contract.routes;
@@ -10,7 +11,7 @@ const source = (p) => fs.readFileSync(p, "utf8");
 
 test("Base44 scanner route generation is explicit and complete", () => {
   assert.equal(contract.schema_version, "base44_function_routes_v1");
-  assert.equal(contract.generation, "v2");
+  assert.equal(contract.generation, "v3");
   assert.deepEqual(Object.keys(routes).sort(), [
     "deleteCustomerScanData",
     "durableScanWorkerControl",
@@ -20,7 +21,7 @@ test("Base44 scanner route generation is explicit and complete", () => {
     "startStandardScanJob",
   ]);
   for (const [canonical, active] of Object.entries(routes)) {
-    assert.equal(active, `${canonical}V2`);
+    assert.equal(active, `${canonical}V3`);
     assert.ok(fs.existsSync(path.join("base44/functions", active, "entry.ts")));
     assert.match(source(path.join("base44/functions", active, "function.jsonc")), new RegExp(`"name"\\s*:\\s*"${active}"`));
   }
@@ -54,25 +55,44 @@ test("fresh Base44 routes ship the same executable source as their canonical pac
   }
 });
 
-test("customer and worker call sites use only fresh scanner routes", () => {
+test("customer and worker call sites use only V3 scanner routes", () => {
   const scanForm = source("src/components/scan/ScanWebsiteForm.jsx");
   const scanRuns = source("src/lib/scanRuns.js");
   const scanHistory = source("src/lib/scanHistory.js");
   const worker = source("scanner-api/app/scan_job.py");
 
-  assert.match(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV2"/);
-  assert.match(scanRuns, /"getCustomerScanResultV2"/);
-  assert.doesNotMatch(scanRuns, /"getCustomerScanResult"/);
-  assert.match(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV2"/);
+  assert.match(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV3"/);
+  assert.doesNotMatch(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV2"/);
+  assert.match(scanRuns, /"getCustomerScanResultV3"/);
+  assert.doesNotMatch(scanRuns, /"getCustomerScanResultV2"/);
+  assert.match(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV3"/);
+  assert.doesNotMatch(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV2"/);
 
   for (const name of [
-    "durableScanWorkerControlV2",
-    "persistDurableScanAuthorityV2",
-    "persistLimitedScanResultV2",
+    "durableScanWorkerControlV3",
+    "persistDurableScanAuthorityV3",
+    "persistLimitedScanResultV3",
   ]) assert.ok(worker.includes(`"${name}"`), name);
-  for (const legacy of [
-    '"durableScanWorkerControl"',
-    '"persistDurableScanAuthority"',
-    '"persistLimitedScanResult"',
-  ]) assert.ok(!worker.includes(legacy), legacy);
+  for (const stale of [
+    '"durableScanWorkerControlV2"',
+    '"persistDurableScanAuthorityV2"',
+    '"persistLimitedScanResultV2"',
+  ]) assert.ok(!worker.includes(stale), stale);
+});
+
+test("V3 cutover preserves the current Standard 150 scope contract", () => {
+  const scanForm = source("src/components/scan/ScanWebsiteForm.jsx");
+  const scanSchema = JSON.parse(source("base44/entities/ScanRun.jsonc"));
+  const startV3 = source("base44/functions/startStandardScanJobV3/entry.ts");
+
+  // A submitted subdomain remains a valid exact website origin.
+  assert.equal(normalizeScopeOrigin("https://blog.example.com/docs"), "https://blog.example.com");
+
+  // The release still does not broaden one scan across sibling subdomains.
+  assert.deepEqual(scanSchema.properties.scope_type.enum, ["", "path_prefix"]);
+  assert.equal(startV3.includes('scope_type: "subdomain"'), false);
+
+  // Standard 150 remains Standard 150; the route rename cannot raise the cap.
+  assert.match(scanForm, /const STANDARD_SCAN_MODE = "standard_150"/);
+  assert.match(scanForm, /max_pages:\s*150/);
 });

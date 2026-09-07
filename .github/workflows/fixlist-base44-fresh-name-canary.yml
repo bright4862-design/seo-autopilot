@@ -20,6 +20,9 @@ on:
 permissions:
   contents: read
 
+# External Base44 mutation lock. Every owner-authenticated hosted workflow that
+# can deploy/delete/set/recover Base44 state is contract-tested to use this same
+# group, so this lock is held continuously across inventory check and deploy.
 concurrency:
   group: fixlist-base44-hosted-controls-v2
   cancel-in-progress: false
@@ -104,8 +107,10 @@ jobs:
           fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$CLI_TMP/whoami" "$BASE44_APP_ID"
 
           # Base44's pinned CLI has update semantics for a named deploy and no
-          # create-only flag. Make the target unknowable before this serialized
-          # run starts, then prove the exact stored source after deployment.
+          # create-only flag. The workflow-level external mutation lock is held
+          # across both the collision check and deployment. The random name also
+          # prevents reuse across independent runs, and stored source is pulled
+          # back before the runtime proof is accepted.
           nonce="$(openssl rand -hex 8)"
           CANARY_NAME="${CANARY_PREFIX}${GITHUB_RUN_ID}${nonce}"
           PROBE_ID="base44-fresh-name-${GITHUB_RUN_ID}-${nonce}"

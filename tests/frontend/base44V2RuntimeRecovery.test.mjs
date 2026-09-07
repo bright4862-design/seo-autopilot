@@ -85,16 +85,10 @@ function staleBody(name, buildId, activationId) {
   const message = {
     durableScanWorkerControlV2: "Use POST for durable worker control.",
     persistDurableScanAuthorityV2: "Use POST to persist durable scan authority.",
+    persistLimitedScanResultV2: "Use POST to persist a limited scan result.",
     getCustomerScanResultV2: "Use POST to load a saved scan.",
     deleteCustomerScanDataV2: "Use POST to manage saved scan history.",
   }[name];
-  if (name === "persistLimitedScanResultV2") {
-    return JSON.stringify({
-      success: false, error_code: "method_not_allowed",
-      error_message: "Use POST to persist a limited scan result.",
-      build_id: buildId, runtime_activation_id: activationId,
-    });
-  }
   return JSON.stringify({
     success: false, error_code: "method_not_allowed", error: message,
     build_id: buildId, runtime_activation_id: activationId,
@@ -426,23 +420,86 @@ test("the probe extracts both identities from one parse, and never confuses them
 // ------------------------------------------------------------ the sequence --
 
 test("all six are classified before any one is deleted", () => {
-  const preflightLoop = recovery.slice(
-    recovery.indexOf("for fn in \"${V2_FUNCTIONS[@]}\"; do\n  require_recoverable_v2_prestate"),
-  );
-  assert.ok(preflightLoop.startsWith("for fn in"), "the preflight loop must exist");
+  const mainBody = recovery.slice(recovery.indexOf('\nif [[ -n "${FIXLIST_V2'));
   assert.ok(
-    recovery.indexOf("require_recoverable_v2_prestate \"$fn\"")
-      < recovery.indexOf("recover_one_v2 \"$fn\""),
+    mainBody.indexOf("preflight_all_v2_routes") < mainBody.indexOf('recover_one_v2 "$fn"'),
     "a deletion must not precede the full preflight",
   );
   assert.ok(
-    recovery.indexOf("BASE44_V2_RUNTIME_PREFLIGHT_VERIFIED") < recovery.indexOf("RECOVERED=0"),
+    mainBody.indexOf("BASE44_V2_RUNTIME_PREFLIGHT_VERIFIED") < mainBody.indexOf("RECOVERED=0"),
     "the preflight must be declared complete before recovery starts",
   );
   // And the preflight itself never mutates.
   const preflight = recovery.slice(recovery.indexOf("require_recoverable_v2_prestate() {"),
     recovery.indexOf("recover_one_v2() {"));
   assert.doesNotMatch(preflight, /functions delete|functions deploy/);
+});
+
+test("one unclassifiable route does not hide the state of the other five", () => {
+  // The preflight used to run under set -e and abort on the first refusal, so a
+  // defect on route four left routes five and six unprobed. Each dispatch costs
+  // the owner a device-code approval, so that turned one repair into a sequence
+  // of them. This drives the real preflight through a curl shim and asserts
+  // every route is probed and every failure named.
+  const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "fixlist-preflight-shim-"));
+  const probeLog = path.join(shimDir, "probed.log");
+  const names = Object.keys(EXPECTED_BUILD);
+  assert.equal(names.length, 6, "expected six V2 routes");
+
+  // Every route answers as its own provably stale handler...
+  for (const name of names) {
+    fs.writeFileSync(path.join(shimDir, `body-${name}`),
+      staleBody(name, OTHER_BUILD, CANONICAL_ACTIVATION[name]));
+  }
+  // ...except one, which answers with something the script cannot account for.
+  const broken = names[3];
+  fs.writeFileSync(path.join(shimDir, `body-${broken}`),
+    JSON.stringify({ success: false, error_code: "method_not_allowed",
+      error_message: "a field name this handler does not use",
+      build_id: OTHER_BUILD, runtime_activation_id: CANONICAL_ACTIVATION[broken] }));
+
+  fs.writeFileSync(path.join(shimDir, "curl"), [
+    "#!/usr/bin/env bash",
+    'out=""; url=""',
+    'while [[ $# -gt 0 ]]; do case "$1" in',
+    '  -o) out="$2"; shift 2;;',
+    '  http*) url="$1"; shift;;',
+    "  *) shift;;",
+    "esac; done",
+    'name="${url##*/}"',
+    'printf "%s\\n" "$name" >> "$FIXLIST_PROBE_LOG"',
+    'if [[ -f "$FIXLIST_SHIM_DIR/body-$name" ]]; then',
+    '  cat "$FIXLIST_SHIM_DIR/body-$name" > "$out"',
+    'else printf "{}" > "$out"; fi',
+    "printf 405",
+    "",
+  ].join("\n"), { mode: 0o755 });
+
+  const out = execFileSync("bash", ["-c", [
+    "set -uo pipefail",
+    'FIXLIST_V2_RUNTIME_RECOVERY_LIB_ONLY=1 source "$0"',
+    // The sourced script sets -e, which is what made the old preflight abort on
+    // the first refusal. Drop it here so the return value can be read.
+    "set +e",
+    "preflight_all_v2_routes",
+    "rc=$?",
+    'printf "rc=%s unclassified=%s" "$rc" "${PREFLIGHT_UNCLASSIFIED[*]:-}"',
+  ].join("; "), SCRIPT], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${shimDir}:${process.env.PATH}`,
+      FIXLIST_SHIM_DIR: shimDir, FIXLIST_PROBE_LOG: probeLog },
+  }).trim();
+
+  const probed = fs.readFileSync(probeLog, "utf8").trim().split("\n").filter(Boolean);
+  // Prove the shim is actually in play before trusting anything it reports.
+  assert.ok(probed.length > 0, "the curl shim is not reaching probe_v2_route");
+  for (const name of names) {
+    assert.ok(probed.includes(name),
+      `${name} was never probed: the preflight stopped early at ${broken}`);
+  }
+  assert.match(out, /rc=1 /, "a preflight with an unclassifiable route must fail");
+  assert.match(out, new RegExp(`unclassified=${broken}$`),
+    `the refusal must name exactly the route that did not classify: ${out}`);
 });
 
 test("each route proves absence after delete and presence after deploy", () => {

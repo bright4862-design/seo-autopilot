@@ -193,7 +193,7 @@ test("only the proven live stale signatures are eligible for deletion", () => {
     ["startStandardScanJob", 405, '{"success":false,"version":"startStandardScanJob_v3_server_admission","error":"Method not allowed."}'],
     ["durableScanWorkerControl", 405, '{"success":false,"error_code":"method_not_allowed","error":"Use POST for durable worker control."}'],
     ["persistDurableScanAuthority", 405, '{"success":false,"error_code":"method_not_allowed","error":"Use POST to persist durable scan authority."}'],
-    ["persistLimitedScanResult", 405, '{"success":false,"error_code":"method_not_allowed","error_message":"Use POST to persist a limited scan result."}'],
+    ["persistLimitedScanResult", 405, '{"success":false,"error_code":"method_not_allowed","error":"Use POST to persist a limited scan result."}'],
     ["getCustomerScanResult", 405, '{"success":false,"error_code":"method_not_allowed","error":"Use POST to load a saved scan."}'],
     ["deleteCustomerScanData", 405, '{"success":false,"error_code":"method_not_allowed","error":"Use POST to manage saved scan history."}'],
     ["ownerScanDebugControl", 405, '{"success":false,"error_code":"method_not_allowed","error":"Use POST for owner scan controls."}'],
@@ -326,4 +326,117 @@ test("workflow is owner-dispatched from exact main and passes both confirmations
   assert.ok(installAt < loginAt, "npm ci must complete before the owner session is established");
   assert.match(workflow, /recover-base44-stale-release-functions\.sh/);
   assert.match(workflow, /rm -rf "\$HOME\/\.base44"/);
+});
+
+// The signature table above is a set of string literals describing bodies that
+// live handlers emit. Nothing tied those literals to the handlers, so a table
+// entry could name a field the handler never returns and every test would still
+// pass: the fixtures were hand-written to match the table rather than the
+// source. That is not hypothetical. The persistLimitedScanResult branch matched
+// on "error_message" while the handler returns "error", so the branch could
+// never fire, and a genuinely stale route was refused in production.
+//
+// These tests derive each body from the handler itself. A field renamed on
+// either side now breaks the build instead of a release.
+
+// createAccessCheckout's 500 and stripeWebhook's 400 are produced at runtime by
+// a failing dependency, not by a literal in our source, so they cannot be
+// derived. Everything else must be.
+const NON_DERIVABLE_SIGNATURES = ["createAccessCheckout", "stripeWebhook"];
+
+/**
+ * Reads the source that actually serves a function's HTTP responses.
+ * @param {string} name Base44 function package name.
+ * @returns {string} Contents of entry.ts, or of index.ts when entry.ts is an
+ *   import shim, which is where the Deno.serve handler really lives.
+ */
+function handlerSource(name) {
+  const entry = fs.readFileSync(`base44/functions/${name}/entry.ts`, "utf8");
+  // Some packages keep Deno.serve in index.ts and import it from entry.ts.
+  return /^\s*import\s+"\.\/index\.ts"\s*;?\s*$/m.test(entry)
+    ? fs.readFileSync(`base44/functions/${name}/index.ts`, "utf8")
+    : entry;
+}
+
+/**
+ * Evaluates the handler's own non-POST return statement and reports the body it
+ * actually produces, so the signature table is checked against the handler
+ * rather than against a fixture written to agree with the table.
+ * @param {string} name Base44 function package name.
+ * @returns {{status: number, body: string}} The real method-not-allowed
+ *   response, with build id and activation marker resolved to their literals.
+ */
+function deriveMethodNotAllowed(name) {
+  const src = handlerSource(name);
+  const guard = src.indexOf('req.method !== "POST"');
+  assert.ok(guard >= 0, `${name}: no non-POST guard to derive from`);
+  const start = src.indexOf("return ", guard);
+  const statement = src.slice(start, src.indexOf("\n", start)).trim();
+
+  let captured = null;
+  const record = (payload, status) => {
+    captured = { payload, status };
+  };
+  const sandbox = {
+    FUNCTION_BUILD_ID: "b".repeat(64),
+    BASE44_RUNTIME_ACTIVATION_ID: src.match(/BASE44_RUNTIME_ACTIVATION_ID = "([^"]+)"/)?.[1] ?? "",
+    VERSION: src.match(/const VERSION = "([^"]+)"/)?.[1] ?? "",
+    Response: { json: (payload, init) => record(payload, init?.status ?? 200) },
+    jsonResponse: (payload, status = 200) => record(payload, status),
+  };
+  vm.runInNewContext(
+    ts.transpileModule(statement.replace(/^return\s+/, ""), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022 },
+    }).outputText,
+    sandbox,
+  );
+  assert.ok(captured, `${name}: non-POST return produced no response`);
+  return { status: captured.status, body: JSON.stringify(captured.payload) };
+}
+
+/**
+ * Lists the routes the recovery script's staleness signature table covers.
+ * @returns {string[]} Function names, in table order.
+ */
+function signatureTableRoutes() {
+  const table = recovery
+    .split("route_is_known_stale_handler() {")[1]
+    .split("\nroute_serves_expected_build")[0];
+  return [...table.matchAll(/^ {4}(\w+)\)$/gm)].map((m) => m[1]);
+}
+
+test("every stale signature matches the body its own handler returns", () => {
+  const derivable = signatureTableRoutes().filter(
+    (name) => !NON_DERIVABLE_SIGNATURES.includes(name),
+  );
+  assert.ok(derivable.length >= 7, "expected the method-not-allowed routes to be derivable");
+
+  for (const name of derivable) {
+    const { status, body } = deriveMethodNotAllowed(name);
+    assert.equal(
+      classify(name, status, body, "", "a".repeat(64)),
+      "stale",
+      `${name}: signature table does not match the handler's own ${status} body: ${body}`,
+    );
+  }
+});
+
+test("no route can join the signature table without source-derived coverage", () => {
+  // Guards the test above: an entry added with a hand-written literal and no
+  // derivation would otherwise be silently exempt.
+  const routes = signatureTableRoutes();
+  for (const name of NON_DERIVABLE_SIGNATURES) {
+    assert.ok(routes.includes(name), `${name} is exempt but no longer in the table`);
+  }
+  for (const name of routes) {
+    if (NON_DERIVABLE_SIGNATURES.includes(name)) continue;
+    assert.ok(
+      fs.existsSync(`base44/functions/${name}/entry.ts`),
+      `${name} is in the signature table but has no handler package to derive from`,
+    );
+    assert.doesNotThrow(
+      () => deriveMethodNotAllowed(name),
+      `${name} is in the signature table but its body cannot be derived from source`,
+    );
+  }
 });

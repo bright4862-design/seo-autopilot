@@ -40,12 +40,10 @@
 #   secret, entity, scanner or frontend mutation
 set -euo pipefail
 
-APP_ID="${BASE44_APP_ID:-6a498732ec779dfaaeab0e53}"
 SOURCE_SHA="${SOURCE_SHA:-}"
 CONFIRM="${CONFIRM:-}"
 ACTION_CONFIRM="${ACTION_CONFIRM:-}"
 BASE44_EXPECTED_OWNER="${BASE44_EXPECTED_OWNER:-}"
-PROBE_ORIGIN="${BASE44_FUNCTION_ORIGIN:-https://base44.app}"
 PROBE_ATTEMPTS="${PROBE_ATTEMPTS:-12}"
 PROBE_DELAY_SECONDS="${PROBE_DELAY_SECONDS:-5}"
 
@@ -56,13 +54,26 @@ source "$REPO_ROOT/scripts/lib/base44-pinned-cli.sh"
 # than restating them. LIB_ONLY stops that script before its own main body.
 FIXLIST_STALE_RECOVERY_LIB_ONLY=1 source "$REPO_ROOT/scripts/recover-base44-stale-release-functions.sh"
 
-# Declared after that source, and under a name it does not use. The canonical
-# recovery assigns EXPECTED_ACTION_CONFIRM unconditionally, so a value set above
-# the source is silently replaced by its phrase -- which would mean this
+# Everything below is declared after that source, because the canonical recovery
+# assigns several of these unconditionally and a value set above the source is
+# silently replaced by its own.
+#
+# EXPECTED_ACTION_CONFIRM is the case where that already bit: the phrase set
+# above was being replaced by the canonical one, which would have meant this
 # destructive run accepted the canonical recovery's authorisation instead of its
 # own. It failed closed rather than open, but only by luck, and an operator
-# holding one phrase must never be able to trigger the other.
+# holding one phrase must never be able to trigger the other. It is renamed here
+# so the sourced script cannot reach it at all.
+#
+# APP_ID and PROBE_ORIGIN currently survive that reassignment by coincidence --
+# both scripts derive them from the same environment variables with identical
+# defaults, so the value is the same either way. They are set here anyway: the
+# coincidence is not a property either file states, and if the defaults ever
+# diverge the canonical's would win silently, which is exactly how the
+# confirmation phrase went wrong.
 V2_EXPECTED_ACTION_CONFIRM="RECREATE-STALE-BASE44-V2-RUNTIME"
+APP_ID="${BASE44_APP_ID:-6a498732ec779dfaaeab0e53}"
+PROBE_ORIGIN="${BASE44_FUNCTION_ORIGIN:-https://base44.app}"
 
 V2_FUNCTIONS=(
   startStandardScanJobV2
@@ -86,10 +97,14 @@ canonical_of() {
   ' "$REPO_ROOT/data/base44-function-routes.json" "$1"
 }
 
+# The activation marker the named package declares, from the one resolver both
+# this script and verify-base44-functions.sh use.
 expected_activation_id() {
   node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --activation-id "$1"
 }
 
+# An activation marker shaped like one this repository produces. Anything else
+# is a value no package here wrote, and is never compared against.
 valid_activation_id() {
   [[ "$1" =~ ^[A-Za-z0-9._-]{1,120}$ ]]
 }
@@ -104,7 +119,11 @@ probe_v2_route() {
     "$PROBE_ORIGIN/api/apps/$APP_ID/functions/$name" 2>/dev/null || echo 000)"
   PROBE_STATUS="$status"
   PROBE_BODY="$(head -c 2048 "$body_file" | tr -d '\n')"
-  PROBE_BUILD_ID="$(python3 - "$body_file" <<'PY' 2>/dev/null || true
+  # Both identities from one parse. Neither pattern admits a space, so a single
+  # separator is unambiguous and an absent or malformed marker stays empty --
+  # which is what every caller checks for.
+  local identity
+  identity="$(python3 - "$body_file" <<'PY' 2>/dev/null || true
 import json, re, sys
 try:
     value = json.load(open(sys.argv[1], encoding="utf-8", errors="replace"))
@@ -113,26 +132,23 @@ except Exception:
 if not isinstance(value, dict):
     raise SystemExit
 build_id = str(value.get("build_id") or "")
-if re.fullmatch(r"[0-9a-f]{64}", build_id):
-    print(build_id, end="")
-PY
-)"
-  PROBE_ACTIVATION_ID="$(python3 - "$body_file" <<'PY' 2>/dev/null || true
-import json, re, sys
-try:
-    value = json.load(open(sys.argv[1], encoding="utf-8", errors="replace"))
-except Exception:
-    raise SystemExit
-if not isinstance(value, dict):
-    raise SystemExit
 activation = str(value.get("runtime_activation_id") or "")
-if re.fullmatch(r"[A-Za-z0-9._-]{1,120}", activation):
-    print(activation, end="")
+if not re.fullmatch(r"[0-9a-f]{64}", build_id):
+    build_id = ""
+if not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", activation):
+    activation = ""
+print(f"{build_id} {activation}", end="")
 PY
 )"
+  PROBE_BUILD_ID="${identity%% *}"
+  PROBE_ACTIVATION_ID=""
+  [[ "$identity" == *" "* ]] && PROBE_ACTIVATION_ID="${identity#* }"
   rm -f "$body_file"
 }
 
+# True only when the probed route serves this exact build AND this exact
+# activation marker. Either alone is satisfiable by a handler that is not the
+# one this source builds.
 route_serves_expected_runtime() {
   local expected_build="$1" expected_activation="$2"
   [[ -n "$expected_build" && "$PROBE_BUILD_ID" == "$expected_build" ]] \
@@ -172,6 +188,9 @@ require_expected_v2_runtime() {
   return 1
 }
 
+# The four values every decision about one route is made from, or a refusal.
+# Resolving them up front is what lets the preflight classify all six before
+# anything is deleted.
 resolve_expectations() {
   local name="$1"
   V2_CANONICAL="$(canonical_of "$name")" || {
@@ -202,6 +221,8 @@ resolve_expectations() {
   return 0
 }
 
+# Non-mutating. Classifies one route as already-current or provably stale, and
+# refuses anything else. Runs for all six before the first deletion.
 require_recoverable_v2_prestate() {
   local name="$1"
   resolve_expectations "$name" || return 1
@@ -220,6 +241,9 @@ require_recoverable_v2_prestate() {
   return 1
 }
 
+# Recompile one route, or leave it alone. Every step proves its own outcome
+# before the next begins, and any failure returns non-zero so `set -e` stops the
+# run before the next route is touched.
 recover_one_v2() {
   local name="$1" inventory
   resolve_expectations "$name" || return 1

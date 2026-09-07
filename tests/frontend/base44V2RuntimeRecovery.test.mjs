@@ -40,18 +40,37 @@ const EXPECTED_BUILD = Object.fromEntries(
 );
 const V2_ACTIVATION = Object.fromEntries(Object.keys(EXPECTED_BUILD).map((name) => [name,
   execFileSync("node", ["scripts/generate_release_contracts.mjs", "--activation-id", name], { encoding: "utf8" }).trim()]));
+// Resolved through the route contract, not by trimming "V2". The script reads
+// the same table for the same reason: an alias whose canonical does not follow
+// the suffix convention would otherwise give the test a different canonical
+// marker than the classifier uses, and the assertions would quietly stop
+// describing it.
+const ROUTES = JSON.parse(fs.readFileSync("data/base44-function-routes.json", "utf8")).routes;
+const canonicalOf = (alias) => Object.entries(ROUTES).find(([, active]) => active === alias)?.[0];
 const CANONICAL_ACTIVATION = Object.fromEntries(Object.keys(EXPECTED_BUILD).map((name) => [name,
-  execFileSync("node", ["scripts/generate_release_contracts.mjs", "--activation-id", name.replace(/V2$/, "")], { encoding: "utf8" }).trim()]));
+  execFileSync("node", ["scripts/generate_release_contracts.mjs", "--activation-id", canonicalOf(name)], { encoding: "utf8" }).trim()]));
 
-/** The build IDs the six V2 routes were actually observed serving. */
-const LIVE_BUILD = {
-  startStandardScanJobV2: "37f0fae80c81223a892a233fd9cfdf32902f43cecf8fe3819a1c2e9d55ecfd8d",
-  durableScanWorkerControlV2: "0fe23e0d7e53982b59d5bc2edc419b4568dcd063efa223ab0cdbecc9a5345f0b",
-  persistDurableScanAuthorityV2: "6cf9bd3b0eaa3da07da8171e237dd921242ed14edecef3421bdacd019abef1db",
-  persistLimitedScanResultV2: "62978e16e20791c205e01f58bffd2b2e5dc39067be13939b8eb08cce6a5f1ecb",
-  getCustomerScanResultV2: "697d83e9d06c03bde76202c5ebd23408098e4fc8a773761783783298496be1f2",
-  deleteCustomerScanDataV2: "6f6c73c198d7a20df923721d826c994f4d8d40decec0ecd313e8f9992f12f481",
-};
+/**
+ * A build ID that is well-formed and is not any route's expected one.
+ *
+ * The routes were observed serving these, which is what the incident looked
+ * like on the day:
+ *
+ *   startStandardScanJobV2         37f0fae80c81223a892a233fd9cfdf32902f43ce…
+ *   durableScanWorkerControlV2     0fe23e0d7e53982b59d5bc2edc419b4568dcd063…
+ *   persistDurableScanAuthorityV2  6cf9bd3b0eaa3da07da8171e237dd921242ed14e…
+ *   persistLimitedScanResultV2     62978e16e20791c205e01f58bffd2b2e5dc39067…
+ *   getCustomerScanResultV2        697d83e9d06c03bde76202c5ebd23408098e4fc8…
+ *   deleteCustomerScanDataV2       6f6c73c198d7a20df923721d826c994f4d8d40de…  (= expected)
+ *
+ * Those values are recorded here and not asserted on. Five of them differ from
+ * the expected build only because those canonical packages happened to change;
+ * pinning that coincidence would fail this file on any later edit to a canonical
+ * package, for a reason that has nothing to do with classification. What the
+ * tests assert is the property the incident revealed: a route serving the
+ * expected build with a canonical-era marker is still stale.
+ */
+const OTHER_BUILD = "a".repeat(64);
 
 /** The exact 405 JSON each route's handler returns, by canonical package. */
 function staleBody(name, buildId, activationId) {
@@ -104,19 +123,22 @@ function classify(name, { status = 405, body, buildId, activationId }) {
 // ------------------------------------------------ the case that got through --
 
 test("a matching build ID with a stale activation marker is not current", () => {
-  // deleteCustomerScanDataV2, exactly as observed: the build ID a build-only
-  // check demands, serving canonical-era code.
-  const name = "deleteCustomerScanDataV2";
-  assert.equal(LIVE_BUILD[name], EXPECTED_BUILD[name],
-    "this fixture only means something while the live and expected build IDs agree");
-  assert.notEqual(V2_ACTIVATION[name], CANONICAL_ACTIVATION[name]);
-
-  const verdict = classify(name, {
-    body: staleBody(name, LIVE_BUILD[name], CANONICAL_ACTIVATION[name]),
-    buildId: LIVE_BUILD[name],
-    activationId: CANONICAL_ACTIVATION[name],
-  });
-  assert.equal(verdict, "stale", "a build-only check calls this route current");
+  // The case a build-only check cannot see, on every route rather than only the
+  // one that happened to exhibit it: the exact build the check demands, served
+  // by a handler still carrying the canonical-era marker.
+  for (const name of Object.keys(EXPECTED_BUILD)) {
+    assert.notEqual(V2_ACTIVATION[name], CANONICAL_ACTIVATION[name],
+      `${name} and its canonical must not share a marker, or nothing can tell them apart`);
+    assert.equal(
+      classify(name, {
+        body: staleBody(name, EXPECTED_BUILD[name], CANONICAL_ACTIVATION[name]),
+        buildId: EXPECTED_BUILD[name],
+        activationId: CANONICAL_ACTIVATION[name],
+      }),
+      "stale",
+      `${name}: a build-only check calls this route current`,
+    );
+  }
 });
 
 test("the same route with its own activation marker is current and untouched", () => {
@@ -129,25 +151,32 @@ test("the same route with its own activation marker is current and untouched", (
   assert.equal(verdict, "current");
 });
 
-test("five routes are caught by the build ID and the sixth only by the marker", () => {
-  // The distribution that made this hard to see: most of the fleet fails the
-  // cheap check, so the one that does not looks like a healthy route.
-  const byBuild = [];
-  const byMarkerOnly = [];
+test("a stale route is caught whether or not its build ID moved", () => {
+  // Both shapes staleness can take. On the day, five routes were the first and
+  // one was the second -- but which route falls in which group is an accident of
+  // whether its canonical package happened to change, so the classifier must
+  // catch either on any route.
   for (const name of Object.keys(EXPECTED_BUILD)) {
-    (LIVE_BUILD[name] === EXPECTED_BUILD[name] ? byMarkerOnly : byBuild).push(name);
+    assert.notEqual(OTHER_BUILD, EXPECTED_BUILD[name]);
     assert.equal(
       classify(name, {
-        body: staleBody(name, LIVE_BUILD[name], CANONICAL_ACTIVATION[name]),
-        buildId: LIVE_BUILD[name],
+        body: staleBody(name, OTHER_BUILD, CANONICAL_ACTIVATION[name]),
+        buildId: OTHER_BUILD,
         activationId: CANONICAL_ACTIVATION[name],
       }),
       "stale",
-      `${name} was not recognized as stale`,
+      `${name}: an old build with an old marker was not recognized as stale`,
+    );
+    assert.equal(
+      classify(name, {
+        body: staleBody(name, EXPECTED_BUILD[name], CANONICAL_ACTIVATION[name]),
+        buildId: EXPECTED_BUILD[name],
+        activationId: CANONICAL_ACTIVATION[name],
+      }),
+      "stale",
+      `${name}: a current build with an old marker was not recognized as stale`,
     );
   }
-  assert.equal(byBuild.length, 5);
-  assert.deepEqual(byMarkerOnly, ["deleteCustomerScanDataV2"]);
 });
 
 test("every current route is skipped rather than deleted", () => {
@@ -168,7 +197,7 @@ test("every current route is skipped rather than deleted", () => {
 
 test("a response this script cannot account for is never deleted", () => {
   const name = "getCustomerScanResultV2";
-  const build = LIVE_BUILD[name];
+  const build = OTHER_BUILD;
   const canonical = CANONICAL_ACTIVATION[name];
   const good = staleBody(name, build, canonical);
 
@@ -215,8 +244,8 @@ test("a half-recovered handler — new build, old marker — still refuses", () 
   }), "stale", "old marker with a current build is the stale signature for this route");
 
   assert.equal(classify(name, {
-    body: staleBody(name, LIVE_BUILD[name], V2_ACTIVATION[name]),
-    buildId: LIVE_BUILD[name],
+    body: staleBody(name, OTHER_BUILD, V2_ACTIVATION[name]),
+    buildId: OTHER_BUILD,
     activationId: V2_ACTIVATION[name],
   }), "refuse", "a new marker on an old build is a state this script has not proven safe");
 });
@@ -446,7 +475,8 @@ test("build IDs resolve through the alias and activation markers do not", () => 
   // the alias too, both routes would report the canonical marker and the pair
   // would stop discriminating.
   for (const name of Object.keys(EXPECTED_BUILD)) {
-    const canonical = name.replace(/V2$/, "");
+    const canonical = canonicalOf(name);
+    assert.ok(canonical, `${name} has no canonical in the route contract`);
     assert.equal(
       EXPECTED_BUILD[name],
       execFileSync("node", ["scripts/generate_release_contracts.mjs", "--build-id", canonical], { encoding: "utf8" }).trim(),

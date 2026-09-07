@@ -51,9 +51,11 @@ test("every deployed function is checked present in the post-deploy inventory", 
 });
 
 test("every function the deploy script calls verified is probed by the verifier", () => {
-  const probed = bashArray(VERIFIER, "FUNCTION_PAIRS").map((pair) =>
-    pair.replace(/^"|"$/g, "").split(":")[1],
-  );
+  // The verifier used to carry "canonical:alias" pairs so it could resolve an
+  // alias's expected build ID itself. That resolution moved into the generator,
+  // which is the only place that knows the alias table, so the list is now the
+  // live route names alone.
+  const probed = bashArray(VERIFIER, "FUNCTION_ROUTES").map((name) => name.replace(/^"|"$/g, ""));
   assert.deepEqual(probed, verified);
 });
 

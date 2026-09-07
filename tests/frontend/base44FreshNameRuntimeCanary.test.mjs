@@ -8,6 +8,42 @@ const CANARY_PREFIX = "fixlistRuntimeActivationProbe";
 const STATIC_CANARY_NAME = "fixlistRuntimeActivationProbe20260907A";
 const BASE44_MUTATION_LOCK = /group:\s*fixlist-base44-hosted-controls-v2/;
 
+function withoutYamlComments(value) {
+  return value
+    .split("\n")
+    .filter((line) => !/^\s*#/.test(line))
+    .join("\n");
+}
+
+function workflowJobs(content) {
+  const lines = content.split("\n");
+  const jobsIndex = lines.findIndex((line) => /^jobs:\s*$/.test(line));
+  assert.notEqual(jobsIndex, -1, "workflow must contain a jobs section");
+
+  const preamble = lines.slice(0, jobsIndex).join("\n");
+  const jobs = [];
+  let current = null;
+
+  for (const line of lines.slice(jobsIndex + 1)) {
+    const jobStart = line.match(/^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$/);
+    if (jobStart) {
+      if (current) jobs.push(current);
+      current = { name: jobStart[1], lines: [line] };
+      continue;
+    }
+    if (current) current.lines.push(line);
+  }
+  if (current) jobs.push(current);
+
+  return {
+    preamble,
+    jobs: jobs.map(({ name, lines: jobLines }) => ({
+      name,
+      content: jobLines.join("\n"),
+    })),
+  };
+}
+
 test("fresh-name Base44 runtime canary is exact-main, owner-gated, isolated, and collision-hardened", () => {
   const workflow = fs.readFileSync(WORKFLOW, "utf8");
 
@@ -65,27 +101,34 @@ test("fresh-name Base44 runtime canary is exact-main, owner-gated, isolated, and
   }
 });
 
-test("every hosted Base44 mutation workflow shares one external serialization lock", () => {
+test("every hosted Base44 mutation job is owner-gated and shares one external serialization lock", () => {
   const workflowFiles = fs.readdirSync(WORKFLOWS_DIR)
     .filter((name) => /\.ya?ml$/.test(name));
 
-  const mutationSignal = /functions (?:deploy|delete)|scripts\/(?:deploy|recover|set)-base44-[A-Za-z0-9._-]+\.sh/;
-  const mutators = workflowFiles
-    .map((name) => ({
-      name,
-      content: fs.readFileSync(`${WORKFLOWS_DIR}/${name}`, "utf8"),
-    }))
-    .filter(({ content }) => mutationSignal.test(content));
+  const directMutation = /functions (?:deploy|delete)/;
+  const scriptMutation = /(?:^|\s)(?:\/bin\/bash|bash)\s+scripts\/(?:deploy|recover|set)-base44-[A-Za-z0-9._-]+\.sh(?:\s|$)/m;
+  const mutators = [];
+
+  for (const name of workflowFiles) {
+    const content = fs.readFileSync(`${WORKFLOWS_DIR}/${name}`, "utf8");
+    const parsed = workflowJobs(content);
+    const workflowPreamble = withoutYamlComments(parsed.preamble);
+    const workflowHasSharedLock = BASE44_MUTATION_LOCK.test(workflowPreamble);
+
+    for (const job of parsed.jobs) {
+      const jobContent = withoutYamlComments(job.content);
+      if (!directMutation.test(jobContent) && !scriptMutation.test(jobContent)) continue;
+      mutators.push({ name, job: job.name });
+
+      assert.match(jobContent, /scripts\/authenticate-base44-owner-session\.sh/,
+        `${name}:${job.name} must authenticate the Base44 owner in the mutating job`);
+      assert.match(jobContent, /environment:\s*fixlist-production-owner/,
+        `${name}:${job.name} must protect the mutating job with the production-owner environment`);
+      assert.ok(workflowHasSharedLock || BASE44_MUTATION_LOCK.test(jobContent),
+        `${name}:${job.name} must share the external Base44 mutation serialization lock`);
+    }
+  }
 
   assert.ok(mutators.length >= 6,
-    `expected the canary plus established Base44 mutation workflows, found ${mutators.length}`);
-
-  for (const { name, content } of mutators) {
-    assert.match(content, /scripts\/authenticate-base44-owner-session\.sh/,
-      `${name} must use the owner-authenticated Base44 production path`);
-    assert.match(content, /environment:\s*fixlist-production-owner/,
-      `${name} must use the production-owner environment`);
-    assert.match(content, BASE44_MUTATION_LOCK,
-      `${name} must share the external Base44 mutation serialization lock`);
-  }
+    `expected the canary plus established Base44 mutation jobs, found ${mutators.length}`);
 });

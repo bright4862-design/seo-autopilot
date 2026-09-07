@@ -137,7 +137,7 @@ route_is_known_stale_handler() {
       [[ "$PROBE_STATUS" == "405" ]] \
         && grep -Eq '"success"[[:space:]]*:[[:space:]]*false' <<<"$PROBE_BODY" \
         && grep -Eq '"error_code"[[:space:]]*:[[:space:]]*"method_not_allowed"' <<<"$PROBE_BODY" \
-        && grep -Fq '"error_message":"Use POST to persist a limited scan result."' <<<"$PROBE_BODY"
+        && grep -Fq '"error":"Use POST to persist a limited scan result."' <<<"$PROBE_BODY"
       ;;
     getCustomerScanResult)
       [[ "$PROBE_STATUS" == "405" ]] \

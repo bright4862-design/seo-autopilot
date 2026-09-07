@@ -44,7 +44,7 @@ const HANDLER_405 = {
   persistDurableScanAuthority:
     '{"success":false,"error_code":"method_not_allowed","error":"Use POST to persist durable scan authority."}',
   persistLimitedScanResult:
-    '{"success":false,"error_code":"method_not_allowed","error_message":"Use POST to persist a limited scan result."}',
+    '{"success":false,"error_code":"method_not_allowed","error":"Use POST to persist a limited scan result."}',
   deleteCustomerScanData:
     '{"success":false,"error_code":"method_not_allowed","error":"Use POST to manage saved scan history."}',
 };

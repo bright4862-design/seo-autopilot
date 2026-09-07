@@ -246,6 +246,22 @@ require_recoverable_v2_prestate() {
   return 1
 }
 
+# Classifies every route and reports on all of them. Preflight is non-mutating,
+# so there is no reason to stop at the first refusal -- and every reason not to:
+# each dispatch of this workflow costs the owner a device-code approval, so
+# surfacing one defect per dispatch turns a single repair into a sequence of
+# them. Names the routes that did not classify in PREFLIGHT_UNCLASSIFIED.
+preflight_all_v2_routes() {
+  local fn
+  PREFLIGHT_UNCLASSIFIED=()
+  for fn in "${V2_FUNCTIONS[@]}"; do
+    if ! require_recoverable_v2_prestate "$fn"; then
+      PREFLIGHT_UNCLASSIFIED+=("$fn")
+    fi
+  done
+  (( ${#PREFLIGHT_UNCLASSIFIED[@]} == 0 ))
+}
+
 # Recompile one route, or leave it alone. Every step proves its own outcome
 # before the next begins, and any failure returns non-zero so `set -e` stops the
 # run before the next route is touched.
@@ -352,9 +368,12 @@ done
 # turns out to be in an unrecognized state after the first five were deleted and
 # redeployed would leave the release half-recovered, which is a worse position
 # than the one this script exists to repair.
-for fn in "${V2_FUNCTIONS[@]}"; do
-  require_recoverable_v2_prestate "$fn"
-done
+if ! preflight_all_v2_routes; then
+  printf 'BASE44_V2_RUNTIME_PREFLIGHT_REFUSED unclassified=%s of=%s routes=%s\n' \
+    "${#PREFLIGHT_UNCLASSIFIED[@]}" "${#V2_FUNCTIONS[@]}" "${PREFLIGHT_UNCLASSIFIED[*]}" >&2
+  echo "No function was deleted." >&2
+  exit 1
+fi
 printf 'BASE44_V2_RUNTIME_PREFLIGHT_VERIFIED\n'
 
 RECOVERED=0

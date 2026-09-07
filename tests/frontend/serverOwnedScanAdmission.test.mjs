@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 import ts from "typescript";
 
@@ -13,6 +13,7 @@ import {
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "../../base44/functions/startStandardScanJob/generatedReleaseContract.js";
 
 const entrySource = readFileSync("base44/functions/startStandardScanJob/entry.ts", "utf8");
+const V3_ENTRY_PATH = "base44/functions/startStandardScanJobV3/entry.ts";
 
 function matches(record, query) {
   for (const [field, expected] of Object.entries(query || {})) {
@@ -21,8 +22,8 @@ function matches(record, query) {
   return true;
 }
 
-async function importHandler(harnessName) {
-  const javascript = ts.transpileModule(entrySource, {
+async function importHandler(harnessName, source = entrySource) {
+  const javascript = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
   }).outputText.replace(/^import[\s\S]*?;\s*$/gm, "");
   const prelude = `const {
@@ -53,6 +54,8 @@ function createHarness({
   createCommitsThenThrows = false,
   releaseFails = false,
   corruptCohortProof = false,
+  projectWebsiteUrl = "https://example.com/",
+  initialScans = [],
 } = {}) {
   const access = {
     id: "access-1",
@@ -66,7 +69,7 @@ function createHarness({
     paid_at: "2026-08-14T12:00:00.000Z",
     stripe_checkout_session_id: "cs_paid_1",
   };
-  const scans = [];
+  const scans = initialScans.map((scan) => ({ ...scan }));
   const scanTasks = new Set();
   const drainTasks = new Set();
   const releases = [];
@@ -113,7 +116,7 @@ function createHarness({
   const BusinessProject = {
     async get(id) {
       return id === "project-1"
-        ? { id, owner_user_id: "user-1", website_url: "https://example.com/" }
+        ? { id, owner_user_id: "user-1", website_url: projectWebsiteUrl }
         : null;
     },
   };
@@ -307,7 +310,7 @@ function installEnv() {
   };
 }
 
-function invoke(handler, requestId = "scanreq_request_1", websiteUrl = "https://example.com/") {
+function invoke(handler, requestId = "scanreq_request_1", websiteUrl = "https://example.com/", bodyOverrides = {}) {
   return handler(new Request("https://function.example", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -318,9 +321,148 @@ function invoke(handler, requestId = "scanreq_request_1", websiteUrl = "https://
       website_url: websiteUrl,
       submitted_url: websiteUrl,
       scan_mode: "standard_150",
+      ...bodyOverrides,
     }),
   }));
 }
+
+test("V3 transport preserves bounded path and language scope at its runtime entrypoint", async () => {
+  assert.equal(
+    existsSync(V3_ENTRY_PATH),
+    true,
+    `${V3_ENTRY_PATH} must exist before frontend callers migrate to the V3 transport`,
+  );
+  const v3Source = readFileSync(V3_ENTRY_PATH, "utf8");
+  const restoreEnv = installEnv();
+
+  async function runCase({ harnessName, projectWebsiteUrl, websiteUrl, requestId, bodyOverrides = {}, initialScans = [] }) {
+    const harness = createHarness({ projectWebsiteUrl, initialScans });
+    globalThis[harnessName] = harness.globals;
+    try {
+      const { default: handler } = await importHandler(harnessName, v3Source);
+      const response = await invoke(handler, requestId, websiteUrl, bodyOverrides);
+      const body = await response.json();
+      return { harness, response, body };
+    } finally {
+      delete globalThis[harnessName];
+    }
+  }
+
+  try {
+    for (const [language, origin] of [["fr", "https://fr.example.com"], ["en", "https://en.example.com"]]) {
+      const websiteUrl = `${origin}/${language}/`;
+      const result = await runCase({
+        harnessName: `__v3Language_${language}`,
+        projectWebsiteUrl: `${origin}/`,
+        websiteUrl,
+        requestId: `scanreq_v3_${language}_origin`,
+        bodyOverrides: { max_pages: 999_999 },
+      });
+      assert.equal(result.response.status, 200);
+      assert.equal(result.body.accepted, true);
+      assert.equal(result.body.max_pages, 150, "client budget pressure must not raise the server cap");
+      assert.equal(result.harness.scans.length, 1);
+      assert.equal(result.harness.scans[0].website_url, websiteUrl);
+      assert.equal(result.harness.scans[0].submitted_url, websiteUrl);
+      assert.equal(result.harness.scans[0].requested_origin, origin);
+      assert.equal(result.harness.scans[0].path_prefix, `/${language}`);
+      assert.equal(result.harness.scans[0].requested_path_prefix, `/${language}`);
+      assert.equal(result.harness.scans[0].scope_type, "");
+      assert.equal(result.harness.scanTasks.size, 1);
+      assert.equal(result.harness.drainTasks.size, 1);
+    }
+
+    const focusedOrigin = "https://fr.example.com";
+    const parent = {
+      id: "parent-fr",
+      owner_user_id: "user-1",
+      project_id: "project-1",
+      website_url: `${focusedOrigin}/`,
+      status: "complete",
+      scope_type: "",
+      sampling_evidence: { path_prefixes_discovered: { "/fr": 42, "/en": 37 } },
+    };
+    const focused = await runCase({
+      harnessName: "__v3FocusedPath",
+      projectWebsiteUrl: `${focusedOrigin}/`,
+      websiteUrl: `${focusedOrigin}/fr/`,
+      requestId: "scanreq_v3_focused_fr",
+      initialScans: [parent],
+      bodyOverrides: {
+        scope_type: "path_prefix",
+        parent_scan_id: parent.id,
+        requested_origin: focusedOrigin,
+        requested_path_prefix: "/fr/",
+        discovered_from: "hreflang",
+        user_confirmed: true,
+        max_pages: 151,
+      },
+    });
+    assert.equal(focused.response.status, 200);
+    assert.equal(focused.body.max_pages, 150);
+    assert.equal(focused.harness.scans.length, 2);
+    assert.deepEqual(
+      {
+        website_url: focused.harness.scans[1].website_url,
+        scope_type: focused.harness.scans[1].scope_type,
+        parent_scan_id: focused.harness.scans[1].parent_scan_id,
+        requested_origin: focused.harness.scans[1].requested_origin,
+        requested_path_prefix: focused.harness.scans[1].requested_path_prefix,
+        discovered_from: focused.harness.scans[1].discovered_from,
+        user_confirmed: focused.harness.scans[1].user_confirmed,
+      },
+      {
+        website_url: `${focusedOrigin}/fr/`,
+        scope_type: "path_prefix",
+        parent_scan_id: "parent-fr",
+        requested_origin: focusedOrigin,
+        requested_path_prefix: "/fr",
+        discovered_from: "hreflang",
+        user_confirmed: true,
+      },
+    );
+
+    for (const pressure of [
+      {
+        name: "subdomain scope type",
+        failureCode: "unsupported_focused_scope",
+        websiteUrl: "https://example.com/",
+        body: { scope_type: "subdomain", requested_origin: "https://fr.example.com", user_confirmed: true },
+      },
+      {
+        name: "sibling origin",
+        failureCode: "focused_scope_origin_mismatch",
+        websiteUrl: "https://fr.example.com/fr/",
+        body: {
+          scope_type: "path_prefix",
+          parent_scan_id: "parent-fr",
+          requested_origin: "https://en.example.com",
+          requested_path_prefix: "/en/",
+          discovered_from: "hreflang",
+          user_confirmed: true,
+        },
+      },
+    ]) {
+      const rejected = await runCase({
+        harnessName: `__v3Rejected_${pressure.name.replaceAll(" ", "_")}`,
+        projectWebsiteUrl: pressure.websiteUrl,
+        websiteUrl: pressure.websiteUrl,
+        requestId: `scanreq_v3_rejected_${pressure.name.replaceAll(" ", "_")}`,
+        initialScans: pressure.name === "sibling origin" ? [parent] : [],
+        bodyOverrides: pressure.body,
+      });
+      assert.equal(rejected.response.status, pressure.name === "subdomain scope type" ? 400 : 409, pressure.name);
+      assert.equal(rejected.body.accepted, false, pressure.name);
+      assert.equal(rejected.body.failure_code, pressure.failureCode, pressure.name);
+      assert.equal(rejected.harness.admission(), null, `${pressure.name} must fail before admission`);
+      assert.equal(rejected.harness.scans.length, pressure.name === "sibling origin" ? 1 : 0, pressure.name);
+      assert.equal(rejected.harness.scanTasks.size, 0, pressure.name);
+      assert.equal(rejected.harness.drainTasks.size, 0, pressure.name);
+    }
+  } finally {
+    restoreEnv();
+  }
+});
 
 test("loaded handler observes mutable intake secret changes on the next request", async () => {
   const restoreEnv = installEnv();

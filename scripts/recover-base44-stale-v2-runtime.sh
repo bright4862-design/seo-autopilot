@@ -84,12 +84,12 @@ V2_FUNCTIONS=(
   deleteCustomerScanDataV2
 )
 
-# The canonical package each V2 route mirrors, read from the route contract
+# The canonical package each V2 route mirrors, read from the historical V2 route contract
 # rather than derived by trimming "V2" off the name.
 canonical_of() {
   node -e '
     const fs = require("node:fs");
-    const routes = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).routes;
+    const routes = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).historical_routes.v2;
     const alias = process.argv[2];
     const found = Object.entries(routes).find(([, active]) => active === alias);
     if (!found) process.exit(3);

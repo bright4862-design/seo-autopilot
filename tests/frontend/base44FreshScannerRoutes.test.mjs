@@ -80,6 +80,31 @@ test("customer and worker call sites use only V3 scanner routes", () => {
   ]) assert.ok(!worker.includes(stale), stale);
 });
 
+test("V3 routes have distinct activation identities and exact release verification", () => {
+  const markers = new Set();
+  for (const canonical of Object.keys(routes)) {
+    const active = `${canonical}V3`;
+    const marker = (name) => source(`base44/functions/${name}/entry.ts`)
+      .match(/BASE44_RUNTIME_ACTIVATION_ID\s*=\s*["']([^"']+)["']/)?.[1];
+    assert.ok(fs.existsSync(`base44/functions/${active}/entry.ts`), `${active} must exist`);
+    const activation = marker(active);
+    assert.match(activation, /^[A-Za-z0-9._-]{1,120}$/);
+    assert.notEqual(activation, marker(canonical));
+    assert.notEqual(activation, marker(`${canonical}V2`));
+    assert.ok(!markers.has(activation), `${active} needs a unique activation identity`);
+    markers.add(activation);
+    for (const file of [
+      "scripts/deploy-base44-beta-functions.sh",
+      "scripts/deploy-base44-beta-site.sh",
+      "scripts/verify-base44-functions.sh",
+      "scripts/base44_release_manifest.mjs",
+    ]) {
+      assert.ok(source(file).includes(active), `${file} must enumerate ${active}`);
+      assert.ok(!source(file).includes(`${canonical}V2`), `${file} must retire the old active route`);
+    }
+  }
+});
+
 test("V3 cutover preserves the current Standard 150 scope contract", () => {
   const scanForm = source("src/components/scan/ScanWebsiteForm.jsx");
   const scanSchema = JSON.parse(source("base44/entities/ScanRun.jsonc"));

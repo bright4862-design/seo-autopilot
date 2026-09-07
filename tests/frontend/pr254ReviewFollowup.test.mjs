@@ -50,8 +50,8 @@ test("a current row with an intentionally empty score explanation is unavailable
 
 test("all five v5 scoreExplanation seal and projection copies stay byte-identical", () => {
   const copies = [
-    "base44/functions/persistDurableScanAuthorityV2/authoritySnapshot.js",
-    "base44/functions/getCustomerScanResultV2/projection.js",
+    "base44/functions/persistDurableScanAuthorityV3/authoritySnapshot.js",
+    "base44/functions/getCustomerScanResultV3/projection.js",
     "base44/functions/grokChat/authoritySnapshot.js",
     "base44/functions/persistDurableScanAuthority/authoritySnapshot.js",
     "base44/functions/getCustomerScanResult/projection.js",

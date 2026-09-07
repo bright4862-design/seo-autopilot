@@ -1,0 +1,4 @@
+{
+  "name": "persistLimitedScanResultV3",
+  "entry": "entry.ts"
+}

@@ -127,6 +127,8 @@ jobs:
             exit 2
           fi
 
+          mkdir -p "$WORK_TMP/base44"
+          cp "$GITHUB_WORKSPACE/base44/config.jsonc" "$WORK_TMP/base44/config.jsonc"
           CANARY_ROOT="$WORK_TMP/base44/functions/$CANARY_NAME"
           mkdir -p "$CANARY_ROOT"
           cat > "$CANARY_ROOT/function.jsonc" <<JSON

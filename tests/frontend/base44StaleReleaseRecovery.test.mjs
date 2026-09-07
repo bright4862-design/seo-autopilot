@@ -344,6 +344,12 @@ test("workflow is owner-dispatched from exact main and passes both confirmations
 // derived. Everything else must be.
 const NON_DERIVABLE_SIGNATURES = ["createAccessCheckout", "stripeWebhook"];
 
+/**
+ * Reads the source that actually serves a function's HTTP responses.
+ * @param {string} name Base44 function package name.
+ * @returns {string} Contents of entry.ts, or of index.ts when entry.ts is an
+ *   import shim, which is where the Deno.serve handler really lives.
+ */
 function handlerSource(name) {
   const entry = fs.readFileSync(`base44/functions/${name}/entry.ts`, "utf8");
   // Some packages keep Deno.serve in index.ts and import it from entry.ts.
@@ -352,8 +358,14 @@ function handlerSource(name) {
     : entry;
 }
 
-// Evaluates the handler's own non-POST return statement and reports the body it
-// actually produces.
+/**
+ * Evaluates the handler's own non-POST return statement and reports the body it
+ * actually produces, so the signature table is checked against the handler
+ * rather than against a fixture written to agree with the table.
+ * @param {string} name Base44 function package name.
+ * @returns {{status: number, body: string}} The real method-not-allowed
+ *   response, with build id and activation marker resolved to their literals.
+ */
 function deriveMethodNotAllowed(name) {
   const src = handlerSource(name);
   const guard = src.indexOf('req.method !== "POST"');
@@ -382,6 +394,10 @@ function deriveMethodNotAllowed(name) {
   return { status: captured.status, body: JSON.stringify(captured.payload) };
 }
 
+/**
+ * Lists the routes the recovery script's staleness signature table covers.
+ * @returns {string[]} Function names, in table order.
+ */
 function signatureTableRoutes() {
   const table = recovery
     .split("route_is_known_stale_handler() {")[1]

@@ -1,9 +1,9 @@
 name: FixList Base44 Fresh-Name Runtime Canary
 
-# One-shot diagnostic for the Base44 stale-runtime incident. This creates one
-# never-used function name from a temporary package, proves that the live route
-# serves the exact dispatch SHA, and deliberately leaves the name in place so a
-# second run refuses rather than recycling evidence.
+# One-shot diagnostic for the Base44 stale-runtime incident. Each run derives
+# an unpredictable never-used function name, proves the stored package and live
+# route both carry the exact dispatch SHA, and deliberately leaves that unique
+# name in place as evidence. No customer route is deleted, reused, or changed.
 
 on:
   workflow_dispatch:
@@ -85,8 +85,7 @@ jobs:
         env:
           SOURCE_SHA: ${{ github.sha }}
           BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
-          CANARY_NAME: fixlistRuntimeActivationProbe20260907A
-          PROBE_ID: base44-fresh-name-runtime-canary-20260907-a
+          CANARY_PREFIX: fixlistRuntimeActivationProbe
           BASE44_APP_ID: 6a498732ec779dfaaeab0e53
           BASE44_FUNCTION_ORIGIN: https://base44.app
         run: |
@@ -95,13 +94,26 @@ jobs:
 
           CLI_TMP="$(mktemp -d)"
           WORK_TMP="$(mktemp -d)"
+          VERIFY_TMP="$(mktemp -d)"
           cleanup() {
-            rm -rf "$CLI_TMP" "$WORK_TMP"
+            rm -rf "$CLI_TMP" "$WORK_TMP" "$VERIFY_TMP"
           }
           trap cleanup EXIT
 
           fixlist_install_base44_cli "$CLI_TMP"
           fixlist_require_base44_owner "$BASE44_EXPECTED_OWNER" "$CLI_TMP/whoami" "$BASE44_APP_ID"
+
+          # Base44's pinned CLI has update semantics for a named deploy and no
+          # create-only flag. Make the target unknowable before this serialized
+          # run starts, then prove the exact stored source after deployment.
+          nonce="$(openssl rand -hex 8)"
+          CANARY_NAME="${CANARY_PREFIX}${GITHUB_RUN_ID}${nonce}"
+          PROBE_ID="base44-fresh-name-${GITHUB_RUN_ID}-${nonce}"
+
+          if ! [[ "$CANARY_NAME" =~ ^[A-Za-z][A-Za-z0-9]{1,62}$ ]]; then
+            echo "Refusing fresh-name canary: generated name is invalid." >&2
+            exit 2
+          fi
 
           strip_ansi() { sed -e 's/\x1b\[[0-9;]*[A-Za-z]//g'; }
           inventory="$("$FIXLIST_BASE44_CLI" --app-id "$BASE44_APP_ID" functions list 2>&1 | strip_ansi)"
@@ -130,6 +142,18 @@ jobs:
           inventory="$("$FIXLIST_BASE44_CLI" --app-id "$BASE44_APP_ID" functions list 2>&1 | strip_ansi)"
           if ! grep -Eq "(^|[[:space:]])${CANARY_NAME}([[:space:]]|$)" <<<"$inventory"; then
             echo "Refusing fresh-name canary: $CANARY_NAME is missing after deploy." >&2
+            exit 1
+          fi
+
+          # Read the server-stored package back into a clean workspace. Runtime
+          # proof is accepted only if Base44 stored exactly the entry.ts we sent.
+          mkdir -p "$VERIFY_TMP/base44"
+          cp "$GITHUB_WORKSPACE/base44/config.jsonc" "$VERIFY_TMP/base44/config.jsonc"
+          cd "$VERIFY_TMP"
+          "$FIXLIST_BASE44_CLI" --app-id "$BASE44_APP_ID" functions pull "$CANARY_NAME"
+          pulled_entry="$VERIFY_TMP/base44/functions/$CANARY_NAME/entry.ts"
+          if [[ ! -f "$pulled_entry" ]] || ! cmp -s "$CANARY_ROOT/entry.ts" "$pulled_entry"; then
+            echo "Refusing fresh-name canary: pulled remote package does not match generated source." >&2
             exit 1
           fi
 

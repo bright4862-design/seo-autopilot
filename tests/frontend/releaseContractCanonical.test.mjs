@@ -26,7 +26,8 @@ const REVISION_RECORD = path.join(ROOT, REVISION_RECORD_REL);
 const CROSS_RUNTIME_INPUT = path.join(ROOT, CROSS_RUNTIME_REL);
 const HISTORICAL_COMPAT_REL = "base44/functions/getCustomerScanResult/releaseCompatibility.js";
 const HISTORICAL_COMPAT_ALIAS_REL = "base44/functions/getCustomerScanResultV2/releaseCompatibility.js";
-const HISTORICAL_COMPAT_RELS = new Set([HISTORICAL_COMPAT_REL, HISTORICAL_COMPAT_ALIAS_REL]);
+const HISTORICAL_COMPAT_V3_REL = "base44/functions/getCustomerScanResultV3/releaseCompatibility.js";
+const HISTORICAL_COMPAT_RELS = new Set([HISTORICAL_COMPAT_REL, HISTORICAL_COMPAT_ALIAS_REL, HISTORICAL_COMPAT_V3_REL]);
 const HISTORICAL_COMPAT = path.join(ROOT, HISTORICAL_COMPAT_REL);
 const GENERATOR = path.join(ROOT, "scripts/generate_release_contracts.mjs");
 
@@ -104,6 +105,7 @@ test("old release fingerprints are isolated to the explicit historical reader re
   assert.ok(historical.every((value) => value !== current), "current fingerprint belongs in the generated release contract, not historical registry");
   assert.match(compatibility, /HISTORICAL_READABLE_RELEASE_FINGERPRINTS/);
   assert.match(compatibility, /CUSTOMER_RESULT_READER_VERSION/);
+  assert.equal(fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_V3_REL), "utf8"), compatibility, "V3 reader must mirror the canonical historical compatibility registry");
   assert.equal(fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_ALIAS_REL), "utf8"), compatibility, "V2 reader must mirror the canonical historical compatibility registry");
 });
 

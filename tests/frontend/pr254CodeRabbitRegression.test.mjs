@@ -79,8 +79,8 @@ test("repeated-title fallback uses the persisted canonical evidence classes", ()
 
 test("all five live score normalizers are pinned byte-identical", () => {
   const copies = [
-    "base44/functions/persistDurableScanAuthorityV2/authoritySnapshot.js",
-    "base44/functions/getCustomerScanResultV2/projection.js",
+    "base44/functions/persistDurableScanAuthorityV3/authoritySnapshot.js",
+    "base44/functions/getCustomerScanResultV3/projection.js",
     "base44/functions/grokChat/authoritySnapshot.js",
     "base44/functions/persistDurableScanAuthority/authoritySnapshot.js",
     "base44/functions/getCustomerScanResult/projection.js",
@@ -92,6 +92,6 @@ test("all five live score normalizers are pinned byte-identical", () => {
   });
 
   for (const copy of copies.slice(1)) {
-    assert.equal(copy.body, copies[0].body, `${copy.file} has drifted from the V2 writer's copy`);
+    assert.equal(copy.body, copies[0].body, `${copy.file} has drifted from the V3 writer's copy`);
   }
 });

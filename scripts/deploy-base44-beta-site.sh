@@ -9,7 +9,7 @@
 # ownerScanDebugControl left the runtime still serving the older compiled
 # handler through eight probes, so "the CLI reported it deployed" is not
 # evidence that a route runs this source. The frontend published here calls the
-# V2 routes, so publishing the site first would put getfixlist.com in front of
+# V3 routes, so publishing the site first would put getfixlist.com in front of
 # handlers whose activation was never proven. The pre-site pass proves them
 # while the live site is still untouched; the post-site pass repairs whatever
 # `site deploy` reconciled away.
@@ -34,12 +34,12 @@ node "$REPO_ROOT/scripts/base44_release_manifest.mjs" verify
 # The scanner and customer-data routes the published frontend and the Cloud Run
 # worker actually call. Every one of these is build-ID verified below.
 VERIFIED_FUNCTIONS=(
-  startStandardScanJobV2
-  durableScanWorkerControlV2
-  persistDurableScanAuthorityV2
-  persistLimitedScanResultV2
-  getCustomerScanResultV2
-  deleteCustomerScanDataV2
+  startStandardScanJobV3
+  durableScanWorkerControlV3
+  persistDurableScanAuthorityV3
+  persistLimitedScanResultV3
+  getCustomerScanResultV3
+  deleteCustomerScanDataV3
 )
 # Deployed, but not build-ID verified. createAccessCheckout and stripeWebhook
 # keep their names because Stripe addresses stripeWebhook by URL from its own

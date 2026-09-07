@@ -3,8 +3,8 @@ import fs from "node:fs";
 import test from "node:test";
 
 import { focusedPathSections } from "../../src/lib/focusedScanScope.js";
-import { buildAuthoritySnapshot } from "../../base44/functions/persistDurableScanAuthorityV2/authoritySnapshot.js";
-import { buildCustomerProjection } from "../../base44/functions/getCustomerScanResultV2/projection.js";
+import { buildAuthoritySnapshot } from "../../base44/functions/persistDurableScanAuthorityV3/authoritySnapshot.js";
+import { buildCustomerProjection } from "../../base44/functions/getCustomerScanResultV3/projection.js";
 
 /**
  * The September 6 production matrix stopped on this.

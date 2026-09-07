@@ -269,11 +269,11 @@ test("Base44 admission configuration is disabled-first, entitlement-owned and ad
 
 test("Base44 release deploy names the explicit durable functions and never reconciles entities or the site", () => {
   const expected = [
-    "startStandardScanJobV2",
-    "durableScanWorkerControlV2",
-    "persistDurableScanAuthorityV2",
-    "persistLimitedScanResultV2",
-    "getCustomerScanResultV2",
+    "startStandardScanJobV3",
+    "durableScanWorkerControlV3",
+    "persistDurableScanAuthorityV3",
+    "persistLimitedScanResultV3",
+    "getCustomerScanResultV3",
     "createAccessCheckout",
     "stripeWebhook",
     "ownerScanDebugControl",
@@ -297,7 +297,7 @@ test("Base44 site publication restores the durable backend after the site deploy
   assert.ok(siteIndex >= 0, "missing Base44 site deployment");
   assert.ok(functionsIndex > siteIndex, "release functions must deploy after the site");
   assert.ok(verifyIndex > functionsIndex, "public source verification must run after backend restoration");
-  // The published frontend calls the V2 routes, so they are also proven live
+  // The published frontend calls the V3 routes, so they are also proven live
   // before the site is cut over -- a publish that fails verification must leave
   // the live site untouched rather than pointing it at unproven handlers.
   assert.ok(provenIndex >= 0 && provenIndex < siteIndex, "release routes must be proven live before the site deploy");
@@ -308,14 +308,14 @@ test("Base44 site publication restores the durable backend after the site deploy
   assert.match(verifySite, /\/assets\/index-/);
   assert.match(verifySite, /grep -Fq "\$EXPECTED_SOURCE_SHA"/);
   for (const required of [
-    "startStandardScanJobV2",
-    "durableScanWorkerControlV2",
-    "persistDurableScanAuthorityV2",
-    "persistLimitedScanResultV2",
-    "getCustomerScanResultV2",
+    "startStandardScanJobV3",
+    "durableScanWorkerControlV3",
+    "persistDurableScanAuthorityV3",
+    "persistLimitedScanResultV3",
+    "getCustomerScanResultV3",
     "createAccessCheckout",
     "stripeWebhook",
-    "deleteCustomerScanDataV2",
+    "deleteCustomerScanDataV3",
     "ownerScanDebugControl",
   ]) assert.match(deploySite, new RegExp(`\\b${required}\\b`));
   assert.doesNotMatch(deploySite, /deploy-base44-beta-functions\.sh|--force|entities\s+push/);

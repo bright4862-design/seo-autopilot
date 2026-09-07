@@ -9,11 +9,11 @@ import {
 import {
   REVIEW_ATTESTATION_VERSION,
   buildAuthoritySnapshot,
-} from "../../base44/functions/persistDurableScanAuthorityV2/authoritySnapshot.js";
+} from "../../base44/functions/persistDurableScanAuthorityV3/authoritySnapshot.js";
 import {
   authoritySnapshotFromRows,
   buildCustomerProjection,
-} from "../../base44/functions/getCustomerScanResultV2/projection.js";
+} from "../../base44/functions/getCustomerScanResultV3/projection.js";
 
 /**
  * The score has to be able to account for itself.
@@ -339,8 +339,8 @@ test("all five copies of the seal normalizer are the same function", () => {
   // output. They are separate Base44 packages with no shared module, so drift
   // in any one copy can make an intact result fail its authority seal.
   const copies = [
-    "base44/functions/persistDurableScanAuthorityV2/authoritySnapshot.js",
-    "base44/functions/getCustomerScanResultV2/projection.js",
+    "base44/functions/persistDurableScanAuthorityV3/authoritySnapshot.js",
+    "base44/functions/getCustomerScanResultV3/projection.js",
     "base44/functions/grokChat/authoritySnapshot.js",
     "base44/functions/persistDurableScanAuthority/authoritySnapshot.js",
     "base44/functions/getCustomerScanResult/projection.js",

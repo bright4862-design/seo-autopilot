@@ -169,6 +169,11 @@ route_is_known_stale_v2() {
   [[ -n "$canonical_activation" && "$PROBE_ACTIVATION_ID" == "$canonical_activation" ]]
 }
 
+# Poll one route until it serves both expected identities, or give up.
+#
+# Fail-closed: waiting longer can only avoid a false failure, never manufacture
+# a pass, so the patience here is generous. A route that never converges stops
+# the run rather than being reported as recovered.
 require_expected_v2_runtime() {
   local name="$1" expected_build="$2" expected_activation="$3" attempt=1
   while (( attempt <= PROBE_ATTEMPTS )); do
@@ -312,6 +317,9 @@ if [[ -n "${FIXLIST_V2_RUNTIME_RECOVERY_LIB_ONLY:-}" ]]; then
   return 0 2>/dev/null || exit 0
 fi
 
+# The destructive-action gate. The phrase is specific to this recovery, so an
+# operator authorised for the canonical nine-function recovery cannot trigger
+# the V2 one by reusing theirs.
 require_v2_action_confirmation() {
   if [[ "$ACTION_CONFIRM" != "$V2_EXPECTED_ACTION_CONFIRM" ]]; then
     echo "Refusing V2 runtime recovery: ACTION_CONFIRM must equal $V2_EXPECTED_ACTION_CONFIRM." >&2

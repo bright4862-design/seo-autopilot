@@ -256,10 +256,43 @@ function main() {
     process.stdout.write(`${CONSUMERS.join("\n")}\n`);
     return 0;
   }
-  if (mode === "--build-id") {
+  if (mode === "--activation-id") {
+    // The runtime activation marker a deployed handler must echo back. It is
+    // read from the package's own entry.ts rather than restated here, so the
+    // value verification demands and the value the handler returns cannot
+    // drift apart. Unlike the build ID this is NOT resolved through the alias:
+    // an alias carries its own marker precisely so the two routes are
+    // distinguishable at runtime.
     const fnName = String(process.argv[3] || "");
-    if (!RELEASE_FUNCTIONS.includes(fnName)) {
+    if (!RELEASE_FUNCTIONS.includes(fnName) && !Object.values(ROUTE_ALIASES).includes(fnName)) {
       process.stderr.write(`Unknown release Base44 function: ${fnName || "(missing)"}\n`);
+      return 2;
+    }
+    const entry = path.join(ROOT, "base44/functions", fnName, "entry.ts");
+    if (!fs.existsSync(entry)) {
+      process.stderr.write(`Release Base44 function has no entry.ts: ${fnName}\n`);
+      return 2;
+    }
+    const marker = fs.readFileSync(entry, "utf8")
+      .match(/BASE44_RUNTIME_ACTIVATION_ID\s*=\s*"([A-Za-z0-9._-]{1,120})"/);
+    if (!marker) {
+      process.stderr.write(`Release Base44 function has no runtime activation marker: ${fnName}\n`);
+      return 2;
+    }
+    process.stdout.write(`${marker[1]}\n`);
+    return 0;
+  }
+  if (mode === "--build-id") {
+    const requested = String(process.argv[3] || "");
+    // A V2 alias is stamped with the identity of the package it mirrors, so its
+    // expected build ID is the canonical's. Resolving that here keeps every
+    // caller asking one question -- "what build must this route serve?" --
+    // instead of each script reimplementing the alias table.
+    const aliasOf = Object.entries(ROUTE_ALIASES)
+      .find(([, alias]) => alias === requested)?.[0];
+    const fnName = aliasOf || requested;
+    if (!RELEASE_FUNCTIONS.includes(fnName)) {
+      process.stderr.write(`Unknown release Base44 function: ${requested || "(missing)"}\n`);
       return 2;
     }
     try {

@@ -15,13 +15,15 @@ PROBE_ATTEMPTS="${PROBE_ATTEMPTS:-12}"
 PROBE_DELAY_SECONDS="${PROBE_DELAY_SECONDS:-5}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-FUNCTION_PAIRS=(
-  "startStandardScanJob:startStandardScanJobV2"
-  "durableScanWorkerControl:durableScanWorkerControlV2"
-  "persistDurableScanAuthority:persistDurableScanAuthorityV2"
-  "persistLimitedScanResult:persistLimitedScanResultV2"
-  "getCustomerScanResult:getCustomerScanResultV2"
-  "deleteCustomerScanData:deleteCustomerScanDataV2"
+# The live routes. Each one's expected build ID is resolved through the alias
+# table by the generator, so this list no longer carries the canonical name.
+FUNCTION_ROUTES=(
+  startStandardScanJobV2
+  durableScanWorkerControlV2
+  persistDurableScanAuthorityV2
+  persistLimitedScanResultV2
+  getCustomerScanResultV2
+  deleteCustomerScanDataV2
 )
 
 command -v curl >/dev/null 2>&1 || {
@@ -45,7 +47,9 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-read_build_id() {
+read_runtime_identity() {
+  # Both markers, or nothing. A handler that answers with only one of them is
+  # not a handler this verification can vouch for.
   local body_file="$1"
   node - "$body_file" <<'NODE'
 const fs = require("node:fs");
@@ -57,35 +61,54 @@ try {
 } catch {
   process.exit(3);
 }
+if (value === null || typeof value !== "object" || Array.isArray(value)) process.exit(3);
 const buildId = String(value?.build_id || "");
 if (!/^[0-9a-f]{64}$/.test(buildId)) process.exit(4);
-process.stdout.write(buildId);
+const activationId = String(value?.runtime_activation_id || "");
+if (!/^[A-Za-z0-9._-]{1,120}$/.test(activationId)) process.exit(5);
+process.stdout.write(`${buildId} ${activationId}`);
 NODE
 }
 
-for pair in "${FUNCTION_PAIRS[@]}"; do
-  canonical="${pair%%:*}"
-  name="${pair#*:}"
-  expected="$(node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --build-id "$canonical")"
+for name in "${FUNCTION_ROUTES[@]}"; do
+  # The build ID resolves through the alias, because an alias is stamped with
+  # the identity of the package it mirrors. The activation marker does not:
+  # each package carries its own. That asymmetry is the whole point of checking
+  # both -- deleteCustomerScanDataV2's canonical package was unchanged by the
+  # activation refresh, so its expected build ID still equals the one the stale
+  # handler serves, and a build-only check calls that route current while it is
+  # running canonical-era code.
+  expected="$(node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --build-id "$name")"
   if ! printf '%s' "$expected" | grep -Eq '^[0-9a-f]{64}$'; then
     echo "Refusing Base44 function verification: local build ID for $name is invalid." >&2
+    exit 2
+  fi
+  expected_activation="$(node "$REPO_ROOT/scripts/generate_release_contracts.mjs" --activation-id "$name")"
+  if ! printf '%s' "$expected_activation" | grep -Eq '^[A-Za-z0-9._-]{1,120}$'; then
+    echo "Refusing Base44 function verification: local activation marker for $name is invalid." >&2
     exit 2
   fi
 
   verified=""
   last_status="000"
   last_build_id=""
+  last_activation_id=""
   attempt=1
   while (( attempt <= PROBE_ATTEMPTS )); do
     body="$TMP/${name}.json"
     status="$(curl -sS -o "$body" -w '%{http_code}' --max-time 25 \
       "$PROBE_ORIGIN/api/apps/$APP_ID/functions/$name" 2>/dev/null || echo 000)"
-    actual="$(read_build_id "$body" 2>/dev/null || true)"
+    identity="$(read_runtime_identity "$body" 2>/dev/null || true)"
+    actual="${identity%% *}"
+    actual_activation=""
+    [[ "$identity" == *" "* ]] && actual_activation="${identity#* }"
     last_status="$status"
     last_build_id="$actual"
+    last_activation_id="$actual_activation"
 
-    if [[ "$status" == "405" && "$actual" == "$expected" ]]; then
-      printf 'FUNCTION_BUILD_VERIFIED name=%s build_id=%s\n' "$name" "$actual"
+    if [[ "$status" == "405" && "$actual" == "$expected" && "$actual_activation" == "$expected_activation" ]]; then
+      printf 'FUNCTION_RUNTIME_VERIFIED name=%s build_id=%s runtime_activation_id=%s\n' \
+        "$name" "$actual" "$actual_activation"
       verified="yes"
       break
     fi
@@ -97,8 +120,9 @@ for pair in "${FUNCTION_PAIRS[@]}"; do
   done
 
   if [[ -z "$verified" ]]; then
-    printf 'FUNCTION_BUILD_MISMATCH name=%s expected=%s actual=%s http_status=%s\n' \
-      "$name" "$expected" "${last_build_id:-missing}" "$last_status" >&2
+    printf 'FUNCTION_BUILD_MISMATCH name=%s expected=%s actual=%s expected_activation=%s actual_activation=%s http_status=%s\n' \
+      "$name" "$expected" "${last_build_id:-missing}" "$expected_activation" \
+      "${last_activation_id:-missing}" "$last_status" >&2
     exit 1
   fi
 done

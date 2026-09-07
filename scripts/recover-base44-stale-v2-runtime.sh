@@ -269,6 +269,23 @@ recover_one_v2() {
     return 1
   fi
 
+  # Re-probe immediately before deleting, because the classification above is
+  # now one network round trip old. Base44 activating the current handler inside
+  # that window would mean deleting a route that is healthy at the moment of
+  # deletion -- briefly taking a live route down for no reason, on a fleet whose
+  # whole problem is that activation is unpredictable. A route that has become
+  # current is left alone; anything else stops the run rather than deleting on a
+  # classification that no longer describes the route.
+  probe_v2_route "$name"
+  if route_reaches_json_handler && route_serves_expected_runtime "$V2_EXPECTED_BUILD" "$V2_EXPECTED_ACTIVATION"; then
+    printf '  skip: became current between classification and deletion\n'
+    return 0
+  fi
+  if ! route_is_known_stale_v2 "$name" "$V2_CANONICAL" "$V2_CANONICAL_ACTIVATION"; then
+    echo "Refusing V2 runtime recovery for $name: state changed between classification and deletion (HTTP $PROBE_STATUS, build ${PROBE_BUILD_ID:-missing}, activation ${PROBE_ACTIVATION_ID:-missing})." >&2
+    return 1
+  fi
+
   printf '  deleting ...\n'
   "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" functions delete "$name"
   inventory="$(remote_inventory)"

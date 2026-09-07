@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 const SCRIPT = "scripts/recover-base44-stale-v2-runtime.sh";
@@ -317,6 +319,108 @@ test("a route already current is never handed to the CLI", () => {
     'printf "calls=%s" "$(wc -l < "$log" | tr -d " ")"',
   ].join("; "), SCRIPT], { encoding: "utf8" }).trim();
   assert.equal(out, "calls=0", "a current route reached the Base44 CLI");
+});
+
+test("a route that goes current between classification and deletion is not deleted", () => {
+  // The classification is one network round trip old by the time the delete is
+  // issued -- the inventory check sits between them. On a fleet whose whole
+  // problem is that Base44 activates handlers unpredictably, that window can
+  // close on its own, and deleting then takes a healthy live route down for no
+  // reason. The stub returns stale on the first probe and current on the
+  // second, which is exactly that race.
+  const out = execFileSync("bash", ["-c", [
+    'set -uo pipefail',
+    'log="$(mktemp)"; cli="$(mktemp)"',
+    'printf \'#!/usr/bin/env bash\\necho "$@" >> "$FIXLIST_TEST_CLI_LOG"\\n\' > "$cli"',
+    'chmod +x "$cli"',
+    'FIXLIST_V2_RUNTIME_RECOVERY_LIB_ONLY=1 source "$0"',
+    'export FIXLIST_TEST_CLI_LOG="$log"',
+    'FIXLIST_BASE44_CLI="$cli"',
+    'remote_inventory() { echo "deleteCustomerScanDataV2"; }',
+    'resolve_expectations deleteCustomerScanDataV2',
+    'PROBES=0',
+    // One element: the join below inserts "; " between entries, which would
+    // otherwise put a semicolon straight after the opening brace.
+    'probe_v2_route() { PROBES=$((PROBES+1));'
+      + ' PROBE_STATUS=405;'
+      + ' PROBE_BODY="{\\"success\\":false,\\"error_code\\":\\"method_not_allowed\\",\\"error\\":\\"Use POST to manage saved scan history.\\"}";'
+      + ' PROBE_BUILD_ID="$V2_EXPECTED_BUILD";'
+      + ' if (( PROBES == 1 )); then PROBE_ACTIVATION_ID="$V2_CANONICAL_ACTIVATION";'
+      + ' else PROBE_ACTIVATION_ID="$V2_EXPECTED_ACTIVATION"; fi; }',
+    'recover_one_v2 deleteCustomerScanDataV2 >/dev/null',
+    'printf "probes=%s calls=%s" "$PROBES" "$(wc -l < "$log" | tr -d " ")"',
+  ].join("; "), SCRIPT], { encoding: "utf8" }).trim();
+
+  assert.equal(out, "probes=2 calls=0",
+    "the route was deleted on a classification that no longer described it");
+});
+
+test("the re-probe sits after the inventory check and before the delete", () => {
+  const body = recovery.slice(recovery.indexOf("recover_one_v2() {"), recovery.indexOf("\nif [[ -n \"${FIXLIST_V2"));
+  const inventoryAt = body.indexOf("absent from remote inventory");
+  const deleteAt = body.indexOf("functions delete");
+  const reprobeAt = body.indexOf("probe_v2_route", inventoryAt);
+  assert.ok(inventoryAt > -1 && deleteAt > -1);
+  assert.ok(reprobeAt > inventoryAt && reprobeAt < deleteAt,
+    "the classification must be refreshed after the inventory round trip");
+  // And a state that is neither current nor stale at that point stops the run.
+  assert.match(body.slice(reprobeAt, deleteAt), /state changed between classification and deletion/);
+});
+
+test("the probe extracts both identities from one parse, and never confuses them", () => {
+  // Every other test here sets PROBE_BUILD_ID and PROBE_ACTIVATION_ID directly,
+  // so the parsing itself was untested -- swapping the two fields in the single
+  // extraction changed nothing that any assertion could see. This drives the
+  // real probe_v2_route through a curl shim so the parse is what is under test.
+  // The shim is written from here rather than escaped through two shell layers.
+  // A mangled heredoc there produces an empty body, and every assertion below
+  // then passes for the wrong reason.
+  const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "fixlist-curl-shim-"));
+  fs.writeFileSync(path.join(shimDir, "curl"), [
+    "#!/usr/bin/env bash",
+    'out=""',
+    'while [[ $# -gt 0 ]]; do case "$1" in -o) out="$2"; shift 2;; *) shift;; esac; done',
+    'printf "%s" "$FIXLIST_TEST_BODY" > "$out"',
+    "printf 405",
+    "",
+  ].join("\n"), { mode: 0o755 });
+
+  const probe = (body) => execFileSync("bash", ["-c", [
+    "set -uo pipefail",
+    'FIXLIST_V2_RUNTIME_RECOVERY_LIB_ONLY=1 source "$0"',
+    "probe_v2_route someRoute",
+    'printf "%s|%s" "$PROBE_BUILD_ID" "$PROBE_ACTIVATION_ID"',
+  ].join("; "), SCRIPT], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${shimDir}:${process.env.PATH}`, FIXLIST_TEST_BODY: body },
+  }).trim();
+
+  // Prove the shim is actually in play before trusting anything it returns.
+  assert.equal(
+    probe(JSON.stringify({ build_id: "c".repeat(64), runtime_activation_id: "probe-shim-check-v1" })),
+    `${"c".repeat(64)}|probe-shim-check-v1`,
+    "the curl shim is not reaching probe_v2_route",
+  );
+
+  const build = "b".repeat(64);
+  const marker = "some-marker-v1";
+
+  assert.equal(probe(JSON.stringify({ build_id: build, runtime_activation_id: marker })),
+    `${build}|${marker}`, "the two identities came back swapped or merged");
+  assert.equal(probe(JSON.stringify({ runtime_activation_id: marker, build_id: build })),
+    `${build}|${marker}`, "extraction must not depend on key order");
+
+  // Each absent or malformed value empties only itself.
+  assert.equal(probe(JSON.stringify({ build_id: build })), `${build}|`);
+  assert.equal(probe(JSON.stringify({ runtime_activation_id: marker })), `|${marker}`);
+  assert.equal(probe(JSON.stringify({ build_id: "nothex", runtime_activation_id: marker })), `|${marker}`);
+  assert.equal(probe(JSON.stringify({ build_id: build, runtime_activation_id: "has a space" })), `${build}|`);
+  assert.equal(probe(JSON.stringify({ build_id: build, runtime_activation_id: "z".repeat(121) })), `${build}|`);
+
+  // Nothing usable comes out of a body that is not a JSON object.
+  assert.equal(probe("[]"), "|");
+  assert.equal(probe("{not json"), "|");
+  assert.equal(probe("<html>nope</html>"), "|");
 });
 
 // ------------------------------------------------------------ the sequence --

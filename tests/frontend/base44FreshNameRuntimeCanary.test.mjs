@@ -60,6 +60,11 @@ test("fresh-name Base44 runtime canary is exact-main, owner-gated, isolated, and
   assert.match(workflow, /functions list/);
   assert.match(workflow, /Refusing fresh-name canary: .*already exists/,
     "an already-used name must refuse rather than be recycled");
+  assert.match(
+    workflow,
+    /mkdir -p "\$WORK_TMP\/base44"[\s\S]*cp "\$GITHUB_WORKSPACE\/base44\/config\.jsonc" "\$WORK_TMP\/base44\/config\.jsonc"[\s\S]*cd "\$WORK_TMP"[\s\S]*functions deploy "\$CANARY_NAME"/,
+    "the deploy workspace must contain Base44 project config before functions deploy",
+  );
 
   assert.match(
     workflow,

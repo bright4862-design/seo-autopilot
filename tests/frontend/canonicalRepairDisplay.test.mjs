@@ -21,6 +21,7 @@ function persistedV2(overrides = {}) {
     priority_context: {
       affected_checked: 1,
       checked_eligible: 1,
+      checked_coverage: 1,
     },
     repair_verification_state: "ready_to_verify",
     shared_repair_confirmed: false,

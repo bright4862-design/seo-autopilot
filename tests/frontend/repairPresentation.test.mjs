@@ -34,8 +34,10 @@ test("sample-qualified searchable coverage is shown without implying whole-site 
     priority_context: {
       indexable_affected: 18,
       indexable_checked_eligible: 20,
+      searchable_coverage: 0.9,
       affected_checked: 18,
       checked_eligible: 24,
+      checked_coverage: 0.75,
     },
   };
 

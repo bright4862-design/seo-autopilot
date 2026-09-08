@@ -30,6 +30,11 @@ test("Account gives paid customers clear product access and legal information", 
   assert.match(account, /does not guarantee rankings/i);
 });
 
+test("Account does not misstate access when the access lookup fails", () => {
+  assert.match(account, /accessUnavailable/);
+  assert.match(account, /Access status temporarily unavailable/);
+});
+
 test("privacy copy accurately describes payment and operational data handling", () => {
   assert.match(account, /Stripe/);
   assert.match(account, /full card details/i);

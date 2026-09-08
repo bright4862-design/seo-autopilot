@@ -5,15 +5,19 @@ import { loadAccess } from "@/lib/access";
 export default function Account() {
   const [access, setAccess] = useState(null);
   const [accessLoaded, setAccessLoaded] = useState(false);
+  const [accessUnavailable, setAccessUnavailable] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    setAccessUnavailable(false);
 
     loadAccess()
       .then((nextAccess) => {
         if (!cancelled) setAccess(nextAccess);
       })
-      .catch(() => {})
+      .catch(() => {
+        if (!cancelled) setAccessUnavailable(true);
+      })
       .finally(() => {
         if (!cancelled) setAccessLoaded(true);
       });
@@ -41,9 +45,11 @@ export default function Account() {
               <p className="mt-1 text-[18px] font-semibold tracking-tight">
                 {!accessLoaded
                   ? "Checking access…"
-                  : access?.fullAccess
-                    ? "Full access is active"
-                    : "No active paid access"}
+                  : accessUnavailable
+                    ? "Access status temporarily unavailable"
+                    : access?.fullAccess
+                      ? "Full access is active"
+                      : "No active paid access"}
               </p>
               <p className="mt-2 max-w-[46ch] text-[13.5px] leading-relaxed text-ink-muted">
                 Standard 150 reviews up to 150 pages per scan and turns the evidence it finds into a prioritized FixList.
@@ -68,7 +74,7 @@ export default function Account() {
 
         <section className="mt-14" aria-labelledby="terms-heading">
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Service terms</p>
-          <h2 id="terms-heading" className="mt-2 text-[22px] font-semibold tracking-[-0.025em]">Terms &amp; Conditions</h2>
+          <h2 id="terms-heading" className="mt-2 text-[22px] font-semibold tracking-[-0.025em]">Terms & Conditions</h2>
           <div className="mt-5 space-y-5 text-[14px] leading-relaxed text-ink-muted">
             <p>
               FixList is an automated website and SEO diagnostic service. Standard 150 can inspect up to 150 pages in a scan, so a FixList may represent a bounded sample rather than every page on a larger website.
@@ -87,7 +93,7 @@ export default function Account() {
 
         <section className="mt-14 border-t border-hairline-soft pt-10" aria-labelledby="privacy-heading">
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Privacy notice</p>
-          <h2 id="privacy-heading" className="mt-2 text-[22px] font-semibold tracking-[-0.025em]">Privacy &amp; Data</h2>
+          <h2 id="privacy-heading" className="mt-2 text-[22px] font-semibold tracking-[-0.025em]">Privacy & Data</h2>
           <div className="mt-5 space-y-5 text-[14px] leading-relaxed text-ink-muted">
             <p>
               To operate FixList, we process the account information needed to identify your account, submitted website URLs, scan results and history, supporting scan evidence, payment and access status, and limited usage events and technical logs used to operate, secure, and improve the service.

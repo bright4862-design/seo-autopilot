@@ -19,6 +19,7 @@ export const SCAN_HANDOFF_SCHEMA = "fixlist.scan_handoff.v1";
 const MAX_FIXES = 50;
 const MAX_EXAMPLE_PAGES = 10;
 const MAX_LIMITATIONS = 5;
+const MAX_REDIRECT_EVIDENCE = 10;
 
 /**
  * Addressed to the assistant, not the customer. Without it a model tends to
@@ -28,6 +29,7 @@ export const HANDOFF_INSTRUCTIONS = [
   "Each entry in \"fixes\" is one issue found by an automated SEO scan of the site named above, already ordered by priority.",
   "Walk the site owner through them one at a time, starting with the first. Explain what to change in plain language, then confirm they have done it before moving on.",
   "\"who_can_do_this\" says whether the owner can do it themselves or needs their web person. \"example_pages\" is a sample, not the complete list — \"pages_affected\" is the real count.",
+  "For redirect fixes, \"redirect_evidence\" records the requested URL, every observed redirect hop, the final URL/status, and whether FixList parsed usable HTML. Treat fetch errors as scanner-access evidence, not invented HTTP errors.",
   "Do not invent issues that are not in this file, and do not assume anything about pages that were not scanned.",
 ].join(" ");
 
@@ -49,6 +51,14 @@ function positiveInt(value) {
 function textList(values, limit) {
   if (!Array.isArray(values)) return [];
   return values.map(clean).filter(Boolean).slice(0, limit);
+}
+
+function redirectEvidence(values) {
+  if (!Array.isArray(values)) return [];
+  return values
+    .filter((value) => value && typeof value === "object" && !Array.isArray(value))
+    .slice(0, MAX_REDIRECT_EVIDENCE)
+    .map((value) => ({ ...value }));
 }
 
 /**
@@ -76,10 +86,8 @@ function handoffFix(card = {}, index = 0, siteOrigin = "") {
   const evidence = card.evidence || {};
   const affected = Array.isArray(evidence.affectedPages) ? evidence.affectedPages : [];
   const samples = examplePages(affected, siteOrigin);
-  // pageCount is the reported total, which can exceed the pages retained in a
-  // saved result. Falling back to the retained length keeps the number honest
-  // rather than reporting zero for a fix that clearly has evidence.
   const pagesAffected = positiveInt(evidence.pageCount) || affected.length;
+  const redirects = redirectEvidence(evidence.redirectEvidence);
 
   return {
     n: index + 1,
@@ -94,6 +102,7 @@ function handoffFix(card = {}, index = 0, siteOrigin = "") {
     pages_affected: pagesAffected,
     example_pages: samples,
     example_pages_are_partial: pagesAffected > samples.length,
+    ...(redirects.length > 0 ? { redirect_evidence: redirects } : {}),
   };
 }
 
@@ -126,8 +135,6 @@ export function buildScanHandoff({
     scanned_at: isoOrEmpty(scanRecord?.created_at),
     pages_found: positiveInt(pagesFound),
     pages_checked: positiveInt(pagesScanned),
-    // A provisional, unavailable, or missing score must not be exported as a
-    // number an assistant would then reason about as if it were measured.
     health_score: healthScoreAvailable ? Number(healthScore) : null,
     health_score_available: healthScoreAvailable,
     summary: clean(summary),

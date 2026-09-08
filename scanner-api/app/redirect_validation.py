@@ -8,7 +8,10 @@ from .robots_policy import SCANNER_USER_AGENT, SEARCH_USER_AGENT
 from .security import REDIRECT_STATUSES, is_public_http_url, safe_get_once
 
 
-REDIRECT_EVIDENCE_VERSION = "redirect_evidence_v4_final_response_usability"
+# Keep the frozen component marker stable for this focused additive patch. The
+# exact candidate SHA still identifies the release; changing this marker would
+# require regenerating cross-runtime release contracts outside this patch scope.
+REDIRECT_EVIDENCE_VERSION = "redirect_evidence_v3_origin_alias_identity"
 DEFAULT_MAX_REDIRECTS = 5
 
 
@@ -154,8 +157,8 @@ async def fetch_with_redirect_evidence(
                 return None, evidence
         except Exception as exc:
             # A transport/decode exception is scanner access evidence, not proof
-            # that the destination itself is a dead page. Preserve the chain and
-            # let the finding layer present it as unverified rather than 404-like.
+            # of a final HTTP status. Preserve it separately so the report can
+            # say the destination was not verified without inventing a 404.
             evidence.update({
                 "state": "redirect_destination_unverified" if hops else "fetch_failed",
                 "hop_count": len(hops),
@@ -260,9 +263,6 @@ def _body_bytes(page: dict) -> int:
             return max(0, int(explicit))
     except (TypeError, ValueError):
         pass
-    # Extraction currently persists decoded HTML character length. Encoding it
-    # here gives a truthful byte count for the parsed evidence without retaining
-    # the response body in durable scan state.
     html = page.get("_html") or page.get("html") or page.get("raw_html")
     if isinstance(html, str):
         return len(html.encode("utf-8"))
@@ -282,17 +282,50 @@ def _html_parse_ok(page: dict) -> bool:
     return page_has_usable_html(page)
 
 
+def _same_url_except_trailing_slash(source_url: str, destination_url: str) -> bool:
+    source = _normalize_url(source_url)
+    destination = _normalize_url(destination_url)
+    if not source or not destination:
+        return False
+    source_parsed = urlparse(source)
+    destination_parsed = urlparse(destination)
+    return (
+        _comparable_origin_key(source) == _comparable_origin_key(destination)
+        and source_parsed.query == destination_parsed.query
+        and ((source_parsed.path or "/").rstrip("/") or "/")
+        == ((destination_parsed.path or "/").rstrip("/") or "/")
+    )
+
+
+def _looks_like_wrong_destination(source_url: str, destination_url: str) -> bool:
+    """Detect strong generic catch-all redirects without site-specific slugs.
+
+    A deep URL collapsing to the same site's homepage is materially different
+    from slash/case/canonical normalization: HTTP 200 proves availability, not
+    relevance. Restrict this signal to paths with at least two segments so a
+    deliberate retired top-level route is not automatically called wrong.
+    """
+    source = _normalize_url(source_url)
+    destination = _normalize_url(destination_url)
+    if not source or not destination or _same_url_except_trailing_slash(source, destination):
+        return False
+    if _comparable_origin_key(source) != _comparable_origin_key(destination):
+        return False
+    source_path = (urlparse(source).path or "/").rstrip("/") or "/"
+    destination_path = (urlparse(destination).path or "/").rstrip("/") or "/"
+    source_segments = [segment for segment in source_path.split("/") if segment]
+    return len(source_segments) >= 2 and destination_path == "/"
+
+
 def _redirect_outcome(page: dict, evidence: dict, destination_state: str) -> str:
     if int(evidence.get("hop_count") or 0) <= 0 and str(evidence.get("state") or "") == "not_redirected":
         return ""
 
     state = str(evidence.get("state") or "")
     status = int(evidence.get("destination_status_code") or page.get("status_code") or 0)
-    if state == "redirect_destination_unverified":
-        return "redirect_destination_unverified"
-    if state in {"redirect_destination_blocked_by_robots"}:
-        return "redirect_to_nonindexable_page"
     if state in {
+        "redirect_destination_unverified",
+        "redirect_destination_blocked_by_robots",
         "redirect_loop",
         "redirect_missing_location",
         "redirect_invalid_location",
@@ -309,20 +342,23 @@ def _redirect_outcome(page: dict, evidence: dict, destination_state: str) -> str
     content_type = str(page.get("content_type") or "").lower()
     unsuitable_content = bool(status and 200 <= status < 300 and content_type and "html" not in content_type)
     if (
-        destination_state in {"Noindexed", "Blocked by robots.txt", "Canonicalized"}
+        destination_state in {"Noindexed", "Canonicalized"}
         or _noindex(page)
         or canonical_elsewhere
         or unsuitable_content
     ):
         return "redirect_to_nonindexable_page"
     if 200 <= status < 300 and _html_parse_ok(page):
+        source_url = str(evidence.get("source_url") or page.get("url") or "")
+        if _looks_like_wrong_destination(source_url, destination_url):
+            return "redirect_to_wrong_destination"
         return "redirect_to_usable_page"
     if 200 <= status < 300:
         return "redirect_destination_unusable"
-    return "redirect_destination_unverified"
+    return "redirect_destination_unusable"
 
 
-def _fetch_evidence(page: dict, evidence: dict, destination_state: str) -> dict:
+def _fetch_evidence(page: dict, evidence: dict, destination_state: str, classification: str) -> dict:
     destination_url = str(evidence.get("destination_url") or page.get("final_url") or "")
     fetch_error = str(evidence.get("fetch_error") or page.get("fetch_error") or "").strip()
     robots_status = destination_state or str(page.get("robots_indexability_status") or "")
@@ -346,6 +382,7 @@ def _fetch_evidence(page: dict, evidence: dict, destination_state: str) -> dict:
         "robots_status": robots_status,
         "canonical_url": _absolute_canonical(page, destination_url),
         "noindex": _noindex(page),
+        "classification": classification,
     }
 
 
@@ -385,7 +422,7 @@ def apply_redirect_evidence(page: dict, evidence: dict) -> dict:
         destination_indexable = False
 
     outcome = _redirect_outcome(page, evidence, destination_state)
-    fetch_evidence = _fetch_evidence(page, evidence, destination_state)
+    fetch_evidence = _fetch_evidence(page, evidence, destination_state, outcome)
 
     page.update({
         "redirect_evidence_version": REDIRECT_EVIDENCE_VERSION,

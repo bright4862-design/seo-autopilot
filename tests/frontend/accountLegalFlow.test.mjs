@@ -6,6 +6,7 @@ const app = readFileSync("src/App.jsx", "utf8");
 const layout = readFileSync("src/components/layout/DashboardLayout.jsx", "utf8");
 const billing = readFileSync("src/pages/Billing.jsx", "utf8");
 const account = readFileSync("src/pages/Account.jsx", "utf8");
+const access = readFileSync("src/lib/access.js", "utf8");
 
 test("the authenticated app exposes an Account page in the protected shell", () => {
   assert.match(app, /import Account from ["']@\/pages\/Account["']/);
@@ -30,8 +31,9 @@ test("Account gives paid customers clear product access and legal information", 
   assert.match(account, /does not guarantee rankings/i);
 });
 
-test("Account does not misstate access when the access lookup fails", () => {
-  assert.match(account, /accessUnavailable/);
+test("access lookup failures stay distinguishable from confirmed no paid access", () => {
+  assert.match(access, /unavailable:\s*true/);
+  assert.match(account, /nextAccess\?\.unavailable/);
   assert.match(account, /Access status temporarily unavailable/);
 });
 

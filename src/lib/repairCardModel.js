@@ -134,16 +134,9 @@ export function whereLine(item) {
     .filter(([family]) => familyWord(family))
     .sort((a, b) => b[1] - a[1])
     .map(([family]) => familyWord(family));
-  // Families the classifier cannot name still hold pages. Dropping them and
-  // then reading the sentence as though the named families cover the whole
-  // count is how "105 pages, 60 of them unclassified and 45 location pages"
-  // became "105 location pages" -- a card claiming one family's identity for
-  // pages that do not belong to it.
   const hasUnnamed = breakdown.length > named.length;
 
   if (named.length === 0) return `${count} ${noun} on your site.`;
-  // One named family gets the complete noun phrase, so a label that is already
-  // a kind of page ("homepage", "product page") is not handed another "pages".
   if (named.length === 1 && !hasUnnamed) {
     const only = breakdown.find(([family]) => familyWord(family));
     return `${count} ${familyNoun(only[0], count)}.`;
@@ -155,28 +148,9 @@ export function whereLine(item) {
   return `${count} ${noun}, across ${spread} pages.`;
 }
 
-/**
- * Two persisted cards are one customer action when they are the same repair.
- *
- * The scan's own `repair_fingerprint` decides that wherever it recorded one:
- * it is the backend's statement of repair identity, and nothing re-derived
- * here outranks it.
- *
- * Rows with no recorded fingerprint remain separate. Missing identity cannot
- * prove that two findings are one customer action, even when their rule/type
- * labels happen to match.
- */
 export function customerActionKey(item, fallbackRowIdentity = "") {
-  // The scanner's own repair identity wins when it recorded one. Two persisted
-  // rows carrying the same fingerprint are the same repair by the backend's
-  // statement, which is stronger evidence than anything re-derived here.
   const fingerprint = repairFingerprintOf(item);
   if (fingerprint) return `fingerprint|${fingerprint}`;
-
-  // An absent fingerprint is explicitly *not* evidence of shared repair
-  // identity. Keep every such persisted row separate. Prefer its durable ID;
-  // mergeCustomerActions supplies a deterministic per-input fallback for legacy
-  // rows with no usable identifier.
   const rowIdentity = clean(
     item?.fix_id
       || item?.id
@@ -187,12 +161,6 @@ export function customerActionKey(item, fallbackRowIdentity = "") {
   return `row|${rowIdentity || "unidentified"}`;
 }
 
-/**
- * The persisted repair identity, or "" when the scan recorded none.
- *
- * Rows without a fingerprint are never merged: an absent identity is not
- * evidence that two repairs are the same one.
- */
 export function repairFingerprintOf(item) {
   return clean(
     item?.repair_fingerprint
@@ -201,9 +169,6 @@ export function repairFingerprintOf(item) {
   );
 }
 
-// A locale segment as it appears in a path: "fr", "de-at", "en-be". Derived
-// from the URL only, and only used to label evidence the customer can already
-// see in that URL -- it never becomes a claim the scanner did not record.
 const LOCALE_SEGMENT = /^[a-z]{2}(-[a-z]{2})?$/;
 
 function localeOf(page) {
@@ -212,7 +177,6 @@ function localeOf(page) {
   return first && LOCALE_SEGMENT.test(first.toLowerCase()) ? first.toLowerCase() : "";
 }
 
-/** Customer-safe rows for the persisted child evidence inside one action. */
 export function customerEvidenceGroupRows(card = {}, siteOrigin = "") {
   const groups = Array.isArray(card?.evidence?.evidenceGroups)
     ? card.evidence.evidenceGroups
@@ -238,11 +202,6 @@ export function customerEvidenceGroupRows(card = {}, siteOrigin = "") {
     return {
       id: clean(group?.fixId) || `evidence-group-${index + 1}`,
       family,
-      // A standalone group heading, so it takes the complete noun phrase rather
-      // than the bare modifier the "across X and Y pages" list needs -- the two
-      // forms diverged when "homepage" stopped being usable as a modifier. It
-      // is always the singular: the row prints its own count right beside it,
-      // and "product pages · 3 pages" says the same thing twice.
       familyLabel: familyNoun(family, 1),
       locale,
       count: Math.max(Number(group?.count) || 0, affectedPages.length),
@@ -258,13 +217,6 @@ export function customerEvidenceGroupHeading(rows = []) {
   return `Evidence groups (${count})`;
 }
 
-/**
- * Child evidence groups for a merged action: one row per persisted card.
- *
- * The top-level card says what to change once; these preserve the template and
- * page distinctions the scan actually recorded, so collapsing the action never
- * costs evidence.
- */
 function evidenceGroupsFor(members) {
   return members.flatMap((member) => {
     const rawCandidate = member?.raw_finding ?? member?.original?.raw_finding;
@@ -297,24 +249,54 @@ function evidenceGroupsFor(members) {
     }
 
     const pages = affectedOf(member);
-    // A page with no market prefix is a disagreement, not an absence of one.
-    // Filtering the empty results out first let ["/fr/page", "/about"] report
-    // "fr", which claims a market for a page that never carried one.
     const locales = [...new Set(pages.map(localeOf))];
     return [{
       family: clean(member?.templateFamily || member?.page_template_family),
       count: countOf(member),
       representativePage: pages[0] || "",
       affectedPages: pages,
-      // Only stated when every page in this group agrees, so the label is a
-      // description of the evidence rather than a guess about the site.
       locale: locales.length === 1 && locales[0] ? locales[0] : "",
       fixId: clean(member?.fix_id || member?.id),
     }];
   });
 }
 
-/** Merge persisted cards that are one customer action, keeping all evidence. */
+function redirectEvidenceFor(item = {}) {
+  const candidates = [];
+  const push = (value, outcome = "") => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    const requested = clean(value.requested_url);
+    const finalUrl = clean(value.final_url);
+    if (!requested && !finalUrl) return;
+    candidates.push({ outcome: clean(outcome), ...value });
+  };
+
+  const rawCandidates = [
+    item?.raw_finding,
+    item?.original?.raw_finding,
+    item?.original,
+    item,
+  ].filter((value) => value && typeof value === "object");
+
+  for (const raw of rawCandidates) {
+    const persistedSamples = Array.isArray(raw.redirect_fetch_evidence_samples)
+      ? raw.redirect_fetch_evidence_samples
+      : [];
+    for (const sample of persistedSamples) {
+      push(sample, raw.redirect_outcome);
+    }
+    push(raw.redirect_fetch_evidence, raw.redirect_outcome);
+  }
+
+  const seen = new Set();
+  return candidates.filter((entry) => {
+    const key = JSON.stringify(entry);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 10);
+}
+
 export function mergeCustomerActions(items = []) {
   const order = [];
   const groups = new Map();
@@ -329,17 +311,11 @@ export function mergeCustomerActions(items = []) {
     }
     const group = groups.get(key);
     group.members.push(item);
-    // The card that already speaks for the most pages leads, so the merged card
-    // keeps the wording written for the larger evidence set.
     if (countOf(item) > countOf(group.lead)) group.lead = item;
   }
 
   return order.map((key) => {
     const { lead, members } = groups.get(key);
-    // A card built from one persisted row is still traceable to that row. The
-    // evidence panel promises the persisted IDs behind every action, and
-    // returning the lead untouched left the four single-row Ike actions with an
-    // empty list -- traceability that held only for merged cards.
     if (members.length === 1) {
       const existing = Array.isArray(lead.mergedFromFixIds)
         ? lead.mergedFromFixIds.map(clean).filter(Boolean)
@@ -347,10 +323,6 @@ export function mergeCustomerActions(items = []) {
       return {
         ...lead,
         mergedFromFixIds: existing.length > 0 ? existing : [clean(lead.fix_id || lead.id)].filter(Boolean),
-        // One persisted row is still one row of evidence. Omitting the group
-        // here made the per-row contract hold only for merged actions, so a
-        // consumer reconciling children against a count saw nothing for every
-        // unmerged card -- the same uniformity mergedFromFixIds already keeps.
         evidenceGroups: evidenceGroupsFor(members),
       };
     }
@@ -371,13 +343,7 @@ export function mergeCustomerActions(items = []) {
         breakdown[family] = (breakdown[family] || 0) + count;
       }
     }
-    // page_count is the sum of what each card proved, not the length of a list
-    // that may be capped: merging must not shrink a total the scan established.
     const declared = members.reduce((total, member) => total + countOf(member), 0);
-    // A merged card genuinely has no single family, so it must stop carrying
-    // the lead's. Left in place, the copy would title the card after one family
-    // and claim "fix the shared standard template once" for pages spanning
-    // three -- naming a shared template the evidence does not support.
     const namedFamilies = Object.keys(breakdown).filter((family) => familyWord(family));
     const spansFamilies = namedFamilies.length > 1;
     return {
@@ -395,12 +361,6 @@ export function mergeCustomerActions(items = []) {
   });
 }
 
-/**
- * The five answers, composed from persisted fields only.
- *
- * `who` is always a human label: the scanner's own bucket names are internal
- * identifiers and never appear.
- */
 export function buildRepairCard(item = {}) {
   const copy = customerCopyForFix(item) || {};
   const suggestion = repairSuggestion(item);
@@ -421,7 +381,6 @@ export function buildRepairCard(item = {}) {
       || "Website improvement",
     technicalLabel: clean(copy.technicalLabel),
     evidenceClass: lower(item?.evidenceClass || item?.evidence_class || item?.original?.evidence_class),
-    // Read by the repeated-title hint. Persisted scope, not re-derived.
     pageScope: lower(item?.pageScope || item?.page_scope || item?.original?.page_scope),
     sharedRepairConfirmed,
     title: clean(copy.title) || clean(item.title) || clean(item.issue_title) || "Review this recommendation",
@@ -430,31 +389,18 @@ export function buildRepairCard(item = {}) {
     whatToChange: clean(copy.recommendation) || clean(suggestion.suggestedFix),
     who: clean(suggestion.role) || (item.needsHelp ? "Developer" : "You"),
     effort: clean(suggestion.effortDetail) || clean(suggestion.effortLabel),
-    // Evidence is not hidden, only ordered after the action.
     evidence: {
       affectedPages: affected,
       pageCount: countOf(item),
       familyBreakdown: breakdownOf(item),
       representativePages: affected.slice(0, 3),
       mergedFromFixIds: Array.isArray(item.mergedFromFixIds) ? item.mergedFromFixIds : [],
-      // Every canonical action has child evidence, including a single-row
-      // action, so rendering and export use one uniform contract.
       evidenceGroups: Array.isArray(item.evidenceGroups) ? item.evidenceGroups : [],
+      redirectEvidence: redirectEvidenceFor(item),
     },
   };
 }
 
-/**
- * Scope wording for one card, from persisted evidence only.
- *
- * The order is a preference, not a fallback chain of equal options: a named
- * page family is the most useful thing a customer can be told, a recorded scope
- * is the next, a count is at least a number they can compare, and the evidence
- * class is the last thing that is still true. Nothing is derived from the
- * affected URLs -- reading "/products/" out of a path and calling the card
- * "Product pages" is a claim the scan never made, and wrong on any site that
- * uses that word for something else.
- */
 function scopeHintFor(card = {}) {
   const families = Object.entries(card?.evidence?.familyBreakdown || {})
     .filter(([family]) => familyWord(family));
@@ -485,19 +431,6 @@ function customerEvidenceClassLabel(value) {
   return EVIDENCE_CLASS_LABELS[lower(value)] || "";
 }
 
-/**
- * Tell apart the cards that need telling apart, and only those.
- *
- * Identical titles do not prove identical repairs -- a redirect in a sitemap
- * and a redirect in a navigation link are different jobs -- so the cards stay
- * separate and the disambiguation is presentational. This runs after card
- * construction, never before grouping: moving it earlier would let a display
- * concern reach customerActionKey and start splitting rows the backend said
- * were one repair.
- *
- * A card whose title already stands alone gets nothing. A hint on every card
- * is noise, and noise is what the metadata line is competing with.
- */
 export function withRepeatedTitleScopeHints(cards = []) {
   const counts = new Map();
   for (const card of cards) {
@@ -510,7 +443,6 @@ export function withRepeatedTitleScopeHints(cards = []) {
   }));
 }
 
-/** The customer-facing FixList: merged actions, each as five answers. */
 export function buildRepairCards(items = []) {
   return mergeCustomerActions(items).map(buildRepairCard);
 }

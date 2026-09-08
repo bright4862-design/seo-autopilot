@@ -94,6 +94,7 @@ function handoffFix(card = {}, index = 0, siteOrigin = "") {
     title: clean(card.title) || "Review this recommendation",
     category: clean(card.customerCategory),
     priority: clean(card.priority) || "medium",
+    action_priority: clean(card.actionPriority),
     who_can_do_this: clean(card.who) || "You",
     effort: clean(card.effort),
     why_it_matters: clean(card.whyItMatters),

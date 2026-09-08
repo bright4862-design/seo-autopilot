@@ -77,7 +77,6 @@ US_STATE_NAMES = (
     "Hawaii",
     "Idaho",
     "Illinois",
-    "Illinois",
     "Indiana",
     "Iowa",
     "Kansas",

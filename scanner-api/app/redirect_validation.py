@@ -3,11 +3,12 @@ from __future__ import annotations
 from collections import Counter
 from urllib.parse import urldefrag, urljoin, urlparse
 
+from .page_evidence_gate import page_has_usable_html
 from .robots_policy import SCANNER_USER_AGENT, SEARCH_USER_AGENT
 from .security import REDIRECT_STATUSES, is_public_http_url, safe_get_once
 
 
-REDIRECT_EVIDENCE_VERSION = "redirect_evidence_v3_origin_alias_identity"
+REDIRECT_EVIDENCE_VERSION = "redirect_evidence_v4_final_response_usability"
 DEFAULT_MAX_REDIRECTS = 5
 
 
@@ -50,13 +51,7 @@ def _identity_path_query(value: str) -> tuple[str, str]:
 
 
 def _is_origin_alias_identity_redirect(evidence: dict) -> bool:
-    """True only for one-hop apex/www aliases preserving scheme, path and query.
-
-    Sitemap normalization can intentionally request the submitted apex host even
-    when the validated canonical host is `www` (or the reverse). That transport
-    alias must retain provenance, but it must not make the final HTML page appear
-    non-indexable or create one redirect FixItem per sitemap URL.
-    """
+    """True only for one-hop apex/www aliases preserving scheme, path and query."""
     if str(evidence.get("state") or "") != "single_redirect":
         return False
     if int(evidence.get("hop_count") or 0) != 1:
@@ -158,8 +153,11 @@ async def fetch_with_redirect_evidence(
                 })
                 return None, evidence
         except Exception as exc:
+            # A transport/decode exception is scanner access evidence, not proof
+            # that the destination itself is a dead page. Preserve the chain and
+            # let the finding layer present it as unverified rather than 404-like.
             evidence.update({
-                "state": "redirect_destination_failed" if hops else "fetch_failed",
+                "state": "redirect_destination_unverified" if hops else "fetch_failed",
                 "hop_count": len(hops),
                 "hops": hops,
                 "chain": chain,
@@ -241,6 +239,116 @@ async def fetch_with_redirect_evidence(
     return None, evidence
 
 
+def _absolute_canonical(page: dict, destination_url: str) -> str:
+    canonical = str(page.get("canonical_url") or page.get("canonical") or "").strip()
+    if not canonical:
+        return ""
+    return _normalize_url(urljoin(destination_url or str(page.get("final_url") or ""), canonical))
+
+
+def _noindex(page: dict) -> bool:
+    if str(page.get("indexability_state") or "") == "Noindexed":
+        return True
+    directives = page.get("effective_search_robots_directives") or []
+    return "noindex" in {str(value or "").strip().lower() for value in directives}
+
+
+def _body_bytes(page: dict) -> int:
+    explicit = page.get("response_body_bytes")
+    try:
+        if explicit is not None:
+            return max(0, int(explicit))
+    except (TypeError, ValueError):
+        pass
+    # Extraction currently persists decoded HTML character length. Encoding it
+    # here gives a truthful byte count for the parsed evidence without retaining
+    # the response body in durable scan state.
+    html = page.get("_html") or page.get("html") or page.get("raw_html")
+    if isinstance(html, str):
+        return len(html.encode("utf-8"))
+    try:
+        return max(0, int(page.get("html_size") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _html_parse_ok(page: dict) -> bool:
+    status = int(page.get("status_code") or 0)
+    if not 200 <= status < 300 or str(page.get("fetch_error") or "").strip():
+        return False
+    content_type = str(page.get("content_type") or "").lower()
+    if content_type and "html" not in content_type:
+        return False
+    return page_has_usable_html(page)
+
+
+def _redirect_outcome(page: dict, evidence: dict, destination_state: str) -> str:
+    if int(evidence.get("hop_count") or 0) <= 0 and str(evidence.get("state") or "") == "not_redirected":
+        return ""
+
+    state = str(evidence.get("state") or "")
+    status = int(evidence.get("destination_status_code") or page.get("status_code") or 0)
+    if state == "redirect_destination_unverified":
+        return "redirect_destination_unverified"
+    if state in {"redirect_destination_blocked_by_robots"}:
+        return "redirect_to_nonindexable_page"
+    if state in {
+        "redirect_loop",
+        "redirect_missing_location",
+        "redirect_invalid_location",
+        "redirect_chain_limit_exceeded",
+        "blocked_non_public_redirect",
+    }:
+        return "redirect_destination_unusable"
+    if status >= 400:
+        return "redirect_destination_unusable"
+
+    destination_url = str(evidence.get("destination_url") or page.get("final_url") or "")
+    canonical = _absolute_canonical(page, destination_url)
+    canonical_elsewhere = bool(canonical and _normalize_url(destination_url) and canonical != _normalize_url(destination_url))
+    content_type = str(page.get("content_type") or "").lower()
+    unsuitable_content = bool(status and 200 <= status < 300 and content_type and "html" not in content_type)
+    if (
+        destination_state in {"Noindexed", "Blocked by robots.txt", "Canonicalized"}
+        or _noindex(page)
+        or canonical_elsewhere
+        or unsuitable_content
+    ):
+        return "redirect_to_nonindexable_page"
+    if 200 <= status < 300 and _html_parse_ok(page):
+        return "redirect_to_usable_page"
+    if 200 <= status < 300:
+        return "redirect_destination_unusable"
+    return "redirect_destination_unverified"
+
+
+def _fetch_evidence(page: dict, evidence: dict, destination_state: str) -> dict:
+    destination_url = str(evidence.get("destination_url") or page.get("final_url") or "")
+    fetch_error = str(evidence.get("fetch_error") or page.get("fetch_error") or "").strip()
+    robots_status = destination_state or str(page.get("robots_indexability_status") or "")
+    return {
+        "requested_url": str(evidence.get("source_url") or page.get("url") or ""),
+        "redirect_chain": [
+            {
+                "url": str(hop.get("url") or ""),
+                "status": int(hop.get("status_code") or 0),
+                "location": str(hop.get("location") or ""),
+            }
+            for hop in (evidence.get("hops") or [])
+            if isinstance(hop, dict)
+        ],
+        "final_url": destination_url,
+        "final_status": int(evidence.get("destination_status_code") or page.get("status_code") or 0),
+        "final_content_type": str(page.get("content_type") or ""),
+        "body_bytes": _body_bytes(page),
+        "html_parse_ok": _html_parse_ok(page),
+        "fetch_error": fetch_error or None,
+        "robots_status": robots_status,
+        "canonical_url": _absolute_canonical(page, destination_url),
+        "noindex": _noindex(page),
+    }
+
+
 def apply_redirect_evidence(page: dict, evidence: dict) -> dict:
     raw_state = str(evidence.get("state") or "not_redirected")
     raw_hop_count = int(evidence.get("hop_count") or 0)
@@ -253,7 +361,7 @@ def apply_redirect_evidence(page: dict, evidence: dict) -> dict:
         "redirect_invalid_location",
         "redirect_chain_limit_exceeded",
         "redirect_destination_blocked_by_robots",
-        "redirect_destination_failed",
+        "redirect_destination_unverified",
         "blocked_non_public_redirect",
     }
 
@@ -270,14 +378,20 @@ def apply_redirect_evidence(page: dict, evidence: dict) -> dict:
         "redirect_missing_location",
         "redirect_invalid_location",
         "redirect_chain_limit_exceeded",
+        "redirect_destination_unverified",
         "blocked_non_public_redirect",
     }:
         destination_state = "Unknown because of access or rendering limitations"
         destination_indexable = False
 
+    outcome = _redirect_outcome(page, evidence, destination_state)
+    fetch_evidence = _fetch_evidence(page, evidence, destination_state)
+
     page.update({
         "redirect_evidence_version": REDIRECT_EVIDENCE_VERSION,
         "redirect_state": state,
+        "redirect_outcome": outcome,
+        "redirect_fetch_evidence": fetch_evidence,
         "redirect_source_url": str(evidence.get("source_url") or page.get("url") or ""),
         "redirect_source_path": str(evidence.get("source_path") or urlparse(str(page.get("url") or "")).path or "/"),
         "redirect_hop_count": hop_count,
@@ -312,23 +426,35 @@ def summarize_redirect_evidence(pages: list[dict]) -> dict:
     ]
     origin_aliases = [page for page in pages if page.get("origin_alias_redirect") is True]
     states = Counter(str(page.get("redirect_state") or "unknown") for page in redirected)
+    outcomes = Counter(str(page.get("redirect_outcome") or "unknown") for page in redirected)
     return {
         "version": REDIRECT_EVIDENCE_VERSION,
         "redirected_pages": len(redirected),
         "origin_alias_redirects": len(origin_aliases),
         "state_counts": dict(sorted(states.items())),
+        "outcome_counts": dict(sorted(outcomes.items())),
         "sitemap_redirects": sum(
             1 for page in redirected if "sitemap" in set(page.get("discovered_from") or [])
         ),
         "internal_link_redirects": sum(
             1 for page in redirected if "internal_link" in set(page.get("discovered_from") or [])
         ),
+        "redirects": [
+            {
+                "outcome": page.get("redirect_outcome"),
+                **dict(page.get("redirect_fetch_evidence") or {}),
+            }
+            for page in redirected
+            if isinstance(page.get("redirect_fetch_evidence"), dict)
+        ],
         "representative_redirects": [
             {
                 "source": page.get("redirect_source_url") or page.get("url"),
                 "destination": page.get("redirect_destination_url"),
                 "state": page.get("redirect_state"),
+                "outcome": page.get("redirect_outcome"),
                 "hop_count": page.get("redirect_hop_count"),
+                "final_status": (page.get("redirect_fetch_evidence") or {}).get("final_status"),
             }
             for page in redirected[:20]
         ],

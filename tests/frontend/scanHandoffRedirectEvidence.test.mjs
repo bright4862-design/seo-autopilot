@@ -22,6 +22,7 @@ const REDIRECT_EVIDENCE = {
   robots_status: "allowed",
   canonical_url: "https://example.com/about/",
   noindex: false,
+  classification: "redirect_to_usable_page",
 };
 
 function redirectIssue() {
@@ -60,4 +61,53 @@ test("redirect evidence survives the customer card and JSON handoff export", () 
       ...REDIRECT_EVIDENCE,
     },
   ]);
+  assert.equal(handoff.fixes[0].redirect_evidence[0].classification, "redirect_to_usable_page");
+});
+
+test("wrong-destination classification survives grouped redirect evidence", () => {
+  const evidence = {
+    requested_url: "https://example.com/section/deep-page",
+    redirect_chain: [{
+      url: "https://example.com/section/deep-page",
+      status: 301,
+      location: "https://example.com/",
+    }],
+    final_url: "https://example.com/",
+    final_status: 200,
+    final_content_type: "text/html",
+    body_bytes: 9000,
+    html_parse_ok: true,
+    fetch_error: null,
+    robots_status: "Indexable",
+    canonical_url: "https://example.com/",
+    noindex: false,
+    classification: "redirect_to_wrong_destination",
+  };
+  const issue = {
+    id: "wrong-redirect",
+    fix_id: "wrong-redirect",
+    rule: "redirect_wrong_destination",
+    repair_fingerprint: "wrong-destination",
+    status: "needs_developer",
+    priority: "high",
+    issue_title: "Fix a redirect that sends visitors to the wrong page",
+    why_it_matters: "The source URL should reach a relevant replacement.",
+    recommendation: "Map it to the closest relevant page.",
+    affected_pages: ["/section/deep-page"],
+    page_count: 1,
+    raw_finding: {
+      rule: "redirect_wrong_destination",
+      redirect_outcome: "redirect_to_wrong_destination",
+      redirect_fetch_evidence: evidence,
+    },
+  };
+
+  const handoff = buildScanHandoff({
+    scanRecord: { website_url: "https://example.com", created_at: "2026-09-08T10:00:00Z" },
+    cards: buildRepairCards([issue]),
+  });
+
+  assert.equal(handoff.fixes[0].redirect_evidence[0].classification, "redirect_to_wrong_destination");
+  assert.equal(handoff.fixes[0].redirect_evidence[0].final_status, 200);
+  assert.equal(handoff.fixes[0].redirect_evidence[0].final_url, "https://example.com/");
 });

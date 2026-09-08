@@ -112,11 +112,10 @@ def test_stable_fingerprint_rows_persist_as_one_action_with_child_evidence():
     assert {group["family"] for group in action["repair_evidence_groups"]} == {"collection_page", "product_detail"}
 
 
-def test_production_shaped_nonempty_fingerprint_persists_as_one_action_without_enabling_fixed_state():
-    # Production review rows carry the scanner's repair_fingerprint but do not
-    # generally carry repair_surface or repair_identity_stable=True. The old
-    # persistence gate therefore wrote one FixItem per row even though the
-    # customer read path correctly rendered this fingerprint as one action.
+def test_production_shaped_fingerprint_merges_only_with_explicit_shared_repair_evidence():
+    # A production repair fingerprint may identify a related pattern without
+    # proving one implementation change. This fixture explicitly confirms the
+    # shared repair, so same-fingerprint rows remain eligible to merge.
     first = {
         "fix_id": "audit_first",
         "rule": "missing_meta_description",
@@ -131,6 +130,7 @@ def test_production_shaped_nonempty_fingerprint_persists_as_one_action_without_e
         "page_count": 1,
         "difficulty": "easy",
         "repair_fingerprint": "production-fingerprint",
+        "shared_repair_confirmed": True,
     }
     second = {
         **first,

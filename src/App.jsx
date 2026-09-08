@@ -13,6 +13,7 @@ import ResetPassword from "@/pages/ResetPassword";
 import FixList from "@/pages/FixList";
 import Onboarding from "@/pages/Onboarding";
 import Billing from "@/pages/Billing";
+import Account from "@/pages/Account";
 
 export default function App() {
   return (
@@ -37,6 +38,7 @@ export default function App() {
             <Route path="/dashboard" element={<FixList />} />
             <Route path="/onboarding" element={<Onboarding />} />
             <Route path="/billing" element={<Billing />} />
+            <Route path="/account" element={<Account />} />
           </Route>
         </Route>
 

@@ -266,7 +266,11 @@ export default function Billing() {
               </p>
             </div>
             {access?.fullAccess ? (
-              <PillButton solid onClick={() => navigate("/onboarding")}>Run a new scan</PillButton>
+              returnedFromCheckout ? (
+                <PillButton solid onClick={() => navigate("/account")}>Continue to your account</PillButton>
+              ) : (
+                <PillButton solid onClick={() => navigate("/onboarding")}>Run a new scan</PillButton>
+              )
             ) : checkoutSuppressed ? (
               <span className="text-[13px] text-ink-faint">{activationPending ? "Activating access…" : "Awaiting confirmation"}</span>
             ) : accessLoaded ? (
@@ -284,11 +288,6 @@ export default function Billing() {
               <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">
                 You can run unlimited scans and see every result in your FixList.
               </p>
-              {returnedFromCheckout ? (
-                <div className="mt-5">
-                  <PillButton solid onClick={() => navigate("/onboarding")}>Run a new scan</PillButton>
-                </div>
-              ) : null}
             </>
           ) : checkoutSuppressed ? (
             activationPending ? (

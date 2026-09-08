@@ -13,7 +13,9 @@ export default function Account() {
 
     loadAccess()
       .then((nextAccess) => {
-        if (!cancelled) setAccess(nextAccess);
+        if (cancelled) return;
+        setAccess(nextAccess);
+        setAccessUnavailable(nextAccess?.unavailable === true);
       })
       .catch(() => {
         if (!cancelled) setAccessUnavailable(true);

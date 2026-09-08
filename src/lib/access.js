@@ -35,14 +35,26 @@ export function isActivePaidAccess(record, user = {}) {
 }
 
 export async function loadAccess() {
-  const user = await base44.auth.me().catch(() => null);
+  let user;
+  try {
+    user = await base44.auth.me();
+  } catch {
+    return { email: "", fullAccess: false, scansUsed: 0, canScan: false, record: null, unavailable: true };
+  }
+
   const email = normalizeEmail(user?.email);
   const userId = String(user?.id || "").trim();
   if (!email || !userId) {
     return { email: "", fullAccess: false, scansUsed: 0, canScan: false, record: null };
   }
 
-  const records = await base44.entities.Access.filter({ user_email: email }).catch(() => []);
+  let records;
+  try {
+    records = await base44.entities.Access.filter({ user_email: email });
+  } catch {
+    return { email, fullAccess: false, scansUsed: 0, canScan: false, record: null, unavailable: true };
+  }
+
   const rows = Array.isArray(records) ? records : [];
   const record = rows.length === 1 ? rows[0] : null;
   const fullAccess = isActivePaidAccess(record, user);

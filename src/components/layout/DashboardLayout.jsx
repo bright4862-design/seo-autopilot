@@ -6,6 +6,7 @@ const navigationItems = [
   { name: "Dashboard", href: "/dashboard" },
   { name: "New scan", href: "/onboarding" },
   { name: "Billing", href: "/billing" },
+  { name: "Account", href: "/account" },
 ];
 
 export default function DashboardLayout() {

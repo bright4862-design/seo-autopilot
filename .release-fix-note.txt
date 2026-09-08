@@ -1,0 +1,1 @@
+Release-control only: pin Base44 product SHA for staged worker promotion verification.

@@ -49,12 +49,12 @@ def test_extracts_strong_visible_template_placeholder_signatures():
         "gvar+ Flexible funding for investors. Visit our XX page to learn more.",
     )
 
-    assert page["unresolved_template_placeholder_count"] >= 2
-    assert "global_variable_placeholder" in page["unresolved_template_placeholder_types"]
-    assert "contextual_xx_placeholder" in page["unresolved_template_placeholder_types"]
-    assert 1 <= len(page["unresolved_template_placeholder_evidence"]) <= 4
-    assert any("gvar+" in sample.lower() for sample in page["unresolved_template_placeholder_evidence"])
-    assert any("XX page" in sample for sample in page["unresolved_template_placeholder_evidence"])
+    assert page["template_content_issue_count"] >= 2
+    assert "global_variable_placeholder" in page["template_content_issue_types"]
+    assert "contextual_xx_placeholder" in page["template_content_issue_types"]
+    assert 1 <= len(page["template_content_issue_evidence"]) <= 4
+    assert any("gvar+" in sample.lower() for sample in page["template_content_issue_evidence"])
+    assert any("XX page" in sample for sample in page["template_content_issue_evidence"])
 
 
 def test_extracts_approved_delimited_variable_syntax_on_commercial_page():
@@ -64,9 +64,9 @@ def test_extracts_approved_delimited_variable_syntax_on_commercial_page():
         "Financing for {{ product }} investors in ${market}. Call {var-phone} today.",
     )
 
-    assert "delimited_template_variable" in page["unresolved_template_placeholder_types"]
-    assert page["unresolved_template_placeholder_count"] >= 3
-    assert len(page["unresolved_template_placeholder_evidence"]) <= 4
+    assert "delimited_template_variable" in page["template_content_issue_types"]
+    assert page["template_content_issue_count"] >= 3
+    assert len(page["template_content_issue_evidence"]) <= 4
 
 
 def test_bare_xx_and_single_literal_gvar_do_not_trigger():
@@ -76,9 +76,9 @@ def test_bare_xx_and_single_literal_gvar_do_not_trigger():
         "Model XX is available. GVAR is an internal acronym mentioned once in this public explanation.",
     )
 
-    assert page["unresolved_template_placeholder_count"] == 0
-    assert page["unresolved_template_placeholder_types"] == []
-    assert page["unresolved_template_placeholder_evidence"] == []
+    assert page["template_content_issue_count"] == 0
+    assert page["template_content_issue_types"] == []
+    assert page["template_content_issue_evidence"] == []
 
 
 def test_guide_code_example_does_not_create_customer_placeholder_repair():

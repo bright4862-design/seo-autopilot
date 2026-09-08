@@ -128,9 +128,6 @@ export function repairSurfaceLabel(item = {}) {
     guide_article: "Guide pages",
     location_landing: "Location pages",
     booking_or_checkout: "Booking pages",
-    // Matches the customer vocabulary used on the card itself: "conversion" and
-    // "route boundary" are both internal names for things an owner recognises
-    // by what they do.
     conversion: "Sign-up and contact pages",
     route_boundary: "Website sections",
     mixed: "Multiple page types",
@@ -142,13 +139,23 @@ export function repairScopeSummary(item = {}) {
   const context = contextOf(item);
   const searchableAffected = Number(context.indexable_affected ?? 0);
   const searchableEligible = Number(context.indexable_checked_eligible ?? 0);
-  if (searchableAffected > 0 && searchableEligible >= searchableAffected) {
+  const searchableCoverage = context.searchable_coverage;
+  const searchableCoverageIsMeasured = searchableCoverage !== null
+    && searchableCoverage !== undefined
+    && searchableCoverage !== ""
+    && Number.isFinite(Number(searchableCoverage));
+  if (searchableCoverageIsMeasured && searchableAffected > 0 && searchableEligible >= searchableAffected) {
     return `${searchableAffected} of ${searchableEligible} searchable pages checked`;
   }
 
   const affectedChecked = Number(context.affected_checked ?? 0);
   const checkedEligible = Number(context.checked_eligible ?? 0);
-  if (affectedChecked > 0 && checkedEligible >= affectedChecked) {
+  const checkedCoverage = context.checked_coverage;
+  const checkedCoverageIsMeasured = checkedCoverage !== null
+    && checkedCoverage !== undefined
+    && checkedCoverage !== ""
+    && Number.isFinite(Number(checkedCoverage));
+  if (checkedCoverageIsMeasured && affectedChecked > 0 && checkedEligible >= affectedChecked) {
     return `${affectedChecked} of ${checkedEligible} relevant pages checked`;
   }
 
@@ -221,13 +228,6 @@ export function repairRowModel(item = {}) {
   };
 }
 
-/**
- * Attach the deterministic suggested fix to a presentation row.
- *
- * The suggestion is derived from evidence the repair already carries, so it is
- * additive: nothing on the item, the row model, or the persisted repair is
- * replaced by it.
- */
 function presentationRow(item) {
   return { item, model: repairRowModel(item), suggestion: repairSuggestion(item) };
 }
@@ -244,9 +244,6 @@ export function sectionCustomerRepairs(items = [], { initialFixFirstLimit = 3 } 
   return SECTION_ORDER
     .map((key) => {
       const bucketRows = buckets.get(key) || [];
-      // Summary only. Every row stays visible with its own evidence; rows are
-      // marked so the shared suggested fix is stated once by the summary
-      // instead of repeating verbatim on each grouped row.
       const groups = buildRepairGroupSummaries(bucketRows);
       const groupedIds = new Set(groups.flatMap((group) => group.memberIds));
       const rows = bucketRows.map((row) => ({
@@ -304,19 +301,6 @@ function presentationModeForItems(items = []) {
   return visibleRowsMode;
 }
 
-/**
- * Safe integration seam for the live FixList page.
- *
- * The complete durable repair snapshot decides presentation authority. Workflow
- * state may hide rows from the visible list, but it must never change the
- * snapshot from legacy/mixed/unsupported to canonical (or vice versa).
- *
- * The preferred explicit API passes the full snapshot as the first argument and
- * `options.visibleItems` as the filtered customer work queue. The current live
- * page also receives an in-memory snapshot marker from `prepareCustomerFixes`,
- * so existing Done filtering cannot reclassify the saved scan before that caller
- * is migrated to the explicit form.
- */
 export function buildFixListPresentation(snapshotItems = [], options = {}) {
   const snapshot = Array.isArray(snapshotItems) ? snapshotItems.filter(Boolean) : [];
   const visibleItems = Array.isArray(options.visibleItems)

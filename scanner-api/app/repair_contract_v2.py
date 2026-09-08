@@ -91,14 +91,25 @@ def _clean_text(value: Any) -> str:
 
 
 def _persistence_repair_fingerprint(item: dict[str, Any]) -> str:
-    """Return the scanner-owned action identity used by every customer surface.
-
-    Stability is deliberately not required here. It remains the stricter gate
-    for cross-scan `verified_fixed`; requiring it for same-scan persistence made
-    canonical FixItems disagree with the customer read model on normal review
-    rows that carry a valid provisional fingerprint.
-    """
+    """Return the scanner-owned repair identity without deciding merge safety."""
     return _clean_text(item.get("repair_fingerprint"))
+
+
+def _repair_grouping_is_confirmed(item: dict[str, Any]) -> bool:
+    """Allow action merging only when common implementation evidence is explicit.
+
+    A provisional fingerprint can help trace or present related findings, but it
+    is not proof that one implementation change repairs every row. Stable repair
+    identity already requires an explicit repair surface and remediation family;
+    `shared_repair_confirmed` is the explicit same-scan override for detectors
+    that can prove one shared implementation change.
+    """
+    identity = item.get("repair_identity") if isinstance(item.get("repair_identity"), dict) else {}
+    return bool(
+        item.get("repair_identity_stable") is True
+        or identity.get("stable") is True
+        or item.get("shared_repair_confirmed") is True
+    )
 
 
 def _dedupe_urls(values: Any) -> list[str]:
@@ -274,7 +285,8 @@ def _group_canonical_repairs(
     order: list[str] = []
     for index, item in enumerate(items):
         fingerprint = _persistence_repair_fingerprint(item)
-        key = f"fingerprint:{fingerprint}" if fingerprint else f"row:{index}"
+        can_merge = bool(fingerprint and _repair_grouping_is_confirmed(item))
+        key = f"fingerprint:{fingerprint}" if can_merge else f"row:{index}"
         if key not in groups:
             groups[key] = []
             order.append(key)

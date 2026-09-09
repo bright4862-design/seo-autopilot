@@ -1,4 +1,5 @@
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
+import { sanitizeReportRawFindingEvidence, sanitizeScanCoverage } from "./repairEvidence.js";
 const ENCODER = new TextEncoder();
 
 export const ACCESS_APP_ID = "6a498732ec779dfaaeab0e53";
@@ -134,6 +135,7 @@ const DETAILED_RUN_FIELDS = [
   "customer_summary",
   "next_best_step",
   "fix_list_id",
+  "scan_coverage",
 ];
 
 const FIX_LIST_FIELDS = [
@@ -294,7 +296,10 @@ export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, au
     && fixList?.repair_contract_version === REPAIR_CONTRACT_V2
     && fixList?.repair_snapshot_contract_version === REPAIR_CONTRACT_V2
     && fixList?.repair_snapshot_contract_complete === true;
-  const customerFixItems = canReadResult ? (fixItems || []).map(sanitizeFixItem) : [];
+  const reportEvidence = usesReportEvidenceContract(run);
+  const customerFixItems = canReadResult
+    ? (fixItems || []).map((item) => sanitizeFixItem(item, { reportEvidence }))
+    : [];
   if (canonical) {
     customerFixItems.sort((left, right) => number(left.canonical_action_rank) - number(right.canonical_action_rank));
   }
@@ -317,7 +322,8 @@ export function authoritySnapshotFromRows({ run, fixList, fixItems, userId }) {
     && fixList?.repair_snapshot_contract_version === REPAIR_CONTRACT_V2
     && fixList?.repair_snapshot_contract_complete === true
     && fixList?.repair_priority_model_version === REPAIR_PRIORITY_MODEL_V2;
-  const recommendations = (fixItems || []).map((item) => authorityFixFromRow(item, { canonical }));
+  const version = text(run?.authority_seal_version, 160);
+  const recommendations = (fixItems || []).map((item) => authorityFixFromRow(item, { canonical, version }));
   if (canonical) {
     recommendations.sort((left, right) => number(left.canonical_action_rank) - number(right.canonical_action_rank));
   } else {
@@ -365,6 +371,7 @@ export function authoritySnapshotFromRows({ run, fixList, fixItems, userId }) {
       // proof stops verifying and an intact result reads as tampered.
       ...coverageSnapshotFields(run),
       ...acceptanceEvidenceSnapshotFields(run),
+      ...reportEvidenceSnapshotFields(run),
       health_score: number(run?.health_score),
       health_grade: text(run?.health_grade, 80),
       ...scoreExplanationSnapshotFields(run),
@@ -433,8 +440,11 @@ export function stableSerialize(value) {
   return JSON.stringify(canonicalize(value));
 }
 
-function authorityFixFromRow(item, { canonical = false } = {}) {
+function authorityFixFromRow(item, { canonical = false, version = "" } = {}) {
   const raw = item?.raw_finding && typeof item.raw_finding === "object" ? item.raw_finding : {};
+  const reportEvidence = version === REVIEW_ATTESTATION_VERSION_V6
+    ? sanitizeReportRawFindingEvidence({ ...item, ...raw })
+    : {};
   const base = {
     fix_id: text(item?.fix_id, 160),
     rule: text(item?.rule, 200),
@@ -467,7 +477,10 @@ function authorityFixFromRow(item, { canonical = false } = {}) {
   if (!canonical) {
     return {
       ...base,
-      raw_finding: { verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence) },
+      raw_finding: {
+        verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence),
+        ...reportEvidence,
+      },
     };
   }
   return {
@@ -499,6 +512,7 @@ function authorityFixFromRow(item, { canonical = false } = {}) {
       ...(canonicalRepairEvidenceGroups(raw.repair_evidence_groups).length > 0
         ? { repair_evidence_groups: canonicalRepairEvidenceGroups(raw.repair_evidence_groups) }
         : {}),
+      ...reportEvidence,
     },
   };
 }
@@ -574,14 +588,20 @@ function sanitizeRun(run, { detailed, healthScoreStatus = "" }) {
 }
 
 function usesAcceptanceEvidenceContract(run) {
-  return ["standard_review_snapshot_hmac_v3_acceptance_evidence", "standard_review_snapshot_hmac_v4_focused_scope", "standard_review_snapshot_hmac_v5_score_explanation"].includes(text(run?.authority_seal_version, 160))
+  return ["standard_review_snapshot_hmac_v3_acceptance_evidence", "standard_review_snapshot_hmac_v4_focused_scope", "standard_review_snapshot_hmac_v5_score_explanation", "standard_review_snapshot_hmac_v6_report_evidence"].includes(text(run?.authority_seal_version, 160))
     || [
       "standard_limited_result_integrity_v2_acceptance_evidence",
       "standard_limited_result_integrity_v3_focused_scope",
       "standard_limited_result_integrity_v4_focused_scope_effective_path",
+      "standard_limited_result_integrity_v5_report_evidence",
     ].includes(
       text(run?.result_integrity_version, 160),
     );
+}
+
+function usesReportEvidenceContract(run) {
+  return text(run?.authority_seal_version, 160) === REVIEW_ATTESTATION_VERSION_V6
+    || text(run?.result_integrity_version, 160) === "standard_limited_result_integrity_v5_report_evidence";
 }
 
 function hasCompleteAcceptanceEvidence(run) {
@@ -695,13 +715,14 @@ function applyCoverageValidity(result) {
   return result;
 }
 
-function sanitizeFixItem(item) {
+function sanitizeFixItem(item, { reportEvidence = false } = {}) {
   const result = pickFields(item, FIX_ITEM_FIELDS);
   const raw = item?.raw_finding && typeof item.raw_finding === "object" ? item.raw_finding : {};
   const evidenceGroups = canonicalRepairEvidenceGroups(raw.repair_evidence_groups);
   result.raw_finding = {
     verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence),
     ...(evidenceGroups.length > 0 ? { repair_evidence_groups: evidenceGroups } : {}),
+    ...(reportEvidence ? sanitizeReportRawFindingEvidence({ ...item, ...raw }) : {}),
   };
   return applyCoverageValidity(result);
 }
@@ -748,6 +769,7 @@ const REVIEW_ATTESTATION_VERSION_V2 = "standard_review_snapshot_hmac_v2_coverage
 const REVIEW_ATTESTATION_VERSION_V3 = "standard_review_snapshot_hmac_v3_acceptance_evidence";
 const REVIEW_ATTESTATION_VERSION_V4 = "standard_review_snapshot_hmac_v4_focused_scope";
 const REVIEW_ATTESTATION_VERSION_V5 = "standard_review_snapshot_hmac_v5_score_explanation";
+const REVIEW_ATTESTATION_VERSION_V6 = "standard_review_snapshot_hmac_v6_report_evidence";
 // Every version from V4 on carries the focused-scope fields; V5 adds the score
 // explanation. Listing them keeps each gate below explicit about which seals it
 // covers, rather than "V4 or later", which is how a v4 row silently gains a field.
@@ -759,7 +781,7 @@ const REVIEW_ATTESTATION_VERSION_V5 = "standard_review_snapshot_hmac_v5_score_ex
  * seal did not cover. The row's own authority_seal_version is the authority.
  */
 function scopeSnapshotFields(row) {
-  if (![REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5].includes(
+  if (![REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6].includes(
     text(row?.authority_seal_version, 160),
   )) return {};
   return {
@@ -774,12 +796,12 @@ function scopeSnapshotFields(row) {
 function scoreExplanationSnapshotFields(row) {
   // V5 only. A v4 row must rebuild exactly as v4: giving it a field its seal
   // did not cover turns an intact result into a tampered one.
-  if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V5) return {};
+  if (![REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6].includes(text(row?.authority_seal_version, 160))) return {};
   return { health_score_explanation: scoreExplanation(row?.health_score_explanation) };
 }
 
 function coverageSnapshotFields(row) {
-  if (![REVIEW_ATTESTATION_VERSION_V2, REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5].includes(
+  if (![REVIEW_ATTESTATION_VERSION_V2, REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6].includes(
     text(row?.authority_seal_version, 160),
   )) return {};
   return {
@@ -796,7 +818,7 @@ function coverageSnapshotFields(row) {
 }
 
 function acceptanceEvidenceSnapshotFields(row) {
-  if (![REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5].includes(text(row?.authority_seal_version, 160))) return {};
+  if (![REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6].includes(text(row?.authority_seal_version, 160))) return {};
   const source = plainObject(row?.classification_integrity);
   const state = text(source.state, 120);
   const verdict = text(source.verdict, 120);
@@ -829,6 +851,11 @@ function acceptanceEvidenceSnapshotFields(row) {
     peak_memory_bytes: workerPeak,
     worker_peak_memory_bytes: workerPeak,
   };
+}
+
+function reportEvidenceSnapshotFields(row) {
+  if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V6) return {};
+  return { scan_coverage: sanitizeScanCoverage(row?.scan_coverage) };
 }
 
 function finiteNonNegativeNumber(value) {

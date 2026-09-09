@@ -1,8 +1,10 @@
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
+import { sanitizeReportRawFindingEvidence, sanitizeScanCoverage } from "./repairEvidence.js";
 
 const ENCODER = new TextEncoder();
 
-export const LIMITED_RESULT_INTEGRITY_VERSION = "standard_limited_result_integrity_v4_focused_scope_effective_path";
+export const LIMITED_RESULT_INTEGRITY_VERSION = "standard_limited_result_integrity_v5_report_evidence";
+export const LIMITED_RESULT_INTEGRITY_VERSION_V4 = "standard_limited_result_integrity_v4_focused_scope_effective_path";
 export const LIMITED_RESULT_INTEGRITY_VERSION_V1 = "standard_limited_result_integrity_v1";
 export const LIMITED_RESULT_INTEGRITY_VERSION_V2 = "standard_limited_result_integrity_v2_acceptance_evidence";
 export const LIMITED_RESULT_INTEGRITY_VERSION_V3 = "standard_limited_result_integrity_v3_focused_scope";
@@ -14,7 +16,8 @@ export const LIMITED_RESULT_INTEGRITY_VERSION_V3 = "standard_limited_result_inte
  * an authority seal is that the two payloads can never be equal. Putting the
  * label in the payload is what guarantees that, whatever else the rows carry.
  */
-export const LIMITED_RESULT_HMAC_DOMAIN = "standard_limited_result_hmac_v4_focused_scope_effective_path";
+export const LIMITED_RESULT_HMAC_DOMAIN = "standard_limited_result_hmac_v5_report_evidence";
+export const LIMITED_RESULT_HMAC_DOMAIN_V4 = "standard_limited_result_hmac_v4_focused_scope_effective_path";
 export const LIMITED_RESULT_HMAC_DOMAIN_V1 = "standard_limited_result_hmac_v1";
 export const LIMITED_RESULT_HMAC_DOMAIN_V2 = "standard_limited_result_hmac_v2_acceptance_evidence";
 export const LIMITED_RESULT_HMAC_DOMAIN_V3 = "standard_limited_result_hmac_v3_focused_scope";
@@ -38,7 +41,7 @@ export function buildLimitedResultSnapshot({
 }) {
   const fixes = firstArray([review?.recommendations, review?.fixes, review?.cleaned_fixes])
     .slice(0, MAX_LIMITED_FIXES)
-    .map(toLimitedFix)
+    .map((fix) => toLimitedFix(fix, { reportEvidence: version === LIMITED_RESULT_INTEGRITY_VERSION }))
     .sort((left, right) => left.fix_id.localeCompare(right.fix_id));
 
   const coverageReasons = textArray(review?.coverage_reasons, 12, 200);
@@ -69,6 +72,7 @@ export function buildLimitedResultSnapshot({
       score_is_provisional: true,
       website_url: text(scan?.submitted_url || scan?.website_url, 2_000),
       ...focusedScopeFields(scan, version),
+      ...(version === LIMITED_RESULT_INTEGRITY_VERSION ? { scan_coverage: sanitizeScanCoverage(scan?.scan_coverage || review?.scan_coverage) } : {}),
       scanner_version: text(scan?.scanner_version, 160),
       scanner_build_revision: text(scan?.scanner_build_revision, 160),
       worker_source_sha: text(scan?.worker_source_sha, 80),
@@ -86,6 +90,7 @@ export function buildLimitedResultSnapshot({
       coverage_authority_version: text(review?.coverage_authority_version, 160),
       ...([
         LIMITED_RESULT_INTEGRITY_VERSION,
+        LIMITED_RESULT_INTEGRITY_VERSION_V4,
         LIMITED_RESULT_INTEGRITY_VERSION_V3,
         LIMITED_RESULT_INTEGRITY_VERSION_V2,
       ].includes(version)
@@ -181,6 +186,7 @@ function limitedPayload(snapshot) {
 
 function limitedIntegrityDomain(version) {
   if (version === LIMITED_RESULT_INTEGRITY_VERSION) return LIMITED_RESULT_HMAC_DOMAIN;
+  if (version === LIMITED_RESULT_INTEGRITY_VERSION_V4) return LIMITED_RESULT_HMAC_DOMAIN_V4;
   if (version === LIMITED_RESULT_INTEGRITY_VERSION_V3) return LIMITED_RESULT_HMAC_DOMAIN_V3;
   if (version === LIMITED_RESULT_INTEGRITY_VERSION_V2) return LIMITED_RESULT_HMAC_DOMAIN_V2;
   if (version === LIMITED_RESULT_INTEGRITY_VERSION_V1) return LIMITED_RESULT_HMAC_DOMAIN_V1;
@@ -188,7 +194,7 @@ function limitedIntegrityDomain(version) {
 }
 
 function focusedScopeFields(scan, version) {
-  if (![LIMITED_RESULT_INTEGRITY_VERSION, LIMITED_RESULT_INTEGRITY_VERSION_V3].includes(version)) return {};
+  if (![LIMITED_RESULT_INTEGRITY_VERSION, LIMITED_RESULT_INTEGRITY_VERSION_V4, LIMITED_RESULT_INTEGRITY_VERSION_V3].includes(version)) return {};
   const fields = {
     scope_type: text(scan?.scope_type, 40),
     parent_scan_id: text(scan?.parent_scan_id, 160),
@@ -197,7 +203,7 @@ function focusedScopeFields(scan, version) {
     discovered_from: text(scan?.discovered_from, 80),
     user_confirmed: scan?.user_confirmed === true,
   };
-  if (version === LIMITED_RESULT_INTEGRITY_VERSION) {
+  if ([LIMITED_RESULT_INTEGRITY_VERSION, LIMITED_RESULT_INTEGRITY_VERSION_V4].includes(version)) {
     fields.effective_path_prefix = text(
       scan?.effective_path_prefix || scan?.path_prefix || scan?.requested_path_prefix,
       1_000,
@@ -263,8 +269,10 @@ function positiveNumber(value) {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
-function toLimitedFix(fix) {
+function toLimitedFix(fix, { reportEvidence = false } = {}) {
   const priority = String(fix?.priority || "").toLowerCase();
+  const raw = fix?.raw_finding && typeof fix.raw_finding === "object" ? fix.raw_finding : {};
+  const reportEvidenceFields = reportEvidence ? sanitizeReportRawFindingEvidence({ ...fix, ...raw }) : {};
   return {
     fix_id: text(fix?.fix_id, 160),
     issue_title: text(fix?.issue_title || fix?.title, 400),
@@ -273,6 +281,7 @@ function toLimitedFix(fix) {
     page_url: text(fix?.page_url, 2_000),
     affected_pages: textArray(fix?.affected_pages, 50, 2_000),
     evidence_status: text(fix?.evidence_status, 120),
+    ...(reportEvidence && Object.keys(reportEvidenceFields).length > 0 ? { raw_finding: reportEvidenceFields } : {}),
   };
 }
 

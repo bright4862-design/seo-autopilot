@@ -1,11 +1,13 @@
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { firstFailedRepairInvariant } from "./repairInvariants.js";
+import { sanitizeReportRawFindingEvidence, sanitizeScanCoverage } from "./repairEvidence.js";
 // Bumped when the snapshot gained coverage/inventory fields. The authority
 // proof is an HMAC over the whole snapshot, so adding a field changes the
 // payload for every row -- including rows sealed before it existed. Version
 // dispatch on reconstruction keeps those rows verifiable instead of turning
 // an intact result into 409 result_authority_invalid.
-export const REVIEW_ATTESTATION_VERSION = "standard_review_snapshot_hmac_v5_score_explanation";
+export const REVIEW_ATTESTATION_VERSION = "standard_review_snapshot_hmac_v6_report_evidence";
+export const REVIEW_ATTESTATION_VERSION_V5 = "standard_review_snapshot_hmac_v5_score_explanation";
 export const REVIEW_ATTESTATION_VERSION_V4 = "standard_review_snapshot_hmac_v4_focused_scope";
 export const REVIEW_ATTESTATION_VERSION_V1 = "standard_review_snapshot_hmac_v1";
 export const REVIEW_ATTESTATION_VERSION_V2 = "standard_review_snapshot_hmac_v2_coverage";
@@ -188,6 +190,7 @@ export function buildAuthoritySnapshot({ scan, review, identity, userId, now = n
       title_evidence_version: text(review?.title_evidence_version || scan?.title_evidence_version || scan?.component_versions?.title_evidence_version || firstPage.title_evidence_version, 160),
       pages_found: number(scan?.pages_found),
       pages_crawled: number(scan?.pages_crawled),
+      scan_coverage: sanitizeScanCoverage(scan?.scan_coverage || review?.scan_coverage),
       scan_status: scanStatus,
       review_confidence_state: text(review?.review_confidence_state, 120),
       evidence_quality_state: text(review?.evidence_quality_state, 120),
@@ -341,6 +344,7 @@ function toAuthorityFix(fix, index) {
     : "page";
   const affectedPages = textArray(fix?.affected_pages, 150, 2_000);
   const raw = fix?.raw_finding && typeof fix.raw_finding === "object" ? fix.raw_finding : {};
+  const reportEvidence = sanitizeReportRawFindingEvidence({ ...fix, ...raw });
   const persistedEvidenceGroups = text(fix?.repair_contract_version, 160) === REPAIR_CONTRACT_V2
     ? canonicalRepairEvidenceGroups(fix?.repair_evidence_groups || raw.repair_evidence_groups)
     : [];
@@ -402,6 +406,7 @@ function toAuthorityFix(fix, index) {
     raw_finding: {
       verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence),
       ...(persistedEvidenceGroups.length > 0 ? { repair_evidence_groups: persistedEvidenceGroups } : {}),
+      ...reportEvidence,
     },
   };
 }

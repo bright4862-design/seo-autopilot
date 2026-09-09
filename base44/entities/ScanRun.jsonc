@@ -227,6 +227,12 @@
     "evidence_quality_gate_version": {
       "type": "string"
     },
+    "scan_coverage": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "description": "Signed Standard 150 observed coverage counters for report-evidence contracts."
+    },
     "coverage_authority_evidence_version": {
       "type": "string",
       "description": "Version of the coverage/inventory assessment sealed with this scan."

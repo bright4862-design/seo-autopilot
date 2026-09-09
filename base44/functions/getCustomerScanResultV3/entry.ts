@@ -22,12 +22,14 @@ const ACCEPTED_AUTHORITY_VERSIONS = new Set([
   "standard_review_snapshot_hmac_v3_acceptance_evidence",
   "standard_review_snapshot_hmac_v4_focused_scope",
   "standard_review_snapshot_hmac_v5_score_explanation",
+  "standard_review_snapshot_hmac_v6_report_evidence",
 ]);
 const ACCEPTED_LIMITED_INTEGRITY_VERSIONS = new Set([
   "standard_limited_result_integrity_v1",
   "standard_limited_result_integrity_v2_acceptance_evidence",
   "standard_limited_result_integrity_v3_focused_scope",
   "standard_limited_result_integrity_v4_focused_scope_effective_path",
+  "standard_limited_result_integrity_v5_report_evidence",
 ]);
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
@@ -157,6 +159,7 @@ Deno.serve(async (req) => {
         "standard_limited_result_integrity_v2_acceptance_evidence",
         "standard_limited_result_integrity_v3_focused_scope",
         "standard_limited_result_integrity_v4_focused_scope_effective_path",
+        "standard_limited_result_integrity_v5_report_evidence",
       ].includes(limitedIntegrityVersion);
       const limitedSnapshot = buildLimitedResultSnapshot({
         identity: {

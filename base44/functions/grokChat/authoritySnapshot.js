@@ -6,7 +6,8 @@ export function authoritySnapshotFromRows({ scan, fixList, fixItems, userId }) {
     && fixList?.repair_snapshot_contract_version === REPAIR_CONTRACT_V2
     && fixList?.repair_snapshot_contract_complete === true
     && fixList?.repair_priority_model_version === REPAIR_PRIORITY_MODEL_V2;
-  const recommendations = (fixItems || []).map((item) => authorityFixFromRow(item, { canonical }));
+  const version = text(scan?.authority_seal_version, 160);
+  const recommendations = (fixItems || []).map((item) => authorityFixFromRow(item, { canonical, version }));
   if (canonical) {
     recommendations.sort((left, right) => number(left.canonical_action_rank) - number(right.canonical_action_rank));
   } else {
@@ -54,6 +55,7 @@ export function authoritySnapshotFromRows({ scan, fixList, fixItems, userId }) {
       // proof stops verifying and an intact result reads as tampered.
       ...coverageSnapshotFields(scan),
       ...acceptanceEvidenceSnapshotFields(scan),
+      ...reportEvidenceSnapshotFields(scan),
       health_score: number(scan?.health_score),
       health_grade: text(scan?.health_grade, 80),
       ...scoreExplanationSnapshotFields(scan),
@@ -92,8 +94,11 @@ export function authoritySnapshotFromRows({ scan, fixList, fixItems, userId }) {
   };
 }
 
-function authorityFixFromRow(item, { canonical = false } = {}) {
+function authorityFixFromRow(item, { canonical = false, version = "" } = {}) {
   const raw = item?.raw_finding && typeof item.raw_finding === "object" ? item.raw_finding : {};
+  const reportEvidence = version === REVIEW_ATTESTATION_VERSION_V6
+    ? sanitizeReportRawFindingEvidence({ ...item, ...raw })
+    : {};
   const base = {
     fix_id: text(item?.fix_id, 160),
     rule: text(item?.rule, 200),
@@ -126,7 +131,7 @@ function authorityFixFromRow(item, { canonical = false } = {}) {
   if (!canonical) {
     return {
       ...base,
-      raw_finding: { verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence) },
+      raw_finding: { verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence), ...reportEvidence },
     };
   }
   return {
@@ -153,7 +158,7 @@ function authorityFixFromRow(item, { canonical = false } = {}) {
     ...(text(item?.repair_verification_state, 120) ? { repair_verification_state: text(item?.repair_verification_state, 120) } : {}),
     ...(text(item?.rule_definition_version, 160) ? { rule_definition_version: text(item?.rule_definition_version, 160) } : {}),
     ...(text(item?.comparison_profile_version, 160) ? { comparison_profile_version: text(item?.comparison_profile_version, 160) } : {}),
-    raw_finding: { verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence) },
+    raw_finding: { verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence), ...reportEvidence },
   };
 }
 
@@ -208,6 +213,7 @@ const REVIEW_ATTESTATION_VERSION_V2 = "standard_review_snapshot_hmac_v2_coverage
 const REVIEW_ATTESTATION_VERSION_V3 = "standard_review_snapshot_hmac_v3_acceptance_evidence";
 const REVIEW_ATTESTATION_VERSION_V4 = "standard_review_snapshot_hmac_v4_focused_scope";
 const REVIEW_ATTESTATION_VERSION_V5 = "standard_review_snapshot_hmac_v5_score_explanation";
+const REVIEW_ATTESTATION_VERSION_V6 = "standard_review_snapshot_hmac_v6_report_evidence";
 
 /**
  * Reconstruction is version-dispatched, never inferred from which fields the
@@ -251,12 +257,12 @@ function scoreExplanation(value) {
 function scoreExplanationSnapshotFields(row) {
   // V5 only. A v4 row must rebuild exactly as v4: giving it a field its seal
   // did not cover turns an intact result into a tampered one.
-  if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V5) return {};
+  if (![REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6].includes(text(row?.authority_seal_version, 160))) return {};
   return { health_score_explanation: scoreExplanation(row?.health_score_explanation) };
 }
 
 function scopeSnapshotFields(row) {
-  if (![REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5].includes(
+  if (![REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6].includes(
     text(row?.authority_seal_version, 160),
   )) return {};
   return {
@@ -270,7 +276,7 @@ function scopeSnapshotFields(row) {
 }
 
 function coverageSnapshotFields(row) {
-  if (![REVIEW_ATTESTATION_VERSION_V2, REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5].includes(
+  if (![REVIEW_ATTESTATION_VERSION_V2, REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6].includes(
     text(row?.authority_seal_version, 160),
   )) return {};
   return {
@@ -287,7 +293,7 @@ function coverageSnapshotFields(row) {
 }
 
 function acceptanceEvidenceSnapshotFields(row) {
-  if (![REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4].includes(
+  if (![REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6].includes(
     text(row?.authority_seal_version, 160),
   )) return {};
   const source = plainObject(row?.classification_integrity);

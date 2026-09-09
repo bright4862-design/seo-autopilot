@@ -465,24 +465,55 @@ def summarize_redirect_evidence(pages: list[dict]) -> dict:
     origin_aliases = [page for page in pages if page.get("origin_alias_redirect") is True]
     states = Counter(str(page.get("redirect_state") or "unknown") for page in redirected)
     outcomes = Counter(str(page.get("redirect_outcome") or "unknown") for page in redirected)
+    sitemap_redirects = sum(1 for page in redirected if "sitemap" in set(page.get("discovered_from") or []))
+    internal_link_redirects = sum(1 for page in redirected if "internal_link" in set(page.get("discovered_from") or []))
+    alias_total = 0
+    sample_aliases: list[dict] = []
+
+    for page in pages:
+        aliases = [item for item in (page.get("redirect_aliases") or []) if isinstance(item, dict)]
+        sample_aliases.extend(aliases)
+        recorded_total = page.get("redirect_alias_total")
+        try:
+            alias_total += max(0, int(recorded_total)) if recorded_total is not None else len(aliases)
+        except (TypeError, ValueError):
+            alias_total += len(aliases)
+
+        recorded_states = page.get("redirect_alias_state_counts")
+        if isinstance(recorded_states, dict):
+            states.update({str(key): int(value or 0) for key, value in recorded_states.items()})
+        else:
+            states.update(str(item.get("redirect_state") or "unknown") for item in aliases)
+        recorded_outcomes = page.get("redirect_alias_outcome_counts")
+        if isinstance(recorded_outcomes, dict):
+            outcomes.update({str(key): int(value or 0) for key, value in recorded_outcomes.items()})
+        else:
+            outcomes.update(str(item.get("redirect_outcome") or "unknown") for item in aliases)
+
+        if page.get("redirect_alias_sitemap_total") is not None:
+            sitemap_redirects += max(0, int(page.get("redirect_alias_sitemap_total") or 0))
+        else:
+            sitemap_redirects += sum(1 for item in aliases if "sitemap" in set(item.get("discovered_from") or []))
+        if page.get("redirect_alias_internal_link_total") is not None:
+            internal_link_redirects += max(0, int(page.get("redirect_alias_internal_link_total") or 0))
+        else:
+            internal_link_redirects += sum(1 for item in aliases if "internal_link" in set(item.get("discovered_from") or []))
+
+    sample_records = [*redirected, *sample_aliases][:20]
     return {
         "version": REDIRECT_EVIDENCE_VERSION,
-        "redirected_pages": len(redirected),
+        "redirected_pages": len(redirected) + alias_total,
         "origin_alias_redirects": len(origin_aliases),
         "state_counts": dict(sorted(states.items())),
         "outcome_counts": dict(sorted(outcomes.items())),
-        "sitemap_redirects": sum(
-            1 for page in redirected if "sitemap" in set(page.get("discovered_from") or [])
-        ),
-        "internal_link_redirects": sum(
-            1 for page in redirected if "internal_link" in set(page.get("discovered_from") or [])
-        ),
+        "sitemap_redirects": sitemap_redirects,
+        "internal_link_redirects": internal_link_redirects,
         "redirects": [
             {
                 "outcome": page.get("redirect_outcome"),
                 **dict(page.get("redirect_fetch_evidence") or {}),
             }
-            for page in redirected
+            for page in sample_records
             if isinstance(page.get("redirect_fetch_evidence"), dict)
         ],
         "representative_redirects": [
@@ -494,7 +525,7 @@ def summarize_redirect_evidence(pages: list[dict]) -> dict:
                 "hop_count": page.get("redirect_hop_count"),
                 "final_status": (page.get("redirect_fetch_evidence") or {}).get("final_status"),
             }
-            for page in redirected[:20]
+            for page in sample_records
         ],
         "representative_origin_aliases": [
             {

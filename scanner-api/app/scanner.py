@@ -691,6 +691,8 @@ async def run_scan(
             deadline=timing_budget["crawl_deadline"],
         )
         redirect_evidence = summarize_redirect_evidence(pages)
+        for page in pages:
+            page.pop("_redirect_alias_identity_keys", None)
 
     findings = build_findings(pages)
     findings.extend(duplicate_title_findings(pages))
@@ -1857,17 +1859,33 @@ def merge_duplicate_page_evidence(retained: dict, duplicate: dict) -> None:
             str(candidate.get("redirect_outcome") or ""),
             str(candidate.get("redirect_destination_url") or candidate.get("final_url") or ""),
         )
-        existing_keys = {
-            (
-                str(item.get("redirect_source_url") or item.get("url") or ""),
-                str(item.get("redirect_outcome") or ""),
-                str(item.get("redirect_destination_url") or item.get("final_url") or ""),
-            )
-            for item in aliases
-            if isinstance(item, dict)
-        }
-        if candidate_key not in existing_keys and len(aliases) < 20:
-            aliases.append(candidate)
+        # Examples are deliberately capped, but the report still needs the
+        # complete number and classification of redirect aliases observed.
+        # The compact identity ledger stays private to the in-memory crawl and
+        # is removed after the redirect summary is finalized. Standard 150 can
+        # enqueue at most max_pages * 8 targets, so 1,200 identities covers the
+        # complete bounded request universe without retaining full evidence.
+        candidate_identity = hashlib.sha256("\x1f".join(candidate_key).encode("utf-8")).hexdigest()[:24]
+        seen_identities = retained.setdefault("_redirect_alias_identity_keys", [])
+        is_new_alias = candidate_identity not in seen_identities
+        if is_new_alias:
+            if len(seen_identities) < 1200:
+                seen_identities.append(candidate_identity)
+            retained["redirect_alias_total"] = int(retained.get("redirect_alias_total") or 0) + 1
+            for field, value in (
+                ("redirect_alias_state_counts", str(candidate.get("redirect_state") or "unknown")),
+                ("redirect_alias_outcome_counts", str(candidate.get("redirect_outcome") or "unknown")),
+            ):
+                counts = dict(retained.get(field) or {})
+                counts[value] = int(counts.get(value) or 0) + 1
+                retained[field] = counts
+            sources = set(candidate.get("discovered_from") or [])
+            if "sitemap" in sources:
+                retained["redirect_alias_sitemap_total"] = int(retained.get("redirect_alias_sitemap_total") or 0) + 1
+            if "internal_link" in sources:
+                retained["redirect_alias_internal_link_total"] = int(retained.get("redirect_alias_internal_link_total") or 0) + 1
+            if len(aliases) < 20:
+                aliases.append(candidate)
 
     for key, limit in (("discovered_from", None), ("source_pages", None), ("link_text_samples", 8)):
         merged = list(dict.fromkeys([*(retained.get(key) or []), *(duplicate.get(key) or [])]))

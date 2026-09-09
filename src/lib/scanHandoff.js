@@ -1,4 +1,5 @@
 import { evidenceLink } from "./evidenceUrl.js";
+import { buildCustomerRepairPlan } from "./customerRepairPlan.js";
 
 /**
  * A compact, assistant-shaped export of one finished scan.
@@ -124,7 +125,8 @@ export function buildScanHandoff({
   generatedAt = new Date(),
 } = {}) {
   const siteOrigin = clean(scanRecord?.website_url);
-  const list = Array.isArray(cards) ? cards.slice(0, MAX_FIXES) : [];
+  const plan = buildCustomerRepairPlan(cards, { fallbackNextBestStep: nextBestStep });
+  const list = plan.cards.slice(0, MAX_FIXES);
   const healthScoreAvailable =
     !scoreUnavailable && healthScore != null && Number.isFinite(Number(healthScore));
 
@@ -139,7 +141,8 @@ export function buildScanHandoff({
     health_score: healthScoreAvailable ? Number(healthScore) : null,
     health_score_available: healthScoreAvailable,
     summary: clean(summary),
-    next_best_step: clean(nextBestStep),
+    next_best_step: plan.nextBestStep,
+    fix_first_count: plan.fixFirstCount,
     limitations: textList(limitations, MAX_LIMITATIONS),
     fix_count: list.length,
     fix_count_is_partial: Array.isArray(cards) && cards.length > list.length,

@@ -59,9 +59,11 @@ test("redirect evidence survives the customer card and JSON handoff export", () 
     {
       outcome: "redirect_to_usable_page",
       ...REDIRECT_EVIDENCE,
+      verification_state: "verified",
     },
   ]);
   assert.equal(handoff.fixes[0].redirect_evidence[0].classification, "redirect_to_usable_page");
+  assert.equal(handoff.fixes[0].redirect_evidence[0].verification_state, "verified");
 });
 
 test("wrong-destination classification survives grouped redirect evidence", () => {
@@ -108,6 +110,7 @@ test("wrong-destination classification survives grouped redirect evidence", () =
   });
 
   assert.equal(handoff.fixes[0].redirect_evidence[0].classification, "redirect_to_wrong_destination");
+  assert.equal(handoff.fixes[0].redirect_evidence[0].verification_state, "verified");
   assert.equal(handoff.fixes[0].redirect_evidence[0].final_status, 200);
   assert.equal(handoff.fixes[0].redirect_evidence[0].final_url, "https://example.com/");
 });

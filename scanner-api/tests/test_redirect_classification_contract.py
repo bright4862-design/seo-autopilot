@@ -181,7 +181,7 @@ async def test_redirect_loop_is_unusable_with_chain_evidence(policy):
 
 
 @pytest.mark.asyncio
-async def test_redirect_destination_timeout_is_unusable_but_not_fabricated_as_confirmed_http_failure(policy):
+async def test_redirect_destination_timeout_is_unverified_and_not_fabricated_as_confirmed_http_failure(policy):
     client = FakeClient({
         "https://example.com/old": _response("https://example.com/old", 301, location="/slow"),
         "https://example.com/slow": httpx.ReadTimeout("timed out"),
@@ -190,7 +190,7 @@ async def test_redirect_destination_timeout_is_unusable_but_not_fabricated_as_co
     page = await fetch_and_extract(client, "https://example.com/old", DISCOVERY_INTERNAL, robots_policy=policy)
     findings = build_findings([page])
 
-    assert page["redirect_outcome"] == "redirect_destination_unusable"
+    assert page["redirect_outcome"] == "redirect_destination_unverified"
     assert page["redirect_state"] == "redirect_destination_unverified"
     assert "redirect_destination_failed" not in {finding["rule"] for finding in findings}
     finding = next(finding for finding in findings if finding["rule"] == "redirect_destination_unverified")
@@ -198,7 +198,7 @@ async def test_redirect_destination_timeout_is_unusable_but_not_fabricated_as_co
     assert finding["non_scoring"] is True
     assert finding["redirect_fetch_evidence"]["fetch_error"]
     assert finding["redirect_fetch_evidence"]["final_status"] == 0
-    assert finding["redirect_fetch_evidence"]["classification"] == "redirect_destination_unusable"
+    assert finding["redirect_fetch_evidence"]["classification"] == "redirect_destination_unverified"
 
 
 @pytest.mark.asyncio

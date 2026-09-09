@@ -1,3 +1,4 @@
+import { sanitizeReportRawFindingEvidence, sanitizeScanCoverage } from "./repairEvidence.js";
 export const REPAIR_CONTRACT_V2 = "repair_contract_v2_shadow_calibrated";
 export const REPAIR_PRIORITY_MODEL_V2 = "repair_priority_v2_technical_severity";
 

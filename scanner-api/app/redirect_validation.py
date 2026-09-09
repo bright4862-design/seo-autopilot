@@ -323,8 +323,9 @@ def _redirect_outcome(page: dict, evidence: dict, destination_state: str) -> str
 
     state = str(evidence.get("state") or "")
     status = int(evidence.get("destination_status_code") or page.get("status_code") or 0)
+    if state == "redirect_destination_unverified":
+        return "redirect_destination_unverified"
     if state in {
-        "redirect_destination_unverified",
         "redirect_destination_blocked_by_robots",
         "redirect_loop",
         "redirect_missing_location",

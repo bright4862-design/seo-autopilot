@@ -261,6 +261,51 @@ function evidenceGroupsFor(members) {
   });
 }
 
+const MAX_REPAIR_OBSERVATION_SAMPLES = 20;
+const REPAIR_OBSERVATION_TEXT_KEYS = new Set([
+  "page_url", "canonical_url", "image_url", "source_page", "current_href",
+  "observed_target", "sitemap_file", "original_loc", "title", "h1", "excerpt",
+  "alt_text", "meta_description", "meta_description_state", "decorative_state",
+  "issue_type", "intended_market", "alt_state", "link_text",
+]);
+
+function sanitizeRepairObservation(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const output = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (REPAIR_OBSERVATION_TEXT_KEYS.has(key)) {
+      // Explicit empty strings are evidence (for example a missing canonical),
+      // so do not pass them through `clean()`, which would make absence and an
+      // observed empty value indistinguishable.
+      if (typeof raw === "string") output[key] = raw.trim();
+      else if (raw === null) output[key] = null;
+      continue;
+    }
+    if (key === "status" || key === "h1_count") {
+      const number = Number(raw);
+      if (Number.isInteger(number) && number >= 0) output[key] = number;
+    }
+  }
+  return Object.keys(output).length > 0 ? output : null;
+}
+
+function repairObservationEvidenceFor(item = {}) {
+  const candidates = [item?.raw_finding, item?.original?.raw_finding, item?.original, item]
+    .filter((value) => value && typeof value === "object" && !Array.isArray(value));
+  for (const raw of candidates) {
+    if (!Object.prototype.hasOwnProperty.call(raw, "repair_observation_samples")
+      && !Object.prototype.hasOwnProperty.call(raw, "repair_observation_count")) continue;
+    const samples = (Array.isArray(raw.repair_observation_samples) ? raw.repair_observation_samples : [])
+      .slice(0, MAX_REPAIR_OBSERVATION_SAMPLES)
+      .map(sanitizeRepairObservation)
+      .filter(Boolean);
+    const countRaw = Number(raw.repair_observation_count);
+    const count = Number.isInteger(countRaw) && countRaw >= 0 ? countRaw : samples.length;
+    return { samples, count: Math.max(count, samples.length) };
+  }
+  return { samples: [], count: 0 };
+}
+
 function redirectEvidenceFor(item = {}) {
   const candidates = [];
   const push = (value, outcome = "") => {
@@ -365,6 +410,7 @@ export function buildRepairCard(item = {}) {
   const copy = customerCopyForFix(item) || {};
   const suggestion = repairSuggestion(item);
   const affected = affectedOf(item);
+  const repairObservations = repairObservationEvidenceFor(item);
   const priority = lower(item?.priority || item?.original?.priority) || "medium";
   const actionPriority = lower(item?.actionPriority || item?.action_priority || item?.original?.action_priority);
   const sharedRepairConfirmed = item?.sharedRepairConfirmed === true
@@ -397,6 +443,8 @@ export function buildRepairCard(item = {}) {
       mergedFromFixIds: Array.isArray(item.mergedFromFixIds) ? item.mergedFromFixIds : [],
       evidenceGroups: Array.isArray(item.evidenceGroups) ? item.evidenceGroups : [],
       redirectEvidence: redirectEvidenceFor(item),
+      repairObservationCount: repairObservations.count,
+      repairObservationSamples: repairObservations.samples,
     },
   };
 }

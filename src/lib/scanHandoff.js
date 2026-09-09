@@ -1,5 +1,6 @@
 import { evidenceLink } from "./evidenceUrl.js";
 import { buildCustomerRepairPlan } from "./customerRepairPlan.js";
+import { scanCoverageDisclosure } from "./scanCoverageDisclosure.js";
 
 /**
  * A compact, assistant-shaped export of one finished scan.
@@ -89,6 +90,10 @@ function handoffFix(card = {}, index = 0, siteOrigin = "") {
   const samples = examplePages(affected, siteOrigin);
   const pagesAffected = positiveInt(evidence.pageCount) || affected.length;
   const redirects = redirectEvidence(evidence.redirectEvidence);
+  const observations = Array.isArray(evidence.repairObservationSamples)
+    ? evidence.repairObservationSamples.slice(0, 20).map((value) => ({ ...value }))
+    : [];
+  const observationCount = positiveInt(evidence.repairObservationCount) || observations.length;
 
   return {
     n: index + 1,
@@ -105,6 +110,10 @@ function handoffFix(card = {}, index = 0, siteOrigin = "") {
     example_pages: samples,
     example_pages_are_partial: pagesAffected > samples.length,
     ...(redirects.length > 0 ? { redirect_evidence: redirects } : {}),
+    ...(observationCount > 0 ? {
+      repair_observation_count: observationCount,
+      repair_observation_samples: observations,
+    } : {}),
   };
 }
 
@@ -138,6 +147,7 @@ export function buildScanHandoff({
     scanned_at: isoOrEmpty(scanRecord?.created_at),
     pages_found: positiveInt(pagesFound),
     pages_checked: positiveInt(pagesScanned),
+    scan_coverage: scanCoverageDisclosure(scanRecord),
     health_score: healthScoreAvailable ? Number(healthScore) : null,
     health_score_available: healthScoreAvailable,
     summary: clean(summary),

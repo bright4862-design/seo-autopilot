@@ -123,12 +123,14 @@ test("Access writes are backend-only and completion is billing-independent", () 
   assert.doesNotMatch(persistence, /entities\.Access|scans_used|ensureAllowanceConsumed/);
 });
 
-test("paid beta checkout is invite-only, default-off, and cannot allocate Access rows", () => {
+test("paid Standard 150 checkout is public when enabled and provisions pending access", () => {
   assert.match(checkout, /BETA_CHECKOUT_ENABLED/);
-  assert.match(checkout, /BETA_COHORT_ALLOWED_USER_IDS/);
-  assert.match(checkout, /const MAX_BETA_CUSTOMERS = 25/);
-  assert.match(checkout, /checkout_access_not_preprovisioned/);
-  assert.doesNotMatch(checkout, /entities\.Access\.create/);
+  assert.doesNotMatch(checkout, /BETA_COHORT_ALLOWED_USER_IDS/);
+  assert.doesNotMatch(checkout, /MAX_BETA_CUSTOMERS/);
+  assert.doesNotMatch(checkout, /checkout_not_invited|checkout_access_not_preprovisioned/);
+  assert.match(checkout, /entities\.Access\.create/);
+  assert.match(checkout, /access_status:\s*"pending"/);
+  assert.match(checkout, /grant_source:\s*"checkout_pending"/);
   assert.match(checkout, /await checkoutIdempotencyKey\(access, policy\.generation\)/);
 });
 

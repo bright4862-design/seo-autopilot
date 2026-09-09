@@ -85,3 +85,51 @@ def test_failed_page_evidence_is_not_fabricated():
     # every fix carries provenance
     assert all(f.get("source_pages") for f in r["cleaned_fixes"])
     assert r.get("review_evidence_contract_version") == "review_evidence_contract_v1"
+
+
+def test_broad_page_pattern_repairs_include_bounded_observed_samples_and_complete_count():
+    pages = []
+    for index in range(25):
+        pages.append({
+            "url": f"https://shop.example.com/products/item-{index}",
+            "final_url": f"https://shop.example.com/products/item-{index}",
+            "status_code": 200,
+            "content_type": "text/html",
+            "page_evidence_class": "usable_html",
+            "page_template_family": "product_page",
+            "canonical": "",
+            "canonical_url": "",
+            "canonical_status": "missing",
+            "h1": f"Item {index}",
+            "h1_count": 1,
+            "meta_description": "",
+            "meta_description_state": "missing",
+            "image_count": 0,
+            "image_missing_alt_count": 0,
+            "indexable": True,
+        })
+
+    result = run_review({
+        "website_url": "https://shop.example.com",
+        "pages_crawled": 25,
+        "pages_found": 25,
+        "pages": pages,
+    })
+    canonical = next(fix for fix in result["cleaned_fixes"] if fix.get("rule") == "canonical_missing")
+    metadata = next(fix for fix in result["cleaned_fixes"] if fix.get("category") == "meta_description")
+
+    assert canonical["repair_observation_count"] == 25
+    assert len(canonical["repair_observation_samples"]) == 20
+    assert canonical["repair_observation_samples"][0] == {
+        "page_url": "/products/item-0",
+        "status": 200,
+        "issue_type": "canonical_missing",
+        "canonical_url": "",
+    }
+    assert metadata["repair_observation_count"] == 25
+    assert len(metadata["repair_observation_samples"]) == 20
+    assert metadata["repair_observation_samples"][0]["page_url"] == "/products/item-0"
+    assert metadata["repair_observation_samples"][0]["status"] == 200
+    assert metadata["repair_observation_samples"][0]["meta_description"] == ""
+    assert metadata["repair_observation_samples"][0]["meta_description_state"] == "missing"
+    assert metadata["repair_observation_samples"][0]["issue_type"] in {"missing_meta_description", "meta_description_unusable"}

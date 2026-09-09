@@ -42,6 +42,10 @@ test("every V3 effective handler returns its expected runtime identity before au
     const response = await handler(new Request("https://identity.example", { method: "GET" }));
     assert.equal(response.status, 405, active);
     const body = await response.json();
+    // Production kept serving this pre-report activation after reporting the
+    // new package as unchanged. Every active handler must leave that generation.
+    assert.notEqual(body.runtime_activation_id, `${active}-fresh-20260907-v1`,
+      `${active} must not reuse the stale pre-report runtime activation`);
     for (const [field, option] of [["build_id", "--build-id"], ["runtime_activation_id", "--activation-id"]]) {
       const expected = execFileSync(process.execPath, ["scripts/generate_release_contracts.mjs", option, active], { encoding: "utf8" }).trim();
       assert.equal(body[field], expected, `${active} effective ${field}`);

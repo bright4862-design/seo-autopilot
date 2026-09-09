@@ -41,6 +41,19 @@ V3_FUNCTIONS=(
   deleteCustomerScanDataV3
 )
 
+# Exact stale build identities observed on all six routes after Release Publish
+# #133 reported them deployed but runtime attestation still returned the
+# September 7 activation generation. Recovery is intentionally incident-bound:
+# any other build with that marker is an uncharacterized state and refuses.
+declare -A V3_STALE_BUILD_IDS=(
+  [startStandardScanJobV3]="0b5465cb2230724e1d2320413e24830ddff6131aaed22f8ddb57275bcbda2b71"
+  [durableScanWorkerControlV3]="ad58d77373edbca90aad92b103d444aa676dc8dba5ee1437fb5464dd3424f413"
+  [persistDurableScanAuthorityV3]="c3d06e823cea841b3b461a753c4c3926d90c050e94e4a7375d3c62133b799317"
+  [persistLimitedScanResultV3]="c8a7282b26e267aa76eb2f067fd4593071e021209138d155be167407c5fb609a"
+  [getCustomerScanResultV3]="d7f681b2c965be72b077b20d6a713b9a82c679c42fc1c842255dab0769760de8"
+  [deleteCustomerScanDataV3]="6f6c73c198d7a20df923721d826c994f4d8d40decec0ecd313e8f9992f12f481"
+)
+
 canonical_of_v3() {
   node -e '
     const fs = require("node:fs");
@@ -101,10 +114,12 @@ route_serves_expected_v3_runtime() {
 }
 
 route_is_known_stale_v3() {
-  local name="$1" canonical="$2" stale_activation="$3"
+  local name="$1" canonical="$2" stale_activation="$3" stale_build
+  stale_build="${V3_STALE_BUILD_IDS[$name]:-}"
   route_reaches_json_handler || return 1
   route_is_known_stale_handler "$canonical" || return 1
-  valid_build_id "${PROBE_BUILD_ID:-}" || return 1
+  valid_build_id "$stale_build" || return 1
+  [[ "$PROBE_BUILD_ID" == "$stale_build" ]] || return 1
   [[ -n "$stale_activation" && "$PROBE_ACTIVATION_ID" == "$stale_activation" ]]
 }
 
@@ -204,6 +219,8 @@ recover_one_v3() {
     return 1
   fi
 
+  # Re-probe immediately before deletion. If the platform converged in the
+  # meantime, leave the now-current route untouched; any other state refuses.
   probe_v3_route "$name"
   if route_reaches_json_handler && route_serves_expected_v3_runtime "$V3_EXPECTED_BUILD" "$V3_EXPECTED_ACTIVATION"; then
     printf '  skip: became current between classification and deletion\n'

@@ -2,4 +2,4 @@
 // SHA-256 package identity for base44/functions/ownerScanDebugControl.
 // Every regular package file is covered except generatedBuildId.js itself.
 
-export const FUNCTION_BUILD_ID = "e035569994ae2849127049964fa896731123dcf3a50cd15320921705a326fb27";
+export const FUNCTION_BUILD_ID = "0e921389cf1654eddd5ee154e3d344af58bd489edddbec96e338505037526a91";

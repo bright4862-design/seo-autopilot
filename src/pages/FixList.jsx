@@ -27,6 +27,7 @@ import {
 } from "@/lib/repairCardModel";
 import { evidenceLink } from "@/lib/evidenceUrl";
 import { buildScanHandoff, scanHandoffFilename, serializeScanHandoff } from "@/lib/scanHandoff";
+import { buildCustomerRepairPlan } from "@/lib/customerRepairPlan";
 import { trackEvent } from "@/lib/analytics";
 import { samplingDisclosure } from "@/lib/samplingDisclosure";
 import { displayPathPrefix, focusedPathSections, focusedSectionOnboardingPath, orderFocusedScanHistory } from "@/lib/focusedScanScope";
@@ -396,7 +397,7 @@ export default function FixList() {
   );
   const hasUsefulScan = hasAuthoritativeScan || hasVerifiedLimitedScan;
   const noHighConfidenceFindings = isNoHighConfidenceFindings(scanRecord, recommendations);
-  const nextBestStep = getNextBestStep(scanRecord, noHighConfidenceFindings);
+  const storedNextBestStep = getNextBestStep(scanRecord, noHighConfidenceFindings);
   const websiteKey = websiteKeyOf(scanRecord);
   const websiteHost = safeHostname(scanRecord?.website_url) || websiteKey || "";
 
@@ -410,12 +411,20 @@ export default function FixList() {
     initialFixFirstLimit: 3,
   });
   const repairPresentation = repairWorkSurface.presentation;
-  const customerRepairCards = useMemo(
+  const rawCustomerRepairCards = useMemo(
     // The hints are applied to the finished set, not per card: whether a title
     // needs disambiguating is a fact about the whole FixList.
     () => repairPresentation.canonical === true ? withRepeatedTitleScopeHints(buildRepairCards(active)) : [],
     [active, repairPresentation.canonical],
   );
+  const customerRepairPlan = useMemo(
+    () => buildCustomerRepairPlan(rawCustomerRepairCards, { fallbackNextBestStep: storedNextBestStep }),
+    [rawCustomerRepairCards, storedNextBestStep],
+  );
+  const customerRepairCards = customerRepairPlan.cards;
+  const nextBestStep = repairPresentation.canonical === true
+    ? customerRepairPlan.nextBestStep
+    : storedNextBestStep;
   const displayedRepairCount = repairPresentation.canonical === true ? customerRepairCards.length : active.length;
   const legacyActive = repairPresentation.canonical || repairPresentation.unsupported ? [] : repairPresentation.legacyItems;
   const topPriorities = legacyActive.slice(0, 3);

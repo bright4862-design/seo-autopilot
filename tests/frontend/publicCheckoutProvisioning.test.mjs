@@ -118,3 +118,95 @@ test("first-time authenticated customer gets exactly one pending Access row befo
 test("public checkout source contains no static invitation membership gate", () => {
   assert.doesNotMatch(checkoutSource, /BETA_COHORT_ALLOWED_USER_IDS|checkout_not_invited|MAX_BETA_CUSTOMERS/);
 });
+
+test("simultaneous first-time checkout requests converge on one pending Access row", async () => {
+  const priorDeno = globalThis.Deno;
+  const env = new Map([
+    ["BETA_CHECKOUT_ENABLED", "true"],
+    ["BETA_CHECKOUT_GENERATION", "public-2026-09"],
+  ]);
+  let rows = [];
+  let createSequence = 0;
+  const sessionsByKey = new Map();
+
+  const Access = {
+    async filter(query) {
+      const snapshot = rows.filter((record) => (
+        (query.owner_user_id && query.owner_user_id === record.owner_user_id)
+        || (query.user_email && query.user_email === record.user_email)
+      )).map((record) => ({ ...record }));
+      if (rows.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+      return snapshot;
+    },
+    async create(fields) {
+      const record = { id: `access-${++createSequence}`, ...fields };
+      rows.push(record);
+      return { ...record };
+    },
+    async update(id, fields) {
+      const index = rows.findIndex((record) => record.id === id);
+      if (index < 0) throw new Error("missing access");
+      rows[index] = { ...rows[index], ...fields };
+      return { ...rows[index] };
+    },
+    async delete(id) {
+      rows = rows.filter((record) => record.id !== id);
+    },
+  };
+  const base44 = {
+    auth: { me: async () => ({ id: "user-race", email: "race@example.com" }) },
+    asServiceRole: { entities: { Access } },
+  };
+
+  class FakeStripe {
+    constructor() {
+      this.checkout = { sessions: {
+        retrieve: async (id) => sessionsByKey.get(id),
+        create: async (params, options) => {
+          if (!sessionsByKey.has(options.idempotencyKey)) {
+            sessionsByKey.set(options.idempotencyKey, {
+              id: "cs_race",
+              status: "open",
+              payment_status: "unpaid",
+              url: "https://checkout.stripe.test/cs_race",
+              customer_email: params.customer_email,
+              client_reference_id: params.client_reference_id,
+              metadata: params.metadata,
+            });
+          }
+          return sessionsByKey.get(options.idempotencyKey);
+        },
+      }};
+    }
+  }
+
+  globalThis.Deno = { env: { get: (name) => env.get(name) } };
+  globalThis.__publicCheckoutRaceHarness = {
+    createClientFromRequest: () => base44,
+    Stripe: FakeStripe,
+    secrets: { get: () => "test-secret" },
+    console: { error: () => {} },
+  };
+
+  try {
+    const { default: handler } = await importHandlerWithHarness(
+      checkoutSource,
+      "__publicCheckoutRaceHarness",
+    );
+    const invoke = () => handler(new Request("https://function.test", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ origin: "https://rich-rank-pilot-flow.base44.app" }),
+    }));
+    const responses = await Promise.all([invoke(), invoke()]);
+    assert.deepEqual(responses.map((response) => response.status), [200, 200]);
+    assert.equal(rows.length, 1, "only one pending access record survives the race");
+    assert.equal(rows[0].owner_user_id, "user-race");
+    assert.equal(rows[0].user_email, "race@example.com");
+    assert.equal(rows[0].stripe_checkout_session_id, "cs_race");
+  } finally {
+    delete globalThis.__publicCheckoutRaceHarness;
+    if (priorDeno === undefined) delete globalThis.Deno;
+    else globalThis.Deno = priorDeno;
+  }
+});

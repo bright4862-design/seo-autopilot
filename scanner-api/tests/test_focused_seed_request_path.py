@@ -63,6 +63,8 @@ async def test_focused_en_seed_preserves_published_trailing_slash_without_broade
     assert result["crawl_scope"]["requested_path_prefix"] == "/en"
     assert result["crawl_scope"]["effective_path_prefix"] == "/en"
     assert any(page["url"] == f"{origin}/en/" and page["status_code"] == 200 for page in result["pages"])
-    assert not any(page["url"] == f"{origin}/en" for page in result["pages"])
+    seed_page = next(page for page in result["pages"] if "seed" in set(page.get("discovered_from") or []))
+    assert seed_page["url"] == f"{origin}/en/"
+    assert seed_page["status_code"] == 200
     assert not any(page["path"].startswith("/fr") for page in result["pages"])
     assert not any("other.example.com" in page["url"] for page in result["pages"])

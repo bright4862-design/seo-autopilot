@@ -62,6 +62,24 @@ test("JSON handoff preserves observed repair evidence and truthful integer scan 
   });
   assert.equal(handoff.fixes[0].repair_observation_count, 25);
   assert.deepEqual(handoff.fixes[0].repair_observation_samples, persisted.raw_finding.repair_observation_samples);
+
+  const redirectHandoff = buildScanHandoff({
+    scanRecord: { website_url: "https://example.com" },
+    cards: [{
+      ...card,
+      evidence: {
+        ...card.evidence,
+        redirectEvidence: [{
+          requested_url: "https://example.com/old",
+          final_url: "https://example.com/final",
+          final_status: 0,
+          fetch_error: "timed out",
+          classification: "redirect_destination_unverified",
+        }],
+      },
+    }],
+  });
+  assert.equal(redirectHandoff.fixes[0].redirect_evidence[0].verification_state, "needs_verification");
 });
 
 test("coverage disclosure rejects strings and legacy inferred fields", () => {

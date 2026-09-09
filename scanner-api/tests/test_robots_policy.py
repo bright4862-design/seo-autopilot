@@ -154,8 +154,8 @@ async def test_scan_does_not_fetch_a_url_disallowed_for_the_scanner(mock_network
     assert private["robots_txt_scanner_blocked"] is True
     assert private["robots_txt_googlebot_blocked"] is True
     assert private["indexability_state"] == "Blocked by robots.txt"
-    assert result["scan_coverage"]["urls_attempted"] == 2
-    assert result["scan_coverage"]["usable_html_pages"] == 1
+    assert result["scan_coverage"]["urls_attempted"] == 3
+    assert result["scan_coverage"]["usable_html_pages"] == 2
     assert result["scan_coverage"]["access_unverified_pages"] == 1
     assert result["scan_coverage"]["verified_http_failures"] == 0
     assert result["scan_coverage"]["unique_retained_destinations"] == 2

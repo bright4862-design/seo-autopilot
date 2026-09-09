@@ -342,3 +342,35 @@ def test_wrong_destination_evidence_survives_final_url_dedup_against_retained_ho
     wrong = next(item for item in findings if item["rule"] == "redirect_wrong_destination")
     assert wrong["affected_pages"] == ["/property-management-in-baltimore/mt-vernon"]
     assert wrong["redirect_fetch_evidence"]["final_url"] == "https://example.com/"
+
+@pytest.mark.asyncio
+async def test_usable_redirect_destination_keeps_its_own_content_findings_on_final_url(policy):
+    final_html = (
+        '<html><head><title>Final service page</title></head>'
+        '<body><p>Useful final-page content.</p><img src="/hero.jpg"></body></html>'
+    )
+    client = FakeClient({
+        "https://example.com/old-service": _response(
+            "https://example.com/old-service", 301, location="/final-service"
+        ),
+        "https://example.com/final-service": _response(
+            "https://example.com/final-service", 200, body=final_html
+        ),
+    })
+
+    page = await fetch_and_extract(
+        client,
+        "https://example.com/old-service",
+        DISCOVERY_INTERNAL,
+        robots_policy=policy,
+    )
+    findings = build_findings([page])
+
+    assert any(
+        item["rule"] == "internal_link_redirect" and item["affected_pages"] == ["/old-service"]
+        for item in findings
+    )
+    for rule in {"missing_meta_description", "missing_h1", "canonical_missing", "image_alt_text"}:
+        finding = next(item for item in findings if item["rule"] == rule)
+        assert finding["affected_pages"] == ["/final-service"]
+    assert not any(item["rule"] == "sitemap_indexability_conflict" for item in findings)

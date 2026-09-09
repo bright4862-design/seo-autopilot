@@ -932,6 +932,41 @@ async def fetch_and_extract(
         return extract_page("", url, url, 0, "", discovery, fetch_error=str(exc)[:220])
 
 
+def _redirect_destination_content_view(page: dict) -> dict | None:
+    evidence = page.get("redirect_fetch_evidence")
+    if not isinstance(evidence, dict) or evidence.get("html_parse_ok") is not True:
+        return None
+    final_status = int(evidence.get("final_status") or 0)
+    final_url = str(evidence.get("final_url") or page.get("final_url") or "").strip()
+    if not 200 <= final_status < 300 or not final_url:
+        return None
+
+    view = dict(page)
+    destination_state = str(page.get("redirect_destination_indexability_state") or "Indexable")
+    view.update({
+        "url": final_url,
+        "final_url": final_url,
+        "path": urlparse(final_url).path or "/",
+        "status_code": final_status,
+        "fetch_error": "",
+        # Discovery provenance belongs to the redirect source. The destination
+        # gets content findings only from the HTML we actually parsed.
+        "discovered_from": [],
+        "source_pages": [],
+        "link_text_samples": [],
+        "redirect_state": "not_redirected",
+        "redirect_outcome": "",
+        "redirect_hop_count": 0,
+        "redirect_hops": [],
+        "redirect_chain": [],
+        "redirect_aliases": [],
+        "indexability_state": destination_state,
+        "robots_indexability_status": destination_state.lower().replace(" ", "_"),
+        "indexable": page.get("redirect_destination_indexable") is True,
+    })
+    return view
+
+
 def build_findings(pages: list[dict]) -> list[dict]:
     findings: list[dict] = []
     for page in pages:
@@ -948,7 +983,11 @@ def build_findings(pages: list[dict]) -> list[dict]:
             if alias_finding is not None:
                 findings.append(alias_finding)
         if page_is_redirect_source(page):
-            continue
+            destination_page = _redirect_destination_content_view(page)
+            if destination_page is None:
+                continue
+            page = destination_page
+            path = page.get("path") or "/"
         if sitemap_indexability_conflict(page):
             findings.append(create_finding(
                 rule="sitemap_indexability_conflict",

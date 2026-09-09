@@ -472,3 +472,43 @@ def test_redirect_summary_is_order_independent_when_final_url_deduplicates():
     for key in ("redirected_pages", "state_counts", "outcome_counts", "internal_link_redirects"):
         assert summary_final_first[key] == summary_alias_first[key]
     assert summary_final_first["redirected_pages"] == 1
+
+
+def test_mixed_redirect_alias_outcomes_survive_one_final_destination_without_cross_classification():
+    homepage = extract_page(
+        '<html><head><title>Home</title></head><body><h1>Home</h1></body></html>',
+        "https://example.com/",
+        "https://example.com/",
+        200,
+        "text/html",
+        {"discovered_from": ["seed"], "source_pages": [], "link_text_samples": []},
+    )
+    wrong = _wrong_destination_alias("/locations/deprecated")
+    usable = _wrong_destination_alias("/home")
+    usable.update({
+        "redirect_outcome": "redirect_to_usable_page",
+        "redirect_source_url": "https://example.com/home",
+        "redirect_source_path": "/home",
+        "url": "https://example.com/home",
+        "path": "/",
+        "redirect_fetch_evidence": {
+            **usable["redirect_fetch_evidence"],
+            "requested_url": "https://example.com/home",
+            "classification": "redirect_to_usable_page",
+        },
+    })
+
+    merge_duplicate_page_evidence(homepage, usable)
+    merge_duplicate_page_evidence(homepage, wrong)
+
+    summary = summarize_redirect_evidence([homepage])
+    assert summary["redirected_pages"] == 2
+    assert summary["outcome_counts"] == {
+        "redirect_to_usable_page": 1,
+        "redirect_to_wrong_destination": 1,
+    }
+    assert summary["internal_link_redirects"] == 2
+
+    rules = [item["rule"] for item in build_findings([homepage])]
+    assert rules.count("internal_link_redirect") == 1
+    assert rules.count("redirect_wrong_destination") == 1

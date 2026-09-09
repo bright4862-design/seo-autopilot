@@ -60,7 +60,13 @@ function redirectEvidence(values) {
   return values
     .filter((value) => value && typeof value === "object" && !Array.isArray(value))
     .slice(0, MAX_REDIRECT_EVIDENCE)
-    .map((value) => ({ ...value }));
+    .map((value) => {
+      const classification = clean(value.classification).toLowerCase();
+      const verificationState = classification === "redirect_destination_unverified" || clean(value.fetch_error)
+        ? "needs_verification"
+        : "verified";
+      return { ...value, verification_state: verificationState };
+    });
 }
 
 /**

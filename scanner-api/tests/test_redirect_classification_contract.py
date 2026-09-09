@@ -238,7 +238,12 @@ async def test_sitemap_trailing_slash_redirect_is_normalization_not_broken(polic
     page = await fetch_and_extract(client, "https://example.com/about", DISCOVERY_SITEMAP, robots_policy=policy)
 
     assert page["redirect_outcome"] == "redirect_to_usable_page"
-    assert _rules(page) == {"sitemap_redirect"}
+    rules = _rules(page)
+    assert "sitemap_redirect" in rules
+    assert "redirect_destination_failed" not in rules
+    assert "redirect_wrong_destination" not in rules
+    description = next(item for item in build_findings([page]) if item["rule"] == "missing_meta_description")
+    assert description["affected_pages"] == ["/about/"]
 
 
 @pytest.mark.asyncio

@@ -161,7 +161,7 @@ test("simultaneous first-time checkout requests converge on one pending Access r
   class FakeStripe {
     constructor() {
       this.checkout = { sessions: {
-        retrieve: async (id) => sessionsByKey.get(id),
+        retrieve: async (id) => Array.from(sessionsByKey.values()).find((session) => session.id === id),
         create: async (params, options) => {
           if (!sessionsByKey.has(options.idempotencyKey)) {
             sessionsByKey.set(options.idempotencyKey, {

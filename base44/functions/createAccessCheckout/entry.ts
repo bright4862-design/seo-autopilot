@@ -119,6 +119,44 @@ async function findOwnedAccess(base44, userId, email) {
   return uniqueRecords([...(byUser || []), ...(byEmail || [])]);
 }
 
+function isSafePendingCheckoutAccess(access, userId, email) {
+  return Boolean(
+    access
+    && String(access.owner_user_id || "").trim() === userId
+    && normalizeEmail(access.user_email) === email
+    && String(access.access_status || "").trim() === "pending"
+    && access.has_full_access !== true
+    && String(access.plan_id || "") === PLAN_ID
+    && String(access.app_id || "") === APP_ID
+    && String(access.grant_source || "") === "checkout_pending"
+    && !String(access.paid_at || "").trim()
+    && !String(access.stripe_payment_intent_id || "").trim()
+    && !String(access.stripe_event_id || "").trim()
+  );
+}
+
+async function reconcilePendingCheckoutAccess(base44, rows, userId, email) {
+  const records = uniqueRecords(rows);
+  if (records.length <= 1) return records;
+  if (!records.every((record) => isSafePendingCheckoutAccess(record, userId, email))) return records;
+
+  const withSession = records.filter((record) => String(record.stripe_checkout_session_id || "").trim());
+  if (withSession.length > 1) return records;
+  const canonical = withSession[0] || [...records].sort((a, b) => String(a.id).localeCompare(String(b.id)))[0];
+  const duplicates = records.filter((record) => record.id !== canonical.id);
+  if (duplicates.some((record) => String(record.stripe_checkout_session_id || "").trim())) return records;
+
+  await Promise.all(duplicates.map(async (record) => {
+    try {
+      await base44.asServiceRole.entities.Access.delete(record.id);
+    } catch {
+      // Another concurrent request may already have removed the same safe
+      // pending duplicate. The authoritative re-read below decides success.
+    }
+  }));
+  return findOwnedAccess(base44, userId, email);
+}
+
 function checkoutAccessStateResponse(access) {
   const status = String(access?.access_status || "").trim();
   if (status === "revoked") {
@@ -174,6 +212,7 @@ export default async function (req) {
     }
 
     let rows = await findOwnedAccess(base44, userId, email);
+    if (rows.length > 1) rows = await reconcilePendingCheckoutAccess(base44, rows, userId, email);
     if (rows.length > 1) {
       return Response.json(
         { error: "Your access record needs support before checkout can continue.", code: "duplicate_access" },
@@ -193,7 +232,8 @@ export default async function (req) {
         has_full_access: false,
       });
       rows = await findOwnedAccess(base44, userId, email);
-      if (rows.length !== 1 || String(rows[0]?.id || "") !== String(created?.id || "")) {
+      if (rows.length > 1) rows = await reconcilePendingCheckoutAccess(base44, rows, userId, email);
+      if (rows.length !== 1) {
         return Response.json(
           { error: "Checkout could not establish a unique access record.", code: "access_conflict" },
           { status: 409 },
@@ -214,6 +254,7 @@ export default async function (req) {
     if (initialStateResponse) return initialStateResponse;
 
     rows = await findOwnedAccess(base44, userId, email);
+    if (rows.length > 1) rows = await reconcilePendingCheckoutAccess(base44, rows, userId, email);
     if (rows.length !== 1 || rows[0]?.id !== access?.id) {
       return Response.json(
         { error: "Checkout could not establish a unique access record.", code: "access_conflict" },

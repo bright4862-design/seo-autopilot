@@ -7,7 +7,7 @@ import UnlockAccessButton from "@/components/billing/UnlockAccessButton";
 import { loadAccess, UNLOCK_PRICE_LABEL } from "@/lib/access";
 
 const plans = [
-  { id: "standard_150", name: "Standard 150 beta", price: "$50 one-time", desc: "Paid lifetime beta access to the production Standard 150 scanner.", features: ["Unlimited Standard 150 scans", "Complete FixList", "Plain-English recommendations"] },
+  { id: "standard_150", name: "Standard 150", price: "$50 one-time", desc: "Lifetime access to the production Standard 150 scanner.", features: ["Unlimited Standard 150 scans", "Complete FixList", "Plain-English recommendations"] },
   { id: "rebuild", name: "Website rebuild", price: "$300", desc: "For larger website structure or migration projects.", features: ["Site structure planning", "Safe migration plan", "Post-launch review"] },
   { id: "grok_ai_helper", name: "Grok AI helper", price: "Coming soon", desc: "An AI helper that answers questions about your scan and walks you through each fix.", features: ["Ask about any fix", "Step-by-step guidance", "Grounded in your scan"], comingSoon: true },
   { id: "premium_scanner", name: "Premium 5,000 page scanner", price: "Coming soon", desc: "Deep scans for large websites, up to 5,000 pages per run.", features: ["Up to 5,000 pages", "Full-site coverage", "Priority scan queue"], comingSoon: true },
@@ -247,7 +247,7 @@ export default function Billing() {
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Account</p>
           <h1 className="mt-2 text-[28px] font-semibold leading-tight tracking-[-0.035em]">Billing</h1>
           <p className="mt-2 max-w-[54ch] text-[15px] leading-relaxed text-ink-muted">
-            Standard 150 beta access is a one-time payment. Checkout is securely handled by Stripe.
+            Standard 150 access is a one-time payment. Checkout is securely handled by Stripe.
           </p>
         </div>
 
@@ -257,7 +257,7 @@ export default function Billing() {
               <p className="text-[12px] font-medium text-ink-faint">Current plan</p>
               <p className="mt-1 text-[17px] font-medium tracking-tight">
                 {access?.fullAccess
-                  ? "Standard 150 beta"
+                  ? "Standard 150"
                   : checkoutSuppressed
                     ? "Standard 150 activation pending"
                     : accessLoaded
@@ -324,7 +324,7 @@ export default function Billing() {
             <>
               <h2 className="text-[18px] font-semibold tracking-tight">Unlock full access — {UNLOCK_PRICE_LABEL}</h2>
               <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">
-                A one-time {UNLOCK_PRICE_LABEL} payment unlocks lifetime beta access to unlimited Standard 150 scans and the complete FixList — every fix, every affected page, and all passed checks.
+                A one-time {UNLOCK_PRICE_LABEL} payment unlocks lifetime access to unlimited Standard 150 scans and the complete FixList — every fix, every affected page, and all passed checks.
               </p>
               <div className="mt-5">
                 <UnlockAccessButton />
@@ -375,7 +375,7 @@ export default function Billing() {
         </div>
 
         <footer className="mt-24 border-t border-hairline-soft pt-5 text-[12px] leading-relaxed text-ink-faint">
-          Standard 150 is the only paid scanner in this beta. Grok and Premium remain unavailable.
+          Standard 150 is the only paid scanner currently available. Grok and Premium remain unavailable.
         </footer>
 
         {leadModal && <LeadRequestModal requestType={leadModal.type} selectedPlan={leadModal.plan} onClose={() => setLeadModal(null)} />}

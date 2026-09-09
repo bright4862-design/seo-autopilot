@@ -9,6 +9,26 @@ function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function isClaimableManualGrant(record, user = {}) {
+  const email = normalizeEmail(user?.email);
+  return Boolean(
+    record
+    && email
+    && normalizeEmail(record.user_email) === email
+    && !String(record.owner_user_id || "").trim()
+    && record.has_full_access === true
+    && record.access_status === "active"
+    && record.plan_id === "standard150_lifetime"
+    && record.app_id === "6a498732ec779dfaaeab0e53"
+    && record.grant_source === "manual_grant"
+    && Number.isFinite(Date.parse(String(record.granted_at || "")))
+  );
+}
+
+function claimedAccessRecord(response) {
+  return response?.data?.access || response?.data?.data?.access || null;
+}
+
 export function isActivePaidAccess(record, user = {}) {
   const email = normalizeEmail(user?.email);
   const userId = String(user?.id || "").trim();
@@ -56,7 +76,17 @@ export async function loadAccess() {
   }
 
   const rows = Array.isArray(records) ? records : [];
-  const record = rows.length === 1 ? rows[0] : null;
+  let record = rows.length === 1 ? rows[0] : null;
+  if (isClaimableManualGrant(record, user)) {
+    try {
+      const response = await base44.functions.invoke("claimComplimentaryAccess", {});
+      const claimed = claimedAccessRecord(response);
+      if (claimed) record = claimed;
+    } catch {
+      // Fail closed: an unbound grant is never treated as access unless the
+      // authenticated exact-email claim succeeds on the server.
+    }
+  }
   const fullAccess = isActivePaidAccess(record, user);
 
   return {

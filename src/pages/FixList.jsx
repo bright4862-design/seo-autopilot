@@ -1521,7 +1521,7 @@ function LockedResultState() {
     <div className="mt-16 rounded-2xl border border-hairline-soft bg-white p-6">
       <h1 className="text-[22px] font-semibold tracking-tight">Your saved result is locked</h1>
       <p className="mt-2 max-w-[52ch] text-[14px] leading-relaxed text-ink-muted">
-        Activate Standard 150 beta access for {UNLOCK_PRICE_LABEL} to open verified fixes and run scans. Result details stay on the server until access is confirmed.
+        Activate Standard 150 access for {UNLOCK_PRICE_LABEL} to open verified fixes and run scans. Result details stay on the server until access is confirmed.
       </p>
       <div className="mt-5">
         <UnlockAccessButton />

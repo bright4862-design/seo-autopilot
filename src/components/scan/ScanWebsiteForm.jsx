@@ -206,7 +206,7 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
       submitLockRef.current = false;
       setSubmitting(false);
       setActiveStep("");
-      setError(`A paid FixList beta pass is required to run Standard 150 scans. Unlock lifetime access for ${UNLOCK_PRICE_LABEL} on the Billing page.`);
+      setError(`Standard 150 access is required to run scans. Unlock lifetime access for ${UNLOCK_PRICE_LABEL} on the Billing page.`);
       return;
     }
 
@@ -890,12 +890,12 @@ function serverProvidedDetail(value) {
 function customerScanAdmissionMessage(code, serverDetail = "") {
   // Curated admission copy remains first choice because it is more actionable.
   const messages = {
-    scan_admission_paused: "New beta scans are temporarily paused. Your existing results are still available.",
+    scan_admission_paused: "New scans are temporarily paused. Your existing results are still available.",
     scan_not_invited: "This Standard 150 beta cohort is currently invite-only.",
     scan_admission_busy: "Another scan is already running for this account. Open the dashboard to follow it before starting another.",
     scan_admission_pending: "This scan request is still being prepared. Please wait a few seconds and try again.",
     scan_atomic_admission_unconfirmed: "New scans are temporarily unavailable while the admission coordinator is verified.",
-    scan_admission_configuration_invalid: "New scans are temporarily unavailable because the beta cohort is not configured.",
+    scan_admission_configuration_invalid: "New scans are temporarily unavailable because scan admission is not configured.",
   };
   const curated = messages[String(code || "")];
   if (curated) return curated;

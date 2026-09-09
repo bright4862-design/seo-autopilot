@@ -2,11 +2,10 @@ import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import Stripe from "npm:stripe@17.5.0";
 import { secrets } from "base44:runtime";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "checkout-prod-reactivation-20260903-v1";
+const BASE44_RUNTIME_ACTIVATION_ID = "checkout-public-access-20260909-v1";
 
 const APP_ID = "6a498732ec779dfaaeab0e53";
 const PLAN_ID = "standard150_lifetime";
-const MAX_BETA_CUSTOMERS = 25;
 const PRODUCTION_APP_ORIGIN = "https://rich-rank-pilot-flow.base44.app";
 const PRICE_DATA = {
   currency: "usd",
@@ -66,29 +65,14 @@ function betaCheckoutPolicy() {
     .trim()
     .toLowerCase() === "true";
   if (!enabled) {
-    return { ok: false, code: "checkout_paused", allowedUserIds: [], generation: "" };
+    return { ok: false, code: "checkout_paused", generation: "" };
   }
 
   const generation = String(Deno.env.get("BETA_CHECKOUT_GENERATION") || "").trim();
-  const allowedUserIds = Array.from(new Set(
-    String(Deno.env.get("BETA_COHORT_ALLOWED_USER_IDS") || "")
-      .split(/[\s,]+/)
-      .map((value) => value.trim())
-      .filter(Boolean),
-  ));
-  const valid = BETA_GENERATION_PATTERN.test(generation)
-    && allowedUserIds.length > 0
-    && allowedUserIds.length <= MAX_BETA_CUSTOMERS
-    && allowedUserIds.every((userId) => BETA_USER_ID_PATTERN.test(userId));
-  if (!valid) {
-    return {
-      ok: false,
-      code: "checkout_configuration_invalid",
-      allowedUserIds: [],
-      generation: "",
-    };
+  if (!BETA_GENERATION_PATTERN.test(generation)) {
+    return { ok: false, code: "checkout_configuration_invalid", generation: "" };
   }
-  return { ok: true, code: "", allowedUserIds, generation };
+  return { ok: true, code: "", generation };
 }
 
 async function checkoutIdempotencyKey(access, generation) {
@@ -172,27 +156,20 @@ export default async function (req) {
       );
     }
 
-    // Paid beta admission is fail-closed. The allowlist itself is the hard seat
-    // cap, so no concurrent checkout can allocate a 26th place. Operators must
-    // pre-provision exactly one Access row for each invited ID before enabling
-    // this generation; checkout never creates entitlement rows.
+    // Checkout remains release-gated, but access is no longer invitation-gated.
+    // A first-time authenticated customer receives only a pending entitlement;
+    // Stripe's verified webhook is still the only paid path that activates it.
     const policy = betaCheckoutPolicy();
     if (!policy.ok) {
       const configurationInvalid = policy.code === "checkout_configuration_invalid";
       return Response.json(
         {
           error: configurationInvalid
-            ? "Checkout is not configured for this beta cohort."
+            ? "Checkout is not configured."
             : "Checkout is temporarily paused.",
           code: policy.code,
         },
         { status: 503 },
-      );
-    }
-    if (!policy.allowedUserIds.includes(userId)) {
-      return Response.json(
-        { error: "This paid beta cohort is currently invite-only.", code: "checkout_not_invited" },
-        { status: 403 },
       );
     }
 
@@ -206,13 +183,23 @@ export default async function (req) {
 
     let access = rows[0] || null;
     if (!access) {
-      return Response.json(
-        {
-          error: "Your beta access invitation is not ready yet.",
-          code: "checkout_access_not_preprovisioned",
-        },
-        { status: 409 },
-      );
+      const created = await base44.asServiceRole.entities.Access.create({
+        user_email: email,
+        owner_user_id: userId,
+        access_status: "pending",
+        plan_id: PLAN_ID,
+        grant_source: "checkout_pending",
+        app_id: APP_ID,
+        has_full_access: false,
+      });
+      rows = await findOwnedAccess(base44, userId, email);
+      if (rows.length !== 1 || String(rows[0]?.id || "") !== String(created?.id || "")) {
+        return Response.json(
+          { error: "Checkout could not establish a unique access record.", code: "access_conflict" },
+          { status: 409 },
+        );
+      }
+      access = rows[0];
     }
     if (
       String(access.owner_user_id || "").trim() !== userId

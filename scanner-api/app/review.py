@@ -1355,6 +1355,35 @@ META_DESCRIPTION_RULE_ORDER = (
     "empty_meta_description",
     "malformed_meta_description",
 )
+REPAIR_OBSERVATION_SAMPLE_LIMIT = 20
+
+
+def repair_observation(page: dict[str, Any], rule: str) -> dict[str, Any]:
+    """Bounded factual evidence for one repair; never invent replacement content."""
+    sample: dict[str, Any] = {
+        "page_url": clean_path(page_evidence_url(page)),
+        "status": int_or_zero(page.get("status_code") or page.get("status")),
+        "issue_type": rule,
+    }
+    if rule in {"canonical_missing", "missing_canonical"}:
+        sample["canonical_url"] = clean_str(page.get("canonical") or page.get("canonical_url"))
+    elif rule in {"missing_meta_description", "empty_meta_description", "malformed_meta_description", "meta_description_unusable"}:
+        sample["meta_description"] = clean_str(page.get("meta_description"))
+        sample["meta_description_state"] = clean_str(page.get("meta_description_state")) or (
+            "present_valid" if clean_str(page.get("meta_description")) else "missing"
+        )
+    elif rule in {"missing_h1", "multiple_h1"}:
+        sample["h1"] = clean_str(page.get("h1"))
+        sample["h1_count"] = int_or_zero(page.get("h1_count"))
+    return sample
+
+
+def repair_observation_evidence(pages: list[dict[str, Any]], rule: str) -> dict[str, Any]:
+    observations = [repair_observation(page, rule) for page in pages if page_evidence_url(page)]
+    return {
+        "repair_observation_count": len(observations),
+        "repair_observation_samples": observations[:REPAIR_OBSERVATION_SAMPLE_LIMIT],
+    }
 
 
 def add_metadata_bucket(buckets: dict[tuple[str, str], dict[str, Any]], family: str, page: dict[str, Any], state: str) -> None:
@@ -1497,6 +1526,7 @@ def build_page_pattern_findings(pages: list[dict[str, Any]]) -> list[dict[str, A
                 "combined_rules": combined_rules,
                 "grouping_explanation": grouping_explanation,
                 "grouped_recommendation_evidence_version": GROUPED_RECOMMENDATION_EVIDENCE_VERSION,
+                **repair_observation_evidence(bucket["pages"], output_rule),
             },
         ))
     return fixes

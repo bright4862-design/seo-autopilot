@@ -54,6 +54,60 @@ REPAIR_SURFACE_GROUPING_VERSION = "repair_surface_grouping_v1_shared_artifact"
 # The Python crawler does not derive an AI crawl policy (no InvokeLLM here), but it
 # still emits the policy contract so AI Review keeps provenance. source="disabled"
 # mirrors the Deno path when policy derivation is off.
+def _new_scan_coverage_counters() -> dict:
+    return {
+        "urls_attempted": 0,
+        "usable_html_pages": 0,
+        "verified_http_failures": 0,
+        "access_unverified_pages": 0,
+        "non_html_resources": 0,
+    }
+
+
+def _access_unverified_observation(page: dict) -> bool:
+    status = int(page.get("status_code") or 0)
+    redirect_state = str(page.get("redirect_state") or "")
+    fetch_error = str(page.get("fetch_error") or "").strip()
+    if redirect_state in {
+        "redirect_destination_unverified",
+        "redirect_destination_blocked_by_robots",
+        "blocked_non_public_redirect",
+    }:
+        return True
+    if status in {401, 403, 407, 408, 425, 429}:
+        return True
+    if status <= 0 and fetch_error:
+        return True
+    if fetch_error.startswith("blocked_"):
+        return True
+    return False
+
+
+def _observe_scan_coverage(counters: dict, page: dict) -> None:
+    counters["urls_attempted"] = int(counters.get("urls_attempted") or 0) + 1
+    if page_has_usable_html(page):
+        counters["usable_html_pages"] = int(counters.get("usable_html_pages") or 0) + 1
+    status = int(page.get("status_code") or 0)
+    if status >= 400:
+        counters["verified_http_failures"] = int(counters.get("verified_http_failures") or 0) + 1
+    if _access_unverified_observation(page):
+        counters["access_unverified_pages"] = int(counters.get("access_unverified_pages") or 0) + 1
+    content_type = str(page.get("content_type") or "").lower()
+    if 200 <= status < 300 and content_type and "html" not in content_type:
+        counters["non_html_resources"] = int(counters.get("non_html_resources") or 0) + 1
+
+
+def _finalize_scan_coverage(counters: dict, retained_pages: list[dict]) -> dict:
+    return {
+        "urls_attempted": max(0, int(counters.get("urls_attempted") or 0)),
+        "usable_html_pages": max(0, int(counters.get("usable_html_pages") or 0)),
+        "verified_http_failures": max(0, int(counters.get("verified_http_failures") or 0)),
+        "access_unverified_pages": max(0, int(counters.get("access_unverified_pages") or 0)),
+        "non_html_resources": max(0, int(counters.get("non_html_resources") or 0)),
+        "unique_retained_destinations": len(retained_pages),
+    }
+
+
 DEFAULT_POLICY = {
     "rendering_mode": "unknown",
     "platform_guess": "",
@@ -346,7 +400,7 @@ async def run_scan(
     scan_started_at = time.monotonic()
     scan_started_wall_clock = utc_now_iso()
     deadline = scan_started_at + budget["timeout"]
-    start_url = normalize_url(website_url)
+    start_url = normalize_published_request_url(website_url)
     if not start_url:
         return {"success": False, "version": VERSION, "error": "Missing or invalid website_url."}
     if not is_public_http_url(start_url):
@@ -383,7 +437,7 @@ async def run_scan(
     artifacts: list[dict] = []
 
     def enqueue(url: str, source: str, source_page: str = "", link_text: str = "") -> None:
-        clean = normalize_url(url)
+        clean = normalize_published_request_url(url) if source == "seed" else normalize_url(url)
         if not clean:
             if is_artifact_url(url):
                 record_artifact(artifacts, url, source, source_page, link_text)
@@ -531,8 +585,10 @@ async def run_scan(
         for url in sampled_sitemap_urls:
             enqueue(url, "sitemap", "/sitemap.xml", "")
 
+        scan_coverage_counters = _new_scan_coverage_counters()
         if initial_rate_limit_page is not None:
             annotate_robots_evidence(initial_rate_limit_page, robots_policy, start_url)
+            _observe_scan_coverage(scan_coverage_counters, initial_rate_limit_page)
             initial_rate_limit_page.pop("_html", None)
             pages.append(initial_rate_limit_page)
             identity = final_url_identity(initial_rate_limit_page.get("final_url") or initial_rate_limit_page.get("url") or "")
@@ -650,6 +706,7 @@ async def run_scan(
                 finally:
                     async with state_lock:
                         if page is not None:
+                            _observe_scan_coverage(scan_coverage_counters, page)
                             identity = final_url_identity(page.get("final_url") or page.get("url") or "")
                             retained = final_pages.get(identity) if identity else None
                             if retained is not None:
@@ -684,6 +741,7 @@ async def run_scan(
         # count pages the result never contains, which is the same class of
         # overstatement the selection counts were already making.
         enrich_checked_coverage(sampling_evidence, pages, path_of)
+        scan_coverage = _finalize_scan_coverage(scan_coverage_counters, pages)
         canonical_target_evidence = await validate_canonical_targets(
             client,
             pages,
@@ -691,6 +749,8 @@ async def run_scan(
             deadline=timing_budget["crawl_deadline"],
         )
         redirect_evidence = summarize_redirect_evidence(pages)
+        for page in pages:
+            page.pop("_redirect_alias_identity_keys", None)
 
     findings = build_findings(pages)
     findings.extend(duplicate_title_findings(pages))
@@ -789,6 +849,7 @@ async def run_scan(
         "scan_deadline_reached": deadline_reached,
         "pages_crawled": len(pages),
         "pages_found": pages_found,
+        "scan_coverage": scan_coverage,
         "queued_remaining": len(queue),
         "pages": pages,
         "crawled_pages": pages,
@@ -820,6 +881,7 @@ async def run_scan(
             "scan_deadline_reached": deadline_reached,
             "pages_crawled": len(pages),
             "pages_found": pages_found,
+            "scan_coverage": scan_coverage,
             "failed_pages": sum(1 for page in pages if is_verified_failed(page)),
             "verified_failed_pages": len(verified_failed),
             "suspicious_url_artifacts": len(artifacts),
@@ -932,6 +994,41 @@ async def fetch_and_extract(
         return extract_page("", url, url, 0, "", discovery, fetch_error=str(exc)[:220])
 
 
+def _redirect_destination_content_view(page: dict) -> dict | None:
+    evidence = page.get("redirect_fetch_evidence")
+    if not isinstance(evidence, dict) or evidence.get("html_parse_ok") is not True:
+        return None
+    final_status = int(evidence.get("final_status") or 0)
+    final_url = str(evidence.get("final_url") or page.get("final_url") or "").strip()
+    if not 200 <= final_status < 300 or not final_url:
+        return None
+
+    view = dict(page)
+    destination_state = str(page.get("redirect_destination_indexability_state") or "Indexable")
+    view.update({
+        "url": final_url,
+        "final_url": final_url,
+        "path": urlparse(final_url).path or "/",
+        "status_code": final_status,
+        "fetch_error": "",
+        # Discovery provenance belongs to the redirect source. The destination
+        # gets content findings only from the HTML we actually parsed.
+        "discovered_from": [],
+        "source_pages": [],
+        "link_text_samples": [],
+        "redirect_state": "not_redirected",
+        "redirect_outcome": "",
+        "redirect_hop_count": 0,
+        "redirect_hops": [],
+        "redirect_chain": [],
+        "redirect_aliases": [],
+        "indexability_state": destination_state,
+        "robots_indexability_status": destination_state.lower().replace(" ", "_"),
+        "indexable": page.get("redirect_destination_indexable") is True,
+    })
+    return view
+
+
 def build_findings(pages: list[dict]) -> list[dict]:
     findings: list[dict] = []
     for page in pages:
@@ -948,7 +1045,11 @@ def build_findings(pages: list[dict]) -> list[dict]:
             if alias_finding is not None:
                 findings.append(alias_finding)
         if page_is_redirect_source(page):
-            continue
+            destination_page = _redirect_destination_content_view(page)
+            if destination_page is None:
+                continue
+            page = destination_page
+            path = page.get("path") or "/"
         if sitemap_indexability_conflict(page):
             findings.append(create_finding(
                 rule="sitemap_indexability_conflict",
@@ -1818,17 +1919,33 @@ def merge_duplicate_page_evidence(retained: dict, duplicate: dict) -> None:
             str(candidate.get("redirect_outcome") or ""),
             str(candidate.get("redirect_destination_url") or candidate.get("final_url") or ""),
         )
-        existing_keys = {
-            (
-                str(item.get("redirect_source_url") or item.get("url") or ""),
-                str(item.get("redirect_outcome") or ""),
-                str(item.get("redirect_destination_url") or item.get("final_url") or ""),
-            )
-            for item in aliases
-            if isinstance(item, dict)
-        }
-        if candidate_key not in existing_keys and len(aliases) < 20:
-            aliases.append(candidate)
+        # Examples are deliberately capped, but the report still needs the
+        # complete number and classification of redirect aliases observed.
+        # The compact identity ledger stays private to the in-memory crawl and
+        # is removed after the redirect summary is finalized. Standard 150 can
+        # enqueue at most max_pages * 8 targets, so 1,200 identities covers the
+        # complete bounded request universe without retaining full evidence.
+        candidate_identity = hashlib.sha256("\x1f".join(candidate_key).encode("utf-8")).hexdigest()[:24]
+        seen_identities = retained.setdefault("_redirect_alias_identity_keys", [])
+        is_new_alias = candidate_identity not in seen_identities
+        if is_new_alias:
+            if len(seen_identities) < 1200:
+                seen_identities.append(candidate_identity)
+            retained["redirect_alias_total"] = int(retained.get("redirect_alias_total") or 0) + 1
+            for field, value in (
+                ("redirect_alias_state_counts", str(candidate.get("redirect_state") or "unknown")),
+                ("redirect_alias_outcome_counts", str(candidate.get("redirect_outcome") or "unknown")),
+            ):
+                counts = dict(retained.get(field) or {})
+                counts[value] = int(counts.get(value) or 0) + 1
+                retained[field] = counts
+            sources = set(candidate.get("discovered_from") or [])
+            if "sitemap" in sources:
+                retained["redirect_alias_sitemap_total"] = int(retained.get("redirect_alias_sitemap_total") or 0) + 1
+            if "internal_link" in sources:
+                retained["redirect_alias_internal_link_total"] = int(retained.get("redirect_alias_internal_link_total") or 0) + 1
+            if len(aliases) < 20:
+                aliases.append(candidate)
 
     for key, limit in (("discovered_from", None), ("source_pages", None), ("link_text_samples", 8)):
         merged = list(dict.fromkeys([*(retained.get(key) or []), *(duplicate.get(key) or [])]))
@@ -1860,6 +1977,33 @@ def resolve_crawl_scope(path_prefix: str | None, requested_path: str) -> tuple[s
     if requested_market:
         return requested_market, "requested_market_path", requested_seed_path
     return "/", "origin_root", requested_seed_path
+
+
+def normalize_published_request_url(value: str) -> str:
+    """Validate a submitted seed URL without rewriting its published path.
+
+    Crawl identity normalization remains separate: /en and /en/ may be
+    distinct server routes. Fragments are removed because HTTP requests never
+    send them, but the submitted path, query, case, and trailing slash survive.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if not raw.startswith(("http://", "https://")):
+        raw = f"https://{raw}"
+    try:
+        parsed = urlparse(raw)
+        if parsed.scheme not in ["http", "https"] or not parsed.netloc:
+            return ""
+        host = parsed.hostname or ""
+        if any(ch.isspace() for ch in parsed.netloc):
+            return ""
+        if "." not in host and host != "localhost":
+            return ""
+        clean, _ = urldefrag(raw)
+        return clean
+    except Exception:
+        return ""
 
 
 def normalize_url(value: str) -> str:

@@ -1,4 +1,6 @@
 import { evidenceLink } from "./evidenceUrl.js";
+import { buildCustomerRepairPlan } from "./customerRepairPlan.js";
+import { scanCoverageDisclosure } from "./scanCoverageDisclosure.js";
 
 /**
  * A compact, assistant-shaped export of one finished scan.
@@ -58,7 +60,13 @@ function redirectEvidence(values) {
   return values
     .filter((value) => value && typeof value === "object" && !Array.isArray(value))
     .slice(0, MAX_REDIRECT_EVIDENCE)
-    .map((value) => ({ ...value }));
+    .map((value) => {
+      const classification = clean(value.classification).toLowerCase();
+      const verificationState = classification === "redirect_destination_unverified" || clean(value.fetch_error)
+        ? "needs_verification"
+        : "verified";
+      return { ...value, verification_state: verificationState };
+    });
 }
 
 /**
@@ -88,12 +96,17 @@ function handoffFix(card = {}, index = 0, siteOrigin = "") {
   const samples = examplePages(affected, siteOrigin);
   const pagesAffected = positiveInt(evidence.pageCount) || affected.length;
   const redirects = redirectEvidence(evidence.redirectEvidence);
+  const observations = Array.isArray(evidence.repairObservationSamples)
+    ? evidence.repairObservationSamples.slice(0, 20).map((value) => ({ ...value }))
+    : [];
+  const observationCount = positiveInt(evidence.repairObservationCount) || observations.length;
 
   return {
     n: index + 1,
     title: clean(card.title) || "Review this recommendation",
     category: clean(card.customerCategory),
     priority: clean(card.priority) || "medium",
+    action_priority: clean(card.actionPriority),
     who_can_do_this: clean(card.who) || "You",
     effort: clean(card.effort),
     why_it_matters: clean(card.whyItMatters),
@@ -103,6 +116,10 @@ function handoffFix(card = {}, index = 0, siteOrigin = "") {
     example_pages: samples,
     example_pages_are_partial: pagesAffected > samples.length,
     ...(redirects.length > 0 ? { redirect_evidence: redirects } : {}),
+    ...(observationCount > 0 ? {
+      repair_observation_count: observationCount,
+      repair_observation_samples: observations,
+    } : {}),
   };
 }
 
@@ -123,7 +140,8 @@ export function buildScanHandoff({
   generatedAt = new Date(),
 } = {}) {
   const siteOrigin = clean(scanRecord?.website_url);
-  const list = Array.isArray(cards) ? cards.slice(0, MAX_FIXES) : [];
+  const plan = buildCustomerRepairPlan(cards, { fallbackNextBestStep: nextBestStep });
+  const list = plan.cards.slice(0, MAX_FIXES);
   const healthScoreAvailable =
     !scoreUnavailable && healthScore != null && Number.isFinite(Number(healthScore));
 
@@ -135,10 +153,12 @@ export function buildScanHandoff({
     scanned_at: isoOrEmpty(scanRecord?.created_at),
     pages_found: positiveInt(pagesFound),
     pages_checked: positiveInt(pagesScanned),
+    scan_coverage: scanCoverageDisclosure(scanRecord),
     health_score: healthScoreAvailable ? Number(healthScore) : null,
     health_score_available: healthScoreAvailable,
     summary: clean(summary),
-    next_best_step: clean(nextBestStep),
+    next_best_step: plan.nextBestStep,
+    fix_first_count: plan.fixFirstCount,
     limitations: textList(limitations, MAX_LIMITATIONS),
     fix_count: list.length,
     fix_count_is_partial: Array.isArray(cards) && cards.length > list.length,

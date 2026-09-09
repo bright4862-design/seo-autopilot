@@ -62,6 +62,11 @@ function finding() {
     difficulty: "developer",
     who_can_do_this: "your_web_person",
     requires_developer: true,
+    repair_observation_count: 2,
+    repair_observation_samples: [
+      { page_url: "/legacy-page", status: 200, issue_type: "canonical_missing", canonical_url: "" },
+      { page_url: "/other-page", status: 200, issue_type: "missing_meta_description", meta_description: "", meta_description_state: "missing" },
+    ],
     raw_finding: {
       redirect_outcome: "redirect_to_wrong_destination",
       redirect_fetch_evidence: structuredClone(redirectEvidence),
@@ -80,6 +85,14 @@ function authoritySnapshot() {
       submitted_url: "https://example.com/",
       pages_found: 2,
       pages_crawled: 2,
+      scan_coverage: {
+        urls_attempted: 3,
+        usable_html_pages: 2,
+        verified_http_failures: 0,
+        access_unverified_pages: 0,
+        non_html_resources: 0,
+        unique_retained_destinations: 2,
+      },
     },
     review: {
       scan_status: "complete",
@@ -100,6 +113,9 @@ function authoritySnapshot() {
 test("authority report evidence survives signing, stored rows, reconstruction, and proof verification", async () => {
   const snapshot = authoritySnapshot();
   assert.deepEqual(snapshot.recommendations[0].raw_finding.redirect_fetch_evidence, redirectEvidence);
+  assert.equal(snapshot.recommendations[0].raw_finding.repair_observation_count, 2);
+  assert.equal(snapshot.recommendations[0].raw_finding.repair_observation_samples[0].canonical_url, "");
+  assert.equal(snapshot.scan.scan_coverage.urls_attempted, 3);
 
   const proof = await createAuthoritySeal(snapshot, SECRET);
   const rows = authorityRowsFromSnapshot(snapshot, {
@@ -139,6 +155,14 @@ test("limited report evidence survives stored rows and proof verification", asyn
       beta_revision_fingerprint: "053180f4bdc70857",
       pages_found: 2,
       pages_crawled: 1,
+      scan_coverage: {
+        urls_attempted: 2,
+        usable_html_pages: 1,
+        verified_http_failures: 0,
+        access_unverified_pages: 1,
+        non_html_resources: 0,
+        unique_retained_destinations: 1,
+      },
     },
     review: {
       scan_status: "limited",
@@ -154,6 +178,8 @@ test("limited report evidence survives stored rows and proof verification", asyn
   });
 
   assert.deepEqual(snapshot.recommendations[0].raw_finding.redirect_fetch_evidence, redirectEvidence);
+  assert.equal(snapshot.recommendations[0].raw_finding.repair_observation_count, 2);
+  assert.equal(snapshot.scan.scan_coverage.access_unverified_pages, 1);
   const proof = await createLimitedResultProof(snapshot, SECRET);
   const rows = limitedRowsFromSnapshot(snapshot, { fixListId: "limited_fixlist", proof });
   const rebuilt = buildLimitedResultSnapshot({

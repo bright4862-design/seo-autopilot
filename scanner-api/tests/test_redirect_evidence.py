@@ -209,8 +209,16 @@ async def test_sitemap_and_internal_link_redirects_have_bounded_source_findings(
     policy = RobotsPolicy("https://example.com/robots.txt", "missing", 404)
     sitemap_page = await fetch_and_extract(FakeClient(responses()), "https://example.com/old", DISCOVERY_SITEMAP, robots_policy=policy)
     internal_page = await fetch_and_extract(FakeClient(responses()), "https://example.com/old", DISCOVERY_INTERNAL, robots_policy=policy)
-    assert [item["rule"] for item in build_findings([sitemap_page])] == ["sitemap_redirect"]
-    assert [item["rule"] for item in build_findings([internal_page])] == ["internal_link_redirect"]
+    sitemap_findings = build_findings([sitemap_page])
+    internal_findings = build_findings([internal_page])
+    assert sitemap_findings[0]["rule"] == "sitemap_redirect"
+    assert internal_findings[0]["rule"] == "internal_link_redirect"
+    for findings in (sitemap_findings, internal_findings):
+        rules = {item["rule"] for item in findings}
+        assert "redirect_destination_failed" not in rules
+        assert {"generic_fallback_title", "missing_meta_description", "canonical_missing"} <= rules
+        for item in findings[1:]:
+            assert item["affected_pages"] == ["/new"]
 
 
 @pytest.mark.asyncio

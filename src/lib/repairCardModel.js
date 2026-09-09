@@ -261,6 +261,51 @@ function evidenceGroupsFor(members) {
   });
 }
 
+const MAX_REPAIR_OBSERVATION_SAMPLES = 20;
+const REPAIR_OBSERVATION_TEXT_KEYS = new Set([
+  "page_url", "canonical_url", "image_url", "source_page", "current_href",
+  "observed_target", "sitemap_file", "original_loc", "title", "h1", "excerpt",
+  "alt_text", "meta_description", "meta_description_state", "decorative_state",
+  "issue_type", "intended_market", "alt_state", "link_text",
+]);
+
+function sanitizeRepairObservation(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const output = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (REPAIR_OBSERVATION_TEXT_KEYS.has(key)) {
+      // Explicit empty strings are evidence (for example a missing canonical),
+      // so do not pass them through `clean()`, which would make absence and an
+      // observed empty value indistinguishable.
+      if (typeof raw === "string") output[key] = raw.trim();
+      else if (raw === null) output[key] = null;
+      continue;
+    }
+    if (key === "status" || key === "h1_count") {
+      const number = Number(raw);
+      if (Number.isInteger(number) && number >= 0) output[key] = number;
+    }
+  }
+  return Object.keys(output).length > 0 ? output : null;
+}
+
+function repairObservationEvidenceFor(item = {}) {
+  const candidates = [item?.raw_finding, item?.original?.raw_finding, item?.original, item]
+    .filter((value) => value && typeof value === "object" && !Array.isArray(value));
+  for (const raw of candidates) {
+    if (!Object.prototype.hasOwnProperty.call(raw, "repair_observation_samples")
+      && !Object.prototype.hasOwnProperty.call(raw, "repair_observation_count")) continue;
+    const samples = (Array.isArray(raw.repair_observation_samples) ? raw.repair_observation_samples : [])
+      .slice(0, MAX_REPAIR_OBSERVATION_SAMPLES)
+      .map(sanitizeRepairObservation)
+      .filter(Boolean);
+    const countRaw = Number(raw.repair_observation_count);
+    const count = Number.isInteger(countRaw) && countRaw >= 0 ? countRaw : samples.length;
+    return { samples, count: Math.max(count, samples.length) };
+  }
+  return { samples: [], count: 0 };
+}
+
 function redirectEvidenceFor(item = {}) {
   const candidates = [];
   const push = (value, outcome = "") => {
@@ -365,6 +410,7 @@ export function buildRepairCard(item = {}) {
   const copy = customerCopyForFix(item) || {};
   const suggestion = repairSuggestion(item);
   const affected = affectedOf(item);
+  const repairObservations = repairObservationEvidenceFor(item);
   const priority = lower(item?.priority || item?.original?.priority) || "medium";
   const actionPriority = lower(item?.actionPriority || item?.action_priority || item?.original?.action_priority);
   const sharedRepairConfirmed = item?.sharedRepairConfirmed === true
@@ -397,6 +443,8 @@ export function buildRepairCard(item = {}) {
       mergedFromFixIds: Array.isArray(item.mergedFromFixIds) ? item.mergedFromFixIds : [],
       evidenceGroups: Array.isArray(item.evidenceGroups) ? item.evidenceGroups : [],
       redirectEvidence: redirectEvidenceFor(item),
+      repairObservationCount: repairObservations.count,
+      repairObservationSamples: repairObservations.samples,
     },
   };
 }
@@ -429,6 +477,62 @@ const EVIDENCE_CLASS_LABELS = Object.freeze({
 
 function customerEvidenceClassLabel(value) {
   return EVIDENCE_CLASS_LABELS[lower(value)] || "";
+}
+
+const REDIRECT_CLASSIFICATION_LABELS = Object.freeze({
+  redirect_to_wrong_destination: "Wrong destination",
+  redirect_to_usable_page: "Usable destination",
+  redirect_destination_unverified: "Could not verify destination",
+  redirect_destination_unusable: "Unusable destination",
+  redirect_to_nonindexable_page: "Non-indexable destination",
+});
+
+function observedStatusLabel(value) {
+  const status = Number(value);
+  return Number.isInteger(status) && status >= 100 && status <= 599
+    ? `HTTP ${status}`
+    : "No verified final status";
+}
+
+export function customerRedirectEvidenceRows(card = {}, siteOrigin = "") {
+  const values = Array.isArray(card?.evidence?.redirectEvidence) ? card.evidence.redirectEvidence : [];
+  return values.slice(0, 20).map((value) => {
+    const classification = lower(value?.classification);
+    const needsVerification = classification === "redirect_destination_unverified" || Boolean(clean(value?.fetch_error));
+    return {
+      requested: evidenceLink(value?.requested_url, siteOrigin),
+      destination: evidenceLink(value?.final_url, siteOrigin),
+      statusLabel: observedStatusLabel(value?.final_status),
+      classificationLabel: REDIRECT_CLASSIFICATION_LABELS[classification] || "Observed redirect",
+      verificationLabel: needsVerification ? "Needs verification" : "Verified response",
+    };
+  });
+}
+
+function observationValueLabel(value = {}) {
+  if (Object.prototype.hasOwnProperty.call(value, "canonical_url")) {
+    return `Canonical observed: ${clean(value.canonical_url) || "missing"}`;
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "meta_description_state")) {
+    const state = lower(value.meta_description_state).replace(/_/g, " ") || "unknown";
+    return `Meta description observed: ${state}`;
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "h1_count")) {
+    return `H1 count observed: ${Number(value.h1_count) || 0}`;
+  }
+  if (clean(value.title)) return `Title observed: ${clean(value.title)}`;
+  return "Issue observed on this page";
+}
+
+export function customerRepairObservationRows(card = {}, siteOrigin = "") {
+  const values = Array.isArray(card?.evidence?.repairObservationSamples)
+    ? card.evidence.repairObservationSamples
+    : [];
+  return values.slice(0, 20).map((value) => ({
+    page: evidenceLink(value?.page_url, siteOrigin),
+    statusLabel: observedStatusLabel(value?.status).replace("No verified final status", "Status not recorded"),
+    valueLabel: observationValueLabel(value),
+  }));
 }
 
 export function withRepeatedTitleScopeHints(cards = []) {

@@ -24,10 +24,13 @@ import {
   withRepeatedTitleScopeHints,
   customerEvidenceGroupHeading,
   customerEvidenceGroupRows,
+  customerRedirectEvidenceRows,
+  customerRepairObservationRows,
 } from "@/lib/repairCardModel";
 import { evidenceLink } from "@/lib/evidenceUrl";
 import { buildScanHandoff, scanHandoffFilename, serializeScanHandoff } from "@/lib/scanHandoff";
 import { buildCustomerRepairPlan } from "@/lib/customerRepairPlan";
+import { scanCoverageDisclosure } from "@/lib/scanCoverageDisclosure";
 import { trackEvent } from "@/lib/analytics";
 import { samplingDisclosure } from "@/lib/samplingDisclosure";
 import { displayPathPrefix, focusedPathSections, focusedSectionOnboardingPath, orderFocusedScanHistory } from "@/lib/focusedScanScope";
@@ -374,6 +377,7 @@ export default function FixList() {
   const scoreUnavailable = isHealthScoreUnavailable(scanRecord);
   const pagesScanned = getPagesScanned(scanRecord, pages);
   const pagesFound = getPagesFound(scanRecord);
+  const observedScanCoverage = useMemo(() => scanCoverageDisclosure(scanRecord), [scanRecord]);
   const locked = scanRecord?.customer_access === "locked";
   // An authoritative result and a verified limited result are both readable;
   // only the first is authoritative. Keeping them as two conditions rather than
@@ -595,6 +599,8 @@ export default function FixList() {
                 limitations={handoffLimitations}
               />
             ) : null}
+
+            <ObservedScanCoverage coverage={observedScanCoverage} />
 
             {sampleCoverage ? (
               <details className="mt-5 max-w-[60ch] rounded-xl border border-hairline-soft bg-white/35 px-4 py-3">
@@ -972,6 +978,36 @@ function ScanExportControls({
   );
 }
 
+function ObservedScanCoverage({ coverage = {} }) {
+  const rows = [
+    ["urls_attempted", "URLs attempted"],
+    ["usable_html_pages", "Usable HTML pages"],
+    ["verified_http_failures", "Verified HTTP failures"],
+    ["access_unverified_pages", "Could not fully verify access"],
+    ["non_html_resources", "Non-HTML resources"],
+    ["unique_retained_destinations", "Unique final destinations"],
+  ].filter(([key]) => Number.isInteger(coverage[key]) && coverage[key] >= 0);
+  if (rows.length === 0) return null;
+  return (
+    <details className="mt-5 max-w-[60ch] rounded-xl border border-hairline-soft bg-white/35 px-4 py-3">
+      <summary className="cursor-pointer text-[12.5px] font-medium text-ink-muted underline decoration-hairline underline-offset-4">
+        What this scan actually reached
+      </summary>
+      <dl className="mt-3 divide-y divide-hairline-soft">
+        {rows.map(([key, label]) => (
+          <div key={key} className="flex items-baseline justify-between gap-4 py-1.5">
+            <dt className="text-[12px] text-ink-faint">{label}</dt>
+            <dd className="text-[12px] font-medium tabular-nums text-ink-muted">{coverage[key]}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="mt-2 text-[11.5px] leading-relaxed text-ink-faint">
+        These are observed counters, not completion percentages. Some access-limited responses can also be verified HTTP responses, so categories may overlap.
+      </p>
+    </details>
+  );
+}
+
 function CustomerRepairList({ cards = [], websiteUrl = "" }) {
   const list = Array.isArray(cards) ? cards.filter(Boolean) : [];
   if (list.length === 0) return null;
@@ -1030,6 +1066,8 @@ function CustomerRepairCard({ card = {}, websiteUrl = "" }) {
   const reportedCount = Math.max(Number(card?.evidence?.pageCount || 0), pages.length);
   const evidenceLabel = customerEvidenceClassLabel(card.evidenceClass);
   const evidenceGroups = customerEvidenceGroupRows(card, websiteUrl);
+  const redirectRows = customerRedirectEvidenceRows(card, websiteUrl);
+  const observationRows = customerRepairObservationRows(card, websiteUrl);
 
   return (
     <article className="border-b border-hairline-soft py-6 first:pt-5">
@@ -1101,6 +1139,38 @@ function CustomerRepairCard({ card = {}, websiteUrl = "" }) {
                 ? ` This saved result contains ${pages.length} of those URLs in its evidence list.`
                 : ""}
             </p>
+          ) : null}
+          {redirectRows.length > 0 ? (
+            <section className="mt-3 border-t border-hairline-soft pt-3" aria-label="Observed redirect evidence">
+              <h5 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Observed redirect evidence</h5>
+              <ul className="mt-2 space-y-2 text-[12px] text-ink-muted">
+                {redirectRows.map((row, index) => (
+                  <li key={`${row.requested.href || row.requested.label}-${index}`} className="rounded-md border border-hairline-soft px-2.5 py-2">
+                    <p className="break-all"><span className="text-ink-faint">Requested:</span> {row.requested.href || row.requested.label}</p>
+                    <p className="mt-1 break-all"><span className="text-ink-faint">Observed destination:</span> {row.destination.href || row.destination.label} · {row.statusLabel}</p>
+                    <p className="mt-1"><span className="text-ink-faint">Classification:</span> {row.classificationLabel} · {row.verificationLabel}</p>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+          {observationRows.length > 0 ? (
+            <section className="mt-3 border-t border-hairline-soft pt-3" aria-label="Observed page evidence">
+              <div className="flex items-baseline justify-between gap-3">
+                <h5 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Observed page evidence</h5>
+                {Number(card?.evidence?.repairObservationCount || 0) > observationRows.length ? (
+                  <span className="text-[11px] tabular-nums text-ink-faint">Showing {observationRows.length} of {card.evidence.repairObservationCount}</span>
+                ) : null}
+              </div>
+              <ul className="mt-2 space-y-2 text-[12px] text-ink-muted">
+                {observationRows.map((row, index) => (
+                  <li key={`${row.page.href || row.page.label}-${index}`} className="rounded-md border border-hairline-soft px-2.5 py-2">
+                    <p className="break-all">{row.page.href || row.page.label}</p>
+                    <p className="mt-1 text-ink-faint">{row.statusLabel} · {row.valueLabel}</p>
+                  </li>
+                ))}
+              </ul>
+            </section>
           ) : null}
           {evidenceGroups.length > 0 ? (
             <section className="mt-3 border-t border-hairline-soft pt-3" aria-label={customerEvidenceGroupHeading(evidenceGroups)}>

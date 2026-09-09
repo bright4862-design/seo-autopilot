@@ -479,6 +479,62 @@ function customerEvidenceClassLabel(value) {
   return EVIDENCE_CLASS_LABELS[lower(value)] || "";
 }
 
+const REDIRECT_CLASSIFICATION_LABELS = Object.freeze({
+  redirect_to_wrong_destination: "Wrong destination",
+  redirect_to_usable_page: "Usable destination",
+  redirect_destination_unverified: "Could not verify destination",
+  redirect_destination_unusable: "Unusable destination",
+  redirect_to_nonindexable_page: "Non-indexable destination",
+});
+
+function observedStatusLabel(value) {
+  const status = Number(value);
+  return Number.isInteger(status) && status >= 100 && status <= 599
+    ? `HTTP ${status}`
+    : "No verified final status";
+}
+
+export function customerRedirectEvidenceRows(card = {}, siteOrigin = "") {
+  const values = Array.isArray(card?.evidence?.redirectEvidence) ? card.evidence.redirectEvidence : [];
+  return values.slice(0, 20).map((value) => {
+    const classification = lower(value?.classification);
+    const needsVerification = classification === "redirect_destination_unverified" || Boolean(clean(value?.fetch_error));
+    return {
+      requested: evidenceLink(value?.requested_url, siteOrigin),
+      destination: evidenceLink(value?.final_url, siteOrigin),
+      statusLabel: observedStatusLabel(value?.final_status),
+      classificationLabel: REDIRECT_CLASSIFICATION_LABELS[classification] || "Observed redirect",
+      verificationLabel: needsVerification ? "Needs verification" : "Verified response",
+    };
+  });
+}
+
+function observationValueLabel(value = {}) {
+  if (Object.prototype.hasOwnProperty.call(value, "canonical_url")) {
+    return `Canonical observed: ${clean(value.canonical_url) || "missing"}`;
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "meta_description_state")) {
+    const state = lower(value.meta_description_state).replace(/_/g, " ") || "unknown";
+    return `Meta description observed: ${state}`;
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "h1_count")) {
+    return `H1 count observed: ${Number(value.h1_count) || 0}`;
+  }
+  if (clean(value.title)) return `Title observed: ${clean(value.title)}`;
+  return "Issue observed on this page";
+}
+
+export function customerRepairObservationRows(card = {}, siteOrigin = "") {
+  const values = Array.isArray(card?.evidence?.repairObservationSamples)
+    ? card.evidence.repairObservationSamples
+    : [];
+  return values.slice(0, 20).map((value) => ({
+    page: evidenceLink(value?.page_url, siteOrigin),
+    statusLabel: observedStatusLabel(value?.status).replace("No verified final status", "Status not recorded"),
+    valueLabel: observationValueLabel(value),
+  }));
+}
+
 export function withRepeatedTitleScopeHints(cards = []) {
   const counts = new Map();
   for (const card of cards) {

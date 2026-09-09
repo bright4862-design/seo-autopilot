@@ -350,6 +350,11 @@ function coverageAuthorityFields(evidence) {
   };
 }
 
+function reportEvidenceSnapshotFields(row) {
+  if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V6) return {};
+  return { scan_coverage: sanitizeScanCoverage(row?.scan_coverage) };
+}
+
 function text(value, limit) {
   return typeof value === "string" ? value.trim().slice(0, limit) : "";
 }

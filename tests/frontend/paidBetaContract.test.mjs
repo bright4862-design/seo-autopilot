@@ -61,7 +61,8 @@ test("customer copy is paid-only and contains no free-scan promise", () => {
     assert.doesNotMatch(source, /free test scan|one free scan|Run free scan/i, name);
   }
   assert.match(billing, /one-time payment/i);
-  assert.match(billing, /Standard 150 beta/);
+  assert.match(billing, /Standard 150/);
+  assert.doesNotMatch(billing, /Standard 150 beta/i);
 });
 
 test("paid admission fails closed for missing, unpaid and duplicate rows", () => {

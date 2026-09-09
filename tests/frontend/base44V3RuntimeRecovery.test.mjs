@@ -23,6 +23,14 @@ const expectedBuild = Object.fromEntries(V3.map((name) => [name,
 const expectedActivation = Object.fromEntries(V3.map((name) => [name,
   execFileSync("node", ["scripts/generate_release_contracts.mjs", "--activation-id", name], { encoding: "utf8" }).trim()]));
 const staleActivation = Object.fromEntries(V3.map((name) => [name, `${name}-fresh-20260907-v1`]));
+const observedStaleBuild = {
+  startStandardScanJobV3: "0b5465cb2230724e1d2320413e24830ddff6131aaed22f8ddb57275bcbda2b71",
+  durableScanWorkerControlV3: "ad58d77373edbca90aad92b103d444aa676dc8dba5ee1437fb5464dd3424f413",
+  persistDurableScanAuthorityV3: "c3d06e823cea841b3b461a753c4c3926d90c050e94e4a7375d3c62133b799317",
+  persistLimitedScanResultV3: "c8a7282b26e267aa76eb2f067fd4593071e021209138d155be167407c5fb609a",
+  getCustomerScanResultV3: "d7f681b2c965be72b077b20d6a713b9a82c679c42fc1c842255dab0769760de8",
+  deleteCustomerScanDataV3: "6f6c73c198d7a20df923721d826c994f4d8d40decec0ecd313e8f9992f12f481",
+};
 
 function handlerBody(name, buildId, activationId) {
   if (name === "startStandardScanJobV3") {
@@ -78,8 +86,8 @@ test("all V3 routes have a fresh report-evidence activation distinct from the st
 test("matching build with the stale September 7 activation is still stale", () => {
   for (const name of V3) {
     assert.equal(classify(name, {
-      body: handlerBody(name, expectedBuild[name], staleActivation[name]),
-      buildId: expectedBuild[name],
+      body: handlerBody(name, observedStaleBuild[name], staleActivation[name]),
+      buildId: observedStaleBuild[name],
       activationId: staleActivation[name],
     }), "stale", name);
   }
@@ -95,15 +103,21 @@ test("exact build plus exact activation is current and must not be deleted", () 
   }
 });
 
-test("old build with the known stale activation is recoverable", () => {
-  const oldBuild = "a".repeat(64);
+test("only the exact observed stale build plus stale activation is recoverable", () => {
   for (const name of V3) {
-    assert.notEqual(oldBuild, expectedBuild[name]);
     assert.equal(classify(name, {
-      body: handlerBody(name, oldBuild, staleActivation[name]),
-      buildId: oldBuild,
+      body: handlerBody(name, observedStaleBuild[name], staleActivation[name]),
+      buildId: observedStaleBuild[name],
       activationId: staleActivation[name],
     }), "stale", name);
+    const unknownBuild = "a".repeat(64);
+    if (unknownBuild !== observedStaleBuild[name]) {
+      assert.equal(classify(name, {
+        body: handlerBody(name, unknownBuild, staleActivation[name]),
+        buildId: unknownBuild,
+        activationId: staleActivation[name],
+      }), "refuse", `${name} unknown stale-generation build`);
+    }
   }
 });
 

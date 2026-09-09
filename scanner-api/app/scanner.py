@@ -400,7 +400,7 @@ async def run_scan(
     scan_started_at = time.monotonic()
     scan_started_wall_clock = utc_now_iso()
     deadline = scan_started_at + budget["timeout"]
-    start_url = normalize_url(website_url)
+    start_url = normalize_published_request_url(website_url)
     if not start_url:
         return {"success": False, "version": VERSION, "error": "Missing or invalid website_url."}
     if not is_public_http_url(start_url):
@@ -437,7 +437,7 @@ async def run_scan(
     artifacts: list[dict] = []
 
     def enqueue(url: str, source: str, source_page: str = "", link_text: str = "") -> None:
-        clean = normalize_url(url)
+        clean = normalize_published_request_url(url) if source == "seed" else normalize_url(url)
         if not clean:
             if is_artifact_url(url):
                 record_artifact(artifacts, url, source, source_page, link_text)
@@ -1977,6 +1977,33 @@ def resolve_crawl_scope(path_prefix: str | None, requested_path: str) -> tuple[s
     if requested_market:
         return requested_market, "requested_market_path", requested_seed_path
     return "/", "origin_root", requested_seed_path
+
+
+def normalize_published_request_url(value: str) -> str:
+    """Validate a submitted seed URL without rewriting its published path.
+
+    Crawl identity normalization remains separate: /en and /en/ may be
+    distinct server routes. Fragments are removed because HTTP requests never
+    send them, but the submitted path, query, case, and trailing slash survive.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if not raw.startswith(("http://", "https://")):
+        raw = f"https://{raw}"
+    try:
+        parsed = urlparse(raw)
+        if parsed.scheme not in ["http", "https"] or not parsed.netloc:
+            return ""
+        host = parsed.hostname or ""
+        if any(ch.isspace() for ch in parsed.netloc):
+            return ""
+        if "." not in host and host != "localhost":
+            return ""
+        clean, _ = urldefrag(raw)
+        return clean
+    except Exception:
+        return ""
 
 
 def normalize_url(value: str) -> str:

@@ -13,8 +13,9 @@ const mobileNavigationSource = readFileSync(
   "utf8",
 );
 
-test("the public landing page states the paid Standard 150 beta contract", () => {
-  assert.match(landingSource, /Standard 150 beta/);
+test("the public landing page states the paid Standard 150 contract without beta invitation language", () => {
+  assert.match(landingSource, /Standard 150/);
+  assert.doesNotMatch(landingSource, /Standard 150 beta|Get beta access|invite-only/i);
   assert.match(landingSource, /\$50/);
   assert.match(landingSource, /one-time/i);
   assert.match(landingSource, /2–4 minutes/);

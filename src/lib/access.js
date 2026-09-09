@@ -79,7 +79,7 @@ export async function loadAccess() {
   let record = rows.length === 1 ? rows[0] : null;
   if (isClaimableManualGrant(record, user)) {
     try {
-      const response = await base44.functions.invoke("claimComplimentaryAccess", {});
+      const response = await base44.functions.invoke("createAccessCheckout", { action: "claim_complimentary_access" });
       const claimed = claimedAccessRecord(response);
       if (claimed) record = claimed;
     } catch {

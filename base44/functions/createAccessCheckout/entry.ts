@@ -2,7 +2,7 @@ import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import Stripe from "npm:stripe@17.5.0";
 import { secrets } from "base44:runtime";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "checkout-public-access-20260909-v1";
+const BASE44_RUNTIME_ACTIVATION_ID = "checkout-prod-reactivation-20260903-v1";
 
 const APP_ID = "6a498732ec779dfaaeab0e53";
 const PLAN_ID = "standard150_lifetime";
@@ -157,6 +157,68 @@ async function reconcilePendingCheckoutAccess(base44, rows, userId, email) {
   return findOwnedAccess(base44, userId, email);
 }
 
+function isEligibleComplimentaryGrant(access, email) {
+  return Boolean(
+    access
+    && normalizeEmail(access.user_email) === email
+    && access.access_status === "active"
+    && access.has_full_access === true
+    && access.plan_id === PLAN_ID
+    && access.app_id === APP_ID
+    && access.grant_source === "manual_grant"
+    && Number.isFinite(Date.parse(String(access.granted_at || "")))
+  );
+}
+
+function publicAccess(access) {
+  return {
+    id: String(access?.id || ""),
+    user_email: normalizeEmail(access?.user_email),
+    owner_user_id: String(access?.owner_user_id || ""),
+    access_status: String(access?.access_status || ""),
+    plan_id: String(access?.plan_id || ""),
+    grant_source: String(access?.grant_source || ""),
+    app_id: String(access?.app_id || ""),
+    has_full_access: access?.has_full_access === true,
+    granted_at: String(access?.granted_at || ""),
+  };
+}
+
+async function claimComplimentaryAccess(base44, userId, email) {
+  let rows = await findOwnedAccess(base44, userId, email);
+  if (rows.length === 0) {
+    return Response.json({ success: false, code: "complimentary_access_not_found" }, { status: 404 });
+  }
+  if (rows.length > 1) {
+    return Response.json({ success: false, code: "access_conflict" }, { status: 409 });
+  }
+
+  let access = rows[0];
+  if (!isEligibleComplimentaryGrant(access, email)) {
+    return Response.json({ success: false, code: "complimentary_access_not_found" }, { status: 404 });
+  }
+
+  const currentOwner = String(access.owner_user_id || "").trim();
+  if (currentOwner && currentOwner !== userId) {
+    return Response.json({ success: false, code: "access_conflict" }, { status: 409 });
+  }
+  if (currentOwner === userId) {
+    return Response.json({ success: true, claimed: false, access: publicAccess(access) });
+  }
+
+  await base44.asServiceRole.entities.Access.update(access.id, { owner_user_id: userId });
+  rows = await findOwnedAccess(base44, userId, email);
+  if (rows.length !== 1 || String(rows[0]?.id || "") !== String(access.id || "")) {
+    return Response.json({ success: false, code: "access_conflict" }, { status: 409 });
+  }
+  access = rows[0];
+  if (!isEligibleComplimentaryGrant(access, email) || String(access.owner_user_id || "").trim() !== userId) {
+    return Response.json({ success: false, code: "access_conflict" }, { status: 409 });
+  }
+
+  return Response.json({ success: true, claimed: true, access: publicAccess(access) });
+}
+
 function checkoutAccessStateResponse(access) {
   const status = String(access?.access_status || "").trim();
   if (status === "revoked") {
@@ -186,6 +248,10 @@ export default async function (req) {
     }
 
     const body = await req.json().catch(() => ({}));
+    if (body?.action === "claim_complimentary_access") {
+      return claimComplimentaryAccess(base44, userId, email);
+    }
+
     const origin = resolveCheckoutReturnOrigin(body?.origin);
     if (!origin) {
       return Response.json(

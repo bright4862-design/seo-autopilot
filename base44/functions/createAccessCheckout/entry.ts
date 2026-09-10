@@ -9,7 +9,7 @@ const PLAN_ID = "standard150_lifetime";
 const PRODUCTION_APP_ORIGIN = "https://rich-rank-pilot-flow.base44.app";
 const PRICE_DATA = {
   currency: "usd",
-  unit_amount: 5000,
+  unit_amount: 10000,
   product: "prod_V0lLfb5lSwxOxh",
 };
 const LOCAL_DEVELOPMENT_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);

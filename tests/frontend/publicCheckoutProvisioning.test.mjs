@@ -15,8 +15,8 @@ async function importHandlerWithHarness(source, harnessName) {
 test("first-time authenticated customer gets exactly one pending Access row before checkout", async () => {
   const priorDeno = globalThis.Deno;
   const env = new Map([
-    ["BETA_CHECKOUT_ENABLED", "true"],
-    ["BETA_CHECKOUT_GENERATION", "public-2026-09"],
+    ["CHECKOUT_ENABLED", "true"],
+    ["CHECKOUT_GENERATION", "public-2026-09"],
   ]);
   let accessRecord = null;
   let createCount = 0;
@@ -122,8 +122,8 @@ test("public checkout source contains no static invitation membership gate", () 
 test("simultaneous first-time checkout requests converge on one pending Access row", async () => {
   const priorDeno = globalThis.Deno;
   const env = new Map([
-    ["BETA_CHECKOUT_ENABLED", "true"],
-    ["BETA_CHECKOUT_GENERATION", "public-2026-09"],
+    ["CHECKOUT_ENABLED", "true"],
+    ["CHECKOUT_GENERATION", "public-2026-09"],
   ]);
   let rows = [];
   let createSequence = 0;

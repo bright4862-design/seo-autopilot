@@ -570,7 +570,7 @@ test("the webhook handler grants once for immediate or delayed payment delivery"
         object: {
           id: sessionId,
           payment_status: overrides.paymentStatus || "paid",
-          amount_total: overrides.amountTotal ?? 5000,
+          amount_total: overrides.amountTotal ?? 10000,
           currency: "usd",
           customer_email: "paid@example.com",
           client_reference_id: "user-1",
@@ -642,7 +642,7 @@ test("the webhook handler grants once for immediate or delayed payment delivery"
 
     const tamperedAsyncSuccess = await deliver("cs_delayed_tampered", 4, {
       type: "checkout.session.async_payment_succeeded",
-      amountTotal: 4999,
+      amountTotal: 9999,
     });
     assert.equal(tamperedAsyncSuccess.status, 400);
     assert.deepEqual(tamperedAsyncSuccess.body, { error: "checkout_amount_mismatch" });

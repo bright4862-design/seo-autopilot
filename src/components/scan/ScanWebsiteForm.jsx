@@ -22,6 +22,7 @@ import {
   OWNERSHIP_NOT_MANAGED,
   OWNERSHIP_OWNER_MANAGED,
   ownerManagedRobotsPolicy,
+  ownershipOnSiteChange,
   readSiteOwnership,
   siteOwnershipStorageKey,
   writeSiteOwnership,
@@ -126,8 +127,19 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
   useEffect(() => {
     const key = siteOwnershipStorageKey(websiteUrl);
     if (key === ownershipKeyRef.current) return;
+    const hadNoSite = !ownershipKeyRef.current;
     ownershipKeyRef.current = key;
-    setSiteOwnership(readSiteOwnership(websiteUrl));
+    const stored = readSiteOwnership(websiteUrl);
+    // An answer given before the URL was typed has nowhere to be stored --
+    // writeSiteOwnership has no key without a host -- so without this it is
+    // silently dropped the moment the customer completes the field they were
+    // asked to fill in. Carry it to the site it turned out to be about.
+    //
+    // A stored answer for that site still wins: it was given while looking at
+    // that site, where this one was given before the site was known.
+    const next = ownershipOnSiteChange({ hadNoSite, pendingAnswer: siteOwnership, storedAnswer: stored });
+    if (next.carry) writeSiteOwnership(websiteUrl, next.answer);
+    setSiteOwnership(next.answer);
   }, [websiteUrl]);
 
   const handleOwnershipChange = (value) => {

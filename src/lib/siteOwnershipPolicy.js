@@ -43,6 +43,11 @@ export function normalizeOwnershipAnswer(value) {
   return SITE_OWNERSHIP_ANSWERS.includes(answer) ? answer : OWNERSHIP_UNANSWERED;
 }
 
+/**
+ * Whether this answer means the customer can act on the site's own settings.
+ * @param {unknown} value A stored or in-flight ownership answer.
+ * @returns {boolean} True only for an explicit owner-or-manager answer.
+ */
 export function isOwnerManaged(value) {
   return normalizeOwnershipAnswer(value) === OWNERSHIP_OWNER_MANAGED;
 }
@@ -72,6 +77,10 @@ export function siteOwnershipStorageKey(websiteUrl) {
  * the form and the failure copy both handle, so every path returns the
  * unanswered value rather than propagating a storage fault into the scan.
  */
+/**
+ * The browser store, or null when it is absent or throws on access.
+ * @returns {Storage|null}
+ */
 function storage() {
   try {
     return typeof localStorage === "undefined" ? null : localStorage;
@@ -80,6 +89,12 @@ function storage() {
   }
 }
 
+/**
+ * Reads the stored answer for a site.
+ * @param {string} websiteUrl Any URL or host for the site.
+ * @returns {string} The stored answer, or the unanswered value when there is
+ *   none, the host cannot be resolved, or storage is unavailable.
+ */
 export function readSiteOwnership(websiteUrl) {
   const key = siteOwnershipStorageKey(websiteUrl);
   if (!key) return OWNERSHIP_UNANSWERED;
@@ -112,6 +127,30 @@ export function writeSiteOwnership(websiteUrl, value) {
   } catch {
     return false;
   }
+}
+
+/**
+ * What to do with the answer when the form's site changes.
+ *
+ * The form asks the question whether or not a URL has been typed yet, and an
+ * answer given before the URL has nowhere to live: `writeSiteOwnership` needs a
+ * host to build a key, so it stores nothing and reports false. Reading storage
+ * for the newly typed site then returns nothing and clears the selection the
+ * customer just made -- they answered, and the answer vanished as they finished
+ * the field they were asked to fill in.
+ *
+ * A stored answer for the new site still wins. It was given while looking at
+ * that site; the pending one was given before the site was known.
+ *
+ * @param {{hadNoSite: boolean, pendingAnswer: string, storedAnswer: string}} state
+ * @returns {{carry: boolean, answer: string}} `carry` means persist `answer`
+ *   under the new site's key and keep the current selection.
+ */
+export function ownershipOnSiteChange({ hadNoSite, pendingAnswer, storedAnswer } = {}) {
+  const pending = normalizeOwnershipAnswer(pendingAnswer);
+  const stored = normalizeOwnershipAnswer(storedAnswer);
+  if (hadNoSite && pending && !stored) return { carry: true, answer: pending };
+  return { carry: false, answer: stored };
 }
 
 /**
@@ -155,11 +194,22 @@ export function ownerManagedRobotsPolicy(value) {
  * enough to say they own the site, and it is the kind of lie that survives a
  * refactor because nobody remembers the copy is downstream of a boolean.
  */
+/**
+ * Whether a submission built from this policy plainly obeys robots.txt.
+ * @param {{respect_robots_txt?: boolean, owner_attested_robots_override?: boolean}} policy
+ * @returns {boolean} True only when robots.txt is respected and no override is
+ *   attested; anything else is not a scan we may describe as obeying it.
+ */
 export function policyObeysRobots(policy) {
   const source = policy && typeof policy === "object" ? policy : {};
   return source.respect_robots_txt === true && source.owner_attested_robots_override === false;
 }
 
+/**
+ * Whether the submission this answer produces obeys robots.txt.
+ * @param {unknown} value An ownership answer.
+ * @returns {boolean}
+ */
 export function submissionObeysRobots(value) {
   return policyObeysRobots(ownerManagedRobotsPolicy(value));
 }
@@ -178,6 +228,12 @@ export function helpTextForPolicy(policy) {
   return policyObeysRobots(policy) ? ROBOTS_OBEYED_COPY.help : "";
 }
 
+/**
+ * The help line shown under the ownership question for this answer.
+ * @param {unknown} value An ownership answer.
+ * @returns {string} The help text, or "" when the resulting scan would no
+ *   longer obey robots.txt and the sentence would be untrue.
+ */
 export function ownershipHelpText(value) {
   return helpTextForPolicy(ownerManagedRobotsPolicy(value));
 }

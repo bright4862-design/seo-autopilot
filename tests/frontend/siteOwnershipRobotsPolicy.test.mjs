@@ -12,6 +12,7 @@ import {
   ownerManagedRobotsPolicy,
   helpTextForPolicy,
   ownershipHelpText,
+  ownershipOnSiteChange,
   readSiteOwnership,
   submissionObeysRobots,
   siteOwnershipStorageKey,
@@ -224,6 +225,57 @@ test("storage failures never reach the customer", () => {
     assert.equal(writeSiteOwnership("", OWNERSHIP_OWNER_MANAGED), false);
     assert.equal(readSiteOwnership(""), OWNERSHIP_UNANSWERED);
   });
+});
+
+test("an answer given before the URL is typed is not thrown away", () => {
+  // The form asks the question whether or not a URL is present, but storage is
+  // keyed on the host, so an early answer has nowhere to go. Reading storage
+  // for the newly typed site then cleared the selection the customer had just
+  // made -- they answered, and it vanished as they finished the URL field.
+  const early = ownershipOnSiteChange({
+    hadNoSite: true, pendingAnswer: OWNERSHIP_OWNER_MANAGED, storedAnswer: OWNERSHIP_UNANSWERED,
+  });
+  assert.deepEqual(early, { carry: true, answer: OWNERSHIP_OWNER_MANAGED });
+
+  // Whatever that site already knows about itself still wins: that answer was
+  // given while looking at the site, this one before the site was known.
+  assert.deepEqual(
+    ownershipOnSiteChange({
+      hadNoSite: true, pendingAnswer: OWNERSHIP_OWNER_MANAGED, storedAnswer: OWNERSHIP_NOT_MANAGED,
+    }),
+    { carry: false, answer: OWNERSHIP_NOT_MANAGED },
+  );
+
+  // Moving between two real sites reads the new one; nothing is carried across.
+  assert.deepEqual(
+    ownershipOnSiteChange({
+      hadNoSite: false, pendingAnswer: OWNERSHIP_OWNER_MANAGED, storedAnswer: OWNERSHIP_UNANSWERED,
+    }),
+    { carry: false, answer: OWNERSHIP_UNANSWERED },
+  );
+  assert.deepEqual(
+    ownershipOnSiteChange({
+      hadNoSite: false, pendingAnswer: OWNERSHIP_OWNER_MANAGED, storedAnswer: OWNERSHIP_NOT_MANAGED,
+    }),
+    { carry: false, answer: OWNERSHIP_NOT_MANAGED },
+  );
+
+  // Nothing to carry, and junk never becomes an answer.
+  assert.deepEqual(
+    ownershipOnSiteChange({ hadNoSite: true, pendingAnswer: "", storedAnswer: "" }),
+    { carry: false, answer: OWNERSHIP_UNANSWERED },
+  );
+  assert.deepEqual(
+    ownershipOnSiteChange({ hadNoSite: true, pendingAnswer: "nonsense", storedAnswer: "" }),
+    { carry: false, answer: OWNERSHIP_UNANSWERED },
+  );
+  assert.deepEqual(ownershipOnSiteChange(), { carry: false, answer: OWNERSHIP_UNANSWERED });
+});
+
+test("the form routes its site change through that decision", () => {
+  const form = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
+  assert.match(form, /ownershipOnSiteChange\(\{ hadNoSite, pendingAnswer: siteOwnership, storedAnswer: stored \}\)/);
+  assert.match(form, /if \(next\.carry\) writeSiteOwnership\(websiteUrl, next\.answer\);/);
 });
 
 // ------------------------------------------------------------- the WAF state --

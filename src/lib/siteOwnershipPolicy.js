@@ -12,11 +12,11 @@ import { normalizeCustomerIdentity } from "./customerBrowserCache.js";
  * cannot infer which one is reading -- nothing in a crawl distinguishes an
  * owner from an onlooker -- so it asks once, before the scan, and remembers.
  */
-export const SITE_OWNERSHIP_POLICY_VERSION = "site_ownership_policy_v1_owner_managed_robots";
+export const SITE_OWNERSHIP_POLICY_VERSION = "site_ownership_policy_v2_owner_attestation_enum";
 
 export const OWNERSHIP_UNANSWERED = "";
-export const OWNERSHIP_OWNER_MANAGED = "owner_managed";
-export const OWNERSHIP_NOT_MANAGED = "not_managed";
+export const OWNERSHIP_OWNER_MANAGED = "owner_or_manager";
+export const OWNERSHIP_NOT_MANAGED = "not_owner";
 
 /** The closed set of stored answers. Anything else reads as unanswered. */
 export const SITE_OWNERSHIP_ANSWERS = Object.freeze([
@@ -36,9 +36,6 @@ export const OWNERSHIP_ANSWER_LABELS = Object.freeze({
   [OWNERSHIP_OWNER_MANAGED]: "Yes — I can change this site's settings",
   [OWNERSHIP_NOT_MANAGED]: "No — I'm checking someone else's site",
 });
-
-export const OWNERSHIP_HELP_TEXT =
-  "This only changes the advice FixList gives you if the scan is blocked. It does not change how the site is scanned.";
 
 /** Normalizes any stored or submitted value onto the closed set. */
 export function normalizeOwnershipAnswer(value) {
@@ -120,23 +117,67 @@ export function writeSiteOwnership(websiteUrl, value) {
 /**
  * The robots policy fields a Standard 150 submission carries for this answer.
  *
- * `respect_robots_txt` is `true` for both answers, and that is deliberate. The
- * scanner API rejects any Standard 150 submission whose `respect_robots_txt` is
- * not exactly `true` -- HTTP 400, "Standard scans must respect robots.txt", on
- * both the admission and the dispatch path -- so sending `false` for an owner
- * would not widen the crawl, it would fail the scan outright for exactly the
- * customers who told us they can fix things.
+ * The scanner API pairs two fields and rejects them when they disagree:
+ * `owner_attested_robots_override` must be true exactly when
+ * `respect_robots_txt` is false, or admission returns 400 "A robots.txt
+ * override requires explicit owner attestation." Both are sent explicitly so
+ * the pair is visible here rather than resting on a server-side default.
  *
- * Declaring ownership records who is able to act on a block. It does not change
- * what the crawler obeys, and nothing here should ever be used to make it.
+ * This asks for no override. A checkbox in a browser is not an attestation:
+ * the server may only honour one that is backed by durable, owned state, and
+ * `BusinessProject.site_owner_attestation` does not exist in main yet. Until it
+ * does, the honest thing for the frontend to send is the answer plus a refusal
+ * to act on it -- so the customer's declaration is recorded and carried, and
+ * the crawl obeys robots.txt exactly as it does today.
+ *
+ * When that durable field lands, the change is here and in ROBOTS_OBEYED_COPY
+ * together; the test suite fails if one moves without the other.
  */
 export function ownerManagedRobotsPolicy(value) {
   const owner = isOwnerManaged(value);
   return Object.freeze({
     respect_robots_txt: true,
+    owner_attested_robots_override: false,
     owner_managed_site: owner,
     robots_policy: owner ? "owner_managed" : "public_crawler",
     site_ownership_answer: normalizeOwnershipAnswer(value),
     site_ownership_policy_version: SITE_OWNERSHIP_POLICY_VERSION,
   });
+}
+
+/**
+ * Whether a submission built from this answer still obeys robots.txt, and the
+ * customer-facing sentences that are only true while it does.
+ *
+ * These sentences are derived from the policy rather than written beside it. A
+ * scan that overrides robots.txt while the form still promises it "does not
+ * change how the site is scanned" is a lie told to the person who trusted us
+ * enough to say they own the site, and it is the kind of lie that survives a
+ * refactor because nobody remembers the copy is downstream of a boolean.
+ */
+export function policyObeysRobots(policy) {
+  const source = policy && typeof policy === "object" ? policy : {};
+  return source.respect_robots_txt === true && source.owner_attested_robots_override === false;
+}
+
+export function submissionObeysRobots(value) {
+  return policyObeysRobots(ownerManagedRobotsPolicy(value));
+}
+
+export const ROBOTS_OBEYED_COPY = Object.freeze({
+  help: "This only changes the advice FixList gives you if the scan is blocked. It does not change how the site is scanned.",
+  spec: "Scan depth: up to 150 pages · respects robots.txt · read-only",
+});
+
+/**
+ * Takes the policy rather than the answer, so the withholding branch can be
+ * exercised before any policy in this file reaches it. A guard whose false case
+ * is unreachable is a guard that asserts nothing.
+ */
+export function helpTextForPolicy(policy) {
+  return policyObeysRobots(policy) ? ROBOTS_OBEYED_COPY.help : "";
+}
+
+export function ownershipHelpText(value) {
+  return helpTextForPolicy(ownerManagedRobotsPolicy(value));
 }

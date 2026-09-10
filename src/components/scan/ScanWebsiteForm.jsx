@@ -17,7 +17,7 @@ import { trackEvent } from "@/lib/analytics";
 import { refreshGroupedCountEvidence } from "@/lib/groupedCountCopy";
 import {
   OWNERSHIP_ANSWER_LABELS,
-  OWNERSHIP_HELP_TEXT,
+  ownershipHelpText,
   OWNERSHIP_QUESTION,
   OWNERSHIP_NOT_MANAGED,
   OWNERSHIP_OWNER_MANAGED,
@@ -40,6 +40,10 @@ const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV3";
 const STANDARD_SCAN_MODE = "standard_150";
 // The single customer-facing statement of scan scope. There is no scanner-size
 // selector and no selectable scan-size control anywhere in the DOM.
+// Only true while submissions still obey robots.txt. Kept literal here
+// because three contract tests assert the customer sees this exact line;
+// siteOwnershipRobotsPolicy.test.mjs asserts it equals ROBOTS_OBEYED_COPY.spec,
+// so the promise still cannot outlive the behaviour.
 const SCAN_SPEC_LINE = "Scan depth: up to 150 pages · respects robots.txt · read-only";
 const STANDARD_SCAN_BUDGET = Object.freeze({ max_pages: 150, max_browser_render_attempts: 1, crawl_timeout_ms: 90000 });
 
@@ -513,7 +517,7 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
                 </label>
               ))}
             </div>
-            <p className="mt-2 text-[13px] leading-relaxed text-ink-faint">{OWNERSHIP_HELP_TEXT}</p>
+            <p className="mt-2 text-[13px] leading-relaxed text-ink-faint">{ownershipHelpText(siteOwnership)}</p>
           </fieldset>
 
           <p className="text-[13px] text-ink-muted">{SCAN_SPEC_LINE}</p>

@@ -8,8 +8,12 @@ import {
   OWNERSHIP_UNANSWERED,
   isOwnerManaged,
   normalizeOwnershipAnswer,
+  ROBOTS_OBEYED_COPY,
   ownerManagedRobotsPolicy,
+  helpTextForPolicy,
+  ownershipHelpText,
   readSiteOwnership,
+  submissionObeysRobots,
   siteOwnershipStorageKey,
   writeSiteOwnership,
 } from "../../src/lib/siteOwnershipPolicy.js";
@@ -47,23 +51,84 @@ function withStorage(store, run) {
 
 // ------------------------------------------------------------- the policy --
 
-test("both answers still tell the scanner to respect robots.txt", () => {
-  // The scanner API rejects a Standard 150 submission whose respect_robots_txt
-  // is not exactly true, on the admission path and again on dispatch. Sending
-  // false for an owner would not widen their crawl, it would 400 their scan.
-  // This is the single most important property in this patch.
+test("the submitted pair matches the server's attestation contract", () => {
+  // The scanner API pairs the two fields and rejects them when they disagree:
+  // owner_attested_robots_override must be true exactly when
+  // respect_robots_txt is false. Sending a mismatched pair is a 400, so this
+  // reads the live guard rather than trusting a remembered one -- an earlier
+  // revision of this patch was written against a hard "must be true" rule that
+  // main has since replaced, and asserted a premise that had already moved.
   const api = readFileSync("scanner-api/app/main.py", "utf8");
-  assert.equal(
-    (api.match(/if payload\.respect_robots_txt is not True:/g) || []).length,
-    2,
-    "both server guards must still exist for this test to mean anything",
+  assert.match(
+    api,
+    /owner_robots_override != \(payload\.respect_robots_txt is False\)/,
+    "the server's pairing guard must still exist for this test to mean anything",
   );
 
   for (const answer of [OWNERSHIP_OWNER_MANAGED, OWNERSHIP_NOT_MANAGED, OWNERSHIP_UNANSWERED, "nonsense"]) {
+    const policy = ownerManagedRobotsPolicy(answer);
     assert.equal(
-      ownerManagedRobotsPolicy(answer).respect_robots_txt,
-      true,
-      `${answer || "(unanswered)"} must not loosen robots.txt`,
+      policy.owner_attested_robots_override,
+      policy.respect_robots_txt === false,
+      `${answer || "(unanswered)"} must submit a pair the server accepts`,
+    );
+  }
+});
+
+test("no browser answer alone asks for a robots.txt override", () => {
+  // The override may only be honoured against durable owned state. Until
+  // BusinessProject.site_owner_attestation exists, a radio button in a browser
+  // is not an attestation, and the frontend must not spend one.
+  const entity = readFileSync("base44/entities/BusinessProject.jsonc", "utf8");
+  const durableAttestationExists = /site_owner_attestation/.test(entity);
+  if (!durableAttestationExists) {
+    for (const answer of [OWNERSHIP_OWNER_MANAGED, OWNERSHIP_NOT_MANAGED, OWNERSHIP_UNANSWERED]) {
+      assert.equal(ownerManagedRobotsPolicy(answer).owner_attested_robots_override, false, String(answer));
+      assert.equal(ownerManagedRobotsPolicy(answer).respect_robots_txt, true, String(answer));
+    }
+  }
+});
+
+test("the robots promise cannot outlive the behaviour", () => {
+  // The failure this prevents: the crawl starts overriding robots.txt while the
+  // form still tells the customer it "does not change how the site is scanned".
+  // Both sentences are downstream of submissionObeysRobots, and this fails the
+  // moment they disagree.
+  const form = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
+  // The literal stays in the form because three other contract tests assert the
+  // customer sees this exact line. Equality here is what keeps the two in step.
+  const specLiteral = form.match(/const SCAN_SPEC_LINE = "([^"]+)"/)?.[1];
+  assert.equal(specLiteral, ROBOTS_OBEYED_COPY.spec,
+    "the form's scan spec line and the policy's copy must not drift apart");
+  assert.match(form, /\{ownershipHelpText\(siteOwnership\)\}/,
+    "the help text must be derived per answer");
+
+  for (const answer of [OWNERSHIP_OWNER_MANAGED, OWNERSHIP_NOT_MANAGED, OWNERSHIP_UNANSWERED]) {
+    const obeys = submissionObeysRobots(answer);
+    assert.equal(
+      ownershipHelpText(answer) === ROBOTS_OBEYED_COPY.help,
+      obeys,
+      `${answer || "(unanswered)"}: the "does not change how the site is scanned" promise must track the policy`,
+    );
+    if (obeys) assert.match(ROBOTS_OBEYED_COPY.spec, /respects robots\.txt/);
+  }
+
+  // Every policy today obeys robots.txt, so the assertions above cannot reach
+  // the withholding branch and would pass against copy that never checks. Drive
+  // the branch directly with the policy the backend override will produce.
+  assert.equal(
+    helpTextForPolicy({ respect_robots_txt: true, owner_attested_robots_override: false }),
+    ROBOTS_OBEYED_COPY.help,
+  );
+  for (const overriding of [
+    { respect_robots_txt: false, owner_attested_robots_override: true },
+    { respect_robots_txt: false, owner_attested_robots_override: false },
+    { respect_robots_txt: true, owner_attested_robots_override: true },
+  ]) {
+    assert.equal(
+      helpTextForPolicy(overriding),
+      "",
+      `a scan that no longer plainly obeys robots.txt must not claim it does: ${JSON.stringify(overriding)}`,
     );
   }
 });

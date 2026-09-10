@@ -1,6 +1,7 @@
 import { base44 } from "@/api/base44Client";
 import { ACTIVE_STATUSES } from "@/lib/friendlyLabels";
 import { normalizeScanTarget, normalizedScanDomain } from "@/lib/scanRunIdentity";
+import { normalizeOwnershipAnswer } from "@/lib/siteOwnershipPolicy";
 import {
   clearCustomerAuthBoundary,
   readCustomerActiveProject,
@@ -69,13 +70,17 @@ export async function getActiveProject() {
 
 // Resolves the BusinessProject identity for a scan target before any ScanRun is
 // created. Projects are domain-scoped and explicitly owner-bound so a user's
-// first Standard scan cannot persist an empty or unrelated project_id.
+// first Standard scan cannot persist an empty or unrelated project_id. When an
+// ownership answer is supplied, it is durably written before this function
+// returns; server admission can therefore derive robots policy from the owned
+// project instead of trusting browser fields.
 export async function ensureScanProject({
   projectId,
   websiteUrl,
   businessName,
   cmsPlatform,
   importantKeywords = [],
+  siteOwnerAttestation = "",
 } = {}) {
   const user = await base44.auth.me();
   if (!user?.id) throw new Error("Sign in before creating a website project.");
@@ -83,6 +88,7 @@ export async function ensureScanProject({
   const normalizedUrl = normalizeScanTarget(websiteUrl);
   const domain = normalizedScanDomain(normalizedUrl);
   if (!domain) throw new Error("A valid website URL is required before creating a website project.");
+  const normalizedAttestation = normalizeOwnershipAnswer(siteOwnerAttestation);
 
   const preferredIds = [projectId, readCustomerActiveProject(user.id)]
     .map((value) => String(value || "").trim())
@@ -117,6 +123,7 @@ export async function ensureScanProject({
       seo_score: 0,
       subscription_plan: "free",
       owner_user_id: user.id,
+      ...(normalizedAttestation ? { site_owner_attestation: normalizedAttestation } : {}),
     };
     const created = await base44.entities.BusinessProject.create(projectFields);
     matchingProject = { ...projectFields, ...(created || {}) };
@@ -127,6 +134,21 @@ export async function ensureScanProject({
   if (!isOwnedProject(matchingProject, user.id)) {
     throw new Error("The website project is not owned by the signed-in user.");
   }
+
+  if (
+    normalizedAttestation
+    && normalizeOwnershipAnswer(matchingProject.site_owner_attestation) !== normalizedAttestation
+  ) {
+    const updated = await base44.entities.BusinessProject.update(stableProjectId, {
+      site_owner_attestation: normalizedAttestation,
+    });
+    matchingProject = {
+      ...matchingProject,
+      ...(updated || {}),
+      site_owner_attestation: normalizedAttestation,
+    };
+  }
+
   writeCustomerActiveProject(user.id, stableProjectId);
   return { user, project: matchingProject, normalized_domain: domain };
 }

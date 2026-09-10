@@ -6,11 +6,10 @@ const BASE44_RUNTIME_ACTIVATION_ID = "checkout-prod-reactivation-20260903-v1";
 
 const APP_ID = "6a498732ec779dfaaeab0e53";
 const PLAN_ID = "standard150_lifetime";
-const MAX_BETA_CUSTOMERS = 25;
 const PRODUCTION_APP_ORIGIN = "https://rich-rank-pilot-flow.base44.app";
 const PRICE_DATA = {
   currency: "usd",
-  unit_amount: 5000,
+  unit_amount: 10000,
   product: "prod_V0lLfb5lSwxOxh",
 };
 const LOCAL_DEVELOPMENT_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
@@ -66,29 +65,14 @@ function betaCheckoutPolicy() {
     .trim()
     .toLowerCase() === "true";
   if (!enabled) {
-    return { ok: false, code: "checkout_paused", allowedUserIds: [], generation: "" };
+    return { ok: false, code: "checkout_paused", generation: "" };
   }
 
   const generation = String(Deno.env.get("BETA_CHECKOUT_GENERATION") || "").trim();
-  const allowedUserIds = Array.from(new Set(
-    String(Deno.env.get("BETA_COHORT_ALLOWED_USER_IDS") || "")
-      .split(/[\s,]+/)
-      .map((value) => value.trim())
-      .filter(Boolean),
-  ));
-  const valid = BETA_GENERATION_PATTERN.test(generation)
-    && allowedUserIds.length > 0
-    && allowedUserIds.length <= MAX_BETA_CUSTOMERS
-    && allowedUserIds.every((userId) => BETA_USER_ID_PATTERN.test(userId));
-  if (!valid) {
-    return {
-      ok: false,
-      code: "checkout_configuration_invalid",
-      allowedUserIds: [],
-      generation: "",
-    };
+  if (!BETA_GENERATION_PATTERN.test(generation)) {
+    return { ok: false, code: "checkout_configuration_invalid", generation: "" };
   }
-  return { ok: true, code: "", allowedUserIds, generation };
+  return { ok: true, code: "", generation };
 }
 
 async function checkoutIdempotencyKey(access, generation) {
@@ -135,6 +119,106 @@ async function findOwnedAccess(base44, userId, email) {
   return uniqueRecords([...(byUser || []), ...(byEmail || [])]);
 }
 
+function isSafePendingCheckoutAccess(access, userId, email) {
+  return Boolean(
+    access
+    && String(access.owner_user_id || "").trim() === userId
+    && normalizeEmail(access.user_email) === email
+    && String(access.access_status || "").trim() === "pending"
+    && access.has_full_access !== true
+    && String(access.plan_id || "") === PLAN_ID
+    && String(access.app_id || "") === APP_ID
+    && String(access.grant_source || "") === "checkout_pending"
+    && !String(access.paid_at || "").trim()
+    && !String(access.stripe_payment_intent_id || "").trim()
+    && !String(access.stripe_event_id || "").trim()
+  );
+}
+
+async function reconcilePendingCheckoutAccess(base44, rows, userId, email) {
+  const records = uniqueRecords(rows);
+  if (records.length <= 1) return records;
+  if (!records.every((record) => isSafePendingCheckoutAccess(record, userId, email))) return records;
+
+  const withSession = records.filter((record) => String(record.stripe_checkout_session_id || "").trim());
+  if (withSession.length > 1) return records;
+  const canonical = withSession[0] || [...records].sort((a, b) => String(a.id).localeCompare(String(b.id)))[0];
+  const duplicates = records.filter((record) => record.id !== canonical.id);
+  if (duplicates.some((record) => String(record.stripe_checkout_session_id || "").trim())) return records;
+
+  await Promise.all(duplicates.map(async (record) => {
+    try {
+      await base44.asServiceRole.entities.Access.delete(record.id);
+    } catch {
+      // Another concurrent request may already have removed the same safe
+      // pending duplicate. The authoritative re-read below decides success.
+    }
+  }));
+  return findOwnedAccess(base44, userId, email);
+}
+
+function isEligibleComplimentaryGrant(access, email) {
+  return Boolean(
+    access
+    && normalizeEmail(access.user_email) === email
+    && access.access_status === "active"
+    && access.has_full_access === true
+    && access.plan_id === PLAN_ID
+    && access.app_id === APP_ID
+    && access.grant_source === "manual_grant"
+    && Number.isFinite(Date.parse(String(access.granted_at || "")))
+  );
+}
+
+function publicAccess(access) {
+  return {
+    id: String(access?.id || ""),
+    user_email: normalizeEmail(access?.user_email),
+    owner_user_id: String(access?.owner_user_id || ""),
+    access_status: String(access?.access_status || ""),
+    plan_id: String(access?.plan_id || ""),
+    grant_source: String(access?.grant_source || ""),
+    app_id: String(access?.app_id || ""),
+    has_full_access: access?.has_full_access === true,
+    granted_at: String(access?.granted_at || ""),
+  };
+}
+
+async function claimComplimentaryAccess(base44, userId, email) {
+  let rows = await findOwnedAccess(base44, userId, email);
+  if (rows.length === 0) {
+    return Response.json({ success: false, code: "complimentary_access_not_found" }, { status: 404 });
+  }
+  if (rows.length > 1) {
+    return Response.json({ success: false, code: "access_conflict" }, { status: 409 });
+  }
+
+  let access = rows[0];
+  if (!isEligibleComplimentaryGrant(access, email)) {
+    return Response.json({ success: false, code: "complimentary_access_not_found" }, { status: 404 });
+  }
+
+  const currentOwner = String(access.owner_user_id || "").trim();
+  if (currentOwner && currentOwner !== userId) {
+    return Response.json({ success: false, code: "access_conflict" }, { status: 409 });
+  }
+  if (currentOwner === userId) {
+    return Response.json({ success: true, claimed: false, access: publicAccess(access) });
+  }
+
+  await base44.asServiceRole.entities.Access.update(access.id, { owner_user_id: userId });
+  rows = await findOwnedAccess(base44, userId, email);
+  if (rows.length !== 1 || String(rows[0]?.id || "") !== String(access.id || "")) {
+    return Response.json({ success: false, code: "access_conflict" }, { status: 409 });
+  }
+  access = rows[0];
+  if (!isEligibleComplimentaryGrant(access, email) || String(access.owner_user_id || "").trim() !== userId) {
+    return Response.json({ success: false, code: "access_conflict" }, { status: 409 });
+  }
+
+  return Response.json({ success: true, claimed: true, access: publicAccess(access) });
+}
+
 function checkoutAccessStateResponse(access) {
   const status = String(access?.access_status || "").trim();
   if (status === "revoked") {
@@ -164,6 +248,10 @@ export default async function (req) {
     }
 
     const body = await req.json().catch(() => ({}));
+    if (body?.action === "claim_complimentary_access") {
+      return claimComplimentaryAccess(base44, userId, email);
+    }
+
     const origin = resolveCheckoutReturnOrigin(body?.origin);
     if (!origin) {
       return Response.json(
@@ -172,31 +260,25 @@ export default async function (req) {
       );
     }
 
-    // Paid beta admission is fail-closed. The allowlist itself is the hard seat
-    // cap, so no concurrent checkout can allocate a 26th place. Operators must
-    // pre-provision exactly one Access row for each invited ID before enabling
-    // this generation; checkout never creates entitlement rows.
+    // Checkout remains release-gated, but access is no longer invitation-gated.
+    // A first-time authenticated customer receives only a pending entitlement;
+    // Stripe's verified webhook is still the only paid path that activates it.
     const policy = betaCheckoutPolicy();
     if (!policy.ok) {
       const configurationInvalid = policy.code === "checkout_configuration_invalid";
       return Response.json(
         {
           error: configurationInvalid
-            ? "Checkout is not configured for this beta cohort."
+            ? "Checkout is not configured."
             : "Checkout is temporarily paused.",
           code: policy.code,
         },
         { status: 503 },
       );
     }
-    if (!policy.allowedUserIds.includes(userId)) {
-      return Response.json(
-        { error: "This paid beta cohort is currently invite-only.", code: "checkout_not_invited" },
-        { status: 403 },
-      );
-    }
 
     let rows = await findOwnedAccess(base44, userId, email);
+    if (rows.length > 1) rows = await reconcilePendingCheckoutAccess(base44, rows, userId, email);
     if (rows.length > 1) {
       return Response.json(
         { error: "Your access record needs support before checkout can continue.", code: "duplicate_access" },
@@ -206,13 +288,24 @@ export default async function (req) {
 
     let access = rows[0] || null;
     if (!access) {
-      return Response.json(
-        {
-          error: "Your beta access invitation is not ready yet.",
-          code: "checkout_access_not_preprovisioned",
-        },
-        { status: 409 },
-      );
+      const created = await base44.asServiceRole.entities.Access.create({
+        user_email: email,
+        owner_user_id: userId,
+        access_status: "pending",
+        plan_id: PLAN_ID,
+        grant_source: "checkout_pending",
+        app_id: APP_ID,
+        has_full_access: false,
+      });
+      rows = await findOwnedAccess(base44, userId, email);
+      if (rows.length > 1) rows = await reconcilePendingCheckoutAccess(base44, rows, userId, email);
+      if (rows.length !== 1) {
+        return Response.json(
+          { error: "Checkout could not establish a unique access record.", code: "access_conflict" },
+          { status: 409 },
+        );
+      }
+      access = rows[0];
     }
     if (
       String(access.owner_user_id || "").trim() !== userId
@@ -227,6 +320,7 @@ export default async function (req) {
     if (initialStateResponse) return initialStateResponse;
 
     rows = await findOwnedAccess(base44, userId, email);
+    if (rows.length > 1) rows = await reconcilePendingCheckoutAccess(base44, rows, userId, email);
     if (rows.length !== 1 || rows[0]?.id !== access?.id) {
       return Response.json(
         { error: "Checkout could not establish a unique access record.", code: "access_conflict" },

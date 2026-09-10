@@ -19,7 +19,7 @@ VERIFICATION_ONLY_LIMITATION_CODES = {
 CANONICAL_MISSING_RULES = {"canonical_missing", "missing_canonical"}
 SITEMAP_REDIRECT_RULES = {"sitemap_redirect"}
 TRAILING_SLASH_REDIRECT_RULES = {"sitemap_redirect", "internal_link_redirect"}
-MISSING_META_DESCRIPTION_RULES = {"missing_meta_description"}
+MISSING_META_DESCRIPTION_RULES = {"missing_meta_description", "empty_meta_description", "malformed_meta_description", "meta_description_unusable"}
 PAGE_SEMANTIC_RULES = {
     "canonical_missing",
     "missing_canonical",
@@ -487,6 +487,14 @@ def _calibrate_scope_sensitive_fix(fix: dict[str, Any]) -> dict[str, Any]:
             "narrow_missing_canonical_scope",
         )
 
+    if rule in CANONICAL_MISSING_RULES:
+        fix = _cap_priority(
+            fix,
+            "high",
+            81,
+            "missing_canonical_urgency_cap",
+        )
+
     if _is_trailing_slash_only_healthy_redirect(fix):
         return _cap_priority(
             fix,
@@ -503,12 +511,12 @@ def _calibrate_scope_sensitive_fix(fix: dict[str, Any]) -> dict[str, Any]:
             "single_healthy_sitemap_redirect",
         )
 
-    if rule in MISSING_META_DESCRIPTION_RULES and affected_count == 1:
+    if rule in MISSING_META_DESCRIPTION_RULES:
         return _cap_priority(
             fix,
             "medium",
             67,
-            "single_page_missing_meta_description",
+            "single_page_missing_meta_description" if affected_count == 1 else "metadata_urgency_cap",
         )
 
     return fix

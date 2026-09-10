@@ -6,7 +6,7 @@ const BASE44_RUNTIME_ACTIVATION_ID = "stripe-webhook-prod-reactivation-20260903-
 
 const APP_ID = "6a498732ec779dfaaeab0e53";
 const PLAN_ID = "standard150_lifetime";
-const EXPECTED_AMOUNT = 5000;
+const EXPECTED_AMOUNT = 10000;
 const EXPECTED_CURRENCY = "usd";
 
 function normalizeEmail(value) {

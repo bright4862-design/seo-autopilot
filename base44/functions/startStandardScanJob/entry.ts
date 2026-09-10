@@ -67,7 +67,7 @@ function mutableScanAdmissionEnv(name) {
   return String(Deno.env.get(name) || "");
 }
 
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "053180f4bdc70857";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "c73399086107cbaf";
 const VERSION = "startStandardScanJob_v3_server_admission";
 const PUBLIC_SCAN_MODE = "standard_150";
 const MAX_PAGES = 150;
@@ -88,15 +88,15 @@ const SAFE_RELEASE_FAILURE_CODES = new Set([
 ]);
 
 const CUSTOMER_STATUS_DETAIL: Record<string, string> = {
-  paid_access_required: "A paid Standard 150 beta pass is required before this scan can start.",
+  paid_access_required: "Standard 150 access is required before this scan can start.",
   paid_access_conflict: "Your access record needs support before this scan can start.",
   durable_worker_not_configured: "The scan worker is not configured yet. No scan was started.",
   invalid_worker_url: "The scan worker is not configured correctly. No scan was started.",
   tasks_credentials_not_configured: "The scan queue is not configured yet. No scan was started.",
   tasks_token_mint_failed: "The scan queue could not authenticate. No scan was started.",
   tasks_unreachable: "The scan queue could not be reached. Please retry.",
-  scan_admission_paused: "New beta scans are temporarily paused.",
-  scan_intake_paused: "New beta scans are temporarily paused.",
+  scan_admission_paused: "New scans are temporarily paused.",
+  scan_intake_paused: "New scans are temporarily paused.",
   scan_admission_configuration_invalid: "The scan admission coordinator is not configured correctly.",
 };
 

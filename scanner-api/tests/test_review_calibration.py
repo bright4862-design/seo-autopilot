@@ -327,7 +327,9 @@ def test_widespread_canonical_and_unsafe_redirect_evidence_are_not_demoted():
     result = apply_review_evidence_calibration(reviewed, body)
     priorities = {fix["rule"] + fix["id"]: fix["priority"] for fix in result["recommendations"]}
 
-    assert priorities["canonical_missingcanonical-sitewide"] == "critical"
+    assert priorities["canonical_missingcanonical-sitewide"] == "high"
+    canonical = next(fix for fix in result["recommendations"] if fix["id"] == "canonical-sitewide")
+    assert canonical["severity_calibration_reason"] == "missing_canonical_urgency_cap"
     assert priorities["sitemap_redirectredirect-loop"] == "critical"
 
 def test_health_score_uses_the_strongest_priority_once_per_rule():
@@ -542,3 +544,29 @@ def test_pdf_and_cloudflare_utility_targets_do_not_create_page_semantic_tasks():
     assert fixes[0]["affected_pages"] == ["/global/en/newsroom/subscription"]
     assert fixes[0]["page_url"] == "/global/en/newsroom/subscription"
     assert fixes[0]["non_html_or_utility_pages_suppressed"] == 1
+
+
+def test_broad_metadata_gap_cannot_become_high_priority_from_page_count_alone():
+    pages = [page(f"/guide-{index}", 4, 0) for index in range(20)]
+    body = payload(pages)
+    reviewed = run_review(body)
+    reviewed["recommendations"] = [
+        {
+            "id": "metadata-broad",
+            "fix_id": "metadata-broad",
+            "rule": "meta_description_unusable",
+            "category": "meta_description",
+            "priority": "high",
+            "overall_priority_score": 88,
+            "affected_pages": [f"/guide-{index}" for index in range(20)],
+            "page_count": 20,
+            "page_scope": "family",
+            "page_template_family": "guide_article",
+            "issue_title": "Add usable descriptions",
+        }
+    ]
+
+    result = apply_review_evidence_calibration(reviewed, body)
+    fix = result["recommendations"][0]
+    assert fix["priority"] == "medium"
+    assert fix["severity_calibration_reason"] == "metadata_urgency_cap"

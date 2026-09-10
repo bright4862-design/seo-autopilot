@@ -110,7 +110,7 @@ test("an authority seal cannot be used as a limited proof", async () => {
 test("the signed payload binds the domain label", () => {
   const limited = snapshot();
   assert.equal(limited.integrity_domain, LIMITED_RESULT_HMAC_DOMAIN);
-  assert.equal(LIMITED_RESULT_HMAC_DOMAIN, "standard_limited_result_hmac_v4_focused_scope_effective_path");
+  assert.equal(LIMITED_RESULT_HMAC_DOMAIN, "standard_limited_result_hmac_v5_report_evidence");
   assert.equal(limited.version, LIMITED_RESULT_INTEGRITY_VERSION);
 });
 

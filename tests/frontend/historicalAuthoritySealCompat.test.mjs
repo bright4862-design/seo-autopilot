@@ -39,6 +39,7 @@ const V2 = "standard_review_snapshot_hmac_v2_coverage";
 const V3 = "standard_review_snapshot_hmac_v3_acceptance_evidence";
 const V4 = "standard_review_snapshot_hmac_v4_focused_scope";
 const V5 = "standard_review_snapshot_hmac_v5_score_explanation";
+const V6 = "standard_review_snapshot_hmac_v6_report_evidence";
 const NOW = "2026-08-21T16:00:00.000Z";
 
 /** Fields Patch B added. A v1 payload must contain none of them. */
@@ -73,6 +74,7 @@ const SCOPE_KEYS = [
 
 /** The field v5 added: where the health score's points went. */
 const SCORE_EXPLANATION_KEYS = ["health_score_explanation"];
+const REPORT_EVIDENCE_KEYS = ["scan_coverage"];
 
 function snapshot() {
   return buildAuthoritySnapshot({
@@ -131,7 +133,7 @@ function snapshot() {
 async function historicalV1Row() {
   const legacy = structuredClone(snapshot());
   legacy.version = V1;
-  for (const key of [...COVERAGE_KEYS, ...ACCEPTANCE_KEYS, ...SCOPE_KEYS, ...SCORE_EXPLANATION_KEYS]) delete legacy.scan[key];
+  for (const key of [...COVERAGE_KEYS, ...ACCEPTANCE_KEYS, ...SCOPE_KEYS, ...SCORE_EXPLANATION_KEYS, ...REPORT_EVIDENCE_KEYS]) delete legacy.scan[key];
 
   const proof = await createAuthoritySeal(legacy, SECRET);
   const rows = authorityRowsFromSnapshot(legacy, {
@@ -146,7 +148,7 @@ async function historicalV1Row() {
 async function historicalV2Row() {
   const legacy = structuredClone(snapshot());
   legacy.version = V2;
-  for (const key of [...ACCEPTANCE_KEYS, ...SCOPE_KEYS, ...SCORE_EXPLANATION_KEYS]) delete legacy.scan[key];
+  for (const key of [...ACCEPTANCE_KEYS, ...SCOPE_KEYS, ...SCORE_EXPLANATION_KEYS, ...REPORT_EVIDENCE_KEYS]) delete legacy.scan[key];
 
   const proof = await createAuthoritySeal(legacy, SECRET);
   const rows = authorityRowsFromSnapshot(legacy, {
@@ -161,7 +163,7 @@ async function historicalV2Row() {
 async function historicalV3Row() {
   const legacy = structuredClone(snapshot());
   legacy.version = V3;
-  for (const key of [...SCOPE_KEYS, ...SCORE_EXPLANATION_KEYS]) delete legacy.scan[key];
+  for (const key of [...SCOPE_KEYS, ...SCORE_EXPLANATION_KEYS, ...REPORT_EVIDENCE_KEYS]) delete legacy.scan[key];
 
   const proof = await createAuthoritySeal(legacy, SECRET);
   const rows = authorityRowsFromSnapshot(legacy, {
@@ -176,11 +178,26 @@ async function historicalV3Row() {
 async function historicalV4Row() {
   const legacy = structuredClone(snapshot());
   legacy.version = V4;
-  for (const key of SCORE_EXPLANATION_KEYS) delete legacy.scan[key];
+  for (const key of [...SCORE_EXPLANATION_KEYS, ...REPORT_EVIDENCE_KEYS]) delete legacy.scan[key];
 
   const proof = await createAuthoritySeal(legacy, SECRET);
   const rows = authorityRowsFromSnapshot(legacy, {
     fixListId: "fl_v4",
+    ownerUserId: "user_hist",
+    proof,
+  });
+  return { legacy, proof, rows };
+}
+
+/** A row sealed under score-explanation v5, before report evidence v6. */
+async function historicalV5Row() {
+  const legacy = structuredClone(snapshot());
+  legacy.version = V5;
+  for (const key of REPORT_EVIDENCE_KEYS) delete legacy.scan[key];
+
+  const proof = await createAuthoritySeal(legacy, SECRET);
+  const rows = authorityRowsFromSnapshot(legacy, {
+    fixListId: "fl_v5",
     ownerUserId: "user_hist",
     proof,
   });
@@ -234,9 +251,9 @@ test("rebuilding a v1 row never introduces a field the v1 seal did not cover", a
 
 // ------------------------------------------------------------ new rows --
 
-test("new rows seal under the score-explanation attestation version", () => {
-  assert.equal(REVIEW_ATTESTATION_VERSION, V5);
-  assert.equal(snapshot().version, V5);
+test("new rows seal under the report-evidence attestation version", () => {
+  assert.equal(REVIEW_ATTESTATION_VERSION, V6);
+  assert.equal(snapshot().version, V6);
 });
 
 test("a historical v2-sealed result still verifies and carries coverage evidence", async () => {
@@ -252,6 +269,27 @@ test("a historical v2-sealed result still verifies and carries coverage evidence
   assert.equal(await verifyAuthoritySeal(rebuilt, SECRET, proof), true);
   assert.equal(rebuilt.scan.usable_html_page_count, 150);
   assert.equal(rebuilt.scan.coverage_authority_evidence.assessment, "sufficient");
+});
+
+test("a historical v5-sealed result still verifies and cannot gain unsigned report evidence", async () => {
+  const { legacy, proof, rows } = await historicalV5Row();
+  const stored = structuredClone(rows);
+  stored.scanRun.scan_coverage = { urls_attempted: 999 };
+  if (stored.fixItems[0]) {
+    stored.fixItems[0].raw_finding = {
+      ...(stored.fixItems[0].raw_finding || {}),
+      redirect_fetch_evidence: { requested_url: "https://evil.example/", classification: "redirect_destination_unusable" },
+    };
+  }
+  const rebuilt = customerSnapshotFromRows({
+    run: { id: "scan_hist", project_id: "proj_hist", ...stored.scanRun },
+    fixList: { id: "fl_v5", ...stored.fixList },
+    fixItems: stored.fixItems,
+    userId: "user_hist",
+  });
+  assert.deepEqual(rebuilt, legacy);
+  assert.equal(await verifyAuthoritySeal(rebuilt, SECRET, proof), true);
+  assert.ok(!("scan_coverage" in rebuilt.scan));
 });
 
 test("a historical v4-sealed result still verifies without a score explanation", async () => {

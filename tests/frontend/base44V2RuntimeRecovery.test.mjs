@@ -47,7 +47,7 @@ const V2_ACTIVATION = Object.fromEntries(Object.keys(EXPECTED_BUILD).map((name) 
 // the suffix convention would otherwise give the test a different canonical
 // marker than the classifier uses, and the assertions would quietly stop
 // describing it.
-const ROUTES = JSON.parse(fs.readFileSync("data/base44-function-routes.json", "utf8")).routes;
+const ROUTES = JSON.parse(fs.readFileSync("data/base44-function-routes.json", "utf8")).historical_routes.v2;
 const canonicalOf = (alias) => Object.entries(ROUTES).find(([, active]) => active === alias)?.[0];
 const CANONICAL_ACTIVATION = Object.fromEntries(Object.keys(EXPECTED_BUILD).map((name) => [name,
   execFileSync("node", ["scripts/generate_release_contracts.mjs", "--activation-id", canonicalOf(name)], { encoding: "utf8" }).trim()]));
@@ -628,7 +628,8 @@ test("runtime verification demands both identities", () => {
 test("the verifier probes exactly the six live routes", () => {
   const listed = verifier.slice(verifier.indexOf("FUNCTION_ROUTES=("), verifier.indexOf(")", verifier.indexOf("FUNCTION_ROUTES=(")))
     .split("\n").slice(1).map((line) => line.trim()).filter(Boolean);
-  assert.deepEqual(listed.sort(), Object.keys(EXPECTED_BUILD).sort());
+  const active = JSON.parse(fs.readFileSync("data/base44-function-routes.json", "utf8")).routes;
+  assert.deepEqual(listed.sort(), Object.values(active).sort());
 });
 
 test("build IDs resolve through the alias and activation markers do not", () => {

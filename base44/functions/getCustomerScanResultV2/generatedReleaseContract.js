@@ -3,7 +3,7 @@
 // Run that generator after changing either input; CI fails on drift.
 
 export const RELEASE_CONTRACT_SCHEMA_VERSION = "beta_crawler_revision_v1";
-export const RELEASE_FINGERPRINT = "053180f4bdc70857";
+export const RELEASE_FINGERPRINT = "c73399086107cbaf";
 export const RELEASE_STATUS = "candidate";
 export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "acceptance_evidence_version": "standard150_acceptance_evidence_v2_aggregate_rss_fail_closed",
@@ -31,7 +31,7 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "grouped_recommendation_evidence_version": "grouped_recommendation_evidence_v1_metadata_states",
   "image_alt_evidence_version": "material_image_alt_v1",
   "indexability_quality_version": "indexability_quality_v1",
-  "limited_result_integrity_version": "standard_limited_result_integrity_v4_focused_scope_effective_path",
+  "limited_result_integrity_version": "standard_limited_result_integrity_v5_report_evidence",
   "market_scope_version": "market_scope_v2_traversal_safe_path_prefix",
   "metadata_evidence_version": "metadata_evidence_v1_description_states",
   "navigation_indexability_version": "navigation_indexability_v1",
@@ -52,7 +52,7 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "repair_surface_grouping_version": "repair_surface_grouping_v1_shared_artifact",
   "repair_write_contract_version": "repair_contract_v2_shadow_calibrated",
   "representative_page_version": "business_representative_page_v3_sitewide_archetype_ranking",
-  "review_attestation_version": "standard_review_snapshot_hmac_v5_score_explanation",
+  "review_attestation_version": "standard_review_snapshot_hmac_v6_report_evidence",
   "review_evidence_calibration_version": "review_evidence_calibration_v6_health_score_v2",
   "review_version": "python_review_v2_structural_marketplace",
   "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",

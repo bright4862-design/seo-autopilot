@@ -1,12 +1,32 @@
 import { base44 } from "@/api/base44Client";
 
-export const UNLOCK_PRICE_LABEL = "$50";
+export const UNLOCK_PRICE_LABEL = "$100";
 export const LOCKED_PREVIEW_FIX_COUNT = 0;
 const OWNER_TEST_EMAIL = "bright4862@gmail.com";
 const OWNER_TEST_USER_ID = "6a498da58ef5cec1f5cd4486";
 
 function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+function isClaimableManualGrant(record, user = {}) {
+  const email = normalizeEmail(user?.email);
+  return Boolean(
+    record
+    && email
+    && normalizeEmail(record.user_email) === email
+    && !String(record.owner_user_id || "").trim()
+    && record.has_full_access === true
+    && record.access_status === "active"
+    && record.plan_id === "standard150_lifetime"
+    && record.app_id === "6a498732ec779dfaaeab0e53"
+    && record.grant_source === "manual_grant"
+    && Number.isFinite(Date.parse(String(record.granted_at || "")))
+  );
+}
+
+function claimedAccessRecord(response) {
+  return response?.data?.access || response?.data?.data?.access || null;
 }
 
 export function isActivePaidAccess(record, user = {}) {
@@ -35,16 +55,38 @@ export function isActivePaidAccess(record, user = {}) {
 }
 
 export async function loadAccess() {
-  const user = await base44.auth.me().catch(() => null);
+  let user;
+  try {
+    user = await base44.auth.me();
+  } catch {
+    return { email: "", fullAccess: false, scansUsed: 0, canScan: false, record: null, unavailable: true };
+  }
+
   const email = normalizeEmail(user?.email);
   const userId = String(user?.id || "").trim();
   if (!email || !userId) {
     return { email: "", fullAccess: false, scansUsed: 0, canScan: false, record: null };
   }
 
-  const records = await base44.entities.Access.filter({ user_email: email }).catch(() => []);
+  let records;
+  try {
+    records = await base44.entities.Access.filter({ user_email: email });
+  } catch {
+    return { email, fullAccess: false, scansUsed: 0, canScan: false, record: null, unavailable: true };
+  }
+
   const rows = Array.isArray(records) ? records : [];
-  const record = rows.length === 1 ? rows[0] : null;
+  let record = rows.length === 1 ? rows[0] : null;
+  if (isClaimableManualGrant(record, user)) {
+    try {
+      const response = await base44.functions.invoke("createAccessCheckout", { action: "claim_complimentary_access" });
+      const claimed = claimedAccessRecord(response);
+      if (claimed) record = claimed;
+    } catch {
+      // Fail closed: an unbound grant is never treated as access unless the
+      // authenticated exact-email claim succeeds on the server.
+    }
+  }
   const fullAccess = isActivePaidAccess(record, user);
 
   return {

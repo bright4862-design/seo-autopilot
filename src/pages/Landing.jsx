@@ -1,10 +1,11 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
+import { UNLOCK_PRICE_LABEL } from "@/lib/access";
 
 const faqs = [
   {
     q: "What does FixList do?",
-    a: "FixList runs a read-only Standard 150 beta scan of up to 150 pages, then turns the results into plain-English SEO fixes you can understand and act on.",
+    a: "FixList runs a read-only Standard 150 scan of up to 150 pages, then turns the results into plain-English SEO fixes you can understand and act on.",
   },
   {
     q: "Will FixList change my website?",
@@ -15,8 +16,8 @@ const faqs = [
     a: "No. FixList is built for small business owners. It explains what matters, why it matters, and whether you can handle it yourself or may need help.",
   },
   {
-    q: "How much is beta access?",
-    a: "Beta access is a one-time $50 payment. It includes Standard 150 beta scans, with up to 150 pages checked per scan.",
+    q: "How much is access?",
+    a: `Standard 150 access is a one-time ${UNLOCK_PRICE_LABEL} payment. It includes unlimited scans, with up to 150 pages checked per scan.`,
   },
   {
     q: "How long does a scan take?",
@@ -55,7 +56,7 @@ export default function Landing() {
               to="/register"
               className="rounded-full bg-ink px-4 py-2 text-[13px] font-medium text-paper transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
             >
-              Get beta access
+              Get access
             </Link>
           </div>
         </nav>
@@ -63,7 +64,7 @@ export default function Landing() {
         <main>
           <section className="mt-24">
             <p className="text-[13px] text-ink-faint">
-              Standard 150 beta · read-only · no site changes
+              Standard 150 · read-only · no site changes
             </p>
             <h1 className="mt-4 text-[32px] font-semibold leading-tight tracking-tight sm:text-[38px]">
               Website scans, turned into simple SEO fixes.
@@ -79,7 +80,7 @@ export default function Landing() {
                 to="/register"
                 className="rounded-full bg-ink px-5 py-2.5 text-[13px] font-medium text-paper transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
               >
-                Get beta access
+                Get access
               </Link>
               <a
                 href="#faq"
@@ -94,7 +95,7 @@ export default function Landing() {
                 <span className="text-good">✓</span> Up to 150 pages per scan
               </span>
               <span className="flex items-center gap-2">
-                <span className="text-good">✓</span> One-time $50 beta access
+                <span className="text-good">✓</span> One-time {UNLOCK_PRICE_LABEL} access
               </span>
               <span className="flex items-center gap-2">
                 <span className="text-good">✓</span> Usually 2–4 minutes

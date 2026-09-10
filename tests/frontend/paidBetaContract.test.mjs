@@ -14,6 +14,7 @@ const checkout = readFileSync("base44/functions/createAccessCheckout/entry.ts", 
 const webhook = readFileSync("base44/functions/stripeWebhook/entry.ts", "utf8");
 const accessClient = readFileSync("src/lib/access.js", "utf8");
 const billing = readFileSync("src/pages/Billing.jsx", "utf8");
+const landing = readFileSync("src/pages/Landing.jsx", "utf8");
 const scanForm = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
 const fixList = readFileSync("src/pages/FixList.jsx", "utf8");
 const persistence = readFileSync("base44/functions/persistDurableScanAuthority/entry.ts", "utf8");
@@ -45,14 +46,15 @@ const ownerAccess = {
   granted_at: "2026-08-11T12:00:00.000Z",
 };
 
-test("checkout, webhook and customer copy share one $50 contract", () => {
-  assert.match(checkout, /unit_amount: 5000/);
-  assert.match(webhook, /const EXPECTED_AMOUNT = 5000;/);
-  assert.match(accessClient, /UNLOCK_PRICE_LABEL = "\$50"/);
-  assert.match(billing, /price: "\$50 one-time"/);
+test("checkout, webhook and customer copy share one $100 contract", () => {
+  assert.match(checkout, /unit_amount: 10000/);
+  assert.match(webhook, /const EXPECTED_AMOUNT = 10000;/);
+  assert.match(accessClient, /UNLOCK_PRICE_LABEL = "\$100"/);
+  assert.match(billing, /price: `\$\{UNLOCK_PRICE_LABEL\} one-time`/);
+  assert.match(landing, /UNLOCK_PRICE_LABEL/);
 
-  for (const [name, source] of Object.entries({ checkout, webhook, accessClient, billing, scanForm, fixList })) {
-    assert.doesNotMatch(source, /\$30(?!\d)|\$75(?!\d)|unit_amount:\s*3000|unit_amount:\s*7500/, name);
+  for (const [name, source] of Object.entries({ checkout, webhook, accessClient, billing, landing, scanForm, fixList })) {
+    assert.doesNotMatch(source, /\$30(?!\d)|\$50(?!\d)|\$75(?!\d)|unit_amount:\s*3000|unit_amount:\s*5000|unit_amount:\s*7500/, name);
   }
 });
 
@@ -61,7 +63,8 @@ test("customer copy is paid-only and contains no free-scan promise", () => {
     assert.doesNotMatch(source, /free test scan|one free scan|Run free scan/i, name);
   }
   assert.match(billing, /one-time payment/i);
-  assert.match(billing, /Standard 150 beta/);
+  assert.match(billing, /Standard 150/);
+  assert.doesNotMatch(billing, /Standard 150 beta/i);
 });
 
 test("paid admission fails closed for missing, unpaid and duplicate rows", () => {
@@ -123,12 +126,14 @@ test("Access writes are backend-only and completion is billing-independent", () 
   assert.doesNotMatch(persistence, /entities\.Access|scans_used|ensureAllowanceConsumed/);
 });
 
-test("paid beta checkout is invite-only, default-off, and cannot allocate Access rows", () => {
+test("paid Standard 150 checkout is public when enabled and provisions pending access", () => {
   assert.match(checkout, /BETA_CHECKOUT_ENABLED/);
-  assert.match(checkout, /BETA_COHORT_ALLOWED_USER_IDS/);
-  assert.match(checkout, /const MAX_BETA_CUSTOMERS = 25/);
-  assert.match(checkout, /checkout_access_not_preprovisioned/);
-  assert.doesNotMatch(checkout, /entities\.Access\.create/);
+  assert.doesNotMatch(checkout, /BETA_COHORT_ALLOWED_USER_IDS/);
+  assert.doesNotMatch(checkout, /MAX_BETA_CUSTOMERS/);
+  assert.doesNotMatch(checkout, /checkout_not_invited|checkout_access_not_preprovisioned/);
+  assert.match(checkout, /entities\.Access\.create/);
+  assert.match(checkout, /access_status:\s*"pending"/);
+  assert.match(checkout, /grant_source:\s*"checkout_pending"/);
   assert.match(checkout, /await checkoutIdempotencyKey\(access, policy\.generation\)/);
 });
 

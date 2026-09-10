@@ -74,6 +74,15 @@ async def test_final_url_dedup_keeps_one_homepage_and_backfills_unique_capacity(
     assert {page["path"] for page in result["pages"]} == {"/", "/about"}
     assert result["technical_audit_summary"]["final_url_dedup_version"] == scanner.FINAL_URL_DEDUP_VERSION
     assert result["technical_audit_summary"]["final_url_duplicates_deduped"] == 1
+    assert result["scan_coverage"] == {
+        "urls_attempted": 3,
+        "usable_html_pages": 3,
+        "verified_http_failures": 0,
+        "access_unverified_pages": 0,
+        "non_html_resources": 0,
+        "unique_retained_destinations": 2,
+    }
+    assert result["technical_audit_summary"]["scan_coverage"] == result["scan_coverage"]
     homepage = next(page for page in result["pages"] if page["path"] == "/")
     assert set(homepage["discovered_from"]) == {"seed", "sitemap"}
     assert homepage["url_confidence"] == "confirmed_seed"

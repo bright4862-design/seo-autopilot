@@ -9,5 +9,7 @@ test("frontend access mirrors the exact owner-bound manual grant policy", () => 
   assert.match(access, /String\(record\.owner_user_id \|\| ""\) === userId/);
   assert.match(access, /record\.grant_source === "manual_grant" && Boolean\(record\.granted_at\)/);
   assert.match(access, /return identityMatches && activeGrant && \(paidGrant \|\| ownerTestGrant \|\| manualGrant\)/);
-  assert.doesNotMatch(access, /!record\.owner_user_id|!String\(record\.owner_user_id/);
+  assert.match(access, /isClaimableManualGrant/);
+  assert.match(access, /!String\(record\.owner_user_id \|\| ""\)\.trim\(\)/);
+  assert.match(access, /action: "claim_complimentary_access"/);
 });

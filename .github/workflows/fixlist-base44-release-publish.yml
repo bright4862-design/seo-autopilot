@@ -3,6 +3,14 @@ name: FixList Base44 Release Publish
 on:
   workflow_dispatch:
     inputs:
+      deployment_target:
+        description: "Bounded Base44 release target. Scanner functions is the safe V3 cutover default."
+        required: true
+        type: choice
+        default: scanner-functions
+        options:
+          - scanner-functions
+          - site-and-functions
       confirm:
         description: "Exact current main SHA. Must equal the release source SHA."
         required: true
@@ -38,13 +46,20 @@ jobs:
 
       - name: Verify exact clean main source
         shell: /bin/bash {0}
+        env:
+          INPUT_DEPLOYMENT_TARGET: ${{ inputs.deployment_target }}
         run: |
           set -euo pipefail
           test "${{ github.actor }}" = "bright4862-design"
           test "${{ github.ref }}" = "refs/heads/main"
+          case "$INPUT_DEPLOYMENT_TARGET" in
+            scanner-functions|site-and-functions) ;;
+            *) echo "Refusing unknown Base44 deployment target: $INPUT_DEPLOYMENT_TARGET" >&2; exit 2 ;;
+          esac
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
           test "$(git rev-parse origin/main)" = "${{ github.sha }}"
           test -z "$(git status --porcelain --untracked-files=all)"
+          /bin/bash -n scripts/deploy-base44-beta-functions.sh
           /bin/bash -n scripts/deploy-base44-beta-site.sh
           /bin/bash -n scripts/authenticate-base44-owner-session.sh
           /bin/bash -n scripts/lib/release-source-guard.sh
@@ -78,7 +93,18 @@ jobs:
       - name: Verify Base44 release package manifest
         run: node scripts/base44_release_manifest.mjs verify
 
+      - name: Deploy and attest exact V3 scanner functions
+        if: ${{ inputs.deployment_target == 'scanner-functions' }}
+        shell: /bin/bash {0}
+        env:
+          DEPLOY_SCOPE: scanner-functions
+          SOURCE_SHA: ${{ github.sha }}
+          CONFIRM: ${{ steps.confirm.outputs.confirm }}
+          BASE44_EXPECTED_OWNER: ${{ secrets.BASE44_EXPECTED_OWNER }}
+        run: /bin/bash scripts/deploy-base44-beta-functions.sh
+
       - name: Publish exact Base44 site and canonical release functions
+        if: ${{ inputs.deployment_target == 'site-and-functions' }}
         shell: /bin/bash {0}
         env:
           SOURCE_SHA: ${{ github.sha }}

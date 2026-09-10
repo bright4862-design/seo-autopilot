@@ -27,7 +27,6 @@ async function importHandlerWithHarness(source, harnessName) {
 }
 
 const checkoutHelpers = await importPureHelpers(checkoutSource, [
-  "MAX_BETA_CUSTOMERS",
   "PRODUCTION_APP_ORIGIN",
   "betaCheckoutPolicy",
   "checkoutIdempotencyKey",
@@ -43,11 +42,7 @@ test("checkout failures remain customer-safe and distinguish paused beta admissi
   );
   assert.equal(
     checkoutFailureMessage("checkout_paused"),
-    "Paid beta checkout is temporarily paused. No payment was started.",
-  );
-  assert.equal(
-    checkoutFailureMessage("checkout_not_invited"),
-    "This paid beta cohort is currently invite-only.",
+    "Checkout is temporarily paused. No payment was started.",
   );
   assert.doesNotMatch(checkoutFailureMessage("unknown_internal_code"), /internal|stripe|access[_-]id/i);
 });
@@ -97,39 +92,27 @@ test("checkout accepts only exact trusted return origins", () => {
   }
 });
 
-test("the paid beta is default-off and capped at 25 exact invited user IDs", () => {
+test("checkout is default-off and requires only a valid release generation", () => {
   const priorDeno = globalThis.Deno;
   const values = new Map();
   globalThis.Deno = { env: { get: (name) => values.get(name) } };
 
   try {
-    assert.equal(checkoutHelpers.MAX_BETA_CUSTOMERS, 25);
     assert.deepEqual(checkoutHelpers.betaCheckoutPolicy(), {
       ok: false,
       code: "checkout_paused",
-      allowedUserIds: [],
       generation: "",
     });
 
     values.set("BETA_CHECKOUT_ENABLED", "true");
-    values.set("BETA_CHECKOUT_GENERATION", "cohort-2026-08");
-    values.set("BETA_COHORT_ALLOWED_USER_IDS", "user-1, user-2\nuser-1");
+    values.set("BETA_CHECKOUT_GENERATION", "public-2026-09");
+    values.set("BETA_COHORT_ALLOWED_USER_IDS", "malformed/not-a-user-id");
     assert.deepEqual(checkoutHelpers.betaCheckoutPolicy(), {
       ok: true,
       code: "",
-      allowedUserIds: ["user-1", "user-2"],
-      generation: "cohort-2026-08",
+      generation: "public-2026-09",
     });
 
-    values.set(
-      "BETA_COHORT_ALLOWED_USER_IDS",
-      Array.from({ length: 26 }, (_, index) => `user-${index + 1}`).join(","),
-    );
-    assert.equal(checkoutHelpers.betaCheckoutPolicy().code, "checkout_configuration_invalid");
-
-    values.set("BETA_COHORT_ALLOWED_USER_IDS", "user-1,not/an/id");
-    assert.equal(checkoutHelpers.betaCheckoutPolicy().code, "checkout_configuration_invalid");
-    values.set("BETA_COHORT_ALLOWED_USER_IDS", "user-1");
     values.set("BETA_CHECKOUT_GENERATION", "generation with spaces");
     assert.equal(checkoutHelpers.betaCheckoutPolicy().code, "checkout_configuration_invalid");
   } finally {
@@ -196,8 +179,7 @@ test("the checkout handler enforces admission without mutating durable entitleme
   const priorDeno = globalThis.Deno;
   const env = new Map([
     ["BETA_CHECKOUT_ENABLED", "true"],
-    ["BETA_CHECKOUT_GENERATION", "cohort-2026-08"],
-    ["BETA_COHORT_ALLOWED_USER_IDS", "user-1"],
+    ["BETA_CHECKOUT_GENERATION", "public-2026-09"],
   ]);
   let accessRecord = {
     id: "access-1",
@@ -319,22 +301,6 @@ test("the checkout handler enforces admission without mutating durable entitleme
     assert.equal(sessionCreateCalls.length, 0);
 
     env.set("BETA_CHECKOUT_ENABLED", "true");
-    env.set("BETA_COHORT_ALLOWED_USER_IDS", "user-2");
-    const uninvited = await invoke("https://rich-rank-pilot-flow.base44.app");
-    assert.equal(uninvited.status, 403);
-    assert.equal((await uninvited.json()).code, "checkout_not_invited");
-    assert.equal(accessCreateCount, 0);
-    assert.equal(sessionCreateCalls.length, 0);
-
-    env.set("BETA_COHORT_ALLOWED_USER_IDS", "user-1");
-    const preprovisionedAccess = accessRecord;
-    accessRecord = null;
-    const notPreprovisioned = await invoke("https://rich-rank-pilot-flow.base44.app");
-    assert.equal(notPreprovisioned.status, 409);
-    assert.equal((await notPreprovisioned.json()).code, "checkout_access_not_preprovisioned");
-    assert.equal(accessCreateCount, 0);
-    assert.equal(sessionCreateCalls.length, 0);
-    accessRecord = preprovisionedAccess;
 
     synchronizePendingWrites = true;
     const concurrentResponses = await Promise.all([
@@ -604,7 +570,7 @@ test("the webhook handler grants once for immediate or delayed payment delivery"
         object: {
           id: sessionId,
           payment_status: overrides.paymentStatus || "paid",
-          amount_total: overrides.amountTotal ?? 5000,
+          amount_total: overrides.amountTotal ?? 10000,
           currency: "usd",
           customer_email: "paid@example.com",
           client_reference_id: "user-1",
@@ -676,7 +642,7 @@ test("the webhook handler grants once for immediate or delayed payment delivery"
 
     const tamperedAsyncSuccess = await deliver("cs_delayed_tampered", 4, {
       type: "checkout.session.async_payment_succeeded",
-      amountTotal: 4999,
+      amountTotal: 9999,
     });
     assert.equal(tamperedAsyncSuccess.status, 400);
     assert.deepEqual(tamperedAsyncSuccess.body, { error: "checkout_amount_mismatch" });

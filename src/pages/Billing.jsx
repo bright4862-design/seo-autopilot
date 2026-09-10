@@ -224,7 +224,7 @@ export default function Billing() {
         return <span className="text-[13px] text-ink-faint">{activationPending ? "Activating…" : "Activation pending"}</span>;
       }
       return accessLoaded
-        ? <UnlockAccessButton />
+        ? <span className="text-[13px] text-ink-faint">Available above</span>
         : <span className="text-[13px] text-ink-faint">Checking access…</span>;
     }
     if (isCurrent) {
@@ -274,7 +274,7 @@ export default function Billing() {
             ) : checkoutSuppressed ? (
               <span className="text-[13px] text-ink-faint">{activationPending ? "Activating access…" : "Awaiting confirmation"}</span>
             ) : accessLoaded ? (
-              <UnlockAccessButton />
+              <span className="text-[13px] text-ink-faint">Unlock below</span>
             ) : (
               <span className="text-[13px] text-ink-faint">Checking…</span>
             )}

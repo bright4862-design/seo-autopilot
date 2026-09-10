@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from .extract import is_legal_page_path
 
-SAMPLING_VERSION = "balanced_sitemap_buckets_v6_selected_and_checked_split"
+SAMPLING_VERSION = "balanced_sitemap_buckets_v7_family_section_round_robin"
 TRUST_PREFIXES = (
     "/about", "/contact", "/privacy", "/terms", "/legal", "/mentions-legales",
     "/cgv", "/security", "/impressum", "/conditions", "/a-propos",
@@ -125,6 +125,38 @@ def select_balanced_urls(
                 fresh.append(url)
         return fresh + repeats
 
+    def section_diverse_first(candidates: Iterable[str]) -> list[str]:
+        """Round-robin meaningful first-level sections within one family.
+
+        Family balancing alone can still spend nearly every generic-family slot
+        on the first large sitemap section. Normalize away locale prefixes, then
+        take one URL per first-level section before returning to a section.
+        """
+        sections: dict[str, list[str]] = {}
+        order: list[str] = []
+        for url in candidates:
+            clean = strip_locale_prefix(path_of(url))
+            segments = [segment for segment in clean.split("/") if segment]
+            section = f"/{segments[0].lower()}" if segments else "/"
+            if section not in sections:
+                sections[section] = []
+                order.append(section)
+            sections[section].append(url)
+
+        result: list[str] = []
+        offset = 0
+        while True:
+            emitted = False
+            for section in order:
+                bucket = sections[section]
+                if offset < len(bucket):
+                    result.append(bucket[offset])
+                    emitted = True
+            if not emitted:
+                break
+            offset += 1
+        return result
+
     for url in fresh_first(u for u in urls if is_trust_path(path_of(u)))[:TRUST_RESERVE]:
         take(url)
 
@@ -139,7 +171,7 @@ def select_balanced_urls(
     for family in sorted(f for f, values in buckets.items() if len(values) >= MATERIAL_THRESHOLD):
         want = min(min_per_family, len(buckets[family]))
         have = sum(1 for url in selected if family_of(url) == family)
-        for url in fresh_first(buckets[family]):
+        for url in section_diverse_first(fresh_first(buckets[family])):
             if have >= want or len(selected) >= budget:
                 break
             if take(url):
@@ -160,7 +192,7 @@ def select_balanced_urls(
         if total > 0:
             quotas = {family: int(remaining * weight / total) for family, weight in weights.items()}
             for family in sorted(quotas, key=lambda value: (-quotas[value], value)):
-                for url in fresh_first(pool[family])[:quotas[family]]:
+                for url in section_diverse_first(fresh_first(pool[family]))[:quotas[family]]:
                     if not take(url):
                         break
 

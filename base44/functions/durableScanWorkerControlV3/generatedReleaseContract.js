@@ -3,7 +3,7 @@
 // Run that generator after changing either input; CI fails on drift.
 
 export const RELEASE_CONTRACT_SCHEMA_VERSION = "beta_crawler_revision_v1";
-export const RELEASE_FINGERPRINT = "c73399086107cbaf";
+export const RELEASE_FINGERPRINT = "ce7d7ecc4f508332";
 export const RELEASE_STATUS = "candidate";
 export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "acceptance_evidence_version": "standard150_acceptance_evidence_v2_aggregate_rss_fail_closed",
@@ -41,13 +41,13 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "page_template_classifier_version": "page_template_classifier_v4_bookable_inventory_routes",
   "priority_summary_version": "priority_summary_v1_action_band_consistent",
   "quality_gate_version": "review_quality_gate_v3_shared_coverage_decision",
-  "redirect_evidence_version": "redirect_evidence_v3_origin_alias_identity",
+  "redirect_evidence_version": "redirect_evidence_v4_specific_top_level_home_catchall",
   "render_evidence_quality_version": "render_evidence_quality_v1",
   "render_evidence_version": "render_evidence_v1",
   "render_followup_version": "render_followup_v1",
   "repair_coverage_version": "repair_coverage_v4_corroborated_family_gap_fill",
   "repair_persistence_grouping_version": "repair_persistence_grouping_v2_valid_fingerprint_actions",
-  "repair_presentation_contract_version": "repair_presentation_v5_evidence_groups_canonical_export",
+  "repair_presentation_contract_version": "repair_presentation_v6_clickable_redirect_evidence",
   "repair_suggestion_library_version": "v1",
   "repair_surface_grouping_version": "repair_surface_grouping_v1_shared_artifact",
   "repair_write_contract_version": "repair_contract_v2_shadow_calibrated",
@@ -57,7 +57,7 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "review_version": "python_review_v2_structural_marketplace",
   "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",
   "sampling_disclosure_version": "sampling_disclosure_v5_selection_language",
-  "sampling_version": "balanced_sitemap_buckets_v6_selected_and_checked_split",
+  "sampling_version": "balanced_sitemap_buckets_v7_family_section_round_robin",
   "scan_history_delete_version": "scan_history_delete_v2_drain_children",
   "scan_history_version": "scan_history_v3_focused_parent_children",
   "scanner_build_revision": "authenticated_health_probe_v1",

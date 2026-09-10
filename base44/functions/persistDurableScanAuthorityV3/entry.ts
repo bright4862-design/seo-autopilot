@@ -1,7 +1,7 @@
 import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { secrets } from "base44:runtime";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "persistDurableScanAuthorityV3-report-evidence-20260909-v1";
+const BASE44_RUNTIME_ACTIVATION_ID = "persistDurableScanAuthorityV3-report-quality-20260910-v1";
 import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
 import { authorityRowsFromSnapshot } from "./authorityRows.js";
 import { AUTHORITY_CONTRACT, buildAuthoritySnapshot, firstFailedAuthorityPredicate, hasCompleteAcceptanceEvidence } from "./authoritySnapshot.js";
@@ -39,7 +39,7 @@ function releaseAdmission(options = {}) {
 // a compiled worker when entry.ts stayed byte-identical while an imported
 // handler changed. Keeping the active release fingerprint in the entry module
 // guarantees every release-fingerprint move changes the deployed entry bytes.
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "c73399086107cbaf";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "ce7d7ecc4f508332";
 
 function normalizeAttempt(value) {
   const parsed = Number(value);

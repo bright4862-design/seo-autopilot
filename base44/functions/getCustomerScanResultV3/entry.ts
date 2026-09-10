@@ -33,9 +33,9 @@ const ACCEPTED_LIMITED_INTEGRITY_VERSIONS = new Set([
 ]);
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "getCustomerScanResultV3-report-evidence-20260909-v1";
+const BASE44_RUNTIME_ACTIVATION_ID = "getCustomerScanResultV3-report-quality-20260910-v1";
 import { isReadableAuthorityReleaseFingerprint } from "./releaseCompatibility.js";
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "c73399086107cbaf";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "ce7d7ecc4f508332";
 const MAX_FIX_ITEMS = 100;
 
 // Runtime-secret convergence must not be confused with cryptographic key

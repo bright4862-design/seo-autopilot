@@ -78,6 +78,13 @@
       ],
       "default": "free"
     },
+    "site_owner_attestation": {
+      "type": "string",
+      "enum": [
+        "owner_or_manager",
+        "not_owner"
+      ]
+    },
     "owner_user_id": {
       "type": "string",
       "rls": {

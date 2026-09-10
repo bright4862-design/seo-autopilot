@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const landingSource = readFileSync("src/pages/Landing.jsx", "utf8");
+const accessSource = readFileSync("src/lib/access.js", "utf8");
 const appSource = readFileSync("src/App.jsx", "utf8");
 const dashboardLayoutSource = readFileSync(
   "src/components/layout/DashboardLayout.jsx",
@@ -16,7 +17,8 @@ const mobileNavigationSource = readFileSync(
 test("the public landing page states the paid Standard 150 contract without beta invitation language", () => {
   assert.match(landingSource, /Standard 150/);
   assert.doesNotMatch(landingSource, /Standard 150 beta|Get beta access|invite-only/i);
-  assert.match(landingSource, /\$100/);
+  assert.match(landingSource, /UNLOCK_PRICE_LABEL/);
+  assert.match(accessSource, /export const UNLOCK_PRICE_LABEL = "\$100"/);
   assert.match(landingSource, /one-time/i);
   assert.match(landingSource, /2–4 minutes/);
 

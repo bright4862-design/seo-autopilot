@@ -14,8 +14,9 @@ const PRICE_DATA = {
   product: "prod_V0lLfb5lSwxOxh",
 };
 const LOCAL_DEVELOPMENT_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
-const BETA_USER_ID_PATTERN = /^[A-Za-z0-9_-]{3,128}$/;
-const BETA_GENERATION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const USER_ID_PATTERN = /^[A-Za-z0-9_-]{3,128}$/;
+const CHECKOUT_GENERATION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const DEFAULT_CHECKOUT_GENERATION = "production-20260910";
 
 function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
@@ -61,16 +62,17 @@ function resolveCheckoutReturnOrigin(value) {
   return "";
 }
 
-function betaCheckoutPolicy() {
-  const enabled = String(Deno.env.get("BETA_CHECKOUT_ENABLED") || "")
-    .trim()
-    .toLowerCase() === "true";
-  if (!enabled) {
+function checkoutPolicy() {
+  const configuredEnabled = String(Deno.env.get("CHECKOUT_ENABLED") || "").trim().toLowerCase();
+  if (configuredEnabled === "false") {
     return { ok: false, code: "checkout_paused", generation: "" };
   }
+  if (configuredEnabled && configuredEnabled !== "true") {
+    return { ok: false, code: "checkout_configuration_invalid", generation: "" };
+  }
 
-  const generation = String(Deno.env.get("BETA_CHECKOUT_GENERATION") || "").trim();
-  if (!BETA_GENERATION_PATTERN.test(generation)) {
+  const generation = String(Deno.env.get("CHECKOUT_GENERATION") || DEFAULT_CHECKOUT_GENERATION).trim();
+  if (!CHECKOUT_GENERATION_PATTERN.test(generation)) {
     return { ok: false, code: "checkout_configuration_invalid", generation: "" };
   }
   return { ok: true, code: "", generation };
@@ -79,7 +81,7 @@ function betaCheckoutPolicy() {
 async function checkoutIdempotencyKey(access, generation) {
   const userId = String(access?.owner_user_id || "").trim();
   const checkoutGeneration = String(generation || "").trim();
-  if (!BETA_USER_ID_PATTERN.test(userId) || !BETA_GENERATION_PATTERN.test(checkoutGeneration)) {
+  if (!USER_ID_PATTERN.test(userId) || !CHECKOUT_GENERATION_PATTERN.test(checkoutGeneration)) {
     throw new Error("checkout_configuration_invalid");
   }
   const previousSessionId = String(access?.stripe_checkout_session_id || "").trim() || "initial";
@@ -264,7 +266,7 @@ export default async function (req) {
     // Checkout remains release-gated, but access is no longer invitation-gated.
     // A first-time authenticated customer receives only a pending entitlement;
     // Stripe's verified webhook is still the only paid path that activates it.
-    const policy = betaCheckoutPolicy();
+    const policy = checkoutPolicy();
     if (!policy.ok) {
       const configurationInvalid = policy.code === "checkout_configuration_invalid";
       return Response.json(

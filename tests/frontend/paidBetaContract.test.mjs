@@ -45,14 +45,14 @@ const ownerAccess = {
   granted_at: "2026-08-11T12:00:00.000Z",
 };
 
-test("checkout, webhook and customer copy share one $50 contract", () => {
-  assert.match(checkout, /unit_amount: 5000/);
-  assert.match(webhook, /const EXPECTED_AMOUNT = 5000;/);
-  assert.match(accessClient, /UNLOCK_PRICE_LABEL = "\$50"/);
-  assert.match(billing, /price: "\$50 one-time"/);
+test("checkout, webhook and customer copy share one $100 contract", () => {
+  assert.match(checkout, /unit_amount: 10000/);
+  assert.match(webhook, /const EXPECTED_AMOUNT = 10000;/);
+  assert.match(accessClient, /UNLOCK_PRICE_LABEL = "\$100"/);
+  assert.match(billing, /price: "\$100 one-time"/);
 
   for (const [name, source] of Object.entries({ checkout, webhook, accessClient, billing, scanForm, fixList })) {
-    assert.doesNotMatch(source, /\$30(?!\d)|\$75(?!\d)|unit_amount:\s*3000|unit_amount:\s*7500/, name);
+    assert.doesNotMatch(source, /\$30(?!\d)|\$50(?!\d)|\$75(?!\d)|unit_amount:\s*3000|unit_amount:\s*5000|unit_amount:\s*7500/, name);
   }
 });
 

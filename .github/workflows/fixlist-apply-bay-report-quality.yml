@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   apply-exact-candidate:
-    if: ${{ hashFiles('.fixlist-bootstrap/bay-report-quality.patch.gz.b64') != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out branch with history
@@ -31,7 +30,11 @@ jobs:
           SELF='.github/workflows/fixlist-apply-bay-report-quality.yml'
 
           test "$GITHUB_REF_NAME" = "$BRANCH"
-          test "$(git rev-parse HEAD~2)" = "$EXPECTED_BASE"
+          git merge-base --is-ancestor "$EXPECTED_BASE" HEAD
+          mapfile -t BOOTSTRAP_FILES < <(git diff --name-only "$EXPECTED_BASE"..HEAD)
+          test "${#BOOTSTRAP_FILES[@]}" = '2'
+          printf '%s\n' "${BOOTSTRAP_FILES[@]}" | grep -Fxq "$PATCH_B64"
+          printf '%s\n' "${BOOTSTRAP_FILES[@]}" | grep -Fxq "$SELF"
           test -f "$PATCH_B64"
           test -f "$SELF"
 

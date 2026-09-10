@@ -36,6 +36,7 @@ import { samplingDisclosure } from "@/lib/samplingDisclosure";
 import { displayPathPrefix, focusedPathSections, focusedSectionOnboardingPath, orderFocusedScanHistory } from "@/lib/focusedScanScope";
 import { buildPageAccounting } from "@/lib/pageAccounting";
 import { customerSafeLimitationLine, durableScanStatePresentation } from "@/lib/durableScanStatePresentation";
+import { readSiteOwnership, resolveScanOwnership } from "@/lib/siteOwnershipPolicy";
 import { healthScoreExplanation } from "@/lib/healthScoreExplanation";
 
 const CMS_OPTIONS = [
@@ -554,7 +555,16 @@ export default function FixList() {
           <LockedResultState />
         ) : scanRecord && !hasUsefulScan ? (
           <RequestedScanState
-            presentation={durableScanStatePresentation(scanRecord)}
+            presentation={durableScanStatePresentation(scanRecord, {
+              // What the customer told us before the scan decides whether a
+              // blocked crawl reads as "open your firewall" or "ask whoever
+              // runs the site". Read at render from the site's own key, so a
+              // result opened later from history still gets the right advice.
+              // The run's own answer first, the browser's only for runs saved
+              // before the policy travelled on them. A scan reopened from history
+              // on another device has no local answer to read.
+              ownership: resolveScanOwnership(scanRecord, readSiteOwnership(scanRecord.website_url)),
+            })}
             limitation={customerSafeLimitationLine(scanRecord)}
             reference={scanRecord.scan_id || scanRecord.id}
           />

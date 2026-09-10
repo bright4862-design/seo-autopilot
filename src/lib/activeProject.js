@@ -24,6 +24,11 @@ function normalizeProjectCms(value) {
   return supported[normalized] || "Unknown";
 }
 
+function normalizeSiteOwnerAttestation(value) {
+  const normalized = String(value || "").trim();
+  return ["owner_or_manager", "not_owner"].includes(normalized) ? normalized : "";
+}
+
 function isOwnedProject(project, userId) {
   return project?.owner_user_id === userId;
 }
@@ -76,6 +81,7 @@ export async function ensureScanProject({
   businessName,
   cmsPlatform,
   importantKeywords = [],
+  siteOwnerAttestation = "",
 } = {}) {
   const user = await base44.auth.me();
   if (!user?.id) throw new Error("Sign in before creating a website project.");
@@ -83,6 +89,7 @@ export async function ensureScanProject({
   const normalizedUrl = normalizeScanTarget(websiteUrl);
   const domain = normalizedScanDomain(normalizedUrl);
   if (!domain) throw new Error("A valid website URL is required before creating a website project.");
+  const normalizedOwnerAttestation = normalizeSiteOwnerAttestation(siteOwnerAttestation);
 
   const preferredIds = [projectId, readCustomerActiveProject(user.id)]
     .map((value) => String(value || "").trim())
@@ -117,6 +124,7 @@ export async function ensureScanProject({
       seo_score: 0,
       subscription_plan: "free",
       owner_user_id: user.id,
+      ...(normalizedOwnerAttestation ? { site_owner_attestation: normalizedOwnerAttestation } : {}),
     };
     const created = await base44.entities.BusinessProject.create(projectFields);
     matchingProject = { ...projectFields, ...(created || {}) };
@@ -127,6 +135,21 @@ export async function ensureScanProject({
   if (!isOwnedProject(matchingProject, user.id)) {
     throw new Error("The website project is not owned by the signed-in user.");
   }
+
+  if (
+    normalizedOwnerAttestation
+    && matchingProject.site_owner_attestation !== normalizedOwnerAttestation
+  ) {
+    const updated = await base44.entities.BusinessProject.update(stableProjectId, {
+      site_owner_attestation: normalizedOwnerAttestation,
+    });
+    matchingProject = {
+      ...matchingProject,
+      ...(updated || {}),
+      site_owner_attestation: normalizedOwnerAttestation,
+    };
+  }
+
   writeCustomerActiveProject(user.id, stableProjectId);
   return { user, project: matchingProject, normalized_domain: domain };
 }

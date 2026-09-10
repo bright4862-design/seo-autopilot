@@ -7,6 +7,7 @@ const BASE44_RUNTIME_ACTIVATION_ID = "checkout-prod-reactivation-20260903-v1";
 const APP_ID = "6a498732ec779dfaaeab0e53";
 const PLAN_ID = "standard150_lifetime";
 const PRODUCTION_APP_ORIGIN = "https://rich-rank-pilot-flow.base44.app";
+const PRODUCTION_CUSTOM_ORIGINS = ["https://getfixlist.com", "https://www.getfixlist.com"];
 const PRICE_DATA = {
   currency: "usd",
   unit_amount: 10000,
@@ -44,7 +45,7 @@ function configuredCheckoutOrigins() {
     .map((value) => parseOrigin(value))
     .filter((origin) => origin?.protocol === "https:")
     .map((origin) => origin.origin);
-  return new Set([PRODUCTION_APP_ORIGIN, ...configured]);
+  return new Set([PRODUCTION_APP_ORIGIN, ...PRODUCTION_CUSTOM_ORIGINS, ...configured]);
 }
 
 function resolveCheckoutReturnOrigin(value) {

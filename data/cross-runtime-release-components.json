@@ -12,7 +12,7 @@
     "focused_scan_scope_version": "focused_scan_scope_v3_fullsite_scope_type_case_preserved_candidates",
     "limited_result_integrity_version": "standard_limited_result_integrity_v5_report_evidence",
     "priority_summary_version": "priority_summary_v1_action_band_consistent",
-    "repair_presentation_contract_version": "repair_presentation_v5_evidence_groups_canonical_export",
+    "repair_presentation_contract_version": "repair_presentation_v6_clickable_redirect_evidence",
     "repair_suggestion_library_version": "v1",
     "repair_write_contract_version": "repair_contract_v2_shadow_calibrated",
     "review_attestation_version": "standard_review_snapshot_hmac_v6_report_evidence",

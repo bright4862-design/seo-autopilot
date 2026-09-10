@@ -1146,8 +1146,23 @@ function CustomerRepairCard({ card = {}, websiteUrl = "" }) {
               <ul className="mt-2 space-y-2 text-[12px] text-ink-muted">
                 {redirectRows.map((row, index) => (
                   <li key={`${row.requested.href || row.requested.label}-${index}`} className="rounded-md border border-hairline-soft px-2.5 py-2">
-                    <p className="break-all"><span className="text-ink-faint">Requested:</span> {row.requested.href || row.requested.label}</p>
-                    <p className="mt-1 break-all"><span className="text-ink-faint">Observed destination:</span> {row.destination.href || row.destination.label} · {row.statusLabel}</p>
+                    <p className="break-all">
+                      <span className="text-ink-faint">Requested:</span>{" "}
+                      {row.requested.isLinkable ? (
+                        <a href={row.requested.href} rel="noopener noreferrer" title={row.requested.title} aria-label={row.requested.linkName} className="underline decoration-hairline underline-offset-4 hover:text-ink">
+                          {row.requested.label}
+                        </a>
+                      ) : <span title={row.requested.title}>{row.requested.label}</span>}
+                    </p>
+                    <p className="mt-1 break-all">
+                      <span className="text-ink-faint">Observed destination:</span>{" "}
+                      {row.destination.isLinkable ? (
+                        <a href={row.destination.href} rel="noopener noreferrer" title={row.destination.title} aria-label={row.destination.linkName} className="underline decoration-hairline underline-offset-4 hover:text-ink">
+                          {row.destination.label}
+                        </a>
+                      ) : <span title={row.destination.title}>{row.destination.label}</span>}
+                      {" · "}{row.statusLabel}
+                    </p>
                     <p className="mt-1"><span className="text-ink-faint">Classification:</span> {row.classificationLabel} · {row.verificationLabel}</p>
                   </li>
                 ))}

@@ -140,7 +140,7 @@ def test_release_marker_endpoints_are_consistent():
     assert revision["component_versions"]["review_evidence_calibration_version"] == health["review_evidence_calibration_version"]
     assert revision["component_versions"]["scanner_build_revision"] == health["scanner_build_revision"]
     assert revision["component_versions"]["artifact_filter_version"] == "artifact_filter_v4_wordpress_route_noise"
-    assert revision["component_versions"]["redirect_evidence_version"] == "redirect_evidence_v3_origin_alias_identity"
+    assert revision["component_versions"]["redirect_evidence_version"] == "redirect_evidence_v4_specific_top_level_home_catchall"
 
 
 def test_scan_endpoint_returns_customer_safe_envelope_on_crash(monkeypatch, capsys):

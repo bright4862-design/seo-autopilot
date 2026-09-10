@@ -65,6 +65,14 @@ test("checkout accepts only exact trusted return origins", () => {
       "https://rich-rank-pilot-flow.base44.app",
     );
     assert.equal(
+      checkoutHelpers.resolveCheckoutReturnOrigin("https://getfixlist.com"),
+      "https://getfixlist.com",
+    );
+    assert.equal(
+      checkoutHelpers.resolveCheckoutReturnOrigin("https://www.getfixlist.com"),
+      "https://www.getfixlist.com",
+    );
+    assert.equal(
       checkoutHelpers.resolveCheckoutReturnOrigin("https://beta.example.com"),
       "https://beta.example.com",
     );

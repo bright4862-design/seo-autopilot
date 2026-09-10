@@ -67,6 +67,10 @@ test("customer copy is paid-only and contains no free-scan promise", () => {
   assert.doesNotMatch(billing, /Standard 150 beta/i);
 });
 
+test("billing shows only one checkout button for unpaid access", () => {
+  assert.equal((billing.match(/<UnlockAccessButton\b/g) || []).length, 1);
+});
+
 test("paid admission fails closed for missing, unpaid and duplicate rows", () => {
   assert.deepEqual(evaluatePaidAccess({ rows: [], user }), {
     ok: false,

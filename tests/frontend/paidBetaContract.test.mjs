@@ -14,6 +14,7 @@ const checkout = readFileSync("base44/functions/createAccessCheckout/entry.ts", 
 const webhook = readFileSync("base44/functions/stripeWebhook/entry.ts", "utf8");
 const accessClient = readFileSync("src/lib/access.js", "utf8");
 const billing = readFileSync("src/pages/Billing.jsx", "utf8");
+const landing = readFileSync("src/pages/Landing.jsx", "utf8");
 const scanForm = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
 const fixList = readFileSync("src/pages/FixList.jsx", "utf8");
 const persistence = readFileSync("base44/functions/persistDurableScanAuthority/entry.ts", "utf8");
@@ -49,10 +50,11 @@ test("checkout, webhook and customer copy share one $100 contract", () => {
   assert.match(checkout, /unit_amount: 10000/);
   assert.match(webhook, /const EXPECTED_AMOUNT = 10000;/);
   assert.match(accessClient, /UNLOCK_PRICE_LABEL = "\$100"/);
-  assert.match(billing, /price: "\$100 one-time"/);
+  assert.match(billing, /price: `\$\{UNLOCK_PRICE_LABEL\} one-time`/);
+  assert.match(landing, /UNLOCK_PRICE_LABEL/);
 
-  for (const [name, source] of Object.entries({ checkout, webhook, accessClient, billing, scanForm, fixList })) {
-    assert.doesNotMatch(source, /\$30(?!\d)|\$75(?!\d)|unit_amount:\s*3000|unit_amount:\s*7500/, name);
+  for (const [name, source] of Object.entries({ checkout, webhook, accessClient, billing, landing, scanForm, fixList })) {
+    assert.doesNotMatch(source, /\$30(?!\d)|\$50(?!\d)|\$75(?!\d)|unit_amount:\s*3000|unit_amount:\s*5000|unit_amount:\s*7500/, name);
   }
 });
 

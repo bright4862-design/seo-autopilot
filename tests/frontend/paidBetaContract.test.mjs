@@ -131,7 +131,8 @@ test("Access writes are backend-only and completion is billing-independent", () 
 });
 
 test("paid Standard 150 checkout is public when enabled and provisions pending access", () => {
-  assert.match(checkout, /BETA_CHECKOUT_ENABLED/);
+  assert.match(checkout, /CHECKOUT_ENABLED/);
+  assert.doesNotMatch(checkout, /BETA_CHECKOUT_ENABLED|BETA_CHECKOUT_GENERATION/);
   assert.doesNotMatch(checkout, /BETA_COHORT_ALLOWED_USER_IDS/);
   assert.doesNotMatch(checkout, /MAX_BETA_CUSTOMERS/);
   assert.doesNotMatch(checkout, /checkout_not_invited|checkout_access_not_preprovisioned/);

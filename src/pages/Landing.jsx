@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
+import { UNLOCK_PRICE_LABEL } from "@/lib/access";
 
 const faqs = [
   {
@@ -16,7 +17,7 @@ const faqs = [
   },
   {
     q: "How much is access?",
-    a: "Standard 150 access is a one-time $100 payment. It includes unlimited scans, with up to 150 pages checked per scan.",
+    a: `Standard 150 access is a one-time ${UNLOCK_PRICE_LABEL} payment. It includes unlimited scans, with up to 150 pages checked per scan.`,
   },
   {
     q: "How long does a scan take?",
@@ -94,7 +95,7 @@ export default function Landing() {
                 <span className="text-good">✓</span> Up to 150 pages per scan
               </span>
               <span className="flex items-center gap-2">
-                <span className="text-good">✓</span> One-time $100 access
+                <span className="text-good">✓</span> One-time {UNLOCK_PRICE_LABEL} access
               </span>
               <span className="flex items-center gap-2">
                 <span className="text-good">✓</span> Usually 2–4 minutes

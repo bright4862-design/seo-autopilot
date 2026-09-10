@@ -16,6 +16,17 @@ import { UNLOCK_PRICE_LABEL, loadAccess } from "@/lib/access";
 import { trackEvent } from "@/lib/analytics";
 import { refreshGroupedCountEvidence } from "@/lib/groupedCountCopy";
 import {
+  OWNERSHIP_ANSWER_LABELS,
+  OWNERSHIP_HELP_TEXT,
+  OWNERSHIP_QUESTION,
+  OWNERSHIP_NOT_MANAGED,
+  OWNERSHIP_OWNER_MANAGED,
+  ownerManagedRobotsPolicy,
+  readSiteOwnership,
+  siteOwnershipStorageKey,
+  writeSiteOwnership,
+} from "@/lib/siteOwnershipPolicy";
+import {
   CUSTOMER_BOUNDARY_EVENT,
   clearCustomerAuthBoundary,
   readCustomerActiveProject,
@@ -67,6 +78,9 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
   const [cmsPlatform, setCmsPlatform] = useState(normalizeCmsValue(project?.cms_platform || "custom"));
   const [keywordsText, setKeywordsText] = useState(Array.isArray(project?.important_keywords) ? project.important_keywords.join("\n") : "");
   const scanMode = STANDARD_SCAN_MODE;
+  // Seeded from storage rather than set by an effect, so a reload paints the
+  // stored answer immediately instead of flashing an unanswered question.
+  const [siteOwnership, setSiteOwnership] = useState(() => readSiteOwnership(focusedUrl || project?.website_url || ""));
   const [optionalOpen, setOptionalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [activeStep, setActiveStep] = useState("");
@@ -99,6 +113,23 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
     setWebsiteUrl(focusedUrl);
     setUrlError("");
   }, [focusedUrl, isFocusedScan, isLoading]);
+
+  // Reset the answer only when the site itself changes, not on every keystroke.
+  // Re-reading storage on each edit would also wipe a just-made choice wherever
+  // localStorage is unavailable -- a private window, or storage turned off --
+  // because the write silently failed and the read returns nothing.
+  const ownershipKeyRef = useRef(siteOwnershipStorageKey(focusedUrl || project?.website_url || ""));
+  useEffect(() => {
+    const key = siteOwnershipStorageKey(websiteUrl);
+    if (key === ownershipKeyRef.current) return;
+    ownershipKeyRef.current = key;
+    setSiteOwnership(readSiteOwnership(websiteUrl));
+  }, [websiteUrl]);
+
+  const handleOwnershipChange = (value) => {
+    setSiteOwnership(value);
+    writeSiteOwnership(websiteUrl, value);
+  };
 
   useEffect(() => {
     if (!isLoading) {
@@ -263,7 +294,9 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
         scan_mode: scanMode,
         enable_screaming_frog_lite: true,
         force_internal_crawl: true,
-        respect_robots_txt: true,
+        // respect_robots_txt stays true for both answers; see
+        // ownerManagedRobotsPolicy for why sending false would fail the scan.
+        ...ownerManagedRobotsPolicy(siteOwnership),
         max_pages: safeScanBudget.max_pages,
         max_competitors: 0,
         max_browser_render_attempts: safeScanBudget.max_browser_render_attempts,
@@ -457,6 +490,31 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
               className="mt-2 h-11 rounded-lg border border-hairline bg-white px-3 text-[15px] text-ink shadow-none transition focus-visible:border-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/10 focus-visible:ring-offset-1"
             />
           </div>
+
+          <fieldset disabled={isLoading} className="disabled:opacity-60">
+            <legend className="text-[13px] font-medium text-ink">{OWNERSHIP_QUESTION}</legend>
+            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:gap-3">
+              {[OWNERSHIP_OWNER_MANAGED, OWNERSHIP_NOT_MANAGED].map((answer) => (
+                <label
+                  key={answer}
+                  htmlFor={`fixlist-site-ownership-${answer}`}
+                  className={`flex flex-1 cursor-pointer items-start gap-2.5 rounded-lg border bg-white p-3 text-[14px] leading-snug transition ${siteOwnership === answer ? "border-ink text-ink" : "border-hairline text-ink-muted hover:border-ink/40"}`}
+                >
+                  <input
+                    id={`fixlist-site-ownership-${answer}`}
+                    type="radio"
+                    name="fixlist-site-ownership"
+                    value={answer}
+                    checked={siteOwnership === answer}
+                    onChange={() => handleOwnershipChange(answer)}
+                    className="mt-0.5 h-4 w-4 shrink-0 accent-ink"
+                  />
+                  <span>{OWNERSHIP_ANSWER_LABELS[answer]}</span>
+                </label>
+              ))}
+            </div>
+            <p className="mt-2 text-[13px] leading-relaxed text-ink-faint">{OWNERSHIP_HELP_TEXT}</p>
+          </fieldset>
 
           <p className="text-[13px] text-ink-muted">{SCAN_SPEC_LINE}</p>
         </div>

@@ -354,7 +354,10 @@ test("FixList renders the shared presentation and holds no second copy", () => {
   assert.doesNotMatch(page, /function durableFailureKind/);
   assert.doesNotMatch(page, /function getDurableScanStateTitle/);
   assert.doesNotMatch(page, /function getDurableScanStateDetail/);
-  assert.match(page, /durableScanStatePresentation\(scanRecord\)/);
+  // The call now carries the customer's ownership answer, which decides
+  // whether a blocked scan reads as "open your firewall" or "ask whoever runs
+  // the site". Still one call into the shared module, still no local copy.
+  assert.match(page, /durableScanStatePresentation\(scanRecord, \{/);
 
   // Both places the scanner's own sentence can appear go through the gate: the
   // note under a readable result, and the limited state that has no result.

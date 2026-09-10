@@ -28,7 +28,7 @@ async function importHandlerWithHarness(source, harnessName) {
 
 const checkoutHelpers = await importPureHelpers(checkoutSource, [
   "PRODUCTION_APP_ORIGIN",
-  "betaCheckoutPolicy",
+  "checkoutPolicy",
   "checkoutIdempotencyKey",
   "classifyExistingCheckoutSession",
   "resolveCheckoutReturnOrigin",
@@ -100,29 +100,35 @@ test("checkout accepts only exact trusted return origins", () => {
   }
 });
 
-test("checkout is default-off and requires only a valid release generation", () => {
+test("production checkout is enabled by default and can be explicitly paused", () => {
   const priorDeno = globalThis.Deno;
   const values = new Map();
   globalThis.Deno = { env: { get: (name) => values.get(name) } };
 
   try {
-    assert.deepEqual(checkoutHelpers.betaCheckoutPolicy(), {
+    assert.deepEqual(checkoutHelpers.checkoutPolicy(), {
+      ok: true,
+      code: "",
+      generation: "production-20260910",
+    });
+
+    values.set("CHECKOUT_ENABLED", "false");
+    assert.deepEqual(checkoutHelpers.checkoutPolicy(), {
       ok: false,
       code: "checkout_paused",
       generation: "",
     });
 
-    values.set("BETA_CHECKOUT_ENABLED", "true");
-    values.set("BETA_CHECKOUT_GENERATION", "public-2026-09");
-    values.set("BETA_COHORT_ALLOWED_USER_IDS", "malformed/not-a-user-id");
-    assert.deepEqual(checkoutHelpers.betaCheckoutPolicy(), {
+    values.set("CHECKOUT_ENABLED", "true");
+    values.set("CHECKOUT_GENERATION", "public-2026-09");
+    assert.deepEqual(checkoutHelpers.checkoutPolicy(), {
       ok: true,
       code: "",
       generation: "public-2026-09",
     });
 
-    values.set("BETA_CHECKOUT_GENERATION", "generation with spaces");
-    assert.equal(checkoutHelpers.betaCheckoutPolicy().code, "checkout_configuration_invalid");
+    values.set("CHECKOUT_GENERATION", "generation with spaces");
+    assert.equal(checkoutHelpers.checkoutPolicy().code, "checkout_configuration_invalid");
   } finally {
     if (priorDeno === undefined) delete globalThis.Deno;
     else globalThis.Deno = priorDeno;
@@ -186,8 +192,8 @@ test("pending checkout retries reuse one user-stable Stripe idempotency key", as
 test("the checkout handler enforces admission without mutating durable entitlement state", async () => {
   const priorDeno = globalThis.Deno;
   const env = new Map([
-    ["BETA_CHECKOUT_ENABLED", "true"],
-    ["BETA_CHECKOUT_GENERATION", "public-2026-09"],
+    ["CHECKOUT_ENABLED", "true"],
+    ["CHECKOUT_GENERATION", "public-2026-09"],
   ]);
   let accessRecord = {
     id: "access-1",
@@ -301,14 +307,14 @@ test("the checkout handler enforces admission without mutating durable entitleme
     assert.equal(accessCreateCount, 0);
     assert.equal(sessionCreateCalls.length, 0);
 
-    env.set("BETA_CHECKOUT_ENABLED", "false");
+    env.set("CHECKOUT_ENABLED", "false");
     const paused = await invoke("https://rich-rank-pilot-flow.base44.app");
     assert.equal(paused.status, 503);
     assert.equal((await paused.json()).code, "checkout_paused");
     assert.equal(accessCreateCount, 0);
     assert.equal(sessionCreateCalls.length, 0);
 
-    env.set("BETA_CHECKOUT_ENABLED", "true");
+    env.set("CHECKOUT_ENABLED", "true");
 
     synchronizePendingWrites = true;
     const concurrentResponses = await Promise.all([

@@ -11,8 +11,13 @@ import {
   ROBOTS_OBEYED_COPY,
   ownerManagedRobotsPolicy,
   helpTextForPolicy,
+  SITE_OWNERSHIP_ANSWERS,
+  SITE_OWNER_ATTESTATION_FIELD,
   ownershipHelpText,
   ownershipOnSiteChange,
+  projectAttestationUpdate,
+  resolveScanOwnership,
+  scanRunOwnership,
   readSiteOwnership,
   submissionObeysRobots,
   siteOwnershipStorageKey,
@@ -52,27 +57,30 @@ function withStorage(store, run) {
 
 // ------------------------------------------------------------- the policy --
 
-test("the submitted pair matches the server's attestation contract", () => {
-  // The scanner API pairs the two fields and rejects them when they disagree:
-  // owner_attested_robots_override must be true exactly when
-  // respect_robots_txt is false. Sending a mismatched pair is a 400, so this
-  // reads the live guard rather than trusting a remembered one -- an earlier
-  // revision of this patch was written against a hard "must be true" rule that
-  // main has since replaced, and asserted a premise that had already moved.
+test("the submission satisfies whichever robots guard the server currently has", () => {
+  // This assertion has now been wrong twice in one day, in both directions:
+  // main gained an owner override and then reverted it, so a test that hard-codes
+  // either rule asserts a premise that has already moved. Read the guard that is
+  // actually there and check the payload against that one.
   const api = readFileSync("scanner-api/app/main.py", "utf8");
-  assert.match(
-    api,
-    /owner_robots_override != \(payload\.respect_robots_txt is False\)/,
-    "the server's pairing guard must still exist for this test to mean anything",
-  );
+  const hardGuard = /if payload\.respect_robots_txt is not True:/.test(api);
+  const pairingGuard = /owner_robots_override != \(payload\.respect_robots_txt is False\)/.test(api);
+  assert.ok(hardGuard || pairingGuard, "no recognised robots guard found in the scanner API");
 
   for (const answer of [OWNERSHIP_OWNER_MANAGED, OWNERSHIP_NOT_MANAGED, OWNERSHIP_UNANSWERED, "nonsense"]) {
     const policy = ownerManagedRobotsPolicy(answer);
-    assert.equal(
-      policy.owner_attested_robots_override,
-      policy.respect_robots_txt === false,
-      `${answer || "(unanswered)"} must submit a pair the server accepts`,
-    );
+    const label = answer || "(unanswered)";
+    // True satisfies both regimes: the hard guard demands it, and the pairing
+    // guard accepts it alongside an absent or false override. Sending it
+    // unconditionally is what makes this patch survive the flip-flop.
+    assert.equal(policy.respect_robots_txt, true, `${label} must respect robots.txt`);
+    if (pairingGuard) {
+      assert.equal(
+        policy.owner_attested_robots_override === true,
+        policy.respect_robots_txt === false,
+        `${label} must submit a pair the pairing guard accepts`,
+      );
+    }
   }
 });
 
@@ -358,7 +366,102 @@ test("the scan form asks the question and submits one robots policy", () => {
   assert.doesNotMatch(payload, /respect_robots_txt:\s*(true|false)/, "payload must not hard-code robots obedience beside the policy");
 });
 
-test("the FixList page passes what the customer told us into the copy", () => {
+// ------------------------------------------------- durable attestation --
+
+test("the BusinessProject attestation uses exactly the two answers", () => {
+  // One vocabulary, stored where the server can verify it. A second spelling in
+  // the frontend is how the two halves drift apart.
+  // Parsed strictly, exactly as the repo's own loaders do. These files carry a
+  // .jsonc extension but are plain JSON, and stripping comments here would let
+  // a commented entity pass this test while breaking every real reader of it.
+  const entity = JSON.parse(readFileSync("base44/entities/BusinessProject.jsonc", "utf8"));
+  const field = entity.properties?.[SITE_OWNER_ATTESTATION_FIELD];
+  assert.ok(field, `BusinessProject must carry ${SITE_OWNER_ATTESTATION_FIELD}`);
+  assert.equal(field.type, "string");
+  assert.deepEqual(field.enum, [OWNERSHIP_OWNER_MANAGED, OWNERSHIP_NOT_MANAGED]);
+  assert.deepEqual(field.enum, [...SITE_OWNERSHIP_ANSWERS]);
+  assert.deepEqual(field.enum, ["owner_or_manager", "not_owner"]);
+});
+
+test("the project is only written when the attestation actually changes", () => {
+  // A write per scan on an unchanged answer is a wasted round trip against the
+  // customer's own record.
+  assert.equal(projectAttestationUpdate({ site_owner_attestation: OWNERSHIP_OWNER_MANAGED }, OWNERSHIP_OWNER_MANAGED), null);
+  assert.equal(projectAttestationUpdate({}, OWNERSHIP_UNANSWERED), null);
+  assert.equal(projectAttestationUpdate(null, OWNERSHIP_UNANSWERED), null);
+  assert.deepEqual(
+    projectAttestationUpdate({}, OWNERSHIP_OWNER_MANAGED),
+    { [SITE_OWNER_ATTESTATION_FIELD]: OWNERSHIP_OWNER_MANAGED },
+  );
+  assert.deepEqual(
+    projectAttestationUpdate({ site_owner_attestation: OWNERSHIP_NOT_MANAGED }, OWNERSHIP_OWNER_MANAGED),
+    { [SITE_OWNER_ATTESTATION_FIELD]: OWNERSHIP_OWNER_MANAGED },
+  );
+  // Junk never becomes a stored attestation.
+  assert.equal(projectAttestationUpdate({}, "nonsense"), null);
+
+  // And an unanswered question never erases one. A customer who answered last
+  // week and scans today from a browser with no local copy would otherwise have
+  // their stored attestation overwritten with a blank -- silently unsaying
+  // something they never took back.
+  for (const blank of ["", "  ", null, undefined, "nonsense"]) {
+    assert.equal(
+      projectAttestationUpdate({ site_owner_attestation: OWNERSHIP_OWNER_MANAGED }, blank),
+      null,
+      `${JSON.stringify(blank)} must not clear a stored attestation`,
+    );
+  }
+});
+
+test("a reopened scan explains itself from what the scan recorded", () => {
+  // Browser storage is per-device and cleared at a customer boundary. A scan
+  // opened next week, on a different machine, from history, must still tell an
+  // owner it was their firewall -- so the answer travels on the run itself.
+  const ownerRun = { site_ownership_answer: OWNERSHIP_OWNER_MANAGED };
+  assert.equal(scanRunOwnership(ownerRun), OWNERSHIP_OWNER_MANAGED);
+  assert.equal(scanRunOwnership({ site_ownership_answer: "nonsense" }), OWNERSHIP_UNANSWERED);
+  assert.equal(scanRunOwnership({}), OWNERSHIP_UNANSWERED);
+  assert.equal(scanRunOwnership(null), OWNERSHIP_UNANSWERED);
+
+  // The record wins; the browser is only consulted for runs saved before the
+  // policy was recorded on them.
+  assert.equal(resolveScanOwnership(ownerRun, OWNERSHIP_NOT_MANAGED), OWNERSHIP_OWNER_MANAGED);
+  assert.equal(resolveScanOwnership({}, OWNERSHIP_OWNER_MANAGED), OWNERSHIP_OWNER_MANAGED);
+  assert.equal(resolveScanOwnership({}, ""), OWNERSHIP_UNANSWERED);
+});
+
+test("a blocked owner reopening an old scan still gets the firewall answer", () => {
+  const record = {
+    status: "limited",
+    coverage_state: "access_limited",
+    site_ownership_answer: OWNERSHIP_OWNER_MANAGED,
+  };
+  // No browser answer at all -- a different device, or storage cleared.
+  const shown = durableScanStatePresentation(record, { ownership: resolveScanOwnership(record, "") });
+  assert.equal(shown.kind, "security_service_blocked");
+  assert.equal(shown.nextStep, WAF_ACTION);
+});
+
+test("the answer travels on the submission, and is filed on the project", () => {
+  // The run itself is written server-side from this payload, so the answer has
+  // to be in the payload to ever reach a saved ScanRun. Assert the submitted
+  // object rather than the form's source text: the field is contributed by the
+  // policy, and grepping the form for it would pass on a spread that had been
+  // removed.
+  for (const answer of [OWNERSHIP_OWNER_MANAGED, OWNERSHIP_NOT_MANAGED]) {
+    assert.equal(ownerManagedRobotsPolicy(answer).site_ownership_answer, answer);
+  }
+  const form = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
+  const payload = form.slice(form.indexOf("const scanPayload = {"), form.indexOf("// PRIMARY PATH"));
+  assert.ok(payload.includes("...ownerManagedRobotsPolicy(siteOwnership)"),
+    "the payload must carry the policy, which is what puts the answer on the run");
+
+  // And the durable attestation is filed on the customer's own record.
+  assert.match(form, /projectAttestationUpdate\(scanProject, siteOwnership\)/);
+  assert.match(form, /BusinessProject\.update\(scanProject\.id, attestation\)/);
+});
+
+test("the FixList page prefers the run's own answer over the browser's", () => {
   const page = readFileSync("src/pages/FixList.jsx", "utf8");
-  assert.match(page, /ownership: readSiteOwnership\(scanRecord\.website_url\)/);
+  assert.match(page, /resolveScanOwnership\(scanRecord, readSiteOwnership\(scanRecord\.website_url\)\)/);
 });

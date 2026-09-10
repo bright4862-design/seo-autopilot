@@ -174,7 +174,7 @@ const COPY = {
   },
   security_service_blocked: {
     title: "Your site's security service is blocking FixList.",
-    detail: "Your site answered FixList with a bot challenge or rate limit instead of your pages, so there was not enough to publish a FixList. This is your firewall or bot protection doing its job — it cannot tell FixList apart from the traffic it exists to stop.",
+    detail: "Your site answered FixList with a bot challenge or rate limit instead of your pages, so there was not enough to publish a FixList. This is your firewall or bot protection doing its job — it cannot tell FixList apart from the traffic it exists to stop. It is not your robots.txt: FixList always respects that, and this block happened before those rules came into it.",
     nextStep: "Temporarily allow FixList in your firewall/bot protection, then Rescan.",
     retryAdvice: "Rescanning before that will be blocked the same way, because nothing about the site has changed yet.",
   },

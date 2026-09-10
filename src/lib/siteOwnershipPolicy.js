@@ -24,6 +24,13 @@ export const SITE_OWNERSHIP_ANSWERS = Object.freeze([
   OWNERSHIP_NOT_MANAGED,
 ]);
 
+/**
+ * Where the answer lives durably. BusinessProject is the customer's own record
+ * of the site, owned and server-side, so an attestation stored there is
+ * something a server can verify -- which browser storage never is.
+ */
+export const SITE_OWNER_ATTESTATION_FIELD = "site_owner_attestation";
+
 export const OWNERSHIP_QUESTION = "Do you own or manage this website?";
 
 /**
@@ -130,6 +137,56 @@ export function writeSiteOwnership(websiteUrl, value) {
 }
 
 /**
+ * The answer a saved scan was run under.
+ *
+ * Browser storage is per-device and is cleared at a customer boundary, so a run
+ * reopened next week or on another machine has no local answer to read. The run
+ * carries its own, which is what lets a historical blocked scan still tell an
+ * owner it was their firewall rather than falling back to advice aimed at
+ * someone who cannot reach it.
+ *
+ * @param {object|null} record A saved ScanRun.
+ * @returns {string} The recorded answer, or the unanswered value.
+ */
+export function scanRunOwnership(record) {
+  const source = record && typeof record === "object" ? record : {};
+  return normalizeOwnershipAnswer(source.site_ownership_answer);
+}
+
+/**
+ * The answer to explain a saved run by: the run's own, then the browser's.
+ *
+ * The run wins because it records what was true when the scan happened. The
+ * browser is consulted only for runs saved before the policy travelled on them,
+ * so those keep working rather than silently losing their explanation.
+ *
+ * @param {object|null} record A saved ScanRun.
+ * @param {string} browserAnswer The answer stored for this site in this browser.
+ * @returns {string}
+ */
+export function resolveScanOwnership(record, browserAnswer) {
+  return scanRunOwnership(record) || normalizeOwnershipAnswer(browserAnswer);
+}
+
+/**
+ * The BusinessProject fields to write for this answer, or null for no write.
+ *
+ * Returns null when nothing would change, so a scan does not spend a write on
+ * the customer's own record restating what it already says.
+ *
+ * @param {object|null} project The owned BusinessProject.
+ * @param {unknown} value The answer to store.
+ * @returns {object|null}
+ */
+export function projectAttestationUpdate(project, value) {
+  const answer = normalizeOwnershipAnswer(value);
+  if (!answer) return null;
+  const source = project && typeof project === "object" ? project : {};
+  if (normalizeOwnershipAnswer(source[SITE_OWNER_ATTESTATION_FIELD]) === answer) return null;
+  return { [SITE_OWNER_ATTESTATION_FIELD]: answer };
+}
+
+/**
  * What to do with the answer when the form's site changes.
  *
  * The form asks the question whether or not a URL has been typed yet, and an
@@ -156,21 +213,23 @@ export function ownershipOnSiteChange({ hadNoSite, pendingAnswer, storedAnswer }
 /**
  * The robots policy fields a Standard 150 submission carries for this answer.
  *
- * The scanner API pairs two fields and rejects them when they disagree:
- * `owner_attested_robots_override` must be true exactly when
- * `respect_robots_txt` is false, or admission returns 400 "A robots.txt
- * override requires explicit owner attestation." Both are sent explicitly so
- * the pair is visible here rather than resting on a server-side default.
+ * `respect_robots_txt` is `true` for every answer, and it stays true through
+ * whichever guard the scanner API currently runs. That guard has moved twice in
+ * a day: a hard "must be exactly true" rule, then an owner-attested pairing
+ * rule, then reverted to the hard rule again. `true` is the one value both
+ * accept -- the hard guard demands it, and the pairing guard accepts it beside
+ * an absent or false override -- so sending it unconditionally is what keeps
+ * this patch correct across the flip-flop rather than correct against whichever
+ * revision it happened to be written on.
  *
- * This asks for no override. A checkbox in a browser is not an attestation:
- * the server may only honour one that is backed by durable, owned state, and
- * `BusinessProject.site_owner_attestation` does not exist in main yet. Until it
- * does, the honest thing for the frontend to send is the answer plus a refusal
- * to act on it -- so the customer's declaration is recorded and carried, and
- * the crawl obeys robots.txt exactly as it does today.
+ * `owner_attested_robots_override` is sent as `false` and never as `true`. The
+ * field is absent from the current model, where Pydantic ignores it; if the
+ * override returns it pairs correctly. Either way this asks for nothing: an
+ * override may only be honoured against durable owned state that a server can
+ * verify, never a radio button, and granting one is not the frontend's to do.
  *
- * When that durable field lands, the change is here and in ROBOTS_OBEYED_COPY
- * together; the test suite fails if one moves without the other.
+ * The answer itself rides along so the run can explain itself later; see
+ * scanRunOwnership.
  */
 export function ownerManagedRobotsPolicy(value) {
   const owner = isOwnerManaged(value);

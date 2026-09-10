@@ -83,6 +83,10 @@
       "rls": {
         "update": { "user_condition": { "role": "admin" } }
       }
+    },
+    "site_owner_attestation": {
+      "type": "string",
+      "enum": ["owner_or_manager", "not_owner"]
     }
   },
   "required": [

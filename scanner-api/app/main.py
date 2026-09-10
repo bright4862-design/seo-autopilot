@@ -51,7 +51,6 @@ from .scan_job import (
     write_terminal_failure,
 )
 from .scanner import VERSION, run_scan
-from .robots_policy import reset_owner_robots_override, set_owner_robots_override
 from .trust_discovery import apply_trust_discovery_gate, enrich_scan_with_trust_pages
 from .url_evidence import URL_EVIDENCE_VERSION, apply_verified_url_contract
 
@@ -108,7 +107,6 @@ class ScanRequest(BaseModel):
     submitted_url: str | None = None
     normalized_domain: str | None = None
     respect_robots_txt: bool = True
-    owner_attested_robots_override: bool = False
     # Trusted-gateway runtime cap. Synchronous requests stay clamped to the
     # safe 20s..75s range; only an asynchronous durable job may use the
     # 120-second ceiling. The 150-page cap is never affected.
@@ -278,14 +276,12 @@ async def scan(payload: ScanRequest, x_scanner_key: str | None = Header(default=
         "scan_run_id": scan_id,
         "submitted_url": str(payload.submitted_url or payload.website_url),
         "normalized_domain": website_host(payload.website_url),
-        "respect_robots_txt": bool(payload.respect_robots_txt),
-        "owner_attested_robots_override": bool(payload.owner_attested_robots_override),
+        "respect_robots_txt": True,
     }
     if request_id and idempotency_key and request_id != idempotency_key:
         raise HTTPException(status_code=409, detail="request_id and idempotency_key must match.")
-    owner_robots_override = bool(payload.owner_attested_robots_override)
-    if owner_robots_override != (payload.respect_robots_txt is False):
-        raise HTTPException(status_code=400, detail="A robots.txt override requires explicit owner attestation.")
+    if payload.respect_robots_txt is not True:
+        raise HTTPException(status_code=400, detail="Standard scans must respect robots.txt.")
 
     timer = RequestTimer(
         "scan",
@@ -304,20 +300,15 @@ async def scan(payload: ScanRequest, x_scanner_key: str | None = Header(default=
             if payload.advisory_crawl_timeout_ms is not None
             else None
         )
-        robots_override_token = set_owner_robots_override(owner_robots_override)
-        try:
-            result = await run_scan(
-                website_url=payload.website_url,
-                path_prefix=payload.path_prefix,
-                scan_mode=payload.scan_mode,
-                business_name=payload.business_name or "",
-                cms_platform=payload.cms_platform or "",
-                concurrency=4 if owner_robots_override else 8,
-                timeout_seconds=request_timeout_seconds,
-                job_mode=bool(payload.async_job),
-            )
-        finally:
-            reset_owner_robots_override(robots_override_token)
+        result = await run_scan(
+            website_url=payload.website_url,
+            path_prefix=payload.path_prefix,
+            scan_mode=payload.scan_mode,
+            business_name=payload.business_name or "",
+            cms_platform=payload.cms_platform or "",
+            timeout_seconds=request_timeout_seconds,
+            job_mode=bool(payload.async_job),
+        )
         trust_timeout = TRUST_DISCOVERY_TIMEOUTS.get(str(payload.scan_mode or "advanced").lower(), 7.0)
         if request_timeout_seconds is not None:
             # Keep post-crawl trust enrichment inside the gateway-safe envelope.
@@ -401,7 +392,6 @@ class ScanJobRequest(BaseModel):
     cms_platform: str | None = None
     scan_mode: str = "standard_150"
     respect_robots_txt: bool = True
-    owner_attested_robots_override: bool = False
 
 
 class ScanDrainRequest(BaseModel):
@@ -591,9 +581,8 @@ async def scan_job(
         raise HTTPException(status_code=400, detail="A durable scan_id and request_id are required.")
     if str(payload.scan_mode or "").lower() != "standard_150":
         raise HTTPException(status_code=400, detail="Only the Standard 150 scan is available.")
-    owner_robots_override = bool(payload.owner_attested_robots_override)
-    if owner_robots_override != (payload.respect_robots_txt is False):
-        raise HTTPException(status_code=400, detail="A robots.txt override requires explicit owner attestation.")
+    if payload.respect_robots_txt is not True:
+        raise HTTPException(status_code=400, detail="Standard scans must respect robots.txt.")
 
     job = payload.model_dump()
     job_attempt = normalize_attempt(payload.attempt_count)
@@ -603,13 +592,7 @@ async def scan_job(
         if scan is None:
             # Transient: the row must exist, so let Cloud Tasks retry it.
             raise HTTPException(status_code=503, detail="The scan record is unavailable.")
-        stored_respect_robots = scan.get("respect_robots_txt")
-        stored_owner_override = scan.get("owner_attested_robots_override")
-        policy_identity_matches = (
-            (stored_respect_robots is None or bool(stored_respect_robots) == bool(payload.respect_robots_txt))
-            and (stored_owner_override is None or bool(stored_owner_override) == owner_robots_override)
-        )
-        if not identity_matches(scan, job) or not policy_identity_matches:
+        if not identity_matches(scan, job):
             await persist_terminal_failure_bounded(
                 client, scan_id, "scan_identity_mismatch",
                 "This scan could not be matched to your request. Please start a new scan.",
@@ -649,23 +632,18 @@ async def scan_job(
         # worker_heartbeat_timeout before it could reach reviewing.
         async with worker_liveness_heartbeat(client, scan):
             try:
-                robots_override_token = set_owner_robots_override(owner_robots_override)
-                try:
-                    result = await asyncio.wait_for(
-                        run_scan(
-                            website_url=payload.website_url,
-                            path_prefix=payload.path_prefix,
-                            scan_mode="advanced",
-                            business_name=payload.business_name or "",
-                            cms_platform=payload.cms_platform or "",
-                            concurrency=4 if owner_robots_override else 8,
-                            timeout_seconds=CRAWL_BUDGET_SECONDS,
-                            job_mode=True,
-                        ),
-                        timeout=WORKER_CRAWL_WALL_TIMEOUT_SECONDS,
-                    )
-                finally:
-                    reset_owner_robots_override(robots_override_token)
+                result = await asyncio.wait_for(
+                    run_scan(
+                        website_url=payload.website_url,
+                        path_prefix=payload.path_prefix,
+                        scan_mode="advanced",
+                        business_name=payload.business_name or "",
+                        cms_platform=payload.cms_platform or "",
+                        timeout_seconds=CRAWL_BUDGET_SECONDS,
+                        job_mode=True,
+                    ),
+                    timeout=WORKER_CRAWL_WALL_TIMEOUT_SECONDS,
+                )
                 # These transforms are synchronous and were previously run
                 # unbounded on the event loop. Heavy evidence could block the
                 # loop, which starves both the heartbeat and every asyncio
@@ -693,8 +671,7 @@ async def scan_job(
                     "scan_run_id": scan_id,
                     "submitted_url": payload.website_url,
                     "normalized_domain": payload.normalized_domain or website_host(payload.website_url),
-                    "respect_robots_txt": bool(payload.respect_robots_txt),
-                    "owner_attested_robots_override": owner_robots_override,
+                    "respect_robots_txt": True,
                 })
             except asyncio.TimeoutError:
                 # This is an outer fail-safe, not a retry signal. If the scanner's

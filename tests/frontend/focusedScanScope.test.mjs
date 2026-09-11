@@ -132,7 +132,12 @@ test("focused children are displayed immediately after their durable parent", ()
 test("server admission requires owned discovered parent scope and does not enable subdomains", () => {
   const source = readSource("base44/functions/startStandardScanJob/entry.ts");
   const schema = JSON.parse(readSource("base44/entities/ScanRun.jsonc"));
-  assert.equal(source.includes("buildAdmissionFingerprint(websiteUrl, scope?.pathPrefix || \"\")"), true);
+  // The admission fingerprint binds the robots policy alongside the URL and
+  // path scope, so an admission granted while respecting robots cannot be
+  // replayed for an owner-override scan.
+  assert.equal(source.includes("buildAdmissionFingerprint(websiteUrl, scope?.pathPrefix || \"\", robotsPolicy)"), true);
+  assert.equal(source.includes("|robots:owner_override"), true);
+  assert.equal(source.includes("|robots:respect"), true);
   assert.equal(source.includes("scopeType !== \"path_prefix\""), true);
   assert.equal(source.includes("body.user_confirmed !== true"), true);
   assert.equal(source.includes("String(parent.owner_user_id || \"\") !== String(user.id)"), true);

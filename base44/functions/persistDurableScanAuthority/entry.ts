@@ -330,6 +330,24 @@ function validateCurrentIdentity({ scan, project, identity, scanResult }) {
   ) {
     throw new RequestProblem(409, "authority_identity_mismatch", "The durable completion no longer matches this owner-bound scan.");
   }
+  if (!robotsPolicyMatches(scan, scanResult)) {
+    throw new RequestProblem(409, "robots_policy_mismatch", "The worker robots policy does not match this scan.");
+  }
+}
+
+function robotsPolicyMatches(scan, scanResult) {
+  const storedRespect = scan?.respect_robots_txt;
+  const storedOverride = scan?.owner_attested_robots_override;
+  const resultRespect = scanResult?.respect_robots_txt;
+  const resultOverride = scanResult?.owner_attested_robots_override;
+  return typeof storedRespect === "boolean"
+    && typeof storedOverride === "boolean"
+    && typeof resultRespect === "boolean"
+    && typeof resultOverride === "boolean"
+    && storedOverride === (storedRespect === false)
+    && resultOverride === (resultRespect === false)
+    && storedRespect === resultRespect
+    && storedOverride === resultOverride;
 }
 
 async function upsertSingleFixList(entities, desired, identity, scan) {

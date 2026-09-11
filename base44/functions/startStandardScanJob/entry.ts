@@ -74,6 +74,7 @@ const MAX_PAGES = 150;
 const ASYNC_WORKER_BUDGET_MS = 210_000;
 const TERMINAL_SCAN_STATUSES = new Set(["complete", "limited", "failed", "cancelled"]);
 const ADMISSION_RECONCILIATION_VERSION = RELEASE_COMPONENT_VERSIONS.admission_reconciliation_version;
+const SITE_OWNERSHIP_POLICY_VERSION = "owner_managed_robots_v1";
 const SAFE_RELEASE_FAILURE_CODES = new Set([
   "admission_release_failed",
   "admission_unreachable",
@@ -264,6 +265,7 @@ export default async function (req: Request): Promise<Response> {
           ...identity.fields,
         }, project.status);
       }
+      const robotsPolicy = robotsPolicyForOwnedProject(project.project);
 
       const focusedParent = await validateFocusedParentScan({
         base44,
@@ -305,6 +307,7 @@ export default async function (req: Request): Promise<Response> {
         identity,
         websiteUrl,
         scope,
+        robotsPolicy,
       });
       if (!admitted.ok) {
         return jsonResponse({
@@ -327,6 +330,18 @@ export default async function (req: Request): Promise<Response> {
       };
     }
 
+    const scanRobotsPolicy = await ensureFrozenScanRobotsPolicy({ base44, context });
+    if (!scanRobotsPolicy) {
+      return jsonResponse({
+        success: false,
+        accepted: false,
+        version: VERSION,
+        failure_code: "scan_identity_mismatch",
+        error: "The saved scan policy could not be verified.",
+        ...identity.fields,
+      }, 409);
+    }
+
     const attemptCount = normalizeAttemptCount(context.scan?.attempt_count);
     if (scanIsTerminal(context.scan)) {
       return jsonResponse({
@@ -336,7 +351,8 @@ export default async function (req: Request): Promise<Response> {
         scan_mode: PUBLIC_SCAN_MODE,
         status: String(context.scan.status),
         max_pages: MAX_PAGES,
-        respect_robots_txt: true,
+        respect_robots_txt: scanRobotsPolicy.respect_robots_txt,
+        owner_attested_robots_override: scanRobotsPolicy.owner_attested_robots_override,
         deno_fallback_used: false,
         ...admissionMeta,
         ...identity.fields,
@@ -423,7 +439,8 @@ export default async function (req: Request): Promise<Response> {
         business_name: String(body.business_name || body.project_name || ""),
         cms_platform: String(body.cms_platform || body.platform || ""),
         scan_mode: PUBLIC_SCAN_MODE,
-        respect_robots_txt: true,
+        respect_robots_txt: scanRobotsPolicy.respect_robots_txt,
+        owner_attested_robots_override: scanRobotsPolicy.owner_attested_robots_override,
       },
       signingKey: dispatchSigningKey,
     });
@@ -463,7 +480,8 @@ export default async function (req: Request): Promise<Response> {
       status: String(context.scan?.status || "queued"),
       worker_budget_ms: ASYNC_WORKER_BUDGET_MS,
       max_pages: MAX_PAGES,
-      respect_robots_txt: true,
+      respect_robots_txt: scanRobotsPolicy.respect_robots_txt,
+      owner_attested_robots_override: scanRobotsPolicy.owner_attested_robots_override,
       deno_fallback_used: false,
       dispatch_uncertain: dispatchUncertain,
       ...admissionMeta,
@@ -483,6 +501,64 @@ export default async function (req: Request): Promise<Response> {
   }
 }
 
+function robotsPolicyForOwnedProject(project = {}) {
+  const raw = String(project?.site_owner_attestation || "").trim().toLowerCase();
+  const siteOwnershipAnswer = raw === "owner_or_manager" || raw === "not_owner" ? raw : "";
+  const ownerAttested = siteOwnershipAnswer === "owner_or_manager";
+  return {
+    respect_robots_txt: !ownerAttested,
+    owner_attested_robots_override: ownerAttested,
+    site_ownership_answer: siteOwnershipAnswer,
+    site_ownership_policy_version: SITE_OWNERSHIP_POLICY_VERSION,
+  };
+}
+
+function robotsPolicyFromScanRun(scan = {}) {
+  const respect = scan?.respect_robots_txt;
+  const ownerOverride = scan?.owner_attested_robots_override;
+  if (typeof respect !== "boolean" || typeof ownerOverride !== "boolean" || ownerOverride !== (respect === false)) {
+    return null;
+  }
+  const rawAnswer = String(scan?.site_ownership_answer || "").trim().toLowerCase();
+  const siteOwnershipAnswer = rawAnswer === "owner_or_manager" || rawAnswer === "not_owner" ? rawAnswer : "";
+  return {
+    respect_robots_txt: respect,
+    owner_attested_robots_override: ownerOverride,
+    site_ownership_answer: siteOwnershipAnswer,
+    site_ownership_policy_version: String(scan?.site_ownership_policy_version || ""),
+  };
+}
+
+function sameRobotsPolicy(scan, robotsPolicy) {
+  const stored = robotsPolicyFromScanRun(scan);
+  return Boolean(
+    stored
+    && stored.respect_robots_txt === robotsPolicy.respect_robots_txt
+    && stored.owner_attested_robots_override === robotsPolicy.owner_attested_robots_override
+    && stored.site_ownership_answer === robotsPolicy.site_ownership_answer
+    && stored.site_ownership_policy_version === robotsPolicy.site_ownership_policy_version
+  );
+}
+
+async function ensureFrozenScanRobotsPolicy({ base44, context }) {
+  const stored = robotsPolicyFromScanRun(context?.scan);
+  if (stored) return stored;
+  if (!context?.scan?.id || !context?.project) return null;
+  const robotsPolicy = robotsPolicyForOwnedProject(context.project);
+  try {
+    const updated = await base44.asServiceRole.entities.ScanRun.update(context.scan.id, {
+      respect_robots_txt: robotsPolicy.respect_robots_txt,
+      owner_attested_robots_override: robotsPolicy.owner_attested_robots_override,
+      site_ownership_answer: robotsPolicy.site_ownership_answer,
+      site_ownership_policy_version: robotsPolicy.site_ownership_policy_version,
+    });
+    context.scan = { ...context.scan, ...(updated || {}), ...robotsPolicy };
+    return robotsPolicyFromScanRun(context.scan);
+  } catch {
+    return null;
+  }
+}
+
 async function loadExactOwnedProject({ base44, user, projectId, websiteUrl }) {
   const id = String(projectId || "").trim();
   if (!id) {
@@ -498,11 +574,11 @@ async function loadExactOwnedProject({ base44, user, projectId, websiteUrl }) {
   return { ok: true, project };
 }
 
-async function admitServerOwnedScan({ base44, user, access, project, body, identity, websiteUrl, scope }) {
+async function admitServerOwnedScan({ base44, user, access, project, body, identity, websiteUrl, scope, robotsPolicy }) {
   const request = normalizeAdmissionIdentity({
     request_id: identity.fields.request_id,
     idempotency_key: identity.fields.idempotency_key,
-    request_fingerprint: await buildAdmissionFingerprint(websiteUrl, scope?.pathPrefix || ""),
+    request_fingerprint: await buildAdmissionFingerprint(websiteUrl, scope?.pathPrefix || "", robotsPolicy),
   });
   if (!request.ok) {
     return { ok: false, status: 409, code: request.code, error: "The scan request identity is invalid." };
@@ -543,7 +619,7 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
   const claimedScanId = String(claim.scan_id || "").trim();
   if (claim.outcome === "replayed" && claimedScanId) {
     let scan = await base44.asServiceRole.entities.ScanRun.get(claimedScanId).catch(() => null);
-    const validation = validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence });
+    const validation = validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence, robotsPolicy });
     if (!validation.ok) return validation;
     scan = await normalizeRecoveredServerScan({ scans: base44.asServiceRole.entities.ScanRun, scan });
     return {
@@ -569,6 +645,7 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
       request,
       websiteUrl,
       admissionEvidence,
+      robotsPolicy,
     }).catch(() => null);
     if (!recovered) {
       return {
@@ -616,6 +693,7 @@ async function admitServerOwnedScan({ base44, user, access, project, body, ident
       websiteUrl,
       admissionEvidence,
       scope,
+      robotsPolicy,
     });
   } catch (error) {
     return {
@@ -763,15 +841,18 @@ function coordinatorAdmissionFailure(result = {}, fallbackCode = "scan_admission
   };
 }
 
-async function buildAdmissionFingerprint(websiteUrl, pathPrefix = "") {
+async function buildAdmissionFingerprint(websiteUrl, pathPrefix = "", robotsPolicy = {}) {
   const normalizedPrefix = normalizeFocusedPathPrefix(pathPrefix);
-  const suffix = normalizedPrefix ? `|path:${normalizedPrefix}` : "";
-  const canonical = `${PUBLIC_SCAN_MODE}|${normalizeWebsiteUrl(websiteUrl)}${suffix}`;
+  const pathSuffix = normalizedPrefix ? `|path:${normalizedPrefix}` : "";
+  const policySuffix = robotsPolicy.owner_attested_robots_override === true
+    ? "|robots:owner_override"
+    : "|robots:respect";
+  const canonical = `${PUBLIC_SCAN_MODE}|${normalizeWebsiteUrl(websiteUrl)}${pathSuffix}${policySuffix}`;
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)));
   return `standard150:${Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
-async function recoverExistingServerScan({ base44, user, project, request, websiteUrl, admissionEvidence }) {
+async function recoverExistingServerScan({ base44, user, project, request, websiteUrl, admissionEvidence, robotsPolicy }) {
   const scans = base44.asServiceRole.entities.ScanRun;
   const matches = await scans.filter(
     { owner_user_id: String(user.id), request_id: request.request_id },
@@ -789,6 +870,7 @@ async function recoverExistingServerScan({ base44, user, project, request, websi
     request,
     websiteUrl,
     admissionEvidence,
+    robotsPolicy,
   });
   if (!validation.ok) throw Object.assign(new Error(validation.code), validation);
   return normalizeRecoveredServerScan({ scans, scan: matches[0] });
@@ -804,6 +886,7 @@ async function recoverOrCreateServerScan({
   websiteUrl,
   admissionEvidence,
   scope,
+  robotsPolicy,
 }) {
   const scans = base44.asServiceRole.entities.ScanRun;
   let matches = await scans.filter(
@@ -817,7 +900,7 @@ async function recoverOrCreateServerScan({
 
   let scan = matches?.[0] || null;
   if (scan) {
-    const validation = validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence });
+    const validation = validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence, robotsPolicy });
     if (!validation.ok) throw Object.assign(new Error(validation.code), validation);
     return normalizeRecoveredServerScan({ scans, scan });
   }
@@ -856,7 +939,10 @@ async function recoverOrCreateServerScan({
       status: "queued",
       previous_scan_id: String(previousScanId),
       attempt_count: 1,
-      respect_robots_txt: true,
+      respect_robots_txt: robotsPolicy.respect_robots_txt,
+      owner_attested_robots_override: robotsPolicy.owner_attested_robots_override,
+      site_ownership_answer: robotsPolicy.site_ownership_answer,
+      site_ownership_policy_version: robotsPolicy.site_ownership_policy_version,
       queued_at: now,
       owner_user_id: String(user.id),
       admission_access_id: String(access.id),
@@ -880,7 +966,7 @@ async function recoverOrCreateServerScan({
     ).catch(() => []);
     if (matches.length === 1) {
       scan = matches[0];
-      const validation = validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence });
+      const validation = validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence, robotsPolicy });
       if (validation.ok) return normalizeRecoveredServerScan({ scans, scan });
     }
     throw error;
@@ -900,7 +986,7 @@ async function normalizeRecoveredServerScan({ scans, scan }) {
   return { ...scan, ...(updated || {}), ...fields, id, scan_id: id };
 }
 
-function validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence }) {
+function validateServerScanContext({ scan, user, project, request, websiteUrl, admissionEvidence, robotsPolicy }) {
   if (!scan || String(scan.owner_user_id || "") !== String(user.id)) {
     return { ok: false, status: 404, code: "scan_not_found", error: "This scan is not available to this account." };
   }
@@ -913,6 +999,7 @@ function validateServerScanContext({ scan, user, project, request, websiteUrl, a
     || String(scan.project_id || "") !== String(project.id)
     || authorityDomain(scan.website_url || scan.submitted_url) !== authorityDomain(websiteUrl)
     || !matchesPersistedAdmissionEvidence(scan, admissionEvidence)
+    || !sameRobotsPolicy(scan, robotsPolicy)
   ) {
     return { ok: false, status: 409, code: "scan_request_identity_conflict", error: "The scan request identity does not match." };
   }
@@ -987,9 +1074,9 @@ async function loadOwnedScanContext({ base44, user, identity, websiteUrl }) {
 
     const expectedDomain = authorityDomain(websiteUrl);
     if (
-      !expectedDomain ||
-      authorityDomain(scan.website_url || scan.submitted_url) !== expectedDomain ||
-      authorityDomain(project.website_url) !== expectedDomain
+      !expectedDomain
+      || authorityDomain(scan.website_url || scan.submitted_url) !== expectedDomain
+      || authorityDomain(project.website_url) !== expectedDomain
     ) {
       return { ok: false, status: 409, error: "The scan website does not match its saved project." };
     }
@@ -1007,9 +1094,9 @@ async function failOwnedScanRun({ base44, context, identity, attemptCount, failu
   if (!context?.ok || !context.scan?.id) return;
   const current = await base44.asServiceRole.entities.ScanRun.get(context.scan.id).catch(() => null);
   if (
-    !current ||
-    normalizeAttemptCount(current.attempt_count) !== normalizeAttemptCount(attemptCount) ||
-    TERMINAL_SCAN_STATUSES.has(String(current.status || "").toLowerCase())
+    !current
+    || normalizeAttemptCount(current.attempt_count) !== normalizeAttemptCount(attemptCount)
+    || TERMINAL_SCAN_STATUSES.has(String(current.status || "").toLowerCase())
   ) return;
 
   try {
@@ -1333,7 +1420,7 @@ async function validateFocusedParentScan({ base44, user, project, scope, website
     return { ok: false, status: 409, code: "focused_parent_must_be_full_site", error: "Start focused scans from the original full-site scan." };
   }
   if (originOf(parent.website_url || parent.submitted_url) !== originOf(websiteUrl)) {
-    return { ok: false, status: 409, code: "focused_parent_origin_mismatch", error: "The focused scan must stay on the parent scan\'s website origin." };
+    return { ok: false, status: 409, code: "focused_parent_origin_mismatch", error: "The focused scan must stay on the parent scan's website origin." };
   }
   if (discoveredPrefixCount(parent, scope.pathPrefix) <= 0) {
     return { ok: false, status: 409, code: "focused_scope_not_discovered", error: "This folder was not discovered in the parent scan." };

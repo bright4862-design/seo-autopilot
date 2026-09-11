@@ -239,6 +239,31 @@ const FIX_ITEM_FIELDS = [
   "updated_date",
 ];
 
+const PREVIEW_FIX_ITEM_FIELDS = [
+  "id",
+  "fix_id",
+  "issue_title",
+  "customer_category",
+  "priority",
+  "action_priority",
+  "page_count",
+];
+
+const PREVIEW_FIX_LIST_FIELDS = [
+  "id",
+  "scan_run_id",
+  "project_id",
+  "website_url",
+  "health_score",
+  "health_grade",
+  "total_fixes",
+  "critical_count",
+  "high_count",
+  "medium_count",
+  "low_count",
+  "generated_at",
+];
+
 export function evaluatePaidAccess({ rows, user }) {
   const records = uniqueRows(rows);
   if (records.length !== 1) return { ok: false, failureCode: records.length > 1 ? "paid_access_conflict" : "paid_access_required" };
@@ -283,12 +308,41 @@ export function evaluatePaidAccess({ rows, user }) {
     : { ok: false, failureCode: "paid_access_required" };
 }
 
-export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, authorityVerified, resultIntegrityVerified }) {
+function sanitizePreviewRun(run) {
+  const result = sanitizeRun(run, { detailed: false });
+  result.health_score = number(run?.health_score);
+  result.health_grade = text(run?.health_grade, 80);
+  result.health_score_status = "authoritative";
+  result.no_high_confidence_findings = run?.no_high_confidence_findings === true;
+  return result;
+}
+
+function sanitizePreviewFixItem(item) {
+  return pickFields(item, PREVIEW_FIX_ITEM_FIELDS);
+}
+
+function previewFixItems(fixItems = []) {
+  return [...(Array.isArray(fixItems) ? fixItems : [])]
+    .sort((left, right) => {
+      const leftRank = number(left?.canonical_action_rank);
+      const rightRank = number(right?.canonical_action_rank);
+      const normalizedLeftRank = leftRank > 0 ? leftRank : Number.MAX_SAFE_INTEGER;
+      const normalizedRightRank = rightRank > 0 ? rightRank : Number.MAX_SAFE_INTEGER;
+      if (normalizedLeftRank !== normalizedRightRank) return normalizedLeftRank - normalizedRightRank;
+      return number(right?.action_priority_score) - number(left?.action_priority_score);
+    })
+    .slice(0, 3)
+    .map(sanitizePreviewFixItem);
+}
+
+export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, previewAccess = false, authorityVerified, resultIntegrityVerified }) {
   // A verified limited result is readable and is never authoritative. The two
   // flags stay separate all the way to the customer so nothing downstream can
   // mistake "we verified this provisional record" for "this is authoritative".
   const limitedVerified = fullAccess === true && resultIntegrityVerified === true;
   const canReadResult = fullAccess === true && (authorityVerified === true || limitedVerified);
+  const previewVerified = previewAccess === true && authorityVerified === true;
+  const canReadSummary = canReadResult || previewVerified;
   const customerHealthScoreStatus = authorityVerified === true
     ? "authoritative"
     : limitedVerified ? "insufficient_evidence" : "";
@@ -299,20 +353,24 @@ export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, au
   const reportEvidence = usesReportEvidenceContract(run);
   const customerFixItems = canReadResult
     ? (fixItems || []).map((item) => sanitizeFixItem(item, { reportEvidence }))
-    : [];
+    : previewVerified ? previewFixItems(fixItems) : [];
   if (canonical) {
     customerFixItems.sort((left, right) => number(left.canonical_action_rank) - number(right.canonical_action_rank));
   }
   return {
     success: true,
-    access: fullAccess === true ? "full" : "locked",
-    authority_verified: fullAccess === true && authorityVerified === true,
+    access: fullAccess === true ? "full" : previewAccess === true ? "preview" : "locked",
+    authority_verified: (fullAccess === true || previewAccess === true) && authorityVerified === true,
     result_integrity_verified: limitedVerified,
-    release_contract_current: canReadResult && run?.beta_revision_fingerprint === RELEASE_FINGERPRINT,
+    release_contract_current: canReadSummary && run?.beta_revision_fingerprint === RELEASE_FINGERPRINT,
     scan_id: text(run?.id, 160),
-    fix_list_id: canReadResult ? text(fixList?.id, 160) : "",
-    run: sanitizeRun(run, { detailed: canReadResult, healthScoreStatus: customerHealthScoreStatus }),
-    fixList: canReadResult ? pickFields(fixList, FIX_LIST_FIELDS) : null,
+    fix_list_id: canReadSummary ? text(fixList?.id, 160) : "",
+    run: previewVerified
+      ? sanitizePreviewRun(run)
+      : sanitizeRun(run, { detailed: canReadResult, healthScoreStatus: customerHealthScoreStatus }),
+    fixList: canReadResult
+      ? pickFields(fixList, FIX_LIST_FIELDS)
+      : previewVerified ? pickFields(fixList, PREVIEW_FIX_LIST_FIELDS) : null,
     fixItems: customerFixItems,
   };
 }

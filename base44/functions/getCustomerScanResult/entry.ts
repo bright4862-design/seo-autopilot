@@ -128,21 +128,21 @@ Deno.serve(async (req) => {
     if (!access.ok && access.failureCode === "paid_access_conflict") {
       throw new RequestProblem(409, "paid_access_conflict", "Your access record needs support before this result can open.");
     }
-    if (!access.ok) {
-      return Response.json(buildCustomerProjection({
-        run,
-        fixList: null,
-        fixItems: [],
-        fullAccess: false,
-        authorityVerified: false,
-      }));
-    }
-
     // A limited result is a real, verified record of a scan that saw useful
     // evidence but not enough to be authoritative. It is verified against its
     // own integrity domain -- never the authority seal -- and is returned with
     // authority_verified false so nothing downstream can promote it.
     if (run.status === "limited") {
+      if (!access.ok) {
+        return Response.json(buildCustomerProjection({
+          run,
+          fixList: null,
+          fixItems: [],
+          fullAccess: false,
+          previewAccess: true,
+          authorityVerified: false,
+        }));
+      }
       const integrityProof = cleanProof(run.result_integrity_proof);
       if (
         !integrityProof
@@ -208,14 +208,16 @@ Deno.serve(async (req) => {
       }));
     }
 
-    // Full access does not make staged or failed content authoritative. These
-    // states intentionally return progress metadata and no FixItems.
+    // In-progress and failed states expose only safe progress metadata. An
+    // unpaid owner keeps the preview marker so the UI can show progress instead
+    // of replacing the scan with a paywall while it is still running.
     if (run.status !== "complete") {
       return Response.json(buildCustomerProjection({
         run,
         fixList: null,
         fixItems: [],
-        fullAccess: true,
+        fullAccess: access.ok,
+        previewAccess: !access.ok,
         authorityVerified: false,
       }));
     }
@@ -263,7 +265,8 @@ Deno.serve(async (req) => {
       run,
       fixList,
       fixItems,
-      fullAccess: true,
+      fullAccess: access.ok,
+      previewAccess: !access.ok,
       authorityVerified: true,
     }));
   } catch (error) {

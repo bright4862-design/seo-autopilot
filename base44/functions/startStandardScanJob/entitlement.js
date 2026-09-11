@@ -58,3 +58,46 @@ export function evaluatePaidAccess({ rows, user }) {
     ? { ok: true, record: row }
     : { ok: false, failureCode: "paid_access_required" };
 }
+
+function isSafePreviewPendingAccess(row, user) {
+  const email = normalizeEmail(user?.email);
+  const userId = String(user?.id || "").trim();
+  return Boolean(
+    row
+    && email
+    && userId
+    && normalizeEmail(row.user_email) === email
+    && String(row.owner_user_id || "").trim() === userId
+    && row.access_status === "pending"
+    && row.has_full_access !== true
+    && row.plan_id === ACCESS_PLAN_ID
+    && row.app_id === ACCESS_APP_ID
+    && row.grant_source === "checkout_pending"
+    && !String(row.paid_at || "").trim()
+    && !String(row.stripe_payment_intent_id || "").trim()
+    && !String(row.stripe_event_id || "").trim()
+  );
+}
+
+function previewAlreadyUsed(priorRuns = []) {
+  return (Array.isArray(priorRuns) ? priorRuns : []).some((run) =>
+    ["complete", "limited"].includes(String(run?.status || "").trim().toLowerCase()),
+  );
+}
+
+export function evaluateScanAccess({ rows, user, priorRuns = [] }) {
+  const records = uniqueAccessRows(rows);
+  const paid = evaluatePaidAccess({ rows: records, user });
+  if (paid.ok) return { ok: true, preview: false, record: paid.record };
+  if (records.length > 1) return { ok: false, preview: false, failureCode: "paid_access_conflict" };
+  if (previewAlreadyUsed(priorRuns)) {
+    return { ok: false, preview: true, failureCode: "preview_scan_used" };
+  }
+  if (records.length === 0) {
+    return { ok: true, preview: true, needsAccessRecord: true };
+  }
+  if (isSafePreviewPendingAccess(records[0], user)) {
+    return { ok: true, preview: true, needsAccessRecord: false, record: records[0] };
+  }
+  return { ok: false, preview: true, failureCode: "paid_access_required" };
+}

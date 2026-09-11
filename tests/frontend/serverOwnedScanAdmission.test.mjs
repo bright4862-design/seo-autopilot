@@ -4,7 +4,7 @@ import test from "node:test";
 import ts from "typescript";
 
 import { normalizeAttemptCount } from "../../base44/functions/startStandardScanJob/cloudTasks.js";
-import { evaluatePaidAccess, uniqueAccessRows } from "../../base44/functions/startStandardScanJob/entitlement.js";
+import { evaluatePaidAccess, evaluateScanAccess, uniqueAccessRows } from "../../base44/functions/startStandardScanJob/entitlement.js";
 import { betaScanAdmissionPolicy, normalizeAdmissionIdentity, scanIsTerminal } from "../../base44/functions/startStandardScanJob/admission.js";
 import {
   admissionClaimEvidenceProof,
@@ -34,6 +34,7 @@ async function importHandler(harnessName, source = entrySource) {
     enqueueScanJob,
     normalizeAttemptCount,
     evaluatePaidAccess,
+    evaluateScanAccess,
     uniqueAccessRows,
     betaScanAdmissionPolicy,
     normalizeAdmissionIdentity,
@@ -276,6 +277,7 @@ function createHarness({
       },
       normalizeAttemptCount,
       evaluatePaidAccess,
+      evaluateScanAccess,
       uniqueAccessRows,
       betaScanAdmissionPolicy,
       normalizeAdmissionIdentity,

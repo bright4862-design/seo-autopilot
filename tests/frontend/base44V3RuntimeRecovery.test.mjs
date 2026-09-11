@@ -31,6 +31,12 @@ const observedStaleBuild = {
   getCustomerScanResultV3: "d7f681b2c965be72b077b20d6a713b9a82c679c42fc1c842255dab0769760de8",
   deleteCustomerScanDataV3: "6f6c73c198d7a20df923721d826c994f4d8d40decec0ecd313e8f9992f12f481",
 };
+const sept9StaleBuild = {
+  startStandardScanJobV3: "471f4c627608653dcce1a7f1eca0c6eff05569e85ba9728e0d3d7a1a8d6b3011",
+  persistDurableScanAuthorityV3: "96a6dfdd9a60eea0fbc687f81fcff2236c84d367ed4b247d1649c8e8545863ce",
+  persistLimitedScanResultV3: "803178674d7ef0d1c80637b0840ec2fb74c77833043ad92c4d7ae2647e089700",
+  getCustomerScanResultV3: "c29241f2779ee37dd7fe3ba1b3d5f991c05f7fe3ad1b5b29b152d273e650bb19",
+};
 
 function handlerBody(name, buildId, activationId) {
   if (name === "startStandardScanJobV3") {
@@ -91,6 +97,26 @@ test("matching build with the stale September 7 activation is still stale", () =
       activationId: staleActivation[name],
     }), "stale", name);
   }
+});
+
+test("the exact September 9 intermediate builds are recoverable with their exact activation", () => {
+  for (const [name, buildId] of Object.entries(sept9StaleBuild)) {
+    assert.equal(classify(name, {
+      body: handlerBody(name, buildId, expectedActivation[name]),
+      buildId,
+      activationId: expectedActivation[name],
+    }), "stale", name);
+  }
+});
+
+test("unknown builds with the September 9 activation still refuse", () => {
+  const name = "startStandardScanJobV3";
+  const unknownBuild = "a".repeat(64);
+  assert.equal(classify(name, {
+    body: handlerBody(name, unknownBuild, expectedActivation[name]),
+    buildId: unknownBuild,
+    activationId: expectedActivation[name],
+  }), "refuse");
 });
 
 test("exact build plus exact activation is current and must not be deleted", () => {

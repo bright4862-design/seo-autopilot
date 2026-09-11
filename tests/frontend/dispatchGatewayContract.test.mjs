@@ -37,6 +37,7 @@ const baseArgs = {
     scan_id: "scan_abc123",
     scan_mode: "standard_150",
     respect_robots_txt: true,
+    owner_attested_robots_override: false,
     website_url: "https://example.com",
   },
 };
@@ -140,7 +141,11 @@ function gatewayWouldReject(rawBody, signatureHeader, timestampHeader, nowSecond
   } else {
     if (task.scheduleTime) return "unexpected_scan_schedule";
     if (job.scan_mode !== "standard_150") return "invalid_scan_mode";
-    if (job.respect_robots_txt !== true) return "invalid_robots_policy";
+    const respect = job.respect_robots_txt;
+    const ownerOverride = job.owner_attested_robots_override;
+    if (typeof respect !== "boolean" || typeof ownerOverride !== "boolean" || ownerOverride !== (respect === false)) {
+      return "invalid_robots_policy";
+    }
   }
 
   return "";
@@ -186,6 +191,23 @@ test("the scan task the dispatcher signs passes the canonical gateway validation
       const { task } = JSON.parse(call.init.body);
       assert.equal(task.name, `${QUEUE}/tasks/standard150-scan_abc123-a1`);
       assert.equal(task.httpRequest.url, WORKER);
+    }));
+});
+
+test("the owner override scan task passes the canonical gateway validation", async () => {
+  await withEnv(gatewayEnv, () =>
+    withFetch(() => Response.json({ success: true, deduplicated: false }), async (calls) => {
+      const result = await enqueueScanJob({
+        ...baseArgs,
+        payload: {
+          ...baseArgs.payload,
+          respect_robots_txt: false,
+          owner_attested_robots_override: true,
+        },
+      });
+      assert.equal(result.ok, true);
+      assert.equal(calls.length, 1);
+      assert.equal(rejectionForCall(calls[0]), "");
     }));
 });
 
@@ -288,7 +310,7 @@ test("the canonical gateway source enforces the validation this suite mirrors", 
     'oidc.get("audience") != WORKER_ORIGIN',
     'task.get("dispatchDeadline") != "480s"',
     'job.get("scan_mode") != "standard_150"',
-    'job.get("respect_robots_txt") is not True',
+    "_valid_robots_policy(job)",
     'not task.get("scheduleTime")',
     'task.get("scheduleTime")',
     "upstream.status_code == 409",

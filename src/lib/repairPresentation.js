@@ -142,13 +142,27 @@ export function repairScopeSummary(item = {}) {
   const context = contextOf(item);
   const searchableAffected = Number(context.indexable_affected ?? 0);
   const searchableEligible = Number(context.indexable_checked_eligible ?? 0);
-  if (searchableAffected > 0 && searchableEligible >= searchableAffected) {
+  const searchableCoverage = context.searchable_coverage;
+  const searchableCoverageIsMeasured = searchableCoverage !== null
+    && searchableCoverage !== undefined
+    && searchableCoverage !== ""
+    && Number.isFinite(Number(searchableCoverage))
+    && Number(searchableCoverage) >= 0
+    && Number(searchableCoverage) <= 1;
+  if (searchableCoverageIsMeasured && searchableAffected > 0 && searchableEligible >= searchableAffected) {
     return `${searchableAffected} of ${searchableEligible} searchable pages checked`;
   }
 
   const affectedChecked = Number(context.affected_checked ?? 0);
   const checkedEligible = Number(context.checked_eligible ?? 0);
-  if (affectedChecked > 0 && checkedEligible >= affectedChecked) {
+  const checkedCoverage = context.checked_coverage;
+  const checkedCoverageIsMeasured = checkedCoverage !== null
+    && checkedCoverage !== undefined
+    && checkedCoverage !== ""
+    && Number.isFinite(Number(checkedCoverage))
+    && Number(checkedCoverage) >= 0
+    && Number(checkedCoverage) <= 1;
+  if (checkedCoverageIsMeasured && affectedChecked > 0 && checkedEligible >= affectedChecked) {
     return `${affectedChecked} of ${checkedEligible} relevant pages checked`;
   }
 

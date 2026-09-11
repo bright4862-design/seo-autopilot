@@ -34,12 +34,12 @@ test("the Base44 dispatcher contains no crawl or post-response worker", () => {
   assert.match(dispatcher, /enqueueScanJob\(\{/);
 });
 
-test("paid admission is server-side and precedes every enqueue", () => {
-  assert.match(dispatcher, /loadPaidEntitlement\(base44, user\)/);
+test("scan admission is server-side and precedes every enqueue", () => {
+  assert.match(dispatcher, /loadScanEntitlement\(base44, user\)/);
   assert.match(dispatcher, /paid_access_required/);
   assert.match(dispatcher, /paid_access_conflict/);
-  assert.ok(dispatcher.indexOf("loadPaidEntitlement(base44, user)") < dispatcher.indexOf("enqueueScanDrain({"));
-  assert.ok(dispatcher.indexOf("loadPaidEntitlement(base44, user)") < dispatcher.indexOf("enqueueScanJob({"));
+  assert.ok(dispatcher.indexOf("loadScanEntitlement(base44, user)") < dispatcher.indexOf("enqueueScanDrain({"));
+  assert.ok(dispatcher.indexOf("loadScanEntitlement(base44, user)") < dispatcher.indexOf("enqueueScanJob({"));
 });
 
 test("task identity is deterministic per scan and attempt", () => {

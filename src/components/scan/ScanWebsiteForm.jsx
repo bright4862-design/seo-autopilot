@@ -895,6 +895,7 @@ function customerScanAdmissionMessage(code, serverDetail = "") {
     scan_admission_pending: "This scan request is still being prepared. Please wait a few seconds and try again.",
     scan_atomic_admission_unconfirmed: "New scans are temporarily unavailable while the admission coordinator is verified.",
     scan_admission_configuration_invalid: "New scans are temporarily unavailable because scan admission is not configured.",
+    preview_scan_used: `Your free preview scan has already been used. Unlock full access for ${UNLOCK_PRICE_LABEL} to run another scan and open the complete FixList.`, 
   };
   const curated = messages[String(code || "")];
   if (curated) return curated;

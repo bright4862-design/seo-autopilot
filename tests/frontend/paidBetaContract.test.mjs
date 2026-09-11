@@ -67,6 +67,10 @@ test("customer copy is paid-only and contains no free-scan promise", () => {
   assert.doesNotMatch(billing, /Standard 150 beta/i);
 });
 
+test("billing shows only one checkout button for unpaid access", () => {
+  assert.equal((billing.match(/<UnlockAccessButton\b/g) || []).length, 1);
+});
+
 test("paid admission fails closed for missing, unpaid and duplicate rows", () => {
   assert.deepEqual(evaluatePaidAccess({ rows: [], user }), {
     ok: false,
@@ -127,7 +131,8 @@ test("Access writes are backend-only and completion is billing-independent", () 
 });
 
 test("paid Standard 150 checkout is public when enabled and provisions pending access", () => {
-  assert.match(checkout, /BETA_CHECKOUT_ENABLED/);
+  assert.match(checkout, /CHECKOUT_ENABLED/);
+  assert.doesNotMatch(checkout, /BETA_CHECKOUT_ENABLED|BETA_CHECKOUT_GENERATION/);
   assert.doesNotMatch(checkout, /BETA_COHORT_ALLOWED_USER_IDS/);
   assert.doesNotMatch(checkout, /MAX_BETA_CUSTOMERS/);
   assert.doesNotMatch(checkout, /checkout_not_invited|checkout_access_not_preprovisioned/);

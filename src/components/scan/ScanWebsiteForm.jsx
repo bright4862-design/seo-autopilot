@@ -18,6 +18,7 @@ import { refreshGroupedCountEvidence } from "@/lib/groupedCountCopy";
 import {
   OWNERSHIP_ANSWER_LABELS,
   ownershipHelpText,
+  scanSpecForOwnership,
   OWNERSHIP_QUESTION,
   OWNERSHIP_NOT_MANAGED,
   OWNERSHIP_OWNER_MANAGED,
@@ -41,12 +42,10 @@ const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV3";
 // translation, so the frontend never sends "advanced" as the customer mode.
 const STANDARD_SCAN_MODE = "standard_150";
 // The single customer-facing statement of scan scope. There is no scanner-size
-// selector and no selectable scan-size control anywhere in the DOM.
-// Only true while submissions still obey robots.txt. Kept literal here
-// because three contract tests assert the customer sees this exact line;
-// siteOwnershipRobotsPolicy.test.mjs asserts it equals ROBOTS_OBEYED_COPY.spec,
-// so the promise still cannot outlive the behaviour.
-const SCAN_SPEC_LINE = "Scan depth: up to 150 pages · respects robots.txt · read-only";
+// selector and no selectable scan-size control anywhere in the DOM. The line
+// is derived from the attested policy rather than written literally here. An
+// owner-managed scan submits the override policy, so a fixed line promising
+// robots.txt is honoured would state the opposite of what the scan does.
 const STANDARD_SCAN_BUDGET = Object.freeze({ max_pages: 150, max_browser_render_attempts: 1, crawl_timeout_ms: 90000 });
 
 const CMS_OPTIONS = [
@@ -147,6 +146,10 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
     setSiteOwnership(value);
     writeSiteOwnership(websiteUrl, value);
   };
+
+  // Stated once, and it follows the answer above it: the help text and this
+  // line must never disagree about whether robots.txt is respected.
+  const scanSpecLine = scanSpecForOwnership(siteOwnership);
 
   useEffect(() => {
     if (!isLoading) {
@@ -548,7 +551,7 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
             <p className="mt-2 text-[13px] leading-relaxed text-ink-faint">{ownershipHelpText(siteOwnership)}</p>
           </fieldset>
 
-          <p className="text-[13px] text-ink-muted">{SCAN_SPEC_LINE}</p>
+          <p className="text-[13px] text-ink-muted">{scanSpecLine}</p>
         </div>
 
         {error ? (

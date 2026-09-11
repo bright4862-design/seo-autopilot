@@ -25,8 +25,14 @@ test("exactly one customer scanner is presented, and it is Standard 150", () => 
   // The selection card is gone: with a single scanner there is nothing to
   // select, and a highlighted "chosen" card implied a choice that never
   // existed. Scope is now stated once, as plain text.
-  assert.match(scanFormSource, /Scan depth: up to 150 pages · respects robots\.txt · read-only/);
-  assert.equal(scanFormSource.match(/SCAN_SPEC_LINE/g).length, 2); // definition + single render
+  // Scope is still stated exactly once, but it is now derived from the attested
+  // policy instead of written literally. A hardcoded promise here was shown to
+  // owner-managed scans, which send respect_robots_txt: false, so the form is
+  // barred from carrying that sentence at all. The two spec strings themselves
+  // are pinned in siteOwnershipRobotsPolicy.test.mjs.
+  assert.doesNotMatch(scanFormSource, /respects robots\.txt/);
+  assert.match(scanFormSource, /const scanSpecLine = scanSpecForOwnership\(siteOwnership\);/);
+  assert.equal(scanFormSource.match(/scanSpecLine/g).length, 2); // derivation + single render
   assert.doesNotMatch(scanFormSource, /Standard · 150/);
   // No picker: no mode list, no mode array, no mode setter.
   assert.doesNotMatch(scanFormSource, /const SCAN_MODES/);

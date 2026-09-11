@@ -34,10 +34,12 @@ test("the Base44 dispatcher contains no crawl or post-response worker", () => {
   assert.match(dispatcher, /enqueueScanJob\(\{/);
 });
 
-test("scan admission is server-side and precedes every enqueue", () => {
+test("paid-or-preview admission is server-side and precedes every enqueue", () => {
   assert.match(dispatcher, /loadScanEntitlement\(base44, user\)/);
+  assert.match(dispatcher, /evaluateScanAccess/);
   assert.match(dispatcher, /paid_access_required/);
   assert.match(dispatcher, /paid_access_conflict/);
+  assert.match(dispatcher, /preview_scan_used/);
   assert.ok(dispatcher.indexOf("loadScanEntitlement(base44, user)") < dispatcher.indexOf("enqueueScanDrain({"));
   assert.ok(dispatcher.indexOf("loadScanEntitlement(base44, user)") < dispatcher.indexOf("enqueueScanJob({"));
 });

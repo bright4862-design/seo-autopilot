@@ -37,7 +37,11 @@ test("the durable route owns the longer Python-only scan", () => {
 
 test("scope is Standard 150, robots-respecting and Python-only", () => {
   assert.match(job, /const MAX_PAGES = 150;/);
-  assert.match(job, /respect_robots_txt: true/);
+  // Robots are respected unless the customer explicitly attested ownership.
+  // Only the exact "owner_or_manager" answer flips it, so an absent, blank or
+  // unrecognised answer still yields respect_robots_txt: true.
+  assert.match(job, /const ownerAttested = siteOwnershipAnswer === "owner_or_manager";/);
+  assert.match(job, /respect_robots_txt: !ownerAttested,/);
   assert.match(job, /deno_fallback_used: false/);
   assert.match(workerMain, /pages_found/);
   assert.match(workerMain, /pages_crawled/);

@@ -91,7 +91,10 @@ test("Grok conversations and pending responses bind owner, project, scan, domain
 test("review scope leaves hidden legacy pages unbundled while the Standard 150 boundary remains unchanged", () => {
   assert.match(app, /path="\/reports" element=\{<Navigate to="\/dashboard" replace \/>\}/);
   assert.match(app, /path="\/crawl-status"[\s\S]*<Navigate to="\/onboarding" replace \/>/);
-  assert.match(scanForm, /Scan depth: up to 150 pages · respects robots\.txt · read-only/);
+  // Scope is still stated on the form, but derived from the attested policy so
+  // an owner-managed scan is not promised robots.txt is respected.
+  assert.match(scanForm, /const scanSpecLine = scanSpecForOwnership\(siteOwnership\);/);
+  assert.match(scanForm, /\{scanSpecLine\}/);
   // Standard 150 is the only customer scan; Premium is not selectable today.
   assert.doesNotMatch(scanForm, /Premium · 5,000/);
   assert.doesNotMatch(scanForm, /premium_5000/);

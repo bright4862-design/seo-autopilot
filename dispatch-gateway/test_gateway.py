@@ -25,10 +25,6 @@ os.environ.setdefault(
 )
 os.environ.setdefault("SCAN_EVIDENCE_SIGNING_KEY", "unit-test-signing-root")
 
-# admission-coordinator/test_coordinator.py installs a fake top-level `google`
-# package before importing its own main module. That module already holds the
-# fake Firestore object by reference, so remove only the import-cache stubs here
-# before loading the gateway, which needs the real google.auth namespace.
 for module_name in ("google.cloud.firestore", "google.cloud", "google"):
     sys.modules.pop(module_name, None)
 
@@ -45,7 +41,7 @@ def encoded(value):
     return base64.b64encode(json.dumps(value).encode("utf-8")).decode("ascii")
 
 
-def task(*, scan_id="scan_abc123", drain=False, attempt=1):
+def task(*, scan_id="scan_abc123", drain=False, attempt=1, respect_robots_txt=True, owner_override=False):
     short_name = f"standard150-{'drain-' if drain else ''}{scan_id}-a{attempt}"
     job = {
         "scan_id": scan_id,
@@ -57,7 +53,8 @@ def task(*, scan_id="scan_abc123", drain=False, attempt=1):
     else:
         job.update({
             "scan_mode": "standard_150",
-            "respect_robots_txt": True,
+            "respect_robots_txt": respect_robots_txt,
+            "owner_attested_robots_override": owner_override,
         })
 
     value = {
@@ -96,6 +93,28 @@ class ValidateDispatchTests(unittest.TestCase):
         accepted, error = self.validate(task())
         self.assertIsNone(error)
         self.assertIsNotNone(accepted)
+
+    def test_owner_override_pair_is_accepted(self):
+        accepted, error = self.validate(task(respect_robots_txt=False, owner_override=True))
+        self.assertIsNone(error)
+        self.assertIsNotNone(accepted)
+
+    def test_non_owner_pair_is_accepted(self):
+        accepted, error = self.validate(task(respect_robots_txt=True, owner_override=False))
+        self.assertIsNone(error)
+        self.assertIsNotNone(accepted)
+
+    def test_mismatched_or_missing_robots_policy_is_rejected(self):
+        for value in (
+            task(respect_robots_txt=False, owner_override=False),
+            task(respect_robots_txt=True, owner_override=True),
+        ):
+            self.assertRejected(value, "invalid_robots_policy")
+        missing = task()
+        job = json.loads(base64.b64decode(missing["httpRequest"]["body"]))
+        del job["owner_attested_robots_override"]
+        missing["httpRequest"]["body"] = encoded(job)
+        self.assertRejected(missing, "invalid_robots_policy")
 
     def test_exact_drain_task_is_accepted(self):
         accepted, error = self.validate(task(drain=True))
@@ -163,13 +182,6 @@ class ValidateDispatchTests(unittest.TestCase):
         job["scan_mode"] = "premium_5000"
         value["httpRequest"]["body"] = encoded(job)
         self.assertRejected(value, "invalid_scan_mode")
-
-    def test_robots_policy_is_pinned(self):
-        value = task()
-        job = json.loads(base64.b64decode(value["httpRequest"]["body"]))
-        job["respect_robots_txt"] = False
-        value["httpRequest"]["body"] = encoded(job)
-        self.assertRejected(value, "invalid_robots_policy")
 
     def test_scan_task_cannot_be_scheduled(self):
         value = task()

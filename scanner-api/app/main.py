@@ -34,6 +34,7 @@ from .render_evidence_quality import (
 )
 from .review import ARCHETYPE_CLASSIFIER_VERSION, REVIEW_VERSION, run_review
 from .review_calibration import CALIBRATION_VERSION, apply_review_evidence_calibration
+from .robots_policy import owner_robots_override
 from .scan_timing import SITEMAP_TIME_RESERVATION_VERSION
 from .scan_job import (
     CRAWL_BUDGET_SECONDS,
@@ -120,6 +121,11 @@ class ChatRequest(BaseModel):
     message: str
     scan: dict[str, Any] = Field(default_factory=dict)
     history: list[dict[str, Any]] = Field(default_factory=list)
+
+
+def valid_robots_policy_pair(respect_robots_txt: bool, owner_attested_robots_override: bool) -> bool:
+    """Accept only the two server-owned Standard 150 robots policy pairs."""
+    return owner_attested_robots_override == (respect_robots_txt is False)
 
 
 def enforce_scan_response_page_budget(result: dict[str, Any], scan_mode: str) -> dict[str, Any]:
@@ -281,7 +287,7 @@ async def scan(payload: ScanRequest, x_scanner_key: str | None = Header(default=
     if request_id and idempotency_key and request_id != idempotency_key:
         raise HTTPException(status_code=409, detail="request_id and idempotency_key must match.")
     if payload.respect_robots_txt is not True:
-        raise HTTPException(status_code=400, detail="Standard scans must respect robots.txt.")
+        raise HTTPException(status_code=400, detail="Synchronous scans require robots.txt enforcement.")
 
     timer = RequestTimer(
         "scan",
@@ -392,6 +398,7 @@ class ScanJobRequest(BaseModel):
     cms_platform: str | None = None
     scan_mode: str = "standard_150"
     respect_robots_txt: bool = True
+    owner_attested_robots_override: bool = False
 
 
 class ScanDrainRequest(BaseModel):
@@ -581,8 +588,11 @@ async def scan_job(
         raise HTTPException(status_code=400, detail="A durable scan_id and request_id are required.")
     if str(payload.scan_mode or "").lower() != "standard_150":
         raise HTTPException(status_code=400, detail="Only the Standard 150 scan is available.")
-    if payload.respect_robots_txt is not True:
-        raise HTTPException(status_code=400, detail="Standard scans must respect robots.txt.")
+    if not valid_robots_policy_pair(
+        payload.respect_robots_txt,
+        payload.owner_attested_robots_override,
+    ):
+        raise HTTPException(status_code=400, detail="Invalid Standard 150 robots policy.")
 
     job = payload.model_dump()
     job_attempt = normalize_attempt(payload.attempt_count)
@@ -632,18 +642,19 @@ async def scan_job(
         # worker_heartbeat_timeout before it could reach reviewing.
         async with worker_liveness_heartbeat(client, scan):
             try:
-                result = await asyncio.wait_for(
-                    run_scan(
-                        website_url=payload.website_url,
-                        path_prefix=payload.path_prefix,
-                        scan_mode="advanced",
-                        business_name=payload.business_name or "",
-                        cms_platform=payload.cms_platform or "",
-                        timeout_seconds=CRAWL_BUDGET_SECONDS,
-                        job_mode=True,
-                    ),
-                    timeout=WORKER_CRAWL_WALL_TIMEOUT_SECONDS,
-                )
+                with owner_robots_override(payload.owner_attested_robots_override):
+                    result = await asyncio.wait_for(
+                        run_scan(
+                            website_url=payload.website_url,
+                            path_prefix=payload.path_prefix,
+                            scan_mode="advanced",
+                            business_name=payload.business_name or "",
+                            cms_platform=payload.cms_platform or "",
+                            timeout_seconds=CRAWL_BUDGET_SECONDS,
+                            job_mode=True,
+                        ),
+                        timeout=WORKER_CRAWL_WALL_TIMEOUT_SECONDS,
+                    )
                 # These transforms are synchronous and were previously run
                 # unbounded on the event loop. Heavy evidence could block the
                 # loop, which starves both the heartbeat and every asyncio
@@ -671,7 +682,8 @@ async def scan_job(
                     "scan_run_id": scan_id,
                     "submitted_url": payload.website_url,
                     "normalized_domain": payload.normalized_domain or website_host(payload.website_url),
-                    "respect_robots_txt": True,
+                    "respect_robots_txt": payload.respect_robots_txt,
+                    "owner_attested_robots_override": payload.owner_attested_robots_override,
                 })
             except asyncio.TimeoutError:
                 # This is an outer fail-safe, not a retry signal. If the scanner's

@@ -393,7 +393,7 @@ async def write_terminal_failure(
 
 
 def identity_matches(scan: dict[str, Any], job: dict[str, Any]) -> bool:
-    """The task must name the same owner-bound durable request."""
+    """The task must name the same owner-bound durable request and frozen robots policy."""
     for field in ("owner_user_id", "request_id", "idempotency_key", "project_id"):
         stored = str(scan.get(field) or "").strip()
         claimed = str(job.get(field) or "").strip()
@@ -405,7 +405,52 @@ def identity_matches(scan: dict[str, Any], job: dict[str, Any]) -> bool:
     claimed_domain = _normalize_domain(
         str(job.get("normalized_domain") or job.get("website_url") or "")
     )
-    return not (stored_domain and claimed_domain and stored_domain != claimed_domain)
+    if stored_domain and claimed_domain and stored_domain != claimed_domain:
+        return False
+
+    # Drain tasks intentionally omit robots policy because they never crawl.
+    # Any task that supplies either policy field must supply and match the exact
+    # frozen pair on ScanRun, otherwise it is a different durable identity.
+    if "respect_robots_txt" in job or "owner_attested_robots_override" in job:
+        stored_respect = scan.get("respect_robots_txt")
+        stored_override = scan.get("owner_attested_robots_override")
+        claimed_respect = job.get("respect_robots_txt")
+        claimed_override = job.get("owner_attested_robots_override")
+        if not all(isinstance(value, bool) for value in (
+            stored_respect,
+            stored_override,
+            claimed_respect,
+            claimed_override,
+        )):
+            return False
+        if stored_override != (stored_respect is False):
+            return False
+        if claimed_override != (claimed_respect is False):
+            return False
+        if stored_respect != claimed_respect or stored_override != claimed_override:
+            return False
+    return True
+
+
+def robots_policy_matches(scan: dict[str, Any], result: dict[str, Any]) -> bool:
+    """Refuse completion if crawl output does not carry the ScanRun's frozen policy."""
+    stored_respect = scan.get("respect_robots_txt")
+    stored_override = scan.get("owner_attested_robots_override")
+    result_respect = result.get("respect_robots_txt")
+    result_override = result.get("owner_attested_robots_override")
+    if not all(isinstance(value, bool) for value in (
+        stored_respect,
+        stored_override,
+        result_respect,
+        result_override,
+    )):
+        return False
+    return (
+        stored_override == (stored_respect is False)
+        and result_override == (result_respect is False)
+        and stored_respect == result_respect
+        and stored_override == result_override
+    )
 
 
 def already_terminal(scan: dict[str, Any]) -> bool:
@@ -456,7 +501,8 @@ def build_authority_review_payload(result: dict[str, Any]) -> dict[str, Any]:
         "website_url": result.get("website_url"),
         "final_url": result.get("final_url"),
         "normalized_domain": result.get("normalized_domain"),
-        "respect_robots_txt": True,
+        "respect_robots_txt": result.get("respect_robots_txt"),
+        "owner_attested_robots_override": result.get("owner_attested_robots_override"),
         "pages_crawled": n(result.get("pages_crawled")),
         "pages_found": n(result.get("pages_found")),
         "queued_remaining": n(result.get("queued_remaining")),
@@ -852,6 +898,8 @@ async def complete_authority(
             "fix_list_id": str(fresh.get("fix_list_id") or ""),
             "authority_proof": str(fresh.get("authority_proof") or ""),
         }
+    if not robots_policy_matches(fresh, result):
+        return {"ok": False, "transient": False, "failure_code": "scan_identity_mismatch"}
     scan = fresh
 
     crawl_limitation = terminal_crawl_limitation(result)

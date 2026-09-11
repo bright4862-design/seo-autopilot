@@ -94,6 +94,9 @@ Deno.serve(async (req) => {
 
     const scan = await entities.ScanRun.get(identity.scan_id).catch(() => null);
     if (!scan) throw new RequestProblem(404, "limited_record_not_found", "The durable scan was not found.");
+    if (!robotsPolicyMatches(scan, scanResult)) {
+      throw new RequestProblem(409, "robots_policy_mismatch", "The worker robots policy does not match this scan.");
+    }
 
     const claimedAttempt = normalizeAttempt(identity.attempt_count);
     if (claimedAttempt !== normalizeAttempt(scan.attempt_count)) {
@@ -220,6 +223,21 @@ Deno.serve(async (req) => {
     return problemResponse(new RequestProblem(500, "limited_result_failed", "The limited scan result could not be saved."));
   }
 });
+
+function robotsPolicyMatches(scan, scanResult) {
+  const storedRespect = scan?.respect_robots_txt;
+  const storedOverride = scan?.owner_attested_robots_override;
+  const resultRespect = scanResult?.respect_robots_txt;
+  const resultOverride = scanResult?.owner_attested_robots_override;
+  return typeof storedRespect === "boolean"
+    && typeof storedOverride === "boolean"
+    && typeof resultRespect === "boolean"
+    && typeof resultOverride === "boolean"
+    && storedOverride === (storedRespect === false)
+    && resultOverride === (resultRespect === false)
+    && storedRespect === resultRespect
+    && storedOverride === resultOverride;
+}
 
 async function upsertSingleFixList(entities, desired, identity, scan) {
   const existingId = cleanId(scan?.fix_list_id);

@@ -1,4 +1,5 @@
 import { scanProgressModel } from "./scanProgressPresentation.js";
+import { isOwnerManaged } from "./siteOwnershipPolicy.js";
 
 // The release component that names how a scan without a result is explained.
 // It lived in FixList.jsx while the copy did; it moves here with the copy, and
@@ -171,6 +172,12 @@ const COPY = {
     nextStep: "Ask whoever manages the site's CDN, firewall, or bot protection to allow the scan, then run it again.",
     retryAdvice: "A scan started now would most likely be limited the same way. Wait for the limit to lift, or get the scanner allowed through first.",
   },
+  security_service_blocked: {
+    title: "Your site's security service is blocking FixList.",
+    detail: "Your site answered FixList with a bot challenge or rate limit instead of your pages, so there was not enough to publish a FixList. This is your firewall or bot protection doing its job — it cannot tell FixList apart from the traffic it exists to stop. It is not your robots.txt: FixList always respects that, and this block happened before those rules came into it.",
+    nextStep: "Temporarily allow FixList in your firewall/bot protection, then Rescan.",
+    retryAdvice: "Rescanning before that will be blocked the same way, because nothing about the site has changed yet.",
+  },
   too_few_usable_pages: {
     title: "Too few usable pages to judge the site",
     detail: "FixList found URLs for this site but could only verify a small number of usable HTML pages, and most of what it did reach was default, archive, or internal routes. That is not enough evidence to describe the site as a whole.",
@@ -293,7 +300,27 @@ function inProgressPresentation(record, now) {
   };
 }
 
-export function durableScanStatePresentation(record, { now = Date.now() } = {}) {
+/**
+ * Which limitation the customer is shown, given what they told us about the
+ * site.
+ *
+ * `durableScanLimitationKind` reads the record and only the record, so it can
+ * never return this one: whether the reader can reach the firewall is browser
+ * state, not scan evidence. The split is kept deliberately -- the classifier
+ * stays a pure function of the row, and ownership is applied here, at the point
+ * where copy is chosen.
+ *
+ * Only `access_limited` is redirected. A save failure or a thin crawl reads the
+ * same to an owner as to anyone else, and telling an owner to open their
+ * firewall for those would send them to fix something that is not broken.
+ */
+function presentedKind(record, ownership) {
+  const kind = durableScanLimitationKind(record);
+  if (kind === "access_limited" && isOwnerManaged(ownership)) return "security_service_blocked";
+  return kind;
+}
+
+export function durableScanStatePresentation(record, { now = Date.now(), ownership = "" } = {}) {
   const source = plainObject(record);
   const status = cleanText(source.status);
 
@@ -302,7 +329,7 @@ export function durableScanStatePresentation(record, { now = Date.now() } = {}) 
   // progress field that only exists on one of them.
   const settled = (kind) => ({ kind, ...COPY[kind], countLabel: "", percent: null, canLeavePage: false, slowNote: "" });
   if (status === "cancelled") return settled("cancelled");
-  if (status === "limited" || status === "failed") return settled(durableScanLimitationKind(source));
+  if (status === "limited" || status === "failed") return settled(presentedKind(source, ownership));
   return settled("no_results");
 }
 

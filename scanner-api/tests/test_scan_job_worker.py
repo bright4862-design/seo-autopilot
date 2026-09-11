@@ -203,6 +203,8 @@ async def test_isolated_review_timeout_maps_to_customer_safe_failure(monkeypatch
         "attempt_count": 1,
         "project_id": "proj-1",
         "owner_user_id": "owner-1",
+        "respect_robots_txt": True,
+        "owner_attested_robots_override": False,
     }
 
     async def read(*_args, **_kwargs):
@@ -218,6 +220,8 @@ async def test_isolated_review_timeout_maps_to_customer_safe_failure(monkeypatch
         None,
         scan,
         {
+            "respect_robots_txt": True,
+            "owner_attested_robots_override": False,
             "crawled_pages": [{
                 "url": "https://example.com/",
                 "status_code": 200,
@@ -243,6 +247,8 @@ async def test_completion_observability_marks_each_pre_persistence_phase(monkeyp
         "attempt_count": 1,
         "project_id": "proj-1",
         "owner_user_id": "owner-1",
+        "respect_robots_txt": True,
+        "owner_attested_robots_override": False,
     }
     events = []
 
@@ -260,6 +266,8 @@ async def test_completion_observability_marks_each_pre_persistence_phase(monkeyp
         None,
         scan,
         {
+            "respect_robots_txt": True,
+            "owner_attested_robots_override": False,
             "crawled_pages": [{
                 "url": "https://example.com/",
                 "status_code": 200,
@@ -354,6 +362,8 @@ async def test_durable_worker_wall_clock_timeout_terminalizes_exact_attempt(monk
         "normalized_domain": "example.com",
         "attempt_count": 1,
         "status": "queued",
+        "respect_robots_txt": True,
+        "owner_attested_robots_override": False,
     }
     payload = main.ScanJobRequest(
         scan_id="scan-1",
@@ -450,6 +460,8 @@ async def test_durable_worker_completion_wall_timeout_terminalizes_exact_attempt
         "normalized_domain": "example.com",
         "attempt_count": 1,
         "status": "queued",
+        "respect_robots_txt": True,
+        "owner_attested_robots_override": False,
     }
     payload = main.ScanJobRequest(
         scan_id="scan-1",

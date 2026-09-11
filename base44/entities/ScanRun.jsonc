@@ -536,7 +536,23 @@
     },
     "respect_robots_txt": {
       "type": "boolean",
-      "default": true
+      "default": true,
+      "description": "Frozen server-derived policy for this scan. False only for an owner/manager-attested FixList crawl."
+    },
+    "owner_attested_robots_override": {
+      "type": "boolean",
+      "default": false,
+      "description": "Frozen server-derived owner/manager override. Must be the inverse of respect_robots_txt."
+    },
+    "site_ownership_answer": {
+      "type": "string",
+      "enum": ["", "owner_or_manager", "not_owner"],
+      "default": "",
+      "description": "Historical ownership answer used to derive this exact scan's robots policy."
+    },
+    "site_ownership_policy_version": {
+      "type": "string",
+      "description": "Version of the server-side ownership-to-robots policy applied to this scan."
     },
     "queued_at": {
       "type": "string"

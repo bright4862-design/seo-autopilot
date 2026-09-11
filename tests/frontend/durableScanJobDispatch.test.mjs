@@ -121,6 +121,10 @@ test("missing durable configuration fails closed after admission", () => {
 test("the public route remains Standard 150 only", () => {
   assert.match(dispatcher, /Only the Standard 150 scan is available/);
   assert.match(dispatcher, /scan_mode: PUBLIC_SCAN_MODE/);
-  assert.match(dispatcher, /respect_robots_txt: true/);
+  // Robots are respected unless the customer explicitly attested ownership.
+  // Only the exact "owner_or_manager" answer flips it, so an absent, blank or
+  // unrecognised answer still yields respect_robots_txt: true.
+  assert.match(dispatcher, /const ownerAttested = siteOwnershipAnswer === "owner_or_manager";/);
+  assert.match(dispatcher, /respect_robots_txt: !ownerAttested,/);
   assert.doesNotMatch(dispatcher, /grok|premium/i);
 });

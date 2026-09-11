@@ -5,6 +5,9 @@ from app.extract import extract_page
 
 
 class Policy:
+    def directive_allowed(self, user_agent, url):
+        return True
+
     def allowed(self, user_agent, url):
         return True
 

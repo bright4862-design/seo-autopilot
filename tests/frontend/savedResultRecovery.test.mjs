@@ -68,5 +68,5 @@ test("opening a limited run explains the evidence limitation instead of claiming
   assert.notEqual(blocked.detail, thin.detail);
 
   // The page hands the whole presentation over rather than picking a title.
-  assert.match(fixList, /presentation=\{durableScanStatePresentation\(scanRecord\)\}/);
+  assert.match(fixList, /presentation=\{durableScanStatePresentation\(scanRecord, \{/);
 });

@@ -16,6 +16,20 @@ import { UNLOCK_PRICE_LABEL, loadAccess } from "@/lib/access";
 import { trackEvent } from "@/lib/analytics";
 import { refreshGroupedCountEvidence } from "@/lib/groupedCountCopy";
 import {
+  OWNERSHIP_ANSWER_LABELS,
+  ownershipHelpText,
+  scanSpecForOwnership,
+  OWNERSHIP_QUESTION,
+  OWNERSHIP_NOT_MANAGED,
+  OWNERSHIP_OWNER_MANAGED,
+  ownerManagedRobotsPolicy,
+  ownershipOnSiteChange,
+  projectAttestationUpdate,
+  readSiteOwnership,
+  siteOwnershipStorageKey,
+  writeSiteOwnership,
+} from "@/lib/siteOwnershipPolicy";
+import {
   CUSTOMER_BOUNDARY_EVENT,
   clearCustomerAuthBoundary,
   readCustomerActiveProject,
@@ -28,8 +42,10 @@ const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV3";
 // translation, so the frontend never sends "advanced" as the customer mode.
 const STANDARD_SCAN_MODE = "standard_150";
 // The single customer-facing statement of scan scope. There is no scanner-size
-// selector and no selectable scan-size control anywhere in the DOM.
-const SCAN_SPEC_LINE = "Scan depth: up to 150 pages · respects robots.txt · read-only";
+// selector and no selectable scan-size control anywhere in the DOM. The line
+// is derived from the attested policy rather than written literally here. An
+// owner-managed scan submits the override policy, so a fixed line promising
+// robots.txt is honoured would state the opposite of what the scan does.
 const STANDARD_SCAN_BUDGET = Object.freeze({ max_pages: 150, max_browser_render_attempts: 1, crawl_timeout_ms: 90000 });
 
 const CMS_OPTIONS = [
@@ -67,6 +83,9 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
   const [cmsPlatform, setCmsPlatform] = useState(normalizeCmsValue(project?.cms_platform || "custom"));
   const [keywordsText, setKeywordsText] = useState(Array.isArray(project?.important_keywords) ? project.important_keywords.join("\n") : "");
   const scanMode = STANDARD_SCAN_MODE;
+  // Seeded from storage rather than set by an effect, so a reload paints the
+  // stored answer immediately instead of flashing an unanswered question.
+  const [siteOwnership, setSiteOwnership] = useState(() => readSiteOwnership(focusedUrl || project?.website_url || ""));
   const [optionalOpen, setOptionalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [activeStep, setActiveStep] = useState("");
@@ -99,6 +118,38 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
     setWebsiteUrl(focusedUrl);
     setUrlError("");
   }, [focusedUrl, isFocusedScan, isLoading]);
+
+  // Reset the answer only when the site itself changes, not on every keystroke.
+  // Re-reading storage on each edit would also wipe a just-made choice wherever
+  // localStorage is unavailable -- a private window, or storage turned off --
+  // because the write silently failed and the read returns nothing.
+  const ownershipKeyRef = useRef(siteOwnershipStorageKey(focusedUrl || project?.website_url || ""));
+  useEffect(() => {
+    const key = siteOwnershipStorageKey(websiteUrl);
+    if (key === ownershipKeyRef.current) return;
+    const hadNoSite = !ownershipKeyRef.current;
+    ownershipKeyRef.current = key;
+    const stored = readSiteOwnership(websiteUrl);
+    // An answer given before the URL was typed has nowhere to be stored --
+    // writeSiteOwnership has no key without a host -- so without this it is
+    // silently dropped the moment the customer completes the field they were
+    // asked to fill in. Carry it to the site it turned out to be about.
+    //
+    // A stored answer for that site still wins: it was given while looking at
+    // that site, where this one was given before the site was known.
+    const next = ownershipOnSiteChange({ hadNoSite, pendingAnswer: siteOwnership, storedAnswer: stored });
+    if (next.carry) writeSiteOwnership(websiteUrl, next.answer);
+    setSiteOwnership(next.answer);
+  }, [websiteUrl]);
+
+  const handleOwnershipChange = (value) => {
+    setSiteOwnership(value);
+    writeSiteOwnership(websiteUrl, value);
+  };
+
+  // Stated once, and it follows the answer above it: the help text and this
+  // line must never disagree about whether robots.txt is respected.
+  const scanSpecLine = scanSpecForOwnership(siteOwnership);
 
   useEffect(() => {
     if (!isLoading) {
@@ -231,6 +282,21 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
         cmsPlatform,
         importantKeywords: cleanedKeywords,
       });
+
+      // Persist the attestation on the customer's own owned record, so it is
+      // something a server can verify rather than a claim held in one browser.
+      // Best-effort: a scan the customer has already paid for must not fail
+      // because their answer could not be filed, and the run carries the answer
+      // regardless, so the explanation survives either way.
+      const attestation = projectAttestationUpdate(scanProject, siteOwnership);
+      if (attestation) {
+        try {
+          await base44.entities.BusinessProject.update(scanProject.id, attestation);
+        } catch {
+          // Non-fatal by design; see above.
+        }
+      }
+
       submitLockRef.current = true;
       requestEpoch = requestEpochRef.current + 1;
       requestEpochRef.current = requestEpoch;
@@ -263,7 +329,9 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
         scan_mode: scanMode,
         enable_screaming_frog_lite: true,
         force_internal_crawl: true,
-        respect_robots_txt: true,
+        // respect_robots_txt stays true for both answers; see
+        // ownerManagedRobotsPolicy for why sending false would fail the scan.
+        ...ownerManagedRobotsPolicy(siteOwnership),
         max_pages: safeScanBudget.max_pages,
         max_competitors: 0,
         max_browser_render_attempts: safeScanBudget.max_browser_render_attempts,
@@ -458,7 +526,32 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
             />
           </div>
 
-          <p className="text-[13px] text-ink-muted">{SCAN_SPEC_LINE}</p>
+          <fieldset disabled={isLoading} className="disabled:opacity-60">
+            <legend className="text-[13px] font-medium text-ink">{OWNERSHIP_QUESTION}</legend>
+            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:gap-3">
+              {[OWNERSHIP_OWNER_MANAGED, OWNERSHIP_NOT_MANAGED].map((answer) => (
+                <label
+                  key={answer}
+                  htmlFor={`fixlist-site-ownership-${answer}`}
+                  className={`flex flex-1 cursor-pointer items-start gap-2.5 rounded-lg border bg-white p-3 text-[14px] leading-snug transition ${siteOwnership === answer ? "border-ink text-ink" : "border-hairline text-ink-muted hover:border-ink/40"}`}
+                >
+                  <input
+                    id={`fixlist-site-ownership-${answer}`}
+                    type="radio"
+                    name="fixlist-site-ownership"
+                    value={answer}
+                    checked={siteOwnership === answer}
+                    onChange={() => handleOwnershipChange(answer)}
+                    className="mt-0.5 h-4 w-4 shrink-0 accent-ink"
+                  />
+                  <span>{OWNERSHIP_ANSWER_LABELS[answer]}</span>
+                </label>
+              ))}
+            </div>
+            <p className="mt-2 text-[13px] leading-relaxed text-ink-faint">{ownershipHelpText(siteOwnership)}</p>
+          </fieldset>
+
+          <p className="text-[13px] text-ink-muted">{scanSpecLine}</p>
         </div>
 
         {error ? (

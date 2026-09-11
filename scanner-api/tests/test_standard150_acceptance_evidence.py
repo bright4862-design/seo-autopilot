@@ -76,9 +76,13 @@ async def test_completion_envelope_carries_measured_classification_and_memory(mo
         "attempt_count": 1,
         "project_id": "project-acceptance",
         "owner_user_id": "owner-acceptance",
+        "respect_robots_txt": True,
+        "owner_attested_robots_override": False,
     }
     result = {
         "normalized_domain": "example.com",
+        "respect_robots_txt": True,
+        "owner_attested_robots_override": False,
         "crawled_pages": [{
             "url": "https://example.com/",
             "status_code": 200,
@@ -166,8 +170,16 @@ async def test_limited_envelope_carries_the_same_measured_acceptance_evidence(mo
         "attempt_count": 1,
         "project_id": "project-acceptance",
         "owner_user_id": "owner-acceptance",
+        "respect_robots_txt": True,
+        "owner_attested_robots_override": False,
     }
-    result = {"normalized_domain": "example.com", "pages_found": 500, "pages_crawled": 25}
+    result = {
+        "normalized_domain": "example.com",
+        "pages_found": 500,
+        "pages_crawled": 25,
+        "respect_robots_txt": True,
+        "owner_attested_robots_override": False,
+    }
     review = {
         "release_gate_eligible": False,
         "score_is_provisional": True,

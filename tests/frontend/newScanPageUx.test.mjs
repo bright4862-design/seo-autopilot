@@ -11,7 +11,10 @@ const layout = readFileSync("src/components/layout/DashboardLayout.jsx", "utf8")
 const app = readFileSync("src/App.jsx", "utf8");
 
 test("required copy is present verbatim", () => {
-  assert.match(scanForm, /Scan depth: up to 150 pages · respects robots\.txt · read-only/);
+  // The scope line is derived from the attested policy now, because an
+  // owner-managed scan must not be shown a robots.txt promise it will not keep.
+  // Both spec strings are pinned in siteOwnershipRobotsPolicy.test.mjs.
+  assert.match(scanForm, /const scanSpecLine = scanSpecForOwnership\(siteOwnership\);/);
   assert.match(scanForm, /Business or website name \(optional\)/);
   assert.match(scanForm, /Scans up to 150 pages\. Larger sites coming soon\./);
   assert.match(scanForm, /Scan time varies by site\. FixList will tell you when it’s safe to leave this page\./);
@@ -31,7 +34,7 @@ test("field order is trust note, heading, subhead, URL, name, spec line, CTA", (
     /Enter a website URL and we’ll turn the scan/,
     /id="fixlist-website-url"/,
     /id="fixlist-business-name"/,
-    /\{SCAN_SPEC_LINE\}/,
+    /\{scanSpecLine\}/,
     /type="submit"/,
   ];
   let cursor = -1;

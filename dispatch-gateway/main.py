@@ -77,6 +77,14 @@ def _decode_task_payload(task: dict[str, Any]) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def _valid_robots_policy(job: dict[str, Any]) -> bool:
+    respect = job.get("respect_robots_txt")
+    owner_override = job.get("owner_attested_robots_override")
+    if type(respect) is not bool or type(owner_override) is not bool:
+        return False
+    return owner_override == (respect is False)
+
+
 def validate_dispatch(payload: Any) -> tuple[dict[str, Any] | None, str | None]:
     if not isinstance(payload, dict):
         return None, "invalid_payload"
@@ -142,7 +150,7 @@ def validate_dispatch(payload: Any) -> tuple[dict[str, Any] | None, str | None]:
             return None, "unexpected_scan_schedule"
         if job.get("scan_mode") != "standard_150":
             return None, "invalid_scan_mode"
-        if job.get("respect_robots_txt") is not True:
+        if not _valid_robots_policy(job):
             return None, "invalid_robots_policy"
 
     return task, None

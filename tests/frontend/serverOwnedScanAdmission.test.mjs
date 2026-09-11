@@ -277,6 +277,7 @@ function createHarness({
       },
       normalizeAttemptCount,
       evaluatePaidAccess,
+      evaluateScanAccess,
       uniqueAccessRows,
       betaScanAdmissionPolicy,
       normalizeAdmissionIdentity,

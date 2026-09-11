@@ -173,7 +173,12 @@ test("only access-limited owner scans get the firewall recovery message", () => 
 
 test("the form asks explicitly before scanning and sends policy intent", () => {
   const form = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
-  assert.match(form, /Do you own or manage this website\?/);
+  // The wording is centralised in the policy module and rendered as the
+  // fieldset legend, so pin the customer-visible sentence where it is defined
+  // and prove the form renders that exact constant rather than its own copy.
+  const policy = readFileSync("src/lib/siteOwnershipPolicy.js", "utf8");
+  assert.match(policy, /OWNERSHIP_QUESTION = "Do you own or manage this website\?"/);
+  assert.match(form, /<legend[^>]*>\{OWNERSHIP_QUESTION\}<\/legend>/);
   assert.match(form, /OWNERSHIP_OWNER_MANAGED/);
   assert.match(form, /OWNERSHIP_NOT_MANAGED/);
   assert.match(form, /\.\.\.ownerManagedRobotsPolicy\(siteOwnership\)/);

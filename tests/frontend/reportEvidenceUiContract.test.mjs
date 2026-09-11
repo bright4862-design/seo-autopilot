@@ -64,6 +64,8 @@ test("FixList renders persisted observations, redirect truth, and raw integer sc
   assert.match(source, /customerRepairObservationRows/);
   assert.match(source, /scanCoverageDisclosure/);
   assert.match(source, /Observed redirect evidence/);
+  assert.match(source, /row\.requested\.isLinkable/);
+  assert.match(source, /row\.destination\.isLinkable/);
   assert.match(source, /Observed page evidence/);
   assert.match(source, /What this scan actually reached/);
   assert.match(source, /URLs attempted/);

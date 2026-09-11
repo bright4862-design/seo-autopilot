@@ -267,3 +267,23 @@ def test_the_crawler_records_checked_coverage_after_the_page_cap():
 
     # And the population must be the one pages_crawled counts.
     assert '"pages_crawled": len(pages)' in source
+
+
+def test_large_generic_family_round_robins_meaningful_sections_before_repeating_one():
+    urls = [f"https://x.com/blog/post-{i}" for i in range(1934)]
+    urls += [f"https://x.com/careers/role-{i}" for i in range(40)]
+    urls += [f"https://x.com/real-estate-rental-property-resources/resource-{i}" for i in range(40)]
+    urls += [f"https://x.com/property-management-in-baltimore/area-{i}" for i in range(40)]
+    urls += [f"https://x.com/property-management-cumberland-county-{i}" for i in range(40)]
+
+    def family(url):
+        return "guide_article" if "/blog/" in url else "standard"
+
+    selected = select_balanced_urls(urls, family, _path_of, 150)
+    standard = [url for url in selected if family(url) == "standard"]
+
+    assert standard, "Bay-shaped sitemap must retain standard-family coverage"
+    assert any("/careers/" in url for url in standard)
+    assert any("/real-estate-rental-property-resources/" in url for url in standard)
+    assert any("/property-management-in-baltimore/" in url for url in standard)
+    assert any("/property-management-cumberland-county-" in url for url in standard)

@@ -77,7 +77,7 @@ function classify(name, { status = 405, body, buildId, activationId }) {
 
 test("all V3 routes have a fresh report-evidence activation distinct from the stale generation", () => {
   for (const name of V3) {
-    assert.match(expectedActivation[name], /-report-evidence-20260909-v1$/);
+    assert.match(expectedActivation[name], /-report-quality-20260910-v1$/);
     assert.notEqual(expectedActivation[name], staleActivation[name]);
     assert.ok(canonicalOf(name), `${name} must resolve through the active route contract`);
   }

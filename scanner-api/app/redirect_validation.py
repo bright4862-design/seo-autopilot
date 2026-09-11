@@ -8,10 +8,7 @@ from .robots_policy import SCANNER_USER_AGENT, SEARCH_USER_AGENT
 from .security import REDIRECT_STATUSES, is_public_http_url, safe_get_once
 
 
-# Keep the frozen component marker stable for this focused additive patch. The
-# exact candidate SHA still identifies the release; changing this marker would
-# require regenerating cross-runtime release contracts outside this patch scope.
-REDIRECT_EVIDENCE_VERSION = "redirect_evidence_v3_origin_alias_identity"
+REDIRECT_EVIDENCE_VERSION = "redirect_evidence_v4_specific_top_level_home_catchall"
 DEFAULT_MAX_REDIRECTS = 5
 
 
@@ -300,10 +297,11 @@ def _same_url_except_trailing_slash(source_url: str, destination_url: str) -> bo
 def _looks_like_wrong_destination(source_url: str, destination_url: str) -> bool:
     """Detect strong generic catch-all redirects without site-specific slugs.
 
-    A deep URL collapsing to the same site's homepage is materially different
+    A specific URL collapsing to the same site's homepage is materially different
     from slash/case/canonical normalization: HTTP 200 proves availability, not
-    relevance. Restrict this signal to paths with at least two segments so a
-    deliberate retired top-level route is not automatically called wrong.
+    relevance. Multi-segment paths are always specific here; a top-level route is
+    specific only when its slug contains multiple lexical tokens. This keeps
+    conventional aliases such as /home out of the wrong-destination bucket.
     """
     source = _normalize_url(source_url)
     destination = _normalize_url(destination_url)
@@ -314,7 +312,14 @@ def _looks_like_wrong_destination(source_url: str, destination_url: str) -> bool
     source_path = (urlparse(source).path or "/").rstrip("/") or "/"
     destination_path = (urlparse(destination).path or "/").rstrip("/") or "/"
     source_segments = [segment for segment in source_path.split("/") if segment]
-    return len(source_segments) >= 2 and destination_path == "/"
+    if destination_path != "/" or not source_segments:
+        return False
+    if len(source_segments) >= 2:
+        return True
+    top_level = source_segments[0].lower().replace("_", "-")
+    if top_level in {"home", "homepage", "index", "index.html", "index.htm"}:
+        return False
+    return len([token for token in top_level.split("-") if token]) >= 2
 
 
 def _redirect_outcome(page: dict, evidence: dict, destination_state: str) -> str:

@@ -150,6 +150,46 @@ async def test_deep_url_redirecting_to_homepage_is_wrong_destination_even_when_h
 
 
 @pytest.mark.asyncio
+async def test_specific_top_level_landing_page_redirecting_to_homepage_is_wrong_destination(policy):
+    source = "https://example.com/property-management-cumberland-county"
+    homepage = "https://example.com/"
+    homepage_html = (
+        '<html><head><title>Property Management</title>'
+        '<link rel="canonical" href="https://example.com/"></head>'
+        '<body><h1>Property Management</h1><p>Homepage content.</p></body></html>'
+    )
+    client = FakeClient({
+        source: _response(source, 301, location="/"),
+        homepage: _response(homepage, 200, body=homepage_html),
+    })
+
+    page = await fetch_and_extract(client, source, DISCOVERY_INTERNAL, robots_policy=policy)
+
+    assert page["redirect_outcome"] == "redirect_to_wrong_destination"
+    assert page["redirect_fetch_evidence"]["final_status"] == 200
+    assert page["redirect_fetch_evidence"]["classification"] == "redirect_to_wrong_destination"
+
+
+@pytest.mark.asyncio
+async def test_conventional_home_alias_redirecting_to_homepage_is_not_wrong_destination(policy):
+    source = "https://example.com/home"
+    homepage = "https://example.com/"
+    homepage_html = (
+        '<html><head><title>Home</title><link rel="canonical" href="https://example.com/"></head>'
+        '<body><h1>Home</h1><p>Homepage content.</p></body></html>'
+    )
+    client = FakeClient({
+        source: _response(source, 301, location="/"),
+        homepage: _response(homepage, 200, body=homepage_html),
+    })
+
+    page = await fetch_and_extract(client, source, DISCOVERY_INTERNAL, robots_policy=policy)
+
+    assert page["redirect_outcome"] == "redirect_to_usable_page"
+    assert "redirect_wrong_destination" not in _rules(page)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("final_status", [404, 500])
 async def test_redirect_to_http_error_is_unusable(policy, final_status):
     client = FakeClient({

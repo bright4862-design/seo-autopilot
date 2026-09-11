@@ -74,9 +74,11 @@ test("the delayed watchdog is the final terminal owner on an isolated control qu
   assert.match(workerMain, /already_terminal\(scan\)/);
 });
 
-test("paid admission is the sole entitlement gate", () => {
-  assert.match(job, /loadPaidEntitlement\(base44, user\)/);
+test("paid-or-preview admission uses one server-side entitlement gate", () => {
+  assert.match(job, /loadScanEntitlement\(base44, user\)/);
+  assert.match(job, /evaluateScanAccess/);
   assert.match(job, /paid_access_required/);
+  assert.match(job, /preview_scan_used/);
   assert.doesNotMatch(job, /scans_used|consumeScanAllowance|FREE_SCAN/);
   assert.doesNotMatch(persist, /entities\.Access|scans_used|ensureAllowanceConsumed/);
   assert.match(persist, /allowanceConsumed: false/);

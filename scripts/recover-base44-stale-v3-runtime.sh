@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Recover the six active V3 Base44 routes when the platform accepts their
-# current definitions but continues executing the September 7 compiled runtime.
+# current definitions but continues executing a known stale compiled runtime.
 #
 # Safety properties:
 # - exact clean current main only
@@ -9,7 +9,7 @@
 # - valid generated contracts and release manifest
 # - all six routes are classified before the first deletion
 # - already-current routes are never deleted
-# - only the exact known stale September 7 runtime is eligible for recreation
+# - only exact incident-bound September 7 or September 9 stale builds are eligible
 # - transport, HTML, router errors, malformed JSON, unknown status/marker refuse
 # - delete -> prove absent -> deploy -> prove present -> verify build+activation
 # - any failure stops before the next route
@@ -52,6 +52,17 @@ declare -A V3_STALE_BUILD_IDS=(
   [persistLimitedScanResultV3]="c8a7282b26e267aa76eb2f067fd4593071e021209138d155be167407c5fb609a"
   [getCustomerScanResultV3]="d7f681b2c965be72b077b20d6a713b9a82c679c42fc1c842255dab0769760de8"
   [deleteCustomerScanDataV3]="6f6c73c198d7a20df923721d826c994f4d8d40decec0ecd313e8f9992f12f481"
+)
+
+# Exact intermediate build identities observed in the September 9 production
+# incident. These routes already expose the current activation marker, but their
+# compiled build id is still the older incident-bound runtime. Only these exact
+# build+activation pairs are eligible; unknown builds with the same marker refuse.
+declare -A V3_SEPT9_INTERMEDIATE_BUILD_IDS=(
+  [startStandardScanJobV3]="471f4c627608653dcce1a7f1eca0c6eff05569e85ba9728e0d3d7a1a8d6b3011"
+  [persistDurableScanAuthorityV3]="96a6dfdd9a60eea0fbc687f81fcff2236c84d367ed4b247d1649c8e8545863ce"
+  [persistLimitedScanResultV3]="803178674d7ef0d1c80637b0840ec2fb74c77833043ad92c4d7ae2647e089700"
+  [getCustomerScanResultV3]="c29241f2779ee37dd7fe3ba1b3d5f991c05f7fe3ad1b5b29b152d273e650bb19"
 )
 
 canonical_of_v3() {
@@ -114,13 +125,25 @@ route_serves_expected_v3_runtime() {
 }
 
 route_is_known_stale_v3() {
-  local name="$1" canonical="$2" stale_activation="$3" stale_build
+  local name="$1" canonical="$2" stale_activation="$3" stale_build sept9_build
   stale_build="${V3_STALE_BUILD_IDS[$name]:-}"
+  sept9_build="${V3_SEPT9_INTERMEDIATE_BUILD_IDS[$name]:-}"
   route_reaches_json_handler || return 1
   route_is_known_stale_handler "$canonical" || return 1
-  valid_build_id "$stale_build" || return 1
-  [[ "$PROBE_BUILD_ID" == "$stale_build" ]] || return 1
-  [[ -n "$stale_activation" && "$PROBE_ACTIVATION_ID" == "$stale_activation" ]]
+
+  if valid_build_id "$stale_build" \
+    && [[ "$PROBE_BUILD_ID" == "$stale_build" ]] \
+    && [[ -n "$stale_activation" && "$PROBE_ACTIVATION_ID" == "$stale_activation" ]]; then
+    return 0
+  fi
+
+  if valid_build_id "$sept9_build" \
+    && [[ "$PROBE_BUILD_ID" == "$sept9_build" ]] \
+    && [[ -n "${V3_EXPECTED_ACTIVATION:-}" && "$PROBE_ACTIVATION_ID" == "$V3_EXPECTED_ACTIVATION" ]]; then
+    return 0
+  fi
+
+  return 1
 }
 
 resolve_v3_expectations() {
@@ -164,7 +187,7 @@ require_recoverable_v3_prestate() {
       "$name" "$PROBE_STATUS" "$PROBE_BUILD_ID" "$PROBE_ACTIVATION_ID" "$V3_EXPECTED_ACTIVATION"
     return 0
   fi
-  echo "Refusing V3 runtime recovery preflight for $name: runtime is neither exact-current nor the proven stale handler (HTTP $PROBE_STATUS, build ${PROBE_BUILD_ID:-missing}, activation ${PROBE_ACTIVATION_ID:-missing})." >&2
+  echo "Refusing V3 runtime recovery preflight for $name: runtime is neither exact-current nor a proven incident-bound stale handler (HTTP $PROBE_STATUS, build ${PROBE_BUILD_ID:-missing}, activation ${PROBE_ACTIVATION_ID:-missing})." >&2
   return 1
 }
 
@@ -209,7 +232,7 @@ recover_one_v3() {
     return 0
   fi
   if ! route_is_known_stale_v3 "$name" "$V3_CANONICAL" "$V3_STALE_ACTIVATION"; then
-    echo "Refusing V3 runtime recovery for $name: pre-state no longer matches the proven stale handler." >&2
+    echo "Refusing V3 runtime recovery for $name: pre-state no longer matches a proven incident-bound stale handler." >&2
     return 1
   fi
 

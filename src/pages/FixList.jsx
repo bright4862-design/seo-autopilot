@@ -379,6 +379,12 @@ export default function FixList() {
   const pagesFound = getPagesFound(scanRecord);
   const observedScanCoverage = useMemo(() => scanCoverageDisclosure(scanRecord), [scanRecord]);
   const locked = scanRecord?.customer_access === "locked";
+  const preview = scanRecord?.customer_access === "preview";
+  const previewComplete = Boolean(
+    preview
+    && scanRecord?.status === "complete"
+    && scanRecord?.authority_verified === true
+  );
   // An authoritative result and a verified limited result are both readable;
   // only the first is authoritative. Keeping them as two conditions rather than
   // relaxing one is what stops a provisional scan from being read as complete.
@@ -521,10 +527,10 @@ export default function FixList() {
           <div className="text-[15px] font-medium tracking-tight text-ink-muted">{websiteHost || ""}</div>
           <button
             type="button"
-            onClick={() => navigate(focusedRescanTarget || "/onboarding")}
+            onClick={() => previewComplete ? navigate("/billing") : navigate(focusedRescanTarget || "/onboarding")}
             className="rounded-full bg-ink px-4 py-2 text-[13px] font-medium text-paper transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
           >
-            {hasUsefulScan ? "Scan again" : "Run a scan"}
+            {previewComplete ? "Unlock full access" : hasUsefulScan ? "Scan again" : "Run a scan"}
           </button>
         </div>
 
@@ -552,6 +558,8 @@ export default function FixList() {
           />
         ) : locked ? (
           <LockedResultState />
+        ) : previewComplete ? (
+          <PreviewResultState scanRecord={scanRecord} />
         ) : scanRecord && !hasUsefulScan ? (
           <RequestedScanState
             presentation={durableScanStatePresentation(scanRecord)}
@@ -1530,6 +1538,74 @@ function LockedResultState() {
   );
 }
 
+function PreviewResultState({ scanRecord = {} }) {
+  const teaserItems = Array.isArray(scanRecord.recommendations) ? scanRecord.recommendations.slice(0, 3) : [];
+  const score = getHealthScore(scanRecord);
+  const pagesFound = getPagesFound(scanRecord);
+  const pagesScanned = getPagesScanned(scanRecord, []);
+  const totalFixes = Math.max(Number(scanRecord.total_fixes || 0), teaserItems.length);
+
+  return (
+    <div className="mt-16">
+      <p className="text-[13px] text-ink-faint tabular-nums">
+        Free preview
+        {pagesFound > 0 ? ` · ${formatCount(pagesFound)} pages found` : ""}
+        {pagesScanned > 0 ? ` · ${formatCount(pagesScanned)} checked` : ""}
+      </p>
+
+      <div className="mt-4 flex items-center gap-7">
+        <ScoreRing score={score} unavailable={score === null} />
+        <div>
+          <h1 className="text-[26px] font-semibold leading-tight tracking-tight">Your preview FixList is ready</h1>
+          <p className="mt-1.5 text-[15px] text-ink-muted">
+            {totalFixes > 0
+              ? `${formatCount(totalFixes)} ${totalFixes === 1 ? "issue" : "issues"} found · showing 3 preview items`
+              : "Your scan is complete."}
+          </p>
+        </div>
+      </div>
+
+      {teaserItems.length > 0 ? (
+        <section className="mt-10" aria-labelledby="preview-findings-heading">
+          <div className="flex items-baseline justify-between gap-4">
+            <h2 id="preview-findings-heading" className="text-[20px] font-semibold tracking-tight text-ink">A few things FixList found</h2>
+            <span className="text-[12px] text-ink-faint">Preview only</span>
+          </div>
+          <div className="mt-3 divide-y divide-hairline-soft border-y border-hairline-soft">
+            {teaserItems.map((item, index) => {
+              const title = cleanString(item.issue_title) || `Issue ${index + 1}`;
+              const category = cleanString(item.customer_category);
+              const priority = customerPriorityLabel(item.action_priority || item.priority);
+              const pageCount = Math.max(0, Number(item.page_count || 0));
+              return (
+                <div key={item.id || item.fix_id || `${title}-${index}`} className="py-5">
+                  <h3 className="text-[16px] font-medium tracking-tight text-ink">{title}</h3>
+                  <p className="mt-1 text-[12px] font-medium text-ink-faint">
+                    {[priority, category, pageCount > 0 ? `${formatCount(pageCount)} ${pageCount === 1 ? "page" : "pages"}` : ""].filter(Boolean).join(" · ")}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="mt-10 rounded-2xl border border-hairline-soft bg-white p-6" aria-labelledby="unlock-preview-heading">
+        <h2 id="unlock-preview-heading" className="text-[21px] font-semibold tracking-tight text-ink">Unlock your complete FixList</h2>
+        <p className="mt-2 max-w-[54ch] text-[14px] leading-relaxed text-ink-muted">
+          Pay {UNLOCK_PRICE_LABEL} once to reveal every issue, affected URL, evidence, why it matters, and exactly what to change. Full access also includes exports and unlimited Standard 150 scans.
+        </p>
+        <p className="mt-3 text-[12.5px] leading-relaxed text-ink-faint">
+          The locked details are not sent to this browser until payment is confirmed.
+        </p>
+        <div className="mt-5">
+          <UnlockAccessButton />
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function FixRow({ item, cms, embedded = false, suggestion: suppliedSuggestion }) {
   const [open, setOpen] = useState(embedded);
   // The presentation seam already computed this for canonical rows. Legacy rows
@@ -2342,6 +2418,7 @@ function normalizeDurableScanBundle(bundle = {}) {
     is_authoritative: fixList.is_authoritative === true,
     health_score: run.health_score ?? fixList.health_score ?? null,
     health_grade: run.health_grade || fixList.health_grade || "",
+    total_fixes: Math.max(0, Number(fixList.total_fixes || 0)),
     scan_status: run.scan_status || fixList.scan_status || "",
     score_is_provisional: run.score_is_provisional === true || fixList.score_is_provisional === true,
     no_high_confidence_findings: run.no_high_confidence_findings === true || fixList.no_high_confidence_findings === true,

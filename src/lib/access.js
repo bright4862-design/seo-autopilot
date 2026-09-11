@@ -1,7 +1,7 @@
 import { base44 } from "@/api/base44Client";
 
 export const UNLOCK_PRICE_LABEL = "$100";
-export const LOCKED_PREVIEW_FIX_COUNT = 0;
+export const LOCKED_PREVIEW_FIX_COUNT = 3;
 const OWNER_TEST_EMAIL = "bright4862@gmail.com";
 const OWNER_TEST_USER_ID = "6a498da58ef5cec1f5cd4486";
 
@@ -27,6 +27,24 @@ function isClaimableManualGrant(record, user = {}) {
 
 function claimedAccessRecord(response) {
   return response?.data?.access || response?.data?.data?.access || null;
+}
+
+function isPreviewEligibleAccessRecord(record, user = {}) {
+  if (!record) return true;
+  const email = normalizeEmail(user?.email);
+  const userId = String(user?.id || "").trim();
+  return Boolean(
+    email
+    && userId
+    && normalizeEmail(record.user_email) === email
+    && String(record.owner_user_id || "").trim() === userId
+    && record.access_status === "pending"
+    && record.has_full_access !== true
+    && record.plan_id === "standard150_lifetime"
+    && record.app_id === "6a498732ec779dfaaeab0e53"
+    && record.grant_source === "checkout_pending"
+    && !String(record.paid_at || "").trim()
+  );
 }
 
 export function isActivePaidAccess(record, user = {}) {
@@ -88,13 +106,16 @@ export async function loadAccess() {
     }
   }
   const fullAccess = isActivePaidAccess(record, user);
+  const conflict = rows.length > 1;
+  const previewEligible = !fullAccess && !conflict && isPreviewEligibleAccessRecord(record, user);
 
   return {
     email,
     fullAccess,
+    previewEligible,
     scansUsed: 0,
-    canScan: fullAccess,
+    canScan: fullAccess || previewEligible,
     record,
-    conflict: rows.length > 1,
+    conflict,
   };
 }

@@ -106,6 +106,8 @@ def _scan():
         "normalized_domain": "example.com",
         "attempt_count": 1,
         "status": "running",
+        "respect_robots_txt": True,
+        "owner_attested_robots_override": False,
     }
 
 
@@ -126,7 +128,7 @@ async def test_noneligible_nonlimited_review_never_reaches_authority_persistence
     outcome = await scan_job.complete_authority(
         object(),
         _scan(),
-        {"pages": []},
+        {"pages": [], "respect_robots_txt": True, "owner_attested_robots_override": False},
         "test-signing-key",
         review={
             "release_gate_eligible": False,
@@ -169,7 +171,7 @@ async def test_noneligible_useful_limited_review_still_uses_integrity_path(monke
     outcome = await scan_job.complete_authority(
         object(),
         _scan(),
-        {"pages": []},
+        {"pages": [], "respect_robots_txt": True, "owner_attested_robots_override": False},
         "test-signing-key",
         review=review("limited_coverage", fixes=1, eligible=False),
     )
@@ -211,7 +213,7 @@ async def test_release_eligible_review_keeps_existing_authority_path(monkeypatch
     outcome = await scan_job.complete_authority(
         object(),
         _scan(),
-        {"pages": [], "normalized_domain": "example.com"},
+        {"pages": [], "normalized_domain": "example.com", "respect_robots_txt": True, "owner_attested_robots_override": False},
         "test-signing-key",
         review=eligible,
     )

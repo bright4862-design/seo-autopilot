@@ -9,6 +9,7 @@ from app.robots_policy import (
     load_robots_policy,
     owner_robots_override,
 )
+from app.scan_job import robots_policy_matches
 from app.scanner import run_scan
 
 
@@ -243,3 +244,49 @@ async def test_owner_override_fetches_disallowed_page_but_keeps_googlebot_block_
     assert private["robots_txt_owner_override_applied"] is True
     assert private["robots_txt_fetch_allowed"] is True
     assert private["indexability_state"] == "Blocked by robots.txt"
+
+
+# --- robots policy identity binding on the completion path -------------------
+# robots_policy_matches is the gate that refuses to seal authority when the
+# crawl output does not carry the ScanRun's frozen robots policy. It shipped
+# without direct coverage; these pin the contract, including the fail-closed
+# behaviour for a row that predates the policy fields.
+
+
+def _policy_pair(respect, override):
+    return {"respect_robots_txt": respect, "owner_attested_robots_override": override}
+
+
+def test_robots_policy_matches_accepts_the_default_respecting_pair():
+    scan = _policy_pair(True, False)
+    assert robots_policy_matches(scan, _policy_pair(True, False)) is True
+
+
+def test_robots_policy_matches_accepts_a_consistent_owner_override_pair():
+    scan = _policy_pair(False, True)
+    assert robots_policy_matches(scan, _policy_pair(False, True)) is True
+
+
+def test_robots_policy_matches_refuses_an_override_the_scan_never_froze():
+    scan = _policy_pair(True, False)
+    assert robots_policy_matches(scan, _policy_pair(False, True)) is False
+
+
+def test_robots_policy_matches_refuses_a_result_that_dropped_the_frozen_override():
+    scan = _policy_pair(False, True)
+    assert robots_policy_matches(scan, _policy_pair(True, False)) is False
+
+
+def test_robots_policy_matches_refuses_an_internally_inconsistent_pair():
+    # An override is only meaningful when robots are not being respected, so
+    # neither half may claim a state the other contradicts.
+    assert robots_policy_matches(_policy_pair(True, True), _policy_pair(True, True)) is False
+    assert robots_policy_matches(_policy_pair(False, False), _policy_pair(False, False)) is False
+
+
+def test_robots_policy_matches_fails_closed_when_the_policy_is_absent():
+    # A ScanRun row written before the policy fields existed carries neither
+    # key. The gate refuses it rather than inferring a policy: an absent
+    # attestation must never be read as permission to crawl.
+    assert robots_policy_matches({}, _policy_pair(True, False)) is False
+    assert robots_policy_matches(_policy_pair(True, False), {}) is False

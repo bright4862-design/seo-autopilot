@@ -6,7 +6,7 @@ import {
   enqueueScanJob,
   normalizeAttemptCount,
 } from "./cloudTasks.js";
-import { evaluatePaidAccess, uniqueAccessRows } from "./entitlement.js";
+import { evaluateScanAccess, uniqueAccessRows } from "./entitlement.js";
 import {
   betaScanAdmissionPolicy,
   normalizeAdmissionIdentity,
@@ -90,6 +90,7 @@ const SAFE_RELEASE_FAILURE_CODES = new Set([
 const CUSTOMER_STATUS_DETAIL: Record<string, string> = {
   paid_access_required: "Standard 150 access is required before this scan can start.",
   paid_access_conflict: "Your access record needs support before this scan can start.",
+  preview_scan_used: "Your free preview scan has already been used. Unlock full access for $100 to run another scan and open the complete FixList.",
   durable_worker_not_configured: "The scan worker is not configured yet. No scan was started.",
   invalid_worker_url: "The scan worker is not configured correctly. No scan was started.",
   tasks_credentials_not_configured: "The scan queue is not configured yet. No scan was started.",
@@ -204,7 +205,7 @@ export default async function (req: Request): Promise<Response> {
           ...identity.fields,
         }, context.status);
       }
-      entitlement = await loadPaidEntitlement(base44, user);
+      entitlement = await loadScanEntitlement(base44, user);
       if (!entitlement.ok) {
         const attemptCount = normalizeAttemptCount(context.scan?.attempt_count);
         await failOwnedScanRun({
@@ -282,7 +283,7 @@ export default async function (req: Request): Promise<Response> {
         }, focusedParent.status);
       }
 
-      entitlement = await loadPaidEntitlement(base44, user);
+      entitlement = await loadScanEntitlement(base44, user);
       if (!entitlement.ok) {
         return jsonResponse({
           success: false,
@@ -918,18 +919,42 @@ function validateServerScanContext({ scan, user, project, request, websiteUrl, a
   return { ok: true };
 }
 
-async function loadPaidEntitlement(base44, user) {
+async function loadScanEntitlement(base44, user) {
   const userId = String(user?.id || "").trim();
   const email = String(user?.email || "").trim().toLowerCase();
+  const entities = base44.asServiceRole.entities;
   try {
-    const [byUser, byEmail] = await Promise.all([
-      base44.asServiceRole.entities.Access.filter({ owner_user_id: userId }),
-      base44.asServiceRole.entities.Access.filter({ user_email: email }),
+    const [byUser, byEmail, ownedRuns, legacyRuns] = await Promise.all([
+      entities.Access.filter({ owner_user_id: userId }),
+      entities.Access.filter({ user_email: email }),
+      entities.ScanRun.filter({ owner_user_id: userId }, "-queued_at", 30),
+      entities.ScanRun.filter({ created_by_id: userId }, "-queued_at", 30),
     ]);
-    return evaluatePaidAccess({
-      rows: uniqueAccessRows([...(byUser || []), ...(byEmail || [])]),
-      user,
-    });
+    const priorRuns = Array.from(new Map(
+      [...(ownedRuns || []), ...(legacyRuns || [])]
+        .filter((row) => row?.id)
+        .map((row) => [String(row.id), row]),
+    ).values());
+    let rows = uniqueAccessRows([...(byUser || []), ...(byEmail || [])]);
+    let entitlement = evaluateScanAccess({ rows, user, priorRuns });
+    if (entitlement.ok && entitlement.preview === true && entitlement.needsAccessRecord === true) {
+      await entities.Access.create({
+        user_email: email,
+        owner_user_id: userId,
+        access_status: "pending",
+        plan_id: "standard150_lifetime",
+        grant_source: "checkout_pending",
+        app_id: "6a498732ec779dfaaeab0e53",
+        has_full_access: false,
+      });
+      const [freshByUser, freshByEmail] = await Promise.all([
+        entities.Access.filter({ owner_user_id: userId }),
+        entities.Access.filter({ user_email: email }),
+      ]);
+      rows = uniqueAccessRows([...(freshByUser || []), ...(freshByEmail || [])]);
+      entitlement = evaluateScanAccess({ rows, user, priorRuns });
+    }
+    return entitlement;
   } catch {
     return { ok: false, failureCode: "paid_access_required" };
   }

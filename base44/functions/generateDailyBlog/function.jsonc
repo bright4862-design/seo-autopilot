@@ -1,16 +1,4 @@
 {
   "name": "generateDailyBlog",
-  "entry": "entry.ts",
-  "automations": [
-    {
-      "name": "FixList daily blog",
-      "type": "scheduled",
-      "schedule_mode": "recurring",
-      "schedule_type": "cron",
-      "cron_expression": "0 12 * * *",
-      "description": "Publish one guarded evergreen FixList article every day at 12:00 UTC.",
-      "is_active": true,
-      "ends_type": "never"
-    }
-  ]
+  "entry": "entry.ts"
 }

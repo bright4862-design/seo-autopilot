@@ -331,6 +331,41 @@ test("the canonical gateway source enforces the validation this suite mirrors", 
   assert.doesNotMatch(deploy, /keys create|iam service-accounts keys/);
 });
 
+test("gateway deployment must prove the new revision actually serves", () => {
+  const deploy = readFileSync(new URL("../../scripts/deploy_dispatch_gateway.sh", import.meta.url), "utf8");
+
+  // Traffic pinned by name to an older revision let six consecutive deploys
+  // build correctly, create Ready revisions, and change nothing: the pinned
+  // 2026-08-16 revision kept serving while each deploy exited 0. The gate now
+  // has to observe the running service, never the template it just wrote.
+  assert.match(deploy, /PRE_DEPLOY_REVISION="\$\(serving_revision_from "\$PRE_JSON"\)"/);
+  assert.match(deploy, /latestCreatedRevisionName/);
+  assert.match(deploy, /deploy created no new revision/);
+
+  // Promotion is explicit. A deploy that exits 0 is never taken as evidence
+  // that traffic moved, because with a pinned traffic spec it does not.
+  assert.match(deploy, /gcloud run services update-traffic "\$GATEWAY"/);
+  assert.match(deploy, /--to-revisions="\$\{NEW_REVISION\}=100"/);
+
+  // Serving revision, traffic share, and immutable digest are each asserted
+  // against the live service rather than the desired template.
+  assert.match(deploy, /traffic serves .*not the revision just created/);
+  assert.match(deploy, /expected 100%/);
+  assert.match(deploy, /does not equal the image this deployment built/);
+  assert.match(deploy, /Serving revision FIXLIST_GATEWAY_SOURCE_SHA is/);
+
+  // Runtime identity has to come back from the live process, and the expected
+  // contract version is read out of the deployed source so it cannot drift.
+  assert.match(deploy, /require\("contract_version", value\.get\("contract_version"\), contract_version\)/);
+  assert.match(deploy, /require\("source_sha", value\.get\("source_sha"\), source_sha\)/);
+  assert.match(deploy, /cannot read GATEWAY_CONTRACT_VERSION from source/);
+
+  // The attested SHA is read back off /health. Echoing the input SHA is what
+  // made four weeks of dead deployments look successful.
+  assert.match(deploy, /echo "GATEWAY_SOURCE_SHA=\$RUNTIME_SOURCE_SHA"/);
+  assert.doesNotMatch(deploy, /echo "GATEWAY_SOURCE_SHA=\$SOURCE_SHA"/);
+});
+
 test("without a gateway URL the legacy key route fails closed", async () => {
   await withEnv({}, () =>
     withFetch(() => {

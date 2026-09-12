@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 
-import { RELEASE_FUNCTIONS } from "../../scripts/base44_release_manifest.mjs";
+import {
+  RELEASE_ENTITIES,
+  RELEASE_FUNCTIONS,
+} from "../../scripts/base44_release_manifest.mjs";
 
 /**
  * The manifest, the publish script and the build-ID verifier must name the same
@@ -41,6 +44,28 @@ const unverified = bashArray(DEPLOY, "UNVERIFIED_FUNCTIONS");
 
 test("the deploy script names exactly the manifest's release functions", () => {
   assert.deepEqual([...verified, ...unverified], RELEASE_FUNCTIONS);
+});
+
+test("the public blog publisher is included in the guarded site release", () => {
+  assert.ok(
+    RELEASE_FUNCTIONS.includes("generateDailyBlog"),
+    "generateDailyBlog must be in the release manifest or the guarded publish can omit it",
+  );
+  assert.ok(
+    unverified.includes("generateDailyBlog"),
+    "generateDailyBlog has no build-ID probe and must be deployed in the explicit unverified set",
+  );
+  assert.ok(
+    !verified.includes("generateDailyBlog"),
+    "generateDailyBlog must not be claimed build-ID verified without a runtime identity probe",
+  );
+});
+
+test("the BlogPost schema is covered by the deterministic release manifest", () => {
+  assert.ok(
+    RELEASE_ENTITIES.includes("BlogPost"),
+    "BlogPost must be included so production verification detects schema drift or absence",
+  );
 });
 
 test("every deployed function is checked present in the post-deploy inventory", () => {

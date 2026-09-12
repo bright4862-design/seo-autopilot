@@ -339,8 +339,19 @@ test("gateway deployment must prove the new revision actually serves", () => {
   // 2026-08-16 revision kept serving while each deploy exited 0. The gate now
   // has to observe the running service, never the template it just wrote.
   assert.match(deploy, /PRE_DEPLOY_REVISION="\$\(serving_revision_from "\$PRE_JSON"\)"/);
-  assert.match(deploy, /latestCreatedRevisionName/);
-  assert.match(deploy, /deploy created no new revision/);
+
+  // The revision name is reserved before the build, never read back afterwards.
+  // latestCreatedRevisionName names whichever revision is newest on the
+  // service, so a second deployment landing in between would hand this run a
+  // revision it never built, to promote and attest as its own.
+  assert.match(deploy, /--plan-revision/);
+  assert.match(deploy, /--revision-suffix="\$REVISION_SUFFIX"/);
+  assert.match(deploy, /reserved revision \$NEW_REVISION already exists/);
+  assert.match(deploy, /--created-revision-json "\$CREATED_JSON"/);
+  // Comments stripped: the script explains this trap at length, and only the
+  // executable lines are allowed to fall into it.
+  const executable = deploy.replace(/^\s*#.*$/gm, "");
+  assert.doesNotMatch(executable, /latestCreatedRevisionName/);
 
   // Promotion is explicit. A deploy that exits 0 is never taken as evidence
   // that traffic moved, because with a pinned traffic spec it does not.

@@ -46,7 +46,8 @@ GATEWAY_JSON="$(mktemp)"
 HEALTH_JSON="$(mktemp)"
 PRE_JSON="$(mktemp)"
 REVISION_JSON="$(mktemp)"
-trap 'rm -f "$WORKER_JSON" "$GATEWAY_JSON" "$HEALTH_JSON" "$PRE_JSON" "$REVISION_JSON"' EXIT
+CREATED_JSON="$(mktemp)"
+trap 'rm -f "$WORKER_JSON" "$GATEWAY_JSON" "$HEALTH_JSON" "$PRE_JSON" "$REVISION_JSON" "$CREATED_JSON"' EXIT
 
 # Reads the revision that actually holds traffic, not the desired template.
 # spec.template is whatever the last deploy asked for; status.traffic is what
@@ -126,11 +127,39 @@ else
 fi
 
 echo
+echo "=== Reserve this deployment's revision name ==="
+# Cloud Run names a revision <service>-<suffix>. Reading that name back after
+# the deploy, from status.latestCreatedRevisionName, returns whichever revision
+# is newest on the service -- and nothing stops a second deployment (a direct
+# script call, another principal) from creating one in between. This run would
+# then promote and attest a revision it never built. The name is instead
+# reserved here, before anything is built, and Cloud Run refuses to reuse it,
+# so the promoted revision can only be this invocation's.
+REVISION_SUFFIX="g${SOURCE_SHA:0:8}-$(date -u +%Y%m%d%H%M%S)-$(python3 -c 'import secrets; print(secrets.token_hex(3))')"
+NEW_REVISION="$(python3 "$REPO_ROOT/scripts/verify_gateway_deployment.py" \
+  --plan-revision \
+  --service "$GATEWAY" \
+  --revision-suffix "$REVISION_SUFFIX" | sed -n 's/^planned_revision=//p')"
+if [[ -z "$NEW_REVISION" ]]; then
+  echo "Refusing gateway deployment: could not reserve a revision name." >&2
+  exit 2
+fi
+echo "reserved_revision=$NEW_REVISION"
+
+if gcloud run revisions describe "$NEW_REVISION" \
+  --project="$PROJECT" \
+  --region="$REGION" >/dev/null 2>&1; then
+  echo "Refusing gateway deployment: reserved revision $NEW_REVISION already exists." >&2
+  exit 2
+fi
+
+echo
 echo "=== Deploy canonical keyless gateway ==="
 gcloud run deploy "$GATEWAY" \
   --project="$PROJECT" \
   --region="$REGION" \
   --source="$SOURCE_DIR" \
+  --revision-suffix="$REVISION_SUFFIX" \
   --build-service-account="$BUILD_SA_RESOURCE" \
   --service-account="$DISPATCHER_SA" \
   "${PUBLIC_ARGS[@]}" \
@@ -147,25 +176,18 @@ gcloud run deploy "$GATEWAY" \
 
 echo
 echo "=== Promote the exact revision this deployment created ==="
-gcloud run services describe "$GATEWAY" \
+gcloud run revisions describe "$NEW_REVISION" \
   --project="$PROJECT" \
   --region="$REGION" \
-  --format=json > "$GATEWAY_JSON"
+  --format=json > "$CREATED_JSON"
 
-NEW_REVISION="$(python3 -c 'import json,sys
-service = json.load(open(sys.argv[1], encoding="utf-8"))
-print(str(service.get("status", {}).get("latestCreatedRevisionName") or ""))' "$GATEWAY_JSON")"
-
-if [[ -z "$NEW_REVISION" ]]; then
-  echo "Refusing gateway deployment: no latestCreatedRevisionName after deploy." >&2
-  exit 2
-fi
-echo "created_revision=$NEW_REVISION"
-
-if [[ -n "$PRE_DEPLOY_REVISION" && "$NEW_REVISION" == "$PRE_DEPLOY_REVISION" ]]; then
-  echo "Refusing gateway deployment: deploy created no new revision (still $NEW_REVISION)." >&2
-  exit 2
-fi
+# The reserved name resolves to a Ready revision carrying this deployment's
+# source SHA, so what is about to be promoted is the revision this run built --
+# not whichever revision happens to be newest on the service.
+python3 "$REPO_ROOT/scripts/verify_gateway_deployment.py" \
+  --created-revision-json "$CREATED_JSON" \
+  --expected-revision "$NEW_REVISION" \
+  --expected-source-sha "$SOURCE_SHA"
 
 # The traffic spec can be pinned by name to an older revision. While it is,
 # gcloud run deploy builds correctly, creates a Ready revision, routes nothing

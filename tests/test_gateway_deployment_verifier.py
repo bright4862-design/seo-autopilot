@@ -26,8 +26,12 @@ verifier = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(verifier)
 
 
-NEW_REVISION = "fixlist-dispatch-gateway-00014-abc"
+NEW_REVISION = "fixlist-dispatch-gateway-g8a833143-20260912220236-a1b2c3"
 OLD_REVISION = "fixlist-dispatch-gateway-00005-xt8"
+# A revision another deployment created on the same service, concurrently.
+FOREIGN_REVISION = "fixlist-dispatch-gateway-00015-def"
+SERVICE_NAME = "fixlist-dispatch-gateway"
+REVISION_SUFFIX = "g8a833143-20260912220236-a1b2c3"
 SOURCE_SHA = "8a833143ef9ee9f8c7e4aa98399bec4b94b6193e"
 CONTRACT_VERSION = "dispatch_gateway_robots_policy_diag_v1"
 DIGEST = (
@@ -39,16 +43,23 @@ DRAIN_QUEUE = "projects/seo-autopilot-501517/locations/europe-west1/queues/fixli
 WORKER_ORIGIN = "https://fixlist-standard150-worker-tpucgyfewa-ew.a.run.app"
 
 
-def service(serving=NEW_REVISION, percent=100, template_image=DIGEST):
+def service(serving=NEW_REVISION, percent=100, template_image=DIGEST, latest_created=None):
     return {
         "spec": {"template": {"spec": {"containers": [{"image": template_image}]}}},
-        "status": {"traffic": [{"percent": percent, "revisionName": serving}]},
+        "status": {
+            "traffic": [{"percent": percent, "revisionName": serving}],
+            "latestCreatedRevisionName": latest_created or serving,
+        },
     }
 
 
-def revision(digest=DIGEST, source_sha=SOURCE_SHA):
+def revision(digest=DIGEST, source_sha=SOURCE_SHA, name=NEW_REVISION, ready="True", reason=None):
     return {
-        "status": {"imageDigest": digest},
+        "metadata": {"name": name},
+        "status": {
+            "imageDigest": digest,
+            "conditions": [{"type": "Ready", "status": ready, "reason": reason}],
+        },
         "spec": {
             "containers": [
                 {"env": [{"name": "FIXLIST_GATEWAY_SOURCE_SHA", "value": source_sha}]}
@@ -112,6 +123,106 @@ def test_health_without_a_revision_field_is_refused():
     del payload["revision"]
     with pytest.raises(verifier.VerificationError):
         check_health(payload)
+
+
+# --- a concurrent deployment must not be mistaken for this one ---------------
+
+
+def test_a_revision_created_by_another_deployment_is_never_promoted():
+    # A second deploy lands between this one finishing and the service being
+    # read back, so latestCreatedRevisionName -- and the traffic that second
+    # deploy then took -- both name a revision this run never built. The gate
+    # must refuse rather than attest the foreign revision.
+    concurrent = service(serving=FOREIGN_REVISION, latest_created=FOREIGN_REVISION)
+    assert concurrent["status"]["latestCreatedRevisionName"] == FOREIGN_REVISION
+    with pytest.raises(verifier.VerificationError) as caught:
+        verifier.verify_control_plane(concurrent, revision(), NEW_REVISION, SOURCE_SHA)
+    assert FOREIGN_REVISION in str(caught.value)
+    assert NEW_REVISION in str(caught.value)
+
+
+def test_serving_revision_ignores_latest_created():
+    # The newest revision on a service is not necessarily one this deployment
+    # made. Only traffic decides, so a foreign latestCreatedRevisionName must
+    # not change what this reads.
+    assert (
+        verifier.serving_revision(
+            service(serving=NEW_REVISION, latest_created=FOREIGN_REVISION)
+        )
+        == NEW_REVISION
+    )
+
+
+def test_a_created_revision_under_a_foreign_name_is_refused():
+    with pytest.raises(verifier.VerificationError) as caught:
+        verifier.verify_created_revision(
+            revision(name=FOREIGN_REVISION), NEW_REVISION, SOURCE_SHA
+        )
+    assert FOREIGN_REVISION in str(caught.value)
+    assert "reserved" in str(caught.value)
+
+
+def test_the_reserved_revision_is_accepted_once_ready():
+    proven = verifier.verify_created_revision(revision(), NEW_REVISION, SOURCE_SHA)
+    assert proven == {"created_revision": NEW_REVISION}
+
+
+def test_a_reserved_revision_that_never_became_ready_is_refused():
+    with pytest.raises(verifier.VerificationError) as caught:
+        verifier.verify_created_revision(
+            revision(ready="False", reason="ContainerHealthCheckFailed"),
+            NEW_REVISION,
+            SOURCE_SHA,
+        )
+    assert "not Ready" in str(caught.value)
+    assert "ContainerHealthCheckFailed" in str(caught.value)
+
+
+def test_a_reserved_revision_missing_its_ready_condition_is_refused():
+    stale = revision()
+    stale["status"]["conditions"] = []
+    with pytest.raises(verifier.VerificationError):
+        verifier.verify_created_revision(stale, NEW_REVISION, SOURCE_SHA)
+
+
+def test_a_reserved_revision_built_from_another_commit_is_refused():
+    with pytest.raises(verifier.VerificationError) as caught:
+        verifier.verify_created_revision(
+            revision(source_sha="7eaef7b98547e8f33a6c5674883fc970dcfa4a41"),
+            NEW_REVISION,
+            SOURCE_SHA,
+        )
+    assert "FIXLIST_GATEWAY_SOURCE_SHA" in str(caught.value)
+
+
+# --- the revision name is decided before the deploy, not read back after -----
+
+
+def test_planned_revision_is_the_service_name_joined_to_the_suffix():
+    assert verifier.plan_revision(SERVICE_NAME, REVISION_SUFFIX) == NEW_REVISION
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "",
+        "-leading-dash",
+        "trailing-dash-",
+        "Upper8a833143",
+        "under_score",
+        "has space",
+        "a" * 64,
+    ],
+)
+def test_planned_revision_refuses_a_suffix_cloud_run_would_reject(suffix):
+    with pytest.raises(verifier.VerificationError):
+        verifier.plan_revision(SERVICE_NAME, suffix)
+
+
+def test_planned_revision_refuses_a_name_over_the_cloud_run_limit():
+    with pytest.raises(verifier.VerificationError) as caught:
+        verifier.plan_revision("a" * 40, REVISION_SUFFIX)
+    assert "63" in str(caught.value)
 
 
 # --- the four-week failure this whole gate exists for ------------------------
@@ -226,6 +337,35 @@ def test_cli_exits_zero_on_a_genuine_deployment(tmp_path, capsys):
     ])
     assert (control, runtime) == (0, 0)
     assert f"runtime_revision={NEW_REVISION}" in capsys.readouterr().out
+
+
+def test_cli_plans_a_revision_without_reading_any_service_state(capsys):
+    assert verifier.main([
+        "--plan-revision",
+        "--service", SERVICE_NAME,
+        "--revision-suffix", REVISION_SUFFIX,
+    ]) == 0
+    assert capsys.readouterr().out == f"planned_revision={NEW_REVISION}\n"
+
+
+def test_cli_exits_non_zero_for_an_unusable_revision_suffix(capsys):
+    assert verifier.main([
+        "--plan-revision",
+        "--service", SERVICE_NAME,
+        "--revision-suffix", "Not Valid",
+    ]) == 2
+    assert "Refusing gateway deployment" in capsys.readouterr().err
+
+
+def test_cli_exits_non_zero_when_the_created_revision_is_foreign(tmp_path, capsys):
+    code = verifier.main([
+        "--created-revision-json",
+        _write(tmp_path, "c.json", revision(name=FOREIGN_REVISION)),
+        "--expected-revision", NEW_REVISION,
+        "--expected-source-sha", SOURCE_SHA,
+    ])
+    assert code == 2
+    assert FOREIGN_REVISION in capsys.readouterr().err
 
 
 def test_cli_exits_non_zero_when_traffic_never_moved(tmp_path):

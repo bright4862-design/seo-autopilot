@@ -2,22 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 
-import {
-  RELEASE_ENTITIES,
-  RELEASE_FUNCTIONS,
-} from "../../scripts/base44_release_manifest.mjs";
+import { RELEASE_FUNCTIONS } from "../../scripts/base44_release_manifest.mjs";
 
 /**
- * The manifest, the publish script and the build-ID verifier must name the same
- * functions.
- *
- * They are hand-maintained lists of the same thing. A package added to the
- * manifest but not to the deploy script passes every local gate and is then
- * simply never deployed -- production keeps serving an app that has no such
- * function, and the failure only shows up as a customer-facing 404 at runtime.
- * A function deployed but absent from the verifier is worse: it is reported
- * published while the runtime may still serve an older compiled handler, which
- * is precisely how the 2026-08/09 Standard 150 outage stayed invisible.
+ * Standard 150 keeps its existing deterministic release manifest. The public
+ * blog publisher is deliberately separate from that runtime-identity contract:
+ * it is still deployed by the guarded site publisher, but remains in the
+ * unverified set until it has its own build-ID/runtime probe.
  */
 
 const DEPLOY = readFileSync(
@@ -27,6 +18,9 @@ const DEPLOY = readFileSync(
 const VERIFIER = readFileSync(
   new URL("../../scripts/verify-base44-functions.sh", import.meta.url),
   "utf8",
+);
+const BLOG_SCHEMA = JSON.parse(
+  readFileSync(new URL("../../base44/entities/BlogPost.jsonc", import.meta.url), "utf8"),
 );
 
 function bashArray(source, name) {
@@ -41,50 +35,50 @@ function bashArray(source, name) {
 
 const verified = bashArray(DEPLOY, "VERIFIED_FUNCTIONS");
 const unverified = bashArray(DEPLOY, "UNVERIFIED_FUNCTIONS");
+const deployed = [...verified, ...unverified];
 
-test("the deploy script names exactly the manifest's release functions", () => {
-  assert.deepEqual([...verified, ...unverified], RELEASE_FUNCTIONS);
+test("the guarded site deploy still covers every Standard 150 release function", () => {
+  assert.deepEqual(
+    deployed.filter((name) => name !== "generateDailyBlog"),
+    RELEASE_FUNCTIONS,
+  );
 });
 
-test("the public blog publisher is included in the guarded site release", () => {
-  assert.ok(
-    RELEASE_FUNCTIONS.includes("generateDailyBlog"),
-    "generateDailyBlog must be in the release manifest or the guarded publish can omit it",
-  );
+test("the public blog publisher is explicitly deployed without pretending it is build-ID verified", () => {
   assert.ok(
     unverified.includes("generateDailyBlog"),
-    "generateDailyBlog has no build-ID probe and must be deployed in the explicit unverified set",
+    "generateDailyBlog must be in the explicit unverified set so site publish cannot omit it",
   );
   assert.ok(
     !verified.includes("generateDailyBlog"),
-    "generateDailyBlog must not be claimed build-ID verified without a runtime identity probe",
+    "generateDailyBlog must not be called build-ID verified without a runtime identity probe",
+  );
+  assert.equal(
+    deployed.filter((name) => name === "generateDailyBlog").length,
+    1,
+    "generateDailyBlog should be deployed exactly once in the composed inventory",
   );
 });
 
-test("the BlogPost schema is covered by the deterministic release manifest", () => {
-  assert.ok(
-    RELEASE_ENTITIES.includes("BlogPost"),
-    "BlogPost must be included so production verification detects schema drift or absence",
-  );
+test("the BlogPost schema is public-read and admin-write", () => {
+  assert.equal(BLOG_SCHEMA.name, "BlogPost");
+  assert.equal(BLOG_SCHEMA.rls?.read, true);
+  assert.deepEqual(BLOG_SCHEMA.rls?.create, { user_condition: { role: "admin" } });
+  assert.deepEqual(BLOG_SCHEMA.rls?.update, { user_condition: { role: "admin" } });
+  assert.deepEqual(BLOG_SCHEMA.rls?.delete, { user_condition: { role: "admin" } });
 });
 
 test("every deployed function is checked present in the post-deploy inventory", () => {
-  // The loop iterates the composed array rather than a second hand-written
-  // list, so a function cannot be deployed and left out of the check.
   assert.match(DEPLOY, /FUNCTIONS=\("\$\{VERIFIED_FUNCTIONS\[@\]\}" "\$\{UNVERIFIED_FUNCTIONS\[@\]\}"\)/);
   assert.match(DEPLOY, /for required in "\$\{FUNCTIONS\[@\]\}"; do/);
 });
 
 test("every function the deploy script calls verified is probed by the verifier", () => {
-  // The verifier used to carry "canonical:alias" pairs so it could resolve an
-  // alias's expected build ID itself. That resolution moved into the generator,
-  // which is the only place that knows the alias table, so the list is now the
-  // live route names alone.
   const probed = bashArray(VERIFIER, "FUNCTION_ROUTES").map((name) => name.replace(/^"|"$/g, ""));
   assert.deepEqual(probed, verified);
 });
 
-test("the routes the customer path depends on are all in the verified set", () => {
+test("the routes the customer scan path depends on are all in the verified set", () => {
   const routes = JSON.parse(
     readFileSync(new URL("../../data/base44-function-routes.json", import.meta.url), "utf8"),
   );

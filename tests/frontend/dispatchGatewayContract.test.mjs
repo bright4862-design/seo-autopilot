@@ -331,6 +331,68 @@ test("the canonical gateway source enforces the validation this suite mirrors", 
   assert.doesNotMatch(deploy, /keys create|iam service-accounts keys/);
 });
 
+test("gateway deployment must prove the new revision actually serves", () => {
+  const deploy = readFileSync(new URL("../../scripts/deploy_dispatch_gateway.sh", import.meta.url), "utf8");
+
+  // Traffic pinned by name to an older revision let six consecutive deploys
+  // build correctly, create Ready revisions, and change nothing: the pinned
+  // 2026-08-16 revision kept serving while each deploy exited 0. The gate now
+  // has to observe the running service, never the template it just wrote.
+  assert.match(deploy, /PRE_DEPLOY_REVISION="\$\(serving_revision_from "\$PRE_JSON"\)"/);
+
+  // The revision name is reserved before the build, never read back afterwards.
+  // latestCreatedRevisionName names whichever revision is newest on the
+  // service, so a second deployment landing in between would hand this run a
+  // revision it never built, to promote and attest as its own.
+  assert.match(deploy, /--plan-revision/);
+  assert.match(deploy, /--revision-suffix="\$REVISION_SUFFIX"/);
+  assert.match(deploy, /reserved revision \$NEW_REVISION already exists/);
+  assert.match(deploy, /--created-revision-json "\$CREATED_JSON"/);
+  // Comments stripped: the script explains this trap at length, and only the
+  // executable lines are allowed to fall into it.
+  const executable = deploy.replace(/^\s*#.*$/gm, "");
+  assert.doesNotMatch(executable, /latestCreatedRevisionName/);
+
+  // Promotion is explicit. A deploy that exits 0 is never taken as evidence
+  // that traffic moved, because with a pinned traffic spec it does not.
+  assert.match(deploy, /gcloud run services update-traffic "\$GATEWAY"/);
+  assert.match(deploy, /--to-revisions="\$\{NEW_REVISION\}=100"/);
+
+  // Both verification phases run through the shared verifier, whose behaviour
+  // is covered by fixtures in tests/test_gateway_deployment_verifier.py.
+  assert.match(deploy, /scripts\/verify_gateway_deployment\.py/);
+  assert.match(deploy, /--service-json "\$GATEWAY_JSON"/);
+  assert.match(deploy, /--revision-json "\$REVISION_JSON"/);
+  assert.match(deploy, /--health-json "\$HEALTH_JSON"/);
+  assert.match(deploy, /--expected-revision "\$NEW_REVISION"/);
+  assert.match(deploy, /--expected-source-sha "\$SOURCE_SHA"/);
+
+  // The customer-facing untagged URL can answer from the revision being
+  // drained, so the runtime probe retries to a deadline and then fails.
+  assert.match(deploy, /\$GATEWAY_URL\/health/);
+  assert.match(deploy, /GATEWAY_HEALTH_TIMEOUT_SECONDS/);
+  assert.match(deploy, /never settled on \$NEW_REVISION/);
+  assert.match(deploy, /RUNTIME_REVISION" != "\$NEW_REVISION"/);
+
+  // The expected contract version is read out of the deployed source so the
+  // assertion cannot drift from the code it proves.
+  assert.match(deploy, /cannot read GATEWAY_CONTRACT_VERSION from source/);
+
+  // The attested SHA and revision are read back off /health. Echoing the input
+  // SHA is what made four weeks of dead deployments look successful.
+  assert.match(deploy, /echo "GATEWAY_SOURCE_SHA=\$RUNTIME_SOURCE_SHA"/);
+  assert.match(deploy, /echo "GATEWAY_RUNTIME_REVISION=\$RUNTIME_REVISION"/);
+  assert.doesNotMatch(deploy, /echo "GATEWAY_SOURCE_SHA=\$SOURCE_SHA"/);
+});
+
+test("the gateway reports the revision executing the request", () => {
+  const gateway = readFileSync(new URL("../../dispatch-gateway/main.py", import.meta.url), "utf8");
+  // From the container, never the request: a caller must not be able to claim
+  // to be a revision it is not.
+  assert.match(gateway, /GATEWAY_RUNTIME_REVISION = os\.environ\.get\("K_REVISION", ""\)/);
+  assert.match(gateway, /"revision": GATEWAY_RUNTIME_REVISION/);
+});
+
 test("without a gateway URL the legacy key route fails closed", async () => {
   await withEnv({}, () =>
     withFetch(() => {

@@ -21,6 +21,12 @@ GATEWAY_CONTRACT_VERSION = "dispatch_gateway_robots_policy_diag_v1"
 GATEWAY_SOURCE_SHA = os.environ.get("FIXLIST_GATEWAY_SOURCE_SHA", "").strip()
 if not re.fullmatch(r"[0-9a-f]{40}", GATEWAY_SOURCE_SHA):
     GATEWAY_SOURCE_SHA = "unknown"
+# The revision actually executing this process. Cloud Run sets K_REVISION in
+# the container; it is never read from the request, so a caller cannot claim to
+# be a revision it is not. source_sha alone cannot prove which revision
+# answered: two revisions built from the same commit report the same SHA, so
+# during traffic propagation an older one can satisfy every other field.
+GATEWAY_RUNTIME_REVISION = os.environ.get("K_REVISION", "").strip() or "unknown"
 ROBOTS_POLICY_STATUS = {
     "robots_policy_missing": 422,
     "robots_policy_type": 400,
@@ -182,6 +188,7 @@ def health():
         "service": "fixlist-dispatch-gateway",
         "contract_version": GATEWAY_CONTRACT_VERSION,
         "source_sha": GATEWAY_SOURCE_SHA,
+        "revision": GATEWAY_RUNTIME_REVISION,
         "queue": QUEUE_PATH,
         "drain_queue": DRAIN_QUEUE_PATH,
         "worker_origin": WORKER_ORIGIN,

@@ -44,7 +44,25 @@ gcloud config set project "$PROJECT" >/dev/null
 WORKER_JSON="$(mktemp)"
 GATEWAY_JSON="$(mktemp)"
 HEALTH_JSON="$(mktemp)"
-trap 'rm -f "$WORKER_JSON" "$GATEWAY_JSON" "$HEALTH_JSON"' EXIT
+PRE_JSON="$(mktemp)"
+REVISION_JSON="$(mktemp)"
+CREATED_JSON="$(mktemp)"
+trap 'rm -f "$WORKER_JSON" "$GATEWAY_JSON" "$HEALTH_JSON" "$PRE_JSON" "$REVISION_JSON" "$CREATED_JSON"' EXIT
+
+# Reads the revision that actually holds traffic, not the desired template.
+# spec.template is whatever the last deploy asked for; status.traffic is what
+# customers reach. Conflating the two let a August revision serve for weeks
+# while every deploy reported success.
+serving_revision_from() {
+  python3 -c 'import json,sys
+service = json.load(open(sys.argv[1], encoding="utf-8"))
+best_name, best_percent = "", -1
+for item in (service.get("status", {}).get("traffic") or []):
+    percent = int(item.get("percent") or 0)
+    if percent > best_percent:
+        best_name, best_percent = str(item.get("revisionName") or ""), percent
+print(best_name)' "$1"
+}
 
 echo "=== Resolve immutable live worker inputs ==="
 gcloud run services describe "$WORKER" \
@@ -96,13 +114,43 @@ echo "source_sha=$SOURCE_SHA"
 # service exists, the exact public-invoker annotation is preserved and future
 # WIF deployments need only service-scoped Cloud Run Developer access.
 PUBLIC_ARGS=()
+PRE_DEPLOY_REVISION=""
 if gcloud run services describe "$GATEWAY" \
   --project="$PROJECT" \
-  --region="$REGION" >/dev/null 2>&1; then
+  --region="$REGION" --format=json > "$PRE_JSON" 2>/dev/null; then
   echo "Existing gateway detected; preserving its current invoker-IAM setting."
+  PRE_DEPLOY_REVISION="$(serving_revision_from "$PRE_JSON")"
+  echo "pre_deploy_serving_revision=${PRE_DEPLOY_REVISION:-<none>}"
 else
   echo "Gateway does not exist; creating it with the Invoker IAM check disabled."
   PUBLIC_ARGS+=(--no-invoker-iam-check)
+fi
+
+echo
+echo "=== Reserve this deployment's revision name ==="
+# Cloud Run names a revision <service>-<suffix>. Reading that name back after
+# the deploy, from status.latestCreatedRevisionName, returns whichever revision
+# is newest on the service -- and nothing stops a second deployment (a direct
+# script call, another principal) from creating one in between. This run would
+# then promote and attest a revision it never built. The name is instead
+# reserved here, before anything is built, and Cloud Run refuses to reuse it,
+# so the promoted revision can only be this invocation's.
+REVISION_SUFFIX="g${SOURCE_SHA:0:8}-$(date -u +%Y%m%d%H%M%S)-$(python3 -c 'import secrets; print(secrets.token_hex(3))')"
+NEW_REVISION="$(python3 "$REPO_ROOT/scripts/verify_gateway_deployment.py" \
+  --plan-revision \
+  --service "$GATEWAY" \
+  --revision-suffix "$REVISION_SUFFIX" | sed -n 's/^planned_revision=//p')"
+if [[ -z "$NEW_REVISION" ]]; then
+  echo "Refusing gateway deployment: could not reserve a revision name." >&2
+  exit 2
+fi
+echo "reserved_revision=$NEW_REVISION"
+
+if gcloud run revisions describe "$NEW_REVISION" \
+  --project="$PROJECT" \
+  --region="$REGION" >/dev/null 2>&1; then
+  echo "Refusing gateway deployment: reserved revision $NEW_REVISION already exists." >&2
+  exit 2
 fi
 
 echo
@@ -111,6 +159,7 @@ gcloud run deploy "$GATEWAY" \
   --project="$PROJECT" \
   --region="$REGION" \
   --source="$SOURCE_DIR" \
+  --revision-suffix="$REVISION_SUFFIX" \
   --build-service-account="$BUILD_SA_RESOURCE" \
   --service-account="$DISPATCHER_SA" \
   "${PUBLIC_ARGS[@]}" \
@@ -126,11 +175,42 @@ gcloud run deploy "$GATEWAY" \
   --quiet
 
 echo
+echo "=== Promote the exact revision this deployment created ==="
+gcloud run revisions describe "$NEW_REVISION" \
+  --project="$PROJECT" \
+  --region="$REGION" \
+  --format=json > "$CREATED_JSON"
+
+# The reserved name resolves to a Ready revision carrying this deployment's
+# source SHA, so what is about to be promoted is the revision this run built --
+# not whichever revision happens to be newest on the service.
+python3 "$REPO_ROOT/scripts/verify_gateway_deployment.py" \
+  --created-revision-json "$CREATED_JSON" \
+  --expected-revision "$NEW_REVISION" \
+  --expected-source-sha "$SOURCE_SHA"
+
+# The traffic spec can be pinned by name to an older revision. While it is,
+# gcloud run deploy builds correctly, creates a Ready revision, routes nothing
+# to it, and Cloud Run retires it seconds later -- while the pinned revision
+# keeps serving and the deploy still exits 0. Promotion is therefore explicit
+# and is never inferred from a successful deploy.
+gcloud run services update-traffic "$GATEWAY" \
+  --project="$PROJECT" \
+  --region="$REGION" \
+  --to-revisions="${NEW_REVISION}=100" \
+  --quiet
+
+echo
 echo "=== Verify deployed gateway ==="
 gcloud run services describe "$GATEWAY" \
   --project="$PROJECT" \
   --region="$REGION" \
   --format=json > "$GATEWAY_JSON"
+
+gcloud run revisions describe "$NEW_REVISION" \
+  --project="$PROJECT" \
+  --region="$REGION" \
+  --format=json > "$REVISION_JSON"
 
 GATEWAY_URL="$(python3 - "$GATEWAY_JSON" "$DISPATCHER_SA" "$QUEUE_PATH" "$DRAIN_QUEUE_PATH" "$WORKER_URL" "$INVOKER_SA" "$SOURCE_SHA" "$SIGNING_SECRET" "$SIGNING_VERSION" <<'PY'
 import json, sys
@@ -170,21 +250,82 @@ PY
 )"
 
 test -n "$GATEWAY_URL"
-curl --fail --silent --show-error --retry 12 --retry-delay 3 --max-time 20 \
-  "$GATEWAY_URL/health" > "$HEALTH_JSON"
-python3 - "$HEALTH_JSON" "$QUEUE_PATH" "$DRAIN_QUEUE_PATH" "$WORKER_ORIGIN" <<'PY'
-import json, sys
-path, queue_path, drain_queue_path, worker_origin = sys.argv[1:]
-with open(path, encoding='utf-8') as handle:
-    value = json.load(handle)
-assert value.get('ok') is True
-assert value.get('service') == 'fixlist-dispatch-gateway'
-assert value.get('queue') == queue_path
-assert value.get('drain_queue') == drain_queue_path
-assert value.get('worker_origin') == worker_origin
-print('Gateway health contract verified.')
-PY
+
+SERVING_REVISION="$(serving_revision_from "$GATEWAY_JSON")"
+
+# Control plane: what Cloud Run has been told. Deterministic the moment the
+# promotion returns, so a failure here is final rather than retried.
+python3 "$REPO_ROOT/scripts/verify_gateway_deployment.py" \
+  --service-json "$GATEWAY_JSON" \
+  --revision-json "$REVISION_JSON" \
+  --expected-revision "$NEW_REVISION" \
+  --expected-source-sha "$SOURCE_SHA"
+
+# Pinned to the constant the deployed source declares, so the assertion cannot
+# drift from the code it is meant to prove.
+EXPECTED_CONTRACT_VERSION="$(python3 -c 'import re,sys
+src = open(sys.argv[1], encoding="utf-8").read()
+found = re.search(r"^GATEWAY_CONTRACT_VERSION\s*=\s*\"([^\"]+)\"", src, re.M)
+print(found.group(1) if found else "")' "$SOURCE_DIR/main.py")"
+if [[ -z "$EXPECTED_CONTRACT_VERSION" ]]; then
+  echo "Refusing gateway deployment: cannot read GATEWAY_CONTRACT_VERSION from source." >&2
+  exit 2
+fi
+
+# Runtime: what a customer actually gets from the untagged service URL. That is
+# the real customer route, and while traffic propagates it can still be
+# answered by the revision being drained. Every other health field is identical
+# across two revisions built from the same commit -- source_sha included -- so
+# the executing revision is the only field that settles which one replied.
+# Propagation is a race, so retry to a deadline and fail if it never settles.
+GATEWAY_HEALTH_TIMEOUT_SECONDS="${GATEWAY_HEALTH_TIMEOUT_SECONDS:-180}"
+HEALTH_DEADLINE=$(( SECONDS + GATEWAY_HEALTH_TIMEOUT_SECONDS ))
+HEALTH_PROVEN=""
+while :; do
+  if curl --fail --silent --show-error --max-time 20 "$GATEWAY_URL/health" > "$HEALTH_JSON" 2>/dev/null; then
+    if HEALTH_PROVEN="$(python3 "$REPO_ROOT/scripts/verify_gateway_deployment.py" \
+      --health-json "$HEALTH_JSON" \
+      --expected-revision "$NEW_REVISION" \
+      --expected-source-sha "$SOURCE_SHA" \
+      --expected-contract-version "$EXPECTED_CONTRACT_VERSION" \
+      --queue-path "$QUEUE_PATH" \
+      --drain-queue-path "$DRAIN_QUEUE_PATH" \
+      --worker-origin "$WORKER_ORIGIN" 2>/dev/null)"; then
+      break
+    fi
+  fi
+  if (( SECONDS >= HEALTH_DEADLINE )); then
+    echo "Refusing gateway deployment: /health never settled on $NEW_REVISION within ${GATEWAY_HEALTH_TIMEOUT_SECONDS}s." >&2
+    echo "Last /health response:" >&2
+    cat "$HEALTH_JSON" >&2 2>/dev/null || true
+    echo >&2
+    python3 "$REPO_ROOT/scripts/verify_gateway_deployment.py" \
+      --health-json "$HEALTH_JSON" \
+      --expected-revision "$NEW_REVISION" \
+      --expected-source-sha "$SOURCE_SHA" \
+      --expected-contract-version "$EXPECTED_CONTRACT_VERSION" \
+      --queue-path "$QUEUE_PATH" \
+      --drain-queue-path "$DRAIN_QUEUE_PATH" \
+      --worker-origin "$WORKER_ORIGIN" >&2 || true
+    exit 2
+  fi
+  sleep 3
+done
+printf '%s\n' "$HEALTH_PROVEN"
+
+RUNTIME_REVISION="$(printf '%s\n' "$HEALTH_PROVEN" | sed -n 's/^runtime_revision=//p')"
+RUNTIME_SOURCE_SHA="$(printf '%s\n' "$HEALTH_PROVEN" | sed -n 's/^runtime_source_sha=//p')"
+if [[ "$RUNTIME_REVISION" != "$NEW_REVISION" || "$RUNTIME_SOURCE_SHA" != "$SOURCE_SHA" ]]; then
+  echo "Refusing gateway deployment: runtime identity $RUNTIME_REVISION/$RUNTIME_SOURCE_SHA != $NEW_REVISION/$SOURCE_SHA" >&2
+  exit 2
+fi
+echo "Gateway health contract verified."
 
 echo
 echo "GATEWAY_READY=$GATEWAY_URL"
-echo "GATEWAY_SOURCE_SHA=$SOURCE_SHA"
+echo "GATEWAY_PRE_DEPLOY_REVISION=${PRE_DEPLOY_REVISION:-<none>}"
+echo "GATEWAY_SERVING_REVISION=$SERVING_REVISION"
+echo "GATEWAY_CONTRACT_VERSION=$EXPECTED_CONTRACT_VERSION"
+# Both read back from the live /health response, never echoed from the input.
+echo "GATEWAY_RUNTIME_REVISION=$RUNTIME_REVISION"
+echo "GATEWAY_SOURCE_SHA=$RUNTIME_SOURCE_SHA"

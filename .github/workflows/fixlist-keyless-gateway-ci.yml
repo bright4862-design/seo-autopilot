@@ -7,7 +7,9 @@ on:
       - 'base44/functions/startStandardScanJob/cloudTasks.js'
       - 'tests/frontend/dispatchGatewayContract.test.mjs'
       - 'scripts/deploy_dispatch_gateway.sh'
+      - 'scripts/verify_gateway_deployment.py'
       - 'scripts/bootstrap-fixlist-dispatch-gateway.sh'
+      - 'tests/test_gateway_deployment_verifier.py'
       - '.github/workflows/fixlist-cloud-operator.yml'
       - '.github/workflows/fixlist-keyless-gateway-ci.yml'
   push:
@@ -18,7 +20,9 @@ on:
       - 'base44/functions/startStandardScanJob/cloudTasks.js'
       - 'tests/frontend/dispatchGatewayContract.test.mjs'
       - 'scripts/deploy_dispatch_gateway.sh'
+      - 'scripts/verify_gateway_deployment.py'
       - 'scripts/bootstrap-fixlist-dispatch-gateway.sh'
+      - 'tests/test_gateway_deployment_verifier.py'
       - '.github/workflows/fixlist-cloud-operator.yml'
       - '.github/workflows/fixlist-keyless-gateway-ci.yml'
 
@@ -67,8 +71,12 @@ jobs:
           PY
 
       - name: Install canonical gateway dependencies
-        working-directory: dispatch-gateway
-        run: python -m pip install -r requirements.txt
+        run: |
+          set -euo pipefail
+          python -m pip install -r dispatch-gateway/requirements.txt pytest
+
+      - name: Prove the deployment gate rejects a deployment that did not ship
+        run: python -m pytest -q tests/test_gateway_deployment_verifier.py
 
       - name: Run canonical gateway Python tests
         working-directory: dispatch-gateway
@@ -78,7 +86,10 @@ jobs:
         run: node --test tests/frontend/dispatchGatewayContract.test.mjs
 
       - name: Compile canonical gateway source
-        run: python -m py_compile dispatch-gateway/main.py dispatch-gateway/test_gateway.py
+        run: |
+          set -euo pipefail
+          python -m py_compile dispatch-gateway/main.py dispatch-gateway/test_gateway.py
+          python -m py_compile scripts/verify_gateway_deployment.py
 
       - name: Build canonical gateway container
         working-directory: dispatch-gateway

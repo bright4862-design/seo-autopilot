@@ -350,6 +350,26 @@ class RobotsDiagnosticsTests(unittest.TestCase):
         self.assertEqual(payload["source_sha"], main.GATEWAY_SOURCE_SHA)
         self.assertEqual(payload["contract_version"], "dispatch_gateway_robots_policy_diag_v1")
 
+    def test_health_reports_the_executing_revision(self):
+        # Two revisions built from one commit report the same source_sha, so
+        # source_sha cannot say which revision answered. K_REVISION can, and it
+        # is the only field a deployment can use to prove the response came
+        # from the revision it just promoted rather than the one being drained.
+        payload = main.app.test_client().get("/health").get_json()
+        self.assertIn("revision", payload)
+        self.assertEqual(payload["revision"], main.GATEWAY_RUNTIME_REVISION)
+
+    def test_health_revision_comes_from_the_container_not_the_caller(self):
+        # A request must never be able to influence the reported revision.
+        client = main.app.test_client()
+        payload = client.get(
+            "/health",
+            query_string={"revision": "attacker-supplied"},
+            headers={"K-Revision": "attacker-supplied", "X-Revision": "attacker-supplied"},
+        ).get_json()
+        self.assertEqual(payload["revision"], main.GATEWAY_RUNTIME_REVISION)
+        self.assertNotEqual(payload["revision"], "attacker-supplied")
+
 
 if __name__ == "__main__":
     unittest.main()

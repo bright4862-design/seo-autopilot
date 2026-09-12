@@ -5,10 +5,10 @@ import { readFileSync } from "node:fs";
 import { RELEASE_FUNCTIONS } from "../../scripts/base44_release_manifest.mjs";
 
 /**
- * Standard 150 keeps its existing deterministic release manifest. The public
- * blog publisher is deliberately separate from that runtime-identity contract:
- * it is still deployed by the guarded site publisher, but remains in the
- * unverified set until it has its own build-ID/runtime probe.
+ * Standard 150 keeps its deterministic guarded release inventory separate from
+ * workflow-backed publishers. Base44 apps with Workflows enabled reject legacy
+ * automation deployment through `functions deploy`, so those publishers must
+ * not be added to the Standard 150 post-site function reconciliation list.
  */
 
 const DEPLOY = readFileSync(
@@ -37,26 +37,14 @@ const verified = bashArray(DEPLOY, "VERIFIED_FUNCTIONS");
 const unverified = bashArray(DEPLOY, "UNVERIFIED_FUNCTIONS");
 const deployed = [...verified, ...unverified];
 
-test("the guarded site deploy still covers every Standard 150 release function", () => {
-  assert.deepEqual(
-    deployed.filter((name) => name !== "generateDailyBlog"),
-    RELEASE_FUNCTIONS,
-  );
+test("the guarded site deploy names exactly the Standard 150 release functions", () => {
+  assert.deepEqual(deployed, RELEASE_FUNCTIONS);
 });
 
-test("the public blog publisher is explicitly deployed without pretending it is build-ID verified", () => {
+test("workflow-backed blog publisher is not sent through legacy functions deploy", () => {
   assert.ok(
-    unverified.includes("generateDailyBlog"),
-    "generateDailyBlog must be in the explicit unverified set so site publish cannot omit it",
-  );
-  assert.ok(
-    !verified.includes("generateDailyBlog"),
-    "generateDailyBlog must not be called build-ID verified without a runtime identity probe",
-  );
-  assert.equal(
-    deployed.filter((name) => name === "generateDailyBlog").length,
-    1,
-    "generateDailyBlog should be deployed exactly once in the composed inventory",
+    !deployed.includes("generateDailyBlog"),
+    "generateDailyBlog must stay out of guarded legacy functions deploy when Workflows are enabled",
   );
 });
 

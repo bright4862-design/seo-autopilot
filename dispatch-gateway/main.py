@@ -213,6 +213,12 @@ def dispatch():
     task, validation_error = validate_dispatch(payload)
     if validation_error:
         validation_status = ROBOTS_POLICY_STATUS.get(validation_error, 400)
+        if validation_error in ROBOTS_POLICY_STATUS:
+            app.logger.warning(json.dumps({
+                "error": validation_error,
+                "contract_version": GATEWAY_CONTRACT_VERSION,
+                "source_sha": GATEWAY_SOURCE_SHA,
+            }, sort_keys=True))
         return response_error(validation_error, validation_status)
     assert task is not None
 

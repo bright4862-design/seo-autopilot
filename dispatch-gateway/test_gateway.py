@@ -302,8 +302,15 @@ class RobotsDiagnosticsTests(unittest.TestCase):
                     job.update(policy)
                     job["private_evidence"] = "must-not-appear"
                     value["httpRequest"]["body"] = encoded(job)
-                    response = self.signed_post(value)
+                    with self.assertLogs(main.app.logger, level="WARNING") as logs:
+                        response = self.signed_post(value)
                     self.assertEqual(response.status_code, status)
+                    self.assertEqual(len(logs.records), 1)
+                    self.assertEqual(json.loads(logs.records[0].getMessage()), {
+                        "error": code,
+                        "contract_version": "dispatch_gateway_robots_policy_diag_v1",
+                        "source_sha": main.GATEWAY_SOURCE_SHA,
+                    })
                     self.assertEqual(response.get_json(), {
                         "success": False, "error": code,
                         "contract_version": "dispatch_gateway_robots_policy_diag_v1",

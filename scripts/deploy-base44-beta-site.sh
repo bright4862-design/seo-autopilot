@@ -43,15 +43,13 @@ VERIFIED_FUNCTIONS=(
 )
 # Deployed, but not build-ID verified. createAccessCheckout and stripeWebhook
 # keep their names because Stripe addresses stripeWebhook by URL from its own
-# dashboard, ownerScanDebugControl is owner-only, and generateDailyBlog is an
-# isolated scheduled content publisher that has no runtime build-ID probe yet.
-# Listing it here ensures a guarded site publish cannot silently omit the daily
-# blog automation while making no claim that its compiled runtime was probed.
+# dashboard, and ownerScanDebugControl is owner-only. Keep workflow-backed
+# publishers such as generateDailyBlog out of this legacy functions deployment:
+# Base44 rejects legacy automation deployment when Workflows are enabled.
 UNVERIFIED_FUNCTIONS=(
   createAccessCheckout
   stripeWebhook
   ownerScanDebugControl
-  generateDailyBlog
 )
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT

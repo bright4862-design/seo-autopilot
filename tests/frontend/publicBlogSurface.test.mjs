@@ -42,7 +42,7 @@ test("landing preview exposes only the three newest published articles", () => {
   assert.ok(previewSource, "BlogPreview.jsx must exist");
   assert.match(previewSource, /BlogPost\.filter\(\s*\{\s*status:\s*["']published["']\s*\}/);
   assert.match(previewSource, /["']-published_at["']/);
-  assert.match(previewSource, /,\s*3\s*\)/);
+  assert.match(previewSource, /,\s*3\s*,?\s*\)/);
   assert.match(previewSource, /Latest from FixList/);
   assert.match(previewSource, /to=\{`\/blog\/\$\{post\.slug\}`\}/);
 });

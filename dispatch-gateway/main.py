@@ -17,6 +17,16 @@ import requests
 
 app = Flask(__name__)
 
+GATEWAY_CONTRACT_VERSION = "dispatch_gateway_robots_policy_diag_v1"
+GATEWAY_SOURCE_SHA = os.environ.get("FIXLIST_GATEWAY_SOURCE_SHA", "").strip()
+if not re.fullmatch(r"[0-9a-f]{40}", GATEWAY_SOURCE_SHA):
+    GATEWAY_SOURCE_SHA = "unknown"
+ROBOTS_POLICY_STATUS = {
+    "robots_policy_missing": 422,
+    "robots_policy_type": 400,
+    "robots_policy_pair": 412,
+}
+
 CLOUD_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 QUEUE_PATH = os.environ["SCAN_TASKS_QUEUE_PATH"].strip()
 DRAIN_QUEUE_PATH = os.environ["SCAN_DRAIN_QUEUE_PATH"].strip()
@@ -41,7 +51,12 @@ TASK_RE = re.compile(r"^standard150-(?:(drain)-)?([A-Za-z0-9_-]+)-a([1-9][0-9]*)
 
 
 def response_error(code: str, status: int):
-    return jsonify({"success": False, "error": code}), status
+    return jsonify({
+        "success": False,
+        "error": code,
+        "contract_version": GATEWAY_CONTRACT_VERSION,
+        "source_sha": GATEWAY_SOURCE_SHA,
+    }), status
 
 
 @app.errorhandler(413)
@@ -151,7 +166,11 @@ def validate_dispatch(payload: Any) -> tuple[dict[str, Any] | None, str | None]:
         if job.get("scan_mode") != "standard_150":
             return None, "invalid_scan_mode"
         if not _valid_robots_policy(job):
-            return None, "invalid_robots_policy"
+            if "respect_robots_txt" not in job or "owner_attested_robots_override" not in job:
+                return None, "robots_policy_missing"
+            if type(job["respect_robots_txt"]) is not bool or type(job["owner_attested_robots_override"]) is not bool:
+                return None, "robots_policy_type"
+            return None, "robots_policy_pair"
 
     return task, None
 
@@ -161,6 +180,8 @@ def health():
     return jsonify({
         "ok": True,
         "service": "fixlist-dispatch-gateway",
+        "contract_version": GATEWAY_CONTRACT_VERSION,
+        "source_sha": GATEWAY_SOURCE_SHA,
         "queue": QUEUE_PATH,
         "drain_queue": DRAIN_QUEUE_PATH,
         "worker_origin": WORKER_ORIGIN,
@@ -191,7 +212,8 @@ def dispatch():
 
     task, validation_error = validate_dispatch(payload)
     if validation_error:
-        return response_error(validation_error, 400)
+        validation_status = ROBOTS_POLICY_STATUS.get(validation_error, 400)
+        return response_error(validation_error, validation_status)
     assert task is not None
 
     try:

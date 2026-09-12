@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 import time
 import unittest
+from unittest.mock import Mock, patch
 
 os.environ.setdefault(
     "SCAN_TASKS_QUEUE_PATH",
@@ -109,12 +110,12 @@ class ValidateDispatchTests(unittest.TestCase):
             task(respect_robots_txt=False, owner_override=False),
             task(respect_robots_txt=True, owner_override=True),
         ):
-            self.assertRejected(value, "invalid_robots_policy")
+            self.assertRejected(value, "robots_policy_pair")
         missing = task()
         job = json.loads(base64.b64decode(missing["httpRequest"]["body"]))
         del job["owner_attested_robots_override"]
         missing["httpRequest"]["body"] = encoded(job)
-        self.assertRejected(missing, "invalid_robots_policy")
+        self.assertRejected(missing, "robots_policy_missing")
 
     def test_exact_drain_task_is_accepted(self):
         accepted, error = self.validate(task(drain=True))
@@ -267,6 +268,80 @@ class SignatureTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.get_json()["error"], "invalid_signature")
+
+
+class RobotsDiagnosticsTests(unittest.TestCase):
+    def signed_post(self, value, *, valid_signature=True):
+        raw = json.dumps({"queue_path": main.QUEUE_PATH, "task": value}).encode()
+        timestamp = str(int(time.time()))
+        return main.app.test_client().post("/dispatch", data=raw, headers={
+            "content-type": "application/json",
+            "x-fixlist-timestamp": timestamp,
+            "x-fixlist-signature": main._expected_signature(timestamp, raw) if valid_signature else "0" * 64,
+        })
+
+    def test_signed_rejections_are_precise_safe_and_never_enqueue(self):
+        cases = []
+        fields = ("respect_robots_txt", "owner_attested_robots_override")
+        for absent in ((fields[0],), (fields[1],), fields):
+            cases.append(({field: True for field in fields if field not in absent}, "robots_policy_missing", 422))
+        for field in fields:
+            for bad in (None, 0, 1, 0.0, 1.0, "false", "true", "", [], {}):
+                policy = dict(zip(fields, (False, True)))
+                policy[field] = bad
+                cases.append((policy, "robots_policy_type", 400))
+        for flag in (False, True):
+            cases.append((dict.fromkeys(fields, flag), "robots_policy_pair", 412))
+        with patch.object(main.google.auth, "default") as auth, patch.object(main.requests, "post") as enqueue:
+            for policy, code, status in cases:
+                with self.subTest(policy=policy):
+                    value = task()
+                    job = json.loads(base64.b64decode(value["httpRequest"]["body"]))
+                    for field in fields:
+                        del job[field]
+                    job.update(policy)
+                    job["private_evidence"] = "must-not-appear"
+                    value["httpRequest"]["body"] = encoded(job)
+                    response = self.signed_post(value)
+                    self.assertEqual(response.status_code, status)
+                    self.assertEqual(response.get_json(), {
+                        "success": False, "error": code,
+                        "contract_version": "dispatch_gateway_robots_policy_diag_v1",
+                        "source_sha": main.GATEWAY_SOURCE_SHA,
+                    })
+            auth.assert_not_called()
+            enqueue.assert_not_called()
+
+    def test_signature_rejection_precedes_policy_diagnostics(self):
+        with patch.object(main.google.auth, "default") as auth, patch.object(main.requests, "post") as enqueue:
+            response = self.signed_post(task(respect_robots_txt=False, owner_override=False), valid_signature=False)
+            self.assertEqual(response.status_code, 401)
+            self.assertEqual(response.get_json()["error"], "invalid_signature")
+            auth.assert_not_called()
+            enqueue.assert_not_called()
+
+    def test_both_valid_pairs_forward_the_exact_task_and_keep_dedup(self):
+        credentials = Mock(valid=True, token="unit-test-token")
+        for respect, override in ((True, False), (False, True)):
+            for upstream_status in (200, 409):
+                with self.subTest(respect=respect, override=override, upstream_status=upstream_status):
+                    value = task(respect_robots_txt=respect, owner_override=override)
+                    upstream = Mock(status_code=upstream_status, ok=True)
+                    upstream.json.return_value = {"name": value["name"]}
+                    with patch.object(main.google.auth, "default", return_value=(credentials, None)), patch.object(main.requests, "post", return_value=upstream) as enqueue:
+                        response = self.signed_post(value)
+                        self.assertEqual(response.status_code, 200)
+                        self.assertEqual(response.get_json(), {
+                            "success": True, "deduplicated": upstream_status == 409, "taskName": value["name"],
+                        })
+                        enqueue.assert_called_once()
+                        self.assertEqual(enqueue.call_args.kwargs["json"], {"task": value})
+
+    def test_health_reports_configured_source_and_contract(self):
+        self.assertEqual(main.GATEWAY_SOURCE_SHA, os.environ.get("FIXLIST_GATEWAY_SOURCE_SHA", "unknown"))
+        payload = main.app.test_client().get("/health").get_json()
+        self.assertEqual(payload["source_sha"], main.GATEWAY_SOURCE_SHA)
+        self.assertEqual(payload["contract_version"], "dispatch_gateway_robots_policy_diag_v1")
 
 
 if __name__ == "__main__":

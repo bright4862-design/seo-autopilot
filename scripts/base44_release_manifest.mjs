@@ -45,12 +45,14 @@ export const RELEASE_FUNCTIONS = [
   "createAccessCheckout",
   "stripeWebhook",
   "ownerScanDebugControl",
+  "generateDailyBlog",
 ];
 
 export const RELEASE_ENTITIES = [
   "ScanRun",
   "FixList",
   "FixItem",
+  "BlogPost",
 ];
 
 // Bare specifiers the Base44 runtime provides. Not resolvable on disk and not

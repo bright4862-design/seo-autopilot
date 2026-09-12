@@ -2,33 +2,86 @@
   "name": "BlogPost",
   "type": "object",
   "properties": {
-    "title": { "type": "string" },
-    "slug": { "type": "string" },
-    "excerpt": { "type": "string" },
-    "body_markdown": { "type": "string", "format": "richtext" },
-    "meta_title": { "type": "string" },
-    "meta_description": { "type": "string" },
-    "category": { "type": "string" },
-    "tags": { "type": "array", "items": { "type": "string" } },
-    "author": { "type": "string", "default": "FixList" },
+    "title": {
+      "type": "string"
+    },
+    "slug": {
+      "type": "string"
+    },
+    "excerpt": {
+      "type": "string"
+    },
+    "body_markdown": {
+      "type": "string",
+      "format": "richtext"
+    },
+    "meta_title": {
+      "type": "string"
+    },
+    "meta_description": {
+      "type": "string"
+    },
+    "category": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "author": {
+      "type": "string",
+      "default": "FixList"
+    },
     "status": {
       "type": "string",
-      "enum": ["draft", "published", "archived"],
+      "enum": [
+        "draft",
+        "published",
+        "archived"
+      ],
       "default": "draft"
     },
-    "published_at": { "type": "string", "format": "date-time" },
-    "generation_key": { "type": "string" },
+    "published_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "generation_key": {
+      "type": "string"
+    },
     "generation_source": {
       "type": "string",
-      "enum": ["manual", "daily_automation"],
+      "enum": [
+        "manual",
+        "daily_automation"
+      ],
       "default": "manual"
     }
   },
-  "required": ["title", "slug", "excerpt", "body_markdown", "status"],
+  "required": [
+    "title",
+    "slug",
+    "excerpt",
+    "body_markdown",
+    "status"
+  ],
   "rls": {
-    "create": { "user_condition": { "role": "admin" } },
+    "create": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
     "read": true,
-    "update": { "user_condition": { "role": "admin" } },
-    "delete": { "user_condition": { "role": "admin" } }
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
   }
 }

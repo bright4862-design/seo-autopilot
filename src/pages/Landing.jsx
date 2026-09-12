@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
+import BlogPreview from "@/components/blog/BlogPreview";
 import { UNLOCK_PRICE_LABEL } from "@/lib/access";
 
 const faqs = [
@@ -39,22 +40,28 @@ export default function Landing() {
           <Link to="/" className="text-[15px] font-semibold tracking-tight">
             FixList
           </Link>
-          <div className="flex items-center gap-5">
+          <div className="flex items-center gap-4 sm:gap-5">
             <a
               href="#faq"
-              className="text-[13px] text-ink-muted transition-colors hover:text-ink"
+              className="text-[12px] text-ink-muted transition-colors hover:text-ink sm:text-[13px]"
             >
               FAQ
             </a>
             <Link
+              to="/blog"
+              className="text-[12px] text-ink-muted transition-colors hover:text-ink sm:text-[13px]"
+            >
+              Blog
+            </Link>
+            <Link
               to="/login"
-              className="text-[13px] text-ink-muted transition-colors hover:text-ink"
+              className="text-[12px] text-ink-muted transition-colors hover:text-ink sm:text-[13px]"
             >
               Log in
             </Link>
             <Link
               to="/register"
-              className="rounded-full bg-ink px-4 py-2 text-[13px] font-medium text-paper transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+              className="rounded-full bg-ink px-3.5 py-2 text-[12px] font-medium text-paper transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink sm:px-4 sm:text-[13px]"
             >
               Get access
             </Link>
@@ -102,6 +109,8 @@ export default function Landing() {
               </span>
             </div>
           </section>
+
+          <BlogPreview />
 
           <section id="faq" className="mt-24">
             <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">

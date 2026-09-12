@@ -8,7 +8,6 @@ import '@/index.css'
 // Public release provenance. The exact Git SHA is compiled into the production
 // bundle by the guarded Base44 site publisher and verified after deployment.
 // It contains no secret material; it only ties the customer UI bytes to source.
-// Build refresh marker; removed before commit.
 const FIXLIST_SOURCE_SHA = String(import.meta.env.VITE_FIXLIST_SOURCE_SHA || '')
 if (typeof window !== 'undefined') {
   Object.defineProperty(window, '__FIXLIST_SOURCE_SHA__', {

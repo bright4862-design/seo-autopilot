@@ -230,55 +230,15 @@ PY
 test -n "$GATEWAY_URL"
 
 SERVING_REVISION="$(serving_revision_from "$GATEWAY_JSON")"
-if [[ "$SERVING_REVISION" != "$NEW_REVISION" ]]; then
-  echo "Refusing gateway deployment: traffic serves '$SERVING_REVISION', not the revision just created '$NEW_REVISION'." >&2
-  exit 2
-fi
 
-python3 - "$GATEWAY_JSON" "$REVISION_JSON" "$NEW_REVISION" "$SOURCE_SHA" <<'PYCHECK'
-import json, sys
-service_path, revision_path, expected_revision, source_sha = sys.argv[1:]
-with open(service_path, encoding="utf-8") as handle:
-    service = json.load(handle)
-with open(revision_path, encoding="utf-8") as handle:
-    revision = json.load(handle)
+# Control plane: what Cloud Run has been told. Deterministic the moment the
+# promotion returns, so a failure here is final rather than retried.
+python3 "$REPO_ROOT/scripts/verify_gateway_deployment.py" \
+  --service-json "$GATEWAY_JSON" \
+  --revision-json "$REVISION_JSON" \
+  --expected-revision "$NEW_REVISION" \
+  --expected-source-sha "$SOURCE_SHA"
 
-percent = sum(
-    int(item.get("percent") or 0)
-    for item in (service.get("status", {}).get("traffic") or [])
-    if item.get("revisionName") == expected_revision
-)
-if percent != 100:
-    raise SystemExit(f"Serving traffic on {expected_revision} is {percent}%, expected 100%")
-
-# The image the revision actually pulled, not the image the template asked for.
-digest = str(revision.get("status", {}).get("imageDigest") or "")
-if "@sha256:" not in digest:
-    raise SystemExit(f"Revision {expected_revision} has no immutable image digest")
-template_image = str(
-    service.get("spec", {}).get("template", {}).get("spec", {})
-    .get("containers", [{}])[0].get("image") or ""
-)
-if template_image != digest:
-    raise SystemExit(
-        f"Serving digest {digest} does not equal the image this deployment built {template_image}"
-    )
-
-# The serving revision's own environment, not the desired template's.
-env = {
-    item.get("name"): str(item.get("value") or "")
-    for item in (revision.get("spec", {}).get("containers", [{}])[0].get("env", []) or [])
-}
-if env.get("FIXLIST_GATEWAY_SOURCE_SHA") != source_sha:
-    raise SystemExit(
-        "Serving revision FIXLIST_GATEWAY_SOURCE_SHA is "
-        f"{env.get('FIXLIST_GATEWAY_SOURCE_SHA')!r}, expected {source_sha!r}"
-    )
-print(f"serving_revision={expected_revision}")
-print(f"serving_image_digest={digest}")
-PYCHECK
-curl --fail --silent --show-error --retry 12 --retry-delay 3 --max-time 20 \
-  "$GATEWAY_URL/health" > "$HEALTH_JSON"
 # Pinned to the constant the deployed source declares, so the assertion cannot
 # drift from the code it is meant to prove.
 EXPECTED_CONTRACT_VERSION="$(python3 -c 'import re,sys
@@ -290,29 +250,51 @@ if [[ -z "$EXPECTED_CONTRACT_VERSION" ]]; then
   exit 2
 fi
 
-RUNTIME_SOURCE_SHA="$(python3 - "$HEALTH_JSON" "$QUEUE_PATH" "$DRAIN_QUEUE_PATH" "$WORKER_ORIGIN" "$EXPECTED_CONTRACT_VERSION" "$SOURCE_SHA" <<'PYHEALTH'
-import json, sys
-path, queue_path, drain_queue_path, worker_origin, contract_version, source_sha = sys.argv[1:]
-with open(path, encoding="utf-8") as handle:
-    value = json.load(handle)
-def require(name, actual, expected):
-    if actual != expected:
-        raise SystemExit(f"Gateway /health {name} is {actual!r}, expected {expected!r}")
-require("ok", value.get("ok"), True)
-require("service", value.get("service"), "fixlist-dispatch-gateway")
-require("queue", value.get("queue"), queue_path)
-require("drain_queue", value.get("drain_queue"), drain_queue_path)
-require("worker_origin", value.get("worker_origin"), worker_origin)
-# Runtime identity. These two are the only evidence that the bytes answering
-# this request are the bytes this deployment built.
-require("contract_version", value.get("contract_version"), contract_version)
-require("source_sha", value.get("source_sha"), source_sha)
-print(value["source_sha"])
-PYHEALTH
-)"
+# Runtime: what a customer actually gets from the untagged service URL. That is
+# the real customer route, and while traffic propagates it can still be
+# answered by the revision being drained. Every other health field is identical
+# across two revisions built from the same commit -- source_sha included -- so
+# the executing revision is the only field that settles which one replied.
+# Propagation is a race, so retry to a deadline and fail if it never settles.
+GATEWAY_HEALTH_TIMEOUT_SECONDS="${GATEWAY_HEALTH_TIMEOUT_SECONDS:-180}"
+HEALTH_DEADLINE=$(( SECONDS + GATEWAY_HEALTH_TIMEOUT_SECONDS ))
+HEALTH_PROVEN=""
+while :; do
+  if curl --fail --silent --show-error --max-time 20 "$GATEWAY_URL/health" > "$HEALTH_JSON" 2>/dev/null; then
+    if HEALTH_PROVEN="$(python3 "$REPO_ROOT/scripts/verify_gateway_deployment.py" \
+      --health-json "$HEALTH_JSON" \
+      --expected-revision "$NEW_REVISION" \
+      --expected-source-sha "$SOURCE_SHA" \
+      --expected-contract-version "$EXPECTED_CONTRACT_VERSION" \
+      --queue-path "$QUEUE_PATH" \
+      --drain-queue-path "$DRAIN_QUEUE_PATH" \
+      --worker-origin "$WORKER_ORIGIN" 2>/dev/null)"; then
+      break
+    fi
+  fi
+  if (( SECONDS >= HEALTH_DEADLINE )); then
+    echo "Refusing gateway deployment: /health never settled on $NEW_REVISION within ${GATEWAY_HEALTH_TIMEOUT_SECONDS}s." >&2
+    echo "Last /health response:" >&2
+    cat "$HEALTH_JSON" >&2 2>/dev/null || true
+    echo >&2
+    python3 "$REPO_ROOT/scripts/verify_gateway_deployment.py" \
+      --health-json "$HEALTH_JSON" \
+      --expected-revision "$NEW_REVISION" \
+      --expected-source-sha "$SOURCE_SHA" \
+      --expected-contract-version "$EXPECTED_CONTRACT_VERSION" \
+      --queue-path "$QUEUE_PATH" \
+      --drain-queue-path "$DRAIN_QUEUE_PATH" \
+      --worker-origin "$WORKER_ORIGIN" >&2 || true
+    exit 2
+  fi
+  sleep 3
+done
+printf '%s\n' "$HEALTH_PROVEN"
 
-if [[ "$RUNTIME_SOURCE_SHA" != "$SOURCE_SHA" ]]; then
-  echo "Refusing gateway deployment: runtime source SHA $RUNTIME_SOURCE_SHA != $SOURCE_SHA" >&2
+RUNTIME_REVISION="$(printf '%s\n' "$HEALTH_PROVEN" | sed -n 's/^runtime_revision=//p')"
+RUNTIME_SOURCE_SHA="$(printf '%s\n' "$HEALTH_PROVEN" | sed -n 's/^runtime_source_sha=//p')"
+if [[ "$RUNTIME_REVISION" != "$NEW_REVISION" || "$RUNTIME_SOURCE_SHA" != "$SOURCE_SHA" ]]; then
+  echo "Refusing gateway deployment: runtime identity $RUNTIME_REVISION/$RUNTIME_SOURCE_SHA != $NEW_REVISION/$SOURCE_SHA" >&2
   exit 2
 fi
 echo "Gateway health contract verified."
@@ -322,5 +304,6 @@ echo "GATEWAY_READY=$GATEWAY_URL"
 echo "GATEWAY_PRE_DEPLOY_REVISION=${PRE_DEPLOY_REVISION:-<none>}"
 echo "GATEWAY_SERVING_REVISION=$SERVING_REVISION"
 echo "GATEWAY_CONTRACT_VERSION=$EXPECTED_CONTRACT_VERSION"
-# Read back from the live /health response, never echoed from the input.
+# Both read back from the live /health response, never echoed from the input.
+echo "GATEWAY_RUNTIME_REVISION=$RUNTIME_REVISION"
 echo "GATEWAY_SOURCE_SHA=$RUNTIME_SOURCE_SHA"

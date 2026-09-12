@@ -74,12 +74,15 @@ test("public blog surfaces do not advertise unreleased product modes", () => {
   }
 });
 
-test("daily publisher is idempotent, quality gated, scheduled, and scanner-isolated", () => {
+test("daily publisher is idempotent, quality gated, workflow-compatible, and scanner-isolated", () => {
   assert.match(publisherSource, /generationKey\s*=\s*`daily:\$\{dayKey\}`/);
   assert.match(publisherSource, /wordCount\(bodyMarkdown\)\s*<\s*800/);
   assert.match(publisherSource, /status:\s*["']published["']/);
-  assert.match(publisherConfig, /"cron_expression"\s*:\s*"0 12 \* \* \*"/);
-  assert.match(publisherConfig, /"is_active"\s*:\s*true/);
+  assert.doesNotMatch(
+    publisherConfig,
+    /"automations"|"cron_expression"|"schedule_type"/,
+    "Workflows-enabled Base44 apps reject legacy function.jsonc automations",
+  );
 
   assert.doesNotMatch(
     publisherSource,

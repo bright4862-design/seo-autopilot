@@ -5,6 +5,8 @@ import DashboardLayout from "@/components/layout/DashboardLayout";
 import ProtectedRoute from "@/components/ProtectedRoute";
 
 import Landing from "@/pages/Landing";
+import Blog from "@/pages/Blog";
+import BlogArticle from "@/pages/BlogArticle";
 import Login from "@/pages/Login";
 import Register from "@/pages/Register";
 import ForgotPassword from "@/pages/ForgotPassword";
@@ -21,6 +23,8 @@ export default function App() {
       <Routes>
         {/* Public pages */}
         <Route path="/" element={<Landing />} />
+        <Route path="/blog" element={<Blog />} />
+        <Route path="/blog/:slug" element={<BlogArticle />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />

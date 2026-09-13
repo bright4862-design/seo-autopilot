@@ -55,6 +55,18 @@ Source:
 
 Long-term recommendation: evaluate Web Bot Auth for FixList before adopting user-agent impersonation or a broad allowlist. It preserves a stable `FixListPythonScanner` identity while giving Cloudflare a cryptographic signal that the request actually came from FixList.
 
+### Verified identity versus owner robots override
+
+Cloudflare's Verified Bot criteria also require non-abusive behavior, including obeying `robots.txt` and crawl directives. FixList currently has a separate owner-attested robots override path for verified site owners/managers. Those two policies must not be conflated.
+
+Research rule:
+
+- do not mark a scan `verified_bot_candidate` unless robots permission for the exact request is confirmed allowed;
+- do not assume a provider-verified FixList identity can also be used for owner robots-override scans;
+- if provider verification is pursued, evaluate whether robots-respecting scans need a distinct verifiable identity or signing profile from owner-authorized override scans.
+
+This is a compatibility-policy boundary only. It does not change the existing owner override or production user agent.
+
 ## AWS WAF findings
 
 AWS WAF Bot Control marks common verifiable bots as verified. AWS documents an explicit allow rule that matches its verified-bot label after the Bot Control managed rule group. AWS WAF also supports reusable IP sets for owner-managed rules.

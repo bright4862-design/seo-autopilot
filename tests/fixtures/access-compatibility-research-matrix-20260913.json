@@ -16,6 +16,18 @@
       "expected_policy": null
     },
     {
+      "site": "rbiprivatelending.com",
+      "role": "same_environment_identity_difference_control",
+      "public_retrieval": "ordinary_public_retrieval_available",
+      "robots_context": "historically_not_a_blanket_robots_denial_but_exact_observer_revalidation_required",
+      "bot_waf_context": "historical_same_environment_requests_differed_by_request_identity_but_root_cause_remains_unproven",
+      "historical_fixlist_state": "zero_page_failure_without_persisted_first_hop_diagnostics",
+      "observer_status": "pending",
+      "root_cause_confidence": "unproven",
+      "normalized_inputs": null,
+      "expected_policy": null
+    },
+    {
       "site": "klook.com",
       "role": "robots_vs_transport_control",
       "public_retrieval": "ordinary_public_retrieval_available",

@@ -1,0 +1,135 @@
+from app.access_compatibility_policy import (
+    ACCESS_STRATEGY_POLICY_VERSION,
+    assess_access,
+)
+
+
+def test_403_does_not_claim_identity_sensitivity_without_controlled_comparison():
+    result = assess_access(
+        robots_allowed=True,
+        http_status=403,
+        owner_managed=True,
+    )
+
+    assert result.failure_kind == "http_access_denied"
+    assert result.identity_sensitivity == "unproven"
+    assert result.owner_action == "manual_review"
+    assert result.policy_version == ACCESS_STRATEGY_POLICY_VERSION
+
+
+def test_robots_restriction_outranks_http_denial():
+    result = assess_access(
+        robots_allowed=False,
+        http_status=403,
+        owner_managed=True,
+    )
+
+    assert result.failure_kind == "robots_restricted"
+    assert result.owner_action == "none"
+
+
+def test_429_is_rate_limited_not_generic_access_denial():
+    result = assess_access(
+        robots_allowed=True,
+        http_status=429,
+        owner_managed=True,
+    )
+
+    assert result.failure_kind == "rate_limited"
+    assert result.owner_action == "manual_review"
+
+
+def test_transport_failure_is_separate_from_http_denial():
+    result = assess_access(
+        robots_allowed=True,
+        transport_error_class="tls_handshake_failed",
+        failure_stage="tls_handshake",
+        owner_managed=True,
+    )
+
+    assert result.failure_kind == "transport_blocked"
+    assert result.identity_sensitivity == "unproven"
+
+
+def test_identity_sensitivity_requires_exact_controlled_comparison_result():
+    unproven = assess_access(
+        robots_allowed=True,
+        http_status=403,
+        identity_comparison_result="inconclusive",
+        owner_managed=True,
+    )
+    proven = assess_access(
+        robots_allowed=True,
+        http_status=403,
+        identity_comparison_result="fixlist_denied_control_allowed",
+        owner_managed=True,
+    )
+
+    assert unproven.identity_sensitivity == "unproven"
+    assert proven.identity_sensitivity == "proven"
+
+
+def test_owner_exception_requires_explicit_supported_capability():
+    result = assess_access(
+        robots_allowed=True,
+        http_status=403,
+        owner_managed=True,
+        owner_exception_capability="supported",
+    )
+
+    assert result.owner_action == "owner_exception_possible"
+    assert result.access_strategy == "owner_allowlist_candidate"
+
+
+def test_plan_limited_owner_exception_stays_distinct():
+    result = assess_access(
+        robots_allowed=True,
+        http_status=403,
+        owner_managed=True,
+        owner_exception_capability="plan_limited",
+    )
+
+    assert result.owner_action == "owner_exception_plan_limited"
+    assert result.access_strategy == "owner_allowlist_plan_limited"
+
+
+def test_non_owner_never_gets_owner_side_exception_action():
+    result = assess_access(
+        robots_allowed=True,
+        http_status=403,
+        owner_managed=False,
+        owner_exception_capability="supported",
+    )
+
+    assert result.owner_action == "none"
+    assert result.access_strategy == "diagnostic_only"
+
+
+def test_successful_standard_access_is_not_a_compatibility_failure():
+    result = assess_access(
+        robots_allowed=True,
+        http_status=200,
+        owner_managed=True,
+    )
+
+    assert result.failure_kind == "standard_access"
+    assert result.owner_action == "none"
+    assert result.access_strategy == "standard_pinned_http"
+
+
+def test_audit_record_is_bounded_and_contains_no_raw_request_material():
+    result = assess_access(
+        robots_allowed=True,
+        http_status=403,
+        owner_managed=True,
+        owner_exception_capability="supported",
+        identity_comparison_result="fixlist_denied_control_allowed",
+    )
+
+    assert result.as_audit_record() == {
+        "access_strategy_policy_version": "access_strategy_policy_v1",
+        "failure_kind": "http_access_denied",
+        "identity_sensitivity": "proven",
+        "owner_action": "owner_exception_possible",
+        "access_strategy": "owner_allowlist_candidate",
+    }

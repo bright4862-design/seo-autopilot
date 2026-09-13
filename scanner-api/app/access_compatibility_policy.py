@@ -37,11 +37,13 @@ def _owner_action(
         return "none", "diagnostic_only"
     if failure_kind != "http_access_denied":
         return "manual_review", "diagnostic_only"
+    if robots_allowed is not True:
+        return "manual_review", "diagnostic_only"
     if owner_exception_capability == "supported":
         return "owner_exception_possible", "owner_allowlist_candidate"
     if owner_exception_capability == "plan_limited":
         return "owner_exception_plan_limited", "owner_allowlist_plan_limited"
-    if owner_exception_capability == "verified_bot" and robots_allowed is True:
+    if owner_exception_capability == "verified_bot":
         return "verified_bot_candidate", "verified_bot_candidate"
     return "manual_review", "diagnostic_only"
 
@@ -56,17 +58,28 @@ def assess_access(
     identity_comparison_result: Optional[str] = None,
     owner_exception_capability: str = "unknown",
 ) -> AccessAssessment:
+    transport_failure = bool(
+        transport_error_class
+        and failure_stage in {
+            "tcp_connect",
+            "tls_handshake",
+            "response_wait",
+        }
+    )
+
     if robots_allowed is False:
         failure_kind = "robots_restricted"
+    elif transport_failure and http_status is not None:
+        # A single first-hop record cannot both have received an HTTP response
+        # and have failed before that response existed. Keep contradictory or
+        # mixed-attempt evidence unclassified until the observer contract can
+        # prove which outcome belongs to the exact request.
+        failure_kind = "unknown_access_failure"
     elif http_status == 429:
         failure_kind = "rate_limited"
     elif http_status in {401, 403, 407}:
         failure_kind = "http_access_denied"
-    elif transport_error_class and failure_stage in {
-        "tcp_connect",
-        "tls_handshake",
-        "response_wait",
-    }:
+    elif transport_failure:
         failure_kind = "transport_blocked"
     elif http_status is not None and 200 <= http_status < 400:
         failure_kind = "standard_access"

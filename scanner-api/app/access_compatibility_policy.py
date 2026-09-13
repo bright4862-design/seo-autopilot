@@ -25,6 +25,7 @@ class AccessAssessment:
 def _owner_action(
     *,
     owner_managed: bool,
+    robots_allowed: Optional[bool],
     failure_kind: str,
     owner_exception_capability: str,
 ) -> tuple[str, str]:
@@ -40,7 +41,7 @@ def _owner_action(
         return "owner_exception_possible", "owner_allowlist_candidate"
     if owner_exception_capability == "plan_limited":
         return "owner_exception_plan_limited", "owner_allowlist_plan_limited"
-    if owner_exception_capability == "verified_bot":
+    if owner_exception_capability == "verified_bot" and robots_allowed is True:
         return "verified_bot_candidate", "verified_bot_candidate"
     return "manual_review", "diagnostic_only"
 
@@ -84,6 +85,7 @@ def assess_access(
 
     owner_action, access_strategy = _owner_action(
         owner_managed=owner_managed,
+        robots_allowed=robots_allowed,
         failure_kind=failure_kind,
         owner_exception_capability=owner_exception_capability,
     )

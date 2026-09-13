@@ -69,6 +69,31 @@ def test_identity_sensitivity_requires_exact_controlled_comparison_result():
     assert proven.identity_sensitivity == "proven"
 
 
+def test_identity_proof_requires_matching_http_denial_and_confirmed_robots_allow():
+    contradictory = assess_access(
+        robots_allowed=True,
+        http_status=200,
+        identity_comparison_result="fixlist_denied_control_allowed",
+        owner_managed=True,
+    )
+    robots_unknown = assess_access(
+        robots_allowed=None,
+        http_status=403,
+        identity_comparison_result="fixlist_denied_control_allowed",
+        owner_managed=True,
+    )
+    valid = assess_access(
+        robots_allowed=True,
+        http_status=403,
+        identity_comparison_result="fixlist_denied_control_allowed",
+        owner_managed=True,
+    )
+
+    assert contradictory.identity_sensitivity == "unproven"
+    assert robots_unknown.identity_sensitivity == "unproven"
+    assert valid.identity_sensitivity == "proven"
+
+
 def test_owner_exception_requires_explicit_supported_capability():
     result = assess_access(
         robots_allowed=True,

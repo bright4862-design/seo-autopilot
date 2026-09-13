@@ -51,6 +51,36 @@ def test_transport_failure_is_separate_from_http_denial():
     assert result.identity_sensitivity == "unproven"
 
 
+def test_dns_failure_stays_unknown_instead_of_claiming_transport_or_waf_block():
+    result = assess_access(
+        robots_allowed=None,
+        transport_error_class="dns_resolution_failed",
+        failure_stage="dns",
+        owner_managed=True,
+        owner_exception_capability="supported",
+    )
+
+    assert result.failure_kind == "unknown_access_failure"
+    assert result.identity_sensitivity == "unproven"
+    assert result.owner_action == "manual_review"
+    assert result.access_strategy == "diagnostic_only"
+
+
+def test_ssrf_validation_rejection_stays_unknown_and_never_becomes_allowlist_candidate():
+    result = assess_access(
+        robots_allowed=None,
+        transport_error_class="unsafe_or_unresolvable_hop",
+        failure_stage="ssrf_validation",
+        owner_managed=True,
+        owner_exception_capability="supported",
+    )
+
+    assert result.failure_kind == "unknown_access_failure"
+    assert result.identity_sensitivity == "unproven"
+    assert result.owner_action == "manual_review"
+    assert result.access_strategy == "diagnostic_only"
+
+
 def test_contradictory_http_success_and_transport_failure_remains_unknown():
     result = assess_access(
         robots_allowed=True,

@@ -55,12 +55,6 @@ def assess_access(
     identity_comparison_result: Optional[str] = None,
     owner_exception_capability: str = "unknown",
 ) -> AccessAssessment:
-    identity_sensitivity = (
-        "proven"
-        if identity_comparison_result == "fixlist_denied_control_allowed"
-        else "unproven"
-    )
-
     if robots_allowed is False:
         failure_kind = "robots_restricted"
     elif http_status == 429:
@@ -77,6 +71,16 @@ def assess_access(
         failure_kind = "standard_access"
     else:
         failure_kind = "unknown_access_failure"
+
+    identity_sensitivity = (
+        "proven"
+        if (
+            robots_allowed is True
+            and failure_kind == "http_access_denied"
+            and identity_comparison_result == "fixlist_denied_control_allowed"
+        )
+        else "unproven"
+    )
 
     owner_action, access_strategy = _owner_action(
         owner_managed=owner_managed,

@@ -19,6 +19,7 @@ def test_real_site_matrix_stays_fail_closed_until_exact_observer_evidence_exists
     assert sites
     assert {row["site"] for row in sites} >= {
         "ironwoodcrecapital.com",
+        "rbiprivatelending.com",
         "klook.com",
         "feverup.com",
         "ratp.fr",

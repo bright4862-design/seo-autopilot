@@ -51,6 +51,21 @@ def test_transport_failure_is_separate_from_http_denial():
     assert result.identity_sensitivity == "unproven"
 
 
+def test_contradictory_http_success_and_transport_failure_remains_unknown():
+    result = assess_access(
+        robots_allowed=True,
+        http_status=200,
+        transport_error_class="tls_handshake_failed",
+        failure_stage="tls_handshake",
+        owner_managed=True,
+    )
+
+    assert result.failure_kind == "unknown_access_failure"
+    assert result.identity_sensitivity == "unproven"
+    assert result.owner_action == "manual_review"
+    assert result.access_strategy == "diagnostic_only"
+
+
 def test_identity_sensitivity_requires_exact_controlled_comparison_result():
     unproven = assess_access(
         robots_allowed=True,
@@ -104,6 +119,19 @@ def test_owner_exception_requires_explicit_supported_capability():
 
     assert result.owner_action == "owner_exception_possible"
     assert result.access_strategy == "owner_allowlist_candidate"
+
+
+def test_owner_exception_stays_manual_when_robots_state_is_unknown():
+    result = assess_access(
+        robots_allowed=None,
+        http_status=403,
+        owner_managed=True,
+        owner_exception_capability="supported",
+    )
+
+    assert result.failure_kind == "http_access_denied"
+    assert result.owner_action == "manual_review"
+    assert result.access_strategy == "diagnostic_only"
 
 
 def test_plan_limited_owner_exception_stays_distinct():

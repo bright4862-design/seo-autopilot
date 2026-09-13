@@ -118,6 +118,26 @@ def test_plan_limited_owner_exception_stays_distinct():
     assert result.access_strategy == "owner_allowlist_plan_limited"
 
 
+def test_verified_bot_candidate_requires_confirmed_robots_compliance():
+    unknown = assess_access(
+        robots_allowed=None,
+        http_status=403,
+        owner_managed=True,
+        owner_exception_capability="verified_bot",
+    )
+    allowed = assess_access(
+        robots_allowed=True,
+        http_status=403,
+        owner_managed=True,
+        owner_exception_capability="verified_bot",
+    )
+
+    assert unknown.owner_action == "manual_review"
+    assert unknown.access_strategy == "diagnostic_only"
+    assert allowed.owner_action == "verified_bot_candidate"
+    assert allowed.access_strategy == "verified_bot_candidate"
+
+
 def test_non_owner_never_gets_owner_side_exception_action():
     result = assess_access(
         robots_allowed=True,

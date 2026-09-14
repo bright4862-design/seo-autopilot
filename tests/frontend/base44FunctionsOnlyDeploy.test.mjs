@@ -64,7 +64,7 @@ function contents(path) {
   try { return readFileSync(path, "utf8"); } catch { return ""; }
 }
 
-test("scanner-functions deploys and attests exactly the six V3 scanner routes", () => {
+test("scanner-functions deploys and attests exactly the six V4 scanner routes", () => {
   const f = fixture();
   try {
     const result = f.run("scanner-functions");

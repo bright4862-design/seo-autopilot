@@ -184,7 +184,7 @@ test("unpaid verified results show a useful bounded preview without full exporta
   }
 });
 
-test("frontend and live V3 paths are wired for preview-before-payment", () => {
+test("frontend and live V4 paths are wired for preview-before-payment", () => {
   const form = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
   const access = readFileSync("src/lib/access.js", "utf8");
   const fixList = readFileSync("src/pages/FixList.jsx", "utf8");

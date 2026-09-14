@@ -4,7 +4,7 @@ import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
 const BASE44_RUNTIME_ACTIVATION_ID = "durable-authority-v2-activation-refresh-20260907-v1";
 import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
 import { authorityRowsFromSnapshot } from "./authorityRows.js";
-import { AUTHORITY_CONTRACT, buildAuthoritySnapshot, firstFailedAuthorityPredicate, hasCompleteAcceptanceEvidence } from "./authoritySnapshot.js";
+import { AUTHORITY_CONTRACT, buildAuthoritySnapshot, buildPersistedAuthoritySnapshot, firstFailedAuthorityPredicate, hasCompleteAcceptanceEvidence } from "./authoritySnapshot.js";
 import { releaseAdmission as releaseAdmissionClient } from "./admissionClient.js";
 import { persistExactAdmissionRelease } from "./admissionRelease.js";
 
@@ -148,26 +148,44 @@ Deno.serve(async (req) => {
       throw new RequestProblem(409, "terminal_authority_rejected", "This scan attempt is already terminal.");
     }
     if (scanStatus === "complete") {
-      if (scan.authority_proof === authorityProof && scan.fix_list_id) {
-        const release = await persistExactAdmissionRelease({
-          entities,
-          scan,
-          terminalStatus: "complete",
-          release: releaseAdmission,
-        });
-        requireAdmissionRelease(release);
-        const replayedScan = release?.scanRun
-          || await entities.ScanRun.get(identity.scan_id).catch(() => scan);
-        return Response.json({
-          success: true,
-          replayed: true,
-          workerVersion: WORKER_VERSION,
-          scanId: identity.scan_id,
-          fixListId: scan.fix_list_id,
-          fixListVerified: true,
-          allowanceConsumed: false,
-          scanRun: replayedScan,
-        });
+      if (scan.authority_proof && scan.fix_list_id) {
+        const replayFixList = await entities.FixList.get(scan.fix_list_id).catch(() => null);
+        const replayItems = replayFixList?.id
+          ? await entities.FixItem.filter({ fix_list_id: replayFixList.id }, "created_date", MAX_FIX_ITEMS)
+          : [];
+        const replaySnapshot = replayFixList?.id
+          ? buildPersistedAuthoritySnapshot({
+            run: scan,
+            fixList: replayFixList,
+            fixItems: replayItems,
+            userId: identity.owner_user_id,
+            sealedAt: scan.authority_sealed_at,
+          })
+          : null;
+        if (
+          replaySnapshot
+          && await verifyAuthoritySeal(replaySnapshot, secret, scan.authority_proof)
+        ) {
+          const release = await persistExactAdmissionRelease({
+            entities,
+            scan,
+            terminalStatus: "complete",
+            release: releaseAdmission,
+          });
+          requireAdmissionRelease(release);
+          const replayedScan = release?.scanRun
+            || await entities.ScanRun.get(identity.scan_id).catch(() => scan);
+          return Response.json({
+            success: true,
+            replayed: true,
+            workerVersion: WORKER_VERSION,
+            scanId: identity.scan_id,
+            fixListId: scan.fix_list_id,
+            fixListVerified: true,
+            allowanceConsumed: false,
+            scanRun: replayedScan,
+          });
+        }
       }
       throw new RequestProblem(409, "authority_immutable", "This scan is already terminal.");
     }
@@ -233,16 +251,58 @@ Deno.serve(async (req) => {
       throw new RequestProblem(500, "authority_persistence_incomplete", "The durable authority rows were not completely staged.");
     }
 
+    // Base44 may normalize/default entity values during persistence. Seal the
+    // exact representation the customer reader will later reconstruct, not the
+    // pre-write worker object. Keep the scan non-terminal until that stored
+    // representation has been re-read and cryptographically verified.
+    const persistedAuthoritySnapshot = buildPersistedAuthoritySnapshot({
+      run: {
+        ...stagedScan,
+        status: "complete",
+        release_gate_eligible: true,
+        completed_at: snapshot.sealed_at,
+      },
+      fixList: persistedFixList,
+      fixItems: persistedItems,
+      userId: identity.owner_user_id,
+      sealedAt: snapshot.sealed_at,
+    });
+    const finalAuthorityProof = await createAuthoritySeal(persistedAuthoritySnapshot, secret);
+    const finalRows = authorityRowsFromSnapshot(persistedAuthoritySnapshot, {
+      fixListId: fixList.id,
+      ownerUserId: identity.owner_user_id,
+      proof: finalAuthorityProof,
+    });
+
+    await entities.FixList.update(fixList.id, finalRows.fixList);
+    await reconcileFixItems(entities, fixList.id, finalRows.fixItems);
     await assertAttemptStillActive(entities, identity.scan_id, claimedAttempt);
-    await entities.ScanRun.update(identity.scan_id, scanRunFields);
+    const { attempt_count: _finalAttempt, ...finalScanFields } = finalRows.scanRun;
+    await entities.ScanRun.update(identity.scan_id, finalScanFields);
+
     const persistedScan = await entities.ScanRun.get(identity.scan_id);
+    const finalPersistedFixList = await entities.FixList.get(fixList.id);
+    const finalPersistedItems = finalRows.fixItems.length > 0
+      ? await entities.FixItem.filter({ fix_list_id: fixList.id }, "created_date", MAX_FIX_ITEMS)
+      : [];
+    const verifiedPersistedSnapshot = buildPersistedAuthoritySnapshot({
+      run: persistedScan,
+      fixList: finalPersistedFixList,
+      fixItems: finalPersistedItems,
+      userId: identity.owner_user_id,
+      sealedAt: snapshot.sealed_at,
+    });
     const authorityPersisted = Boolean(
       persistedScan?.status === "complete"
-      && persistedScan?.authority_proof === authorityProof
-      && persistedScan?.authority_seal_version === snapshot.version
-      && persistedScan?.authority_sealed_at === snapshot.sealed_at
+      && persistedScan?.authority_proof === finalAuthorityProof
+      && persistedScan?.authority_seal_version === persistedAuthoritySnapshot.version
+      && persistedScan?.authority_sealed_at === persistedAuthoritySnapshot.sealed_at
       && persistedScan?.fix_list_id === fixList.id
       && persistedScan?.release_gate_eligible === true
+      && finalPersistedFixList?.authority_proof === finalAuthorityProof
+      && finalPersistedItems.length === finalRows.fixItems.length
+      && finalPersistedItems.every((item) => item?.authority_proof === finalAuthorityProof)
+      && await verifyAuthoritySeal(verifiedPersistedSnapshot, secret, finalAuthorityProof)
     );
     if (!authorityPersisted) {
       throw new RequestProblem(500, "authority_terminal_update_failed", "The authoritative scan could not be finalized.");
@@ -330,6 +390,24 @@ function validateCurrentIdentity({ scan, project, identity, scanResult }) {
   ) {
     throw new RequestProblem(409, "authority_identity_mismatch", "The durable completion no longer matches this owner-bound scan.");
   }
+  if (!robotsPolicyMatches(scan, scanResult)) {
+    throw new RequestProblem(409, "robots_policy_mismatch", "The worker robots policy does not match this scan.");
+  }
+}
+
+function robotsPolicyMatches(scan, scanResult) {
+  const storedRespect = scan?.respect_robots_txt;
+  const storedOverride = scan?.owner_attested_robots_override;
+  const resultRespect = scanResult?.respect_robots_txt;
+  const resultOverride = scanResult?.owner_attested_robots_override;
+  return typeof storedRespect === "boolean"
+    && typeof storedOverride === "boolean"
+    && typeof resultRespect === "boolean"
+    && typeof resultOverride === "boolean"
+    && storedOverride === (storedRespect === false)
+    && resultOverride === (resultRespect === false)
+    && storedRespect === resultRespect
+    && storedOverride === resultOverride;
 }
 
 async function upsertSingleFixList(entities, desired, identity, scan) {

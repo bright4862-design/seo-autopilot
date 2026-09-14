@@ -371,6 +371,44 @@ test("the checkout handler enforces admission without mutating durable entitleme
       user_email: "paid@example.com",
       access_status: "pending",
       has_full_access: false,
+      stripe_checkout_session_id: "cs_old_100",
+    };
+    accessFilterCallCount = 0;
+    accessUpdates.length = 0;
+    sessionsByKey.set("old-100-session", {
+      id: "cs_old_100",
+      status: "open",
+      payment_status: "unpaid",
+      url: "https://checkout.stripe.test/old-100",
+      customer_email: "paid@example.com",
+      client_reference_id: "user-1",
+      metadata: {
+        base44_app_id: "6a498732ec779dfaaeab0e53",
+        plan_id: "standard150_lifetime",
+        access_id: "access-1",
+        owner_user_id: "user-1",
+        user_email: "paid@example.com",
+      },
+      line_items: { data: [{ price: { id: "price_old_100_usd" }, quantity: 1 }] },
+    });
+    const stripeCallsBeforePriceMigration = sessionCreateCalls.length;
+    const migratedCheckout = await invoke("https://rich-rank-pilot-flow.base44.app");
+    assert.equal(migratedCheckout.status, 200);
+    assert.deepEqual(await migratedCheckout.json(), { url: "https://checkout.stripe.test/cs_pending_1" });
+    assert.deepEqual(expiredSessionIds, ["cs_old_100"]);
+    assert.equal(sessionCreateCalls.length, stripeCallsBeforePriceMigration + 1);
+    const migratedCreate = sessionCreateCalls.at(-1);
+    assert.deepEqual(migratedCreate.params.line_items, [
+      { price: "price_1UFXgX4DcTLS57kiIag23r8C", quantity: 1 },
+    ]);
+    assert.equal(accessRecord.stripe_checkout_session_id, "cs_pending_1");
+
+    accessRecord = {
+      id: "access-1",
+      owner_user_id: "user-1",
+      user_email: "paid@example.com",
+      access_status: "pending",
+      has_full_access: false,
       stripe_checkout_session_id: "cs_expired_1",
     };
     accessFilterCallCount = 0;

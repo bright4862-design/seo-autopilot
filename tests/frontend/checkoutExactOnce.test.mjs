@@ -584,7 +584,7 @@ test("the webhook handler grants once for immediate or delayed payment delivery"
         object: {
           id: sessionId,
           payment_status: overrides.paymentStatus || "paid",
-          amount_total: overrides.amountTotal ?? 10000,
+          amount_total: overrides.amountTotal ?? 4900,
           currency: "usd",
           customer_email: "paid@example.com",
           client_reference_id: "user-1",

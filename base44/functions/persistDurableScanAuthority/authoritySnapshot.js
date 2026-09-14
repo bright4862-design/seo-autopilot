@@ -251,6 +251,46 @@ export function buildAuthoritySnapshot({ scan, review, identity, userId, now = n
   };
 }
 
+// Rebuild the authority payload from the exact entity rows Base44 returned
+// after persistence. The customer reader verifies this stored representation,
+// so the final HMAC must be derived from the same normalized values rather than
+// from the pre-write worker/review object.
+export function buildPersistedAuthoritySnapshot({ run, fixList, fixItems, userId, sealedAt }) {
+  const persistedRun = run && typeof run === "object" ? run : {};
+  const persistedFixList = fixList && typeof fixList === "object" ? fixList : {};
+  const persistedFixItems = Array.isArray(fixItems) ? fixItems : [];
+  const canonical = persistedFixList?.repair_contract_version === REPAIR_CONTRACT_V2
+    && persistedFixList?.repair_snapshot_contract_version === REPAIR_CONTRACT_V2
+    && persistedFixList?.repair_snapshot_contract_complete === true
+    && persistedFixList?.repair_priority_model_version === REPAIR_PRIORITY_MODEL_V2;
+
+  return buildAuthoritySnapshot({
+    scan: {
+      ...persistedRun,
+      submitted_url: persistedRun.website_url,
+    },
+    review: {
+      ...persistedRun,
+      ...persistedFixList,
+      recommendations: persistedFixItems,
+      ...(canonical ? {
+        repair_contract_version: REPAIR_CONTRACT_V2,
+        repair_snapshot_contract_version: REPAIR_CONTRACT_V2,
+        repair_snapshot_contract_complete: true,
+        repair_priority_model_version: REPAIR_PRIORITY_MODEL_V2,
+        canonical_repairs: persistedFixItems,
+      } : {}),
+    },
+    identity: {
+      scan_id: persistedRun.id || persistedRun.scan_id,
+      project_id: persistedRun.project_id || persistedFixList.project_id,
+      normalized_domain: persistedRun.normalized_domain || persistedRun.website_url,
+    },
+    userId,
+    now: sealedAt || persistedRun.authority_sealed_at,
+  });
+}
+
 function suppressAggregateCoveredPageFixes(fixes) {
   const coverage = new Set();
   for (const fix of fixes) {

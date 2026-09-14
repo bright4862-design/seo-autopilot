@@ -275,4 +275,5 @@ def test_funbooker_image_descriptions_classify_as_image_alt_and_collapse():
     assert len(image_fixes) == 1
     assert len(image_fixes[0]["affected_pages"]) == 3
     assert image_fixes[0]["source"].startswith("page_pattern:")
-    assert image_fixes[0]["who_can_do_this"] == "your_web_person"
+    assert image_fixes[0]["who_can_do_this"] == "you_or_your_web_person"
+    assert image_fixes[0]["requires_developer"] is False

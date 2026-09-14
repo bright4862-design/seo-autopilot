@@ -85,6 +85,26 @@ def test_small_redirect_change_is_presented_as_owner_or_web_person_work():
     assert fix["estimated_time"] == "about 15–30 minutes"
 
 
+def test_shared_image_alt_pattern_is_owner_or_web_person_not_developer_only():
+    fix = _normalize(
+        "image_alt_text",
+        "image_alt_text",
+        3,
+        source="page_pattern:image_alt_text:activity_detail",
+        page_template_family="activity_detail",
+        page_scope="family",
+        difficulty="developer",
+        requires_developer=True,
+        status="needs_developer",
+        who_can_do_this="your_web_person",
+    )
+
+    assert fix["requires_developer"] is False
+    assert fix["who_can_do_this"] == "you_or_your_web_person"
+    assert fix["difficulty"] == "moderate"
+    assert fix["estimated_time"] == "about 15–30 minutes"
+
+
 def test_rendering_problem_stays_developer_owned_even_for_one_url():
     fix = _normalize(
         "js_rendering",

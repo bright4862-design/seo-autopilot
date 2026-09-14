@@ -156,12 +156,10 @@ test("unpaid verified results show a useful bounded preview without full exporta
     assert.equal(preview.authority_verified, true);
     assert.equal(preview.run.health_score, 61);
     assert.equal(preview.fixList.total_fixes, 10);
-    assert.equal(preview.fixItems.length, 8, "preview sends only a bounded subset of findings");
+    assert.equal(preview.fixItems.length, 2, "preview sends only the two teaser findings");
 
-    const detailed = preview.fixItems.slice(0, 5);
-    const summaryOnly = preview.fixItems.slice(5);
-    assert.equal(detailed.length, 5);
-    assert.equal(summaryOnly.length, 3);
+    const detailed = preview.fixItems;
+    assert.equal(detailed.length, 2);
 
     detailed.forEach((item, index) => {
       assert.equal(item.preview_locked_detail, false);
@@ -170,22 +168,6 @@ test("unpaid verified results show a useful bounded preview without full exporta
       assert.equal(item.recommended_value, `Preview recommendation ${index + 1}`);
       assert.equal(item.preview_example_page, `https://example.com/private-${index + 1}`);
     });
-
-    const detailOnly = new Set([
-      "plain_english_explanation",
-      "why_it_matters",
-      "recommended_value",
-      "simple_next_step",
-      "difficulty",
-      "who_can_do_this",
-      "requires_developer",
-      "evidence_class",
-      "preview_example_page",
-    ]);
-    for (const item of summaryOnly) {
-      assert.equal(item.preview_locked_detail, true);
-      for (const key of detailOnly) assert.equal(key in item, false, `${key} leaked into locked preview summary`);
-    }
 
     const neverPreview = new Set([
       "page_url",
@@ -215,6 +197,8 @@ test("frontend and live V3 paths are wired for preview-before-payment", () => {
   assert.match(reader, /previewAccess:\s*!access\.ok/);
   assert.match(fixList, /customer_access === "preview"/);
   assert.match(fixList, /<PreviewResultState/);
+  assert.match(fixList, /more fixes are ready/i);
+  assert.match(fixList, /Unlock full FixList/i);
   assert.match(form, /preview_scan_used/);
 });
 

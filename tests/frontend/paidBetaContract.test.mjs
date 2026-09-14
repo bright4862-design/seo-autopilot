@@ -58,10 +58,14 @@ test("checkout, webhook and customer copy share one $100 contract", () => {
   }
 });
 
-test("customer copy is paid-only and contains no free-scan promise", () => {
-  for (const [name, source] of Object.entries({ accessClient, billing, scanForm, fixList })) {
-    assert.doesNotMatch(source, /free test scan|one free scan|Run free scan/i, name);
-  }
+test("customer copy offers one free Standard 150 preview before the same one-time full-access purchase", () => {
+  assert.match(landing, /One free Standard 150 test scan/i);
+  assert.match(landing, /No payment before your preview/i);
+  assert.match(landing, /Run free scan/i);
+  assert.match(scanForm, /one free Standard 150 test scan before payment/i);
+  assert.match(scanForm, /full access is required to copy, download, export/i);
+  assert.match(fixList, /Free preview is view-only/i);
+  assert.match(fixList, /copy, CSV\/PDF\/JSON downloads, exports/i);
   assert.match(billing, /one-time payment/i);
   assert.match(billing, /Standard 150/);
   assert.doesNotMatch(billing, /Standard 150 beta/i);

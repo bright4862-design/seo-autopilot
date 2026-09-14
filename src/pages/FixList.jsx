@@ -1549,16 +1549,19 @@ function LockedResultState() {
 }
 
 function PreviewResultState({ scanRecord = {} }) {
-  const teaserItems = Array.isArray(scanRecord.recommendations) ? scanRecord.recommendations.slice(0, 3) : [];
+  const previewItems = Array.isArray(scanRecord.recommendations) ? scanRecord.recommendations.filter(Boolean) : [];
+  const detailedItems = previewItems.filter((item) => item?.preview_locked_detail !== true);
+  const lockedSummaryItems = previewItems.filter((item) => item?.preview_locked_detail === true);
   const score = getHealthScore(scanRecord);
   const pagesFound = getPagesFound(scanRecord);
   const pagesScanned = getPagesScanned(scanRecord, []);
-  const totalFixes = Math.max(Number(scanRecord.total_fixes || 0), teaserItems.length);
+  const totalFixes = Math.max(Number(scanRecord.total_fixes || 0), previewItems.length);
+  const hiddenFixCount = Math.max(0, totalFixes - previewItems.length);
 
   return (
     <div className="mt-16">
       <p className="text-[13px] text-ink-faint tabular-nums">
-        Free preview
+        Free test scan
         {pagesFound > 0 ? ` · ${formatCount(pagesFound)} pages found` : ""}
         {pagesScanned > 0 ? ` · ${formatCount(pagesScanned)} checked` : ""}
       </p>
@@ -1566,47 +1569,122 @@ function PreviewResultState({ scanRecord = {} }) {
       <div className="mt-4 flex items-center gap-7">
         <ScoreRing score={score} unavailable={score === null} />
         <div>
-          <h1 className="text-[26px] font-semibold leading-tight tracking-tight">Your preview FixList is ready</h1>
+          <h1 className="text-[26px] font-semibold leading-tight tracking-tight">Your free FixList preview is ready</h1>
           <p className="mt-1.5 text-[15px] text-ink-muted">
             {totalFixes > 0
-              ? `${formatCount(totalFixes)} ${totalFixes === 1 ? "issue" : "issues"} found · showing 3 preview items`
+              ? `${formatCount(totalFixes)} ${totalFixes === 1 ? "issue" : "issues"} found · most results are visible below`
               : "Your scan is complete."}
           </p>
         </div>
       </div>
 
-      {teaserItems.length > 0 ? (
+      {detailedItems.length > 0 ? (
         <section className="mt-10" aria-labelledby="preview-findings-heading">
           <div className="flex items-baseline justify-between gap-4">
-            <h2 id="preview-findings-heading" className="text-[20px] font-semibold tracking-tight text-ink">A few things FixList found</h2>
-            <span className="text-[12px] text-ink-faint">Preview only</span>
+            <div>
+              <h2 id="preview-findings-heading" className="text-[20px] font-semibold tracking-tight text-ink">What FixList found</h2>
+              <p className="mt-1.5 max-w-[54ch] text-[12.5px] leading-relaxed text-ink-faint">
+                The highest-priority findings are shown with enough detail to judge the scan. Complete evidence, every affected URL, step-by-step instructions, copy, download and export require full access.
+              </p>
+            </div>
+            <span className="shrink-0 text-[12px] text-ink-faint">Free preview</span>
           </div>
-          <div className="mt-3 divide-y divide-hairline-soft border-y border-hairline-soft">
-            {teaserItems.map((item, index) => {
+
+          <div className="mt-4 divide-y divide-hairline-soft border-y border-hairline-soft">
+            {detailedItems.map((item, index) => {
               const title = cleanString(item.issue_title) || `Issue ${index + 1}`;
               const category = cleanString(item.customer_category);
               const priority = customerPriorityLabel(item.action_priority || item.priority);
               const pageCount = Math.max(0, Number(item.page_count || 0));
+              const explanation = cleanString(item.plain_english_explanation);
+              const why = cleanString(item.why_it_matters);
+              const recommendation = cleanString(item.recommended_value || item.simple_next_step);
+              const who = cleanString(item.who_can_do_this) || (item.requires_developer === true ? "Web developer" : "You or your web team");
+              const examplePage = cleanString(item.preview_example_page);
               return (
-                <div key={item.id || item.fix_id || `${title}-${index}`} className="py-5">
-                  <h3 className="text-[16px] font-medium tracking-tight text-ink">{title}</h3>
-                  <p className="mt-1 text-[12px] font-medium text-ink-faint">
-                    {[priority, category, pageCount > 0 ? `${formatCount(pageCount)} ${pageCount === 1 ? "page" : "pages"}` : ""].filter(Boolean).join(" · ")}
+                <article key={item.id || item.fix_id || `${title}-${index}`} className="py-6">
+                  <div className="flex flex-wrap items-start justify-between gap-x-5 gap-y-2">
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-[17px] font-medium tracking-tight text-ink">{title}</h3>
+                      <p className="mt-1 text-[12px] font-medium text-ink-faint">
+                        {[priority, category, pageCount > 0 ? `${formatCount(pageCount)} ${pageCount === 1 ? "page" : "pages"}` : ""].filter(Boolean).join(" · ")}
+                      </p>
+                    </div>
+                  </div>
+
+                  {explanation ? <p className="mt-3 max-w-[58ch] text-[14px] leading-relaxed text-ink-muted">{explanation}</p> : null}
+
+                  <dl className="mt-4 space-y-3">
+                    {why ? (
+                      <div>
+                        <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Why it matters</dt>
+                        <dd className="mt-1 max-w-[58ch] text-[13.5px] leading-relaxed text-ink-muted">{why}</dd>
+                      </div>
+                    ) : null}
+                    {recommendation ? (
+                      <div>
+                        <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">What to change</dt>
+                        <dd className="mt-1 max-w-[58ch] text-[13.5px] leading-relaxed text-ink">{recommendation}</dd>
+                      </div>
+                    ) : null}
+                    {examplePage ? (
+                      <div>
+                        <dt className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Example affected page</dt>
+                        <dd className="mt-1 max-w-[58ch] break-all text-[12.5px] leading-relaxed text-ink-muted">{examplePage}</dd>
+                      </div>
+                    ) : null}
+                  </dl>
+
+                  <p className="mt-4 text-[12px] text-ink-faint"><span className="font-medium text-ink-muted">Who:</span> {who}</p>
+                  <p className="mt-3 text-[11.5px] leading-relaxed text-ink-faint">
+                    The complete affected-page list, technical evidence and reusable export are reserved for full access.
                   </p>
-                </div>
+                </article>
               );
             })}
           </div>
         </section>
       ) : null}
 
+      {lockedSummaryItems.length > 0 || hiddenFixCount > 0 ? (
+        <section className="mt-9 rounded-2xl border border-hairline-soft bg-white/45 px-5 py-5" aria-labelledby="more-preview-findings-heading">
+          <div className="flex items-baseline justify-between gap-4">
+            <h2 id="more-preview-findings-heading" className="text-[17px] font-semibold tracking-tight text-ink">More findings from this scan</h2>
+            <span className="text-[11px] uppercase tracking-[0.08em] text-ink-faint">Details locked</span>
+          </div>
+          {lockedSummaryItems.length > 0 ? (
+            <div className="mt-3 divide-y divide-hairline-soft">
+              {lockedSummaryItems.map((item, index) => {
+                const title = cleanString(item.issue_title) || `Additional issue ${index + 1}`;
+                const category = cleanString(item.customer_category);
+                const priority = customerPriorityLabel(item.action_priority || item.priority);
+                const pageCount = Math.max(0, Number(item.page_count || 0));
+                return (
+                  <div key={item.id || item.fix_id || `${title}-${index}`} className="py-3.5 first:pt-1">
+                    <p className="text-[14px] font-medium text-ink">{title}</p>
+                    <p className="mt-1 text-[11.5px] text-ink-faint">
+                      {[priority, category, pageCount > 0 ? `${formatCount(pageCount)} ${pageCount === 1 ? "page" : "pages"}` : ""].filter(Boolean).join(" · ")}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+          {hiddenFixCount > 0 ? (
+            <p className="mt-3 text-[12.5px] leading-relaxed text-ink-muted">
+              + {formatCount(hiddenFixCount)} additional {hiddenFixCount === 1 ? "finding" : "findings"} are included in the complete FixList.
+            </p>
+          ) : null}
+        </section>
+      ) : null}
+
       <section className="mt-10 rounded-2xl border border-hairline-soft bg-white p-6" aria-labelledby="unlock-preview-heading">
         <h2 id="unlock-preview-heading" className="text-[21px] font-semibold tracking-tight text-ink">Unlock your complete FixList</h2>
         <p className="mt-2 max-w-[54ch] text-[14px] leading-relaxed text-ink-muted">
-          Pay {UNLOCK_PRICE_LABEL} once to reveal every issue, affected URL, evidence, why it matters, and exactly what to change. Full access also includes exports and unlimited Standard 150 scans.
+          Pay {UNLOCK_PRICE_LABEL} once to open every finding, every affected URL, complete evidence and implementation guidance. Full access also enables copy, CSV/PDF/JSON downloads, exports and future Standard 150 scans.
         </p>
         <p className="mt-3 text-[12.5px] leading-relaxed text-ink-faint">
-          The locked details are not sent to this browser until payment is confirmed.
+          Free preview is view-only. The complete URL lists and export payloads are not sent to this browser until access is confirmed.
         </p>
         <div className="mt-5">
           <UnlockAccessButton />

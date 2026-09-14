@@ -602,7 +602,7 @@ export default function FixList() {
               <p className="mt-8 max-w-[56ch] text-[14px] leading-relaxed text-ink-muted">{summary}</p>
             ) : null}
 
-            {repairPresentation.canonical === true && customerRepairCards.length > 0 ? (
+            {scanRecord?.customer_access === "full" && repairPresentation.canonical === true && customerRepairCards.length > 0 ? (
               <ScanExportControls
                 scanRecord={scanRecord}
                 cards={customerRepairCards}

@@ -212,8 +212,15 @@ test("the free preview is view-only and contains no copy, download, or export im
   assert.match(preview, /Free preview is view-only/);
   assert.match(preview, /copy, CSV\/PDF\/JSON downloads, exports/);
   assert.match(preview, /preview_locked_detail/);
+  assert.match(preview, /customerOwnerLabel/);
   assert.doesNotMatch(preview, /navigator\.clipboard/);
   assert.doesNotMatch(preview, /downloadTextFile/);
   assert.doesNotMatch(preview, /exportScanReportPdf/);
   assert.doesNotMatch(preview, /<ScanExportControls/);
+});
+
+test("customer cards label the estimate as work rather than vague effort", () => {
+  const fixList = readFileSync("src/pages/FixList.jsx", "utf8");
+  assert.match(fixList, /Estimated work:/);
+  assert.doesNotMatch(fixList, />Effort:<\/span>/);
 });

@@ -79,8 +79,8 @@ test("repeated-title fallback uses the persisted canonical evidence classes", ()
 
 test("all five live score normalizers are pinned byte-identical", () => {
   const copies = [
-    "base44/functions/persistDurableScanAuthorityV3/authoritySnapshot.js",
-    "base44/functions/getCustomerScanResultV3/projection.js",
+    "base44/functions/persistDurableScanAuthorityV4/authoritySnapshot.js",
+    "base44/functions/getCustomerScanResultV4/projection.js",
     "base44/functions/grokChat/authoritySnapshot.js",
     "base44/functions/persistDurableScanAuthority/authoritySnapshot.js",
     "base44/functions/getCustomerScanResult/projection.js",

@@ -45,14 +45,19 @@ const CONSUMERS = [
   "base44/functions/getCustomerScanResult/generatedReleaseContract.js",
   "base44/functions/persistDurableScanAuthorityV2/generatedReleaseContract.js",
   "base44/functions/persistDurableScanAuthorityV3/generatedReleaseContract.js",
+  "base44/functions/persistDurableScanAuthorityV4/generatedReleaseContract.js",
   "base44/functions/persistLimitedScanResultV2/generatedReleaseContract.js",
   "base44/functions/persistLimitedScanResultV3/generatedReleaseContract.js",
+  "base44/functions/persistLimitedScanResultV4/generatedReleaseContract.js",
   "base44/functions/startStandardScanJobV2/generatedReleaseContract.js",
   "base44/functions/startStandardScanJobV3/generatedReleaseContract.js",
+  "base44/functions/startStandardScanJobV4/generatedReleaseContract.js",
   "base44/functions/durableScanWorkerControlV2/generatedReleaseContract.js",
   "base44/functions/durableScanWorkerControlV3/generatedReleaseContract.js",
+  "base44/functions/durableScanWorkerControlV4/generatedReleaseContract.js",
   "base44/functions/getCustomerScanResultV2/generatedReleaseContract.js",
   "base44/functions/getCustomerScanResultV3/generatedReleaseContract.js",
+  "base44/functions/getCustomerScanResultV4/generatedReleaseContract.js",
   // Not in RELEASE_FUNCTIONS and not reachable from the live app, but they must
   // not be able to ship a stale marker if they are ever republished.
   "base44/functions/aiReviewScan/generatedReleaseContract.js",
@@ -73,14 +78,19 @@ const ENTRY_IDENTITY_CONSUMERS = [
   "base44/functions/getCustomerScanResult/entry.ts",
   "base44/functions/persistDurableScanAuthorityV2/entry.ts",
   "base44/functions/persistDurableScanAuthorityV3/entry.ts",
+  "base44/functions/persistDurableScanAuthorityV4/entry.ts",
   "base44/functions/persistLimitedScanResultV2/entry.ts",
   "base44/functions/persistLimitedScanResultV3/entry.ts",
+  "base44/functions/persistLimitedScanResultV4/entry.ts",
   "base44/functions/startStandardScanJobV2/entry.ts",
   "base44/functions/startStandardScanJobV3/entry.ts",
+  "base44/functions/startStandardScanJobV4/entry.ts",
   "base44/functions/durableScanWorkerControlV2/entry.ts",
   "base44/functions/durableScanWorkerControlV3/entry.ts",
+  "base44/functions/durableScanWorkerControlV4/entry.ts",
   "base44/functions/getCustomerScanResultV2/entry.ts",
   "base44/functions/getCustomerScanResultV3/entry.ts",
+  "base44/functions/getCustomerScanResultV4/entry.ts",
   "base44/functions/ownerScanDebugControl/entry.ts",
   "base44/functions/aiReviewScan/entry.ts",
 ];
@@ -116,9 +126,9 @@ const ROUTE_CONTRACT = JSON.parse(
   fs.readFileSync(path.join(REPO_ROOT, "data/base44-function-routes.json"), "utf8"),
 );
 const ROUTE_ALIASES = ROUTE_CONTRACT.routes;
-// Retired V2 identities remain resolvable for the bounded historical recovery.
-const HISTORICAL_ROUTE_ALIASES = ROUTE_CONTRACT.historical_routes.v2;
-const ALL_ROUTE_ALIASES = [...Object.entries(ROUTE_ALIASES), ...Object.entries(HISTORICAL_ROUTE_ALIASES)];
+// Retired route generations remain resolvable for bounded historical recovery.
+const HISTORICAL_ROUTE_ALIASES = Object.values(ROUTE_CONTRACT.historical_routes || {}).flatMap((routes) => Object.entries(routes));
+const ALL_ROUTE_ALIASES = [...Object.entries(ROUTE_ALIASES), ...HISTORICAL_ROUTE_ALIASES];
 const FUNCTION_BUILD_ID_FILE = "generatedBuildId.js";
 
 function functionBuildIdFiles(fnName) {

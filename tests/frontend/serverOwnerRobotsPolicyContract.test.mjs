@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const dispatcher = readFileSync("base44/functions/startStandardScanJobV3/entry.ts", "utf8");
+const dispatcher = readFileSync("base44/functions/startStandardScanJobV4/entry.ts", "utf8");
 const scanRunSchema = JSON.parse(readFileSync("base44/entities/ScanRun.jsonc", "utf8"));
 const worker = readFileSync("scanner-api/app/main.py", "utf8");
 const workerHelpers = readFileSync("scanner-api/app/scan_job.py", "utf8");
-const authority = readFileSync("base44/functions/persistDurableScanAuthorityV3/entry.ts", "utf8");
-const limited = readFileSync("base44/functions/persistLimitedScanResultV3/entry.ts", "utf8");
+const authority = readFileSync("base44/functions/persistDurableScanAuthorityV4/entry.ts", "utf8");
+const limited = readFileSync("base44/functions/persistLimitedScanResultV4/entry.ts", "utf8");
 
 test("server derives owner robots policy from the owned BusinessProject, never browser policy intent", () => {
   assert.match(dispatcher, /site_owner_attestation/);

@@ -240,8 +240,8 @@ def test_authority_is_verified_before_paid_independent_terminal_completion():
 
 def test_worker_uses_only_signed_hosted_boundaries():
     source = WORKER_SOURCE.read_text(encoding="utf-8")
-    assert 'invoke_function(client, "persistDurableScanAuthorityV3", envelope)' in source
-    assert 'invoke_function(client, "durableScanWorkerControlV3", envelope' in source
+    assert 'invoke_function(client, "persistDurableScanAuthorityV4", envelope)' in source
+    assert 'invoke_function(client, "durableScanWorkerControlV4", envelope' in source
     assert "/entities/" not in source
     assert "Base44-Service-Authorization" not in source
     assert 'invoke_function(client, "aiReviewScan"' not in source

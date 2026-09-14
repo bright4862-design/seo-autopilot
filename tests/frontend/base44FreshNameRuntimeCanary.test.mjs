@@ -95,17 +95,17 @@ test("fresh-name Base44 runtime canary is exact-main, owner-gated, isolated, and
 
   for (const customerRoute of [
     "startStandardScanJobV2",
-    "startStandardScanJobV3",
+    "startStandardScanJobV4",
     "durableScanWorkerControlV2",
-    "durableScanWorkerControlV3",
+    "durableScanWorkerControlV4",
     "persistDurableScanAuthorityV2",
-    "persistDurableScanAuthorityV3",
+    "persistDurableScanAuthorityV4",
     "persistLimitedScanResultV2",
-    "persistLimitedScanResultV3",
+    "persistLimitedScanResultV4",
     "getCustomerScanResultV2",
-    "getCustomerScanResultV3",
+    "getCustomerScanResultV4",
     "deleteCustomerScanDataV2",
-    "deleteCustomerScanDataV3",
+    "deleteCustomerScanDataV4",
   ]) {
     assert.doesNotMatch(workflow, new RegExp(customerRoute),
       `${customerRoute} must not be touched by the fresh-name diagnostic`);

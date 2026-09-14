@@ -36,12 +36,12 @@ const FUNCTIONS_DIR = "base44/functions";
 const ENTITIES_DIR = "base44/entities";
 
 export const RELEASE_FUNCTIONS = [
-  "startStandardScanJobV3",
-  "durableScanWorkerControlV3",
-  "persistDurableScanAuthorityV3",
-  "persistLimitedScanResultV3",
-  "getCustomerScanResultV3",
-  "deleteCustomerScanDataV3",
+  "startStandardScanJobV4",
+  "durableScanWorkerControlV4",
+  "persistDurableScanAuthorityV4",
+  "persistLimitedScanResultV4",
+  "getCustomerScanResultV4",
+  "deleteCustomerScanDataV4",
   "createAccessCheckout",
   "stripeWebhook",
   "ownerScanDebugControl",

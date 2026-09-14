@@ -4,7 +4,7 @@ import test from "node:test";
 
 import * as scanEntitlement from "../../base44/functions/startStandardScanJob/entitlement.js";
 import { buildCustomerProjection as buildLegacyCustomerProjection } from "../../base44/functions/getCustomerScanResult/projection.js";
-import { buildCustomerProjection as buildV3CustomerProjection } from "../../base44/functions/getCustomerScanResultV3/projection.js";
+import { buildCustomerProjection as buildV3CustomerProjection } from "../../base44/functions/getCustomerScanResultV4/projection.js";
 
 const APP_ID = "6a498732ec779dfaaeab0e53";
 const PLAN_ID = "standard150_lifetime";
@@ -188,8 +188,8 @@ test("frontend and live V3 paths are wired for preview-before-payment", () => {
   const form = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
   const access = readFileSync("src/lib/access.js", "utf8");
   const fixList = readFileSync("src/pages/FixList.jsx", "utf8");
-  const dispatcher = readFileSync("base44/functions/startStandardScanJobV3/entry.ts", "utf8");
-  const reader = readFileSync("base44/functions/getCustomerScanResultV3/entry.ts", "utf8");
+  const dispatcher = readFileSync("base44/functions/startStandardScanJobV4/entry.ts", "utf8");
+  const reader = readFileSync("base44/functions/getCustomerScanResultV4/entry.ts", "utf8");
 
   assert.match(access, /canScan:\s*fullAccess\s*\|\|\s*previewEligible/);
   assert.match(dispatcher, /evaluateScanAccess/);

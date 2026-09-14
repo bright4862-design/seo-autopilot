@@ -13,7 +13,7 @@ import {
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "../../base44/functions/startStandardScanJob/generatedReleaseContract.js";
 
 const entrySource = readFileSync("base44/functions/startStandardScanJob/entry.ts", "utf8");
-const V3_ENTRY_PATH = "base44/functions/startStandardScanJobV3/entry.ts";
+const V3_ENTRY_PATH = "base44/functions/startStandardScanJobV4/entry.ts";
 
 function matches(record, query) {
   for (const [field, expected] of Object.entries(query || {})) {

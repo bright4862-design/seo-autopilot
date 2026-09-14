@@ -47,14 +47,14 @@ test("every customer-release function package is portable, closed, pinned and sy
   const problems = auditAll().flatMap((r) => r.problems);
   assert.deepEqual(problems, [], problems.join("\n"));
   assert.deepEqual(RELEASE_FUNCTIONS, [
-    "startStandardScanJobV3",
-    "durableScanWorkerControlV3",
-    "persistDurableScanAuthorityV3",
+    "startStandardScanJobV4",
+    "durableScanWorkerControlV4",
+    "persistDurableScanAuthorityV4",
     // A limited result gets its own package rather than a provisional branch
     // inside the authority function: there is no authority seal in it to weaken.
-    "persistLimitedScanResultV3",
-    "getCustomerScanResultV3",
-    "deleteCustomerScanDataV3",
+    "persistLimitedScanResultV4",
+    "getCustomerScanResultV4",
+    "deleteCustomerScanDataV4",
     "createAccessCheckout",
     "stripeWebhook",
     "ownerScanDebugControl",
@@ -289,13 +289,13 @@ test("a fresh pulled Base44 inventory must match every release package and autho
     }
     assert.equal(compareReleaseDirectories(functionsRoot, entitiesRoot).ok, true);
 
-    fs.appendFileSync(path.join(functionsRoot, "getCustomerScanResultV3", "projection.js"), "\n// drift\n");
+    fs.appendFileSync(path.join(functionsRoot, "getCustomerScanResultV4", "projection.js"), "\n// drift\n");
     const drifted = compareReleaseDirectories(functionsRoot, entitiesRoot);
     assert.equal(drifted.ok, false);
-    assert.ok(drifted.problems.some((problem) => problem.includes("getCustomerScanResultV3")));
+    assert.ok(drifted.problems.some((problem) => problem.includes("getCustomerScanResultV4")));
     fs.copyFileSync(
-      "base44/functions/getCustomerScanResultV3/projection.js",
-      path.join(functionsRoot, "getCustomerScanResultV3", "projection.js"),
+      "base44/functions/getCustomerScanResultV4/projection.js",
+      path.join(functionsRoot, "getCustomerScanResultV4", "projection.js"),
     );
 
     fs.appendFileSync(path.join(entitiesRoot, "ScanRun.jsonc"), "\n// drift\n");

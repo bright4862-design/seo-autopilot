@@ -9,12 +9,12 @@ DEPLOY_SCOPE="${DEPLOY_SCOPE:-release-functions}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 SCANNER_FUNCTIONS=(
-  startStandardScanJobV3
-  durableScanWorkerControlV3
-  persistDurableScanAuthorityV3
-  persistLimitedScanResultV3
-  getCustomerScanResultV3
-  deleteCustomerScanDataV3
+  startStandardScanJobV4
+  durableScanWorkerControlV4
+  persistDurableScanAuthorityV4
+  persistLimitedScanResultV4
+  getCustomerScanResultV4
+  deleteCustomerScanDataV4
 )
 RELEASE_FUNCTIONS=(
   "${SCANNER_FUNCTIONS[@]}"

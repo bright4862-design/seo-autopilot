@@ -8,12 +8,12 @@ import test from "node:test";
 const script = "scripts/deploy-base44-beta-functions.sh";
 const workflow = readFileSync(".github/workflows/fixlist-base44-release-publish.yml", "utf8");
 const scannerFunctions = [
-  "startStandardScanJobV3",
-  "durableScanWorkerControlV3",
-  "persistDurableScanAuthorityV3",
-  "persistLimitedScanResultV3",
-  "getCustomerScanResultV3",
-  "deleteCustomerScanDataV3",
+  "startStandardScanJobV4",
+  "durableScanWorkerControlV4",
+  "persistDurableScanAuthorityV4",
+  "persistLimitedScanResultV4",
+  "getCustomerScanResultV4",
+  "deleteCustomerScanDataV4",
 ];
 
 function fixture({ verifierExit = 0 } = {}) {

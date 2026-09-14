@@ -6,7 +6,7 @@ import {
   authoritySnapshotFromRows,
   createAuthoritySeal,
   verifyAuthoritySeal,
-} from "../../base44/functions/getCustomerScanResultV3/projection.js";
+} from "../../base44/functions/getCustomerScanResultV4/projection.js";
 
 const SECRET = "reader-parity-test-secret";
 const NOW = "2026-09-14T17:30:00.000Z";
@@ -112,7 +112,7 @@ test("customer authority reconstruction accepts canonical repair evidence groups
 });
 
 test("authority verification failure logs bounded release identity without logging proofs or secrets", () => {
-  const source = readFileSync("base44/functions/getCustomerScanResultV3/entry.ts", "utf8");
+  const source = readFileSync("base44/functions/getCustomerScanResultV4/entry.ts", "utf8");
 
   assert.match(source, /getCustomerScanResult authority verification failed/);
   assert.match(source, /scan_id:\s*cleanId\(run\.id\)/);

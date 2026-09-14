@@ -561,10 +561,7 @@ function authorityFixFromRow(item, { canonical = false, version = "" } = {}) {
     requires_approval: item?.requires_approval === true,
     can_auto_fix: false,
     estimated_time: text(item?.estimated_time, 120),
-    // user_status is mutable customer workflow state. The writer seals the
-    // immutable initial value, so verification must never depend on later
-    // customer progress updates.
-    user_status: "open",
+    user_status: text(item?.user_status, 80),
     what_to_do_steps: textArray(item?.what_to_do_steps, 12, 1_000),
   };
   if (!canonical) {
@@ -602,8 +599,8 @@ function authorityFixFromRow(item, { canonical = false, version = "" } = {}) {
     ...(text(item?.comparison_profile_version, 160) ? { comparison_profile_version: text(item?.comparison_profile_version, 160) } : {}),
     raw_finding: {
       verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence),
-      ...(canonicalRepairEvidenceGroups(item?.repair_evidence_groups || raw.repair_evidence_groups).length > 0
-        ? { repair_evidence_groups: canonicalRepairEvidenceGroups(item?.repair_evidence_groups || raw.repair_evidence_groups) }
+      ...(canonicalRepairEvidenceGroups(raw.repair_evidence_groups).length > 0
+        ? { repair_evidence_groups: canonicalRepairEvidenceGroups(raw.repair_evidence_groups) }
         : {}),
       ...reportEvidence,
     },

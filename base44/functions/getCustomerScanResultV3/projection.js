@@ -239,7 +239,7 @@ const FIX_ITEM_FIELDS = [
   "updated_date",
 ];
 
-const PREVIEW_FIX_ITEM_FIELDS = [
+const PREVIEW_SUMMARY_FIX_ITEM_FIELDS = [
   "id",
   "fix_id",
   "issue_title",
@@ -248,6 +248,21 @@ const PREVIEW_FIX_ITEM_FIELDS = [
   "action_priority",
   "page_count",
 ];
+
+const PREVIEW_DETAILED_FIX_ITEM_FIELDS = [
+  ...PREVIEW_SUMMARY_FIX_ITEM_FIELDS,
+  "plain_english_explanation",
+  "why_it_matters",
+  "recommended_value",
+  "simple_next_step",
+  "difficulty",
+  "who_can_do_this",
+  "requires_developer",
+  "evidence_class",
+];
+
+const PREVIEW_DETAILED_FIX_COUNT = 5;
+const PREVIEW_VISIBLE_FIX_COUNT = 8;
 
 const PREVIEW_FIX_LIST_FIELDS = [
   "id",
@@ -317,8 +332,25 @@ function sanitizePreviewRun(run) {
   return result;
 }
 
-function sanitizePreviewFixItem(item) {
-  return pickFields(item, PREVIEW_FIX_ITEM_FIELDS);
+function previewExamplePage(item = {}) {
+  const candidates = [
+    ...(Array.isArray(item?.affected_pages) ? item.affected_pages : []),
+    item?.page_url,
+  ];
+  return candidates.map((value) => text(value, 2_000)).find(Boolean) || "";
+}
+
+function sanitizePreviewFixItem(item, { detailed = false } = {}) {
+  const result = pickFields(
+    item,
+    detailed ? PREVIEW_DETAILED_FIX_ITEM_FIELDS : PREVIEW_SUMMARY_FIX_ITEM_FIELDS,
+  );
+  result.preview_locked_detail = detailed !== true;
+  if (detailed) {
+    const examplePage = previewExamplePage(item);
+    if (examplePage) result.preview_example_page = examplePage;
+  }
+  return result;
 }
 
 function previewFixItems(fixItems = []) {
@@ -331,8 +363,8 @@ function previewFixItems(fixItems = []) {
       if (normalizedLeftRank !== normalizedRightRank) return normalizedLeftRank - normalizedRightRank;
       return number(right?.action_priority_score) - number(left?.action_priority_score);
     })
-    .slice(0, 3)
-    .map(sanitizePreviewFixItem);
+    .slice(0, PREVIEW_VISIBLE_FIX_COUNT)
+    .map((item, index) => sanitizePreviewFixItem(item, { detailed: index < PREVIEW_DETAILED_FIX_COUNT }));
 }
 
 export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, previewAccess = false, authorityVerified, resultIntegrityVerified }) {

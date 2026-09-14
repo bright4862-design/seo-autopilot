@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildAuthoritySnapshot,
+  buildPersistedAuthoritySnapshot,
 } from "../../base44/functions/persistDurableScanAuthority/authoritySnapshot.js";
 import { authorityRowsFromSnapshot } from "../../base44/functions/persistDurableScanAuthority/authorityRows.js";
 import {
@@ -138,6 +139,59 @@ test("authority report evidence survives signing, stored rows, reconstruction, a
 
   assert.deepEqual(reconstructed, snapshot);
   assert.equal(await verifyAuthoritySeal(reconstructed, SECRET, proof), true);
+});
+
+test("authority proof is derived from the persistence-normalized rows the customer reader will verify", async () => {
+  const snapshot = authoritySnapshot();
+  const stagingProof = await createAuthoritySeal(snapshot, SECRET);
+  const rows = authorityRowsFromSnapshot(snapshot, {
+    fixListId: "fixlist_persisted_normalized",
+    ownerUserId: "user_report_evidence",
+    proof: stagingProof,
+  });
+
+  // Model Base44's entity round-trip: schema defaults and server metadata may be
+  // added to the rows, while the signed customer fields must retain their value.
+  const storedRun = {
+    id: "scan_report_evidence",
+    project_id: "project_report_evidence",
+    normalized_domain: "example.com",
+    ...structuredClone(rows.scanRun),
+    updated_date: "2026-09-09T09:00:03.000Z",
+  };
+  const storedFixList = {
+    id: "fixlist_persisted_normalized",
+    ...structuredClone(rows.fixList),
+    created_date: "2026-09-09T09:00:02.000Z",
+  };
+  const storedFixItems = structuredClone(rows.fixItems).map((item, index) => ({
+    ...item,
+    page_count: 0,
+    family_breakdown: {},
+    representative_pages_by_family: {},
+    metadata_state_counts: { missing: 0, empty: 0, malformed: 0 },
+    combined_rules: [],
+    carried_over: false,
+    created_date: `2026-09-09T09:00:0${index + 2}.000Z`,
+  }));
+
+  const persistedSnapshot = buildPersistedAuthoritySnapshot({
+    run: storedRun,
+    fixList: storedFixList,
+    fixItems: storedFixItems,
+    userId: "user_report_evidence",
+    sealedAt: NOW,
+  });
+  const customerSnapshot = authoritySnapshotFromRows({
+    run: storedRun,
+    fixList: storedFixList,
+    fixItems: storedFixItems,
+    userId: "user_report_evidence",
+  });
+
+  assert.deepEqual(persistedSnapshot, customerSnapshot);
+  const finalProof = await createAuthoritySeal(persistedSnapshot, SECRET);
+  assert.equal(await verifyAuthoritySeal(customerSnapshot, SECRET, finalProof), true);
 });
 
 test("limited report evidence survives stored rows and proof verification", async () => {

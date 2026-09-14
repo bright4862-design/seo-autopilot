@@ -296,7 +296,7 @@ test("the export is offered only where the page shows canonical repair cards", (
   // would hand an assistant a list the page itself refuses to stand behind.
   assert.match(
     page,
-    /\{repairPresentation\.canonical === true && customerRepairCards\.length > 0 \? \(\s*<ScanExportControls/,
+    /\{scanRecord\?\.customer_access === "full" && repairPresentation\.canonical === true && customerRepairCards\.length > 0 \? \(\s*<ScanExportControls/,
   );
 });
 

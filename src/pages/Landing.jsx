@@ -17,8 +17,12 @@ const faqs = [
     a: "No. FixList is built for small business owners. It explains what matters, why it matters, and whether you can handle it yourself or may need help.",
   },
   {
-    q: "How much is access?",
-    a: `Standard 150 access is a one-time ${UNLOCK_PRICE_LABEL} payment. It includes unlimited scans, with up to 150 pages checked per scan.`,
+    q: "Can I try FixList before paying?",
+    a: "Yes. Create an account and run one free Standard 150 test scan. You can view your real score and most of the highest-priority findings before paying. Copy, download, export, complete affected-page lists, and future scans require full access.",
+  },
+  {
+    q: "How much is full access?",
+    a: `Your first test scan is free. Full Standard 150 access is a one-time ${UNLOCK_PRICE_LABEL} payment and includes the complete FixList, copy/download/export, and unlimited future scans of up to 150 pages each.`,
   },
   {
     q: "How long does a scan take?",
@@ -26,7 +30,7 @@ const faqs = [
   },
   {
     q: "What happens after I run my scan?",
-    a: "You get a FixList with your website health score, prioritized recommendations, affected pages, and simple next steps.",
+    a: "You get a real FixList preview with your website health score and most of the highest-priority findings. Full access reveals the complete affected-page evidence and enables copy, download, export, and future scans.",
   },
 ];
 
@@ -63,7 +67,7 @@ export default function Landing() {
               to="/register"
               className="rounded-full bg-ink px-3.5 py-2 text-[12px] font-medium text-paper transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink sm:px-4 sm:text-[13px]"
             >
-              Get access
+              Run free scan
             </Link>
           </div>
         </nav>
@@ -87,7 +91,7 @@ export default function Landing() {
                 to="/register"
                 className="rounded-full bg-ink px-5 py-2.5 text-[13px] font-medium text-paper transition-opacity hover:opacity-80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
               >
-                Get access
+                Run free scan
               </Link>
               <a
                 href="#faq"
@@ -99,10 +103,10 @@ export default function Landing() {
 
             <div className="mt-8 flex flex-wrap gap-x-6 gap-y-2 text-[13px] text-ink-muted">
               <span className="flex items-center gap-2">
-                <span className="text-good">✓</span> Up to 150 pages per scan
+                <span className="text-good">✓</span> One free Standard 150 test scan
               </span>
               <span className="flex items-center gap-2">
-                <span className="text-good">✓</span> One-time {UNLOCK_PRICE_LABEL} access
+                <span className="text-good">✓</span> No payment before your preview
               </span>
               <span className="flex items-center gap-2">
                 <span className="text-good">✓</span> Usually 2–4 minutes

@@ -13,7 +13,7 @@ const mobileNavigationSource = readFileSync(
   "utf8",
 );
 
-test("the public landing page states the paid Standard 150 contract without beta invitation language", () => {
+test("the public landing page offers one free Standard 150 preview and preserves the paid full-access contract", () => {
   assert.match(landingSource, /Standard 150/);
   assert.doesNotMatch(landingSource, /Standard 150 beta|Get beta access|invite-only/i);
   // The page renders the shared price constant rather than a literal, so certify
@@ -29,7 +29,11 @@ test("the public landing page states the paid Standard 150 contract without beta
   assert.match(landingSource, /one-time/i);
   assert.match(landingSource, /2–4 minutes/);
 
-  assert.doesNotMatch(landingSource, /free scan|no credit card/i);
+  assert.match(landingSource, /Run free scan/i);
+  assert.match(landingSource, /One free Standard 150 test scan/i);
+  assert.match(landingSource, /No payment before your preview/i);
+  assert.match(landingSource, /copy, download, export/i);
+  assert.doesNotMatch(landingSource, /no credit card/i);
   assert.doesNotMatch(landingSource, /1–2 minutes|1-2 minutes/i);
   assert.doesNotMatch(landingSource, /Grok|Premium/i);
 });

@@ -258,6 +258,15 @@ Deno.serve(async (req) => {
       throw new RequestProblem(503, "result_authority_unavailable", "Verified results are temporarily unavailable.");
     }
     if (!await verifyAuthoritySeal(snapshot, secret, proof)) {
+      console.error("getCustomerScanResult authority verification failed", {
+        scan_id: cleanId(run.id),
+        build_id: FUNCTION_BUILD_ID,
+        runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID,
+        authority_seal_version: cleanText(run.authority_seal_version, 160),
+        release_fingerprint: runReleaseFingerprint,
+        reader_release_fingerprint: RELEASE_FINGERPRINT,
+        fix_item_count: fixItems.length,
+      });
       throw new RequestProblem(409, "result_authority_invalid", "This saved result no longer matches its server authority seal.");
     }
 

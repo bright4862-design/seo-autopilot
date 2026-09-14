@@ -158,8 +158,19 @@ test("pending checkout retries reuse one user-stable Stripe idempotency key", as
       status: "open",
       payment_status: "unpaid",
       url: "https://checkout.stripe.test/one",
+      line_items: { data: [{ price: { id: "price_1UFXgX4DcTLS57kiIag23r8C" }, quantity: 1 }] },
     }),
     "reusable",
+  );
+  assert.equal(
+    checkoutHelpers.classifyExistingCheckoutSession({
+      id: "cs_old_100",
+      status: "open",
+      payment_status: "unpaid",
+      url: "https://checkout.stripe.test/old-100",
+      line_items: { data: [{ price: { id: "price_old_100_usd" }, quantity: 1 }] },
+    }),
+    "renew_wrong_price",
   );
   assert.equal(
     checkoutHelpers.classifyExistingCheckoutSession({
@@ -180,7 +191,8 @@ test("pending checkout retries reuse one user-stable Stripe idempotency key", as
     "renew",
   );
 
-  assert.match(checkoutSource, /checkout\.sessions\.retrieve\(previousSessionId\)/);
+  assert.match(checkoutSource, /checkout\.sessions\.retrieve\(previousSessionId, \{ expand: \["line_items\.data\.price"\] \}\)/);
+  assert.match(checkoutSource, /checkout\.sessions\.expire\(previousSessionId\)/);
   assert.match(checkoutSource, /\{ idempotencyKey: await checkoutIdempotencyKey\(access, policy\.generation\) \}/);
   assert.ok(
     checkoutSource.indexOf("checkout.sessions.retrieve(previousSessionId)") <
@@ -208,6 +220,7 @@ test("the checkout handler enforces admission without mutating durable entitleme
   const sessionCreateCalls = [];
   const sessionsByKey = new Map();
   let accessFilterCallCount = 0;
+  const expiredSessionIds = [];
   let beforeFilterCall = null;
   let beforeNextUpdate = null;
   let synchronizePendingWrites = false;
@@ -257,9 +270,18 @@ test("the checkout handler enforces admission without mutating durable entitleme
     constructor() {
       this.checkout = {
         sessions: {
-          retrieve: async (id) => {
+          retrieve: async (id, options) => {
+            assert.deepEqual(options, { expand: ["line_items.data.price"] });
             const session = [...sessionsByKey.values()].find((candidate) => candidate.id === id);
             if (!session) throw new Error("missing_test_session");
+            return session;
+          },
+          expire: async (id) => {
+            expiredSessionIds.push(id);
+            const session = [...sessionsByKey.values()].find((candidate) => candidate.id === id);
+            if (!session) throw new Error("missing_test_session");
+            session.status = "expired";
+            session.url = null;
             return session;
           },
           create: async (params, options) => {
@@ -274,6 +296,7 @@ test("the checkout handler enforces admission without mutating durable entitleme
               customer_email: params.customer_email,
               client_reference_id: params.client_reference_id,
               metadata: params.metadata,
+              line_items: { data: [{ price: { id: params.line_items[0].price }, quantity: params.line_items[0].quantity }] },
             };
             sessionsByKey.set(options.idempotencyKey, session);
             return session;

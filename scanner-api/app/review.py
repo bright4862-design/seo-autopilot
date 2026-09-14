@@ -2077,7 +2077,10 @@ def normalize_fix(fix: dict[str, Any], index: int) -> dict[str, Any]:
     page_url = clean_path(fix.get("page_url") or fix.get("url") or fix.get("final_url") or first_value(fix.get("affected_pages")) or first_value(fix.get("pages")) or "/")
     affected = normalize_affected_pages(fix, page_url)
     difficulty = normalize_difficulty(fix)
-    developer_owned = needs_developer_owner({**fix, "rule": rule, "category": category, "difficulty": difficulty, "affected_pages": affected})
+    repair_owner = repair_owner_for({**fix, "rule": rule, "category": category, "difficulty": difficulty, "affected_pages": affected})
+    developer_owned = repair_owner == "your_web_person"
+    customer_difficulty = "developer" if developer_owned else ("moderate" if repair_owner == "you_or_your_web_person" else ("easy" if difficulty == "developer" else difficulty))
+    estimated_time = estimate_repair_time({**fix, "rule": rule, "category": category, "affected_pages": affected}, repair_owner)
     title = clean_str(fix.get("issue_title") or fix.get("title")) or default_title(category, rule)
     explanation = clean_str(fix.get("plain_english_explanation") or fix.get("explanation") or fix.get("summary") or fix.get("description")) or "This recommendation was found during the website scan."
     why = clean_str(fix.get("why_it_matters") or fix.get("why") or fix.get("impact")) or "Improving this helps visitors and search engines understand and access the site more clearly."
@@ -2106,17 +2109,17 @@ def normalize_fix(fix: dict[str, Any], index: int) -> dict[str, Any]:
         "url_confidence": fix.get("url_confidence") or "",
         "url_suspicion_reasons": (fix.get("url_suspicion_reasons") or [])[:8] if isinstance(fix.get("url_suspicion_reasons"), list) else [],
         "priority": normalize_priority(fix.get("priority")),
-        "difficulty": "developer" if developer_owned else difficulty,
-        "status": "needs_developer" if developer_owned else fix.get("status") or ("auto_fixed" if fix.get("can_auto_fix") else "needs_approval"),
-        "requires_developer": developer_owned or bool(fix.get("requires_developer")),
-        "requires_approval": False if developer_owned else fix.get("requires_approval") is not False,
+        "difficulty": customer_difficulty,
+        "status": "needs_developer" if developer_owned else ("auto_fixed" if fix.get("can_auto_fix") else "needs_approval"),
+        "requires_developer": developer_owned,
+        "requires_approval": False if developer_owned else True,
         "can_auto_fix": bool(fix.get("can_auto_fix")) and not developer_owned,
         "what_to_do": steps,
         "what_to_do_steps": steps,
         "fix_steps": steps,
-        "who_can_do_this": "your_web_person" if developer_owned else normalize_owner(fix.get("who_can_do_this")),
-        "estimated_time": clean_str(fix.get("estimated_time") or fix.get("time_estimate")) or default_time("developer" if developer_owned else difficulty),
-        "time_estimate": clean_str(fix.get("time_estimate") or fix.get("estimated_time")) or default_time("developer" if developer_owned else difficulty),
+        "who_can_do_this": repair_owner,
+        "estimated_time": estimated_time,
+        "time_estimate": estimated_time,
         "confidence_score": fix.get("confidence_score") if isinstance(fix.get("confidence_score"), (int, float)) else 88,
     }
 
@@ -2166,7 +2169,8 @@ def score_fix(
         priority = "high"
     if rule in RATE_LIMIT_RULES and page_value["score"] < 70 and priority in {"critical", "high"}:
         priority = "medium"
-    developer_owned = needs_developer_owner({**fix, "primary_defect_class": defect_class})
+    repair_owner = repair_owner_for({**fix, "primary_defect_class": defect_class})
+    developer_owned = repair_owner == "your_web_person"
     affected_pages = dedupe_strings([clean_path(u) for u in (fix.get("affected_pages") or [page_url]) if clean_path(u)]) or ["/"]
     source_pages = dedupe_strings([clean_path(u) for u in (fix.get("source_pages") if isinstance(fix.get("source_pages"), list) else []) if clean_path(u)]) or affected_pages
     link_text_samples = [clean_str(x) for x in (fix.get("link_text_samples") if isinstance(fix.get("link_text_samples"), list) else []) if clean_str(x)][:12]
@@ -2202,10 +2206,12 @@ def score_fix(
         "overall_priority_score": overall,
         "site_fingerprint_vertical": site_fingerprint["primary_archetype"],
         "archetype_label": site_fingerprint["archetype_label"],
-        "requires_developer": developer_owned or bool(fix.get("requires_developer")),
-        "difficulty": "developer" if developer_owned else fix.get("difficulty"),
-        "status": "needs_developer" if developer_owned else fix.get("status"),
-        "who_can_do_this": "your_web_person" if developer_owned else fix.get("who_can_do_this"),
+        "requires_developer": developer_owned,
+        "difficulty": "developer" if developer_owned else ("moderate" if repair_owner == "you_or_your_web_person" else ("easy" if fix.get("difficulty") == "developer" else fix.get("difficulty"))),
+        "status": "needs_developer" if developer_owned else ("needs_approval" if fix.get("status") == "needs_developer" else fix.get("status")),
+        "who_can_do_this": repair_owner,
+        "estimated_time": estimate_repair_time({**fix, "affected_pages": affected_pages, "page_scope": scope_evidence["page_scope"], "page_template_family": scope_evidence["page_template_family"]}, repair_owner),
+        "time_estimate": estimate_repair_time({**fix, "affected_pages": affected_pages, "page_scope": scope_evidence["page_scope"], "page_template_family": scope_evidence["page_template_family"]}, repair_owner),
     }
 
 
@@ -3180,22 +3186,100 @@ def default_steps(category: str, rule: str, difficulty: str, recommended_value: 
     ]
 
 
-def needs_developer_owner(item: dict[str, Any]) -> bool:
-    affected = item.get("affected_pages") or []
-    affected_count = len(set(map(clean_path, affected))) if isinstance(affected, list) else 0
-    page_template_family = str(item.get("page_template_family") or "")
-    if str(item.get("source", "")).startswith("page_pattern:image_alt_text:"):
-        return True  # a template-level image-alt pattern is a developer task even at one sampled page
-    if affected_count >= 5:
-        return True
-    if page_template_family in {"activity_detail", "booking_or_checkout", "product_page", "collection_page", "conversion", "loan_program", "calculator", "comparison_page", "location_landing", "route_boundary"} and affected_count >= 2:
-        return True
-    value = " ".join(str(item.get(key, "")) for key in ["rule", "category", "title", "issue_title", "reason", "recommendation", "recommended_value", "who_can_do_this", "primary_defect_class"]).lower()
+EDITOR_FRIENDLY_REPAIR_RE = re.compile(
+    r"missing[_ ]?(?:meta[_ ]?)?title|duplicate[_ ]?(?:meta[_ ]?)?title|"
+    r"missing[_ ]?meta[_ ]?description|duplicate[_ ]?meta[_ ]?description|"
+    r"missing[_ ]?h1|multiple[_ ]?h1|image[_ ]?alt|broken[_ ]?internal[_ ]?link|"
+    r"internal[_ ]?link|thin[_ ]?content",
+    re.I,
+)
+AMBIGUOUS_CMS_REPAIR_RE = re.compile(
+    r"canonical|redirect|schema|structured data|robots|noindex|indexability|sitemap|404|410",
+    re.I,
+)
+HARD_DEVELOPER_REPAIR_RE = re.compile(
+    r"server-side|server side|server[_ ]?error|ssr|pre-render|prerender|javascript|rendering|"
+    r"firewall|bot protection|cloudflare|rate[_ -]?limit|429|500|502|503|504|"
+    r"crawlable html|view source|route-boundary|route boundary|routing|checkout|login|account|dashboard",
+    re.I,
+)
+
+
+def _repair_text(item: dict[str, Any]) -> str:
+    value = " ".join(str(item.get(key, "")) for key in [
+        "rule", "category", "title", "issue_title", "reason", "recommendation",
+        "recommended_value", "who_can_do_this", "primary_defect_class",
+    ]).lower()
     if isinstance(item.get("what_to_do_steps"), list):
         value += " " + " ".join(map(str, item["what_to_do_steps"])).lower()
-    if item.get("requires_developer") or item.get("difficulty") == "developer" or item.get("status") == "needs_developer" or "your_web_person" in value:
+    return value
+
+
+def repair_owner_for(item: dict[str, Any]) -> str:
+    """Return the customer-facing owner without treating URL count as skill level."""
+    value = _repair_text(item)
+    if HARD_DEVELOPER_REPAIR_RE.search(value):
+        return "your_web_person"
+    if EDITOR_FRIENDLY_REPAIR_RE.search(value):
+        return "you"
+    if AMBIGUOUS_CMS_REPAIR_RE.search(value):
+        return "you_or_your_web_person"
+    if item.get("requires_developer") or item.get("difficulty") == "developer" or item.get("status") == "needs_developer":
+        return "your_web_person"
+    owner = normalize_owner(item.get("who_can_do_this"))
+    return owner or "you"
+
+
+def needs_developer_owner(item: dict[str, Any]) -> bool:
+    return repair_owner_for(item) == "your_web_person"
+
+
+def _repair_page_count(item: dict[str, Any]) -> int:
+    affected = item.get("affected_pages") or []
+    observed = len({clean_path(value) for value in affected if clean_path(value)}) if isinstance(affected, list) else 0
+    try:
+        reported = int(item.get("page_count") or 0)
+    except (TypeError, ValueError):
+        reported = 0
+    return max(1, observed, reported)
+
+
+def _shared_repair_evidence(item: dict[str, Any]) -> bool:
+    if item.get("shared_repair_confirmed") is True or item.get("repair_leverage_confirmed") is True:
         return True
-    return bool(re.search(r"developer|web person|server-side|server side|ssr|pre-render|prerender|javascript|rendering|schema|structured data|canonical|redirect|server|firewall|bot protection|cloudflare|429|500|503|404|410|robots|noindex|crawlable html|view source|indexability|route-boundary|route boundary|checkout|login|account|dashboard|routing", value))
+    surface = str(item.get("repair_surface") or item.get("implementation_surface") or "").lower()
+    if any(token in surface for token in ["template", "cms_field", "shared_navigation", "theme", "layout"]):
+        return True
+    family = str(item.get("page_template_family") or "").strip().lower()
+    scope = str(item.get("page_scope") or "").strip().lower()
+    return _repair_page_count(item) > 1 and family not in {"", "mixed", "unknown"} and scope in {"family", "template"}
+
+
+def estimate_repair_time(item: dict[str, Any], owner: str | None = None) -> str:
+    """Estimate hands-on work from repair surface plus affected URL count."""
+    owner = owner or repair_owner_for(item)
+    count = _repair_page_count(item)
+    shared = _shared_repair_evidence(item)
+
+    if shared:
+        return "about 30–60 minutes" if owner == "your_web_person" else "about 15–30 minutes"
+
+    if owner == "your_web_person":
+        if count <= 2:
+            return "about 30–60 minutes"
+        if count <= 10:
+            return "about 1–2 hours"
+        return "about 2–4 hours"
+
+    if count <= 2:
+        return "about 5–15 minutes"
+    if count <= 5:
+        return "about 15–30 minutes"
+    if count <= 15:
+        return "about 30–60 minutes"
+    if count <= 40:
+        return "about 1–2 hours"
+    return "about 2–4 hours"
 
 
 def infer_category(rule: str, fix: dict[str, Any]) -> str:

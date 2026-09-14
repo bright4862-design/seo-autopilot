@@ -80,9 +80,13 @@ function isSafePreviewPendingAccess(row, user) {
 }
 
 function previewAlreadyUsed(priorRuns = []) {
-  return (Array.isArray(priorRuns) ? priorRuns : []).some((run) =>
-    ["complete", "limited"].includes(String(run?.status || "").trim().toLowerCase()),
-  );
+  return (Array.isArray(priorRuns) ? priorRuns : []).some((run) => {
+    const status = String(run?.status || "").trim().toLowerCase();
+    const proof = String(run?.authority_proof || "").trim().toLowerCase();
+    return status === "complete"
+      && run?.release_gate_eligible === true
+      && /^[a-f0-9]{64}$/.test(proof);
+  });
 }
 
 export function evaluateScanAccess({ rows, user, priorRuns = [] }) {

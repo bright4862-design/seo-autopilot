@@ -92,7 +92,9 @@ test("same-attempt partial authority resumes, terminal outcomes stay immutable",
   assert.match(persist, /authority_immutable/);
   assert.match(persist, /terminal_authority_rejected/);
   assert.match(persist, /scanStatus === "complete"/);
-  assert.match(persist, /scan\.authority_proof === authorityProof && scan\.fix_list_id/);
+  assert.match(persist, /scan\.authority_proof && scan\.fix_list_id/);
+  assert.match(persist, /buildPersistedAuthoritySnapshot/);
+  assert.match(persist, /verifyAuthoritySeal\(replaySnapshot, secret, scan\.authority_proof\)/);
   assert.match(persist, /normalizeAttempt\(scan\.authority_attempt_count \?\? rowAttempt\) !== claimedAttempt/);
   assert.ok((persist.match(/await assertAttemptStillActive\(/g) || []).length >= 2);
   assert.match(workerJob, /"already_sealed": True/);
@@ -107,10 +109,16 @@ test("retries reconcile authority rows without touching paid access", () => {
   assert.match(persist, /for \(const duplicate of items\.slice\(1\)\)/);
   assert.doesNotMatch(persist, /ensureAllowanceConsumed|entities\.Access|scans_used/);
   assert.ok(
-    persist.indexOf("authority_persistence_incomplete") < persist.indexOf("await entities.ScanRun.update(identity.scan_id, scanRunFields)"),
-    "the terminal write must follow complete authority verification",
+    persist.indexOf("authority_persistence_incomplete") < persist.indexOf("const persistedAuthoritySnapshot = buildPersistedAuthoritySnapshot"),
+    "the persisted-row seal must follow complete staging verification",
+  );
+  assert.ok(
+    persist.indexOf("verifyAuthoritySeal(verifiedPersistedSnapshot, secret, finalAuthorityProof)")
+      < persist.indexOf("const release = await persistExactAdmissionRelease"),
+    "admission release must follow verification of the exact persisted authority snapshot",
   );
   assert.match(persist, /const \{ attempt_count: _stagedAttempt, \.\.\.scanRunFields \} = rows\.scanRun/);
+  assert.match(persist, /const \{ attempt_count: _finalAttempt, \.\.\.finalScanFields \} = finalRows\.scanRun/);
   assert.doesNotMatch(persist, /ScanRun\.update\(identity\.scan_id, rows\.scanRun\)/);
 });
 

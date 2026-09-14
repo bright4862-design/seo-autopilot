@@ -259,6 +259,18 @@ test("an unrecognized scanner role is passed through rather than overwritten", (
   assert.equal(suggestion.roleSource, "scanner_evidence");
 });
 
+test("owner-or-web-person scanner token becomes customer-facing copy", () => {
+  const suggestion = repairSuggestion({
+    rule: "canonical_missing",
+    who_can_do_this: "you_or_your_web_person",
+    estimated_time: "about 5–15 minutes",
+  });
+
+  assert.equal(suggestion.role, "You or your web person");
+  assert.equal(suggestion.roleSource, "scanner_evidence");
+  assert.equal(suggestion.effortDetail, "about 5–15 minutes");
+});
+
 test("the suggestion layer never mutates the repair it reads", () => {
   const item = Object.freeze({
     rule: "redirect_chain",

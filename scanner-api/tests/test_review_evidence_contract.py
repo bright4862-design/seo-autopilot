@@ -41,7 +41,9 @@ def test_grouped_template_fix_carries_source_pages_and_evidence_current_value():
     assert canonical["page_template_family"] == "collection_page"
     assert canonical["source_pages"] == ["/collections/a", "/collections/b", "/collections/c"]
     assert canonical["current_value"].startswith("3 affected pages: /collections/a, /collections/b, /collections/c")
-    assert canonical["who_can_do_this"] == "your_web_person"
+    assert canonical["who_can_do_this"] == "you_or_your_web_person"
+    assert canonical["requires_developer"] is False
+    assert canonical["difficulty"] == "moderate"
 
 
 def test_legacy_template_stamps_are_reclassified_by_canonical_classifier():

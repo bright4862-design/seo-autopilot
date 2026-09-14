@@ -575,6 +575,7 @@ const ROLE_SYNONYMS = Object.freeze({
  */
 const INTERNAL_ROLE_TOKENS = Object.freeze({
   your_web_person: "Developer",
+  you_or_your_web_person: "You or your web person",
   web_person: "Developer",
   your_developer: "Developer",
   content_editor: "Content team",

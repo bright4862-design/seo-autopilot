@@ -2,17 +2,13 @@ import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import Stripe from "npm:stripe@17.5.0";
 import { secrets } from "base44:runtime";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "checkout-prod-reactivation-20260903-v1";
+const BASE44_RUNTIME_ACTIVATION_ID = "checkout-price-49-20260914-v1";
 
 const APP_ID = "6a498732ec779dfaaeab0e53";
 const PLAN_ID = "standard150_lifetime";
 const PRODUCTION_APP_ORIGIN = "https://rich-rank-pilot-flow.base44.app";
 const PRODUCTION_CUSTOM_ORIGINS = ["https://getfixlist.com", "https://www.getfixlist.com"];
-const PRICE_DATA = {
-  currency: "usd",
-  unit_amount: 10000,
-  product: "prod_V0lLfb5lSwxOxh",
-};
+const STRIPE_PRICE_ID = "price_1UFXgX4DcTLS57kiIag23r8C";
 const LOCAL_DEVELOPMENT_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const USER_ID_PATTERN = /^[A-Za-z0-9_-]{3,128}$/;
 const CHECKOUT_GENERATION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -370,7 +366,7 @@ export default async function (req) {
     const session = await stripe.checkout.sessions.create(
       {
         mode: "payment",
-        line_items: [{ price_data: PRICE_DATA, quantity: 1 }],
+        line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
         customer_email: email,
         client_reference_id: userId,
         success_url: `${origin}/billing?paid=1`,

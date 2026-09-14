@@ -33,29 +33,31 @@ def _image_alt_fix(result):
     )
 
 
-def test_grouped_page_pattern_image_alt_fix_is_developer_owned():
+def test_grouped_page_pattern_image_alt_fix_is_owner_or_web_person_work():
     fix = _image_alt_fix(_run([_page("/contact"), _page("/contact-sales")]))
 
     assert fix["source"].startswith("page_pattern:image_alt_text:")
     assert len(fix["affected_pages"]) == 2
-    assert fix["who_can_do_this"] == "your_web_person"
-    assert fix["difficulty"] == "developer"
-    assert fix["requires_developer"] is True
+    assert fix["who_can_do_this"] == "you_or_your_web_person"
+    assert fix["difficulty"] == "moderate"
+    assert fix["requires_developer"] is False
+    assert fix.get("requires_approval") is True
 
 
-def test_single_page_image_alt_pattern_is_developer_owned():
-    # A page_pattern image-alt card is a template-level task even when only one page was sampled.
+def test_single_page_image_alt_pattern_is_owner_or_web_person_work():
+    # A page-pattern image-alt card may be a CMS field or a template change, so
+    # it should not claim that a developer is always required.
     fix = _image_alt_fix(_run([_page("/contact")]))
 
     assert len(fix["affected_pages"]) == 1
     assert fix["source"].startswith("page_pattern:image_alt_text:")
-    assert fix["who_can_do_this"] == "your_web_person"
-    assert fix["difficulty"] == "developer"
-    assert fix["requires_developer"] is True
-    assert fix.get("requires_approval") is False
+    assert fix["who_can_do_this"] == "you_or_your_web_person"
+    assert fix["difficulty"] == "moderate"
+    assert fix["requires_developer"] is False
+    assert fix.get("requires_approval") is True
 
 
-def test_single_sampled_activity_page_collapses_raw_singleton_and_is_developer_owned():
+def test_single_sampled_activity_page_collapses_raw_singleton_and_keeps_flexible_owner():
     """Funbooker regression: a raw singleton and generator card for one activity URL collapse."""
     pages = [{
         "final_url": "https://funbooker.com/fr/annonce/kaskad/voir",
@@ -94,7 +96,8 @@ def test_single_sampled_activity_page_collapses_raw_singleton_and_is_developer_o
 
     assert len(image_fixes) == 1
     assert image_fixes[0]["source"] == "page_pattern:image_alt_text:activity_detail"
-    assert image_fixes[0]["who_can_do_this"] == "your_web_person"
+    assert image_fixes[0]["who_can_do_this"] == "you_or_your_web_person"
+    assert image_fixes[0]["requires_developer"] is False
 
 
 def test_trailing_slash_variants_produce_one_card():

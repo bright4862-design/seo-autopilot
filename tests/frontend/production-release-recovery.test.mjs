@@ -37,7 +37,8 @@ test("merged results preserve authoritative durable release markers", () => {
   assert.match(scanRunModel, /authority_proof/);
   assert.match(persistence, /authority_seal_version/);
   assert.match(scanRunModel, /release_gate_eligible/);
-  assert.match(persistence, /persistedScan\?\.authority_proof === authorityProof/);
+  assert.match(persistence, /persistedScan\?\.authority_proof === finalAuthorityProof/);
+  assert.match(persistence, /verifyAuthoritySeal\(verifiedPersistedSnapshot, secret, finalAuthorityProof\)/);
   assert.match(persistence, /persistedScan\?\.release_gate_eligible === true/);
 });
 

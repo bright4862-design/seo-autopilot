@@ -17,10 +17,10 @@ test("the public landing page offers one free Standard 150 preview and preserves
   assert.match(landingSource, /Standard 150/);
   assert.doesNotMatch(landingSource, /Standard 150 beta|Get beta access|invite-only/i);
   // The page renders the shared price constant rather than a literal, so certify
-  // what the customer is shown through it. Grepping the source for "$100" went
+  // what the customer is shown through it. Grepping the source for "$49" went
   // stale the moment the price moved into src/lib/access.js, and this assertion
   // has been failing ever since while the rendered price stayed correct.
-  // paidBetaContract.test.mjs pins that constant to $100 across checkout, the
+  // paidBetaContract.test.mjs pins that constant to $49 across checkout, the
   // webhook and every customer surface.
   assert.match(landingSource, /\{UNLOCK_PRICE_LABEL\}/);
   // And the page must not reintroduce a hard-coded price, which is what let the

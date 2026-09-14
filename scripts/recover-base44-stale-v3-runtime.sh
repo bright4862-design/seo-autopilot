@@ -9,7 +9,7 @@
 # - valid generated contracts and release manifest
 # - all six routes are classified before the first deletion
 # - already-current routes are never deleted
-# - only exact incident-bound September 7 or September 9 stale builds are eligible
+# - only exact incident-bound September 7, September 9 or September 14 stale builds are eligible
 # - transport, HTML, router errors, malformed JSON, unknown status/marker refuse
 # - delete -> prove absent -> deploy -> prove present -> verify build+activation
 # - any failure stops before the next route
@@ -63,6 +63,19 @@ declare -A V3_SEPT9_INTERMEDIATE_BUILD_IDS=(
   [persistDurableScanAuthorityV3]="96a6dfdd9a60eea0fbc687f81fcff2236c84d367ed4b247d1649c8e8545863ce"
   [persistLimitedScanResultV3]="803178674d7ef0d1c80637b0840ec2fb74c77833043ad92c4d7ae2647e089700"
   [getCustomerScanResultV3]="c29241f2779ee37dd7fe3ba1b3d5f991c05f7fe3ad1b5b29b152d273e650bb19"
+)
+
+# Exact stale compiled runtimes observed during the September 14 unpaid-preview
+# cutover after Base44 reported all V3 definitions "unchanged". Every observed
+# route already carries the current report-evidence activation marker, so only
+# these exact build+activation pairs are eligible for delete/recreate recovery.
+# deleteCustomerScanDataV3 was already exact-current and is intentionally absent.
+declare -A V3_SEPT14_PREVIEW_CUTOVER_BUILD_IDS=(
+  [startStandardScanJobV3]="7a121e334ea8944504e5f5ebdb7bec7dfc8efd6e8fbfa89995bb0cad0dac6771"
+  [durableScanWorkerControlV3]="61f7d18336f29b514be3727b087bd7187eff65c634e11c3760faea9f9d45ebec"
+  [persistDurableScanAuthorityV3]="f177c20c256b736e954f49c1cdcbadbc72cea35c904e97c933c2156ffcc5ad91"
+  [persistLimitedScanResultV3]="c22ee54343fc4717abd0ff8a7eab936cf7f7ccb102c851c7378aebd7b4c11db0"
+  [getCustomerScanResultV3]="dd8df0224006a5709207c9169025792908bf3c1b1e4b1db82478ae2f0c4ce350"
 )
 
 canonical_of_v3() {
@@ -125,9 +138,10 @@ route_serves_expected_v3_runtime() {
 }
 
 route_is_known_stale_v3() {
-  local name="$1" canonical="$2" stale_activation="$3" stale_build sept9_build
+  local name="$1" canonical="$2" stale_activation="$3" stale_build sept9_build sept14_build
   stale_build="${V3_STALE_BUILD_IDS[$name]:-}"
   sept9_build="${V3_SEPT9_INTERMEDIATE_BUILD_IDS[$name]:-}"
+  sept14_build="${V3_SEPT14_PREVIEW_CUTOVER_BUILD_IDS[$name]:-}"
   route_reaches_json_handler || return 1
   route_is_known_stale_handler "$canonical" || return 1
 
@@ -139,6 +153,12 @@ route_is_known_stale_v3() {
 
   if valid_build_id "$sept9_build" \
     && [[ "$PROBE_BUILD_ID" == "$sept9_build" ]] \
+    && [[ -n "${V3_EXPECTED_ACTIVATION:-}" && "$PROBE_ACTIVATION_ID" == "$V3_EXPECTED_ACTIVATION" ]]; then
+    return 0
+  fi
+
+  if valid_build_id "$sept14_build" \
+    && [[ "$PROBE_BUILD_ID" == "$sept14_build" ]] \
     && [[ -n "${V3_EXPECTED_ACTIVATION:-}" && "$PROBE_ACTIVATION_ID" == "$V3_EXPECTED_ACTIVATION" ]]; then
     return 0
   fi

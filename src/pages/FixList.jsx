@@ -1550,13 +1550,12 @@ function LockedResultState() {
 
 function PreviewResultState({ scanRecord = {} }) {
   const previewItems = Array.isArray(scanRecord.recommendations) ? scanRecord.recommendations.filter(Boolean) : [];
-  const detailedItems = previewItems.filter((item) => item?.preview_locked_detail !== true);
-  const lockedSummaryItems = previewItems.filter((item) => item?.preview_locked_detail === true);
+  const detailedItems = previewItems.filter((item) => item?.preview_locked_detail !== true).slice(0, 2);
   const score = getHealthScore(scanRecord);
   const pagesFound = getPagesFound(scanRecord);
   const pagesScanned = getPagesScanned(scanRecord, []);
-  const totalFixes = Math.max(Number(scanRecord.total_fixes || 0), previewItems.length);
-  const hiddenFixCount = Math.max(0, totalFixes - previewItems.length);
+  const totalFixes = Math.max(Number(scanRecord.total_fixes || 0), detailedItems.length);
+  const hiddenFixCount = Math.max(0, totalFixes - detailedItems.length);
 
   return (
     <div className="mt-16">
@@ -1572,7 +1571,7 @@ function PreviewResultState({ scanRecord = {} }) {
           <h1 className="text-[26px] font-semibold leading-tight tracking-tight">Your free FixList preview is ready</h1>
           <p className="mt-1.5 text-[15px] text-ink-muted">
             {totalFixes > 0
-              ? `${formatCount(totalFixes)} ${totalFixes === 1 ? "issue" : "issues"} found · most results are visible below`
+              ? `${formatCount(totalFixes)} ${totalFixes === 1 ? "issue" : "issues"} found · ${formatCount(detailedItems.length)} shown in your free preview`
               : "Your scan is complete."}
           </p>
         </div>
@@ -1584,7 +1583,7 @@ function PreviewResultState({ scanRecord = {} }) {
             <div>
               <h2 id="preview-findings-heading" className="text-[20px] font-semibold tracking-tight text-ink">What FixList found</h2>
               <p className="mt-1.5 max-w-[54ch] text-[12.5px] leading-relaxed text-ink-faint">
-                The highest-priority findings are shown with enough detail to judge the scan. Complete evidence, every affected URL, step-by-step instructions, copy, download and export require full access.
+                Up to two of the highest-priority findings are shown with enough detail to judge the scan. Complete evidence, every affected URL, step-by-step instructions, copy, download and export require full access.
               </p>
             </div>
             <span className="shrink-0 text-[12px] text-ink-faint">Free preview</span>
@@ -1646,40 +1645,20 @@ function PreviewResultState({ scanRecord = {} }) {
         </section>
       ) : null}
 
-      {lockedSummaryItems.length > 0 || hiddenFixCount > 0 ? (
+      {hiddenFixCount > 0 ? (
         <section className="mt-9 rounded-2xl border border-hairline-soft bg-white/45 px-5 py-5" aria-labelledby="more-preview-findings-heading">
           <div className="flex items-baseline justify-between gap-4">
-            <h2 id="more-preview-findings-heading" className="text-[17px] font-semibold tracking-tight text-ink">More findings from this scan</h2>
-            <span className="text-[11px] uppercase tracking-[0.08em] text-ink-faint">Details locked</span>
+            <h2 id="more-preview-findings-heading" className="text-[17px] font-semibold tracking-tight text-ink">More fixes are ready</h2>
+            <span className="text-[11px] uppercase tracking-[0.08em] text-ink-faint">Locked</span>
           </div>
-          {lockedSummaryItems.length > 0 ? (
-            <div className="mt-3 divide-y divide-hairline-soft">
-              {lockedSummaryItems.map((item, index) => {
-                const title = cleanString(item.issue_title) || `Additional issue ${index + 1}`;
-                const category = cleanString(item.customer_category);
-                const priority = customerPriorityLabel(item.action_priority || item.priority);
-                const pageCount = Math.max(0, Number(item.page_count || 0));
-                return (
-                  <div key={item.id || item.fix_id || `${title}-${index}`} className="py-3.5 first:pt-1">
-                    <p className="text-[14px] font-medium text-ink">{title}</p>
-                    <p className="mt-1 text-[11.5px] text-ink-faint">
-                      {[priority, category, pageCount > 0 ? `${formatCount(pageCount)} ${pageCount === 1 ? "page" : "pages"}` : ""].filter(Boolean).join(" · ")}
-                    </p>
-                  </div>
-                );
-              })}
-            </div>
-          ) : null}
-          {hiddenFixCount > 0 ? (
-            <p className="mt-3 text-[12.5px] leading-relaxed text-ink-muted">
-              + {formatCount(hiddenFixCount)} additional {hiddenFixCount === 1 ? "finding" : "findings"} are included in the complete FixList.
-            </p>
-          ) : null}
+          <p className="mt-3 text-[12.5px] leading-relaxed text-ink-muted">
+            {formatCount(hiddenFixCount)} more {hiddenFixCount === 1 ? "fix is" : "fixes are"} included in your complete FixList.
+          </p>
         </section>
       ) : null}
 
       <section className="mt-10 rounded-2xl border border-hairline-soft bg-white p-6" aria-labelledby="unlock-preview-heading">
-        <h2 id="unlock-preview-heading" className="text-[21px] font-semibold tracking-tight text-ink">Unlock your complete FixList</h2>
+        <h2 id="unlock-preview-heading" className="text-[21px] font-semibold tracking-tight text-ink">Unlock full FixList</h2>
         <p className="mt-2 max-w-[54ch] text-[14px] leading-relaxed text-ink-muted">
           Pay {UNLOCK_PRICE_LABEL} once to open every finding, every affected URL, complete evidence and implementation guidance. Full access also enables copy, CSV/PDF/JSON downloads, exports and future Standard 150 scans.
         </p>

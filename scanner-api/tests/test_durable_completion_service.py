@@ -221,12 +221,16 @@ def test_authority_is_verified_before_paid_independent_terminal_completion():
     assert "scans_used" not in source
     stage_index = source.index("await entities.ScanRun.update(identity.scan_id, stagedScanFields)")
     verify_index = source.index("const authorityStaged = Boolean(")
-    terminal_index = source.index("await entities.ScanRun.update(identity.scan_id, scanRunFields)")
-    assert stage_index < verify_index < terminal_index
+    persisted_snapshot_index = source.index("const persistedAuthoritySnapshot = buildPersistedAuthoritySnapshot")
+    terminal_index = source.index("await entities.ScanRun.update(identity.scan_id, finalScanFields)")
+    final_verify_index = source.index("verifyAuthoritySeal(verifiedPersistedSnapshot, secret, finalAuthorityProof)")
+    assert stage_index < verify_index < persisted_snapshot_index < terminal_index < final_verify_index
     assert source.count("await assertAttemptStillActive(") >= 2
     assert "terminal_authority_rejected" in source
     assert "await entities.ScanRun.update(identity.scan_id, rows.scanRun)" not in source
     assert "const { attempt_count: _stagedAttempt, ...scanRunFields } = rows.scanRun" in source
+    assert "const { attempt_count: _finalAttempt, ...finalScanFields } = finalRows.scanRun" in source
+    assert "verifyAuthoritySeal(verifiedPersistedSnapshot, secret, finalAuthorityProof)" in source
     assert 'status: "reviewing"' in source
     assert 'release_gate_eligible: false' in source
     assert 'persistedScan?.status === "complete"' in source

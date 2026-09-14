@@ -90,7 +90,7 @@ const SAFE_RELEASE_FAILURE_CODES = new Set([
 const CUSTOMER_STATUS_DETAIL: Record<string, string> = {
   paid_access_required: "Standard 150 access is required before this scan can start.",
   paid_access_conflict: "Your access record needs support before this scan can start.",
-  preview_scan_used: "Your free preview scan has already been used. Unlock full access for $100 to run another scan and open the complete FixList.",
+  preview_scan_used: "Your free preview scan has already been used. Unlock full access for $49 to run another scan and open the complete FixList.",
   durable_worker_not_configured: "The scan worker is not configured yet. No scan was started.",
   invalid_worker_url: "The scan worker is not configured correctly. No scan was started.",
   tasks_credentials_not_configured: "The scan queue is not configured yet. No scan was started.",

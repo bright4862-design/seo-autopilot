@@ -2,4 +2,4 @@
 // SHA-256 package identity for base44/functions/stripeWebhook.
 // Every regular package file is covered except generatedBuildId.js itself.
 
-export const FUNCTION_BUILD_ID = "a2bc0ac8beb26b8c341b21dd044bc4aff0d68f873a41a62bad6e697112bc063d";
+export const FUNCTION_BUILD_ID = "77ae356675bad0d5b25eb4737bd51671bce8a4a392ffb68743f089f261dceb54";

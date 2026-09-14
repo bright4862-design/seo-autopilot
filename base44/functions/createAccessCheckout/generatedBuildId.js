@@ -2,4 +2,4 @@
 // SHA-256 package identity for base44/functions/createAccessCheckout.
 // Every regular package file is covered except generatedBuildId.js itself.
 
-export const FUNCTION_BUILD_ID = "808c143d4f0e1da91736944bea38a543bab5985184c0ae63c8d0b5284b7fae8e";
+export const FUNCTION_BUILD_ID = "52d986899805e8b9969c31a7b0dc40540c1cfbf2b3e1d9fe3c38ec3a1a267e2a";

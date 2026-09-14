@@ -3220,6 +3220,8 @@ def repair_owner_for(item: dict[str, Any]) -> str:
     value = _repair_text(item)
     if HARD_DEVELOPER_REPAIR_RE.search(value):
         return "your_web_person"
+    if str(item.get("source", "")).startswith("page_pattern:image_alt_text:"):
+        return "you_or_your_web_person"
     if EDITOR_FRIENDLY_REPAIR_RE.search(value):
         return "you"
     if AMBIGUOUS_CMS_REPAIR_RE.search(value):

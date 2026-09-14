@@ -112,9 +112,10 @@ test("retries reconcile authority rows without touching paid access", () => {
     persist.indexOf("authority_persistence_incomplete") < persist.indexOf("const persistedAuthoritySnapshot = buildPersistedAuthoritySnapshot"),
     "the persisted-row seal must follow complete staging verification",
   );
+  const finalPersistedVerify = persist.indexOf("verifyAuthoritySeal(verifiedPersistedSnapshot, secret, finalAuthorityProof)");
+  assert.ok(finalPersistedVerify >= 0, "the final persisted snapshot must be cryptographically verified");
   assert.ok(
-    persist.indexOf("verifyAuthoritySeal(verifiedPersistedSnapshot, secret, finalAuthorityProof)")
-      < persist.indexOf("const release = await persistExactAdmissionRelease"),
+    persist.indexOf("const release = await persistExactAdmissionRelease", finalPersistedVerify) > finalPersistedVerify,
     "admission release must follow verification of the exact persisted authority snapshot",
   );
   assert.match(persist, /const \{ attempt_count: _stagedAttempt, \.\.\.scanRunFields \} = rows\.scanRun/);

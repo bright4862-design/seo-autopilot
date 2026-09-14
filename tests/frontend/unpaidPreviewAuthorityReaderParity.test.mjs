@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -108,4 +109,17 @@ test("customer authority reconstruction accepts canonical repair evidence groups
   });
 
   assert.deepEqual(rebuilt.recommendations[0].raw_finding.repair_evidence_groups, groups);
+});
+
+test("authority verification failure logs bounded release identity without logging proofs or secrets", () => {
+  const source = readFileSync("base44/functions/getCustomerScanResultV3/entry.ts", "utf8");
+
+  assert.match(source, /getCustomerScanResult authority verification failed/);
+  assert.match(source, /scan_id:\s*cleanId\(run\.id\)/);
+  assert.match(source, /build_id:\s*FUNCTION_BUILD_ID/);
+  assert.match(source, /runtime_activation_id:\s*BASE44_RUNTIME_ACTIVATION_ID/);
+  assert.match(source, /authority_seal_version:\s*cleanText\(run\.authority_seal_version, 160\)/);
+  assert.match(source, /release_fingerprint:\s*runReleaseFingerprint/);
+  assert.match(source, /fix_item_count:\s*fixItems\.length/);
+  assert.doesNotMatch(source, /authority verification failed[\\s\\S]{0,800}(proof|secret):/);
 });

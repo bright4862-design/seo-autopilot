@@ -89,10 +89,21 @@ async function checkoutIdempotencyKey(access, generation) {
   return `access-checkout:${APP_ID}:${fingerprint}`;
 }
 
+function checkoutSessionUsesCurrentPrice(session) {
+  const lineItems = Array.isArray(session?.line_items?.data) ? session.line_items.data : [];
+  if (lineItems.length !== 1) return false;
+  const lineItem = lineItems[0] || {};
+  const price = typeof lineItem.price === "string" ? lineItem.price : String(lineItem.price?.id || "");
+  const quantity = Number(lineItem.quantity);
+  return price === STRIPE_PRICE_ID && quantity === 1;
+}
+
 function classifyExistingCheckoutSession(session) {
   if (session?.payment_status === "paid" || session?.status === "complete") return "payment_processing";
-  if (session?.status === "open" && session?.url) return "reusable";
   if (session?.status === "expired") return "renew";
+  if (session?.status === "open" && session?.url) {
+    return checkoutSessionUsesCurrentPrice(session) ? "reusable" : "renew_wrong_price";
+  }
   return "blocked";
 }
 
@@ -342,7 +353,7 @@ export default async function (req) {
     const stripe = new Stripe(secrets.get("STRIPE_SECRET_KEY"));
     const previousSessionId = String(access?.stripe_checkout_session_id || "").trim();
     if (previousSessionId) {
-      const previousSession = await stripe.checkout.sessions.retrieve(previousSessionId);
+      const previousSession = await stripe.checkout.sessions.retrieve(previousSessionId, { expand: ["line_items.data.price"] });
       assertSessionBelongsToAccess(previousSession, access, userId, email);
       const previousSessionState = classifyExistingCheckoutSession(previousSession);
 
@@ -355,7 +366,9 @@ export default async function (req) {
           { status: 409 },
         );
       }
-      if (previousSessionState !== "renew") {
+      if (previousSessionState === "renew_wrong_price") {
+        await stripe.checkout.sessions.expire(previousSessionId);
+      } else if (previousSessionState !== "renew") {
         return Response.json(
           { error: "Your checkout needs support before it can continue.", code: "checkout_session_conflict" },
           { status: 409 },

@@ -4,6 +4,7 @@ import test from "node:test";
 
 const reader = readFileSync("base44/functions/getCustomerScanResult/entry.ts", "utf8");
 const compatibility = readFileSync("base44/functions/getCustomerScanResult/releaseCompatibility.js", "utf8");
+const CURRENT_RELEASE_BEFORE_READER_PARITY = "c73399086107cbaf";
 const CURRENT_PRE_P1B_FINGERPRINT = "0fa7d98734efb3f2";
 const FOCUSED_DESIGN_BASE_FINGERPRINT = "7a95768cc8ee2076";
 const scanRuns = readFileSync("src/lib/scanRuns.js", "utf8");
@@ -17,8 +18,13 @@ test("a known-compatible historical release remains readable after the app advan
   );
   assert.match(
     compatibility,
-    /CUSTOMER_RESULT_READER_VERSION = "customer_result_reader_v5_acceptance_projection_parity"/,
+    /CUSTOMER_RESULT_READER_VERSION = "customer_result_reader_v6_authority_reconstruction_parity"/,
     "historical reader semantics must carry an explicit release component version",
+  );
+  assert.match(
+    compatibility,
+    new RegExp(CURRENT_RELEASE_BEFORE_READER_PARITY),
+    "the release immediately preceding reader parity must remain explicitly readable",
   );
   assert.match(
     compatibility,

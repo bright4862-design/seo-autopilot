@@ -2,7 +2,7 @@ import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import Stripe from "npm:stripe@17.5.0";
 import { secrets } from "base44:runtime";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
-const BASE44_RUNTIME_ACTIVATION_ID = "checkout-price-49-20260914-v1";
+const BASE44_RUNTIME_ACTIVATION_ID = "checkout-prod-reactivation-20260903-v1";
 
 const APP_ID = "6a498732ec779dfaaeab0e53";
 const PLAN_ID = "standard150_lifetime";

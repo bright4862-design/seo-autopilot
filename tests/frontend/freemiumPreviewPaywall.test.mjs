@@ -48,11 +48,31 @@ test("unpaid customers receive exactly one preview scan before payment", () => {
     { ok: true, preview: true, needsAccessRecord: false, record: pendingAccess() },
   );
 
+  for (const priorRun of [
+    { id: "scan_failed", status: "failed" },
+    { id: "scan_cancelled", status: "cancelled" },
+    { id: "scan_limited", status: "limited", release_gate_eligible: false },
+    { id: "scan_unsealed", status: "complete", release_gate_eligible: false },
+    { id: "scan_missing_proof", status: "complete", release_gate_eligible: true, authority_proof: "" },
+  ]) {
+    assert.equal(
+      scanEntitlement.evaluateScanAccess({ rows: [pendingAccess()], user: USER, priorRuns: [priorRun] }).ok,
+      true,
+      `${priorRun.id} must not consume the free preview`,
+    );
+  }
+
+  const authoritativePreview = {
+    id: "scan_done",
+    status: "complete",
+    release_gate_eligible: true,
+    authority_proof: "a".repeat(64),
+  };
   assert.deepEqual(
     scanEntitlement.evaluateScanAccess({
       rows: [pendingAccess()],
       user: USER,
-      priorRuns: [{ id: "scan_done", status: "complete" }],
+      priorRuns: [authoritativePreview],
     }),
     { ok: false, preview: true, failureCode: "preview_scan_used" },
   );
@@ -60,7 +80,7 @@ test("unpaid customers receive exactly one preview scan before payment", () => {
   const paid = scanEntitlement.evaluateScanAccess({
     rows: [paidAccess()],
     user: USER,
-    priorRuns: [{ id: "scan_done", status: "complete" }],
+    priorRuns: [authoritativePreview],
   });
   assert.equal(paid.ok, true);
   assert.equal(paid.preview, false);

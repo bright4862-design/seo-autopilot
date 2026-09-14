@@ -1,7 +1,7 @@
 import { base44 } from "@/api/base44Client";
 
 export const UNLOCK_PRICE_LABEL = "$100";
-export const LOCKED_PREVIEW_FIX_COUNT = 3;
+export const LOCKED_PREVIEW_FIX_COUNT = 8;
 const OWNER_TEST_EMAIL = "bright4862@gmail.com";
 const OWNER_TEST_USER_ID = "6a498da58ef5cec1f5cd4486";
 

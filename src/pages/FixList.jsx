@@ -1137,7 +1137,7 @@ function CustomerRepairCard({ card = {}, websiteUrl = "" }) {
 
       <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-[12.5px] text-ink-faint">
         <span><span className="font-medium text-ink-muted">Who:</span> {card.who}</span>
-        {card.effort ? <span><span className="font-medium text-ink-muted">Effort:</span> {card.effort}</span> : null}
+        {card.effort ? <span><span className="font-medium text-ink-muted">Estimated work:</span> {card.effort}</span> : null}
       </div>
 
       <details className="mt-4 max-w-[60ch]">
@@ -1598,7 +1598,7 @@ function PreviewResultState({ scanRecord = {} }) {
               const explanation = cleanString(item.plain_english_explanation);
               const why = cleanString(item.why_it_matters);
               const recommendation = cleanString(item.recommended_value || item.simple_next_step);
-              const who = cleanString(item.who_can_do_this) || (item.requires_developer === true ? "Web developer" : "You or your web team");
+              const who = customerOwnerLabel(item.who_can_do_this, item.requires_developer);
               const examplePage = cleanString(item.preview_example_page);
               return (
                 <article key={item.id || item.fix_id || `${title}-${index}`} className="py-6">
@@ -2578,8 +2578,9 @@ function getIssueBucket(item = {}) {
   const status = String(item.status || "").toLowerCase();
   const difficulty = String(item.difficulty || "").toLowerCase();
   const text = `${item.rule || ""} ${item.category || ""} ${item.title || ""} ${item.issue_title || ""} ${item.recommended_value || ""} ${item.why_it_matters || ""}`.toLowerCase();
+  if (owner === "you_or_your_web_person") return "needs_approval";
   if (owner.includes("web") || owner.includes("developer") || difficulty === "developer" || status === "needs_developer") return "needs_developer";
-  if (/429|server|firewall|bot protection|cloudflare|rate.limit|crawlable html|javascript|rendering|schema|canonical|redirect|robots|noindex|indexability/.test(text)) return "needs_developer";
+  if (/429|server[_ -]?error|firewall|bot protection|cloudflare|rate.limit|crawlable html|javascript|rendering|route.boundary|routing|checkout|login|dashboard/.test(text)) return "needs_developer";
   if (status === "auto_fixed" || item.can_auto_fix) return "auto_fixed";
   return "needs_approval";
 }
@@ -2628,6 +2629,15 @@ function firstArray(values) {
 
 function unique(values) {
   return Array.from(new Set((values || []).filter((value) => value !== undefined && value !== null && String(value).trim() !== "")));
+}
+
+function customerOwnerLabel(value, requiresDeveloper = false) {
+  const owner = cleanString(value).toLowerCase();
+  if (owner === "you_or_your_web_person") return "You or your web person";
+  if (owner === "your_web_person" || owner.includes("developer") || owner === "web_person") return "Web developer";
+  if (owner === "you" || owner === "owner") return "You";
+  if (cleanString(value)) return cleanString(value);
+  return requiresDeveloper === true ? "Web developer" : "You";
 }
 
 function cleanString(value) {

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Recover the six active V3 Base44 routes when the platform accepts their
-# current definitions but continues executing a known stale compiled runtime.
+# Recover the six V3 Base44 routes when the platform accepts their current
+# definitions but continues executing a known stale compiled runtime. V3 may be
+# active or retained as the exact historical V3 generation after a later cutover.
 #
 # Safety properties:
 # - exact clean current main only
@@ -79,14 +80,23 @@ declare -A V3_SEPT14_PREVIEW_CUTOVER_BUILD_IDS=(
 )
 
 canonical_of_v3() {
-  node -e '
+  node -e '''
     const fs = require("node:fs");
-    const routes = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).routes;
+    const contract = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
     const alias = process.argv[2];
-    const found = Object.entries(routes).find(([, active]) => active === alias);
-    if (!found) process.exit(3);
-    process.stdout.write(found[0]);
-  ' "$REPO_ROOT/data/base44-function-routes.json" "$1"
+    const routeSets = [];
+    if (contract.generation === "v3" && contract.routes && typeof contract.routes === "object") {
+      routeSets.push(contract.routes);
+    }
+    const historicalV3 = contract.historical_routes?.v3;
+    if (historicalV3 && typeof historicalV3 === "object") routeSets.push(historicalV3);
+    const matches = routeSets.flatMap((routes) =>
+      Object.entries(routes).filter(([, route]) => route === alias).map(([canonical]) => canonical)
+    );
+    const unique = [...new Set(matches)];
+    if (unique.length !== 1) process.exit(3);
+    process.stdout.write(unique[0]);
+  ''' "$REPO_ROOT/data/base44-function-routes.json" "$1"
 }
 
 expected_v3_activation_id() {
@@ -169,7 +179,7 @@ route_is_known_stale_v3() {
 resolve_v3_expectations() {
   local name="$1"
   V3_CANONICAL="$(canonical_of_v3 "$name")" || {
-    echo "Refusing V3 runtime recovery for $name: no canonical package in the active route contract." >&2
+    echo "Refusing V3 runtime recovery for $name: no unambiguous canonical package in the V3 route contract." >&2
     return 1
   }
   V3_EXPECTED_BUILD="$(expected_build_id "$name")"

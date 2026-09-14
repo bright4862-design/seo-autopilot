@@ -16,8 +16,11 @@ const V3 = [
   "deleteCustomerScanDataV3",
 ];
 
-const routes = JSON.parse(fs.readFileSync(ROUTE_FILE, "utf8")).routes;
-const canonicalOf = (alias) => Object.entries(routes).find(([, active]) => active === alias)?.[0];
+const routeContract = JSON.parse(fs.readFileSync(ROUTE_FILE, "utf8"));
+const v3Routes = routeContract.generation === "v3"
+  ? routeContract.routes
+  : routeContract.historical_routes?.v3 || {};
+const canonicalOf = (alias) => Object.entries(v3Routes).find(([, route]) => route === alias)?.[0];
 const expectedBuild = Object.fromEntries(V3.map((name) => [name,
   execFileSync("node", ["scripts/generate_release_contracts.mjs", "--build-id", name], { encoding: "utf8" }).trim()]));
 const expectedActivation = Object.fromEntries(V3.map((name) => [name,
@@ -85,7 +88,7 @@ test("all V3 routes have a fresh report-evidence activation distinct from the st
   for (const name of V3) {
     assert.match(expectedActivation[name], /-report-evidence-20260909-v1$/);
     assert.notEqual(expectedActivation[name], staleActivation[name]);
-    assert.ok(canonicalOf(name), `${name} must resolve through the active route contract`);
+    assert.ok(canonicalOf(name), `${name} must resolve through the exact V3 route contract`);
   }
 });
 

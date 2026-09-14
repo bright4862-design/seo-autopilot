@@ -14,8 +14,11 @@ const observedSept14 = {
   getCustomerScanResultV3: "dd8df0224006a5709207c9169025792908bf3c1b1e4b1db82478ae2f0c4ce350",
 };
 
-const routes = JSON.parse(fs.readFileSync(ROUTE_FILE, "utf8")).routes;
-const canonicalOf = (alias) => Object.entries(routes).find(([, active]) => active === alias)?.[0];
+const routeContract = JSON.parse(fs.readFileSync(ROUTE_FILE, "utf8"));
+const v3Routes = routeContract.generation === "v3"
+  ? routeContract.routes
+  : routeContract.historical_routes?.v3 || {};
+const canonicalOf = (alias) => Object.entries(v3Routes).find(([, route]) => route === alias)?.[0];
 const expectedActivation = Object.fromEntries(Object.keys(observedSept14).map((name) => [name,
   execFileSync("node", ["scripts/generate_release_contracts.mjs", "--activation-id", name], { encoding: "utf8" }).trim()]));
 
@@ -60,7 +63,7 @@ function classify(name, buildId) {
 
 test("the exact Sep 14 preview-cutover stale V3 builds are recoverable", () => {
   for (const [name, buildId] of Object.entries(observedSept14)) {
-    assert.ok(canonicalOf(name), `${name} must resolve through the active route contract`);
+    assert.ok(canonicalOf(name), `${name} must resolve through the exact V3 route contract`);
     assert.equal(classify(name, buildId), "stale", name);
   }
 });

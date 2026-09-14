@@ -481,6 +481,9 @@ export default function ScanWebsiteForm({ project = null, saving = false, focuse
           <p className="text-[13px] text-ink-faint">Read-only scan · no site changes</p>
           <h1 className="text-[32px] font-semibold leading-tight tracking-tight text-ink sm:text-[38px]">Create your FixList</h1>
           <p className="max-w-[52ch] text-[15px] leading-relaxed text-ink-muted">Enter a website URL and we’ll turn the scan into a plain-English list of what to fix, what matters most, and what may need a developer.</p>
+          {!isFocusedScan ? (
+            <p className="max-w-[54ch] text-[13px] leading-relaxed text-ink-faint">New accounts get one free Standard 150 test scan before payment. The preview is view-only; full access is required to copy, download, export, reveal the complete evidence, or run future scans.</p>
+          ) : null}
           {isFocusedScan ? (
             <div className="rounded-xl border border-hairline-soft bg-white px-4 py-3 text-[13px] leading-relaxed text-ink-muted">
               <div className="font-medium text-ink">Focused section</div>

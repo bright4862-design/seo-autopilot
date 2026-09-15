@@ -11,7 +11,7 @@ const routes = contract.routes;
 
 const source = (p) => fs.readFileSync(p, "utf8");
 
-test("every V4 effective handler returns its expected runtime identity before authentication", async () => {
+test("every active V5 effective handler returns its expected runtime identity before authentication", async () => {
   for (const active of Object.values(routes)) {
     const root = path.resolve("base44/functions", active);
     const cache = new Map();
@@ -55,7 +55,7 @@ test("every V4 effective handler returns its expected runtime identity before au
 
 test("Base44 scanner route generation is explicit and complete", () => {
   assert.equal(contract.schema_version, "base44_function_routes_v1");
-  assert.equal(contract.generation, "v4");
+  assert.equal(contract.generation, "v5");
   assert.deepEqual(Object.keys(routes).sort(), [
     "deleteCustomerScanData",
     "durableScanWorkerControl",
@@ -65,13 +65,13 @@ test("Base44 scanner route generation is explicit and complete", () => {
     "startStandardScanJob",
   ]);
   for (const [canonical, active] of Object.entries(routes)) {
-    assert.equal(active, `${canonical}V4`);
+    assert.equal(active, `${canonical}V5`);
     assert.ok(fs.existsSync(path.join("base44/functions", active, "entry.ts")));
     assert.match(source(path.join("base44/functions", active, "function.jsonc")), new RegExp(`"name"\\s*:\\s*"${active}"`));
   }
 });
 
-test("fresh Base44 routes preserve canonical source except the bounded V4 preview delta", () => {
+test("fresh Base44 routes preserve canonical source except the bounded signed-preview delta", () => {
   const withoutActivationNonce = (value) => value.replace(
     /(BASE44_RUNTIME_ACTIVATION_ID\s*=\s*)["'][^"']+["']/g,
     '$1"<deployment-activation-nonce>"',
@@ -114,23 +114,23 @@ test("fresh Base44 routes preserve canonical source except the bounded V4 previe
   }
 });
 
-test("customer and worker call sites use only V4 scanner routes", () => {
+test("customer and worker call sites use only V5 scanner routes", () => {
   const scanForm = source("src/components/scan/ScanWebsiteForm.jsx");
   const scanRuns = source("src/lib/scanRuns.js");
   const scanHistory = source("src/lib/scanHistory.js");
   const worker = source("scanner-api/app/scan_job.py");
 
-  assert.match(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV4"/);
+  assert.match(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV5"/);
   assert.doesNotMatch(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV2"/);
-  assert.match(scanRuns, /"getCustomerScanResultV4"/);
+  assert.match(scanRuns, /"getCustomerScanResultV5"/);
   assert.doesNotMatch(scanRuns, /"getCustomerScanResultV2"/);
-  assert.match(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV4"/);
+  assert.match(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV5"/);
   assert.doesNotMatch(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV2"/);
 
   for (const name of [
-    "durableScanWorkerControlV4",
-    "persistDurableScanAuthorityV4",
-    "persistLimitedScanResultV4",
+    "durableScanWorkerControlV5",
+    "persistDurableScanAuthorityV5",
+    "persistLimitedScanResultV5",
   ]) assert.ok(worker.includes(`"${name}"`), name);
   for (const stale of [
     '"durableScanWorkerControlV2"',
@@ -139,19 +139,19 @@ test("customer and worker call sites use only V4 scanner routes", () => {
   ]) assert.ok(!worker.includes(stale), stale);
 });
 
-test("V4 routes have distinct activation identities and exact release verification", () => {
+test("V4 routes keep distinct historical activation identities and are retired from active deployment", () => {
   const markers = new Set();
   for (const canonical of Object.keys(routes)) {
-    const active = `${canonical}V4`;
+    const historical = `${canonical}V4`;
     const marker = (name) => source(`base44/functions/${name}/entry.ts`)
       .match(/BASE44_RUNTIME_ACTIVATION_ID\s*=\s*["']([^"']+)["']/)?.[1];
-    assert.ok(fs.existsSync(`base44/functions/${active}/entry.ts`), `${active} must exist`);
-    const activation = marker(active);
+    assert.ok(fs.existsSync(`base44/functions/${historical}/entry.ts`), `${historical} must remain for historical reads`);
+    const activation = marker(historical);
     assert.match(activation, /^[A-Za-z0-9._-]{1,120}$/);
     assert.notEqual(activation, marker(canonical));
     assert.notEqual(activation, marker(`${canonical}V3`));
     assert.notEqual(activation, marker(`${canonical}V2`));
-    assert.ok(!markers.has(activation), `${active} needs a unique activation identity`);
+    assert.ok(!markers.has(activation), `${historical} needs a unique activation identity`);
     markers.add(activation);
     for (const file of [
       "scripts/deploy-base44-beta-functions.sh",
@@ -159,8 +159,8 @@ test("V4 routes have distinct activation identities and exact release verificati
       "scripts/verify-base44-functions.sh",
       "scripts/base44_release_manifest.mjs",
     ]) {
-      assert.ok(source(file).includes(active), `${file} must enumerate ${active}`);
-      assert.ok(!source(file).includes(`${canonical}V2`), `${file} must retire the old active route`);
+      assert.ok(!source(file).includes(historical), `${file} must not deploy retired ${historical}`);
+      assert.ok(!source(file).includes(`${canonical}V2`), `${file} must keep V2 retired`);
     }
   }
 });

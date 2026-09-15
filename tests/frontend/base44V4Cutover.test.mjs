@@ -14,12 +14,13 @@ const expectedCanonicals = [
   "deleteCustomerScanData",
 ];
 
-test("V4 is the active Base44 generation and V3/V2 remain historical", () => {
+test("V4 remains a complete historical Base44 generation after the V5 cutover", () => {
   assert.equal(contract.schema_version, "base44_function_routes_v1");
-  assert.equal(contract.generation, "v4");
+  assert.equal(contract.generation, "v5");
   assert.deepEqual(Object.keys(contract.routes).sort(), [...expectedCanonicals].sort());
   for (const canonical of expectedCanonicals) {
-    assert.equal(contract.routes[canonical], `${canonical}V4`);
+    assert.equal(contract.routes[canonical], `${canonical}V5`);
+    assert.equal(contract.historical_routes.v4[canonical], `${canonical}V4`);
     assert.equal(contract.historical_routes.v3[canonical], `${canonical}V3`);
     assert.equal(contract.historical_routes.v2[canonical], `${canonical}V2`);
     assert.ok(fs.existsSync(`base44/functions/${canonical}V4/entry.ts`));
@@ -68,19 +69,19 @@ test("V4 executable packages preserve canonical behavior except fresh activation
   }
 });
 
-test("customer and worker active call sites use V4 only", () => {
+test("V4 routes are retained for history but retired from active customer and worker call sites", () => {
   const scanForm = source("src/components/scan/ScanWebsiteForm.jsx");
   const scanRuns = source("src/lib/scanRuns.js");
   const scanHistory = source("src/lib/scanHistory.js");
   const worker = source("scanner-api/app/scan_job.py");
-  assert.match(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV4"/);
-  assert.doesNotMatch(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV3"/);
-  assert.match(scanRuns, /"getCustomerScanResultV4"/);
-  assert.doesNotMatch(scanRuns, /"getCustomerScanResultV3"/);
-  assert.match(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV4"/);
-  assert.doesNotMatch(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV3"/);
-  for (const name of ["durableScanWorkerControlV4", "persistDurableScanAuthorityV4", "persistLimitedScanResultV4"]) assert.ok(worker.includes(`"${name}"`), name);
-  for (const stale of ["durableScanWorkerControlV3", "persistDurableScanAuthorityV3", "persistLimitedScanResultV3"]) assert.ok(!worker.includes(`"${stale}"`), stale);
+  assert.match(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV5"/);
+  assert.doesNotMatch(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV4"/);
+  assert.match(scanRuns, /"getCustomerScanResultV5"/);
+  assert.doesNotMatch(scanRuns, /"getCustomerScanResultV4"/);
+  assert.match(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV5"/);
+  assert.doesNotMatch(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV4"/);
+  for (const name of ["durableScanWorkerControlV5", "persistDurableScanAuthorityV5", "persistLimitedScanResultV5"]) assert.ok(worker.includes(`"${name}"`), name);
+  for (const retired of ["durableScanWorkerControlV4", "persistDurableScanAuthorityV4", "persistLimitedScanResultV4"]) assert.ok(!worker.includes(`"${retired}"`), retired);
 });
 
 test("V4 preserves verified unpaid teaser and shared $49 two-fix contract", () => {

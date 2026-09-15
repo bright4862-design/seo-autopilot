@@ -17,18 +17,23 @@ const ENTRY_MODULES = [
   ["persistDurableScanAuthorityV2", /Deno\.serve\(/],
   ["persistDurableScanAuthorityV3", /Deno\.serve\(/],
   ["persistDurableScanAuthorityV4", /Deno\.serve\(/],
+  ["persistDurableScanAuthorityV5", /Deno\.serve\(/],
   ["persistLimitedScanResultV2", /Deno\.serve\(/],
   ["persistLimitedScanResultV3", /Deno\.serve\(/],
   ["persistLimitedScanResultV4", /Deno\.serve\(/],
+  ["persistLimitedScanResultV5", /Deno\.serve\(/],
   ["startStandardScanJobV2", /export default async function/],
   ["startStandardScanJobV3", /export default async function/],
   ["startStandardScanJobV4", /export default async function/],
+  ["startStandardScanJobV5", /export default async function/],
   ["durableScanWorkerControlV2", /Deno\.serve\(/],
   ["durableScanWorkerControlV3", /Deno\.serve\(/],
   ["durableScanWorkerControlV4", /Deno\.serve\(/],
+  ["durableScanWorkerControlV5", /Deno\.serve\(/],
   ["getCustomerScanResultV2", /Deno\.serve\(/],
   ["getCustomerScanResultV3", /Deno\.serve\(/],
   ["getCustomerScanResultV4", /Deno\.serve\(/],
+  ["getCustomerScanResultV5", /Deno\.serve\(/],
   ["ownerScanDebugControl", /Deno\.serve\(/],
   ["aiReviewScan", /Deno\.serve\(/],
 ];
@@ -195,7 +200,7 @@ test("every function carrying a release contract has a maintained entry identity
     );
     assert.match(
       generator,
-      new RegExp(`base44/functions/${name}/entry\\.ts`),
+      new RegExp(`base44/functions/${name}/entry\.ts`),
       `${name} entry identity is asserted here but the generator does not maintain it`,
     );
   }

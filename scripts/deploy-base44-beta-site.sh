@@ -34,12 +34,12 @@ node "$REPO_ROOT/scripts/base44_release_manifest.mjs" verify
 # The scanner and customer-data routes the published frontend and the Cloud Run
 # worker actually call. Every one of these is build-ID verified below.
 VERIFIED_FUNCTIONS=(
-  startStandardScanJobV4
-  durableScanWorkerControlV4
-  persistDurableScanAuthorityV4
-  persistLimitedScanResultV4
-  getCustomerScanResultV4
-  deleteCustomerScanDataV4
+  startStandardScanJobV5
+  durableScanWorkerControlV5
+  persistDurableScanAuthorityV5
+  persistLimitedScanResultV5
+  getCustomerScanResultV5
+  deleteCustomerScanDataV5
 )
 # Deployed, but not build-ID verified. createAccessCheckout and stripeWebhook
 # keep their names because Stripe addresses stripeWebhook by URL from its own

@@ -704,7 +704,23 @@ export async function getScanRunWithFixList(scanRunId) {
     if (!Array.isArray(result.fixItems)) return fail({ error_code: "result_authority_invalid" });
     const fixItems = result.fixItems;
     if (!fixList && fixItems.length > 0) return fail({ error_code: "result_authority_invalid" });
-    if ((fixItems || []).some((item) => (
+    const access = String(result.access || "locked");
+    const authorityVerified = result.authority_verified === true;
+    const terminalPreview = access === "preview" && String(run.status || "") === "complete";
+
+    // A terminal unpaid preview is already identity-bound and HMAC-verified by
+    // getCustomerScanResultV5. Its two customer-visible FixItems are
+    // deliberately sanitized and do not expose internal project/scan/fix-list
+    // row ids, so applying the full-result row-identity check here rejects a
+    // valid signed preview as result_authority_invalid. Keep the top-level
+    // run/FixList identity checks above, require the verified preview marker,
+    // and preserve strict per-row identity validation for every non-preview
+    // result.
+    if (terminalPreview) {
+      if (!authorityVerified || fixItems.length > 2) {
+        return fail({ error_code: "result_authority_invalid" });
+      }
+    } else if ((fixItems || []).some((item) => (
       String(item.project_id || "") !== projectId
       || String(item.scan_run_id || "") !== String(run.id || "")
       || String(item.fix_list_id || "") !== String(fixList?.id || "")
@@ -714,8 +730,8 @@ export async function getScanRunWithFixList(scanRunId) {
       kind: "loaded",
       scan_id: run.id,
       fix_list_id: fixList?.id || result.fix_list_id || run.fix_list_id || "",
-      access: result.access || "locked",
-      authority_verified: result.authority_verified === true,
+      access,
+      authority_verified: authorityVerified,
       run: { ...run, scan_id: run.id },
       fixList: fixList || null,
       fixItems: fixItems || [],

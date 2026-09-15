@@ -14,7 +14,7 @@ const expectedCanonicals = [
   "deleteCustomerScanData",
 ];
 
-test("V4 remains a complete historical Base44 generation after the V5 cutover", () => {
+test("V5 is the active Base44 generation and V4/V3/V2 remain historical", () => {
   assert.equal(contract.schema_version, "base44_function_routes_v1");
   assert.equal(contract.generation, "v5");
   assert.deepEqual(Object.keys(contract.routes).sort(), [...expectedCanonicals].sort());
@@ -23,17 +23,17 @@ test("V4 remains a complete historical Base44 generation after the V5 cutover", 
     assert.equal(contract.historical_routes.v4[canonical], `${canonical}V4`);
     assert.equal(contract.historical_routes.v3[canonical], `${canonical}V3`);
     assert.equal(contract.historical_routes.v2[canonical], `${canonical}V2`);
-    assert.ok(fs.existsSync(`base44/functions/${canonical}V4/entry.ts`));
-    assert.match(source(`base44/functions/${canonical}V4/function.jsonc`), new RegExp(`"name"\\s*:\\s*"${canonical}V4"`));
+    assert.ok(fs.existsSync(`base44/functions/${canonical}V5/entry.ts`));
+    assert.match(source(`base44/functions/${canonical}V5/function.jsonc`), new RegExp(`"name"\\s*:\\s*"${canonical}V5"`));
   }
 });
 
-test("V4 executable packages preserve canonical behavior except fresh activation identity", () => {
+test("V5 executable packages preserve canonical behavior except fresh activation identity", () => {
   const normalizeActivation = (value) => value.replace(
     /(BASE44_RUNTIME_ACTIVATION_ID\s*=\s*)["'][^"']+["']/g,
     '$1"<deployment-activation-nonce>"',
   );
-  const v4OnlyFiles = new Map([
+  const v5OnlyFiles = new Map([
     ["persistDurableScanAuthority", ["customerPreviewSeal.js"]],
     ["getCustomerScanResult", ["customerPreviewSeal.js"]],
   ]);
@@ -43,33 +43,33 @@ test("V4 executable packages preserve canonical behavior except fresh activation
   ]);
   for (const canonical of expectedCanonicals) {
     const canonicalDir = `base44/functions/${canonical}`;
-    const v4Dir = `base44/functions/${canonical}V4`;
+    const v5Dir = `base44/functions/${canonical}V5`;
     const filtered = (dir) => fs.readdirSync(dir).filter((name) => !["function.jsonc", "generatedBuildId.js"].includes(name)).sort();
     const canonicalFiles = filtered(canonicalDir);
-    const allowedExtras = v4OnlyFiles.get(canonical) || [];
+    const allowedExtras = v5OnlyFiles.get(canonical) || [];
     assert.deepEqual(
-      filtered(v4Dir),
+      filtered(v5Dir),
       [...canonicalFiles, ...allowedExtras].sort(),
       canonical,
     );
     const intentionalChanges = intentionallyChangedInheritedFiles.get(canonical) || new Set();
     for (const file of canonicalFiles) {
       if (intentionalChanges.has(file)) continue;
-      assert.equal(normalizeActivation(source(path.join(v4Dir, file))), normalizeActivation(source(path.join(canonicalDir, file))), `${canonical}V4/${file}`);
+      assert.equal(normalizeActivation(source(path.join(v5Dir, file))), normalizeActivation(source(path.join(canonicalDir, file))), `${canonical}V5/${file}`);
     }
     if (allowedExtras.length > 0) {
-      const v4Entry = source(path.join(v4Dir, "entry.ts"));
-      assert.match(v4Entry, /customerPreviewSeal\.js/, `${canonical}V4 entry must wire the signed preview addition`);
+      const v5Entry = source(path.join(v5Dir, "entry.ts"));
+      assert.match(v5Entry, /customerPreviewSeal\.js/, `${canonical}V5 entry must wire the signed preview addition`);
     }
     if (canonical === "getCustomerScanResult") {
-      const v4Projection = source(path.join(v4Dir, "projection.js"));
-      assert.match(v4Projection, /"preview_example_page"/, "V4 preview projection may expose only its pre-signed example page addition");
-      assert.match(source(path.join(v4Dir, "releaseCompatibility.js")), /customer_result_reader_v7_signed_preview_authority/);
+      const v5Projection = source(path.join(v5Dir, "projection.js"));
+      assert.match(v5Projection, /"preview_example_page"/, "V5 preview projection may expose only its pre-signed example page addition");
+      assert.match(source(path.join(v5Dir, "releaseCompatibility.js")), /customer_result_reader_v7_signed_preview_authority/);
     }
   }
 });
 
-test("V4 routes are retained for history but retired from active customer and worker call sites", () => {
+test("customer and worker active call sites use V5 only", () => {
   const scanForm = source("src/components/scan/ScanWebsiteForm.jsx");
   const scanRuns = source("src/lib/scanRuns.js");
   const scanHistory = source("src/lib/scanHistory.js");
@@ -81,12 +81,12 @@ test("V4 routes are retained for history but retired from active customer and wo
   assert.match(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV5"/);
   assert.doesNotMatch(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV4"/);
   for (const name of ["durableScanWorkerControlV5", "persistDurableScanAuthorityV5", "persistLimitedScanResultV5"]) assert.ok(worker.includes(`"${name}"`), name);
-  for (const retired of ["durableScanWorkerControlV4", "persistDurableScanAuthorityV4", "persistLimitedScanResultV4"]) assert.ok(!worker.includes(`"${retired}"`), retired);
+  for (const stale of ["durableScanWorkerControlV4", "persistDurableScanAuthorityV4", "persistLimitedScanResultV4"]) assert.ok(!worker.includes(`"${stale}"`), stale);
 });
 
-test("V4 preserves verified unpaid teaser and shared $49 two-fix contract", () => {
-  const reader = source("base44/functions/getCustomerScanResultV4/entry.ts");
-  const projection = source("base44/functions/getCustomerScanResultV4/projection.js");
+test("V5 preserves verified unpaid teaser and shared $49 two-fix contract", () => {
+  const reader = source("base44/functions/getCustomerScanResultV5/entry.ts");
+  const projection = source("base44/functions/getCustomerScanResultV5/projection.js");
   const fixListPage = source("src/pages/FixList.jsx");
   const access = source("src/lib/access.js");
   assert.match(reader, /previewAccess:\s*!access\.ok/);

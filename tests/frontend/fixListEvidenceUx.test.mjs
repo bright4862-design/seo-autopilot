@@ -87,7 +87,7 @@ test("durable authority is written server-side and the browser only reads the ex
   assert.match(durablePersistenceSource, /persistedScan\?\.status === "complete"/);
   assert.match(durablePersistenceSource, /authority_proof/);
   assert.match(durablePersistenceSource, /persistExactAdmissionRelease\(\{/);
-  assert.match(scanRunsSource, /base44\.functions\.invoke\("getCustomerScanResultV4"/);
+  assert.match(scanRunsSource, /base44\.functions\.invoke\("getCustomerScanResultV5"/);
   assert.match(scanFormSource, /submitStandardScanJob\(scanPayload\)/);
   assert.match(scanFormSource, /setWatchedScanId\(scanId\)/);
   const submitStart = scanFormSource.indexOf("async function handleSubmit");

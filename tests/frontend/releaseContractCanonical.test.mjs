@@ -28,7 +28,8 @@ const HISTORICAL_COMPAT_REL = "base44/functions/getCustomerScanResult/releaseCom
 const HISTORICAL_COMPAT_ALIAS_REL = "base44/functions/getCustomerScanResultV2/releaseCompatibility.js";
 const HISTORICAL_COMPAT_V3_REL = "base44/functions/getCustomerScanResultV3/releaseCompatibility.js";
 const HISTORICAL_COMPAT_V4_REL = "base44/functions/getCustomerScanResultV4/releaseCompatibility.js";
-const HISTORICAL_COMPAT_RELS = new Set([HISTORICAL_COMPAT_REL, HISTORICAL_COMPAT_ALIAS_REL, HISTORICAL_COMPAT_V3_REL, HISTORICAL_COMPAT_V4_REL]);
+const HISTORICAL_COMPAT_V5_REL = "base44/functions/getCustomerScanResultV5/releaseCompatibility.js";
+const HISTORICAL_COMPAT_RELS = new Set([HISTORICAL_COMPAT_REL, HISTORICAL_COMPAT_ALIAS_REL, HISTORICAL_COMPAT_V3_REL, HISTORICAL_COMPAT_V4_REL, HISTORICAL_COMPAT_V5_REL]);
 const HISTORICAL_COMPAT = path.join(ROOT, HISTORICAL_COMPAT_REL);
 const GENERATOR = path.join(ROOT, "scripts/generate_release_contracts.mjs");
 
@@ -117,6 +118,13 @@ test("old release fingerprints are isolated to the explicit historical reader re
     "V4 may advance reader semantics but must mirror the canonical historical fingerprint registry",
   );
   assert.match(v4Compatibility, /customer_result_reader_v7_signed_preview_authority/);
+  const v5Compatibility = fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_V5_REL), "utf8");
+  assert.equal(
+    compatibilityWithoutReaderVersion(v5Compatibility),
+    compatibilityWithoutReaderVersion(compatibility),
+    "V5 active reader must preserve the canonical historical fingerprint registry",
+  );
+  assert.match(v5Compatibility, /customer_result_reader_v7_signed_preview_authority/);
   assert.equal(fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_V3_REL), "utf8"), compatibility, "V3 reader must mirror the canonical historical compatibility registry");
   assert.equal(fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_ALIAS_REL), "utf8"), compatibility, "V2 reader must mirror the canonical historical compatibility registry");
 });
@@ -269,8 +277,8 @@ test("every declared cross-runtime component is a real marker in shipped code", 
     admission_reconciliation_version: "base44/functions/durableScanWorkerControl/generatedReleaseContract.js",
     authority_seal_version: "base44/functions/persistDurableScanAuthority/authoritySeal.js",
     customer_projection_version: "base44/functions/getCustomerScanResult/projection.js",
-    customer_preview_seal_version: "base44/functions/getCustomerScanResultV4/customerPreviewSeal.js",
-    customer_result_reader_version: "base44/functions/getCustomerScanResultV4/releaseCompatibility.js",
+    customer_preview_seal_version: "base44/functions/getCustomerScanResultV5/customerPreviewSeal.js",
+    customer_result_reader_version: "base44/functions/getCustomerScanResultV5/releaseCompatibility.js",
     limited_result_integrity_version: "base44/functions/persistLimitedScanResult/limitedResultIntegrity.js",
     review_attestation_version: "base44/functions/persistDurableScanAuthority/authoritySnapshot.js",
     durable_completion_contract_version: "base44/functions/persistDurableScanAuthority/entry.ts",

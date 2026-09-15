@@ -5,7 +5,7 @@
 
 import { base44 } from "@/api/base44Client";
 
-const DELETE_FUNCTION = "deleteCustomerScanDataV4";
+const DELETE_FUNCTION = "deleteCustomerScanDataV5";
 
 export const KEEP_NEWEST_SCANS = 3;
 

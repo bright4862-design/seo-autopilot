@@ -18,12 +18,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # The live routes. Each one's expected build ID is resolved through the alias
 # table by the generator, so this list no longer carries the canonical name.
 FUNCTION_ROUTES=(
-  startStandardScanJobV4
-  durableScanWorkerControlV4
-  persistDurableScanAuthorityV4
-  persistLimitedScanResultV4
-  getCustomerScanResultV4
-  deleteCustomerScanDataV4
+  startStandardScanJobV5
+  durableScanWorkerControlV5
+  persistDurableScanAuthorityV5
+  persistLimitedScanResultV5
+  getCustomerScanResultV5
+  deleteCustomerScanDataV5
 )
 
 command -v curl >/dev/null 2>&1 || {
@@ -74,7 +74,7 @@ for name in "${FUNCTION_ROUTES[@]}"; do
   # The build ID resolves through the alias, because an alias is stamped with
   # the identity of the package it mirrors. The activation marker does not:
   # each package carries its own. That asymmetry is the whole point of checking
-  # both -- deleteCustomerScanDataV4's canonical package was unchanged by the
+  # both -- deleteCustomerScanDataV5's canonical package was unchanged by the
   # activation refresh, so its expected build ID still equals the one the stale
   # handler serves, and a build-only check calls that route current while it is
   # running canonical-era code.

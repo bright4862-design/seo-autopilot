@@ -8,12 +8,12 @@ import test from "node:test";
 const script = "scripts/deploy-base44-beta-functions.sh";
 const workflow = readFileSync(".github/workflows/fixlist-base44-release-publish.yml", "utf8");
 const scannerFunctions = [
-  "startStandardScanJobV4",
-  "durableScanWorkerControlV4",
-  "persistDurableScanAuthorityV4",
-  "persistLimitedScanResultV4",
-  "getCustomerScanResultV4",
-  "deleteCustomerScanDataV4",
+  "startStandardScanJobV5",
+  "durableScanWorkerControlV5",
+  "persistDurableScanAuthorityV5",
+  "persistLimitedScanResultV5",
+  "getCustomerScanResultV5",
+  "deleteCustomerScanDataV5",
 ];
 
 function fixture({ verifierExit = 0 } = {}) {
@@ -64,7 +64,7 @@ function contents(path) {
   try { return readFileSync(path, "utf8"); } catch { return ""; }
 }
 
-test("scanner-functions deploys and attests exactly the six V4 scanner routes", () => {
+test("scanner-functions deploys and attests exactly the six V5 scanner routes", () => {
   const f = fixture();
   try {
     const result = f.run("scanner-functions");

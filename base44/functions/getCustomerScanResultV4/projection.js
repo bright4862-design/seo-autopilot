@@ -259,6 +259,7 @@ const PREVIEW_DETAILED_FIX_ITEM_FIELDS = [
   "who_can_do_this",
   "requires_developer",
   "evidence_class",
+  "preview_example_page",
 ];
 
 const PREVIEW_DETAILED_FIX_COUNT = 2;
@@ -334,6 +335,7 @@ function sanitizePreviewRun(run) {
 
 function previewExamplePage(item = {}) {
   const candidates = [
+    item?.preview_example_page,
     ...(Array.isArray(item?.affected_pages) ? item.affected_pages : []),
     item?.page_url,
   ];

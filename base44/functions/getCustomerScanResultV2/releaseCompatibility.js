@@ -6,6 +6,7 @@
 export const CUSTOMER_RESULT_READER_VERSION = "customer_result_reader_v6_authority_reconstruction_parity";
 
 export const HISTORICAL_READABLE_RELEASE_FINGERPRINTS = Object.freeze([
+  "a511d61013ef9fe3",
   "c73399086107cbaf",
   "5d94e93c54a9efb6",
   "7a95768cc8ee2076",

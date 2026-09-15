@@ -67,7 +67,7 @@ function mutableScanAdmissionEnv(name) {
   return String(Deno.env.get(name) || "");
 }
 
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "a511d61013ef9fe3";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "104d5fc4c8d562c9";
 const VERSION = "startStandardScanJob_v3_server_admission";
 const PUBLIC_SCAN_MODE = "standard_150";
 const MAX_PAGES = 150;

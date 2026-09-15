@@ -1,0 +1,587 @@
+name: Apply redirect sitemap consolidation v1
+
+on:
+  push:
+    branches:
+      - feature/redirect-sitemap-consolidation-v1
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/redirect-sitemap-consolidation-v1
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: pip install -r scanner-api/requirements.txt
+
+      - name: Apply guarded product and release changes
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          from pathlib import Path
+
+          ROOT = Path.cwd()
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = ROOT / path
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected exactly one anchor, found {count}: {old[:100]!r}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          consolidation_module = '''from __future__ import annotations
+
+FINDING_CONSOLIDATION_VERSION = "finding_consolidation_v1_redirect_sitemap_families"
+
+# Exact-rule only: different remediation rules must never be merged together.
+CROSS_FAMILY_REDIRECT_SITEMAP_RULES = frozenset({
+    "sitemap_redirect",
+    "internal_link_redirect",
+    "redirect_chain",
+    "redirect_destination_failed",
+    "redirect_destination_blocked",
+    "redirect_destination_noindex",
+    "sitemap_indexability_conflict",
+    "sitemap_canonicalized_url",
+})
+
+_RULE_COPY = {
+    "sitemap_redirect": {
+        "explanation": "Several XML sitemap entries redirect before reaching their final destination. This is one sitemap-maintenance issue even when the URLs belong to different page families.",
+        "recommendation": "Replace each redirecting sitemap entry with its final indexable canonical URL, then regenerate and resubmit the sitemap.",
+    },
+    "internal_link_redirect": {
+        "explanation": "Several internal links point to URLs that redirect before reaching their destination. Consolidating them keeps navigation and crawl paths direct across every affected page family.",
+        "recommendation": "Update each internal link to point directly to the final destination URL and verify representative links from every affected page family.",
+    },
+    "redirect_chain": {
+        "explanation": "Several URLs pass through repeated redirect hops. The same routing problem affects multiple page families and should be fixed as one redirect-rule cleanup.",
+        "recommendation": "Point each source URL directly to its final destination and remove unnecessary intermediate redirect hops.",
+    },
+    "redirect_destination_failed": {
+        "explanation": "Several redirects end on unavailable pages. These failures span multiple page families but share the same destination-health remediation.",
+        "recommendation": "Restore a valid final destination or update each redirect to the closest relevant live page, then verify the final response is successful.",
+    },
+    "redirect_destination_blocked": {
+        "explanation": "Several redirects end on robots-blocked destinations. This is one crawl-access pattern across the affected page families.",
+        "recommendation": "Confirm that each destination is intended, allow crawler access where appropriate, and redirect directly to a crawlable final URL.",
+    },
+    "redirect_destination_noindex": {
+        "explanation": "Several redirects end on pages that are explicitly noindexed. This sends conflicting destination signals across multiple page families.",
+        "recommendation": "Redirect to indexable final destinations or revise the destination noindex policy when those pages should consolidate search signals.",
+    },
+    "sitemap_indexability_conflict": {
+        "explanation": "Several sitemap entries are explicitly noindexed or blocked by robots.txt. The URLs span multiple page families but share one sitemap-indexability conflict.",
+        "recommendation": "Remove non-indexable URLs from the sitemap, or make them crawlable and indexable when they are intended search landing pages.",
+    },
+    "sitemap_canonicalized_url": {
+        "explanation": "Several sitemap entries canonicalize to different preferred URLs. This is one sitemap-maintenance problem across multiple page families.",
+        "recommendation": "Replace each canonicalized sitemap entry with its final indexable canonical URL and keep only preferred URLs in XML sitemaps.",
+    },
+}
+
+
+def is_cross_family_rule(rule: str) -> bool:
+    return str(rule or "") in CROSS_FAMILY_REDIRECT_SITEMAP_RULES
+
+
+def consolidation_copy(rule: str) -> dict[str, str]:
+    return dict(_RULE_COPY.get(str(rule or ""), {}))
+'''
+          (ROOT / "scanner-api/app/finding_consolidation.py").write_text(consolidation_module, encoding="utf-8")
+
+          scanner_path = ROOT / "scanner-api/app/scanner.py"
+          scanner = scanner_path.read_text(encoding="utf-8")
+          import_anchor = "from .extract import classify_template, extract_links, extract_page\n"
+          if scanner.count(import_anchor) != 1:
+              raise SystemExit("scanner import anchor drift")
+          scanner = scanner.replace(
+              import_anchor,
+              import_anchor + "from .finding_consolidation import (\n    FINDING_CONSOLIDATION_VERSION,\n    consolidation_copy,\n    is_cross_family_rule,\n)\n",
+              1,
+          )
+          scanner = scanner.replace(
+              '"sitemap_indexability_conflict"}',
+              '"sitemap_indexability_conflict", "sitemap_canonicalized_url"}',
+              1,
+          )
+
+          grouping_start = scanner.index("def grouping_key(finding: dict) -> str:\n")
+          grouping_end = scanner.index("\n\ndef group_template_title", grouping_start)
+          scanner = scanner[:grouping_start] + '''def grouping_key(finding: dict) -> str:
+    family = classify_template(finding.get("page_url") or (finding.get("affected_pages") or [""])[0] or "")
+    rule = finding.get("rule", "")
+    if is_cross_family_rule(rule):
+        return f"cross_family|{rule}"
+    if rule in FAILURE_RULES:
+        return f"failure|{rule}|{family}"
+    if rule in TEMPLATE_RULES:
+        return f"template|{rule}|{family}"
+    return ""
+''' + scanner[grouping_end:]
+
+          group_start = scanner.index("def group_findings(findings: list[dict]) -> list[dict]:\n")
+          group_end = scanner.index("\n\ndef _unique_nonempty", group_start)
+          scanner = scanner[:group_start] + '''def group_findings(findings: list[dict]) -> list[dict]:
+    direct: list[dict] = []
+    groups: dict[str, list[dict]] = {}
+    for finding in findings:
+        key = grouping_key(finding)
+        if not key:
+            direct.append(finding)
+            continue
+        groups.setdefault(key, []).append(finding)
+
+    for key, members in groups.items():
+        affected = _unique_nonempty([p for f in members for p in (f.get("affected_pages") or [f.get("page_url")])])[:150]
+        # Only collapse when multiple pages share the exact same remediation rule.
+        if len(affected) < GROUP_MIN_AFFECTED:
+            direct.extend(members)
+            continue
+
+        sample = members[0]
+        rule = str(sample.get("rule") or "")
+        pages_by_family: dict[str, list[str]] = {}
+        for page in affected:
+            family_name = classify_template(page)
+            pages_by_family.setdefault(family_name, []).append(page)
+        family_breakdown = {family_name: len(values) for family_name, values in pages_by_family.items()}
+        representative_pages_by_family = {
+            family_name: values[:3] for family_name, values in pages_by_family.items()
+        }
+        family_count = len(pages_by_family)
+        cross_family = is_cross_family_rule(rule) and family_count > 1
+        family = "mixed" if cross_family else classify_template(sample.get("page_url") or affected[0])
+        blocked = key.startswith("failure|rate_limited_page") or rule == "rate_limited_page"
+        if blocked:
+            title = "Check pages blocked by rate limiting"
+            explanation = "Several similar pages returned HTTP 429 or rate limiting. Treat this as one crawler-access problem."
+            recommendation = "Ask your web person to check server, CDN, firewall, and rate-limit logs. Confirm Googlebot and normal users can access the affected URLs."
+        else:
+            title = group_template_title(rule, family)
+            specific_copy = consolidation_copy(rule)
+            explanation = specific_copy.get(
+                "explanation",
+                "Several similar pages have the same template-level issue. Fix the shared template or pattern instead of creating one task per page.",
+            )
+            recommendation = specific_copy.get(
+                "recommendation",
+                "Fix one representative page/template first, then roll out the same rule across the affected group.",
+            )
+        group_id = stable_id(f"group|{key}")
+        grouped = dict(sample)
+        grouped.update({
+            "id": group_id,
+            "fix_id": group_id,
+            "page_url": "",
+            "title": title,
+            "issue_title": title,
+            "plain_english_explanation": explanation,
+            "plain_english_summary": explanation,
+            "why_it_matters": explanation,
+            "recommended_value": recommendation,
+            "recommendation": recommendation,
+            "ai_recommendation": recommendation,
+            "current_value": (
+                f"{len(affected)} affected URLs across {family_count} page families."
+                if is_cross_family_rule(rule)
+                else sample.get("current_value", "")
+            ),
+            "priority": "high" if blocked else ("medium" if sample.get("priority") == "high" else sample.get("priority")),
+            "difficulty": "developer" if blocked else sample.get("difficulty"),
+            "requires_developer": blocked or sample.get("requires_developer", False),
+            "who_can_do_this": "your_web_person" if (blocked or sample.get("requires_developer")) else sample.get("who_can_do_this"),
+            "affected_pages": affected,
+            "page_count": len(affected),
+            "page_template_family": family,
+            "page_scope": "cross_family" if cross_family else "template",
+            "family_count": family_count,
+            "family_breakdown": dict(sorted(family_breakdown.items())),
+            "representative_pages_by_family": dict(sorted(representative_pages_by_family.items())),
+            "finding_consolidation_version": FINDING_CONSOLIDATION_VERSION,
+            "source_pages": _unique_nonempty([p for f in members for p in (f.get("source_pages") or [])]),
+            "link_text_samples": _unique_nonempty([t for f in members for t in (f.get("link_text_samples") or [])]),
+        })
+        direct.append(grouped)
+    return direct
+''' + scanner[group_end:]
+          scanner_path.write_text(scanner, encoding="utf-8")
+
+          post_path = ROOT / "scanner-api/app/indexability_postprocess.py"
+          post = post_path.read_text(encoding="utf-8")
+          post = post.replace(
+              "import hashlib\n",
+              "import hashlib\n\nfrom .finding_consolidation import (\n    FINDING_CONSOLIDATION_VERSION,\n    consolidation_copy,\n    is_cross_family_rule,\n)\n",
+              1,
+          )
+          function_start = post.index("def group_indexability_quality_findings(findings: list[dict]) -> list[dict]:\n")
+          function_end = post.index("\n\ndef apply_indexability_quality_to_result", function_start)
+          post = post[:function_start] + '''def group_indexability_quality_findings(findings: list[dict]) -> list[dict]:
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for finding in findings:
+        rule = str(finding.get("rule") or "")
+        family = str(finding.get("page_template_family") or "standard")
+        family_key = "cross_family" if is_cross_family_rule(rule) else family
+        groups.setdefault((rule, family_key), []).append(finding)
+
+    output: list[dict] = []
+    severity = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+    for (rule, family_key), members in groups.items():
+        affected = _unique(
+            page
+            for member in members
+            for page in (member.get("affected_pages") or [member.get("page_url")])
+        )[:150]
+        if len(affected) < GROUP_MIN_AFFECTED:
+            output.extend(members)
+            continue
+
+        sample = dict(members[0])
+        pages_by_family: dict[str, list[str]] = {}
+        for member in members:
+            member_family = str(member.get("page_template_family") or "standard")
+            for page in (member.get("affected_pages") or [member.get("page_url")]):
+                cleaned = str(page or "").strip()
+                if cleaned and cleaned not in pages_by_family.setdefault(member_family, []):
+                    pages_by_family[member_family].append(cleaned)
+        family_breakdown = {name: len(values) for name, values in pages_by_family.items()}
+        representative_pages_by_family = {name: values[:3] for name, values in pages_by_family.items()}
+        family_count = len(pages_by_family)
+        cross_family = is_cross_family_rule(rule) and family_count > 1
+        group_key = f"indexability-quality|{rule}|{family_key}|{','.join(sorted(pages_by_family))}"
+        group_id = "finding_" + hashlib.sha1(group_key.encode("utf-8")).hexdigest()[:12]
+        highest_priority = max(
+            (str(member.get("priority") or "low") for member in members),
+            key=lambda value: severity.get(value, 0),
+        )
+        title = QUALITY_GROUP_TITLES.get(rule, str(sample.get("title") or "Fix repeated indexability issue"))
+        specific_copy = consolidation_copy(rule)
+        explanation = specific_copy.get(
+            "explanation",
+            "Several similar pages share the same indexability problem. Fix the shared template, routing rule, or response behavior instead of treating each URL separately.",
+        )
+        recommendation = specific_copy.get(
+            "recommendation",
+            "Fix one representative template or routing rule, verify the result, then apply it across every affected URL.",
+        )
+        sample.update({
+            "id": group_id,
+            "fix_id": group_id,
+            "page_url": "",
+            "title": title,
+            "issue_title": title,
+            "plain_english_explanation": explanation,
+            "plain_english_summary": explanation,
+            "why_it_matters": explanation,
+            "recommended_value": recommendation,
+            "recommendation": recommendation,
+            "ai_recommendation": recommendation,
+            "current_value": f"{len(affected)} affected URLs across {family_count} page families.",
+            "priority": highest_priority,
+            "affected_pages": affected,
+            "page_count": len(affected),
+            "page_template_family": "mixed" if cross_family else str(sample.get("page_template_family") or "standard"),
+            "page_scope": "cross_family" if cross_family else "template",
+            "family_count": family_count,
+            "family_breakdown": dict(sorted(family_breakdown.items())),
+            "representative_pages_by_family": dict(sorted(representative_pages_by_family.items())),
+            "finding_consolidation_version": FINDING_CONSOLIDATION_VERSION,
+            "source_pages": _unique(
+                page for member in members for page in (member.get("source_pages") or [])
+            ),
+            "link_text_samples": _unique(
+                text for member in members for text in (member.get("link_text_samples") or [])
+            ),
+        })
+        output.append(sample)
+    return output
+''' + post[function_end:]
+          post_path.write_text(post, encoding="utf-8")
+
+          replace_once(
+              "scanner-api/app/beta_revision.py",
+              "    from .indexability_quality import INDEXABILITY_QUALITY_VERSION\n",
+              "    from .finding_consolidation import FINDING_CONSOLIDATION_VERSION\n    from .indexability_quality import INDEXABILITY_QUALITY_VERSION\n",
+          )
+          replace_once(
+              "scanner-api/app/beta_revision.py",
+              '        "scanner_version": VERSION,\n',
+              '        "scanner_version": VERSION,\n        "finding_consolidation_version": FINDING_CONSOLIDATION_VERSION,\n',
+          )
+
+          replace_once(
+              "scanner-api/app/main.py",
+              "from .indexability_postprocess import apply_indexability_quality_to_result\n",
+              "from .finding_consolidation import FINDING_CONSOLIDATION_VERSION\nfrom .indexability_postprocess import apply_indexability_quality_to_result\n",
+          )
+          replace_once(
+              "scanner-api/app/main.py",
+              '        "scanner_build_revision": SCANNER_BUILD_REVISION,\n',
+              '        "scanner_build_revision": SCANNER_BUILD_REVISION,\n        "finding_consolidation_version": FINDING_CONSOLIDATION_VERSION,\n',
+          )
+
+          record_path = ROOT / "data/beta-crawler-revision.json"
+          record = json.loads(record_path.read_text(encoding="utf-8"))
+          record["component_versions"]["finding_consolidation_version"] = "finding_consolidation_v1_redirect_sitemap_families"
+          payload = json.dumps(record["component_versions"], sort_keys=True, separators=(",", ":"))
+          record["fingerprint"] = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+          if record["fingerprint"] != "349d0700e5fae0cd":
+              raise SystemExit(f"unexpected candidate fingerprint: {record['fingerprint']}")
+          record.update({
+              "acceptance_report": "docs/releases/redirect-sitemap-consolidation-v1.md",
+              "git_commit": "pending_production_acceptance",
+              "note": "Candidate: exact-rule redirect and sitemap findings consolidate across page families while preserving rule-specific remediation, family counts, representative examples, and all affected URLs. IKEA global-root mismatch is recorded as an acceptance-control correction. Score calibration remains deferred.",
+              "recorded_at": "2026-07-18T00:00:00Z",
+              "status": "candidate",
+          })
+          record_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+          manifest_path = ROOT / "data/beta-acceptance-manifest.jsonl"
+          manifest_lines = manifest_path.read_text(encoding="utf-8").splitlines()
+          if not any(json.loads(line).get("site") == "ikea-fr" for line in manifest_lines if line.strip()):
+              manifest_lines.append(json.dumps({
+                  "site": "ikea-fr",
+                  "url": "https://www.ikea.com/fr/fr/",
+                  "stratum": "ecommerce_marketplace",
+                  "scan_mode": "advanced",
+                  "expected_archetype": "ecommerce_specialty_retail",
+              }, separators=(",", ":")))
+          manifest_path.write_text("\n".join(manifest_lines) + "\n", encoding="utf-8")
+
+          acceptance_path = ROOT / "docs/beta-acceptance.md"
+          acceptance = acceptance_path.read_text(encoding="utf-8")
+          heading = "## Known follow-ups\n"
+          correction = '''## IKEA acceptance-test correction
+
+The original production matrix submitted `https://www.ikea.com`, which routed to IKEA's global corporate/editorial branch rather than a country storefront. In the preserved evidence, 147 of 150 pages were under `/global/en/`, 50 routes were articles, and there were zero product-route or product-schema signals. There were no blocked or HTTP 429 pages.
+
+`content_blog` was therefore consistent with the content actually scanned. The original `ecommerce_specialty_retail` expectation was an acceptance-control error, not an ecommerce-classifier failure.
+
+The next IKEA retail control is permanently defined as:
+
+- URL: `https://www.ikea.com/fr/fr/`
+- Expected archetype: `ecommerce_specialty_retail`
+
+A separate future milestone is tracked in issue #77: when `market_scope_required` is true, classification authority should be provisional or ambiguous and request a market-specific URL. General score calibration remains deferred.
+
+'''
+          if correction not in acceptance:
+              if acceptance.count(heading) != 1:
+                  raise SystemExit("beta acceptance heading drift")
+              acceptance = acceptance.replace(heading, correction + heading, 1)
+          old_followups = '''1. Investigate the preserved IKEA evidence before changing classifier behavior. IKEA's global root classified as `content_blog` instead of the expected `ecommerce_specialty_retail`; locale routing, access evidence, and representative sampling must be examined first.
+2. Improve consolidation of repeated redirect and sitemap recommendations across page and template families.
+3. Keep score calibration deferred.
+4. Keep renderer infrastructure, large asynchronous crawl modes, and performance auditing as separate roadmap decisions.
+'''
+          new_followups = '''1. Implement the future market-scope confidence-quality milestone in issue #77 under a separate version and acceptance gate.
+2. Validate the versioned redirect/sitemap consolidation candidate before deployment.
+3. Keep score calibration deferred.
+4. Keep renderer infrastructure, large asynchronous crawl modes, and performance auditing as separate roadmap decisions.
+'''
+          if old_followups in acceptance:
+              acceptance = acceptance.replace(old_followups, new_followups, 1)
+          acceptance_path.write_text(acceptance, encoding="utf-8")
+
+          release_doc = '''# Redirect and sitemap consolidation v1 candidate
+
+## Scope
+
+This candidate consolidates repeated findings across page families only when they share the exact same redirect or sitemap remediation rule.
+
+Included rules:
+
+- `sitemap_redirect`
+- `internal_link_redirect`
+- `redirect_chain`
+- `redirect_destination_failed`
+- `redirect_destination_blocked`
+- `redirect_destination_noindex`
+- `sitemap_indexability_conflict`
+- `sitemap_canonicalized_url`
+
+Each consolidated card preserves every affected URL, a count by template family, up to three representative examples per family, the exact rule-specific title, and rule-specific remediation copy. Findings with different rules remain separate.
+
+## Release identity
+
+- Consolidation marker: `finding_consolidation_v1_redirect_sitemap_families`
+- Candidate fingerprint: `349d0700e5fae0cd`
+- Frozen v8 production fingerprint remains historical evidence: `430813f2b15afa8f`
+
+## Acceptance-control correction
+
+The global IKEA root was an invalid ecommerce control because it routed to the corporate/editorial branch. Future IKEA ecommerce validation uses `https://www.ikea.com/fr/fr/` with expected archetype `ecommerce_specialty_retail`.
+
+## Non-goals
+
+- no classifier-weight changes
+- no market-scope confidence change in this milestone; issue #77 tracks that separately
+- no scoring-model or threshold changes
+- no crawl-cap changes
+- no Cloud Run, Base44, or secret configuration changes
+
+## Required gate
+
+The candidate requires focused regressions, the full normal CI suite, deployment under its new fingerprint, and a focused production comparison before it can replace the frozen baseline.
+'''
+          release_path = ROOT / "docs/releases/redirect-sitemap-consolidation-v1.md"
+          release_path.parent.mkdir(parents=True, exist_ok=True)
+          release_path.write_text(release_doc, encoding="utf-8")
+
+          test_content = '''import json
+from pathlib import Path
+
+from app.finding_consolidation import FINDING_CONSOLIDATION_VERSION
+from app.indexability_postprocess import group_indexability_quality_findings
+from app.main import health
+from app.scanner import create_finding, group_findings
+
+
+def _finding(rule: str, path: str, title: str = "Issue") -> dict:
+    return create_finding(
+        rule=rule,
+        category="indexability",
+        priority="medium",
+        title=title,
+        page_url=path,
+        current_value="evidence",
+        explanation="specific evidence",
+        recommendation="specific fix",
+        difficulty="developer",
+    )
+
+
+def test_sitemap_redirects_consolidate_across_template_families():
+    findings = [
+        _finding("sitemap_redirect", "/products/chair-old"),
+        _finding("sitemap_redirect", "/blog/old-guide"),
+        _finding("sitemap_redirect", "/locations/paris-old"),
+    ]
+
+    grouped = group_findings(findings)
+
+    assert len(grouped) == 1
+    card = grouped[0]
+    assert card["rule"] == "sitemap_redirect"
+    assert card["title"] == "Replace redirecting URLs in the sitemap"
+    assert card["page_scope"] == "cross_family"
+    assert card["page_template_family"] == "mixed"
+    assert card["family_count"] == 3
+    assert card["family_breakdown"] == {
+        "guide_article": 1,
+        "location_landing": 1,
+        "product_page": 1,
+    }
+    assert card["representative_pages_by_family"]["product_page"] == ["/products/chair-old"]
+    assert card["affected_pages"] == [
+        "/products/chair-old",
+        "/blog/old-guide",
+        "/locations/paris-old",
+    ]
+    assert "final indexable canonical URL" in card["recommendation"]
+    assert card["finding_consolidation_version"] == FINDING_CONSOLIDATION_VERSION
+
+
+def test_different_remediation_rules_never_merge():
+    paths = ["/products/chair-old", "/blog/old-guide", "/locations/paris-old"]
+    findings = [
+        *[_finding("sitemap_redirect", path) for path in paths],
+        *[_finding("internal_link_redirect", path) for path in paths],
+    ]
+
+    grouped = group_findings(findings)
+
+    assert len(grouped) == 2
+    assert {card["rule"] for card in grouped} == {"sitemap_redirect", "internal_link_redirect"}
+    assert all(card["page_count"] == 3 for card in grouped)
+
+
+def test_sitemap_canonicalized_urls_consolidate_across_families():
+    findings = [
+        _finding("sitemap_canonicalized_url", "/products/chair-old"),
+        _finding("sitemap_canonicalized_url", "/blog/old-guide"),
+        _finding("sitemap_canonicalized_url", "/locations/paris-old"),
+    ]
+
+    grouped = group_indexability_quality_findings(findings)
+
+    assert len(grouped) == 1
+    card = grouped[0]
+    assert card["title"] == "Replace canonicalized URLs in the sitemap"
+    assert card["page_scope"] == "cross_family"
+    assert card["family_count"] == 3
+    assert "final indexable canonical URL" in card["recommendation"]
+    assert card["finding_consolidation_version"] == FINDING_CONSOLIDATION_VERSION
+
+
+def test_two_urls_do_not_cross_the_grouping_threshold():
+    findings = [
+        _finding("sitemap_redirect", "/products/chair-old"),
+        _finding("sitemap_redirect", "/blog/old-guide"),
+    ]
+
+    grouped = group_findings(findings)
+
+    assert len(grouped) == 2
+    assert all(card["page_count"] if "page_count" in card else 1 for card in grouped)
+
+
+def test_future_ikea_control_uses_localized_storefront():
+    repo_root = Path(__file__).resolve().parents[2]
+    records = [
+        json.loads(line)
+        for line in (repo_root / "data/beta-acceptance-manifest.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    ikea = next(record for record in records if record["site"] == "ikea-fr")
+
+    assert ikea["url"] == "https://www.ikea.com/fr/fr/"
+    assert ikea["expected_archetype"] == "ecommerce_specialty_retail"
+
+
+def test_health_exposes_consolidation_marker():
+    assert health()["finding_consolidation_version"] == FINDING_CONSOLIDATION_VERSION
+'''
+          (ROOT / "scanner-api/tests/test_redirect_sitemap_consolidation.py").write_text(test_content, encoding="utf-8")
+
+          print("Candidate fingerprint:", record["fingerprint"])
+          print("Guarded patch applied.")
+          PY
+
+      - name: Run focused consolidation and revision tests
+        working-directory: scanner-api
+        run: |
+          pytest -q \
+            tests/test_redirect_sitemap_consolidation.py \
+            tests/test_sitemap_indexability_conflicts.py \
+            tests/test_redirect_evidence.py \
+            tests/test_beta_revision.py
+
+      - name: Verify no scoring constants changed
+        run: |
+          git diff -- scanner-api/app/review.py scanner-api/app/review_calibration.py
+          test -z "$(git diff --name-only -- scanner-api/app/review.py scanner-api/app/review_calibration.py)"
+
+      - name: Remove patch workflow and commit direct source
+        run: |
+          rm .github/workflows/apply-redirect-sitemap-consolidation-v1.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Add cross-family redirect and sitemap consolidation"
+          git push origin HEAD:feature/redirect-sitemap-consolidation-v1

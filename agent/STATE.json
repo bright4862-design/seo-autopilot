@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "project": "FixList",
+  "repository": "bright4862-design/seo-autopilot",
+  "requires_refresh_on_start": true,
+  "last_observed_utc": "2026-08-27T10:23:00Z",
+  "release": {
+    "mode": "standard_150",
+    "status": "no_go",
+    "active_pr": 191,
+    "observed_head_sha": "92d2d04e1d6ddc50836ee2194a1a22ea43906030",
+    "observed_fingerprint": "cd31b3c1e5f9dd7c",
+    "production_deploy_authorized": false,
+    "merge_authorized": false
+  },
+  "locked_boundaries": {
+    "grok_enabled": false,
+    "premium_5000_enabled": false,
+    "production_supabase_activation": false,
+    "standard_150_contract_may_be_weakened": false
+  },
+  "current_focus": {
+    "id": "release-pr191-integrity",
+    "summary": "Clear remaining Standard 150 release-integrity blockers, then rerun exact-head release gates.",
+    "priority": "P0"
+  },
+  "notes": [
+    "This is an observed snapshot, not a substitute for live verification.",
+    "Any release-candidate SHA movement invalidates prior exact-head verification until rerun.",
+    "Production remains NO-GO until all required release gates pass on one immutable release identity."
+  ]
+}

@@ -106,7 +106,17 @@ test("old release fingerprints are isolated to the explicit historical reader re
   assert.ok(historical.every((value) => value !== current), "current fingerprint belongs in the generated release contract, not historical registry");
   assert.match(compatibility, /HISTORICAL_READABLE_RELEASE_FINGERPRINTS/);
   assert.match(compatibility, /CUSTOMER_RESULT_READER_VERSION/);
-  assert.equal(fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_V4_REL), "utf8"), compatibility, "V4 reader must mirror the canonical historical compatibility registry");
+  const compatibilityWithoutReaderVersion = (value) => value.replace(
+    /CUSTOMER_RESULT_READER_VERSION = "[^"]+"/,
+    'CUSTOMER_RESULT_READER_VERSION = "<reader-version>"',
+  );
+  const v4Compatibility = fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_V4_REL), "utf8");
+  assert.equal(
+    compatibilityWithoutReaderVersion(v4Compatibility),
+    compatibilityWithoutReaderVersion(compatibility),
+    "V4 may advance reader semantics but must mirror the canonical historical fingerprint registry",
+  );
+  assert.match(v4Compatibility, /customer_result_reader_v7_signed_preview_authority/);
   assert.equal(fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_V3_REL), "utf8"), compatibility, "V3 reader must mirror the canonical historical compatibility registry");
   assert.equal(fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_ALIAS_REL), "utf8"), compatibility, "V2 reader must mirror the canonical historical compatibility registry");
 });
@@ -259,7 +269,8 @@ test("every declared cross-runtime component is a real marker in shipped code", 
     admission_reconciliation_version: "base44/functions/durableScanWorkerControl/generatedReleaseContract.js",
     authority_seal_version: "base44/functions/persistDurableScanAuthority/authoritySeal.js",
     customer_projection_version: "base44/functions/getCustomerScanResult/projection.js",
-    customer_result_reader_version: "base44/functions/getCustomerScanResult/releaseCompatibility.js",
+    customer_preview_seal_version: "base44/functions/getCustomerScanResultV4/customerPreviewSeal.js",
+    customer_result_reader_version: "base44/functions/getCustomerScanResultV4/releaseCompatibility.js",
     limited_result_integrity_version: "base44/functions/persistLimitedScanResult/limitedResultIntegrity.js",
     review_attestation_version: "base44/functions/persistDurableScanAuthority/authoritySnapshot.js",
     durable_completion_contract_version: "base44/functions/persistDurableScanAuthority/entry.ts",

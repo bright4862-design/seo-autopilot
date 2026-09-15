@@ -7,6 +7,16 @@ import { authorityRowsFromSnapshot } from "./authorityRows.js";
 import { AUTHORITY_CONTRACT, buildAuthoritySnapshot, buildPersistedAuthoritySnapshot, firstFailedAuthorityPredicate, hasCompleteAcceptanceEvidence } from "./authoritySnapshot.js";
 import { releaseAdmission as releaseAdmissionClient } from "./admissionClient.js";
 import { persistExactAdmissionRelease } from "./admissionRelease.js";
+import {
+  CUSTOMER_PREVIEW_SEAL_VERSION,
+  buildCustomerPreviewPayload,
+  createCustomerPreviewProof,
+  customerPreviewPayloadMatchesRun,
+  hasCustomerPreviewArtifact,
+  parseCustomerPreviewPayload,
+  serializeCustomerPreviewPayload,
+  verifyCustomerPreviewProof,
+} from "./customerPreviewSeal.js";
 
 function mutableScanAdmissionSecret(name) {
   try {
@@ -39,7 +49,7 @@ function releaseAdmission(options = {}) {
 // a compiled worker when entry.ts stayed byte-identical while an imported
 // handler changed. Keeping the active release fingerprint in the entry module
 // guarantees every release-fingerprint move changes the deployed entry bytes.
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "a511d61013ef9fe3";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "104d5fc4c8d562c9";
 
 function normalizeAttempt(value) {
   const parsed = Number(value);
@@ -166,15 +176,27 @@ Deno.serve(async (req) => {
           replaySnapshot
           && await verifyAuthoritySeal(replaySnapshot, secret, scan.authority_proof)
         ) {
+          let replayScan = scan;
+          if (String(scan.beta_revision_fingerprint || "") === BASE44_HANDLER_RELEASE_FINGERPRINT) {
+            replayScan = await ensureVerifiedCustomerPreview({
+              entities,
+              scan,
+              fixList: replayFixList,
+              fixItems: replayItems,
+              ownerUserId: identity.owner_user_id,
+              fullAuthorityProof: scan.authority_proof,
+              secret,
+            });
+          }
           const release = await persistExactAdmissionRelease({
             entities,
-            scan,
+            scan: replayScan,
             terminalStatus: "complete",
             release: releaseAdmission,
           });
           requireAdmissionRelease(release);
           const replayedScan = release?.scanRun
-            || await entities.ScanRun.get(identity.scan_id).catch(() => scan);
+            || await entities.ScanRun.get(identity.scan_id).catch(() => replayScan);
           return Response.json({
             success: true,
             replayed: true,
@@ -307,15 +329,31 @@ Deno.serve(async (req) => {
     if (!authorityPersisted) {
       throw new RequestProblem(500, "authority_terminal_update_failed", "The authoritative scan could not be finalized.");
     }
-    const release = await persistExactAdmissionRelease({
+
+    // The unpaid teaser has its own bounded integrity domain. Create it only
+    // after the complete ScanRun + FixList + FixItems have passed the full
+    // authority verification above; the preview therefore attests to two
+    // customer-safe findings from an already-authoritative result rather than
+    // bypassing or weakening the full seal.
+    const previewPersistedScan = await ensureVerifiedCustomerPreview({
       entities,
       scan: persistedScan,
+      fixList: finalPersistedFixList,
+      fixItems: finalPersistedItems,
+      ownerUserId: identity.owner_user_id,
+      fullAuthorityProof: finalAuthorityProof,
+      secret,
+    });
+
+    const release = await persistExactAdmissionRelease({
+      entities,
+      scan: previewPersistedScan,
       terminalStatus: "complete",
       release: releaseAdmission,
     });
     requireAdmissionRelease(release);
     const releasedScan = release?.scanRun
-      || await entities.ScanRun.get(identity.scan_id).catch(() => persistedScan);
+      || await entities.ScanRun.get(identity.scan_id).catch(() => previewPersistedScan);
 
     return Response.json({
       success: true,
@@ -333,6 +371,62 @@ Deno.serve(async (req) => {
     return problemResponse(new RequestProblem(500, "durable_authority_failed", "The durable scan authority could not be saved."));
   }
 });
+
+
+async function ensureVerifiedCustomerPreview({
+  entities,
+  scan,
+  fixList,
+  fixItems,
+  ownerUserId,
+  fullAuthorityProof,
+  secret,
+}) {
+  const existingPayload = parseCustomerPreviewPayload(scan?.customer_preview_payload);
+  if (
+    hasCustomerPreviewArtifact(scan)
+    && existingPayload
+    && customerPreviewPayloadMatchesRun(existingPayload, { run: scan, userId: ownerUserId })
+    && await verifyCustomerPreviewProof(existingPayload, secret, scan.customer_preview_proof)
+  ) {
+    return scan;
+  }
+
+  const customerPreviewPayload = buildCustomerPreviewPayload({
+    run: scan,
+    fixList,
+    fixItems,
+    ownerUserId,
+    fullAuthorityProof,
+  });
+  const customerPreviewProof = await createCustomerPreviewProof(customerPreviewPayload, secret);
+  await entities.ScanRun.update(scan.id, {
+    customer_preview_seal_version: CUSTOMER_PREVIEW_SEAL_VERSION,
+    customer_preview_sealed_at: scan.authority_sealed_at,
+    customer_preview_payload: serializeCustomerPreviewPayload(customerPreviewPayload),
+    customer_preview_proof: customerPreviewProof,
+  });
+
+  const previewPersistedScan = await entities.ScanRun.get(scan.id);
+  const persistedPreviewPayload = parseCustomerPreviewPayload(previewPersistedScan?.customer_preview_payload);
+  const previewPersisted = Boolean(
+    hasCustomerPreviewArtifact(previewPersistedScan)
+    && persistedPreviewPayload
+    && customerPreviewPayloadMatchesRun(persistedPreviewPayload, {
+      run: previewPersistedScan,
+      userId: ownerUserId,
+    })
+    && await verifyCustomerPreviewProof(
+      persistedPreviewPayload,
+      secret,
+      previewPersistedScan.customer_preview_proof,
+    )
+  );
+  if (!previewPersisted) {
+    throw new RequestProblem(500, "customer_preview_persistence_failed", "The verified customer preview could not be finalized.");
+  }
+  return previewPersistedScan;
+}
 
 function requireAdmissionRelease(release) {
   if (release?.ok !== true) {

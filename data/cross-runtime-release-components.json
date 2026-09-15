@@ -3,8 +3,9 @@
     "admission_reconciliation_version": "admission_reconciliation_v1_exact_generation_barrier",
     "authority_seal_version": "scan_evidence_hmac_sha256_v1",
     "count_copy_version": "count_copy_v2_agreeing_verbs",
+    "customer_preview_seal_version": "standard_customer_preview_hmac_v1",
     "customer_projection_version": "customer_projection_v7_progress_heartbeat",
-    "customer_result_reader_version": "customer_result_reader_v6_authority_reconstruction_parity",
+    "customer_result_reader_version": "customer_result_reader_v7_signed_preview_authority",
     "durable_completion_contract_version": "durable_standard150_completion_v1",
     "durable_control_contract_version": "durable_standard150_control_v1",
     "durable_worker_contract_version": "scan_job_worker_v1_cloud_tasks",
@@ -20,6 +21,6 @@
     "scan_history_delete_version": "scan_history_delete_v2_drain_children",
     "scan_history_version": "scan_history_v3_focused_parent_children"
   },
-  "note": "Canonical cross-runtime release components. P1-B1 focused scans classify full-site rows by scope_type, preserve case-sensitive path candidates, bound persisted path-prefix evidence, reject traversal before parsing, bind requested plus effective limited-result scope, preserve one-argument customer acceptance-evidence projection, and expose verified effective scope in the customer run. Subdomains remain disabled.",
+  "note": "Canonical cross-runtime release components. Standard 150 now includes a domain-separated two-fix customer preview seal created only after full authority persistence verifies; the V7 customer reader may verify that bounded preview without reconstructing the full FixList. Existing full authority, limited-result integrity, history, focused-scan, robots, admission, and repair contracts remain unchanged.",
   "schema_version": "cross_runtime_release_components_v1"
 }

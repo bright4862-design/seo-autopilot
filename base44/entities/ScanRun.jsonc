@@ -624,6 +624,55 @@
         }
       }
     },
+    "customer_preview_seal_version": {
+      "type": "string",
+      "description": "Independent HMAC contract for the bounded unpaid customer preview. It never substitutes for the full authority proof.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "customer_preview_sealed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Authority seal timestamp bound into the signed unpaid preview artifact.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "customer_preview_payload": {
+      "type": "string",
+      "maxLength": 64000,
+      "description": "Canonical JSON containing at most two customer-safe fixes, the score summary, and the exact full-authority binding.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
+    "customer_preview_proof": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "Domain-separated HMAC proof for the bounded unpaid customer preview.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
+    },
     "result_integrity_version": {
       "type": "string",
       "description": "Version of the limited-result integrity contract, when this row is a verified limited result."

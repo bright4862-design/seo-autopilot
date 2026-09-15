@@ -35,7 +35,13 @@ import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { FUNCTION_BUILD_ID } from "./generatedBuildId.js";
 const BASE44_RUNTIME_ACTIVATION_ID = "getCustomerScanResultV4-report-evidence-20260909-v1";
 import { isReadableAuthorityReleaseFingerprint } from "./releaseCompatibility.js";
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "a511d61013ef9fe3";
+import {
+  customerPreviewPayloadMatchesRun,
+  hasCustomerPreviewArtifact,
+  parseCustomerPreviewPayload,
+  verifyCustomerPreviewProof,
+} from "./customerPreviewSeal.js";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "104d5fc4c8d562c9";
 const MAX_FIX_ITEMS = 100;
 
 // Runtime-secret convergence must not be confused with cryptographic key
@@ -245,18 +251,55 @@ Deno.serve(async (req) => {
       );
     }
 
+    // Both integrity domains use the exact same canonical key bytes, but the
+    // preview has a distinct HMAC domain and a bounded payload. Never trim or
+    // normalize the key: whitespace is part of an HMAC key.
+    const secret = String(mutableSigningKey() || "");
+    if (!secret) {
+      throw new RequestProblem(503, "result_authority_unavailable", "Verified results are temporarily unavailable.");
+    }
+
+    // Fresh unpaid results can be opened from their independently signed,
+    // two-fix preview artifact. That artifact was created only after the full
+    // authority rows passed persistence verification, and it binds the exact
+    // full authority proof, owner, scan, project, domain, release and seal time.
+    // If a preview artifact exists but does not verify, fail closed rather than
+    // falling through to unsigned rows or silently ignoring corruption.
+    if (!access.ok && hasCustomerPreviewArtifact(run)) {
+      const previewPayload = parseCustomerPreviewPayload(run.customer_preview_payload);
+      const previewVerified = Boolean(
+        previewPayload
+        && customerPreviewPayloadMatchesRun(previewPayload, { run, userId: user.id })
+        && await verifyCustomerPreviewProof(previewPayload, secret, run.customer_preview_proof)
+      );
+      if (!previewVerified) {
+        console.error("getCustomerScanResult preview verification failed", {
+          scan_id: cleanId(run.id),
+          build_id: FUNCTION_BUILD_ID,
+          runtime_activation_id: BASE44_RUNTIME_ACTIVATION_ID,
+          preview_seal_version: cleanText(run.customer_preview_seal_version, 160),
+          authority_seal_version: cleanText(run.authority_seal_version, 160),
+          release_fingerprint: runReleaseFingerprint,
+        });
+        throw new RequestProblem(409, "result_preview_invalid", "This saved preview no longer matches its server integrity seal.");
+      }
+      return Response.json(buildCustomerProjection({
+        run: previewPayload.run,
+        fixList: previewPayload.fixList,
+        fixItems: previewPayload.fixItems,
+        fullAccess: false,
+        previewAccess: true,
+        authorityVerified: true,
+      }));
+    }
+
     const fixList = await loadFixList(serviceEntities.FixList, run, user, proof);
     const fixItems = await loadFixItems(serviceEntities.FixItem, fixList, run, user, proof);
     const snapshot = authoritySnapshotFromRows({ run, fixList, fixItems, userId: user.id });
     assertSnapshotIdentity(snapshot, { run, fixList, user });
 
-    // Authority proof must be verified with the exact same secret bytes used
-    // by persistDurableScanAuthority. Do not trim or normalize this value:
-    // whitespace is part of an HMAC key and changing it invalidates every seal.
-    const secret = String(mutableSigningKey() || "");
-    if (!secret) {
-      throw new RequestProblem(503, "result_authority_unavailable", "Verified results are temporarily unavailable.");
-    }
+    // Paid/full access and historical unpaid rows without a preview artifact
+    // retain the existing full authority reconstruction and verification path.
     if (!await verifyAuthoritySeal(snapshot, secret, proof)) {
       console.error("getCustomerScanResult authority verification failed", {
         scan_id: cleanId(run.id),

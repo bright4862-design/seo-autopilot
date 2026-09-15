@@ -71,11 +71,19 @@ test("Base44 scanner route generation is explicit and complete", () => {
   }
 });
 
-test("fresh Base44 routes ship the same executable source as their canonical packages", () => {
+test("fresh Base44 routes preserve canonical source except the bounded V4 preview delta", () => {
   const withoutActivationNonce = (value) => value.replace(
     /(BASE44_RUNTIME_ACTIVATION_ID\s*=\s*)["'][^"']+["']/g,
     '$1"<deployment-activation-nonce>"',
   );
+  const v4OnlyFiles = new Map([
+    ["persistDurableScanAuthority", ["customerPreviewSeal.js"]],
+    ["getCustomerScanResult", ["customerPreviewSeal.js"]],
+  ]);
+  const intentionallyChangedInheritedFiles = new Map([
+    ["persistDurableScanAuthority", new Set(["entry.ts"])],
+    ["getCustomerScanResult", new Set(["entry.ts", "projection.js", "releaseCompatibility.js"])],
+  ]);
   for (const [canonical, active] of Object.entries(routes)) {
     const canonicalDir = path.join("base44/functions", canonical);
     const activeDir = path.join("base44/functions", active);
@@ -85,17 +93,24 @@ test("fresh Base44 routes ship the same executable source as their canonical pac
     const activeFiles = fs.readdirSync(activeDir)
       .filter((name) => !["function.jsonc", "generatedBuildId.js"].includes(name))
       .sort();
-    assert.deepEqual(activeFiles, canonicalFiles, active);
+    const allowedExtras = v4OnlyFiles.get(canonical) || [];
+    assert.deepEqual(activeFiles, [...canonicalFiles, ...allowedExtras].sort(), active);
+    const intentionalChanges = intentionallyChangedInheritedFiles.get(canonical) || new Set();
     for (const file of canonicalFiles) {
+      if (intentionalChanges.has(file)) continue;
       assert.equal(
         withoutActivationNonce(source(path.join(activeDir, file))),
         withoutActivationNonce(source(path.join(canonicalDir, file))),
         `${active}/${file}`,
       );
     }
-    const canonicalBuild = source(path.join(canonicalDir, "generatedBuildId.js")).match(/FUNCTION_BUILD_ID = "([0-9a-f]{64})"/)?.[1];
-    const aliasBuild = source(path.join(activeDir, "generatedBuildId.js")).match(/FUNCTION_BUILD_ID = "([0-9a-f]{64})"/)?.[1];
-    assert.equal(aliasBuild, canonicalBuild, active);
+    if (allowedExtras.length > 0) {
+      assert.match(source(path.join(activeDir, "entry.ts")), /customerPreviewSeal\.js/, `${active} must wire the signed preview helper`);
+    }
+    if (canonical === "getCustomerScanResult") {
+      assert.match(source(path.join(activeDir, "projection.js")), /"preview_example_page"/);
+      assert.match(source(path.join(activeDir, "releaseCompatibility.js")), /customer_result_reader_v7_signed_preview_authority/);
+    }
   }
 });
 

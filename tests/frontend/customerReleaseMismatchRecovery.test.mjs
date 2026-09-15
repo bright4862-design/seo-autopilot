@@ -4,6 +4,7 @@ import test from "node:test";
 
 const reader = readFileSync("base44/functions/getCustomerScanResult/entry.ts", "utf8");
 const compatibility = readFileSync("base44/functions/getCustomerScanResult/releaseCompatibility.js", "utf8");
+const PREVIEW_PARITY_RELEASE = "a511d61013ef9fe3";
 const CURRENT_RELEASE_BEFORE_READER_PARITY = "c73399086107cbaf";
 const CURRENT_PRE_P1B_FINGERPRINT = "0fa7d98734efb3f2";
 const FOCUSED_DESIGN_BASE_FINGERPRINT = "7a95768cc8ee2076";
@@ -11,6 +12,7 @@ const scanRuns = readFileSync("src/lib/scanRuns.js", "utf8");
 const fixList = readFileSync("src/pages/FixList.jsx", "utf8");
 
 test("a known-compatible historical release remains readable after the app advances", () => {
+  assert.match(compatibility, new RegExp(PREVIEW_PARITY_RELEASE), "the pre-preview release must remain explicitly readable");
   assert.match(
     compatibility,
     /HISTORICAL_READABLE_RELEASE_FINGERPRINTS = Object\.freeze\(\[[\s\S]*?"5d94e93c54a9efb6"/,

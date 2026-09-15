@@ -32,17 +32,39 @@ test("V4 executable packages preserve canonical behavior except fresh activation
     /(BASE44_RUNTIME_ACTIVATION_ID\s*=\s*)["'][^"']+["']/g,
     '$1"<deployment-activation-nonce>"',
   );
+  const v4OnlyFiles = new Map([
+    ["persistDurableScanAuthority", ["customerPreviewSeal.js"]],
+    ["getCustomerScanResult", ["customerPreviewSeal.js"]],
+  ]);
+  const intentionallyChangedInheritedFiles = new Map([
+    ["persistDurableScanAuthority", new Set(["entry.ts"])],
+    ["getCustomerScanResult", new Set(["entry.ts", "projection.js", "releaseCompatibility.js"])],
+  ]);
   for (const canonical of expectedCanonicals) {
     const canonicalDir = `base44/functions/${canonical}`;
     const v4Dir = `base44/functions/${canonical}V4`;
     const filtered = (dir) => fs.readdirSync(dir).filter((name) => !["function.jsonc", "generatedBuildId.js"].includes(name)).sort();
-    assert.deepEqual(filtered(v4Dir), filtered(canonicalDir), canonical);
-    for (const file of filtered(canonicalDir)) {
+    const canonicalFiles = filtered(canonicalDir);
+    const allowedExtras = v4OnlyFiles.get(canonical) || [];
+    assert.deepEqual(
+      filtered(v4Dir),
+      [...canonicalFiles, ...allowedExtras].sort(),
+      canonical,
+    );
+    const intentionalChanges = intentionallyChangedInheritedFiles.get(canonical) || new Set();
+    for (const file of canonicalFiles) {
+      if (intentionalChanges.has(file)) continue;
       assert.equal(normalizeActivation(source(path.join(v4Dir, file))), normalizeActivation(source(path.join(canonicalDir, file))), `${canonical}V4/${file}`);
     }
-    const canonicalBuild = source(`${canonicalDir}/generatedBuildId.js`).match(/FUNCTION_BUILD_ID = "([0-9a-f]{64})"/)?.[1];
-    const aliasBuild = source(`${v4Dir}/generatedBuildId.js`).match(/FUNCTION_BUILD_ID = "([0-9a-f]{64})"/)?.[1];
-    assert.equal(aliasBuild, canonicalBuild, canonical);
+    if (allowedExtras.length > 0) {
+      const v4Entry = source(path.join(v4Dir, "entry.ts"));
+      assert.match(v4Entry, /customerPreviewSeal\.js/, `${canonical}V4 entry must wire the signed preview addition`);
+    }
+    if (canonical === "getCustomerScanResult") {
+      const v4Projection = source(path.join(v4Dir, "projection.js"));
+      assert.match(v4Projection, /"preview_example_page"/, "V4 preview projection may expose only its pre-signed example page addition");
+      assert.match(source(path.join(v4Dir, "releaseCompatibility.js")), /customer_result_reader_v7_signed_preview_authority/);
+    }
   }
 });
 

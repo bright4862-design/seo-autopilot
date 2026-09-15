@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { buildAuthoritySnapshot } from "../../base44/functions/persistDurableScanAuthorityV3/authoritySnapshot.js";
+import { authorityRowsFromSnapshot } from "../../base44/functions/persistDurableScanAuthorityV3/authorityRows.js";
+import { buildCustomerProjection } from "../../base44/functions/getCustomerScanResultV3/projection.js";
 import { buildRepairCards } from "../../src/lib/repairCardModel.js";
 import { buildScanHandoff } from "../../src/lib/scanHandoff.js";
 
@@ -113,4 +116,101 @@ test("wrong-destination classification survives grouped redirect evidence", () =
   assert.equal(handoff.fixes[0].redirect_evidence[0].verification_state, "verified");
   assert.equal(handoff.fixes[0].redirect_evidence[0].final_status, 200);
   assert.equal(handoff.fixes[0].redirect_evidence[0].final_url, "https://example.com/");
+});
+
+test("wrong-destination redirect evidence survives authority persistence and customer projection", () => {
+  const evidence = {
+    requested_url: "https://example.com/section/deep-page",
+    redirect_chain: [{
+      url: "https://example.com/section/deep-page",
+      status: 301,
+      location: "https://example.com/",
+    }],
+    final_url: "https://example.com/",
+    final_status: 200,
+    final_content_type: "text/html",
+    body_bytes: 9000,
+    html_parse_ok: true,
+    fetch_error: null,
+    robots_status: "allowed",
+    canonical_url: "https://example.com/",
+    noindex: false,
+    classification: "redirect_to_wrong_destination",
+  };
+  const snapshot = buildAuthoritySnapshot({
+    scan: {
+      website_url: "https://example.com/",
+      pages_found: 2,
+      pages_crawled: 2,
+    },
+    review: {
+      recommendations: [{
+        fix_id: "wrong-redirect-persisted",
+        rule: "redirect_wrong_destination",
+        category: "redirect",
+        issue_title: "Fix a redirect that sends visitors to the wrong page",
+        why_it_matters: "The source URL should reach a relevant replacement.",
+        recommendation: "Map it to the closest relevant page.",
+        affected_pages: ["/section/deep-page"],
+        source_pages: ["/section"],
+        page_count: 1,
+        priority: "critical",
+        raw_finding: {
+          redirect_outcome: "redirect_to_wrong_destination",
+          redirect_fetch_evidence_samples: [evidence],
+        },
+      }],
+    },
+    identity: {
+      scan_id: "scan-redirect-evidence",
+      project_id: "project-1",
+      normalized_domain: "example.com",
+    },
+    userId: "user-1",
+    now: "2026-09-08T23:10:00.000Z",
+  });
+
+  assert.equal(
+    snapshot.recommendations[0].raw_finding.redirect_outcome,
+    "redirect_to_wrong_destination",
+    "authority snapshot dropped redirect outcome",
+  );
+  assert.deepEqual(
+    snapshot.recommendations[0].raw_finding.redirect_fetch_evidence_samples,
+    [evidence],
+    "authority snapshot dropped redirect chain evidence",
+  );
+
+  const rows = authorityRowsFromSnapshot(snapshot, {
+    fixListId: "fixlist-redirect-evidence",
+    ownerUserId: "user-1",
+    proof: "a".repeat(64),
+  });
+  const projection = buildCustomerProjection({
+    run: { id: "scan-redirect-evidence", project_id: "project-1", ...rows.scanRun },
+    fixList: { id: "fixlist-redirect-evidence", ...rows.fixList },
+    fixItems: rows.fixItems.map((item, index) => ({ id: `row-${index + 1}`, ...item })),
+    fullAccess: true,
+    authorityVerified: true,
+    resultIntegrityVerified: false,
+  });
+
+  assert.equal(
+    projection.fixItems[0].raw_finding.redirect_outcome,
+    "redirect_to_wrong_destination",
+    "customer projection dropped redirect outcome",
+  );
+  assert.deepEqual(
+    projection.fixItems[0].raw_finding.redirect_fetch_evidence_samples,
+    [evidence],
+    "customer projection dropped redirect chain evidence",
+  );
+
+  const handoff = buildScanHandoff({
+    scanRecord: { website_url: "https://example.com", created_at: "2026-09-08T23:10:00Z" },
+    cards: buildRepairCards(projection.fixItems),
+  });
+  assert.equal(handoff.fixes[0].redirect_evidence[0].classification, "redirect_to_wrong_destination");
+  assert.equal(handoff.fixes[0].redirect_evidence[0].final_url, "https://example.com/");
+  assert.equal(handoff.fixes[0].redirect_evidence[0].final_status, 200);
 });

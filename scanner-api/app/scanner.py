@@ -15,6 +15,7 @@ from .redirect_validation import apply_redirect_evidence, fetch_with_redirect_ev
 from .extract import classify_template, extract_links, extract_page
 from .market_scope import market_pair_prefix, path_within_scope
 from .page_evidence_gate import (
+    ACCESS_BLOCK_HEADER_ALLOWLIST,
     PAGE_EVIDENCE_GATE_VERSION,
     page_evidence_class,
     page_has_usable_html,
@@ -68,6 +69,8 @@ def _access_unverified_observation(page: dict) -> bool:
     status = int(page.get("status_code") or 0)
     redirect_state = str(page.get("redirect_state") or "")
     fetch_error = str(page.get("fetch_error") or "").strip()
+    if str(page.get("access_block_kind") or "").strip().lower() in {"challenge", "block", "rate_limit"}:
+        return True
     if redirect_state in {
         "redirect_destination_unverified",
         "redirect_destination_blocked_by_robots",
@@ -160,6 +163,9 @@ def transient_pressure_kind(page: dict | None) -> str:
     if not isinstance(page, dict):
         return ""
     status = int(page.get("status_code") or 0)
+    access_kind = str(page.get("access_block_kind") or "").strip().lower()
+    if access_kind in {"challenge", "block"}:
+        return ""
     if status == 429:
         return "429"
     if status in TRANSIENT_PRESSURE_STATUS_CODES:
@@ -980,7 +986,11 @@ async def fetch_and_extract(
             response.status_code,
             content_type,
             discovery,
-            response_headers={"x-robots-tag": response.headers.get_list("x-robots-tag")},
+            response_headers={
+                name: response.headers.get_list(name)
+                for name in ("x-robots-tag", *ACCESS_BLOCK_HEADER_ALLOWLIST)
+                if response.headers.get_list(name)
+            },
             body_truncated=html_truncated,
             include_links=True,
         )

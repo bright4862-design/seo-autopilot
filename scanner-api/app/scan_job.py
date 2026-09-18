@@ -744,6 +744,49 @@ def run_local_review_isolated(
             process.join(timeout=LOCAL_REVIEW_PROCESS_JOIN_GRACE_SECONDS)
 
 
+
+_ACCESS_VENDOR_LABELS = {
+    "cloudflare": "Cloudflare",
+    "siteground": "SiteGround",
+    "datadome": "DataDome",
+    "imperva": "Imperva",
+    "sucuri": "Sucuri",
+    "akamai": "Akamai",
+    "wordfence": "Wordfence",
+    "origin": "The site",
+}
+
+
+def _access_limitation_detail(pages: list[dict[str, Any]] | None) -> str:
+    stamped = [
+        page for page in (pages or [])
+        if isinstance(page, dict)
+        and str(page.get("access_block_kind") or "").strip().lower() in {"challenge", "block", "rate_limit"}
+    ]
+    if stamped:
+        first = stamped[0]
+        vendor_key = str(first.get("access_block_vendor") or "origin").strip().lower()
+        vendor = _ACCESS_VENDOR_LABELS.get(vendor_key, vendor_key.replace("_", " ").title() or "The site")
+        kind = str(first.get("access_block_kind") or "block").strip().lower()
+        if kind == "challenge":
+            return (
+                f"{vendor} returned a bot challenge to the scanner, so FixList could not collect enough verified HTML "
+                "to save an authoritative result. Waiting alone does not clear a bot challenge; the site must allow FixList first."
+            )
+        if kind == "rate_limit":
+            return (
+                f"{vendor} returned a rate limit to the scanner, so FixList could not collect enough verified HTML "
+                "to save an authoritative result. Rate limits can clear after traffic pressure drops."
+            )
+        return (
+            f"{vendor} returned an automated-access block to the scanner, so FixList could not collect enough verified HTML "
+            "to save an authoritative result. The site must allow FixList before a rescan can succeed."
+        )
+    return (
+        "The site limited or challenged the scanner, so FixList could not collect enough verified HTML "
+        "to save an authoritative result."
+    )
+
 def terminal_crawl_limitation(result: dict[str, Any]) -> dict[str, str] | None:
     """Short-circuit a definitively blocked crawl before full local review.
 
@@ -765,10 +808,7 @@ def terminal_crawl_limitation(result: dict[str, Any]) -> dict[str, str] | None:
     if blocked > 0 and usable == 0:
         return {
             "code": "scan_access_limited",
-            "detail": (
-                "The site rate-limited or challenged the scanner, so FixList could not collect enough verified HTML "
-                "to save an authoritative result. Please try again later."
-            ),
+            "detail": _access_limitation_detail(pages),
         }
     return None
 
@@ -791,8 +831,9 @@ def terminal_review_limitation(review: dict[str, Any]) -> dict[str, str] | None:
         return {
             "code": "scan_access_limited",
             "detail": (
-                "The site rate-limited or challenged the scanner, so FixList could not collect enough verified HTML "
-                "to save an authoritative result. Please try again later."
+                "The site returned a rate limit, bot challenge, or automated-access block to the scanner, so FixList "
+                "could not collect enough verified HTML to save an authoritative result. A bot challenge or block must "
+                "be cleared by the site; waiting only helps when the cause is a rate limit."
             ),
         }
     return None

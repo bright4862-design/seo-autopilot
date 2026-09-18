@@ -8,7 +8,12 @@ from bs4 import BeautifulSoup
 
 from .location_template_content import detect_location_template_content
 from .market_scope import strip_market_locale_prefix
-from .page_evidence_gate import PAGE_EVIDENCE_GATE_VERSION, classify_page_evidence
+from .page_evidence_gate import (
+    PAGE_EVIDENCE_GATE_VERSION,
+    access_block_header_evidence,
+    classify_page_evidence,
+    detect_access_block,
+)
 from .metadata_title_evidence import (
     METADATA_EVIDENCE_VERSION,
     TITLE_EVIDENCE_VERSION,
@@ -217,6 +222,7 @@ def extract_page(
     )
 
     rendering_signals = client_rendering_signals(html, status_code, word_count)
+    access_block = detect_access_block(status_code, response_headers, html)
     page_evidence_class = classify_page_evidence(
         status_code=status_code,
         content_type=content_type,
@@ -225,6 +231,7 @@ def extract_page(
         # A body cut at the parse ceiling is incomplete evidence: the gate must
         # see that here, while it is stamping, not after the fact.
         body_truncated=body_truncated,
+        response_headers=response_headers,
     )
 
     page = {
@@ -291,6 +298,14 @@ def extract_page(
             path, title, h1s[0] if h1s else "", status_code, page_template_family, schema_types
         ),
     }
+    if access_block:
+        page.update({
+            "access_block_vendor": access_block["vendor"],
+            "access_block_kind": access_block["kind"],
+            "access_block_signal": access_block["signal"],
+            "access_block_headers": access_block_header_evidence(response_headers),
+        })
+
     if include_links and 200 <= int(status_code or 0) < 300 and html:
         page["_links"] = extract_links_from_soup(soup, final_url or url)
     return page

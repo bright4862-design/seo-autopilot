@@ -5,6 +5,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from urllib import robotparser
 
+from .page_evidence_gate import detect_access_block
 from .security import DEFAULT_MAX_DECODED_RESPONSE_BYTES, safe_get
 
 
@@ -94,6 +95,9 @@ async def load_robots_policy(client, origin: str) -> RobotsPolicy:
         return RobotsPolicy(robots_url, "unavailable", 0)
 
     status_code = int(getattr(response, "status_code", 0) or 0)
+    body = str(getattr(response, "text", "") or "")
+    if detect_access_block(status_code, getattr(response, "headers", None), body):
+        return RobotsPolicy(robots_url, "access_limited", status_code)
     if status_code in {404, 410}:
         return RobotsPolicy(robots_url, "missing", status_code)
     if not (200 <= status_code < 300):
@@ -101,7 +105,7 @@ async def load_robots_policy(client, origin: str) -> RobotsPolicy:
 
     parser = robotparser.RobotFileParser()
     parser.set_url(robots_url)
-    parser.parse(str(getattr(response, "text", "") or "").splitlines())
+    parser.parse(body.splitlines())
     return RobotsPolicy(robots_url, "available", status_code, parser)
 
 

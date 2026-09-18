@@ -88,7 +88,7 @@ def test_the_worker_routes_limited_coverage_to_the_limited_function():
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[1] / "app" / "scan_job.py").read_text(encoding="utf-8")
-    assert 'invoke_function(client, "persistLimitedScanResultV5"' in source
+    assert 'invoke_function(client, "persistLimitedScanResultV6"' in source
     assert "LIMITED_COVERAGE_STATES" in source
 
 
@@ -192,7 +192,7 @@ async def test_release_eligible_review_keeps_existing_authority_path(monkeypatch
 
     async def invoke(_client, name, payload, *args, **kwargs):
         calls.append((name, payload))
-        assert name == "persistDurableScanAuthorityV5"
+        assert name == "persistDurableScanAuthorityV6"
         return {
             "status_code": 200,
             "body": {
@@ -225,4 +225,4 @@ async def test_release_eligible_review_keeps_existing_authority_path(monkeypatch
         "fix_list_id": "fixlist_1",
         "authority_proof": "a" * 64,
     }
-    assert [name for name, _payload in calls] == ["persistDurableScanAuthorityV5"]
+    assert [name for name, _payload in calls] == ["persistDurableScanAuthorityV6"]

@@ -73,6 +73,7 @@ def collect_component_versions() -> dict[str, str]:
     FastAPI app or paying for heavier imports at module load time.
     """
     from .artifact_filter import ARTIFACT_FILTER_VERSION
+    from .crawler_identity import CRAWLER_IDENTITY_VERSION
     from .canonical_validation import CANONICAL_TARGET_EVIDENCE_VERSION
     from .repair_coverage import REPAIR_COVERAGE_VERSION
     from .repair_contract_v2 import REPAIR_PERSISTENCE_GROUPING_VERSION
@@ -122,6 +123,7 @@ def collect_component_versions() -> dict[str, str]:
     components = {
         "scanner_version": VERSION,
         "repair_surface_grouping_version": REPAIR_SURFACE_GROUPING_VERSION,
+        "crawler_identity_version": CRAWLER_IDENTITY_VERSION,
         "scanner_build_revision": SCANNER_BUILD_REVISION,
         "acceptance_evidence_version": ACCEPTANCE_EVIDENCE_VERSION,
         "artifact_filter_version": ARTIFACT_FILTER_VERSION,

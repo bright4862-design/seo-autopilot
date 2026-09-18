@@ -5,6 +5,7 @@ import re
 from urllib.parse import urljoin, urlparse
 
 import httpx
+from .crawler_identity import CRAWLER_HTTP_USER_AGENT
 
 from .extract import extract_links, extract_page
 from .security import DEFAULT_MAX_DECODED_RESPONSE_BYTES, is_public_http_url, safe_get
@@ -153,7 +154,7 @@ async def enrich_scan_with_trust_pages(scan_result: dict) -> dict:
     async with httpx.AsyncClient(
         timeout=6,
         follow_redirects=False,
-        headers={"User-Agent": "Mozilla/5.0 (compatible; FixListTrustDiscovery/1.0)"},
+        headers={"User-Agent": CRAWLER_HTTP_USER_AGENT},
     ) as client:
         # Read the homepage first so custom trust URLs such as /company can be
         # discovered from navigation/footer text even when their slug is unusual.

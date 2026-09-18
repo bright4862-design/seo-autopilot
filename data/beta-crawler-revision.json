@@ -12,6 +12,7 @@
     "coverage_authority_evidence_version": "coverage_authority_evidence_v2_authoritative",
     "coverage_authority_version": "coverage_authority_v1_shared_decision",
     "crawler_acceptance_version": "crawler_acceptance_v1",
+    "crawler_identity_version": "crawler_identity_v1_fixlistbot_legacy_robots",
     "customer_preview_seal_version": "standard_customer_preview_hmac_v1",
     "customer_projection_version": "customer_projection_v7_progress_heartbeat",
     "customer_result_reader_version": "customer_result_reader_v7_signed_preview_authority",
@@ -65,10 +66,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "9e4901da590017e1",
+  "fingerprint": "46cda16461fb1e1d",
   "git_commit": "",
-  "note": "vendor access-block classification",
-  "recorded_at": "2026-09-18T09:32:51.424615+00:00",
+  "note": "Candidate only: published FixListBot identity; production GCP acceptance pending",
+  "recorded_at": "2026-09-18T20:00:32.701950+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

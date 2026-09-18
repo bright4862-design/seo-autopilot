@@ -246,3 +246,13 @@ test("the actual customer reader rejects an unknown release before treating it a
   assert.equal(body.success, false);
   assert.equal(body.error_code, "result_release_mismatch");
 });
+
+test("the identity candidate still reads sealed results from the preceding production release", async () => {
+  const fingerprint = "9e4901da590017e1";
+  const response = await invokeWithFingerprint(fingerprint);
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.authority_verified, true);
+  assert.equal(body.run.beta_revision_fingerprint, fingerprint);
+  assert.equal(body.release_contract_current, false);
+});

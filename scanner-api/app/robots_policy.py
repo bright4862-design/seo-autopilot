@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from urllib import robotparser
 
 from .page_evidence_gate import detect_access_block
+from .crawler_identity import SCANNER_USER_AGENT, LEGACY_SCANNER_USER_AGENT
 from .security import DEFAULT_MAX_DECODED_RESPONSE_BYTES, safe_get
 
 
-SCANNER_USER_AGENT = "FixListPythonScanner"
 SEARCH_USER_AGENT = "Googlebot"
 _OWNER_ROBOTS_OVERRIDE: ContextVar[bool] = ContextVar(
     "fixlist_owner_robots_override",
@@ -54,7 +54,11 @@ class RobotsPolicy:
             return True
         if self.status != "available" or self.parser is None:
             return None
-        return bool(self.parser.can_fetch(user_agent, url))
+        allowed = bool(self.parser.can_fetch(user_agent, url))
+        if user_agent == SCANNER_USER_AGENT:
+            # Renaming must not evade an existing site's crawler-specific deny.
+            allowed = allowed and bool(self.parser.can_fetch(LEGACY_SCANNER_USER_AGENT, url))
+        return allowed
 
     def allowed(self, user_agent: str, url: str) -> bool | None:
         """Return effective fetch permission for the requested user-agent.

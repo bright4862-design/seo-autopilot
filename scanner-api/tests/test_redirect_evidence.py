@@ -51,7 +51,7 @@ class SelectivePolicy:
         self.googlebot_blocked = set(googlebot_blocked or [])
 
     def allowed(self, user_agent, url):
-        if user_agent == "FixListPythonScanner":
+        if user_agent == "FixListBot":
             return url not in self.scanner_blocked
         if user_agent == "Googlebot":
             return url not in self.googlebot_blocked

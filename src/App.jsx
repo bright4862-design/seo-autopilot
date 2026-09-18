@@ -5,6 +5,7 @@ import DashboardLayout from "@/components/layout/DashboardLayout";
 import ProtectedRoute from "@/components/ProtectedRoute";
 
 import Landing from "@/pages/Landing";
+import Crawler from "@/pages/Crawler";
 import Blog from "@/pages/Blog";
 import BlogArticle from "@/pages/BlogArticle";
 import Login from "@/pages/Login";
@@ -23,6 +24,7 @@ export default function App() {
       <Routes>
         {/* Public pages */}
         <Route path="/" element={<Landing />} />
+        <Route path="/crawler" element={<Crawler />} />
         <Route path="/blog" element={<Blog />} />
         <Route path="/blog/:slug" element={<BlogArticle />} />
         <Route path="/login" element={<Login />} />

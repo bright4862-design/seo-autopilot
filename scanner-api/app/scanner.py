@@ -8,6 +8,7 @@ from email.utils import parsedate_to_datetime
 from urllib.parse import urldefrag, urlparse
 
 import httpx
+from .crawler_identity import CRAWLER_HTTP_USER_AGENT
 
 from .artifact_filter import MAX_ARTIFACT_EVIDENCE, is_artifact_url, record_artifact
 from .canonical_validation import validate_canonical_targets
@@ -484,7 +485,7 @@ async def run_scan(
     async with httpx.AsyncClient(
         timeout=fetch_timeout,
         follow_redirects=False,
-        headers={"User-Agent": "Mozilla/5.0 (compatible; FixListPythonScanner/1.0)"},
+        headers={"User-Agent": CRAWLER_HTTP_USER_AGENT},
     ) as client:
         robots_policy = await load_robots_policy(client, origin)
         rate_limit_profile = ""

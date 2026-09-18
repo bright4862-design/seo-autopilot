@@ -299,8 +299,8 @@ test("server review snapshot survives the actual persistence and Grok reconstruc
 });
 
 test("only trusted server worker evidence can enter the active durable authority persistence path", () => {
-  assert.match(durableWorkerSource, /invoke_function\(client, "durableScanWorkerControlV5"/);
-  assert.match(durableWorkerSource, /invoke_function\(client, "persistDurableScanAuthorityV5"/);
+  assert.match(durableWorkerSource, /invoke_function\(client, "durableScanWorkerControlV6"/);
+  assert.match(durableWorkerSource, /invoke_function\(client, "persistDurableScanAuthorityV6"/);
   assert.match(durablePersistenceSource, /assertWorkerHeader\(req\)/);
   assert.match(durablePersistenceSource, /verifyAuthoritySeal\(signedDocument, secret, proof\)/);
   assert.match(durablePersistenceSource, /buildAuthoritySnapshot\(\{/);

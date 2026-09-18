@@ -12,6 +12,13 @@ SERVICE = "fixlist-standard150-worker"
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class CloudCommandError(RuntimeError):
+    """Only fixed operation names and allowlisted error facts may leave gcloud."""
+    def __init__(self, evidence):
+        self.evidence = evidence
+        super().__init__(json.dumps(evidence, sort_keys=True))
+
+
 def job_plan(service, revision, expected_revision, probe_source):
     traffic = [t for t in service.get("status", {}).get("traffic", []) if t.get("percent", 0) > 0]
     if len(traffic) != 1 or traffic[0].get("percent") != 100 or traffic[0].get("revisionName") != expected_revision:
@@ -64,9 +71,27 @@ def job_plan(service, revision, expected_revision, probe_source):
 
 
 def gcloud(*args):
-    result = subprocess.run(["gcloud", *args, f"--project={PROJECT}", "--format=json",
-                             *([] if args[0] == "logging" else [f"--region={REGION}"])],
-                            check=True, capture_output=True, text=True, timeout=300)
+    operation = " ".join(args[:2] if args[0] == "logging" else args[:3])
+    try:
+        result = subprocess.run(["gcloud", *args, f"--project={PROJECT}", "--format=json",
+                                 *([] if args[0] == "logging" else [f"--region={REGION}"])],
+                                check=True, capture_output=True, text=True, timeout=300)
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr or ""
+        category = next((code for code in (
+            "PERMISSION_DENIED", "UNAUTHENTICATED", "INVALID_ARGUMENT", "NOT_FOUND",
+            "RESOURCE_EXHAUSTED", "DEADLINE_EXCEEDED", "UNAVAILABLE", "FAILED_PRECONDITION"
+        ) if re.search(r"\b" + code + r"\b", stderr)), "unclassified_cloud_error")
+        failure = {"operation": operation, "exit_code": exc.returncode, "category": category}
+        # Never echo arbitrary stderr, resource names, command arguments or token-bearing URLs.
+        for permission in ("logging.logEntries.list", "logging.privateLogEntries.list",
+                           "run.jobs.create", "run.jobs.run", "run.jobs.delete", "iam.serviceAccounts.actAs"):
+            if re.search(r"(?<![\w.])" + re.escape(permission) + r"(?![\w.])", stderr):
+                failure["permission"] = permission
+                break
+        raise CloudCommandError(failure) from None
+    except subprocess.TimeoutExpired:
+        raise CloudCommandError({"operation": operation, "category": "command_timeout"}) from None
     return json.loads(result.stdout or "{}")
 
 
@@ -94,6 +119,7 @@ def execute(revision, source, confirm, run_id, attempt, output):
         if not re.fullmatch(re.escape(job) + r"-[a-z0-9]+", name):
             raise ValueError("Unrecognized execution identity; refusing broad log query")
         evidence["execution"] = name
+        evidence["execution_succeeded"] = True
         logs = gcloud("logging", "read", f'resource.type="cloud_run_job" AND resource.labels.job_name="{job}" AND labels."run.googleapis.com/execution_name"="{name}"', "--limit=100", "--order=asc")
         rows = [row["jsonPayload"] for row in logs if row.get("jsonPayload", {}).get("diagnostic") == "ironwood_v1"]
         (output / "observations.json").write_text(json.dumps(rows, indent=2))
@@ -101,10 +127,18 @@ def execute(revision, source, confirm, run_id, attempt, output):
             raise ValueError("Diagnostic completion evidence missing; do not infer a result")
         # Detect concurrent production movement, without trying to roll it back.
         job_plan(gcloud("run", "services", "describe", SERVICE), r, revision, "")
+    except CloudCommandError as exc:
+        evidence["failure"] = exc.evidence
+        raise
     finally:
         try:
             gcloud("run", "jobs", "delete", job, "--quiet")
             evidence["job_deleted"] = True
+        except CloudCommandError as exc:
+            evidence["cleanup_failure"] = exc.evidence
+            # Preserve the first failure; a cleanup error must not replace the diagnosis.
+            if "failure" not in evidence:
+                raise
         finally:
             (output / "result.json").write_text(json.dumps(evidence, indent=2))
 
@@ -116,7 +150,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     try:
         execute(args.revision, args.source, args.confirm, args.run_id, args.attempt, Path(args.output))
-    except subprocess.CalledProcessError as exc:
-        # gcloud errors may contain account/resource details, but never print flags/code or credentials.
-        print(f"Diagnostic cloud command failed (exit {exc.returncode}); no IAM/access workaround attempted.")
+    except CloudCommandError as exc:
+        failure = {"event": "cloud_command_failed", **exc.evidence}
+        Path(args.output).mkdir(parents=True, exist_ok=True)
+        (Path(args.output) / "failure.json").write_text(json.dumps(failure, indent=2))
+        print(json.dumps(failure), flush=True)
         raise SystemExit(1)

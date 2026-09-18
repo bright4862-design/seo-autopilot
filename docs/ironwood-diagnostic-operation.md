@@ -86,3 +86,18 @@ remain outside this operation.
 
 Cloud Run job flags follow Google's [create](https://cloud.google.com/sdk/gcloud/reference/run/jobs/create)
 and [execute](https://cloud.google.com/sdk/gcloud/reference/run/jobs/execute) interfaces.
+# Cloud-command failure evidence
+
+Run `35395821976` reached a successful job execution and deletion. Its saved
+`result.json` identifies execution `fixlist-ironwood-diag-35395821976-1-2jdpw`,
+but no `observations.json` was saved: the Cloud Logging read failed. The old
+wrapper suppressed stderr, so the underlying reason cannot be recovered from
+that artifact. Do not infer that IAM or SiteGround caused this failure.
+
+The wrapper now emits and uploads `failure.json` containing the failed operation,
+exit code, an allowlisted error category, and an allowlisted permission name when
+present. Raw stderr, command arguments, account identifiers and URLs are not
+printed. An unknown error remains `unclassified_cloud_error` rather than being
+guessed. `result.json` records successful execution separately from log retrieval,
+and preserves both primary and cleanup failures if deletion also fails.
+No permissions are granted automatically. A failed log read is not crawl evidence.

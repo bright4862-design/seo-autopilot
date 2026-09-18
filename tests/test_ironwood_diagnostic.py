@@ -144,3 +144,64 @@ def test_gcloud_boundary_has_no_shell_and_scopes_every_call(monkeypatch):
     assert "--project=seo-autopilot-501517" in calls[0][0]
     assert not any(x.startswith("--region=") for x in calls[1][0])
     assert all(not kwargs.get("shell") and kwargs["check"] and kwargs["timeout"] == 300 for _, kwargs in calls)
+
+
+def test_cloud_failure_identifies_operation_and_permission_without_leaking_stderr(monkeypatch):
+    m = module()
+    def process(*args, **kwargs):
+        raise m.subprocess.CalledProcessError(1, args[0], stderr=
+            "ERROR: (gcloud.logging.read) PERMISSION_DENIED: Permission 'logging.logEntries.list' denied. "
+            "Bearer private-token user@example.com https://example.com/?secret=hidden")
+    monkeypatch.setattr(m.subprocess, "run", process)
+    with pytest.raises(m.CloudCommandError) as caught:
+        m.gcloud("logging", "read", "private-filter")
+    result = caught.value.evidence
+    assert result == {"operation": "logging read", "exit_code": 1,
+                      "category": "PERMISSION_DENIED", "permission": "logging.logEntries.list"}
+    assert "private" not in str(caught.value)
+    assert "hidden" not in str(caught.value)
+    assert "example.com" not in str(caught.value)
+
+
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_failed_log_read_preserves_successful_execution_and_cleanup(tmp_path, monkeypatch, cleanup_fails):
+    m = module()
+    job = "fixlist-ironwood-diag-123-1"
+    def cloud(*args):
+        if args[:3] == ("run", "services", "describe"): return service()
+        if args[:3] == ("run", "revisions", "describe"): return revision()
+        if args[:3] == ("run", "jobs", "create"): return {}
+        if args[:3] == ("run", "jobs", "delete"):
+            if cleanup_fails:
+                raise m.CloudCommandError({"operation": "run jobs delete", "exit_code": 1, "category": "PERMISSION_DENIED"})
+            return {}
+        if args[:3] == ("run", "jobs", "execute"): return {"metadata": {"name": job + "-abc"}}
+        if args[:2] == ("logging", "read"):
+            raise m.CloudCommandError({"operation": "logging read", "exit_code": 1, "category": "PERMISSION_DENIED"})
+        raise AssertionError(args)
+    monkeypatch.setattr(m, "gcloud", cloud)
+    with pytest.raises(m.CloudCommandError, match="logging read"):
+        m.execute(REV, "b" * 40, f"ironwood-diagnostic:{REV}:{'b' * 40}", "123", "1", tmp_path)
+    result = json.loads((tmp_path / "result.json").read_text())
+    assert result["execution_succeeded"] is True
+    assert result["job_deleted"] is (not cleanup_fails)
+    assert result["failure"]["operation"] == "logging read"
+    if cleanup_fails:
+        assert result["cleanup_failure"]["operation"] == "run jobs delete"
+    assert not (tmp_path / "observations.json").exists()
+
+
+@pytest.mark.parametrize("timeout", [False, True])
+def test_unknown_errors_and_timeouts_never_emit_raw_output(monkeypatch, timeout):
+    m = module()
+    def process(*args, **kwargs):
+        if timeout:
+            raise m.subprocess.TimeoutExpired(args[0], 300, output="secret", stderr="secret")
+        raise m.subprocess.CalledProcessError(1, args[0], stderr="unknown secret")
+    monkeypatch.setattr(m.subprocess, "run", process)
+    with pytest.raises(m.CloudCommandError) as caught:
+        m.gcloud("run", "jobs", "execute", "private-resource")
+    assert caught.value.evidence["operation"] == "run jobs execute"
+    assert caught.value.evidence["category"] == ("command_timeout" if timeout else "unclassified_cloud_error")
+    assert "secret" not in str(caught.value)
+    assert "private-resource" not in str(caught.value)

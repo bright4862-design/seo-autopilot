@@ -485,6 +485,7 @@ def build_authority_review_payload(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "success": True,
         "review_payload_version": SCAN_ATTESTATION_VERSION,
+        **({"geo_readiness": result["geo_readiness"]} if "geo_readiness" in result else {}),
         "scanner_version": result.get("scanner_version"),
         "scanner_build_revision": result.get("scanner_build_revision") or technical.get("scanner_build_revision"),
         "scanner_wrapper_version": result.get("scanner_wrapper_version"),
@@ -655,6 +656,12 @@ def build_local_review(result: dict[str, Any]) -> dict[str, Any]:
         "python_review_fallback_used": False,
         "beta_revision_fingerprint": live_revision()["fingerprint"],
     })
+    from .geo_runtime import assess_review_geo
+    review["geo_readiness"] = assess_review_geo(
+        result, _first_list(result, ("crawled_pages", "pages", "scanned_pages", "crawl_pages")),
+        parent_authoritative=review.get("release_gate_eligible") is True,
+        access_limited=review.get("coverage_state") == "access_limited",
+    )
     return apply_canonical_repair_contract(review, result)
 
 

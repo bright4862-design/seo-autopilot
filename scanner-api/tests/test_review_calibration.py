@@ -67,7 +67,7 @@ def test_material_image_alt_gap_remains_actionable_but_never_critical():
     assert fix["missing_alt_total"] == 18
     assert fix["image_total"] == 26
     assert fix["missing_alt_ratio"] == 0.692
-    assert fix["image_alt_evidence_version"] == "material_image_alt_v1"
+    assert fix["image_alt_evidence_version"] == "material_image_alt_v2_absent_attribute"
 
 
 def test_weak_pages_are_removed_from_a_mixed_image_alt_group():

@@ -258,6 +258,48 @@ test("a record with no site or date still produces a usable filename", () => {
   assert.match(name, /^fixlist-scan-\d{4}-\d{2}-\d{2}\.json$/);
 });
 
+test("the handoff carries only the bounded GEO summary and never hidden detail", () => {
+  const handoff = buildScanHandoff({
+    scanRecord: SCAN,
+    cards: [],
+    geoReadiness: {
+      geo_readiness_version: "geo_readiness_v1_experimental",
+      evidence_adapter_version: "geo_evidence_v1",
+      assessment_status: "assessed",
+      score: 0,
+      coverage: 0.8,
+      sample_pages: 5,
+      score_bounds: { lower: 0, upper: 20 },
+      bounds_kind: "unknown_outcome_range_not_statistical_confidence",
+      findings: [{ suggested_action: "hidden action", evidence_samples: [{ page_url: "https://example.com/hidden" }] }],
+      observations: [{ reason: "hidden evidence" }],
+    },
+  });
+
+  assert.deepEqual(handoff.geo_readiness, {
+    assessment_status: "assessed",
+    score: 0,
+    coverage: 0.8,
+    sample_pages: 5,
+    score_bounds: { lower: 0, upper: 20 },
+    bounds_kind: "unknown_outcome_range_not_statistical_confidence",
+    methodology: "Experimental v1 assessment of accepted raw HTML evidence.",
+    limitation: "This readiness assessment does not measure AI citations, inclusion, visibility, or traffic.",
+  });
+  assert.doesNotMatch(JSON.stringify(handoff.geo_readiness), /hidden|findings|observations|page_url/i);
+});
+
+test("a malformed GEO summary is exported as unavailable rather than a score", () => {
+  const handoff = buildScanHandoff({
+    scanRecord: SCAN,
+    cards: [],
+    geoReadiness: { assessment_status: "assessed", score: 100, coverage: "unknown" },
+  });
+
+  assert.equal(handoff.geo_readiness.assessment_status, "unavailable");
+  assert.equal(handoff.geo_readiness.score, null);
+});
+
 /**
  * The wiring half. `exportScanReportPdf` sat in the tree for months with no
  * call site anywhere, and `download_json_enabled: true` was written into every

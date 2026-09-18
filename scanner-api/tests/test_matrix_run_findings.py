@@ -35,16 +35,13 @@ def test_a_foreign_subdomain_is_not_counted_as_a_discovered_page():
     assert is_scannable_sitemap_url(blog, ORIGIN) is False
 
 
-def test_the_scanned_host_and_its_www_alias_are_both_scannable():
-    for url in (
-        "https://example.com/pricing",
-        "https://www.example.com/pricing",
-        "http://example.com/pricing",
-    ):
-        assert is_scannable_sitemap_url(url, ORIGIN) is True, url
-    # And the www alias is still rewritten onto the scanned origin, so the
-    # crawler's strict same-origin guard accepts it.
-    assert normalize_sitemap_page_url("https://www.example.com/pricing", ORIGIN) == "https://example.com/pricing"
+def test_only_the_exact_effective_origin_is_scannable():
+    assert is_scannable_sitemap_url("https://example.com/pricing", ORIGIN) is True
+    for url in ("https://www.example.com/pricing", "http://example.com/pricing"):
+        assert is_scannable_sitemap_url(url, ORIGIN) is False, url
+    assert normalize_sitemap_page_url(
+        "https://www.example.com/pricing", ORIGIN
+    ) == "https://www.example.com/pricing"
 
 
 def test_a_relative_entry_is_left_to_the_path_check():

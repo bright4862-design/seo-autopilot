@@ -13,7 +13,7 @@ from .security import ResponseBodyTooLarge, safe_get
 
 MAX_SITEMAP_FETCHES = 60
 MAX_SITEMAP_DECODED_BYTES = 5_000_000
-SITEMAP_PARSER_VERSION = "sitemap_parser_v1_xml_identity"
+SITEMAP_PARSER_VERSION = "sitemap_parser_v2_exact_origin_identity"
 
 SITEMAP_LOC_RE = re.compile(
     r"<(?:[A-Za-z_][\w.-]*:)?loc\b[^>]*>(.*?)</(?:[A-Za-z_][\w.-]*:)?loc\s*>",
@@ -422,26 +422,7 @@ def is_same_prefix(url: str, path_prefix: str) -> bool:
 
 
 def is_scannable_sitemap_url(url: str, origin: str) -> bool:
-    """True when a sitemap URL names a page this scan can actually fetch.
-
-    A sitemap index routinely lists other subdomains -- blog., shop., docs. --
-    and `normalize_sitemap_page_url` deliberately leaves those on their own
-    host, because rewriting them onto the scanned origin would invent pages
-    that do not exist there. Nothing downstream then re-checked the host:
-    `is_same_prefix` compares the path only, so a foreign-subdomain URL whose
-    path happened to sit inside the scope was accepted into the discovery
-    inventory.
-
-    The crawler's own `same_origin` guard is strict, so those URLs were never
-    fetched. They only ever reached `pages_found`, which is how a site could
-    report thousands of pages discovered against a hundred and fifty crawled --
-    and how a 600-page subdomain inflated a 5,000-page total for a site that
-    does not have 5,000 pages on the host being scanned.
-
-    Counting a page the scan cannot reach is not caution, it is a wrong number:
-    it overstates the site, understates coverage, and drags the score's coverage
-    ceiling down for a shortfall that never existed.
-    """
+    """True only for relative entries or the scan's exact effective origin."""
     try:
         parsed = urlparse(str(url or ""))
         origin_parsed = urlparse(str(origin or ""))
@@ -456,7 +437,10 @@ def is_scannable_sitemap_url(url: str, origin: str) -> bool:
             # the scanned origin. Counting those inflates the same inventory
             # this guard exists to keep honest.
             return not (parsed.scheme or parsed.netloc)
-        return comparable_host(parsed.hostname) == comparable_host(origin_parsed.hostname)
+        return (
+            parsed.scheme.lower() == origin_parsed.scheme.lower()
+            and parsed.netloc.lower() == origin_parsed.netloc.lower()
+        )
     except Exception:
         return False
 
@@ -468,24 +452,14 @@ def record_market_prefix(scope_evidence: dict, url: str) -> None:
 
 
 def normalize_sitemap_page_url(url: str, origin: str) -> str:
-    """Keep sitemap page URLs on the scanner's accepted origin.
-
-    Many sites redirect apex -> www or www -> apex, while their sitemap uses the
-    canonical host. The scanner's same-origin guard is intentionally strict, so
-    normal sitemap page URLs can be dropped after a harmless www/apex mismatch.
-    When the hosts match after stripping a leading www., rewrite only the scheme
-    and netloc to the scanner origin while preserving path/query/fragment.
-    """
+    """Preserve an absolute published sitemap location without its fragment."""
     try:
         parsed = urlparse(url)
-        origin_parsed = urlparse(origin)
-        if not parsed.scheme or not parsed.netloc or not origin_parsed.scheme or not origin_parsed.netloc:
+        if not parsed.scheme or not parsed.netloc:
             return url
-        if comparable_host(parsed.hostname or "") == comparable_host(origin_parsed.hostname or ""):
-            return urlunparse(parsed._replace(scheme=origin_parsed.scheme, netloc=origin_parsed.netloc))
+        return urlunparse(parsed._replace(fragment=""))
     except Exception:
         return url
-    return url
 
 
 def comparable_host(host: str) -> str:

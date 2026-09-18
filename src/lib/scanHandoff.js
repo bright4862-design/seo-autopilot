@@ -1,6 +1,7 @@
 import { evidenceLink } from "./evidenceUrl.js";
 import { buildCustomerRepairPlan } from "./customerRepairPlan.js";
 import { scanCoverageDisclosure } from "./scanCoverageDisclosure.js";
+import { buildGeoReadinessPresentation } from "./geoReadinessPresentation.js";
 
 /**
  * A compact, assistant-shaped export of one finished scan.
@@ -137,6 +138,7 @@ export function buildScanHandoff({
   summary = "",
   nextBestStep = "",
   limitations = [],
+  geoReadiness = undefined,
   generatedAt = new Date(),
 } = {}) {
   const siteOrigin = clean(scanRecord?.website_url);
@@ -144,6 +146,11 @@ export function buildScanHandoff({
   const list = plan.cards.slice(0, MAX_FIXES);
   const healthScoreAvailable =
     !scoreUnavailable && healthScore != null && Number.isFinite(Number(healthScore));
+  const geo = buildGeoReadinessPresentation({
+    geoReadiness,
+    customerAccess: "preview",
+    completedAt: scanRecord?.completed_at || scanRecord?.created_at,
+  });
 
   return {
     schema: SCAN_HANDOFF_SCHEMA,
@@ -156,6 +163,16 @@ export function buildScanHandoff({
     scan_coverage: scanCoverageDisclosure(scanRecord),
     health_score: healthScoreAvailable ? Number(healthScore) : null,
     health_score_available: healthScoreAvailable,
+    geo_readiness: {
+      assessment_status: geo.state,
+      score: geo.scoreAvailable ? geo.score : null,
+      coverage: geo.state === "unavailable" ? null : geoReadiness?.coverage ?? null,
+      sample_pages: geo.state === "unavailable" ? null : geoReadiness?.sample_pages ?? null,
+      score_bounds: geo.state === "unavailable" ? null : geoReadiness?.score_bounds ?? null,
+      bounds_kind: geo.state === "unavailable" ? "" : geoReadiness?.bounds_kind ?? "",
+      methodology: geo.methodologyLabel,
+      limitation: geo.nonCitationLabel,
+    },
     summary: clean(summary),
     next_best_step: plan.nextBestStep,
     fix_first_count: plan.fixFirstCount,

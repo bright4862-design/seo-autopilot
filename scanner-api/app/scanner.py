@@ -42,7 +42,7 @@ from .security import is_public_http_url, safe_get
 from .sitemap import load_sitemap_urls
 from .url_frontier_policy import FRONTIER_POLICY_VERSION, classify_frontier_url
 
-VERSION = "python_scanner_v3_bounded_request"
+VERSION = "python_scanner_v4_published_request_identity"
 RENDER_EVIDENCE_VERSION = "render_evidence_v1"
 FINAL_URL_DEDUP_VERSION = "final_url_dedup_v1_normalized_identity"
 # How findings become customer repair cards. A change here changes what the
@@ -443,7 +443,7 @@ async def run_scan(
     artifacts: list[dict] = []
 
     def enqueue(url: str, source: str, source_page: str = "", link_text: str = "") -> None:
-        clean = normalize_published_request_url(url) if source == "seed" else normalize_url(url)
+        clean = normalize_published_request_url(url)
         if not clean:
             if is_artifact_url(url):
                 record_artifact(artifacts, url, source, source_page, link_text)

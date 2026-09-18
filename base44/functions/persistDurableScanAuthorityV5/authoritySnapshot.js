@@ -1,3 +1,4 @@
+import { GEO_SNAPSHOT_VERSION, validateGeoReadiness, emptyGeoReadiness, validProducerGeoReadiness } from "./geoReadiness.js";
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { firstFailedRepairInvariant } from "./repairInvariants.js";
 import { sanitizeReportRawFindingEvidence, sanitizeScanCoverage } from "./repairEvidence.js";
@@ -6,7 +7,8 @@ import { sanitizeReportRawFindingEvidence, sanitizeScanCoverage } from "./repair
 // payload for every row -- including rows sealed before it existed. Version
 // dispatch on reconstruction keeps those rows verifiable instead of turning
 // an intact result into 409 result_authority_invalid.
-export const REVIEW_ATTESTATION_VERSION = "standard_review_snapshot_hmac_v6_report_evidence";
+export const REVIEW_ATTESTATION_VERSION = "standard_review_snapshot_hmac_geo_v1";
+export const REVIEW_ATTESTATION_VERSION_V6 = "standard_review_snapshot_hmac_v6_report_evidence";
 export const REVIEW_ATTESTATION_VERSION_V5 = "standard_review_snapshot_hmac_v5_score_explanation";
 export const REVIEW_ATTESTATION_VERSION_V4 = "standard_review_snapshot_hmac_v4_focused_scope";
 export const REVIEW_ATTESTATION_VERSION_V1 = "standard_review_snapshot_hmac_v1";
@@ -64,6 +66,7 @@ export function firstFailedAuthorityPredicate(scan, review) {
     ["canonical_repair_contract", canonicalReviewIsAbsentOrValid(review)],
     // Re-derived here, not trusted. A repair whose own arithmetic cannot be
     // true must not reach a seal, whatever the producer claims about it.
+    ["geo_readiness_contract", validProducerGeoReadiness(review?.geo_readiness, scan)],
     ["repair_coverage_invariants", firstFailedRepairInvariant_forAll(review) === ""],
   ];
   return predicates.find(([, passed]) => !passed)?.[0] || "";
@@ -163,6 +166,7 @@ export function buildAuthoritySnapshot({ scan, review, identity, userId, now = n
     normalized_domain: domain(identity?.normalized_domain),
     release_fingerprint: fingerprint,
     scan: {
+      geo_readiness: validateGeoReadiness(review?.geo_readiness ?? emptyGeoReadiness()),
       status: "complete",
       release_gate_eligible: true,
       score_is_provisional: false,
@@ -264,7 +268,10 @@ export function buildPersistedAuthoritySnapshot({ run, fixList, fixItems, userId
     && persistedFixList?.repair_snapshot_contract_complete === true
     && persistedFixList?.repair_priority_model_version === REPAIR_PRIORITY_MODEL_V2;
 
-  return buildAuthoritySnapshot({
+  // Historical v6 never authenticated GEO. New row reconstruction requires the field.
+  const isGeo = persistedRun.authority_seal_version === REVIEW_ATTESTATION_VERSION;
+  if (isGeo) validateGeoReadiness(persistedRun.geo_readiness);
+  const snapshot = buildAuthoritySnapshot({
     scan: {
       ...persistedRun,
       submitted_url: persistedRun.website_url,
@@ -272,6 +279,7 @@ export function buildPersistedAuthoritySnapshot({ run, fixList, fixItems, userId
     review: {
       ...persistedRun,
       ...persistedFixList,
+      geo_readiness: isGeo ? persistedRun.geo_readiness : undefined,
       recommendations: persistedFixItems,
       ...(canonical ? {
         repair_contract_version: REPAIR_CONTRACT_V2,
@@ -289,6 +297,11 @@ export function buildPersistedAuthoritySnapshot({ run, fixList, fixItems, userId
     userId,
     now: sealedAt || persistedRun.authority_sealed_at,
   });
+  if (persistedRun.authority_seal_version === REVIEW_ATTESTATION_VERSION_V6) {
+    snapshot.version = REVIEW_ATTESTATION_VERSION_V6;
+    delete snapshot.scan.geo_readiness;
+  }
+  return snapshot;
 }
 
 function suppressAggregateCoveredPageFixes(fixes) {

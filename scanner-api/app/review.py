@@ -2371,8 +2371,11 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
         "access_evidence_state": access_evidence_state,
         "release_gate_eligible": release_gate_eligible,
     }
+    from .geo_runtime import assess_review_geo
+    geo_readiness = assess_review_geo(body, pages, parent_authoritative=release_gate_eligible, access_limited=material_access_limited or blocked)
     pages_returned = pages[:80]
     return {
+        "geo_readiness": geo_readiness,
         "limitation": coverage_limitation,
         "plain_english_summary": summary,
         "website_health_report": report,

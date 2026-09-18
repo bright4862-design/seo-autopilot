@@ -3,7 +3,7 @@ from app.scanner import SCAN_BUDGETS, VERSION
 
 
 def test_quick_budget_leaves_time_for_base44_response_reserve():
-    assert VERSION == "python_scanner_v3_bounded_request"
+    assert VERSION == "python_scanner_v4_published_request_identity"
     assert SCAN_BUDGETS["quick"]["timeout"] <= 40
     assert SCAN_BUDGETS["quick"]["fetch_timeout"] <= 6
     assert SCAN_BUDGETS["quick"]["max_sitemap_fetches"] <= 10

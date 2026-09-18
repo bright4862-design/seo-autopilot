@@ -9,7 +9,7 @@ from .health_score_explanation import apply_score_ceiling, build_health_score_ex
 from .review import compute_health_score_breakdown, group_page_recommendations, unwrap_scan_payload
 
 CALIBRATION_VERSION = "review_evidence_calibration_v6_health_score_v2"
-IMAGE_ALT_EVIDENCE_VERSION = "material_image_alt_v1"
+IMAGE_ALT_EVIDENCE_VERSION = "material_image_alt_v2_absent_attribute"
 IMAGE_ALT_RULES = {"image_alt_text", "missing_image_alt"}
 VERIFICATION_ONLY_RULES = {"potential_orphan_pages", "indexable_faceted_navigation"}
 VERIFICATION_ONLY_LIMITATION_CODES = {

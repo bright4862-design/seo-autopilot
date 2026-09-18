@@ -132,6 +132,7 @@ function snapshot() {
 /** A row as it was persisted before the coverage fields existed. */
 async function historicalV1Row() {
   const legacy = structuredClone(snapshot());
+  delete legacy.scan.geo_readiness;
   legacy.version = V1;
   for (const key of [...COVERAGE_KEYS, ...ACCEPTANCE_KEYS, ...SCOPE_KEYS, ...SCORE_EXPLANATION_KEYS, ...REPORT_EVIDENCE_KEYS]) delete legacy.scan[key];
 
@@ -147,6 +148,7 @@ async function historicalV1Row() {
 /** A row sealed after coverage v2 but before acceptance-evidence v3. */
 async function historicalV2Row() {
   const legacy = structuredClone(snapshot());
+  delete legacy.scan.geo_readiness;
   legacy.version = V2;
   for (const key of [...ACCEPTANCE_KEYS, ...SCOPE_KEYS, ...SCORE_EXPLANATION_KEYS, ...REPORT_EVIDENCE_KEYS]) delete legacy.scan[key];
 
@@ -162,6 +164,7 @@ async function historicalV2Row() {
 /** A row sealed under acceptance-evidence v3, before focused scope v4. */
 async function historicalV3Row() {
   const legacy = structuredClone(snapshot());
+  delete legacy.scan.geo_readiness;
   legacy.version = V3;
   for (const key of [...SCOPE_KEYS, ...SCORE_EXPLANATION_KEYS, ...REPORT_EVIDENCE_KEYS]) delete legacy.scan[key];
 
@@ -177,6 +180,7 @@ async function historicalV3Row() {
 /** A row sealed under focused scope v4, before the score explanation v5. */
 async function historicalV4Row() {
   const legacy = structuredClone(snapshot());
+  delete legacy.scan.geo_readiness;
   legacy.version = V4;
   for (const key of [...SCORE_EXPLANATION_KEYS, ...REPORT_EVIDENCE_KEYS]) delete legacy.scan[key];
 
@@ -192,6 +196,7 @@ async function historicalV4Row() {
 /** A row sealed under score-explanation v5, before report evidence v6. */
 async function historicalV5Row() {
   const legacy = structuredClone(snapshot());
+  delete legacy.scan.geo_readiness;
   legacy.version = V5;
   for (const key of REPORT_EVIDENCE_KEYS) delete legacy.scan[key];
 
@@ -251,9 +256,9 @@ test("rebuilding a v1 row never introduces a field the v1 seal did not cover", a
 
 // ------------------------------------------------------------ new rows --
 
-test("new rows seal under the report-evidence attestation version", () => {
-  assert.equal(REVIEW_ATTESTATION_VERSION, V6);
-  assert.equal(snapshot().version, V6);
+test("new rows seal under the GEO attestation version", () => {
+  assert.equal(REVIEW_ATTESTATION_VERSION, "standard_review_snapshot_hmac_geo_v1");
+  assert.equal(snapshot().version, REVIEW_ATTESTATION_VERSION);
 });
 
 test("a historical v2-sealed result still verifies and carries coverage evidence", async () => {

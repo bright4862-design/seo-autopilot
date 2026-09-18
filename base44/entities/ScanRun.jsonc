@@ -38,7 +38,10 @@
     },
     "scope_type": {
       "type": "string",
-      "enum": ["", "path_prefix"],
+      "enum": [
+        "",
+        "path_prefix"
+      ],
       "default": "",
       "description": "Focused-scan scope type. This release supports same-origin path_prefix only."
     },
@@ -60,7 +63,13 @@
     },
     "discovered_from": {
       "type": "string",
-      "enum": ["", "sitemap", "internal_link", "canonical", "hreflang"],
+      "enum": [
+        "",
+        "sitemap",
+        "internal_link",
+        "canonical",
+        "hreflang"
+      ],
       "default": ""
     },
     "user_confirmed": {
@@ -546,7 +555,11 @@
     },
     "site_ownership_answer": {
       "type": "string",
-      "enum": ["", "owner_or_manager", "not_owner"],
+      "enum": [
+        "",
+        "owner_or_manager",
+        "not_owner"
+      ],
       "default": "",
       "description": "Historical ownership answer used to derive this exact scan's robots policy."
     },
@@ -688,6 +701,17 @@
     "result_integrity_proof": {
       "type": "string",
       "description": "Server-only HMAC over the limited result. Cryptographically unusable as an authority proof."
+    },
+    "geo_readiness": {
+      "type": "object",
+      "description": "Server-validated GEO readiness, authenticated only by the GEO authority snapshot version. Historical absence is not assessed.",
+      "rls": {
+        "write": {
+          "user_condition": {
+            "role": "admin"
+          }
+        }
+      }
     }
   },
   "required": [

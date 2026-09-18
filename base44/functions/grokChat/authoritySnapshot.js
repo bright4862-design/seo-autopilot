@@ -1,3 +1,4 @@
+import { GEO_SNAPSHOT_VERSION, geoReadinessSnapshotFields, customerGeoReadiness } from "./geoReadiness.js";
 import { sanitizeReportRawFindingEvidence, sanitizeScanCoverage } from "./repairEvidence.js";
 export const REPAIR_CONTRACT_V2 = "repair_contract_v2_shadow_calibrated";
 export const REPAIR_PRIORITY_MODEL_V2 = "repair_priority_v2_technical_severity";
@@ -31,6 +32,7 @@ export function authoritySnapshotFromRows({ scan, fixList, fixItems, userId }) {
       website_url: text(scan?.website_url, 2_000),
       normalized_domain: domain(scan?.normalized_domain || scan?.website_url),
       ...scopeSnapshotFields(scan),
+      ...geoReadinessSnapshotFields(scan),
       scanner_version: text(scan?.scanner_version, 160),
       scanner_build_revision: text(scan?.scanner_build_revision, 160),
       scanner_wrapper_version: text(scan?.scanner_wrapper_version, 160),
@@ -97,7 +99,7 @@ export function authoritySnapshotFromRows({ scan, fixList, fixItems, userId }) {
 
 function authorityFixFromRow(item, { canonical = false, version = "" } = {}) {
   const raw = item?.raw_finding && typeof item.raw_finding === "object" ? item.raw_finding : {};
-  const reportEvidence = version === REVIEW_ATTESTATION_VERSION_V6
+  const reportEvidence = [REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION].includes(version)
     ? sanitizeReportRawFindingEvidence({ ...item, ...raw })
     : {};
   const base = {
@@ -258,12 +260,12 @@ function scoreExplanation(value) {
 function scoreExplanationSnapshotFields(row) {
   // V5 only. A v4 row must rebuild exactly as v4: giving it a field its seal
   // did not cover turns an intact result into a tampered one.
-  if (![REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6].includes(text(row?.authority_seal_version, 160))) return {};
+  if (![REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION].includes(text(row?.authority_seal_version, 160))) return {};
   return { health_score_explanation: scoreExplanation(row?.health_score_explanation) };
 }
 
 function scopeSnapshotFields(row) {
-  if (![REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6].includes(
+  if (![REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION].includes(
     text(row?.authority_seal_version, 160),
   )) return {};
   return {
@@ -277,7 +279,7 @@ function scopeSnapshotFields(row) {
 }
 
 function coverageSnapshotFields(row) {
-  if (![REVIEW_ATTESTATION_VERSION_V2, REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6].includes(
+  if (![REVIEW_ATTESTATION_VERSION_V2, REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION].includes(
     text(row?.authority_seal_version, 160),
   )) return {};
   return {
@@ -294,7 +296,7 @@ function coverageSnapshotFields(row) {
 }
 
 function acceptanceEvidenceSnapshotFields(row) {
-  if (![REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6].includes(
+  if (![REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION].includes(
     text(row?.authority_seal_version, 160),
   )) return {};
   const source = plainObject(row?.classification_integrity);
@@ -351,7 +353,7 @@ function coverageAuthorityFields(evidence) {
 }
 
 function reportEvidenceSnapshotFields(row) {
-  if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V6) return {};
+  if (![REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION].includes(text(row?.authority_seal_version, 160))) return {};
   return { scan_coverage: sanitizeScanCoverage(row?.scan_coverage) };
 }
 

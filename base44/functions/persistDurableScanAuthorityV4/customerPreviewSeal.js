@@ -1,6 +1,8 @@
+import { GEO_SNAPSHOT_VERSION, customerGeoReadiness } from "./geoReadiness.js";
 import { createAuthoritySeal, stableSerialize, verifyAuthoritySeal } from "./authoritySeal.js";
 
-export const CUSTOMER_PREVIEW_SEAL_VERSION = "standard_customer_preview_hmac_v1";
+export const CUSTOMER_PREVIEW_SEAL_VERSION = "standard_customer_preview_hmac_v2_geo_readiness";
+export const CUSTOMER_PREVIEW_SEAL_VERSION_V1 = "standard_customer_preview_hmac_v1";
 export const CUSTOMER_PREVIEW_SEAL_DOMAIN = "fixlist_customer_preview_v1";
 export const CUSTOMER_PREVIEW_VISIBLE_FIX_COUNT = 2;
 
@@ -61,6 +63,7 @@ const PREVIEW_FIX_ITEM_FIELDS = [
 export function buildCustomerPreviewPayload({ run, fixList, fixItems, ownerUserId, fullAuthorityProof }) {
   const customerRun = pickFields(run, PREVIEW_RUN_FIELDS);
   customerRun.health_score_status = "authoritative";
+  if (run?.authority_seal_version === GEO_SNAPSHOT_VERSION) customerRun.geo_readiness = customerGeoReadiness(run);
   const customerFixList = pickFields(fixList, PREVIEW_FIX_LIST_FIELDS);
   const customerFixItems = [...(Array.isArray(fixItems) ? fixItems : [])]
     .sort((left, right) => {
@@ -97,7 +100,7 @@ export function buildCustomerPreviewPayload({ run, fixList, fixItems, ownerUserI
 export function customerPreviewSealEnvelope(payload) {
   return {
     domain: CUSTOMER_PREVIEW_SEAL_DOMAIN,
-    version: CUSTOMER_PREVIEW_SEAL_VERSION,
+    version: payload?.authority_seal_version === GEO_SNAPSHOT_VERSION ? CUSTOMER_PREVIEW_SEAL_VERSION : CUSTOMER_PREVIEW_SEAL_VERSION_V1,
     payload,
   };
 }
@@ -119,7 +122,7 @@ export function parseCustomerPreviewPayload(value) {
 
 export function hasCustomerPreviewArtifact(run) {
   return Boolean(
-    text(run?.customer_preview_seal_version, 160) === CUSTOMER_PREVIEW_SEAL_VERSION
+    [CUSTOMER_PREVIEW_SEAL_VERSION, CUSTOMER_PREVIEW_SEAL_VERSION_V1].includes(text(run?.customer_preview_seal_version, 160))
     && text(run?.customer_preview_payload, 64_000)
     && cleanProof(run?.customer_preview_proof)
     && text(run?.customer_preview_sealed_at, 80)

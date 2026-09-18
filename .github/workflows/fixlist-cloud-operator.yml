@@ -399,6 +399,7 @@ jobs:
             ${{ runner.temp }}/ironwood-evidence/profile.json
             ${{ runner.temp }}/ironwood-evidence/observations.json
             ${{ runner.temp }}/ironwood-evidence/result.json
+            ${{ runner.temp }}/ironwood-evidence/failure.json
 
   verify-admission-identity:
     if: >-

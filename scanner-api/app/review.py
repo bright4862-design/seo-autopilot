@@ -2972,9 +2972,12 @@ def is_blocked_access_page(page: dict[str, Any]) -> bool:
     status = int_or_zero(page.get("status_code") or page.get("status"))
     text = f"{page.get('fetch_error', '')} {page.get('title', '')} {page.get('content_type', '')}".lower()
     evidence_class = page_evidence_class(page)
+    access_kind = str(page.get("access_block_kind") or "").strip().lower()
     return (
-        status == 429
+        access_kind in {"challenge", "block", "rate_limit"}
+        or status == 429
         or (status in {401, 403} and evidence_class == "failed_access")
+        or (200 <= status < 300 and evidence_class == "failed_access")
         or has_any(text, ["rate limit", "too many requests", "connection verification", "bot protection", "access denied", "cloudflare"])
     )
 

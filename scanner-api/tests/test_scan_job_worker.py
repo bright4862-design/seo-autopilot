@@ -102,7 +102,7 @@ def test_definitive_blocked_crawl_short_circuits_before_full_review():
     })
     assert limitation is not None
     assert limitation["code"] == "scan_access_limited"
-    assert "rate-limited or challenged" in limitation["detail"]
+    assert "limited or challenged" in limitation["detail"]
 
     # Ordinary server failures are not relabelled as CDN/bot challenges.
     assert terminal_crawl_limitation({
@@ -126,7 +126,7 @@ def test_blocked_review_gets_truthful_access_limited_terminal_code():
     })
     assert limitation is not None
     assert limitation["code"] == "scan_access_limited"
-    assert "rate-limited or challenged" in limitation["detail"]
+    assert "rate limit, bot challenge, or automated-access block" in limitation["detail"]
 
 
 def test_non_access_provisional_review_keeps_authority_predicate_path():

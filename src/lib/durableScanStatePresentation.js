@@ -170,7 +170,7 @@ const COPY = {
     title: "The website limited automated access",
     detail: "The website answered FixList with rate limits or a bot challenge before enough pages could be checked, so no complete FixList was published. What did get through is not a fair sample of the site.",
     nextStep: "Ask whoever manages the site's CDN, firewall, or bot protection to allow the scan, then run it again.",
-    retryAdvice: "A scan started now would most likely be limited the same way. Wait for the limit to lift, or get the scanner allowed through first.",
+    retryAdvice: "A rate limit may clear after traffic drops, but a bot challenge will not clear just by waiting. If the site is challenging FixList, it must allow FixList through first.",
   },
   security_service_blocked: {
     title: "Your site's security service is blocking FixList.",

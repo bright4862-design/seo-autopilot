@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `104d5fc4c8d562c9` |
+| Candidate fingerprint | `9e4901da590017e1` |
 | Classifier | `archetype_classifier_v12_locale_normalized_structural_routes` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,12 +15,12 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `104d5fc4c8d562c9` with classifier
+fingerprint `9e4901da590017e1` with classifier
 `archetype_classifier_v12_locale_normalized_structural_routes`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
 `review_evidence_calibration_v6_health_score_v2`.
 
-The immediately superseded candidate was `a511d61013ef9fe3`; before that `c73399086107cbaf`, `053180f4bdc70857`; before that `821d211419fd327e`; before that `cc385c397c97d579`, `b3345916049979a1`, `77588ce93276d608`, `68a16802a9c7a543`, `a43a71c61f32d9fb`, `2f4238b4989f3fd9`, `0544ce395811cbd5`,
+The immediately superseded candidate was `104d5fc4c8d562c9`; before that `a511d61013ef9fe3`, `c73399086107cbaf`, `053180f4bdc70857`; before that `821d211419fd327e`; before that `cc385c397c97d579`, `b3345916049979a1`, `77588ce93276d608`, `68a16802a9c7a543`, `a43a71c61f32d9fb`, `2f4238b4989f3fd9`, `0544ce395811cbd5`,
 `0fa7d98734efb3f2`, `7a95768cc8ee2076`, `58275d24191cf1cb`,
 `7b0ec8c46654192b`, `5d94e93c54a9efb6`, `e18b72b2d0e159b8`, `cd31b3c1e5f9dd7c` and
 `1ddf8085bc7721c4`.
@@ -33,7 +33,17 @@ scan coverage now survive signing, persistence, reconstruction and customer proj
 while historical authority v1-v5 and limited-result v1-v4 shapes remain reconstructible
 under their original proof domains.
 
-The current `104d5fc4c8d562c9` candidate adds a domain-separated unpaid-preview seal. A completed Standard 150 result still has to pass the full persisted authority verification first; only then may the writer persist a bounded customer preview containing the score summary and at most two customer-safe fixes. The preview binds the exact owner, scan, project, domain, full authority proof, authority seal version/time, and release fingerprint. Unpaid reads may verify that small artifact without reconstructing the full FixList, while paid/full reads keep the existing full authority verification path. The prior `a511d61013ef9fe3` release remains explicitly readable as historical authority. This candidate has not yet met production acceptance.
+The current `9e4901da590017e1` candidate adds vendor-aware access-block classification under
+`page_evidence_gate_v2_vendor_access_block`. Explicit Cloudflare, SiteGround,
+DataDome, Imperva, Sucuri, Akamai and Wordfence challenges/blocks are kept out of
+SEO evidence, deterministic challenges/blocks are not retried as transient pressure,
+and customer guidance distinguishes rate limits that may clear from bot challenges
+that require the site to allow FixList. This is classification and failure handling
+only: it does not change the 150-page cap, owner robots policy, SSRF protections,
+admission, authority signing, user-agent identity, TLS behavior, proxies, or challenge
+solving. This candidate has not yet met production acceptance.
+
+The immediately preceding `104d5fc4c8d562c9` candidate adds a domain-separated unpaid-preview seal. A completed Standard 150 result still has to pass the full persisted authority verification first; only then may the writer persist a bounded customer preview containing the score summary and at most two customer-safe fixes. The preview binds the exact owner, scan, project, domain, full authority proof, authority seal version/time, and release fingerprint. Unpaid reads may verify that small artifact without reconstructing the full FixList, while paid/full reads keep the existing full authority verification path. The prior `a511d61013ef9fe3` release remains explicitly readable as historical authority. That candidate did not itself establish production acceptance.
 
 The preceding `a511d61013ef9fe3` candidate changed customer-result reader semantics: authority reconstruction normalized mutable `user_status` to the immutable sealed value and read canonical repair-evidence groups from the same persisted locations as the writer. The prior `c73399086107cbaf` release remained explicitly readable as historical authority.
 

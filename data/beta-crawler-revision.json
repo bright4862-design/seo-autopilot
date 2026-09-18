@@ -32,7 +32,7 @@
     "metadata_evidence_version": "metadata_evidence_v1_description_states",
     "navigation_indexability_version": "navigation_indexability_v1",
     "orphan_asset_evidence_version": "orphan_asset_evidence_v1",
-    "page_evidence_gate_version": "page_evidence_gate_v1",
+    "page_evidence_gate_version": "page_evidence_gate_v2_vendor_access_block",
     "page_level_asset_evidence_version": "page_level_asset_evidence_v3_markdown",
     "page_template_classifier_version": "page_template_classifier_v4_bookable_inventory_routes",
     "priority_summary_version": "priority_summary_v1_action_band_consistent",
@@ -65,10 +65,10 @@
     "trust_finding_gate_version": "trust_page_finding_gate_v1",
     "zero_fix_confidence_version": "python_review_v3_zero_fix_confidence"
   },
-  "fingerprint": "104d5fc4c8d562c9",
+  "fingerprint": "9e4901da590017e1",
   "git_commit": "",
-  "note": "signed unpaid preview authority artifact",
-  "recorded_at": "2026-09-15T10:50:17.321439+00:00",
+  "note": "vendor access-block classification",
+  "recorded_at": "2026-09-18T09:32:51.424615+00:00",
   "schema_version": "beta_crawler_revision_v1",
   "status": "candidate"
 }

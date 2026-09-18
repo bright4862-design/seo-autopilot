@@ -117,6 +117,7 @@ def annotate_robots_evidence(page: dict, policy: RobotsPolicy, url: str) -> dict
     page.update({
         "robots_txt_scanner_allowed": scanner_directive_allowed,
         "robots_txt_googlebot_allowed": googlebot_allowed,
+        "robots_txt_oai_searchbot_allowed": policy.directive_allowed("OAI-SearchBot", url),
         "robots_txt_scanner_blocked": scanner_directive_allowed is False,
         "robots_txt_googlebot_blocked": googlebot_allowed is False,
         "robots_txt_owner_override_applied": owner_robots_override_active(),

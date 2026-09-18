@@ -1,3 +1,4 @@
+import { GEO_SNAPSHOT_VERSION, geoReadinessSnapshotFields, customerGeoReadiness, validatedGeoSummary, emptyGeoReadiness, geoReadinessSummary } from "./geoReadiness.js";
 import { RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { sanitizeReportRawFindingEvidence, sanitizeScanCoverage } from "./repairEvidence.js";
 const ENCODER = new TextEncoder();
@@ -9,7 +10,7 @@ export const OWNER_TEST_USER_ID = "6a498da58ef5cec1f5cd4486";
 // Versions the customer projection itself. Declared in
 // data/cross-runtime-release-components.json so a projection behavior change
 // moves the release fingerprint like any Python change would.
-export const CUSTOMER_PROJECTION_VERSION = "customer_projection_v7_progress_heartbeat";
+export const CUSTOMER_PROJECTION_VERSION = "customer_projection_v8_geo_readiness";
 export const REPAIR_CONTRACT_V2 = "repair_contract_v2_shadow_calibrated";
 export const REPAIR_PRIORITY_MODEL_V2 = "repair_priority_v2_technical_severity";
 
@@ -335,7 +336,7 @@ function previewFixItems(fixItems = []) {
     .map(sanitizePreviewFixItem);
 }
 
-export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, previewAccess = false, authorityVerified, resultIntegrityVerified }) {
+export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, previewAccess = false, authorityVerified, resultIntegrityVerified, signedPreview = false }) {
   // A verified limited result is readable and is never authoritative. The two
   // flags stay separate all the way to the customer so nothing downstream can
   // mistake "we verified this provisional record" for "this is authoritative".
@@ -365,9 +366,10 @@ export function buildCustomerProjection({ run, fixList, fixItems, fullAccess, pr
     release_contract_current: canReadSummary && run?.beta_revision_fingerprint === RELEASE_FINGERPRINT,
     scan_id: text(run?.id, 160),
     fix_list_id: canReadSummary ? text(fixList?.id, 160) : "",
-    run: previewVerified
-      ? sanitizePreviewRun(run)
-      : sanitizeRun(run, { detailed: canReadResult, healthScoreStatus: customerHealthScoreStatus }),
+    run: {
+      ...(previewVerified ? sanitizePreviewRun(run) : sanitizeRun(run, { detailed: canReadResult, healthScoreStatus: customerHealthScoreStatus })),
+      ...(canReadSummary && authorityVerified === true ? {geo_readiness: signedPreview && previewVerified ? validatedGeoSummary(run?.geo_readiness ?? geoReadinessSummary(emptyGeoReadiness())) : customerGeoReadiness(run, canReadResult)} : {}),
+    },
     fixList: canReadResult
       ? pickFields(fixList, FIX_LIST_FIELDS)
       : previewVerified ? pickFields(fixList, PREVIEW_FIX_LIST_FIELDS) : null,
@@ -404,6 +406,7 @@ export function authoritySnapshotFromRows({ run, fixList, fixItems, userId }) {
       website_url: text(run?.website_url, 2_000),
       normalized_domain: domain(run?.normalized_domain || run?.website_url),
       ...scopeSnapshotFields(run),
+      ...geoReadinessSnapshotFields(run),
       scanner_version: text(run?.scanner_version, 160),
       scanner_build_revision: text(run?.scanner_build_revision, 160),
       scanner_wrapper_version: text(run?.scanner_wrapper_version, 160),
@@ -500,7 +503,7 @@ export function stableSerialize(value) {
 
 function authorityFixFromRow(item, { canonical = false, version = "" } = {}) {
   const raw = item?.raw_finding && typeof item.raw_finding === "object" ? item.raw_finding : {};
-  const reportEvidence = version === REVIEW_ATTESTATION_VERSION_V6
+  const reportEvidence = [REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION].includes(version)
     ? sanitizeReportRawFindingEvidence({ ...item, ...raw })
     : {};
   const base = {
@@ -646,7 +649,7 @@ function sanitizeRun(run, { detailed, healthScoreStatus = "" }) {
 }
 
 function usesAcceptanceEvidenceContract(run) {
-  return ["standard_review_snapshot_hmac_v3_acceptance_evidence", "standard_review_snapshot_hmac_v4_focused_scope", "standard_review_snapshot_hmac_v5_score_explanation", "standard_review_snapshot_hmac_v6_report_evidence"].includes(text(run?.authority_seal_version, 160))
+  return ["standard_review_snapshot_hmac_v3_acceptance_evidence", "standard_review_snapshot_hmac_v4_focused_scope", "standard_review_snapshot_hmac_v5_score_explanation", "standard_review_snapshot_hmac_v6_report_evidence", GEO_SNAPSHOT_VERSION].includes(text(run?.authority_seal_version, 160))
     || [
       "standard_limited_result_integrity_v2_acceptance_evidence",
       "standard_limited_result_integrity_v3_focused_scope",
@@ -658,7 +661,7 @@ function usesAcceptanceEvidenceContract(run) {
 }
 
 function usesReportEvidenceContract(run) {
-  return text(run?.authority_seal_version, 160) === REVIEW_ATTESTATION_VERSION_V6
+  return [REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION].includes(text(run?.authority_seal_version, 160))
     || text(run?.result_integrity_version, 160) === "standard_limited_result_integrity_v5_report_evidence";
 }
 
@@ -839,7 +842,7 @@ const REVIEW_ATTESTATION_VERSION_V6 = "standard_review_snapshot_hmac_v6_report_e
  * seal did not cover. The row's own authority_seal_version is the authority.
  */
 function scopeSnapshotFields(row) {
-  if (![REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6].includes(
+  if (![REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION].includes(
     text(row?.authority_seal_version, 160),
   )) return {};
   return {
@@ -854,12 +857,12 @@ function scopeSnapshotFields(row) {
 function scoreExplanationSnapshotFields(row) {
   // V5 only. A v4 row must rebuild exactly as v4: giving it a field its seal
   // did not cover turns an intact result into a tampered one.
-  if (![REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6].includes(text(row?.authority_seal_version, 160))) return {};
+  if (![REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION].includes(text(row?.authority_seal_version, 160))) return {};
   return { health_score_explanation: scoreExplanation(row?.health_score_explanation) };
 }
 
 function coverageSnapshotFields(row) {
-  if (![REVIEW_ATTESTATION_VERSION_V2, REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6].includes(
+  if (![REVIEW_ATTESTATION_VERSION_V2, REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION].includes(
     text(row?.authority_seal_version, 160),
   )) return {};
   return {
@@ -876,7 +879,7 @@ function coverageSnapshotFields(row) {
 }
 
 function acceptanceEvidenceSnapshotFields(row) {
-  if (![REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6].includes(text(row?.authority_seal_version, 160))) return {};
+  if (![REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION].includes(text(row?.authority_seal_version, 160))) return {};
   const source = plainObject(row?.classification_integrity);
   const state = text(source.state, 120);
   const verdict = text(source.verdict, 120);
@@ -912,7 +915,7 @@ function acceptanceEvidenceSnapshotFields(row) {
 }
 
 function reportEvidenceSnapshotFields(row) {
-  if (text(row?.authority_seal_version, 160) !== REVIEW_ATTESTATION_VERSION_V6) return {};
+  if (![REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION].includes(text(row?.authority_seal_version, 160))) return {};
   return { scan_coverage: sanitizeScanCoverage(row?.scan_coverage) };
 }
 

@@ -118,21 +118,21 @@ test("old release fingerprints are isolated to the explicit historical reader re
     compatibilityWithoutReaderVersion(compatibility),
     "V4 may advance reader semantics but must mirror the canonical historical fingerprint registry",
   );
-  assert.match(v4Compatibility, /customer_result_reader_v7_signed_preview_authority/);
+  assert.match(v4Compatibility, /customer_result_reader_v8_geo_readiness/);
   const v5Compatibility = fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_V5_REL), "utf8");
   assert.equal(
     compatibilityWithoutReaderVersion(v5Compatibility),
     compatibilityWithoutReaderVersion(compatibility),
     "V5 historical reader must preserve the canonical historical fingerprint registry",
   );
-  assert.match(v5Compatibility, /customer_result_reader_v7_signed_preview_authority/);
+  assert.match(v5Compatibility, /customer_result_reader_v8_geo_readiness/);
   const v6Compatibility = fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_V6_REL), "utf8");
   assert.equal(
     compatibilityWithoutReaderVersion(v6Compatibility),
     compatibilityWithoutReaderVersion(compatibility),
     "V6 active reader must preserve the canonical historical fingerprint registry",
   );
-  assert.match(v6Compatibility, /customer_result_reader_v7_signed_preview_authority/);
+  assert.match(v6Compatibility, /customer_result_reader_v8_geo_readiness/);
   assert.equal(fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_V3_REL), "utf8"), compatibility, "V3 reader must mirror the canonical historical compatibility registry");
   assert.equal(fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_ALIAS_REL), "utf8"), compatibility, "V2 reader must mirror the canonical historical compatibility registry");
 });

@@ -263,6 +263,7 @@ test("the sealed row rebuilds to the same snapshot it was signed as", () => {
       normalized_domain: "x.com",
       website_url: "https://x.com",
       authority_seal_version: REVIEW_ATTESTATION_VERSION,
+      geo_readiness: snapshot.scan.geo_readiness,
       authority_sealed_at: snapshot.sealed_at,
       status: "complete",
       release_gate_eligible: true,

@@ -14,6 +14,7 @@ import RecentScanRow from "@/components/fixlist/RecentScanRow";
 import RepairWorkSurface from "@/components/fixlist/RepairWorkSurface";
 import ExplicitPassedChecks from "@/components/fixlist/ExplicitPassedChecks";
 import SuggestedFix from "@/components/fixlist/SuggestedFix";
+import GeoReadinessPanel from "@/components/fixlist/GeoReadinessPanel";
 import { deleteScanRun } from "@/lib/scanHistory";
 import { prepareCustomerFixes, priorityBucket } from "@/lib/fixRanking";
 import { buildRepairWorkSurfacePresentation } from "@/lib/repairWorkSurfacePresentation";
@@ -598,6 +599,14 @@ export default function FixList() {
 
             <ScoreExplanation explanation={healthScoreExplanation(scanRecord)} />
 
+            <GeoReadinessPanel
+              geoReadiness={scanRecord?.geo_readiness}
+              customerAccess={scanRecord?.customer_access}
+              cards={customerRepairCards}
+              siteOrigin={scanRecord?.website_url}
+              completedAt={scanRecord?.completed_at || scanRecord?.created_at}
+            />
+
             {summary ? (
               <p className="mt-8 max-w-[56ch] text-[14px] leading-relaxed text-ink-muted">{summary}</p>
             ) : null}
@@ -615,6 +624,7 @@ export default function FixList() {
                 summary={summary}
                 nextBestStep={nextBestStep}
                 limitations={handoffLimitations}
+                geoReadiness={scanRecord?.geo_readiness}
               />
             ) : null}
 
@@ -863,6 +873,7 @@ function ScanExportControls({
   summary = "",
   nextBestStep = "",
   limitations = [],
+  geoReadiness,
 }) {
   const [copied, setCopied] = useState(false);
   const [pdfPending, setPdfPending] = useState(false);
@@ -881,6 +892,7 @@ function ScanExportControls({
       summary,
       nextBestStep,
       limitations,
+      geoReadiness,
     });
   }
 
@@ -1576,6 +1588,13 @@ function PreviewResultState({ scanRecord = {} }) {
           </p>
         </div>
       </div>
+
+      <GeoReadinessPanel
+        geoReadiness={scanRecord?.geo_readiness}
+        customerAccess="preview"
+        siteOrigin={scanRecord?.website_url}
+        completedAt={scanRecord?.completed_at || scanRecord?.created_at}
+      />
 
       {detailedItems.length > 0 ? (
         <section className="mt-10" aria-labelledby="preview-findings-heading">

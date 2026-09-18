@@ -27,7 +27,8 @@ function fixture() {
     health_grade: "Needs work",
     release_gate_eligible: true,
     beta_revision_fingerprint: "0123456789abcdef",
-    authority_seal_version: "standard_review_snapshot_hmac_v6_report_evidence",
+    authority_seal_version: "standard_review_snapshot_hmac_geo_v1",
+    geo_readiness: JSON.parse(readFileSync("tests/fixtures/geo/runtime.json", "utf8")).failures,
     authority_sealed_at: "2026-09-15T10:01:23.940Z",
     authority_proof: FULL_PROOF,
     fix_list_id: "fixlist_preview_1",
@@ -104,7 +105,7 @@ test("writer and reader build the same bounded signed customer preview", async (
   const writerPayload = buildWriterPreview(args);
   const readerPayload = buildReaderPreview(args);
 
-  assert.equal(WRITER_PREVIEW_VERSION, "standard_customer_preview_hmac_v1");
+  assert.equal(WRITER_PREVIEW_VERSION, "standard_customer_preview_hmac_v2_geo_readiness");
   assert.equal(READER_PREVIEW_VERSION, WRITER_PREVIEW_VERSION);
   assert.deepEqual(readerPayload, writerPayload);
   assert.equal(writerPayload.scan_id, run.id);
@@ -168,19 +169,19 @@ test("signed customer preview is release-versioned and schema-bound", () => {
 
   assert.equal(
     crossRuntime.components.customer_preview_seal_version,
-    "standard_customer_preview_hmac_v1",
+    "standard_customer_preview_hmac_v2_geo_readiness",
   );
   assert.equal(
     revision.component_versions.customer_preview_seal_version,
-    "standard_customer_preview_hmac_v1",
+    "standard_customer_preview_hmac_v2_geo_readiness",
   );
   assert.equal(
     crossRuntime.components.customer_result_reader_version,
-    "customer_result_reader_v7_signed_preview_authority",
+    "customer_result_reader_v8_geo_readiness",
   );
   assert.equal(
     revision.component_versions.customer_result_reader_version,
-    "customer_result_reader_v7_signed_preview_authority",
+    "customer_result_reader_v8_geo_readiness",
   );
   for (const field of [
     "customer_preview_seal_version",
@@ -211,7 +212,7 @@ test("current-release terminal replay repairs only a missing signed preview afte
 });
 
 
-test("actual V4 unpaid request reads the signed preview without loading full result rows", async () => {
+test("actual V6 unpaid request reads the GEO signed preview without loading full result rows", async () => {
   const [{
     buildCustomerPreviewPayload,
     createCustomerPreviewProof,
@@ -221,12 +222,12 @@ test("actual V4 unpaid request reads the signed preview without loading full res
     parseCustomerPreviewPayload,
     verifyCustomerPreviewProof,
   }, projection, limitedIntegrity, releaseContract, compatibility, buildIdentity] = await Promise.all([
-    import("../../base44/functions/getCustomerScanResultV4/customerPreviewSeal.js"),
-    import("../../base44/functions/getCustomerScanResultV4/projection.js"),
-    import("../../base44/functions/getCustomerScanResultV4/limitedResultIntegrity.js"),
-    import("../../base44/functions/getCustomerScanResultV4/generatedReleaseContract.js"),
-    import("../../base44/functions/getCustomerScanResultV4/releaseCompatibility.js"),
-    import("../../base44/functions/getCustomerScanResultV4/generatedBuildId.js"),
+    import("../../base44/functions/getCustomerScanResultV6/customerPreviewSeal.js"),
+    import("../../base44/functions/getCustomerScanResultV6/projection.js"),
+    import("../../base44/functions/getCustomerScanResultV6/limitedResultIntegrity.js"),
+    import("../../base44/functions/getCustomerScanResultV6/generatedReleaseContract.js"),
+    import("../../base44/functions/getCustomerScanResultV6/releaseCompatibility.js"),
+    import("../../base44/functions/getCustomerScanResultV6/generatedBuildId.js"),
   ]);
   const { run: sourceRun, fixList, fixItems } = fixture();
   const run = {
@@ -244,7 +245,7 @@ test("actual V4 unpaid request reads the signed preview without loading full res
   });
   const previewProof = await createCustomerPreviewProof(previewPayload, SECRET);
   Object.assign(run, {
-    customer_preview_seal_version: "standard_customer_preview_hmac_v1",
+    customer_preview_seal_version: "standard_customer_preview_hmac_v2_geo_readiness",
     customer_preview_sealed_at: run.authority_sealed_at,
     customer_preview_payload: serializeCustomerPreviewPayload(previewPayload),
     customer_preview_proof: previewProof,
@@ -273,8 +274,8 @@ test("actual V4 unpaid request reads the signed preview without loading full res
     },
   };
 
-  const harnessName = `__customerPreviewV4Harness_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-  const entrySource = readFileSync("base44/functions/getCustomerScanResultV4/entry.ts", "utf8");
+  const harnessName = `__customerPreviewV6Harness_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const entrySource = readFileSync("base44/functions/getCustomerScanResultV6/entry.ts", "utf8");
   const javascript = ts.transpileModule(entrySource, {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
   }).outputText.replace(/^import[\s\S]*?;\s*$/gm, "");
@@ -345,6 +346,10 @@ test("actual V4 unpaid request reads the signed preview without loading full res
     assert.equal("affected_pages" in body.fixItems[0], false);
     assert.equal("raw_finding" in body.fixItems[0], false);
     assert.equal(fullRowReads, 0);
+    assert.equal(body.run.geo_readiness.assessment_status, "assessed");
+    assert.equal(body.run.geo_readiness.sample_pages, 1);
+    assert.equal("observations" in body.run.geo_readiness, false);
+    assert.equal("findings" in body.run.geo_readiness, false);
   } finally {
     delete globalThis[harnessName];
     if (priorDeno === undefined) delete globalThis.Deno;

@@ -7,7 +7,7 @@ const MAX_ID_LENGTH = 160;
 const MAX_HISTORY_MESSAGES = 20;
 const MAX_FIX_ITEMS = 100;
 const CHAT_TIMEOUT_MS = 95_000;
-const REVIEW_ATTESTATION_VERSION = "standard_review_snapshot_hmac_v1";
+const ACCEPTED_AUTHORITY_VERSIONS = new Set(["standard_review_snapshot_hmac_v1", "standard_review_snapshot_hmac_v2_coverage", "standard_review_snapshot_hmac_v3_acceptance_evidence", "standard_review_snapshot_hmac_v4_focused_scope", "standard_review_snapshot_hmac_v5_score_explanation", "standard_review_snapshot_hmac_v6_report_evidence", "standard_review_snapshot_hmac_geo_v1"]);
 import { RELEASE_FINGERPRINT as EXPECTED_RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 const SAFE_UNAVAILABLE_MESSAGE = "Grok is temporarily unavailable. Your FixList conversation is still saved; please try again.";
 
@@ -320,7 +320,7 @@ async function loadConversationHistory(base44: any, conversation: any, user: any
 
 async function assertServerAuthoritySeal({ scan, fixList, fixItems, user }: any) {
   if (
-    cleanText(scan.authority_seal_version, MAX_ID_LENGTH) !== REVIEW_ATTESTATION_VERSION
+    !ACCEPTED_AUTHORITY_VERSIONS.has(cleanText(scan.authority_seal_version, MAX_ID_LENGTH))
     || !cleanText(scan.authority_sealed_at, 80)
     || !/^[a-f0-9]{64}$/.test(cleanText(scan.authority_proof, 64))
   ) {
@@ -333,7 +333,7 @@ async function assertServerAuthoritySeal({ scan, fixList, fixItems, user }: any)
 
   const snapshot = authoritySnapshotFromRows({ scan, fixList, fixItems, userId: user.id });
   if (
-    snapshot.version !== REVIEW_ATTESTATION_VERSION
+    !ACCEPTED_AUTHORITY_VERSIONS.has(snapshot.version)
     || snapshot.release_fingerprint !== EXPECTED_RELEASE_FINGERPRINT
     || cleanId(snapshot.owner_user_id) !== cleanId(user.id)
     || cleanId(snapshot.scan_id) !== cleanId(scan.id)

@@ -6,6 +6,7 @@ from urllib.parse import urljoin, urldefrag, urlparse
 
 from bs4 import BeautifulSoup
 
+from .geo_evidence import VERSION as GEO_EVIDENCE_ADAPTER_VERSION, extract_geo_evidence
 from .location_template_content import detect_location_template_content
 from .market_scope import strip_market_locale_prefix
 from .page_evidence_gate import (
@@ -197,7 +198,7 @@ def extract_page(
 
     h1s = [clean_text(h.get_text(" ")) for h in soup.find_all("h1") if clean_text(h.get_text(" "))]
     images = soup.find_all("img")
-    missing_alt = sum(1 for img in images if not clean_text(img.get("alt", "")))
+    missing_alt = sum(1 for img in images if not img.has_attr("alt"))
     schema_types = extract_schema_types(soup)
     visible_text = clean_text(soup.get_text(" "))
     word_count = len([w for w in visible_text.split(" ") if w])
@@ -305,6 +306,19 @@ def extract_page(
             "access_block_signal": access_block["signal"],
             "access_block_headers": access_block_header_evidence(response_headers),
         })
+
+    # GEO only consumes the same accepted response; no secondary fetch.
+    if page_evidence_class == "usable_html":
+        try:
+            page["geo_evidence"] = extract_geo_evidence(html or "", page)
+        except Exception:
+            # This optional diagnostic must not invalidate accepted SEO evidence.
+            # Keep the rejection explicit without retaining exception/body data.
+            page["geo_evidence"] = {
+                "version": GEO_EVIDENCE_ADAPTER_VERSION, "origin": "raw_html",
+                "accepted": False, "signals": {}, "content_digest": "",
+            }
+            page["geo_evidence_error"] = "extraction_error"
 
     if include_links and 200 <= int(status_code or 0) < 300 and html:
         page["_links"] = extract_links_from_soup(soup, final_url or url)

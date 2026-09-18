@@ -64,18 +64,25 @@ def test_parse_sitemap_locs_uses_xml_entities_and_preserves_cdata():
     ]
 
 
-def test_sitemap_page_urls_normalize_www_to_origin_host():
+def test_sitemap_page_urls_preserve_www_host():
     assert normalize_sitemap_page_url(
         "https://www.centerstreetlending.com/blog/benefits-of-using-bridge-loans-for-real-estate-transactions",
         "https://centerstreetlending.com",
-    ) == "https://centerstreetlending.com/blog/benefits-of-using-bridge-loans-for-real-estate-transactions"
+    ) == "https://www.centerstreetlending.com/blog/benefits-of-using-bridge-loans-for-real-estate-transactions"
 
 
-def test_sitemap_page_urls_normalize_apex_to_www_origin_host():
+def test_sitemap_page_urls_preserve_apex_host():
     assert normalize_sitemap_page_url(
         "https://centerstreetlending.com/loans/fix-and-flip",
         "https://www.centerstreetlending.com",
-    ) == "https://www.centerstreetlending.com/loans/fix-and-flip"
+    ) == "https://centerstreetlending.com/loans/fix-and-flip"
+
+
+def test_sitemap_page_urls_remove_fragment_without_rewriting_identity():
+    assert normalize_sitemap_page_url(
+        "http://www.example.com/X/?Q=1#section",
+        "https://example.com",
+    ) == "http://www.example.com/X/?Q=1"
 
 
 def test_sitemap_page_urls_do_not_cross_unrelated_hosts():

@@ -65,7 +65,9 @@ The artifact contains `profile.json`, `observations.json` and `result.json` when
 those stages complete. It records the worker digest/source, diagnostic source,
 runtime versions and code hashes, UTC/request order, each UA, status, allowlisted
 headers, decoded byte length, challenge classification and redacted redirect/
-meta-refresh destination. No response bodies, cookies, tokens, query strings or
+meta-refresh destination origin. Non-root response-controlled paths are replaced
+with `/[redacted]` because CAPTCHA/session tokens can occur in a path as well as
+in a query. No response bodies, cookies, URL-path tokens, query strings or
 production secret values are retained. An absent completion row is a failed
 diagnostic, not evidence that a site is accessible.
 

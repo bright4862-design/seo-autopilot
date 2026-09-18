@@ -22,12 +22,13 @@ HEADERS = ("sg-captcha", "cf-mitigated", "server", "x-robots-tag", "content-type
 
 
 def target(value):
-    """Record destination without query, fragment or embedded credentials; never fetch it."""
+    """Record origin only; redact token-bearing paths/query/fragment and never fetch it."""
     try:
         parsed = urlsplit(urljoin(ORIGIN + "/", value))
         if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
             return "unsupported_or_redacted"
-        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))[:512]
+        path = "/" if parsed.path in {"", "/"} else "/[redacted]"
+        return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))[:512]
     except ValueError:
         return "invalid"
 
@@ -45,7 +46,7 @@ def evidence(response):
     return {"status_code": response.status_code,
             "headers": {name: response.headers[name][:200] for name in HEADERS if name in response.headers},
             "redirect_target": target(response.headers["location"]) if "location" in response.headers else "",
-            "meta_refresh_target": refresh, "target_query_and_fragment_redacted": True,
+            "meta_refresh_target": refresh, "target_nonroot_path_query_and_fragment_redacted": True,
             "decoded_response_bytes": len(response.content),
             "challenge": detect_access_block(response.status_code, response.headers, response.text)}
 

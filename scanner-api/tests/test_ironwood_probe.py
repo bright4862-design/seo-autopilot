@@ -32,10 +32,21 @@ async def test_comparison_is_sequential_bounded_and_never_follows_challenge(monk
     assert waits == [5] * 5
     requests = [r for r in rows if r["event"] == "response"]
     assert all(r["challenge"]["vendor"] == "siteground" for r in requests)
-    assert all(r["meta_refresh_target"] == "https://ironwoodcrecapital.com/.well-known/sgcaptcha/test" for r in requests)
+    assert all(r["meta_refresh_target"] == "https://ironwoodcrecapital.com/[redacted]" for r in requests)
     assert "secret" not in json.dumps(rows)
     assert "set-cookie" not in json.dumps(rows)
     assert rows[-1]["event"] == "complete"
+
+
+def test_response_controlled_path_tokens_are_never_retained():
+    m = module()
+    row = m.evidence(httpx.Response(202, headers={"location": "https://example.com/session/TOKEN_SECRET?token=QUERY_SECRET", "sg-captcha": "challenge"},
+                                  text='<meta http-equiv="refresh" content="0;url=/.well-known/sgcaptcha/PATH_SECRET">'))
+    assert "SECRET" not in json.dumps(row)
+    assert row["redirect_target"] == "https://example.com/[redacted]"
+    assert row["meta_refresh_target"] == "https://ironwoodcrecapital.com/[redacted]"
+    assert m.target("/") == "https://ironwoodcrecapital.com/"
+    assert row["challenge"]["vendor"] == "siteground"
 
 
 @pytest.mark.asyncio

@@ -71,7 +71,7 @@ function sandbox(t, routes) {
       file = path.join(dir, `body-${index}`);
       fs.writeFileSync(file, body);
     }
-    return `${status}\\t${url}\\t${file}`;
+    return `${status}\t${url}\t${file}`;
   });
   fs.writeFileSync(path.join(dir, "routes"), `${lines.join("\n")}\n`);
   fs.writeFileSync(path.join(dir, "requests.log"), "");

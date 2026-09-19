@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, Iterable
-from urllib.parse import urlsplit
 
 from .active_soft404_orchestration import collect_active_soft404_baselines
 from .coverage_probes import build_soft_404_probe_candidates
@@ -212,6 +211,24 @@ def _aggregate_variant_evidence(rows: list[dict[str, Any]]) -> tuple[str, str]:
     return "pass", "registered_variant_pairs_checked"
 
 
+def _force_unknown_if_unverified_rows(
+    coverage: dict[str, Any],
+    rows: list[dict[str, Any]],
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    """Prevent skipped/robots-denied observations from looking like coverage pass.
+
+    The shared scheduler records an intentional robots skip in ``skipped`` rather
+    than ``not_verified`` because the request was never started. Feature coverage
+    still has to remain unknown whenever the corresponding evidence row is
+    unverified.
+    """
+    if any(_clean(row.get("state"), 100) == "not_verified" for row in rows):
+        return {**coverage, "state": "not_verified", "reason": reason}
+    return coverage
+
+
 async def run_stage2_shared_probe_orchestration(
     *,
     client: Any,
@@ -371,7 +388,17 @@ async def run_stage2_shared_probe_orchestration(
 
     summary = probe_scheduler.summary()
     sitemap_coverage = sitemap_coverage_from_scheduler(summary, registration=sitemap_registration)
+    sitemap_coverage = _force_unknown_if_unverified_rows(
+        sitemap_coverage,
+        sitemap_target_evidence,
+        reason="one_or_more_sitemap_targets_unverified",
+    )
     variant_coverage = url_variant_coverage_from_scheduler(summary, candidates=selected_variants)
+    variant_coverage = _force_unknown_if_unverified_rows(
+        variant_coverage,
+        variant_evidence,
+        reason="one_or_more_url_variants_unverified",
+    )
     if desired_variants > len(selected_variants):
         variant_coverage = {
             **variant_coverage,

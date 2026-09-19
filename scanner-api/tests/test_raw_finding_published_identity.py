@@ -205,6 +205,7 @@ async def test_unsampled_internal_link_probe_verifies_broken_target_without_expa
     assert probe["version"] == "coverage_probe_scheduler_v1_shared_request_budget"
     assert probe["request_budget"]["requests_consumed"] == 1
     assert probe["purposes"]["internal_link"]["eligible"] == 1
+    assert probe["purposes"]["internal_link"]["attempted"] == 1
     assert probe["purposes"]["internal_link"]["completed"] == 1
     [observation] = [
         row for row in probe["observations"]

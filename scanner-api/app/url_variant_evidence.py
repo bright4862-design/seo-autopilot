@@ -85,12 +85,57 @@ def _complete_usable_html(page: Any) -> bool:
     return True
 
 
+def _is_noindex(page: Any) -> bool:
+    if not isinstance(page, dict):
+        return False
+    if page.get("noindex") is True:
+        return True
+    state = _clean(page.get("indexability_state"), 120).lower()
+    robots = _clean(page.get("robots_indexability_status"), 120).lower()
+    return robots == "noindex" or state == "noindex" or "noindex" in state
+
+
+def _raw_url_parts(url: str) -> tuple[str, str, str]:
+    """Return raw authority, path and query/fragment suffix without serialization.
+
+    `urlsplit` is fine for scope validation, but its serializer can erase the
+    distinction between `/page` and `/page?`. B16 evidence must retain that exact
+    observed spelling, so path mutations splice the original string instead.
+    """
+    value = _clean(url)
+    scheme_at = value.find("://")
+    if scheme_at < 0:
+        return "", "", ""
+    authority_start = scheme_at + 3
+    delimiter_positions = [
+        pos for marker in ("/", "?", "#")
+        if (pos := value.find(marker, authority_start)) >= 0
+    ]
+    first = min(delimiter_positions) if delimiter_positions else len(value)
+    authority = value[:first]
+    suffix_at = min(
+        [pos for marker in ("?", "#") if (pos := value.find(marker, first)) >= 0]
+        or [len(value)]
+    )
+    path = value[first:suffix_at] if first < suffix_at else ""
+    suffix = value[suffix_at:]
+    return authority, path, suffix
+
+
+def _replace_path_preserving_suffix(url: str, path: str) -> str:
+    authority, _, suffix = _raw_url_parts(url)
+    if not authority:
+        return ""
+    clean_path = path if path.startswith("/") else "/" + path
+    return f"{authority}{clean_path}{suffix}"
+
+
 def _toggle_trailing_slash(url: str) -> str:
     parsed = urlsplit(url)
     if not parsed.scheme or not parsed.netloc or parsed.path in {"", "/"}:
         return ""
     path = parsed.path[:-1] if parsed.path.endswith("/") else parsed.path + "/"
-    return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, parsed.fragment))
+    return _replace_path_preserving_suffix(url, path)
 
 
 def _toggle_first_path_alpha_case(url: str) -> str:
@@ -109,7 +154,7 @@ def _toggle_first_path_alpha_case(url: str) -> str:
             continue
         if char.isalpha():
             chars[index] = char.upper() if char.islower() else char.lower()
-            return urlunsplit((parsed.scheme, parsed.netloc, "".join(chars), parsed.query, parsed.fragment))
+            return _replace_path_preserving_suffix(url, "".join(chars))
     return ""
 
 
@@ -118,6 +163,8 @@ def _replace_origin(url: str, alias_origin: str) -> str:
     alias = urlsplit(alias_origin)
     if alias.scheme not in {"http", "https"} or not alias.netloc:
         return ""
+    # Alias origins are caller-verified scope evidence. Preserve the source path
+    # and raw query ordering; this branch does not infer aliases itself.
     return urlunsplit((alias.scheme, alias.netloc, source.path, source.query, source.fragment))
 
 
@@ -137,6 +184,10 @@ def build_url_variant_candidates(
     alias origin; this module never authorizes a sibling host. Meaningful query
     candidates must be supplied explicitly from observed/reviewed evidence, so
     arbitrary parameter mutations are never invented.
+
+    Every returned row reports whether the candidate universe was truncated.
+    That lets downstream coverage remain unknown instead of describing a bounded
+    sample as exhaustive evidence.
     """
     base_origin = _origin_key(origin)
     prefix = _scope_prefix(scope_prefix)
@@ -146,7 +197,7 @@ def build_url_variant_candidates(
     seen: set[tuple[str, str, str]] = set()
 
     def add(source_url: str, probe_url: str, kind: str, *, synthetic: bool, verified_alias: bool = False) -> None:
-        if not source_url or not probe_url or source_url == probe_url or len(rows) >= limit:
+        if not source_url or not probe_url or source_url == probe_url:
             return
         key = (source_url, probe_url, kind)
         if key in seen:
@@ -162,8 +213,6 @@ def build_url_variant_candidates(
         })
 
     for source_url in sorted({_clean(value) for value in observed_urls if _clean(value)}):
-        if len(rows) >= limit:
-            break
         parsed = urlsplit(source_url)
         if _origin_key(source_url) != base_origin or not _path_within_scope(parsed.path, prefix):
             continue
@@ -180,8 +229,6 @@ def build_url_variant_candidates(
                 )
 
     for item in meaningful_parameter_variants or []:
-        if len(rows) >= limit:
-            break
         if not isinstance(item, dict):
             continue
         source_url = _clean(item.get("source_url"))
@@ -196,7 +243,13 @@ def build_url_variant_candidates(
             continue
         add(source_url, probe_url, "meaningful_parameter", synthetic=False)
 
-    return rows[:limit]
+    eligible = len(rows)
+    truncated = eligible > limit
+    selected = rows[:limit]
+    for row in selected:
+        row["eligible_candidate_count"] = eligible
+        row["candidate_universe_truncated"] = truncated
+    return selected
 
 
 def register_url_variant_candidates(scheduler, candidates: Iterable[dict[str, Any]], *, scope_prefix: str = "/") -> int:
@@ -242,7 +295,9 @@ def classify_url_variant(source_page: Any, variant_page: Any, candidate: dict[st
 
     Redirect destination meaning belongs to B08. A synthetic probe may show that
     a candidate normalizes to the assessed source, but ``published_redirect_claim``
-    remains false by construction.
+    remains false by construction. An independently live route is evidence that
+    a variant exists, not proof that it duplicates the source; without canonical,
+    redirect or separate content-equivalence evidence it therefore stays unknown.
     """
     source_url = _clean(candidate.get("source_url"))
     probe_url = _clean(candidate.get("probe_url"))
@@ -289,18 +344,27 @@ def classify_url_variant(source_page: Any, variant_page: Any, candidate: dict[st
     canonical = _canonical_url(variant_page)
     if canonical and canonical in {source_url, source_final}:
         return {**base, "state": "pass", "reason": "variant_canonicalized_to_source"}
+    if _is_noindex(variant_page):
+        return {**base, "reason": "live_noindex_variant_requires_policy_judgment"}
     if probe_url != source_url and variant_final != source_final:
-        return {**base, "state": "fail", "reason": "distinct_live_variant"}
+        return {**base, "reason": "distinct_live_variant_requires_equivalence_evidence"}
     return {**base, "state": "pass", "reason": "same_effective_route"}
 
 
-def url_variant_coverage_from_scheduler(summary: Any) -> dict[str, Any]:
+def url_variant_coverage_from_scheduler(summary: Any, *, candidates: Iterable[dict[str, Any]] | None = None) -> dict[str, Any]:
+    candidate_rows = [row for row in (candidates or []) if isinstance(row, dict)]
+    candidate_universe_truncated = any(bool(row.get("candidate_universe_truncated")) for row in candidate_rows)
+    eligible_candidate_count = max(
+        [int(row.get("eligible_candidate_count") or 0) for row in candidate_rows] or [0]
+    )
     if not isinstance(summary, dict):
         return {
             "version": URL_VARIANT_EVIDENCE_VERSION,
             "state": "not_verified",
             "reason": "scheduler_summary_unavailable",
             "eligible": 0,
+            "eligible_candidate_count": eligible_candidate_count,
+            "candidate_universe_truncated": candidate_universe_truncated,
             "completed": 0,
             "exhausted": 0,
         }
@@ -311,7 +375,9 @@ def url_variant_coverage_from_scheduler(summary: Any) -> dict[str, Any]:
     skipped = max(0, int(stats.get("skipped") or 0))
     exhausted = max(0, int(stats.get("exhausted") or 0))
     not_verified = max(0, int(stats.get("not_verified") or 0))
-    if exhausted or budget.get("budget_exhausted") or budget.get("deadline_exhausted"):
+    if candidate_universe_truncated:
+        state, reason = "not_verified", "candidate_universe_truncated"
+    elif exhausted or budget.get("budget_exhausted") or budget.get("deadline_exhausted"):
         state, reason = "not_verified", "shared_probe_budget_or_deadline_exhausted"
     elif eligible and completed + skipped < eligible:
         state, reason = "not_verified", "eligible_url_variants_not_fully_checked"
@@ -324,6 +390,8 @@ def url_variant_coverage_from_scheduler(summary: Any) -> dict[str, Any]:
         "state": state,
         "reason": reason,
         "eligible": eligible,
+        "eligible_candidate_count": eligible_candidate_count,
+        "candidate_universe_truncated": candidate_universe_truncated,
         "attempted": max(0, int(stats.get("attempted") or 0)),
         "completed": completed,
         "not_verified": not_verified,

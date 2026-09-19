@@ -25,6 +25,7 @@ This lane owns only feature-specific B09 sitemap-integrity and B16 URL-variant e
 `scanner-api/app/url_variant_evidence.py`
 
 - Builds bounded slash and case variants while preserving the source URL's raw query ordering, reserved-escape spelling and the otherwise-easy-to-lose empty query delimiter on path mutations.
+- Verified-origin alias variants preserve the same raw route spelling, including reserved escapes, raw query order and an empty query delimiter.
 - Does **not** generate scheme/apex-www variants unless the caller supplies a previously verified alias origin. This preserves the no-sibling-host expansion boundary.
 - Meaningful-parameter variants must be explicitly supplied as observed/reviewed source→variant pairs; the helper does not invent arbitrary query mutations.
 - Registers all variant probes into the existing shared scheduler under purpose `url_variant`; it does not own another request pool.
@@ -32,9 +33,9 @@ This lane owns only feature-specific B09 sitemap-integrity and B16 URL-variant e
 - Canonicalization back to the source passes. Challenge/access/request/incomplete evidence remains unknown. An independently live case/query route is **not** automatically labelled a duplicate: without redirect/canonical or separate equivalence evidence it remains `not_verified`, and explicit noindex remains a policy/judgment state rather than a manufactured duplicate defect.
 - Candidate generation records `eligible_candidate_count` and `candidate_universe_truncated`; partial/exhausted/truncated shared-scheduler coverage remains `not_verified`.
 
-## Regression file
+## Regression files
 
-`scanner-api/tests/test_stage2_coverage_integrity.py`
+`scanner-api/tests/test_stage2_coverage_integrity.py` and `scanner-api/tests/test_stage2_url_variant_exact_identity.py`.
 
 Coverage includes:
 
@@ -45,6 +46,7 @@ Coverage includes:
 - challenge/429/incomplete target unknown states;
 - root/source diagnostic fail-closed behavior and exact source-level missing-vs-access-limited reasons;
 - exact case/slash/query/reserved-escape preservation, including an empty query delimiter;
+- verified-origin alias variants preserving reserved escapes, raw query order and an empty query delimiter;
 - no implicit apex/www or scheme expansion;
 - explicit verified alias generation;
 - explicit meaningful-parameter variants;
@@ -59,12 +61,13 @@ Coverage includes:
 
 ## Review-hardening findings corrected in this lane
 
-A fresh lane review found two evidence-truthfulness risks after the first green implementation checkpoint:
+A fresh lane review found evidence-truthfulness risks after the first green implementation checkpoint:
 
 1. The scheduler can complete every **selected** probe even when the B09/B16 candidate universe was intentionally capped. The feature helpers now carry universe-size/truncation evidence and refuse to describe that bounded subset as exhaustive coverage.
 2. A distinct live 200 URL is evidence that another route exists, not proof that it duplicates the assessed source. B16 now requires redirect/canonical or later independent equivalence evidence before a duplicate-like defect can be promoted; independently live routes remain unknown meanwhile.
+3. URL mutation through a generic serializer could lose exact route spelling such as a trailing empty `?`. Path and verified-origin alias mutations now retain the raw route suffix so evidence identity stays exact.
 
-The review also added raw empty-query-delimiter preservation to path-variant tests and exact sitemap-source failure attribution for future producer enrichment.
+The review also added exact sitemap-source failure attribution for future producer enrichment.
 
 CodeRabbit was manually requested on draft PR #310, but its service reported that the account/repository review request was rate-limited at this checkpoint. That is not treated as an independent-review pass.
 
@@ -82,15 +85,17 @@ These are intentionally left to the serialized Stage-2 integration owner because
 
 ## Verification
 
-Exact code/test head before this documentation update: `6e8cecf9edb06b0385b55079c31cc8d6aa673d5c`.
+Exact code/test head before this documentation update: `88bfe16a41bf9af9768ca860f25457dd5bdfa3bf`.
 
-FixList CI run: https://github.com/bright4862-design/seo-autopilot/actions/runs/35462510437 — **success**.
+FixList CI run: https://github.com/bright4862-design/seo-autopilot/actions/runs/35462691396 — **success**.
 
 Fresh results on that exact code head:
 
+- immutable checkout verified exact SHA `88bfe16a41bf9af9768ca860f25457dd5bdfa3bf`;
 - root scanner regressions: **115 passed**;
-- scanner-api: **1,844 passed / 18 intentional skips**;
+- scanner-api: **1,846 passed / 18 intentional skips**;
 - `test_stage2_coverage_integrity.py`: **24 passed**;
+- `test_stage2_url_variant_exact_identity.py`: **2 passed**;
 - lint: passed;
 - typecheck: passed;
 - generated release contracts: passed;

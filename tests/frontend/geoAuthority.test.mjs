@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';
 import {webcrypto} from 'node:crypto';
-import {validateGeoReadiness,emptyGeoReadiness,validProducerGeoReadiness,GEO_SNAPSHOT_VERSION} from '../../base44/functions/persistDurableScanAuthorityV6/geoReadiness.js';
-import {buildAuthoritySnapshot,buildPersistedAuthoritySnapshot} from '../../base44/functions/persistDurableScanAuthorityV6/authoritySnapshot.js';
-import {authorityRowsFromSnapshot} from '../../base44/functions/persistDurableScanAuthorityV6/authorityRows.js';
-import {authoritySnapshotFromRows,buildCustomerProjection,createAuthoritySeal,verifyAuthoritySeal} from '../../base44/functions/getCustomerScanResultV6/projection.js';
+import {validateGeoReadiness,emptyGeoReadiness,validProducerGeoReadiness,GEO_SNAPSHOT_VERSION} from '../../base44/functions/persistDurableScanAuthorityV7/geoReadiness.js';
+import {buildAuthoritySnapshot,buildPersistedAuthoritySnapshot} from '../../base44/functions/persistDurableScanAuthorityV7/authoritySnapshot.js';
+import {authorityRowsFromSnapshot} from '../../base44/functions/persistDurableScanAuthorityV7/authorityRows.js';
+import {authoritySnapshotFromRows,buildCustomerProjection,createAuthoritySeal,verifyAuthoritySeal} from '../../base44/functions/getCustomerScanResultV7/projection.js';
 import {authoritySnapshotFromRows as grokSnapshot} from '../../base44/functions/grokChat/authoritySnapshot.js';
-import * as writerPreview from '../../base44/functions/persistDurableScanAuthorityV6/customerPreviewSeal.js';
-import * as readerPreview from '../../base44/functions/getCustomerScanResultV6/customerPreviewSeal.js';
+import * as writerPreview from '../../base44/functions/persistDurableScanAuthorityV7/customerPreviewSeal.js';
+import * as readerPreview from '../../base44/functions/getCustomerScanResultV7/customerPreviewSeal.js';
 const fixtures=JSON.parse(fs.readFileSync('tests/fixtures/geo/runtime.json','utf8'));
 const copy=v=>structuredClone(v);
 const secret='geo-test-secret';
@@ -55,8 +55,8 @@ test('paid full GEO and signed/free summary preserve entitlement without nested 
  assert.equal('geo_readiness' in buildCustomerProjection({...data,fullAccess:false,authorityVerified:false}).run,false);
 });
 test('package-local GEO validators remain identical',()=>{
- const expected=fs.readFileSync('base44/functions/persistDurableScanAuthorityV6/geoReadiness.js','utf8');
- for(const prefix of ['persistDurableScanAuthority','getCustomerScanResult'])for(const suffix of ['', 'V2','V3','V4','V5','V6'])assert.equal(fs.readFileSync(`base44/functions/${prefix}${suffix}/geoReadiness.js`,'utf8'),expected);
+ const expected=fs.readFileSync('base44/functions/persistDurableScanAuthorityV7/geoReadiness.js','utf8');
+ for(const prefix of ['persistDurableScanAuthority','getCustomerScanResult'])for(const suffix of ['', 'V2','V3','V4','V5','V6','V7'])assert.equal(fs.readFileSync(`base44/functions/${prefix}${suffix}/geoReadiness.js`,'utf8'),expected);
  assert.equal(fs.readFileSync('base44/functions/grokChat/geoReadiness.js','utf8'),expected);
 });
 test('frozen pre-GEO v1-v6 HMAC bytes survive injection and detect historical row tampering',async()=>{
@@ -103,7 +103,7 @@ test('missing persisted GEO and producer sample omission fail closed',()=>{
 test('schema keeps GEO server-owned and every customer reader accepts the internal GEO version',()=>{
  const schema=JSON.parse(fs.readFileSync('base44/entities/ScanRun.jsonc','utf8'));
  assert.equal(schema.properties.geo_readiness.type,'object');assert.equal(schema.properties.geo_readiness.rls.write.user_condition.role,'admin');assert.equal(schema.rls.read.user_condition.role,'admin');
- for(const suffix of ['', 'V2','V3','V4','V5','V6']) {
+ for(const suffix of ['', 'V2','V3','V4','V5','V6','V7']) {
   const entry=fs.readFileSync(`base44/functions/getCustomerScanResult${suffix}/entry.ts`,'utf8');
   assert.match(entry,/const ACCEPTED_AUTHORITY_VERSIONS = new Set\(\[[\s\S]*?"standard_review_snapshot_hmac_geo_v1"/);
   const compatibility=fs.readFileSync(`base44/functions/getCustomerScanResult${suffix}/releaseCompatibility.js`,'utf8');assert.match(compatibility,/9e4901da590017e1/);

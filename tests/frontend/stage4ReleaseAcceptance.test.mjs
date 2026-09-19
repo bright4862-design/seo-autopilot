@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   EXPECTED_SCANNER_FUNCTIONS,
+  EXPECTED_SCANNER_ROUTE_GENERATION,
+  SCANNER_RUNTIME_ROLES,
   STAGE4_RELEASE_RECORD_VERSION,
   evaluateStage4ReleaseAcceptance,
 } from "../../scripts/stage4ReleaseAcceptance.mjs";
@@ -27,6 +29,7 @@ function validRecord(overrides = {}) {
     },
     schema: { named_schema_parity: true, evidence_reference: RECEIPT },
     deployment: {
+      route_generation: EXPECTED_SCANNER_ROUTE_GENERATION,
       site: {
         verified: true,
         source_sha: SHA,
@@ -110,6 +113,15 @@ function validRecord(overrides = {}) {
   return { ...record, ...overrides };
 }
 
+test("source release manifest supplies all six scanner roles at one route generation", () => {
+  assert.equal(EXPECTED_SCANNER_FUNCTIONS.length, SCANNER_RUNTIME_ROLES.length);
+  assert.equal(SCANNER_RUNTIME_ROLES.length, 6);
+  assert.match(EXPECTED_SCANNER_ROUTE_GENERATION, /^V\d+$/);
+  for (const role of SCANNER_RUNTIME_ROLES) {
+    assert.ok(EXPECTED_SCANNER_FUNCTIONS.includes(`${role}${EXPECTED_SCANNER_ROUTE_GENERATION}`));
+  }
+});
+
 test("test fixtures can exercise the complete shape but can never establish live acceptance", () => {
   const result = evaluateStage4ReleaseAcceptance(validRecord({ test_fixture: true }));
   assert.equal(result.status, "not_assessed");
@@ -124,6 +136,14 @@ test("all six scanner runtime identities are explicit release gates", () => {
   const result = evaluateStage4ReleaseAcceptance(record);
   assert.equal(result.status, "failed");
   assert.ok(result.failures.some((value) => value.includes("missing runtime identity")));
+});
+
+test("deployed route generation must match the source release manifest", () => {
+  const record = validRecord();
+  record.deployment.route_generation = "V999";
+  const result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.status, "failed");
+  assert.ok(result.failures.some((value) => value.includes("route generation")));
 });
 
 test("site, CI, function and worker source must all match the exact merged SHA", () => {

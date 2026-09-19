@@ -7,7 +7,7 @@ const MAX_ID_LENGTH = 160;
 const MAX_HISTORY_MESSAGES = 20;
 const MAX_FIX_ITEMS = 100;
 const CHAT_TIMEOUT_MS = 95_000;
-const ACCEPTED_AUTHORITY_VERSIONS = new Set(["standard_review_snapshot_hmac_v1", "standard_review_snapshot_hmac_v2_coverage", "standard_review_snapshot_hmac_v3_acceptance_evidence", "standard_review_snapshot_hmac_v4_focused_scope", "standard_review_snapshot_hmac_v5_score_explanation", "standard_review_snapshot_hmac_v6_report_evidence", "standard_review_snapshot_hmac_geo_v1"]);
+const ACCEPTED_AUTHORITY_VERSIONS = new Set(["standard_review_snapshot_hmac_v1", "standard_review_snapshot_hmac_v2_coverage", "standard_review_snapshot_hmac_v3_acceptance_evidence", "standard_review_snapshot_hmac_v4_focused_scope", "standard_review_snapshot_hmac_v5_score_explanation", "standard_review_snapshot_hmac_v6_report_evidence", "standard_review_snapshot_hmac_geo_v1", "standard_review_snapshot_hmac_identity_v1"]);
 import { RELEASE_FINGERPRINT as EXPECTED_RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 const SAFE_UNAVAILABLE_MESSAGE = "Grok is temporarily unavailable. Your FixList conversation is still saved; please try again.";
 

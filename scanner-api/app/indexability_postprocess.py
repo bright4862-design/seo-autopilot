@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+from .search_applicability import filter_search_findings, search_applicability
+from .metadata_title_evidence import relative_evidence_url
+from .repair_coverage import repair_evidence_key_function, scan_evidence_origin
 
 from .indexability_quality import (
     annotate_indexability_quality,
@@ -120,7 +123,7 @@ def group_indexability_quality_findings(findings: list[dict]) -> list[dict]:
     return output
 
 
-def apply_indexability_quality_to_result(result: dict) -> dict:
+def apply_indexability_quality_to_result(result: dict, *, identity_version: str = "") -> dict:
     """Apply bounded indexability and navigation evidence to a scan response.
 
     This runs at the scanner API boundary after bounded trust-page enrichment. It
@@ -133,10 +136,13 @@ def apply_indexability_quality_to_result(result: dict) -> dict:
     pages = list(result.get("crawled_pages") or result.get("pages") or [])
     if not pages:
         return result
+    identity = {"scan_origin": scan_evidence_origin(result) if identity_version else "", "identity_version": identity_version}
+    key_for = repair_evidence_key_function(legacy_key=str, **identity)
 
     for page in pages:
         annotate_indexability_quality(page)
         annotate_navigation_indexability(page)
+        page["search_applicability"] = search_applicability(page)
 
     # Import lazily so the quality modules remain independent of scanner finding
     # construction and do not create an import cycle during app startup.
@@ -149,7 +155,7 @@ def apply_indexability_quality_to_result(result: dict) -> dict:
     ]
 
     soft_404_paths = {
-        _page_path(page)
+        (relative_evidence_url(page, **identity) if identity_version else _page_path(page))
         for page in pages
         if page.get("soft_404_suspected") and not page.get("trust_discovery_probe")
     }
@@ -157,10 +163,12 @@ def apply_indexability_quality_to_result(result: dict) -> dict:
         item
         for item in existing_raw
         if not (
-            str(item.get("page_url") or "") in soft_404_paths
+            key_for(item.get("page_url") or "") in soft_404_paths
             and str(item.get("rule") or "") in SOFT_404_NOISE_RULES
         )
     ]
+
+    existing_raw = filter_search_findings(existing_raw, pages)
 
     quality_raw: list[dict] = []
     for page in pages:
@@ -168,9 +176,9 @@ def apply_indexability_quality_to_result(result: dict) -> dict:
         # part of the representative SEO sample and should not generate new tasks.
         if page.get("trust_discovery_probe"):
             continue
-        quality_raw.extend(build_indexability_quality_findings(page, create_finding))
+        quality_raw.extend(build_indexability_quality_findings(page, create_finding, **identity))
 
-    navigation_raw = build_navigation_indexability_findings(pages, create_finding)
+    navigation_raw = build_navigation_indexability_findings(pages, create_finding, **identity)
     raw_findings = existing_raw + quality_raw + navigation_raw
     grouped = (
         group_findings(existing_raw)
@@ -178,8 +186,8 @@ def apply_indexability_quality_to_result(result: dict) -> dict:
         + navigation_raw
     )
     health_score = calculate_health_score(pages, grouped)
-    indexability_evidence = summarize_indexability_quality(pages)
-    navigation_evidence = summarize_navigation_indexability(pages)
+    indexability_evidence = summarize_indexability_quality(pages, **identity)
+    navigation_evidence = summarize_navigation_indexability(pages, **identity)
 
     result["pages"] = pages
     result["crawled_pages"] = pages

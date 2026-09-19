@@ -515,7 +515,7 @@ async def test_durable_worker_completion_wall_timeout_terminalizes_exact_attempt
     monkeypatch.setattr(main, "read_scan_run", read)
     monkeypatch.setattr(main, "mark_scan_started", started)
     monkeypatch.setattr(main, "run_scan", quick_scan)
-    monkeypatch.setattr(main, "apply_indexability_quality_to_result", lambda value: value)
+    monkeypatch.setattr(main, "apply_indexability_quality_to_result", lambda value, **_kwargs: value)
     monkeypatch.setattr(main, "apply_render_evidence_quality", lambda value: value)
     monkeypatch.setattr(main, "enforce_scan_response_page_budget", lambda value, _mode: value)
     monkeypatch.setattr(main, "live_revision", lambda: {"fingerprint": "test"})

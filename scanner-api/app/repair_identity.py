@@ -5,6 +5,8 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
+from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION, repair_evidence_key_function
+
 REPAIR_IDENTITY_VERSION = "repair_identity_v2_technical"
 REPAIR_VERIFICATION_VERSION = "repair_verification_v3_contract_comparable"
 
@@ -65,15 +67,16 @@ def _path(value: Any) -> str:
         return raw.rstrip("/") or "/"
 
 
-def _affected_pages(fix: dict[str, Any]) -> list[str]:
+def _affected_pages(fix: dict[str, Any], *, scan_origin: str = "", identity_version: str = "") -> list[str]:
     values = fix.get("affected_pages") if isinstance(fix.get("affected_pages"), list) else []
     if not values:
         fallback = fix.get("page_url") or fix.get("representative_page_url")
         values = [fallback] if fallback else []
     output: list[str] = []
     seen: set[str] = set()
+    key_for = repair_evidence_key_function(legacy_key=_path, scan_origin=scan_origin, identity_version=identity_version)
     for value in values:
-        key = _path(value)
+        key = key_for(value)
         if key and key not in seen:
             seen.add(key)
             output.append(key)
@@ -168,16 +171,17 @@ def annotate_repair_identity(fix: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _page_key(page: dict[str, Any]) -> str:
-    return _path(page.get("url") or page.get("final_url") or page.get("page_url") or page.get("path"))
+def _page_key(page: dict[str, Any], *, scan_origin: str = "", identity_version: str = "") -> str:
+    key_for = repair_evidence_key_function(legacy_key=_path, scan_origin=scan_origin, identity_version=identity_version)
+    return key_for(page.get("url") or page.get("final_url") or page.get("page_url") or page.get("path"))
 
 
-def _page_lookup(pages: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _page_lookup(pages: list[dict[str, Any]], *, scan_origin: str = "", identity_version: str = "") -> dict[str, dict[str, Any]]:
     lookup: dict[str, dict[str, Any]] = {}
     for page in pages or []:
         if not isinstance(page, dict):
             continue
-        key = _page_key(page)
+        key = _page_key(page, scan_origin=scan_origin, identity_version=identity_version)
         if key:
             lookup[key] = page
     return lookup
@@ -226,8 +230,15 @@ def verification_contract_comparability(
     """
     previous_rule = _clean(previous_fix.get("rule_definition_version"))
     previous_profile = _clean(previous_fix.get("comparison_profile_version"))
+    previous_urls = _clean(previous_fix.get("evidence_url_identity_version"))
+    current_urls = _clean((current_contract or {}).get("evidence_url_identity_version")) if isinstance(current_contract, dict) else ""
+    supported_urls = {"", PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION}
+    if previous_urls not in supported_urls or current_urls not in supported_urls or previous_urls != current_urls:
+        return "incomparable", "Evidence URL identity rules differ or are unsupported across these scans."
 
     if not previous_rule and not previous_profile:
+        if previous_urls:
+            return "compatible", "Published evidence URL identity rules match across these scans."
         return "legacy_compatible", "No versioned comparison contract was stored on the historical repair."
 
     if not isinstance(current_contract, dict):
@@ -286,6 +297,9 @@ def compare_repair_runs(
     current_fixes: list[dict[str, Any]],
     current_pages: list[dict[str, Any]],
     current_contract: dict[str, Any] | None = None,
+    *,
+    previous_scan_origin: str = "",
+    scan_origin: str = "",
 ) -> dict[str, Any]:
     """Classify a previous repair against a later crawl without false `fixed` claims.
 
@@ -296,7 +310,15 @@ def compare_repair_runs(
     or no-longer-comparable evidence becomes `could_not_verify`.
     """
     previous_identity = build_repair_identity(previous_fix)
-    previous_affected = _affected_pages(previous_fix)
+    previous_version = _clean(previous_fix.get("evidence_url_identity_version"))
+    current_version = _clean((current_contract or {}).get("evidence_url_identity_version")) if isinstance(current_contract, dict) else ""
+    # Unknown versions are rejected by the comparison gate below, never used
+    # to opt a historical repair into current semantics.
+    previous_context = {"scan_origin": previous_scan_origin,
+                        "identity_version": previous_version if previous_version == PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION else ""}
+    current_context = {"scan_origin": scan_origin,
+                       "identity_version": current_version if current_version == PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION else ""}
+    previous_affected = _affected_pages(previous_fix, **previous_context)
 
     if not previous_identity["stable"]:
         return {
@@ -328,7 +350,7 @@ def compare_repair_runs(
             "version": REPAIR_VERIFICATION_VERSION,
             "state": state,
             "reason": "The same stable repair fingerprint is present in the latest crawl.",
-            "rechecked_pages": len(set(_affected_pages(matching_current[0]))),
+            "rechecked_pages": len(set(_affected_pages(matching_current[0], **current_context))),
             "eligible_rechecked_pages": 0,
             "previous_affected_pages": len(previous_affected),
         }
@@ -345,7 +367,21 @@ def compare_repair_runs(
             "comparison_contract_state": contract_state,
         }
 
-    lookup = _page_lookup(current_pages)
+    if previous_version == PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION:
+        raw_affected = previous_fix.get("affected_pages") or [previous_fix.get("page_url") or previous_fix.get("representative_page_url")]
+        key_for = repair_evidence_key_function(**previous_context)
+        if any(not key_for(value) for value in raw_affected):
+            return {
+                "version": REPAIR_VERIFICATION_VERSION,
+                "state": "could_not_verify",
+                "reason": "One or more previous URLs cannot be resolved against their original scan origin.",
+                "rechecked_pages": 0,
+                "eligible_rechecked_pages": 0,
+                "previous_affected_pages": len(raw_affected),
+                "comparison_contract_state": contract_state,
+            }
+
+    lookup = _page_lookup(current_pages, **current_context)
     previous_set = set(previous_affected)
     observed = previous_set & set(lookup)
     if not previous_set or not previous_set.issubset(lookup):

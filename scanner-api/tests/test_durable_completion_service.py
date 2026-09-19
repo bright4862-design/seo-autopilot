@@ -105,6 +105,10 @@ def test_review_changes_the_completion_proof():
 def test_production_shaped_funbooker_review_reaches_current_authority_predicate_with_v12():
     """Exercise the real Python review/envelope before the deployed JS predicate."""
     result = json.loads((REPO_ROOT / "tests/fixtures/funbooker.scan.json").read_text())
+    # The historical synthetic fixture omitted request scope. The current
+    # durable caller supplies it; never infer it from a representative page.
+    result["website_url"] = "https://www.funbooker.example/"
+    result["crawl_scope"] = {"requested_origin": "https://www.funbooker.example"}
     review = build_local_review(result)
     scan = {
         "id": "diagnostic-funbooker",
@@ -134,7 +138,7 @@ def test_production_shaped_funbooker_review_reaches_current_authority_predicate_
       console.log(JSON.stringify({
         actual: review.archetype_classifier_version,
         expected: RELEASE_COMPONENT_VERSIONS.archetype_classifier_version,
-        firstFailed: firstFailedAuthorityPredicate(scan, review),
+        firstFailed: firstFailedAuthorityPredicate(scan, review, {identityVersion: "evidence_url_identity_v2_published_route"}),
       }));
     """
     completed = subprocess.run(

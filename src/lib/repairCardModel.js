@@ -12,7 +12,7 @@
  * better. Where the backend cannot support a claim, the claim is omitted.
  */
 import { customerCopyForFix } from "./fixVocabulary.js";
-import { evidenceLink } from "./evidenceUrl.js";
+import { evidenceLink, evidenceIdentityOptions } from "./evidenceUrl.js";
 import { repairSuggestion, repairTypeOf } from "./repairSuggestions.js";
 
 const clean = (value) => (typeof value === "string" ? value.trim() : "");
@@ -206,7 +206,7 @@ export function customerEvidenceGroupRows(card = {}, siteOrigin = "") {
       locale,
       count: Math.max(Number(group?.count) || 0, affectedPages.length),
       representativePage,
-      representativeLink: evidenceLink(representativePage, siteOrigin),
+      representativeLink: evidenceLink(representativePage, siteOrigin, evidenceIdentityOptions(card)),
       affectedPages,
     };
   });
@@ -436,6 +436,7 @@ export function buildRepairCard(item = {}) {
     who: clean(suggestion.role) || (item.needsHelp ? "Developer" : "You"),
     effort: clean(suggestion.effortDetail) || clean(suggestion.effortLabel),
     evidence: {
+      ...(evidenceIdentityOptions(item).identityVersion ? evidenceIdentityOptions(item) : {}),
       affectedPages: affected,
       pageCount: countOf(item),
       familyBreakdown: breakdownOf(item),
@@ -500,8 +501,8 @@ export function customerRedirectEvidenceRows(card = {}, siteOrigin = "") {
     const classification = lower(value?.classification);
     const needsVerification = classification === "redirect_destination_unverified" || Boolean(clean(value?.fetch_error));
     return {
-      requested: evidenceLink(value?.requested_url, siteOrigin),
-      destination: evidenceLink(value?.final_url, siteOrigin),
+      requested: evidenceLink(value?.requested_url, siteOrigin, evidenceIdentityOptions(card)),
+      destination: evidenceLink(value?.final_url, siteOrigin, evidenceIdentityOptions(card)),
       statusLabel: observedStatusLabel(value?.final_status),
       classificationLabel: REDIRECT_CLASSIFICATION_LABELS[classification] || "Observed redirect",
       verificationLabel: needsVerification ? "Needs verification" : "Verified response",
@@ -521,6 +522,7 @@ function observationValueLabel(value = {}) {
     return `H1 count observed: ${Number(value.h1_count) || 0}`;
   }
   if (clean(value.title)) return `Title observed: ${clean(value.title)}`;
+  if (clean(value.excerpt)) return clean(value.excerpt);
   return "Issue observed on this page";
 }
 
@@ -529,7 +531,7 @@ export function customerRepairObservationRows(card = {}, siteOrigin = "") {
     ? card.evidence.repairObservationSamples
     : [];
   return values.slice(0, 20).map((value) => ({
-    page: evidenceLink(value?.page_url, siteOrigin),
+    page: evidenceLink(value?.page_url, siteOrigin, evidenceIdentityOptions(card)),
     statusLabel: observedStatusLabel(value?.status).replace("No verified final status", "Status not recorded"),
     valueLabel: observationValueLabel(value),
   }));

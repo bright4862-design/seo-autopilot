@@ -109,7 +109,7 @@ test("fresh Base44 routes preserve canonical source except the bounded signed-pr
     }
     if (canonical === "getCustomerScanResult") {
       assert.match(source(path.join(activeDir, "projection.js")), /"preview_example_page"/);
-      assert.match(source(path.join(activeDir, "releaseCompatibility.js")), /customer_result_reader_v8_geo_readiness/);
+      assert.match(source(path.join(activeDir, "releaseCompatibility.js")), /customer_result_reader_v9_published_route_identity/);
     }
   }
 });

@@ -147,9 +147,9 @@ test("no rendered suggestion field is ever undefined, null, or a non-string", ()
 });
 
 test("every suggestion carries the library version so wording can be compared over time", () => {
-  assert.equal(REPAIR_SUGGESTION_LIBRARY_VERSION, "v1");
-  assert.equal(repairSuggestion({ rule: "missing_h1" }).libraryVersion, "v1");
-  assert.equal(repairSuggestion({ rule: "unknown" }).libraryVersion, "v1");
+  assert.equal(REPAIR_SUGGESTION_LIBRARY_VERSION, "v2_stage1_content_evidence");
+  assert.equal(repairSuggestion({ rule: "missing_h1" }).libraryVersion, "v2_stage1_content_evidence");
+  assert.equal(repairSuggestion({ rule: "unknown" }).libraryVersion, "v2_stage1_content_evidence");
 });
 
 test("shared-repair evidence is required before a template fix is suggested", () => {

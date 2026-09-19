@@ -2,7 +2,7 @@ import React from "react";
 import { Button } from "@/components/ui/button";
 import { trackEvent } from "@/lib/analytics";
 import { customerText, getStatusLabel } from "@/lib/friendlyLabels";
-import { evidenceLink } from "@/lib/evidenceUrl";
+import { evidenceLink, evidenceIdentityOptions } from "@/lib/evidenceUrl";
 import { ChevronLeft, Copy, X } from "lucide-react";
 
 export default function IssueDetailModal({ issue, onClose, onStatusUpdate }) {
@@ -18,7 +18,7 @@ export default function IssueDetailModal({ issue, onClose, onStatusUpdate }) {
   };
 
   const copyAffectedUrl = async (page) => {
-    const link = evidenceLink(page, siteOrigin);
+    const link = evidenceLink(page, siteOrigin, evidenceIdentityOptions(issue));
     const value = link.href || page;
     if (!value) return;
     await navigator.clipboard.writeText(value);
@@ -54,7 +54,7 @@ export default function IssueDetailModal({ issue, onClose, onStatusUpdate }) {
               <h3 className="text-sm font-semibold text-slate-950">Affected pages</h3>
               <ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600">
                 {affectedPages.map((page, index) => {
-                  const link = evidenceLink(page, siteOrigin);
+                  const link = evidenceLink(page, siteOrigin, evidenceIdentityOptions(issue));
                   return (
                     <li key={`${page}-${index}`} className="flex items-start justify-between gap-3">
                       <div className="min-w-0 break-all">

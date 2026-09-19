@@ -29,6 +29,9 @@ from .metadata_title_evidence import (
     normalize_title_key,
     relative_evidence_url,
 )
+from .search_applicability import search_applicability, search_metadata_applicable, filter_search_findings
+from .content_evidence_findings import content_evidence_findings
+from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
 from .sampling import SAMPLING_VERSION, enrich_checked_coverage, sampling_report, select_balanced_urls
 from .scan_timing import (
     SITEMAP_TIME_RESERVATION_VERSION,
@@ -42,7 +45,7 @@ from .security import is_public_http_url, safe_get
 from .sitemap import load_sitemap_urls
 from .url_frontier_policy import FRONTIER_POLICY_VERSION, classify_frontier_url
 
-VERSION = "python_scanner_v4_published_request_identity"
+VERSION = "python_scanner_v5_observed_finding_identity"
 RENDER_EVIDENCE_VERSION = "render_evidence_v1"
 FINAL_URL_DEDUP_VERSION = "final_url_dedup_v1_normalized_identity"
 # How findings become customer repair cards. A change here changes what the
@@ -50,7 +53,7 @@ FINAL_URL_DEDUP_VERSION = "final_url_dedup_v1_normalized_identity"
 # marker: reusing scanner_version would churn every historical seal fixture,
 # and leaving the release identity unmoved would ship two different grouping
 # behaviours under one fingerprint.
-REPAIR_SURFACE_GROUPING_VERSION = "repair_surface_grouping_v1_shared_artifact"
+REPAIR_SURFACE_GROUPING_VERSION = "repair_surface_grouping_v2_evidenced_search_intent"
 
 # The Python crawler does not derive an AI crawl policy (no InvokeLLM here), but it
 # still emits the policy contract so AI Review keeps provenance. source="disabled"
@@ -758,8 +761,10 @@ async def run_scan(
         for page in pages:
             page.pop("_redirect_alias_identity_keys", None)
 
-    findings = build_findings(pages)
-    findings.extend(duplicate_title_findings(pages))
+    finding_identity = {"scan_origin": scope_evidence["requested_origin"],
+                        "identity_version": PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION}
+    findings = build_findings(pages, **finding_identity)
+    findings.extend(duplicate_title_findings(pages, **finding_identity))
     findings.extend(duplicate_casing_findings(pages))
     grouped = group_findings(findings)
     verified_failed = [page_evidence(page) for page in pages if is_verified_failed(page)]
@@ -1004,7 +1009,11 @@ async def fetch_and_extract(
         return extract_page("", url, url, 0, "", discovery, fetch_error=str(exc)[:220])
 
 
-def _redirect_destination_content_view(page: dict) -> dict | None:
+def _redirect_destination_content_view(page: dict, *, identity_version: str = "") -> dict | None:
+    if identity_version:
+        from .url_evidence import verified_redirect_content_url
+        if not verified_redirect_content_url(page):
+            return None
     evidence = page.get("redirect_fetch_evidence")
     if not isinstance(evidence, dict) or evidence.get("html_parse_ok") is not True:
         return None
@@ -1039,48 +1048,57 @@ def _redirect_destination_content_view(page: dict) -> dict | None:
     return view
 
 
-def build_findings(pages: list[dict]) -> list[dict]:
+def build_findings(pages: list[dict], *, scan_origin: str = "", identity_version: str = "") -> list[dict]:
     findings: list[dict] = []
+    identity = {"scan_origin": scan_origin, "identity_version": identity_version}
     for page in pages:
-        path = page.get("path") or "/"
+        path = relative_evidence_url(page, **identity)
         if page.get("url_confidence") == "crawler_artifact":
             continue
-        redirect_finding = redirect_finding_for_page(page)
+        redirect_finding = redirect_finding_for_page(page, **identity)
         if redirect_finding is not None:
             findings.append(redirect_finding)
         for alias in page.get("redirect_aliases") or []:
             if not isinstance(alias, dict):
                 continue
-            alias_finding = redirect_finding_for_page(alias)
+            alias_finding = redirect_finding_for_page(alias, **identity)
             if alias_finding is not None:
                 findings.append(alias_finding)
         if page_is_redirect_source(page):
-            destination_page = _redirect_destination_content_view(page)
+            destination_page = _redirect_destination_content_view(page, identity_version=identity_version)
             if destination_page is None:
                 continue
             page = destination_page
-            path = page.get("path") or "/"
+            path = relative_evidence_url(page, **identity)
         if sitemap_indexability_conflict(page):
-            findings.append(create_finding(
+            sitemap_intent = "sitemap" in (page.get("discovered_from") or [])
+            conflict = create_finding(
                 rule="sitemap_indexability_conflict",
                 category="indexability",
                 priority="medium",
-                title="Remove non-indexable URLs from the sitemap",
+                title="Remove non-indexable URLs from the sitemap" if sitemap_intent else "Resolve conflicting search-indexing intent",
                 page_url=path,
                 current_value=str(page.get("indexability_state") or "Not indexable"),
                 explanation=(
                     "This URL was explicitly listed in a sitemap but the scanner found a "
-                    "noindex directive or a Googlebot robots.txt block."
+                    "noindex directive or a Googlebot robots.txt block." if sitemap_intent else
+                    "This page has declared search intent, but its accepted HTML contains a noindex directive."
                 ),
                 recommendation=(
                     "Remove the URL from the sitemap unless it should be indexable. If it should "
-                    "be indexed, resolve the noindex or Googlebot block first."
+                    "be indexed, resolve the noindex or Googlebot block first." if sitemap_intent else
+                    "Decide whether this page should appear in search. Remove noindex if it should; otherwise keep noindex and remove the declared search intent."
                 ),
                 difficulty="developer",
                 source_pages=page.get("source_pages", []),
                 link_text_samples=page.get("link_text_samples", []),
-            ))
-        canonical_finding = canonical_target_finding(page)
+            )
+            # Grouped guidance must not turn an explicit search-intent conflict
+            # into invented sitemap evidence. This is producer-side provenance;
+            # the resulting customer copy uses the existing authenticated fields.
+            conflict["indexability_intent_sources"] = search_applicability(page)["intent_sources"]
+            findings.append(conflict)
+        canonical_finding = canonical_target_finding(page, **identity)
         if canonical_finding is not None:
             findings.append(canonical_finding)
         if str(page.get("fetch_error") or "").startswith("blocked_"):
@@ -1171,9 +1189,10 @@ def build_findings(pages: list[dict]) -> list[dict]:
         if not page.get("canonical") and page.get("indexable"):
             findings.append(create_finding("canonical_missing", "canonical", "medium", "Add a canonical URL", path, explanation="The page does not expose a canonical URL.", recommendation="Add a self-referencing canonical or point to the preferred version.", difficulty="developer"))
         missing_alt = int(page.get("image_missing_alt_count") or 0)
-        if missing_alt > 0:
+        if missing_alt > 0 and not page.get("image_alt_applicability"):
             findings.append(create_finding("image_alt_text", "image_alt_text", "medium" if missing_alt >= 10 else "low", "Add useful image descriptions", path, current_value=f"{missing_alt} images missing alt text", explanation="Some meaningful images may not have text descriptions.", recommendation="Add short, specific alt text to meaningful images."))
-    return findings
+    findings.extend(content_evidence_findings(pages))
+    return filter_search_findings(findings, pages)
 
 
 
@@ -1191,7 +1210,7 @@ def page_is_redirect_source(page: dict) -> bool:
     }
 
 
-def redirect_finding_for_page(page: dict) -> dict | None:
+def redirect_finding_for_page(page: dict, *, scan_origin: str = "", identity_version: str = "") -> dict | None:
     if not page_is_redirect_source(page):
         return None
 
@@ -1199,6 +1218,11 @@ def redirect_finding_for_page(page: dict) -> dict | None:
     outcome = str(page.get("redirect_outcome") or "")
     sources = set(page.get("discovered_from") or [])
     source_path = str(page.get("redirect_source_path") or urlparse(str(page.get("url") or "")).path or "/")
+    if identity_version:
+        source_path = relative_evidence_url(
+            {"url": page.get("url") or page.get("redirect_source_path")},
+            scan_origin=scan_origin, identity_version=identity_version,
+        )
     destination = str(page.get("redirect_destination_url") or page.get("final_url") or "")
     destination_status = int(page.get("redirect_destination_status_code") or 0)
     destination_indexability = str(page.get("redirect_destination_indexability_state") or "")
@@ -1319,7 +1343,7 @@ def redirect_finding_for_page(page: dict) -> dict | None:
     return finding
 
 
-def canonical_target_finding(page: dict) -> dict | None:
+def canonical_target_finding(page: dict, *, scan_origin: str = "", identity_version: str = "") -> dict | None:
     state = str(page.get("canonical_target_state") or "")
     target = str(page.get("canonical_target_url") or page.get("canonical") or "")
     status_code = int(page.get("canonical_target_status_code") or 0)
@@ -1399,7 +1423,8 @@ def canonical_target_finding(page: dict) -> dict | None:
         category="canonical",
         priority=priority,
         title=title,
-        page_url=page.get("path") or "/",
+        page_url=(relative_evidence_url(page, scan_origin=scan_origin, identity_version=identity_version)
+                  if identity_version else page.get("path") or "/"),
         current_value=" — ".join(part for part in current_parts if part),
         explanation=explanation,
         recommendation=recommendation,
@@ -1423,12 +1448,10 @@ def canonical_target_finding(page: dict) -> dict | None:
 
 
 def sitemap_indexability_conflict(page: dict) -> bool:
-    if "sitemap" not in set(page.get("discovered_from") or []):
-        return False
-    return str(page.get("indexability_state") or "") in {
-        "Noindexed",
-        "Blocked by robots.txt",
-    }
+    if search_applicability(page)["index_or_drop"]:
+        return True
+    return ("sitemap" in (page.get("discovered_from") or [])
+            and str(page.get("indexability_state") or "") == "Blocked by robots.txt")
 
 
 def create_finding(rule: str, category: str, priority: str, title: str, page_url: str, current_value: str = "", explanation: str = "", recommendation: str = "", difficulty: str = "easy", source_pages: list[str] | None = None, link_text_samples: list[str] | None = None) -> dict:
@@ -1616,6 +1639,44 @@ def group_template_title(rule: str, family: str) -> str:
     return f"Fix repeated {fam} template issue"
 
 
+def _group_indexability_intent_sources(members: list[dict]) -> list[str]:
+    # Before explicit search intent was supported, this rule meant sitemap
+    # evidence only. Preserve that meaning for legacy producer rows.
+    return sorted({
+        source
+        for member in members
+        for source in member.get("indexability_intent_sources", ["sitemap"])
+        if source in {"sitemap", "declared_search_intent"}
+    })
+
+
+def _group_indexability_guidance(members: list[dict]) -> tuple[str, str, str]:
+    sources = _group_indexability_intent_sources(members)
+    if sources == ["sitemap"]:
+        return (
+            "Remove non-indexable URLs from the sitemap",
+            "These URLs are explicitly listed in the sitemap, but the scanner found a noindex "
+            "directive or a Googlebot robots.txt block on each affected URL.",
+            "Remove non-indexable URLs from the sitemap unless they should be indexed. "
+            "For URLs that should be indexed, resolve the noindex directive or Googlebot block first.",
+        )
+    if "sitemap" not in sources:
+        return (
+            "Resolve conflicting search-indexing intent",
+            "These pages have declared search intent, but their accepted HTML contains a noindex directive.",
+            "Decide whether each page should appear in search. Remove noindex if it should; "
+            "otherwise keep noindex and remove the declared search intent.",
+        )
+    return (
+        "Resolve conflicting search-indexing intent",
+        "These non-indexable URLs have conflicting search intent from sitemap entries, declared search "
+        "intent, or both. The scanner found a noindex directive or a Googlebot robots.txt block on each affected URL.",
+        "Decide whether each page should appear in search and resolve the noindex directive or Googlebot block "
+        "if it should. For URLs listed in the sitemap, remove entries that should remain non-indexable. "
+        "For URLs with declared search intent, remove the declared search intent if they should remain non-indexable.",
+    )
+
+
 def group_findings(findings: list[dict]) -> list[dict]:
     direct: list[dict] = []
     groups: dict[str, list[dict]] = {}
@@ -1639,6 +1700,8 @@ def group_findings(findings: list[dict]) -> list[dict]:
             title = "Check pages blocked by rate limiting"
             explanation = "Several similar pages returned HTTP 429 or rate limiting. Treat this as one crawler-access problem."
             recommendation = "Ask your web person to check server, CDN, firewall, and rate-limit logs. Confirm Googlebot and normal users can access the affected URLs."
+        elif sample.get("rule") == "sitemap_indexability_conflict":
+            title, explanation, recommendation = _group_indexability_guidance(members)
         else:
             title = group_template_title(sample.get("rule", ""), family)
             surface_guidance = SITE_SURFACE_GUIDANCE.get(SITE_SURFACE_RULES.get(sample.get("rule", "")))
@@ -1675,6 +1738,8 @@ def group_findings(findings: list[dict]) -> list[dict]:
             "page_count": len(affected),
             "source_pages": _unique_nonempty([p for f in members for p in (f.get("source_pages") or [])]),
             "link_text_samples": _unique_nonempty([t for f in members for t in (f.get("link_text_samples") or [])]),
+            **({"indexability_intent_sources": _group_indexability_intent_sources(members)}
+               if sample.get("rule") == "sitemap_indexability_conflict" else {}),
             **({"redirect_fetch_evidence_samples": redirect_samples} if redirect_samples else {}),
         })
         direct.append(grouped)
@@ -1693,12 +1758,12 @@ def _unique_nonempty(values: list) -> list:
 
 
 
-def duplicate_title_findings(pages: list[dict]) -> list[dict]:
+def duplicate_title_findings(pages: list[dict], *, scan_origin: str = "", identity_version: str = "") -> list[dict]:
     buckets: dict[str, list[dict]] = {}
     for page in pages:
         status = int(page.get("status_code") or 0)
         title = str(page.get("title") or "").strip()
-        if not title or page.get("indexable") is False or not page_has_usable_html(page):
+        if not title or page.get("indexable") is False or not page_has_usable_html(page) or not search_metadata_applicable(page):
             continue
         if not is_html_page_evidence(page):
             continue
@@ -1707,7 +1772,7 @@ def duplicate_title_findings(pages: list[dict]) -> list[dict]:
     findings: list[dict] = []
     for title_key in sorted(buckets):
         members = buckets[title_key]
-        urls = sorted(_unique_nonempty([relative_evidence_url(page) for page in members]))
+        urls = sorted(_unique_nonempty([relative_evidence_url(page, scan_origin=scan_origin, identity_version=identity_version) for page in members]))
         if len(urls) < 2:
             continue
         title = str(members[0].get("title") or "").strip()

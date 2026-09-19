@@ -72,11 +72,13 @@ def collect_component_versions() -> dict[str, str]:
     Imports are local so freeze tooling can call this without constructing the
     FastAPI app or paying for heavier imports at module load time.
     """
+    from .accepted_content_evidence import IMAGE_APPLICABILITY_VERSION, VISIBLE_TEMPLATE_VERSION
+    from .search_applicability import SEARCH_APPLICABILITY_VERSION
     from .geo_readiness import VERSION as GEO_READINESS_VERSION
     from .geo_evidence import VERSION as GEO_EVIDENCE_VERSION
     from .artifact_filter import ARTIFACT_FILTER_VERSION
     from .canonical_validation import CANONICAL_TARGET_EVIDENCE_VERSION
-    from .repair_coverage import REPAIR_COVERAGE_VERSION
+    from .repair_coverage import PUBLISHED_REPAIR_COVERAGE_VERSION, PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
     from .repair_contract_v2 import REPAIR_PERSISTENCE_GROUPING_VERSION
     from .coverage_authority import (
         COVERAGE_AUTHORITY_EVIDENCE_VERSION,
@@ -122,6 +124,9 @@ def collect_component_versions() -> dict[str, str]:
     from .trust_discovery import TRUST_DISCOVERY_VERSION, TRUST_FINDING_GATE_VERSION
 
     components = {
+        "image_alt_applicability_version": IMAGE_APPLICABILITY_VERSION,
+        "visible_template_evidence_version": VISIBLE_TEMPLATE_VERSION,
+        "search_applicability_version": SEARCH_APPLICABILITY_VERSION,
         "geo_readiness_version": GEO_READINESS_VERSION,
         "geo_evidence_version": GEO_EVIDENCE_VERSION,
         "scanner_version": VERSION,
@@ -164,7 +169,8 @@ def collect_component_versions() -> dict[str, str]:
         "evidence_quality_gate_version": EVIDENCE_QUALITY_GATE_VERSION,
         "coverage_authority_evidence_version": COVERAGE_AUTHORITY_EVIDENCE_VERSION,
         "coverage_authority_version": COVERAGE_AUTHORITY_VERSION,
-        "repair_coverage_version": REPAIR_COVERAGE_VERSION,
+        "repair_coverage_version": PUBLISHED_REPAIR_COVERAGE_VERSION,
+        "evidence_url_identity_version": PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
         "repair_persistence_grouping_version": REPAIR_PERSISTENCE_GROUPING_VERSION,
         "frontier_policy_version": FRONTIER_POLICY_VERSION,
     }

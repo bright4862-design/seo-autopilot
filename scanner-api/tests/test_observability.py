@@ -132,7 +132,7 @@ def test_release_marker_endpoints_are_consistent():
     assert health["archetype_classifier_version"] == ARCHETYPE_CLASSIFIER_VERSION
     assert health["beta_revision_fingerprint"] == CURRENT_FINGERPRINT
     assert health["review_version"] == "python_review_v2_structural_marketplace"
-    assert health["review_evidence_calibration_version"] == "review_evidence_calibration_v6_health_score_v2"
+    assert health["review_evidence_calibration_version"] == "review_evidence_calibration_v7_content_applicability"
     assert health["scanner_build_revision"] == "authenticated_health_probe_v1"
     assert revision["fingerprint"] == health["beta_revision_fingerprint"]
     assert revision["component_versions"]["archetype_classifier_version"] == health["archetype_classifier_version"]

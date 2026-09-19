@@ -5,6 +5,7 @@ const BASE44_RUNTIME_ACTIVATION_ID = "persistDurableScanAuthorityV3-report-evide
 import { createAuthoritySeal, verifyAuthoritySeal } from "./authoritySeal.js";
 import { authorityRowsFromSnapshot } from "./authorityRows.js";
 import { AUTHORITY_CONTRACT, buildAuthoritySnapshot, buildPersistedAuthoritySnapshot, firstFailedAuthorityPredicate, hasCompleteAcceptanceEvidence } from "./authoritySnapshot.js";
+import { PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION } from "./evidenceUrlIdentity.js";
 import { releaseAdmission as releaseAdmissionClient } from "./admissionClient.js";
 import { persistExactAdmissionRelease } from "./admissionRelease.js";
 
@@ -39,7 +40,7 @@ function releaseAdmission(options = {}) {
 // a compiled worker when entry.ts stayed byte-identical while an imported
 // handler changed. Keeping the active release fingerprint in the entry module
 // guarantees every release-fingerprint move changes the deployed entry bytes.
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "47793ce37ca20523";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "01ebe8e90df1e6bd";
 
 function normalizeAttempt(value) {
   const parsed = Number(value);
@@ -109,7 +110,7 @@ Deno.serve(async (req) => {
       user_confirmed: scan.user_confirmed === true,
     };
 
-    const failedPredicate = firstFailedAuthorityPredicate(authorityScanResult, review);
+    const failedPredicate = firstFailedAuthorityPredicate(authorityScanResult, review, { identityVersion: PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION });
     if (failedPredicate) {
       const classifierDiagnostic = failedPredicate === "archetype_classifier_version"
         ? `__expected_${diagnosticClassifierMarker(AUTHORITY_CONTRACT.archetype_classifier_version)}__received_${diagnosticClassifierMarker(review?.archetype_classifier_version || review?.site_fingerprint?.classification?.classifier_version)}`
@@ -130,6 +131,7 @@ Deno.serve(async (req) => {
 
     const stableSealedAt = stableTimestamp(scan);
     const snapshot = buildAuthoritySnapshot({
+      identityVersion: PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
       scan: authorityScanResult,
       review,
       identity,

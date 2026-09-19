@@ -6,9 +6,11 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .health_score_explanation import apply_score_ceiling, build_health_score_explanation
+from .accepted_content_evidence import IMAGE_APPLICABILITY_VERSION
+from .repair_coverage import repair_evidence_key_function
 from .review import compute_health_score_breakdown, group_page_recommendations, unwrap_scan_payload
 
-CALIBRATION_VERSION = "review_evidence_calibration_v6_health_score_v2"
+CALIBRATION_VERSION = "review_evidence_calibration_v7_content_applicability"
 IMAGE_ALT_EVIDENCE_VERSION = "material_image_alt_v2_absent_attribute"
 IMAGE_ALT_RULES = {"image_alt_text", "missing_image_alt"}
 VERIFICATION_ONLY_RULES = {"potential_orphan_pages", "indexable_faceted_navigation"}
@@ -92,6 +94,18 @@ def image_alt_evidence(page: dict[str, Any]) -> dict[str, Any]:
     image_count = _int(page.get("image_count"))
     missing_alt = _int(page.get("image_missing_alt_count") or page.get("missing_alt_image_count"))
     ratio = missing_alt / image_count if image_count > 0 else 0.0
+    applicability = page.get("image_alt_applicability")
+    if isinstance(applicability, dict) and applicability.get("version") == IMAGE_APPLICABILITY_VERSION:
+        accepted = applicability.get("accepted") is True
+        material = _int(applicability.get("material_missing_alt_count")) if accepted else 0
+        uncertain = _int(applicability.get("uncertain_missing_alt_count")) if accepted else 0
+        return {
+            "image_count": image_count, "missing_alt": missing_alt, "missing_alt_ratio": round(ratio, 3),
+            "material": material > 0, "material_missing_alt": material, "uncertain_missing_alt": uncertain,
+            "excluded_missing_alt": _int(applicability.get("excluded_missing_alt_count")) if accepted else 0,
+            "image_alt_evidence_version": IMAGE_APPLICABILITY_VERSION, "accepted": accepted,
+            "reason": applicability.get("reason", ""),
+        }
     material = bool(
         missing_alt > 0
         and image_count > 0
@@ -140,7 +154,7 @@ def _is_non_html_or_utility_page(page: dict[str, Any]) -> bool:
     return bool(content_type and content_type not in {"text/html", "application/xhtml+xml"})
 
 
-def _page_evidence_map(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _page_evidence_map(payload: dict[str, Any], *, key_function: Any = _path) -> dict[str, dict[str, Any]]:
     evidence: dict[str, dict[str, Any]] = {}
     for page in _pages_from_payload(payload):
         stats = {
@@ -148,8 +162,13 @@ def _page_evidence_map(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "content_type": _content_type(page),
             "non_html_or_utility": _is_non_html_or_utility_page(page),
         }
-        for value in (page.get("url"), page.get("final_url"), page.get("path"), page.get("page_url")):
-            key = _path(value)
+        values = (
+            (page.get("url"), page.get("final_url"), page.get("path"), page.get("page_url"))
+            if key_function is _path else
+            (page.get("final_url") or page.get("url") or page.get("page_url") or page.get("path"),)
+        )
+        for value in values:
+            key = key_function(value)
             if key:
                 evidence[key] = stats
     return evidence
@@ -164,6 +183,7 @@ def _is_page_semantic_fix(fix: dict[str, Any]) -> bool:
 def _calibrate_page_semantic_fix(
     fix: dict[str, Any],
     evidence: dict[str, dict[str, Any]],
+    *, key_function: Any = _path,
 ) -> dict[str, Any] | None:
     affected = fix.get("affected_pages") if isinstance(fix.get("affected_pages"), list) else []
     if not affected:
@@ -172,7 +192,7 @@ def _calibrate_page_semantic_fix(
     retained: list[str] = []
     suppressed: list[str] = []
     for value in affected:
-        key = _path(value)
+        key = key_function(value)
         if not key:
             continue
         stats = evidence.get(key, {})
@@ -189,7 +209,7 @@ def _calibrate_page_semantic_fix(
 
     source_pages = fix.get("source_pages") if isinstance(fix.get("source_pages"), list) else []
     retained_set = set(retained)
-    filtered_sources = [value for value in source_pages if _path(value) in retained_set]
+    filtered_sources = [value for value in source_pages if key_function(value) in retained_set]
     return {
         **fix,
         "affected_pages": retained,
@@ -201,15 +221,19 @@ def _calibrate_page_semantic_fix(
     }
 
 
-def _calibrate_image_alt_fix(fix: dict[str, Any], evidence: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+def _calibrate_image_alt_fix(fix: dict[str, Any], evidence: dict[str, dict[str, Any]], *, key_function: Any = _path) -> dict[str, Any] | None:
     affected = fix.get("affected_pages") if isinstance(fix.get("affected_pages"), list) else []
     if not affected:
         affected = [fix.get("page_url") or "/"]
 
     matched: list[tuple[str, dict[str, Any]]] = []
     unmatched: list[str] = []
+    seen: set[str] = set()
     for value in affected:
-        key = _path(value)
+        key = key_function(value)
+        if key_function is not _path and key in seen:
+            continue
+        seen.add(key)
         if key in evidence:
             matched.append((key, evidence[key]))
         elif key:
@@ -220,16 +244,28 @@ def _calibrate_image_alt_fix(fix: dict[str, Any], evidence: dict[str, dict[str, 
     if not matched:
         return fix
 
-    material = [(path, stats) for path, stats in matched if stats["material"]]
+    material = [(path, stats) for path, stats in matched if stats["material"] and fix.get("rule") != "image_alt_review"]
     if not material:
+        uncertain = [(path, stats) for path, stats in matched if stats.get("uncertain_missing_alt", 0) > 0]
+        if uncertain:
+            retained = [path for path, _ in uncertain]
+            total = sum(stats["uncertain_missing_alt"] for _, stats in uncertain)
+            return {
+                **fix, "affected_pages": retained, "page_url": retained[0], "page_count": len(retained),
+                "source_pages": retained[:30], "non_scoring": True, "score_impact": 0,
+                "evidence_status": "needs_verification", "verification_state": "needs_verification",
+                "image_alt_evidence_version": IMAGE_APPLICABILITY_VERSION, "material_affected_page_count": 0,
+                "uncertain_missing_alt_total": total,
+                "current_value": f"{total} images have no alt attribute; their purpose needs review before an accessibility repair can be confirmed.",
+            }
         return None
 
     retained = [path for path, _ in material]
-    missing_alt_total = sum(stats["missing_alt"] for _, stats in material)
+    missing_alt_total = sum(stats.get("material_missing_alt", stats["missing_alt"]) for _, stats in material)
     image_total = sum(stats["image_count"] for _, stats in material)
     aggregate_ratio = round(missing_alt_total / max(1, image_total), 3)
-    max_missing = max(stats["missing_alt"] for _, stats in material)
-    max_ratio = max(stats["missing_alt_ratio"] for _, stats in material)
+    max_missing = max(stats.get("material_missing_alt", stats["missing_alt"]) for _, stats in material)
+    max_ratio = max(round(stats.get("material_missing_alt", stats["missing_alt"]) / max(1, stats["image_count"]), 3) for _, stats in material)
 
     priority = str(fix.get("priority") or "medium").lower()
     if priority == "critical":
@@ -248,7 +284,7 @@ def _calibrate_image_alt_fix(fix: dict[str, Any], evidence: dict[str, dict[str, 
             f"{missing_alt_total} missing descriptions across {image_total} images "
             f"({round(aggregate_ratio * 100, 1)}%)."
         ),
-        "image_alt_evidence_version": IMAGE_ALT_EVIDENCE_VERSION,
+        "image_alt_evidence_version": IMAGE_APPLICABILITY_VERSION if any(stats.get("image_alt_evidence_version") == IMAGE_APPLICABILITY_VERSION for _, stats in matched) else IMAGE_ALT_EVIDENCE_VERSION,
         "material_affected_page_count": len(retained),
         "weak_signal_page_count_suppressed": len(matched) - len(material),
         "missing_alt_total": missing_alt_total,
@@ -257,9 +293,11 @@ def _calibrate_image_alt_fix(fix: dict[str, Any], evidence: dict[str, dict[str, 
         "max_missing_alt_per_page": max_missing,
         "max_missing_alt_ratio_per_page": max_ratio,
     }
+    if calibrated["image_alt_evidence_version"] == IMAGE_APPLICABILITY_VERSION:
+        calibrated["uncertain_missing_alt_total"] = sum(stats.get("uncertain_missing_alt", 0) for _, stats in matched)
 
     source_pages = fix.get("source_pages") if isinstance(fix.get("source_pages"), list) else []
-    filtered_sources = [value for value in source_pages if _path(value) in set(retained)]
+    filtered_sources = [value for value in source_pages if key_function(value) in set(retained)]
     calibrated["source_pages"] = filtered_sources[:30] or retained[:30]
     return calibrated
 
@@ -543,12 +581,13 @@ def _health_grade(score: int, scan_status: str) -> str:
     return "Major issues"
 
 
-def apply_review_evidence_calibration(result: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+def apply_review_evidence_calibration(result: dict[str, Any], payload: dict[str, Any], *, scan_origin: str = "", identity_version: str = "") -> dict[str, Any]:
     if not isinstance(result, dict):
         return result
 
     calibrated_result = deepcopy(result)
-    evidence = _page_evidence_map(payload)
+    key_function = repair_evidence_key_function(scan_origin=scan_origin, identity_version=identity_version, legacy_key=_path)
+    evidence = _page_evidence_map(payload, key_function=key_function)
     source_fixes = calibrated_result.get("recommendations")
     if not isinstance(source_fixes, list):
         source_fixes = calibrated_result.get("fixes") if isinstance(calibrated_result.get("fixes"), list) else []
@@ -559,11 +598,11 @@ def apply_review_evidence_calibration(result: dict[str, Any], payload: dict[str,
             continue
         rule = str(item.get("rule") or item.get("category") or "")
         if _is_page_semantic_fix(item):
-            item = _calibrate_page_semantic_fix(item, evidence)
+            item = _calibrate_page_semantic_fix(item, evidence, key_function=key_function)
             if item is None:
                 continue
         if rule in IMAGE_ALT_RULES or str(item.get("category") or "") == "image_alt_text":
-            item = _calibrate_image_alt_fix(item, evidence)
+            item = _calibrate_image_alt_fix(item, evidence, key_function=key_function)
             if item is None:
                 continue
         if _is_verification_only_fix(item):

@@ -11,7 +11,7 @@ const source = await readFile(
 
 const start = Math.max(
   source.indexOf("function AffectedPage({ page })"),
-  source.indexOf("function AffectedPage({ page, websiteUrl, index })"),
+  source.indexOf("function AffectedPage({ page, websiteUrl, identityOptions, index })"),
 );
 const end = source.indexOf("function normalizeAffectedPageList", start);
 const affectedPageSource = source.slice(start, end);

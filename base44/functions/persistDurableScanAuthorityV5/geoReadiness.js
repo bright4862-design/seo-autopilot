@@ -1,5 +1,8 @@
 // Package-local authority boundary; mirrored in readers/writers (no cross-package imports).
 export const GEO_SNAPSHOT_VERSION = "standard_review_snapshot_hmac_geo_v1";
+export function usesGeoSnapshotVersion(version) {
+ return version === GEO_SNAPSHOT_VERSION || version === "standard_review_snapshot_hmac_identity_v1";
+}
 export const GEO_VERSION = "geo_readiness_v1_experimental";
 export const GEO_ADAPTER_VERSION = "geo_evidence_v1";
 const CHECKS = {
@@ -125,15 +128,15 @@ export function validateGeoReadiness(value) {
  return structuredClone(v);
 }
 export function geoReadinessSnapshotFields(row) {
- return row?.authority_seal_version===GEO_SNAPSHOT_VERSION ? {geo_readiness:validateGeoReadiness(row.geo_readiness)} : {};
+ return usesGeoSnapshotVersion(row?.authority_seal_version) ? {geo_readiness:validateGeoReadiness(row.geo_readiness)} : {};
 }
 export function geoReadinessSummary(value) {
  const v=validateGeoReadiness(value);
  return Object.fromEntries(["geo_readiness_version","evidence_adapter_version","assessment_status","score","coverage","sample_pages","score_bounds","bounds_kind"].map(k=>[k,v[k]]));
 }
 export function customerGeoReadiness(row,full=false) {
- const v=row?.authority_seal_version===GEO_SNAPSHOT_VERSION?validateGeoReadiness(row.geo_readiness):emptyGeoReadiness();
- return full ? {...v,authority_verified:row?.authority_seal_version===GEO_SNAPSHOT_VERSION} : geoReadinessSummary(v);
+ const v=usesGeoSnapshotVersion(row?.authority_seal_version)?validateGeoReadiness(row.geo_readiness):emptyGeoReadiness();
+ return full ? {...v,authority_verified:usesGeoSnapshotVersion(row?.authority_seal_version)} : geoReadinessSummary(v);
 }
 export function validProducerGeoReadiness(value, scan) {
  try {

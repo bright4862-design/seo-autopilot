@@ -6,6 +6,7 @@ from urllib.parse import urljoin, urldefrag, urlparse
 
 from bs4 import BeautifulSoup
 
+from .accepted_content_evidence import extract_accepted_content_evidence
 from .geo_evidence import VERSION as GEO_EVIDENCE_ADAPTER_VERSION, extract_geo_evidence
 from .location_template_content import detect_location_template_content
 from .market_scope import strip_market_locale_prefix
@@ -25,7 +26,7 @@ from .metadata_title_evidence import (
 )
 
 
-CANONICAL_HREF_RESOLUTION_VERSION = "canonical_href_resolution_v2_absolute_single_label_same_path"
+CANONICAL_HREF_RESOLUTION_VERSION = "canonical_href_resolution_v3_published_route_identity"
 
 
 def _canonical_path_key(value: str) -> str:
@@ -215,13 +216,6 @@ def extract_page(
     indexable = 200 <= status_code < 300 and not fetch_error and not noindexed
     indexability_state = classify_indexability_state(status_code, fetch_error, noindexed)
     page_template_family = classify_template(path, title, h1s[0] if h1s else "", schema_types)
-    template_content = detect_location_template_content(
-        path,
-        title,
-        h1s[0] if h1s else "",
-        visible_text,
-    )
-
     rendering_signals = client_rendering_signals(html, status_code, word_count)
     access_block = detect_access_block(status_code, response_headers, html)
     page_evidence_class = classify_page_evidence(
@@ -234,8 +228,12 @@ def extract_page(
         body_truncated=body_truncated,
         response_headers=response_headers,
     )
+    content_evidence = extract_accepted_content_evidence(html or "", page_evidence_class)
+    location_context = content_evidence.pop("location_context")
+    template_content = detect_location_template_content(path, **location_context)
 
     page = {
+        **content_evidence,
         "url": url,
         "final_url": final_url or url,
         "path": path,
@@ -630,9 +628,6 @@ def estimate_intent(
 
 
 def same_path(left: str, right: str) -> bool:
-    try:
-        l = urlparse(left)
-        r = urlparse(right)
-        return l.netloc == r.netloc and l.path.rstrip("/") == r.path.rstrip("/")
-    except Exception:
-        return False
+    from .repair_coverage import published_evidence_url_key
+    left_key = published_evidence_url_key(left)
+    return bool(left_key and left_key == published_evidence_url_key(right))

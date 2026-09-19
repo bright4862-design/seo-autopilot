@@ -43,9 +43,17 @@ def _sort_key(fix: dict[str, Any], original_index: int) -> tuple[int, int, int, 
     )
 
 
+def sort_calibrated_repairs(fixes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Use the same stable ordering before and after evidence-group merging."""
+    indexed = list(enumerate(fixes))
+    indexed.sort(key=lambda pair: _sort_key(pair[1], pair[0]), reverse=True)
+    return [fix for _, fix in indexed]
+
+
 def build_calibrated_shadow_review_analysis(
     review_result: dict[str, Any],
     pages: list[dict[str, Any]] | None = None,
+    *, scan_origin: str = "", identity_version: str = "",
 ) -> dict[str, Any]:
     """Build the calibrated v2 ordering over an already-finished review.
 
@@ -66,16 +74,14 @@ def build_calibrated_shadow_review_analysis(
     pages_snapshot = deepcopy(evidence_pages)
     annotated = []
     for fix in fixes_snapshot:
-        calibrated = annotate_calibrated_repair_priority(fix, pages_snapshot)
+        calibrated = annotate_calibrated_repair_priority(fix, pages_snapshot, scan_origin=scan_origin, identity_version=identity_version)
         with_identity = annotate_repair_identity(calibrated)
         annotated.append({
             **with_identity,
             "repair_contract_version": REPAIR_SHADOW_CALIBRATION_VERSION,
         })
 
-    indexed = list(enumerate(annotated))
-    indexed.sort(key=lambda pair: _sort_key(pair[1], pair[0]), reverse=True)
-    proposed = [fix for _, fix in indexed]
+    proposed = sort_calibrated_repairs(annotated)
 
     current_keys = [_repair_key(fix, index) for index, fix in enumerate(annotated)]
     proposed_keys = [_repair_key(fix, index) for index, fix in enumerate(proposed)]

@@ -68,7 +68,7 @@ async def test_real_redirecting_aliases_merge_at_the_observed_final_url(monkeypa
         f"{origin}/": {"body": _html()},
         f"{origin}/one": {"status": 301, "headers": {"location": "/final/"}},
         f"{origin}/two": {"status": 302, "headers": {"location": "/final/"}},
-        f"{origin}/final/": {"body": _html()},
+        f"{origin}/final/": {"body": _html().replace("<meta name='description' content='Useful page'>", "")},
     })
     result = await scanner.run_scan(f"{origin}/", scan_mode="basic", concurrency=1)
     requested_paths = [request.url.raw_path.decode("ascii") for request in requests]
@@ -81,3 +81,16 @@ async def test_real_redirecting_aliases_merge_at_the_observed_final_url(monkeypa
     assert redirected["redirect_alias_total"] == 1
     assert redirected["redirect_aliases"][0]["url"] == f"{origin}/two"
     assert redirected["redirect_aliases"][0]["redirect_destination_url"] == f"{origin}/final/"
+
+    # Feed the real fetch/redirect/extraction result through signed persistence
+    # and the actual customer serializers; only the observed final page needs
+    # a description, not each redirect alias as another content page.
+    import json
+    from pathlib import Path
+    import subprocess
+    from app.scan_job import build_local_review
+    review = build_local_review(result)
+    completed = subprocess.run(["node", "tests/helpers/assertPublishedEvidenceOutput.mjs"],
+        input=json.dumps({"scan": result, "review": review, "expectedUrls": [origin + "/final/"], "expectedEligible": 0}),
+        text=True, capture_output=True, cwd=Path(__file__).resolve().parents[2], timeout=30)
+    assert completed.returncode == 0, completed.stderr

@@ -1,8 +1,11 @@
+import pytest
+
 from app.extract import extract_page
 from app.review import (
     GROUPED_RECOMMENDATION_EVIDENCE_VERSION,
     build_page_pattern_findings,
 )
+from app.repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
 
 
 DISCOVERY = {"discovered_from": ["sitemap"], "source_pages": ["/sitemap.xml"], "link_text_samples": []}
@@ -21,8 +24,8 @@ def page(url: str, metadata_markup: str) -> dict:
     return evidence
 
 
-def metadata_fixes(pages: list[dict]) -> list[dict]:
-    return [fix for fix in build_page_pattern_findings(pages) if fix.get("category") == "meta_description"]
+def metadata_fixes(pages: list[dict], **identity_context) -> list[dict]:
+    return [fix for fix in build_page_pattern_findings(pages, **identity_context) if fix.get("category") == "meta_description"]
 
 
 def test_mixed_metadata_states_become_one_evidence_specific_family_card():
@@ -65,3 +68,71 @@ def test_single_metadata_state_keeps_specific_rule_without_fake_combination():
     assert fix["combined_rules"] == []
     assert fix["page_count"] == 2
     assert fix["grouping_explanation"]
+
+
+def test_three_200_routes_remain_three_affected_pages():
+    pages = [page("https://example.com" + path, "") for path in ["/x", "/x/", "/X"]]
+    [fix] = metadata_fixes(pages, scan_origin="https://example.com",
+                           identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
+    assert fix["page_count"] == 3
+    assert fix["affected_pages"] == ["https://example.com/x", "https://example.com/x/", "https://example.com/X"]
+    assert fix["metadata_state_counts"]["missing"] == 3
+
+
+def test_published_routes_survive_real_review_and_canonical_priority():
+    from app.review import run_review
+    from app.repair_contract_v2 import apply_canonical_repair_contract
+
+    pages = [page("https://example.com" + path, "") for path in ["/x", "/x/", "/X"]]
+    scan = {"website_url": "https://example.com", "pages": pages,
+            "crawl_scope": {"requested_origin": "https://example.com"}}
+    review = run_review(scan, identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
+    result = apply_canonical_repair_contract(review, scan, identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
+    [fix] = [item for item in result["canonical_repairs"] if item["category"] == "meta_description"]
+    assert fix["affected_pages"] == ["https://example.com/x", "https://example.com/x/", "https://example.com/X"]
+    assert fix["page_count"] == 3
+    assert fix["family_breakdown"] == {"activity_detail": 3}
+    assert fix["priority_context"]["affected_observed"] == 3
+    assert fix["evidence_url_identity_version"] == PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
+
+
+def test_published_review_requires_scan_owned_origin():
+    import pytest
+    from app.review import run_review
+
+    for scan in [{"normalized_domain": "example.com"},
+                 {"website_url": "https://example.com", "crawl_scope": {"requested_origin": "not-an-origin"}}]:
+        with pytest.raises(ValueError, match="trusted scan origin"):
+            run_review(scan, identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
+
+
+def test_durable_worker_activates_published_identity_before_review_and_grouping():
+    from app.scan_job import build_local_review
+
+    pages = [page("https://example.com" + path, "") for path in ["/x", "/x/", "/X"]]
+    review = build_local_review({"website_url": "https://example.com", "pages": pages,
+                                "crawl_scope": {"requested_origin": "https://example.com"}})
+    [fix] = [item for item in review["canonical_repairs"] if item["category"] == "meta_description"]
+    assert fix["page_count"] == 3
+    assert fix["evidence_url_identity_version"] == PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
+
+
+@pytest.mark.parametrize("routes", [
+    ["/x", "/x/", "/X"],
+    ["/x", "/x/", "/X", "/a%2Fb", "/a/b", "/a/../x", "/café", "/caf%C3%A9",
+     "/q?b=2&a=1&a=0", "/q?a=0&a=1&b=2", "https://foreign.example/x"],
+])
+def test_real_python_canonical_evidence_survives_all_signed_readers(routes):
+    import json
+    from pathlib import Path
+    import subprocess
+    from app.scan_job import build_local_review
+
+    pages = [page(path if path.startswith("https:") else "https://example.com" + path, "") for path in routes]
+    scan = {"website_url": "https://example.com", "pages": pages,
+            "crawl_scope": {"requested_origin": "https://example.com"}}
+    review = build_local_review(scan)
+    completed = subprocess.run(["node", "tests/helpers/assertPublishedEvidenceOutput.mjs"],
+                               input=json.dumps({"scan": scan, "review": review, "expectedUrls": [p["url"] for p in pages]}), text=True,
+                               capture_output=True, cwd=Path(__file__).resolve().parents[2], timeout=30)
+    assert completed.returncode == 0, completed.stderr

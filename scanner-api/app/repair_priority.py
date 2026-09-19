@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
+from .repair_coverage import repair_evidence_key_function
+
 REPAIR_PRIORITY_VERSION = "repair_priority_v1_contextual_evidence"
 
 SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1}
@@ -85,15 +87,16 @@ def _page_url(page: dict[str, Any]) -> str:
     return _clean(page.get("url") or page.get("final_url") or page.get("page_url") or page.get("path"))
 
 
-def _affected_pages(fix: dict[str, Any]) -> list[str]:
+def _affected_pages(fix: dict[str, Any], *, scan_origin: str = "", identity_version: str = "") -> list[str]:
     values = fix.get("affected_pages") if isinstance(fix.get("affected_pages"), list) else []
     if not values:
         fallback = fix.get("page_url") or fix.get("representative_page_url")
         values = [fallback] if fallback else []
     output: list[str] = []
     seen: set[str] = set()
+    key_for = repair_evidence_key_function(legacy_key=_path, scan_origin=scan_origin, identity_version=identity_version)
     for value in values:
-        key = _path(value)
+        key = key_for(value)
         if key and key not in seen:
             seen.add(key)
             output.append(key)
@@ -284,12 +287,23 @@ class CoverageContext:
         return ratio if 0.0 <= ratio <= 1.0 else None
 
 
-def build_coverage_context(fix: dict[str, Any], pages: list[dict[str, Any]]) -> CoverageContext:
-    affected = set(_affected_pages(fix))
+def build_coverage_context(fix: dict[str, Any], pages: list[dict[str, Any]], *, scan_origin: str = "", identity_version: str = "") -> CoverageContext:
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    key_for = repair_evidence_key_function(legacy_key=_path, **identity_context)
+    affected = set(_affected_pages(fix, **identity_context))
+    def observation_keys(page):
+        keys = [key_for(_page_url(page))]
+        evidence = page.get("redirect_fetch_evidence")
+        if (identity_version and isinstance(evidence, dict)
+                and evidence.get("html_parse_ok") is True
+                and 200 <= int(evidence.get("final_status") or 0) < 300
+                and evidence.get("final_url") == page.get("final_url") and _usable_html(page)):
+            keys.append(key_for(evidence["final_url"]))
+        return [key for key in keys if key]
+
     page_lookup = {
-        _path(_page_url(page)): page
-        for page in pages
-        if isinstance(page, dict) and _path(_page_url(page))
+        key: page for page in pages if isinstance(page, dict)
+        for key in observation_keys(page)
     }
     matched_affected = [page_lookup[key] for key in affected if key in page_lookup]
 
@@ -309,8 +323,8 @@ def build_coverage_context(fix: dict[str, Any], pages: list[dict[str, Any]]) -> 
     # The numerator restricted to the denominator's own universe. Without this
     # intersection the two counts describe different sets of URLs and their
     # quotient is not a coverage figure at all.
-    eligible_keys = {_path(_page_url(page)) for page in eligible}
-    affected_eligible_pages = [page for page in matched_affected if _path(_page_url(page)) in eligible_keys]
+    eligible_keys = {key for page in eligible for key in observation_keys(page)}
+    affected_eligible_pages = [page_lookup[key] for key in affected if key in eligible_keys and key in page_lookup]
 
     states = [_indexability_state(page) for page in affected_eligible_pages]
     indexable_affected = states.count("indexable")
@@ -403,10 +417,12 @@ def _priority_reason(
     context: CoverageContext,
     *,
     search_facing: bool,
+    scan_origin: str = "",
+    identity_version: str = "",
 ) -> str:
     family = _fix_family(fix)
     label = _family_label(family) if family else "relevant pages"
-    affected_count = max(context.affected_checked, len(_affected_pages(fix)))
+    affected_count = max(context.affected_checked, len(_affected_pages(fix, scan_origin=scan_origin, identity_version=identity_version)))
 
     # Only state "N of M" when N and M were counted over the same URLs.
     if search_facing and context.indexable_checked_eligible and context.indexable_affected and context.affected_universe_is_comparable:
@@ -451,7 +467,7 @@ def _priority_reason(
     return f"{affected_count} checked pages are affected."
 
 
-def annotate_repair_priority(fix: dict[str, Any], pages: list[dict[str, Any]]) -> dict[str, Any]:
+def annotate_repair_priority(fix: dict[str, Any], pages: list[dict[str, Any]], *, scan_origin: str = "", identity_version: str = "") -> dict[str, Any]:
     """Add contextual customer priority without mutating scanner severity.
 
     This is deliberately a synthesis-layer annotation. It does not change crawl
@@ -459,7 +475,7 @@ def annotate_repair_priority(fix: dict[str, Any], pages: list[dict[str, Any]]) -
     """
     base_severity = _base_severity(fix)
     evidence_class = _evidence_class(fix)
-    context = build_coverage_context(fix, pages)
+    context = build_coverage_context(fix, pages, scan_origin=scan_origin, identity_version=identity_version)
     search_facing = _is_search_facing(fix)
     action_priority = _action_priority(base_severity, evidence_class, context, search_facing=search_facing)
     score = _sort_score(base_severity, action_priority, context, fix, search_facing=search_facing)
@@ -467,6 +483,9 @@ def annotate_repair_priority(fix: dict[str, Any], pages: list[dict[str, Any]]) -
 
     priority_context = {
         "version": REPAIR_PRIORITY_VERSION,
+        **({"evidence_url_identity_version": identity_version,
+            "affected_observed": context.affected_observed,
+            "affected_eligible": context.affected_eligible} if identity_version else {}),
         "base_severity": base_severity,
         "action_priority": action_priority,
         "action_priority_score": score,
@@ -490,7 +509,7 @@ def annotate_repair_priority(fix: dict[str, Any], pages: list[dict[str, Any]]) -
         "base_severity": base_severity,
         "action_priority": action_priority,
         "action_priority_score": score,
-        "priority_reason": _priority_reason(fix, base_severity, context, search_facing=search_facing),
+        "priority_reason": _priority_reason(fix, base_severity, context, search_facing=search_facing, scan_origin=scan_origin, identity_version=identity_version),
         "repair_leverage_confirmed": shared_confirmed,
         "priority_context": priority_context,
     }

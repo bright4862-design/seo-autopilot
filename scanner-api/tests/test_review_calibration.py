@@ -260,7 +260,7 @@ def test_funbooker_narrow_issues_calibrate_to_good_without_score_noise():
     assert result["health_score"] == 79
     assert result["health_grade"] == "Good"
     assert result["next_best_step"] == "Add canonical URLs to legal info pages"
-    assert result["review_evidence_calibration_version"] == "review_evidence_calibration_v6_health_score_v2"
+    assert result["review_evidence_calibration_version"] == "review_evidence_calibration_v7_content_applicability"
     assert len([fix for fix in result["recommendations"] if fix["rule"] == "sitemap_redirect"]) == 2
     assert len([fix for fix in result["recommendations"] if fix["rule"] == "missing_meta_description"]) == 2
     assert len([fix for fix in result["recommendations"] if fix["rule"] == "missing_h1"]) == 2

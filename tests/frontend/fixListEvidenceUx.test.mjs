@@ -16,7 +16,7 @@ test("FixList exposes the complete affected URL list with copy and CSV controls"
   assert.match(fixListSource, /Show all \{availableCount\} pages/);
   assert.match(fixListSource, /Copy page list/);
   assert.match(fixListSource, /Download CSV/);
-  assert.match(fixListSource, /affected_url/);
+  assert.match(fixListSource, /serializeAffectedUrlsCsv\(item\)/);
 });
 
 test("FixList instructions are action-oriented and rule specific", () => {

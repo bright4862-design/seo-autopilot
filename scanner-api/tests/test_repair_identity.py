@@ -1,9 +1,60 @@
+import pytest
+
+from app.repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
 from app.repair_identity import (
     build_repair_identity,
     compare_repair_runs,
     verification_contract_comparability,
     verification_eligibility,
 )
+
+
+@pytest.mark.parametrize("previous_version,current_version", [
+    ("", PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION),
+    (PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION, ""),
+    ("unknown", PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION),
+    (PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION, "unknown"),
+])
+def test_changed_url_identity_cannot_verify_a_disappeared_repair(previous_version, current_version):
+    previous = stable_fix(affected_pages=["https://example.com/a/"], evidence_url_identity_version=previous_version)
+    result = compare_repair_runs(previous, [], [page("https://example.com/a/")],
+                                 current_contract={"evidence_url_identity_version": current_version})
+    assert result["state"] == "could_not_verify"
+    assert result["comparison_contract_state"] == "incomparable"
+
+
+@pytest.mark.parametrize("current_url,state,rechecked", [
+    ("https://example.com/a/", "verified_fixed", 1),
+    ("https://example.com/a", "could_not_verify", 0),
+    ("https://foreign.example/a/", "could_not_verify", 0),
+    ("https://example.com/A/", "could_not_verify", 0),
+    ("https://example.com/a/?b=2&a=1", "could_not_verify", 0),
+])
+def test_published_verification_requires_exact_route_and_origin(current_url, state, rechecked):
+    previous = stable_fix(affected_pages=["https://example.com/a/"],
+                          evidence_url_identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
+    result = compare_repair_runs(previous, [], [page(current_url)],
+                                 current_contract={"evidence_url_identity_version": PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION})
+    assert result["state"] == state
+    assert result["rechecked_pages"] == rechecked
+
+
+def test_previous_relative_evidence_uses_previous_scan_origin_not_current_origin():
+    previous = stable_fix(affected_pages=["/a/"],
+                          evidence_url_identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
+    result = compare_repair_runs(previous, [], [page("/a/")],
+                                 current_contract={"evidence_url_identity_version": PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION},
+                                 previous_scan_origin="https://old.example", scan_origin="https://new.example")
+    assert result["state"] == "could_not_verify"
+    assert result["rechecked_pages"] == 0
+
+
+def test_unresolved_previous_member_cannot_disappear_from_verification_denominator():
+    previous = stable_fix(affected_pages=["https://example.com/a/", "/unresolved"],
+                          evidence_url_identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
+    result = compare_repair_runs(previous, [], [page("https://example.com/a/")],
+                                 current_contract={"evidence_url_identity_version": PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION})
+    assert result["state"] == "could_not_verify"
 
 
 def stable_fix(**overrides):

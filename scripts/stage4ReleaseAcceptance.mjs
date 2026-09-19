@@ -8,7 +8,33 @@
 import { RELEASE_FUNCTIONS } from "./base44_release_manifest.mjs";
 
 export const STAGE4_RELEASE_RECORD_VERSION = "stage4_exact_source_customer_acceptance_v1";
-export const EXPECTED_SCANNER_FUNCTIONS = Object.freeze(RELEASE_FUNCTIONS.filter((name) => name.endsWith("V6")));
+export const SCANNER_RUNTIME_ROLES = Object.freeze([
+  "startStandardScanJob",
+  "durableScanWorkerControl",
+  "persistDurableScanAuthority",
+  "persistLimitedScanResult",
+  "getCustomerScanResult",
+  "deleteCustomerScanData",
+]);
+
+function scannerRuntimeContract(functionNames) {
+  const matches = [];
+  for (const role of SCANNER_RUNTIME_ROLES) {
+    const candidates = functionNames.filter((name) => new RegExp(`^${role}V\\d+$`).test(name));
+    if (candidates.length === 1) matches.push(candidates[0]);
+  }
+  const generations = new Set(matches.map((name) => name.match(/(V\d+)$/)?.[1]).filter(Boolean));
+  return {
+    functions: matches,
+    route_generation: matches.length === SCANNER_RUNTIME_ROLES.length && generations.size === 1
+      ? [...generations][0]
+      : null,
+  };
+}
+
+const SOURCE_RUNTIME_CONTRACT = scannerRuntimeContract(RELEASE_FUNCTIONS);
+export const EXPECTED_SCANNER_FUNCTIONS = Object.freeze(SOURCE_RUNTIME_CONTRACT.functions);
+export const EXPECTED_SCANNER_ROUTE_GENERATION = SOURCE_RUNTIME_CONTRACT.route_generation;
 
 function clean(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -42,6 +68,11 @@ export function evaluateStage4ReleaseAcceptance(record) {
   if (record.test_fixture === true) blockers.push("test fixture cannot establish live release acceptance");
   if (clean(record.provenance) !== "live_authorized") blockers.push("release provenance is not live_authorized");
   if (time(record.observed_at) === null) blockers.push("release observed_at missing or invalid");
+
+  add(failures, EXPECTED_SCANNER_FUNCTIONS.length === SCANNER_RUNTIME_ROLES.length && Boolean(EXPECTED_SCANNER_ROUTE_GENERATION),
+    "source release manifest does not declare one complete scanner runtime generation");
+  add(failures, clean(record.deployment?.route_generation) === EXPECTED_SCANNER_ROUTE_GENERATION,
+    "deployed scanner route generation does not match source release manifest");
 
   const sha = clean(record.source?.merged_sha);
   add(failures, isSha(sha, 40), "merged source SHA invalid");

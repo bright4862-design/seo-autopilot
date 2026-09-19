@@ -115,3 +115,32 @@ Exact next action:
 After B07, implement B09 sitemap integrity and B16 URL variants on the same scheduler, then B08 redirect-meaning evidence and B10–B15/B17–B18. Stage 3 B19–B24 and Stage 4 B25–B28 remain open. The genuine provenance-labelled 30-site baseline/candidate gate remains open. Historical summary counts must not be repurposed as that gate.
 
 Current state distinction: code is committed and source CI has passed at `62e9af…`; the later documentation commits only persist the checkpoint. Nothing from Stage 2 is merged to `main`, staged, deployed or live-accepted.
+
+## Current resume point — Stage 2 B07 downstream projection checkpoint (2026-09-19)
+
+Stage 1 remains merged on `main` at `22ce4e69aa915a2e5ba796f9432fea33a0fa79bb`; its production publication/promotion/live acceptance is still pending. Continue keeping PR [#303](https://github.com/bright4862-design/seo-autopilot/pull/303) isolated on `agent/full-blueprint-stage2-coverage-b06-20260919`; do not merge while that exact Stage-1 SHA remains in guarded cutover.
+
+Latest verified code/test checkpoint:
+
+- Exact code/test head: `a5cde450977311f167f3608122773912805dcf96`
+- Exact-source CI: [FixList CI 35456222652](https://github.com/bright4862-design/seo-autopilot/actions/runs/35456222652), success
+- Root scanner checks: **115 passed**
+- `scanner-api`: **1,816 passed / 18 intentional skips**
+- Scanner lint/typecheck, generated contracts, frozen revision and production scanner-image build passed; frontend/deploy contract job passed.
+- Stage-1 corpus output remains explicitly labelled synthetic; the genuine full 30-site gate remains `not_assessed`.
+
+What was added after the engine checkpoint:
+
+- `indexability_postprocess` consumes only current-version active baseline records already attached by the producer. It does not reconstruct active evidence from the live web.
+- A verified active match promotes only the already-assessed page to a soft-404 finding with versioned authenticated evidence, confidence 98 and exact `verified_observed_pages`.
+- Grouping now keys by evidence version, so active proof is never collapsed with passive/legacy heuristic soft-404s. Grouped active findings retain the exact verified page union.
+- The behavioral integration covers indexability findings → local review → signed authority → persisted rows → verified customer/Grok reconstruction → repair cards → handoff → PDF/TXT/CSV → rendered customer components. Preview privacy and invalid-authority behavior remain covered by the same helper.
+- Synthetic baseline probes remain outside `pages`/`pages_crawled`; the affected real assessed pages remain eligible evidence. Challenge baselines stay unknown, and absent active evidence preserves legacy passive behavior.
+
+Two intermediate CI failures are intentionally recorded as regression discoveries, not hidden: one corrected the test's denominator assumption (`affected_eligible` belongs to the real assessed affected pages, not synthetic probes), and one corrected the integration helper to accept the existing truthful rendered phrase “N of N relevant pages checked.” Production evidence rules were not weakened.
+
+**B07 is still open.** The actual `run_scan` path does not yet create/fetch/register the synthetic root/path-family probes or populate `coverage_probe_evidence.soft_404_baselines`. Therefore this checkpoint proves downstream authentication and customer delivery once a verified baseline exists, but it is not a complete producer-path implementation, deployment or live scan.
+
+Exact next action: wire B07 producer orchestration into `run_scan` using the existing `SharedCoverageProbeScheduler`, robots ownership checks and hardened request provider. Add explicit challenge/429/robots/budget/deadline unknown-state producer regressions and assert that synthetic probes never alter the Standard 150 assessed-page count/denominator. Then obtain independent review and exact-head CI before marking B07 source-complete.
+
+After B07 closes, continue B09 sitemap integrity and B16 URL variants on the same finite scheduler, then B08 redirect-meaning evidence and B10–B15/B17–B18. Stage 3 B19–B24 and Stage 4 B25–B28 remain open. Nothing from Stage 2 is merged, staged, deployed or live-accepted.

@@ -849,7 +849,7 @@ async def run_scan(
                 source_pages=candidate.get("source_pages") or [],
                 link_text_samples=candidate.get("link_text_samples") or [],
             )
-            if failed:
+            if status_code in {404, 410}:
                 rule = "410_error" if status_code == 410 else "404_error"
                 link_probe_findings.append(create_finding(
                     rule=rule,

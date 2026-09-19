@@ -877,6 +877,8 @@ async def run_scan(
                     "evidence_status": "confirmed",
                     "verification_state": "verified",
                     "confidence_score": 96,
+                    "observed_evidence_version": LINK_INTEGRITY_PROBE_VERSION,
+                    "verified_observed_pages": [target],
                     # Stage 3 owns score/root-cause semantics. Coverage evidence
                     # is intentionally non-scoring until those caps land.
                     "non_scoring": True,
@@ -1880,6 +1882,14 @@ def group_findings(findings: list[dict]) -> list[dict]:
             "page_count": len(affected),
             "source_pages": _unique_nonempty([p for f in members for p in (f.get("source_pages") or [])]),
             "link_text_samples": _unique_nonempty([t for f in members for t in (f.get("link_text_samples") or [])]),
+            **({
+                "observed_evidence_version": sample.get("observed_evidence_version"),
+                "verified_observed_pages": _unique_nonempty([
+                    p for f in members for p in (f.get("verified_observed_pages") or [])
+                ]),
+            } if sample.get("observed_evidence_version")
+                and all(f.get("observed_evidence_version") == sample.get("observed_evidence_version") for f in members)
+                else {}),
             **({"indexability_intent_sources": _group_indexability_intent_sources(members)}
                if sample.get("rule") == "sitemap_indexability_conflict" else {}),
             **({"redirect_fetch_evidence_samples": redirect_samples} if redirect_samples else {}),

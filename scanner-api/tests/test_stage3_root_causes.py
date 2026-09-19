@@ -218,3 +218,31 @@ def test_same_root_cause_id_with_different_repair_surfaces_stays_separate():
 
     assert len(groups) == 2
     assert {group["repair_surface_id"] for group in groups} == {"header", "footer"}
+
+
+def test_grouping_preserves_first_seen_rank_order_when_later_member_joins():
+    fixes = [
+        {
+            "id": "ranked-first",
+            "affected_pages": ["/a"],
+            "root_cause_evidence": evidence("shared-root", "ev-a", surface="template"),
+        },
+        {
+            "id": "later-singleton",
+            "affected_pages": ["/b"],
+        },
+        {
+            "id": "ranked-first-geo",
+            "finding_domain": "geo",
+            "page_template_family": "location_landing",
+            "affected_pages": ["/c"],
+            "root_cause_evidence": evidence("shared-root", "ev-c", surface="template"),
+        },
+    ]
+
+    groups = group_evidenced_root_causes(fixes, scan_id="scan-1")
+
+    assert [group["member_ids"] for group in groups] == [
+        ["ranked-first", "ranked-first-geo"],
+        ["later-singleton"],
+    ]

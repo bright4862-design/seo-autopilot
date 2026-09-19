@@ -194,6 +194,23 @@ def _merge_repair_group(
     if source_pages:
         lead["source_pages"] = source_pages
 
+    observed_versions = {
+        _clean_text(member.get("observed_evidence_version"))
+        for member in members
+        if _clean_text(member.get("observed_evidence_version"))
+    }
+    if len(observed_versions) == 1:
+        lead["observed_evidence_version"] = next(iter(observed_versions))
+        lead["verified_observed_pages"] = _dedupe_urls([
+            page
+            for member in members
+            for page in (
+                member.get("verified_observed_pages")
+                if isinstance(member.get("verified_observed_pages"), list)
+                else []
+            )
+        ], **identity_context)
+
     all_complete = all(member.get("affected_pages_complete") is not False for member in members)
     lead["affected_pages_complete"] = all_complete
     lead["requires_developer"] = any(member.get("requires_developer") is True for member in members)

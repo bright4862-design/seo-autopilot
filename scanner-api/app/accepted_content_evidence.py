@@ -59,6 +59,18 @@ def _placement(node: Any) -> str:
     return "body"
 
 
+def _node_excluded_by_sanitize(node: Any) -> bool:
+    """Return whether this node or an ancestor is removed from accepted evidence."""
+    current = node
+    while current is not None and getattr(current, "name", None):
+        if (current.name in EXCLUDED_TAGS or current.has_attr("hidden")
+                or str(current.get("aria-hidden", "")).strip().lower() == "true"
+                or HIDDEN_STYLE.search(str(current.get("style", "")))):
+            return True
+        current = current.parent
+    return False
+
+
 def _sanitize(soup: BeautifulSoup) -> None:
     # Reverse document order prevents a removed parent's children from being
     # accessed after BeautifulSoup clears their attributes during decompose().
@@ -249,13 +261,22 @@ def extract_accepted_content_evidence(html: str, evidence_class: str) -> dict[st
         "inline_script_bytes": inline_script_bytes,
         "inline_style_bytes": inline_style_bytes,
     })
-    snapshots = [(img, "absent" if not img.has_attr("alt") else ("empty" if not _text(img.get("alt")) else "present"), _placement(img)) for img in soup.find_all("img")]
+    snapshots = []
+    for img in soup.find_all("img"):
+        alt_state = "absent" if not img.has_attr("alt") else ("empty" if not _text(img.get("alt")) else "present")
+        placement = _placement(img)
+        if _node_excluded_by_sanitize(img):
+            applicability, applicability_reason = "excluded", "hidden_or_example_content"
+        else:
+            applicability, applicability_reason = _image_applicability(img, soup)
+        # Retain only scalar evidence before destructive sanitization. Hidden
+        # ancestors are decomposed below, so no later classification may
+        # dereference a decomposed BeautifulSoup node.
+        snapshots.append((alt_state, placement, applicability, applicability_reason))
     _sanitize(soup)
-    visible_ids = {id(img) for img in soup.find_all("img")}
     images.update(accepted=True, state="pass", reason="accepted_html", **dict.fromkeys(counts, 0))
     images["image_count"] = images["observation_count"] = len(snapshots)
-    for ordinal, (img, alt_state, placement) in enumerate(snapshots, start=1):
-        applicability, applicability_reason = (_image_applicability(img, soup) if id(img) in visible_ids else ("excluded", "hidden_or_example_content"))
+    for ordinal, (alt_state, placement, applicability, applicability_reason) in enumerate(snapshots, start=1):
         if alt_state == "absent":
             images["absent_alt_count"] += 1
             images[f"{applicability}_missing_alt_count"] += 1

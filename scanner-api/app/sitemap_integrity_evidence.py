@@ -235,14 +235,41 @@ def classify_sitemap_target(
     return {**base, "state": "pass", "reason": "sitemap_target_usable_indexable_html"}
 
 
+def _source_failure_state(reason: str) -> tuple[str, str]:
+    clean = _clean(reason, 160).lower()
+    if not clean:
+        return "not_verified", "sitemap_source_retrieval_failed_reason_unattributed"
+    if clean in {
+        "challenge",
+        "block",
+        "rate_limit",
+        "robots_denied",
+        "deadline_exhausted",
+        "request_budget_exhausted",
+        "timeout",
+        "dns_error",
+        "transport_error",
+    } or clean.startswith(("http_401", "http_403", "http_407", "http_408", "http_425", "http_429")):
+        return "not_verified", f"sitemap_source_{clean}"
+    if clean.startswith(("http_404", "http_410", "http_5")) or clean in {
+        "redirect_loop",
+        "invalid_xml",
+        "invalid_sitemap",
+        "response_too_large",
+    }:
+        return "fail", f"sitemap_source_{clean}"
+    return "not_verified", f"sitemap_source_failure_{clean}"
+
+
 def build_sitemap_source_evidence(diagnostics: Any) -> list[dict[str, Any]]:
-    """Project existing sitemap diagnostics without inventing missing provenance.
+    """Project sitemap diagnostics without inventing missing provenance.
 
     Current discovery diagnostics identify roots individually but aggregate some
     child failure reasons. A failed source with no attached failure reason stays
-    ``not_verified`` rather than being promoted to a site defect. The integration
-    owner can extend producer diagnostics with per-child reasons later without
-    changing this fail-closed contract.
+    ``not_verified`` rather than being promoted to a site defect. If the shared
+    producer later attaches an exact source-level reason, the conservative map
+    above can classify known unusable files while access-limited failures remain
+    unknown.
     """
     if not isinstance(diagnostics, dict):
         return []
@@ -253,16 +280,17 @@ def build_sitemap_source_evidence(diagnostics: Any) -> list[dict[str, Any]]:
         url = _clean(source.get("url"))
         source_kind = _clean(source.get("source"), 120)
         outcome = _clean(source.get("outcome"), 120)
+        source_reason = _clean(source.get("reason"), 160)
         loc_count = max(0, int(source.get("loc_count") or 0))
         if outcome == "urls":
             state, reason = "pass", "sitemap_source_retrieved"
         elif outcome == "failed":
-            state, reason = "not_verified", "sitemap_source_retrieval_failed_reason_unattributed"
+            state, reason = _source_failure_state(source_reason)
         elif outcome == "empty":
             state, reason = "not_verified", "sitemap_source_empty_or_no_relevant_urls"
         else:
             state, reason = "not_verified", "sitemap_source_outcome_unknown"
-        output.append({
+        row = {
             "version": SITEMAP_INTEGRITY_EVIDENCE_VERSION,
             "rule": "sitemap_source_integrity",
             "source_url": url,
@@ -270,7 +298,10 @@ def build_sitemap_source_evidence(diagnostics: Any) -> list[dict[str, Any]]:
             "state": state,
             "reason": reason,
             "loc_count": loc_count,
-        })
+        }
+        if source_reason:
+            row["source_reason"] = source_reason
+        output.append(row)
 
     failure_buckets = diagnostics.get("sitemap_failure_reason_buckets") or {}
     if isinstance(failure_buckets, dict) and failure_buckets:
@@ -290,13 +321,18 @@ def build_sitemap_source_evidence(diagnostics: Any) -> list[dict[str, Any]]:
     return output
 
 
-def sitemap_coverage_from_scheduler(summary: Any) -> dict[str, Any]:
+def sitemap_coverage_from_scheduler(summary: Any, *, registration: Any = None) -> dict[str, Any]:
+    registration = registration if isinstance(registration, dict) else {}
+    candidate_universe_truncated = bool(registration.get("truncated"))
+    eligible_unsampled = max(0, int(registration.get("eligible_unsampled") or 0))
     if not isinstance(summary, dict):
         return {
             "version": SITEMAP_INTEGRITY_EVIDENCE_VERSION,
             "state": "not_verified",
             "reason": "scheduler_summary_unavailable",
             "eligible": 0,
+            "eligible_unsampled": eligible_unsampled,
+            "candidate_universe_truncated": candidate_universe_truncated,
             "completed": 0,
             "exhausted": 0,
         }
@@ -307,7 +343,9 @@ def sitemap_coverage_from_scheduler(summary: Any) -> dict[str, Any]:
     skipped = max(0, int(stats.get("skipped") or 0))
     exhausted = max(0, int(stats.get("exhausted") or 0))
     not_verified = max(0, int(stats.get("not_verified") or 0))
-    if exhausted or budget.get("budget_exhausted") or budget.get("deadline_exhausted"):
+    if candidate_universe_truncated:
+        state, reason = "not_verified", "candidate_universe_truncated"
+    elif exhausted or budget.get("budget_exhausted") or budget.get("deadline_exhausted"):
         state, reason = "not_verified", "shared_probe_budget_or_deadline_exhausted"
     elif eligible and completed + skipped < eligible:
         state, reason = "not_verified", "eligible_sitemap_targets_not_fully_checked"
@@ -320,6 +358,8 @@ def sitemap_coverage_from_scheduler(summary: Any) -> dict[str, Any]:
         "state": state,
         "reason": reason,
         "eligible": eligible,
+        "eligible_unsampled": eligible_unsampled,
+        "candidate_universe_truncated": candidate_universe_truncated,
         "attempted": max(0, int(stats.get("attempted") or 0)),
         "completed": completed,
         "not_verified": not_verified,

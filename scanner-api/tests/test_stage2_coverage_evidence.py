@@ -29,11 +29,14 @@ def _page(url, text, **extra):
 
 
 def test_near_duplicates_use_verified_main_text_not_template_chrome():
-    common = " ".join(["product", "benefits", "pricing", "details", "shipping"] * 20)
+    # Use high-entropy substantive text so the shingle similarity measures the
+    # intended near-duplicate relationship rather than a tiny repeating token
+    # cycle whose deduplicated shingles would understate similarity.
+    common = " ".join(f"token{index}" for index in range(100))
     pages = [
         _page("https://example.com/a", common + " alpha"),
         _page("https://example.com/b", common + " beta"),
-        _page("https://example.com/c", " ".join(["unique", "editorial", "story", "history", "context"] * 20)),
+        _page("https://example.com/c", " ".join(f"unique{index}" for index in range(100))),
         {**_page("https://example.com/unverified", common), "main_text_verified": False},
     ]
     evidence = near_duplicate_main_content(pages)

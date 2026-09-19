@@ -13,6 +13,7 @@ from .security import ResponseBodyTooLarge, safe_get
 
 MAX_SITEMAP_FETCHES = 60
 MAX_SITEMAP_DECODED_BYTES = 5_000_000
+MAX_SITEMAP_TARGET_PROVENANCE = 10_000
 SITEMAP_PARSER_VERSION = "sitemap_parser_v2_exact_origin_identity"
 
 SITEMAP_LOC_RE = re.compile(
@@ -107,10 +108,15 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
     diagnostics.setdefault("sitemap_fetch_limit_reached", False)
     diagnostics.setdefault("sitemap_budget_exhausted", False)
     diagnostics.setdefault("sitemap_failure_reason_buckets", {})
+    diagnostics.setdefault("sitemap_source_failures", {})
     # Per-source outcomes. Inventory proof is judged per source: a failed
     # speculative /sitemap.xml probe must not invalidate a robots-declared
     # sitemap that actually worked, so both observations are preserved.
     diagnostics.setdefault("sitemap_sources", [])
+    # Per-target provenance is required by B09 so unsampled sitemap probes can
+    # name the exact source file that published the target without pretending
+    # aggregate sitemap success/failure applies to every child.
+    diagnostics.setdefault("sitemap_target_sources", [])
     request_interval = max(0.0, float(min_request_interval_seconds or 0.0))
     diagnostics["sitemap_request_interval_seconds"] = request_interval
     request_pacer = _SitemapRequestPacer(request_interval)
@@ -154,10 +160,11 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
             diagnostics=diagnostics,
             pacer=request_pacer,
         )
+        root_declared = root in declared_roots
         _record_sitemap_source(
             diagnostics,
             url=root,
-            declared=root in declared_roots,
+            declared=root_declared,
             loc_count=len(locs),
             failed=_sitemap_failure_total(diagnostics) > failures_before,
         )
@@ -170,6 +177,12 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
                 record_market_prefix(scope_evidence, normalized)
                 if is_scannable_sitemap_url(normalized, origin) and is_same_prefix(normalized, path_prefix):
                     bucket.append(normalized)
+                    _record_sitemap_target_source(
+                        diagnostics,
+                        target_url=normalized,
+                        sitemap_url=root,
+                        source_kind="robots_declared" if root_declared else "speculative_default",
+                    )
                 else:
                     scope_evidence["sitemap_urls_excluded_outside_scope"] += 1
 
@@ -179,6 +192,7 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
     for child in rank_child_sitemaps(child_sitemaps, path_prefix):
         if _stop_sitemap_discovery(fetched, fetch_limit, deadline, diagnostics):
             break
+        failures_before = _sitemap_failure_total(diagnostics)
         bucket = family_urls.setdefault(f"child:{sitemap_family_key(child)}", [])
         locs = await fetch_sitemap_locs(
             client,
@@ -189,6 +203,14 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
             diagnostics=diagnostics,
             pacer=request_pacer,
         )
+        _record_sitemap_source(
+            diagnostics,
+            url=child,
+            declared=False,
+            loc_count=len(locs),
+            failed=_sitemap_failure_total(diagnostics) > failures_before,
+            source_kind="child_discovered",
+        )
         for loc in locs:
             if len(bucket) >= limit:
                 break
@@ -197,6 +219,12 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
                 record_market_prefix(scope_evidence, normalized)
                 if is_scannable_sitemap_url(normalized, origin) and is_same_prefix(normalized, path_prefix):
                     bucket.append(normalized)
+                    _record_sitemap_target_source(
+                        diagnostics,
+                        target_url=normalized,
+                        sitemap_url=child,
+                        source_kind="child_discovered",
+                    )
                 else:
                     scope_evidence["sitemap_urls_excluded_outside_scope"] += 1
 
@@ -214,6 +242,12 @@ async def load_sitemap_urls(client: httpx.AsyncClient, origin: str, path_prefix:
     elif len(detected) > 1:
         scope_evidence["multimarket_detected"] = True
     output = output[:limit]
+    output_set = set(output)
+    diagnostics["sitemap_target_sources"] = [
+        row
+        for row in diagnostics.get("sitemap_target_sources", [])
+        if isinstance(row, dict) and row.get("url") in output_set
+    ][:MAX_SITEMAP_TARGET_PROVENANCE]
     diagnostics["sitemap_fetch_count"] = len(fetched)
     diagnostics["sitemap_urls_discovered"] = len(output)
     diagnostics["sitemap_child_url_count"] = len(dedupe(child_sitemaps))
@@ -237,11 +271,21 @@ def interleave_url_families(family_urls: dict[str, list[str]]) -> list[str]:
     return output
 
 
-def _record_sitemap_failure(diagnostics: dict | None, reason: str) -> None:
+def _record_sitemap_failure(
+    diagnostics: dict | None,
+    reason: str,
+    *,
+    source_url: str = "",
+) -> None:
     if diagnostics is None:
         return
+    reason = str(reason or "sitemap_failure")
     buckets = diagnostics.setdefault("sitemap_failure_reason_buckets", {})
     buckets[reason] = int(buckets.get(reason, 0)) + 1
+    source = str(source_url or "").strip()
+    if source:
+        failures = diagnostics.setdefault("sitemap_source_failures", {})
+        failures[source] = reason
 
 
 def _sitemap_failure_total(diagnostics: dict | None) -> int:
@@ -258,6 +302,7 @@ def _record_sitemap_source(
     declared: bool,
     loc_count: int,
     failed: bool,
+    source_kind: str | None = None,
 ) -> None:
     """One observation per inventory source, kept whatever the others did."""
     if diagnostics is None:
@@ -268,12 +313,51 @@ def _record_sitemap_source(
         outcome = "urls"
     else:
         outcome = "empty"
-    diagnostics.setdefault("sitemap_sources", []).append({
+    row = {
         "url": str(url),
-        "source": "robots_declared" if declared else "speculative_default",
+        "source": source_kind or ("robots_declared" if declared else "speculative_default"),
         "outcome": outcome,
         "loc_count": int(loc_count),
-    })
+    }
+    if failed:
+        reason = str((diagnostics.get("sitemap_source_failures") or {}).get(str(url)) or "").strip()
+        if reason:
+            row["reason"] = reason
+    diagnostics.setdefault("sitemap_sources", []).append(row)
+
+
+def _record_sitemap_target_source(
+    diagnostics: dict | None,
+    *,
+    target_url: str,
+    sitemap_url: str,
+    source_kind: str,
+) -> None:
+    """Retain bounded exact target→source provenance for later B09 probes."""
+    if diagnostics is None:
+        return
+    target = str(target_url or "").strip()
+    source = str(sitemap_url or "").strip()
+    if not target or not source:
+        return
+    rows = diagnostics.setdefault("sitemap_target_sources", [])
+    if len(rows) >= MAX_SITEMAP_TARGET_PROVENANCE:
+        diagnostics["sitemap_target_sources_truncated"] = True
+        return
+    identity = (target, source)
+    if any(
+        isinstance(row, dict)
+        and (str(row.get("url") or ""), str(row.get("sitemap_url") or "")) == identity
+        for row in rows
+    ):
+        return
+    rows.append(
+        {
+            "url": target,
+            "sitemap_url": source,
+            "source_kind": str(source_kind or "sitemap"),
+        }
+    )
 
 
 def _stop_sitemap_discovery(fetched: set[str], fetch_limit: int, deadline: float | None, diagnostics: dict | None) -> bool:
@@ -295,7 +379,7 @@ async def fetch_sitemap_locs(client: httpx.AsyncClient, sitemap_url: str, fetche
     if _deadline_reached(deadline):
         if diagnostics is not None:
             diagnostics["sitemap_budget_exhausted"] = True
-        _record_sitemap_failure(diagnostics, "sitemap_deadline_reached")
+        _record_sitemap_failure(diagnostics, "sitemap_deadline_reached", source_url=sitemap_url)
         return []
     fetched.add(sitemap_url)
     if diagnostics is not None:
@@ -309,32 +393,32 @@ async def fetch_sitemap_locs(client: httpx.AsyncClient, sitemap_url: str, fetche
         if response is None:
             if _deadline_reached(deadline) and diagnostics is not None:
                 diagnostics["sitemap_budget_exhausted"] = True
-                _record_sitemap_failure(diagnostics, "sitemap_deadline_reached")
+                _record_sitemap_failure(diagnostics, "sitemap_deadline_reached", source_url=sitemap_url)
             else:
-                _record_sitemap_failure(diagnostics, "no_response")
+                _record_sitemap_failure(diagnostics, "no_response", source_url=sitemap_url)
             return []
         if response.status_code >= 400:
-            _record_sitemap_failure(diagnostics, f"http_{response.status_code}")
+            _record_sitemap_failure(diagnostics, f"http_{response.status_code}", source_url=sitemap_url)
             return []
     except asyncio.TimeoutError:
         if diagnostics is not None:
             diagnostics["sitemap_budget_exhausted"] = True
-        _record_sitemap_failure(diagnostics, "sitemap_timeout")
+        _record_sitemap_failure(diagnostics, "sitemap_timeout", source_url=sitemap_url)
         return []
     except ResponseBodyTooLarge:
-        _record_sitemap_failure(diagnostics, "sitemap_body_too_large")
+        _record_sitemap_failure(diagnostics, "sitemap_body_too_large", source_url=sitemap_url)
         return []
     except Exception:
-        _record_sitemap_failure(diagnostics, "sitemap_fetch_exception")
+        _record_sitemap_failure(diagnostics, "sitemap_fetch_exception", source_url=sitemap_url)
         return []
 
     try:
         body = decode_sitemap_body(response, sitemap_url)
     except ResponseBodyTooLarge:
-        _record_sitemap_failure(diagnostics, "sitemap_body_too_large")
+        _record_sitemap_failure(diagnostics, "sitemap_body_too_large", source_url=sitemap_url)
         return []
     if not body:
-        _record_sitemap_failure(diagnostics, "empty_sitemap_body")
+        _record_sitemap_failure(diagnostics, "empty_sitemap_body", source_url=sitemap_url)
         return []
     locs: list[str] = []
     for loc in parse_sitemap_locs(body):

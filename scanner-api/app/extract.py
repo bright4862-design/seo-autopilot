@@ -114,6 +114,24 @@ def client_rendering_signals(html: str, status_code: int, word_count: int) -> li
     return [label for label, pattern in APP_SHELL_MARKERS if pattern.search(source)][:4]
 
 
+def _anchor_navigation_presence(anchor: Any) -> bool:
+    """Return only semantic raw-HTML navigation evidence for an anchor.
+
+    Class names such as ``menu`` are not treated as proof. A verified source page
+    can therefore establish navigation presence only through a ``nav`` ancestor
+    or an ancestor explicitly carrying ``role=navigation``.
+    """
+    current = anchor
+    while current is not None:
+        if getattr(current, "name", None) == "nav":
+            return True
+        role = str(getattr(current, "attrs", {}).get("role", "")).strip().lower()
+        if role == "navigation":
+            return True
+        current = getattr(current, "parent", None)
+    return False
+
+
 def extract_links_from_soup(soup: BeautifulSoup, base_url: str, limit: int = 2000) -> list[dict]:
     links: list[dict] = []
     for anchor in soup.find_all("a", href=True):
@@ -123,7 +141,13 @@ def extract_links_from_soup(soup: BeautifulSoup, base_url: str, limit: int = 200
             continue
         if not href:
             continue
-        links.append({"href": href, "text": clean_text(anchor.get_text(" "))[:180]})
+        links.append(
+            {
+                "href": href,
+                "text": clean_text(anchor.get_text(" "))[:180],
+                "navigation_presence": _anchor_navigation_presence(anchor),
+            }
+        )
         if len(links) >= max(1, int(limit or 2000)):
             break
     return links

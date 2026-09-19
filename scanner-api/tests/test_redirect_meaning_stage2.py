@@ -109,7 +109,9 @@ def _assert_persisted_customer_output(page: dict, expected_url: str) -> None:
             "review": build_local_review(result),
             "expectedUrls": [expected_url],
             "expectedRule": "redirect_wrong_destination",
-            "expectedEligible": 1,
+            # A redirect source is observed evidence, not an eligible assessed
+            # content-page denominator. Do not invent checked coverage for it.
+            "expectedEligible": 0,
         }),
         text=True,
         capture_output=True,
@@ -263,4 +265,27 @@ async def test_non_html_200_destination_is_unusable_not_nonindexable(policy):
     evidence = page["redirect_fetch_evidence"]
     assert evidence["html_parse_ok"] is False
     assert evidence["classification"] == "redirect_destination_unusable"
+    assert evidence["meaning_evidence"]["reason"] == "destination_not_usable_html"
+
+
+@pytest.mark.asyncio
+async def test_empty_html_200_destination_is_unusable(policy):
+    source = "https://example.com/old-empty"
+    destination = "https://example.com/empty"
+    client = FakeClient({
+        source: _response(source, 301, location="/empty"),
+        destination: _response(
+            destination,
+            200,
+            body="",
+            content_type="text/html; charset=utf-8",
+        ),
+    })
+
+    page = await fetch_and_extract(client, source, DISCOVERY_INTERNAL, robots_policy=policy)
+
+    assert page["redirect_outcome"] == "redirect_destination_unusable"
+    evidence = page["redirect_fetch_evidence"]
+    assert evidence["html_parse_ok"] is False
+    assert evidence["meaning_evidence"]["state"] == "verified_unusable"
     assert evidence["meaning_evidence"]["reason"] == "destination_not_usable_html"

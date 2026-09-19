@@ -118,7 +118,7 @@ def test_b09_registration_discloses_truncation_without_expanding_assessed_pages(
         {"url": f"https://example.com/shop/{index}", "sitemap_url": "https://example.com/products.xml"}
         for index in range(5)
     ]
-    result = register_sitemap_target_candidates(
+    registration = register_sitemap_target_candidates(
         scheduler,
         entries,
         assessed_urls=["https://example.com/shop/assessed"],
@@ -126,11 +126,17 @@ def test_b09_registration_discloses_truncation_without_expanding_assessed_pages(
         scope_prefix="/shop",
         max_candidates=2,
     )
-    assert result["eligible_unsampled"] == 5
-    assert result["registered"] == 2
-    assert result["truncated"] is True
-    assert result["assessed_page_count_unchanged"] is True
+    assert registration["eligible_unsampled"] == 5
+    assert registration["registered"] == 2
+    assert registration["truncated"] is True
+    assert registration["assessed_page_count_unchanged"] is True
     assert len(scheduler.candidates("sitemap_target")) == 2
+
+    coverage = sitemap_coverage_from_scheduler(scheduler.summary(), registration=registration)
+    assert coverage["state"] == "not_verified"
+    assert coverage["reason"] == "candidate_universe_truncated"
+    assert coverage["eligible_unsampled"] == 5
+    assert coverage["candidate_universe_truncated"] is True
 
 
 def test_b09_classifies_verified_missing_noindex_redirect_and_app_shell_conflicts():
@@ -219,6 +225,20 @@ def test_b09_source_diagnostics_fail_closed_when_failure_reason_is_not_attribute
     assert coverage["failure_reason_buckets"] == {"http_403": 1}
 
 
+def test_b09_exact_source_failure_reason_distinguishes_known_missing_from_access_limited():
+    evidence = build_sitemap_source_evidence(
+        {
+            "sitemap_sources": [
+                {"url": "https://example.com/missing.xml", "source": "robots_declared", "outcome": "failed", "reason": "http_404"},
+                {"url": "https://example.com/blocked.xml", "source": "robots_declared", "outcome": "failed", "reason": "http_403"},
+            ]
+        }
+    )
+    missing, blocked = evidence
+    assert (missing["state"], missing["reason"]) == ("fail", "sitemap_source_http_404")
+    assert (blocked["state"], blocked["reason"]) == ("not_verified", "sitemap_source_http_403")
+
+
 def test_b16_generates_bounded_slash_and_case_variants_without_changing_reserved_escape_or_query():
     source = "https://example.com/Catalog%2FItem?color=Blue&size=M"
     rows = build_url_variant_candidates(
@@ -235,6 +255,15 @@ def test_b16_generates_bounded_slash_and_case_variants_without_changing_reserved
     assert all(row["source_url"] == source for row in rows)
     assert all(row["version"] == URL_VARIANT_EVIDENCE_VERSION for row in rows)
     assert all(row["synthetic"] is True for row in rows)
+
+
+def test_b16_path_mutation_preserves_empty_query_delimiter_as_identity_evidence():
+    source = "https://example.com/Page?"
+    rows = build_url_variant_candidates([source], origin="https://example.com", max_candidates=2)
+    by_kind = {row["kind"]: row for row in rows}
+    assert by_kind["slash"]["probe_url"] == "https://example.com/Page/?"
+    assert by_kind["case"]["probe_url"] == "https://example.com/page?"
+    assert all(row["source_url"] == source for row in rows)
 
 
 def test_b16_does_not_generate_apex_www_or_scheme_variants_without_verified_alias_scope():
@@ -276,6 +305,32 @@ def test_b16_meaningful_parameter_variant_must_be_explicit_and_preserves_exact_q
     assert parameter["synthetic"] is False
 
 
+def test_b16_candidate_limit_is_reported_and_cannot_be_described_as_full_coverage():
+    sources = [f"https://example.com/shop/item-{index}" for index in range(4)]
+    rows = build_url_variant_candidates(sources, origin="https://example.com", max_candidates=2)
+    assert len(rows) == 2
+    assert all(row["eligible_candidate_count"] == 8 for row in rows)
+    assert all(row["candidate_universe_truncated"] is True for row in rows)
+
+    scheduler = _scheduler(max_probe_requests=5)
+    register_url_variant_candidates(scheduler, rows)
+    for row in rows:
+        scheduler.begin_candidate("url_variant")
+        scheduler.record_result(
+            "url_variant",
+            row["probe_url"],
+            state="pass",
+            reason="variant_not_published",
+            status_code=404,
+            final_url=row["probe_url"],
+        )
+    coverage = url_variant_coverage_from_scheduler(scheduler.summary(), candidates=rows)
+    assert coverage["state"] == "not_verified"
+    assert coverage["reason"] == "candidate_universe_truncated"
+    assert coverage["eligible"] == 2
+    assert coverage["eligible_candidate_count"] == 8
+
+
 def test_b16_registers_candidates_in_same_shared_scheduler_without_new_budget():
     scheduler = _scheduler(max_probe_requests=5)
     source = "https://example.com/shop/item"
@@ -310,7 +365,7 @@ def test_b16_normal_redirect_to_source_is_harmless_but_never_claimed_as_publishe
     assert result["probe_url"] == probe_url
 
 
-def test_b16_distinct_live_case_variant_is_risk_without_collapsing_identity():
+def test_b16_distinct_live_case_variant_stays_unknown_without_equivalence_evidence():
     source_url = "https://example.com/Product"
     probe_url = "https://example.com/product"
     candidate = {
@@ -320,14 +375,14 @@ def test_b16_distinct_live_case_variant_is_risk_without_collapsing_identity():
         "synthetic": True,
     }
     result = classify_url_variant(_page(source_url), _page(probe_url), candidate)
-    assert result["state"] == "fail"
-    assert result["reason"] == "distinct_live_variant"
+    assert result["state"] == "not_verified"
+    assert result["reason"] == "distinct_live_variant_requires_equivalence_evidence"
     assert result["source_url"] == source_url
     assert result["probe_url"] == probe_url
     assert result["source_final_url"] != result["variant_final_url"]
 
 
-def test_b16_distinct_meaningful_query_variant_is_risk_and_keeps_raw_query_order():
+def test_b16_distinct_meaningful_query_variant_stays_unknown_without_equivalence():
     source_url = "https://example.com/search?brand=Acme&sort=price"
     probe_url = "https://example.com/search?brand=Acme&sort=rating"
     candidate = {
@@ -337,9 +392,21 @@ def test_b16_distinct_meaningful_query_variant_is_risk_and_keeps_raw_query_order
         "synthetic": False,
     }
     result = classify_url_variant(_page(source_url), _page(probe_url), candidate)
-    assert (result["state"], result["reason"]) == ("fail", "distinct_live_variant")
+    assert (result["state"], result["reason"]) == (
+        "not_verified",
+        "distinct_live_variant_requires_equivalence_evidence",
+    )
     assert result["source_url"].endswith("?brand=Acme&sort=price")
     assert result["probe_url"].endswith("?brand=Acme&sort=rating")
+
+
+def test_b16_live_noindex_variant_does_not_become_duplicate_risk():
+    source_url = "https://example.com/page"
+    probe_url = "https://example.com/Page"
+    candidate = {"source_url": source_url, "probe_url": probe_url, "kind": "case", "synthetic": True}
+    result = classify_url_variant(_page(source_url), _page(probe_url, noindex=True), candidate)
+    assert result["state"] == "not_verified"
+    assert result["reason"] == "live_noindex_variant_requires_policy_judgment"
 
 
 def test_b16_variant_canonicalized_to_source_is_not_reported_as_duplicate_risk():

@@ -28,7 +28,7 @@ def _page(url: str, main_text: str, *, chrome: str = "Shared navigation") -> dic
     )
 
 
-def test_b10_extraction_retains_sanitized_main_text_without_common_chrome():
+def test_b10_extraction_publishes_only_irreversible_main_content_signature_material():
     page = _page(
         "https://example.com/a",
         " ".join(f"alpha{index}" for index in range(80)),
@@ -38,9 +38,28 @@ def test_b10_extraction_retains_sanitized_main_text_without_common_chrome():
     assert page["main_text_evidence_version"] == MAIN_TEXT_EVIDENCE_VERSION
     assert page["main_text_verified"] is True
     assert page["main_text_source"] == "main_landmark"
+    assert page["main_text_representation"] == "sha256_5_token_shingles_v1"
+    assert page["main_text_signature"]
+    assert page["main_text_token_count"] >= 80
     assert "Navigation marker" not in page["main_text"]
     assert "Shared footer" not in page["main_text"]
-    assert "alpha79" in page["main_text"]
+    assert "alpha79" not in page["main_text"]
+    assert all(len(token) == 16 for token in page["main_text"].split())
+
+
+def test_b10_empty_main_landmark_does_not_fall_back_to_body_text():
+    page = extract_page(
+        "<html><head><title>Private title</title></head><body><p>Outside main copy</p><main></main></body></html>",
+        "https://example.com/empty-main",
+        "https://example.com/empty-main",
+        200,
+        "text/html",
+        {"discovered_from": ["sitemap"], "source_pages": [], "link_text_samples": []},
+    )
+    assert page["main_text_source"] == "main_landmark"
+    assert page["main_text_verified"] is False
+    assert page["main_text"] == ""
+    assert page["main_text_char_count"] == 0
 
 
 def test_b10_near_duplicate_analysis_uses_extracted_main_content_not_shared_chrome():
@@ -76,6 +95,7 @@ def test_b10_unusable_html_cannot_become_verified_main_text():
     assert page["main_text_evidence_version"] == MAIN_TEXT_EVIDENCE_VERSION
     assert page["main_text_verified"] is False
     assert page["main_text"] == ""
+    assert page["main_text_signature"] == ""
     assert near_duplicate_main_content([page])["state"] == "not_verified"
 
 

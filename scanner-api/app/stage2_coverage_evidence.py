@@ -13,6 +13,11 @@ from typing import Any
 import math
 import re
 
+from .stage2_reachability_provenance import (
+    REACHABILITY_PROVENANCE_VERSION,
+    REACHABILITY_SCOPE,
+)
+
 MAIN_TEXT_EVIDENCE_VERSION = "main_text_signature_v1"
 NEAR_DUPLICATE_VERSION = "near_duplicate_main_v1"
 MONEY_REACHABILITY_VERSION = "money_page_reachability_v1"
@@ -196,38 +201,103 @@ def near_duplicate_main_content(
 
 
 def money_page_reachability(pages: list[dict[str, Any]]) -> dict[str, Any]:
-    """Summarize observed reachability without claiming sitewide orphaning."""
+    """Summarize B11 observed reachability without a sitewide orphan claim.
+
+    Only the versioned producer envelope is accepted. A sitemap source or legacy
+    ``source_pages`` value is not silently promoted into an internal inlink.
+    Verified weak signals may fail inside the observed sample; partial provenance
+    remains unknown, and a pass requires all three B11 dimensions to be known.
+    """
     pages = _bounded_pages(pages)
     rows: list[dict[str, Any]] = []
     for page in pages:
         family = _clean(page.get("page_template_family")).lower()
         if not (page.get("money_page") is True or family in MONEY_FAMILIES):
             continue
-        source_pages = page.get("source_pages") if isinstance(page.get("source_pages"), list) else []
-        unique_sources = [source for source in dict.fromkeys(_clean(v) for v in source_pages) if source]
+
+        provenance_ok = (
+            page.get("reachability_provenance_version") == REACHABILITY_PROVENANCE_VERSION
+            and page.get("reachability_scope") == REACHABILITY_SCOPE
+            and page.get("reachability_evidence_state") == "observed_sample"
+            and page.get("sitewide_orphan_claim") is False
+        )
+        if not provenance_ok:
+            rows.append(
+                {
+                    "url": _page_url(page),
+                    "family": family or "standard",
+                    "observed_inlinks": None,
+                    "source_samples": [],
+                    "observed_depth": None,
+                    "navigation_presence": None,
+                    "state": "not_verified",
+                    "reason": "reachability_provenance_unavailable",
+                    "sitewide_orphan_claim": False,
+                }
+            )
+            continue
+
+        raw_sources = page.get("internal_source_pages")
+        sources = raw_sources if isinstance(raw_sources, list) else []
+        unique_sources = [source for source in dict.fromkeys(_clean(v) for v in sources) if source]
+        observed_inlinks = page.get("observed_internal_inlink_count")
+        if not isinstance(observed_inlinks, int) or observed_inlinks < 0:
+            observed_inlinks = None
+        elif observed_inlinks != len(unique_sources) and page.get("internal_source_pages_truncated") is not True:
+            # Exact counts and examples must agree unless the examples are
+            # explicitly truncated. Mismatched evidence fails closed.
+            observed_inlinks = None
+
         depth = page.get("crawl_depth")
         depth = int(depth) if isinstance(depth, int) and 0 <= depth <= MAX_PAGES else None
         nav = page.get("navigation_presence")
         nav_state = nav if type(nav) is bool else None
-        weak = not unique_sources or (depth is not None and depth >= 4) or nav_state is False
+
+        weak = (
+            observed_inlinks == 0
+            or (depth is not None and depth >= 4)
+            or nav_state is False
+        )
+        complete = observed_inlinks is not None and depth is not None and nav_state is not None
+        if weak:
+            state, reason = "fail", "weak_route_in_observed_sample"
+        elif complete:
+            state, reason = "pass", "reachable_in_observed_sample"
+        else:
+            state, reason = "not_verified", "reachability_evidence_partial"
+
         rows.append(
             {
                 "url": _page_url(page),
                 "family": family or "standard",
-                "observed_inlinks": len(unique_sources),
+                "observed_inlinks": observed_inlinks,
                 "source_samples": unique_sources[:MAX_LINK_SAMPLES],
+                "source_samples_truncated": page.get("internal_source_pages_truncated") is True,
                 "observed_depth": depth,
                 "navigation_presence": nav_state,
-                "state": "fail" if weak else "pass",
-                "reason": "weak_route_in_observed_sample" if weak else "reachable_in_observed_sample",
+                "state": state,
+                "reason": reason,
+                "sitewide_orphan_claim": False,
             }
         )
+
+    if not rows:
+        overall_state = "not_verified"
+    elif any(row["state"] == "fail" for row in rows):
+        overall_state = "fail"
+    elif any(row["state"] == "not_verified" for row in rows):
+        overall_state = "not_verified"
+    else:
+        overall_state = "pass"
     return {
         "version": MONEY_REACHABILITY_VERSION,
-        "scope": "observed_standard150_sample_only",
-        "state": "pass" if rows else "not_verified",
+        "provenance_version": REACHABILITY_PROVENANCE_VERSION,
+        "scope": REACHABILITY_SCOPE,
+        "state": overall_state,
         "money_pages_observed": len(rows),
         "weak_routes": sum(1 for row in rows if row["state"] == "fail"),
+        "unverified_routes": sum(1 for row in rows if row["state"] == "not_verified"),
+        "sitewide_orphan_claim": False,
         "pages": rows,
     }
 

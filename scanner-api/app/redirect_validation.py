@@ -104,6 +104,7 @@ async def fetch_with_redirect_evidence(
     *,
     max_redirects: int = DEFAULT_MAX_REDIRECTS,
     max_decoded_bytes: int | None = None,
+    request_provider=None,
 ):
     source = _normalize_url(url)
     evidence = _base_evidence(source or str(url or ""))
@@ -140,10 +141,18 @@ async def fetch_with_redirect_evidence(
                 return None, evidence
 
         try:
-            response = await safe_get_once(
-                client,
-                current,
-                max_decoded_bytes=max_decoded_bytes,
+            response = (
+                await request_provider(
+                    client,
+                    current,
+                    max_decoded_bytes=max_decoded_bytes,
+                )
+                if request_provider is not None
+                else await safe_get_once(
+                    client,
+                    current,
+                    max_decoded_bytes=max_decoded_bytes,
+                )
             )
             if response is None:
                 evidence.update({

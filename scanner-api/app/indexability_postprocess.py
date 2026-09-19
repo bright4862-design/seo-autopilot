@@ -101,15 +101,20 @@ def _apply_active_soft_404_match(page: dict, baselines: list[dict]) -> dict:
 
 
 def group_indexability_quality_findings(findings: list[dict]) -> list[dict]:
-    groups: dict[tuple[str, str], list[dict]] = {}
+    groups: dict[tuple[str, str, str], list[dict]] = {}
     for finding in findings:
         rule = str(finding.get("rule") or "")
         family = str(finding.get("page_template_family") or "standard")
-        groups.setdefault((rule, family), []).append(finding)
+        # Active-baseline findings are authenticated under a different evidence
+        # revision than legacy/passive soft-404 heuristics. Never collapse the
+        # two into one repair card and then imply the active proof covered URLs
+        # that were only heuristically classified.
+        evidence_version = str(finding.get("observed_evidence_version") or "")
+        groups.setdefault((rule, family, evidence_version), []).append(finding)
 
     output: list[dict] = []
     severity = {"critical": 4, "high": 3, "medium": 2, "low": 1}
-    for (rule, family), members in groups.items():
+    for (rule, family, evidence_version), members in groups.items():
         affected = _unique(
             page
             for member in members
@@ -120,13 +125,22 @@ def group_indexability_quality_findings(findings: list[dict]) -> list[dict]:
             continue
 
         sample = dict(members[0])
-        group_key = f"indexability-quality|{rule}|{family}"
+        group_key = f"indexability-quality|{rule}|{family}|{evidence_version}"
         group_id = "finding_" + hashlib.sha1(group_key.encode("utf-8")).hexdigest()[:12]
         highest_priority = max(
             (str(member.get("priority") or "low") for member in members),
             key=lambda value: severity.get(value, 0),
         )
         title = QUALITY_GROUP_TITLES.get(rule, str(sample.get("title") or "Fix repeated indexability issue"))
+        verified_observed_pages = _unique(
+            page
+            for member in members
+            for page in (
+                member.get("verified_observed_pages")
+                if isinstance(member.get("verified_observed_pages"), list)
+                else []
+            )
+        )
         sample.update({
             "id": group_id,
             "fix_id": group_id,
@@ -161,6 +175,9 @@ def group_indexability_quality_findings(findings: list[dict]) -> list[dict]:
                 text for member in members for text in (member.get("link_text_samples") or [])
             ),
         })
+        if evidence_version and verified_observed_pages:
+            sample["observed_evidence_version"] = evidence_version
+            sample["verified_observed_pages"] = verified_observed_pages
         output.append(sample)
     return output
 

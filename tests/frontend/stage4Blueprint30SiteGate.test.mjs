@@ -7,17 +7,19 @@ import {
   loadBlueprint30SiteRoster,
 } from "../../scripts/assertBlueprint30SiteGate.mjs";
 
-const HEX40 = "1".repeat(40);
+const BASELINE_SHA = "1".repeat(40);
+const CANDIDATE_SHA = "3".repeat(40);
 const HEX64 = "2".repeat(64);
 const FINGERPRINT = "0123456789abcdef";
 
-function artifact(label) {
+function artifact(label, kind) {
+  const baseline = kind === "baseline";
   return {
     provenance: "captured",
     artifact_sha256: HEX64,
-    source_sha: HEX40,
+    source_sha: baseline ? BASELINE_SHA : CANDIDATE_SHA,
     release_fingerprint: FINGERPRINT,
-    captured_at: "2026-09-19T18:00:00Z",
+    captured_at: baseline ? "2026-09-19T18:00:00Z" : "2026-09-19T18:30:00Z",
     scan_mode: "standard_150",
     scope: "/",
     policy_id: "standard150-production-policy-v1",
@@ -30,8 +32,8 @@ function pair(row, { newArtifacts = [] } = {}) {
     site_id: row.site,
     url: row.url,
     stratum: row.stratum,
-    baseline: artifact(`${row.site}-baseline`),
-    candidate: artifact(`${row.site}-candidate`),
+    baseline: artifact(`${row.site}-baseline`, "baseline"),
+    candidate: artifact(`${row.site}-candidate`, "candidate"),
     difference_summary: { new_artifact_ids: newArtifacts },
     adjudications: [],
   };
@@ -65,11 +67,12 @@ test("the tracked renderer roster alone can never satisfy the full gate", () => 
   assert.ok(result.blockers.some((value) => value.includes("30 paired sites")));
 });
 
-test("synthetic or test-fixture pairs are explicitly not assessed even with all 30 shapes", () => {
+test("test-fixture pairs are explicitly not assessed even when all 30 captured shapes are otherwise valid", () => {
   const result = evaluateBlueprint30SiteGate(record({ test_fixture: true }));
   assert.equal(result.status, "not_assessed");
   assert.equal(result.pass, false);
   assert.equal(result.site_count, 30);
+  assert.deepEqual(result.failures, [], "the synthetic structural fixture should be valid apart from its non-live provenance blocker");
   assert.ok(result.blockers.some((value) => value.includes("test fixtures")));
 });
 
@@ -79,6 +82,21 @@ test("a partial captured cohort remains not assessed instead of becoming a small
   assert.equal(result.status, "not_assessed");
   assert.equal(result.pass, false);
   assert.equal(result.site_count, 29);
+});
+
+test("baseline and candidate must be distinct ordered captures under the same scope/policy", () => {
+  const full = record();
+  const pair0 = full.pairs[0];
+  pair0.candidate.source_sha = pair0.baseline.source_sha;
+  pair0.candidate.evidence_bundle_id = pair0.baseline.evidence_bundle_id;
+  pair0.candidate.captured_at = "2026-09-19T17:59:59Z";
+  pair0.candidate.scope = "/different";
+  pair0.candidate.policy_id = "different-policy";
+  const result = evaluateBlueprint30SiteGate(full);
+  assert.equal(result.status, "failed");
+  for (const fragment of ["source SHA is identical", "evidence bundle id is identical", "predates baseline", "scope differs", "policy differs"]) {
+    assert.ok(result.failures.some((value) => value.includes(fragment)), fragment);
+  }
 });
 
 test("every new candidate artifact requires explicit evidence-backed adjudication", () => {

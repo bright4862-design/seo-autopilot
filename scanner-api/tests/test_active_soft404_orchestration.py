@@ -271,3 +271,36 @@ async def test_deadline_exhaustion_is_explicit_unknown_without_fetch():
     summary = pool.summary()
     assert summary["request_budget"]["deadline_exhausted"] is True
     assert summary["purposes"]["soft_404_baseline"]["exhausted"] == len(baselines)
+
+
+@pytest.mark.asyncio
+async def test_candidate_limit_preserves_shared_pool_capacity_for_other_stage2_purposes():
+    pages = [
+        assessed_page(ORIGIN + "/catalog/a"),
+        {**assessed_page(ORIGIN + "/guides/a"), "page_template_family": "guide"},
+        {**assessed_page(ORIGIN + "/pricing/a"), "page_template_family": "pricing_page"},
+    ]
+    calls = []
+
+    async def fake_fetch(_client, url, _discovery, **_kwargs):
+        calls.append(url)
+        return probe_page(url)
+
+    pool = scheduler(request_limit=8)
+    baselines = await collect_active_soft404_baselines(
+        client=object(),
+        pages=pages,
+        origin=ORIGIN,
+        scope_prefix="/",
+        robots_policy=FakeRobots(True),
+        probe_scheduler=pool,
+        fetch_page=fake_fetch,
+        max_candidates=2,
+    )
+
+    assert len(baselines) == 2
+    assert len(calls) == 2
+    assert pool.summary()["purposes"]["soft_404_baseline"]["eligible"] == 2
+    # The local candidate cap can reserve the same scheduler for B09/B16. It is
+    # not a new request budget and never changes the assessed pages.
+    assert pages[0]["url"] == ORIGIN + "/catalog/a"

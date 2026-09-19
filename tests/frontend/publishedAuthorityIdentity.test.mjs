@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { webcrypto, createHash } from "node:crypto";
-import { buildAuthoritySnapshot, buildPersistedAuthoritySnapshot, firstFailedAuthorityPredicate } from "../../base44/functions/persistDurableScanAuthorityV6/authoritySnapshot.js";
-import { authorityRowsFromSnapshot } from "../../base44/functions/persistDurableScanAuthorityV6/authorityRows.js";
-import { createAuthoritySeal, stableSerialize, verifyAuthoritySeal } from "../../base44/functions/persistDurableScanAuthorityV6/authoritySeal.js";
-import { authoritySnapshotFromRows, buildCustomerProjection } from "../../base44/functions/getCustomerScanResultV6/projection.js";
+import { buildAuthoritySnapshot, buildPersistedAuthoritySnapshot, firstFailedAuthorityPredicate } from "../../base44/functions/persistDurableScanAuthorityV7/authoritySnapshot.js";
+import { authorityRowsFromSnapshot } from "../../base44/functions/persistDurableScanAuthorityV7/authorityRows.js";
+import { createAuthoritySeal, stableSerialize, verifyAuthoritySeal } from "../../base44/functions/persistDurableScanAuthorityV7/authoritySeal.js";
+import { authoritySnapshotFromRows, buildCustomerProjection } from "../../base44/functions/getCustomerScanResultV7/projection.js";
 import { authoritySnapshotFromRows as grokSnapshot } from "../../base44/functions/grokChat/authoritySnapshot.js";
-import { buildCustomerPreviewPayload, createCustomerPreviewProof, verifyCustomerPreviewProof } from "../../base44/functions/persistDurableScanAuthorityV6/customerPreviewSeal.js";
+import { buildCustomerPreviewPayload, createCustomerPreviewProof, verifyCustomerPreviewProof } from "../../base44/functions/persistDurableScanAuthorityV7/customerPreviewSeal.js";
 
 const IDENTITY = "evidence_url_identity_v2_published_route";
 const SEAL = "standard_review_snapshot_hmac_identity_v1";

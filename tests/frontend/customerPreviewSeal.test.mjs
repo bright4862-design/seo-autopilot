@@ -212,7 +212,7 @@ test("current-release terminal replay repairs only a missing signed preview afte
 });
 
 
-for (const authorityVersion of ["standard_review_snapshot_hmac_geo_v1", "standard_review_snapshot_hmac_identity_v1"]) test(`actual V6 unpaid request reads ${authorityVersion} signed preview without loading full result rows`, async () => {
+for (const authorityVersion of ["standard_review_snapshot_hmac_geo_v1", "standard_review_snapshot_hmac_identity_v1"]) test(`actual V7 unpaid request reads ${authorityVersion} signed preview without loading full result rows`, async () => {
   const [{
     buildCustomerPreviewPayload,
     createCustomerPreviewProof,
@@ -222,12 +222,12 @@ for (const authorityVersion of ["standard_review_snapshot_hmac_geo_v1", "standar
     parseCustomerPreviewPayload,
     verifyCustomerPreviewProof,
   }, projection, limitedIntegrity, releaseContract, compatibility, buildIdentity] = await Promise.all([
-    import("../../base44/functions/getCustomerScanResultV6/customerPreviewSeal.js"),
-    import("../../base44/functions/getCustomerScanResultV6/projection.js"),
-    import("../../base44/functions/getCustomerScanResultV6/limitedResultIntegrity.js"),
-    import("../../base44/functions/getCustomerScanResultV6/generatedReleaseContract.js"),
-    import("../../base44/functions/getCustomerScanResultV6/releaseCompatibility.js"),
-    import("../../base44/functions/getCustomerScanResultV6/generatedBuildId.js"),
+    import("../../base44/functions/getCustomerScanResultV7/customerPreviewSeal.js"),
+    import("../../base44/functions/getCustomerScanResultV7/projection.js"),
+    import("../../base44/functions/getCustomerScanResultV7/limitedResultIntegrity.js"),
+    import("../../base44/functions/getCustomerScanResultV7/generatedReleaseContract.js"),
+    import("../../base44/functions/getCustomerScanResultV7/releaseCompatibility.js"),
+    import("../../base44/functions/getCustomerScanResultV7/generatedBuildId.js"),
   ]);
   const { run: sourceRun, fixList, fixItems } = fixture();
   const run = {
@@ -275,8 +275,8 @@ for (const authorityVersion of ["standard_review_snapshot_hmac_geo_v1", "standar
     },
   };
 
-  const harnessName = `__customerPreviewV6Harness_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-  const entrySource = readFileSync("base44/functions/getCustomerScanResultV6/entry.ts", "utf8");
+  const harnessName = `__customerPreviewV7Harness_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const entrySource = readFileSync("base44/functions/getCustomerScanResultV7/entry.ts", "utf8");
   const javascript = ts.transpileModule(entrySource, {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
   }).outputText.replace(/^import[\s\S]*?;\s*$/gm, "");

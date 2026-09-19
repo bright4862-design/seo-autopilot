@@ -186,7 +186,9 @@ def group_evidenced_root_causes(
     grouping evidence. Verified SEO and GEO members may share one cause while
     retaining domain/family partitions and exact affected URL unions. Output
     order is anchored to the first member seen, so grouping cannot move an
-    earlier-ranked verified repair behind later singleton repairs.
+    earlier-ranked verified repair behind later singleton repairs. Verified
+    grouping also requires an exact scan identity; missing scan identity fails
+    closed to a singleton rather than creating a cross-run merge surface.
     """
     ordered_groups: list[dict[str, Any]] = []
     verified: OrderedDict[tuple[str, str, str], dict[str, Any]] = OrderedDict()
@@ -196,6 +198,12 @@ def group_evidenced_root_causes(
             continue
         evidence = validate_root_cause_evidence(fix)
         member_scan_id = _scan_identity(fix, scan_id)
+        if evidence["state"] == "verified" and not member_scan_id:
+            evidence = {
+                **evidence,
+                "state": "not_verified",
+                "reason": "verified root-cause grouping requires exact scan identity",
+            }
         if evidence["state"] != "verified":
             ordered_groups.append(
                 _singleton_group(
@@ -222,7 +230,7 @@ def group_evidenced_root_causes(
                 "grouping_reason": "members share the same explicit verified root cause",
                 "root_cause_id": root_cause_id,
                 "repair_surface_id": repair_surface_id or None,
-                "scan_id": member_scan_id or None,
+                "scan_id": member_scan_id,
                 "member_ids": [],
                 "member_count": 0,
                 "domains": [],

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Iterable
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 
 URL_VARIANT_EVIDENCE_VERSION = "url_variant_probe_v1_bounded_exact_identity"
@@ -100,7 +100,8 @@ def _raw_url_parts(url: str) -> tuple[str, str, str]:
 
     `urlsplit` is fine for scope validation, but its serializer can erase the
     distinction between `/page` and `/page?`. B16 evidence must retain that exact
-    observed spelling, so path mutations splice the original string instead.
+    observed spelling, so path/verified-origin mutations splice the original
+    route string instead.
     """
     value = _clean(url)
     scheme_at = value.find("://")
@@ -159,13 +160,11 @@ def _toggle_first_path_alpha_case(url: str) -> str:
 
 
 def _replace_origin(url: str, alias_origin: str) -> str:
-    source = urlsplit(url)
     alias = urlsplit(alias_origin)
     if alias.scheme not in {"http", "https"} or not alias.netloc:
         return ""
-    # Alias origins are caller-verified scope evidence. Preserve the source path
-    # and raw query ordering; this branch does not infer aliases itself.
-    return urlunsplit((alias.scheme, alias.netloc, source.path, source.query, source.fragment))
+    _, raw_path, raw_suffix = _raw_url_parts(url)
+    return f"{alias.scheme}://{alias.netloc}{raw_path}{raw_suffix}"
 
 
 def build_url_variant_candidates(

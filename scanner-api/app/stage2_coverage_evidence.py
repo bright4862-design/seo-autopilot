@@ -179,10 +179,16 @@ def near_duplicate_main_content(
             }
         )
 
+    state = "not_verified" if not rows else ("fail" if clusters else "pass")
+    reason = (
+        "verified_main_text_unavailable"
+        if not rows
+        else ("near_duplicate_main_content_observed" if clusters else "no_near_duplicate_cluster_observed")
+    )
     return {
         "version": NEAR_DUPLICATE_VERSION,
-        "state": "pass" if rows else "not_verified",
-        "reason": "verified_main_text" if rows else "verified_main_text_unavailable",
+        "state": state,
+        "reason": reason,
         "eligible_pages": len(rows),
         "clusters": clusters,
         "pair_samples": pair_samples,
@@ -282,6 +288,7 @@ def assess_local_entity_completeness(observation: dict[str, Any]) -> dict[str, A
             "state": "not_applicable" if observation.get("applicable") is False else "not_verified",
             "reason": observation.get("reason") or "local_entity_applicability_unknown",
             "missing_required": [],
+            "unverified_fields": [],
         }
     if observation.get("accepted") is not True:
         return {
@@ -289,15 +296,36 @@ def assess_local_entity_completeness(observation: dict[str, Any]) -> dict[str, A
             "state": "not_verified",
             "reason": observation.get("reason") or "local_entity_evidence_unavailable",
             "missing_required": [],
+            "unverified_fields": [],
         }
-    required = ("name", "address", "phone", "regular_hours")
+
+    contextual_status = _clean(observation.get("contextual_status")) or None
+    required = ("name", "address", "phone")
     missing = [key for key in required if not _clean(observation.get(key))]
+    hours = _clean(observation.get("regular_hours"))
+    hours_applicable = observation.get("regular_hours_applicable")
+    unverified_fields: list[str] = []
+    if hours_applicable is True and not hours:
+        missing.append("regular_hours")
+    elif hours_applicable is not False and not hours:
+        # A Coming Soon/closed/preopening context may legitimately lack regular
+        # hours. Without explicit applicability, preserve this as unknown rather
+        # than manufacturing a customer defect.
+        unverified_fields.append("regular_hours")
+
+    if missing:
+        state, reason = "fail", "required_local_details_missing"
+    elif unverified_fields:
+        state, reason = "not_verified", "local_detail_applicability_unverified"
+    else:
+        state, reason = "pass", "required_local_details_observed"
     return {
         "version": LOCAL_ENTITY_VERSION,
-        "state": "fail" if missing else "pass",
-        "reason": "required_local_details_missing" if missing else "required_local_details_observed",
+        "state": state,
+        "reason": reason,
         "missing_required": missing,
-        "contextual_status": _clean(observation.get("contextual_status")) or None,
+        "unverified_fields": unverified_fields,
+        "contextual_status": contextual_status,
         "optional_available": {
             key: bool(observation.get(key))
             for key in ("holiday_hours", "photos", "same_as", "parent_entity")
@@ -444,7 +472,7 @@ def optional_crux_adapter(
         value = metrics.get(key)
         if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0:
             safe[key] = value
-    return {**base, "state": "connected", "metrics": safe or None}
+    return {**base, "state": "connected" if safe else "unavailable", "metrics": safe or None}
 
 
 def page_weight_evidence(
@@ -514,4 +542,4 @@ def optional_gsc_adapter(
             safe[key] = value
     if metrics.get("index_state") in {"indexed", "not_indexed", "unknown"}:
         safe["index_state"] = metrics["index_state"]
-    return {**base, "state": "connected", "metrics": safe or None}
+    return {**base, "state": "connected" if safe else "unavailable", "metrics": safe or None}

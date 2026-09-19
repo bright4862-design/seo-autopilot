@@ -53,15 +53,15 @@ The B07/B09/B16 producer path is serialized through the existing `SharedCoverage
 
 ## Fresh independent-review corrections landed
 
-The current green code head incorporates the latest concrete review findings:
+The current green code head incorporates and regresses the latest concrete review findings:
 
 1. **Image evidence / DOM sanitization** — scalar image applicability is captured before destructive BeautifulSoup sanitization. Hidden/example descendants are excluded; decomposed nodes are never dereferenced later.
 2. **Empty landmark correctness** — main/article/body selection uses explicit `is None` checks so an empty `<main>` cannot fall through to unrelated body/title content.
-3. **B10 raw-content privacy** — raw substantive page text is no longer retained by the producer compatibility field. The field contains only irreversible SHA-256 five-token shingle digests plus aggregate signature/token/character-count metadata. The corresponding independent review thread remains intentionally open until the reviewer confirms whether the hashed compatibility field itself must be absent from the final `pages`/`crawled_pages` payload.
+3. **B10 raw-content privacy** — raw substantive page text is no longer retained by the producer compatibility field. The field contains deterministic SHA-256 five-token shingle fingerprints plus aggregate signature/token/character-count metadata. CodeRabbit independently confirmed that the original raw-copy exposure is addressed and resolved the thread. These fingerprints are not treated as secret against candidate-text dictionary matching.
 4. **Redirect-loop provenance** — zero-hop diagnostic loop state is `not_verified`; a loop with observed hop evidence remains `verified_unusable`.
 5. **Access-block redirect truthfulness** — challenge/block/rate-limit evidence is evaluated before generic HTTP >=400 classification. Challenged 403/429/503 destinations remain unknown; a verified ordinary 404 remains unusable.
 
-The empty-landmark and access-block review threads were replied to with exact-head CI evidence and resolved. The B10 final-publication thread remains open for independent confirmation.
+CodeRabbit independently confirmed and resolved the currently reported empty-landmark, raw-copy and access-block threads after the exact-head fixes. A fresh whole-head review request has been posted; any newly reported finding remains a gate and must be closed with a reproducing regression.
 
 ## Stage 2 status
 
@@ -78,7 +78,7 @@ Source-complete/materially proven on the integration line:
 
 Open serialized Stage-2 work:
 
-- **B10:** resolve final publication-boundary handling of hashed compatibility material; if duplicate evidence becomes displayed, add producer → Review → signed authority → persisted rows → customer/card/handoff/export proof.
+- **B10:** raw-copy privacy defect is resolved; authenticated producer → Review → authority → persistence → customer/card/handoff/export proof is still required if near-duplicate evidence becomes customer-visible.
 - **B11:** stable sample-scoped crawl depth, inlink and navigation provenance; no sitewide orphan claim from sample-only evidence.
 - **B12:** paired raw/rendered hub-link evidence for up to five hubs, with explicit completed/failed/unassessed states.
 - **B13/B14:** contextual local entity/status/address/phone/regular-hours producer evidence and verified entity matching/NAP consistency.
@@ -126,6 +126,6 @@ The genuine 30-site gate is still **not assessed**. Historical summary counts an
 
 ## Exact next action
 
-Stay on Stage 2. First close the B10 final publication-boundary review question with a reproducing test if the reviewer requires the hashed compatibility field itself to be removed. Then implement B11 producer provenance truthfully from observed crawl/inlink/navigation data without inventing a complete-site denominator. Continue B12–B15/B17 transfer/B18 as serialized slices, add authenticated downstream tests for anything customer-visible, run focused tests after each slice, and require exact-head FixList CI + independent review for meaningful combined checkpoints.
+Stay on Stage 2. The currently reported inline review findings are resolved. Implement B11 producer provenance truthfully from observed crawl/inlink/navigation data without inventing a complete-site denominator. Continue B12–B15/B17 transfer/B18 as serialized slices, add authenticated downstream tests for anything customer-visible, run focused tests after each slice, and require exact-head FixList CI + independent review for meaningful combined checkpoints.
 
 Do not begin shared Stage-3 integration until B06–B18 are genuinely source-complete and green. Do not begin Stage-4 live execution until all applicable source/review/CI/30-site/release gates are actually proven.

@@ -21,7 +21,7 @@ The automation assignment described the same Stage-4 concerns in a slightly diff
 
 ### B27 / compatibility boundary
 
-`script/stage4EvidenceCompatibility.mjs` (repository path: `scripts/stage4EvidenceCompatibility.mjs`) defines a read-only fail-closed compatibility policy:
+`scripts/stage4EvidenceCompatibility.mjs` defines a read-only fail-closed compatibility policy:
 
 - all historical authority seals remain readable under historical reconstruction semantics;
 - the current identity seal requires the exact published-route identity and coverage versions;
@@ -49,7 +49,7 @@ The existing Stage-1 named corpus remains the source of deterministic named-host
 - `full_30_site_gate=not_assessed`;
 - actual Python corpus production plus `scripts/assertCorpusRun.mjs` execution in FixList CI.
 
-New `scripts/assertBlueprint30SiteGate.mjs` implements the separate full-blueprint gate. The tracked 30-row renderer-risk manifest is accepted only as the canonical **roster**. A pass requires exactly 30 paired baseline/candidate artifacts where each artifact is explicitly `captured`, Standard 150, source/fingerprint/time/scope/policy/evidence-bundle identified, and each new candidate artifact has an evidence-backed independent adjudication. Historical summaries, synthetic data, test fixtures, wrong/partial rosters and 29/30 cohorts cannot pass.
+New `scripts/assertBlueprint30SiteGate.mjs` implements the separate full-blueprint gate. The tracked 30-row renderer-risk manifest is accepted only as the canonical **roster**. A pass requires exactly 30 paired baseline/candidate artifacts where each artifact is explicitly `captured`, Standard 150, source/fingerprint/time/scope/policy/evidence-bundle identified. Baseline and candidate must be distinct ordered captures under the same scope and policy. Every new candidate artifact requires an evidence-backed independent adjudication. Historical summaries, synthetic data, test fixtures, wrong/partial rosters and 29/30 cohorts cannot pass.
 
 `tests/frontend/stage4Blueprint30SiteGate.test.mjs` proves those fail-closed states. It intentionally does not create a unit-test record that can be mistaken for a genuine passing corpus.
 
@@ -79,21 +79,21 @@ The source audit deliberately returns `soft_404.status=not_assessed`: source fil
 - the canonical release manifest contains exactly six V6 scanner runtime functions;
 - Cloud Operator exposes guarded build/promote/rollback/barrier/cutover/acceptance-only operations with bounded acceptance budgets.
 
-`scripts/stage4ReleaseAcceptance.mjs` defines the evidence record required to call live Stage 4 accepted. It requires:
+`scripts/stage4ReleaseAcceptance.mjs` defines the evidence record required to call live Stage 4 accepted. It requires traceable receipts/references for every material live claim, including:
 
-- exact merged SHA, independent approved review and exact-SHA CI success;
+- exact merged SHA, independently approved review and exact-SHA CI success;
 - named-schema parity;
 - verified getfixlist and Base44 site source identities;
 - verified identities for all six V6 scanner functions;
 - worker source, digest, revision, 100% traffic, rollback target/readiness and private unauthenticated `/scan-job` 403;
 - an acceptance-only bounded cohort while public claims are closed;
-- a real successful Standard 150 scan within the 150-page cap, persisted authority proof and FixList id;
+- a real scan submitted through the published customer UI using Standard 150, within the 150-page cap, with persisted authority proof and FixList id;
 - reload of the exact same `scan_id`/FixList/authority proof;
 - owner-scoped history containing that scan;
 - a distinct linked rescan on the same domain with verified improved/unchanged/regressed comparison evidence;
 - cohort close/drain before public claims open.
 
-Test fixtures can exercise this shape but are forcibly `not_assessed`; they cannot claim live acceptance.
+Test fixtures can exercise this shape but are forcibly `not_assessed`; they cannot claim live acceptance. A claimed live state without receipts fails closed.
 
 ## Files owned by this lane
 
@@ -117,7 +117,29 @@ No `run_scan`, shared probe scheduler, Stage-2 feature module, Stage-3 ranking/d
 
 ## Verification status
 
-CI is required on the exact final branch head before this lane is integration-ready. Do not convert the source-level source audit, synthetic corpus, test fixtures or contract tests into claims of deployed/live acceptance.
+Exact code/test checkpoint before this documentation commit: `c8999a0407136b4e9e45345ba81011584691ecf8`.
+
+FixList CI run `35463913140`: **SUCCESS** on both jobs.
+
+Fresh exact-checkpoint evidence:
+
+- immutable checkout: passed;
+- root scanner regression step: passed;
+- full `scanner-api` regression step: passed;
+- named Stage-1 corpus production/assertion: passed and remained explicitly synthetic with `full_30_site_gate=not_assessed`;
+- frozen scanner revision verification: passed;
+- production scanner image build: passed;
+- frontend lint: passed;
+- typecheck: passed;
+- generated release contracts: current;
+- frontend contract tests, including the Stage-4 regressions above: passed;
+- frontend production build: passed.
+
+The latest directly captured numeric suite totals from the preceding exact lane head `1e22b488036c2a00b9993a6302ddb8fbae1bd9f3`, FixList CI `35463815563`, were **115 root scanner tests** and **1,820 scanner-api tests / 18 intentional skips**. The later checkpoint changed only Stage-4 JavaScript gate/test code and the same scanner regression, corpus, frozen-revision and image-build steps passed again.
+
+CodeRabbit independent review was manually requested on draft PR #317, but the service reported its review quota/rate limit at this checkpoint. That is recorded as **independent automated review unavailable**, not as a review pass.
+
+**Lane status: code/test contracts are CI-verified and integration-ready, but Stage 4 is not complete or live-accepted.** The genuine paired 30-site gate, deployed getfixlist soft-404 verification, exact-source deployment and real customer scan/reload/history/rescan acceptance all remain `not_assessed` until performed against the eventual integrated release.
 
 ## Remaining serialized integration/live actions
 
@@ -127,5 +149,5 @@ CI is required on the exact final branch head before this lane is integration-re
 4. Merge only reviewed integrated source, require exact-main CI and named schema parity.
 5. Publish Base44 site/functions and promote the worker only through guarded owner workflows, proving actual runtime/source identities and rollback readiness.
 6. Recheck getfixlist canonical, robots, sitemap and soft-404 behavior against the **exact deployed source**. The source-level changes in this lane are not deployment proof.
-7. With public claims still closed, activate a bounded acceptance-only cohort and run one real customer Standard 150 scan. Verify persisted authority/FixList, exact `scan_id` reload/history, then run and verify a linked rescan comparison.
+7. With public claims still closed, activate a bounded acceptance-only cohort and run one real customer Standard 150 scan from the published UI. Verify persisted authority/FixList, exact `scan_id` reload/history, then run and verify a linked rescan comparison.
 8. Close/drain acceptance before opening public claims. Record the resulting live evidence in the Stage-4 acceptance record; only a genuine `live_authorized` record may pass.

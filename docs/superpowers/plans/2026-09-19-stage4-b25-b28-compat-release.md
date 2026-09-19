@@ -31,7 +31,7 @@ The automation assignment described the same Stage-4 concerns in a slightly diff
 
 Regressions in `tests/frontend/stage4EvidenceCompatibility.test.mjs` read the frozen historical HMAC fixture and prove the compatibility helper neither rewrites the fixture objects nor changes the fixture file bytes.
 
-`tests/frontend/stage4HistoricalReaderContract.test.mjs` also checks the real V6 customer reader and Grok reader still list every historical authority version plus `standard_review_snapshot_hmac_identity_v1`, and that both readers contain a fail-closed accepted-version boundary.
+`tests/frontend/stage4HistoricalReaderContract.test.mjs` also checks the lane-base V6 customer reader and Grok reader still list every historical authority version plus `standard_review_snapshot_hmac_identity_v1`, and that both readers contain a fail-closed accepted-version boundary. Current `main` has subsequently moved to V7 routes; the serialized integrator must run the same compatibility assertions against the then-current reader generation rather than downgrading routes.
 
 **Integration hook:** the serialized authority/customer integrator must use this version registry (or an equivalent reviewed shared implementation) when new Stage-2/3 evidence becomes signed customer evidence. This lane intentionally does not modify authority/persistence shared writers or customer reader reconstruction code.
 
@@ -76,15 +76,17 @@ The source audit deliberately returns `soft_404.status=not_assessed`: source fil
 - checkout and `origin/main` must equal the dispatched SHA;
 - owner confirmation must equal the exact SHA;
 - ephemeral Base44 device authorization remains required;
-- the canonical release manifest contains exactly six V6 scanner runtime functions;
+- the canonical release manifest must contain exactly one versioned runtime function for each of the six scanner roles, all at the same route generation;
 - Cloud Operator exposes guarded build/promote/rollback/barrier/cutover/acceptance-only operations with bounded acceptance budgets.
 
-`scripts/stage4ReleaseAcceptance.mjs` defines the evidence record required to call live Stage 4 accepted. It requires traceable receipts/references for every material live claim, including:
+The lane base carries V6 release routes while current `main` carries V7. `scripts/stage4ReleaseAcceptance.mjs` is deliberately **route-generation aware**, not hardcoded to V6: it derives all six scanner runtime roles and their single generation from the exact source release manifest and rejects deployed evidence from any other generation. This prevents Stage-4 integration from accidentally downgrading V7 back to the older lane-base route names.
+
+The live acceptance evidence record requires traceable receipts/references for every material claim, including:
 
 - exact merged SHA, independently approved review and exact-SHA CI success;
 - named-schema parity;
 - verified getfixlist and Base44 site source identities;
-- verified identities for all six V6 scanner functions;
+- verified identities for all six source-declared scanner runtime functions at that same route generation;
 - worker source, digest, revision, 100% traffic, rollback target/readiness and private unauthenticated `/scan-job` 403;
 - an acceptance-only bounded cohort while public claims are closed;
 - a real scan submitted through the published customer UI using Standard 150, within the 150-page cap, with persisted authority proof and FixList id;
@@ -117,9 +119,9 @@ No `run_scan`, shared probe scheduler, Stage-2 feature module, Stage-3 ranking/d
 
 ## Verification status
 
-Exact code/test checkpoint before this documentation commit: `c8999a0407136b4e9e45345ba81011584691ecf8`.
+Exact code/test checkpoint before this documentation commit: `5108196b422055fd93b4b3a4c550e5588b4c3fcc`.
 
-FixList CI run `35463913140`: **SUCCESS** on both jobs.
+FixList CI run `35464321801`: **SUCCESS** on both jobs.
 
 Fresh exact-checkpoint evidence:
 
@@ -132,19 +134,19 @@ Fresh exact-checkpoint evidence:
 - frontend lint: passed;
 - typecheck: passed;
 - generated release contracts: current;
-- frontend contract tests, including the Stage-4 regressions above: passed;
+- frontend contract tests, including the Stage-4 route-generation, compatibility, 30-site, own-site and live-acceptance regressions above: passed;
 - frontend production build: passed.
 
-The latest directly captured numeric suite totals from the preceding exact lane head `1e22b488036c2a00b9993a6302ddb8fbae1bd9f3`, FixList CI `35463815563`, were **115 root scanner tests** and **1,820 scanner-api tests / 18 intentional skips**. The later checkpoint changed only Stage-4 JavaScript gate/test code and the same scanner regression, corpus, frozen-revision and image-build steps passed again.
+The latest directly captured numeric suite totals from the earlier exact lane head `1e22b488036c2a00b9993a6302ddb8fbae1bd9f3`, FixList CI `35463815563`, were **115 root scanner tests** and **1,820 scanner-api tests / 18 intentional skips**. No scanner Python/runtime behavior was changed after that checkpoint, and the later exact code head reran and passed those scanner regression, corpus, frozen-revision and production-image steps.
 
-CodeRabbit independent review was manually requested on draft PR #317, but the service reported its review quota/rate limit at this checkpoint. That is recorded as **independent automated review unavailable**, not as a review pass.
+CodeRabbit independent review was manually requested on draft PR #317, but the service reported `Review rate limited`. That is recorded as **independent automated review unavailable**, not as a review pass.
 
 **Lane status: code/test contracts are CI-verified and integration-ready, but Stage 4 is not complete or live-accepted.** The genuine paired 30-site gate, deployed getfixlist soft-404 verification, exact-source deployment and real customer scan/reload/history/rescan acceptance all remain `not_assessed` until performed against the eventual integrated release.
 
 ## Remaining serialized integration/live actions
 
 1. Complete and exact-head verify B06–B24 before shared Stage-4 wiring.
-2. Authenticate approved Stage-2/3 evidence fields through the canonical signed authority and all verified readers using the compatibility boundary; retain frozen legacy reconstruction bytes and fail closed on unknown versions.
+2. Reconcile this lane onto the then-current release route generation (currently V7 on `main`), never downgrade routes, and authenticate approved Stage-2/3 evidence fields through the canonical signed authority and all verified readers; retain frozen legacy reconstruction bytes and fail closed on unknown versions.
 3. Capture the genuine paired 30-site baseline/candidate corpus under a single explicit policy/scope contract; independently adjudicate every new artifact. Until that exists, B25 full gate remains `not_assessed`.
 4. Merge only reviewed integrated source, require exact-main CI and named schema parity.
 5. Publish Base44 site/functions and promote the worker only through guarded owner workflows, proving actual runtime/source identities and rollback readiness.

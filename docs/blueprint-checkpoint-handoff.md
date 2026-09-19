@@ -66,3 +66,22 @@ Candidate fingerprint `5fb87bf7869c51c2` is explicitly a candidate, not frozen/a
 The genuine 30-site baseline/candidate replay corpus is still missing. Historical summary counts are not substitute acceptance evidence. Base44 synchronization and app-level authentication previously failed and must be revalidated at release time.
 
 The authorized first release requires complete stage-one source acceptance, exact-source CI, named schema parity, controlled cutover and verified Base44/worker activation. Live stage-one acceptance is required before recording the milestone as released and accepted. Remaining full-blueprint and 30-site requirements are not claimed by this release. Preserve the 150-page/security limits, existing GEO, historical proofs and preview privacy. Do not disconnect the repository, rotate secrets, broadly push schemas or publish a stale snapshot.
+
+
+## Current resume point — Stage 2 B06 checkpoint (2026-09-19)
+
+Stage 1 is merged on `main` at `22ce4e69aa915a2e5ba796f9432fea33a0fa79bb`, but its production publication/promotion/live acceptance remains a separate pending cutover. Do not describe the staged 0%-traffic worker as live.
+
+Later-stage work is isolated on:
+
+- Branch: `agent/full-blueprint-stage2-coverage-b06-20260919`
+- PR: [#303](https://github.com/bright4862-design/seo-autopilot/pull/303)
+- Last code checkpoint verified before this documentation update: `d88b5b89a870b9f502f46da654eab9c831945c40`
+- Exact-code CI: [FixList CI 35450285277](https://github.com/bright4862-design/seo-autopilot/actions/runs/35450285277), success
+- Results: 1,806 scanner tests passed / 18 intentional skips; 1,479 frontend tests passed; lint, typecheck, generated contracts, build, labelled Stage-1 corpus, frozen revision and production scanner-image build passed.
+
+B06 is source-complete on this branch: bounded unsampled same-site link checks share one finite request pool, preserve source-page/link evidence, keep probe targets outside the assessed-page cap and persist verified 404/410 evidence through the signed customer path. Probe-backed observed counts are authenticated without inventing an assessed denominator. Nothing in PR #303 is merged, deployed, staged or live.
+
+Exact next engineering action: implement **B07 active soft-404 detection** on the same `SharedCoverageProbeScheduler`. Use deterministic non-existent root/path-family probes, compare only complete accepted responses/intent, retain synthetic provenance, reject challenge/block/rate-limit responses as baselines and preserve exhaustion as unknown. Then proceed to B09/B16 reuse of the same scheduler and B08 redirect-meaning evidence, followed by B10–B18 in blueprint order. Stage 3 B19–B24 and Stage 4 B25–B28 remain open.
+
+Release sequencing rule remains unchanged: while the Stage-1 exact SHA is still in cutover, do not merge PR #303 into `main`. Continue implementation/review on the branch and carry Stage 1 through its existing guarded release handoff separately.

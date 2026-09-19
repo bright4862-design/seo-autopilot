@@ -60,6 +60,34 @@ function capturedArtifactErrors(artifact, label) {
   return failures;
 }
 
+function pairedArtifactErrors(pair) {
+  const failures = [];
+  const baseline = pair?.baseline || {};
+  const candidate = pair?.candidate || {};
+  const baselineTime = parseTime(baseline.captured_at);
+  const candidateTime = parseTime(candidate.captured_at);
+  if (isSha(baseline.source_sha, 40) && isSha(candidate.source_sha, 40)
+      && clean(baseline.source_sha) === clean(candidate.source_sha)) {
+    failures.push("baseline/candidate source SHA is identical");
+  }
+  if (clean(baseline.evidence_bundle_id) && clean(candidate.evidence_bundle_id)
+      && clean(baseline.evidence_bundle_id) === clean(candidate.evidence_bundle_id)) {
+    failures.push("baseline/candidate evidence bundle id is identical");
+  }
+  if (baselineTime !== null && candidateTime !== null && candidateTime < baselineTime) {
+    failures.push("candidate capture predates baseline capture");
+  }
+  if (clean(baseline.policy_id) && clean(candidate.policy_id)
+      && clean(baseline.policy_id) !== clean(candidate.policy_id)) {
+    failures.push("baseline/candidate scan policy differs");
+  }
+  if (clean(baseline.scope) && clean(candidate.scope)
+      && clean(baseline.scope) !== clean(candidate.scope)) {
+    failures.push("baseline/candidate scope differs");
+  }
+  return failures;
+}
+
 function adjudicationErrors(pair) {
   const failures = [];
   const difference = pair?.difference_summary;
@@ -122,14 +150,7 @@ export function evaluateBlueprint30SiteGate(record) {
     if (clean(pair.stratum) !== row.stratum) failures.push(`${row.site}: stratum does not match canonical roster`);
     for (const message of capturedArtifactErrors(pair.baseline, `${row.site} baseline`)) failures.push(message);
     for (const message of capturedArtifactErrors(pair.candidate, `${row.site} candidate`)) failures.push(message);
-    if (clean(pair.baseline?.policy_id) && clean(pair.candidate?.policy_id)
-        && clean(pair.baseline.policy_id) !== clean(pair.candidate.policy_id)) {
-      failures.push(`${row.site}: baseline/candidate scan policy differs`);
-    }
-    if (clean(pair.baseline?.scope) && clean(pair.candidate?.scope)
-        && clean(pair.baseline.scope) !== clean(pair.candidate.scope)) {
-      failures.push(`${row.site}: baseline/candidate scope differs`);
-    }
+    for (const message of pairedArtifactErrors(pair)) failures.push(`${row.site}: ${message}`);
     for (const message of adjudicationErrors(pair)) failures.push(`${row.site}: ${message}`);
   }
   for (const id of pairIds) if (id && !expected.has(id)) failures.push(`unexpected site ${id}`);

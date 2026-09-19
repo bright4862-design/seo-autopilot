@@ -40,13 +40,26 @@ def test_near_duplicates_use_verified_main_text_not_template_chrome():
         {**_page("https://example.com/unverified", common), "main_text_verified": False},
     ]
     evidence = near_duplicate_main_content(pages)
-    assert evidence["state"] == "pass"
+    assert evidence["state"] == "fail"
+    assert evidence["reason"] == "near_duplicate_main_content_observed"
     assert evidence["eligible_pages"] == 3
     assert len(evidence["clusters"]) == 1
     assert set(evidence["clusters"][0]["affected_pages"]) == {
         "https://example.com/a",
         "https://example.com/b",
     }
+
+
+def test_distinct_verified_main_text_is_a_pass():
+    evidence = near_duplicate_main_content(
+        [
+            _page("https://example.com/a", " ".join(f"alpha{index}" for index in range(80))),
+            _page("https://example.com/b", " ".join(f"beta{index}" for index in range(80))),
+        ]
+    )
+    assert evidence["state"] == "pass"
+    assert evidence["reason"] == "no_near_duplicate_cluster_observed"
+    assert evidence["clusters"] == []
 
 
 def test_near_duplicates_stay_unknown_without_verified_main_text():
@@ -128,7 +141,7 @@ def test_failed_hub_render_does_not_claim_missing_links():
     assert row["rendered_link_count"] is None
 
 
-def test_local_entity_requires_core_fields_but_optional_fields_are_not_defects():
+def test_local_entity_requires_applicable_core_fields_but_optional_fields_are_not_defects():
     evidence = assess_local_entity_completeness(
         {
             "applicable": True,
@@ -137,12 +150,43 @@ def test_local_entity_requires_core_fields_but_optional_fields_are_not_defects()
             "address": "1 Main St",
             "phone": "+1 555 555 1212",
             "regular_hours": "Mon-Fri 9-5",
+            "regular_hours_applicable": True,
         }
     )
     assert evidence["state"] == "pass"
     assert evidence["missing_required"] == []
+    assert evidence["unverified_fields"] == []
     assert evidence["optional_available"]["holiday_hours"] is False
     assert evidence["optional_available"]["photos"] is False
+
+
+def test_local_entity_hours_applicability_fails_closed_for_coming_soon_or_unknown_context():
+    coming_soon = assess_local_entity_completeness(
+        {
+            "applicable": True,
+            "accepted": True,
+            "name": "Store A",
+            "address": "1 Main St",
+            "phone": "+1 555 555 1212",
+            "contextual_status": "Coming Soon",
+            "regular_hours_applicable": False,
+        }
+    )
+    assert coming_soon["state"] == "pass"
+    assert coming_soon["contextual_status"] == "Coming Soon"
+    assert coming_soon["missing_required"] == []
+
+    unknown_hours = assess_local_entity_completeness(
+        {
+            "applicable": True,
+            "accepted": True,
+            "name": "Store A",
+            "address": "1 Main St",
+            "phone": "+1 555 555 1212",
+        }
+    )
+    assert unknown_hours["state"] == "not_verified"
+    assert unknown_hours["unverified_fields"] == ["regular_hours"]
 
 
 def test_local_entity_unknown_or_nonapplicable_stays_nondefect():
@@ -238,7 +282,7 @@ def test_page_weight_keeps_unknown_wire_length_distinct_from_zero():
     assert evidence["inline_script_bytes"] == 0
 
 
-def test_crux_adapter_labels_disconnected_stale_and_connected_states():
+def test_crux_adapter_labels_disconnected_stale_connected_and_empty_states():
     disconnected = optional_crux_adapter(connection_state="disconnected")
     assert disconnected["version"] == CRUX_ADAPTER_VERSION
     assert disconnected["metrics"] is None
@@ -263,6 +307,16 @@ def test_crux_adapter_labels_disconnected_stale_and_connected_states():
     assert connected["state"] == "connected"
     assert connected["scope"] == "origin"
     assert connected["metrics"]["lcp_ms"] == 2100
+
+    empty = optional_crux_adapter(
+        connection_state="connected",
+        observed_at=date(2026, 9, 1),
+        as_of=date(2026, 9, 19),
+        scope="origin",
+        metrics={"not_a_metric": 1},
+    )
+    assert empty["state"] == "unavailable"
+    assert empty["metrics"] is None
 
 
 def test_gsc_adapter_never_fabricates_metrics_when_disconnected_or_stale():
@@ -302,3 +356,12 @@ def test_gsc_connected_metrics_are_bounded_and_explicit():
         "position": 4.5,
         "index_state": "indexed",
     }
+
+    empty = optional_gsc_adapter(
+        connection_state="connected",
+        as_of=date(2026, 9, 19),
+        observed_at=date(2026, 9, 18),
+        metrics={"query": "not retained"},
+    )
+    assert empty["state"] == "unavailable"
+    assert empty["metrics"] is None

@@ -200,6 +200,29 @@ def test_same_root_cause_id_never_crosses_scan_identity():
     assert all(group["member_count"] == 1 for group in groups)
 
 
+def test_verified_cause_without_scan_identity_does_not_group():
+    fixes = [
+        {
+            "id": "a",
+            "affected_pages": ["/a"],
+            "root_cause_evidence": evidence("same-root", "ev-a"),
+        },
+        {
+            "id": "b",
+            "affected_pages": ["/b"],
+            "root_cause_evidence": evidence("same-root", "ev-b"),
+        },
+    ]
+
+    groups = group_evidenced_root_causes(fixes)
+
+    assert len(groups) == 2
+    assert all(group["member_count"] == 1 for group in groups)
+    assert all(group["grouping_state"] == "not_verified" for group in groups)
+    assert all("requires exact scan identity" in group["grouping_reason"] for group in groups)
+    assert all(group["scan_id"] is None for group in groups)
+
+
 def test_same_root_cause_id_with_different_repair_surfaces_stays_separate():
     fixes = [
         {

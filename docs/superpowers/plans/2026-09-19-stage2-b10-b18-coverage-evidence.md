@@ -2,6 +2,7 @@
 
 Branch: `agent/stage2-b10-b18-acceptance-20260919`
 Base: Stage-2 PR head `b05fe3993422357959c7755a2eda47a2e635943f`
+CI-only draft: PR [#311](https://github.com/bright4862-design/seo-autopilot/pull/311), targeted at `main` only because repository FixList CI runs pull requests whose base is `main`; **do not merge this lane directly**.
 
 This lane deliberately does not edit `run_scan`, the shared coverage scheduler, redirect meaning, sitemap probes, URL-variant probes, authority writers, or customer projections. It provides bounded feature helpers and behavioral contracts for the integration owner to wire through those shared seams serially.
 

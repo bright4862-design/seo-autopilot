@@ -374,6 +374,8 @@ def _redirect_meaning_evidence(page: dict, evidence: dict) -> dict:
         return {**base, "state": "verified_unusable", "reason": "redirect_loop"}
     if state in {"redirect_missing_location", "redirect_invalid_location", "blocked_non_public_redirect"}:
         return {**base, "state": "verified_unusable", "reason": state}
+    if str(page.get("access_block_kind") or "").strip().lower() in {"challenge", "block", "rate_limit"}:
+        return {**base, "state": "not_verified", "reason": "destination_access_unverified"}
     if status >= 400:
         return {**base, "state": "verified_unusable", "reason": f"destination_http_{status}"}
     if page_evidence_class(page) == "failed_access":
@@ -424,6 +426,13 @@ def _redirect_outcome(page: dict, evidence: dict, destination_state: str, meanin
     status = int(evidence.get("destination_status_code") or page.get("status_code") or 0)
     meaning_state = str(meaning_evidence.get("state") or "")
     meaning_reason = str(meaning_evidence.get("reason") or "")
+    access_unverified = (
+        str(page.get("access_block_kind") or "").strip().lower() in {"challenge", "block", "rate_limit"}
+        or meaning_reason in {"destination_access_unverified", "redirect_chain_limit_exceeded", "redirect_loop_unverified"}
+        or state in {"redirect_destination_unverified", "redirect_destination_blocked_by_robots", "redirect_chain_limit_exceeded"}
+    )
+    if meaning_state == "not_verified" and access_unverified:
+        return "redirect_destination_unverified"
     if meaning_state == "verified_unusable" or status >= 400:
         return "redirect_destination_unusable"
 

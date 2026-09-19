@@ -12,7 +12,7 @@
  * app -- a relative path must never appear to belong to getfixlist.com.
  */
 
-import { publishedEvidenceUrlKey, PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION } from "../../base44/functions/persistDurableScanAuthorityV6/evidenceUrlIdentity.js";
+import { publishedEvidenceUrlKey, PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION } from "../../base44/functions/persistDurableScanAuthorityV7/evidenceUrlIdentity.js";
 
 const HTTP_URL = /^https?:\/\//i;
 // The only schemes a customer report may turn into a link. An allowlist on the

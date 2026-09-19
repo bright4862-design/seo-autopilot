@@ -14,7 +14,7 @@ const canonicals = [
 ];
 
 test("V5 remains available only as the immediately historical Base44 generation", () => {
-  assert.equal(contract.generation, "v6");
+  assert.equal(contract.generation, "v7");
   for (const canonical of canonicals) {
     assert.equal(contract.historical_routes.v5[canonical], canonical + "V5");
     assert.ok(fs.existsSync("base44/functions/" + canonical + "V5/entry.ts"));
@@ -22,7 +22,7 @@ test("V5 remains available only as the immediately historical Base44 generation"
       source("base44/functions/" + canonical + "V5/function.jsonc"),
       new RegExp('"name"\\s*:\\s*"' + canonical + 'V5"'),
     );
-    assert.equal(contract.routes[canonical], canonical + "V6");
+    assert.equal(contract.routes[canonical], canonical + "V7");
   }
 });
 

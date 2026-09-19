@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {webcrypto} from 'node:crypto';
-import {buildAuthoritySnapshot,buildPersistedAuthoritySnapshot} from '../../base44/functions/persistDurableScanAuthorityV6/authoritySnapshot.js';
-import {authorityRowsFromSnapshot} from '../../base44/functions/persistDurableScanAuthorityV6/authorityRows.js';
-import {authoritySnapshotFromRows,buildCustomerProjection} from '../../base44/functions/getCustomerScanResultV6/projection.js';
+import {buildAuthoritySnapshot,buildPersistedAuthoritySnapshot} from '../../base44/functions/persistDurableScanAuthorityV7/authoritySnapshot.js';
+import {authorityRowsFromSnapshot} from '../../base44/functions/persistDurableScanAuthorityV7/authorityRows.js';
+import {authoritySnapshotFromRows,buildCustomerProjection} from '../../base44/functions/getCustomerScanResultV7/projection.js';
 import {authoritySnapshotFromRows as grokSnapshot} from '../../base44/functions/grokChat/authoritySnapshot.js';
-import {createAuthoritySeal,verifyAuthoritySeal} from '../../base44/functions/persistDurableScanAuthorityV6/authoritySeal.js';
+import {createAuthoritySeal,verifyAuthoritySeal} from '../../base44/functions/persistDurableScanAuthorityV7/authoritySeal.js';
 import {buildRepairCards,customerRepairObservationRows} from '../../src/lib/repairCardModel.js';
 import {buildScanHandoff} from '../../src/lib/scanHandoff.js';
 const {scan,review}=JSON.parse(readFileSync(0,'utf8'));

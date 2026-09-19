@@ -30,7 +30,8 @@ const HISTORICAL_COMPAT_V3_REL = "base44/functions/getCustomerScanResultV3/relea
 const HISTORICAL_COMPAT_V4_REL = "base44/functions/getCustomerScanResultV4/releaseCompatibility.js";
 const HISTORICAL_COMPAT_V5_REL = "base44/functions/getCustomerScanResultV5/releaseCompatibility.js";
 const HISTORICAL_COMPAT_V6_REL = "base44/functions/getCustomerScanResultV6/releaseCompatibility.js";
-const HISTORICAL_COMPAT_RELS = new Set([HISTORICAL_COMPAT_REL, HISTORICAL_COMPAT_ALIAS_REL, HISTORICAL_COMPAT_V3_REL, HISTORICAL_COMPAT_V4_REL, HISTORICAL_COMPAT_V5_REL, HISTORICAL_COMPAT_V6_REL]);
+const HISTORICAL_COMPAT_V7_REL = "base44/functions/getCustomerScanResultV7/releaseCompatibility.js";
+const HISTORICAL_COMPAT_RELS = new Set([HISTORICAL_COMPAT_REL, HISTORICAL_COMPAT_ALIAS_REL, HISTORICAL_COMPAT_V3_REL, HISTORICAL_COMPAT_V4_REL, HISTORICAL_COMPAT_V5_REL, HISTORICAL_COMPAT_V6_REL, HISTORICAL_COMPAT_V7_REL]);
 const HISTORICAL_COMPAT = path.join(ROOT, HISTORICAL_COMPAT_REL);
 const GENERATOR = path.join(ROOT, "scripts/generate_release_contracts.mjs");
 
@@ -130,9 +131,16 @@ test("old release fingerprints are isolated to the explicit historical reader re
   assert.equal(
     compatibilityWithoutReaderVersion(v6Compatibility),
     compatibilityWithoutReaderVersion(compatibility),
-    "V6 active reader must preserve the canonical historical fingerprint registry",
+    "V6 historical reader must preserve the canonical historical fingerprint registry",
   );
   assert.match(v6Compatibility, /customer_result_reader_v9_published_route_identity/);
+  const v7Compatibility = fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_V7_REL), "utf8");
+  assert.equal(
+    compatibilityWithoutReaderVersion(v7Compatibility),
+    compatibilityWithoutReaderVersion(compatibility),
+    "V7 active reader must preserve the canonical historical fingerprint registry",
+  );
+  assert.match(v7Compatibility, /customer_result_reader_v9_published_route_identity/);
   assert.equal(fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_V3_REL), "utf8"), compatibility, "V3 reader must mirror the canonical historical compatibility registry");
   assert.equal(fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_ALIAS_REL), "utf8"), compatibility, "V2 reader must mirror the canonical historical compatibility registry");
 });

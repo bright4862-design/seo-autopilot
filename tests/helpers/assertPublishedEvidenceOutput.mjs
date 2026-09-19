@@ -5,11 +5,11 @@ import {serializeAffectedUrlsText,serializeAffectedUrlsCsv} from "../../src/lib/
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {webcrypto} from "node:crypto";
-import {buildAuthoritySnapshot,buildPersistedAuthoritySnapshot} from "../../base44/functions/persistDurableScanAuthorityV6/authoritySnapshot.js";
-import {authorityRowsFromSnapshot} from "../../base44/functions/persistDurableScanAuthorityV6/authorityRows.js";
-import {authoritySnapshotFromRows,buildCustomerProjection} from "../../base44/functions/getCustomerScanResultV6/projection.js";
+import {buildAuthoritySnapshot,buildPersistedAuthoritySnapshot} from "../../base44/functions/persistDurableScanAuthorityV7/authoritySnapshot.js";
+import {authorityRowsFromSnapshot} from "../../base44/functions/persistDurableScanAuthorityV7/authorityRows.js";
+import {authoritySnapshotFromRows,buildCustomerProjection} from "../../base44/functions/getCustomerScanResultV7/projection.js";
 import {authoritySnapshotFromRows as grokSnapshot} from "../../base44/functions/grokChat/authoritySnapshot.js";
-import {createAuthoritySeal,verifyAuthoritySeal} from "../../base44/functions/persistDurableScanAuthorityV6/authoritySeal.js";
+import {createAuthoritySeal,verifyAuthoritySeal} from "../../base44/functions/persistDurableScanAuthorityV7/authoritySeal.js";
 const {scan,review,expectedUrls,expectedEligible=expectedUrls.length,expectedRule}=JSON.parse(readFileSync(0,"utf8"));
 const snapshot=buildAuthoritySnapshot({scan,review,identity:{scan_id:"s",project_id:"p",normalized_domain:"example.com"},
   userId:"u",now:"2026-09-19T00:00:00.000Z",identityVersion:"evidence_url_identity_v2_published_route"});

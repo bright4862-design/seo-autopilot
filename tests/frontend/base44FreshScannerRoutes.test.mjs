@@ -11,7 +11,7 @@ const routes = contract.routes;
 
 const source = (p) => fs.readFileSync(p, "utf8");
 
-test("every active V6 effective handler returns its expected runtime identity before authentication", async () => {
+test("every active V7 effective handler returns its expected runtime identity before authentication", async () => {
   for (const active of Object.values(routes)) {
     const root = path.resolve("base44/functions", active);
     const cache = new Map();
@@ -55,7 +55,7 @@ test("every active V6 effective handler returns its expected runtime identity be
 
 test("Base44 scanner route generation is explicit and complete", () => {
   assert.equal(contract.schema_version, "base44_function_routes_v1");
-  assert.equal(contract.generation, "v6");
+  assert.equal(contract.generation, "v7");
   assert.deepEqual(Object.keys(routes).sort(), [
     "deleteCustomerScanData",
     "durableScanWorkerControl",
@@ -65,7 +65,7 @@ test("Base44 scanner route generation is explicit and complete", () => {
     "startStandardScanJob",
   ]);
   for (const [canonical, active] of Object.entries(routes)) {
-    assert.equal(active, `${canonical}V6`);
+    assert.equal(active, `${canonical}V7`);
     assert.ok(fs.existsSync(path.join("base44/functions", active, "entry.ts")));
     assert.match(source(path.join("base44/functions", active, "function.jsonc")), new RegExp(`"name"\\s*:\\s*"${active}"`));
   }
@@ -114,23 +114,23 @@ test("fresh Base44 routes preserve canonical source except the bounded signed-pr
   }
 });
 
-test("customer and worker call sites use only V6 scanner routes", () => {
+test("customer and worker call sites use only V7 scanner routes", () => {
   const scanForm = source("src/components/scan/ScanWebsiteForm.jsx");
   const scanRuns = source("src/lib/scanRuns.js");
   const scanHistory = source("src/lib/scanHistory.js");
   const worker = source("scanner-api/app/scan_job.py");
 
-  assert.match(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV6"/);
+  assert.match(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV7"/);
   assert.doesNotMatch(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV2"/);
-  assert.match(scanRuns, /"getCustomerScanResultV6"/);
+  assert.match(scanRuns, /"getCustomerScanResultV7"/);
   assert.doesNotMatch(scanRuns, /"getCustomerScanResultV2"/);
-  assert.match(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV6"/);
+  assert.match(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV7"/);
   assert.doesNotMatch(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV2"/);
 
   for (const name of [
-    "durableScanWorkerControlV6",
-    "persistDurableScanAuthorityV6",
-    "persistLimitedScanResultV6",
+    "durableScanWorkerControlV7",
+    "persistDurableScanAuthorityV7",
+    "persistLimitedScanResultV7",
   ]) assert.ok(worker.includes(`"${name}"`), name);
   for (const stale of [
     '"durableScanWorkerControlV2"',

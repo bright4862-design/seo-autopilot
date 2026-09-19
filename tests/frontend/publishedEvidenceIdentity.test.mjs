@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 
-import * as identity from "../../base44/functions/persistDurableScanAuthorityV6/evidenceUrlIdentity.js";
+import * as identity from "../../base44/functions/persistDurableScanAuthorityV7/evidenceUrlIdentity.js";
 
 const table = JSON.parse(readFileSync(
   new URL("../fixtures/published-evidence-url-identity.json", import.meta.url), "utf8",

@@ -10,6 +10,7 @@ import {
 const SHA = "a".repeat(40);
 const PROOF = "b".repeat(64);
 const DIGEST = `sha256:${"c".repeat(64)}`;
+const RECEIPT = "receipt:verified-stage4-evidence";
 
 function validRecord(overrides = {}) {
   const record = {
@@ -17,20 +18,27 @@ function validRecord(overrides = {}) {
     provenance: "live_authorized",
     observed_at: "2026-09-19T20:00:00Z",
     source: { merged_sha: SHA },
-    review: { status: "approved" },
-    ci: { sha: SHA, conclusion: "success" },
-    schema: { named_schema_parity: true },
+    review: { status: "approved", evidence_reference: RECEIPT },
+    ci: {
+      sha: SHA,
+      conclusion: "success",
+      run_id: 123456,
+      run_url: "https://github.com/bright4862-design/seo-autopilot/actions/runs/123456",
+    },
+    schema: { named_schema_parity: true, evidence_reference: RECEIPT },
     deployment: {
       site: {
         verified: true,
         source_sha: SHA,
         hosts_verified: ["getfixlist.com", "getfixlist.base44.app"],
+        verification_reference: RECEIPT,
       },
       functions: EXPECTED_SCANNER_FUNCTIONS.map((name, index) => ({
         name,
         verified: true,
         source_sha: SHA,
         runtime_build_id: `build-${index + 1}`,
+        verification_reference: `${RECEIPT}:${name}`,
       })),
       worker: {
         verified: true,
@@ -41,6 +49,8 @@ function validRecord(overrides = {}) {
         rollback_target: "fixlist-standard150-worker-00122-old",
         rollback_ready: true,
         private_scan_job_unauth_status: 403,
+        promotion_reference: `${RECEIPT}:promotion`,
+        rollback_reference: `${RECEIPT}:rollback`,
       },
     },
     acceptance: {
@@ -48,10 +58,14 @@ function validRecord(overrides = {}) {
         mode: "acceptance_only",
         total_claim_budget: 1,
         public_claims_closed: true,
+        activation_reference: `${RECEIPT}:cohort`,
       },
       scan: {
         scan_id: "scan-acceptance-1",
         mode: "standard_150",
+        submission_surface: "published_customer_ui",
+        observed_at: "2026-09-19T20:10:00Z",
+        evidence_reference: `${RECEIPT}:scan`,
         status: "complete",
         pages_crawled: 150,
         release_gate_eligible: true,
@@ -61,16 +75,22 @@ function validRecord(overrides = {}) {
         normalized_domain: "example.com",
       },
       reload: {
+        observed_at: "2026-09-19T20:11:00Z",
+        evidence_reference: `${RECEIPT}:reload`,
         requested_scan_id: "scan-acceptance-1",
         loaded_scan_id: "scan-acceptance-1",
         fix_list_id: "fix-list-1",
         authority_proof: PROOF,
       },
       history: {
+        observed_at: "2026-09-19T20:12:00Z",
+        evidence_reference: `${RECEIPT}:history`,
         owner_scoped: true,
         scan_ids: ["scan-acceptance-1"],
       },
       rescan: {
+        observed_at: "2026-09-19T20:20:00Z",
+        evidence_reference: `${RECEIPT}:rescan`,
         scan_id: "scan-acceptance-2",
         parent_scan_id: "scan-acceptance-1",
         normalized_domain: "example.com",
@@ -79,10 +99,12 @@ function validRecord(overrides = {}) {
         comparison_evidence_verified: true,
       },
       closed_and_drained: true,
+      close_drain_reference: `${RECEIPT}:close-drain`,
     },
     public_release: {
       opened_after_acceptance: true,
       claims_open: true,
+      opening_reference: `${RECEIPT}:public-open`,
     },
   };
   return { ...record, ...overrides };
@@ -152,4 +174,28 @@ test("rescan comparison and rollback readiness are explicit rather than inferred
   assert.ok(result.failures.some((value) => value.includes("rollback path")));
   assert.ok(result.failures.some((value) => value.includes("rescan comparison result")));
   assert.ok(result.failures.some((value) => value.includes("comparison evidence")));
+});
+
+test("claimed live state without traceable receipts fails closed", () => {
+  const record = validRecord();
+  record.review.evidence_reference = "";
+  record.ci.run_id = 0;
+  record.deployment.site.verification_reference = "";
+  record.deployment.worker.promotion_reference = "";
+  record.acceptance.scan.evidence_reference = "";
+  record.acceptance.reload.evidence_reference = "";
+  record.acceptance.close_drain_reference = "";
+  record.public_release.opening_reference = "";
+  const result = evaluateStage4ReleaseAcceptance(record);
+  assert.equal(result.status, "failed");
+  for (const fragment of [
+    "review evidence reference",
+    "CI run id",
+    "site verification receipt",
+    "worker promotion receipt",
+    "scan evidence reference",
+    "reload evidence reference",
+    "close/drain receipt",
+    "public opening receipt",
+  ]) assert.ok(result.failures.some((value) => value.includes(fragment)), fragment);
 });

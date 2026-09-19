@@ -1,187 +1,117 @@
 # Full blueprint progress
 
-> Release sequencing update (2026-09-19): the user explicitly authorized “once stage one is ready deploy and publish.” Complete and review all stage-one behavior before merging and publishing exact source. Earlier references to waiting for the entire blueprint are superseded for this first release. B06–B24 and the genuine 30-site full-blueprint gate remain open; synthetic stage-one acceptance does not complete them. No further general implementation or deployment approval is required.
+Authoritative design: `docs/superpowers/specs/2026-09-19-full-scanner-blueprint-design.md`.
 
-Goal: build and deploy the complete applicable user-supplied scanner blueprint.
+This file is the current requirement ledger. Older checkpoints remain available in Git history and the executable plan/handoff documents linked below; stale approval-blocker language is not current authority.
 
-## 2026-09-19 baseline and design
+## Release sequencing
 
-- Authoritative GitHub main checked with `git ls-remote origin refs/heads/main`: `7a744a501416b1b9feac462511071fc9f08e1ba1`.
-- Isolated local clone: `work/seo-autopilot-blueprint`; local implementation branch: `codex/full-blueprint-20260919`.
-- User approved staged implementation using the existing scanner, preserving old reports and current crawl/security limits, with deployment after full blueprint acceptance.
-- Written design: [Full scanner blueprint](superpowers/specs/2026-09-19-full-scanner-blueprint-design.md). It records B01–B28 acceptance requirements and awaits the written-spec review required by the brainstorming workflow.
-- No production-code changes, pushes, deployments, schema writes or live scans have been made in this phase.
+Stage 1 and the later blueprint remain separate release states.
 
-## Confirmed blocking defect for evidence correctness
+- Stage-1 source was completed and merged before this later-stage integration line. Its exact-source production publication/promotion/non-owner live acceptance is a separate guarded operation and is **not** implied by later-stage CI.
+- The later-stage integration branch is `agent/full-blueprint-stage2-coverage-b06-20260919`, PR #303.
+- Do not merge later-stage work to `main`, publish Base44, promote worker traffic, mutate admission, run a competing production scan, change schema/secrets, or otherwise move production while the Stage-1 exact-source release operator still owns that cutover.
+- After Stage-1 live acceptance is recorded, this integration line must reconcile onto the then-current accepted `main` without reverting V7 runtime/public-build changes or the durable ownership-before-admission fix, followed by fresh exact-head combined CI.
 
-A fresh in-memory reproduction uses the real `extract_page`, `build_page_pattern_findings`, `evidence_url_key` and `normalize_repair_scope` functions. Input: three complete HTTP-200 HTML pages, each missing a meta description, at:
+## Stage 1 — source complete; live release acceptance is separate
 
-```text
-https://example.com/x
-https://example.com/x/
-https://example.com/X
-```
+Stage-1 implementation established the published-route evidence identity, authenticated authority/persistence/readers, image/template/search-evidence correctness, historical signature compatibility, preview privacy, and the named synthetic acceptance runner. The synthetic corpus remains explicitly synthetic and is not the genuine 30-site full-blueprint gate.
 
-Observed current behavior:
+Historical Stage-1 acceptance detail: `docs/stage-one-evidence-acceptance.md`.
 
-```json
-{
-  "legacy_identity_keys": ["/x", "/x", "/x"],
-  "review_page_count": 2,
-  "review_affected_pages": ["/x", "/X"],
-  "review_metadata_missing_observations": 3,
-  "normalized_scope_page_count": 1,
-  "normalized_scope_affected_pages": ["https://example.com/x"]
-}
-```
+The frozen scanner revision checked by current later-stage CI remains `01ebe8e90df1e6bd`.
 
-Required new-report behavior: three distinct affected pages through review, canonical grouping, persisted authority, verified projection and export. Historical reports retain legacy byte/signature reconstruction. An observed redirect to one final page remains a different case from three independent 200 responses.
+## Stage 2 — B06–B18 integration in progress
 
-The migration audit also identified slash-losing singleton suppression in the JavaScript authority writer and path-based priority/cross-run joins. Fixing only the Python identity helper cannot satisfy the end-to-end requirement.
+Integration surface: PR #303 / `agent/full-blueprint-stage2-coverage-b06-20260919`.
 
-## Verification environment
+The isolated lane PRs are review/CI lanes only and must not be merged directly to `main`.
 
-- Local Node 20.19.5/npm 10.8.2 were prepared to match the workflow runtime.
-- Local Python virtual environment has scanner requirements and pytest.
-- Earlier full local release-gate run passed lint, typecheck, build, Base44 package checks, Python/scanner checks and manifest checks; frontend baseline had 1,368 passes and eight failures. These historical results are not post-change verification.
-- The eight frontend failures were traced to macOS Bash 3.2 parsing Bash-4 associative arrays under `set -u`, before their behavioral assertions ran.
-- A clean, unshimmed rerun of `base44V3RuntimeRecovery.test.mjs` and `base44V3RuntimeRecoverySept14.test.mjs` passed 11/11 tests under Node 20.19.5 and Bash 5.2.37 in the existing `fixlist-scanner:merged-main-check` container. Network was disabled, root/repository/Node mounts were read-only and `/tmp` was isolated. No test/source edits or credentials were used. This is a scoped result, not a fresh full-suite pass.
-- Linux Node runtime: sibling `work/node-v20.19.5-linux-arm64`; the official tarball's verified SHA256 is `d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd`.
+### Integrated and materially wired
 
-### Fresh full frontend baseline
+- **B06 — shared bounded coverage scheduler/internal-link verification.** One finite follow-up scheduler reuses the hardened robots/DNS/SSRF/redirect/body/deadline request path. Probe-only URLs do not enter the Standard 150 assessed-page set or denominator. Verified unsampled broken-link evidence has authenticated producer → Review → authority → persistence → customer-output coverage.
+- **B07 — active soft-404 evidence/orchestration.** Deterministic same-origin/effective-scope missing-page candidates use the shared finite scheduler. Challenge/429/robots/budget/deadline/incomplete outcomes remain unknown. Synthetic probes remain outside assessed pages. Versioned active evidence is kept separate from historical/passive heuristic evidence and has downstream signed/persisted/customer coverage.
+- **B08 — redirect meaning.** Harmless normalization, usable destination, wrong/catch-all destination, unusable destination and unverified access are distinct. A diagnostic-only loop without concrete hops is unverified; an observed loop with hop provenance is unusable. Challenge/block/rate-limit destinations remain unknown even when the HTTP response is 403/429/503; an ordinary verified 404 remains unusable.
+- **B09 — sitemap integrity helper/probe integration.** Same-origin/in-scope unsampled targets reuse the shared scheduler; candidate-universe truncation and access/budget uncertainty remain explicit. Exact source-level sitemap provenance enrichment and any customer-visible promotion still require the serialized producer/customer path.
+- **B16 — URL variants.** Exact path/query/case/reserved-escape/empty-query identity is retained. No implicit sibling-host expansion occurs. Live alternate routes are not declared duplicates without independent equivalence evidence. Redirect meaning is delegated to B08.
+- **B10 — accepted main-content producer seam.** Accepted usable HTML prefers `main`, `role=main`, then `article`; body fallback strips common chrome on a clone. Empty landmarks remain landmarks. Raw customer copy is not retained in the compatibility evidence: the producer emits bounded irreversible SHA-256 five-token shingle digests plus aggregate signature/token/character-count metadata. The independent review thread remains open on whether that hashed compatibility field must also be removed at the final `pages`/`crawled_pages` response boundary.
+- **B17 partial — truthful decoded/inline page weight.** Decoded HTML bytes and inline script/style bytes are separately measured from accepted content. Transfer/wire bytes remain `unknown`; decoded size or zero is never substituted for network transfer bytes.
 
-The complete frontend suite at `7a744a501416b1b9feac462511071fc9f08e1ba1` now passes: **1,376 tests, 1,376 passed, zero failures/skips**, exit 0. Command inside the isolated environment: `node --test --test-reporter=spec tests/frontend/*.test.mjs`.
+Shared B07/B09/B16 integration checkpoint: `ca70b7380011e93437fc993185e511a5847618e6`, Stage2IntegrationRun `35469815094`.
 
-The verified runtime is the official `node:20.19.5-bookworm` image, manifest digest `sha256:ba36e9b2705008e63e354214f0e3011c528af9df2ca13ac2bd2c0114650302e6`: Node 20.19.5, Bash 5.2.15, Git 2.39.5 and Python 3.11.2. Test inputs came from `git archive HEAD` into disposable executable tmpfs; dependencies and Git metadata were read-only mounts. Network was disabled and the root filesystem was read-only. No source/test changes or service calls were used to make this pass.
+### Current exact reviewed code/test checkpoint
 
-Two intermediate environment runs were not green and are retained in `.release/`: the read-only/noexec setup prevented test scratch commands; the writable archive lacked Git and history. A shallow-history gap was also found: the historical `33f471e` fixture did not exist locally. Fetching history without changing the checkout restored that real fixture before the final passing run. The final log is `.release/baseline-frontend-node20-bookworm.log`.
+Exact code head before the documentation-only refresh: `f904649c9193877181471e1daa01097da0f3062b`.
 
-This is baseline evidence for existing behavior, not acceptance evidence for unimplemented blueprint requirements or a complete release gate.
+FixList CI `35472567286` passed both jobs on that exact code head:
 
-## Release blocker, separate from implementation
+- immutable checkout verified `f904649c9193877181471e1daa01097da0f3062b`;
+- root scanner regressions: **115 passed**;
+- `scanner-api`: **1,911 passed / 18 intentional skips**;
+- Stage-1 labelled corpus: `synthetic`, 14 cases / 55 assertions, `full_30_site_gate=not_assessed`;
+- frozen scanner revision `01ebe8e90df1e6bd`: passed;
+- production scanner image: passed, image SHA `sha256:73902d7ee4728b41d0b26bc956ff51bd388320d40c439faaacd2735ff98b9f63`;
+- lint, typecheck, generated release contracts, frontend contract tests and production frontend build: passed.
 
-Base44 Builder has displayed `Couldn't fetch your code from GitHub` with publishing disabled. Its development snapshot was older than the GitHub candidate; the live deployment was also not proven to match that candidate. A connected label or loaded preview is insufficient evidence of synchronization. Local CLI app-level credential validation also failed despite a cached `whoami` identity.
+Fresh independent-review findings corrected before that green run:
 
-Do not disconnect the repository, publish a stale snapshot, rotate secrets or infer that the deployment wrapper caused the Builder fetch failure. Revalidate exact source, named schema changes, active runtime identities and owner authorization at release time.
+1. accepted-image applicability is reduced to scalar evidence before BeautifulSoup sanitization/decomposition;
+2. empty `main`/body tags use explicit `is None` selection rather than truthiness fallback;
+3. raw B10 page text is replaced by irreversible hash shingles/signature metadata;
+4. zero-hop diagnostic redirect loops remain unverified while concrete loops remain unusable;
+5. access-block/challenge/rate-limit evidence is evaluated before generic HTTP error classification.
 
-## Next work
+Detailed checkpoint: `docs/superpowers/plans/2026-09-19-stage2-serialized-review-hardening.md`.
 
-1. Complete written-design review.
-2. Write the first executable implementation plan for evidence correctness, including the versioned Python/JavaScript identity contract and historical fixtures.
-3. Implement with failing behavioral regressions first; independently review each coherent task and run integrated checks.
-4. Continue all remaining B01–B28 requirements; the first stage is not a substitute for full blueprint completion.
+### Stage 2 still open
 
-## Specification self-review
+Stage 2 is **not source-complete**. Remaining serialized requirements:
 
-- Cross-checked the final seven PDF pages against the register, adding the explicitly named `scripts/assertCorpusRun.mjs` runner, the 30-site baseline/candidate gate and operator-only suppression visibility.
-- The named assertion runner is absent at the starting commit; the design requires creating it, not claiming an existing gate passed.
-- Preserved the approved safety amendments over the PDF's unsafe/broader sketches: bounded requests, no automatic sibling-host expansion or UA impersonation, conservative image/local applicability and no blanket accessibility suppression on noindex pages.
-- Identified and recorded the writer-side second deduplication, seal-selected reconstruction, historical version comparability and GEO-capability requirements for the new identity revision.
-- Documentation whitespace checks pass; no production implementation is claimed.
+- **B10:** finish the final publication-boundary decision for the hashed compatibility field; if duplicate evidence becomes customer-visible, add authenticated Review → authority → persistence → customer/card/handoff/export coverage.
+- **B11:** produce stable sample-scoped crawl depth, inlink and navigation provenance. Observed weak routing must never be described as sitewide orphaning without evidence outside the assessed sample.
+- **B12:** produce bounded paired raw/rendered hub-link evidence for up to five representative hubs with explicit completed/failed/unassessed states; neither raw nor rendered evidence is the sole truth source.
+- **B13/B14:** produce applicable local entity/status/address/phone/regular-hours evidence and verified entity-match/NAP provenance. Optional fields remain optional and Coming Soon/unknown applicability fails closed.
+- **B15:** produce explicit current-content intent plus current-scoped temporal evidence. An old date alone is not freshness failure.
+- **B17:** add directly measured transfer-byte evidence without confusing it with decoded bytes. CrUX remains optional and must expose disconnected/stale/unavailable states unless a current authorized response actually exists.
+- **B18:** GSC remains optional with explicit disconnected/stale/unavailable behavior unless a current owner-authorized response exists.
+- Any newly displayed B09/B10–B18 evidence/count/finding requires real producer → Review → signed authority → persisted rows → verified customer/card/handoff/export coverage before the requirement can close.
+- Final combined independent review plus a fresh exact-head CI after the remaining shared wiring are mandatory before Stage 3 integration.
 
-## 30-site gate input inventory
+## Stage 3 — isolated lanes built; integration held behind Stage 2
 
-The repository does not yet contain the data needed to claim the blueprint's 30-site no-new-artifact gate passes.
+The existing lane work is implementation input only until Stage 2 closes.
 
-- `data/renderer-risk-study-manifest.jsonl` provides 30 unique sites, 10 per stratum. Its workflow and collector are live-run renderer studies, not full scanner baseline/candidate comparisons. The expected study output files are not tracked or present locally.
-- `docs/audit/2026-08-21-production-50-site/matrix.csv` and `results.jsonl` provide 50 historical summary rows, including 30 completed scans. This is a different roster; the summaries contain neither full page/FixItem evidence nor paired candidate outputs. They cannot silently be combined with the renderer roster into a passing corpus.
-- Existing synthetic HTTP fixtures cover four sites. Other tracked synthetic scan snapshots and derived fingerprint fixtures are useful test inputs but not a replayable 30-site corpus.
-- `scripts/acceptance-gates.mjs` evaluates one current scan bundle. It does not compare baseline/candidate artifacts. The PDF's named `scripts/assertCorpusRun.mjs` still needs to be implemented.
+- `agent/stage3-b19-b20-decisions-20260919`: B19 exact **impact × reach × page value × confidence** factor evidence/explanations and B20 explicit evidenced shared root causes across SEO/GEO. Family similarity alone is not root-cause proof. Exact lane head `e74d87acd0cec2955402b96f635f13bc275f3a91` previously passed its lane CI.
+- `agent/stage3-b21-b24-delivery-20260919`: B21 exact unions/count distinctions/rank-before-truncate; B22 authenticated evidence-led private previews; B23 explicit evidenced root-cause score caps preserving existing ceilings; B24 backward-compatible handoff v2. The lane is integration-ready, not source-complete.
 
-Required input contract: one explicit canonical 30-site manifest; stable site IDs; paired comparable baseline/candidate artifacts with source/fingerprint, capture time, URL/scope/mode and evidence-backed artifact identities. A deterministic CI gate also needs immutable sanitized HTTP response fixtures (robots, sitemaps, redirects, status/headers/HTML) so it executes current source rather than merely comparing precomputed exports. Any newly captured fixture must be labelled as such; historical summary counts are not substitute evidence.
+Do not integrate B19–B24 into shared ranking/authority/customer interfaces until Stage 2 is source-complete, independently reviewed and exact-head green. Python Review remains the canonical ranking authority.
 
-This inventory was read-only: no new live scans, provider calls or source edits.
+## Stage 4 — isolated compatibility/release lane built; live acceptance not run
 
-## Goal blocker audit
+`agent/stage4-b25-b28-compat-release-20260919` contains isolated B25–B28 compatibility/acceptance/release-preparation work. It does not constitute release authorization or live acceptance.
 
-The written-design review requested after the high-level architecture approval remains unanswered across three consecutive goal turns. Baseline verification and the corpus-input inventory are complete; their processes are terminal. GitHub main remains `7a744a501416b1b9feac462511071fc9f08e1ba1`, and this branch still has only the two new documentation files, with no production-code edits.
+Spec numbering controls:
 
-The brainstorming workflow requires written-spec approval before implementation. Further repeated status checks do not advance the build, and no additional in-scope preparation is needed to resolve this decision. Mark the goal blocked, not complete, pending approval of the linked design. On approval, resume with the first executable implementation plan and retain the entire B01–B28 objective. Deployment additionally remains subject to the recorded release/authentication and acceptance gates.
+- **B25:** named synthetic corpus plus a genuine provenance-labelled 30-site baseline/candidate gate. Historical summaries and synthetic fixtures cannot satisfy the real gate.
+- **B26:** reproduced own-site serving defects/fixes with source evidence; deployed HTTP behavior must be verified only on the exact eventual release.
+- **B27:** GEO/historical HMAC/reader/tamper/privacy compatibility for new evidence while original historical signatures remain readable and unknown versions fail closed.
+- **B28:** exact-source review/CI/deployment/live acceptance, including runtime identities, rollback, one bounded real customer Standard-150 submit → persistence → exact `scan_id` reload/history → linked rescan verification.
 
-## Implementation resumed — 2026-09-19
+The genuine 30-site baseline/candidate gate is currently **not assessed**. No Stage-4 deployment, live scan or production claim is authorized by an isolated lane CI result.
 
-The user explicitly approved the written design: **“Approved—start implementation.”** This resolves the historical approval blocker above. The first executable plan is `docs/superpowers/plans/2026-09-19-published-evidence-identity.md`; implementation starts with literal shared Python/JavaScript URL-identity regressions. Root owns the coupled changes on the existing isolated branch. The full B01–B28 objective and deployment gates remain unchanged.
+## Hard invariants for all remaining work
 
-### First implementation slice: identity primitives
+- Standard 150 assessed-page cap and truthful denominators remain authoritative.
+- Stage-2 follow-up checks share one finite request pool; no second scheduler/budget.
+- Existing robots ownership, DNS/SSRF, redirect, decoded-body and deadline protections remain authoritative.
+- One active scan/account, cancellation/terminalization and exact scan isolation remain intact.
+- Missing, blocked, stale, disconnected or invalid evidence remains unknown rather than a pass/fail invention.
+- Historical signatures/readers stay byte/read compatible; unknown new versions fail closed.
+- Preview privacy and entitlement boundaries remain intact.
+- Python Review remains the canonical priority/ranking authority.
+- Premium/Grok remain outside this blueprint integration.
+- Synthetic/historical data never substitutes for the genuine 30-site gate or a real customer live acceptance.
 
-- Added opt-in published-route identity helpers in Python and the package-local JavaScript mirrors, preserving legacy behavior. The new helper retains case, trailing slash, reserved escapes, raw query ordering and foreign-origin distinctions.
-- Added 72 shared literal cases. New assertions failed before implementation; historical assertions stayed green. Follow-up origin regressions caught Unicode scheme case-folding, line-separator handling and IDNA2008/WHATWG differences.
-- Added pinned `ada-url==1.32.0` for origin-only WHATWG normalization; paths and queries never enter its serializer. This avoids handwritten Unicode/bidi rules. Scanner image installation must be verified before release.
-- Fresh full checks: **1,647 scanner tests passed, 18 intentional skips, 694 existing dependency warnings; 1,449 frontend tests passed with no failures/skips.** Base44 package closure and generated-contract checks passed. The independent bounded Python/JS comparison reported 98 cases with zero differing pairs.
-- This is not yet a fix to produced report counts: connecting the helper through producers, authority, persistence and export is the next dependent work. No push, live scan or deployment occurred.
+## Exact next engineering action
 
-### Second implementation slice: opt-in Python production path
-
-- Threaded trusted scan-origin/version context through extraction-derived findings, review filtering, grouped suppression, exact family/role/indexability joins, canonical evidence union and priority calculation. Classifier normalization and legacy defaults remain unchanged.
-- The real three-HTTP-200-route case now retains three affected pages through review and canonical grouping. Merged source URLs, coverage counts and ordering use the same evidence identity.
-- Cross-run verification rejects mismatched/unknown URL identity versions and cannot resolve an old relative URL against a different scan's origin or silently discard unresolved evidence.
-- Behavioral regressions failed before each fix. Full pre-checkpoint checks passed 1,669 scanner tests (18 intentional skips) and 1,449 frontend tests; package/generated checks passed. A final merged-order test then failed and passed after its fix; the checkpoint gate reruns the complete suites.
-- Activation is intentionally deferred until the new authority seal, persisted evidence and historical reconstruction are implemented together. This remains local, undeployed work, not full-blueprint completion.
-
-### Third implementation slice: versioned authority and persisted readers
-
-- Activated the published-route producer together with the new internal authority seal; public V6 routes remain unchanged. Persisted count/family columns and version/completeness metadata in existing `raw_finding` are authenticated. No entity migration was needed.
-- Actual Python-produced canonical repairs pass writer, persisted readback, customer and chat signature reconstruction with three distinct route URLs and counts. The integration tests exposed and fixed dropped chat child groups and missing priority identity/count fields.
-- Historical GEO rows retain their captured, literal HMAC and preview proof even when new markers are injected. New-route, escape, count, partition and version tampering is rejected. The new unpaid request path preserves the two-fix preview without loading hidden findings.
-- The latest full pre-checkpoint gate passed **1,672 scanner tests, 18 intentional skips, 718 dependency warnings; 1,459 frontend tests, zero failures/skips**, plus package closure and generated-contract checks. Two subsequent regressions exposed mutable customer status in chat reconstruction and unknown-seal fallback in persisted writing; both failed before their fixes and then passed in a 32-test authority/historical set. The checkpoint gate reruns the complete suites.
-- Pinned `ada-url==1.32.0` installed from official PyPI wheels and executed all **73 identity/legacy checks** on both Linux arm64 and Linux amd64 (the latter under Docker emulation). Tests used read-only source, disabled networking and no credentials. The amd64 official Python 3.12-slim manifest was `sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9`.
-- Candidate fingerprint `5fb87bf7869c51c2` is explicitly marked candidate, not frozen/accepted or deployed; prior fingerprint `47793ce37ca20523` remains supported for historical reading. Export-path verification and independent review remain open, as do the other blueprint requirements and deployment.
-
-## Work-agent stage-one candidate (2026-09-19)
-
-Recovered exact checkpoint `a51fa796` from GitHub, preserving Tasks 1–3. Implemented Task 4 through actual rendered consumers and serializers, then integrated B03/B04/B05 and the named synthetic acceptance runner. Details and explicit remaining gates: `docs/stage-one-evidence-acceptance.md`.
-
-Fresh full verification: 1,767 scanner tests passed (18 intentional skips), 1,479 frontend tests passed, root Python gate/lint/typecheck/build/package/generated/freeze checks passed. Candidate fingerprint `01ebe8e90df1e6bd` remains unaccepted. Independent review subsequently found four Important issues, now corrected with reproducing tests. Final source gate: 1,798 scanner tests passed (18 intentional skips), 1,479 frontend tests passed, all source checks green. Exact-source CI, merge and production verification are next. No full-blueprint or real 30-site acceptance is claimed.
-
-
-## Stage 2 coverage checkpoint — B06 source-complete on PR #303 (2026-09-19)
-
-Stage 2 is isolated from the Stage-1 release line on branch `agent/full-blueprint-stage2-coverage-b06-20260919`, draft PR [#303](https://github.com/bright4862-design/seo-autopilot/pull/303). GitHub `main` remained at the merged Stage-1 source `22ce4e69aa915a2e5ba796f9432fea33a0fa79bb` throughout this checkpoint, so this work has **not** moved the exact-SHA cutover underneath the pending Stage-1 production promotion.
-
-Requirement status:
-
-- **B06 — source-complete and CI-verified on the branch; not merged/deployed/live.** Added one shared bounded coverage-probe scheduler, then used it to status-check same-site internal-link targets that fall outside the assessed-page sample. Probe pages never enter the assessed-page count. Actual request identities are reused, redirect hops use the same safe request provider, and the pool is bounded by both a small per-mode allowance and the crawler's existing finite `max_pages * 8` request ceiling.
-- The scheduler exposes eligible/attempted/completed/pass/fail/not-verified/skipped/exhausted counts and a bounded evidence sample. Exhaustion/deadline/robots/access challenge states remain unknown/not-verified rather than becoming a pass. Probe time receives its own subdeadline so additive coverage cannot starve the existing canonical validator.
-- A verified unsampled 404/410 becomes the existing authenticated broken-link repair with retained source page/link text. It is explicitly non-scoring until B19/B23 land. The review coverage context counts a confirmed versioned probe URL as `affected_observed` but never as `affected_eligible`, preventing an invented denominator. Unknown versions and unverified probe claims cannot inflate the signed count.
-- The behavioral regression uses the real Python producer → review → canonical authority → persisted rows → verified customer/chat/card/handoff/export helper. It proves a broken target beyond a 4-page assessed sample is requested, remains outside `pages`, persists as one signed repair, and reloads with truthful `affected_observed=1`, `affected_eligible=0`.
-- Exact code checkpoint `d88b5b89a870b9f502f46da654eab9c831945c40` passed FixList CI run **35450285277**: **1,806 scanner tests passed, 18 intentional skips**, **1,479 frontend tests passed**, lint/typecheck/generated-contract checks, labelled Stage-1 corpus verification, frozen revision check, frontend build and production scanner-image build all passed.
-- Two preceding CI failures were retained as useful evidence rather than hidden: the first caught a direct-404 classification mistake; the second proved that the repair reached the signed customer row while `affected_observed` was still zero. Both causes were fixed with reproducing regressions before the green run.
-
-**Open Stage 2:** B07–B18. The next dependency-owned slice is B07 active soft-404 baselines using this same scheduler; B09 sitemap integrity and B16 URL variants must reuse the same pool rather than create new request budgets. B08 reuses retained redirect evidence. B10–B15/B17–B18 remain unimplemented here.
-
-**Stages 3–4:** B19–B28 remain open. No Stage-2 code is merged, staged, deployed or live-accepted by this checkpoint. The genuine provenance-labelled 30-site baseline/candidate gate remains open and historical summary counts are still not substitute evidence.
-
-## Stage 2 coverage checkpoint — B07 active soft-404 evidence engine (2026-09-19)
-
-PR [#303](https://github.com/bright4862-design/seo-autopilot/pull/303) now also contains the first B07 implementation checkpoint at source commit `62e9af3029f3ff35c76deb2213dc4124b0d50314`. The executable continuation plan is [B07 active soft-404 probe engine](superpowers/plans/2026-09-19-active-soft404-probe-engine.md).
-
-Requirement status:
-
-- **B07 — engine implemented and exact-source CI-verified; integration remains open.** The shared B06 scheduler now recognizes a versioned `soft_404_baseline` purpose, emits bounded authenticated synthetic metadata and can generate deterministic missing-path candidates inside the verified origin/scope: one scope-root candidate and at most three parent-directory candidates per observed page-template family.
-- Baselines fail closed. Only complete accepted HTML can establish a 2xx missing-page baseline. Challenge/block/rate-limit, transport failure, raw truncation, incomplete evidence and generic healthy 2xx content remain `not_verified`; real 404/410 is a correct hard-missing response. Redirected synthetic probes remain unknown here so B08, not B07, owns redirect meaning.
-- Assessed-page comparison requires its own missing-page intent plus corroborating similarity to a verified active baseline. Unknown/generic baselines cannot manufacture a finding, and only bounded title/H1/meta-derived signature tokens are retained for comparison rather than response-body copy.
-- Behavioral regressions cover deterministic scoped/capped candidates, shared request identity/budget invariants, hard-missing behavior, challenge/incomplete rejection, no positives from unknown/generic baselines, active positive matching and exact evidence-version/provenance metadata.
-- Exact source CI [35452713440](https://github.com/bright4862-design/seo-autopilot/actions/runs/35452713440) passed at `62e9af3029f3ff35c76deb2213dc4124b0d50314`: **1,812 scanner tests passed / 18 intentional skips**; scanner lint/typecheck/generated-contract checks, labelled synthetic acceptance corpora, frozen-revision check, production scanner-image build and the frontend/deploy contract job all passed.
-
-This checkpoint deliberately does **not** claim B07 source-complete. `run_scan` does not yet issue the synthetic probes, assessed pages are not yet annotated by the active evidence, and no new active soft-404 row reaches signed persisted/customer output. Because customer-displayed output is unchanged by this engine-only commit, the required producer → review → authority → persisted rows → verified customer-output regression belongs to the next integration commit and must pass before B07 can close.
-
-**Exact next action:** wire these B07 helpers into the real scanner orchestration using the existing `SharedCoverageProbeScheduler`, existing robots ownership policy and hardened request provider; then authenticate active evidence through indexability findings, authority/persistence and verified customer surfaces. Add positive and challenge/429/robots/budget/deadline unknown regressions and prove synthetic probes never increase the Standard 150 assessed-page count or its denominator. Resolve independent review findings and require exact-head CI before marking B07 source-complete.
-
-After B07, continue B09 and B16 on the same finite scheduler, then B08 redirect-meaning evidence and B10–B15/B17–B18. Stage 3 B19–B24 and Stage 4 B25–B28 remain open. PR #303 stays unmerged while the Stage-1 exact SHA is still in guarded production cutover; nothing in this Stage-2 checkpoint is staged, deployed or live-accepted.
-
-## Stage 2 coverage checkpoint — B07 authenticated downstream projection (2026-09-19)
-
-PR [#303](https://github.com/bright4862-design/seo-autopilot/pull/303) now carries the next coherent B07 integration slice. Exact code/test head `a5cde450977311f167f3608122773912805dcf96` passed [FixList CI 35456222652](https://github.com/bright4862-design/seo-autopilot/actions/runs/35456222652).
-
-- `indexability_postprocess` now consumes only current-version active soft-404 baselines already produced by the scanner. It never reconstructs active evidence from the live web. A verified assessed-page match is promoted to a soft-404 with `active_baseline_match`, confidence 98 and explicit `soft_404_probe_v1_active_baseline` provenance while passive historical behavior remains unchanged when active evidence is absent.
-- Grouping is separated by evidence version. Active and passive heuristic soft-404 rows cannot collapse into one repair card, and grouped active findings retain the exact union of `verified_observed_pages` rather than implying active proof for heuristic-only URLs.
-- New real downstream regressions take active evidence through indexability findings → local review → signed authority → persisted rows → verified customer and Grok reconstruction → repair card → handoff → PDF/TXT/CSV → rendered customer components. Preview privacy and invalid-authority behavior remain enforced by the same integration helper.
-- Positive fixtures prove synthetic baseline evidence does not add probe URLs to `pages` or `pages_crawled`. The real affected pages remain truthful assessed/eligible evidence; synthetic probe URLs remain outside that denominator. A challenged baseline remains `not_verified` and cannot manufacture a soft-404. A no-baseline fixture proves the existing passive heuristic is preserved without active version claims.
-- Two intermediate CI failures are retained as useful regressions: one caught an incorrect test assumption that real affected assessed pages should have `affected_eligible=0`; another caught the integration helper failing to recognize the existing truthful UI copy “N of N relevant pages checked.” Both tests were corrected without weakening production evidence rules.
-- Exact code/test CI is green: root scanner checks reported **115 passed**; `scanner-api` reported **1,816 passed / 18 intentional skips**; scanner lint/typecheck/generated-contract checks, frozen-revision checks, production scanner-image build and the frontend/deploy contract job passed. The Stage-1 acceptance corpus executed as explicitly labelled **synthetic** evidence; its full 30-site gate remained `not_assessed` and is not claimed as live or genuine-corpus acceptance.
-
-**B07 remains open rather than source-complete.** The real `run_scan` producer still does not derive, register and fetch the deterministic synthetic root/path-family probes or persist `soft_404_baselines`. Therefore this checkpoint proves the authenticated downstream half only; it does not claim a live producer path, deployment or customer scan.
-
-**Exact next action:** implement B07 producer orchestration inside `run_scan`: derive bounded candidates from the canonical origin/effective scope and observed page families; robots-precheck them; register and fetch them through the existing hardened `SharedCoverageProbeScheduler`; classify only complete accepted responses; persist bounded baseline signatures/provenance into `coverage_probe_evidence.soft_404_baselines`; keep challenge/429/robots/budget/deadline states unknown; and add producer-path regressions proving synthetic probes never change the Standard 150 assessed-page count or denominator. Then run independent review plus exact-head CI before closing B07.
-
-After B07 closes, continue B09 sitemap integrity and B16 URL variants on the same finite scheduler, then B08 redirect-meaning evidence and B10–B15/B17–B18. Stage 3 B19–B24 and Stage 4 B25–B28 remain open. PR #303 stays unmerged while Stage 1 remains in exact-SHA guarded cutover. Nothing from Stage 2 is staged, deployed or live-accepted.
+Remain on Stage 2. Resolve the still-open B10 publication-boundary review question with a reproducing test, then wire the next shared producer slice beginning with B11 truthful sample-scoped depth/inlink/navigation provenance. Continue B12–B15/B17 transfer/B18 in serialized slices, adding authenticated downstream coverage for anything customer-visible. After each coherent slice, run focused tests; after meaningful combined checkpoints require exact-head FixList CI and independent review. Only then begin shared Stage-3 integration.

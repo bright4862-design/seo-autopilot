@@ -1,0 +1,109 @@
+# Full blueprint progress
+
+Goal: build and deploy the complete applicable user-supplied scanner blueprint.
+
+## 2026-09-19 baseline and design
+
+- Authoritative GitHub main checked with `git ls-remote origin refs/heads/main`: `7a744a501416b1b9feac462511071fc9f08e1ba1`.
+- Isolated local clone: `work/seo-autopilot-blueprint`; local implementation branch: `codex/full-blueprint-20260919`.
+- User approved staged implementation using the existing scanner, preserving old reports and current crawl/security limits, with deployment after full blueprint acceptance.
+- Written design: [Full scanner blueprint](superpowers/specs/2026-09-19-full-scanner-blueprint-design.md). It records B01–B28 acceptance requirements and awaits the written-spec review required by the brainstorming workflow.
+- No production-code changes, pushes, deployments, schema writes or live scans have been made in this phase.
+
+## Confirmed blocking defect for evidence correctness
+
+A fresh in-memory reproduction uses the real `extract_page`, `build_page_pattern_findings`, `evidence_url_key` and `normalize_repair_scope` functions. Input: three complete HTTP-200 HTML pages, each missing a meta description, at:
+
+```text
+https://example.com/x
+https://example.com/x/
+https://example.com/X
+```
+
+Observed current behavior:
+
+```json
+{
+  "legacy_identity_keys": ["/x", "/x", "/x"],
+  "review_page_count": 2,
+  "review_affected_pages": ["/x", "/X"],
+  "review_metadata_missing_observations": 3,
+  "normalized_scope_page_count": 1,
+  "normalized_scope_affected_pages": ["https://example.com/x"]
+}
+```
+
+Required new-report behavior: three distinct affected pages through review, canonical grouping, persisted authority, verified projection and export. Historical reports retain legacy byte/signature reconstruction. An observed redirect to one final page remains a different case from three independent 200 responses.
+
+The migration audit also identified slash-losing singleton suppression in the JavaScript authority writer and path-based priority/cross-run joins. Fixing only the Python identity helper cannot satisfy the end-to-end requirement.
+
+## Verification environment
+
+- Local Node 20.19.5/npm 10.8.2 were prepared to match the workflow runtime.
+- Local Python virtual environment has scanner requirements and pytest.
+- Earlier full local release-gate run passed lint, typecheck, build, Base44 package checks, Python/scanner checks and manifest checks; frontend baseline had 1,368 passes and eight failures. These historical results are not post-change verification.
+- The eight frontend failures were traced to macOS Bash 3.2 parsing Bash-4 associative arrays under `set -u`, before their behavioral assertions ran.
+- A clean, unshimmed rerun of `base44V3RuntimeRecovery.test.mjs` and `base44V3RuntimeRecoverySept14.test.mjs` passed 11/11 tests under Node 20.19.5 and Bash 5.2.37 in the existing `fixlist-scanner:merged-main-check` container. Network was disabled, root/repository/Node mounts were read-only and `/tmp` was isolated. No test/source edits or credentials were used. This is a scoped result, not a fresh full-suite pass.
+- Linux Node runtime: sibling `work/node-v20.19.5-linux-arm64`; the official tarball's verified SHA256 is `d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd`.
+
+### Fresh full frontend baseline
+
+The complete frontend suite at `7a744a501416b1b9feac462511071fc9f08e1ba1` now passes: **1,376 tests, 1,376 passed, zero failures/skips**, exit 0. Command inside the isolated environment: `node --test --test-reporter=spec tests/frontend/*.test.mjs`.
+
+The verified runtime is the official `node:20.19.5-bookworm` image, manifest digest `sha256:ba36e9b2705008e63e354214f0e3011c528af9df2ca13ac2bd2c0114650302e6`: Node 20.19.5, Bash 5.2.15, Git 2.39.5 and Python 3.11.2. Test inputs came from `git archive HEAD` into disposable executable tmpfs; dependencies and Git metadata were read-only mounts. Network was disabled and the root filesystem was read-only. No source/test changes or service calls were used to make this pass.
+
+Two intermediate environment runs were not green and are retained in `.release/`: the read-only/noexec setup prevented test scratch commands; the writable archive lacked Git and history. A shallow-history gap was also found: the historical `33f471e` fixture did not exist locally. Fetching history without changing the checkout restored that real fixture before the final passing run. The final log is `.release/baseline-frontend-node20-bookworm.log`.
+
+This is baseline evidence for existing behavior, not acceptance evidence for unimplemented blueprint requirements or a complete release gate.
+
+## Release blocker, separate from implementation
+
+Base44 Builder has displayed `Couldn't fetch your code from GitHub` with publishing disabled. Its development snapshot was older than the GitHub candidate; the live deployment was also not proven to match that candidate. A connected label or loaded preview is insufficient evidence of synchronization. Local CLI app-level credential validation also failed despite a cached `whoami` identity.
+
+Do not disconnect the repository, publish a stale snapshot, rotate secrets or infer that the deployment wrapper caused the Builder fetch failure. Revalidate exact source, named schema changes, active runtime identities and owner authorization at release time.
+
+## Next work
+
+1. Complete written-design review.
+2. Write the first executable implementation plan for evidence correctness, including the versioned Python/JavaScript identity contract and historical fixtures.
+3. Implement with failing behavioral regressions first; independently review each coherent task and run integrated checks.
+4. Continue all remaining B01–B28 requirements; the first stage is not a substitute for full blueprint completion.
+
+## Specification self-review
+
+- Cross-checked the final seven PDF pages against the register, adding the explicitly named `scripts/assertCorpusRun.mjs` runner, the 30-site baseline/candidate gate and operator-only suppression visibility.
+- The named assertion runner is absent at the starting commit; the design requires creating it, not claiming an existing gate passed.
+- Preserved the approved safety amendments over the PDF's unsafe/broader sketches: bounded requests, no automatic sibling-host expansion or UA impersonation, conservative image/local applicability and no blanket accessibility suppression on noindex pages.
+- Identified and recorded the writer-side second deduplication, seal-selected reconstruction, historical version comparability and GEO-capability requirements for the new identity revision.
+- Documentation whitespace checks pass; no production implementation is claimed.
+
+## 30-site gate input inventory
+
+The repository does not yet contain the data needed to claim the blueprint's 30-site no-new-artifact gate passes.
+
+- `data/renderer-risk-study-manifest.jsonl` provides 30 unique sites, 10 per stratum. Its workflow and collector are live-run renderer studies, not full scanner baseline/candidate comparisons. The expected study output files are not tracked or present locally.
+- `docs/audit/2026-08-21-production-50-site/matrix.csv` and `results.jsonl` provide 50 historical summary rows, including 30 completed scans. This is a different roster; the summaries contain neither full page/FixItem evidence nor paired candidate outputs. They cannot silently be combined with the renderer roster into a passing corpus.
+- Existing synthetic HTTP fixtures cover four sites. Other tracked synthetic scan snapshots and derived fingerprint fixtures are useful test inputs but not a replayable 30-site corpus.
+- `scripts/acceptance-gates.mjs` evaluates one current scan bundle. It does not compare baseline/candidate artifacts. The PDF's named `scripts/assertCorpusRun.mjs` still needs to be implemented.
+
+Required input contract: one explicit canonical 30-site manifest; stable site IDs; paired comparable baseline/candidate artifacts with source/fingerprint, capture time, URL/scope/mode and evidence-backed artifact identities. A deterministic CI gate also needs immutable sanitized HTTP response fixtures (robots, sitemaps, redirects, status/headers/HTML) so it executes current source rather than merely comparing precomputed exports. Any newly captured fixture must be labelled as such; historical summary counts are not substitute evidence.
+
+This inventory was read-only: no new live scans, provider calls or source edits.
+
+## Goal blocker audit
+
+The written-design review requested after the high-level architecture approval remains unanswered across three consecutive goal turns. Baseline verification and the corpus-input inventory are complete; their processes are terminal. GitHub main remains `7a744a501416b1b9feac462511071fc9f08e1ba1`, and this branch still has only the two new documentation files, with no production-code edits.
+
+The brainstorming workflow requires written-spec approval before implementation. Further repeated status checks do not advance the build, and no additional in-scope preparation is needed to resolve this decision. Mark the goal blocked, not complete, pending approval of the linked design. On approval, resume with the first executable implementation plan and retain the entire B01–B28 objective. Deployment additionally remains subject to the recorded release/authentication and acceptance gates.
+
+## Implementation resumed — 2026-09-19
+
+The user explicitly approved the written design: **“Approved—start implementation.”** This resolves the historical approval blocker above. The first executable plan is `docs/superpowers/plans/2026-09-19-published-evidence-identity.md`; implementation starts with literal shared Python/JavaScript URL-identity regressions. Root owns the coupled changes on the existing isolated branch. The full B01–B28 objective and deployment gates remain unchanged.
+
+### First implementation slice: identity primitives
+
+- Added opt-in published-route identity helpers in Python and the package-local JavaScript mirrors, preserving legacy behavior. The new helper retains case, trailing slash, reserved escapes, raw query ordering and foreign-origin distinctions.
+- Added 72 shared literal cases. New assertions failed before implementation; historical assertions stayed green. Follow-up origin regressions caught Unicode scheme case-folding, line-separator handling and IDNA2008/WHATWG differences.
+- Added pinned `ada-url==1.32.0` for origin-only WHATWG normalization; paths and queries never enter its serializer. This avoids handwritten Unicode/bidi rules. Scanner image installation must be verified before release.
+- Fresh full checks: **1,647 scanner tests passed, 18 intentional skips, 694 existing dependency warnings; 1,449 frontend tests passed with no failures/skips.** Base44 package closure and generated-contract checks passed. The independent bounded Python/JS comparison reported 98 cases with zero differing pairs.
+- This is not yet a fix to produced report counts: connecting the helper through producers, authority, persistence and export is the next dependent work. No push, live scan or deployment occurred.

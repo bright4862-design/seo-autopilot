@@ -27,6 +27,8 @@ which is precisely how a mixed group came to be labelled Homepage.
 
 from __future__ import annotations
 
+import ipaddress
+import re
 from typing import Any
 from urllib.parse import quote, unquote, unquote_to_bytes, urlsplit
 
@@ -122,6 +124,87 @@ def evidence_url_key(value: Any) -> str:
         return ""
     query = _canonical_query(value)
     return f"{path}?{query}" if query else path
+
+
+PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION = "evidence_url_identity_v2_published_route"
+
+_OBSERVED_URL_FORBIDDEN = re.compile(r"[\x00-\x20\x7f-\x9f\\]")
+_OBSERVED_ABSOLUTE_URL = re.compile(r"^(https?)://([^/?#]+)(.*)$", re.IGNORECASE | re.ASCII)
+
+
+def _published_origin(scheme: str, authority: str) -> str:
+    """Normalize only a validated origin, never the observed route text."""
+    if "@" in authority or "%" in authority:
+        return ""
+    ipv6 = authority.startswith("[")
+    match = re.fullmatch(r"\[([^\]]+)\](?::([0-9]+))?" if ipv6
+                         else r"([^:\[\]]+)(?::([0-9]+))?", authority)
+    if not match:
+        return ""
+    scheme = scheme.lower()
+    port = match[2]
+    if port is not None:
+        # Length bound avoids unbounded integer parsing for malformed evidence.
+        digits = port.lstrip("0") or "0"
+        if len(digits) > 5 or int(digits) > 65535:
+            return ""
+        number = int(digits)
+        port = "" if number == (443 if scheme == "https" else 80) else f":{number}"
+    # Use WHATWG IDNA, not IDNA2008 (which rejects domains JS accepts). The
+    # parser sees only the origin; observed paths never pass through it.
+    # Keep this local so stdlib-only historical callers remain compatible.
+    from ada_url import URL
+
+    try:
+        literal = f"[{match[1]}]" if ipv6 else match[1]
+        host = URL(f"{scheme}://{literal}/").hostname
+        if not ipv6:
+            # A nonnumeric suffix prevents implicit short/octal/hex IPv4
+            # coercion while performing UTS-46 domain normalization.
+            domain = URL(f"https://{literal}.invalid/").hostname[:-8]
+            labels = domain.removesuffix(".").split(".")
+            if len(domain.removesuffix(".")) > 253 or any(
+                len(label) > 63 or not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", label)
+                for label in labels
+            ):
+                return ""
+            if host != domain:
+                return ""
+            if re.fullmatch(r"[0-9]+|0x[0-9a-f]*", labels[-1]):
+                if str(ipaddress.IPv4Address(domain)) != domain:
+                    return ""
+        return f"{scheme}://{host}{port or ''}"
+    except (ValueError, UnicodeError):
+        return ""
+
+
+def published_evidence_url_key(value: Any, *, scan_origin: str = "") -> str:
+    """Identity of an observed HTTP(S) request, separate from family/scheduling.
+
+    Keep case, slash, escapes and query spelling; only the origin and fragment
+    are normalized. Root-relative evidence needs a trusted scan-owned origin.
+    Invalid or ambiguous inputs have no evidence key.
+    """
+    if not isinstance(value, str) or not value or _OBSERVED_URL_FORBIDDEN.search(value):
+        return ""
+    raw = value.split("#", 1)[0]
+    absolute = _OBSERVED_ABSOLUTE_URL.fullmatch(raw)
+    if absolute:
+        origin = _published_origin(absolute[1], absolute[2])
+        route = absolute[3]
+    elif raw.startswith("/") and not raw.startswith("//"):
+        if not isinstance(scan_origin, str) or _OBSERVED_URL_FORBIDDEN.search(scan_origin):
+            return ""
+        base = _OBSERVED_ABSOLUTE_URL.fullmatch(scan_origin)
+        if not base:
+            return ""
+        origin = _published_origin(base[1], base[2])
+        route = raw
+    else:
+        return ""
+    if not origin:
+        return ""
+    return origin + (route if route.startswith("/") else f"/{route}")
 
 
 def _page_family(page: dict[str, Any], resolver: Any = None) -> str:

@@ -75,6 +75,27 @@ def test_unknown_family_denominator_is_unknown_not_zero():
     assert any("Reach unknown" in line for line in factors["explanation"])
 
 
+def test_observed_non_indexable_affected_page_has_known_zero_reach():
+    fix = verified_fix(
+        affected_pages=["/products/noindex"],
+        page_template_family="product_page",
+    )
+    factors = build_four_factor_priority(
+        fix,
+        [
+            page("/products/noindex", indexable=False),
+            page("/products/indexable", indexable=True),
+        ],
+    )
+
+    assert factors["reach"] == 0.0
+    assert factors["reach_state"] == "known"
+    assert factors["reach_affected_indexable"] == 0
+    assert factors["reach_observed_indexable_family"] == 1
+    assert factors["priority_factor_score"] == 0.0
+    assert not any("Reach unknown" in line for line in factors["explanation"])
+
+
 def test_high_impact_commercial_leaf_stays_ahead_of_low_impact_structural_page():
     high_leaf = verified_fix(
         rule="broken_page",
@@ -204,3 +225,12 @@ def test_confidence_uses_verified_heuristic_unverified_blueprint_values():
     assert verified["confidence"] == 1.0
     assert heuristic["confidence"] == 0.7
     assert unverified["confidence"] == 0.4
+
+
+def test_conflicting_verified_and_unknown_markers_fail_closed_to_unverified():
+    factors = build_four_factor_priority(
+        verified_fix(verification_state="verified", evidence_status="unknown"),
+        [page("/products/a")],
+    )
+    assert factors["confidence_state"] == "unverified"
+    assert factors["confidence"] == 0.4

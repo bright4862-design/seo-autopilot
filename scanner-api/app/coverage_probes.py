@@ -398,6 +398,7 @@ class SharedCoverageProbeScheduler:
             }
         )
         self._observations: list[dict[str, Any]] = []
+        self._observation_count = 0
 
     def register(
         self,
@@ -574,6 +575,7 @@ class SharedCoverageProbeScheduler:
         })
 
     def _observations_append(self, observation: dict[str, Any]) -> None:
+        self._observation_count += 1
         if len(self._observations) >= MAX_PROBE_OBSERVATION_SAMPLES:
             return
         observation = dict(observation)
@@ -609,8 +611,5 @@ class SharedCoverageProbeScheduler:
                 for purpose, stats in sorted(self._stats.items())
             },
             "observations": list(self._observations),
-            "observation_samples_truncated": sum(
-                int(stats.get("completed") or 0) + int(stats.get("exhausted") or 0)
-                for stats in self._stats.values()
-            ) > len(self._observations),
+            "observation_samples_truncated": self._observation_count > len(self._observations),
         }

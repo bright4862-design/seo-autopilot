@@ -96,7 +96,10 @@ def _assert_persisted_customer_output(result: dict, rule: str, urls: list[str]) 
             "review": build_local_review(result),
             "expectedUrls": urls,
             "expectedRule": rule,
-            "expectedEligible": 0,
+            # Active soft-404 proof classifies already-assessed pages. Synthetic
+            # baseline probes never join this denominator, but the verified
+            # affected pages themselves remain eligible assessed evidence.
+            "expectedEligible": len(urls),
         }),
         text=True,
         capture_output=True,

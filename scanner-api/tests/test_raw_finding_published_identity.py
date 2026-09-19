@@ -170,3 +170,95 @@ async def test_actual_soft_404_query_does_not_target_healthy_route(monkeypatch, 
     [title] = [row for row in repairs if row["rule"] == "missing_title"]
     assert title["affected_pages"] == [good]
     assert_persisted_customer_output(result, "soft_404", [bad], eligible=0)
+
+
+@pytest.mark.asyncio
+async def test_unsampled_internal_link_probe_verifies_broken_target_without_expanding_assessed_cap(monkeypatch, mock_network):
+    broken = ORIGIN + "/beyond-sample-broken"
+    monkeypatch.setitem(scanner.SCAN_BUDGETS, "basic", {
+        "max_pages": 4, "timeout": 20, "fetch_timeout": 3, "max_sitemap_fetches": 2,
+    })
+    requests = mock_network({
+        ORIGIN + "/robots.txt": {"body": "User-agent: *\nAllow: /", "content_type": "text/plain"},
+        ORIGIN + "/sitemap.xml": {"body": "<urlset/>", "content_type": "application/xml"},
+        ORIGIN + "/": {"body": html(
+            title="Home page",
+            body=(
+                '<h1>Home page</h1>'
+                '<a href="/a">A</a><a href="/b">B</a><a href="/c">C</a>'
+                '<a href="/beyond-sample-broken">Broken target</a>'
+            ),
+        )},
+        ORIGIN + "/a": {"body": html(title="A")},
+        ORIGIN + "/b": {"body": html(title="B")},
+        ORIGIN + "/c": {"body": html(title="C")},
+        broken: {"status": 404, "body": "<html><title>Not found</title><h1>Not found</h1></html>"},
+    })
+
+    result = apply_post_crawl_transforms(
+        await scanner.run_scan(ORIGIN + "/", scan_mode="basic", concurrency=1)
+    )
+
+    assert result["pages_crawled"] == 4
+    assert broken not in {page["url"] for page in result["pages"]}
+    probe = result["coverage_probe_evidence"]
+    assert probe["version"] == "coverage_probe_scheduler_v1_shared_request_budget"
+    assert probe["request_budget"]["requests_consumed"] == 1
+    assert probe["purposes"]["internal_link"]["eligible"] == 1
+    assert probe["purposes"]["internal_link"]["completed"] == 1
+    [observation] = [
+        row for row in probe["observations"]
+        if row["purpose"] == "internal_link" and row["observed_url"] == broken
+    ]
+    assert observation["state"] == "fail"
+    assert observation["status_code"] == 404
+    assert observation["source_pages"] == ["/"]
+    assert observation["link_text_samples"] == ["Broken target"]
+
+    [raw] = [row for row in result["raw_findings"] if row["rule"] == "404_error"]
+    assert raw["affected_pages"] == [broken]
+    assert raw["source_pages"] == ["/"]
+    assert raw["verification_state"] == "verified"
+    assert raw["non_scoring"] is True
+    assert raw["score_impact"] == 0
+
+    requested = [
+        f"{request.url.scheme}://{request.headers.get('host', '')}{request.url.raw_path.decode('ascii')}"
+        for request in requests
+    ]
+    assert broken in requested
+    assert_persisted_customer_output(result, "404_error", [broken], eligible=0)
+
+
+@pytest.mark.asyncio
+async def test_unsampled_link_probe_budget_exhaustion_is_unknown_not_success(monkeypatch, mock_network):
+    monkeypatch.setitem(scanner.SCAN_BUDGETS, "basic", {
+        "max_pages": 4, "timeout": 20, "fetch_timeout": 3, "max_sitemap_fetches": 2,
+    })
+    monkeypatch.setattr(scanner, "coverage_probe_request_limit", lambda _mode: 1)
+    mock_network({
+        ORIGIN + "/robots.txt": {"body": "User-agent: *\nAllow: /", "content_type": "text/plain"},
+        ORIGIN + "/sitemap.xml": {"body": "<urlset/>", "content_type": "application/xml"},
+        ORIGIN + "/": {"body": html(
+            title="Home page",
+            body=(
+                '<h1>Home</h1><a href="/a">A</a><a href="/b">B</a><a href="/c">C</a>'
+                '<a href="/u1">U1</a><a href="/u2">U2</a>'
+            ),
+        )},
+        ORIGIN + "/a": {"body": html(title="A")},
+        ORIGIN + "/b": {"body": html(title="B")},
+        ORIGIN + "/c": {"body": html(title="C")},
+        ORIGIN + "/u1": {"body": html(title="U1")},
+        ORIGIN + "/u2": {"status": 404, "body": "<h1>Not found</h1>"},
+    })
+    result = await scanner.run_scan(ORIGIN + "/", scan_mode="basic", concurrency=1)
+    purpose = result["coverage_probe_evidence"]["purposes"]["internal_link"]
+    assert purpose["eligible"] == 2
+    assert purpose["completed"] == 1
+    assert purpose["exhausted"] == 1
+    assert result["coverage_probe_evidence"]["request_budget"]["budget_exhausted"] is True
+    assert not [
+        row for row in result["raw_findings"]
+        if row["rule"] in {"404_error", "410_error"} and row["affected_pages"] == [ORIGIN + "/u2"]
+    ]

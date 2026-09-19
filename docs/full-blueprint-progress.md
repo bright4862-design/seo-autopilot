@@ -46,7 +46,22 @@ B11 producer/consumer code before semantic link-context enrichment reached exact
 
 Semantic navigation context was then added. Exact head `0b657afad65bf6c9aef883de11fd23093c6a1f90` exposed one compatibility-test mismatch in FixList CI `35475547130`: the pre-existing Stage-1 link observation expected `{href,text}`, while the enriched record intentionally also contains `navigation_presence`. The new B11 suites themselves passed; scanner-api finished **1 failed, 1,920 passed, 18 skipped**, and root scanner regressions were **115 passed**. The compatibility regression was corrected by strengthening the old assertion to include the new explicit field rather than deleting or weakening the test.
 
-Current executable code head after that correction: `c26a0495162359a6af72de0371ea33207e6df505`. FixList CI `35475725233` was still running when this ledger entry was written. Do not treat the current executable head as CI-certified until that exact run succeeds.
+Exact executable code head after that correction: `c26a0495162359a6af72de0371ea33207e6df505`.
+
+FixList CI `35475725233` — **SUCCESS** on both jobs for that exact head:
+
+- immutable checkout verified `c26a0495162359a6af72de0371ea33207e6df505`;
+- root scanner regressions: **115 passed**;
+- scanner-api: **1,921 passed / 18 intentional skips**;
+- B11 focused suites: `test_stage2_navigation_link_context.py` **2 passed**, `test_stage2_reachability_provenance.py` **6 passed**, Stage-2 coverage evidence **18 passed**;
+- Stage-1 labelled corpus remained `synthetic`, 14 cases / 55 assertions, `full_30_site_gate=not_assessed`;
+- frozen scanner revision `01ebe8e90df1e6bd`: passed;
+- production scanner image passed, image SHA `sha256:6ffb6434ea9c2849ac5890cd42d4fd6c0d36a7a37e428c159f56ec3673482fd1`;
+- lint, typecheck, generated release contracts, frontend contract tests and production frontend build: passed.
+
+The workflow resolved Node `20.20.2`; this exact run is not evidence for Node `20.19.5`.
+
+CodeRabbit independently reported **no correctness defect** in the reviewed B11 semantic-link checkpoint. It confirmed semantic-only navigation evidence, exact URL identity preservation, sitemap/inlink separation, exclusion of challenged/failed/truncated source pages, and the explicit `sitewide_orphan_claim=false` boundary. It also confirmed the remaining producer-path gap and called for explicit bounded persistence/preview tests if B11 source URLs are later projected downstream.
 
 Detailed B11 checkpoint: `docs/superpowers/plans/2026-09-20-stage2-b11-reachability-provenance.md`.
 
@@ -72,7 +87,7 @@ Fresh independent-review findings corrected before that green run:
 4. zero-hop diagnostic redirect loops remain unverified while concrete loops remain unusable;
 5. access-block/challenge/rate-limit evidence is evaluated before generic HTTP error classification.
 
-CodeRabbit independently confirmed and resolved the reported B10 empty-landmark, B10 raw-copy, and B08 access-block threads after the exact-head fixes. A focused B11 review request is now open and remains a gate; the request itself is not a review pass.
+CodeRabbit independently confirmed and resolved the reported B10 empty-landmark, B10 raw-copy, and B08 access-block threads after the exact-head fixes.
 
 Detailed prior hardening checkpoint: `docs/superpowers/plans/2026-09-19-stage2-serialized-review-hardening.md`.
 
@@ -81,7 +96,7 @@ Detailed prior hardening checkpoint: `docs/superpowers/plans/2026-09-19-stage2-s
 Stage 2 is **not source-complete**. Remaining serialized requirements:
 
 - **B10:** the raw-copy review defect is resolved; if duplicate evidence becomes customer-visible, add authenticated Review → authority → persistence → customer/card/handoff/export coverage before closing the displayed behavior.
-- **B11:** connect the new versioned internal-link/depth/navigation producer evidence into shared `run_scan` after final retained assessed-page selection. Exact source request URL and accepted source-page evidence must gate each observed edge; sitemap discovery must never create inlinks/depth; assessed counts must stay unchanged. Add downstream authenticated coverage if the evidence becomes customer-visible.
+- **B11:** connect the new versioned internal-link/depth/navigation producer evidence into shared `run_scan` after final retained assessed-page selection. Exact source request URL and accepted source-page evidence must gate each observed edge; sitemap discovery must never create inlinks/depth; assessed counts must stay unchanged. Add downstream authenticated coverage if the evidence becomes customer-visible, and keep persisted/previewed source URL samples bounded and entitlement/privacy-safe.
 - **B12:** produce bounded paired raw/rendered hub-link evidence for up to five representative hubs with explicit completed/failed/unassessed states; neither raw nor rendered evidence is the sole truth source.
 - **B13/B14:** produce applicable local entity/status/address/phone/regular-hours evidence and verified entity-match/NAP provenance. Optional fields remain optional and Coming Soon/unknown applicability fails closed.
 - **B15:** produce explicit current-content intent plus current-scoped temporal evidence. An old date alone is not freshness failure.
@@ -127,4 +142,4 @@ The genuine 30-site baseline/candidate gate is currently **not assessed**. No St
 
 ## Exact next engineering action
 
-Remain on Stage 2. Wait only for the current B11 exact-head CI/review evidence needed to classify this checkpoint, then wire the B11 observed internal-link graph into shared `run_scan` without altering the Standard-150 denominator or creating a new request budget. After that continue B12–B15/B17 transfer/B18 in serialized slices, adding authenticated downstream coverage for anything customer-visible. Require exact-head FixList CI and independent review at meaningful combined checkpoints. Only then begin shared Stage-3 integration.
+Remain on Stage 2. Wire the now-reviewed and exact-head-green B11 observed internal-link graph into shared `run_scan` after final retained page selection, without altering the Standard-150 denominator or creating a new request budget. Then continue B12–B15/B17 transfer/B18 in serialized slices, adding authenticated downstream coverage for anything customer-visible. Require exact-head FixList CI and independent review at meaningful combined checkpoints. Only then begin shared Stage-3 integration.

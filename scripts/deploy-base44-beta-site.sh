@@ -70,7 +70,8 @@ deploy_functions "${VERIFIED_FUNCTIONS[@]}"
 bash "$REPO_ROOT/scripts/verify-base44-functions.sh"
 printf 'BASE44_RELEASE_ROUTES_ACTIVE_PRE_SITE\n'
 
-VITE_FIXLIST_SOURCE_SHA="$SOURCE_SHA" npm run build
+# A fresh browser has no cached Base44 app ID; bind it to this deployment.
+VITE_BASE44_APP_ID="$APP_ID" VITE_FIXLIST_SOURCE_SHA="$SOURCE_SHA" npm run build
 "$FIXLIST_BASE44_CLI" --app-id "$APP_ID" site deploy --no-build --yes
 
 # Re-establish every function afterwards using the SAME authenticated CLI

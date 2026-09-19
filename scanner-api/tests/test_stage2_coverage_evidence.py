@@ -14,6 +14,10 @@ from app.stage2_coverage_evidence import (
     optional_gsc_adapter,
     page_weight_evidence,
 )
+from app.stage2_reachability_provenance import (
+    REACHABILITY_PROVENANCE_VERSION,
+    REACHABILITY_SCOPE,
+)
 
 
 def _page(url, text, **extra):
@@ -77,16 +81,29 @@ def test_money_page_reachability_is_sample_scoped_not_sitewide_orphaning():
                 "https://example.com/pricing",
                 "x " * 50,
                 page_template_family="pricing_page",
-                source_pages=[],
+                reachability_provenance_version=REACHABILITY_PROVENANCE_VERSION,
+                reachability_scope=REACHABILITY_SCOPE,
+                reachability_evidence_state="observed_sample",
+                observed_internal_inlink_count=0,
+                internal_source_pages=[],
+                internal_source_pages_truncated=False,
                 crawl_depth=5,
+                navigation_presence=None,
+                sitewide_orphan_claim=False,
             ),
             _page(
                 "https://example.com/product",
                 "x " * 50,
                 page_template_family="product_page",
-                source_pages=["https://example.com/category"],
+                reachability_provenance_version=REACHABILITY_PROVENANCE_VERSION,
+                reachability_scope=REACHABILITY_SCOPE,
+                reachability_evidence_state="observed_sample",
+                observed_internal_inlink_count=1,
+                internal_source_pages=["https://example.com/category"],
+                internal_source_pages_truncated=False,
                 crawl_depth=2,
                 navigation_presence=True,
+                sitewide_orphan_claim=False,
             ),
         ]
     )
@@ -94,6 +111,52 @@ def test_money_page_reachability_is_sample_scoped_not_sitewide_orphaning():
     assert evidence["money_pages_observed"] == 2
     assert evidence["weak_routes"] == 1
     assert evidence["pages"][0]["reason"] == "weak_route_in_observed_sample"
+    assert evidence["pages"][0]["sitewide_orphan_claim"] is False
+    assert evidence["sitewide_orphan_claim"] is False
+
+
+def test_money_page_reachability_rejects_legacy_sitemap_source_as_internal_inlink():
+    evidence = money_page_reachability(
+        [
+            _page(
+                "https://example.com/pricing",
+                "x " * 50,
+                page_template_family="pricing_page",
+                source_pages=["/sitemap.xml"],
+                crawl_depth=1,
+                navigation_presence=True,
+            )
+        ]
+    )
+    assert evidence["state"] == "not_verified"
+    assert evidence["pages"][0]["state"] == "not_verified"
+    assert evidence["pages"][0]["observed_inlinks"] is None
+    assert evidence["pages"][0]["reason"] == "reachability_provenance_unavailable"
+
+
+def test_money_page_reachability_partial_evidence_cannot_become_a_pass():
+    evidence = money_page_reachability(
+        [
+            _page(
+                "https://example.com/pricing",
+                "x " * 50,
+                page_template_family="pricing_page",
+                reachability_provenance_version=REACHABILITY_PROVENANCE_VERSION,
+                reachability_scope=REACHABILITY_SCOPE,
+                reachability_evidence_state="observed_sample",
+                observed_internal_inlink_count=2,
+                internal_source_pages=["https://example.com/a", "https://example.com/b"],
+                internal_source_pages_truncated=False,
+                crawl_depth=None,
+                navigation_presence=None,
+                sitewide_orphan_claim=False,
+            )
+        ]
+    )
+    assert evidence["state"] == "not_verified"
+    assert evidence["weak_routes"] == 0
+    assert evidence["unverified_routes"] == 1
+    assert evidence["pages"][0]["reason"] == "reachability_evidence_partial"
 
 
 def test_hub_comparison_discloses_selected_completed_failed_and_unassessed():

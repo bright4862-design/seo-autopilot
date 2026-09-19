@@ -1,5 +1,5 @@
 from app.accepted_content_evidence import extract_accepted_content_evidence
-from app.redirect_validation import _redirect_meaning_evidence
+from app.redirect_validation import _redirect_meaning_evidence, _redirect_outcome
 
 
 def test_hidden_image_control_is_excluded_without_post_sanitize_node_access():
@@ -83,3 +83,61 @@ def test_redirect_loop_with_concrete_hop_evidence_is_verified_unusable():
 
     assert meaning["state"] == "verified_unusable"
     assert meaning["reason"] == "redirect_loop"
+
+
+def test_challenged_redirect_destination_403_stays_unverified_not_unusable():
+    page = {
+        "url": "https://example.com/old",
+        "final_url": "https://example.com/protected",
+        "status_code": 403,
+        "content_type": "text/html",
+        "access_block_kind": "challenge",
+        "fetch_error": "",
+    }
+    evidence = {
+        "state": "single_redirect",
+        "source_url": "https://example.com/old",
+        "destination_url": "https://example.com/protected",
+        "destination_status_code": 403,
+        "hop_count": 1,
+        "hops": [
+            {"url": "https://example.com/old", "status_code": 302, "location": "https://example.com/protected"}
+        ],
+        "chain": ["https://example.com/old", "https://example.com/protected"],
+    }
+
+    meaning = _redirect_meaning_evidence(page, evidence)
+    outcome = _redirect_outcome(page, evidence, "Unknown because of access or rendering limitations", meaning)
+
+    assert meaning["state"] == "not_verified"
+    assert meaning["reason"] == "destination_access_unverified"
+    assert outcome == "redirect_destination_unverified"
+
+
+def test_genuine_redirect_destination_404_remains_verified_unusable():
+    page = {
+        "url": "https://example.com/old",
+        "final_url": "https://example.com/missing",
+        "status_code": 404,
+        "content_type": "text/html",
+        "access_block_kind": "",
+        "fetch_error": "",
+    }
+    evidence = {
+        "state": "single_redirect",
+        "source_url": "https://example.com/old",
+        "destination_url": "https://example.com/missing",
+        "destination_status_code": 404,
+        "hop_count": 1,
+        "hops": [
+            {"url": "https://example.com/old", "status_code": 302, "location": "https://example.com/missing"}
+        ],
+        "chain": ["https://example.com/old", "https://example.com/missing"],
+    }
+
+    meaning = _redirect_meaning_evidence(page, evidence)
+    outcome = _redirect_outcome(page, evidence, "HTTP 404", meaning)
+
+    assert meaning["state"] == "verified_unusable"
+    assert meaning["reason"] == "destination_http_404"
+    assert outcome == "redirect_destination_unusable"

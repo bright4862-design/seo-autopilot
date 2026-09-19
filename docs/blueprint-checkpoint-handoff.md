@@ -19,7 +19,30 @@ Branch: `agent/full-blueprint-stage2-coverage-b06-20260919`
 
 PR: #303 — `Stage 2: integrate B06–B18 evidence lanes and finish shared producer wiring`
 
-Exact reviewed code/test head before the latest documentation-only commits: `f904649c9193877181471e1daa01097da0f3062b`.
+### B11 checkpoint now in progress
+
+The current serialized slice added the B11 reachability producer/consumer seam before shared `run_scan` wiring:
+
+- `scanner-api/app/stage2_reachability_provenance.py` retains versioned sample-scoped internal-link provenance separately from sitemap discovery, computes shortest observed accepted-HTML depth from the exact seed, preserves exact evidence URL identity, and explicitly forbids sitewide-orphan claims.
+- `scanner-api/app/stage2_coverage_evidence.py::money_page_reachability` accepts only that exact provenance version/scope; legacy `source_pages` (including sitemap sources) cannot silently become inlinks; partial evidence remains unknown and a pass requires inlinks + depth + navigation state.
+- `scanner-api/app/extract.py` now carries semantic raw-link navigation context only from `<nav>` or `role=navigation`; CSS class/footer placement alone is not proof.
+- focused regressions cover semantic navigation, sitemap-only discovery, challenged/unusable sources, shortest-depth stability, exact path/query/case/escape identity, and legacy/partial evidence fail-closed behavior.
+
+Verification:
+
+- exact head `1f27022583b3777cfe886632cff3b7db19140334` passed FixList CI `35475369510` before semantic link context was added;
+- exact head `0b657afad65bf6c9aef883de11fd23093c6a1f90` then exposed one pre-existing compatibility assertion that did not include the newly intentional `navigation_presence` field. Its new B11 tests passed, root tests were **115 passed**, and scanner-api finished **1 failed, 1,920 passed, 18 skipped**;
+- the old test was strengthened to assert the enriched link shape at executable head `c26a0495162359a6af72de0371ea33207e6df505`. FixList CI `35475725233` was still running when this handoff was written; do not call `c26a049...` certified unless that exact run succeeds.
+
+A focused CodeRabbit review is requested for B11 sample-scope truthfulness, sitemap/inlink separation, exact identity, challenged-source handling, semantic navigation evidence, privacy and compatibility. The request itself is not a review pass.
+
+Detailed checkpoint: `docs/superpowers/plans/2026-09-20-stage2-b11-reachability-provenance.md`.
+
+B11 is **not source-complete** yet. The next shared integration action is to connect the observed internal-link graph into `enrich_pages_with_reachability_provenance` after the final retained Standard-150 page cap, with exact source request URLs and accepted source-page evidence gating every verified edge. That hook must not change assessed counts, create another request budget, treat sitemap discovery as an inlink/depth, or promote sample-only weakness to a sitewide orphan claim.
+
+### Prior exact reviewed Stage-2 checkpoint
+
+Exact reviewed code/test head before B11 work: `f904649c9193877181471e1daa01097da0f3062b`.
 
 Exact-head FixList CI: `35472567286` — **SUCCESS**.
 
@@ -37,7 +60,7 @@ Verification on that code head:
 
 The workflow resolved Node 20.20.2. Do not describe this exact CI run as Node 20.19.5 runtime evidence.
 
-Detailed current review checkpoint: `docs/superpowers/plans/2026-09-19-stage2-serialized-review-hardening.md`.
+Detailed prior review checkpoint: `docs/superpowers/plans/2026-09-19-stage2-serialized-review-hardening.md`.
 
 ## Stage-2 lane integration already on PR #303
 
@@ -51,9 +74,9 @@ The lane PRs were CI/review inputs and were not merged directly to `main`.
 
 The B07/B09/B16 producer path is serialized through the existing `SharedCoverageProbeScheduler`, not a second scheduler. Synthetic/probe-only URLs remain outside assessed `pages` and `pages_crawled` and cannot inflate the Standard-150 denominator.
 
-## Fresh independent-review corrections landed
+## Fresh independent-review corrections already landed
 
-The current green code head incorporates and regresses the latest concrete review findings:
+The previously green reviewed code incorporated and regressed these concrete review findings:
 
 1. **Image evidence / DOM sanitization** — scalar image applicability is captured before destructive BeautifulSoup sanitization. Hidden/example descendants are excluded; decomposed nodes are never dereferenced later.
 2. **Empty landmark correctness** — main/article/body selection uses explicit `is None` checks so an empty `<main>` cannot fall through to unrelated body/title content.
@@ -61,7 +84,7 @@ The current green code head incorporates and regresses the latest concrete revie
 4. **Redirect-loop provenance** — zero-hop diagnostic loop state is `not_verified`; a loop with observed hop evidence remains `verified_unusable`.
 5. **Access-block redirect truthfulness** — challenge/block/rate-limit evidence is evaluated before generic HTTP >=400 classification. Challenged 403/429/503 destinations remain unknown; a verified ordinary 404 remains unusable.
 
-CodeRabbit independently confirmed and resolved the currently reported empty-landmark, raw-copy and access-block threads after the exact-head fixes. A fresh whole-head review request has been posted; any newly reported finding remains a gate and must be closed with a reproducing regression.
+CodeRabbit independently confirmed and resolved the empty-landmark, raw-copy and access-block threads after their exact-head fixes.
 
 ## Stage 2 status
 
@@ -74,12 +97,13 @@ Source-complete/materially proven on the integration line:
 - B08 redirect meaning with current fail-closed access handling;
 - B09/B16 helper + shared scheduler integration, with remaining exact source-level sitemap provenance/customer promotion decisions noted below;
 - B10 accepted main-content extraction/privacy seam;
+- B11 producer/consumer provenance adapter + semantic raw-link context are implemented, but the shared `run_scan` graph hook remains open;
 - B17 decoded HTML + inline script/style byte separation.
 
 Open serialized Stage-2 work:
 
 - **B10:** raw-copy privacy defect is resolved; authenticated producer → Review → authority → persistence → customer/card/handoff/export proof is still required if near-duplicate evidence becomes customer-visible.
-- **B11:** stable sample-scoped crawl depth, inlink and navigation provenance; no sitewide orphan claim from sample-only evidence.
+- **B11:** wire exact observed internal edges from accepted source pages into retained assessed pages after the final cap; sitemap discovery cannot create an inlink/depth; no sitewide orphan claim; add downstream authenticated proof if B11 becomes customer-visible.
 - **B12:** paired raw/rendered hub-link evidence for up to five hubs, with explicit completed/failed/unassessed states.
 - **B13/B14:** contextual local entity/status/address/phone/regular-hours producer evidence and verified entity matching/NAP consistency.
 - **B15:** current-content intent + current-scoped temporal anchors; an old date alone cannot fail freshness.
@@ -126,6 +150,6 @@ The genuine 30-site gate is still **not assessed**. Historical summary counts an
 
 ## Exact next action
 
-Stay on Stage 2. The currently reported inline review findings are resolved. Implement B11 producer provenance truthfully from observed crawl/inlink/navigation data without inventing a complete-site denominator. Continue B12–B15/B17 transfer/B18 as serialized slices, add authenticated downstream tests for anything customer-visible, run focused tests after each slice, and require exact-head FixList CI + independent review for meaningful combined checkpoints.
+Stay on Stage 2. First classify the current B11 exact-head CI and focused independent review. Then wire B11 into shared `run_scan` with exact source request identity and accepted-source gating after final page retention, without altering the assessed denominator or request scheduler. Continue B12–B15/B17 transfer/B18 as serialized slices, add authenticated downstream tests for anything customer-visible, and require exact-head FixList CI + independent review for meaningful combined checkpoints.
 
 Do not begin shared Stage-3 integration until B06–B18 are genuinely source-complete and green. Do not begin Stage-4 live execution until all applicable source/review/CI/30-site/release gates are actually proven.

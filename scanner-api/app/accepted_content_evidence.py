@@ -7,6 +7,7 @@ accepted HTML and remain explicitly unverified when that evidence is unusable.
 """
 from __future__ import annotations
 
+from hashlib import sha256
 import re
 from typing import Any
 
@@ -21,6 +22,8 @@ MAX_HTML = 2_000_000
 MAX_IMAGE_SAMPLES = 40
 MAX_TEMPLATE_SAMPLES = 4
 MAX_MAIN_TEXT_CHARS = 120_000
+MAX_MAIN_TEXT_SHINGLES = 512
+MAIN_TEXT_SHINGLE_SIZE = 5
 EXCLUDED_TAGS = {"script", "style", "template", "noscript", "code", "pre"}
 BLOCK_TAGS = {"title", "h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "dt", "dd", "td", "th", "div", "section", "article", "main", "body", "figcaption", "label", "button", "a"}
 HIDDEN_STYLE = re.compile(r"(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*(?:hidden|collapse)|content-visibility\s*:\s*hidden)\s*(?:!important\s*)?(?:;|$)", re.I)
@@ -93,31 +96,60 @@ def _inline_bytes(soup: BeautifulSoup) -> tuple[int, int]:
     return script_bytes, style_bytes
 
 
+def _hashed_shingles(text: str) -> tuple[list[str], int]:
+    tokens = re.findall(r"[\w'-]+", _text(text).lower(), flags=re.UNICODE)
+    if len(tokens) < MAIN_TEXT_SHINGLE_SIZE:
+        return [], len(tokens)
+    shingles: list[str] = []
+    seen: set[str] = set()
+    for index in range(len(tokens) - MAIN_TEXT_SHINGLE_SIZE + 1):
+        raw = "\x1f".join(tokens[index:index + MAIN_TEXT_SHINGLE_SIZE])
+        digest = sha256(raw.encode("utf-8")).hexdigest()[:16]
+        if digest not in seen:
+            seen.add(digest)
+            shingles.append(digest)
+        if len(shingles) >= MAX_MAIN_TEXT_SHINGLES:
+            break
+    return shingles, len(tokens)
+
+
 def _main_text_evidence(soup: BeautifulSoup) -> dict[str, Any]:
     # Work on a clone so chrome removal for B10 cannot change any existing
     # template/image/location evidence extracted from the accepted view.
     clone = BeautifulSoup(str(soup), "lxml")
-    root = clone.find("main") or clone.find(attrs={"role": "main"}) or clone.find("article")
+    root = clone.find("main")
+    if root is None:
+        root = clone.find(attrs={"role": "main"})
+    if root is None:
+        root = clone.find("article")
     source = "main_landmark"
     if root is None:
-        root = clone.body or clone
+        body = clone.body
+        root = clone if body is None else body
         source = "body_without_common_chrome"
         for node in reversed(root.find_all(["header", "nav", "footer", "aside"])):
             node.decompose()
-    text = _text(root.get_text(" ")) if root else ""
+    text = _text(root.get_text(" ")) if root is not None else ""
     truncated = len(text) > MAX_MAIN_TEXT_CHARS
     bounded = text[:MAX_MAIN_TEXT_CHARS]
     verified = bool(bounded) and not truncated
+    shingles, token_count = _hashed_shingles(bounded) if verified else ([], 0)
+    aggregate = sha256("|".join(shingles).encode("ascii")).hexdigest() if shingles else ""
     return {
         "main_text_evidence_version": MAIN_TEXT_EVIDENCE_VERSION,
         "main_text_verified": verified,
         "main_text_reason": (
-            "accepted_sanitized_main_text"
+            "accepted_sanitized_main_text_signature"
             if verified
             else ("main_text_too_large" if truncated else "main_text_empty")
         ),
-        "main_text_source": source if root else None,
-        "main_text": bounded,
+        "main_text_source": source if root is not None else None,
+        # Compatibility input for the Stage-2 near-duplicate helper is an
+        # irreversible shingle stream, never the page's raw customer copy.
+        "main_text": " ".join(shingles),
+        "main_text_representation": "sha256_5_token_shingles_v1",
+        "main_text_signature": aggregate,
+        "main_text_token_count": token_count,
         "main_text_char_count": len(text),
         "main_text_truncated": truncated,
     }
@@ -161,7 +193,8 @@ def _fragments(soup: BeautifulSoup) -> list[tuple[str, str]]:
     # Group adjacent inline text under its nearest block without rescanning
     # ancestor text. Each visible occurrence is counted exactly once.
     grouped: dict[int, tuple[Any, list[str]]] = {}
-    root = soup.body or soup
+    body = soup.body
+    root = soup if body is None else body
     for value in root.find_all(string=True):
         if value.__class__.__name__ in {"Comment", "Doctype", "ProcessingInstruction"}:
             continue
@@ -207,8 +240,14 @@ def _template_evidence(soup: BeautifulSoup) -> dict[str, Any]:
                         continue
                 record(kind, placement, _snippet(text, match.start(), match.end()))
 
-    main = soup.find("main") or soup.find(attrs={"role": "main"}) or soup.find("article") or soup.body
-    if main and not main.find(["img", "video", "audio", "iframe", "svg", "canvas", "form", "input", "textarea", "select"]):
+    main = soup.find("main")
+    if main is None:
+        main = soup.find(attrs={"role": "main"})
+    if main is None:
+        main = soup.find("article")
+    if main is None:
+        main = soup.body
+    if main is not None and not main.find(["img", "video", "audio", "iframe", "svg", "canvas", "form", "input", "textarea", "select"]):
         content = _text(main.get_text(" "))
         if not content:
             record("empty_shell", _placement(main), "No visible text, media or form in the content area.")
@@ -240,6 +279,9 @@ def extract_accepted_content_evidence(html: str, evidence_class: str) -> dict[st
         "main_text_reason": reason,
         "main_text_source": None,
         "main_text": "",
+        "main_text_representation": "sha256_5_token_shingles_v1",
+        "main_text_signature": "",
+        "main_text_token_count": None,
         "main_text_char_count": None,
         "main_text_truncated": False,
         "page_weight_evidence_version": PAGE_WEIGHT_VERSION,

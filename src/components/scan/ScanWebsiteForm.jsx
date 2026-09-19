@@ -35,7 +35,7 @@ import {
   readCustomerActiveProject,
 } from "@/lib/customerBrowserCache";
 
-const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV6";
+const ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV7";
 
 // Standard 150 is the only customer scan. There is no scan-size selector and no
 // customer-controlled scanner budget. The gateway owns the Python compatibility

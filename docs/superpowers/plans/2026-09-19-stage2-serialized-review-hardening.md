@@ -4,7 +4,7 @@ Integration branch: `agent/full-blueprint-stage2-coverage-b06-20260919`
 
 PR: #303
 
-Exact reviewed code/test head before this documentation-only checkpoint: `f904649c9193877181471e1daa01097da0f3062b`.
+Exact reviewed code/test head before the documentation-only checkpoints: `f904649c9193877181471e1daa01097da0f3062b`.
 
 Exact-head FixList CI: `35472567286` — **SUCCESS**.
 
@@ -23,29 +23,29 @@ Exact-head FixList CI: `35472567286` — **SUCCESS**.
 
 The workflow's Node setup resolved Node `20.20.2` on the runner. Do not describe this CI run as Node 20.19.5 exact-runtime evidence.
 
-## Review findings fixed in this checkpoint
+## Review findings fixed and independently confirmed
 
 ### Accepted image evidence and destructive sanitization
 
-Image applicability is now reduced to scalar evidence before BeautifulSoup sanitization can `decompose()` hidden/example nodes. Hidden descendants are explicitly classified `excluded / hidden_or_example_content`; no later classification dereferences a decomposed tag.
+Image applicability is reduced to scalar evidence before BeautifulSoup sanitization can `decompose()` hidden/example nodes. Hidden descendants are explicitly classified `excluded / hidden_or_example_content`; no later classification dereferences a decomposed tag.
 
 Regression: `test_hidden_image_control_is_excluded_without_post_sanitize_node_access`.
 
 ### Empty main-landmark truthfulness
 
-B10 main-content extraction and visible-template evidence now use explicit `is None` checks instead of BeautifulSoup Tag truthiness. An empty `<main></main>` remains the selected main landmark and cannot fall through to body/title text.
+B10 main-content extraction and visible-template evidence use explicit `is None` checks instead of BeautifulSoup Tag truthiness. An empty `<main></main>` remains the selected main landmark and cannot fall through to body/title text.
 
 Regression: `test_b10_empty_main_landmark_does_not_fall_back_to_body_text`.
 
-The corresponding CodeRabbit thread was replied to with exact-head CI evidence and resolved after the fix.
+CodeRabbit independently confirmed the reported failure is addressed and resolved the thread.
 
 ### Main-content privacy
 
-The accepted B10 producer no longer places raw page copy into its compatibility field. It computes bounded SHA-256 five-token shingles and an aggregate signature; only the irreversible digest tokens plus token/character-count metadata leave the extraction helper.
+The accepted B10 producer no longer places raw page copy into its compatibility field. It computes bounded deterministic SHA-256 five-token shingle fingerprints plus an aggregate signature and token/character-count metadata.
 
-Regression: `test_b10_extraction_publishes_only_irreversible_main_content_signature_material` asserts source words and shared chrome/footer copy do not survive.
+Regression: `test_b10_extraction_publishes_only_irreversible_main_content_signature_material` asserts source words and shared chrome/footer copy do not survive in the emitted field.
 
-The independent review thread remains deliberately open pending confirmation whether the hashed compatibility field itself must also be absent from final `pages`/`crawled_pages`. If required, the next serialized slice must compute B10 before response assembly and remove the transient compatibility material entirely rather than weakening the analysis.
+CodeRabbit independently confirmed that the original raw page-copy exposure is addressed and resolved the thread. The review also correctly notes a terminology limit: these deterministic digests are **cryptographic fingerprints**, not absolute irreversibility against an attacker who already possesses candidate source text and can perform dictionary matching. Do not describe them as providing secrecy against candidate-text matching.
 
 ### Redirect loop provenance
 
@@ -57,7 +57,9 @@ Regressions cover both cases.
 
 Redirect meaning checks normalized `access_block_kind` (`challenge`, `block`, `rate_limit`) before generic HTTP >=400 classification. A challenge response such as HTTP 403 stays `destination_access_unverified` and yields `redirect_destination_unverified`; an ordinary verified 404 remains `redirect_destination_unusable`.
 
-Paired regressions cover the challenged 403 and ordinary 404 cases. The corresponding CodeRabbit thread was replied to and resolved after the fix.
+Paired regressions cover the challenged 403 and ordinary 404 cases. CodeRabbit independently confirmed the fix and resolved the thread.
+
+At this checkpoint all currently reported inline review threads on PR #303 are resolved. A fresh whole-head review was requested after the fixes; any later newly reported finding remains a gate and must be handled with a reproducing regression.
 
 ## Current requirement status
 
@@ -67,7 +69,7 @@ Already integrated on this line: B06 scheduler/internal-link coverage, B07 activ
 
 Still open:
 
-- **B10**: final publication-boundary decision for hashed compatibility material; authenticated customer projection only if the duplicate evidence becomes displayed.
+- **B10**: authenticated customer projection only if duplicate evidence becomes displayed; the raw-copy review defect itself is resolved.
 - **B11**: stable sample-scoped crawl depth, inlink and navigation provenance; do not infer sitewide orphaning from an observed sample.
 - **B12**: bounded paired raw/rendered hub-link evidence for up to five hubs, with completed/failed/unassessed states.
 - **B13/B14**: applicable local entity/status/address/phone/regular-hours production plus verified entity-match/NAP provenance.

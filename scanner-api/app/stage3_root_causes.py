@@ -155,6 +155,7 @@ def _singleton_group(
     member_id = _fix_id(fix, index)
     family = _family(fix)
     domain = _domain(fix)
+    affected_pages = _affected_pages(fix)
     return {
         "version": ROOT_CAUSE_GROUPING_VERSION,
         "grouping_state": evidence["state"],
@@ -166,8 +167,8 @@ def _singleton_group(
         "member_count": 1,
         "domains": [domain],
         "family_partitions": {family: [member_id]},
-        "affected_pages": _affected_pages(fix),
-        "affected_page_count": len(_affected_pages(fix)),
+        "affected_pages": affected_pages,
+        "affected_page_count": len(affected_pages),
         "contributing_evidence_refs": list(evidence.get("evidence_refs") or []),
         "contributing_observation_ids": _observation_ids(fix),
         "suppressed_members": [],
@@ -183,9 +184,11 @@ def group_evidenced_root_causes(
 
     Page/template family, impact class and similar wording are never sufficient
     grouping evidence. Verified SEO and GEO members may share one cause while
-    retaining domain/family partitions and exact affected URL unions.
+    retaining domain/family partitions and exact affected URL unions. Output
+    order is anchored to the first member seen, so grouping cannot move an
+    earlier-ranked verified repair behind later singleton repairs.
     """
-    groups: list[dict[str, Any]] = []
+    ordered_groups: list[dict[str, Any]] = []
     verified: OrderedDict[tuple[str, str, str], dict[str, Any]] = OrderedDict()
 
     for index, fix in enumerate(fixes or []):
@@ -194,7 +197,7 @@ def group_evidenced_root_causes(
         evidence = validate_root_cause_evidence(fix)
         member_scan_id = _scan_identity(fix, scan_id)
         if evidence["state"] != "verified":
-            groups.append(
+            ordered_groups.append(
                 _singleton_group(
                     fix,
                     index=index,
@@ -231,6 +234,7 @@ def group_evidenced_root_causes(
                 "suppressed_members": [],
             }
             verified[key] = group
+            ordered_groups.append(group)
 
         group["member_ids"].append(member_id)
         group["member_count"] = len(group["member_ids"])
@@ -262,5 +266,4 @@ def group_evidenced_root_causes(
                 }
             )
 
-    groups.extend(verified.values())
-    return groups
+    return ordered_groups

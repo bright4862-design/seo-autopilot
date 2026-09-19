@@ -68,6 +68,47 @@ def test_invalid_duplicate_fix_ids_fail_closed_instead_of_publishing_legacy():
         apply_canonical_repair_contract(review, scan)
 
 
+def test_published_canonical_merge_preserves_sources_and_recomputes_group_coverage():
+    from app.repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
+
+    urls = ["https://example.com/x", "https://example.com/x/", "https://example.com/X"]
+    fixes = [{**_fix(str(i), "missing_meta_description", "medium", [url]),
+              "source_pages": [url]} for i, url in enumerate(urls)]
+    scan = {"website_url": "https://example.com", "pages": [_page(url) for url in urls]}
+    result = apply_canonical_repair_contract({"cleaned_fixes": fixes}, scan,
+                                            identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
+    [merged] = result["canonical_repairs"]
+    assert merged["affected_pages"] == urls
+    assert merged["source_pages"] == urls
+    assert merged["page_count"] == 3
+    assert merged["priority_context"]["affected_checked"] == 3
+    assert merged["priority_context"]["affected_observed"] == 3
+    assert merged["priority_context"]["checked_eligible"] == 3
+
+
+def test_published_canonical_contract_rejects_unresolvable_evidence_before_normalizing():
+    from app.repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
+
+    fix = _fix("unresolved", "missing_meta_description", "medium", ["/x", "not-a-root-relative-url"])
+    scan = {"website_url": "https://example.com", "pages": [_page("https://example.com/x")]}
+    with pytest.raises(CanonicalRepairContractError, match="unresolvable affected evidence"):
+        apply_canonical_repair_contract({"cleaned_fixes": [fix]}, scan,
+                                       identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
+
+
+def test_published_canonical_order_uses_merged_coverage_priority():
+    from app.repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
+
+    urls = ["https://example.com/x", "https://example.com/x/", "https://example.com/X"]
+    fixes = [_fix("heading", "missing_h1", "medium", urls[:2])]
+    fixes += [_fix(str(i), "missing_meta_description", "medium", [url]) for i, url in enumerate(urls)]
+    scan = {"website_url": "https://example.com", "pages": [_page(url) for url in urls]}
+    result = apply_canonical_repair_contract({"cleaned_fixes": fixes}, scan,
+                                            identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
+    assert [fix["rule"] for fix in result["canonical_repairs"]] == ["missing_meta_description", "missing_h1"]
+    assert [fix["canonical_action_rank"] for fix in result["canonical_repairs"]] == [1, 2]
+
+
 
 def test_stable_fingerprint_rows_persist_as_one_action_with_child_evidence():
     first = annotate_repair_identity({

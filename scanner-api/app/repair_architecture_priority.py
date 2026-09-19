@@ -5,6 +5,8 @@ from math import log2
 from typing import Any
 from urllib.parse import urlparse
 
+from .repair_coverage import repair_evidence_key_function
+
 REPAIR_ARCHITECTURE_PRIORITY_VERSION = "repair_architecture_priority_v1_role_coverage"
 
 STRUCTURAL_FAMILIES = {
@@ -106,7 +108,7 @@ def _fix_family(fix: dict[str, Any]) -> str:
     return _lower(fix.get("page_template_family") or fix.get("template_family"))
 
 
-def _affected_paths(fix: dict[str, Any]) -> list[str]:
+def _affected_paths(fix: dict[str, Any], *, scan_origin: str = "", identity_version: str = "") -> list[str]:
     values = fix.get("affected_pages") if isinstance(fix.get("affected_pages"), list) else []
     if not values:
         fallback = fix.get("page_url") or fix.get("representative_page_url")
@@ -114,8 +116,9 @@ def _affected_paths(fix: dict[str, Any]) -> list[str]:
 
     output: list[str] = []
     seen: set[str] = set()
+    key_for = repair_evidence_key_function(legacy_key=_path, scan_origin=scan_origin, identity_version=identity_version)
     for raw in values:
-        key = _path(raw)
+        key = key_for(raw)
         if key and key not in seen:
             seen.add(key)
             output.append(key)
@@ -142,11 +145,14 @@ def page_role(page: dict[str, Any]) -> str:
 def role_counts_for_affected(
     fix: dict[str, Any],
     pages: list[dict[str, Any]],
+    *, scan_origin: str = "", identity_version: str = "",
 ) -> RoleCounts:
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    key_for = repair_evidence_key_function(legacy_key=_path, **identity_context)
     page_lookup = {
-        _path(_page_url(page)): page
+        key_for(_page_url(page)): page
         for page in pages or []
-        if isinstance(page, dict) and _path(_page_url(page))
+        if isinstance(page, dict) and key_for(_page_url(page))
     }
     fix_family = _fix_family(fix)
     counts = {
@@ -157,7 +163,7 @@ def role_counts_for_affected(
         "other": 0,
     }
 
-    for key in _affected_paths(fix):
+    for key in _affected_paths(fix, **identity_context):
         page = page_lookup.get(key)
         if page is None:
             page = {"path": key, "page_template_family": fix_family}
@@ -212,9 +218,11 @@ def architecture_context(
     pages: list[dict[str, Any]],
     *,
     checked_eligible: int | None,
+    scan_origin: str = "",
+    identity_version: str = "",
 ) -> dict[str, Any]:
-    counts = role_counts_for_affected(fix, pages)
-    affected_checked = len(_affected_paths(fix))
+    counts = role_counts_for_affected(fix, pages, scan_origin=scan_origin, identity_version=identity_version)
+    affected_checked = len(_affected_paths(fix, scan_origin=scan_origin, identity_version=identity_version))
     return {
         "version": REPAIR_ARCHITECTURE_PRIORITY_VERSION,
         "role_counts": counts.as_dict(),
@@ -232,13 +240,15 @@ def architecture_priority_reason(
     pages: list[dict[str, Any]],
     *,
     checked_eligible: int | None,
+    scan_origin: str = "",
+    identity_version: str = "",
     fallback_reason: str,
 ) -> str:
     """Add role-aware wording only when a stronger coverage reason is unavailable."""
     if checked_eligible:
         return fallback_reason
 
-    counts = role_counts_for_affected(fix, pages)
+    counts = role_counts_for_affected(fix, pages, scan_origin=scan_origin, identity_version=identity_version)
     bits: list[str] = []
     if counts.structural:
         bits.append(

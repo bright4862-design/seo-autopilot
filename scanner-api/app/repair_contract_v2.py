@@ -20,8 +20,12 @@ from .repair_persistence_shadow import (
     REPAIR_PRIORITY_MODEL_VERSION,
     validate_v2_persistence_candidate,
 )
-from .repair_coverage import evidence_url_key, first_failed_repair_invariant, normalize_repair_scope
-from .repair_shadow_calibration import build_calibrated_shadow_review_analysis
+from .repair_coverage import (
+    first_failed_repair_invariant, normalize_repair_scope,
+    repair_evidence_key_function, scan_evidence_origin,
+)
+from .repair_priority_calibration import annotate_calibrated_repair_priority
+from .repair_shadow_calibration import build_calibrated_shadow_review_analysis, sort_calibrated_repairs
 
 
 REPAIR_PERSISTENCE_GROUPING_VERSION = "repair_persistence_grouping_v2_valid_fingerprint_actions"
@@ -38,15 +42,17 @@ def _diagnostic_count(value: Any, fallback: int = 0) -> int:
         return fallback
 
 
-def _safe_repair_diagnostic(fix: dict[str, Any], invariant: str, *, rank: int) -> dict[str, Any]:
+def _safe_repair_diagnostic(fix: dict[str, Any], invariant: str, *, rank: int, scan_origin: str = "", identity_version: str = "") -> dict[str, Any]:
     """Return bounded, non-secret fields sufficient to diagnose invariant drift.
 
     Never emit raw headers, authority material, tokens, or URL query strings.
     The diagnostic intentionally reports cardinalities and family names rather
     than representative URLs.
     """
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    key_for = repair_evidence_key_function(**identity_context)
     affected_pages = fix.get("affected_pages") if isinstance(fix.get("affected_pages"), list) else []
-    affected_keys = {key for value in affected_pages if (key := evidence_url_key(value))}
+    affected_keys = {key for value in affected_pages if (key := key_for(value))}
     breakdown = fix.get("family_breakdown") if isinstance(fix.get("family_breakdown"), dict) else {}
     representatives = (
         fix.get("representative_pages_by_family")
@@ -101,12 +107,14 @@ def _persistence_repair_fingerprint(item: dict[str, Any]) -> str:
     return _clean_text(item.get("repair_fingerprint"))
 
 
-def _dedupe_urls(values: Any) -> list[str]:
+def _dedupe_urls(values: Any, *, scan_origin: str = "", identity_version: str = "") -> list[str]:
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    key_for = repair_evidence_key_function(**identity_context)
     output: list[str] = []
     seen: set[str] = set()
     for value in values if isinstance(values, list) else []:
         raw = _clean_text(value)
-        key = evidence_url_key(raw)
+        key = key_for(raw)
         if raw and key and key not in seen:
             seen.add(key)
             output.append(raw)
@@ -126,9 +134,10 @@ def _locale_for_urls(values: list[str]) -> str:
     return next(iter(locales)) if len(locales) == 1 and "" not in locales else ""
 
 
-def _repair_evidence_group(item: dict[str, Any]) -> dict[str, Any]:
+def _repair_evidence_group(item: dict[str, Any], *, scan_origin: str = "", identity_version: str = "") -> dict[str, Any]:
     """Preserve one pre-group repair row as bounded child evidence."""
-    affected = _dedupe_urls(item.get("affected_pages"))
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    affected = _dedupe_urls(item.get("affected_pages"), **identity_context)
     family = _clean_text(item.get("page_template_family") or item.get("template_family"))
     return {
         "fix_id": _clean_text(item.get("fix_id"))[:160],
@@ -162,22 +171,24 @@ def _strictest_member(members: list[dict[str, Any]]) -> dict[str, Any]:
 def _merge_repair_group(
     members: list[dict[str, Any]],
     pages: list[dict[str, Any]],
+    *, scan_origin: str = "", identity_version: str = "",
 ) -> dict[str, Any]:
     """Collapse one non-empty fingerprint into one canonical persisted action."""
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
     group_fingerprint = _persistence_repair_fingerprint(members[0]) if members else ""
     lead = deepcopy(_strictest_member(members))
-    child_groups = [_repair_evidence_group(member) for member in members]
+    child_groups = [_repair_evidence_group(member, **identity_context) for member in members]
 
     affected = _dedupe_urls([
         page
         for member in members
         for page in (member.get("affected_pages") if isinstance(member.get("affected_pages"), list) else [])
-    ])
+    ], **identity_context)
     source_pages = _dedupe_urls([
         page
         for member in members
         for page in (member.get("source_pages") if isinstance(member.get("source_pages"), list) else [])
-    ])
+    ], **identity_context)
 
     lead["affected_pages"] = affected
     if source_pages:
@@ -226,11 +237,11 @@ def _merge_repair_group(
 
     if all_complete:
         lead["page_count"] = len(affected)
-        merged = _normalize_canonical_repair_evidence(lead, pages)
+        merged = _normalize_canonical_repair_evidence(lead, pages, **identity_context)
     else:
         lead["page_count"] = max(
             len(affected),
-            sum(max(_diagnostic_count(member.get("page_count")), len(_dedupe_urls(member.get("affected_pages")))) for member in members),
+            sum(max(_diagnostic_count(member.get("page_count")), len(_dedupe_urls(member.get("affected_pages"), **identity_context))) for member in members),
         )
         breakdown: dict[str, int] = {}
         representatives: dict[str, str] = {}
@@ -256,6 +267,11 @@ def _merge_repair_group(
             lead["representative_pages_by_family"] = representatives
         merged = annotate_repair_identity(lead)
 
+    if identity_version and all_complete:
+        # The merged action's denominator must describe its union of evidence,
+        # not the strictest member's smaller pre-merge URL set.
+        merged = annotate_calibrated_repair_priority(merged, pages, **identity_context)
+
     if group_fingerprint:
         identity = deepcopy(merged.get("repair_identity")) if isinstance(merged.get("repair_identity"), dict) else {}
         identity["fingerprint"] = group_fingerprint
@@ -268,8 +284,10 @@ def _merge_repair_group(
 def _group_canonical_repairs(
     items: list[dict[str, Any]],
     pages: list[dict[str, Any]],
+    *, scan_origin: str = "", identity_version: str = "",
 ) -> list[dict[str, Any]]:
     """Persist one top-level action per valid non-empty repair fingerprint."""
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
     groups: dict[str, list[dict[str, Any]]] = {}
     order: list[str] = []
     for index, item in enumerate(items):
@@ -280,12 +298,13 @@ def _group_canonical_repairs(
             order.append(key)
         groups[key].append(item)
 
-    return [_merge_repair_group(groups[key], pages) for key in order]
+    return [_merge_repair_group(groups[key], pages, **identity_context) for key in order]
 
 
 def apply_canonical_repair_contract(
     review_result: dict[str, Any],
     scan_result: dict[str, Any],
+    *, identity_version: str = "",
 ) -> dict[str, Any]:
     """Attach one complete canonical v2 snapshot or leave review untouched.
 
@@ -296,9 +315,11 @@ def apply_canonical_repair_contract(
     if not isinstance(review_result, dict):
         return review_result
 
+    identity_context = {"scan_origin": scan_evidence_origin(scan_result) if identity_version else "",
+                        "identity_version": identity_version}
     review = deepcopy(review_result)
     pages = _first_pages(scan_result)
-    analysis = build_calibrated_shadow_review_analysis(review, pages)
+    analysis = build_calibrated_shadow_review_analysis(review, pages, **identity_context)
     proposed = analysis.get("proposed_fixes") if isinstance(analysis, dict) else None
     if not isinstance(proposed, list):
         emit("canonical_repair_contract_absent", severity="WARNING", reason="proposed_fixes_missing")
@@ -310,13 +331,13 @@ def apply_canonical_repair_contract(
         if not isinstance(raw_fix, dict):
             emit("canonical_repair_contract_absent", severity="WARNING", reason="proposed_fix_not_object", canonical_action_rank=source_rank)
             raise CanonicalRepairContractError("canonical repair synthesis produced a non-object repair")
-        canonical_fix = _normalize_canonical_repair_evidence(raw_fix, pages)
-        failed_invariant = first_failed_repair_invariant(canonical_fix)
+        canonical_fix = _normalize_canonical_repair_evidence(raw_fix, pages, **identity_context)
+        failed_invariant = first_failed_repair_invariant(canonical_fix, **identity_context)
         if failed_invariant:
             emit(
                 "canonical_repair_invariant_rejected",
                 severity="WARNING",
-                **_safe_repair_diagnostic(canonical_fix, failed_invariant, rank=source_rank),
+                **_safe_repair_diagnostic(canonical_fix, failed_invariant, rank=source_rank, **identity_context),
             )
             raise CanonicalRepairContractError(f"canonical repair invariant rejected: {failed_invariant}")
         identity = canonical_fix.get("repair_identity") if isinstance(canonical_fix.get("repair_identity"), dict) else {}
@@ -332,7 +353,9 @@ def apply_canonical_repair_contract(
             "repair_identity_version": str(identity.get("version") or "").strip(),
         })
 
-    canonical_items = _group_canonical_repairs(pre_group_items, pages)
+    canonical_items = _group_canonical_repairs(pre_group_items, pages, **identity_context)
+    if identity_version:
+        canonical_items = sort_calibrated_repairs(canonical_items)
     for rank, item in enumerate(canonical_items, start=1):
         item["canonical_action_rank"] = rank
         item["repair_contract_version"] = REPAIR_CONTRACT_VERSION
@@ -380,6 +403,7 @@ def _first_pages(scan_result: dict[str, Any]) -> list[dict[str, Any]]:
 def _normalize_canonical_repair_evidence(
     fix: dict[str, Any],
     pages: list[dict[str, Any]],
+    *, scan_origin: str = "", identity_version: str = "",
 ) -> dict[str, Any]:
     """Re-derive one canonical repair from one shared affected-page identity.
 
@@ -391,9 +415,14 @@ def _normalize_canonical_repair_evidence(
     The family resolver is imported lazily to reuse review's existing vocabulary
     without creating a second classifier or changing crawler behavior.
     """
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
     from .review import normalize_template_family
 
     snapshot = deepcopy(fix)
+    if identity_version:
+        key_for = repair_evidence_key_function(**identity_context)
+        if any(not key_for(value) for value in snapshot.get("affected_pages") or []):
+            raise CanonicalRepairContractError("unresolvable affected evidence")
     if snapshot.get("affected_pages_complete") is False:
         # A truncated affected list is only a sample of a larger proven total.
         # Re-normalizing from the sample would silently shrink page_count and
@@ -406,5 +435,6 @@ def _normalize_canonical_repair_evidence(
         snapshot,
         pages,
         family_resolver=normalize_template_family,
+        **identity_context,
     )
     return annotate_repair_identity(normalized)

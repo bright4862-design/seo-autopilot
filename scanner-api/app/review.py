@@ -7,7 +7,10 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .coverage_authority import assess_coverage, coverage_inputs_from_payload
-from .repair_coverage import REPAIR_COVERAGE_VERSION, evidence_url_key, normalize_repair_scope
+from .repair_coverage import (
+    REPAIR_COVERAGE_VERSION, evidence_url_key, normalize_repair_scope,
+    repair_evidence_key_function, scan_evidence_origin,
+)
 from .repair_dedup import (  # re-exported: callers and tests import these from review
     FAILURE_EVIDENCE_DEDUP_VERSION,
     GENERATOR_GROUP_SOURCES,
@@ -368,8 +371,12 @@ PLAYBOOKS = {
 }
 
 
-def run_review(payload: dict[str, Any]) -> dict[str, Any]:
+def run_review(payload: dict[str, Any], *, identity_version: str = "") -> dict[str, Any]:
     body = unwrap_scan_payload(payload)
+    identity_context = {"scan_origin": scan_evidence_origin(body) if identity_version else "",
+                        "identity_version": identity_version}
+    if identity_version and not identity_context["scan_origin"]:
+        raise ValueError("published evidence requires a trusted scan origin")
     website_url = clean_str(
         body.get("website_url")
         or body.get("normalized_url")
@@ -398,11 +405,11 @@ def run_review(payload: dict[str, Any]) -> dict[str, Any]:
     site_fingerprint["scoring_model"] = SCORING_MODEL
     playbook = get_playbook(site_fingerprint["primary_archetype"])
     playbook = apply_finance_sub_playbook(playbook, site_fingerprint.get("finance_sub_playbook", ""))
-    evidence_fixes = build_scanner_evidence_findings(body, pages, site_fingerprint)
-    page_pattern_fixes = build_page_pattern_findings(pages)
+    evidence_fixes = build_scanner_evidence_findings(body, pages, site_fingerprint, **identity_context)
+    page_pattern_fixes = build_page_pattern_findings(pages, **identity_context)
     location_template_fixes = build_location_template_raw_fixes(pages)
-    strategic_fixes = build_strategic_findings(body, pages, website_url, site_fingerprint, playbook)
-    canonical_fixes = prepare_fixes(raw_fixes + evidence_fixes + page_pattern_fixes + location_template_fixes + strategic_fixes, site_fingerprint, body, playbook, pages)
+    strategic_fixes = build_strategic_findings(body, pages, website_url, site_fingerprint, playbook, **identity_context)
+    canonical_fixes = prepare_fixes(raw_fixes + evidence_fixes + page_pattern_fixes + location_template_fixes + strategic_fixes, site_fingerprint, body, playbook, pages, **identity_context)
     no_page_evidence = (
         int_or_zero(site_fingerprint.get("pages_received")) <= 0
         or int_or_zero(site_fingerprint.get("pages_crawled")) <= 0
@@ -1209,14 +1216,19 @@ def archetype_boost(key: str, text: str, pages: list[dict[str, Any]]) -> float:
     return 0
 
 
-def build_scanner_evidence_findings(body: dict[str, Any], pages: list[dict[str, Any]], site_fingerprint: dict[str, Any]) -> list[dict[str, Any]]:
+def build_scanner_evidence_findings(body: dict[str, Any], pages: list[dict[str, Any]], site_fingerprint: dict[str, Any], *, scan_origin: str = "", identity_version: str = "") -> list[dict[str, Any]]:
+    from functools import partial
+
+    make_evidence_fix = partial(make_fix, scan_origin=scan_origin, identity_version=identity_version)
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
     evidence_pages = dedupe_pages(
         collect_arrays(
             body.get("verified_failed_pages"),
             deep_get(body, "technical_audit_summary", "verified_failed_pages"),
             deep_get(body, "url_evidence_summary", "verified_failed_pages"),
         )
-        + [page for page in pages if is_failed_page(page) or is_blocked_access_page(page) or page_evidence_class(page) == "failed_access"]
+        + [page for page in pages if is_failed_page(page) or is_blocked_access_page(page) or page_evidence_class(page) == "failed_access"],
+        **identity_context,
     )
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for page in evidence_pages:
@@ -1225,7 +1237,7 @@ def build_scanner_evidence_findings(body: dict[str, Any], pages: list[dict[str, 
     fixes = []
     for bucket, group in grouped.items():
         if bucket == "access":
-            fixes.append(make_fix(
+            fixes.append(make_evidence_fix(
                 rule="site_access_limited",
                 category="web_dev",
                 priority="medium",
@@ -1250,7 +1262,7 @@ def build_scanner_evidence_findings(body: dict[str, Any], pages: list[dict[str, 
             ))
             continue
         if bucket == "429":
-            fixes.append(make_fix(
+            fixes.append(make_evidence_fix(
                 rule="rate_limited_page",
                 category="web_dev",
                 priority="high" if len(group) >= 3 else "medium",
@@ -1278,7 +1290,7 @@ def build_scanner_evidence_findings(body: dict[str, Any], pages: list[dict[str, 
             ) >= 2
             for page in group
         )
-        fixes.append(make_fix(
+        fixes.append(make_evidence_fix(
             rule="server_error" if is_server else "410_error" if bucket == "410" else "broken_page",
             category="web_dev" if is_server else "404_error",
             priority="high" if important_failed_pages(group, site_fingerprint) else "medium",
@@ -1358,10 +1370,12 @@ META_DESCRIPTION_RULE_ORDER = (
 REPAIR_OBSERVATION_SAMPLE_LIMIT = 20
 
 
-def repair_observation(page: dict[str, Any], rule: str) -> dict[str, Any]:
+def repair_observation(page: dict[str, Any], rule: str, *, scan_origin: str = "", identity_version: str = "") -> dict[str, Any]:
     """Bounded factual evidence for one repair; never invent replacement content."""
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    key_for = repair_evidence_key_function(legacy_key=clean_path, **identity_context)
     sample: dict[str, Any] = {
-        "page_url": clean_path(page_evidence_url(page)),
+        "page_url": key_for(page_evidence_url(page)),
         "status": int_or_zero(page.get("status_code") or page.get("status")),
         "issue_type": rule,
     }
@@ -1378,8 +1392,8 @@ def repair_observation(page: dict[str, Any], rule: str) -> dict[str, Any]:
     return sample
 
 
-def repair_observation_evidence(pages: list[dict[str, Any]], rule: str) -> dict[str, Any]:
-    observations = [repair_observation(page, rule) for page in pages if page_evidence_url(page)]
+def repair_observation_evidence(pages: list[dict[str, Any]], rule: str, *, scan_origin: str = "", identity_version: str = "") -> dict[str, Any]:
+    observations = [repair_observation(page, rule, scan_origin=scan_origin, identity_version=identity_version) for page in pages if page_evidence_url(page)]
     return {
         "repair_observation_count": len(observations),
         "repair_observation_samples": observations[:REPAIR_OBSERVATION_SAMPLE_LIMIT],
@@ -1447,7 +1461,9 @@ def metadata_bucket_copy(bucket: dict[str, Any], is_group: bool) -> dict[str, An
     }
 
 
-def build_page_pattern_findings(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_page_pattern_findings(pages: list[dict[str, Any]], *, scan_origin: str = "", identity_version: str = "") -> list[dict[str, Any]]:
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    key_for = repair_evidence_key_function(legacy_key=clean_path, **identity_context)
     buckets: dict[tuple[str, str], dict[str, Any]] = {}
     for page in pages:
         url = page_evidence_url(page)
@@ -1474,7 +1490,7 @@ def build_page_pattern_findings(pages: list[dict[str, Any]]) -> list[dict[str, A
     fixes = []
     for bucket in buckets.values():
         affected = [page_evidence_url(page) for page in bucket["pages"]]
-        affected_count = len(set(map(clean_path, affected)))
+        affected_count = len({key_for(url) for url in affected if key_for(url)})
         is_group = affected_count > 1
         metadata_counts = bucket.get("metadata_state_counts")
         if isinstance(metadata_counts, dict):
@@ -1506,6 +1522,7 @@ def build_page_pattern_findings(pages: list[dict[str, Any]]) -> list[dict[str, A
             metadata_counts = {"missing": 0, "empty": 0, "malformed": 0}
 
         fixes.append(make_fix(
+            **identity_context,
             rule=output_rule,
             category=bucket["category"],
             priority="critical" if bucket["category"] == "canonical" else "high" if len(bucket["pages"]) >= 8 else "medium",
@@ -1519,14 +1536,14 @@ def build_page_pattern_findings(pages: list[dict[str, Any]]) -> list[dict[str, A
             extra={
                 "current_value": metadata_state_summary(metadata_counts) if any(int_or_zero(metadata_counts.get(key)) for key in ("missing", "empty", "malformed")) else template_current_value(affected),
                 "defect_summary": explanation,
-                "source_pages": dedupe_strings([clean_path(u) for u in affected if clean_path(u)])[:30],
+                "source_pages": dedupe_strings([key_for(u) for u in affected if key_for(u)])[:30],
                 "page_template_family": bucket["family"],
                 "page_count": affected_count,
                 "metadata_state_counts": metadata_counts,
                 "combined_rules": combined_rules,
                 "grouping_explanation": grouping_explanation,
                 "grouped_recommendation_evidence_version": GROUPED_RECOMMENDATION_EVIDENCE_VERSION,
-                **repair_observation_evidence(bucket["pages"], output_rule),
+                **repair_observation_evidence(bucket["pages"], output_rule, **identity_context),
             },
         ))
     return fixes
@@ -1538,10 +1555,15 @@ def add_bucket(buckets: dict[tuple[str, str], dict[str, Any]], rule: str, catego
         buckets[key] = {"rule": rule, "category": category, "family": family, "pages": [], "title": title, "explanation": explanation, "why": why, "recommendation": recommendation, "difficulty": difficulty, "current_value": explanation}
     buckets[key]["pages"].append(page)
 
-def build_strategic_findings(body: dict[str, Any], pages: list[dict[str, Any]], website_url: str, site_fingerprint: dict[str, Any], playbook: dict[str, Any]) -> list[dict[str, Any]]:
+def build_strategic_findings(body: dict[str, Any], pages: list[dict[str, Any]], website_url: str, site_fingerprint: dict[str, Any], playbook: dict[str, Any], *, scan_origin: str = "", identity_version: str = "") -> list[dict[str, Any]]:
+    from functools import partial
+
+    make_evidence_fix = partial(make_fix, scan_origin=scan_origin, identity_version=identity_version)
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    key_for = repair_evidence_key_function(legacy_key=clean_path, **identity_context)
     fixes = []
     if safe_hostname(website_url).endswith(".base44.app"):
-        fixes.append(make_fix("free_base44_subdomain", "indexability", "high", "Move production SEO to a custom domain", "The site is on a free Base44 subdomain. That can be crawled, but it is not the strongest production SEO or trust setup.", "A custom domain improves brand trust, shareability, Search Console ownership, and company-specific search signals.", "Connect a branded custom domain before treating this as the long-term production SEO home.", ["/"], "developer", "archetype_strategy_layer", extra={"current_value": f"Production site served from {safe_hostname(website_url)} (free Base44 subdomain).", "source_pages": ["/"]}))
+        fixes.append(make_evidence_fix("free_base44_subdomain", "indexability", "high", "Move production SEO to a custom domain", "The site is on a free Base44 subdomain. That can be crawled, but it is not the strongest production SEO or trust setup.", "A custom domain improves brand trust, shareability, Search Console ownership, and company-specific search signals.", "Connect a branded custom domain before treating this as the long-term production SEO home.", ["/"], "developer", "archetype_strategy_layer", extra={"current_value": f"Production site served from {safe_hostname(website_url)} (free Base44 subdomain).", "source_pages": ["/"]}))
     def is_route_page(page: dict[str, Any]) -> bool:
         # Trust the scanner's authoritative classification when it supplied one.
         stamped = page.get("route_boundary_candidate")
@@ -1552,11 +1574,11 @@ def build_strategic_findings(body: dict[str, Any], pages: list[dict[str, Any]], 
 
     route_pages = [page for page in pages if is_route_page(page) and page_is_indexable(page)]
     if route_pages:
-        fixes.append(make_fix("route_boundary_candidate_indexable", "indexability", "critical", "Keep checkout, login, account, and app routes out of search", "FixList found checkout, login, account, dashboard, billing, cart, admin, or app-like routes that appear crawlable and indexable.", "These pages are usually not useful SEO landing pages. Letting them appear in search can dilute the site, confuse prospects, or expose private product structure.", "Ask your web person to require login, add noindex, or keep these routes out of public search while preserving true public landing, category, product, booking, and help pages.", [page_evidence_url(page) for page in route_pages], "developer", "archetype_route_boundary_layer", extra={"current_value": "Indexable app/checkout/account routes: " + ", ".join(dedupe_strings([clean_path(page_evidence_url(page)) for page in route_pages])[:6]), "source_pages": dedupe_strings([clean_path(page_evidence_url(page)) for page in route_pages])[:30]}))
+        fixes.append(make_evidence_fix("route_boundary_candidate_indexable", "indexability", "critical", "Keep checkout, login, account, and app routes out of search", "FixList found checkout, login, account, dashboard, billing, cart, admin, or app-like routes that appear crawlable and indexable.", "These pages are usually not useful SEO landing pages. Letting them appear in search can dilute the site, confuse prospects, or expose private product structure.", "Ask your web person to require login, add noindex, or keep these routes out of public search while preserving true public landing, category, product, booking, and help pages.", [page_evidence_url(page) for page in route_pages], "developer", "archetype_route_boundary_layer", extra={"current_value": "Indexable app/checkout/account routes: " + ", ".join(dedupe_strings([key_for(page_evidence_url(page)) for page in route_pages])[:6]), "source_pages": dedupe_strings([key_for(page_evidence_url(page)) for page in route_pages])[:30]}))
     trust_sensitive = site_fingerprint["regulatory_sensitivity"] != "standard" or site_fingerprint["primary_archetype"] == "saas_app_membership"
     has_trust = any(clean_path(page_evidence_url(page)).lower().startswith(tuple(TRUST_PATHS)) for page in pages)
     if trust_sensitive and pages and not has_trust:
-        fixes.append(make_fix("missing_trust_pages", "schema", "high" if site_fingerprint["regulatory_sensitivity"] != "standard" else "medium", "Add public trust pages", f"For a {playbook['label']} site, visitors and crawlers need clear trust, legal, contact, and ownership signals.", "Trust pages help buyers, search engines, and AI systems understand who runs the site and whether it is credible.", "Add or expose clear About, Contact, Privacy, Terms, and Security/Trust pages, then link them from the footer.", ["/"], "moderate", "archetype_trust_layer", extra={"current_value": f"No public trust pages (About/Contact/Privacy/Terms) found among {len(pages)} crawled pages.", "source_pages": ["/"]}))
+        fixes.append(make_evidence_fix("missing_trust_pages", "schema", "high" if site_fingerprint["regulatory_sensitivity"] != "standard" else "medium", "Add public trust pages", f"For a {playbook['label']} site, visitors and crawlers need clear trust, legal, contact, and ownership signals.", "Trust pages help buyers, search engines, and AI systems understand who runs the site and whether it is credible.", "Add or expose clear About, Contact, Privacy, Terms, and Security/Trust pages, then link them from the footer.", ["/"], "moderate", "archetype_trust_layer", extra={"current_value": f"No public trust pages (About/Contact/Privacy/Terms) found among {len(pages)} crawled pages.", "source_pages": ["/"]}))
     return fixes
 
 
@@ -1589,15 +1611,20 @@ def collapse_sitewide_template_findings(
     site_fingerprint: dict[str, Any],
     body: dict[str, Any],
     playbook: dict[str, Any],
+    *,
+    scan_origin: str = "",
+    identity_version: str = "",
 ) -> list[dict[str, Any]]:
     """Collapse one global implementation fault without erasing per-family evidence."""
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    key_for = repair_evidence_key_function(legacy_key=clean_path, **identity_context)
     if not sitewide_collapse_evidence_is_sufficient(site_fingerprint):
         return fixes
 
     usable_pages = {
-        clean_path(page_evidence_url(page))
+        key_for(page_evidence_url(page))
         for page in pages
-        if clean_path(page_evidence_url(page))
+        if key_for(page_evidence_url(page))
         and not is_blocked_access_page(page)
         and int_or_zero(page.get("status_code") or page.get("status")) < 400
         and page_is_indexable(page)
@@ -1606,9 +1633,9 @@ def collapse_sitewide_template_findings(
         return fixes
 
     page_lookup = {
-        clean_path(page_evidence_url(page)): page
+        key_for(page_evidence_url(page)): page
         for page in pages
-        if clean_path(page_evidence_url(page))
+        if key_for(page_evidence_url(page))
     }
     output = list(fixes)
     for rule in SITEWIDE_COLLAPSE_RULES:
@@ -1625,10 +1652,10 @@ def collapse_sitewide_template_findings(
             if str(fix.get("page_template_family") or "") not in {"", "mixed", "sitewide"}
         }
         affected = dedupe_strings([
-            clean_path(url)
+            key_for(url)
             for fix in candidates
             for url in (fix.get("affected_pages") or [])
-            if clean_path(url)
+            if key_for(url)
         ])
         affected_usable = [url for url in affected if url in usable_pages]
         coverage_ratio = len(affected_usable) / max(1, len(usable_pages))
@@ -1644,9 +1671,9 @@ def collapse_sitewide_template_findings(
         for fix in candidates:
             family = str(fix.get("page_template_family") or "standard")
             family_pages = dedupe_strings([
-                clean_path(url)
+                key_for(url)
                 for url in (fix.get("affected_pages") or [])
-                if clean_path(url) and clean_path(url) in usable_pages
+                if key_for(url) and key_for(url) in usable_pages
             ])
             if not family_pages:
                 continue
@@ -1665,7 +1692,7 @@ def collapse_sitewide_template_findings(
         ranked_affected = sorted(
             affected_usable,
             key=lambda url: (
-                representative_page_score(url, {**base, "rule": rule}, page_lookup, body, playbook),
+                representative_page_score(url, {**base, "rule": rule}, page_lookup, body, playbook, **identity_context),
                 -original_position[url],
             ),
             reverse=True,
@@ -1673,7 +1700,7 @@ def collapse_sitewide_template_findings(
         ranked_source_pages = sorted(
             representative_pages,
             key=lambda url: representative_page_score(
-                url, {**base, "rule": rule}, page_lookup, body, playbook
+                url, {**base, "rule": rule}, page_lookup, body, playbook, **identity_context
             ),
             reverse=True,
         )
@@ -1821,20 +1848,25 @@ def is_orphan_page_finding(fix: dict[str, Any]) -> bool:
 def filter_orphan_asset_evidence(
     fix: dict[str, Any],
     pages: list[dict[str, Any]],
+    *,
+    scan_origin: str = "",
+    identity_version: str = "",
 ) -> dict[str, Any] | None:
     """Remove non-HTML URLs from orphan findings; suppress asset-only groups."""
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    key_for = repair_evidence_key_function(legacy_key=clean_path, **identity_context)
     if not is_orphan_page_finding(fix):
         return fix
 
     page_lookup = {
-        clean_path(page_evidence_url(page)): page
+        key_for(page_evidence_url(page)): page
         for page in pages
-        if clean_path(page_evidence_url(page))
+        if key_for(page_evidence_url(page))
     }
     affected = dedupe_strings([
-        clean_path(url)
+        key_for(url)
         for url in (fix.get("affected_pages") or [fix.get("page_url") or "/"])
-        if clean_path(url)
+        if key_for(url)
     ])
     html_pages = [
         url for url in affected
@@ -1847,17 +1879,17 @@ def filter_orphan_asset_evidence(
         if not isinstance(values, list):
             return []
         normalized = dedupe_strings([
-            clean_path(value) for value in values if clean_path(value)
+            key_for(value) for value in values if key_for(value)
         ])
         return [
             url for url in normalized
             if not is_non_html_page_evidence({**page_lookup.get(url, {}), "url": url})
         ][:limit]
 
-    selected_page = clean_path(fix.get("page_url") or "")
+    selected_page = key_for(fix.get("page_url") or "")
     if selected_page not in html_pages:
         selected_page = html_pages[0]
-    representative = clean_path(fix.get("representative_page_url") or "")
+    representative = key_for(fix.get("representative_page_url") or "")
     if representative not in html_pages:
         representative = selected_page
 
@@ -1876,20 +1908,25 @@ def filter_orphan_asset_evidence(
 def filter_page_level_asset_evidence(
     fix: dict[str, Any],
     pages: list[dict[str, Any]],
+    *,
+    scan_origin: str = "",
+    identity_version: str = "",
 ) -> dict[str, Any] | None:
     """Keep generic page-level findings on HTML documents only."""
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    key_for = repair_evidence_key_function(legacy_key=clean_path, **identity_context)
     rule = str(fix.get("rule") or "").lower()
     if rule not in PAGE_LEVEL_HTML_ONLY_RULES:
         return fix
     page_lookup = {
-        clean_path(page_evidence_url(page)): page
+        key_for(page_evidence_url(page)): page
         for page in pages
-        if clean_path(page_evidence_url(page))
+        if key_for(page_evidence_url(page))
     }
     candidates = dedupe_strings([
-        clean_path(url)
+        key_for(url)
         for url in (fix.get("affected_pages") or [fix.get("page_url") or "/"])
-        if clean_path(url)
+        if key_for(url)
     ])
     html_pages = [
         url for url in candidates
@@ -1897,7 +1934,7 @@ def filter_page_level_asset_evidence(
     ]
     if not html_pages:
         return None
-    selected = clean_path(fix.get("page_url") or "")
+    selected = key_for(fix.get("page_url") or "")
     if selected not in html_pages:
         selected = html_pages[0]
     return {
@@ -1936,10 +1973,15 @@ def representative_page_score(
     page_lookup: dict[str, dict[str, Any]],
     body: dict[str, Any],
     playbook: dict[str, Any],
+    *,
+    scan_origin: str = "",
+    identity_version: str = "",
 ) -> int:
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    key_for = repair_evidence_key_function(legacy_key=clean_path, **identity_context)
     path = clean_path(url) or "/"
     lower = path.lower()
-    page = page_lookup.get(path, {})
+    page = page_lookup.get(key_for(url), {})
     rule = str(fix.get("rule") or "").lower()
     direct_evidence = rule in DIRECT_EVIDENCE_RULES
     requested = clean_path(
@@ -1998,22 +2040,27 @@ def select_representative_page(
     pages: list[dict[str, Any]],
     body: dict[str, Any],
     playbook: dict[str, Any],
+    *,
+    scan_origin: str = "",
+    identity_version: str = "",
 ) -> dict[str, Any]:
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    key_for = repair_evidence_key_function(legacy_key=clean_path, **identity_context)
     affected = dedupe_strings([
-        clean_path(url)
+        key_for(url)
         for url in (fix.get("affected_pages") or [fix.get("page_url") or "/"])
-        if clean_path(url)
+        if key_for(url)
     ]) or ["/"]
     page_lookup = {
-        clean_path(page_evidence_url(page)): page
+        key_for(page_evidence_url(page)): page
         for page in pages
-        if clean_path(page_evidence_url(page))
+        if key_for(page_evidence_url(page))
     }
     original_position = {url: index for index, url in enumerate(affected)}
     ranked = sorted(
         affected,
         key=lambda url: (
-            representative_page_score(url, fix, page_lookup, body, playbook),
+            representative_page_score(url, fix, page_lookup, body, playbook, **identity_context),
             -original_position[url],
         ),
         reverse=True,
@@ -2045,37 +2092,42 @@ HTML_DEPENDENT_RULES = {
 }
 
 
-def filter_html_dependent_fix_evidence(fix: dict[str, Any], pages: list[dict[str, Any]]) -> dict[str, Any] | None:
+def filter_html_dependent_fix_evidence(fix: dict[str, Any], pages: list[dict[str, Any]], *, scan_origin: str = "", identity_version: str = "") -> dict[str, Any] | None:
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    key_for = repair_evidence_key_function(legacy_key=clean_path, **identity_context)
     rule = str(fix.get("rule") or "").lower()
     if rule not in HTML_DEPENDENT_RULES:
         return fix
-    lookup = {clean_path(page_evidence_url(page)): page for page in pages if clean_path(page_evidence_url(page))}
-    affected = dedupe_strings([clean_path(url) for url in (fix.get("affected_pages") or [fix.get("page_url") or "/"]) if clean_path(url)])
+    lookup = {key_for(page_evidence_url(page)): page for page in pages if key_for(page_evidence_url(page))}
+    affected = dedupe_strings([key_for(url) for url in (fix.get("affected_pages") or [fix.get("page_url") or "/"]) if key_for(url)])
     usable = [url for url in affected if page_has_usable_html(lookup.get(url, {}))]
     if not usable:
         return None
     return {**fix, "affected_pages": usable, "page_url": usable[0], "page_count": len(usable), "evidence_gate_version": PAGE_EVIDENCE_GATE_VERSION}
 
 
-def prepare_fixes(raw_fixes: list[dict[str, Any]], site_fingerprint: dict[str, Any], body: dict[str, Any], playbook: dict[str, Any], pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    normalized = dedupe_fixes([normalize_fix(fix, index) for index, fix in enumerate(raw_fixes or []) if isinstance(fix, dict)])
-    normalized = [candidate for fix in normalized if (candidate := filter_html_dependent_fix_evidence(fix, pages)) is not None]
-    filtered = [filter_orphan_asset_evidence(fix, pages) for fix in normalized]
+def prepare_fixes(raw_fixes: list[dict[str, Any]], site_fingerprint: dict[str, Any], body: dict[str, Any], playbook: dict[str, Any], pages: list[dict[str, Any]], *, scan_origin: str = "", identity_version: str = "") -> list[dict[str, Any]]:
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    normalized = dedupe_fixes([normalize_fix(fix, index, **identity_context) for index, fix in enumerate(raw_fixes or []) if isinstance(fix, dict)])
+    normalized = [candidate for fix in normalized if (candidate := filter_html_dependent_fix_evidence(fix, pages, **identity_context)) is not None]
+    filtered = [filter_orphan_asset_evidence(fix, pages, **identity_context) for fix in normalized]
     normalized = [fix for fix in filtered if fix is not None]
-    filtered = [filter_page_level_asset_evidence(fix, pages) for fix in normalized]
+    filtered = [filter_page_level_asset_evidence(fix, pages, **identity_context) for fix in normalized]
     normalized = [fix for fix in filtered if fix is not None]
-    normalized = [select_representative_page(fix, pages, body, playbook) for fix in normalized]
-    scored = [score_fix(fix, site_fingerprint, body, playbook, pages) for fix in normalized]
-    scored = suppress_group_covered_singletons(scored)
-    scored = suppress_duplicate_group_cards(scored)
-    scored = collapse_sitewide_template_findings(scored, pages, site_fingerprint, body, playbook)
+    normalized = [select_representative_page(fix, pages, body, playbook, **identity_context) for fix in normalized]
+    scored = [score_fix(fix, site_fingerprint, body, playbook, pages, **identity_context) for fix in normalized]
+    scored = suppress_group_covered_singletons(scored, **identity_context)
+    scored = suppress_duplicate_group_cards(scored, **identity_context)
+    scored = collapse_sitewide_template_findings(scored, pages, site_fingerprint, body, playbook, **identity_context)
     return sorted(scored, key=fix_sort_key, reverse=True)[:36]
 
-def normalize_fix(fix: dict[str, Any], index: int) -> dict[str, Any]:
+def normalize_fix(fix: dict[str, Any], index: int, *, scan_origin: str = "", identity_version: str = "") -> dict[str, Any]:
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    key_for = repair_evidence_key_function(legacy_key=clean_path, **identity_context)
     rule = clean_str(fix.get("rule") or fix.get("type") or fix.get("issue_type") or "review")
     category = CATEGORY_MAP.get(str(fix.get("category", ""))) or CATEGORY_MAP.get(rule) or clean_str(fix.get("category")) or infer_category(rule, fix)
-    page_url = clean_path(fix.get("page_url") or fix.get("url") or fix.get("final_url") or first_value(fix.get("affected_pages")) or first_value(fix.get("pages")) or "/")
-    affected = normalize_affected_pages(fix, page_url)
+    page_url = key_for(fix.get("page_url") or fix.get("url") or fix.get("final_url") or first_value(fix.get("affected_pages")) or first_value(fix.get("pages")) or "/")
+    affected = normalize_affected_pages(fix, page_url, **identity_context)
     difficulty = normalize_difficulty(fix)
     repair_owner = repair_owner_for({**fix, "rule": rule, "category": category, "difficulty": difficulty, "affected_pages": affected})
     developer_owned = repair_owner == "your_web_person"
@@ -2139,7 +2191,12 @@ def score_fix(
     body: dict[str, Any],
     playbook: dict[str, Any],
     pages: list[dict[str, Any]] | None = None,
+    *,
+    scan_origin: str = "",
+    identity_version: str = "",
 ) -> dict[str, Any]:
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    key_for = repair_evidence_key_function(legacy_key=clean_path, **identity_context)
     # The caller already holds the authoritative page list; deriving it from
     # body keys here was guessing at the payload shape and silently resolved
     # every affected URL to "unknown".
@@ -2147,8 +2204,9 @@ def score_fix(
         fix,
         pages if pages is not None else (body.get("crawled_pages") or body.get("pages") or []),
         family_resolver=normalize_template_family,
+        **identity_context,
     )
-    page_url = clean_path(fix.get("page_url") or first_value(fix.get("affected_pages")) or "/")
+    page_url = key_for(fix.get("page_url") or first_value(fix.get("affected_pages")) or "/")
     page_value = score_page_value(page_url, site_fingerprint, body, playbook)
     defect_class = classify_defect_class(fix)
     evidence_confidence = score_evidence_confidence(fix)
@@ -2171,8 +2229,8 @@ def score_fix(
         priority = "medium"
     repair_owner = repair_owner_for({**fix, "primary_defect_class": defect_class})
     developer_owned = repair_owner == "your_web_person"
-    affected_pages = dedupe_strings([clean_path(u) for u in (fix.get("affected_pages") or [page_url]) if clean_path(u)]) or ["/"]
-    source_pages = dedupe_strings([clean_path(u) for u in (fix.get("source_pages") if isinstance(fix.get("source_pages"), list) else []) if clean_path(u)]) or affected_pages
+    affected_pages = dedupe_strings([key_for(u) for u in (fix.get("affected_pages") or [page_url]) if key_for(u)]) or ["/"]
+    source_pages = dedupe_strings([key_for(u) for u in (fix.get("source_pages") if isinstance(fix.get("source_pages"), list) else []) if key_for(u)]) or affected_pages
     link_text_samples = [clean_str(x) for x in (fix.get("link_text_samples") if isinstance(fix.get("link_text_samples"), list) else []) if clean_str(x)][:12]
     return {
         **fix,
@@ -2193,6 +2251,7 @@ def score_fix(
         "representative_pages_by_family": scope_evidence["representative_pages_by_family"],
         "affected_pages_complete": scope_evidence["affected_pages_complete"],
         "repair_coverage_version": scope_evidence["repair_coverage_version"],
+        **({"evidence_url_identity_version": identity_version} if identity_version else {}),
         "page_value_score": page_value["score"],
         "page_value_label": page_value["label"],
         "primary_defect_class": defect_class,
@@ -2446,9 +2505,11 @@ def build_review_payload(body: dict[str, Any], pages: list[dict[str, Any]], fixe
     }
 
 
-def make_fix(rule: str, category: str, priority: str, title: str, explanation: str, why: str, recommendation: str, affected_pages: list[Any], difficulty: str, source: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+def make_fix(rule: str, category: str, priority: str, title: str, explanation: str, why: str, recommendation: str, affected_pages: list[Any], difficulty: str, source: str, extra: dict[str, Any] | None = None, *, scan_origin: str = "", identity_version: str = "") -> dict[str, Any]:
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    key_for = repair_evidence_key_function(legacy_key=clean_path, **identity_context)
     extra = extra or {}
-    clean_affected = dedupe_strings([clean_path(url) for url in affected_pages or ["/"] if clean_path(url)])[:150]
+    clean_affected = dedupe_strings([key_for(url) for url in affected_pages or ["/"] if key_for(url)])[:150]
     page = clean_affected[0] if clean_affected else "/"
     fix_id = stable_id(f"synthetic|{rule}|{page}|{title}|{','.join(clean_affected)}")
     steps = default_steps(category, rule, difficulty, recommendation)
@@ -2486,6 +2547,7 @@ def make_fix(rule: str, category: str, priority: str, title: str, explanation: s
         "time_estimate": default_time(difficulty),
         "source": source,
         **extra,
+        **({"evidence_url_identity_version": identity_version} if identity_version else {}),
     }
 
 
@@ -3102,13 +3164,15 @@ def is_internal_app_route(url: str = "") -> bool:
     return any(pattern in path for pattern in INTERNAL_ROUTE_PATTERNS)
 
 
-def normalize_affected_pages(fix: dict[str, Any], fallback: str) -> list[str]:
+def normalize_affected_pages(fix: dict[str, Any], fallback: str, *, scan_origin: str = "", identity_version: str = "") -> list[str]:
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    key_for = repair_evidence_key_function(legacy_key=clean_path, **identity_context)
     values: list[Any] = []
     for key in ["affected_pages", "pages", "page_urls"]:
         if isinstance(fix.get(key), list):
             values.extend(fix[key])
     values.append(fallback)
-    return dedupe_strings([clean_path(value) for value in values if clean_path(value)])[:150]
+    return dedupe_strings([key_for(value) for value in values if key_for(value)])[:150]
 
 
 def normalize_steps(fix: dict[str, Any]) -> list[str] | None:
@@ -3371,11 +3435,13 @@ def dedupe_fixes(fixes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return output
 
 
-def dedupe_pages(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def dedupe_pages(pages: list[dict[str, Any]], *, scan_origin: str = "", identity_version: str = "") -> list[dict[str, Any]]:
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    key_for = repair_evidence_key_function(legacy_key=clean_path, **identity_context)
     seen: set[str] = set()
     output = []
     for page in pages:
-        key = clean_path(page_evidence_url(page))
+        key = key_for(page_evidence_url(page))
         if not key or key in seen:
             continue
         seen.add(key)

@@ -2,6 +2,17 @@
 without collapsing distinct defects or lone single-page fixes."""
 
 from app.review import fix_dedup_class, run_review
+from app.repair_dedup import suppress_group_covered_singletons
+from app.repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
+
+
+def test_published_aggregate_does_not_cover_another_case_slash_or_origin():
+    group = {"rule": "missing_h1", "source": "page_pattern:missing_h1", "affected_pages": ["/x", "/y"]}
+    singletons = [{"rule": "missing_h1", "affected_pages": [url]} for url in
+                  ["https://example.com/x", "/x/", "/X", "https://foreign.example/x"]]
+    kept = suppress_group_covered_singletons([group, *singletons], scan_origin="https://example.com",
+                                             identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
+    assert kept == [group, *singletons[1:]]
 
 
 def _run(pages, raw):

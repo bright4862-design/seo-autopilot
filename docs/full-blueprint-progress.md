@@ -107,3 +107,11 @@ The user explicitly approved the written design: **“Approved—start implement
 - Added pinned `ada-url==1.32.0` for origin-only WHATWG normalization; paths and queries never enter its serializer. This avoids handwritten Unicode/bidi rules. Scanner image installation must be verified before release.
 - Fresh full checks: **1,647 scanner tests passed, 18 intentional skips, 694 existing dependency warnings; 1,449 frontend tests passed with no failures/skips.** Base44 package closure and generated-contract checks passed. The independent bounded Python/JS comparison reported 98 cases with zero differing pairs.
 - This is not yet a fix to produced report counts: connecting the helper through producers, authority, persistence and export is the next dependent work. No push, live scan or deployment occurred.
+
+### Second implementation slice: opt-in Python production path
+
+- Threaded trusted scan-origin/version context through extraction-derived findings, review filtering, grouped suppression, exact family/role/indexability joins, canonical evidence union and priority calculation. Classifier normalization and legacy defaults remain unchanged.
+- The real three-HTTP-200-route case now retains three affected pages through review and canonical grouping. Merged source URLs, coverage counts and ordering use the same evidence identity.
+- Cross-run verification rejects mismatched/unknown URL identity versions and cannot resolve an old relative URL against a different scan's origin or silently discard unresolved evidence.
+- Behavioral regressions failed before each fix. Full pre-checkpoint checks passed 1,669 scanner tests (18 intentional skips) and 1,449 frontend tests; package/generated checks passed. A final merged-order test then failed and passed after its fix; the checkpoint gate reruns the complete suites.
+- Activation is intentionally deferred until the new authority seal, persisted evidence and historical reconstruction are implemented together. This remains local, undeployed work, not full-blueprint completion.

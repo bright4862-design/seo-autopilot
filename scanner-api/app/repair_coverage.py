@@ -27,6 +27,7 @@ which is precisely how a mixed group came to be labelled Homepage.
 
 from __future__ import annotations
 
+from functools import partial
 import ipaddress
 import re
 from typing import Any
@@ -127,6 +128,7 @@ def evidence_url_key(value: Any) -> str:
 
 
 PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION = "evidence_url_identity_v2_published_route"
+PUBLISHED_REPAIR_COVERAGE_VERSION = "repair_coverage_v5_published_route_identity"
 
 _OBSERVED_URL_FORBIDDEN = re.compile(r"[\x00-\x20\x7f-\x9f\\]")
 _OBSERVED_ABSOLUTE_URL = re.compile(r"^(https?)://([^/?#]+)(.*)$", re.IGNORECASE | re.ASCII)
@@ -207,6 +209,24 @@ def published_evidence_url_key(value: Any, *, scan_origin: str = "") -> str:
     return origin + (route if route.startswith("/") else f"/{route}")
 
 
+def repair_evidence_key_function(*, scan_origin: str = "", identity_version: str = "",
+                                 legacy_key: Any = evidence_url_key) -> Any:
+    """Select semantics from caller-owned context, never a repair-row marker."""
+    if identity_version == PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION:
+        return partial(published_evidence_url_key, scan_origin=scan_origin)
+    if identity_version:
+        raise ValueError("unsupported evidence URL identity version")
+    return legacy_key
+
+
+def scan_evidence_origin(scan: dict[str, Any]) -> str:
+    """Trusted scan scope includes scheme/port; normalized_domain does not."""
+    scope = scan.get("crawl_scope") if isinstance(scan.get("crawl_scope"), dict) else {}
+    raw = scope.get("requested_origin") or scan.get("website_url") or scan.get("normalized_url") or ""
+    root = published_evidence_url_key("/", scan_origin=raw)
+    return root[:-1] if root else ""
+
+
 def _page_family(page: dict[str, Any], resolver: Any = None) -> str:
     """The family this page already carries, reconciled to one vocabulary.
 
@@ -265,26 +285,32 @@ def normalize_repair_scope(
     *,
     family_resolver: Any = None,
     max_affected: int = DEFAULT_MAX_AFFECTED,
+    scan_origin: str = "",
+    identity_version: str = "",
 ) -> dict[str, Any]:
     """Return a copy of `fix` with scope, family and partitions derived from evidence."""
     normalized = dict(fix or {})
+    evidence_key_for = repair_evidence_key_function(scan_origin=scan_origin, identity_version=identity_version)
+    stamp_key_for = evidence_key_for if identity_version else template_family_key
 
     stamped: dict[str, str] = {}
     for page in pages or []:
         if not isinstance(page, dict):
             continue
-        key = template_family_key(page.get("final_url") or page.get("url") or page.get("path"))
+        key = stamp_key_for(page.get("final_url") or page.get("url") or page.get("path"))
         if key and key not in stamped:
             stamped[key] = _page_family(page, family_resolver)
 
     # Deduplicate by evidence identity while keeping the detector's order, so a
-    # repeated URL cannot inflate the count the customer is shown. Family lookup
-    # remains path-only because query parameters do not change a page template.
+    # repeated URL cannot inflate the count the customer is shown. Historical
+    # family lookup stays path-only; new reports join the exact observed page.
     seen: set[str] = set()
     ordered: list[tuple[str, str]] = []
     for raw in normalized.get("affected_pages") or []:
-        family_key = template_family_key(raw)
-        evidence_key = evidence_url_key(raw)
+        family_key = stamp_key_for(raw)
+        evidence_key = evidence_key_for(raw)
+        if identity_version and not evidence_key:
+            raise ValueError("unresolvable affected evidence")
         if not family_key or not evidence_key or evidence_key in seen:
             continue
         seen.add(evidence_key)
@@ -350,8 +376,10 @@ def normalize_repair_scope(
         # A truncated list must never be compared against a total; downstream
         # suppresses the ratio rather than dividing a sample by a whole.
         "affected_pages_complete": page_count <= max_affected,
-        "repair_coverage_version": REPAIR_COVERAGE_VERSION,
+        "repair_coverage_version": PUBLISHED_REPAIR_COVERAGE_VERSION if identity_version else REPAIR_COVERAGE_VERSION,
     })
+    if identity_version:
+        normalized["evidence_url_identity_version"] = identity_version
     return normalized
 
 
@@ -372,12 +400,13 @@ def _optional_count(value: Any) -> int | None:
         return None
 
 
-def _unique_affected_evidence(repair: dict[str, Any]) -> set[str]:
+def _unique_affected_evidence(repair: dict[str, Any], *, scan_origin: str = "", identity_version: str = "") -> set[str]:
     values = repair.get("affected_pages") if isinstance(repair.get("affected_pages"), list) else []
-    return {key for value in values if (key := evidence_url_key(value))}
+    key_for = repair_evidence_key_function(scan_origin=scan_origin, identity_version=identity_version)
+    return {key for value in values if (key := key_for(value))}
 
 
-def first_failed_repair_invariant(repair: dict[str, Any] | None) -> str:
+def first_failed_repair_invariant(repair: dict[str, Any] | None, *, scan_origin: str = "", identity_version: str = "") -> str:
     """Mirror Base44's fail-closed structural repair-coverage invariant.
 
     The durable worker runs this after canonical normalization and before the
@@ -387,6 +416,14 @@ def first_failed_repair_invariant(repair: dict[str, Any] | None) -> str:
     """
     if not isinstance(repair, dict):
         return "repair_missing"
+    if identity_version and identity_version != PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION:
+        return "unsupported_evidence_url_identity_version"
+    if identity_version and repair.get("evidence_url_identity_version") != identity_version:
+        return "evidence_url_identity_version_mismatch"
+    key_for = repair_evidence_key_function(scan_origin=scan_origin, identity_version=identity_version)
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    if identity_version and any(not key_for(value) for value in repair.get("affected_pages") or []):
+        return "unresolvable_affected_evidence"
 
     reported_raw = repair.get("affected_reported")
     reported = _count(repair.get("page_count") if reported_raw is None else reported_raw)
@@ -427,7 +464,7 @@ def first_failed_repair_invariant(repair: dict[str, Any] | None) -> str:
     if partitions and partition_total != page_count:
         return "family_breakdown_does_not_sum_to_page_count"
 
-    if complete and len(_unique_affected_evidence(repair)) != page_count:
+    if complete and len(_unique_affected_evidence(repair, **identity_context)) != page_count:
         return "page_count_disagrees_with_unique_affected_pages"
 
     named_families = [family for family in partitions if family not in NON_SPECIFIC_FAMILIES]
@@ -446,13 +483,13 @@ def first_failed_repair_invariant(repair: dict[str, Any] | None) -> str:
 
     representatives = repair.get("representative_pages_by_family")
     if isinstance(representatives, dict) and complete:
-        affected = _unique_affected_evidence(repair)
+        affected = _unique_affected_evidence(repair, **identity_context)
         for family, value in representatives.items():
             urls = value if isinstance(value, list) else [value]
             if not urls:
                 return "representative_is_not_an_affected_page"
             for url in urls:
-                if evidence_url_key(url) not in affected:
+                if key_for(url) not in affected:
                     return "representative_is_not_an_affected_page"
             if named_families and family not in partitions:
                 return "representative_family_not_in_breakdown"

@@ -15,6 +15,8 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 def patch_scanner() -> None:
     text = SCANNER_PATH.read_text()
 
+    if "import inspect\n" not in text:
+        text = replace_once(text, "import hashlib\n", "import hashlib\nimport inspect\n", "inspect import")
     if "from .active_soft404_orchestration import uniform_observed_group_provenance" not in text:
         text = replace_once(
             text,
@@ -32,20 +34,32 @@ def patch_scanner() -> None:
             "shared Stage 2 orchestration import",
         )
 
+    helper = '''\n\ndef _supports_stage2_probe_fetch(fetcher) -> bool:\n    """Require the hardened callback seam before active Standard-150 probes run.\n\n    Stage-2 active probes are allowed only when the active fetch callback accepts\n    both robots policy and the shared scheduler's request provider. This keeps the\n    finite request pool enforceable and fails closed for legacy/injected callbacks\n    that cannot honor that contract.\n    """\n    try:\n        parameters = inspect.signature(fetcher).parameters\n    except (TypeError, ValueError):\n        return False\n    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):\n        return True\n    return "robots_policy" in parameters and "request_provider" in parameters\n\n\n'''
+    if "def _supports_stage2_probe_fetch(fetcher)" not in text:
+        text = replace_once(text, "\n\nasync def run_scan(\n", helper + "async def run_scan(\n", "Stage 2 fetch capability helper")
+
     text = replace_once(
         text,
         "        coverage_probe_evidence = probe_scheduler.summary()\n",
-        "        coverage_probe_evidence = await run_stage2_shared_probe_orchestration(\n"
-        "            client=client,\n"
-        "            pages=pages,\n"
-        "            sitemap_urls=sitemap_urls,\n"
-        "            sitemap_diagnostics=sitemap_diagnostics,\n"
-        "            origin=origin,\n"
-        "            scope_prefix=prefix,\n"
-        "            robots_policy=robots_policy,\n"
-        "            probe_scheduler=probe_scheduler,\n"
-        "            fetch_page=fetch_and_extract,\n"
-        "        )\n",
+        "        if int(budget.get(\"max_pages\") or 0) >= 150 and _supports_stage2_probe_fetch(fetch_and_extract):\n"
+        "            coverage_probe_evidence = await run_stage2_shared_probe_orchestration(\n"
+        "                client=client,\n"
+        "                pages=pages,\n"
+        "                sitemap_urls=sitemap_urls,\n"
+        "                sitemap_diagnostics=sitemap_diagnostics,\n"
+        "                origin=origin,\n"
+        "                scope_prefix=prefix,\n"
+        "                robots_policy=robots_policy,\n"
+        "                probe_scheduler=probe_scheduler,\n"
+        "                fetch_page=fetch_and_extract,\n"
+        "            )\n"
+        "        else:\n"
+        "            coverage_probe_evidence = probe_scheduler.summary()\n"
+        "            if int(budget.get(\"max_pages\") or 0) >= 150:\n"
+        "                coverage_probe_evidence.update({\n"
+        "                    \"stage2_orchestration_state\": \"not_verified\",\n"
+        "                    \"stage2_orchestration_reason\": \"hardened_probe_fetch_contract_unavailable\",\n"
+        "                })\n",
         "run_scan shared Stage 2 orchestration call",
     )
 
@@ -150,14 +164,24 @@ class LandingResponse:
         self.text = "<html><body>landing</body></html>"
 
 
+def test_stage2_probe_fetch_requires_hardened_shared_request_provider_contract():
+    async def legacy_fetch(_client, _url, _discovery, robots_policy=None):
+        return {}
+
+    async def hardened_fetch(_client, _url, _discovery, robots_policy=None, request_provider=None):
+        return {}
+
+    async def kwargs_fetch(_client, _url, _discovery, **kwargs):
+        return {}
+
+    assert scanner._supports_stage2_probe_fetch(legacy_fetch) is False
+    assert scanner._supports_stage2_probe_fetch(hardened_fetch) is True
+    assert scanner._supports_stage2_probe_fetch(kwargs_fetch) is True
+
+
 @pytest.mark.asyncio
 async def test_run_scan_calls_one_shared_stage2_orchestrator_without_expanding_assessed_pages(monkeypatch):
     monkeypatch.setattr(scanner, "is_public_http_url", lambda _url: True)
-    monkeypatch.setitem(
-        scanner.SCAN_BUDGETS,
-        "basic",
-        {"max_pages": 1, "timeout": 20, "fetch_timeout": 3, "max_sitemap_fetches": 2},
-    )
 
     async def fake_load_robots_policy(_client, _origin):
         return Policy()
@@ -211,7 +235,7 @@ async def test_run_scan_calls_one_shared_stage2_orchestrator_without_expanding_a
     monkeypatch.setattr(scanner, "run_render_followup", fake_render_followup)
     monkeypatch.setattr(scanner, "run_stage2_shared_probe_orchestration", fake_stage2_orchestration)
 
-    result = await scanner.run_scan("https://example.com/", scan_mode="basic", concurrency=1)
+    result = await scanner.run_scan("https://example.com/", scan_mode="advanced", concurrency=1)
 
     assert result["success"] is True
     assert result["pages_crawled"] == 1

@@ -76,6 +76,7 @@ class SharedCoverageProbeScheduler:
             lambda: {
                 "eligible": 0,
                 "selected": 0,
+                "attempted": 0,
                 "completed": 0,
                 "passed": 0,
                 "failed": 0,
@@ -137,7 +138,9 @@ class SharedCoverageProbeScheduler:
         return self._request_capacity_available()
 
     def begin_candidate(self, purpose: str) -> None:
-        self._stats[str(purpose or "")]["selected"] += 1
+        stats = self._stats[str(purpose or "")]
+        stats["selected"] += 1
+        stats["attempted"] += 1
 
     async def fetch_once(self, client, url: str, *, max_decoded_bytes: int | None = None):
         request_url = str(url or "").strip()

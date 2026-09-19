@@ -22,7 +22,7 @@ test("V5 remains available only as the immediately historical Base44 generation"
       source("base44/functions/" + canonical + "V5/function.jsonc"),
       new RegExp('"name"\\s*:\\s*"' + canonical + 'V5"'),
     );
-    assert.equal(contract.routes[canonical], canonical + "V6");
+    assert.equal(contract.routes[canonical], canonical + "V7");
   }
 });
 

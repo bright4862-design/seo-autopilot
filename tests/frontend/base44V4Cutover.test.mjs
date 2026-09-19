@@ -14,12 +14,12 @@ const expectedCanonicals = [
   "deleteCustomerScanData",
 ];
 
-test("V4 remains a complete historical Base44 generation after the V6 cutover", () => {
+test("V4 remains a complete historical Base44 generation after the V7 cutover", () => {
   assert.equal(contract.schema_version, "base44_function_routes_v1");
   assert.equal(contract.generation, "v6");
   assert.deepEqual(Object.keys(contract.routes).sort(), [...expectedCanonicals].sort());
   for (const canonical of expectedCanonicals) {
-    assert.equal(contract.routes[canonical], `${canonical}V6`);
+    assert.equal(contract.routes[canonical], `${canonical}V7`);
     assert.equal(contract.historical_routes.v4[canonical], `${canonical}V4`);
     assert.equal(contract.historical_routes.v3[canonical], `${canonical}V3`);
     assert.equal(contract.historical_routes.v2[canonical], `${canonical}V2`);
@@ -74,13 +74,13 @@ test("V4 routes are retained for history but retired from active customer and wo
   const scanRuns = source("src/lib/scanRuns.js");
   const scanHistory = source("src/lib/scanHistory.js");
   const worker = source("scanner-api/app/scan_job.py");
-  assert.match(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV6"/);
+  assert.match(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV7"/);
   assert.doesNotMatch(scanForm, /ASYNC_SCAN_JOB_FUNCTION = "startStandardScanJobV4"/);
-  assert.match(scanRuns, /"getCustomerScanResultV6"/);
+  assert.match(scanRuns, /"getCustomerScanResultV7"/);
   assert.doesNotMatch(scanRuns, /"getCustomerScanResultV4"/);
-  assert.match(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV6"/);
+  assert.match(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV7"/);
   assert.doesNotMatch(scanHistory, /DELETE_FUNCTION = "deleteCustomerScanDataV4"/);
-  for (const name of ["durableScanWorkerControlV6", "persistDurableScanAuthorityV6", "persistLimitedScanResultV6"]) assert.ok(worker.includes(`"${name}"`), name);
+  for (const name of ["durableScanWorkerControlV7", "persistDurableScanAuthorityV7", "persistLimitedScanResultV7"]) assert.ok(worker.includes(`"${name}"`), name);
   for (const retired of ["durableScanWorkerControlV4", "persistDurableScanAuthorityV4", "persistLimitedScanResultV4"]) assert.ok(!worker.includes(`"${retired}"`), retired);
 });
 

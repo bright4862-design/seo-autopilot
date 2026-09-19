@@ -1,13 +1,19 @@
 from contextlib import asynccontextmanager
+import json
+from pathlib import Path
 import socket
+import subprocess
 
 import httpx
 import pytest
 
+from app.repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
 from app.robots_policy import RobotsPolicy
-from app.scanner import build_findings, fetch_and_extract
+from app.scan_job import build_local_review
+from app.scanner import build_findings, fetch_and_extract, group_findings
 
 
+ORIGIN = "https://example.com"
 DISCOVERY_INTERNAL = {
     "discovered_from": ["internal_link"],
     "source_pages": ["/source"],
@@ -79,6 +85,40 @@ def _html(url: str, *, title: str, h1: str, description: str = "") -> str:
     )
 
 
+def _assert_persisted_customer_output(page: dict, expected_url: str) -> None:
+    raw = build_findings(
+        [page],
+        identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
+        scan_origin=ORIGIN,
+    )
+    result = {
+        "success": True,
+        "website_url": ORIGIN,
+        "crawl_scope": {"requested_origin": ORIGIN},
+        "pages": [page],
+        "crawled_pages": [page],
+        "pages_found": 1,
+        "pages_crawled": 1,
+        "raw_findings": raw,
+        "findings": group_findings(raw),
+    }
+    completed = subprocess.run(
+        ["node", "tests/helpers/assertPublishedEvidenceOutput.mjs"],
+        input=json.dumps({
+            "scan": result,
+            "review": build_local_review(result),
+            "expectedUrls": [expected_url],
+            "expectedRule": "redirect_wrong_destination",
+            "expectedEligible": 1,
+        }),
+        text=True,
+        capture_output=True,
+        cwd=Path(__file__).resolve().parents[2],
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 @pytest.mark.asyncio
 async def test_related_hub_redirect_is_usable_not_wrong_destination(policy):
     source = "https://example.com/property-management-in-baltimore/mt-vernon"
@@ -141,6 +181,7 @@ async def test_unrelated_section_redirect_is_wrong_destination_even_when_200(pol
     wrong = next(row for row in findings if row["rule"] == "redirect_wrong_destination")
     assert wrong["verification_state"] == "verified"
     assert wrong["redirect_fetch_evidence"]["classification"] == "redirect_to_wrong_destination"
+    _assert_persisted_customer_output(page, source)
 
 
 @pytest.mark.asyncio

@@ -1860,6 +1860,20 @@ def group_findings(findings: list[dict]) -> list[dict]:
             if isinstance(finding.get("redirect_fetch_evidence"), dict)
             and finding.get("redirect_fetch_evidence")
         ][:10]
+        observed_versions = {
+            str(finding.get("observed_evidence_version") or "").strip()
+            for finding in members
+            if str(finding.get("observed_evidence_version") or "").strip()
+        }
+        verified_observed_pages = _unique_nonempty([
+            page
+            for finding in members
+            for page in (
+                finding.get("verified_observed_pages")
+                if isinstance(finding.get("verified_observed_pages"), list)
+                else []
+            )
+        ])
         group_id = stable_id(f"group|{key}")
         grouped = dict(sample)
         grouped.update({
@@ -1883,13 +1897,9 @@ def group_findings(findings: list[dict]) -> list[dict]:
             "source_pages": _unique_nonempty([p for f in members for p in (f.get("source_pages") or [])]),
             "link_text_samples": _unique_nonempty([t for f in members for t in (f.get("link_text_samples") or [])]),
             **({
-                "observed_evidence_version": sample.get("observed_evidence_version"),
-                "verified_observed_pages": _unique_nonempty([
-                    p for f in members for p in (f.get("verified_observed_pages") or [])
-                ]),
-            } if sample.get("observed_evidence_version")
-                and all(f.get("observed_evidence_version") == sample.get("observed_evidence_version") for f in members)
-                else {}),
+                "observed_evidence_version": next(iter(observed_versions)),
+                "verified_observed_pages": verified_observed_pages,
+            } if len(observed_versions) == 1 and verified_observed_pages else {}),
             **({"indexability_intent_sources": _group_indexability_intent_sources(members)}
                if sample.get("rule") == "sitemap_indexability_conflict" else {}),
             **({"redirect_fetch_evidence_samples": redirect_samples} if redirect_samples else {}),

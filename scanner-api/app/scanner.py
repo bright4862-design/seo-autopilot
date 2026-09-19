@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import inspect
 import math
 import re
 import time
@@ -9,6 +10,7 @@ from urllib.parse import urldefrag, urlparse
 
 import httpx
 
+from .active_soft404_orchestration import uniform_observed_group_provenance
 from .artifact_filter import MAX_ARTIFACT_EVIDENCE, is_artifact_url, record_artifact
 from .canonical_validation import validate_canonical_targets
 from .coverage_probes import (
@@ -36,6 +38,7 @@ from .metadata_title_evidence import (
     relative_evidence_url,
 )
 from .search_applicability import search_applicability, search_metadata_applicable, filter_search_findings
+from .stage2_shared_probe_orchestration import run_stage2_shared_probe_orchestration
 from .content_evidence_findings import content_evidence_findings
 from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
 from .sampling import SAMPLING_VERSION, enrich_checked_coverage, sampling_report, select_balanced_urls
@@ -398,6 +401,23 @@ def resolve_scan_budget(scan_mode: str, timeout_seconds: float | None = None, *,
         max(6, int(bounded // 2)),
     )
     return budget
+
+
+def _supports_stage2_probe_fetch(fetcher) -> bool:
+    """Require the hardened callback seam before active Standard-150 probes run.
+
+    Stage-2 active probes are allowed only when the active fetch callback accepts
+    both robots policy and the shared scheduler's request provider. This keeps the
+    finite request pool enforceable and fails closed for legacy/injected callbacks
+    that cannot honor that contract.
+    """
+    try:
+        parameters = inspect.signature(fetcher).parameters
+    except (TypeError, ValueError):
+        return False
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+        return True
+    return "robots_policy" in parameters and "request_provider" in parameters
 
 
 async def run_scan(
@@ -885,7 +905,25 @@ async def run_scan(
                     "score_impact": 0,
                 })
 
-        coverage_probe_evidence = probe_scheduler.summary()
+        if int(budget.get("max_pages") or 0) >= 150 and _supports_stage2_probe_fetch(fetch_and_extract):
+            coverage_probe_evidence = await run_stage2_shared_probe_orchestration(
+                client=client,
+                pages=pages,
+                sitemap_urls=sitemap_urls,
+                sitemap_diagnostics=sitemap_diagnostics,
+                origin=origin,
+                scope_prefix=prefix,
+                robots_policy=robots_policy,
+                probe_scheduler=probe_scheduler,
+                fetch_page=fetch_and_extract,
+            )
+        else:
+            coverage_probe_evidence = probe_scheduler.summary()
+            if int(budget.get("max_pages") or 0) >= 150:
+                coverage_probe_evidence.update({
+                    "stage2_orchestration_state": "not_verified",
+                    "stage2_orchestration_reason": "hardened_probe_fetch_contract_unavailable",
+                })
         canonical_target_evidence = await validate_canonical_targets(
             client,
             pages,
@@ -1377,8 +1415,8 @@ def redirect_finding_for_page(page: dict, *, scan_origin: str = "", identity_ver
     if outcome == "redirect_to_wrong_destination":
         details = (
             "redirect_wrong_destination", "high", "Fix a redirect that sends visitors to the wrong page",
-            "This URL reaches a working page, but the redirect collapses a specific deep URL onto the site homepage instead of a relevant replacement page.",
-            "Point the source URL to the closest relevant replacement page, or restore the intended page. Do not use the homepage as a catch-all destination.",
+            "This URL reaches working HTML, but the redirect sends a specific URL to an unrelated or catch-all destination instead of a relevant replacement page.",
+            "Point the source URL to the closest relevant replacement page, or restore the intended page. Avoid unrelated or catch-all redirects that erase the source URL meaning.",
         )
     elif state == "redirect_destination_unverified":
         needs_verification = True
@@ -1686,9 +1724,9 @@ SITE_SURFACE_GUIDANCE = {
         "Update the redirect rules so each source points in one hop to a final, indexable 200-status URL.",
     ),
     "redirect_destination_fit": (
-        "These source URLs reach working HTML, but they collapse onto a generic homepage rather than a relevant replacement. "
+        "These source URLs reach working HTML, but they collapse onto unrelated or catch-all destinations rather than relevant replacements. "
         "That is a redirect-destination problem, not a page-availability failure.",
-        "Map each source URL to the closest relevant replacement page, or restore the intended page. Avoid homepage catch-all redirects.",
+        "Map each source URL to the closest relevant replacement page, or restore the intended page. Avoid unrelated or catch-all redirects that erase the source URL meaning.",
     ),
     "redirect_access_checks": (
         "The scanner followed these redirects but could not verify the final responses because of transport or decoding failures. "
@@ -1767,7 +1805,7 @@ def group_template_title(rule: str, family: str) -> str:
     if rule == "redirect_destination_unverified":
         return "Verify redirect destinations the scan could not load"
     if rule == "redirect_wrong_destination":
-        return "Fix redirects that send specific URLs to the homepage"
+        return "Fix redirects that send specific URLs to unrelated destinations"
     if rule == "redirect_destination_blocked":
         return "Review redirects to robots-blocked pages"
     if rule == "redirect_destination_noindex":
@@ -1860,22 +1898,14 @@ def group_findings(findings: list[dict]) -> list[dict]:
             if isinstance(finding.get("redirect_fetch_evidence"), dict)
             and finding.get("redirect_fetch_evidence")
         ][:10]
-        observed_versions = {
-            str(finding.get("observed_evidence_version") or "").strip()
-            for finding in members
-            if str(finding.get("observed_evidence_version") or "").strip()
-        }
-        verified_observed_pages = _unique_nonempty([
-            page
-            for finding in members
-            for page in (
-                finding.get("verified_observed_pages")
-                if isinstance(finding.get("verified_observed_pages"), list)
-                else []
-            )
-        ])
+        group_provenance = uniform_observed_group_provenance(members)
         group_id = stable_id(f"group|{key}")
         grouped = dict(sample)
+        # A lead/sample row must never lend active observed authority to
+        # an unversioned group member. Restore provenance only through
+        # the all-members-same-version contract above.
+        grouped.pop("observed_evidence_version", None)
+        grouped.pop("verified_observed_pages", None)
         grouped.update({
             "id": group_id,
             "fix_id": group_id,
@@ -1896,10 +1926,7 @@ def group_findings(findings: list[dict]) -> list[dict]:
             "page_count": len(affected),
             "source_pages": _unique_nonempty([p for f in members for p in (f.get("source_pages") or [])]),
             "link_text_samples": _unique_nonempty([t for f in members for t in (f.get("link_text_samples") or [])]),
-            **({
-                "observed_evidence_version": next(iter(observed_versions)),
-                "verified_observed_pages": verified_observed_pages,
-            } if len(observed_versions) == 1 and verified_observed_pages else {}),
+            **group_provenance,
             **({"indexability_intent_sources": _group_indexability_intent_sources(members)}
                if sample.get("rule") == "sitemap_indexability_conflict" else {}),
             **({"redirect_fetch_evidence_samples": redirect_samples} if redirect_samples else {}),

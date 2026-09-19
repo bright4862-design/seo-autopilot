@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections import Counter
-from urllib.parse import urldefrag, urljoin, urlparse
+import re
+from urllib.parse import unquote, urldefrag, urljoin, urlparse
 
-from .page_evidence_gate import page_has_usable_html
+from .page_evidence_gate import page_evidence_class, page_has_usable_html
 from .robots_policy import SCANNER_USER_AGENT, SEARCH_USER_AGENT
 from .security import REDIRECT_STATUSES, is_public_http_url, safe_get_once
 
@@ -12,7 +13,13 @@ from .security import REDIRECT_STATUSES, is_public_http_url, safe_get_once
 # exact candidate SHA still identifies the release; changing this marker would
 # require regenerating cross-runtime release contracts outside this patch scope.
 REDIRECT_EVIDENCE_VERSION = "redirect_evidence_v3_origin_alias_identity"
+REDIRECT_MEANING_VERSION = "redirect_meaning_v1_semantic_destination_fit"
 DEFAULT_MAX_REDIRECTS = 5
+
+_MEANING_STOPWORDS = {
+    "about", "and", "are", "com", "for", "from", "html", "http", "https",
+    "index", "legacy", "old", "page", "pages", "the", "this", "to", "www",
+}
 
 
 def _normalize_url(value: str) -> str:
@@ -306,42 +313,118 @@ def _same_url_except_trailing_slash(source_url: str, destination_url: str) -> bo
     )
 
 
-def _looks_like_wrong_destination(source_url: str, destination_url: str) -> bool:
-    """Detect strong generic catch-all redirects without site-specific slugs.
-
-    A deep URL collapsing to the same site's homepage is materially different
-    from slash/case/canonical normalization: HTTP 200 proves availability, not
-    relevance. Restrict this signal to paths with at least two segments so a
-    deliberate retired top-level route is not automatically called wrong.
-    """
-    source = _normalize_url(source_url)
-    destination = _normalize_url(destination_url)
-    if not source or not destination or _same_url_except_trailing_slash(source, destination):
-        return False
-    if _comparable_origin_key(source) != _comparable_origin_key(destination):
-        return False
-    source_path = (urlparse(source).path or "/").rstrip("/") or "/"
-    destination_path = (urlparse(destination).path or "/").rstrip("/") or "/"
-    source_segments = [segment for segment in source_path.split("/") if segment]
-    return len(source_segments) >= 2 and destination_path == "/"
+def _meaning_terms(value: str) -> list[str]:
+    text = unquote(str(value or "")).lower().replace("_", " ").replace("-", " ")
+    terms = []
+    for token in re.findall(r"[a-z0-9]+", text):
+        if len(token) < 3 or token in _MEANING_STOPWORDS or token.isdigit():
+            continue
+        if token not in terms:
+            terms.append(token)
+    return terms[:24]
 
 
-def _redirect_outcome(page: dict, evidence: dict, destination_state: str) -> str:
+def _source_meaning_terms(page: dict, evidence: dict) -> list[str]:
+    source_url = str(evidence.get("source_url") or page.get("url") or "")
+    source_path = urlparse(source_url).path or "/"
+    values = [source_path, *(page.get("link_text_samples") or [])]
+    terms = []
+    for value in values:
+        for token in _meaning_terms(value):
+            if token not in terms:
+                terms.append(token)
+    return terms[:24]
+
+
+def _destination_meaning_terms(page: dict, destination_url: str) -> list[str]:
+    values = [
+        urlparse(destination_url).path or "/",
+        page.get("title") or "",
+        page.get("h1") or "",
+        page.get("meta_description") or "",
+    ]
+    terms = []
+    for value in values:
+        for token in _meaning_terms(str(value or "")):
+            if token not in terms:
+                terms.append(token)
+    return terms[:24]
+
+
+def _redirect_meaning_evidence(page: dict, evidence: dict) -> dict:
+    state = str(evidence.get("state") or "")
+    source_url = str(evidence.get("source_url") or page.get("url") or "")
+    destination_url = str(evidence.get("destination_url") or page.get("final_url") or "")
+    status = int(evidence.get("destination_status_code") or page.get("status_code") or 0)
+    base = {
+        "version": REDIRECT_MEANING_VERSION,
+        "state": "not_applicable",
+        "reason": "not_redirected",
+        "source_terms": [],
+        "destination_terms": [],
+        "shared_terms": [],
+    }
+    if int(evidence.get("hop_count") or 0) <= 0 and state == "not_redirected":
+        return base
+
+    if state in {"redirect_destination_unverified", "redirect_destination_blocked_by_robots"}:
+        return {**base, "state": "not_verified", "reason": "destination_access_unverified"}
+    if page_evidence_class(page) == "failed_access":
+        return {**base, "state": "not_verified", "reason": "destination_access_unverified"}
+    if state == "redirect_chain_limit_exceeded":
+        return {**base, "state": "not_verified", "reason": "redirect_chain_limit_exceeded"}
+    if state in {"redirect_loop", "redirect_missing_location", "redirect_invalid_location", "blocked_non_public_redirect"}:
+        return {**base, "state": "verified_unusable", "reason": state}
+    if status >= 400:
+        return {**base, "state": "verified_unusable", "reason": f"destination_http_{status}"}
+    if 200 <= status < 300 and not _html_parse_ok(page):
+        return {**base, "state": "verified_unusable", "reason": "destination_not_usable_html"}
+    if not 200 <= status < 300:
+        return {**base, "state": "not_verified", "reason": "destination_status_unknown"}
+
+    source_terms = _source_meaning_terms(page, evidence)
+    destination_terms = _destination_meaning_terms(page, destination_url)
+    shared_terms = sorted(set(source_terms) & set(destination_terms))[:12]
+    populated = {
+        **base,
+        "source_terms": source_terms,
+        "destination_terms": destination_terms,
+        "shared_terms": shared_terms,
+    }
+
+    if _same_url_except_trailing_slash(source_url, destination_url):
+        return {**populated, "state": "verified_related", "reason": "trailing_slash_normalization"}
+
+    destination_path = (urlparse(destination_url).path or "/").rstrip("/") or "/"
+    if destination_path == "/" and "home" in source_terms:
+        return {**populated, "state": "verified_related", "reason": "explicit_home_intent"}
+    if shared_terms:
+        return {**populated, "state": "verified_related", "reason": "semantic_overlap"}
+
+    source_specific = len(source_terms) >= 2
+    destination_depth = len([segment for segment in destination_path.split("/") if segment])
+    if source_specific and destination_depth <= 1:
+        return {
+            **populated,
+            "state": "verified_mismatch",
+            "reason": "specific_source_to_unrelated_generic_destination",
+        }
+    return {**populated, "state": "not_verified", "reason": "semantic_relationship_unclear"}
+
+
+def _redirect_outcome(page: dict, evidence: dict, destination_state: str, meaning_evidence: dict) -> str:
     if int(evidence.get("hop_count") or 0) <= 0 and str(evidence.get("state") or "") == "not_redirected":
         return ""
 
     state = str(evidence.get("state") or "")
     status = int(evidence.get("destination_status_code") or page.get("status_code") or 0)
-    if state == "redirect_destination_unverified":
-        return "redirect_destination_unverified"
-    if state in {
-        "redirect_destination_blocked_by_robots",
-        "redirect_loop",
-        "redirect_missing_location",
-        "redirect_invalid_location",
-        "redirect_chain_limit_exceeded",
-        "blocked_non_public_redirect",
-    }:
+    if meaning_evidence.get("state") == "not_verified":
+        return "redirect_destination_unverified" if state in {
+            "redirect_destination_unverified",
+            "redirect_destination_blocked_by_robots",
+            "redirect_chain_limit_exceeded",
+        } or page_evidence_class(page) == "failed_access" else "redirect_to_usable_page"
+    if meaning_evidence.get("state") == "verified_unusable":
         return "redirect_destination_unusable"
     if status >= 400:
         return "redirect_destination_unusable"
@@ -349,18 +432,10 @@ def _redirect_outcome(page: dict, evidence: dict, destination_state: str) -> str
     destination_url = str(evidence.get("destination_url") or page.get("final_url") or "")
     canonical = _absolute_canonical(page, destination_url)
     canonical_elsewhere = bool(canonical and _normalize_url(destination_url) and canonical != _normalize_url(destination_url))
-    content_type = str(page.get("content_type") or "").lower()
-    unsuitable_content = bool(status and 200 <= status < 300 and content_type and "html" not in content_type)
-    if (
-        destination_state in {"Noindexed", "Canonicalized"}
-        or _noindex(page)
-        or canonical_elsewhere
-        or unsuitable_content
-    ):
+    if destination_state in {"Noindexed", "Canonicalized"} or _noindex(page) or canonical_elsewhere:
         return "redirect_to_nonindexable_page"
     if 200 <= status < 300 and _html_parse_ok(page):
-        source_url = str(evidence.get("source_url") or page.get("url") or "")
-        if _looks_like_wrong_destination(source_url, destination_url):
+        if meaning_evidence.get("state") == "verified_mismatch":
             return "redirect_to_wrong_destination"
         return "redirect_to_usable_page"
     if 200 <= status < 300:
@@ -368,7 +443,13 @@ def _redirect_outcome(page: dict, evidence: dict, destination_state: str) -> str
     return "redirect_destination_unusable"
 
 
-def _fetch_evidence(page: dict, evidence: dict, destination_state: str, classification: str) -> dict:
+def _fetch_evidence(
+    page: dict,
+    evidence: dict,
+    destination_state: str,
+    classification: str,
+    meaning_evidence: dict,
+) -> dict:
     destination_url = str(evidence.get("destination_url") or page.get("final_url") or "")
     fetch_error = str(evidence.get("fetch_error") or page.get("fetch_error") or "").strip()
     robots_status = destination_state or str(page.get("robots_indexability_status") or "")
@@ -393,6 +474,7 @@ def _fetch_evidence(page: dict, evidence: dict, destination_state: str, classifi
         "canonical_url": _absolute_canonical(page, destination_url),
         "noindex": _noindex(page),
         "classification": classification,
+        "meaning_evidence": dict(meaning_evidence),
     }
 
 
@@ -431,8 +513,9 @@ def apply_redirect_evidence(page: dict, evidence: dict) -> dict:
         destination_state = "Unknown because of access or rendering limitations"
         destination_indexable = False
 
-    outcome = _redirect_outcome(page, evidence, destination_state)
-    fetch_evidence = _fetch_evidence(page, evidence, destination_state, outcome)
+    meaning_evidence = _redirect_meaning_evidence(page, evidence)
+    outcome = _redirect_outcome(page, evidence, destination_state, meaning_evidence)
+    fetch_evidence = _fetch_evidence(page, evidence, destination_state, outcome, meaning_evidence)
 
     page.update({
         "redirect_evidence_version": REDIRECT_EVIDENCE_VERSION,

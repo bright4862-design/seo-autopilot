@@ -132,3 +132,21 @@ The user explicitly approved the written design: **“Approved—start implement
 Recovered exact checkpoint `a51fa796` from GitHub, preserving Tasks 1–3. Implemented Task 4 through actual rendered consumers and serializers, then integrated B03/B04/B05 and the named synthetic acceptance runner. Details and explicit remaining gates: `docs/stage-one-evidence-acceptance.md`.
 
 Fresh full verification: 1,767 scanner tests passed (18 intentional skips), 1,479 frontend tests passed, root Python gate/lint/typecheck/build/package/generated/freeze checks passed. Candidate fingerprint `01ebe8e90df1e6bd` remains unaccepted. Independent review subsequently found four Important issues, now corrected with reproducing tests. Final source gate: 1,798 scanner tests passed (18 intentional skips), 1,479 frontend tests passed, all source checks green. Exact-source CI, merge and production verification are next. No full-blueprint or real 30-site acceptance is claimed.
+
+
+## Stage 2 coverage checkpoint — B06 source-complete on PR #303 (2026-09-19)
+
+Stage 2 is isolated from the Stage-1 release line on branch `agent/full-blueprint-stage2-coverage-b06-20260919`, draft PR [#303](https://github.com/bright4862-design/seo-autopilot/pull/303). GitHub `main` remained at the merged Stage-1 source `22ce4e69aa915a2e5ba796f9432fea33a0fa79bb` throughout this checkpoint, so this work has **not** moved the exact-SHA cutover underneath the pending Stage-1 production promotion.
+
+Requirement status:
+
+- **B06 — source-complete and CI-verified on the branch; not merged/deployed/live.** Added one shared bounded coverage-probe scheduler, then used it to status-check same-site internal-link targets that fall outside the assessed-page sample. Probe pages never enter the assessed-page count. Actual request identities are reused, redirect hops use the same safe request provider, and the pool is bounded by both a small per-mode allowance and the crawler's existing finite `max_pages * 8` request ceiling.
+- The scheduler exposes eligible/attempted/completed/pass/fail/not-verified/skipped/exhausted counts and a bounded evidence sample. Exhaustion/deadline/robots/access challenge states remain unknown/not-verified rather than becoming a pass. Probe time receives its own subdeadline so additive coverage cannot starve the existing canonical validator.
+- A verified unsampled 404/410 becomes the existing authenticated broken-link repair with retained source page/link text. It is explicitly non-scoring until B19/B23 land. The review coverage context counts a confirmed versioned probe URL as `affected_observed` but never as `affected_eligible`, preventing an invented denominator. Unknown versions and unverified probe claims cannot inflate the signed count.
+- The behavioral regression uses the real Python producer → review → canonical authority → persisted rows → verified customer/chat/card/handoff/export helper. It proves a broken target beyond a 4-page assessed sample is requested, remains outside `pages`, persists as one signed repair, and reloads with truthful `affected_observed=1`, `affected_eligible=0`.
+- Exact code checkpoint `d88b5b89a870b9f502f46da654eab9c831945c40` passed FixList CI run **35450285277**: **1,806 scanner tests passed, 18 intentional skips**, **1,479 frontend tests passed**, lint/typecheck/generated-contract checks, labelled Stage-1 corpus verification, frozen revision check, frontend build and production scanner-image build all passed.
+- Two preceding CI failures were retained as useful evidence rather than hidden: the first caught a direct-404 classification mistake; the second proved that the repair reached the signed customer row while `affected_observed` was still zero. Both causes were fixed with reproducing regressions before the green run.
+
+**Open Stage 2:** B07–B18. The next dependency-owned slice is B07 active soft-404 baselines using this same scheduler; B09 sitemap integrity and B16 URL variants must reuse the same pool rather than create new request budgets. B08 reuses retained redirect evidence. B10–B15/B17–B18 remain unimplemented here.
+
+**Stages 3–4:** B19–B28 remain open. No Stage-2 code is merged, staged, deployed or live-accepted by this checkpoint. The genuine provenance-labelled 30-site baseline/candidate gate remains open and historical summary counts are still not substitute evidence.

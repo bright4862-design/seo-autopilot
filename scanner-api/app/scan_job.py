@@ -641,14 +641,14 @@ def build_local_review(result: dict[str, Any]) -> dict[str, Any]:
     from .coverage_authority import attach_coverage_authority_evidence
     from .evidence_quality import apply_evidence_quality_gate
     from .repair_contract_v2 import apply_canonical_repair_contract
-    from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
+    from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION, scan_evidence_origin
     from .review import run_review
     from .review_calibration import apply_review_evidence_calibration
     from .trust_discovery import apply_trust_discovery_gate
 
     review = run_review(result, identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
     review = apply_trust_discovery_gate(review, result)
-    review = apply_review_evidence_calibration(review, result)
+    review = apply_review_evidence_calibration(review, result, scan_origin=scan_evidence_origin(result), identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)
     review = apply_evidence_quality_gate(review, result)
     review = attach_coverage_authority_evidence(review, result)
     review.update({

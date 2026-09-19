@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 from .coverage_authority import assess_coverage, coverage_inputs_from_payload
 from .repair_coverage import (
-    REPAIR_COVERAGE_VERSION, evidence_url_key, normalize_repair_scope,
+    REPAIR_COVERAGE_VERSION, PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION, evidence_url_key, normalize_repair_scope,
     repair_evidence_key_function, scan_evidence_origin,
 )
 from .repair_dedup import (  # re-exported: callers and tests import these from review
@@ -27,6 +27,8 @@ from .page_evidence_gate import (
     page_has_usable_html,
 )
 from .market_scope import strip_market_locale_prefix
+from .search_applicability import rule_is_applicable, search_metadata_applicable
+from .content_evidence_findings import content_evidence_findings
 from .location_template_content import build_location_template_raw_fixes
 
 REVIEW_VERSION = "python_review_v2_structural_marketplace"
@@ -407,7 +409,9 @@ def run_review(payload: dict[str, Any], *, identity_version: str = "") -> dict[s
     playbook = apply_finance_sub_playbook(playbook, site_fingerprint.get("finance_sub_playbook", ""))
     evidence_fixes = build_scanner_evidence_findings(body, pages, site_fingerprint, **identity_context)
     page_pattern_fixes = build_page_pattern_findings(pages, **identity_context)
-    location_template_fixes = build_location_template_raw_fixes(pages)
+    location_template_fixes = build_location_template_raw_fixes([
+        p for p in pages if (p.get("visible_template_evidence") or {}).get("state") != "fail"
+    ]) + content_evidence_findings(pages)
     strategic_fixes = build_strategic_findings(body, pages, website_url, site_fingerprint, playbook, **identity_context)
     canonical_fixes = prepare_fixes(raw_fixes + evidence_fixes + page_pattern_fixes + location_template_fixes + strategic_fixes, site_fingerprint, body, playbook, pages, **identity_context)
     no_page_evidence = (
@@ -1245,7 +1249,7 @@ def build_scanner_evidence_findings(body: dict[str, Any], pages: list[dict[str, 
                 explanation="The site redirected or responded in a way the scanner could not safely verify. This is a scan limitation, not proof of an SEO defect.",
                 why="Without usable HTML, FixList cannot confirm titles, headings, canonical tags, metadata, schema, content, or image descriptions.",
                 recommendation="Try again later. If it keeps happening, ask your web person to check hosting, CDN, firewall, bot-protection, DNS, and redirect logs.",
-                affected_pages=[page_evidence_url(page) for page in group],
+                affected_pages=[page_evidence_url(page, identity_version=identity_version) for page in group],
                 difficulty="developer",
                 source="scanner_access_evidence",
                 extra={
@@ -1270,7 +1274,7 @@ def build_scanner_evidence_findings(body: dict[str, Any], pages: list[dict[str, 
                 explanation="The scanner saw HTTP 429, bot protection, or a connection-verification response. This is crawler-access evidence, not proof that customers see a broken page.",
                 why="If legitimate crawlers cannot access important pages, search engines may miss them. Verify this in server, CDN, firewall, or bot-protection logs before changing page content.",
                 recommendation="Ask your web person to check server, CDN, firewall, and bot-protection logs for these URLs. Confirm whether Googlebot and normal users can access them, then adjust rate-limit rules only if legitimate access is blocked.",
-                affected_pages=[page_evidence_url(page) for page in group],
+                affected_pages=[page_evidence_url(page, identity_version=identity_version) for page in group],
                 difficulty="developer",
                 source="scanner_verified_failed_pages:429",
                 extra={
@@ -1298,7 +1302,7 @@ def build_scanner_evidence_findings(body: dict[str, Any], pages: list[dict[str, 
             explanation="The scanner found URLs that returned server errors during the crawl. These are technical availability problems, not copywriting tasks." if is_server else "The scanner found URLs that returned 404 or 410 during the crawl and included source evidence such as internal links, sitemap discovery, or linked failed URLs.",
             why="Server errors can prevent search engines and users from reaching important pages and can waste crawl budget." if is_server else "Broken internal links and confirmed failed URLs waste crawl budget and can send users or search engines into dead ends, especially when they are discovered from important pages.",
             recommendation="Ask your web person to inspect the failing URLs, server logs, and routing rules, then restore the page or redirect to the closest relevant live page." if is_server else "Ask your web person to either restore the missing URL, update the internal link that points to it, or add a 301 redirect to the closest relevant live page. Do not treat this as a meta title or content rewrite.",
-            affected_pages=[page_evidence_url(page) for page in group],
+            affected_pages=[page_evidence_url(page, identity_version=identity_version) for page in group],
             difficulty="developer",
             source=f"scanner_verified_failed_pages:{bucket}",
             extra={
@@ -1375,7 +1379,7 @@ def repair_observation(page: dict[str, Any], rule: str, *, scan_origin: str = ""
     identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
     key_for = repair_evidence_key_function(legacy_key=clean_path, **identity_context)
     sample: dict[str, Any] = {
-        "page_url": key_for(page_evidence_url(page)),
+        "page_url": key_for(page_evidence_url(page, identity_version=identity_version)),
         "status": int_or_zero(page.get("status_code") or page.get("status")),
         "issue_type": rule,
     }
@@ -1393,7 +1397,7 @@ def repair_observation(page: dict[str, Any], rule: str, *, scan_origin: str = ""
 
 
 def repair_observation_evidence(pages: list[dict[str, Any]], rule: str, *, scan_origin: str = "", identity_version: str = "") -> dict[str, Any]:
-    observations = [repair_observation(page, rule, scan_origin=scan_origin, identity_version=identity_version) for page in pages if page_evidence_url(page)]
+    observations = [repair_observation(page, rule, scan_origin=scan_origin, identity_version=identity_version) for page in pages if page_evidence_url(page, identity_version=identity_version)]
     return {
         "repair_observation_count": len(observations),
         "repair_observation_samples": observations[:REPAIR_OBSERVATION_SAMPLE_LIMIT],
@@ -1466,12 +1470,12 @@ def build_page_pattern_findings(pages: list[dict[str, Any]], *, scan_origin: str
     key_for = repair_evidence_key_function(legacy_key=clean_path, **identity_context)
     buckets: dict[tuple[str, str], dict[str, Any]] = {}
     for page in pages:
-        url = page_evidence_url(page)
+        url = page_evidence_url(page, identity_version=identity_version)
         if not url or is_non_html_page_evidence(page) or not page_has_usable_html(page):
             continue
         family = normalize_template_family(page.get("page_template_family"), url)
         canonical = clean_str(page.get("canonical") or page.get("canonical_url") or "")
-        if not canonical:
+        if not canonical and search_metadata_applicable(page):
             add_bucket(buckets, "canonical_missing", "canonical", family, page, "Add canonical URLs across templates", "The page does not expose a canonical URL.", "Canonical URLs help search engines consolidate duplicate and near-duplicate versions of a page.", "Ask your web person to add self-referencing canonicals to the shared template or affected pages.", "developer")
         h1_count = int_or_zero(page.get("h1_count"))
         if h1_count == 0:
@@ -1479,17 +1483,17 @@ def build_page_pattern_findings(pages: list[dict[str, Any]], *, scan_origin: str
         elif h1_count > 1:
             add_bucket(buckets, "multiple_h1", "thin_content", family, page, "Use one main page heading", "The page has more than one H1 heading.", "Multiple H1s can make the page structure less clear.", "Keep one H1 as the main page heading and make the rest H2/H3 headings.", "easy")
         missing_alt = int_or_zero(page.get("image_missing_alt_count") or page.get("missing_alt_image_count"))
-        if missing_alt > 0:
+        if missing_alt > 0 and not page.get("image_alt_applicability"):
             add_bucket(buckets, "image_alt_text", "image_alt_text", family, page, "Batch image descriptions on templates", f"{missing_alt} images missing alt text", "Repeated image-alt gaps are usually a shared template or CMS pattern, especially on listing or detail pages.", "Fix one representative page/template first, then roll out the same rule across the affected group.", "developer" if missing_alt >= 8 else "easy")
         metadata_state = clean_str(page.get("meta_description_state"))
         if not metadata_state:
             metadata_state = "present_valid" if clean_str(page.get("meta_description")) else "missing"
-        if metadata_state in META_DESCRIPTION_STATE_CONFIG:
+        if metadata_state in META_DESCRIPTION_STATE_CONFIG and search_metadata_applicable(page):
             add_metadata_bucket(buckets, family, page, metadata_state)
 
     fixes = []
     for bucket in buckets.values():
-        affected = [page_evidence_url(page) for page in bucket["pages"]]
+        affected = [page_evidence_url(page, identity_version=identity_version) for page in bucket["pages"]]
         affected_count = len({key_for(url) for url in affected if key_for(url)})
         is_group = affected_count > 1
         metadata_counts = bucket.get("metadata_state_counts")
@@ -1569,14 +1573,14 @@ def build_strategic_findings(body: dict[str, Any], pages: list[dict[str, Any]], 
         stamped = page.get("route_boundary_candidate")
         if isinstance(stamped, bool):
             return stamped
-        url = page_evidence_url(page)
+        url = page_evidence_url(page, identity_version=identity_version)
         return is_route_boundary_candidate(url) or is_internal_app_route(url)
 
     route_pages = [page for page in pages if is_route_page(page) and page_is_indexable(page)]
     if route_pages:
-        fixes.append(make_evidence_fix("route_boundary_candidate_indexable", "indexability", "critical", "Keep checkout, login, account, and app routes out of search", "FixList found checkout, login, account, dashboard, billing, cart, admin, or app-like routes that appear crawlable and indexable.", "These pages are usually not useful SEO landing pages. Letting them appear in search can dilute the site, confuse prospects, or expose private product structure.", "Ask your web person to require login, add noindex, or keep these routes out of public search while preserving true public landing, category, product, booking, and help pages.", [page_evidence_url(page) for page in route_pages], "developer", "archetype_route_boundary_layer", extra={"current_value": "Indexable app/checkout/account routes: " + ", ".join(dedupe_strings([key_for(page_evidence_url(page)) for page in route_pages])[:6]), "source_pages": dedupe_strings([key_for(page_evidence_url(page)) for page in route_pages])[:30]}))
+        fixes.append(make_evidence_fix("route_boundary_candidate_indexable", "indexability", "critical", "Keep checkout, login, account, and app routes out of search", "FixList found checkout, login, account, dashboard, billing, cart, admin, or app-like routes that appear crawlable and indexable.", "These pages are usually not useful SEO landing pages. Letting them appear in search can dilute the site, confuse prospects, or expose private product structure.", "Ask your web person to require login, add noindex, or keep these routes out of public search while preserving true public landing, category, product, booking, and help pages.", [page_evidence_url(page, identity_version=identity_version) for page in route_pages], "developer", "archetype_route_boundary_layer", extra={"current_value": "Indexable app/checkout/account routes: " + ", ".join(dedupe_strings([key_for(page_evidence_url(page, identity_version=identity_version)) for page in route_pages])[:6]), "source_pages": dedupe_strings([key_for(page_evidence_url(page, identity_version=identity_version)) for page in route_pages])[:30]}))
     trust_sensitive = site_fingerprint["regulatory_sensitivity"] != "standard" or site_fingerprint["primary_archetype"] == "saas_app_membership"
-    has_trust = any(clean_path(page_evidence_url(page)).lower().startswith(tuple(TRUST_PATHS)) for page in pages)
+    has_trust = any(clean_path(page_evidence_url(page, identity_version=identity_version)).lower().startswith(tuple(TRUST_PATHS)) for page in pages)
     if trust_sensitive and pages and not has_trust:
         fixes.append(make_evidence_fix("missing_trust_pages", "schema", "high" if site_fingerprint["regulatory_sensitivity"] != "standard" else "medium", "Add public trust pages", f"For a {playbook['label']} site, visitors and crawlers need clear trust, legal, contact, and ownership signals.", "Trust pages help buyers, search engines, and AI systems understand who runs the site and whether it is credible.", "Add or expose clear About, Contact, Privacy, Terms, and Security/Trust pages, then link them from the footer.", ["/"], "moderate", "archetype_trust_layer", extra={"current_value": f"No public trust pages (About/Contact/Privacy/Terms) found among {len(pages)} crawled pages.", "source_pages": ["/"]}))
     return fixes
@@ -1622,9 +1626,9 @@ def collapse_sitewide_template_findings(
         return fixes
 
     usable_pages = {
-        key_for(page_evidence_url(page))
+        key_for(page_evidence_url(page, identity_version=identity_version))
         for page in pages
-        if key_for(page_evidence_url(page))
+        if key_for(page_evidence_url(page, identity_version=identity_version))
         and not is_blocked_access_page(page)
         and int_or_zero(page.get("status_code") or page.get("status")) < 400
         and page_is_indexable(page)
@@ -1633,9 +1637,9 @@ def collapse_sitewide_template_findings(
         return fixes
 
     page_lookup = {
-        key_for(page_evidence_url(page)): page
+        key_for(page_evidence_url(page, identity_version=identity_version)): page
         for page in pages
-        if key_for(page_evidence_url(page))
+        if key_for(page_evidence_url(page, identity_version=identity_version))
     }
     output = list(fixes)
     for rule in SITEWIDE_COLLAPSE_RULES:
@@ -1859,9 +1863,9 @@ def filter_orphan_asset_evidence(
         return fix
 
     page_lookup = {
-        key_for(page_evidence_url(page)): page
+        key_for(page_evidence_url(page, identity_version=identity_version)): page
         for page in pages
-        if key_for(page_evidence_url(page))
+        if key_for(page_evidence_url(page, identity_version=identity_version))
     }
     affected = dedupe_strings([
         key_for(url)
@@ -1919,9 +1923,9 @@ def filter_page_level_asset_evidence(
     if rule not in PAGE_LEVEL_HTML_ONLY_RULES:
         return fix
     page_lookup = {
-        key_for(page_evidence_url(page)): page
+        key_for(page_evidence_url(page, identity_version=identity_version)): page
         for page in pages
-        if key_for(page_evidence_url(page))
+        if key_for(page_evidence_url(page, identity_version=identity_version))
     }
     candidates = dedupe_strings([
         key_for(url)
@@ -2052,9 +2056,9 @@ def select_representative_page(
         if key_for(url)
     ]) or ["/"]
     page_lookup = {
-        key_for(page_evidence_url(page)): page
+        key_for(page_evidence_url(page, identity_version=identity_version)): page
         for page in pages
-        if key_for(page_evidence_url(page))
+        if key_for(page_evidence_url(page, identity_version=identity_version))
     }
     original_position = {url: index for index, url in enumerate(affected)}
     ranked = sorted(
@@ -2088,7 +2092,7 @@ HTML_DEPENDENT_RULES = {
     "duplicate_title_query_variants", "duplicate_title_template",
     "missing_meta_description", "empty_meta_description", "malformed_meta_description",
     "meta_description_unusable", "duplicate_meta_description", "missing_h1", "multiple_h1", "schema",
-    "structured_data", "thin_content", "image_alt_text", "missing_image_alt",
+    "structured_data", "thin_content", "image_alt_text", "missing_image_alt", "image_alt_review", "visible_template_content",
 }
 
 
@@ -2098,9 +2102,12 @@ def filter_html_dependent_fix_evidence(fix: dict[str, Any], pages: list[dict[str
     rule = str(fix.get("rule") or "").lower()
     if rule not in HTML_DEPENDENT_RULES:
         return fix
-    lookup = {key_for(page_evidence_url(page)): page for page in pages if key_for(page_evidence_url(page))}
+    lookup = {key_for(url): page for page in pages
+              for url in (page_evidence_url(page, identity_version=identity_version),
+                          page_evidence_url(page, identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION))
+              if key_for(url)}
     affected = dedupe_strings([key_for(url) for url in (fix.get("affected_pages") or [fix.get("page_url") or "/"]) if key_for(url)])
-    usable = [url for url in affected if page_has_usable_html(lookup.get(url, {}))]
+    usable = [url for url in affected if page_has_usable_html(lookup.get(url, {})) and rule_is_applicable(lookup[url], rule)]
     if not usable:
         return None
     return {**fix, "affected_pages": usable, "page_url": usable[0], "page_count": len(usable), "evidence_gate_version": PAGE_EVIDENCE_GATE_VERSION}
@@ -3072,8 +3079,9 @@ def important_failed_pages(group: list[dict[str, Any]], site_fingerprint: dict[s
     return False
 
 
-def page_evidence_url(page: dict[str, Any]) -> str:
-    return str(page.get("url") or page.get("final_url") or page.get("path") or page.get("page_url") or "/")
+def page_evidence_url(page: dict[str, Any], *, identity_version: str = "") -> str:
+    from .url_evidence import page_content_evidence_url
+    return page_content_evidence_url(page, identity_version=identity_version)
 
 
 def page_is_indexable(page: dict[str, Any]) -> bool:
@@ -3186,6 +3194,8 @@ def normalize_steps(fix: dict[str, Any]) -> list[str] | None:
 def default_steps(category: str, rule: str, difficulty: str, recommended_value: str) -> list[str]:
     text = f"{category} {rule}"
 
+    if rule == "image_alt_review":
+        return ["Review each image in its page context.", "Confirm whether it conveys information, operates a control, or is decorative.", "Add suitable text for informative or functional images; keep decorative images intentionally empty.", "Publish any applicable changes and run FixList again."]
     if category == "image_alt_text" or re.search(r"image_alt|missing_alt|alt_text", rule, re.I):
         return [
             "Open one affected page and identify which meaningful images are missing alt text.",
@@ -3441,7 +3451,7 @@ def dedupe_pages(pages: list[dict[str, Any]], *, scan_origin: str = "", identity
     seen: set[str] = set()
     output = []
     for page in pages:
-        key = key_for(page_evidence_url(page))
+        key = key_for(page_evidence_url(page, identity_version=identity_version))
         if not key or key in seen:
             continue
         seen.add(key)

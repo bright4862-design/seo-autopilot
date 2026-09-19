@@ -291,10 +291,19 @@ def build_coverage_context(fix: dict[str, Any], pages: list[dict[str, Any]], *, 
     identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
     key_for = repair_evidence_key_function(legacy_key=_path, **identity_context)
     affected = set(_affected_pages(fix, **identity_context))
+    def observation_keys(page):
+        keys = [key_for(_page_url(page))]
+        evidence = page.get("redirect_fetch_evidence")
+        if (identity_version and isinstance(evidence, dict)
+                and evidence.get("html_parse_ok") is True
+                and 200 <= int(evidence.get("final_status") or 0) < 300
+                and evidence.get("final_url") == page.get("final_url") and _usable_html(page)):
+            keys.append(key_for(evidence["final_url"]))
+        return [key for key in keys if key]
+
     page_lookup = {
-        key_for(_page_url(page)): page
-        for page in pages
-        if isinstance(page, dict) and key_for(_page_url(page))
+        key: page for page in pages if isinstance(page, dict)
+        for key in observation_keys(page)
     }
     matched_affected = [page_lookup[key] for key in affected if key in page_lookup]
 
@@ -314,8 +323,8 @@ def build_coverage_context(fix: dict[str, Any], pages: list[dict[str, Any]], *, 
     # The numerator restricted to the denominator's own universe. Without this
     # intersection the two counts describe different sets of URLs and their
     # quotient is not a coverage figure at all.
-    eligible_keys = {key_for(_page_url(page)) for page in eligible}
-    affected_eligible_pages = [page for page in matched_affected if key_for(_page_url(page)) in eligible_keys]
+    eligible_keys = {key for page in eligible for key in observation_keys(page)}
+    affected_eligible_pages = [page_lookup[key] for key in affected if key in eligible_keys and key in page_lookup]
 
     states = [_indexability_state(page) for page in affected_eligible_pages]
     indexable_affected = states.count("indexable")

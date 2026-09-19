@@ -1,5 +1,7 @@
 # Full scanner blueprint: evidence, prioritization, coverage and release
 
+> Release sequencing update (2026-09-19): the user explicitly authorized “once stage one is ready deploy and publish.” Complete and review all stage-one behavior before merging and publishing exact source. Earlier references to waiting for the entire blueprint are superseded for this first release. B06–B24 and the genuine 30-site full-blueprint gate remain open; synthetic stage-one acceptance does not complete them. No further general implementation or deployment approval is required.
+
 Status: written design approved by the user on 2026-09-19 with the explicit instruction "Approved—start implementation". Implementation is in progress; no deployment is claimed by this document.
 
 ## Authority and outcome

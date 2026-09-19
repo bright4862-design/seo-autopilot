@@ -1,3 +1,5 @@
+import pytest
+
 from app.extract import extract_page
 from app.review import (
     GROUPED_RECOMMENDATION_EVIDENCE_VERSION,
@@ -115,43 +117,22 @@ def test_durable_worker_activates_published_identity_before_review_and_grouping(
     assert fix["evidence_url_identity_version"] == PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
 
 
-def test_real_python_canonical_evidence_survives_all_signed_readers():
+@pytest.mark.parametrize("routes", [
+    ["/x", "/x/", "/X"],
+    ["/x", "/x/", "/X", "/a%2Fb", "/a/b", "/a/../x", "/café", "/caf%C3%A9",
+     "/q?b=2&a=1&a=0", "/q?a=0&a=1&b=2", "https://foreign.example/x"],
+])
+def test_real_python_canonical_evidence_survives_all_signed_readers(routes):
     import json
     from pathlib import Path
     import subprocess
     from app.scan_job import build_local_review
 
-    pages = [page("https://example.com" + path, "") for path in ["/x", "/x/", "/X"]]
+    pages = [page(path if path.startswith("https:") else "https://example.com" + path, "") for path in routes]
     scan = {"website_url": "https://example.com", "pages": pages,
             "crawl_scope": {"requested_origin": "https://example.com"}}
     review = build_local_review(scan)
-    script = r'''
-      import assert from "node:assert/strict";
-      import {readFileSync} from "node:fs";
-      import {webcrypto} from "node:crypto";
-      import {buildAuthoritySnapshot,buildPersistedAuthoritySnapshot} from "./base44/functions/persistDurableScanAuthorityV6/authoritySnapshot.js";
-      import {authorityRowsFromSnapshot} from "./base44/functions/persistDurableScanAuthorityV6/authorityRows.js";
-      import {authoritySnapshotFromRows,buildCustomerProjection} from "./base44/functions/getCustomerScanResultV6/projection.js";
-      import {authoritySnapshotFromRows as grokSnapshot} from "./base44/functions/grokChat/authoritySnapshot.js";
-      import {createAuthoritySeal,verifyAuthoritySeal} from "./base44/functions/persistDurableScanAuthorityV6/authoritySeal.js";
-      const {scan,review}=JSON.parse(readFileSync(0,"utf8"));
-      const snapshot=buildAuthoritySnapshot({scan,review,identity:{scan_id:"s",project_id:"p",normalized_domain:"example.com"},
-        userId:"u",now:"2026-09-19T00:00:00.000Z",identityVersion:"evidence_url_identity_v2_published_route"});
-      const proof=await createAuthoritySeal(snapshot,"test-secret",webcrypto);
-      const rows=authorityRowsFromSnapshot(snapshot,{fixListId:"f",ownerUserId:"u",proof});
-      const data={run:{...rows.scanRun,id:"s",project_id:"p"},fixList:{...rows.fixList,id:"f"},fixItems:rows.fixItems,userId:"u"};
-      for(const [name,result] of [["writer",buildPersistedAuthoritySnapshot(data)],["customer",authoritySnapshotFromRows(data)],["grok",grokSnapshot({...data,scan:data.run})]]) {
-        assert.deepEqual(result,snapshot,name);
-        assert.equal(await verifyAuthoritySeal(result,"test-secret",proof,webcrypto),true,name);
-      }
-      const [fix]=buildCustomerProjection({...data,fullAccess:true,authorityVerified:true}).fixItems.filter(f=>f.category==="meta_description");
-      assert.equal(fix.page_count,3);
-      assert.equal(fix.raw_finding.repair_evidence_groups[0].count,3);
-      assert.equal(fix.priority_context.evidence_url_identity_version,"evidence_url_identity_v2_published_route");
-      assert.equal(fix.priority_context.affected_observed,3);
-      assert.equal(fix.priority_context.affected_eligible,3);
-    '''
-    completed = subprocess.run(["node", "--input-type=module", "-e", script],
-                               input=json.dumps({"scan": scan, "review": review}), text=True,
+    completed = subprocess.run(["node", "tests/helpers/assertPublishedEvidenceOutput.mjs"],
+                               input=json.dumps({"scan": scan, "review": review, "expectedUrls": [p["url"] for p in pages]}), text=True,
                                capture_output=True, cwd=Path(__file__).resolve().parents[2], timeout=30)
     assert completed.returncode == 0, completed.stderr

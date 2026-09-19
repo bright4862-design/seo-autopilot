@@ -28,7 +28,8 @@ import {
   customerRedirectEvidenceRows,
   customerRepairObservationRows,
 } from "@/lib/repairCardModel";
-import { evidenceLink } from "@/lib/evidenceUrl";
+import { evidenceLink, evidenceIdentityOptions } from "@/lib/evidenceUrl";
+import { serializeAffectedUrlsCsv, serializeAffectedUrlsText } from "@/lib/affectedUrlExport";
 import { buildScanHandoff, scanHandoffFilename, serializeScanHandoff } from "@/lib/scanHandoff";
 import { buildCustomerRepairPlan } from "@/lib/customerRepairPlan";
 import { scanCoverageDisclosure } from "@/lib/scanCoverageDisclosure";
@@ -1260,7 +1261,7 @@ function CustomerRepairCard({ card = {}, websiteUrl = "" }) {
               */}
               <ul className="mt-2 max-h-64 space-y-1.5 overflow-y-auto pr-1 text-[12px] text-ink-muted">
                 {pages.map((page) => {
-                  const pageLink = evidenceLink(page, websiteUrl);
+                  const pageLink = evidenceLink(page, websiteUrl, evidenceIdentityOptions(card));
                   return (
                     <li key={page} className="break-all">
                       {pageLink.isLinkable ? (
@@ -1712,7 +1713,7 @@ function FixRow({ item, cms, embedded = false, suggestion: suppliedSuggestion })
 
   async function copyAffectedUrls() {
     try {
-      const text = item.affectedPages.map((page) => toAbsolutePageUrl(page, item.websiteUrl)).join("\n");
+      const text = serializeAffectedUrlsText(item);
       await navigator.clipboard.writeText(text);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
@@ -1722,17 +1723,7 @@ function FixRow({ item, cms, embedded = false, suggestion: suppliedSuggestion })
   }
 
   function downloadAffectedUrls() {
-    const rows = item.affectedPages.map((page) => [
-      toAbsolutePageUrl(page, item.websiteUrl),
-      item.title,
-      item.rule,
-      item.priority,
-      item.templateFamily,
-    ]);
-    const csv = [
-      ["affected_url", "finding", "rule", "priority", "template_family"],
-      ...rows,
-    ].map((row) => row.map(csvCell).join(",")).join("\n");
+    const csv = serializeAffectedUrlsCsv(item);
     const host = safeHostname(item.websiteUrl) || "website";
     const rule = String(item.rule || "finding").replace(/[^a-z0-9_-]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase();
     downloadTextFile(csv, `fixlist-${host}-${rule || "finding"}-urls.csv`, "text/csv;charset=utf-8");
@@ -1840,7 +1831,7 @@ function FixRow({ item, cms, embedded = false, suggestion: suppliedSuggestion })
               {shownPages.length > 0 ? (
                 <div className="mt-3 space-y-2">
                   {shownPages.map((page, index) => (
-                    <AffectedPage key={`${page}-${index}`} page={page} websiteUrl={item.websiteUrl} index={index} />
+                    <AffectedPage key={`${page}-${index}`} page={page} websiteUrl={item.websiteUrl} identityOptions={evidenceIdentityOptions(item)} index={index} />
                   ))}
                   {extraCount > 0 ? (
                     <button type="button" onClick={() => setShowAllPages(true)} className="mt-1 text-[13px] font-medium text-ink underline decoration-hairline underline-offset-4">
@@ -1899,10 +1890,10 @@ function NoScanState({ onScan }) {
   );
 }
 
-function AffectedPage({ page, websiteUrl, index }) {
+function AffectedPage({ page, websiteUrl, identityOptions, index }) {
   // One shared contract decides how a page reads and whether it may be a link,
   // so a card, a modal and an export cannot describe the same page differently.
-  const link = evidenceLink(page, websiteUrl);
+  const link = evidenceLink(page, websiteUrl, identityOptions);
   const host = formatPageLabel(link.href || page);
   const showHost = link.isLinkable && cleanString(host) !== cleanString(link.label);
 
@@ -1956,21 +1947,6 @@ function isUsableAffectedPageUrl(value) {
   if (/^\/cdn-cgi\//i.test(pathname)) return false;
   if (/\.(?:avif|bmp|css|csv|doc|docx|eot|gif|ico|jpe?g|js|json|map|mjs|mp3|mp4|mpeg|mov|ogg|otf|pdf|png|ppt|pptx|svg|tiff?|ttf|wav|webm|webp|woff2?|xls|xlsx|xml|zip)$/i.test(pathname)) return false;
   return raw.startsWith("/") || /^https?:\/\//i.test(raw);
-}
-
-function toAbsolutePageUrl(page, websiteUrl) {
-  const raw = String(page || "").trim();
-  if (!raw) return "";
-  if (isFullUrl(raw)) return raw;
-  try {
-    return new URL(raw, websiteUrl || "https://fixlist.invalid").toString();
-  } catch {
-    return raw;
-  }
-}
-
-function csvCell(value) {
-  return `"${String(value ?? "").replace(/"/g, '""')}"`;
 }
 
 function downloadTextFile(content, filename, type) {

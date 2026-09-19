@@ -3,9 +3,10 @@ from __future__ import annotations
 import re
 from collections import Counter
 from urllib.parse import urlparse
+from .metadata_title_evidence import relative_evidence_url
 
 
-INDEXABILITY_QUALITY_VERSION = "indexability_quality_v1"
+INDEXABILITY_QUALITY_VERSION = "indexability_quality_v3_published_evidence"
 SOFT_404_MAX_WORDS = 250
 SOFT_404_THIN_WORDS = 120
 
@@ -77,6 +78,14 @@ def _soft_404_signals(page: dict) -> list[str]:
 
 def annotate_indexability_quality(page: dict) -> dict:
     original_state = str(page.get("indexability_state") or "")
+    if (
+        page.get("indexability_quality_version") == INDEXABILITY_QUALITY_VERSION
+        and original_state in {"Canonicalized", "Soft 404"}
+        and page.get("indexability_state_before_quality")
+    ):
+        # Re-running the boundary must assess the original extraction state,
+        # not mistake this annotator's own classification for new evidence.
+        original_state = str(page["indexability_state_before_quality"])
     page["indexability_quality_version"] = INDEXABILITY_QUALITY_VERSION
     page["indexability_state_before_quality"] = original_state
 
@@ -124,9 +133,10 @@ def annotate_indexability_quality(page: dict) -> dict:
     return page
 
 
-def build_indexability_quality_findings(page: dict, create_finding) -> list[dict]:
+def build_indexability_quality_findings(page: dict, create_finding, *, scan_origin: str = "", identity_version: str = "") -> list[dict]:
     findings: list[dict] = []
-    path = str(page.get("path") or "/")
+    path = (relative_evidence_url(page, scan_origin=scan_origin, identity_version=identity_version)
+            if identity_version else str(page.get("path") or "/"))
     sources = set(page.get("discovered_from") or [])
 
     if page.get("soft_404_suspected"):
@@ -245,7 +255,10 @@ def build_indexability_quality_findings(page: dict, create_finding) -> list[dict
     return findings
 
 
-def summarize_indexability_quality(pages: list[dict]) -> dict:
+def summarize_indexability_quality(pages: list[dict], *, scan_origin: str = "", identity_version: str = "") -> dict:
+    def evidence_url(page):
+        return (relative_evidence_url(page, scan_origin=scan_origin, identity_version=identity_version)
+                if identity_version else page.get("path") or page.get("url"))
     state_counts = Counter(str(page.get("indexability_state") or "Unknown") for page in pages)
     conflict_counts = Counter(
         conflict
@@ -261,11 +274,11 @@ def summarize_indexability_quality(pages: list[dict]) -> dict:
         "canonicalized_count": len(canonicalized_pages),
         "conflict_counts": dict(sorted(conflict_counts.items())),
         "representative_soft_404s": [
-            page.get("path") or page.get("url") for page in soft_404_pages[:20]
+            evidence_url(page) for page in soft_404_pages[:20]
         ],
         "representative_conflicts": [
             {
-                "page": page.get("path") or page.get("url"),
+                "page": evidence_url(page),
                 "conflicts": list(page.get("indexability_conflicts") or []),
             }
             for page in pages

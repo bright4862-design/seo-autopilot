@@ -18,7 +18,7 @@ from typing import Any
 from .repair_coverage import repair_evidence_key_function
 from .review_primitives import clean_path, dedupe_strings, has_any, int_or_zero
 
-FAILURE_EVIDENCE_DEDUP_VERSION = "failure_evidence_dedup_v2_group_covered_page_rows"
+FAILURE_EVIDENCE_DEDUP_VERSION = "failure_evidence_dedup_v3_image_certainty_actions"
 
 GENERATOR_GROUP_SOURCES = ("page_pattern:", "scanner_verified_failed_pages:", "archetype_")
 
@@ -56,6 +56,11 @@ def fix_dedup_class(fix: dict[str, Any]) -> str:
     remediation = failure_remediation_family(fix)
     if remediation:
         return remediation
+    # Reviewing an image's purpose and repairing an evidenced meaningful image
+    # are separate actions even when their pages and display category overlap.
+    # Both group/group and group/singleton suppression use this identity.
+    if str(fix.get("rule") or "").lower() == "image_alt_review":
+        return "image_alt_review"
     text = " ".join(str(fix.get(k, "")) for k in ["rule", "category", "issue_title", "title"]).lower()
     if "canonical" in text:
         return "canonical"

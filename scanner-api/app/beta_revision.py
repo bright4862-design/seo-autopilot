@@ -72,6 +72,8 @@ def collect_component_versions() -> dict[str, str]:
     Imports are local so freeze tooling can call this without constructing the
     FastAPI app or paying for heavier imports at module load time.
     """
+    from .accepted_content_evidence import IMAGE_APPLICABILITY_VERSION, VISIBLE_TEMPLATE_VERSION
+    from .search_applicability import SEARCH_APPLICABILITY_VERSION
     from .geo_readiness import VERSION as GEO_READINESS_VERSION
     from .geo_evidence import VERSION as GEO_EVIDENCE_VERSION
     from .artifact_filter import ARTIFACT_FILTER_VERSION
@@ -122,6 +124,9 @@ def collect_component_versions() -> dict[str, str]:
     from .trust_discovery import TRUST_DISCOVERY_VERSION, TRUST_FINDING_GATE_VERSION
 
     components = {
+        "image_alt_applicability_version": IMAGE_APPLICABILITY_VERSION,
+        "visible_template_evidence_version": VISIBLE_TEMPLATE_VERSION,
+        "search_applicability_version": SEARCH_APPLICABILITY_VERSION,
         "geo_readiness_version": GEO_READINESS_VERSION,
         "geo_evidence_version": GEO_EVIDENCE_VERSION,
         "scanner_version": VERSION,

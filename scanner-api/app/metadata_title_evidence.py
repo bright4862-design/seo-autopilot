@@ -115,8 +115,20 @@ def describe_meta_description(soup, html: str, status_code: int, content_type: s
     }
 
 
-def relative_evidence_url(page: dict) -> str:
+def relative_evidence_url(page: dict, *, scan_origin: str = "", identity_version: str = "") -> str:
+    """Keep the historical relative formatter; current producers use exact keys.
+
+    The current raw evidence contract must retain the observed origin as well as
+    route text. Reducing an observed www/foreign URL to a relative path would
+    later attach it to the requested origin. URL parsers also erase empty query
+    delimiters and semicolon parameters, so current routes use the shared key.
+    """
     value = str(page.get("final_url") or page.get("url") or page.get("path") or "/")
+    if identity_version:
+        from .repair_coverage import repair_evidence_key_function
+        from .url_evidence import page_content_evidence_url
+        value = page_content_evidence_url(page, identity_version=identity_version)
+        return repair_evidence_key_function(scan_origin=scan_origin, identity_version=identity_version)(value)
     parsed = urlparse(value)
     path = parsed.path or str(page.get("path") or "/")
     return f"{path}?{parsed.query}" if parsed.query else path

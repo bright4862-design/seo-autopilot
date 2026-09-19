@@ -1,4 +1,4 @@
-import { evidenceLink, resolveEvidenceUrl } from "./evidenceUrl.js";
+import { evidenceLink, resolveEvidenceUrl, evidenceIdentityOptions } from "./evidenceUrl.js";
 
 const VERSION = "geo_readiness_v1_experimental";
 const ADAPTER_VERSION = "geo_evidence_v1";
@@ -8,7 +8,7 @@ const DETAIL_CHECKS = new Set(["search_policy", "indexability", "template_integr
 const REPAIR_RULES = Object.freeze({
   search_policy: new Set(["oai_searchbot_blocked", "oai_searchbot_policy", "search_policy", "geo_search_policy"]),
   indexability: new Set(["sitemap_indexability_conflict", "noindex_sitemap_conflict", "geo_indexability"]),
-  template_integrity: new Set(["broken_location_template_content", "template_token", "template_integrity", "unresolved_placeholder", "geo_template_integrity"]),
+  template_integrity: new Set(["visible_template_content", "broken_location_template_content", "template_token", "template_integrity", "unresolved_placeholder", "geo_template_integrity"]),
 });
 
 const clean = (value) => typeof value === "string" ? value.trim() : "";
@@ -41,8 +41,9 @@ function statusLabel(status) {
   return "Experimental readiness score";
 }
 
-function normalizedUrl(value, origin) {
-  const resolved = resolveEvidenceUrl(value, origin);
+function normalizedUrl(value, origin, options) {
+  const resolved = resolveEvidenceUrl(value, origin, options);
+  if (options?.identityVersion) return resolved;
   if (!resolved) return "";
   try {
     const url = new URL(resolved);
@@ -53,12 +54,12 @@ function normalizedUrl(value, origin) {
   }
 }
 
-function findingUrls(finding, siteOrigin) {
+function findingUrls(finding, siteOrigin, options) {
   if (!Array.isArray(finding?.evidence_samples)) return [];
   const seen = new Set();
   return finding.evidence_samples.flatMap((sample) => {
-    const link = evidenceLink(sample?.page_url, siteOrigin);
-    const key = normalizedUrl(link.href, siteOrigin);
+    const link = evidenceLink(sample?.page_url, siteOrigin, options);
+    const key = normalizedUrl(link.href, siteOrigin, options);
     if (!key || seen.has(key)) return [];
     seen.add(key);
     return [link];
@@ -68,13 +69,14 @@ function findingUrls(finding, siteOrigin) {
 function matchingCard(finding, cards, siteOrigin) {
   const supported = REPAIR_RULES[finding.check_id];
   if (!supported) return null;
-  const geoUrls = new Set(findingUrls(finding, siteOrigin).map((link) => normalizedUrl(link.href, siteOrigin)));
-  if (geoUrls.size === 0) return null;
   return cards.find((card) => {
+    const options = evidenceIdentityOptions(card);
+    const geoUrls = new Set(findingUrls(finding, siteOrigin, options).map(link => normalizedUrl(link.href, siteOrigin, options)));
+    if (geoUrls.size === 0) return false;
     const identities = [card?.rule, card?.rootCauseId, card?.root_cause_id].map((value) => clean(value).toLowerCase());
     if (!identities.some((identity) => supported.has(identity))) return false;
     const pages = Array.isArray(card?.evidence?.affectedPages) ? card.evidence.affectedPages : [];
-    return pages.some((page) => geoUrls.has(normalizedUrl(page, siteOrigin)));
+    return pages.some((page) => geoUrls.has(normalizedUrl(page, siteOrigin, options)));
   }) || null;
 }
 

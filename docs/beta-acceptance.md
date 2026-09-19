@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Candidate fingerprint | `5fb87bf7869c51c2` |
+| Candidate fingerprint | `01ebe8e90df1e6bd` |
 | Classifier | `archetype_classifier_v12_locale_normalized_structural_routes` |
 | Freeze source of truth | `data/beta-crawler-revision.json` (`status: "candidate"`) |
 | Deployed commit | **not recorded** (`git_commit: ""`) |
@@ -15,12 +15,14 @@
 The v8 record below is **historical** and does **not** cover this candidate. It
 accepted fingerprint `430813f2b15afa8f` with classifier
 `archetype_classifier_v8_platform_product_routes`. The candidate code is
-fingerprint `5fb87bf7869c51c2` with classifier
+fingerprint `01ebe8e90df1e6bd` with classifier
 `archetype_classifier_v12_locale_normalized_structural_routes`, URL frontier policy
 `url_frontier_policy_v1_conservative_trap_guard`, and review calibration
-`review_evidence_calibration_v6_health_score_v2`.
+`review_evidence_calibration_v7_content_applicability`.
 
-The current `5fb87bf7869c51c2` local candidate preserves published route identity through review, grouped repair evidence, signed counts, persistence and customer readers. It adds the internal `standard_review_snapshot_hmac_identity_v1` seal while retaining public V6 routes, GEO capability and the Standard 150 cap. Historical authority and preview proofs retain their original serialization. Local implementation and regression checks are recorded in `docs/full-blueprint-progress.md`; full-blueprint acceptance, exact-SHA CI, deployment verification and live acceptance remain pending.
+The current `01ebe8e90df1e6bd` local candidate preserves published route identity through review, grouped repair evidence, signed counts, persistence and customer readers. It adds the internal `standard_review_snapshot_hmac_identity_v1` seal while retaining public V6 routes, GEO capability and the Standard 150 cap. Historical authority and preview proofs retain their original serialization. Local implementation and regression checks are recorded in `docs/full-blueprint-progress.md`; full-blueprint acceptance, exact-SHA CI, deployment verification and live acceptance remain pending.
+
+Stage-one sequencing is authorized by the user: deploy after complete stage-one acceptance. The identity-only source-sharing checkpoint `5fb87bf7869c51c2` is superseded and was not deployed. The current candidate also adds image applicability, general visible-template evidence, search-metadata relevance and the labelled 14-case synthetic corpus. These do not satisfy the later genuine 30-site or full-blueprint gate.
 
 The historical `47793ce37ca20523` candidate added experimental GEO readiness from accepted retained HTML, independently validated and signed results, paid/preview-safe presentation, and blueprint P0 corrections for published URLs and absent image alt attributes. See `docs/geo-release-acceptance.md` for its local validation, sampling sensitivity and limits. It is not acceptance evidence for the current candidate.
 

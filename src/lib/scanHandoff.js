@@ -1,4 +1,4 @@
-import { evidenceLink } from "./evidenceUrl.js";
+import { evidenceLink, evidenceIdentityOptions } from "./evidenceUrl.js";
 import { buildCustomerRepairPlan } from "./customerRepairPlan.js";
 import { scanCoverageDisclosure } from "./scanCoverageDisclosure.js";
 import { buildGeoReadinessPresentation } from "./geoReadinessPresentation.js";
@@ -76,13 +76,13 @@ function redirectEvidence(values) {
  * linkable falls back to its display label rather than being dropped, because
  * the count and the sample have to stay consistent with each other.
  */
-function examplePages(pages, siteOrigin) {
+function examplePages(pages, siteOrigin, options) {
   if (!Array.isArray(pages)) return [];
   const seen = new Set();
   const output = [];
   for (const page of pages) {
     if (output.length >= MAX_EXAMPLE_PAGES) break;
-    const link = evidenceLink(page, siteOrigin);
+    const link = evidenceLink(page, siteOrigin, options);
     const value = link.href || link.label;
     if (!value || seen.has(value)) continue;
     seen.add(value);
@@ -94,7 +94,7 @@ function examplePages(pages, siteOrigin) {
 function handoffFix(card = {}, index = 0, siteOrigin = "") {
   const evidence = card.evidence || {};
   const affected = Array.isArray(evidence.affectedPages) ? evidence.affectedPages : [];
-  const samples = examplePages(affected, siteOrigin);
+  const samples = examplePages(affected, siteOrigin, evidenceIdentityOptions(card));
   const pagesAffected = positiveInt(evidence.pageCount) || affected.length;
   const redirects = redirectEvidence(evidence.redirectEvidence);
   const observations = Array.isArray(evidence.repairObservationSamples)

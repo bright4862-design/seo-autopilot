@@ -12,6 +12,8 @@
  * app -- a relative path must never appear to belong to getfixlist.com.
  */
 
+import { publishedEvidenceUrlKey, PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION } from "../../base44/functions/persistDurableScanAuthorityV6/evidenceUrlIdentity.js";
+
 const HTTP_URL = /^https?:\/\//i;
 // The only schemes a customer report may turn into a link. An allowlist on the
 // parsed protocol is the single guard: `new URL("javascript:...", origin)`
@@ -34,7 +36,16 @@ export function isAbsoluteHttpUrl(value) {
  * customer clicks through, so a `javascript:` payload smuggled into evidence
  * must not survive as an anchor href.
  */
-export function resolveEvidenceUrl(page, siteOrigin) {
+export function evidenceIdentityOptions(item = {}) {
+  return { identityVersion: item.evidence?.identityVersion || item.evidence_url_identity_version
+    || item.original?.evidence_url_identity_version || "" };
+}
+
+export function resolveEvidenceUrl(page, siteOrigin, { identityVersion = "" } = {}) {
+  if (identityVersion) {
+    return identityVersion === PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
+      ? publishedEvidenceUrlKey(page, { scanOrigin: siteOrigin }) : "";
+  }
   const raw = clean(page);
   if (!raw) return "";
   const origin = clean(siteOrigin);
@@ -49,9 +60,14 @@ export function resolveEvidenceUrl(page, siteOrigin) {
 }
 
 /** The path a page occupies, for display beneath its label. */
-export function evidencePath(page) {
+export function evidencePath(page, { identityVersion = "" } = {}) {
   const raw = clean(page);
   if (!raw) return "";
+  if (identityVersion) {
+    // Presentation must retain the route text authenticated by the new seal.
+    // Navigation is still subject to the browser's own URL handling.
+    return raw.replace(/^https?:\/\/[^/?#]+/i, "").split("#")[0] || "/";
+  }
   try {
     const url = new URL(raw);
     return `${url.pathname}${url.search}` || "/";
@@ -67,15 +83,15 @@ export function evidencePath(page) {
  * still shows the path it lives at. Everything else reads as its own path,
  * which is what someone editing the site actually recognises.
  */
-export function evidenceDisplayLabel(page) {
-  const path = evidencePath(page);
+export function evidenceDisplayLabel(page, options) {
+  const path = evidencePath(page, options);
   if (!path || path === "/") return "Homepage (/)";
   return path;
 }
 
 /** An accessible name that says what opening the link will do. */
-export function evidenceLinkName(page) {
-  return `Open affected page: ${evidenceDisplayLabel(page)}`;
+export function evidenceLinkName(page, options) {
+  return `Open affected page: ${evidenceDisplayLabel(page, options)}`;
 }
 
 /**
@@ -84,14 +100,14 @@ export function evidenceLinkName(page) {
  * `href` is empty whenever the page must not be clickable, so a caller renders
  * a link only when the contract says one is safe.
  */
-export function evidenceLink(page, siteOrigin) {
-  const href = resolveEvidenceUrl(page, siteOrigin);
+export function evidenceLink(page, siteOrigin, options) {
+  const href = resolveEvidenceUrl(page, siteOrigin, options);
   return {
     href,
-    label: evidenceDisplayLabel(href || page),
-    path: evidencePath(href || page),
+    label: evidenceDisplayLabel(href || page, options),
+    path: evidencePath(href || page, options),
     title: href || clean(page),
-    linkName: evidenceLinkName(href || page),
+    linkName: evidenceLinkName(href || page, options),
     isLinkable: Boolean(href),
   };
 }

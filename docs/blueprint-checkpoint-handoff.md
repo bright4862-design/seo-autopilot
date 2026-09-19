@@ -1,8 +1,10 @@
 # Blueprint implementation checkpoint
 
-This is a source-sharing checkpoint requested by the user, not a completed stage, accepted release, merge or deployment.
+> Release sequencing update (2026-09-19): the user explicitly authorized “once stage one is ready deploy and publish.” Complete and review all stage-one behavior before merging and publishing exact source. Earlier references to waiting for the entire blueprint are superseded for this first release. B06–B24 and the genuine 30-site full-blueprint gate remain open; synthetic stage-one acceptance does not complete them. No further general implementation or deployment approval is required.
 
-## Resume point
+This document preserves the original source-sharing checkpoint and its decisions. The receiving work agent has now completed stage-one implementation and the independent review; four Important findings have been corrected and the final local source gate passed (1,798 scanner and 1,479 frontend tests). Exact-source CI, merge and production cutover remain. See [current acceptance evidence](stage-one-evidence-acceptance.md) and [independent review](stage-one-independent-review.md) for current status. No deployment is claimed.
+
+## Original source-sharing resume point
 
 - Branch: `codex/full-blueprint-20260919`.
 - Baseline: `7a744a501416b1b9feac462511071fc9f08e1ba1`.
@@ -49,7 +51,7 @@ The pinned `ada-url==1.32.0` official wheels executed all 73 shared-identity/leg
 - Store new metadata in existing raw evidence and authenticate existing count columns. Missing persisted metadata blocks re-signing.
 - Move the real Python-to-all-readers integration test forward from Task 4 because handbuilt fixtures missed canonical field loss. This test requires Node on PATH.
 
-## Next work and known checks
+## Checks identified at the original checkpoint
 
 Finish the identity plan's persisted customer/card/PDF/JSON/CSV export checks, then full source verification and its independent whole-branch review. Use actual producer and consumer code, not a parallel serializer in tests.
 
@@ -63,4 +65,4 @@ Candidate fingerprint `5fb87bf7869c51c2` is explicitly a candidate, not frozen/a
 
 The genuine 30-site baseline/candidate replay corpus is still missing. Historical summary counts are not substitute acceptance evidence. Base44 synchronization and app-level authentication previously failed and must be revalidated at release time.
 
-Do not deploy merely because stage 1 or this checkpoint passes. The approved release gate requires complete applicable blueprint acceptance, exact-source CI, named schema parity and verified Base44/worker activation. Preserve the 150-page/security limits, existing GEO, historical proofs and preview privacy. Do not disconnect the repository, rotate secrets, broadly push schemas or publish a stale snapshot.
+The authorized first release requires complete stage-one source acceptance, exact-source CI, named schema parity, controlled cutover and verified Base44/worker activation. Live stage-one acceptance is required before recording the milestone as released and accepted. Remaining full-blueprint and 30-site requirements are not claimed by this release. Preserve the 150-page/security limits, existing GEO, historical proofs and preview privacy. Do not disconnect the repository, rotate secrets, broadly push schemas or publish a stale snapshot.

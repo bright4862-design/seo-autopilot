@@ -1,5 +1,7 @@
 # Full blueprint progress
 
+> Release sequencing update (2026-09-19): the user explicitly authorized “once stage one is ready deploy and publish.” Complete and review all stage-one behavior before merging and publishing exact source. Earlier references to waiting for the entire blueprint are superseded for this first release. B06–B24 and the genuine 30-site full-blueprint gate remain open; synthetic stage-one acceptance does not complete them. No further general implementation or deployment approval is required.
+
 Goal: build and deploy the complete applicable user-supplied scanner blueprint.
 
 ## 2026-09-19 baseline and design
@@ -124,3 +126,9 @@ The user explicitly approved the written design: **“Approved—start implement
 - The latest full pre-checkpoint gate passed **1,672 scanner tests, 18 intentional skips, 718 dependency warnings; 1,459 frontend tests, zero failures/skips**, plus package closure and generated-contract checks. Two subsequent regressions exposed mutable customer status in chat reconstruction and unknown-seal fallback in persisted writing; both failed before their fixes and then passed in a 32-test authority/historical set. The checkpoint gate reruns the complete suites.
 - Pinned `ada-url==1.32.0` installed from official PyPI wheels and executed all **73 identity/legacy checks** on both Linux arm64 and Linux amd64 (the latter under Docker emulation). Tests used read-only source, disabled networking and no credentials. The amd64 official Python 3.12-slim manifest was `sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9`.
 - Candidate fingerprint `5fb87bf7869c51c2` is explicitly marked candidate, not frozen/accepted or deployed; prior fingerprint `47793ce37ca20523` remains supported for historical reading. Export-path verification and independent review remain open, as do the other blueprint requirements and deployment.
+
+## Work-agent stage-one candidate (2026-09-19)
+
+Recovered exact checkpoint `a51fa796` from GitHub, preserving Tasks 1–3. Implemented Task 4 through actual rendered consumers and serializers, then integrated B03/B04/B05 and the named synthetic acceptance runner. Details and explicit remaining gates: `docs/stage-one-evidence-acceptance.md`.
+
+Fresh full verification: 1,767 scanner tests passed (18 intentional skips), 1,479 frontend tests passed, root Python gate/lint/typecheck/build/package/generated/freeze checks passed. Candidate fingerprint `01ebe8e90df1e6bd` remains unaccepted. Independent review subsequently found four Important issues, now corrected with reproducing tests. Final source gate: 1,798 scanner tests passed (18 intentional skips), 1,479 frontend tests passed, all source checks green. Exact-source CI, merge and production verification are next. No full-blueprint or real 30-site acceptance is claimed.

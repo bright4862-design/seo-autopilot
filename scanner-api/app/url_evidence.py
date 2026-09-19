@@ -6,6 +6,33 @@ from urllib.parse import urlparse
 URL_EVIDENCE_VERSION = "verified_final_url_v1"
 
 
+def verified_redirect_content_url(page: dict[str, Any]) -> str:
+    """Return only the successfully parsed, matched redirect destination."""
+    from .page_evidence_gate import page_has_usable_html
+    evidence = page.get("redirect_fetch_evidence")
+    if not isinstance(evidence, dict) or evidence.get("html_parse_ok") is not True:
+        return ""
+    try:
+        status = int(evidence.get("final_status") or 0)
+    except (TypeError, ValueError):
+        return ""
+    final_url = str(evidence.get("final_url") or "")
+    if (200 <= status < 300 and page_has_usable_html(page)
+            and final_url and final_url == page.get("final_url")):
+        return final_url
+    return ""
+
+
+def page_content_evidence_url(page: dict[str, Any], *, identity_version: str = "") -> str:
+    """Share the versioned observed-content choice across producer and review."""
+    from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
+    if identity_version == PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION:
+        destination = verified_redirect_content_url(page)
+        if destination:
+            return destination
+    return str(page.get("url") or page.get("final_url") or page.get("path") or page.get("page_url") or "/")
+
+
 def _page_records(result: dict[str, Any]) -> list[dict[str, Any]]:
     for key in ("crawled_pages", "pages", "scanned_pages", "crawl_pages"):
         value = result.get(key)

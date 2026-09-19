@@ -35,13 +35,24 @@ The isolated lane PRs are review/CI lanes only and must not be merged directly t
 - **B09 — sitemap integrity helper/probe integration.** Same-origin/in-scope unsampled targets reuse the shared scheduler; candidate-universe truncation and access/budget uncertainty remain explicit. Exact source-level sitemap provenance enrichment and any customer-visible promotion still require the serialized producer/customer path.
 - **B16 — URL variants.** Exact path/query/case/reserved-escape/empty-query identity is retained. No implicit sibling-host expansion occurs. Live alternate routes are not declared duplicates without independent equivalence evidence. Redirect meaning is delegated to B08.
 - **B10 — accepted main-content producer seam.** Accepted usable HTML prefers `main`, `role=main`, then `article`; body fallback strips common chrome on a clone. Empty landmarks remain landmarks. Raw customer copy is not retained in the compatibility evidence: the producer emits bounded deterministic SHA-256 five-token shingle fingerprints plus aggregate signature/token/character-count metadata. CodeRabbit independently confirmed the raw-copy exposure is addressed and resolved the review thread. These fingerprints are not described as secret against candidate-text dictionary matching.
+- **B11 partial — truthful sample-scoped reachability provenance.** New versioned producer/consumer contracts retain observed internal-source identity separately from sitemap discovery, compute shortest observed accepted-HTML depth from the exact seed, preserve exact URL spelling/query/case/reserved escapes, fail closed for challenged/unusable sources, and explicitly forbid a sitewide-orphan claim. Raw links now carry semantic navigation context only from `<nav>` or `role=navigation`; CSS class/footer placement alone is not proof. The remaining shared `run_scan` hook still has to feed the observed internal-link graph into final retained assessed pages after the Standard-150 cap.
 - **B17 partial — truthful decoded/inline page weight.** Decoded HTML bytes and inline script/style bytes are separately measured from accepted content. Transfer/wire bytes remain `unknown`; decoded size or zero is never substituted for network transfer bytes.
 
 Shared B07/B09/B16 integration checkpoint: `ca70b7380011e93437fc993185e511a5847618e6`, Stage2IntegrationRun `35469815094`.
 
-### Current exact reviewed code/test checkpoint
+### Current B11 executable checkpoint
 
-Exact code head before the documentation-only refresh: `f904649c9193877181471e1daa01097da0f3062b`.
+B11 producer/consumer code before semantic link-context enrichment reached exact head `1f27022583b3777cfe886632cff3b7db19140334`. FixList CI `35475369510` passed both jobs on that exact head.
+
+Semantic navigation context was then added. Exact head `0b657afad65bf6c9aef883de11fd23093c6a1f90` exposed one compatibility-test mismatch in FixList CI `35475547130`: the pre-existing Stage-1 link observation expected `{href,text}`, while the enriched record intentionally also contains `navigation_presence`. The new B11 suites themselves passed; scanner-api finished **1 failed, 1,920 passed, 18 skipped**, and root scanner regressions were **115 passed**. The compatibility regression was corrected by strengthening the old assertion to include the new explicit field rather than deleting or weakening the test.
+
+Current executable code head after that correction: `c26a0495162359a6af72de0371ea33207e6df505`. FixList CI `35475725233` was still running when this ledger entry was written. Do not treat the current executable head as CI-certified until that exact run succeeds.
+
+Detailed B11 checkpoint: `docs/superpowers/plans/2026-09-20-stage2-b11-reachability-provenance.md`.
+
+### Prior exact reviewed code/test checkpoint
+
+Exact code head before B11 work: `f904649c9193877181471e1daa01097da0f3062b`.
 
 FixList CI `35472567286` passed both jobs on that exact code head:
 
@@ -61,16 +72,16 @@ Fresh independent-review findings corrected before that green run:
 4. zero-hop diagnostic redirect loops remain unverified while concrete loops remain unusable;
 5. access-block/challenge/rate-limit evidence is evaluated before generic HTTP error classification.
 
-CodeRabbit independently confirmed and resolved the currently reported B10 empty-landmark, B10 raw-copy, and B08 access-block threads after the exact-head fixes. A fresh whole-head review request remains a gate for any newly reported issue.
+CodeRabbit independently confirmed and resolved the reported B10 empty-landmark, B10 raw-copy, and B08 access-block threads after the exact-head fixes. A focused B11 review request is now open and remains a gate; the request itself is not a review pass.
 
-Detailed checkpoint: `docs/superpowers/plans/2026-09-19-stage2-serialized-review-hardening.md`.
+Detailed prior hardening checkpoint: `docs/superpowers/plans/2026-09-19-stage2-serialized-review-hardening.md`.
 
 ### Stage 2 still open
 
 Stage 2 is **not source-complete**. Remaining serialized requirements:
 
 - **B10:** the raw-copy review defect is resolved; if duplicate evidence becomes customer-visible, add authenticated Review → authority → persistence → customer/card/handoff/export coverage before closing the displayed behavior.
-- **B11:** produce stable sample-scoped crawl depth, inlink and navigation provenance. Observed weak routing must never be described as sitewide orphaning without evidence outside the assessed sample.
+- **B11:** connect the new versioned internal-link/depth/navigation producer evidence into shared `run_scan` after final retained assessed-page selection. Exact source request URL and accepted source-page evidence must gate each observed edge; sitemap discovery must never create inlinks/depth; assessed counts must stay unchanged. Add downstream authenticated coverage if the evidence becomes customer-visible.
 - **B12:** produce bounded paired raw/rendered hub-link evidence for up to five representative hubs with explicit completed/failed/unassessed states; neither raw nor rendered evidence is the sole truth source.
 - **B13/B14:** produce applicable local entity/status/address/phone/regular-hours evidence and verified entity-match/NAP provenance. Optional fields remain optional and Coming Soon/unknown applicability fails closed.
 - **B15:** produce explicit current-content intent plus current-scoped temporal evidence. An old date alone is not freshness failure.
@@ -116,4 +127,4 @@ The genuine 30-site baseline/candidate gate is currently **not assessed**. No St
 
 ## Exact next engineering action
 
-Remain on Stage 2. The current reported review threads are resolved; continue with B11 truthful sample-scoped depth/inlink/navigation provenance. Then continue B12–B15/B17 transfer/B18 in serialized slices, adding authenticated downstream coverage for anything customer-visible. After each coherent slice, run focused tests; after meaningful combined checkpoints require exact-head FixList CI and independent review. Only then begin shared Stage-3 integration.
+Remain on Stage 2. Wait only for the current B11 exact-head CI/review evidence needed to classify this checkpoint, then wire the B11 observed internal-link graph into shared `run_scan` without altering the Standard-150 denominator or creating a new request budget. After that continue B12–B15/B17 transfer/B18 in serialized slices, adding authenticated downstream coverage for anything customer-visible. Require exact-head FixList CI and independent review at meaningful combined checkpoints. Only then begin shared Stage-3 integration.

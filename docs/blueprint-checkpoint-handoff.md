@@ -66,3 +66,81 @@ Candidate fingerprint `5fb87bf7869c51c2` is explicitly a candidate, not frozen/a
 The genuine 30-site baseline/candidate replay corpus is still missing. Historical summary counts are not substitute acceptance evidence. Base44 synchronization and app-level authentication previously failed and must be revalidated at release time.
 
 The authorized first release requires complete stage-one source acceptance, exact-source CI, named schema parity, controlled cutover and verified Base44/worker activation. Live stage-one acceptance is required before recording the milestone as released and accepted. Remaining full-blueprint and 30-site requirements are not claimed by this release. Preserve the 150-page/security limits, existing GEO, historical proofs and preview privacy. Do not disconnect the repository, rotate secrets, broadly push schemas or publish a stale snapshot.
+
+
+## Current resume point — Stage 2 B06 checkpoint (2026-09-19)
+
+Stage 1 is merged on `main` at `22ce4e69aa915a2e5ba796f9432fea33a0fa79bb`, but its production publication/promotion/live acceptance remains a separate pending cutover. Do not describe the staged 0%-traffic worker as live.
+
+Later-stage work is isolated on:
+
+- Branch: `agent/full-blueprint-stage2-coverage-b06-20260919`
+- PR: [#303](https://github.com/bright4862-design/seo-autopilot/pull/303)
+- Last code checkpoint verified before this documentation update: `d88b5b89a870b9f502f46da654eab9c831945c40`
+- Exact-code CI: [FixList CI 35450285277](https://github.com/bright4862-design/seo-autopilot/actions/runs/35450285277), success
+- Results: 1,806 scanner tests passed / 18 intentional skips; 1,479 frontend tests passed; lint, typecheck, generated contracts, build, labelled Stage-1 corpus, frozen revision and production scanner-image build passed.
+
+B06 is source-complete on this branch: bounded unsampled same-site link checks share one finite request pool, preserve source-page/link evidence, keep probe targets outside the assessed-page cap and persist verified 404/410 evidence through the signed customer path. Probe-backed observed counts are authenticated without inventing an assessed denominator. Nothing in PR #303 is merged, deployed, staged or live.
+
+Exact next engineering action: implement **B07 active soft-404 detection** on the same `SharedCoverageProbeScheduler`. Use deterministic non-existent root/path-family probes, compare only complete accepted responses/intent, retain synthetic provenance, reject challenge/block/rate-limit responses as baselines and preserve exhaustion as unknown. Then proceed to B09/B16 reuse of the same scheduler and B08 redirect-meaning evidence, followed by B10–B18 in blueprint order. Stage 3 B19–B24 and Stage 4 B25–B28 remain open.
+
+Release sequencing rule remains unchanged: while the Stage-1 exact SHA is still in cutover, do not merge PR #303 into `main`. Continue implementation/review on the branch and carry Stage 1 through its existing guarded release handoff separately.
+
+## Current resume point — Stage 2 B07 engine checkpoint (2026-09-19)
+
+Stage 1 remains merged on `main` at `22ce4e69aa915a2e5ba796f9432fea33a0fa79bb`; production publication/promotion/live acceptance is still pending. Stage-2 work remains isolated on `agent/full-blueprint-stage2-coverage-b06-20260919` / PR [#303](https://github.com/bright4862-design/seo-autopilot/pull/303). Do not merge this PR while that exact Stage-1 SHA remains in guarded cutover.
+
+Latest implemented code checkpoint:
+
+- Source commit: `62e9af3029f3ff35c76deb2213dc4124b0d50314` — `feat(scanner): add active soft-404 probe evidence engine`
+- Executable continuation plan: [2026-09-19-active-soft404-probe-engine.md](superpowers/plans/2026-09-19-active-soft404-probe-engine.md)
+- Exact-source CI: [FixList CI 35452713440](https://github.com/bright4862-design/seo-autopilot/actions/runs/35452713440), success
+- Scanner result: **1,812 passed / 18 intentional skips**
+- Scanner lint/typecheck, generated contracts, labelled synthetic acceptance corpora, frozen-revision checks and production scanner-image build passed; the frontend/deploy contract job also passed.
+
+What exists now: B07 has a versioned active-baseline evidence engine on the shared B06 request pool. Candidate generation is deterministic, same-origin and effective-scope bounded: one scoped-root synthetic missing path plus up to three representative parent-directory paths per observed page-template family. Complete accepted 2xx missing-intent HTML can establish a baseline; hard 404/410 is treated as correct missing behavior; challenge/block/rate-limit/incomplete/generic responses remain unknown. Assessed-page positives require both their own missing intent and corroborating similarity. Synthetic provenance and bounded evidence-version metadata are explicit.
+
+**B07 is not source-complete.** The real scanner `run_scan` path does not yet issue these probes; assessed pages are not yet annotated by this active evidence; authority/persistence/customer readers do not yet receive a B07 active row. No customer-visible or persisted output changed in the engine checkpoint. The required real producer → review → signed authority → persisted rows → verified customer/chat/card/handoff/export regression must land with orchestration before B07 closes.
+
+Exact next action:
+
+1. Derive synthetic candidates from the canonical scan origin, effective scope and observed page-template families in `run_scan`.
+2. Register/fetch them through the existing `SharedCoverageProbeScheduler` and hardened request provider; apply existing robots ownership policy first. Never create a second budget, and never add synthetic paths to assessed pages.
+3. Classify access/evidence normally. Only verified complete baselines receive bounded signature tokens; challenge/429/robots/budget/deadline outcomes stay unknown.
+4. Compare assessed pages and integrate compatible `active_baseline_match` evidence into indexability quality without deleting or rewriting historical passive soft-404 behavior.
+5. Authenticate the exact B07 evidence version and verified affected page through canonical authority/persisted rows and every verified customer surface.
+6. Add positive and negative real-path regressions, including proof that the Standard 150 assessed-page count/denominator is unchanged.
+7. Run independent review and exact-head CI. Resolve findings with reproducing tests before changing B07 to source-complete.
+
+After B07, implement B09 sitemap integrity and B16 URL variants on the same scheduler, then B08 redirect-meaning evidence and B10–B15/B17–B18. Stage 3 B19–B24 and Stage 4 B25–B28 remain open. The genuine provenance-labelled 30-site baseline/candidate gate remains open. Historical summary counts must not be repurposed as that gate.
+
+Current state distinction: code is committed and source CI has passed at `62e9af…`; the later documentation commits only persist the checkpoint. Nothing from Stage 2 is merged to `main`, staged, deployed or live-accepted.
+
+## Current resume point — Stage 2 B07 downstream projection checkpoint (2026-09-19)
+
+Stage 1 remains merged on `main` at `22ce4e69aa915a2e5ba796f9432fea33a0fa79bb`; its production publication/promotion/live acceptance is still pending. Continue keeping PR [#303](https://github.com/bright4862-design/seo-autopilot/pull/303) isolated on `agent/full-blueprint-stage2-coverage-b06-20260919`; do not merge while that exact Stage-1 SHA remains in guarded cutover.
+
+Latest verified code/test checkpoint:
+
+- Exact code/test head: `a5cde450977311f167f3608122773912805dcf96`
+- Exact-source CI: [FixList CI 35456222652](https://github.com/bright4862-design/seo-autopilot/actions/runs/35456222652), success
+- Root scanner checks: **115 passed**
+- `scanner-api`: **1,816 passed / 18 intentional skips**
+- Scanner lint/typecheck, generated contracts, frozen revision and production scanner-image build passed; frontend/deploy contract job passed.
+- Stage-1 corpus output remains explicitly labelled synthetic; the genuine full 30-site gate remains `not_assessed`.
+
+What was added after the engine checkpoint:
+
+- `indexability_postprocess` consumes only current-version active baseline records already attached by the producer. It does not reconstruct active evidence from the live web.
+- A verified active match promotes only the already-assessed page to a soft-404 finding with versioned authenticated evidence, confidence 98 and exact `verified_observed_pages`.
+- Grouping now keys by evidence version, so active proof is never collapsed with passive/legacy heuristic soft-404s. Grouped active findings retain the exact verified page union.
+- The behavioral integration covers indexability findings → local review → signed authority → persisted rows → verified customer/Grok reconstruction → repair cards → handoff → PDF/TXT/CSV → rendered customer components. Preview privacy and invalid-authority behavior remain covered by the same helper.
+- Synthetic baseline probes remain outside `pages`/`pages_crawled`; the affected real assessed pages remain eligible evidence. Challenge baselines stay unknown, and absent active evidence preserves legacy passive behavior.
+
+Two intermediate CI failures are intentionally recorded as regression discoveries, not hidden: one corrected the test's denominator assumption (`affected_eligible` belongs to the real assessed affected pages, not synthetic probes), and one corrected the integration helper to accept the existing truthful rendered phrase “N of N relevant pages checked.” Production evidence rules were not weakened.
+
+**B07 is still open.** The actual `run_scan` path does not yet create/fetch/register the synthetic root/path-family probes or populate `coverage_probe_evidence.soft_404_baselines`. Therefore this checkpoint proves downstream authentication and customer delivery once a verified baseline exists, but it is not a complete producer-path implementation, deployment or live scan.
+
+Exact next action: wire B07 producer orchestration into `run_scan` using the existing `SharedCoverageProbeScheduler`, robots ownership checks and hardened request provider. Add explicit challenge/429/robots/budget/deadline unknown-state producer regressions and assert that synthetic probes never alter the Standard 150 assessed-page count/denominator. Then obtain independent review and exact-head CI before marking B07 source-complete.
+
+After B07 closes, continue B09 sitemap integrity and B16 URL variants on the same finite scheduler, then B08 redirect-meaning evidence and B10–B15/B17–B18. Stage 3 B19–B24 and Stage 4 B25–B28 remain open. Nothing from Stage 2 is merged, staged, deployed or live-accepted.

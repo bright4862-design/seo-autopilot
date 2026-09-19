@@ -11,6 +11,12 @@ import httpx
 
 from .artifact_filter import MAX_ARTIFACT_EVIDENCE, is_artifact_url, record_artifact
 from .canonical_validation import validate_canonical_targets
+from .coverage_probes import (
+    COVERAGE_PROBE_SCHEDULER_VERSION,
+    LINK_INTEGRITY_PROBE_VERSION,
+    SharedCoverageProbeScheduler,
+    coverage_probe_request_limit,
+)
 from .redirect_validation import apply_redirect_evidence, fetch_with_redirect_evidence, summarize_redirect_evidence
 from .extract import classify_template, extract_links, extract_page
 from .market_scope import market_pair_prefix, path_within_scope
@@ -751,6 +757,135 @@ async def run_scan(
         # overstatement the selection counts were already making.
         enrich_checked_coverage(sampling_evidence, pages, path_of)
         scan_coverage = _finalize_scan_coverage(scan_coverage_counters, pages)
+
+        # Stage 2 coverage probes share the crawler's finite frontier-request
+        # ceiling, but they never become assessed pages. This lets Standard 150
+        # verify bounded discovered targets beyond its assessed sample without
+        # quietly turning into a larger crawl.
+        probe_started_at = time.monotonic()
+        remaining_crawl_seconds = max(0.0, timing_budget["crawl_deadline"] - probe_started_at)
+        # Coverage is additive. It must not consume the whole remainder and
+        # starve the pre-existing canonical validator that follows it.
+        probe_time_budget_seconds = min(12.0, remaining_crawl_seconds * 0.25)
+        probe_scheduler = SharedCoverageProbeScheduler(
+            max_probe_requests=coverage_probe_request_limit(scan_mode),
+            shared_request_limit=max_pages * 8,
+            initial_request_count=crawl_state["claimed"],
+            deadline=probe_started_at + probe_time_budget_seconds,
+        )
+        for target, record in discovery.items():
+            if target in seen or "internal_link" not in set(record.get("discovered_from") or []):
+                continue
+            probe_scheduler.register(
+                purpose="internal_link",
+                url=target,
+                source_pages=record.get("source_pages") or [],
+                link_text_samples=record.get("link_text_samples") or [],
+            )
+
+        link_probe_findings = []
+        for candidate in probe_scheduler.candidates("internal_link"):
+            target = candidate["url"]
+            if not probe_scheduler.can_start_candidate("internal_link", target):
+                probe_scheduler.record_exhausted(
+                    "internal_link",
+                    target,
+                    source_pages=candidate.get("source_pages") or [],
+                    link_text_samples=candidate.get("link_text_samples") or [],
+                )
+                continue
+            if robots_policy.allowed(SCANNER_USER_AGENT, target) is False:
+                probe_scheduler.record_skipped(
+                    "internal_link",
+                    target,
+                    reason="blocked_by_robots_txt",
+                    source_pages=candidate.get("source_pages") or [],
+                    link_text_samples=candidate.get("link_text_samples") or [],
+                )
+                continue
+
+            probe_scheduler.begin_candidate("internal_link")
+            probe_page = await fetch_and_extract(
+                client,
+                target,
+                {
+                    "discovered_from": ["internal_link"],
+                    "source_pages": candidate.get("source_pages") or [],
+                    "link_text_samples": candidate.get("link_text_samples") or [],
+                },
+                robots_policy=robots_policy,
+                request_provider=probe_scheduler.fetch_once,
+            )
+            annotate_robots_evidence(probe_page, robots_policy, target)
+            status_code = int(probe_page.get("status_code") or 0)
+            evidence_class = page_evidence_class(probe_page)
+            fetch_error = str(probe_page.get("fetch_error") or "").strip()
+            access_kind = str(probe_page.get("access_block_kind") or "").strip().lower()
+            if (
+                access_kind in {"challenge", "block", "rate_limit"}
+                or status_code in {401, 403, 407, 408, 425, 429}
+                or (status_code <= 0 and fetch_error)
+            ):
+                probe_scheduler.record_result(
+                    "internal_link",
+                    target,
+                    state="not_verified",
+                    reason=fetch_error or access_kind or evidence_class or "access_unverified",
+                    status_code=status_code,
+                    final_url=probe_page.get("final_url") or target,
+                    source_pages=candidate.get("source_pages") or [],
+                    link_text_samples=candidate.get("link_text_samples") or [],
+                )
+                continue
+
+            failed = status_code >= 400
+            probe_scheduler.record_result(
+                "internal_link",
+                target,
+                state="fail" if failed else "pass",
+                reason=f"http_{status_code}" if status_code else "no_status",
+                status_code=status_code,
+                final_url=probe_page.get("final_url") or target,
+                source_pages=candidate.get("source_pages") or [],
+                link_text_samples=candidate.get("link_text_samples") or [],
+            )
+            if status_code in {404, 410}:
+                rule = "410_error" if status_code == 410 else "404_error"
+                link_probe_findings.append(create_finding(
+                    rule=rule,
+                    category="404_error",
+                    priority="high",
+                    title="Fix a broken internal link",
+                    page_url=relative_evidence_url(
+                        {"url": target},
+                        scan_origin=scope_evidence["requested_origin"],
+                        identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
+                    ),
+                    current_value=f"HTTP {status_code} verified by bounded same-site link probe",
+                    explanation=(
+                        "A link on an assessed page points to a same-site URL outside the assessed-page sample, "
+                        f"and a bounded follow-up request verified HTTP {status_code}."
+                    ),
+                    recommendation=(
+                        "Restore the target, redirect it to the closest relevant live page, or update the source link."
+                    ),
+                    difficulty="developer",
+                    source_pages=candidate.get("source_pages") or [],
+                    link_text_samples=candidate.get("link_text_samples") or [],
+                ))
+                link_probe_findings[-1].update({
+                    "evidence_status": "confirmed",
+                    "verification_state": "verified",
+                    "confidence_score": 96,
+                    "observed_evidence_version": LINK_INTEGRITY_PROBE_VERSION,
+                    "verified_observed_pages": [target],
+                    # Stage 3 owns score/root-cause semantics. Coverage evidence
+                    # is intentionally non-scoring until those caps land.
+                    "non_scoring": True,
+                    "score_impact": 0,
+                })
+
+        coverage_probe_evidence = probe_scheduler.summary()
         canonical_target_evidence = await validate_canonical_targets(
             client,
             pages,
@@ -764,6 +899,7 @@ async def run_scan(
     finding_identity = {"scan_origin": scope_evidence["requested_origin"],
                         "identity_version": PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION}
     findings = build_findings(pages, **finding_identity)
+    findings.extend(link_probe_findings)
     findings.extend(duplicate_title_findings(pages, **finding_identity))
     findings.extend(duplicate_casing_findings(pages))
     grouped = group_findings(findings)
@@ -846,6 +982,9 @@ async def run_scan(
         "crawl_timing": crawl_timing,
         "render_evidence_version": RENDER_EVIDENCE_VERSION,
         "render_evidence": render_evidence,
+        "coverage_probe_scheduler_version": COVERAGE_PROBE_SCHEDULER_VERSION,
+        "link_integrity_probe_version": LINK_INTEGRITY_PROBE_VERSION,
+        "coverage_probe_evidence": coverage_probe_evidence,
         "screaming_frog_lite_enabled": True,
         "website_url": start_url,
         "normalized_url": start_url,
@@ -904,6 +1043,9 @@ async def run_scan(
             "redirect_evidence": redirect_evidence,
             "render_evidence_version": RENDER_EVIDENCE_VERSION,
             "render_evidence": render_evidence,
+            "coverage_probe_scheduler_version": COVERAGE_PROBE_SCHEDULER_VERSION,
+            "link_integrity_probe_version": LINK_INTEGRITY_PROBE_VERSION,
+            "coverage_probe_evidence": coverage_probe_evidence,
             "duplicate_casing_routes": detect_duplicate_casing_routes(pages),
             "screaming_frog_lite_enabled": True,
         },
@@ -943,6 +1085,7 @@ async def fetch_and_extract(
     url: str,
     discovery: dict,
     robots_policy=None,
+    request_provider=None,
 ) -> dict:
     if not is_public_http_url(url):
         return extract_page("", url, url, 0, "", discovery, fetch_error="blocked_non_public_host")
@@ -962,6 +1105,7 @@ async def fetch_and_extract(
                 url,
                 robots_policy,
                 max_decoded_bytes=MAX_DECODED_RESPONSE_BYTES,
+                request_provider=request_provider,
             )
             if response is None:
                 page = extract_page(
@@ -1716,6 +1860,20 @@ def group_findings(findings: list[dict]) -> list[dict]:
             if isinstance(finding.get("redirect_fetch_evidence"), dict)
             and finding.get("redirect_fetch_evidence")
         ][:10]
+        observed_versions = {
+            str(finding.get("observed_evidence_version") or "").strip()
+            for finding in members
+            if str(finding.get("observed_evidence_version") or "").strip()
+        }
+        verified_observed_pages = _unique_nonempty([
+            page
+            for finding in members
+            for page in (
+                finding.get("verified_observed_pages")
+                if isinstance(finding.get("verified_observed_pages"), list)
+                else []
+            )
+        ])
         group_id = stable_id(f"group|{key}")
         grouped = dict(sample)
         grouped.update({
@@ -1738,6 +1896,10 @@ def group_findings(findings: list[dict]) -> list[dict]:
             "page_count": len(affected),
             "source_pages": _unique_nonempty([p for f in members for p in (f.get("source_pages") or [])]),
             "link_text_samples": _unique_nonempty([t for f in members for t in (f.get("link_text_samples") or [])]),
+            **({
+                "observed_evidence_version": next(iter(observed_versions)),
+                "verified_observed_pages": verified_observed_pages,
+            } if len(observed_versions) == 1 and verified_observed_pages else {}),
             **({"indexability_intent_sources": _group_indexability_intent_sources(members)}
                if sample.get("rule") == "sitemap_indexability_conflict" else {}),
             **({"redirect_fetch_evidence_samples": redirect_samples} if redirect_samples else {}),

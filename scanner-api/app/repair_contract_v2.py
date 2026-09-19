@@ -177,6 +177,11 @@ def _merge_repair_group(
     identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
     group_fingerprint = _persistence_repair_fingerprint(members[0]) if members else ""
     lead = deepcopy(_strictest_member(members))
+    # Provenance must describe the entire merged action. A strict lead row can
+    # carry authenticated active evidence while another member is unversioned;
+    # inheriting that lead metadata would falsely authenticate the whole union.
+    lead.pop("observed_evidence_version", None)
+    lead.pop("verified_observed_pages", None)
     child_groups = [_repair_evidence_group(member, **identity_context) for member in members]
 
     affected = _dedupe_urls([
@@ -193,6 +198,22 @@ def _merge_repair_group(
     lead["affected_pages"] = affected
     if source_pages:
         lead["source_pages"] = source_pages
+
+    member_versions = [_clean_text(member.get("observed_evidence_version")) for member in members]
+    observed_versions = set(member_versions)
+    if member_versions and all(member_versions) and len(observed_versions) == 1:
+        lead["observed_evidence_version"] = next(iter(observed_versions))
+        verified_observed_pages = _dedupe_urls([
+            page
+            for member in members
+            for page in (
+                member.get("verified_observed_pages")
+                if isinstance(member.get("verified_observed_pages"), list)
+                else []
+            )
+        ], **identity_context)
+        if verified_observed_pages:
+            lead["verified_observed_pages"] = verified_observed_pages
 
     all_complete = all(member.get("affected_pages_complete") is not False for member in members)
     lead["affected_pages_complete"] = all_complete

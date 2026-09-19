@@ -219,3 +219,63 @@ def test_the_invariants_hold_for_every_production_shape():
     if context.checked_eligible is not None:
         assert context.affected_eligible <= context.checked_eligible
     assert 0 <= context.indexable_affected <= context.affected_eligible
+
+
+
+def test_confirmed_versioned_probe_is_observed_but_not_assessed():
+    from app.coverage_probes import LINK_INTEGRITY_PROBE_VERSION
+
+    fix = {
+        "rule": "404_error",
+        "page_template_family": "unknown",
+        "affected_pages": ["/outside-sample"],
+        "observed_evidence_version": LINK_INTEGRITY_PROBE_VERSION,
+        "verified_observed_pages": ["/outside-sample"],
+        "verification_state": "verified",
+        "evidence_status": "confirmed",
+    }
+    context = build_coverage_context(
+        fix,
+        [page("/")],
+        scan_origin="https://ex.com",
+        identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
+    )
+
+    assert context.affected_reported == 1
+    assert context.affected_observed == 1
+    assert context.affected_eligible == 0
+    assert context.checked_eligible is None
+    assert context.checked_coverage is None
+
+
+@pytest.mark.parametrize(
+    ("version", "verification_state", "evidence_status"),
+    [
+        ("unknown_probe_version", "verified", "confirmed"),
+        ("link_integrity_probe_v1_unsampled_same_site", "not_verified", "confirmed"),
+        ("link_integrity_probe_v1_unsampled_same_site", "verified", "needs_verification"),
+    ],
+)
+def test_untrusted_or_unverified_probe_claim_does_not_inflate_observed_count(
+    version, verification_state, evidence_status
+):
+    fix = {
+        "rule": "404_error",
+        "page_template_family": "unknown",
+        "affected_pages": ["/outside-sample"],
+        "observed_evidence_version": version,
+        "verified_observed_pages": ["/outside-sample"],
+        "verification_state": verification_state,
+        "evidence_status": evidence_status,
+    }
+    context = build_coverage_context(
+        fix,
+        [page("/")],
+        scan_origin="https://ex.com",
+        identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
+    )
+
+    assert context.affected_reported == 1
+    assert context.affected_observed == 0
+    assert context.affected_eligible == 0
+    assert context.checked_coverage is None

@@ -58,6 +58,6 @@ assert.deepEqual(locked.fixItems,[]);
 // Render production components, with only the outbound analytics service inert.
 const {renderComponent} = await import('./renderComponent.mjs');
 const rowHtml = await renderComponent('src/components/fixlist/CanonicalRepairRow.jsx', {item:fix,showSuggestion:false});
-assert.match(rowHtml,new RegExp(`\\b${expectedUrls.length} (?:(?:of \\d+ searchable|affected) )?pages?\\b`));
+assert.match(rowHtml,new RegExp(`\\b${expectedUrls.length} (?:of \\d+ (?:searchable pages|relevant pages checked)|affected pages?|pages?)\\b`));
 const modalHtml = await renderComponent('src/components/issues/IssueDetailModal.jsx', {issue:{...fix,website_url:origin}});
 for (const url of expectedUrls) assert.ok(modalHtml.includes(`href="${url.replaceAll('&','&amp;')}"`),url);

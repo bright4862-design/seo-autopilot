@@ -150,3 +150,21 @@ Requirement status:
 **Open Stage 2:** B07–B18. The next dependency-owned slice is B07 active soft-404 baselines using this same scheduler; B09 sitemap integrity and B16 URL variants must reuse the same pool rather than create new request budgets. B08 reuses retained redirect evidence. B10–B15/B17–B18 remain unimplemented here.
 
 **Stages 3–4:** B19–B28 remain open. No Stage-2 code is merged, staged, deployed or live-accepted by this checkpoint. The genuine provenance-labelled 30-site baseline/candidate gate remains open and historical summary counts are still not substitute evidence.
+
+## Stage 2 coverage checkpoint — B07 active soft-404 evidence engine (2026-09-19)
+
+PR [#303](https://github.com/bright4862-design/seo-autopilot/pull/303) now also contains the first B07 implementation checkpoint at source commit `62e9af3029f3ff35c76deb2213dc4124b0d50314`. The executable continuation plan is [B07 active soft-404 probe engine](superpowers/plans/2026-09-19-active-soft404-probe-engine.md).
+
+Requirement status:
+
+- **B07 — engine implemented and exact-source CI-verified; integration remains open.** The shared B06 scheduler now recognizes a versioned `soft_404_baseline` purpose, emits bounded authenticated synthetic metadata and can generate deterministic missing-path candidates inside the verified origin/scope: one scope-root candidate and at most three parent-directory candidates per observed page-template family.
+- Baselines fail closed. Only complete accepted HTML can establish a 2xx missing-page baseline. Challenge/block/rate-limit, transport failure, raw truncation, incomplete evidence and generic healthy 2xx content remain `not_verified`; real 404/410 is a correct hard-missing response. Redirected synthetic probes remain unknown here so B08, not B07, owns redirect meaning.
+- Assessed-page comparison requires its own missing-page intent plus corroborating similarity to a verified active baseline. Unknown/generic baselines cannot manufacture a finding, and only bounded title/H1/meta-derived signature tokens are retained for comparison rather than response-body copy.
+- Behavioral regressions cover deterministic scoped/capped candidates, shared request identity/budget invariants, hard-missing behavior, challenge/incomplete rejection, no positives from unknown/generic baselines, active positive matching and exact evidence-version/provenance metadata.
+- Exact source CI [35452713440](https://github.com/bright4862-design/seo-autopilot/actions/runs/35452713440) passed at `62e9af3029f3ff35c76deb2213dc4124b0d50314`: **1,812 scanner tests passed / 18 intentional skips**; scanner lint/typecheck/generated-contract checks, labelled synthetic acceptance corpora, frozen-revision check, production scanner-image build and the frontend/deploy contract job all passed.
+
+This checkpoint deliberately does **not** claim B07 source-complete. `run_scan` does not yet issue the synthetic probes, assessed pages are not yet annotated by the active evidence, and no new active soft-404 row reaches signed persisted/customer output. Because customer-displayed output is unchanged by this engine-only commit, the required producer → review → authority → persisted rows → verified customer-output regression belongs to the next integration commit and must pass before B07 can close.
+
+**Exact next action:** wire these B07 helpers into the real scanner orchestration using the existing `SharedCoverageProbeScheduler`, existing robots ownership policy and hardened request provider; then authenticate active evidence through indexability findings, authority/persistence and verified customer surfaces. Add positive and challenge/429/robots/budget/deadline unknown regressions and prove synthetic probes never increase the Standard 150 assessed-page count or its denominator. Resolve independent review findings and require exact-head CI before marking B07 source-complete.
+
+After B07, continue B09 and B16 on the same finite scheduler, then B08 redirect-meaning evidence and B10–B15/B17–B18. Stage 3 B19–B24 and Stage 4 B25–B28 remain open. PR #303 stays unmerged while the Stage-1 exact SHA is still in guarded production cutover; nothing in this Stage-2 checkpoint is staged, deployed or live-accepted.

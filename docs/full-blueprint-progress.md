@@ -34,7 +34,7 @@ The isolated lane PRs are review/CI lanes only and must not be merged directly t
 - **B08 — redirect meaning.** Harmless normalization, usable destination, wrong/catch-all destination, unusable destination and unverified access are distinct. A diagnostic-only loop without concrete hops is unverified; an observed loop with hop provenance is unusable. Challenge/block/rate-limit destinations remain unknown even when the HTTP response is 403/429/503; an ordinary verified 404 remains unusable.
 - **B09 — sitemap integrity helper/probe integration.** Same-origin/in-scope unsampled targets reuse the shared scheduler; candidate-universe truncation and access/budget uncertainty remain explicit. Exact source-level sitemap provenance enrichment and any customer-visible promotion still require the serialized producer/customer path.
 - **B16 — URL variants.** Exact path/query/case/reserved-escape/empty-query identity is retained. No implicit sibling-host expansion occurs. Live alternate routes are not declared duplicates without independent equivalence evidence. Redirect meaning is delegated to B08.
-- **B10 — accepted main-content producer seam.** Accepted usable HTML prefers `main`, `role=main`, then `article`; body fallback strips common chrome on a clone. Empty landmarks remain landmarks. Raw customer copy is not retained in the compatibility evidence: the producer emits bounded irreversible SHA-256 five-token shingle digests plus aggregate signature/token/character-count metadata. The independent review thread remains open on whether that hashed compatibility field must also be removed at the final `pages`/`crawled_pages` response boundary.
+- **B10 — accepted main-content producer seam.** Accepted usable HTML prefers `main`, `role=main`, then `article`; body fallback strips common chrome on a clone. Empty landmarks remain landmarks. Raw customer copy is not retained in the compatibility evidence: the producer emits bounded deterministic SHA-256 five-token shingle fingerprints plus aggregate signature/token/character-count metadata. CodeRabbit independently confirmed the raw-copy exposure is addressed and resolved the review thread. These fingerprints are not described as secret against candidate-text dictionary matching.
 - **B17 partial — truthful decoded/inline page weight.** Decoded HTML bytes and inline script/style bytes are separately measured from accepted content. Transfer/wire bytes remain `unknown`; decoded size or zero is never substituted for network transfer bytes.
 
 Shared B07/B09/B16 integration checkpoint: `ca70b7380011e93437fc993185e511a5847618e6`, Stage2IntegrationRun `35469815094`.
@@ -57,9 +57,11 @@ Fresh independent-review findings corrected before that green run:
 
 1. accepted-image applicability is reduced to scalar evidence before BeautifulSoup sanitization/decomposition;
 2. empty `main`/body tags use explicit `is None` selection rather than truthiness fallback;
-3. raw B10 page text is replaced by irreversible hash shingles/signature metadata;
+3. raw B10 page text is replaced by deterministic cryptographic fingerprint shingles/signature metadata;
 4. zero-hop diagnostic redirect loops remain unverified while concrete loops remain unusable;
 5. access-block/challenge/rate-limit evidence is evaluated before generic HTTP error classification.
+
+CodeRabbit independently confirmed and resolved the currently reported B10 empty-landmark, B10 raw-copy, and B08 access-block threads after the exact-head fixes. A fresh whole-head review request remains a gate for any newly reported issue.
 
 Detailed checkpoint: `docs/superpowers/plans/2026-09-19-stage2-serialized-review-hardening.md`.
 
@@ -67,7 +69,7 @@ Detailed checkpoint: `docs/superpowers/plans/2026-09-19-stage2-serialized-review
 
 Stage 2 is **not source-complete**. Remaining serialized requirements:
 
-- **B10:** finish the final publication-boundary decision for the hashed compatibility field; if duplicate evidence becomes customer-visible, add authenticated Review → authority → persistence → customer/card/handoff/export coverage.
+- **B10:** the raw-copy review defect is resolved; if duplicate evidence becomes customer-visible, add authenticated Review → authority → persistence → customer/card/handoff/export coverage before closing the displayed behavior.
 - **B11:** produce stable sample-scoped crawl depth, inlink and navigation provenance. Observed weak routing must never be described as sitewide orphaning without evidence outside the assessed sample.
 - **B12:** produce bounded paired raw/rendered hub-link evidence for up to five representative hubs with explicit completed/failed/unassessed states; neither raw nor rendered evidence is the sole truth source.
 - **B13/B14:** produce applicable local entity/status/address/phone/regular-hours evidence and verified entity-match/NAP provenance. Optional fields remain optional and Coming Soon/unknown applicability fails closed.
@@ -114,4 +116,4 @@ The genuine 30-site baseline/candidate gate is currently **not assessed**. No St
 
 ## Exact next engineering action
 
-Remain on Stage 2. Resolve the still-open B10 publication-boundary review question with a reproducing test, then wire the next shared producer slice beginning with B11 truthful sample-scoped depth/inlink/navigation provenance. Continue B12–B15/B17 transfer/B18 in serialized slices, adding authenticated downstream coverage for anything customer-visible. After each coherent slice, run focused tests; after meaningful combined checkpoints require exact-head FixList CI and independent review. Only then begin shared Stage-3 integration.
+Remain on Stage 2. The current reported review threads are resolved; continue with B11 truthful sample-scoped depth/inlink/navigation provenance. Then continue B12–B15/B17 transfer/B18 in serialized slices, adding authenticated downstream coverage for anything customer-visible. After each coherent slice, run focused tests; after meaningful combined checkpoints require exact-head FixList CI and independent review. Only then begin shared Stage-3 integration.

@@ -1,4 +1,5 @@
 from app.accepted_content_evidence import extract_accepted_content_evidence
+from app.redirect_validation import _redirect_meaning_evidence
 
 
 def test_hidden_image_control_is_excluded_without_post_sanitize_node_access():
@@ -33,3 +34,52 @@ def test_hidden_image_control_is_excluded_without_post_sanitize_node_access():
             "reason": "unnamed_image_control",
         },
     ]
+
+
+def test_diagnostic_only_redirect_loop_without_hops_stays_unverified():
+    page = {
+        "url": "https://example.com/a",
+        "final_url": "https://example.com/a",
+        "status_code": 302,
+        "content_type": "text/html",
+    }
+    evidence = {
+        "state": "redirect_loop",
+        "source_url": "https://example.com/a",
+        "destination_url": "https://example.com/a",
+        "destination_status_code": 302,
+        "hop_count": 0,
+        "hops": [],
+        "chain": ["https://example.com/a"],
+    }
+
+    meaning = _redirect_meaning_evidence(page, evidence)
+
+    assert meaning["state"] == "not_verified"
+    assert meaning["reason"] == "redirect_loop_unverified"
+
+
+def test_redirect_loop_with_concrete_hop_evidence_is_verified_unusable():
+    page = {
+        "url": "https://example.com/a",
+        "final_url": "https://example.com/a",
+        "status_code": 302,
+        "content_type": "text/html",
+    }
+    evidence = {
+        "state": "redirect_loop",
+        "source_url": "https://example.com/a",
+        "destination_url": "https://example.com/a",
+        "destination_status_code": 302,
+        "hop_count": 2,
+        "hops": [
+            {"url": "https://example.com/a", "status_code": 302, "location": "https://example.com/b"},
+            {"url": "https://example.com/b", "status_code": 302, "location": "https://example.com/a"},
+        ],
+        "chain": ["https://example.com/a", "https://example.com/b", "https://example.com/a"],
+    }
+
+    meaning = _redirect_meaning_evidence(page, evidence)
+
+    assert meaning["state"] == "verified_unusable"
+    assert meaning["reason"] == "redirect_loop"

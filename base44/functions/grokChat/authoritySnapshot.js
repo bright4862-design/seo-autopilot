@@ -1,5 +1,7 @@
 import { GEO_SNAPSHOT_VERSION, geoReadinessSnapshotFields, customerGeoReadiness } from "./geoReadiness.js";
 import { sanitizeReportRawFindingEvidence, sanitizeScanCoverage } from "./repairEvidence.js";
+import { PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION } from "./evidenceUrlIdentity.js";
+import { PUBLISHED_REVIEW_ATTESTATION_VERSION, publishedIdentityContext, publishedRepairEvidenceFields, publishedPriorityContext } from "./publishedRepairEvidence.js";
 export const REPAIR_CONTRACT_V2 = "repair_contract_v2_shadow_calibrated";
 export const REPAIR_PRIORITY_MODEL_V2 = "repair_priority_v2_technical_severity";
 
@@ -9,7 +11,8 @@ export function authoritySnapshotFromRows({ scan, fixList, fixItems, userId }) {
     && fixList?.repair_snapshot_contract_complete === true
     && fixList?.repair_priority_model_version === REPAIR_PRIORITY_MODEL_V2;
   const version = text(scan?.authority_seal_version, 160);
-  const recommendations = (fixItems || []).map((item) => authorityFixFromRow(item, { canonical, version }));
+  const publishedContext = { ...publishedIdentityContext(scan, version === PUBLISHED_REVIEW_ATTESTATION_VERSION ? PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION : ""), persisted: true };
+  const recommendations = (fixItems || []).map((item) => authorityFixFromRow(item, { canonical, version, publishedContext }));
   if (canonical) {
     recommendations.sort((left, right) => number(left.canonical_action_rank) - number(right.canonical_action_rank));
   } else {
@@ -97,9 +100,10 @@ export function authoritySnapshotFromRows({ scan, fixList, fixItems, userId }) {
   };
 }
 
-function authorityFixFromRow(item, { canonical = false, version = "" } = {}) {
+function authorityFixFromRow(item, { canonical = false, version = "", publishedContext = {} } = {}) {
+  const published = publishedRepairEvidenceFields(item, publishedContext);
   const raw = item?.raw_finding && typeof item.raw_finding === "object" ? item.raw_finding : {};
-  const reportEvidence = [REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION].includes(version)
+  const reportEvidence = [REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION, PUBLISHED_REVIEW_ATTESTATION_VERSION].includes(version)
     ? sanitizeReportRawFindingEvidence({ ...item, ...raw })
     : {};
   const base = {
@@ -128,13 +132,17 @@ function authorityFixFromRow(item, { canonical = false, version = "" } = {}) {
     requires_approval: item?.requires_approval === true,
     can_auto_fix: false,
     estimated_time: text(item?.estimated_time, 120),
-    user_status: text(item?.user_status, 80),
+    // Workflow state is mutable; new seals authenticate the writer's initial
+    // value, while the chat's customer context still reads current row state.
+    user_status: publishedContext.identityVersion ? "open" : text(item?.user_status, 80),
     what_to_do_steps: textArray(item?.what_to_do_steps, 12, 1_000),
+    ...published.fields,
   };
   if (!canonical) {
     return {
       ...base,
-      raw_finding: { verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence), ...reportEvidence },
+      raw_finding: { verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence), ...reportEvidence,
+        ...(publishedContext.identityVersion ? { published_evidence: published.evidence } : {}) },
     };
   }
   return {
@@ -157,17 +165,39 @@ function authorityFixFromRow(item, { canonical = false, version = "" } = {}) {
     repair_surface: text(item?.repair_surface, 160),
     remediation_family: text(item?.remediation_family, 200),
     shared_repair_confirmed: item?.shared_repair_confirmed === true,
-    priority_context: canonicalPriorityContext(item?.priority_context),
+    priority_context: canonicalPriorityContext(item?.priority_context, publishedContext.identityVersion),
     ...(text(item?.repair_verification_state, 120) ? { repair_verification_state: text(item?.repair_verification_state, 120) } : {}),
     ...(text(item?.rule_definition_version, 160) ? { rule_definition_version: text(item?.rule_definition_version, 160) } : {}),
     ...(text(item?.comparison_profile_version, 160) ? { comparison_profile_version: text(item?.comparison_profile_version, 160) } : {}),
-    raw_finding: { verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence), ...reportEvidence },
+    raw_finding: { verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence), ...reportEvidence,
+      ...(publishedContext.identityVersion && canonicalRepairEvidenceGroups(raw.repair_evidence_groups).length > 0
+        ? { repair_evidence_groups: canonicalRepairEvidenceGroups(raw.repair_evidence_groups) } : {}),
+      ...(publishedContext.identityVersion ? { published_evidence: published.evidence } : {}) },
   };
 }
 
-function canonicalPriorityContext(value) {
+function canonicalRepairEvidenceGroups(value) {
+  const groups = Array.isArray(value) ? value : [];
+  return groups.slice(0, 100).map((group) => ({
+    fix_id: text(group?.fix_id, 160),
+    family: text(group?.family, 160),
+    locale: text(group?.locale, 40),
+    representative_url: text(group?.representative_url, 2_000),
+    affected_urls: textArray(group?.affected_urls, 150, 2_000),
+    count: Math.max(0, number(group?.count)),
+    priority: text(group?.priority, 40),
+    action_priority: text(group?.action_priority, 80),
+    evidence_class: text(group?.evidence_class, 80),
+    evidence_status: text(group?.evidence_status, 120),
+    verification_state: text(group?.verification_state, 120),
+    repair_verification_state: text(group?.repair_verification_state, 120),
+  }));
+}
+
+function canonicalPriorityContext(value, identityVersion = "") {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   return {
+    ...publishedPriorityContext(source, identityVersion),
     version: text(source.version, 160),
     legacy_priority: text(source.legacy_priority, 40),
     base_severity: text(source.base_severity, 40),
@@ -260,12 +290,12 @@ function scoreExplanation(value) {
 function scoreExplanationSnapshotFields(row) {
   // V5 only. A v4 row must rebuild exactly as v4: giving it a field its seal
   // did not cover turns an intact result into a tampered one.
-  if (![REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION].includes(text(row?.authority_seal_version, 160))) return {};
+  if (![REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION, PUBLISHED_REVIEW_ATTESTATION_VERSION].includes(text(row?.authority_seal_version, 160))) return {};
   return { health_score_explanation: scoreExplanation(row?.health_score_explanation) };
 }
 
 function scopeSnapshotFields(row) {
-  if (![REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION].includes(
+  if (![REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION, PUBLISHED_REVIEW_ATTESTATION_VERSION].includes(
     text(row?.authority_seal_version, 160),
   )) return {};
   return {
@@ -279,7 +309,7 @@ function scopeSnapshotFields(row) {
 }
 
 function coverageSnapshotFields(row) {
-  if (![REVIEW_ATTESTATION_VERSION_V2, REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION].includes(
+  if (![REVIEW_ATTESTATION_VERSION_V2, REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION, PUBLISHED_REVIEW_ATTESTATION_VERSION].includes(
     text(row?.authority_seal_version, 160),
   )) return {};
   return {
@@ -296,7 +326,7 @@ function coverageSnapshotFields(row) {
 }
 
 function acceptanceEvidenceSnapshotFields(row) {
-  if (![REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION].includes(
+  if (![REVIEW_ATTESTATION_VERSION_V3, REVIEW_ATTESTATION_VERSION_V4, REVIEW_ATTESTATION_VERSION_V5, REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION, PUBLISHED_REVIEW_ATTESTATION_VERSION].includes(
     text(row?.authority_seal_version, 160),
   )) return {};
   const source = plainObject(row?.classification_integrity);
@@ -353,7 +383,7 @@ function coverageAuthorityFields(evidence) {
 }
 
 function reportEvidenceSnapshotFields(row) {
-  if (![REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION].includes(text(row?.authority_seal_version, 160))) return {};
+  if (![REVIEW_ATTESTATION_VERSION_V6, GEO_SNAPSHOT_VERSION, PUBLISHED_REVIEW_ATTESTATION_VERSION].includes(text(row?.authority_seal_version, 160))) return {};
   return { scan_coverage: sanitizeScanCoverage(row?.scan_coverage) };
 }
 

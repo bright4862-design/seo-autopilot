@@ -24,6 +24,7 @@ const ACCEPTED_AUTHORITY_VERSIONS = new Set([
   "standard_review_snapshot_hmac_v5_score_explanation",
   "standard_review_snapshot_hmac_v6_report_evidence",
   "standard_review_snapshot_hmac_geo_v1",
+  "standard_review_snapshot_hmac_identity_v1",
 ]);
 const ACCEPTED_LIMITED_INTEGRITY_VERSIONS = new Set([
   "standard_limited_result_integrity_v1",
@@ -42,7 +43,7 @@ import {
   parseCustomerPreviewPayload,
   verifyCustomerPreviewProof,
 } from "./customerPreviewSeal.js";
-const BASE44_HANDLER_RELEASE_FINGERPRINT = "47793ce37ca20523";
+const BASE44_HANDLER_RELEASE_FINGERPRINT = "5fb87bf7869c51c2";
 const MAX_FIX_ITEMS = 100;
 
 // Runtime-secret convergence must not be confused with cryptographic key

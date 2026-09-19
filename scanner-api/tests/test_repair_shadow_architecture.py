@@ -44,7 +44,7 @@ def test_durable_worker_uses_one_explicit_post_review_contract_boundary():
     worker = _source(SCANNER_APP / "scan_job.py")
     wrapper = _source(SCANNER_APP / "repair_contract_v2.py")
     assert "from .repair_contract_v2 import apply_canonical_repair_contract" in worker
-    assert "return apply_canonical_repair_contract(review, result)" in worker
+    assert "return apply_canonical_repair_contract(review, result, identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION)" in worker
     assert "build_calibrated_shadow_review_analysis" in wrapper
     assert "validate_v2_persistence_candidate" in wrapper
     for marker in ("repair_persistence_shadow", "repair_shadow_calibration", "repair_priority_calibration"):

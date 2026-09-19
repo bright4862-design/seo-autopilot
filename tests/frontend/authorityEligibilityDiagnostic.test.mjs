@@ -86,7 +86,7 @@ test("durable persistence publishes only the fixed predicate name", () => {
     new URL("../../base44/functions/persistDurableScanAuthority/entry.ts", import.meta.url),
     "utf8",
   );
-  assert.match(source, /firstFailedAuthorityPredicate\(authorityScanResult, review\)/);
+  assert.match(source, /firstFailedAuthorityPredicate\(authorityScanResult, review, \{ identityVersion: PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION \}\)/);
   assert.match(source, /`authority_snapshot_not_eligible__\$\{failedPredicate\}\$\{classifierDiagnostic\}\$\{fingerprintDiagnostic\}`/);
   assert.match(source, /failedPredicate === "archetype_classifier_version"/);
   assert.match(source, /__expected_\$\{diagnosticClassifierMarker\(AUTHORITY_CONTRACT\.archetype_classifier_version\)\}__received_\$\{diagnosticClassifierMarker\(review\?\.archetype_classifier_version \|\| review\?\.site_fingerprint\?\.classification\?\.classifier_version\)\}/);

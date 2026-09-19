@@ -2,6 +2,8 @@ import { GEO_SNAPSHOT_VERSION, validateGeoReadiness, emptyGeoReadiness, validPro
 import { RELEASE_COMPONENT_VERSIONS, RELEASE_FINGERPRINT } from "./generatedReleaseContract.js";
 import { firstFailedRepairInvariant } from "./repairInvariants.js";
 import { sanitizeReportRawFindingEvidence, sanitizeScanCoverage } from "./repairEvidence.js";
+import { PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION, publishedEvidenceUrlKey } from "./evidenceUrlIdentity.js";
+import { PUBLISHED_REVIEW_ATTESTATION_VERSION, publishedIdentityContext, publishedRepairEvidenceFields, publishedPriorityContext } from "./publishedRepairEvidence.js";
 // Bumped when the snapshot gained coverage/inventory fields. The authority
 // proof is an HMAC over the whole snapshot, so adding a field changes the
 // payload for every row -- including rows sealed before it existed. Version
@@ -40,7 +42,10 @@ export const AUTHORITY_CONTRACT = Object.freeze({
 // summary boolean Python derives from the same assessment.
 export const AUTHORITATIVE_COVERAGE_STATE = "sufficient";
 
-export function firstFailedAuthorityPredicate(scan, review) {
+export function firstFailedAuthorityPredicate(scan, review, { identityVersion = "" } = {}) {
+  let context;
+  try { context = publishedIdentityContext(scan, identityVersion); }
+  catch { return "published_identity_context"; }
   const firstPage = firstArray([scan?.crawled_pages, scan?.pages, scan?.scanned_pages])[0] || {};
   const predicates = [
     ["scanner_version", scan?.scanner_version === AUTHORITY_CONTRACT.scanner_version],
@@ -63,11 +68,11 @@ export function firstFailedAuthorityPredicate(scan, review) {
     // worker or hand-built envelope away from covering a limited scan.
     ["coverage_state", coverageAssessment(review).state === AUTHORITATIVE_COVERAGE_STATE],
     ["coverage_authority_version", Boolean(text(coverageAssessment(review).coverage_authority_version, 160))],
-    ["canonical_repair_contract", canonicalReviewIsAbsentOrValid(review)],
+    ["canonical_repair_contract", canonicalReviewIsAbsentOrValid(review, context)],
     // Re-derived here, not trusted. A repair whose own arithmetic cannot be
     // true must not reach a seal, whatever the producer claims about it.
     ["geo_readiness_contract", validProducerGeoReadiness(review?.geo_readiness, scan)],
-    ["repair_coverage_invariants", firstFailedRepairInvariant_forAll(review) === ""],
+    ["repair_coverage_invariants", firstFailedRepairInvariant_forAll(review, context) === ""],
   ];
   return predicates.find(([, passed]) => !passed)?.[0] || "";
 }
@@ -79,7 +84,15 @@ export function firstFailedAuthorityPredicate(scan, review) {
  * which predicate failed, and "repair_coverage_invariants" alone would not say
  * which repair or which rule.
  */
-export function firstFailedRepairInvariant_forAll(review) {
+export function firstFailedRepairInvariant_forAll(review, context = {}) {
+  try { return repairInvariantForAll(review, context); }
+  catch (error) {
+    if (context.identityVersion) return "published_evidence_invalid";
+    throw error;
+  }
+}
+
+function repairInvariantForAll(review, context = {}) {
   // Validate the same repair collection that buildAuthoritySnapshot will seal.
   // Canonical v2 deliberately leaves the legacy recommendations untouched, so
   // applying Patch D's stronger arithmetic to that stale legacy list can reject
@@ -89,7 +102,7 @@ export function firstFailedRepairInvariant_forAll(review) {
     ? suppressAggregateCoveredPageFixes(
       (Array.isArray(review?.canonical_repairs) ? review.canonical_repairs : [])
         .slice(0, MAX_AUTHORITY_FIXES)
-        .map(toAuthorityFix),
+        .map((fix, index) => toAuthorityFix(fix, index, context)), context,
     )
     : [];
   const canonical = canonicalRequested && canonicalAuthorityFixesValid(canonicalMapped);
@@ -97,7 +110,7 @@ export function firstFailedRepairInvariant_forAll(review) {
     ? review.canonical_repairs.slice(0, MAX_AUTHORITY_FIXES)
     : firstArray([review?.recommendations, review?.fixes, review?.cleaned_fixes]);
   for (const fix of fixes) {
-    const failed = firstFailedRepairInvariant(fix);
+    const failed = firstFailedRepairInvariant(fix, context);
     if (failed) return failed;
   }
   return "";
@@ -109,13 +122,14 @@ function coverageAssessment(review) {
   return assessment && typeof assessment === "object" ? assessment : {};
 }
 
-export function isAuthorityEligible(scan, review) {
-  return firstFailedAuthorityPredicate(scan, review) === "";
+export function isAuthorityEligible(scan, review, context = {}) {
+  return firstFailedAuthorityPredicate(scan, review, context) === "";
 }
 
-export function buildAuthoritySnapshot({ scan, review, identity, userId, now = new Date().toISOString() }) {
+export function buildAuthoritySnapshot({ scan, review, identity, userId, now = new Date().toISOString(), identityVersion = "", persistedEvidence = false }) {
+  const context = { ...publishedIdentityContext(scan, identityVersion), persisted: persistedEvidence };
   const firstPage = firstArray([scan?.crawled_pages, scan?.pages, scan?.scanned_pages])[0] || {};
-  if (!canonicalReviewIsAbsentOrValid(review)) {
+  if (!canonicalReviewIsAbsentOrValid(review, context)) {
     throw new Error("canonical repair contract is invalid");
   }
   const canonicalRequested = canonicalReviewRequested(review);
@@ -123,7 +137,7 @@ export function buildAuthoritySnapshot({ scan, review, identity, userId, now = n
     ? suppressAggregateCoveredPageFixes(
       (Array.isArray(review?.canonical_repairs) ? review.canonical_repairs : [])
         .slice(0, MAX_AUTHORITY_FIXES)
-        .map(toAuthorityFix),
+        .map((fix, index) => toAuthorityFix(fix, index, context)), context,
     )
     : [];
   const canonical = canonicalRequested && canonicalAuthorityFixesValid(canonicalMapped);
@@ -135,7 +149,7 @@ export function buildAuthoritySnapshot({ scan, review, identity, userId, now = n
       review?.findings,
       review?.cleaned_fixes,
       review?.recommended_actions,
-    ]).slice(0, MAX_AUTHORITY_FIXES).map(toAuthorityFix));
+    ]).slice(0, MAX_AUTHORITY_FIXES).map((fix, index) => toAuthorityFix(fix, index, context)), context);
   const fixes = canonical
     ? canonicalMapped.map((fix, index) => ({
       ...fix,
@@ -158,7 +172,7 @@ export function buildAuthoritySnapshot({ scan, review, identity, userId, now = n
   const fingerprint = text(review?.beta_revision_fingerprint || scan?.beta_revision_fingerprint, 160);
 
   return {
-    version: REVIEW_ATTESTATION_VERSION,
+    version: identityVersion ? PUBLISHED_REVIEW_ATTESTATION_VERSION : REVIEW_ATTESTATION_VERSION,
     sealed_at: String(now),
     owner_user_id: text(userId, 160),
     scan_id: text(identity?.scan_id, 160),
@@ -261,6 +275,9 @@ export function buildAuthoritySnapshot({ scan, review, identity, userId, now = n
 // from the pre-write worker/review object.
 export function buildPersistedAuthoritySnapshot({ run, fixList, fixItems, userId, sealedAt }) {
   const persistedRun = run && typeof run === "object" ? run : {};
+  if (![REVIEW_ATTESTATION_VERSION_V6, REVIEW_ATTESTATION_VERSION, PUBLISHED_REVIEW_ATTESTATION_VERSION].includes(persistedRun.authority_seal_version)) {
+    throw new Error("Unsupported persisted authority seal version");
+  }
   const persistedFixList = fixList && typeof fixList === "object" ? fixList : {};
   const persistedFixItems = Array.isArray(fixItems) ? fixItems : [];
   const canonical = persistedFixList?.repair_contract_version === REPAIR_CONTRACT_V2
@@ -269,9 +286,12 @@ export function buildPersistedAuthoritySnapshot({ run, fixList, fixItems, userId
     && persistedFixList?.repair_priority_model_version === REPAIR_PRIORITY_MODEL_V2;
 
   // Historical v6 never authenticated GEO. New row reconstruction requires the field.
-  const isGeo = persistedRun.authority_seal_version === REVIEW_ATTESTATION_VERSION;
+  const isPublished = persistedRun.authority_seal_version === PUBLISHED_REVIEW_ATTESTATION_VERSION;
+  const isGeo = isPublished || persistedRun.authority_seal_version === REVIEW_ATTESTATION_VERSION;
   if (isGeo) validateGeoReadiness(persistedRun.geo_readiness);
   const snapshot = buildAuthoritySnapshot({
+    identityVersion: isPublished ? PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION : "",
+    persistedEvidence: true,
     scan: {
       ...persistedRun,
       submitted_url: persistedRun.website_url,
@@ -304,14 +324,14 @@ export function buildPersistedAuthoritySnapshot({ run, fixList, fixItems, userId
   return snapshot;
 }
 
-function suppressAggregateCoveredPageFixes(fixes) {
+function suppressAggregateCoveredPageFixes(fixes, context = {}) {
   const coverage = new Set();
   for (const fix of fixes) {
     if (!isAggregateFix(fix)) continue;
     const rule = findingKey(fix.rule);
     const family = aggregateFamilyKey(fix);
     if (!rule) continue;
-    for (const page of explicitAffectedPageKeys(fix)) {
+    for (const page of explicitAffectedPageKeys(fix, context)) {
       coverage.add(coverageKey(rule, family, page));
     }
   }
@@ -319,7 +339,7 @@ function suppressAggregateCoveredPageFixes(fixes) {
 
   return fixes.filter((fix) => {
     if (isAggregateFix(fix) || fix.page_scope !== "page") return true;
-    const pages = pageKeys(fix);
+    const pages = pageKeys(fix, context);
     if (pages.length !== 1) return true;
     const rule = findingKey(fix.rule);
     const family = findingKey(fix.page_template_family);
@@ -341,20 +361,20 @@ function coverageKey(rule, family, page) {
   return `${rule}\u0000${family}\u0000${page}`;
 }
 
-function explicitAffectedPageKeys(fix) {
-  return uniquePageKeys(fix?.affected_pages);
+function explicitAffectedPageKeys(fix, context) {
+  return uniquePageKeys(fix?.affected_pages, context);
 }
 
-function pageKeys(fix) {
-  const affected = explicitAffectedPageKeys(fix);
-  return affected.length > 0 ? affected : uniquePageKeys([fix?.page_url]);
+function pageKeys(fix, context) {
+  const affected = explicitAffectedPageKeys(fix, context);
+  return affected.length > 0 ? affected : uniquePageKeys([fix?.page_url], context);
 }
 
-function uniquePageKeys(values) {
+function uniquePageKeys(values, context = {}) {
   const seen = new Set();
   const output = [];
   for (const value of values || []) {
-    const key = pageKey(value);
+    const key = context.identityVersion ? publishedEvidenceUrlKey(value, context) : pageKey(value);
     if (!key || seen.has(key)) continue;
     seen.add(key);
     output.push(key);
@@ -388,7 +408,8 @@ function findingKey(value) {
   return text(value, 200).toLowerCase();
 }
 
-function toAuthorityFix(fix, index) {
+function toAuthorityFix(fix, index, context = {}) {
+  const published = publishedRepairEvidenceFields(fix, context);
   const priority = ["critical", "high", "medium", "low"].includes(String(fix?.priority || "").toLowerCase())
     ? String(fix.priority).toLowerCase()
     : "medium";
@@ -421,7 +442,7 @@ function toAuthorityFix(fix, index) {
       shared_repair_confirmed: fix?.shared_repair_confirmed === true
         || fix?.repair_leverage_confirmed === true
         || fix?.priority_context?.shared_repair_confirmed === true,
-      priority_context: canonicalPriorityContext(fix?.priority_context),
+      priority_context: canonicalPriorityContext(fix?.priority_context, context.identityVersion),
       ...(text(fix?.repair_verification_state, 120) ? { repair_verification_state: text(fix?.repair_verification_state, 120) } : {}),
       ...(text(fix?.rule_definition_version, 160) ? { rule_definition_version: text(fix?.rule_definition_version, 160) } : {}),
       ...(text(fix?.comparison_profile_version, 160) ? { comparison_profile_version: text(fix?.comparison_profile_version, 160) } : {}),
@@ -455,11 +476,13 @@ function toAuthorityFix(fix, index) {
     estimated_time: text(fix?.estimated_time, 120),
     user_status: "open",
     what_to_do_steps: textArray(fix?.what_to_do_steps, 12, 1_000),
+    ...published.fields,
     ...canonicalFields,
     raw_finding: {
       verified_urls: verifiedUrls(raw.verified_urls || raw.url_evidence),
       ...(persistedEvidenceGroups.length > 0 ? { repair_evidence_groups: persistedEvidenceGroups } : {}),
       ...reportEvidence,
+      ...(context.identityVersion ? { published_evidence: published.evidence } : {}),
     },
   };
 }
@@ -502,13 +525,18 @@ function canonicalReviewAttempted(review) {
   );
 }
 
-function canonicalReviewIsAbsentOrValid(review) {
+function canonicalReviewIsAbsentOrValid(review, context = {}) {
   if (!canonicalReviewAttempted(review)) return true;
   if (!canonicalReviewRequested(review)) return false;
-  const mapped = suppressAggregateCoveredPageFixes(
-    review.canonical_repairs.slice(0, MAX_AUTHORITY_FIXES).map(toAuthorityFix),
-  );
-  return canonicalAuthorityFixesValid(mapped);
+  try {
+    const mapped = suppressAggregateCoveredPageFixes(
+      review.canonical_repairs.slice(0, MAX_AUTHORITY_FIXES).map((fix, index) => toAuthorityFix(fix, index, context)), context,
+    );
+    return canonicalAuthorityFixesValid(mapped);
+  } catch (error) {
+    if (context.identityVersion) return false;
+    throw error;
+  }
 }
 
 function canonicalAuthorityFixesValid(fixes) {
@@ -539,9 +567,10 @@ function canonicalAuthorityFixesValid(fixes) {
   return true;
 }
 
-function canonicalPriorityContext(value) {
+function canonicalPriorityContext(value, identityVersion = "") {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   return {
+    ...publishedPriorityContext(source, identityVersion),
     version: text(source.version, 160),
     legacy_priority: text(source.legacy_priority, 40),
     base_severity: text(source.base_severity, 40),

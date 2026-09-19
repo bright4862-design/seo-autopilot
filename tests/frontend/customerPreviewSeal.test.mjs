@@ -177,11 +177,11 @@ test("signed customer preview is release-versioned and schema-bound", () => {
   );
   assert.equal(
     crossRuntime.components.customer_result_reader_version,
-    "customer_result_reader_v8_geo_readiness",
+    "customer_result_reader_v9_published_route_identity",
   );
   assert.equal(
     revision.component_versions.customer_result_reader_version,
-    "customer_result_reader_v8_geo_readiness",
+    "customer_result_reader_v9_published_route_identity",
   );
   for (const field of [
     "customer_preview_seal_version",
@@ -212,7 +212,7 @@ test("current-release terminal replay repairs only a missing signed preview afte
 });
 
 
-test("actual V6 unpaid request reads the GEO signed preview without loading full result rows", async () => {
+for (const authorityVersion of ["standard_review_snapshot_hmac_geo_v1", "standard_review_snapshot_hmac_identity_v1"]) test(`actual V6 unpaid request reads ${authorityVersion} signed preview without loading full result rows`, async () => {
   const [{
     buildCustomerPreviewPayload,
     createCustomerPreviewProof,
@@ -232,6 +232,7 @@ test("actual V6 unpaid request reads the GEO signed preview without loading full
   const { run: sourceRun, fixList, fixItems } = fixture();
   const run = {
     ...sourceRun,
+    authority_seal_version: authorityVersion,
     beta_revision_fingerprint: releaseContract.RELEASE_FINGERPRINT,
     score_is_provisional: false,
     evidence_quality_blocking: false,

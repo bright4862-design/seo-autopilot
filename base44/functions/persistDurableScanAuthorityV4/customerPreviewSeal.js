@@ -1,4 +1,4 @@
-import { GEO_SNAPSHOT_VERSION, customerGeoReadiness } from "./geoReadiness.js";
+import { usesGeoSnapshotVersion, customerGeoReadiness } from "./geoReadiness.js";
 import { createAuthoritySeal, stableSerialize, verifyAuthoritySeal } from "./authoritySeal.js";
 
 export const CUSTOMER_PREVIEW_SEAL_VERSION = "standard_customer_preview_hmac_v2_geo_readiness";
@@ -63,7 +63,7 @@ const PREVIEW_FIX_ITEM_FIELDS = [
 export function buildCustomerPreviewPayload({ run, fixList, fixItems, ownerUserId, fullAuthorityProof }) {
   const customerRun = pickFields(run, PREVIEW_RUN_FIELDS);
   customerRun.health_score_status = "authoritative";
-  if (run?.authority_seal_version === GEO_SNAPSHOT_VERSION) customerRun.geo_readiness = customerGeoReadiness(run);
+  if (usesGeoSnapshotVersion(run?.authority_seal_version)) customerRun.geo_readiness = customerGeoReadiness(run);
   const customerFixList = pickFields(fixList, PREVIEW_FIX_LIST_FIELDS);
   const customerFixItems = [...(Array.isArray(fixItems) ? fixItems : [])]
     .sort((left, right) => {
@@ -100,7 +100,7 @@ export function buildCustomerPreviewPayload({ run, fixList, fixItems, ownerUserI
 export function customerPreviewSealEnvelope(payload) {
   return {
     domain: CUSTOMER_PREVIEW_SEAL_DOMAIN,
-    version: payload?.authority_seal_version === GEO_SNAPSHOT_VERSION ? CUSTOMER_PREVIEW_SEAL_VERSION : CUSTOMER_PREVIEW_SEAL_VERSION_V1,
+    version: usesGeoSnapshotVersion(payload?.authority_seal_version) ? CUSTOMER_PREVIEW_SEAL_VERSION : CUSTOMER_PREVIEW_SEAL_VERSION_V1,
     payload,
   };
 }

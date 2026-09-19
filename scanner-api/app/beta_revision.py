@@ -76,7 +76,7 @@ def collect_component_versions() -> dict[str, str]:
     from .geo_evidence import VERSION as GEO_EVIDENCE_VERSION
     from .artifact_filter import ARTIFACT_FILTER_VERSION
     from .canonical_validation import CANONICAL_TARGET_EVIDENCE_VERSION
-    from .repair_coverage import REPAIR_COVERAGE_VERSION
+    from .repair_coverage import PUBLISHED_REPAIR_COVERAGE_VERSION, PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
     from .repair_contract_v2 import REPAIR_PERSISTENCE_GROUPING_VERSION
     from .coverage_authority import (
         COVERAGE_AUTHORITY_EVIDENCE_VERSION,
@@ -164,7 +164,8 @@ def collect_component_versions() -> dict[str, str]:
         "evidence_quality_gate_version": EVIDENCE_QUALITY_GATE_VERSION,
         "coverage_authority_evidence_version": COVERAGE_AUTHORITY_EVIDENCE_VERSION,
         "coverage_authority_version": COVERAGE_AUTHORITY_VERSION,
-        "repair_coverage_version": REPAIR_COVERAGE_VERSION,
+        "repair_coverage_version": PUBLISHED_REPAIR_COVERAGE_VERSION,
+        "evidence_url_identity_version": PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
         "repair_persistence_grouping_version": REPAIR_PERSISTENCE_GROUPING_VERSION,
         "frontier_policy_version": FRONTIER_POLICY_VERSION,
     }

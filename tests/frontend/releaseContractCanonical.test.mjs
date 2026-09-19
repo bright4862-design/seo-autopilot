@@ -118,21 +118,21 @@ test("old release fingerprints are isolated to the explicit historical reader re
     compatibilityWithoutReaderVersion(compatibility),
     "V4 may advance reader semantics but must mirror the canonical historical fingerprint registry",
   );
-  assert.match(v4Compatibility, /customer_result_reader_v8_geo_readiness/);
+  assert.match(v4Compatibility, /customer_result_reader_v9_published_route_identity/);
   const v5Compatibility = fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_V5_REL), "utf8");
   assert.equal(
     compatibilityWithoutReaderVersion(v5Compatibility),
     compatibilityWithoutReaderVersion(compatibility),
     "V5 historical reader must preserve the canonical historical fingerprint registry",
   );
-  assert.match(v5Compatibility, /customer_result_reader_v8_geo_readiness/);
+  assert.match(v5Compatibility, /customer_result_reader_v9_published_route_identity/);
   const v6Compatibility = fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_V6_REL), "utf8");
   assert.equal(
     compatibilityWithoutReaderVersion(v6Compatibility),
     compatibilityWithoutReaderVersion(compatibility),
     "V6 active reader must preserve the canonical historical fingerprint registry",
   );
-  assert.match(v6Compatibility, /customer_result_reader_v8_geo_readiness/);
+  assert.match(v6Compatibility, /customer_result_reader_v9_published_route_identity/);
   assert.equal(fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_V3_REL), "utf8"), compatibility, "V3 reader must mirror the canonical historical compatibility registry");
   assert.equal(fs.readFileSync(path.join(ROOT, HISTORICAL_COMPAT_ALIAS_REL), "utf8"), compatibility, "V2 reader must mirror the canonical historical compatibility registry");
 });
@@ -288,7 +288,8 @@ test("every declared cross-runtime component is a real marker in shipped code", 
     customer_preview_seal_version: "base44/functions/getCustomerScanResultV5/customerPreviewSeal.js",
     customer_result_reader_version: "base44/functions/getCustomerScanResultV5/releaseCompatibility.js",
     limited_result_integrity_version: "base44/functions/persistLimitedScanResult/limitedResultIntegrity.js",
-    review_attestation_version: "base44/functions/persistDurableScanAuthority/authoritySnapshot.js",
+    review_attestation_version: "base44/functions/persistDurableScanAuthority/publishedRepairEvidence.js",
+    repair_invariant_version: "base44/functions/persistDurableScanAuthority/repairInvariants.js",
     durable_completion_contract_version: "base44/functions/persistDurableScanAuthority/entry.ts",
     durable_control_contract_version: "base44/functions/durableScanWorkerControl/entry.ts",
     durable_worker_contract_version: "base44/functions/durableScanWorkerControl/entry.ts",

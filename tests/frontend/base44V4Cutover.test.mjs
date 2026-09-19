@@ -64,7 +64,7 @@ test("V4 executable packages preserve canonical behavior except fresh activation
     if (canonical === "getCustomerScanResult") {
       const v4Projection = source(path.join(v4Dir, "projection.js"));
       assert.match(v4Projection, /"preview_example_page"/, "V4 preview projection may expose only its pre-signed example page addition");
-      assert.match(source(path.join(v4Dir, "releaseCompatibility.js")), /customer_result_reader_v8_geo_readiness/);
+      assert.match(source(path.join(v4Dir, "releaseCompatibility.js")), /customer_result_reader_v9_published_route_identity/);
     }
   }
 });

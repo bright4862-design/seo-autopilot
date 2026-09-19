@@ -3,7 +3,7 @@
 // Run that generator after changing either input; CI fails on drift.
 
 export const RELEASE_CONTRACT_SCHEMA_VERSION = "beta_crawler_revision_v1";
-export const RELEASE_FINGERPRINT = "47793ce37ca20523";
+export const RELEASE_FINGERPRINT = "5fb87bf7869c51c2";
 export const RELEASE_STATUS = "candidate";
 export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "acceptance_evidence_version": "standard150_acceptance_evidence_v2_aggregate_rss_fail_closed",
@@ -18,12 +18,13 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "coverage_authority_version": "coverage_authority_v1_shared_decision",
   "crawler_acceptance_version": "crawler_acceptance_v1",
   "customer_preview_seal_version": "standard_customer_preview_hmac_v2_geo_readiness",
-  "customer_projection_version": "customer_projection_v8_geo_readiness",
-  "customer_result_reader_version": "customer_result_reader_v8_geo_readiness",
+  "customer_projection_version": "customer_projection_v9_published_route_identity",
+  "customer_result_reader_version": "customer_result_reader_v9_published_route_identity",
   "durable_completion_contract_version": "durable_standard150_completion_v1",
   "durable_control_contract_version": "durable_standard150_control_v1",
   "durable_worker_contract_version": "scan_job_worker_v1_cloud_tasks",
   "evidence_quality_gate_version": "evidence_quality_gate_v2_shared_coverage_decision",
+  "evidence_url_identity_version": "evidence_url_identity_v2_published_route",
   "failure_evidence_dedup_version": "failure_evidence_dedup_v2_group_covered_page_rows",
   "failure_state_presentation_version": "failure_state_presentation_v2_structured_limitation_reasons",
   "final_url_dedup_version": "final_url_dedup_v1_normalized_identity",
@@ -48,14 +49,15 @@ export const RELEASE_COMPONENT_VERSIONS = Object.freeze({
   "render_evidence_quality_version": "render_evidence_quality_v1",
   "render_evidence_version": "render_evidence_v1",
   "render_followup_version": "render_followup_v1",
-  "repair_coverage_version": "repair_coverage_v4_corroborated_family_gap_fill",
+  "repair_coverage_version": "repair_coverage_v5_published_route_identity",
+  "repair_invariant_version": "repair_invariant_v2_published_route_identity",
   "repair_persistence_grouping_version": "repair_persistence_grouping_v2_valid_fingerprint_actions",
   "repair_presentation_contract_version": "repair_presentation_v5_evidence_groups_canonical_export",
   "repair_suggestion_library_version": "v1",
   "repair_surface_grouping_version": "repair_surface_grouping_v1_shared_artifact",
   "repair_write_contract_version": "repair_contract_v2_shadow_calibrated",
   "representative_page_version": "business_representative_page_v3_sitewide_archetype_ranking",
-  "review_attestation_version": "standard_review_snapshot_hmac_geo_v1",
+  "review_attestation_version": "standard_review_snapshot_hmac_identity_v1",
   "review_evidence_calibration_version": "review_evidence_calibration_v6_health_score_v2",
   "review_version": "python_review_v2_structural_marketplace",
   "route_boundary_classifier_version": "route_boundary_classifier_v2_wordpress_author_archives",

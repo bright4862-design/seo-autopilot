@@ -4,6 +4,7 @@ import hashlib
 from .search_applicability import filter_search_findings, search_applicability
 from .metadata_title_evidence import relative_evidence_url
 from .repair_coverage import repair_evidence_key_function, scan_evidence_origin
+from .coverage_probes import SOFT_404_PROBE_VERSION, compare_page_to_soft_404_baselines
 
 from .indexability_quality import (
     annotate_indexability_quality,
@@ -56,6 +57,47 @@ def _unique(values) -> list[str]:
             seen.add(cleaned)
             output.append(cleaned)
     return output
+
+
+def _active_soft_404_baselines(result: dict) -> list[dict]:
+    """Return only current, explicitly-labelled active soft-404 baselines.
+
+    The scanner producer owns network access and provenance. This postprocess
+    boundary consumes only the bounded baseline records it was given; absent,
+    stale or unknown evidence must not be reconstructed from the current web.
+    """
+    coverage = result.get("coverage_probe_evidence")
+    if not isinstance(coverage, dict):
+        return []
+    baselines = coverage.get("soft_404_baselines")
+    if not isinstance(baselines, list):
+        return []
+    return [
+        dict(item)
+        for item in baselines
+        if isinstance(item, dict) and item.get("version") == SOFT_404_PROBE_VERSION
+    ]
+
+
+def _apply_active_soft_404_match(page: dict, baselines: list[dict]) -> dict:
+    """Promote a verified active-baseline match without erasing passive evidence."""
+    evidence = compare_page_to_soft_404_baselines(page, baselines)
+    if evidence.get("state") != "fail" or evidence.get("reason") != "active_soft_404_baseline_match":
+        return evidence
+
+    signals = _unique([
+        "active_baseline_match",
+        *(evidence.get("intent_signals") or []),
+        *(page.get("soft_404_signals") or []),
+    ])
+    page["soft_404_suspected"] = True
+    page["soft_404_signals"] = signals
+    page["soft_404_confidence"] = max(98, int(page.get("soft_404_confidence") or 0))
+    if str(page.get("indexability_state") or "") in {"Indexable", "Canonicalized", "Soft 404"}:
+        page["indexable"] = False
+        page["indexability_state"] = "Soft 404"
+        page["robots_indexability_status"] = "soft_404"
+    return evidence
 
 
 def group_indexability_quality_findings(findings: list[dict]) -> list[dict]:
@@ -138,9 +180,12 @@ def apply_indexability_quality_to_result(result: dict, *, identity_version: str 
         return result
     identity = {"scan_origin": scan_evidence_origin(result) if identity_version else "", "identity_version": identity_version}
     key_for = repair_evidence_key_function(legacy_key=str, **identity)
+    active_baselines = _active_soft_404_baselines(result)
+    active_soft_404_evidence: dict[int, dict] = {}
 
     for page in pages:
         annotate_indexability_quality(page)
+        active_soft_404_evidence[id(page)] = _apply_active_soft_404_match(page, active_baselines)
         annotate_navigation_indexability(page)
         page["search_applicability"] = search_applicability(page)
 
@@ -176,7 +221,25 @@ def apply_indexability_quality_to_result(result: dict, *, identity_version: str 
         # part of the representative SEO sample and should not generate new tasks.
         if page.get("trust_discovery_probe"):
             continue
-        quality_raw.extend(build_indexability_quality_findings(page, create_finding, **identity))
+        page_quality = build_indexability_quality_findings(page, create_finding, **identity)
+        active = active_soft_404_evidence.get(id(page)) or {}
+        if active.get("state") == "fail" and active.get("reason") == "active_soft_404_baseline_match":
+            observed_url = (
+                relative_evidence_url(page, **identity)
+                if identity_version
+                else str(page.get("url") or page.get("final_url") or _page_path(page))
+            )
+            for finding in page_quality:
+                if str(finding.get("rule") or "") != "soft_404":
+                    continue
+                finding.update({
+                    "evidence_status": "confirmed_active_baseline",
+                    "verification_state": "verified",
+                    "confidence_score": 98,
+                    "observed_evidence_version": SOFT_404_PROBE_VERSION,
+                    "verified_observed_pages": [observed_url],
+                })
+        quality_raw.extend(page_quality)
 
     navigation_raw = build_navigation_indexability_findings(pages, create_finding, **identity)
     raw_findings = existing_raw + quality_raw + navigation_raw

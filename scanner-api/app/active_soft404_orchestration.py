@@ -65,6 +65,30 @@ def _unknown_baseline(probe_url: str, metadata: dict, reason: str) -> dict[str, 
     )
 
 
+def _bounded_candidate_rows(
+    origin: str,
+    scope_prefix: str,
+    pages: list[dict],
+    max_candidates: int | None,
+) -> list[dict[str, Any]]:
+    """Return the deterministic eligible prefix selected for this shared-pool slice.
+
+    The global ``SharedCoverageProbeScheduler`` remains the actual request bound.
+    This local selection exists so B07 cannot monopolize the shared Stage-2 pool
+    before B09/B16 have an opportunity to register their own bounded evidence.
+    ``None`` preserves the historical helper behavior for existing callers/tests.
+    """
+    candidates = build_soft_404_probe_candidates(origin, scope_prefix, pages)
+    if max_candidates is None:
+        return candidates
+    try:
+        limit = int(max_candidates)
+    except (TypeError, ValueError):
+        limit = 0
+    limit = max(0, min(MAX_ACTIVE_SOFT404_BASELINE_RECORDS, limit))
+    return candidates[:limit]
+
+
 async def collect_active_soft404_baselines(
     *,
     client: Any,
@@ -74,6 +98,7 @@ async def collect_active_soft404_baselines(
     robots_policy: Any,
     probe_scheduler: SharedCoverageProbeScheduler,
     fetch_page: Callable[..., Awaitable[dict]],
+    max_candidates: int | None = None,
 ) -> list[dict[str, Any]]:
     """Collect bounded active soft-404 evidence through the shared probe pool.
 
@@ -81,8 +106,12 @@ async def collect_active_soft404_baselines(
     or appends to the assessed ``pages`` collection. Network requests are made
     only through ``probe_scheduler`` by passing its ``fetch_once`` method to the
     caller-supplied hardened fetch path.
+
+    ``max_candidates`` optionally reserves the remainder of the *same* scheduler
+    for other Stage-2 purposes. It does not create a second request allowance and
+    therefore cannot increase the shared request budget.
     """
-    for candidate in build_soft_404_probe_candidates(origin, scope_prefix, pages):
+    for candidate in _bounded_candidate_rows(origin, scope_prefix, pages, max_candidates):
         probe_scheduler.register(
             purpose="soft_404_baseline",
             url=candidate["url"],

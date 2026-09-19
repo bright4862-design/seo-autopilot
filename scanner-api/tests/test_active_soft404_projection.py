@@ -140,6 +140,54 @@ def test_active_baseline_match_becomes_authenticated_soft404_without_expanding_a
     _assert_persisted_customer_output(result, "soft_404", [url])
 
 
+def test_grouped_active_soft404_keeps_exact_verified_page_union():
+    urls = [
+        ORIGIN + "/catalog/missing-offer-a",
+        ORIGIN + "/catalog/missing-offer-b",
+        ORIGIN + "/catalog/missing-offer-c",
+    ]
+    pages = [
+        _accepted_page(
+            url,
+            title="Page not found",
+            h1="Catalog entry",
+            description="This catalog entry is no longer available",
+        )
+        for url in urls
+    ]
+    raw = scanner.build_findings(pages, **CURRENT)
+    result = apply_indexability_quality_to_result(
+        {
+            "success": True,
+            "website_url": ORIGIN,
+            "crawl_scope": {"requested_origin": ORIGIN},
+            "pages": pages,
+            "crawled_pages": pages,
+            "pages_found": len(pages),
+            "pages_crawled": len(pages),
+            "raw_findings": raw,
+            "findings": scanner.group_findings(raw),
+            "coverage_probe_evidence": {
+                "version": "coverage_probe_scheduler_v1_shared_request_budget",
+                "soft_404_baselines": [_active_baseline()],
+            },
+        },
+        identity_version=PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION,
+    )
+
+    [finding] = [row for row in result["findings"] if row["rule"] == "soft_404"]
+    assert set(finding["affected_pages"]) == set(urls)
+    assert finding["page_count"] == 3
+    assert finding["observed_evidence_version"] == SOFT_404_PROBE_VERSION
+    assert set(finding["verified_observed_pages"]) == set(urls)
+
+    [repair] = [row for row in build_local_review(result)["canonical_repairs"] if row["rule"] == "soft_404"]
+    assert set(repair["affected_pages"]) == set(urls)
+    assert repair["observed_evidence_version"] == SOFT_404_PROBE_VERSION
+    assert set(repair["verified_observed_pages"]) == set(urls)
+    _assert_persisted_customer_output(result, "soft_404", urls)
+
+
 def test_challenged_active_baseline_stays_unknown_and_does_not_invent_soft404():
     url = ORIGIN + "/catalog/healthy-offer"
     page = _accepted_page(
@@ -190,4 +238,4 @@ def test_absent_active_baseline_preserves_legacy_passive_soft404_behavior():
     [finding] = [row for row in result["raw_findings"] if row["rule"] == "soft_404"]
     assert finding["evidence_status"] == "confirmed_by_high_confidence_heuristic"
     assert "observed_evidence_version" not in finding
-    assert finding["verified_observed_pages"] if "verified_observed_pages" in finding else True
+    assert "verified_observed_pages" not in finding

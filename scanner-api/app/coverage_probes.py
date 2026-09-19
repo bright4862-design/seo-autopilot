@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import time
 from collections import defaultdict
@@ -64,6 +65,7 @@ class SharedCoverageProbeScheduler:
         self.shared_request_limit = max(0, int(shared_request_limit or 0))
         self.initial_request_count = max(0, int(initial_request_count or 0))
         self.deadline = float(deadline or 0.0)
+        self.started_at = time.monotonic()
         self.requests_consumed = 0
         self.reused_requests = 0
         self.deadline_exhausted = False
@@ -151,11 +153,24 @@ class SharedCoverageProbeScheduler:
         # Spend the permit before I/O. A timeout/transport failure still consumed
         # a real outbound request and therefore still counts against the bound.
         self.requests_consumed += 1
-        response = await safe_get_once(
-            client,
-            request_url,
-            max_decoded_bytes=max_decoded_bytes,
-        )
+        remaining = None if not self.deadline else self.deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
+            self.deadline_exhausted = True
+            raise RuntimeError("coverage_probe_deadline_exhausted")
+        try:
+            request = safe_get_once(
+                client,
+                request_url,
+                max_decoded_bytes=max_decoded_bytes,
+            )
+            response = (
+                await request
+                if remaining is None
+                else await asyncio.wait_for(request, timeout=max(0.1, remaining))
+            )
+        except asyncio.TimeoutError as exc:
+            self.deadline_exhausted = True
+            raise RuntimeError("coverage_probe_deadline_exhausted") from exc
         if response is not None:
             self._response_cache[request_url] = response
         return response
@@ -169,6 +184,29 @@ class SharedCoverageProbeScheduler:
             "state": "not_verified",
             "reason": "deadline_exhausted" if self.deadline_exhausted else "request_budget_exhausted",
             "observed_url": str(url or ""),
+            "status_code": 0,
+            "final_url": "",
+            "source_pages": _bounded_text_list(source_pages),
+            "link_text_samples": _bounded_text_list(link_text_samples),
+        })
+
+    def record_skipped(
+        self,
+        purpose: str,
+        url: str,
+        *,
+        reason: str,
+        source_pages: Any = None,
+        link_text_samples: Any = None,
+    ) -> None:
+        purpose = str(purpose or "")
+        self._stats[purpose]["skipped"] += 1
+        self._observations_append({
+            "purpose": purpose,
+            "version": LINK_INTEGRITY_PROBE_VERSION if purpose == "internal_link" else COVERAGE_PROBE_SCHEDULER_VERSION,
+            "state": "not_verified",
+            "reason": str(reason or "")[:220],
+            "observed_url": str(url or "")[:2_000],
             "status_code": 0,
             "final_url": "",
             "source_pages": _bounded_text_list(source_pages),
@@ -240,6 +278,7 @@ class SharedCoverageProbeScheduler:
                 "requests_remaining": min(remaining_probe, remaining_shared),
                 "budget_exhausted": self.budget_exhausted,
                 "deadline_exhausted": self.deadline_exhausted,
+                "time_budget_seconds": round(max(0.0, self.deadline - self.started_at), 3) if self.deadline else None,
             },
             "purposes": {
                 purpose: dict(stats)

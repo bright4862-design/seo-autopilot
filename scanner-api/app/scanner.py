@@ -762,11 +762,16 @@ async def run_scan(
         # ceiling, but they never become assessed pages. This lets Standard 150
         # verify bounded discovered targets beyond its assessed sample without
         # quietly turning into a larger crawl.
+        probe_started_at = time.monotonic()
+        remaining_crawl_seconds = max(0.0, timing_budget["crawl_deadline"] - probe_started_at)
+        # Coverage is additive. It must not consume the whole remainder and
+        # starve the pre-existing canonical validator that follows it.
+        probe_time_budget_seconds = min(12.0, remaining_crawl_seconds * 0.25)
         probe_scheduler = SharedCoverageProbeScheduler(
             max_probe_requests=coverage_probe_request_limit(scan_mode),
             shared_request_limit=max_pages * 8,
             initial_request_count=crawl_state["claimed"],
-            deadline=timing_budget["crawl_deadline"],
+            deadline=probe_started_at + probe_time_budget_seconds,
         )
         for target, record in discovery.items():
             if target in seen or "internal_link" not in set(record.get("discovered_from") or []):
@@ -790,10 +795,9 @@ async def run_scan(
                 )
                 continue
             if robots_policy.allowed(SCANNER_USER_AGENT, target) is False:
-                probe_scheduler.record_result(
+                probe_scheduler.record_skipped(
                     "internal_link",
                     target,
-                    state="not_verified",
                     reason="blocked_by_robots_txt",
                     source_pages=candidate.get("source_pages") or [],
                     link_text_samples=candidate.get("link_text_samples") or [],

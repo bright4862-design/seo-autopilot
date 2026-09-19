@@ -164,12 +164,16 @@ def _verification_class(fix: dict[str, Any]) -> str:
         _lower(fix.get("assessment_state")),
     }
     states.discard("")
-    if states & VERIFIED_STATES:
-        return "verified"
-    if states & HEURISTIC_STATES:
-        return "heuristic"
+
+    # Mixed states fail toward the weaker evidence class. A verified marker may
+    # not override a simultaneous access-limited/unknown marker, and a verified
+    # marker paired with a provisional marker remains heuristic.
     if states & UNVERIFIED_STATES:
         return "unverified"
+    if states & HEURISTIC_STATES:
+        return "heuristic"
+    if states & VERIFIED_STATES:
+        return "verified"
 
     confidence = fix.get("evidence_confidence")
     if confidence is None:
@@ -286,14 +290,16 @@ def _reach(
         return ReachFactor(None, 0, None, "unknown", "no matching observed/indexable family denominator")
 
     key_for = _key_function(scan_origin=scan_origin, identity_version=identity_version)
-    page_lookup: dict[str, dict[str, Any]] = {}
+    family_page_lookup: dict[str, dict[str, Any]] = {}
     denominator_keys: set[str] = set()
     for page in pages or []:
-        if not isinstance(page, dict) or _template_family(page) != family or _indexable(page) is not True:
+        if not isinstance(page, dict) or _template_family(page) != family:
             continue
         key = key_for(_page_url(page))
-        if key:
-            page_lookup[key] = page
+        if not key:
+            continue
+        family_page_lookup[key] = page
+        if _indexable(page) is True:
             denominator_keys.add(key)
 
     if not denominator_keys:
@@ -305,13 +311,14 @@ def _reach(
         if key and key not in affected_keys:
             affected_keys.append(key)
 
-    # Reach is only a ratio when every affected observation can be placed in the
-    # same observed/indexable family universe. Probe-only or cross-family URLs
-    # make the denominator non-comparable rather than silently becoming zero.
-    if not affected_keys or any(key not in page_lookup for key in affected_keys):
-        return ReachFactor(None, 0, len(denominator_keys), "unknown", "affected evidence is outside the matching observed/indexable family denominator")
+    # Reach uses the matching observed/indexable family denominator. Observed
+    # non-indexable affected pages are allowed and contribute zero to this
+    # numerator. A missing or cross-family affected observation makes the ratio
+    # incomparable and therefore unknown rather than silently becoming zero.
+    if not affected_keys or any(key not in family_page_lookup for key in affected_keys):
+        return ReachFactor(None, 0, len(denominator_keys), "unknown", "affected evidence is outside the matching observed family denominator")
 
-    numerator = len(affected_keys)
+    numerator = sum(1 for key in affected_keys if key in denominator_keys)
     denominator = len(denominator_keys)
     value = numerator / denominator
     if not 0.0 <= value <= 1.0:

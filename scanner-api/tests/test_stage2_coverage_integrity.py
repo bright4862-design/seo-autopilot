@@ -1,13 +1,17 @@
 from app.coverage_probes import SharedCoverageProbeScheduler
-from app.stage2_coverage_integrity import (
+from app.sitemap_integrity_evidence import (
     SITEMAP_INTEGRITY_EVIDENCE_VERSION,
+    build_sitemap_source_evidence,
+    classify_sitemap_target,
+    register_sitemap_target_candidates,
+    sitemap_coverage_from_scheduler,
+)
+from app.url_variant_evidence import (
     URL_VARIANT_EVIDENCE_VERSION,
     build_url_variant_candidates,
-    classify_sitemap_target,
     classify_url_variant,
-    feature_coverage_from_scheduler,
-    register_sitemap_target_candidates,
     register_url_variant_candidates,
+    url_variant_coverage_from_scheduler,
 )
 
 
@@ -74,6 +78,7 @@ def test_b09_registers_only_unsampled_same_origin_scoped_targets_with_source_pro
 
     assert result["version"] == SITEMAP_INTEGRITY_EVIDENCE_VERSION
     assert result["registered"] == 1
+    assert result["eligible_unsampled"] == 1
     assert result["skipped_assessed"] == 1
     assert result["skipped_outside_scope"] == 2
     assert result["assessed_page_count_unchanged"] is True
@@ -84,10 +89,10 @@ def test_b09_registers_only_unsampled_same_origin_scoped_targets_with_source_pro
     assert candidate["metadata"]["synthetic"] is False
 
 
-def test_b09_dedupes_target_identity_without_losing_sitemap_sources():
+def test_b09_dedupes_request_identity_and_retains_multiple_sitemap_sources():
     scheduler = _scheduler()
     target = "https://example.com/shop/item"
-    register_sitemap_target_candidates(
+    result = register_sitemap_target_candidates(
         scheduler,
         [
             {"url": target, "sitemap_url": "https://example.com/products-a.xml"},
@@ -98,31 +103,60 @@ def test_b09_dedupes_target_identity_without_losing_sitemap_sources():
         scope_prefix="/shop",
     )
     [candidate] = scheduler.candidates("sitemap_target")
-    # The helper registers one request identity; multiple source aggregation is
-    # handled by the shared scheduler when the same candidate is registered.
+    assert result["registered"] == 1
     assert candidate["url"] == target
+    assert candidate["source_pages"] == [
+        "https://example.com/products-a.xml",
+        "https://example.com/products-b.xml",
+    ]
     assert scheduler.summary()["purposes"]["sitemap_target"]["eligible"] == 1
+
+
+def test_b09_registration_discloses_truncation_without_expanding_assessed_pages():
+    scheduler = _scheduler()
+    entries = [
+        {"url": f"https://example.com/shop/{index}", "sitemap_url": "https://example.com/products.xml"}
+        for index in range(5)
+    ]
+    result = register_sitemap_target_candidates(
+        scheduler,
+        entries,
+        assessed_urls=["https://example.com/shop/assessed"],
+        origin="https://example.com",
+        scope_prefix="/shop",
+        max_candidates=2,
+    )
+    assert result["eligible_unsampled"] == 5
+    assert result["registered"] == 2
+    assert result["truncated"] is True
+    assert result["assessed_page_count_unchanged"] is True
+    assert len(scheduler.candidates("sitemap_target")) == 2
 
 
 def test_b09_classifies_verified_missing_noindex_redirect_and_app_shell_conflicts():
     requested = "https://example.com/shop/item"
-    source = "https://example.com/products.xml"
+    sources = ["https://example.com/products.xml"]
 
-    missing = classify_sitemap_target(_page(requested, status=404, evidence_class="failed_http"), requested_url=requested, sitemap_source=source)
+    missing = classify_sitemap_target(
+        _page(requested, status=404, evidence_class="failed_http"),
+        requested_url=requested,
+        sitemap_sources=sources,
+    )
     assert (missing["state"], missing["reason"]) == ("fail", "sitemap_target_http_404")
 
-    noindex = classify_sitemap_target(_page(requested, noindex=True), requested_url=requested, sitemap_source=source)
+    noindex = classify_sitemap_target(_page(requested, noindex=True), requested_url=requested, sitemap_sources=sources)
     assert (noindex["state"], noindex["reason"]) == ("fail", "sitemap_target_noindex")
 
     redirected = classify_sitemap_target(
         _page(requested, final_url="https://example.com/shop/new-item", redirect_hops=1),
         requested_url=requested,
-        sitemap_source=source,
+        sitemap_sources=sources,
     )
     assert (redirected["state"], redirected["reason"]) == ("fail", "sitemap_target_redirected")
 
-    shell = classify_sitemap_target(_page(requested, app_shell=True), requested_url=requested, sitemap_source=source)
+    shell = classify_sitemap_target(_page(requested, app_shell=True), requested_url=requested, sitemap_sources=sources)
     assert (shell["state"], shell["reason"]) == ("fail", "sitemap_target_app_shell")
+    assert shell["sitemap_sources"] == sources
 
 
 def test_b09_keeps_challenge_429_and_incomplete_html_unverified():
@@ -149,12 +183,40 @@ def test_b09_keeps_challenge_429_and_incomplete_html_unverified():
 def test_b09_usable_indexable_target_passes_with_provenance():
     requested = "https://example.com/shop/item"
     source = "https://example.com/products.xml"
-    result = classify_sitemap_target(_page(requested), requested_url=requested, sitemap_source=source)
+    result = classify_sitemap_target(_page(requested), requested_url=requested, sitemap_sources=[source])
     assert result["version"] == SITEMAP_INTEGRITY_EVIDENCE_VERSION
     assert result["state"] == "pass"
     assert result["reason"] == "sitemap_target_usable_indexable_html"
     assert result["requested_url"] == requested
-    assert result["sitemap_source"] == source
+    assert result["sitemap_sources"] == [source]
+
+
+def test_b09_source_diagnostics_fail_closed_when_failure_reason_is_not_attributed_to_source():
+    evidence = build_sitemap_source_evidence(
+        {
+            "sitemap_sources": [
+                {
+                    "url": "https://example.com/products.xml",
+                    "source": "robots_declared",
+                    "outcome": "failed",
+                    "loc_count": 0,
+                },
+                {
+                    "url": "https://example.com/sitemap.xml",
+                    "source": "speculative_default",
+                    "outcome": "urls",
+                    "loc_count": 12,
+                },
+            ],
+            "sitemap_failure_reason_buckets": {"http_403": 1},
+        }
+    )
+    declared, default, coverage = evidence
+    assert declared["state"] == "not_verified"
+    assert declared["reason"] == "sitemap_source_retrieval_failed_reason_unattributed"
+    assert default["state"] == "pass"
+    assert coverage["state"] == "not_verified"
+    assert coverage["failure_reason_buckets"] == {"http_403": 1}
 
 
 def test_b16_generates_bounded_slash_and_case_variants_without_changing_reserved_escape_or_query():
@@ -326,18 +388,14 @@ def test_b16_redirect_to_other_destination_defers_meaning_to_b08():
     assert result["reason"] == "redirect_meaning_requires_b08"
 
 
-def test_shared_scheduler_exhaustion_projects_as_unknown_feature_coverage():
+def test_shared_scheduler_exhaustion_projects_as_unknown_sitemap_coverage():
     scheduler = _scheduler(max_probe_requests=0)
     target = "https://example.com/shop/item"
     scheduler.register(purpose="sitemap_target", url=target)
     assert scheduler.can_start_candidate("sitemap_target", target) is False
     scheduler.record_exhausted("sitemap_target", target)
 
-    coverage = feature_coverage_from_scheduler(
-        scheduler.summary(),
-        "sitemap_target",
-        version=SITEMAP_INTEGRITY_EVIDENCE_VERSION,
-    )
+    coverage = sitemap_coverage_from_scheduler(scheduler.summary())
     assert coverage["state"] == "not_verified"
     assert coverage["reason"] == "shared_probe_budget_or_deadline_exhausted"
     assert coverage["eligible"] == 1
@@ -357,12 +415,8 @@ def test_partial_url_variant_coverage_never_becomes_success():
         status_code=200,
         final_url="https://example.com/a",
     )
-    coverage = feature_coverage_from_scheduler(
-        scheduler.summary(),
-        "url_variant",
-        version=URL_VARIANT_EVIDENCE_VERSION,
-    )
+    coverage = url_variant_coverage_from_scheduler(scheduler.summary())
     assert coverage["state"] == "not_verified"
-    assert coverage["reason"] == "eligible_targets_not_fully_checked"
+    assert coverage["reason"] == "eligible_url_variants_not_fully_checked"
     assert coverage["eligible"] == 2
     assert coverage["completed"] == 1

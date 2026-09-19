@@ -350,6 +350,7 @@ def _destination_meaning_terms(page: dict, destination_url: str) -> list[str]:
 
 def _redirect_meaning_evidence(page: dict, evidence: dict) -> dict:
     state = str(evidence.get("state") or "")
+    hop_count = int(evidence.get("hop_count") or 0)
     source_url = str(evidence.get("source_url") or page.get("url") or "")
     destination_url = str(evidence.get("destination_url") or page.get("final_url") or "")
     status = int(evidence.get("destination_status_code") or page.get("status_code") or 0)
@@ -361,13 +362,17 @@ def _redirect_meaning_evidence(page: dict, evidence: dict) -> dict:
         "destination_terms": [],
         "shared_terms": [],
     }
-    if int(evidence.get("hop_count") or 0) <= 0 and state == "not_redirected":
+    if hop_count <= 0 and state == "not_redirected":
         return base
     if state in {"redirect_destination_unverified", "redirect_destination_blocked_by_robots"}:
         return {**base, "state": "not_verified", "reason": "destination_access_unverified"}
     if state == "redirect_chain_limit_exceeded":
         return {**base, "state": "not_verified", "reason": "redirect_chain_limit_exceeded"}
-    if state in {"redirect_loop", "redirect_missing_location", "redirect_invalid_location", "blocked_non_public_redirect"}:
+    if state == "redirect_loop":
+        if hop_count <= 0:
+            return {**base, "state": "not_verified", "reason": "redirect_loop_unverified"}
+        return {**base, "state": "verified_unusable", "reason": "redirect_loop"}
+    if state in {"redirect_missing_location", "redirect_invalid_location", "blocked_non_public_redirect"}:
         return {**base, "state": "verified_unusable", "reason": state}
     if status >= 400:
         return {**base, "state": "verified_unusable", "reason": f"destination_http_{status}"}
@@ -429,7 +434,7 @@ def _redirect_outcome(page: dict, evidence: dict, destination_state: str, meanin
         return "redirect_to_nonindexable_page"
 
     if meaning_state == "not_verified" and (
-        meaning_reason in {"destination_access_unverified", "redirect_chain_limit_exceeded"}
+        meaning_reason in {"destination_access_unverified", "redirect_chain_limit_exceeded", "redirect_loop_unverified"}
         or state in {"redirect_destination_unverified", "redirect_destination_blocked_by_robots", "redirect_chain_limit_exceeded"}
         or page_evidence_class(page) == "failed_access"
     ):

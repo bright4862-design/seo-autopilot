@@ -823,7 +823,7 @@ async def run_scan(
             access_kind = str(probe_page.get("access_block_kind") or "").strip().lower()
             if (
                 access_kind in {"challenge", "block", "rate_limit"}
-                or evidence_class == "failed_access"
+                or status_code in {401, 403, 407, 408, 425, 429}
                 or (status_code <= 0 and fetch_error)
             ):
                 probe_scheduler.record_result(
@@ -838,7 +838,7 @@ async def run_scan(
                 )
                 continue
 
-            failed = status_code in {404, 410}
+            failed = status_code >= 400
             probe_scheduler.record_result(
                 "internal_link",
                 target,

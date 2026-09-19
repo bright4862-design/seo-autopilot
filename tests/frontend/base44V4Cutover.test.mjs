@@ -16,7 +16,7 @@ const expectedCanonicals = [
 
 test("V4 remains a complete historical Base44 generation after the V7 cutover", () => {
   assert.equal(contract.schema_version, "base44_function_routes_v1");
-  assert.equal(contract.generation, "v6");
+  assert.equal(contract.generation, "v7");
   assert.deepEqual(Object.keys(contract.routes).sort(), [...expectedCanonicals].sort());
   for (const canonical of expectedCanonicals) {
     assert.equal(contract.routes[canonical], `${canonical}V7`);

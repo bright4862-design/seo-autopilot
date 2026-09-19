@@ -55,7 +55,7 @@ test("every active V7 effective handler returns its expected runtime identity be
 
 test("Base44 scanner route generation is explicit and complete", () => {
   assert.equal(contract.schema_version, "base44_function_routes_v1");
-  assert.equal(contract.generation, "v6");
+  assert.equal(contract.generation, "v7");
   assert.deepEqual(Object.keys(routes).sort(), [
     "deleteCustomerScanData",
     "durableScanWorkerControl",

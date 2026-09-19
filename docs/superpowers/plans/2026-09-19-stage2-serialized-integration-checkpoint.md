@@ -4,99 +4,102 @@ Branch: `agent/full-blueprint-stage2-coverage-b06-20260919`
 
 PR: #303
 
-Stage-1 production/release source remains separate. Fresh GitHub main was verified at `2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad`; this Stage-2 branch has not been merged to main, deployed, promoted, or live-accepted.
+Stage-1 production/release source remains separate. Fresh GitHub main remains outside this later-stage branch; nothing in this checkpoint authorizes or performs production publication, promotion, admission mutation, live scanning, schema broadening, Premium enablement, or Grok enablement.
 
 ## Integrated lane deltas
 
-The serialized integration branch now contains the completed isolated feature-lane deltas, merged one at a time:
+The serialized integration branch contains the isolated Stage-2 feature-lane deltas, integrated one at a time rather than merged directly to `main`:
 
-1. B07 orchestration adapter and focused safety regressions from `agent/stage2-b07-producer-20260919` head `0ca2eeabe89642bacea81b36b4efb98c09c7737e`, integrated through PR #318. Stage-2 merge commit: `3cdd464504c114a170222efc5fceffd200043fc4`.
-2. B09 sitemap-integrity and B16 URL-variant helpers/regressions from `agent/stage2-b09-b16-coverage-20260919` head `d58a06b93da5625958eeb68691eeffae88a3ba2a`, integrated through PR #310. Stage-2 merge commit: `6d2fb78739d86fcba062c38fd6b08b433e5c715f`.
-3. B08 redirect-destination meaning helpers/regressions from `agent/stage2-b08-redirect-meaning-20260919` head `bc4f53e2669d0e35f9f0bb752cce31811b334d25`, integrated through PR #309. Stage-2 merge commit: `b2eae38ae9cdd02af390d8647cebabae1279885e`.
-4. B10–B15/B17–B18 evidence helpers/regressions from `agent/stage2-b10-b18-acceptance-20260919` head `7921ad254b91e850c71eee0e3aba7c3f54750cfd`, integrated through PR #311. Stage-2 merge commit: `eaca32004ca06250b8442c72422a9fb349d5ccb5`.
+1. B07 orchestration adapter/safety regressions from `agent/stage2-b07-producer-20260919` head `0ca2eeabe89642bacea81b36b4efb98c09c7737e`.
+2. B09 sitemap-integrity and B16 URL-variant helpers/regressions from `agent/stage2-b09-b16-coverage-20260919` head `d58a06b93da5625958eeb68691eeffae88a3ba2a`.
+3. B08 redirect-destination meaning helpers/regressions from `agent/stage2-b08-redirect-meaning-20260919` head `bc4f53e2669d0e35f9f0bb752cce31811b334d25`.
+4. B10–B15/B17–B18 evidence helpers/regressions from `agent/stage2-b10-b18-acceptance-20260919` head `7921ad254b91e850c71eee0e3aba7c3f54750cfd`.
 
-The lane PRs were integration surfaces only; they were not merged to `main`.
+B06 remains the existing source-complete shared scheduler/internal-link foundation on this line.
 
-## Shared finite-pool hardening implemented after lane integration
+## Shared finite-pool orchestration added in the serialized integration
 
-The first serialized integration review found a concrete risk: B07 could register every deterministic soft-404 candidate before B09/B16 had a chance to consume the same finite follow-up budget. That would technically reuse one scheduler but still allow one purpose to monopolize it.
+The integration branch now contains `scanner-api/app/stage2_shared_probe_orchestration.py`, a producer adapter that composes B07, B09 and B16 through the **one already-owned `SharedCoverageProbeScheduler`**.
 
-This branch now adds two bounded protections:
+The adapter:
 
-- `scanner-api/app/active_soft404_orchestration.py` accepts an optional `max_candidates` cap. The cap selects a deterministic prefix but does **not** create or enlarge any request allowance. Existing callers keep the previous behavior when no cap is supplied.
-- `scanner-api/app/stage2_probe_budget.py` derives candidate allocations only from the existing scheduler summary's `request_budget.requests_remaining`. It round-robins remaining capacity across `soft_404_baseline`, `sitemap_target`, and `url_variant`, fails closed to zero on malformed/missing scheduler evidence, and cannot allocate more than the existing shared remaining request count or the purpose's eligible candidate count.
+- reads the scheduler's existing remaining request capacity through `stage2_probe_budget.py`; it never creates or enlarges a feature-local allowance;
+- derives deterministic B07 synthetic missing-page candidates;
+- consumes exact B09 target→sitemap provenance retained by current sitemap discovery, while leaving missing provenance explicitly incomplete rather than inventing a source URL;
+- derives only bounded B16 exact-identity variants, taking sibling/alias origins only when supplied as already verified and meaningful parameters only when supplied as explicitly observed/reviewed;
+- allocates candidate starts across `soft_404_baseline`, `sitemap_target`, and `url_variant` before follow-up I/O, so an earlier purpose cannot silently hide later eligible work;
+- registers all selected B07/B09/B16 candidates on the same scheduler before the first follow-up request;
+- fetches exclusively through the existing hardened page path with `probe_scheduler.fetch_once` as request provider, so redirect hops spend the same finite request pool;
+- applies the existing robots policy before B09/B16 requests; B07 continues to apply the same policy inside its existing helper;
+- records challenge, 429, robots denial, request failure, shared-budget exhaustion and deadline exhaustion as unknown/not-verified;
+- never appends synthetic/probe-only URLs to assessed `pages` and returns an explicit before/after assessed-page invariant;
+- attaches bounded `soft_404_baselines`, sitemap evidence/coverage/provenance, URL-variant evidence/coverage and the allocation contract to one scheduler-summary-compatible evidence envelope.
 
-Focused regressions cover reserved shared capacity, missing scheduler evidence, small/large finite pools, eligible-count ceilings, malformed desired counts, and refusal to recognize an unapproved second purpose.
+A follow-up hardening found that the scheduler records an intentional robots skip in its `skipped` counter rather than `not_verified`. The feature coverage layer now explicitly checks its classified evidence rows so a robots-denied/unverified target cannot be mislabeled as a coverage pass.
 
-Exact code/test head for this hardening: `73df240cbf12e54df4647d40f4b13b64b2c0df3d`.
+## New behavioral regressions
 
-FixList CI run `35466831345` passed both jobs on that exact head:
+`scanner-api/tests/test_stage2_shared_probe_orchestration.py` adds five network-free producer-adapter regressions:
 
-- immutable checkout confirmed `73df240cbf12e54df4647d40f4b13b64b2c0df3d`;
+1. B07/B09/B16 candidates are registered before first follow-up I/O; one scheduler is used; verified soft-404, sitemap-404 and harmless slash-normalization evidence are produced without changing assessed pages.
+2. A one-request shared remainder allocates only one candidate start and keeps unselected B09/B16 candidate universes explicit/truncated/not-verified rather than claiming coverage.
+3. Robots-denied sitemap evidence is explicit unknown and does not become a coverage pass.
+4. Sitemap 429 and URL-variant challenge evidence remain unknown.
+5. Deadline exhaustion causes no fetch and leaves B07/B09/B16 coverage unknown.
+
+## Exact verification
+
+Exact code/test head: `4d53c33edb5a2f028af26c732172123c11cb20ce`.
+
+FixList CI run: `35468420878` — **SUCCESS on both jobs**.
+
+Fresh evidence from that exact checkout:
+
+- immutable checkout confirmed `4d53c33edb5a2f028af26c732172123c11cb20ce`;
 - root scanner suite: **115 passed**;
-- `scanner-api`: **1,888 passed / 18 intentional skips** (1,906 collected);
-- active soft-404 orchestration: **9 passed**;
-- Stage-2 shared probe allocation: **5 passed**;
-- B08/B09/B10–B18 focused suites remained green;
-- labelled Stage-1 corpus remained explicitly `synthetic`: 14 cases / 55 assertions;
-- genuine full 30-site gate remained `not_assessed`;
-- frozen scanner revision check passed at `01ebe8e90df1e6bd`;
-- production scanner image build passed;
-- lint, typecheck, generated contracts, frontend contracts and production frontend build passed.
+- `scanner-api`: **1,896 passed / 18 intentional skips** (1,914 collected);
+- new shared Stage-2 orchestration suite: **5 passed**;
+- existing B07/B08/B09/B16/B10–B18 suites remained green;
+- labelled Stage-1 corpus remained explicitly `synthetic`: **14 cases / 55 assertions**;
+- genuine full 30-site gate remained **`not_assessed`**;
+- frozen scanner revision `01ebe8e90df1e6bd` passed;
+- production scanner-image build passed;
+- lint, typecheck, generated release contracts, frontend contract tests and frontend production build passed.
 
-This proves the integrated helpers and finite-pool allocation contracts coexist without regression. It does **not** prove B07–B18 source-complete because the shared producer still does not invoke most new helpers.
+This is meaningful integrated producer-adapter evidence, but it does **not** make Stage 2 source-complete because the real `scanner.py::run_scan` call site and later producer/customer surfaces are still open.
 
-## Shared integration work still open
+## Remaining serialized Stage-2 work
 
-### B07 — producer path
+### 1. Wire the adapter into real `run_scan`
 
-`scanner-api/app/active_soft404_orchestration.py` is present and tested, but `scanner.py::run_scan` still needs to invoke it using the already-created `SharedCoverageProbeScheduler`, effective origin/path scope, existing robots policy, and `fetch_and_extract(... request_provider=scheduler.fetch_once)` hardened request path. The resulting bounded baseline rows must be attached under `coverage_probe_evidence.soft_404_baselines` before postprocessing. Synthetic probes must never enter `pages`, `pages_crawled`, assessed/eligible denominators, or discovery counts.
+Invoke `run_stage2_shared_probe_orchestration(...)` after the existing B06 unsampled-internal-link slice using the already-created scheduler, canonical/effective origin and scope, current robots policy, current discovered sitemap URLs/diagnostics, and existing hardened `fetch_and_extract` path. The returned envelope can replace the later scheduler snapshot because it preserves the scheduler-summary keys and adds Stage-2 evidence.
 
-The new shared allocation contract should determine the B07 candidate cap before B09/B16 registration rather than granting B07 a feature-local request budget.
+Add a direct real-`run_scan` regression proving positive + robots/challenge/429/budget/deadline behavior and that synthetic/probe-only URLs never change Standard 150 assessed-page counts/denominators.
 
-Producer-path positive and challenge/429/robots/budget/deadline regressions remain required. Existing downstream active-soft404 authority/customer tests must then be exercised from the real producer path.
+### 2. Fix grouped observed provenance in `scanner.group_findings`
 
-A separate integration review also confirmed `scanner.py::group_findings` still restores observed provenance when the set of *non-empty* versions has one item, even if another grouped member is unversioned. That can lend active authority to a passive member. Before B07 closes, group-level `observed_evidence_version` and `verified_observed_pages` must be emitted only when **every** member carries the same non-empty version, with a direct `scanner.group_findings` regression.
+The current implementation still filters blank evidence versions before checking agreement. A versioned member can therefore lend group-level `observed_evidence_version` / `verified_observed_pages` to an unversioned member. Strip sample-inherited observed provenance and restore it only through `uniform_observed_group_provenance(...)`, which already requires the same non-empty version on **every** grouped member. Add a direct `group_findings` regression.
 
-### B08 — shared customer wording
+### 3. Generalize B08 customer wording
 
-The current `redirect_wrong_destination` customer copy in `scanner.py` still describes only a catch-all homepage. B08 can now verify unrelated/catch-all sections too. The shared copy, group title and site-surface guidance must become evidence-led and generic (for example, “unrelated or catch-all destination”), with a focused regression. Do not change the redirect evidence version or historical signatures.
+The shared `redirect_wrong_destination` copy still describes only homepage catch-all behavior. B08 can prove unrelated sections too. Change the title/explanation/recommendation/group text to evidence-led “unrelated or catch-all destination” language without changing historical evidence versions/signatures, and add a focused regression.
 
-### B09 — sitemap producer provenance and shared fetch
+### 4. Complete B10–B15/B17–B18 real producer/authenticated delivery
 
-The helper is integrated, but `run_scan` must retain per-target sitemap-source provenance and exact source/child failure reasons, register unsampled in-scope targets under purpose `sitemap_target` on the **same** scheduler, fetch through the existing hardened request provider, and keep challenged/robots/budget/deadline/incomplete states unknown. Probe-only sitemap targets must stay outside assessed-page counts.
+The pure evidence contracts are integrated, but real production evidence still needs to supply accepted substantive main text, navigation/depth, bounded raw/rendered hub pairs, local entity/context/status, scoped freshness/current intent, truthful transfer/decoded/inline byte measurements, and explicit optional CrUX/GSC disconnected/stale/unavailable states.
 
-Fresh source inspection confirms current `load_sitemap_urls` records only aggregate failure buckets plus root-level source outcomes. It does not yet retain page-target → exact sitemap-source provenance, does not record child sources as source rows, and does not attach each failure reason to the exact sitemap URL. This remains a real producer gap, not a documentation gap.
+Any newly displayed evidence/count/finding must be proven through real producer → review → signed authority → persisted rows → verified customer/card/handoff/export readers before the corresponding requirement is source-complete.
 
-### B16 — URL variant producer wiring
+### 5. Independent review + exact-head combined CI
 
-The helper is integrated, but `run_scan` must derive/register only bounded exact-identity variants allowed by the spec. Verified alias origins must come from already-authenticated landing/scope evidence; meaningful parameter variants must be observed/reviewed rather than invented. Synthetic normalization cannot become a published-redirect claim. A distinct live route remains unknown unless separate authenticated equivalence evidence (for example B10) proves equivalence.
+After the remaining shared wiring, run focused regressions, the full exact-head FixList CI, and independent review. Fix every material finding with a reproducing regression. Only then mark B06–B18 source-complete and begin shared Stage-3 integration.
 
-### B10–B15/B17–B18 — extraction and authenticated projection
+## Invariants retained
 
-Pure evidence contracts are integrated. Shared producer wiring remains for accepted substantive main text, crawl-depth/navigation provenance, bounded paired raw/rendered hub evidence, local entity/context/status envelopes, contextual temporal/current-intent evidence, truthful transfer/decoded/inline byte measurements, and optional CrUX/GSC states. Disconnected, stale and unavailable provider evidence must stay explicit and non-fabricated.
-
-If any of these fields create or change customer-visible findings/counts, integration must add real producer → review → signed authority → persisted rows → verified customer/card/handoff/export regressions before the requirement is source-complete.
-
-## Integration invariants
-
-- One shared finite coverage scheduler/request pool only; no feature receives a second hidden request budget.
-- Standard 150 assessed-page cap and truthful assessed denominators remain unchanged by probe-only evidence.
-- Existing DNS/SSRF/redirect/body/deadline/robots protections remain authoritative.
-- Unknown/unavailable evidence remains unknown and cannot be converted to pass/fail merely to improve coverage.
-- Historical signatures/readers and preview privacy remain unchanged.
-- Python review remains the canonical decision/ranking authority.
-- Stage 3 shared integration does not begin until Stage 2 producer/customer wiring is complete, independently reviewed, and exact-head CI green.
-
-## Next serialized slice
-
-1. Correct `scanner.group_findings` mixed-version provenance and add the direct regression.
-2. Wire B07 into the actual `run_scan` probe phase using the shared allocator and add producer-path regressions.
-3. Update B08 shared wording with a focused regression.
-4. Extend sitemap discovery diagnostics with exact target/source and exact source-failure provenance; then wire B09/B16 registrations and fetch/classification through the same scheduler.
-5. Complete B10–B18 producer/extraction/authenticated customer wiring.
-6. Run focused suites after each slice, then full exact-head FixList CI.
-7. Obtain independent review and fix every material finding with a reproducing regression.
-8. Only then update B06–B18 to source-complete and begin Stage-3 shared integration.
-
-No production release, live scan, provider connection, schema broadening, secret change, Premium enablement or Grok enablement is authorized by this checkpoint.
+- exactly one finite Stage-2 follow-up scheduler/request pool;
+- Standard 150 assessed-page cap and truthful denominators unchanged by probe-only evidence;
+- DNS/SSRF/redirect/body/deadline/robots rules remain authoritative;
+- unknown/unavailable evidence remains unknown;
+- exact published evidence identity, historical signatures/readers and preview privacy remain compatible;
+- Python Review remains canonical decision/ranking authority;
+- no production release/live acceptance is claimed here.

@@ -100,10 +100,39 @@ test("project persistence is available before Standard 150 admission", () => {
   assert.match(activeProject, /siteOwnerAttestation = ""/);
   assert.match(activeProject, /normalizeOwnershipAnswer\(siteOwnerAttestation\)/);
   assert.match(activeProject, /site_owner_attestation: normalizedAttestation/);
-  assert.match(form, /projectAttestationUpdate\(scanProject, siteOwnership\)/);
-  const projectWrite = form.indexOf("base44.entities.BusinessProject.update(scanProject.id, attestation)");
+  assert.match(form, /siteOwnerAttestation: siteOwnership/);
+  assert.doesNotMatch(form, /projectAttestationUpdate\(scanProject, siteOwnership\)/);
+  const ensureCall = form.indexOf("await ensureScanProject");
+  const projectWrite = activeProject.indexOf("const updated = await base44.entities.BusinessProject.update(stableProjectId");
   const admission = form.indexOf("submitStandardScanJob(scanPayload)");
-  assert.ok(projectWrite >= 0 && admission > projectWrite, "project attestation must be written before admission");
+  assert.ok(ensureCall >= 0 && projectWrite >= 0 && admission > ensureCall, "attestation persistence must be part of the admission prerequisite");
+  assert.match(activeProject.slice(projectWrite, activeProject.indexOf("writeCustomerActiveProject", projectWrite)), /await base44\.entities\.BusinessProject\.update/);
+  assert.doesNotMatch(form, /BusinessProject\.update\(scanProject\.id, attestation\)/);
+});
+
+test("an existing owner project is overwritten by not_owner before robots-safe admission", () => {
+  const activeProject = readFileSync("src/lib/activeProject.js", "utf8");
+  const form = readFileSync("src/components/scan/ScanWebsiteForm.jsx", "utf8");
+  const staleProject = { site_owner_attestation: OWNERSHIP_OWNER_MANAGED };
+  assert.deepEqual(projectAttestationUpdate(staleProject, OWNERSHIP_NOT_MANAGED), {
+    site_owner_attestation: OWNERSHIP_NOT_MANAGED,
+  });
+  assert.deepEqual(ownerManagedRobotsPolicy(OWNERSHIP_NOT_MANAGED), {
+    respect_robots_txt: true,
+    owner_attested_robots_override: false,
+    owner_managed_site: false,
+    robots_policy: "public_crawler",
+    site_ownership_answer: OWNERSHIP_NOT_MANAGED,
+    site_ownership_policy_version: "site_ownership_policy_v3_owner_robots_override",
+  });
+  const ensureCall = form.slice(form.indexOf("await ensureScanProject"), form.indexOf("submitStandardScanJob(scanPayload)"));
+  assert.match(ensureCall, /siteOwnerAttestation:\s*siteOwnership/);
+  const updateBlock = activeProject.slice(
+    activeProject.indexOf("if (\n    normalizedAttestation"),
+    activeProject.indexOf("writeCustomerActiveProject", activeProject.indexOf("if (\n    normalizedAttestation")),
+  );
+  assert.match(updateBlock, /await base44\.entities\.BusinessProject\.update/);
+  assert.doesNotMatch(updateBlock, /catch/);
 });
 
 test("project attestation updates only on a canonical change", () => {

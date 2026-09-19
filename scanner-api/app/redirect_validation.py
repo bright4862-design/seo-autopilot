@@ -172,9 +172,6 @@ async def fetch_with_redirect_evidence(
                 })
                 return None, evidence
         except Exception as exc:
-            # A transport/decode exception is scanner access evidence, not proof
-            # of a final HTTP status. Preserve it separately so the report can
-            # say the destination was not verified without inventing a 404.
             evidence.update({
                 "state": "redirect_destination_unverified" if hops else "fetch_failed",
                 "hop_count": len(hops),
@@ -366,10 +363,7 @@ def _redirect_meaning_evidence(page: dict, evidence: dict) -> dict:
     }
     if int(evidence.get("hop_count") or 0) <= 0 and state == "not_redirected":
         return base
-
     if state in {"redirect_destination_unverified", "redirect_destination_blocked_by_robots"}:
-        return {**base, "state": "not_verified", "reason": "destination_access_unverified"}
-    if page_evidence_class(page) == "failed_access":
         return {**base, "state": "not_verified", "reason": "destination_access_unverified"}
     if state == "redirect_chain_limit_exceeded":
         return {**base, "state": "not_verified", "reason": "redirect_chain_limit_exceeded"}
@@ -377,6 +371,8 @@ def _redirect_meaning_evidence(page: dict, evidence: dict) -> dict:
         return {**base, "state": "verified_unusable", "reason": state}
     if status >= 400:
         return {**base, "state": "verified_unusable", "reason": f"destination_http_{status}"}
+    if page_evidence_class(page) == "failed_access":
+        return {**base, "state": "not_verified", "reason": "destination_access_unverified"}
     if 200 <= status < 300 and not _html_parse_ok(page):
         return {**base, "state": "verified_unusable", "reason": "destination_not_usable_html"}
     if not 200 <= status < 300:
@@ -391,17 +387,20 @@ def _redirect_meaning_evidence(page: dict, evidence: dict) -> dict:
         "destination_terms": destination_terms,
         "shared_terms": shared_terms,
     }
-
     if _same_url_except_trailing_slash(source_url, destination_url):
         return {**populated, "state": "verified_related", "reason": "trailing_slash_normalization"}
 
+    source_specific = len(source_terms) >= 2
     destination_path = (urlparse(destination_url).path or "/").rstrip("/") or "/"
-    if destination_path == "/" and "home" in source_terms:
-        return {**populated, "state": "verified_related", "reason": "explicit_home_intent"}
+    if destination_path == "/":
+        if "home" in source_terms:
+            return {**populated, "state": "verified_related", "reason": "explicit_home_intent"}
+        if source_specific:
+            return {**populated, "state": "verified_mismatch", "reason": "specific_source_to_homepage"}
+        return {**populated, "state": "not_verified", "reason": "homepage_relationship_unclear"}
     if shared_terms:
         return {**populated, "state": "verified_related", "reason": "semantic_overlap"}
 
-    source_specific = len(source_terms) >= 2
     destination_depth = len([segment for segment in destination_path.split("/") if segment])
     if source_specific and destination_depth <= 1:
         return {
@@ -418,15 +417,9 @@ def _redirect_outcome(page: dict, evidence: dict, destination_state: str, meanin
 
     state = str(evidence.get("state") or "")
     status = int(evidence.get("destination_status_code") or page.get("status_code") or 0)
-    if meaning_evidence.get("state") == "not_verified":
-        return "redirect_destination_unverified" if state in {
-            "redirect_destination_unverified",
-            "redirect_destination_blocked_by_robots",
-            "redirect_chain_limit_exceeded",
-        } or page_evidence_class(page) == "failed_access" else "redirect_to_usable_page"
-    if meaning_evidence.get("state") == "verified_unusable":
-        return "redirect_destination_unusable"
-    if status >= 400:
+    meaning_state = str(meaning_evidence.get("state") or "")
+    meaning_reason = str(meaning_evidence.get("reason") or "")
+    if meaning_state == "verified_unusable" or status >= 400:
         return "redirect_destination_unusable"
 
     destination_url = str(evidence.get("destination_url") or page.get("final_url") or "")
@@ -434,8 +427,15 @@ def _redirect_outcome(page: dict, evidence: dict, destination_state: str, meanin
     canonical_elsewhere = bool(canonical and _normalize_url(destination_url) and canonical != _normalize_url(destination_url))
     if destination_state in {"Noindexed", "Canonicalized"} or _noindex(page) or canonical_elsewhere:
         return "redirect_to_nonindexable_page"
+
+    if meaning_state == "not_verified" and (
+        meaning_reason in {"destination_access_unverified", "redirect_chain_limit_exceeded"}
+        or state in {"redirect_destination_unverified", "redirect_destination_blocked_by_robots", "redirect_chain_limit_exceeded"}
+        or page_evidence_class(page) == "failed_access"
+    ):
+        return "redirect_destination_unverified"
     if 200 <= status < 300 and _html_parse_ok(page):
-        if meaning_evidence.get("state") == "verified_mismatch":
+        if meaning_state == "verified_mismatch":
             return "redirect_to_wrong_destination"
         return "redirect_to_usable_page"
     if 200 <= status < 300:
@@ -443,13 +443,7 @@ def _redirect_outcome(page: dict, evidence: dict, destination_state: str, meanin
     return "redirect_destination_unusable"
 
 
-def _fetch_evidence(
-    page: dict,
-    evidence: dict,
-    destination_state: str,
-    classification: str,
-    meaning_evidence: dict,
-) -> dict:
+def _fetch_evidence(page: dict, evidence: dict, destination_state: str, classification: str, meaning_evidence: dict) -> dict:
     destination_url = str(evidence.get("destination_url") or page.get("final_url") or "")
     fetch_error = str(evidence.get("fetch_error") or page.get("fetch_error") or "").strip()
     robots_status = destination_state or str(page.get("robots_indexability_status") or "")

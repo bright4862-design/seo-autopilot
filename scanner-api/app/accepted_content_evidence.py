@@ -14,6 +14,7 @@ from typing import Any
 from bs4 import BeautifulSoup
 
 from .stage2_coverage_evidence import MAIN_TEXT_EVIDENCE_VERSION, PAGE_WEIGHT_VERSION
+from .stage2_local_entity_producer import LOCAL_ENTITY_PRODUCER_VERSION, extract_local_entity_observations
 
 
 IMAGE_APPLICABILITY_VERSION = "image_alt_applicability_v1"
@@ -144,8 +145,8 @@ def _main_text_evidence(soup: BeautifulSoup) -> dict[str, Any]:
             else ("main_text_too_large" if truncated else "main_text_empty")
         ),
         "main_text_source": source if root is not None else None,
-        # Compatibility input for the Stage-2 near-duplicate helper is an
-        # irreversible shingle stream, never the page's raw customer copy.
+        # Compatibility input for the Stage-2 near-duplicate helper is a
+        # bounded deterministic fingerprint stream, never the page's raw copy.
         "main_text": " ".join(shingles),
         "main_text_representation": "sha256_5_token_shingles_v1",
         "main_text_signature": aggregate,
@@ -270,10 +271,21 @@ def extract_accepted_content_evidence(html: str, evidence_class: str) -> dict[st
     templates = {"version": VISIBLE_TEMPLATE_VERSION, "accepted": False, "state": "not_verified", "reason": reason,
                  "issue_types": [], "issue_count": None, "samples": [], "samples_truncated": False}
     location = {"title": "", "h1": "", "visible_text": ""}
+    local_entities = {
+        "version": LOCAL_ENTITY_PRODUCER_VERSION,
+        "state": "not_verified",
+        "reason": reason,
+        "candidate_count": 0,
+        "selected_count": 0,
+        "selection_truncated": False,
+        "malformed_script_count": 0,
+        "observations": [],
+    }
     result = {
         "image_alt_applicability": images,
         "visible_template_evidence": templates,
         "location_context": location,
+        "local_entity_observations": local_entities,
         "main_text_evidence_version": MAIN_TEXT_EVIDENCE_VERSION,
         "main_text_verified": False,
         "main_text_reason": reason,
@@ -302,6 +314,10 @@ def extract_accepted_content_evidence(html: str, evidence_class: str) -> dict[st
         "decoded_bytes_basis": "utf8_of_decoded_html",
         "inline_script_bytes": inline_script_bytes,
         "inline_style_bytes": inline_style_bytes,
+        # Capture structured local-entity evidence before script sanitization.
+        # This is still the same accepted HTML response; no secondary fetch or
+        # rendered claim is introduced.
+        "local_entity_observations": extract_local_entity_observations(soup),
     })
     snapshots = []
     for img in soup.find_all("img"):

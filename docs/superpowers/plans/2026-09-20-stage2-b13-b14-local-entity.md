@@ -8,93 +8,108 @@ PR: #303
 
 ## Scope
 
-This slice implements a conservative producer/evidence seam for B13 local entity completeness and B14 cross-page NAP consistency without introducing a new network request path, request budget, customer repair, score adjustment, or sitewide consistency claim.
+This slice implements conservative B13 local-entity completeness/status evidence and B14 provenance-bearing cross-page NAP evidence without adding a new fetch path, request budget, customer repair, score adjustment or sitewide consistency claim.
 
-The implementation consumes only accepted page HTML already obtained by the Standard-150 crawler. It does not infer entity identity from shared names, phone numbers, addresses, URL shape, or page-family similarity.
+The implementation consumes only accepted Standard-150 HTML and already-retained discovery provenance. Entity identity is never inferred from matching names, phones, addresses, page families, forms, sitemap membership or visible text.
 
-## Producer behavior
+## Current producer contract
 
-`scanner-api/app/stage2_local_entity_producer.py` parses bounded JSON-LD LocalBusiness/Store-family observations from accepted usable HTML and records bounded structured evidence for:
+`scanner-api/app/stage2_local_entity_producer.py` emits bounded observations under:
+
+- `local_entity_producer_v1_jsonld_explicit_identity`;
+- `local_entity_context_provenance_v1`.
+
+Accepted JSON-LD LocalBusiness/Store-family observations can retain explicitly present:
 
 - name;
 - address;
 - phone;
-- regular hours when explicitly present;
-- structured entity type;
-- explicit JSON-LD entity ID;
-- optional holiday-hours/photos/sameAs/parent-entity presence.
+- regular hours;
+- schema type;
+- JSON-LD entity ID;
+- optional holiday-hours/photos/sameAs/parent-entity presence;
+- contextual open/closed/Coming Soon evidence;
+- explicit form/store-finder/sitemap provenance.
 
-Optional holiday-hours/photos/sameAs/parent fields are not universal requirements. Missing regular hours are not automatically a defect: when applicability is unknown they remain `not_verified`.
+Malformed, oversized or unusable HTML remains unverified. Optional holiday hours/photos/sameAs/parent fields are not universal requirements.
 
-Malformed or oversized JSON-LD remains `not_verified`; an unusable HTTP page cannot contribute accepted local-entity evidence.
+## Contextual status rules
 
-Page observations are bounded to 10 selected observations while preserving an exact unique candidate count. Scan aggregation is bounded to 20 selected observations and records whether selection was truncated.
+Status is admitted only from bounded explicit provenance:
 
-## B14 identity and comparison rules
+1. explicit structured fields (`businessStatus`, `openingStatus`, `status`) when the value maps unambiguously to `coming_soon`, `open` or `closed`;
+2. otherwise a conservative accepted title/H1 phrase such as `Coming Soon`, `Opening Soon`, `Now Open`, `Temporarily Closed` or `Permanently Closed`.
 
-Cross-page NAP evidence is deliberately stricter than B13 completeness:
+Arbitrary body text does not establish business status. For example, `Customer support is closed Sundays` cannot mark a location closed.
 
-- only an explicit absolute HTTP(S) JSON-LD `@id` is currently accepted as verified cross-page identity;
-- fragment/relative IDs such as `#store` are retained as observed IDs but are `unverified` until a trusted document base is available for correct resolution;
-- shared names, addresses, phones, or page-family similarity never establish identity;
-- an entity is comparable only when the same verified explicit ID is observed on at least two distinct page URLs;
-- duplicate/conflicting JSON-LD on one page cannot become cross-page proof;
-- one verified observation cannot produce a NAP-consistency pass;
-- distinct explicit entity IDs remain separate even when they share a phone number;
-- `sitewide_consistency_claim` is always false for this bounded assessed-page evidence.
+Hours applicability follows the status rather than inventing a defect:
 
-These rules preserve unknown/ambiguous evidence rather than manufacturing a pass or failure.
+- explicit regular hours -> applicable;
+- verified Coming Soon/closed -> missing regular hours are not a defect;
+- verified open -> regular hours are applicable;
+- unknown status and no hours -> applicability stays unknown.
+
+## B14 entity identity and source provenance
+
+Cross-page identity remains deliberately stricter than NAP similarity:
+
+- only an explicit absolute HTTP(S) JSON-LD `@id` is currently verified for cross-page entity identity;
+- relative/fragment IDs remain unverified without trusted document-base resolution;
+- matching names, addresses, phone numbers or page-family similarity never prove identity;
+- the same verified ID must appear on at least two distinct page URLs before NAP consistency can pass/fail;
+- same-page duplicates/conflicts cannot become cross-page proof;
+- distinct explicit IDs remain separate even with a shared phone;
+- `sitewide_consistency_claim` remains false.
+
+Additional source provenance is recorded without changing those identity rules:
+
+- `form_explicit_entity_id` only when a form/subtree carries the exact already-verified absolute entity ID in an explicit entity/location/store ID attribute or field;
+- `store_finder_explicit_entity_id` only when an explicit store-finder/locator marker and the exact already-verified entity ID occur together;
+- `sitemap_reference` only from the retained page's actual `discovered_from` provenance at scan aggregation time.
+
+Form/store-finder/sitemap context never promotes an observation that lacks the verified structured entity ID. This avoids turning matching NAP strings or generic locator markup into identity proof.
+
+## Shared result / authority behavior
+
+`build_local_entity_scan_evidence(pages)` aggregates only retained Standard-150 pages, capped at 20 selected observations while preserving eligible/truncation counts. `indexability_postprocess.py` attaches the aggregate to the shared scan result and `technical_audit_summary`, so the existing authority payload authenticates it.
+
+The evidence is still internal/evidence-only. This slice does not create a B13/B14 repair, customer card, export row, score change or preview surface. Therefore no customer output has been invented simply to satisfy a test.
 
 ## Behavioral regressions
 
-`scanner-api/tests/test_stage2_local_entity_producer.py` covers:
+Existing B13/B14 tests continue to cover structured completeness, cross-page same-ID pass/fail, relative/no-ID fail-closed behavior, same-page duplicate protection, malformed/unusable HTML and bounded sampling.
 
-- accepted structured entity completeness;
-- unknown regular-hours applicability;
-- verified cross-page inconsistency from the same explicit entity ID;
-- verified cross-page matching NAP;
-- same-page duplicate/conflicting identity remaining unverified for B14;
-- separate explicit entities sharing a phone number;
-- no-ID observations remaining unverified;
-- unusable HTTP evidence rejection;
-- malformed JSON-LD fail-closed behavior;
-- unique candidate deduplication and bounded selection.
+`scanner-api/tests/test_stage2_local_entity_explicit_provenance.py` adds six adversarial regressions for:
 
-`scanner-api/tests/test_stage2_local_entity_identity.py` adds explicit regressions for relative/fragment JSON-LD IDs and preserves the verified absolute-ID path.
+1. explicit machine Coming Soon status making absent regular hours contextual rather than defective;
+2. accepted title/H1 Coming Soon status;
+3. incidental body `closed` wording not becoming location status;
+4. exact form-ID provenance plus retained sitemap discovery provenance;
+5. exact store-finder ID matching, with mismatched IDs ignored;
+6. form/sitemap context never promoting missing structured entity identity.
 
 ## Verification
 
-Intermediate cross-page implementation head `b513c6c7a47e39d792b342f15d6ff31025f5d099` passed FixList CI `35484212032` on both jobs:
+Exact executable head: `e906ef69c7b7deab3a1014c702b4f3af1453c54c`.
 
-- root scanner regressions: 115 passed;
-- scanner-api: 1,950 passed / 18 intentional skips;
-- Stage-1 labelled corpus: synthetic, 14 cases / 55 assertions, `full_30_site_gate=not_assessed`;
-- frozen scanner revision `01ebe8e90df1e6bd`: passed;
-- production scanner image: `sha256:7c634b53988ff3a865b0af809edd93f3f8b583b4e0973e6a501e4c6c801639e8`;
-- lint, typecheck, generated release contracts, frontend contract tests and production frontend build: passed.
+FixList CI `35490908086` — **SUCCESS** on both jobs:
 
-Final exact executable head for this slice: `fe3d18cc63f7b0acdf0e97679db5b14e47966e10`.
+- immutable checkout verified the exact SHA;
+- root scanner regression step passed;
+- full `scanner-api` suite passed, including the six new explicit-provenance regressions; relative to the prior 1,978-test checkpoint this adds six tests (1,984 passed / 18 intentional skips);
+- labelled Stage-1 synthetic corpus passed and remains explicitly synthetic; the genuine 30-site gate remains `not_assessed`;
+- frozen scanner revision check passed;
+- production scanner image build passed;
+- lint, typecheck, generated release contracts, frontend contract tests and production frontend build passed.
 
-FixList CI `35484333097` passed both jobs on that exact head:
+The workflow environment continues to resolve Node 20.20.x rather than serving as Node 20.19.5 runtime evidence.
 
-- immutable checkout verified `fe3d18cc63f7b0acdf0e97679db5b14e47966e10`;
-- root scanner regressions: **115 passed**;
-- scanner-api: **1,952 passed / 18 intentional skips**;
-- Stage-1 labelled corpus: `synthetic`, 14 cases / 55 assertions, `full_30_site_gate=not_assessed`;
-- frozen scanner revision `01ebe8e90df1e6bd`: passed;
-- production scanner image: `sha256:e776770dc976cf7c4b434e134db31323f61278c0f8c460c53ca890cc50d11bb9`;
-- lint, typecheck, generated release contracts, frontend contract tests and production frontend build: passed.
+## Remaining B13/B14 limits
 
-The workflow resolved Node `20.20.2`; this is not Node `20.19.5` runtime evidence.
+This slice intentionally does not infer identity from generic visible text, generic form values or locator page shape. A store-finder/form can contribute identity only through an exact explicit machine ID already tied to the structured entity. Sitemap membership is provenance, not proof that two NAP records are one entity.
 
-## What is not yet proven
-
-B13/B14 are **not source-complete** yet.
-
-The page-level structured observations are produced on accepted crawler pages, and the scan-level `build_local_entity_scan_evidence(pages)` adapter is tested, but the bounded scan-level summary is not yet attached to the shared `run_scan` result/authority path. No B13/B14 customer repair/card/export or score change is introduced by this slice.
-
-The current producer also does not claim generic visible-text/store-form entity identity, Coming Soon status inference, or complete store-finder/form parity. Those require explicit provenance rather than heuristics.
+No live third-party location feed or external provider is required or claimed.
 
 ## Next serialized action
 
-Wire the bounded scan-level B13/B14 evidence into the shared scanner result without changing the Standard-150 assessed set or request budget. Keep it evidence-only unless/until an authenticated Review → authority → persistence → customer/card/handoff/export path is added. Then continue B15 contextual freshness, direct B17 transfer bytes/CrUX states, and B18 GSC states.
+Treat B13/B14 source provenance as implemented pending whole-Stage-2 independent review. Stay on Stage 2: perform a fresh independent review of the combined B06–B18 source shape, reproduce and fix any material finding with behavioral regressions, then require fresh exact-head CI. Do not start shared Stage-3 integration until that review/CI gate is actually satisfied.

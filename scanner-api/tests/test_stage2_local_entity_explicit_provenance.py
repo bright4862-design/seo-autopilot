@@ -104,8 +104,14 @@ def test_b14_surface_provenance_records_sitemap_and_explicit_form_reference_with
     assert observation["entity_key"] == ENTITY_ID
     assert observation["surface_provenance"] == [
         "structured_data",
-        "sitemap_reference",
         "form_explicit_entity_id",
+    ]
+
+    completeness = build_local_entity_scan_evidence([page])["completeness"][0]
+    assert completeness["surface_provenance"] == [
+        "structured_data",
+        "form_explicit_entity_id",
+        "sitemap_reference",
     ]
 
 
@@ -141,7 +147,9 @@ def test_b14_form_or_sitemap_context_never_promotes_missing_structured_identity(
 
     assert observation["entity_match"] == "unverified"
     assert observation["entity_key"] == ""
-    assert observation["surface_provenance"] == ["structured_data", "sitemap_reference"]
+    assert observation["surface_provenance"] == ["structured_data"]
+    completeness = build_local_entity_scan_evidence([page])["completeness"][0]
+    assert completeness["surface_provenance"] == ["structured_data", "sitemap_reference"]
     nap = build_local_entity_scan_evidence([page])["nap_consistency"]
     assert nap["state"] == "not_verified"
     assert nap["verified_observations"] == 0

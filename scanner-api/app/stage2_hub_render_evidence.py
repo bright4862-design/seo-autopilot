@@ -133,6 +133,24 @@ def _raw_retained_links(
     return links, complete
 
 
+def _rendered_page_usable(rendered_page: dict[str, Any]) -> bool:
+    """Require explicit successful, complete HTML before B12 trusts render links."""
+    if not isinstance(rendered_page, dict):
+        return False
+    status = rendered_page.get("status_code")
+    if not isinstance(status, int) or not 200 <= status < 300:
+        return False
+    if rendered_page.get("page_evidence_class") != "usable_html":
+        return False
+    if _text(rendered_page.get("fetch_error")):
+        return False
+    if rendered_page.get("raw_html_truncated") is True or rendered_page.get("body_truncated") is True:
+        return False
+    if _text(rendered_page.get("access_block_kind")).lower() in {"challenge", "block", "rate_limit"}:
+        return False
+    return True
+
+
 def _rendered_retained_links(
     rendered_page: dict[str, Any],
     *,
@@ -258,6 +276,16 @@ def build_hub_link_comparison(
                     **base,
                     "state": "failed",
                     "reason": "renderer_result_missing",
+                    "rendered_evidence_state": "failed",
+                }
+            )
+            continue
+        if not _rendered_page_usable(rendered_page):
+            rows.append(
+                {
+                    **base,
+                    "state": "failed",
+                    "reason": "rendered_page_not_accepted_usable_html",
                     "rendered_evidence_state": "failed",
                 }
             )

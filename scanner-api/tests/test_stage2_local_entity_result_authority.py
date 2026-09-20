@@ -78,7 +78,24 @@ def test_b13_b14_aggregate_reaches_shared_result_and_signed_review_payload_witho
     assert len(updated["pages"]) == 2
 
     signed_review_payload = build_authority_review_payload(updated)
-    assert signed_review_payload["technical_audit_summary"]["local_entity_scan_evidence"] == evidence
+    signed_evidence = signed_review_payload["technical_audit_summary"]["local_entity_scan_evidence"]
+    assert signed_evidence["producer_version"] == LOCAL_ENTITY_PRODUCER_VERSION
+    assert signed_evidence["eligible_observations"] == 2
+    assert signed_evidence["selected_observations"] == 2
+    assert signed_evidence["selection_truncated"] is False
+    assert signed_evidence["nap_consistency"]["state"] == "pass"
+    assert signed_evidence["nap_consistency"]["comparable_entity_groups"] == 1
+    assert signed_evidence["nap_consistency"]["sitewide_consistency_claim"] is False
+    assert len(signed_evidence["completeness"]) == 2
+    assert all(row["state"] == "pass" for row in signed_evidence["completeness"])
+    assert all(row["entity_match"] == "verified" for row in signed_evidence["completeness"])
+
+    serialized_signed = json.dumps(signed_evidence, sort_keys=True)
+    assert "https://example.com/entities/store-1" not in serialized_signed
+    assert ORIGIN + "/locations/store-1" not in serialized_signed
+    assert ORIGIN + "/store-finder/store-1" not in serialized_signed
+    for private_field in ("entity_key", "page_url", "contextual_status_provenance"):
+        assert f'"{private_field}"' not in serialized_signed
 
     assert not [
         row
@@ -110,7 +127,17 @@ def test_b14_verified_cross_page_nap_conflict_is_authenticated_evidence_but_not_
     }]
 
     signed_review_payload = build_authority_review_payload(updated)
-    assert signed_review_payload["technical_audit_summary"]["local_entity_scan_evidence"]["nap_consistency"]["state"] == "fail"
+    signed_nap = signed_review_payload["technical_audit_summary"]["local_entity_scan_evidence"]["nap_consistency"]
+    assert signed_nap["state"] == "fail"
+    assert signed_nap["verified_observations"] == 2
+    assert signed_nap["comparable_entity_groups"] == 1
+    assert signed_nap["sitewide_consistency_claim"] is False
+    assert signed_nap["inconsistencies"] == [{
+        "fields": ["phone"],
+        "source_count": 2,
+        "provenance": ["structured_data"],
+    }]
+    assert "entity_key" not in signed_nap["inconsistencies"][0]
     assert not [
         row
         for row in updated["findings"]

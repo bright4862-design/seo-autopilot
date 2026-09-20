@@ -581,6 +581,46 @@ def limited_result_payload(review: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_COMPLETION_COVERAGE_ASSESSMENT_FIELDS = frozenset({
+    "coverage_authority_version",
+    "state",
+    "reasons",
+    "authoritative",
+    "score_is_provisional",
+    "release_gate_eligible",
+    "inventory",
+    "inventory_proof",
+    "thresholds",
+})
+
+
+def completion_review_payload(review: dict[str, Any]) -> dict[str, Any]:
+    """Project free-form coverage diagnostics out before completion HMAC signing.
+
+    B22's preview source already uses controller-owned coverage copy. The full
+    completion Review must be just as strict: arbitrary producer/debug prose or
+    future unknown coverage fields cannot hitchhike beside that source into the
+    signed authority envelope. Preserve the current scanner-owned structured
+    coverage decision fields and fail closed for every other assessment key.
+    """
+    if not isinstance(review, dict):
+        return {}
+    projected = dict(review)
+    fingerprint = review.get("site_fingerprint")
+    if not isinstance(fingerprint, dict):
+        return projected
+    projected_fingerprint = dict(fingerprint)
+    assessment = fingerprint.get("coverage_assessment")
+    if isinstance(assessment, dict):
+        projected_fingerprint["coverage_assessment"] = {
+            key: assessment[key]
+            for key in _COMPLETION_COVERAGE_ASSESSMENT_FIELDS
+            if key in assessment
+        }
+    projected["site_fingerprint"] = projected_fingerprint
+    return projected
+
+
 def build_limited_envelope(
     scan: dict[str, Any],
     result: dict[str, Any],
@@ -625,7 +665,7 @@ def build_completion_envelope(
         "version": COMPLETION_VERSION,
         "identity": identity,
         "scan": external_result,
-        "review": review,
+        "review": completion_review_payload(review),
     }
     return {**signed, "proof": create_authority_seal(signed, signing_key)}
 

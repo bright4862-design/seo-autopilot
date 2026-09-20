@@ -13,7 +13,7 @@ from app.stage2_reachability_provenance import (
 )
 
 
-def _hub(url: str, family: str, *, suspected: bool = True, sources=None, status: int = 200):
+def _hub(url: str, family: str, *, suspected: bool = True, sources=None, status: int = 200, truncated: bool = False):
     usable = status == 200
     return {
         "url": url,
@@ -32,7 +32,7 @@ def _hub(url: str, family: str, *, suspected: bool = True, sources=None, status:
         "reachability_evidence_state": "observed_sample" if usable else "not_verified",
         "observed_internal_inlink_count": len(sources or []),
         "internal_source_pages": list(sources or []),
-        "internal_source_pages_truncated": False,
+        "internal_source_pages_truncated": truncated,
         "navigation_presence": None,
         "crawl_depth": 0 if family == "homepage" else 1,
         "sitewide_orphan_claim": False,
@@ -52,6 +52,7 @@ def test_b12_selects_at_most_five_verified_structural_hubs_and_excludes_failed_p
     ]
 
     selected = select_representative_hubs(pages)
+    evidence = build_hub_link_comparison(pages)
 
     assert len(selected) == MAX_HUBS
     assert [page["url"] for page in selected[:4]] == [
@@ -62,6 +63,8 @@ def test_b12_selects_at_most_five_verified_structural_hubs_and_excludes_failed_p
     ]
     assert "https://example.com/failed" not in [page["url"] for page in selected]
     assert "https://example.com/product" not in [page["url"] for page in selected]
+    assert evidence["eligible_hubs"] == 6
+    assert evidence["selection_truncated"] is True
 
 
 def test_b12_exact_retained_identity_ignores_unsampled_and_variant_render_links():
@@ -97,6 +100,51 @@ def test_b12_exact_retained_identity_ignores_unsampled_and_variant_render_links(
     assert home_row["raw_only_count"] == 0
     assert exact not in home_row["render_only_samples"]
     assert "https://example.com/pricing?plan=Pro%2FAnnual" not in home_row["render_only_samples"]
+
+
+def test_b12_preserves_explicit_empty_query_delimiter_identity():
+    home = "https://example.com/"
+    empty_query = "https://example.com/page?"
+    plain = "https://example.com/page"
+    pages = [
+        _hub(home, "homepage"),
+        _hub(empty_query, "collection_page", sources=[home]),
+        _hub(plain, "collection_page", sources=[]),
+    ]
+
+    evidence = build_hub_link_comparison(
+        pages,
+        attempted_urls=[home],
+        rendered_pages_by_url={home: {"links": ["/page?"]}},
+    )
+    row = next(item for item in evidence["hubs"] if item["hub_url"] == home)
+
+    assert row["state"] == "completed"
+    assert row["raw_link_count"] == 1
+    assert row["rendered_link_count"] == 1
+    assert row["render_only_count"] == 0
+    assert row["raw_only_count"] == 0
+
+
+def test_b12_truncated_b11_source_samples_fail_closed_instead_of_inventing_raw_absence():
+    home = "https://example.com/"
+    target = "https://example.com/collection"
+    pages = [
+        _hub(home, "homepage"),
+        _hub(target, "collection_page", sources=["https://example.com/other"], truncated=True),
+    ]
+
+    evidence = build_hub_link_comparison(
+        pages,
+        attempted_urls=[home],
+        rendered_pages_by_url={home: {"links": [target]}},
+    )
+    row = next(item for item in evidence["hubs"] if item["hub_url"] == home)
+
+    assert row["state"] == "failed"
+    assert row["reason"] == "raw_retained_link_evidence_incomplete"
+    assert row["raw_link_count"] is None
+    assert row["render_only_count"] is None
 
 
 def test_b12_missing_renderer_link_collection_is_failed_not_an_empty_success():

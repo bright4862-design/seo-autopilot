@@ -55,6 +55,15 @@ def _b11_verified_page(page: dict[str, Any]) -> bool:
     )
 
 
+def _eligible_hubs(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        page
+        for page in pages
+        if _b11_verified_page(page)
+        and _text(page.get("page_template_family")) in HUB_FAMILY_PRIORITY
+    ]
+
+
 def select_representative_hubs(
     pages: list[dict[str, Any]],
     *,
@@ -65,12 +74,7 @@ def select_representative_hubs(
     if not isinstance(pages, list) or limit == 0:
         return []
 
-    eligible = [
-        page
-        for page in pages
-        if _b11_verified_page(page)
-        and _text(page.get("page_template_family")) in HUB_FAMILY_PRIORITY
-    ]
+    eligible = _eligible_hubs(pages)
     selected: list[dict[str, Any]] = []
     selected_urls: set[str] = set()
 
@@ -98,21 +102,35 @@ def select_representative_hubs(
     return selected
 
 
-def _raw_retained_links(pages: list[dict[str, Any]], source_url: str) -> list[str]:
-    """Invert B11 verified inlinks into one source's retained outgoing set."""
+def _raw_retained_links(
+    pages: list[dict[str, Any]],
+    source_url: str,
+) -> tuple[list[str], bool]:
+    """Invert B11 verified inlinks into one source's retained outgoing set.
+
+    B11 source examples are bounded. If a retained target reports a truncated
+    source list that does not contain this hub, absence of the edge is unknown,
+    so B12 must not present the reconstructed raw set as complete.
+    """
     links: list[str] = []
     seen: set[str] = set()
+    complete = True
     for target in pages:
         if not _b11_verified_page(target):
             continue
         sources = target.get("internal_source_pages")
-        if not isinstance(sources, list) or source_url not in sources:
+        if not isinstance(sources, list):
+            complete = False
+            continue
+        if target.get("internal_source_pages_truncated") is True and source_url not in sources:
+            complete = False
+        if source_url not in sources:
             continue
         target_url = _request_url(target)
         if target_url and target_url not in seen:
             seen.add(target_url)
             links.append(target_url)
-    return links
+    return links, complete
 
 
 def _rendered_retained_links(
@@ -124,7 +142,10 @@ def _rendered_retained_links(
     """Return exact retained URLs from explicit renderer link evidence.
 
     A renderer result without a link collection is not an empty link set. It is
-    unavailable evidence and therefore returns ``None``.
+    unavailable evidence and therefore returns ``None``. URL resolution removes
+    fragments because they are not HTTP request identity, but preserves an
+    explicit empty query delimiter so ``/page`` and ``/page?`` are not silently
+    collapsed by ``urllib.parse.urljoin``.
     """
     raw_links = rendered_page.get("links")
     if raw_links is None:
@@ -139,8 +160,12 @@ def _rendered_retained_links(
         raw = _text(href)
         if not raw:
             continue
+        raw_without_fragment = raw.split("#", 1)[0]
+        explicit_empty_query = raw_without_fragment.endswith("?")
         try:
             resolved, _ = urldefrag(urljoin(hub_url, raw))
+            if explicit_empty_query and "?" not in resolved:
+                resolved += "?"
             parsed = urlparse(resolved)
         except Exception:
             continue
@@ -173,8 +198,8 @@ def build_hub_link_comparison(
     rendered = rendered_pages_by_url or {}
     failures = failure_reasons or {}
     attempted = {_text(value) for value in attempted_urls if _text(value)}
-    all_eligible = select_representative_hubs(pages, max_hubs=MAX_HUBS)
-    selected = all_eligible[: max(0, min(int(max_hubs or 0), MAX_HUBS))]
+    eligible = _eligible_hubs(pages)
+    selected = select_representative_hubs(pages, max_hubs=max_hubs)
     retained_urls = {
         _request_url(page)
         for page in pages
@@ -184,18 +209,28 @@ def build_hub_link_comparison(
     rows: list[dict[str, Any]] = []
     for page in selected:
         hub_url = _request_url(page)
-        raw_links = _raw_retained_links(pages, hub_url)
+        raw_links, raw_complete = _raw_retained_links(pages, hub_url)
         base = {
             "hub_url": hub_url,
             "page_template_family": _text(page.get("page_template_family")),
-            "raw_evidence_state": "completed",
-            "raw_link_count": len(raw_links),
+            "raw_evidence_state": "completed" if raw_complete else "not_verified",
+            "raw_link_count": len(raw_links) if raw_complete else None,
             "rendered_link_count": None,
             "render_only_count": None,
             "raw_only_count": None,
             "render_only_samples": [],
             "raw_only_samples": [],
         }
+        if not raw_complete:
+            rows.append(
+                {
+                    **base,
+                    "state": "failed",
+                    "reason": "raw_retained_link_evidence_incomplete",
+                    "rendered_evidence_state": "unassessed" if hub_url not in attempted else "unknown",
+                }
+            )
+            continue
         if hub_url not in attempted:
             rows.append(
                 {
@@ -277,8 +312,9 @@ def build_hub_link_comparison(
         "scope": HUB_RENDER_SCOPE,
         "evidence_state": evidence_state,
         "interpretation": "paired_comparison_neither_surface_is_sole_truth",
-        "eligible_hubs": len(all_eligible),
+        "eligible_hubs": len(eligible),
         "selected": len(rows),
+        "selection_truncated": len(eligible) > len(rows),
         "completed": completed,
         "failed": failed,
         "unassessed": unassessed,

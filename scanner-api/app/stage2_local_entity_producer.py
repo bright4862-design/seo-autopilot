@@ -257,7 +257,7 @@ def _surface_provenance(
     entity_match: str,
     discovery: dict[str, Any] | None,
 ) -> list[str]:
-    """Record explicit page/surface provenance without using it to prove identity."""
+    """Record explicit HTML-surface provenance without using it to prove identity."""
     provenance = ["structured_data"]
     discovered_from = {
         _text(value)
@@ -457,6 +457,11 @@ def build_local_entity_scan_evidence(pages: list[dict[str, Any]]) -> dict[str, A
         observations = envelope.get("observations")
         if not isinstance(observations, list):
             continue
+        page_discovery = {
+            _text(value)
+            for value in (page.get("discovered_from") or [])
+            if _text(value)
+        }
         for observation in observations:
             if not isinstance(observation, dict):
                 continue
@@ -466,6 +471,14 @@ def build_local_entity_scan_evidence(pages: list[dict[str, Any]]) -> dict[str, A
             row = dict(observation)
             row["page_url"] = _text(page.get("final_url") or page.get("url"))
             row["source"] = _text(observation.get("source")) or "structured_data"
+            surface_provenance = [
+                _text(value)
+                for value in (observation.get("surface_provenance") or [])
+                if _text(value)
+            ]
+            if "sitemap" in page_discovery:
+                surface_provenance.append("sitemap_reference")
+            row["surface_provenance"] = list(dict.fromkeys(surface_provenance))
             rows.append(row)
 
     completeness = []

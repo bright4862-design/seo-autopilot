@@ -107,21 +107,30 @@ def summarize_candidate_counts(
     }
 
 
-def _candidate_priority(candidate: dict[str, Any]) -> tuple[float, float, str]:
-    """Consume Python-owned ranking output without inventing a second model.
+def _candidate_priority(candidate: dict[str, Any]) -> tuple[int, float, float, str]:
+    """Consume Python-owned ranking output without converting unknown scores to zero.
 
-    B19 owns the ranking algorithm. This lane accepts its persisted numeric rank/score
-    and only supplies deterministic fallback ordering for candidates whose integration
-    has not yet populated those fields.
+    B19 owns the ranking model. A numeric rank or score is a known sortable value.
+    An explicitly present but non-numeric ``priority_score`` is an unknown B19 score
+    and is deferred behind every known-score candidate; impact must not substitute for
+    that missing composite. Rows from older callers that provide neither rank nor score
+    retain deterministic legacy fallback ordering, but the B21 integration always
+    supplies ``priority_score`` explicitly so its unknown state fails closed here.
     """
-    primary = _number(candidate.get("priority_rank"))
-    if primary is None:
-        primary = _number(candidate.get("priority_score"))
-    if primary is None:
-        primary = 0.0
     impact = _number(candidate.get("impact")) or 0.0
     rule_id = str(candidate.get("rule_id") or candidate.get("id") or "")
-    return primary, impact, rule_id
+
+    primary_rank = _number(candidate.get("priority_rank"))
+    if primary_rank is not None:
+        return 2, primary_rank, impact, rule_id
+
+    if "priority_score" in candidate:
+        priority_score = _number(candidate.get("priority_score"))
+        if priority_score is None:
+            return 0, 0.0, 0.0, rule_id
+        return 2, priority_score, impact, rule_id
+
+    return 1, 0.0, impact, rule_id
 
 
 def prepare_ranked_candidates(
@@ -147,7 +156,8 @@ def prepare_ranked_candidates(
         key=lambda row: (
             -_candidate_priority(row)[0],
             -_candidate_priority(row)[1],
-            _candidate_priority(row)[2],
+            -_candidate_priority(row)[2],
+            _candidate_priority(row)[3],
             row["_original_index"],
         )
     )

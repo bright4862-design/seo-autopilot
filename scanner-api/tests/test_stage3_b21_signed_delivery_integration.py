@@ -170,3 +170,24 @@ def test_b21_unknown_b19_score_cannot_displace_known_zero_score_before_truncatio
     assert delivery["presentation_omitted_count"] == 1
     assert "meta-35" in delivery["displayed_fix_ids"]
     assert "broken-36" not in delivery["displayed_fix_ids"]
+
+    # Prove the truncation decision is not merely a helper result: it is the exact
+    # Review payload authenticated by the existing completion HMAC. This protects
+    # the real customer/persistence authority seam from reintroducing unknown-as-zero
+    # ordering after the B21 presentation cap has been applied.
+    scan_result = {
+        "scan_id": "scan-stage3-b21",
+        "scan_run_id": "scan-stage3-b21",
+        "website_url": "https://example.com",
+        "normalized_domain": "example.com",
+        "respect_robots_txt": True,
+        "owner_attested_robots_override": False,
+        "crawled_pages": pages,
+    }
+    envelope = build_completion_envelope(_scan_record(), scan_result, integrated, "stage3-secret")
+    signed_delivery = envelope["review"]["stage3_delivery"]
+    assert signed_delivery == delivery
+    assert "meta-35" in signed_delivery["displayed_fix_ids"]
+    assert "broken-36" not in signed_delivery["displayed_fix_ids"]
+    signed = {key: envelope[key] for key in ("version", "identity", "scan", "review")}
+    assert envelope["proof"] == create_authority_seal(signed, "stage3-secret")

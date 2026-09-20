@@ -25,6 +25,10 @@ def _fix(index: int, *, broken: bool = False) -> dict:
         "rule": rule,
         "category": "404_error" if broken else "meta_description",
         "priority": "critical" if broken else "medium",
+        "base_severity": "critical" if broken else "medium",
+        "evidence_class": "confirmed_problem",
+        "action_priority": "fix_first" if broken else "improve",
+        "priority_reason": "verified synthetic delivery fixture",
         "page_scope": "page",
         "page_template_family": "product_page",
         "affected_pages": [url],
@@ -62,6 +66,10 @@ def test_b21_ranked_delivery_and_counts_are_attached_before_signed_completion(mo
         "crawled_pages": pages,
     }
 
+    # The real shadow builder applies an upstream presentation limit. B21 must be
+    # proven at the later canonical authority seam with every eligible candidate
+    # still present, so isolate that seam while retaining the normal canonical
+    # validator and identity derivation.
     monkeypatch.setattr(
         repair_contract_v2,
         "build_calibrated_shadow_review_analysis",

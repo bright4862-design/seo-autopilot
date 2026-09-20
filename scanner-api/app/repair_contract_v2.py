@@ -26,6 +26,8 @@ from .repair_coverage import (
 )
 from .repair_priority_calibration import annotate_calibrated_repair_priority
 from .repair_shadow_calibration import build_calibrated_shadow_review_analysis, sort_calibrated_repairs
+from .stage3_priority_factors import annotate_four_factor_priority
+from .stage3_root_causes import group_evidenced_root_causes
 
 
 REPAIR_PERSISTENCE_GROUPING_VERSION = "repair_persistence_grouping_v2_valid_fingerprint_actions"
@@ -177,9 +179,6 @@ def _merge_repair_group(
     identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
     group_fingerprint = _persistence_repair_fingerprint(members[0]) if members else ""
     lead = deepcopy(_strictest_member(members))
-    # Provenance must describe the entire merged action. A strict lead row can
-    # carry authenticated active evidence while another member is unversioned;
-    # inheriting that lead metadata would falsely authenticate the whole union.
     lead.pop("observed_evidence_version", None)
     lead.pop("verified_observed_pages", None)
     child_groups = [_repair_evidence_group(member, **identity_context) for member in members]
@@ -289,8 +288,6 @@ def _merge_repair_group(
         merged = annotate_repair_identity(lead)
 
     if identity_version and all_complete:
-        # The merged action's denominator must describe its union of evidence,
-        # not the strictest member's smaller pre-merge URL set.
         merged = annotate_calibrated_repair_priority(merged, pages, **identity_context)
 
     if group_fingerprint:
@@ -320,6 +317,54 @@ def _group_canonical_repairs(
         groups[key].append(item)
 
     return [_merge_repair_group(groups[key], pages, **identity_context) for key in order]
+
+
+def _trusted_stage3_scan_id(scan_result: dict[str, Any]) -> str:
+    """Return only an exact producer scan identity suitable for B20 grouping.
+
+    Stage 3 must not invent or borrow a later durable identity. The crawler has
+    historically carried both scan_id and scan_run_id; only an exact non-empty
+    match is accepted here. Otherwise B20 grouping deliberately fails closed to
+    singleton/unverified groups until the durable worker can prove the identity.
+    """
+    if not isinstance(scan_result, dict):
+        return ""
+    scan_id = _clean_text(scan_result.get("scan_id"))
+    scan_run_id = _clean_text(scan_result.get("scan_run_id"))
+    return scan_id if scan_id and scan_run_id and scan_id == scan_run_id else ""
+
+
+def _attach_stage3_decision_evidence(
+    canonical_items: list[dict[str, Any]],
+    pre_group_items: list[dict[str, Any]],
+    pages: list[dict[str, Any]],
+    scan_result: dict[str, Any],
+    *,
+    scan_origin: str = "",
+    identity_version: str = "",
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Attach B19 factors and B20 evidenced grouping before authority signing.
+
+    B19 is recomputed over the final canonical affected-page union, never copied
+    from one pre-merge child. B20 consumes the pre-fingerprint rows so explicit
+    SEO/GEO root-cause evidence is not erased by legacy repair fingerprint
+    grouping. No requests, crawl budget, persistence writes or customer
+    projection occur here; build_completion_envelope subsequently signs these
+    derived fields with the rest of Review.
+    """
+    identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
+    annotated: list[dict[str, Any]] = []
+    for item in canonical_items:
+        with_factors = annotate_four_factor_priority(item, pages, **identity_context)
+        factors = deepcopy(with_factors.get("stage3_priority_factors") or {})
+        with_factors["priority_factors"] = factors
+        annotated.append(with_factors)
+
+    root_cause_groups = group_evidenced_root_causes(
+        pre_group_items,
+        scan_id=_trusted_stage3_scan_id(scan_result),
+    )
+    return annotated, root_cause_groups
 
 
 def apply_canonical_repair_contract(
@@ -404,10 +449,19 @@ def apply_canonical_repair_contract(
         )
         raise CanonicalRepairContractError("canonical repair persistence candidate was rejected")
 
+    canonical_items, root_cause_groups = _attach_stage3_decision_evidence(
+        canonical_items,
+        pre_group_items,
+        pages,
+        scan_result,
+        **identity_context,
+    )
+
     return {
         **review,
         **parent,
         "canonical_repairs": canonical_items,
+        "stage3_root_cause_groups": root_cause_groups,
         "repair_contract_validation_version": validation.get("version") or "",
     }
 
@@ -445,11 +499,6 @@ def _normalize_canonical_repair_evidence(
         if any(not key_for(value) for value in snapshot.get("affected_pages") or []):
             raise CanonicalRepairContractError("unresolvable affected evidence")
     if snapshot.get("affected_pages_complete") is False:
-        # A truncated affected list is only a sample of a larger proven total.
-        # Re-normalizing from the sample would silently shrink page_count and
-        # falsely claim completeness. Base44 deliberately skips URL-cardinality
-        # and representative membership checks for this shape, so preserve it
-        # and only refresh repair identity.
         return annotate_repair_identity(snapshot)
 
     normalized = normalize_repair_scope(

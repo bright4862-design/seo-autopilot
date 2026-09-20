@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import defaultdict
 from typing import Any
 
 from bs4 import BeautifulSoup
@@ -204,6 +205,64 @@ def extract_local_entity_observations(soup: BeautifulSoup) -> dict[str, Any]:
     }
 
 
+def _cross_page_nap_consistency(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Evaluate B14 only where an explicit entity ID is seen on multiple pages.
+
+    A single page can prove structured identity and B13 completeness, but it
+    cannot prove cross-page NAP consistency. Duplicate/conflicting JSON-LD on
+    one URL therefore remains unverified for B14 rather than becoming a false
+    cross-page pass or fail. Shared names or phone numbers never join entities.
+    """
+    verified = [
+        row
+        for row in rows
+        if isinstance(row, dict)
+        and row.get("accepted") is True
+        and _text(row.get("entity_key"))
+        and row.get("entity_match") == "verified"
+    ]
+    ambiguous = sum(
+        1
+        for row in rows
+        if isinstance(row, dict) and row.get("entity_match") in {"ambiguous", "unverified"}
+    )
+
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in verified:
+        groups[_text(row.get("entity_key"))].append(row)
+
+    comparable_keys: set[str] = set()
+    comparable_rows: list[dict[str, Any]] = []
+    for entity_key, members in groups.items():
+        page_urls = {
+            _text(member.get("page_url"))
+            for member in members
+            if _text(member.get("page_url"))
+        }
+        if len(page_urls) < 2:
+            continue
+        comparable_keys.add(entity_key)
+        comparable_rows.extend(members)
+
+    evaluated = assess_nap_consistency(comparable_rows)
+    if not comparable_keys:
+        state = "not_verified"
+    else:
+        state = evaluated.get("state") or "not_verified"
+
+    return {
+        **evaluated,
+        "version": NAP_CONSISTENCY_VERSION,
+        "state": state,
+        "verified_observations": len(verified),
+        "ambiguous_observations": ambiguous,
+        "comparable_entity_groups": len(comparable_keys),
+        "unverified_entity_groups": max(0, len(groups) - len(comparable_keys)),
+        "scope": "cross_page_explicit_entity_identity",
+        "sitewide_consistency_claim": False,
+    }
+
+
 def build_local_entity_scan_evidence(pages: list[dict[str, Any]]) -> dict[str, Any]:
     """Build bounded B13/B14 summaries from producer observations on retained pages."""
     rows: list[dict[str, Any]] = []
@@ -236,7 +295,7 @@ def build_local_entity_scan_evidence(pages: list[dict[str, Any]]) -> dict[str, A
             "source": row.get("source") or "structured_data",
             **result,
         })
-    nap = assess_nap_consistency(rows)
+    nap = _cross_page_nap_consistency(rows)
     return {
         "producer_version": LOCAL_ENTITY_PRODUCER_VERSION,
         "local_entity_version": LOCAL_ENTITY_VERSION,

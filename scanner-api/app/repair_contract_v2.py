@@ -26,11 +26,13 @@ from .repair_coverage import (
 )
 from .repair_priority_calibration import annotate_calibrated_repair_priority
 from .repair_shadow_calibration import build_calibrated_shadow_review_analysis, sort_calibrated_repairs
+from .stage3_delivery import DEFAULT_PRESENTATION_LIMIT, prepare_ranked_candidates, summarize_candidate_counts
 from .stage3_priority_factors import annotate_four_factor_priority
 from .stage3_root_causes import group_evidenced_root_causes
 
 
 REPAIR_PERSISTENCE_GROUPING_VERSION = "repair_persistence_grouping_v2_valid_fingerprint_actions"
+STAGE3_DELIVERY_VERSION = "stage3_delivery_v1_rank_before_truncate"
 
 
 class CanonicalRepairContractError(RuntimeError):
@@ -334,6 +336,21 @@ def _trusted_stage3_scan_id(scan_result: dict[str, Any]) -> str:
     return scan_id if scan_id and scan_run_id and scan_id == scan_run_id else ""
 
 
+def _delivery_candidate(item: dict[str, Any]) -> dict[str, Any]:
+    """Map authenticated B19 evidence into the reviewed B21 ranking helper.
+
+    This is a temporary ranking view only. It does not write a second priority
+    model back into the canonical repair. Unknown B19 scores stay unknown/zero
+    for the primary sort, with evidenced impact as the deterministic fallback.
+    """
+    candidate = deepcopy(item)
+    factors = candidate.get("stage3_priority_factors") if isinstance(candidate.get("stage3_priority_factors"), dict) else {}
+    candidate["rule_id"] = _clean_text(candidate.get("fix_id") or candidate.get("rule"))
+    candidate["priority_score"] = factors.get("priority_factor_score")
+    candidate["impact"] = factors.get("impact")
+    return candidate
+
+
 def _attach_stage3_decision_evidence(
     canonical_items: list[dict[str, Any]],
     pre_group_items: list[dict[str, Any]],
@@ -342,15 +359,16 @@ def _attach_stage3_decision_evidence(
     *,
     scan_origin: str = "",
     identity_version: str = "",
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Attach B19 factors and B20 evidenced grouping before authority signing.
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """Attach B19/B20/B21 reviewed evidence before authority signing.
 
     B19 is recomputed over the final canonical affected-page union, never copied
     from one pre-merge child. B20 consumes the pre-fingerprint rows so explicit
     SEO/GEO root-cause evidence is not erased by legacy repair fingerprint
-    grouping. No requests, crawl budget, persistence writes or customer
-    projection occur here; build_completion_envelope subsequently signs these
-    derived fields with the rest of Review.
+    grouping. B21 computes truthful counts on every canonical repair and ranks
+    every eligible B19-scored repair before the legacy presentation limit. The
+    signed delivery summary retains only bounded fix IDs and aggregate counts;
+    it does not duplicate raw candidate evidence.
     """
     identity_context = {"scan_origin": scan_origin, "identity_version": identity_version}
     annotated: list[dict[str, Any]] = []
@@ -358,13 +376,32 @@ def _attach_stage3_decision_evidence(
         with_factors = annotate_four_factor_priority(item, pages, **identity_context)
         factors = deepcopy(with_factors.get("stage3_priority_factors") or {})
         with_factors["priority_factors"] = factors
+        with_factors["stage3_counts"] = summarize_candidate_counts(with_factors)
         annotated.append(with_factors)
 
     root_cause_groups = group_evidenced_root_causes(
         pre_group_items,
         scan_id=_trusted_stage3_scan_id(scan_result),
     )
-    return annotated, root_cause_groups
+
+    ranked = prepare_ranked_candidates(
+        (_delivery_candidate(item) for item in annotated),
+        presentation_limit=DEFAULT_PRESENTATION_LIMIT,
+    )
+    displayed_fix_ids = [
+        _clean_text(item.get("fix_id"))
+        for item in ranked.get("displayed_candidates", [])
+        if isinstance(item, dict) and _clean_text(item.get("fix_id"))
+    ]
+    delivery = {
+        "version": STAGE3_DELIVERY_VERSION,
+        "eligible_candidate_count": ranked.get("eligible_candidate_count", 0),
+        "displayed_candidate_count": ranked.get("displayed_candidate_count", 0),
+        "presentation_truncated": ranked.get("presentation_truncated") is True,
+        "presentation_omitted_count": ranked.get("presentation_omitted_count", 0),
+        "displayed_fix_ids": displayed_fix_ids,
+    }
+    return annotated, root_cause_groups, delivery
 
 
 def apply_canonical_repair_contract(
@@ -449,7 +486,7 @@ def apply_canonical_repair_contract(
         )
         raise CanonicalRepairContractError("canonical repair persistence candidate was rejected")
 
-    canonical_items, root_cause_groups = _attach_stage3_decision_evidence(
+    canonical_items, root_cause_groups, stage3_delivery = _attach_stage3_decision_evidence(
         canonical_items,
         pre_group_items,
         pages,
@@ -462,6 +499,7 @@ def apply_canonical_repair_contract(
         **parent,
         "canonical_repairs": canonical_items,
         "stage3_root_cause_groups": root_cause_groups,
+        "stage3_delivery": stage3_delivery,
         "repair_contract_validation_version": validation.get("version") or "",
     }
 

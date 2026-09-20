@@ -33,6 +33,7 @@ from .acceptance_evidence import (
     measure_worker_peak_memory_bytes,
 )
 from .observability import emit
+from .page_output_privacy import project_scan_result_for_external_boundary
 
 WORKER_VERSION = "scan_job_worker_v1_cloud_tasks"
 CONTROL_VERSION = "durable_standard150_control_v1"
@@ -476,6 +477,7 @@ def build_authority_review_payload(result: dict[str, Any]) -> dict[str, Any]:
     pages_found carries the full discovery inventory; only the review page
     sample is bounded. The 150-page crawl cap never truncates discovery.
     """
+    result = project_scan_result_for_external_boundary(result)
     pages = _first_list(result, ("crawled_pages", "pages", "scanned_pages", "crawl_pages"))[:REVIEW_PAGE_SAMPLE_LIMIT]
     findings = _first_list(result, ("grouped_findings", "recommendations", "findings", "raw_findings", "fixes"))[:REVIEW_FINDING_LIMIT]
     technical = result.get("technical_audit_summary") if isinstance(result.get("technical_audit_summary"), dict) else {}
@@ -585,18 +587,19 @@ def build_limited_envelope(
     review: dict[str, Any],
     signing_key: str,
 ) -> dict[str, Any]:
+    external_result = project_scan_result_for_external_boundary(result)
     identity = {
         "owner_user_id": str(scan.get("owner_user_id") or ""),
         "scan_id": str(scan.get("id") or ""),
         "project_id": str(scan.get("project_id") or ""),
-        "request_id": str(scan.get("request_id") or result.get("request_id") or ""),
-        "normalized_domain": str(result.get("normalized_domain") or "").lower().removeprefix("www."),
+        "request_id": str(scan.get("request_id") or external_result.get("request_id") or ""),
+        "normalized_domain": str(external_result.get("normalized_domain") or "").lower().removeprefix("www."),
         "attempt_count": str(current_attempt(scan)),
     }
     signed = {
         "version": LIMITED_COMPLETION_VERSION,
         "identity": identity,
-        "scan": result,
+        "scan": external_result,
         "review": limited_result_payload(review),
     }
     return {**signed, "proof": create_authority_seal(signed, signing_key)}
@@ -608,19 +611,20 @@ def build_completion_envelope(
     review: dict[str, Any],
     signing_key: str,
 ) -> dict[str, Any]:
+    external_result = project_scan_result_for_external_boundary(result)
     identity = {
         "owner_user_id": str(scan.get("owner_user_id") or ""),
         "scan_id": str(scan.get("id") or ""),
         "project_id": str(scan.get("project_id") or ""),
-        "request_id": str(scan.get("request_id") or result.get("request_id") or ""),
-        "idempotency_key": str(scan.get("idempotency_key") or result.get("idempotency_key") or ""),
-        "normalized_domain": str(result.get("normalized_domain") or "").lower().removeprefix("www."),
+        "request_id": str(scan.get("request_id") or external_result.get("request_id") or ""),
+        "idempotency_key": str(scan.get("idempotency_key") or external_result.get("idempotency_key") or ""),
+        "normalized_domain": str(external_result.get("normalized_domain") or "").lower().removeprefix("www."),
         "attempt_count": str(current_attempt(scan)),
     }
     signed = {
         "version": COMPLETION_VERSION,
         "identity": identity,
-        "scan": result,
+        "scan": external_result,
         "review": review,
     }
     return {**signed, "proof": create_authority_seal(signed, signing_key)}

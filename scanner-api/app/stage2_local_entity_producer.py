@@ -17,10 +17,12 @@ from .stage2_coverage_evidence import (
 
 
 LOCAL_ENTITY_PRODUCER_VERSION = "local_entity_producer_v1_jsonld_explicit_identity"
+LOCAL_CONTEXT_PROVENANCE_VERSION = "local_entity_context_provenance_v1"
 MAX_JSONLD_SCRIPTS = 20
 MAX_JSONLD_CHARS = 250_000
 MAX_PAGE_ENTITY_OBSERVATIONS = 10
 MAX_SCAN_ENTITY_OBSERVATIONS = 20
+MAX_SURFACE_SCAN_NODES = 200
 
 _LOCAL_TYPES = {
     "localbusiness",
@@ -36,6 +38,31 @@ _LOCAL_TYPES = {
     "homeandconstructionbusiness",
     "healthandbeautybusiness",
     "sportsactivitylocation",
+}
+
+_EXPLICIT_ENTITY_ATTRS = ("data-entity-id", "data-location-id", "data-store-id")
+_EXPLICIT_ENTITY_FIELD_NAMES = {
+    "entity_id",
+    "entityid",
+    "location_id",
+    "locationid",
+    "store_id",
+    "storeid",
+}
+_STATUS_FIELDS = ("businessStatus", "openingStatus", "status")
+_STATUS_ALIASES = {
+    "coming_soon": "coming_soon",
+    "opening_soon": "coming_soon",
+    "preopening": "coming_soon",
+    "pre_opening": "coming_soon",
+    "now_open": "open",
+    "open": "open",
+    "active": "open",
+    "operating": "open",
+    "closed": "closed",
+    "temporarily_closed": "closed",
+    "permanently_closed": "closed",
+    "inactive": "closed",
 }
 
 
@@ -141,13 +168,138 @@ def _entity_identity(value: Any) -> tuple[str, str, str]:
     return entity_key, "unverified", "relative_jsonld_id_requires_base_resolution"
 
 
-def extract_local_entity_observations(soup: BeautifulSoup) -> dict[str, Any]:
+def _status_token(value: Any) -> str:
+    raw = _text(value)
+    if not raw:
+        return ""
+    raw = raw.rsplit("/", 1)[-1]
+    raw = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", raw)
+    return re.sub(r"[^a-z0-9]+", "_", raw.casefold()).strip("_")
+
+
+def _contextual_status(node: dict[str, Any], soup: BeautifulSoup) -> tuple[str | None, str, list[dict[str, str]]]:
+    """Return only explicit machine status or conservative accepted-heading context."""
+    for field in _STATUS_FIELDS:
+        raw = _text(node.get(field))
+        canonical = _STATUS_ALIASES.get(_status_token(raw))
+        if canonical:
+            return canonical, "observed_explicit", [{
+                "source": "structured_data",
+                "field": field,
+                "value": raw[:160],
+            }]
+
+    heading_candidates: list[tuple[str, str]] = []
+    title = soup.title
+    if title is not None:
+        heading_candidates.append(("title", _text(title.get_text(" "))[:160]))
+    h1 = soup.find("h1")
+    if h1 is not None:
+        heading_candidates.append(("h1", _text(h1.get_text(" "))[:160]))
+
+    for field, text in heading_candidates:
+        lowered = text.casefold()
+        canonical = None
+        if re.search(r"\b(?:coming|opening)\s+soon\b", lowered):
+            canonical = "coming_soon"
+        elif re.search(r"\bnow\s+open\b", lowered):
+            canonical = "open"
+        elif re.search(r"\b(?:temporarily|permanently)\s+closed\b", lowered):
+            canonical = "closed"
+        elif re.fullmatch(r"closed", lowered.strip()):
+            canonical = "closed"
+        if canonical:
+            return canonical, "observed_context", [{
+                "source": "accepted_heading",
+                "field": field,
+                "value": text,
+            }]
+
+    return None, "not_verified", []
+
+
+def _explicit_entity_reference(node: Any, entity_key: str) -> bool:
+    if not entity_key or node is None:
+        return False
+    for attr in _EXPLICIT_ENTITY_ATTRS:
+        if _text(getattr(node, "attrs", {}).get(attr)) == entity_key:
+            return True
+    name = re.sub(r"[^a-z0-9]+", "_", _text(getattr(node, "attrs", {}).get("name")).casefold()).strip("_")
+    value = _text(getattr(node, "attrs", {}).get("value"))
+    return name in _EXPLICIT_ENTITY_FIELD_NAMES and value == entity_key
+
+
+def _subtree_has_explicit_entity_reference(node: Any, entity_key: str) -> bool:
+    if _explicit_entity_reference(node, entity_key):
+        return True
+    count = 0
+    for child in node.find_all(True):
+        count += 1
+        if count > MAX_SURFACE_SCAN_NODES:
+            break
+        if _explicit_entity_reference(child, entity_key):
+            return True
+    return False
+
+
+def _is_store_finder_marker(node: Any) -> bool:
+    attrs = getattr(node, "attrs", {})
+    if "data-store-finder" in attrs or "data-store-locator" in attrs:
+        return True
+    node_id = re.sub(r"[^a-z0-9]+", "-", _text(attrs.get("id")).casefold()).strip("-")
+    return node_id in {"store-finder", "store-locator", "location-finder", "location-locator"}
+
+
+def _surface_provenance(
+    soup: BeautifulSoup,
+    *,
+    entity_key: str,
+    entity_match: str,
+    discovery: dict[str, Any] | None,
+) -> list[str]:
+    """Record explicit page/surface provenance without using it to prove identity."""
+    provenance = ["structured_data"]
+    discovered_from = {
+        _text(value)
+        for value in ((discovery or {}).get("discovered_from") or [])
+        if _text(value)
+    }
+    if "sitemap" in discovered_from:
+        provenance.append("sitemap_reference")
+
+    if entity_match != "verified" or not entity_key:
+        return provenance
+
+    for form in soup.find_all("form")[:20]:
+        if _subtree_has_explicit_entity_reference(form, entity_key):
+            provenance.append("form_explicit_entity_id")
+            break
+
+    scanned = 0
+    for node in soup.find_all(True):
+        scanned += 1
+        if scanned > MAX_SURFACE_SCAN_NODES:
+            break
+        if not _is_store_finder_marker(node):
+            continue
+        if _subtree_has_explicit_entity_reference(node, entity_key):
+            provenance.append("store_finder_explicit_entity_id")
+            break
+
+    return list(dict.fromkeys(provenance))
+
+
+def extract_local_entity_observations(
+    soup: BeautifulSoup,
+    *,
+    discovery: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Extract bounded B13 structured observations from accepted HTML only.
 
     Cross-page identity is verified only from an absolute HTTP(S) JSON-LD
     ``@id``. Relative IDs are retained as observations but cannot establish a
-    B14 entity match without trusted base-URL resolution. Name, address, and
-    phone similarity never establish an entity match.
+    B14 entity match without trusted base-URL resolution. Name, address, phone,
+    page family, form context and sitemap discovery never establish identity.
     """
     candidates: list[dict[str, Any]] = []
     malformed = 0
@@ -180,6 +332,7 @@ def extract_local_entity_observations(soup: BeautifulSoup) -> dict[str, Any]:
         address = _address(node.get("address"))
         phone = _text(node.get("telephone"))[:120]
         regular_hours = _hours(node)
+        contextual_status, contextual_status_state, contextual_status_provenance = _contextual_status(node, soup)
         dedupe_key = (entity_key, name, address, phone)
         if dedupe_key in seen:
             continue
@@ -187,11 +340,26 @@ def extract_local_entity_observations(soup: BeautifulSoup) -> dict[str, Any]:
         unique_candidate_count += 1
         if len(observations) >= MAX_PAGE_ENTITY_OBSERVATIONS:
             continue
+        if regular_hours:
+            regular_hours_applicable: bool | None = True
+        elif contextual_status in {"coming_soon", "closed"}:
+            regular_hours_applicable = False
+        elif contextual_status == "open":
+            regular_hours_applicable = True
+        else:
+            regular_hours_applicable = None
         observations.append({
             "producer_version": LOCAL_ENTITY_PRODUCER_VERSION,
+            "context_provenance_version": LOCAL_CONTEXT_PROVENANCE_VERSION,
             "applicable": True,
             "accepted": True,
             "source": "structured_data",
+            "surface_provenance": _surface_provenance(
+                soup,
+                entity_key=entity_key,
+                entity_match=entity_match,
+                discovery=discovery,
+            ),
             "schema_types": _types(node.get("@type")),
             "entity_key": entity_key,
             "entity_match": entity_match,
@@ -200,8 +368,10 @@ def extract_local_entity_observations(soup: BeautifulSoup) -> dict[str, Any]:
             "address": address,
             "phone": phone,
             "regular_hours": regular_hours,
-            "regular_hours_applicable": True if regular_hours else None,
-            "contextual_status": None,
+            "regular_hours_applicable": regular_hours_applicable,
+            "contextual_status": contextual_status,
+            "contextual_status_state": contextual_status_state,
+            "contextual_status_provenance": contextual_status_provenance,
             "holiday_hours": bool(node.get("specialOpeningHoursSpecification")),
             "photos": bool(node.get("image") or node.get("photo")),
             "same_as": bool(node.get("sameAs")),
@@ -216,6 +386,7 @@ def extract_local_entity_observations(soup: BeautifulSoup) -> dict[str, Any]:
         state, reason = "not_applicable", "no_local_entity_structured_data"
     return {
         "version": LOCAL_ENTITY_PRODUCER_VERSION,
+        "context_provenance_version": LOCAL_CONTEXT_PROVENANCE_VERSION,
         "state": state,
         "reason": reason,
         "candidate_count": unique_candidate_count,
@@ -294,7 +465,7 @@ def build_local_entity_scan_evidence(pages: list[dict[str, Any]]) -> dict[str, A
                 continue
             row = dict(observation)
             row["page_url"] = _text(page.get("final_url") or page.get("url"))
-            row["source"] = "structured_data"
+            row["source"] = _text(observation.get("source")) or "structured_data"
             rows.append(row)
 
     completeness = []
@@ -306,11 +477,16 @@ def build_local_entity_scan_evidence(pages: list[dict[str, Any]]) -> dict[str, A
             "entity_match": row.get("entity_match") or "unverified",
             "entity_identity_reason": row.get("entity_identity_reason") or "",
             "source": row.get("source") or "structured_data",
+            "surface_provenance": list(row.get("surface_provenance") or []),
+            "context_provenance_version": row.get("context_provenance_version") or "",
+            "contextual_status_state": row.get("contextual_status_state") or "not_verified",
+            "contextual_status_provenance": list(row.get("contextual_status_provenance") or []),
             **result,
         })
     nap = _cross_page_nap_consistency(rows)
     return {
         "producer_version": LOCAL_ENTITY_PRODUCER_VERSION,
+        "context_provenance_version": LOCAL_CONTEXT_PROVENANCE_VERSION,
         "local_entity_version": LOCAL_ENTITY_VERSION,
         "nap_consistency_version": NAP_CONSISTENCY_VERSION,
         "eligible_observations": eligible,

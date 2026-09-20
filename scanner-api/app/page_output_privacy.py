@@ -38,6 +38,16 @@ INTERNAL_PAGE_EVIDENCE_FIELDS = frozenset({
 
 PAGE_LIST_KEYS = ("pages", "crawled_pages", "scanned_pages", "crawl_pages")
 
+_LOCAL_ENTITY_AGGREGATE_ALLOWED_FIELDS = frozenset({
+    "producer_version",
+    "context_provenance_version",
+    "local_entity_version",
+    "nap_consistency_version",
+    "eligible_observations",
+    "selected_observations",
+    "selection_truncated",
+})
+
 _LOCAL_COMPLETENESS_ALLOWED_FIELDS = frozenset({
     "version",
     "state",
@@ -52,6 +62,17 @@ _LOCAL_COMPLETENESS_ALLOWED_FIELDS = frozenset({
     "surface_provenance",
     "context_provenance_version",
     "contextual_status_state",
+})
+
+_LOCAL_NAP_ALLOWED_FIELDS = frozenset({
+    "version",
+    "state",
+    "verified_observations",
+    "ambiguous_observations",
+    "comparable_entity_groups",
+    "unverified_entity_groups",
+    "scope",
+    "sitewide_consistency_claim",
 })
 
 _LOCAL_NAP_INCONSISTENCY_ALLOWED_FIELDS = frozenset({
@@ -78,12 +99,13 @@ def project_pages_for_external_boundary(pages: Iterable[Any]) -> list[Any]:
 
 
 def project_local_entity_scan_evidence(evidence: Any) -> Any:
-    """Keep B13/B14 states/counts while dropping content and entity identity.
+    """Keep only approved B13/B14 states/counts at the external boundary.
 
     The producer aggregate is useful downstream for requirement/version/state
     proof, but its internal rows still carry exact page URLs, absolute entity IDs
-    and accepted-heading provenance. Those values are not required to prove the
-    aggregate state and must not cross the customer/persistence boundary.
+    and accepted-heading provenance. Use positive allowlists at every aggregate
+    level so a future producer/debug field cannot silently become customer or
+    persisted output merely because the producer learned a new shape.
     """
     if not isinstance(evidence, dict):
         return evidence
@@ -91,7 +113,7 @@ def project_local_entity_scan_evidence(evidence: Any) -> Any:
     projected = {
         key: value
         for key, value in evidence.items()
-        if key not in {"completeness", "nap_consistency"}
+        if key in _LOCAL_ENTITY_AGGREGATE_ALLOWED_FIELDS
     }
 
     completeness = evidence.get("completeness")
@@ -111,7 +133,7 @@ def project_local_entity_scan_evidence(evidence: Any) -> Any:
         safe_nap = {
             key: value
             for key, value in nap.items()
-            if key != "inconsistencies"
+            if key in _LOCAL_NAP_ALLOWED_FIELDS
         }
         inconsistencies = nap.get("inconsistencies")
         if isinstance(inconsistencies, list):

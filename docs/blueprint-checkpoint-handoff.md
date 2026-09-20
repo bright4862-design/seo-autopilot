@@ -37,23 +37,11 @@ Exact reviewed blobs were integrated serially onto the single integration branch
 
 ### B19/B20 real signed-review wiring — RED → GREEN
 
-RED: `ac6ce27b3c492649537d80788f7b02b86ec39e5e` added three regressions at the canonical Review → signed completion seam. FixList CI `35501924104` failed as intended in the scanner regression job while the independent lint/typecheck/contracts/frontend job remained green.
+RED: `ac6ce27b3c492649537d80788f7b02b86ec39e5e` added regressions at the canonical Review → signed completion seam. FixList CI `35501924104` failed as intended in the scanner regression job while the independent lint/typecheck/contracts/frontend job remained green.
 
-GREEN: `7ba2df83d848fd643bb510374b7da5a18ac749f1` modifies `repair_contract_v2.py` so reviewed B19/B20 evidence is derived after the final canonical repair merge/validation and before the durable completion envelope signs Review.
+GREEN: `7ba2df83d848fd643bb510374b7da5a18ac749f1` modifies `repair_contract_v2.py` so reviewed B19/B20 evidence is derived after the final canonical repair merge/validation and before the durable completion envelope signs Review. Exact-head FixList CI `35501983203` passed both jobs.
 
-Exact-head FixList CI `35501983203` passed both jobs:
-
-- immutable checkout passed;
-- root scanner regressions passed;
-- full scanner-api tests passed, including the three new signed-review regressions plus both reviewed Stage-3 lane suites;
-- labelled Stage-1 synthetic corpus passed and remains explicitly not the genuine 30-site gate;
-- frozen scanner revision passed;
-- production scanner image build passed;
-- lint, typecheck, generated release contracts, frontend contracts and production build passed.
-
-No new aggregate pytest count is asserted because the Actions summary does not expose the exact total after importing both reviewed Stage-3 lane suites.
-
-B19 behavior now authenticated in signed Review:
+B19 behavior authenticated in signed Review:
 
 - versioned exact `impact × reach × page value × confidence` factors;
 - truthful unknown reach remains `None`/`unknown` rather than zero;
@@ -61,20 +49,35 @@ B19 behavior now authenticated in signed Review:
 - repair leverage is not consumed as a substitute/fifth factor;
 - the same authenticated factor envelope is mirrored as `priority_factors` for later B24 derivation.
 
-B20 behavior now authenticated in signed Review:
+B20 behavior authenticated in signed Review:
 
 - explicit verified root-cause evidence only; family similarity/generic text is insufficient;
 - source pre-fingerprint rows are used so SEO/GEO and family provenance is not erased before grouping;
 - affected URL sets are unioned and suppressed-member reason/provenance is retained;
-- grouping accepts producer identity only when non-empty `scan_id` and `scan_run_id` exactly match;
-- missing/mismatched identity fails closed to singleton `not_verified` groups.
+- the enclosing producer identity must provide non-empty exact `scan_id == scan_run_id`.
+
+### B20 independent-review P1 correction — trusted producer identity per member
+
+Fresh CodeRabbit review found one material scan-isolation defect in the first B20 wiring: a repair-local `scan_id` / `scan_run_id` could replace the trusted producer identity inside `stage3_root_causes.py`, allowing foreign repairs that shared the same local identity to form a verified group under a different enclosing producer.
+
+RED commit `6f1e2cc3ae519bbb494cab599579758f9efe427a` added regressions for foreign repair-local identity and valid matching local identity. FixList CI `35503985665` failed in the scanner regression job as intended while the separate build/contracts job passed.
+
+Fix commit `56a9362ceb9ec1b06b88e26a0fd7db8fff97e92c` makes the caller-provided trusted producer identity authoritative. Repair-local `scan_id` / `scan_run_id` values are only consistency assertions: if present, each must exactly match the trusted producer identity or that repair becomes a singleton `not_verified` member. A missing trusted producer identity cannot be recreated from repair-local fields.
+
+CI `35504067902` then exposed an older lane assertion that still expected repair-local identity to establish trust without a producer identity. That test expectation conflicted with the approved fail-closed semantics and the independent review finding; it was strengthened rather than weakened.
+
+Commit `cbfd2b1f4a696c209dfab90e3981f42b0cbaa481` updates the lane regression so missing trusted producer identity yields `scan_id=None`, singleton groups and `not_verified` even if repairs carry local IDs. Exact-head FixList CI `35504200573` passed both jobs: root regressions, full scanner-api tests, labelled Stage-1 synthetic corpus, frozen revision, production scanner image build, lint, typecheck, generated release contracts, frontend contracts and production build all passed.
+
+B20 verified multi-member grouping now requires both exact enclosing producer identity and consistency of every present repair-local identity. Same family, similar wording, matching URLs or repair-local IDs alone cannot establish trust.
+
+A fresh independent follow-up review of this corrected boundary is still required before B20 is recorded review-complete.
 
 Detailed plan/checkpoint: `docs/superpowers/plans/2026-09-20-stage3-signed-b19-b20-integration.md`.
 
 ### Requirement state
 
 - **B19:** partial shared integration. Signed Review carries exact factors/explanations. Durable FixItem/card/export consumption is not yet proven, so B19 is not complete.
-- **B20:** partial shared integration. Signed Review carries explicit evidenced grouping and fail-closed identity behavior. Durable persistence/customer projection is not yet proven, so B20 is not complete.
+- **B20:** partial shared integration, P1 corrected and exact-head CI green. Fresh independent follow-up review plus durable persistence/customer projection remain open, so B20 is not complete.
 - **B21:** helper is present and tested for unique unions/count distinctions/rank-before-truncate, but not yet wired into the signed persisted customer presentation seam.
 - **B22:** helper is present and tested for exact owner/scan authority plus strict field whitelist, but not yet wired to the actual private-preview entitlement path.
 - **B23:** helper is present and tested for explicit verified root-cause caps while preserving an existing ceiling, but not yet wired to live health-score production.
@@ -95,6 +98,6 @@ The genuine 30-site gate remains **not assessed**. Historical summaries and synt
 
 ## Exact next action
 
-Continue serially on PR #303 with B21–B24 real delivery integration. First add RED tests proving all eligible B19-scored candidates are ranked before presentation limits and that exact B21 counts survive into the signed authority projection without leaking private evidence. Then minimally wire B21 and the B23 cap decision inside Review while preserving existing access/sample/incomplete ceilings. Only after those are green should B22 private preview and B24 customer/operator handoff v2 be connected to their authenticated downstream paths.
+First obtain a fresh independent follow-up review of the corrected B20 trusted-producer scan-isolation boundary. If clean, continue serially on PR #303 with B21–B24 real delivery integration: add RED tests proving all eligible B19-scored candidates are ranked before presentation limits and exact B21 counts survive into signed authority without leaking private evidence; minimally wire B21 and B23 while preserving existing access/sample/incomplete ceilings; then connect B22 private preview and B24 customer/operator handoff v2 only through authenticated downstream allowlists.
 
 Do not move production.

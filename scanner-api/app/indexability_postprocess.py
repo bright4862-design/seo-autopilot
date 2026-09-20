@@ -6,6 +6,7 @@ from .metadata_title_evidence import relative_evidence_url
 from .repair_coverage import repair_evidence_key_function, scan_evidence_origin
 from .coverage_probes import SOFT_404_PROBE_VERSION, compare_page_to_soft_404_baselines
 from .stage2_local_entity_producer import build_local_entity_scan_evidence
+from .stage2_connected_provider_evidence import build_disconnected_provider_bundle
 
 from .indexability_quality import (
     annotate_indexability_quality,
@@ -186,10 +187,11 @@ def group_indexability_quality_findings(findings: list[dict]) -> list[dict]:
 def apply_indexability_quality_to_result(result: dict, *, identity_version: str = "") -> dict:
     """Apply bounded Stage-2 evidence to a successful scan response.
 
-    Indexability/navigation rules can update findings. The B13/B14 local-entity
-    aggregate added here is evidence-only: it is attached to the shared scanner
-    result and authenticated technical summary, but it does not create a repair,
-    customer card, score change, new request, or sitewide consistency claim.
+    Indexability/navigation rules can update findings. B13/B14 local-entity and
+    the disconnected B17/B18 provider bundle added here are evidence-only: they
+    are attached to the shared scanner result and authenticated technical
+    summary, but they do not create a repair, customer card, score change, new
+    request, provider connection, or sitewide consistency claim.
     """
     if not isinstance(result, dict) or not result.get("success"):
         return result
@@ -202,6 +204,19 @@ def apply_indexability_quality_to_result(result: dict, *, identity_version: str 
     # HTML. Aggregate only that exact retained set here so evidence cannot expand
     # the Standard-150 assessed denominator or create a second fetch path.
     local_entity_scan_evidence = build_local_entity_scan_evidence(pages)
+
+    # The ordinary Standard-150 worker does not own a CrUX/GSC account or accept
+    # provider payloads from the browser/task request. Record that absence
+    # explicitly on the exact retained page set. No metric can be admitted here;
+    # connected data still requires the exact durable scan-id gate later.
+    assessed_provider_urls = [
+        str(page.get("final_url") or page.get("url") or "").strip()
+        for page in pages
+        if isinstance(page, dict) and str(page.get("final_url") or page.get("url") or "").strip()
+    ]
+    connected_provider_evidence = build_disconnected_provider_bundle(
+        assessed_urls=assessed_provider_urls,
+    )
 
     identity = {"scan_origin": scan_evidence_origin(result) if identity_version else "", "identity_version": identity_version}
     key_for = repair_evidence_key_function(legacy_key=str, **identity)
@@ -287,6 +302,7 @@ def apply_indexability_quality_to_result(result: dict, *, identity_version: str 
     result["indexability_quality_evidence"] = indexability_evidence
     result["navigation_indexability_evidence"] = navigation_evidence
     result["local_entity_scan_evidence"] = local_entity_scan_evidence
+    result["connected_provider_evidence"] = connected_provider_evidence
 
     summary = result.get("scan_summary")
     if not isinstance(summary, dict):
@@ -311,6 +327,7 @@ def apply_indexability_quality_to_result(result: dict, *, identity_version: str 
         "indexability_quality_evidence": indexability_evidence,
         "navigation_indexability_evidence": navigation_evidence,
         "local_entity_scan_evidence": local_entity_scan_evidence,
+        "connected_provider_evidence": connected_provider_evidence,
         "soft_404_pages": indexability_evidence.get("soft_404_count", 0),
         "canonicalized_pages": indexability_evidence.get("canonicalized_count", 0),
         "indexability_conflicts": sum(indexability_evidence.get("conflict_counts", {}).values()),

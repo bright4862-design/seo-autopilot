@@ -3,6 +3,7 @@ import json
 from app.extract import extract_page
 from app.stage2_local_entity_producer import (
     LOCAL_ENTITY_PRODUCER_VERSION,
+    MAX_PAGE_ENTITY_OBSERVATIONS,
     build_local_entity_scan_evidence,
 )
 
@@ -167,3 +168,51 @@ def test_b13_malformed_jsonld_stays_unknown_instead_of_becoming_no_local_entity(
     assert envelope["reason"] == "local_entity_structured_data_malformed"
     assert envelope["malformed_script_count"] == 1
     assert envelope["observations"] == []
+
+
+def test_b13_duplicate_jsonld_entity_does_not_invent_candidate_truncation():
+    entity = {
+        "@context": "https://schema.org",
+        "@graph": [
+            {
+                "@type": "Store",
+                "@id": "https://example.com/entities/store-1",
+                "name": "Store One",
+                "telephone": "555",
+                "address": "1 Main Street",
+            },
+            {
+                "@type": "Store",
+                "@id": "https://example.com/entities/store-1",
+                "name": "Store One",
+                "telephone": "555",
+                "address": "1 Main Street",
+            },
+        ],
+    }
+    envelope = _page("https://example.com/store-1", entity)["local_entity_observations"]
+
+    assert envelope["candidate_count"] == 1
+    assert envelope["selected_count"] == 1
+    assert envelope["selection_truncated"] is False
+
+
+def test_b13_unique_candidate_count_remains_exact_when_samples_are_capped():
+    entities = [
+        {
+            "@type": "Store",
+            "@id": f"https://example.com/entities/store-{index}",
+            "name": f"Store {index}",
+            "telephone": f"555-{index:04d}",
+            "address": f"{index} Main Street",
+        }
+        for index in range(MAX_PAGE_ENTITY_OBSERVATIONS + 2)
+    ]
+    envelope = _page(
+        "https://example.com/store-directory",
+        {"@context": "https://schema.org", "@graph": entities},
+    )["local_entity_observations"]
+
+    assert envelope["candidate_count"] == MAX_PAGE_ENTITY_OBSERVATIONS + 2
+    assert envelope["selected_count"] == MAX_PAGE_ENTITY_OBSERVATIONS
+    assert envelope["selection_truncated"] is True

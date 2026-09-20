@@ -8,7 +8,8 @@ This is the current requirement ledger. Historical checkpoints remain in Git his
 
 Stage 1 and the later blueprint remain distinct release states.
 
-- `main` was last verified at `2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad`, containing the V7 runtime/public-build changes and durable ownership-before-admission fix #308.
+- `main` was refreshed and remains `2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad`, containing the V7 runtime/public-build changes and durable ownership-before-admission fix #308.
+- `docs/stage-one-evidence-acceptance.md` on current `main` still records the Stage-1 source as an implementation candidate with exact-source production publication and fresh non-owner production acceptance pending. No accepted production report is recorded there.
 - Stage-1 exact-source publication/promotion and fresh non-owner production acceptance remain owned by the existing single release operator.
 - Later-stage integration remains on `agent/full-blueprint-stage2-coverage-b06-20260919`, PR #303.
 - Do **not** merge later-stage work to `main`, publish Base44, promote worker traffic, mutate admission, run a competing production scan, rebuild the release, change schema/secrets, or otherwise move production while the Stage-1 release operator owns that cutover.
@@ -40,7 +41,7 @@ Requirement state:
 
 The latest Stage-2 privacy hardening remains positive-allowlist/fail-closed for both per-page output and local/NAP aggregates. Unknown future producer/debug fields do not become signed/persisted/customer fields automatically.
 
-## Stage 3 — reviewed lanes integrated serially; B19/B20 reviewed authority seam and B21 signed delivery seam active
+## Stage 3 — reviewed lanes integrated serially; B19/B20 reviewed authority seam and corrected B21 signed delivery seam active
 
 The existing isolated lanes were refreshed and copied as exact reviewed deltas; no duplicate worker was launched and no lane PR was merged to `main`.
 
@@ -68,44 +69,49 @@ Fresh CodeRabbit review identified a material scan-isolation gap after the first
 - Fix commit `56a9362ceb9ec1b06b88e26a0fd7db8fff97e92c` made the caller-provided producer identity authoritative. Repair-local IDs are only consistency assertions; a present mismatch forces that member to singleton `not_verified`, and absent trusted producer identity cannot be resurrected locally.
 - CI `35504067902` then exposed one stale lane assertion that expected local identity to establish trust without a producer identity. The assertion was strengthened, not weakened.
 - Test-semantics commit `cbfd2b1f4a696c209dfab90e3981f42b0cbaa481` now requires missing producer identity to yield untrusted singleton groups even if repairs carry local IDs. Exact-head FixList CI `35504200573` passed both jobs.
-- Fresh CodeRabbit follow-up on exact stable head `fb9a22f1284e1381db04186733ebeb32bb4a7e93` (PR #303 issue comment `5749166024`, 2026-09-20T10:14:11Z) reported: `I found no unresolved material issue in fb9a22f1284e1381db04186733ebeb32bb4a7e93`. It explicitly rechecked trusted producer identity, repair-local consistency/fail-closed behavior, explicit verified same-root-cause evidence, B19 four-factor semantics, truthful unknown reach and signed-Review preservation.
+- Fresh CodeRabbit follow-up on exact stable head `fb9a22f1284e1381db04186733ebeb32bb4a7e93` (PR #303 issue comment `5749166024`, 2026-09-20T10:14:11Z) reported no unresolved material issue and explicitly rechecked trusted producer identity, repair-local consistency/fail-closed behavior, explicit verified same-root-cause evidence, B19 four-factor semantics, truthful unknown reach and signed-Review preservation.
 
 B20 verified grouping now requires the trusted producer identity plus exact consistency of any repair-local identity on every member. Same family, similarity or repair-local scan IDs alone cannot create trust. The B20 independent-review gate is therefore closed **for the signed Review boundary**; durable FixItem/customer projection remains open, so B20 overall is not yet complete.
 
 Detailed checkpoint: `docs/superpowers/plans/2026-09-20-stage3-signed-b19-b20-integration.md`.
 
-### B21 signed delivery integration — RED → GREEN
+### B21 signed delivery integration and independent-review correction
 
-B21 is now wired through the real canonical Review → signed completion boundary rather than remaining an isolated helper.
+B21 is wired through the real canonical Review → signed completion boundary rather than remaining an isolated helper.
 
-- Initial fixture commit `bd8ac740320a3d239f053ba690dfb5e6b67cb41f` was rejected by the pre-existing canonical persistence validator and is **not** counted as semantic RED evidence.
-- Valid RED commit `513a4438d5622d393bf3031cb2db17f29caa7ee5` made the fixture contract-valid and proved the actual missing seam. FixList CI `35506946578` failed exactly because `stage3_delivery` was absent from the integrated Review (`KeyError: 'stage3_delivery'`); the independent lint/typecheck/contracts/frontend job remained green.
-- Implementation commit `86cea88d8a90c62a686015fb9fc464fc0dddfd0d` attaches per-repair B21 counts and a bounded signed delivery summary before completion signing.
-- CI `35507077795` exposed a real integration issue: the temporary B21 ranking view still carried legacy `priority_rank`, allowing the older calibration order to mask authenticated B19 factor scores.
-- Fix commit `d74240b751d9ac1fefe070036397d016a6d074aa` removes `priority_rank` **only from the temporary B21 ranking view**; canonical repairs keep their historical calibration metadata unchanged.
-- That run then exposed a test-semantics issue, not a product regression: the test used cross-cutting `broken_page`, for which B19 truthfully leaves family reach/composite score unknown. The expectation was corrected without weakening B19/B21 semantics.
-- Commit `e9aa3789b9b143a7b3b8dbdd0e52ad2edf953a0f` uses a family-scoped, B19-known `duplicate_content` candidate and explicitly asserts `score_state == known` before testing rank-before-truncate.
-- Exact-head FixList CI `35507339178` passed both jobs on `e9aa3789b9b143a7b3b8dbdd0e52ad2edf953a0f`: 115 root regressions passed; scanner-api `2029 passed, 18 skipped`; labelled synthetic corpus remained 14 cases / 55 assertions with `full_30_site_gate=not_assessed`; frozen revision `01ebe8e90df1e6bd` passed; scanner image built as `sha256:e7378326b2f8030b7cbe23f0fb5a01a0f7f50a18e80d75b5c28fe8ee8b38ccc1`; lint, typecheck, generated release contracts, frontend contracts and production frontend build passed.
-- CI requested Node 20 and `setup-node` resolved Node `20.20.2`; the GitHub-hosted action runtime separately warns that JavaScript actions are forced onto Node 24. This checkpoint is not represented as Node 20.19.5 evidence.
+- Initial fixture `bd8ac740320a3d239f053ba690dfb5e6b67cb41f` was rejected by the pre-existing canonical persistence validator and is not semantic RED evidence.
+- Valid RED `513a4438d5622d393bf3031cb2db17f29caa7ee5` / FixList CI `35506946578` failed exactly because `stage3_delivery` was absent at the integrated Review boundary; build/contracts remained green.
+- `86cea88d8a90c62a686015fb9fc464fc0dddfd0d` attached per-repair truthful B21 counts and a bounded signed delivery summary.
+- CI `35507077795` exposed that legacy `priority_rank` could mask authenticated B19 factor order in the temporary B21 view.
+- `d74240b751d9ac1fefe070036397d016a6d074aa` removed `priority_rank` only from that temporary ranking view, preserving canonical historical metadata.
+- `e9aa3789b9b143a7b3b8dbdd0e52ad2edf953a0f` corrected the ordering fixture to a family-scoped B19-known candidate rather than fabricating a score for cross-cutting `broken_page`. CI `35507339178` was green.
+
+Fresh CodeRabbit review then identified a material **P1 B19/B21 truncation defect**: the helper could normalize explicit unknown B19 composite score to sortable zero and use impact as the next key, allowing a high-impact unknown repair to displace a repair whose authenticated B19 score was genuinely known as `0.0` at the 36-item cap.
+
+- Regression commit `467fc4aaf184c2cf8ad99e41dc8baa8fd13ac0d2` covered unknown-vs-known-zero ordering.
+- Correction `2b952e14ac72f03c42be794540574bc06a2c55b7` changes `stage3_delivery._candidate_priority()` so every numeric B19 score, including exact zero, is in the known sortable segment and every explicit unknown score is deferred after all known scores. Impact never substitutes for an unknown composite when comparing it with a known composite.
+- The reviewer specifically required an integrated signed-Review regression with more than 36 candidates. Commit `881430f0ccd1900535fe2d4483e7d217b382954e` strengthens the real B21 integration test with 37 contract-valid repairs: 35 positive known scores, one authenticated known score exactly `0.0`, and one high-impact cross-cutting unknown score. It proves the known zero is retained, the unknown repair is omitted, the same `stage3_delivery` decision appears in the completion Review, and the existing HMAC authenticates that Review.
+- Exact executable FixList CI `35512886836` passed both jobs on `881430f0ccd1900535fe2d4483e7d217b382954e`: 115 root tests; scanner-api `2030 passed, 18 skipped`; two integrated signed B21 tests; labelled synthetic corpus 14 cases / 55 assertions with `full_30_site_gate=not_assessed`; frozen revision `01ebe8e90df1e6bd`; scanner image `sha256:6d49c53baa876bf38bdf4229399e13ab2164ccbbc40a99e5723589b786aa5022`; lint, typecheck, generated contracts, frontend contracts and production frontend build all passed.
+- CI requested Node 20 but `setup-node` resolved Node `20.20.2`; hosted JavaScript actions separately warned that their own runtime is forced to Node 24. This is not exact Node 20.19.5 evidence.
 
 B21 signed behavior now proves:
 
-- every eligible canonical repair receives truthful `unique_affected_page_count`, `observation_count`, `known_population_count`, `displayed_sample_count`, sample list/partiality and truncated-sample count before authority signing;
-- all eligible B19-scored candidates are ranked before the 36-item presentation limit;
-- legacy `priority_rank` cannot mask the authenticated B19 score in that Stage-3 ranking view;
-- truthful unknown B19 scores remain unknown rather than being fabricated merely to force an order;
-- the signed delivery summary contains bounded counts plus `displayed_fix_ids`, not duplicate raw candidate evidence;
-- the completion proof authenticates the same Review object containing B19/B20/B21 evidence.
+- every eligible canonical repair receives truthful unique affected URL / observation / known-population / displayed-sample counts before authority signing;
+- all eligible candidates are considered before the 36-item presentation limit;
+- known B19 scores are ranked ahead of explicit unknown composite scores, including the exact-known-zero edge case;
+- legacy calibration rank does not mask authenticated B19 factor order in the temporary B21 ranking view;
+- the bounded delivery summary carries counts and `displayed_fix_ids`, not duplicate raw candidate evidence;
+- the completion proof authenticates the same Review carrying B19/B20/B21.
 
-B21 is therefore **shared-integrated and exact-head CI green at the signed authority boundary**, but is not yet complete overall because durable FixItem persistence and actual customer card/export consumption of the ranked/count evidence remain unproven.
+A focused independent follow-up review of the corrected exact signed boundary is still required before closing the B21 review gate. Durable FixItem/card/export consumption also remains open.
 
 Detailed checkpoint: `docs/superpowers/plans/2026-09-20-stage3-b21-signed-delivery.md`.
 
 ### Current B19–B24 requirement state
 
-- **B19:** signed Review integration green; exact factors/explanations and truthful unknowns are authenticated. Durable FixItem/card/export consumption is still open.
+- **B19:** signed Review integration green; exact factors/explanations and truthful unknowns are authenticated, including unknown-vs-known-zero ordering at the B21 cap. Durable FixItem/card/export consumption is still open.
 - **B20:** signed Review integration corrected, exact-head CI green, and fresh independent follow-up review clean. Durable persistence/customer projection is still open.
-- **B21:** signed Review integration green with rank-before-truncate and truthful count evidence. Durable persisted customer/card/export consumption and focused independent review of the new B21 seam remain open.
+- **B21:** corrected signed Review integration is green at executable `881430f0...` / CI `35512886836`, including the >36 known-zero-vs-unknown signed-authority regression. Focused independent follow-up plus durable persisted customer/card/export consumption remain open.
 - **B22:** strict authenticated private-preview selection/whitelist helper exists; actual entitlement/customer preview seam still needs wiring and no-leak proof.
 - **B23:** explicit verified root-cause score-cap helper exists and preserves an existing ceiling independently; actual health-score integration must preserve current access/sample/incomplete ceilings.
 - **B24:** handoff v2 builder + historical v1 reader exist; actual authenticated customer/operator handoff route and persisted source fields still need wiring/proof.
@@ -140,4 +146,6 @@ The genuine 30-site baseline/candidate gate remains **not assessed**. Historical
 
 ## Exact next engineering action
 
-Continue serially on PR #303 from the green B21 signed-authority checkpoint. First wire B19/B21 evidence into the existing durable persistence/customer read model without schema/RLS broadening, and add real persistence → card/export regressions proving rank/count provenance survives while suppressed/operator-only/private evidence does not. Then integrate B23 at the existing health-score boundary while preserving every current access/sample/incomplete ceiling. Only after those customer-visible score/count seams are proven should B22 private preview and B24 authenticated handoff-v2 routes be connected. Require RED → GREEN behavior, exact-head FixList CI and focused independent review for each shared slice. Do not move production.
+Request and inspect a focused independent follow-up review of executable `881430f0ccd1900535fe2d4483e7d217b382954e` and its persisted documentation head. Correct any material B19/B21 signed-boundary finding with a reproducing regression and fresh exact-head CI.
+
+The next customer-visible B19/B21 persistence/card/export slice must **not** recreate or copy the missing V7 Base44 route files into this later-stage branch. Current `main` contains V7/#308, but current Stage-1 acceptance documentation still records exact-source production publication/non-owner acceptance as pending. Once that serialized release gate is actually recorded complete, reconcile this branch onto the then-current accepted `main`, preserve V7/#308, run fresh integrated-head CI, then wire authenticated B19/B21 evidence into the real durable V7 persistence/read/customer/export path without schema/RLS broadening. Until then, continue only later-stage source work that does not duplicate or mutate the release path. Do not move production.

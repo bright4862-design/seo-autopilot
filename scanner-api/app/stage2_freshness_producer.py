@@ -14,7 +14,11 @@ MAX_INTENT_EVIDENCE = 4
 MAX_TEMPORAL_EVIDENCE = 8
 
 _EXPLICIT_CURRENT = re.compile(
-    r"\b(?:current|currently|latest|today(?:'s)?|this\s+(?:week|month|year)|up[- ]to[- ]date|now)\b",
+    r"\b(?:current|currently|latest|today(?:'s)?|this\s+(?:week|month|year)|up[- ]to[- ]date)\b",
+    re.I,
+)
+_HISTORICAL_CONTEXT = re.compile(
+    r"\b(?:archive|archived|historical|history|past|previous|previously|former|formerly)\b",
     re.I,
 )
 _YEAR = re.compile(r"(?<!\d)(20\d{2})(?!\d)")
@@ -113,7 +117,8 @@ def build_contextual_freshness_page_evidence(
     Old years are retained as historical anchors but cannot become a freshness
     defect unless the same visible field explicitly claims current/latest/today
     intent. URL years remain historical context and are never promoted to a
-    current-scope contradiction by themselves.
+    current-scope contradiction by themselves. Generic calls to action such as
+    ``apply now`` are intentionally not treated as current-content intent.
     """
     if not isinstance(page, dict) or not page_has_usable_html(page):
         assessment = {
@@ -141,7 +146,12 @@ def build_contextual_freshness_page_evidence(
         if not value:
             continue
         marker = _EXPLICIT_CURRENT.search(value)
-        scope = "current" if marker else "historical"
+        historical_context = _HISTORICAL_CONTEXT.search(value)
+        # Mixed "latest/current" and explicit archive/history wording is not a
+        # clean contradictory current-scope date. Preserve the current intent,
+        # but keep that field's dates historical so the assessment remains
+        # unknown rather than manufacturing a stale-content defect.
+        scope = "current" if marker and not historical_context else "historical"
         if marker and len(intent_rows) < MAX_INTENT_EVIDENCE:
             intent_rows.append(f"{source}:{marker.group(0).lower()}")
         temporal_rows.extend(_temporal_anchors(value, scope=scope, source=source))

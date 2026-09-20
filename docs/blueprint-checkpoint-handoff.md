@@ -19,7 +19,29 @@ Branch: `agent/full-blueprint-stage2-coverage-b06-20260919`
 
 PR: #303 — `Stage 2: integrate B06–B18 evidence lanes and finish shared producer wiring`
 
-### B11 checkpoint — shared retained-link producer hook implemented and CI green
+### Current B12 checkpoint — paired hub-link evidence seam is green, shared caller disclosure still open
+
+Exact executable head: `e3155ae722631189f338f7bd76225a5e35950bf5`.
+
+FixList CI `35480882511` — **SUCCESS** on both jobs. Immutable checkout, root scanner regressions, the full scanner-api suite, the labelled synthetic Stage-1 corpus, frozen scanner revision verification, production scanner-image build, lint, typecheck, generated release contracts, frontend contract tests and production frontend build all passed. The slice adds seven focused B12 behavioral regressions.
+
+Implemented B12 behavior:
+
+- `scanner-api/app/stage2_hub_render_evidence.py` selects at most five verified structural hubs from the retained Standard-150 set and separately records the exact eligible count plus whether selection was truncated.
+- Raw link evidence is reconstructed only from B11 retained assessed-page provenance. If B11 source samples are truncated such that raw-link absence cannot be proven, the hub fails closed instead of producing a false raw/render difference.
+- Rendered links are accepted only from an explicit renderer link collection, resolved against the hub, fragment-stripped, and intersected with the exact retained assessed URL set. Unsampled targets never become assessed pages.
+- Exact path/query/case/reserved-escape identity is preserved. An explicit empty query delimiter is restored after URL resolution so `/page` and `/page?` are not silently collapsed.
+- An absent rendered link collection is `failed`/unavailable rather than an empty success. Renderer exceptions remain visible only in the pre-existing browser-followup diagnostic field; the new B12 evidence records the normalized `renderer_failed` reason and does not duplicate raw exception text.
+- `scanner-api/app/render_followup.py` attaches `hub_link_comparison` without increasing the existing `DEFAULT_RENDER_FOLLOWUP_LIMIT=3`. B12 adds no renderer call, HTTP request, coverage scheduler or budget.
+- Up to five hubs may be selected for disclosure even though only the existing three-page browser policy can execute. Selected hubs outside that existing policy are explicitly `unassessed`; paired failures and completed comparisons are counted separately. `interpretation=paired_comparison_neither_surface_is_sole_truth` is pinned by regression.
+
+Known B12 integration gap, deliberately **not** called complete: `scanner.run_scan` currently invokes `run_render_followup(pages if material_render_risk else [], ...)`. Therefore scans where the explicit rendering policy declines browser follow-up pass an empty page list and cannot disclose otherwise eligible retained hubs as selected/unassessed. The next serialized change must pass the final retained page set to the B12 disclosure builder while preserving the existing decision about whether any renderer calls are allowed. Do not broaden the browser budget to fix this.
+
+A fresh CodeRabbit review was requested against the exact B11/B12 invariants; no current independent-review pass is claimed until that response is recorded.
+
+Detailed B12 checkpoint: `docs/superpowers/plans/2026-09-20-stage2-b12-hub-render-evidence.md`.
+
+### B11 checkpoint history
 
 B11 now reaches the real retained Standard-150 page set without expanding the crawl or adding a second budget.
 
@@ -29,38 +51,17 @@ B11 now reaches the real retained Standard-150 page set without expanding the cr
 - Unsampled links are ignored for B11 graph construction rather than appended to `pages`; sitemap discovery never becomes an inlink/depth; the adapter cannot emit a sitewide orphan claim; no network call or new request scheduler is introduced.
 - `_reachability_links` is removed in a `finally` block before scan results can be returned, signed, persisted, previewed or exported.
 
-Behavioral coverage now includes the existing six provenance tests, two semantic-navigation identity tests, coverage-evidence fail-closed cases, plus three new real retained-set hook cases: semantic seed navigation → exact depth/inlink; unsampled outgoing target cannot expand assessed pages; and challenged/unusable source cannot contribute even with malformed private cache input.
+Exact B11 retained-hook head `f51869adf8eac44de4fa7c9387590ab3c330c5a9` passed FixList CI `35478073142` with **115 root tests**, **1,924 scanner-api tests / 18 intentional skips**, labelled synthetic Stage-1 corpus, frozen revision, production scanner image, lint, typecheck, generated contracts, frontend contracts and production build.
 
-Exact executable head: `f51869adf8eac44de4fa7c9387590ab3c330c5a9`.
+The prior focused CodeRabbit review found no correctness defect in the semantic-link B11 seam and independently confirmed semantic-only navigation evidence, exact URL identity, sitemap/inlink separation, challenged-source exclusion and the no-sitewide-orphan boundary. The retained-link hook landed afterward; the current B11/B12 review request is the independent-review gate for that newer shared hook.
 
-FixList CI `35478073142` — **SUCCESS** on both jobs:
+Detailed B11 checkpoint: `docs/superpowers/plans/2026-09-20-stage2-b11-reachability-provenance.md`.
 
-- immutable checkout verified `f51869adf8eac44de4fa7c9387590ab3c330c5a9`;
-- root scanner regressions: **115 passed**;
-- scanner-api: **1,924 passed / 18 intentional skips**;
-- new `test_stage2_reachability_run_scan_seam.py`: **3 passed**;
-- labelled Stage-1 corpus remained explicitly `synthetic`, **14 cases / 55 assertions**, `full_30_site_gate=not_assessed`;
-- frozen scanner revision `01ebe8e90df1e6bd`: passed;
-- production scanner image passed, image SHA `sha256:7dc32951eaf6b600424b9e1fde302a9300ae90b333f813e4ac1156fe1bb3ff72`;
-- lint, typecheck, generated release contracts, frontend contract tests and production build: passed.
-
-The workflow resolved Node `20.20.2`; do not describe this run as Node `20.19.5` runtime evidence.
-
-The prior focused CodeRabbit review found no correctness defect in the semantic-link B11 seam and independently confirmed semantic-only navigation evidence, exact URL identity, sitemap/inlink separation, challenged-source exclusion and the no-sitewide-orphan boundary. The retained-link hook above landed afterward, so **fresh incremental review of `f51869ad...` remains a gate** before B11 is independently review-complete.
-
-Detailed checkpoint: `docs/superpowers/plans/2026-09-20-stage2-b11-reachability-provenance.md`.
-
-B11 introduces no customer-facing repair/card in this slice. If B11 source URL samples later become persisted/previewed/exported as customer-visible evidence, that display path still requires bounded authenticated authority/persistence/entitlement/privacy coverage.
-
-### Prior B11 checkpoint history
-
-- `1f27022583b3777cfe886632cff3b7db19140334` passed CI `35475369510` before semantic link context.
-- `0b657afad65bf6c9aef883de11fd23093c6a1f90` correctly exposed one old assertion that did not yet include `navigation_presence`; its B11 tests passed while scanner-api ended **1 failed, 1,920 passed, 18 skipped** and root tests were **115 passed**.
-- The old assertion was strengthened at `c26a0495162359a6af72de0371ea33207e6df505`; CI `35475725233` passed both jobs with **115 root passed** and **1,921 scanner-api passed / 18 skipped**.
-
-### Prior exact reviewed Stage-2 checkpoint
+### Prior reviewed Stage-2 hardening
 
 Before B11, exact reviewed code/test head `f904649c9193877181471e1daa01097da0f3062b` passed FixList CI `35472567286` with **115 root scanner tests**, **1,911 scanner-api passed / 18 skips**, labelled synthetic Stage-1 corpus, frozen revision, production scanner-image build, lint, typecheck, generated contracts, frontend contract tests and production build.
+
+Previously corrected independent-review findings remain carried forward: image applicability before destructive DOM sanitization; empty-landmark selection via explicit `is None`; no raw B10 customer copy in retained duplicate evidence; diagnostic-only redirect loops remaining unverified; and challenge/block/rate-limit redirect destinations remaining unknown before generic HTTP failure classification.
 
 ## Stage-2 lane integration already on PR #303
 
@@ -74,16 +75,6 @@ The lane PRs were CI/review inputs and were not merged directly to `main`.
 
 The B07/B09/B16 producer path is serialized through the existing `SharedCoverageProbeScheduler`, not a second scheduler. Synthetic/probe-only URLs remain outside assessed `pages` and `pages_crawled` and cannot inflate the Standard-150 denominator.
 
-## Independent-review corrections already landed
-
-The previously green reviewed code incorporated and regressed these concrete findings:
-
-1. **Image evidence / DOM sanitization** — scalar image applicability is captured before destructive BeautifulSoup sanitization. Hidden/example descendants are excluded; decomposed nodes are never dereferenced later.
-2. **Empty landmark correctness** — main/article/body selection uses explicit `is None` checks so an empty `<main>` cannot fall through to unrelated body/title content.
-3. **B10 raw-content privacy** — raw substantive page text is no longer retained by the producer compatibility field. It uses bounded deterministic SHA-256 five-token shingle fingerprints plus aggregate signature/token/character-count metadata. These fingerprints are not treated as secret against candidate-text dictionary matching.
-4. **Redirect-loop provenance** — zero-hop diagnostic loop state is `not_verified`; a loop with observed hop evidence remains `verified_unusable`.
-5. **Access-block redirect truthfulness** — challenge/block/rate-limit evidence is evaluated before generic HTTP >=400 classification. Challenged 403/429/503 destinations remain unknown; a verified ordinary 404 remains unusable.
-
 ## Stage 2 status
 
 Stage 2 is **not source-complete** and Stage 3 must not be shared-integrated yet.
@@ -95,14 +86,15 @@ Materially proven/integrated on this line:
 - B08 redirect meaning with fail-closed access handling;
 - B09/B16 helper + shared scheduler integration, with exact source-level sitemap provenance/customer-promotion caveats;
 - B10 accepted main-content extraction/privacy seam;
-- B11 real retained-set producer wiring, exact-head CI green; fresh review still open;
+- B11 real retained-set producer wiring and exact-head CI;
+- B12 paired-hub evidence seam under the existing render-followup policy, exact-head CI, with the shared no-render caller-disclosure gap still open;
 - B17 decoded HTML + inline script/style byte separation.
 
 Open serialized Stage-2 work:
 
 - **B10:** add authenticated Review → authority → persistence → customer/card/handoff/export proof if near-duplicate evidence becomes customer-visible.
-- **B11:** resolve fresh independent review of `f51869ad...`; add downstream authenticated/privacy proof only if the new provenance is exposed to customers.
-- **B12:** paired raw/rendered hub-link evidence for up to five representative hubs, with explicit completed/failed/unassessed states and neither evidence source treated as sole truth.
+- **B11:** resolve fresh independent review of the retained-link hook; add downstream authenticated/privacy proof only if the new provenance is exposed to customers.
+- **B12:** fix the `run_scan` caller so final retained pages reach B12 disclosure even when browser execution is not selected; do not add renderer calls or another budget. Resolve fresh independent review.
 - **B13/B14:** contextual local entity/status/address/phone/regular-hours producer evidence and verified entity matching/NAP consistency.
 - **B15:** current-content intent + current-scoped temporal anchors; an old date alone cannot fail freshness.
 - **B17:** directly measured transfer bytes; decoded bytes remain distinct. Optional CrUX must explicitly support disconnected/stale/unavailable.
@@ -148,6 +140,6 @@ The genuine 30-site gate is still **not assessed**. Historical summary counts an
 
 ## Exact next action
 
-Stay on Stage 2. Request/resolve focused independent review of the B11 retained-link hook at executable head `f51869ad...`. Then implement B12 paired raw/rendered hub-link production as the next serialized slice, followed by B13–B15/B17 transfer/B18. Add authenticated downstream tests for anything customer-visible and require exact-head FixList CI + independent review for meaningful combined checkpoints.
+Stay on Stage 2. Fix the narrow B12 shared-caller disclosure gap while retaining the existing browser-execution limit and no-second-budget invariant, then resolve current independent review. Continue B13–B15/B17 transfer/B18 after B12 closes. Add authenticated downstream tests for anything customer-visible and require exact-head FixList CI + independent review for meaningful combined checkpoints.
 
 Do not begin shared Stage-3 integration until B06–B18 are genuinely source-complete and green. Do not begin Stage-4 live execution until all applicable source/review/CI/30-site/release gates are actually proven.

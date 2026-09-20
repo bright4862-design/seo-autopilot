@@ -33,6 +33,10 @@ def _raw_result() -> dict:
             "intent_evidence": [PRIVATE_SENTINEL],
         },
         "_reachability_links": [{"href": PRIVATE_SENTINEL}],
+        # Intentionally unknown to the current Stage-2 producer contract. The
+        # external projection must fail closed for future private page fields,
+        # rather than relying on a deny-list that has to know this name first.
+        "future_private_detail": PRIVATE_SENTINEL,
     }
     aggregate = {
         "producer_version": "local_entity_producer_v1_jsonld_explicit_identity",
@@ -115,6 +119,7 @@ def _assert_private_stage2_evidence_absent(value) -> None:
         "local_entity_observations",
         "contextual_freshness_evidence",
         "_reachability_links",
+        "future_private_detail",
         "future_debug_observation",
     ):
         assert f'"{field}"' not in serialized

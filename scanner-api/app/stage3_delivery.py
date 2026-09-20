@@ -288,13 +288,11 @@ def select_private_preview(
     remaining verified finding is eligible. A good-shape message requires an explicit
     sufficient-coverage qualification.
     """
-    _qualification_state, qualification_text = _safe_preview_coverage_qualification(coverage_qualification)
-
     if authority_verified is not True:
         return {
             "state": "not_available",
             "findings": [],
-            "coverage_qualification": qualification_text,
+            "coverage_qualification": None,
         }
 
     eligible: list[dict[str, Any]] = []
@@ -437,7 +435,7 @@ def build_handoff_v2(
         ],
     }
     payload["fix_count"] = len(payload["fixes"])
-    if operator_authorized:
+    if operator_authorized is True:
         payload["suppressed_findings"] = [
             deepcopy(item) for item in (suppressed_findings or []) if isinstance(item, dict)
         ]

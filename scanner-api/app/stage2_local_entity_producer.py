@@ -4,6 +4,7 @@ import json
 import re
 from collections import defaultdict
 from typing import Any
+from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
@@ -123,11 +124,30 @@ def _parent(node: dict[str, Any]) -> str:
     return _text(value)[:300]
 
 
+def _entity_identity(value: Any) -> tuple[str, str, str]:
+    """Return observed JSON-LD ID plus conservative cross-page match state.
+
+    A fragment or relative ``@id`` is meaningful only after resolution against
+    that document's base URL. This producer does not receive that trusted base,
+    so relative IDs remain observed but unverified rather than being compared
+    across pages as if ``#store`` meant the same branch everywhere.
+    """
+    entity_key = _text(value)[:500]
+    if not entity_key:
+        return "", "unverified", "jsonld_id_missing"
+    parsed = urlparse(entity_key)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return entity_key, "verified", "absolute_http_jsonld_id"
+    return entity_key, "unverified", "relative_jsonld_id_requires_base_resolution"
+
+
 def extract_local_entity_observations(soup: BeautifulSoup) -> dict[str, Any]:
     """Extract bounded B13 structured observations from accepted HTML only.
 
-    Cross-page identity is verified only from an explicit JSON-LD ``@id``.
-    Name, address, and phone similarity never establish an entity match.
+    Cross-page identity is verified only from an absolute HTTP(S) JSON-LD
+    ``@id``. Relative IDs are retained as observations but cannot establish a
+    B14 entity match without trusted base-URL resolution. Name, address, and
+    phone similarity never establish an entity match.
     """
     candidates: list[dict[str, Any]] = []
     malformed = 0
@@ -155,7 +175,7 @@ def extract_local_entity_observations(soup: BeautifulSoup) -> dict[str, Any]:
     seen: set[tuple[str, str, str, str]] = set()
     unique_candidate_count = 0
     for node in candidates:
-        entity_key = _text(node.get("@id"))[:500]
+        entity_key, entity_match, entity_identity_reason = _entity_identity(node.get("@id"))
         name = _text(node.get("name"))[:300]
         address = _address(node.get("address"))
         phone = _text(node.get("telephone"))[:120]
@@ -174,7 +194,8 @@ def extract_local_entity_observations(soup: BeautifulSoup) -> dict[str, Any]:
             "source": "structured_data",
             "schema_types": _types(node.get("@type")),
             "entity_key": entity_key,
-            "entity_match": "verified" if entity_key else "unverified",
+            "entity_match": entity_match,
+            "entity_identity_reason": entity_identity_reason,
             "name": name,
             "address": address,
             "phone": phone,
@@ -206,13 +227,7 @@ def extract_local_entity_observations(soup: BeautifulSoup) -> dict[str, Any]:
 
 
 def _cross_page_nap_consistency(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Evaluate B14 only where an explicit entity ID is seen on multiple pages.
-
-    A single page can prove structured identity and B13 completeness, but it
-    cannot prove cross-page NAP consistency. Duplicate/conflicting JSON-LD on
-    one URL therefore remains unverified for B14 rather than becoming a false
-    cross-page pass or fail. Shared names or phone numbers never join entities.
-    """
+    """Evaluate B14 only where one verified entity ID spans multiple pages."""
     verified = [
         row
         for row in rows
@@ -245,10 +260,7 @@ def _cross_page_nap_consistency(rows: list[dict[str, Any]]) -> dict[str, Any]:
         comparable_rows.extend(members)
 
     evaluated = assess_nap_consistency(comparable_rows)
-    if not comparable_keys:
-        state = "not_verified"
-    else:
-        state = evaluated.get("state") or "not_verified"
+    state = (evaluated.get("state") or "not_verified") if comparable_keys else "not_verified"
 
     return {
         **evaluated,
@@ -292,6 +304,7 @@ def build_local_entity_scan_evidence(pages: list[dict[str, Any]]) -> dict[str, A
             "page_url": row.get("page_url") or "",
             "entity_key": row.get("entity_key") or "",
             "entity_match": row.get("entity_match") or "unverified",
+            "entity_identity_reason": row.get("entity_identity_reason") or "",
             "source": row.get("source") or "structured_data",
             **result,
         })

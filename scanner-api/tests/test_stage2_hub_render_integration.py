@@ -228,3 +228,33 @@ async def test_b12_without_renderer_stays_unassessed_and_does_not_invent_rendere
     assert b12["unassessed"] == 2
     assert b12["evidence_state"] == "not_assessed"
     assert all(row["rendered_link_count"] is None for row in b12["hubs"])
+
+
+@pytest.mark.asyncio
+async def test_b12_evidence_pages_do_not_enable_browser_followup_when_render_policy_declines():
+    retained_pages = [
+        _hub("https://example.com/", "homepage", suspected=False),
+        _hub(
+            "https://example.com/collections",
+            "collection_page",
+            suspected=False,
+            sources=["https://example.com/"],
+        ),
+    ]
+
+    result = await run_render_followup(
+        [],
+        render_page=None,
+        evidence_pages=retained_pages,
+    )
+    b12 = result["hub_link_comparison"]
+
+    assert result["status"] == "not_needed"
+    assert result["selected_pages"] == 0
+    assert result["attempted_pages"] == 0
+    assert b12["eligible_hubs"] == 2
+    assert b12["selected"] == 2
+    assert b12["completed"] == 0
+    assert b12["failed"] == 0
+    assert b12["unassessed"] == 2
+    assert b12["evidence_state"] == "not_assessed"

@@ -70,14 +70,28 @@ Fresh CodeRabbit then found a material P1: explicit unknown B19 composite score 
 
 The **B21 independent-review gate is closed for the signed authority boundary**. B21 remains incomplete overall until authenticated B19/B21 evidence is persisted and consumed by real customer card/export surfaces with no suppressed/operator/private leakage.
 
-CI requested Node 20 but setup-node resolved `20.20.2`; hosted JavaScript actions separately warned their runtime is forced to Node 24. None of these runs is represented as exact Node 20.19.5 evidence.
+### B23 — signed authority source seam implemented; review + durable score consumption open
 
-Detailed checkpoint: `docs/superpowers/plans/2026-09-20-stage3-b21-signed-delivery.md`.
+B23 now has a real canonical Review -> completion-HMAC decision seam without rewriting the current customer-visible legacy `health_score`.
 
-### B22–B24 current state
+- RED `c713baca3f65da28bd52616960fdcb30e8f52d49` / FixList CI `35514082243`: the new signed B23 expectation failed in the Python scanner-api job while the separate lint/typecheck/contracts/frontend job remained green.
+- `5d967faa32e6a0790cf5cae013717a35455ba9b4` binds optional score caps only to the same versioned, explicit, verified B20 root-cause evidence. Unverified/conflicted/cross-scan evidence cannot contribute a cap; conflicting explicit caps fail closed.
+- `addc071e2fcc2d4f2392eb1fa5586cb73dde352e` attaches `stage3_health_score_decision` before completion signing. It uses the already-final legacy score as the base, carries an existing explicit legacy ceiling without recomputing it, deduplicates by `root_cause_id`, preserves coverage state and can only keep/lower the candidate score.
+- `bdd7fc4e2794227997b181693b203b157304ba02` adds conflict and foreign-scan adversarial regressions.
+- `23d28ddee804e9c20db4136f06aab879685d1942` separates root-cap lowering from preservation of a stricter pre-existing incomplete ceiling.
+- Exact executable CI `35514416069` passed both jobs: root scanner regressions, full scanner-api suite, labelled synthetic corpus, frozen revision, scanner image build, lint/typecheck/generated release contracts/frontend contracts/frontend production build all passed.
+
+Behavioral proof covers: verified cap 72 producing a signed candidate score 72 from legacy score 88 while legacy display remains 88; existing incomplete ceiling 55 remaining stricter than cap 72; cap conflicts failing closed; and foreign repair scan identity being unable to apply a cap after B20 isolation rejects the group.
+
+Detailed checkpoint: `docs/superpowers/plans/2026-09-20-stage3-b23-signed-score-caps.md`.
+
+B23 remains **partial**, not complete overall: focused independent review is still required, and after Stage-1 accepted-main reconciliation any actual customer-visible B23 score must be proven through the real V7 persistence/read/card/export path while preserving historical readers/signatures and all access/sample/incomplete ceilings.
+
+CI requested Node 20 in prior runs but hosted setup has resolved newer Node 20 patch versions; none of these runs is represented as exact Node 20.19.5 evidence.
+
+### B22/B24 current state
 
 - **B22 partial:** strict authenticated private-preview selection/whitelist helper exists; actual entitlement/customer preview seam and no-leak proof remain unwired.
-- **B23 partial:** explicit verified root-cause score-cap helper exists and preserves an existing ceiling in isolation; actual health-score production boundary must preserve all current access/sample/incomplete ceilings.
 - **B24 partial:** handoff-v2 builder + historical-v1 reader exist; actual authenticated customer/operator handoff route, persisted source fields and suppressed/operator-only exclusion remain unwired.
 
 Stage 3 is **in progress, not complete**.
@@ -97,6 +111,8 @@ Standard-150 assessed-page cap; truthful denominators; one finite Stage-2 follow
 
 ## Exact next engineering action
 
-The B21 signed-boundary review gate is now closed. Durable B19/B21 customer persistence remains release-gated because this older-base integration branch must not recreate V7 while Stage-1 acceptance is pending. Once Stage-1 exact-source publication and fresh non-owner acceptance are recorded, reconcile onto accepted `main`, preserve V7/#308, run fresh integrated-head CI, then wire authenticated B19/B21 factor/rank/count evidence through the real V7 persistence/read/card/export path with RED -> GREEN regressions and focused independent review.
+B23's signed source seam is implemented and exact-code CI green; its focused independent review is now the next gate. If review reports a material issue, reproduce it first, correct minimally and require fresh exact-head CI.
 
-Until that release gate closes, continue only Stage-3 source work that does not duplicate/mutate the frozen release path. The next eligible serialized slice is B23 health-score boundary integration, provided it preserves every current access/sample/incomplete ceiling and is proven through signed authority before any customer-visible completion claim. Do not move production.
+Durable B19/B21/B23 customer persistence/card/export work remains release-gated because this older-base integration branch must not recreate V7 while Stage-1 acceptance is pending. Once Stage-1 exact-source publication and fresh non-owner acceptance are recorded, reconcile onto accepted `main`, preserve V7/#308, run fresh integrated-head CI, then wire authenticated B19/B21 evidence and any B23-adjusted score through the real V7 persistence/read/card/export path with RED -> GREEN regressions and independent review.
+
+Until that release gate closes, continue only Stage-3 source work that does not duplicate/mutate the frozen release path. B22/B24 source-only work is eligible only if it can remain off the V7 customer/persistence path. Do not move production.

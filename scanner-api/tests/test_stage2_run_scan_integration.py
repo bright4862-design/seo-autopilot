@@ -66,7 +66,11 @@ async def test_run_scan_calls_one_shared_stage2_orchestrator_without_expanding_a
     async def fake_validate(*_args, **_kwargs):
         return {}
 
-    async def fake_render_followup(*_args, **_kwargs):
+    render_capture = {}
+
+    async def fake_render_followup(*args, **kwargs):
+        render_capture["policy_pages"] = args[0] if args else kwargs.get("pages")
+        render_capture.update(kwargs)
         return {"attempted": 0}
 
     captured = {}
@@ -107,6 +111,12 @@ async def test_run_scan_calls_one_shared_stage2_orchestrator_without_expanding_a
     assert result["coverage_probe_evidence"]["stage2_orchestration_version"] == "test_shared_stage2_orchestration"
     assert result["coverage_probe_evidence"]["assessed_page_count_unchanged"] is True
     assert result["technical_audit_summary"]["coverage_probe_evidence"] == result["coverage_probe_evidence"]
+    # B12 disclosure gets the exact retained assessed set even when browser
+    # policy declines rendering. This must not turn the retained pages into
+    # browser-selected work or create a second render budget.
+    assert render_capture["policy_pages"] == []
+    assert render_capture["render_page"] is None
+    assert render_capture["evidence_pages"] is result["pages"]
 
 
 def _group_member(path, *, version=None):

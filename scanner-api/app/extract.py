@@ -24,6 +24,10 @@ from .metadata_title_evidence import (
     is_generic_fallback_title,
     title_width_state,
 )
+from .transport_evidence import (
+    TRANSFER_BODY_BYTES_BASIS,
+    measured_transfer_body_bytes,
+)
 
 
 CANONICAL_HREF_RESOLUTION_VERSION = "canonical_href_resolution_v3_published_route_identity"
@@ -253,6 +257,13 @@ def extract_page(
         response_headers=response_headers,
     )
     content_evidence = extract_accepted_content_evidence(html or "", page_evidence_class)
+    transfer_body_bytes = measured_transfer_body_bytes(response_headers)
+    if page_evidence_class == "usable_html" and transfer_body_bytes is not None:
+        content_evidence.update({
+            "transfer_bytes": transfer_body_bytes,
+            "transfer_bytes_state": "measured",
+            "transfer_bytes_basis": TRANSFER_BODY_BYTES_BASIS,
+        })
     location_context = content_evidence.pop("location_context")
     template_content = detect_location_template_content(path, **location_context)
 

@@ -14,6 +14,7 @@ from typing import Any, Iterable
 HANDOFF_V2 = "fixlist_handoff_v2"
 DEFAULT_PRESENTATION_LIMIT = 36
 DEFAULT_SAMPLE_LIMIT = 10
+SAFE_SUFFICIENT_COVERAGE_QUALIFICATION = "Coverage was sufficient for the assessed scan scope."
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -199,6 +200,24 @@ def _preview_projection(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _safe_preview_coverage_qualification(value: Any) -> tuple[str, str | None]:
+    """Return only a fixed customer-safe qualification for an explicit sufficient state."""
+    qualification = _dict(value)
+    raw_state = qualification.get("state")
+    state = raw_state.strip().lower() if isinstance(raw_state, str) else ""
+    text = SAFE_SUFFICIENT_COVERAGE_QUALIFICATION if state == "sufficient" else None
+    return state, text
+
+
+def _preview_priority_value(candidate: dict[str, Any]) -> float:
+    """Preserve an exact numeric zero when ranking preview candidates."""
+    priority_rank = _number(candidate.get("priority_rank"))
+    if priority_rank is not None:
+        return priority_rank
+    priority_score = _number(candidate.get("priority_score"))
+    return priority_score if priority_score is not None else 0.0
+
+
 def select_evidence_led_preview(
     candidates: Iterable[dict[str, Any]],
     *,
@@ -212,8 +231,7 @@ def select_evidence_led_preview(
     customer-facing ``select_private_preview`` keeps the stricter scan/owner checks.
     Only explicitly preview-allowed, individually verified candidates participate.
     """
-    qualification = _dict(coverage_qualification)
-    qualification_text = qualification.get("text") if isinstance(qualification.get("text"), str) else None
+    qualification_state, qualification_text = _safe_preview_coverage_qualification(coverage_qualification)
 
     eligible = [
         raw
@@ -226,21 +244,22 @@ def select_evidence_led_preview(
         key=lambda item: (
             -int((_nonnegative_int(item.get("impact")) or 0) >= 4),
             -(_nonnegative_int(item.get("impact")) or 0),
-            -(_number(item.get("priority_rank")) or _number(item.get("priority_score")) or 0.0),
+            -_preview_priority_value(item),
             str(item.get("rule_id") or ""),
         )
     )
 
     max_items = max(0, int(max_items))
     if eligible and max_items:
-        selected = eligible[:max_items]
+        high_impact = [item for item in eligible if (_nonnegative_int(item.get("impact")) or 0) >= 4]
+        selected = high_impact[:max_items] if high_impact else eligible[:1]
         return {
             "state": "findings",
             "findings": [_preview_projection(item) for item in selected],
             "coverage_qualification": qualification_text,
         }
 
-    if qualification.get("state") == "sufficient" and qualification_text:
+    if qualification_state == "sufficient" and qualification_text:
         return {
             "state": "good_shape",
             "findings": [],
@@ -269,8 +288,7 @@ def select_private_preview(
     remaining verified finding is eligible. A good-shape message requires an explicit
     sufficient-coverage qualification.
     """
-    qualification = _dict(coverage_qualification)
-    qualification_text = qualification.get("text") if isinstance(qualification.get("text"), str) else None
+    _qualification_state, qualification_text = _safe_preview_coverage_qualification(coverage_qualification)
 
     if authority_verified is not True:
         return {
@@ -293,7 +311,7 @@ def select_private_preview(
     return select_evidence_led_preview(
         eligible,
         max_items=max_items,
-        coverage_qualification=qualification,
+        coverage_qualification=coverage_qualification,
     )
 
 

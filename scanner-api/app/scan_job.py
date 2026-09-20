@@ -617,6 +617,8 @@ def completion_review_payload(review: dict[str, Any]) -> dict[str, Any]:
             for key in _COMPLETION_COVERAGE_ASSESSMENT_FIELDS
             if key in assessment
         }
+    elif "coverage_assessment" in fingerprint:
+        projected_fingerprint["coverage_assessment"] = {}
     projected["site_fingerprint"] = projected_fingerprint
     return projected
 

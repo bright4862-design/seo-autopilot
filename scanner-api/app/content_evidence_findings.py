@@ -5,6 +5,7 @@ import hashlib
 from .accepted_content_evidence import IMAGE_APPLICABILITY_VERSION, VISIBLE_TEMPLATE_VERSION
 from .page_evidence_gate import page_has_usable_html
 from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
+from .stage2_reachability_provenance import enrich_pages_from_retained_link_evidence
 from .url_evidence import page_content_evidence_url
 
 
@@ -33,6 +34,14 @@ def _fix(page, rule, category, title, explanation, recommendation, observations,
 
 
 def content_evidence_findings(pages):
+    # ``run_scan`` invokes this only after the final assessed-page cap. Use that
+    # stable page set to project the temporary raw-link cache into B11 sample-
+    # scoped reachability evidence, then discard the private cache before result
+    # persistence/customer projection. Review can call this function again later;
+    # already-enriched pages have no private cache and are left unchanged.
+    if any(isinstance(page, dict) and '_reachability_links' in page for page in pages):
+        enrich_pages_from_retained_link_evidence(pages)
+
     output=[]
     for page in pages:
         if not page_has_usable_html(page) or not _url(page):

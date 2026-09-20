@@ -17,17 +17,17 @@ def _page(index: int) -> dict:
     }
 
 
-def _fix(index: int, *, broken: bool = False) -> dict:
+def _fix(index: int, *, high_impact: bool = False) -> dict:
     url = f"https://example.com/products/{index}"
-    rule = "broken_page" if broken else "missing_meta_description"
+    rule = "duplicate_content" if high_impact else "missing_meta_description"
     return {
-        "fix_id": f"{'broken' if broken else 'meta'}-{index}",
+        "fix_id": f"{'duplicate' if high_impact else 'meta'}-{index}",
         "rule": rule,
-        "category": "404_error" if broken else "meta_description",
-        "priority": "critical" if broken else "medium",
-        "base_severity": "critical" if broken else "medium",
+        "category": "duplicate_content" if high_impact else "meta_description",
+        "priority": "high" if high_impact else "medium",
+        "base_severity": "high" if high_impact else "medium",
         "evidence_class": "confirmed_problem",
-        "action_priority": "fix_first" if broken else "improve",
+        "action_priority": "fix_first" if high_impact else "improve",
         "priority_reason": "verified synthetic delivery fixture",
         "page_scope": "page",
         "page_template_family": "product_page",
@@ -53,7 +53,11 @@ def _scan_record() -> dict:
 
 
 def test_b21_ranked_delivery_and_counts_are_attached_before_signed_completion(monkeypatch):
-    fixes = [_fix(index) for index in range(39)] + [_fix(39, broken=True)]
+    # Use a family-scoped high-impact candidate rather than a cross-cutting
+    # access failure: B19 intentionally leaves cross-cutting reach unknown, while
+    # B21's ordering requirement applies to candidates with a comparable B19
+    # four-factor score.
+    fixes = [_fix(index) for index in range(39)] + [_fix(39, high_impact=True)]
     pages = [_page(index) for index in range(40)]
     review = {"cleaned_fixes": fixes}
     scan_result = {
@@ -83,13 +87,16 @@ def test_b21_ranked_delivery_and_counts_are_attached_before_signed_completion(mo
     assert delivery["displayed_candidate_count"] == DEFAULT_PRESENTATION_LIMIT
     assert delivery["presentation_truncated"] is True
     assert delivery["presentation_omitted_count"] == 4
-    assert delivery["displayed_fix_ids"][0] == "broken-39"
-    assert "broken-39" in delivery["displayed_fix_ids"]
+    assert delivery["displayed_fix_ids"][0] == "duplicate-39"
+    assert "duplicate-39" in delivery["displayed_fix_ids"]
     assert len(delivery["displayed_fix_ids"]) == DEFAULT_PRESENTATION_LIMIT
     assert "displayed_candidates" not in delivery
 
-    broken = next(item for item in integrated["canonical_repairs"] if item["fix_id"] == "broken-39")
-    counts = broken["stage3_counts"]
+    duplicate = next(item for item in integrated["canonical_repairs"] if item["fix_id"] == "duplicate-39")
+    factors = duplicate["stage3_priority_factors"]
+    assert factors["score_state"] == "known"
+    assert factors["priority_factor_score"] > 0
+    counts = duplicate["stage3_counts"]
     assert counts["unique_affected_page_count"] == 1
     assert counts["observation_count"] == 0
     assert counts["known_population_count"] is None

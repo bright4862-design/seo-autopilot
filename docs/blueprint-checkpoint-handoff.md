@@ -14,24 +14,19 @@ This is the current serialized handoff for the FixList full-scanner blueprint. H
 
 ## Current Stage-2 executable checkpoint
 
-Exact executable head: `910206d34a298ab840cf610542a55809a76b0115`.
+Exact executable head: `e906ef69c7b7deab3a1014c702b4f3af1453c54c`.
 
-FixList CI `35490060294` — **SUCCESS** on both jobs:
+FixList CI `35490908086` — **SUCCESS** on both jobs:
 
 - immutable checkout verified the exact SHA;
-- root scanner regressions: **115 passed**;
-- `scanner-api`: **1,978 passed / 18 intentional skips**;
-- new shared disconnected-provider result/authority regressions: **3 passed**;
-- existing connected-provider contract regressions: **7 passed**;
-- direct B17 transfer-body regressions: **4 passed**;
-- labelled Stage-1 corpus: `synthetic`, 14 cases / 55 assertions, `full_30_site_gate=not_assessed`;
-- frozen scanner revision `01ebe8e90df1e6bd`: passed;
-- production scanner image: `sha256:afc5d05e3a0c36639b02c40de8545d87d3d897711969c17e13029f01c6ee9ba1`;
-- lint, typecheck, generated release contracts, frontend contract tests and production frontend build: passed.
+- root scanner regression step passed;
+- full scanner-api suite passed, including six new B13/B14 explicit-provenance regressions; relative to the prior 1,978-test checkpoint this is 1,984 passed / 18 intentional skips;
+- labelled Stage-1 synthetic corpus passed and remains synthetic; `full_30_site_gate=not_assessed` remains unchanged;
+- frozen scanner revision check passed;
+- production scanner image build passed;
+- lint, typecheck, generated release contracts, frontend contract tests and production frontend build passed.
 
-The workflow installed Node `20.20.2`; do not describe this checkpoint as Node `20.19.5` runtime evidence.
-
-Direct transfer-byte checkpoint immediately below it: `b915e3846aa2a94da7acbe0b59be7e22c4b3051d`, FixList CI `35489000795` — SUCCESS.
+Documentation-only commits now sit above the executable checkpoint. Keep code certification attached to `e906ef69...` unless a later exact head also receives green CI.
 
 ## Stage-2 material state
 
@@ -45,72 +40,74 @@ Direct transfer-byte checkpoint immediately below it: `b915e3846aa2a94da7acbe0b5
 
 ### B11/B12
 
-B11 produces sample-scoped depth/inlink/navigation provenance on the real retained Standard-150 set after the final cap. Exact retained edges only; sitemap discovery cannot become an inlink; challenged/unusable sources are re-gated out; unsampled targets cannot expand the assessed set; `sitewide_orphan_claim` remains false. The private retained-link cache is removed before persistence/customer projection.
+B11 produces sample-scoped depth/inlink/navigation provenance on the real retained Standard-150 set after the final cap. Exact retained edges only; sitemap discovery cannot become an inlink; challenged/unusable sources are re-gated out; unsampled targets cannot expand the assessed set; `sitewide_orphan_claim=false`. The private retained-link cache is removed before persistence/customer projection.
 
 B12 reuses retained-link evidence and the existing bounded browser-followup observations. Up to five hubs may be selected for disclosure while execution remains under the existing three-page followup ceiling. Rendered links count only from successful accepted 2xx `usable_html` observations without challenge/block/rate-limit/fetch-error/truncation state; other render states remain failed/unassessed.
 
-### B13/B14
+### B13/B14 — explicit provenance slice complete at source level
 
-B13 accepted usable HTML produces bounded versioned JSON-LD LocalBusiness/Store-family observations for explicitly present name/address/phone/regular-hours/schema/entity-id plus optional fields. Malformed/oversized/unusable evidence fails closed and optional absence is not a universal defect.
+B13 accepted usable HTML produces bounded JSON-LD LocalBusiness/Store-family observations. The producer now retains versioned status/source provenance without introducing a second fetch:
 
-B14 cross-page identity remains conservative:
+- explicit machine status (`businessStatus`, `openingStatus`, `status`) may establish `coming_soon`, `open` or `closed` when the value maps unambiguously;
+- otherwise a conservative accepted title/H1 phrase such as Coming Soon, Opening Soon, Now Open, Temporarily Closed or Permanently Closed may establish context;
+- arbitrary body text does not establish business status;
+- missing regular hours are non-defective for verified Coming Soon/closed, applicable for verified open, and unknown when applicability is unknown.
 
-- only explicit absolute HTTP(S) JSON-LD `@id` is currently verified for cross-page identity;
+B14 remains deliberately strict about identity:
+
+- only explicit absolute HTTP(S) JSON-LD `@id` is verified for cross-page identity;
 - relative/fragment IDs remain unverified without trusted document-base resolution;
 - matching names/addresses/phones or page-family similarity never prove identity;
 - the same verified ID must occur on at least two distinct page URLs before consistency can pass/fail;
 - same-page duplicate/conflicting JSON-LD cannot become cross-page proof;
 - distinct explicit IDs stay separate even with a shared phone;
-- `sitewide_consistency_claim` remains false.
+- `sitewide_consistency_claim=false`.
 
-The bounded scan aggregate is attached to the shared result and `technical_audit_summary`, so the existing authority payload authenticates it. It remains evidence-only: no customer repair/card/export or score change was introduced.
+Source provenance is now recorded conservatively:
 
-B13/B14 still do **not** claim generic visible-text/store-form identity, complete Coming Soon/open/closed inference, or complete store-finder/form/sitemap entity parity. Those spec portions remain open until explicit provenance is implemented.
+- a form contributes `form_explicit_entity_id` only when it contains the exact already-verified entity ID in an explicit entity/location/store ID field/attribute;
+- a store-finder/locator contributes `store_finder_explicit_entity_id` only when an explicit finder marker and exact already-verified entity ID occur together;
+- `sitemap_reference` is added only from the retained page's real `discovered_from` evidence during scan aggregation;
+- none of these sources can promote a missing/unverified identity.
+
+The bounded scan aggregate remains attached to the shared result and authenticated `technical_audit_summary`. It is evidence-only: no new repair/card/export/score/preview surface was introduced.
 
 Detailed checkpoint: `docs/superpowers/plans/2026-09-20-stage2-b13-b14-local-entity.md`.
 
 ### B15
 
-Contextual freshness is produced on the retained-page evidence seam. A fail requires explicit current-content intent plus contradictory current-scoped temporal evidence. Old articles/years/dated paths alone cannot fail; archive/history wording remains historical; `apply now` is not current-content intent; year-only dates use 31 December conservatively. This remains evidence-only with no repair/card/score change or new fetch.
+Contextual freshness is produced on the retained-page evidence seam. A fail requires explicit current-content intent plus contradictory current-scoped temporal evidence. Old articles/years/dated paths alone cannot fail; archive/history wording remains historical; `apply now` is not current-content intent; year-only dates use 31 December conservatively. Evidence-only, no new fetch or customer repair.
 
-Detailed checkpoint: `docs/superpowers/plans/2026-09-20-stage2-b15-contextual-freshness.md`.
+### B16–B18
 
-### B16–B18 — current integrated state
+- B16 exact URL-variant identity is integrated; no sibling-host expansion or duplicate claim without independent equivalence evidence.
+- B17 decoded HTML and inline script/style bytes are separate from directly measured raw transfer-body payload bytes. Transfer bytes are measured before content decoding, never inferred from `Content-Length`, cannot be spoofed by a remote internal header, and remain unknown on access-limited pages. Ordinary scans authenticate CrUX as disconnected; controlled authorized/current/stale/unavailable shapes are tested. No live provider connection is claimed.
+- B18 ordinary scans authenticate GSC as disconnected with `provider_data_admitted=false`, no metrics and exact retained assessed-URL count. Controlled connected/stale/unavailable shapes require authorization, exact scan identity, exact retained URL membership, conflict rejection and the Standard-150 ceiling. No live GSC connection or traffic/indexing claim is made.
 
-- B16 exact URL-variant identity is integrated; no sibling-host expansion or duplicate claim occurs without independent equivalence evidence.
-- B17 decoded HTML and inline script/style bytes are separated. Transfer-body payload bytes are now directly measured from `httpx` raw chunks before content decoding, never inferred from `Content-Length` or decoded HTML, and remote responses cannot spoof the internal measurement. Access-limited pages remain unknown. Ordinary scans authenticate CrUX as disconnected with no metrics/fabricated scan identity. Controlled exact-scan connected/stale/unavailable CrUX shapes are tested; no live connection is claimed.
-- B18 ordinary scans now authenticate GSC as disconnected with `provider_data_admitted=false`, no metrics and only the exact retained assessed URL count. Controlled exact-scan connected/stale/unavailable GSC shapes are tested, including authorization, exact scan identity, exact retained URL membership, conflicting-duplicate rejection and the Standard-150 ceiling. No live GSC connection or traffic/indexing claim is made.
+## Stage 2 remains open only at the final review/certification gate
 
-Detailed checkpoints:
+Do not start shared Stage-3 integration yet. Source implementation for B06–B18 has reached the combined whole-stage review boundary. Remaining serialized work:
 
-- `docs/superpowers/plans/2026-09-20-stage2-connected-provider-evidence.md`
-- `docs/superpowers/plans/2026-09-20-stage2-transfer-body-evidence.md`
-- `docs/superpowers/plans/2026-09-20-stage2-provider-result-integration.md`
+1. obtain a fresh independent review of the complete current B06–B18 source shape;
+2. reproduce every material review finding with a behavioral regression, then apply the smallest safe correction;
+3. require fresh exact-head FixList CI after review corrections, or certify the current source only if the fresh review finds no material issue;
+4. keep evidence-only B09/B10–B18 fields internal unless an intentional authenticated customer chain is added; do not invent UI/export output to claim completeness;
+5. preserve Standard-150 cap, one finite probe budget, robots/DNS/SSRF/redirect/body/deadline controls, one active scan/account, exact scan isolation, historical signatures/readers, preview privacy and Python Review authority.
 
-## Stage 2 remains open
-
-Do not start shared Stage-3 integration yet. Remaining serialized work:
-
-1. close the remaining B13/B14 explicit-provenance gap for contextual Coming Soon/open/closed and store-finder/form/sitemap entity evidence without inferring identity from matching NAP strings;
-2. preserve exact B09 sitemap provenance if/when exposed downstream;
-3. add real producer → Review → signed authority → persisted rows → verified customer/card/handoff/export coverage for every newly displayed B09/B10–B18 evidence/count/finding; evidence-only internal fields do not require inventing customer output;
-4. obtain a fresh independent review of the combined B06–B18 source shape and close material findings with regressions;
-5. require final fresh exact-head CI after review corrections before recording Stage 2 complete.
-
-The optional-provider blueprint gate is satisfied only at the source/contract level here: disconnected behavior and controlled connected-response behavior are tested. No account-specific live connection is claimed or required for an otherwise valid scan.
+The optional-provider gate is source/contract based: disconnected behavior plus controlled connected-response behavior is implemented. A live account-specific provider connection is neither claimed nor required for an otherwise valid scan.
 
 ## Stage 3 — isolated lanes built, not shared-integrated
 
-Reuse these lanes only after Stage 2 closes:
+Reuse only after Stage 2 closes:
 
-- `agent/stage3-b19-b20-decisions-20260919` / head `e74d87acd0cec2955402b96f635f13bc275f3a91`: B19 impact × reach × page value × confidence and B20 explicit evidenced SEO/GEO root causes. Lane CI `35463839728` passed.
-- `agent/stage3-b21-b24-delivery-20260919` / head `a998b4e38a06d6c163ac8853c3e49e9f10a58cb7`: B21 exact unions/rank-before-truncate, B22 authenticated private preview selection, B23 evidenced root-cause score caps preserving existing ceilings, B24 backward-compatible handoff v2. Lane CI `35463511347` passed.
+- `agent/stage3-b19-b20-decisions-20260919` / `e74d87acd0cec2955402b96f635f13bc275f3a91`, CI `35463839728`: B19 impact × reach × page value × confidence and B20 explicit evidenced SEO/GEO root causes. Family similarity is not root-cause proof.
+- `agent/stage3-b21-b24-delivery-20260919` / `a998b4e38a06d6c163ac8853c3e49e9f10a58cb7`, CI `35463511347`: B21 exact unions/rank-before-truncate, B22 authenticated private preview selection, B23 evidenced root-cause score caps preserving existing ceilings, B24 backward-compatible handoff v2.
 
-These are integration-ready inputs, not source-complete product behavior. Python Review remains canonical ranking authority. Shared ranking/authority/persistence/customer interfaces remain serialized integration work.
+These are integration-ready inputs, not product completion. Python Review remains canonical ranking authority. Shared ranking/authority/persistence/customer interfaces remain serialized integration work.
 
 ## Stage 4 — isolated lane built, not released
 
-Reuse `agent/stage4-b25-b28-compat-release-20260919` / head `d2ce905ff67410586f86e38bafd93ce4e998e4d1` only after Stage 3 shared integration. Lane CI `35464436789` passed but does not constitute live acceptance.
+Reuse `agent/stage4-b25-b28-compat-release-20260919` / `d2ce905ff67410586f86e38bafd93ce4e998e4d1`, CI `35464436789`, only after Stage 3 shared integration.
 
 Spec numbering controls:
 
@@ -121,18 +118,6 @@ Spec numbering controls:
 
 The genuine 30-site gate remains **not assessed**. Historical summaries and synthetic fixtures cannot become a pass. No Stage-4 deployment, live customer scan or acceptance has been run by this integration branch.
 
-## Invariants carried forward
-
-- Standard-150 assessed-page cap and truthful denominators remain authoritative.
-- One finite shared Stage-2 follow-up request pool only.
-- Robots ownership, DNS/SSRF, redirects, body/deadline limits remain intact.
-- One active scan/account, cancellation, server terminalization and exact scan isolation remain intact.
-- Missing/challenged/robots/budget/deadline/stale/disconnected/invalid evidence remains unknown.
-- Historical signatures/readers remain compatible; unknown evidence versions fail closed.
-- Preview privacy remains intact.
-- Python Review remains the sole canonical ranking/decision authority.
-- Premium/Grok remain outside this integration.
-
 ## Exact next action
 
-Remain on Stage 2. Implement the remaining B13/B14 explicit-provenance cases conservatively, then obtain a fresh independent whole-stage review and exact-head CI. Do not begin Stage-3 shared integration until B06–B18 are genuinely complete, independently reviewed and green.
+Stay on Stage 2 for the fresh independent whole-stage B06–B18 review. Fix material findings with behavioral regressions and fresh exact-head CI. Only then begin serialized Stage-3 shared integration.

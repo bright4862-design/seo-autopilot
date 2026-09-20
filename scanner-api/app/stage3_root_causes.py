@@ -140,9 +140,24 @@ def validate_root_cause_evidence(fix: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _scan_identity(fix: dict[str, Any], provided_scan_id: str) -> str:
-    own = _clean(fix.get("scan_id") or fix.get("scan_run_id"))
-    return own or _clean(provided_scan_id)
+def _trusted_member_scan_identity(fix: dict[str, Any], provided_scan_id: str) -> tuple[str, bool]:
+    """Bind a B20 member to the trusted producer identity, never a repair-local one.
+
+    ``provided_scan_id`` is already validated at the caller as the exact matching
+    producer ``scan_id == scan_run_id``. Repair-local identity fields are only
+    consistency assertions: if either is present it must exactly match the trusted
+    producer identity. Missing/invalid producer identity cannot be resurrected by a
+    repair-local value.
+    """
+    trusted = _clean(provided_scan_id)
+    if not trusted:
+        return "", False
+
+    for field in ("scan_id", "scan_run_id"):
+        local = _clean(fix.get(field))
+        if local and local != trusted:
+            return trusted, False
+    return trusted, True
 
 
 def _singleton_group(
@@ -187,8 +202,9 @@ def group_evidenced_root_causes(
     retaining domain/family partitions and exact affected URL unions. Output
     order is anchored to the first member seen, so grouping cannot move an
     earlier-ranked verified repair behind later singleton repairs. Verified
-    grouping also requires an exact scan identity; missing scan identity fails
-    closed to a singleton rather than creating a cross-run merge surface.
+    grouping also requires an exact trusted producer scan identity; missing or
+    mismatched producer identity, or any conflicting repair-local identity,
+    fails closed to a singleton rather than creating a cross-run merge surface.
     """
     ordered_groups: list[dict[str, Any]] = []
     verified: OrderedDict[tuple[str, str, str], dict[str, Any]] = OrderedDict()
@@ -197,12 +213,17 @@ def group_evidenced_root_causes(
         if not isinstance(fix, dict):
             continue
         evidence = validate_root_cause_evidence(fix)
-        member_scan_id = _scan_identity(fix, scan_id)
-        if evidence["state"] == "verified" and not member_scan_id:
+        member_scan_id, identity_matches = _trusted_member_scan_identity(fix, scan_id)
+        if evidence["state"] == "verified" and not identity_matches:
+            reason = (
+                "repair scan identity does not match trusted producer identity"
+                if member_scan_id
+                else "verified root-cause grouping requires exact scan identity"
+            )
             evidence = {
                 **evidence,
                 "state": "not_verified",
-                "reason": "verified root-cause grouping requires exact scan identity",
+                "reason": reason,
             }
         if evidence["state"] != "verified":
             ordered_groups.append(

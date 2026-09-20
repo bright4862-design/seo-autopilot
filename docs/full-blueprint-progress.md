@@ -8,7 +8,7 @@ This is the current requirement ledger. Historical checkpoints remain in Git his
 
 Stage 1 and the later blueprint remain distinct release states.
 
-- `main` was freshly verified at `2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad`, containing the V7 runtime/public-build changes and durable ownership-before-admission fix #308.
+- `main` was last verified at `2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad`, containing the V7 runtime/public-build changes and durable ownership-before-admission fix #308.
 - Stage-1 exact-source publication/promotion and fresh non-owner production acceptance remain owned by the existing single release operator.
 - Later-stage integration remains on `agent/full-blueprint-stage2-coverage-b06-20260919`, PR #303.
 - Do **not** merge later-stage work to `main`, publish Base44, promote worker traffic, mutate admission, run a competing production scan, rebuild the release, change schema/secrets, or otherwise move production while the Stage-1 release operator owns that cutover.
@@ -16,82 +16,62 @@ Stage 1 and the later blueprint remain distinct release states.
 
 The labelled Stage-1 corpus remains explicitly synthetic and cannot satisfy the genuine B25 30-site gate. Frozen scanner revision: `01ebe8e90df1e6bd`.
 
-## Stage 2 — B06–B18 source integrated; final corrected-head re-review remains open
+## Stage 2 — B06–B18 source/review/CI complete on PR #303
 
-Integration surface: PR #303 / `agent/full-blueprint-stage2-coverage-b06-20260919`.
+Stable corrected Stage-2 head: `10f51529bf5bf64b7b24ab8424f3ae821de46b39`.
 
-The isolated Stage-2 lane PRs were review/CI inputs only and must not be merged directly to `main`.
+Exact-head FixList CI `35500580582` passed. The fresh CodeRabbit follow-up on the corrected fail-closed page-output boundary (PR #303 issue comment `5748778814`, 2026-09-20T08:48:38Z) reviewed the corrected surface and returned `Comments: 0` with no actionable finding. That satisfies the final Stage-2 independent-review gate. Stage 2 is therefore recorded **complete for source integration, independent review and exact-head CI**; this is not a production release claim and does not alter the Stage-1 freeze.
 
-### Requirement status
+Requirement state:
 
-- **B06:** one finite shared follow-up scheduler / unsampled internal-link verification is integrated. Probe-only URLs cannot inflate Standard-150 assessed pages or denominators.
-- **B07:** active soft-404 orchestration is integrated through that same scheduler. Challenge/429/robots/budget/deadline/incomplete remains unknown.
+- **B06:** one finite shared follow-up scheduler / unsampled internal-link verification; probe-only URLs cannot inflate Standard-150 assessed pages or denominators.
+- **B07:** active soft-404 orchestration through that same scheduler; challenge/429/robots/budget/deadline/incomplete remains unknown.
 - **B08:** redirect meaning distinguishes normalization, usable destination, wrong/catch-all destination, unusable destination and unverified access.
-- **B09:** sitemap integrity/probes reuse the same finite scheduler. Customer promotion still requires exact root/child provenance and authenticated downstream proof.
-- **B10:** accepted main-content evidence is integrated for internal deterministic analysis. Raw substantive copy is not retained; bounded fingerprints remain internal-only and are denied at external authority/customer boundaries.
-- **B11:** exact retained-set sample-scoped depth/inlink/navigation is integrated. Sitemap is not an inlink, challenged/unusable sources cannot contribute, unsampled links cannot expand Standard 150, and no sitewide orphan claim is made.
-- **B12:** paired raw/rendered hub-link evidence is integrated under the existing browser-followup ceiling with explicit completed/failed/unassessed states.
-- **B13:** contextual local entity/status completeness is integrated as evidence-only; raw identity/contact observations remain internal and the external aggregate is positive-allowlisted.
-- **B14:** cross-page identity requires the same explicit absolute HTTP(S) JSON-LD `@id` on distinct pages. Matching NAP/family never proves identity. External NAP proof is reduced and fail-closed.
-- **B15:** contextual freshness is integrated as evidence-only. Old dates alone cannot fail; current-content intent plus contradictory current-scoped temporal evidence is required.
-- **B16:** exact URL variant identity is integrated; no sibling-host expansion or duplicate claim without verified equivalence.
-- **B17:** direct transfer bytes remain distinct from decoded/inline bytes. CrUX defaults disconnected; controlled connected evidence requires owner authorization, exact scan identity and valid non-future observation time.
-- **B18:** GSC defaults disconnected; controlled evidence requires owner authorization, exact scan identity, exact retained-URL membership, conflict rejection, Standard-150 ceiling and valid non-future observation time.
+- **B09:** robots-declared sitemap integrity/probes reuse the same finite scheduler with explicit retrieval/probe provenance.
+- **B10:** accepted main-content evidence is internal deterministic analysis; raw copy is not retained and private fingerprints are denied at external boundaries.
+- **B11:** exact retained-set sample-scoped depth/inlink/navigation; sitemap is not an inlink, challenged sources cannot contribute, unsampled links cannot expand Standard 150, no sitewide-orphan overclaim.
+- **B12:** paired raw/rendered hub-link evidence under the existing browser-followup ceiling with completed/failed/unassessed states.
+- **B13:** contextual local entity/status completeness; raw identity/contact observations stay internal and external aggregate fields are positive-allowlisted.
+- **B14:** cross-page identity requires the same explicit absolute HTTP(S) JSON-LD `@id` on distinct URLs; matching NAP/family never proves identity.
+- **B15:** contextual freshness requires current-content intent plus contradictory temporal evidence; old dates alone cannot fail.
+- **B16:** exact bounded URL-variant identity/probes; no sibling-host expansion or duplicate claim without verified equivalence.
+- **B17:** measured transfer bytes remain distinct from decoded/inline bytes; optional CrUX defaults disconnected and controlled evidence requires owner authorization, exact scan identity and valid observation time.
+- **B18:** GSC defaults disconnected; controlled evidence requires owner authorization, exact scan identity, exact retained-URL membership, conflict rejection, Standard-150 ceiling and valid observation time.
 
-### Latest independent-review finding: future private page fields were fail-open
+The latest Stage-2 privacy hardening remains positive-allowlist/fail-closed for both per-page output and local/NAP aggregates. Unknown future producer/debug fields do not become signed/persisted/customer fields automatically.
 
-A fresh CodeRabbit re-review of stable head `464d3a84726887a32bf19ad3b372d6a5ac5498cd` found one remaining material P1 boundary defect: `project_page_for_external_boundary` used a deny-list, so a future producer/debug field not already named in that list could cross `pages`/`crawled_pages`, direct authority review, signed completion/limited envelopes, persistence, preview or export.
+## Stage 3 — reviewed lanes integrated serially; B19/B20 signed-review seam now active
 
-#### RED
+The existing isolated lanes were refreshed and copied as exact reviewed deltas; no duplicate worker was launched and no lane PR was merged to `main`.
 
-Commit `e51b62220c926c671c0906b441de62dcaf9c7b53` — `test(stage2): reproduce future private page leak` — injected an intentionally unknown `future_private_detail` sentinel into the existing direct-helper privacy fixture and required it to be absent from every external authority/signing path.
+- B19/B20 source lane `e74d87acd0cec2955402b96f635f13bc275f3a91` was integrated at `c3f9d685e17b26c372a5a47403b478caec36ed2a`.
+- B21–B24 source lane `a998b4e38a06d6c163ac8853c3e49e9f10a58cb7` was integrated at `3aebc7375e854ce063c0bcec0a46210473e061c7`.
+- Combined exact-head FixList CI `35501672504` passed both jobs.
 
-FixList CI `35499676118` failed as intended. The fixture change did not add a new test function; it caused the existing three direct-helper privacy regressions to expose the leak. The previous fully green suite size was 1,993 scanner-api tests / 18 intentional skips, so the RED behavior is the existing three privacy checks failing against the same suite rather than a new standalone test count.
+### B19/B20 shared authority integration
 
-#### Correction
+RED commit `ac6ce27b3c492649537d80788f7b02b86ec39e5e` added three behavioral regressions for the canonical Review → signed completion seam. FixList CI `35501924104` failed as intended in the scanner regression job while the lint/typecheck/contracts/frontend job stayed green.
 
-Commit `fda2ab346fa102fe2a7d02f116b1cd6e1fa92eaf` — `fix(stage2): fail closed page output projection` — replaces page-output deny-list copying with an explicit positive external page-field allowlist.
+GREEN commit `7ba2df83d848fd643bb510374b7da5a18ac749f1` wires B19/B20 into `repair_contract_v2.py` after the existing canonical persistence candidate validator and before Review is signed by the durable completion envelope. Exact-head FixList CI `35501983203` passed both jobs: root scanner regressions, full scanner-api tests including the new signed-review regressions, labelled Stage-1 synthetic corpus, frozen revision, scanner image, lint, typecheck, generated contracts, frontend contracts and production build all passed.
 
-Consequences:
+The implementation now proves:
 
-- unknown future page fields are denied by default;
-- currently approved route, metadata, robots, canonical, redirect, indexability, bounded access-block, Stage-1 content, B11 reachability, B17 scalar page-weight and authenticated GEO diagnostics remain explicitly classified;
-- B10 fingerprints, B13/B14 raw entity/contact evidence, B15 per-page freshness evidence and B11 private retained-link cache remain excluded;
-- future producer fields now require deliberate review/classification before they can become a signed/customer/persisted contract.
+- **B19 partial shared integration:** final canonical repairs carry versioned exact factors `impact × reach × page value × confidence`, explanations, truthful unknown reach, and the same authenticated envelope is exposed as `priority_factors`; repair leverage is not read as a substitute factor.
+- **B20 partial shared integration:** explicit root-cause grouping consumes pre-fingerprint rows, can span SEO/GEO and families only with explicit verified evidence, unions affected URLs, and accepts producer scan identity only when non-empty `scan_id == scan_run_id`; otherwise it fails closed to singleton/unverified groups.
+- B19/B20 derived fields are now inside the signed Review object. They are **not yet claimed as durable customer FixItem/card/export fields**; persistence/customer projections still require explicit reviewed wiring.
 
-Exact executable FixList CI `35500366163` on `fda2ab346fa102fe2a7d02f116b1cd6e1fa92eaf` — **SUCCESS** on both jobs:
+Detailed checkpoint: `docs/superpowers/plans/2026-09-20-stage3-signed-b19-b20-integration.md`.
 
-- immutable checkout: passed;
-- root scanner regressions: passed (same 115-test root gate as the preceding certified checkpoint);
-- full `scanner-api`: passed, including the three strengthened unknown-field direct-helper privacy regressions; suite remains **1,993 passed / 18 intentional skips** because the RED commit only strengthened an existing shared fixture;
-- labelled Stage-1 synthetic corpus: passed and remains `full_30_site_gate=not_assessed`;
-- frozen scanner revision: passed;
-- production scanner image build: passed;
-- lint, typecheck, generated release contracts, frontend contract tests and production frontend build: passed.
+### B21–B24 state
 
-GitHub Actions continues to request Node 20 and resolve Node 20.20.2 in the current CI environment; do not describe these runs as Node 20.19.5 runtime evidence.
+Reviewed lane code is present on the serialized branch and its isolated/combined tests are green, but the shared delivery contract is not complete merely because helpers pass:
 
-Detailed review-hardening history: `docs/superpowers/plans/2026-09-20-stage2-followup-review-hardening.md`.
+- **B21:** exact unique URL unions / observation / population / displayed-sample counts and rank-before-truncate helper exist; actual signed canonical presentation/persistence seam still needs wiring.
+- **B22:** strict authenticated private-preview selection/whitelist helper exists; actual entitlement/customer preview seam still needs wiring and no-leak proof.
+- **B23:** explicit verified root-cause score-cap helper exists and preserves an existing ceiling independently; actual health-score integration must preserve current access/sample/incomplete ceilings.
+- **B24:** handoff v2 builder + historical v1 reader exist; actual authenticated customer/operator handoff route and persisted source fields still need wiring/proof.
 
-### Stage 2 completion gate
-
-Stage 2 is **not yet recorded complete**. B06–B18 source integration and the latest material review correction now have RED reproduction and exact executable green CI. Remaining gate:
-
-1. stabilize the persisted documentation head and require its exact-head FixList CI;
-2. request one fresh independent re-review of that corrected stable PR #303 head;
-3. reproduce/fix any material finding before recording completion;
-4. only after a clean re-review record B06–B18 complete and begin serialized Stage-3 integration.
-
-Keep internal B09/B10–B18 evidence internal unless a deliberate producer → Review → signed authority → persisted rows → customer/card/handoff/export chain is added. Preserve Standard 150, one finite request budget, robots/DNS/SSRF/redirect/body/deadline protections, exact scan isolation, one active scan/account, cancellation/terminalization, historical signatures/readers, preview privacy and Python Review authority.
-
-## Stage 3 — isolated lanes built; shared integration held behind Stage 2
-
-Do not duplicate these implementations. Reuse only after Stage 2 closes:
-
-- `agent/stage3-b19-b20-decisions-20260919` @ `e74d87acd0cec2955402b96f635f13bc275f3a91`, CI `35463839728`: B19 exact **impact × reach × page value × confidence** with truthful unknown denominators; B20 explicit evidenced shared SEO/GEO root causes. Family similarity is not root-cause proof and repair leverage is not a substitute fourth factor.
-- `agent/stage3-b21-b24-delivery-20260919` @ `a998b4e38a06d6c163ac8853c3e49e9f10a58cb7`, CI `35463511347`: B21 exact unique unions/count distinctions/rank-before-truncate; B22 authenticated evidence-led private previews; B23 documented root-cause score caps preserving incomplete/access ceilings; B24 authenticated backward-compatible handoff v2 with v1 compatibility and no suppressed/operator-only exposure.
-
-Python Review remains canonical ranking authority. Shared ranking/authority/persistence/customer integration remains serialized work after Stage 2 closes.
+Stage 3 is therefore **in progress, not complete**.
 
 ## Stage 4 — isolated compatibility/release lane built; live acceptance not run
 
@@ -115,10 +95,10 @@ The genuine 30-site baseline/candidate gate remains **not assessed**. Historical
 - Missing, blocked, stale, disconnected, future-dated or otherwise invalid evidence remains unknown/unavailable rather than an invented pass/fail/current state.
 - Historical signatures/readers stay compatible; unknown evidence versions fail closed.
 - Preview privacy and entitlement boundaries remain intact.
-- Python Review remains canonical priority/ranking authority.
+- New displayed counts/priorities/scores require authenticated source → Review → persistence → customer proof before completion claims.
 - Premium/Grok remain outside this integration.
 - Synthetic/historical data never substitutes for the genuine 30-site gate or real customer live acceptance.
 
 ## Exact next engineering action
 
-Require exact-head CI on the final persisted documentation head, then request one fresh independent re-review of that stable PR #303 head. If clean, record Stage 2 complete and begin serialized integration of the existing B19/B20 and B21–B24 lanes. Do not move production.
+Continue Stage 3 on this same serialized branch with B21–B24 shared delivery wiring. Use the newly signed B19/B20 evidence to rank all eligible canonical candidates before presentation truncation, attach honest B21 counts, apply B23 only through explicit verified root-cause caps while preserving existing ceilings, and derive B22/B24 only through authenticated allowlisted customer/operator projections. Add RED regressions at the real authority/persistence/customer seam, fix minimally, run exact-head CI, and request focused independent review. Do not move production.

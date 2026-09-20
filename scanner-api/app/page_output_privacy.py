@@ -1,8 +1,8 @@
-"""Fail-closed projections for internal per-page evidence.
+"""Fail-closed projections for internal Stage-2 page evidence.
 
 Stage-2 producers retain richer evidence long enough for deterministic review and
 scan-level aggregation. Those intermediate fields are not part of the approved
-HTTP/customer/persistence contract. External boundaries must project page
+HTTP/customer/persistence contract. The common post-crawl boundary projects page
 records through this module instead of forwarding producer dictionaries.
 """
 from __future__ import annotations
@@ -22,9 +22,9 @@ INTERNAL_PAGE_EVIDENCE_FIELDS = frozenset({
     "main_text_verified",
     "main_text_reason",
     "main_text_truncated",
-    # B13/B14 extraction intermediates. The scan-level authenticated aggregate
-    # is the supported contract; raw normalized entity/contact observations are
-    # deliberately not a customer/persistence page field.
+    # B13/B14 extraction intermediates. The scan-level aggregate is reduced to
+    # non-content states/counts before persistence; raw normalized observations
+    # are deliberately not a customer/persistence page field.
     "local_entity_observations",
     "location_context",
     # B15 evidence remains internal until an authenticated customer contract is
@@ -37,6 +37,28 @@ INTERNAL_PAGE_EVIDENCE_FIELDS = frozenset({
 })
 
 PAGE_LIST_KEYS = ("pages", "crawled_pages", "scanned_pages", "crawl_pages")
+
+_LOCAL_COMPLETENESS_ALLOWED_FIELDS = frozenset({
+    "version",
+    "state",
+    "reason",
+    "missing_required",
+    "unverified_fields",
+    "contextual_status",
+    "optional_available",
+    "entity_match",
+    "entity_identity_reason",
+    "source",
+    "surface_provenance",
+    "context_provenance_version",
+    "contextual_status_state",
+})
+
+_LOCAL_NAP_INCONSISTENCY_ALLOWED_FIELDS = frozenset({
+    "fields",
+    "source_count",
+    "provenance",
+})
 
 
 def project_page_for_external_boundary(page: Any) -> Any:
@@ -55,18 +77,82 @@ def project_pages_for_external_boundary(pages: Iterable[Any]) -> list[Any]:
     return [project_page_for_external_boundary(page) for page in pages]
 
 
-def project_scan_result_for_external_boundary(result: dict[str, Any]) -> dict[str, Any]:
-    """Shallow-copy a scan and sanitize every recognized page-list projection.
+def project_local_entity_scan_evidence(evidence: Any) -> Any:
+    """Keep B13/B14 states/counts while dropping content and entity identity.
 
-    Non-page aggregates remain unchanged. In particular, authenticated
-    scan-level Stage-2 summaries may survive while raw per-page producer inputs
-    stay private. The input result is never mutated, so the canonical Python
-    Review can continue consuming the richer internal evidence before the
-    persistence boundary is built.
+    The producer aggregate is useful downstream for requirement/version/state
+    proof, but its internal rows still carry exact page URLs, absolute entity IDs
+    and accepted-heading provenance. Those values are not required to prove the
+    aggregate state and must not cross the customer/persistence boundary.
     """
-    projected = dict(result)
+    if not isinstance(evidence, dict):
+        return evidence
+
+    projected = {
+        key: value
+        for key, value in evidence.items()
+        if key not in {"completeness", "nap_consistency"}
+    }
+
+    completeness = evidence.get("completeness")
+    if isinstance(completeness, list):
+        projected["completeness"] = [
+            {
+                key: value
+                for key, value in row.items()
+                if key in _LOCAL_COMPLETENESS_ALLOWED_FIELDS
+            }
+            for row in completeness
+            if isinstance(row, dict)
+        ]
+
+    nap = evidence.get("nap_consistency")
+    if isinstance(nap, dict):
+        safe_nap = {
+            key: value
+            for key, value in nap.items()
+            if key != "inconsistencies"
+        }
+        inconsistencies = nap.get("inconsistencies")
+        if isinstance(inconsistencies, list):
+            safe_nap["inconsistencies"] = [
+                {
+                    key: value
+                    for key, value in row.items()
+                    if key in _LOCAL_NAP_INCONSISTENCY_ALLOWED_FIELDS
+                }
+                for row in inconsistencies
+                if isinstance(row, dict)
+            ]
+        projected["nap_consistency"] = safe_nap
+
+    return projected
+
+
+def _project_local_entity_aggregate(container: dict[str, Any]) -> dict[str, Any]:
+    projected = dict(container)
+    if "local_entity_scan_evidence" in container:
+        projected["local_entity_scan_evidence"] = project_local_entity_scan_evidence(
+            container.get("local_entity_scan_evidence")
+        )
+    return projected
+
+
+def project_scan_result_for_external_boundary(result: dict[str, Any]) -> dict[str, Any]:
+    """Copy a scan while removing producer-only content/identity evidence.
+
+    Page arrays are projected independently so aliases cannot retain a private
+    field. B13/B14 scan-level evidence is reduced to versioned states/counts and
+    non-content diagnostics. The input result is never mutated.
+    """
+    projected = _project_local_entity_aggregate(result)
     for key in PAGE_LIST_KEYS:
         value = result.get(key)
         if isinstance(value, list):
             projected[key] = project_pages_for_external_boundary(value)
+
+    technical = result.get("technical_audit_summary")
+    if isinstance(technical, dict):
+        projected["technical_audit_summary"] = _project_local_entity_aggregate(technical)
+
     return projected

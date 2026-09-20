@@ -107,6 +107,38 @@ def test_b15_year_only_uses_latest_possible_day_to_avoid_false_staleness():
     assert evidence["assessment"]["state"] == "pass"
 
 
+def test_b15_apply_now_is_not_current_content_intent():
+    evidence = build_contextual_freshness_page_evidence(
+        _page(
+            title="Apply now for mortgage rates 2022",
+            h1="Mortgage rates 2022",
+        ),
+        as_of=date(2026, 9, 20),
+    )
+
+    assert evidence["current_content_intent"] == ""
+    assert evidence["assessment"]["state"] == "not_applicable"
+    assert evidence["assessment"]["reason"] == "no_current_content_intent"
+
+
+def test_b15_explicit_archive_context_blocks_false_current_scope_date():
+    evidence = build_contextual_freshness_page_evidence(
+        _page(
+            title="Latest mortgage rates — historical archive January 2022",
+            h1="Latest mortgage rates",
+        ),
+        as_of=date(2026, 9, 20),
+    )
+
+    assert evidence["current_content_intent"] == "explicit_current_language"
+    assert any(
+        row["source"] == "title" and row["date"] == "2022-01-31" and row["scope"] == "historical"
+        for row in evidence["temporal_evidence"]
+    )
+    assert evidence["assessment"]["state"] == "not_verified"
+    assert evidence["assessment"]["reason"] == "no_current_scope_date"
+
+
 def test_b15_unusable_page_cannot_produce_current_or_temporal_claims():
     evidence = build_contextual_freshness_page_evidence(
         _page(

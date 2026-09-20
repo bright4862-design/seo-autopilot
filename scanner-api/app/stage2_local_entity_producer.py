@@ -152,6 +152,7 @@ def extract_local_entity_observations(soup: BeautifulSoup) -> dict[str, Any]:
 
     observations: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str, str]] = set()
+    unique_candidate_count = 0
     for node in candidates:
         entity_key = _text(node.get("@id"))[:500]
         name = _text(node.get("name"))[:300]
@@ -162,6 +163,9 @@ def extract_local_entity_observations(soup: BeautifulSoup) -> dict[str, Any]:
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
+        unique_candidate_count += 1
+        if len(observations) >= MAX_PAGE_ENTITY_OBSERVATIONS:
+            continue
         observations.append({
             "producer_version": LOCAL_ENTITY_PRODUCER_VERSION,
             "applicable": True,
@@ -181,8 +185,6 @@ def extract_local_entity_observations(soup: BeautifulSoup) -> dict[str, Any]:
             "same_as": bool(node.get("sameAs")),
             "parent_entity": _parent(node),
         })
-        if len(observations) >= MAX_PAGE_ENTITY_OBSERVATIONS:
-            break
 
     if observations:
         state, reason = "observed", "accepted_local_entity_structured_data"
@@ -194,9 +196,9 @@ def extract_local_entity_observations(soup: BeautifulSoup) -> dict[str, Any]:
         "version": LOCAL_ENTITY_PRODUCER_VERSION,
         "state": state,
         "reason": reason,
-        "candidate_count": len(candidates),
+        "candidate_count": unique_candidate_count,
         "selected_count": len(observations),
-        "selection_truncated": len(candidates) > len(observations),
+        "selection_truncated": unique_candidate_count > len(observations),
         "malformed_script_count": malformed,
         "observations": observations,
     }

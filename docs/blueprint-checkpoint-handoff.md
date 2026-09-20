@@ -26,7 +26,7 @@ Keep these invariants intact during all later reconciliation:
 - fail-closed external page/aggregate projection; raw B10 fingerprints, B13/B14 identity/contact observations, B15 freshness details and private B11 link caches remain internal;
 - historical signatures/readers remain readable and original signatures are never rewritten.
 
-A direct authenticated HTTP `/scan` privacy regression at `d9061f23edd0a0541b017f42297bf60a9c401560` proved B10/B11/B13/B15 private sentinels do not survive the serialized response; CI `35524582769` passed.
+Direct authenticated HTTP `/scan` privacy regression `d9061f23edd0a0541b017f42297bf60a9c401560`, CI `35524582769`, proves B10/B11/B13/B15 private sentinels do not survive the serialized response.
 
 ## Stage 3 handoff — in progress
 
@@ -41,53 +41,50 @@ Current requirement state:
 - **B19 partial:** signed canonical Review uses exact impact × reach × page value × confidence with versioned explanations and truthful unknowns; repair leverage is not a factor. Durable V7 customer/card/export consumption is open.
 - **B20 partial:** verified shared root-cause grouping requires explicit versioned same-cause evidence and trusted enclosing `scan_id == scan_run_id`; family similarity and repair-local identity alone cannot establish trust. Scan-isolation P1 was RED at `6f1e2cc3ae519bbb494cab599579758f9efe427a` / CI `35503985665`, fixed through `56a9362ceb9ec1b06b88e26a0fd7db8fff97e92c` + `cbfd2b1f4a696c209dfab90e3981f42b0cbaa481`, with CI `35504200573` and clean follow-up `5749166024`. Durable projection is open.
 - **B21 partial:** signed Review has exact unique affected-page / observation / known-population / displayed-sample counts and ranks all eligible B19 candidates before truncation. Known numeric zero remains known; unknown composite does not borrow impact. Stable checkpoint `7236c36cd65fe441a9a90c6a52db9a6c2342125a`, CI `35513093636`, review follow-up `5750062094` clean. Durable customer/card/export proof is open.
-- **B22 partial:** signed evidence-led preview source exists, prefers verified impact-4/5 findings with two-item cap, otherwise exactly one best verified fallback; good-shape requires explicit sufficient coverage and fixed controller-owned wording. Arbitrary producer coverage text is excluded from the nested source and enclosing completion-HMAC Review. Durable exact-owner/exact-scan V7 entitlement/read/card/export proof remains open.
+- **B22 partial:** signed evidence-led preview source exists, prefers verified impact-4/5 findings with two-item cap, otherwise exactly one best verified fallback; good-shape requires explicit sufficient coverage and fixed controller-owned wording. Arbitrary producer coverage text is excluded from nested preview and completion-HMAC Review. Current malformed-shape correction is GREEN but fresh independent review and durable exact-owner/exact-scan V7 customer proof remain open.
 - **B23 partial:** only explicit verified B20 root-cause evidence can contribute documented score caps; conflicting/unverified/cross-scan evidence fails closed and stricter access/sample/incomplete ceilings remain authoritative. Stable checkpoint `4ee24691f46721ffe8112bb435f278e5dd810721`, CI `35514613656`, focused review `5750230877` clean. Durable customer-visible score consumption remains open.
-- **B24 partial:** signed handoff-v2 source requires trusted exact scan identity and verified B20 root-cause mapping; carries family IDs, B19 factors, B21 counts, evidence refs, verification/dependency/vendor metadata and scanner UA; historical v1 reader compatibility remains preserved. Durable V7 persistence/read/customer/operator/export proof remains open.
+- **B24 partial:** signed handoff-v2 source requires trusted exact scan identity and verified B20 root-cause mapping; carries family IDs, B19 factors, B21 counts, evidence refs, verification/dependency/vendor metadata and scanner UA; historical v1 reader compatibility remains preserved. `suppressed_findings` now requires literal `operator_authorized is True`; durable V7 persistence/read/customer/operator/export proof and fresh independent review remain open.
 
-## Latest B22/B24 authority fail-closed slice
+## Latest completion-coverage privacy slice
 
-Fresh source inspection found two concrete helper-level authority defects and fixed them RED → GREEN without touching the frozen V7 durable/customer paths.
+Fresh review identified a real completion-authority fail-open shape: `completion_review_payload()` sanitized mapping-shaped `site_fingerprint.coverage_assessment`, but malformed scalar/list values could survive into the Review HMAC-signed by `build_completion_envelope()`.
 
 ### RED
 
-Commit `28f58efbd773637bfada09da5b0a99b7fcc03fbc` added `scanner-api/tests/test_stage3_authority_fail_closed.py`.
+Commit `60f52e8b304f65c89a30436a478ab75047ad3aad` added two adversarial regressions in `scanner-api/tests/test_stage3_completion_review_privacy.py`, one scalar and one list-shaped sentinel.
 
-FixList CI `35528067336` failed exactly in scanner-api while the independent lint/typecheck/contracts/frontend job passed. Scanner-api summary: `4 failed, 2042 passed, 18 skipped`.
+FixList CI `35534328975` failed those two privacy tests: `2 failed, 2046 passed, 18 skipped`. The same RED run also failed generated Base44 Python review-client/release-contract artifact verification, so it is not described as otherwise green.
 
-The failures proved:
-
-1. `select_private_preview()` accepted a caller-provided `coverage_qualification.state=sufficient` before checking `authority_verified`, so an unverified authority still received the fixed sufficient-coverage customer message;
-2. `build_handoff_v2()` used truthiness for `operator_authorized`, leaking `suppressed_findings` for invalid truthy non-booleans `1`, `"true"`, and `{"authorized": true}`.
+An accidental whole-file replacement of `scanner-api/app/scan_job.py` occurred at `dcad8174f3781ef1a012530f6cd98e482e73ed0b`; exact previous content was immediately restored by forward commit `65905f9a30fd731fb466b6c2574cb1eaa2482ded`. No force-push or production mutation occurred.
 
 ### GREEN
 
-Implementation commit `4a9e0d4dec048291be7956bb225ab1635af30bbc`:
+Implementation commit `7d7dd19e7c77bdc03a93a081e7dab42d23cffd00` keeps the existing positive allowlist for valid mapping-shaped coverage decisions and, when `coverage_assessment` is present but non-mapping, projects it to `{}` before HMAC signing. If the field is absent, it remains absent.
 
-- B22 now returns `state=not_available`, no findings and `coverage_qualification=None` before evaluating any qualification unless `authority_verified is True`.
-- B24 now projects `suppressed_findings` only when `operator_authorized is True` literally.
+Exact-head FixList CI `35537701598` passed both jobs on `7d7dd19e...`:
 
-FixList CI `35528215150` passed both jobs on the exact implementation SHA:
-
-- root tests: `115 passed`;
-- scanner-api: `2046 passed, 18 skipped`;
-- the four new authority regressions passed;
-- Stage-1 synthetic corpus: 14 cases / 55 assertions, provenance `synthetic`, `full_30_site_gate=not_assessed`;
+- root regressions: `115 passed`;
+- scanner-api: `2048 passed, 18 skipped`;
+- scalar/list malformed-shape regressions passed;
+- Stage-1 synthetic corpus: provenance `synthetic`, 14 cases / 55 assertions, `full_30_site_gate=not_assessed`;
 - frozen revision `01ebe8e90df1e6bd` matched;
-- scanner image `sha256:124ee33c14e185e89adbb49906941192d7a2f55ffe8356e8ad7d43c121a7d932` built;
-- lint, typecheck, generated contracts, frontend contracts and production build passed.
+- production scanner image: `sha256:a4118fa8ab73ac94d873e4aa30e4d9c1ef0db13c3ae061da8893b584af38bfc2`;
+- lint, typecheck, generated release contracts, frontend contract tests and production build passed.
 
-Hosted `setup-node` resolved Node `20.20.2`; do not describe this run as exact Node `20.19.5` evidence.
+The generated-client/release-contract failure from the RED run did not reproduce on the GREEN head.
 
-Detailed checkpoint: `docs/superpowers/plans/2026-09-20-stage3-b22-b24-authority-fail-closed.md`.
+Runtime evidence: Ubuntu 24.04 / Bash; Python 3.12.14; Node was requested as major 20 and resolved to `20.20.2`, so this is not exact Node 20.19.5 evidence. GitHub emitted the action-runtime Node-24 migration warning.
+
+Detailed checkpoint: `docs/superpowers/plans/2026-09-20-stage3-completion-coverage-shape-fail-closed.md`.
 
 ## What remains before Stage 3 can be complete
 
-1. One fresh independent review of the current corrected B22/B24 shared authority/privacy boundary. A skipped/failed automated review is not approval.
-2. Stage-1 exact-source publication and fresh non-owner acceptance must be recorded by the separate release operator.
-3. Reconcile this integration branch onto the then-current accepted `main`, preserve V7/#308, and run fresh exact integrated-head CI.
-4. Complete the actual V7 producer → signed authority → persisted rows → exact-owner/exact-scan read/reload/history → customer card/export/preview seams for B19/B21/B22/B23/B24. Prove suppressed/operator-only findings never enter customer output and historical v1 remains readable.
-5. Persist exact source SHAs, tests/failures and independent review evidence before declaring Stage 3 complete.
+1. Certify the final persisted documentation/ledger branch head with exact-head FixList CI.
+2. Refresh PR #303 comments/reviews and obtain one genuinely fresh independent review of the latest corrected B22/B24 shared authority/privacy boundary. A skipped/failed automated review is not approval.
+3. Stage-1 exact-source publication and fresh non-owner acceptance must be recorded by the separate release operator.
+4. Reconcile this integration branch onto the then-current accepted `main`, preserve V7/#308, and run fresh exact integrated-head CI.
+5. Complete the actual V7 producer → signed authority → persisted rows → exact-owner/exact-scan read/reload/history → customer card/export/preview seams for B19/B21/B22/B23/B24. Prove suppressed/operator-only findings never enter customer output and historical v1 remains readable.
+6. Persist exact source SHAs, tests/failures and independent review evidence before declaring Stage 3 complete.
 
 ## Stage 4 handoff — held
 
@@ -100,8 +97,8 @@ Canonical isolated lane remains `agent/stage4-b25-b28-compat-release-20260919` a
 
 ## Resume instruction
 
-The next serialized owner should first refresh `AGENTS.md`, `README.md`, the approved spec, this handoff, `docs/full-blueprint-progress.md`, current-main `docs/stage-one-evidence-acceptance.md`, applicable executable plans, PR #303 comments/reviews and branch heads.
+First refresh `AGENTS.md`, `README.md`, the approved spec, this handoff, `docs/full-blueprint-progress.md`, current-main `docs/stage-one-evidence-acceptance.md`, applicable executable plans, PR #303 comments/reviews and branch heads.
 
-Then certify the current persisted documentation head with exact-head FixList CI and obtain one fresh independent review of the latest B22/B24 authority corrections. Do not bypass the Stage-1 release freeze. When Stage-1 acceptance is actually recorded, reconcile onto accepted `main` and prove the real V7 B19–B24 persistence/customer seams before starting shared Stage-4 integration.
+Then inspect exact-head CI for the persisted documentation head and resolve any real failure inline. If green, refresh independent review state. Do not bypass the Stage-1 release freeze. When Stage-1 acceptance is actually recorded, reconcile onto accepted `main` and prove the real V7 B19–B24 persistence/customer seams before starting shared Stage-4 integration.
 
-No production deployment, `main` merge, worker/admission mutation, production scan, provider connection, schema/RLS change, secret rotation, Premium enablement or Grok enablement occurred in the latest slice.
+No production deployment, `main` merge, worker/admission mutation, production scan, provider connection, schema/RLS change, secret rotation, Premium enablement or Grok enablement occurred in this slice.

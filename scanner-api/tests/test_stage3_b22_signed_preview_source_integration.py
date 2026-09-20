@@ -182,6 +182,34 @@ def test_b22_coverage_qualification_never_copies_untrusted_review_text():
     assert private_url not in serialized_envelope
 
 
+def test_completion_review_payload_drops_scalar_coverage_assessment_before_signing():
+    sentinel = "PRIVATE-SCALAR-COVERAGE-SENTINEL https://private.example/scalar"
+    review = _review([])
+    review["site_fingerprint"]["coverage_assessment"] = sentinel
+
+    envelope = build_completion_envelope(_scan_record(), _scan_result([]), review, "stage3-b22-secret")
+    serialized_review = json.dumps(envelope["review"], sort_keys=True)
+    serialized_envelope = json.dumps(envelope, sort_keys=True)
+
+    assert sentinel not in serialized_review
+    assert sentinel not in serialized_envelope
+    assert envelope["review"]["site_fingerprint"].get("coverage_assessment") in ({}, None)
+
+
+def test_completion_review_payload_drops_list_coverage_assessment_before_signing():
+    sentinel = "PRIVATE-LIST-COVERAGE-SENTINEL https://private.example/list"
+    review = _review([])
+    review["site_fingerprint"]["coverage_assessment"] = [sentinel, {"text": sentinel}]
+
+    envelope = build_completion_envelope(_scan_record(), _scan_result([]), review, "stage3-b22-secret")
+    serialized_review = json.dumps(envelope["review"], sort_keys=True)
+    serialized_envelope = json.dumps(envelope, sort_keys=True)
+
+    assert sentinel not in serialized_review
+    assert sentinel not in serialized_envelope
+    assert envelope["review"]["site_fingerprint"].get("coverage_assessment") in ({}, None)
+
+
 def test_b22_unknown_coverage_cannot_create_good_shape_or_customer_text():
     sentinel = "PRIVATE-UNKNOWN-COVERAGE-SENTINEL"
     review = _review([])

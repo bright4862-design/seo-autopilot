@@ -175,7 +175,7 @@ def test_verified_cause_without_evidence_references_does_not_group():
     assert all("no contributing evidence references" in group["grouping_reason"] for group in groups)
 
 
-def test_same_root_cause_id_never_crosses_scan_identity():
+def test_repair_local_scan_identity_cannot_create_trust_without_producer_identity():
     fixes = [
         {
             "id": "scan-a",
@@ -196,8 +196,10 @@ def test_same_root_cause_id_never_crosses_scan_identity():
     groups = group_evidenced_root_causes(fixes)
 
     assert len(groups) == 2
-    assert {group["scan_id"] for group in groups} == {"scan-a-id", "scan-b-id"}
+    assert all(group["scan_id"] is None for group in groups)
     assert all(group["member_count"] == 1 for group in groups)
+    assert all(group["grouping_state"] == "not_verified" for group in groups)
+    assert all("requires exact scan identity" in group["grouping_reason"] for group in groups)
 
 
 def test_verified_cause_without_scan_identity_does_not_group():

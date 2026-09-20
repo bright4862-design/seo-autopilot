@@ -26,9 +26,11 @@ from .repair_coverage import (
 )
 from .repair_priority_calibration import annotate_calibrated_repair_priority
 from .repair_shadow_calibration import build_calibrated_shadow_review_analysis, sort_calibrated_repairs
+from .robots_policy import SCANNER_USER_AGENT
 from .stage3_delivery import (
     DEFAULT_PRESENTATION_LIMIT,
     apply_root_cause_score_caps,
+    build_handoff_v2,
     prepare_ranked_candidates,
     summarize_candidate_counts,
 )
@@ -342,6 +344,184 @@ def _trusted_stage3_scan_id(scan_result: dict[str, Any]) -> str:
     return scan_id if scan_id and scan_run_id and scan_id == scan_run_id else ""
 
 
+def _optional_nonnegative_count(value: Any) -> int | None:
+    """Preserve an evidenced whole-number count or keep it unknown."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float) and value.is_integer() and value >= 0:
+        return int(value)
+    return None
+
+
+def _verified_stage3_groups_by_member(
+    root_cause_groups: list[dict[str, Any]],
+    *,
+    trusted_scan_id: str,
+) -> dict[str, list[dict[str, Any]]]:
+    """Index only B20 groups verified for the exact producer scan."""
+    output: dict[str, list[dict[str, Any]]] = {}
+    for group in root_cause_groups:
+        if not isinstance(group, dict):
+            continue
+        if group.get("grouping_state") != "verified":
+            continue
+        if _clean_text(group.get("scan_id")) != trusted_scan_id:
+            continue
+        members = group.get("member_ids") if isinstance(group.get("member_ids"), list) else []
+        for member_id in members:
+            clean_member = _clean_text(member_id)
+            if clean_member:
+                output.setdefault(clean_member, []).append(group)
+    return output
+
+
+def _stage3_handoff_candidate(
+    item: dict[str, Any],
+    groups_by_member: dict[str, list[dict[str, Any]]],
+) -> tuple[dict[str, Any], bool]:
+    """Project one canonical repair into the B24 serializer without inventing IDs.
+
+    B20 may legitimately prove no shared root cause. It may also discover that a
+    legacy fingerprint action contains members with different verified causes.
+    A singular B24 ``root_cause_id`` cannot truthfully encode that latter shape,
+    so the caller fails the whole source snapshot closed instead of guessing.
+    """
+    member_ids: list[str] = []
+    evidence_groups = item.get("repair_evidence_groups") if isinstance(item.get("repair_evidence_groups"), list) else []
+    for child in evidence_groups:
+        if not isinstance(child, dict):
+            continue
+        member_id = _clean_text(child.get("fix_id"))
+        if member_id and member_id not in member_ids:
+            member_ids.append(member_id)
+    if not member_ids:
+        fallback = _clean_text(item.get("fix_id"))
+        if fallback:
+            member_ids.append(fallback)
+
+    matched_groups: list[dict[str, Any]] = []
+    seen_group_keys: set[tuple[str, str, tuple[str, ...]]] = set()
+    for member_id in member_ids:
+        for group in groups_by_member.get(member_id, []):
+            key = (
+                _clean_text(group.get("root_cause_id")),
+                _clean_text(group.get("repair_surface_id")),
+                tuple(_clean_text(value) for value in group.get("member_ids", []) if _clean_text(value)),
+            )
+            if key not in seen_group_keys:
+                seen_group_keys.add(key)
+                matched_groups.append(group)
+
+    root_cause_ids: list[str] = []
+    family_ids: list[str] = []
+    evidence_refs: list[str] = []
+    for group in matched_groups:
+        root_cause_id = _clean_text(group.get("root_cause_id"))
+        if root_cause_id and root_cause_id not in root_cause_ids:
+            root_cause_ids.append(root_cause_id)
+        partitions = group.get("family_partitions") if isinstance(group.get("family_partitions"), dict) else {}
+        for family in partitions:
+            clean_family = _clean_text(family)
+            if clean_family and clean_family not in family_ids:
+                family_ids.append(clean_family)
+        refs = group.get("contributing_evidence_refs") if isinstance(group.get("contributing_evidence_refs"), list) else []
+        for ref in refs:
+            clean_ref = _clean_text(ref)
+            if clean_ref and clean_ref not in evidence_refs:
+                evidence_refs.append(clean_ref)
+
+    if not family_ids:
+        for child in evidence_groups:
+            if isinstance(child, dict):
+                family = _clean_text(child.get("family"))
+                if family and family not in family_ids:
+                    family_ids.append(family)
+    if not family_ids:
+        family = _clean_text(item.get("page_template_family") or item.get("template_family"))
+        if family:
+            family_ids.append(family)
+
+    existing_refs = item.get("evidence_refs") if isinstance(item.get("evidence_refs"), list) else []
+    for ref in existing_refs:
+        clean_ref = _clean_text(ref)
+        if clean_ref and clean_ref not in evidence_refs:
+            evidence_refs.append(clean_ref)
+
+    counts = item.get("stage3_counts") if isinstance(item.get("stage3_counts"), dict) else {}
+    candidate = {
+        **deepcopy(item),
+        "rule_id": _clean_text(item.get("fix_id") or item.get("rule")),
+        "title": _clean_text(item.get("issue_title") or item.get("title") or item.get("fix_id") or item.get("rule")),
+        "root_cause_id": root_cause_ids[0] if len(root_cause_ids) == 1 else None,
+        "family_ids": family_ids,
+        "observation_count": counts.get("observation_count"),
+        "known_population_count": counts.get("known_population_count"),
+        "evidence_refs": evidence_refs,
+        "vendor_owner": item.get("vendor_owner") or item.get("who_can_do_this"),
+    }
+    return candidate, len(root_cause_ids) > 1
+
+
+def _build_stage3_handoff_v2_source(
+    canonical_items: list[dict[str, Any]],
+    root_cause_groups: list[dict[str, Any]],
+    scan_result: dict[str, Any],
+    *,
+    scan_origin: str = "",
+    identity_version: str = "",
+) -> dict[str, Any] | None:
+    """Build a customer-safe B24 source snapshot inside the signed Review.
+
+    This is deliberately not a new customer route and does not touch V7
+    persistence. It proves the authoritative Python source shape while Stage-1
+    publication remains frozen. The eventual durable exporter must consume this
+    authenticated source after reconciliation instead of rebuilding Stage 3 from
+    an alternate path.
+    """
+    trusted_scan_id = _trusted_stage3_scan_id(scan_result)
+    if not trusted_scan_id:
+        return None
+
+    groups_by_member = _verified_stage3_groups_by_member(
+        root_cause_groups,
+        trusted_scan_id=trusted_scan_id,
+    )
+    candidates: list[dict[str, Any]] = []
+    for item in canonical_items:
+        candidate, ambiguous_root_cause = _stage3_handoff_candidate(item, groups_by_member)
+        if ambiguous_root_cause:
+            return None
+        candidates.append(candidate)
+
+    scan_identity = {
+        "scan_id": trusted_scan_id,
+        "scan_run_id": trusted_scan_id,
+        "normalized_domain": _clean_text(scan_result.get("normalized_domain")),
+        "scan_origin": _clean_text(scan_origin),
+        "evidence_url_identity_version": _clean_text(identity_version),
+    }
+    source = build_handoff_v2(
+        scan_identity=scan_identity,
+        fixes=candidates,
+        user_agent=SCANNER_USER_AGENT,
+        operator_authorized=False,
+    )
+
+    # The isolated B24 helper predates the canonical indexable-count requirement.
+    # Enrich only the shared authoritative source with the existing evidenced
+    # canonical count; missing/invalid values stay None rather than becoming 0.
+    serialized_fixes = source.get("fixes") if isinstance(source.get("fixes"), list) else []
+    for serialized, candidate in zip(serialized_fixes, candidates):
+        if not isinstance(serialized, dict):
+            continue
+        counts = serialized.get("counts") if isinstance(serialized.get("counts"), dict) else {}
+        counts["indexable_affected"] = _optional_nonnegative_count(candidate.get("indexable_affected"))
+        serialized["counts"] = counts
+    return source
+
+
 def _delivery_candidate(item: dict[str, Any]) -> dict[str, Any]:
     """Map authenticated B19 evidence into the reviewed B21 ranking helper.
 
@@ -601,6 +781,12 @@ def apply_canonical_repair_contract(
         **identity_context,
     )
     stage3_health_score_decision = _build_stage3_health_score_decision(review, root_cause_groups)
+    stage3_handoff_v2_source = _build_stage3_handoff_v2_source(
+        canonical_items,
+        root_cause_groups,
+        scan_result,
+        **identity_context,
+    )
 
     return {
         **review,
@@ -609,6 +795,7 @@ def apply_canonical_repair_contract(
         "stage3_root_cause_groups": root_cause_groups,
         "stage3_delivery": stage3_delivery,
         **({"stage3_health_score_decision": stage3_health_score_decision} if stage3_health_score_decision is not None else {}),
+        **({"stage3_handoff_v2_source": stage3_handoff_v2_source} if stage3_handoff_v2_source is not None else {}),
         "repair_contract_validation_version": validation.get("version") or "",
     }
 

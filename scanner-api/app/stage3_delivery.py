@@ -199,6 +199,61 @@ def _preview_projection(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def select_evidence_led_preview(
+    candidates: Iterable[dict[str, Any]],
+    *,
+    max_items: int = 2,
+    coverage_qualification: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Select a bounded verified preview from an already-authenticated candidate set.
+
+    This helper intentionally performs no owner or entitlement decision. Callers at an
+    authority boundary may use it to sign the evidence-led selection source, while the
+    customer-facing ``select_private_preview`` keeps the stricter scan/owner checks.
+    Only explicitly preview-allowed, individually verified candidates participate.
+    """
+    qualification = _dict(coverage_qualification)
+    qualification_text = qualification.get("text") if isinstance(qualification.get("text"), str) else None
+
+    eligible = [
+        raw
+        for raw in candidates
+        if isinstance(raw, dict)
+        and raw.get("preview_allowed") is True
+        and raw.get("evidence_state") == "verified"
+    ]
+    eligible.sort(
+        key=lambda item: (
+            -int((_nonnegative_int(item.get("impact")) or 0) >= 4),
+            -(_nonnegative_int(item.get("impact")) or 0),
+            -(_number(item.get("priority_rank")) or _number(item.get("priority_score")) or 0.0),
+            str(item.get("rule_id") or ""),
+        )
+    )
+
+    max_items = max(0, int(max_items))
+    if eligible and max_items:
+        selected = eligible[:max_items]
+        return {
+            "state": "findings",
+            "findings": [_preview_projection(item) for item in selected],
+            "coverage_qualification": qualification_text,
+        }
+
+    if qualification.get("state") == "sufficient" and qualification_text:
+        return {
+            "state": "good_shape",
+            "findings": [],
+            "coverage_qualification": qualification_text,
+        }
+
+    return {
+        "state": "not_available",
+        "findings": [],
+        "coverage_qualification": qualification_text,
+    }
+
+
 def select_private_preview(
     candidates: Iterable[dict[str, Any]],
     *,
@@ -235,36 +290,11 @@ def select_private_preview(
         ):
             eligible.append(raw)
 
-    eligible.sort(
-        key=lambda item: (
-            -int((_nonnegative_int(item.get("impact")) or 0) >= 4),
-            -(_nonnegative_int(item.get("impact")) or 0),
-            -(_number(item.get("priority_rank")) or _number(item.get("priority_score")) or 0.0),
-            str(item.get("rule_id") or ""),
-        )
+    return select_evidence_led_preview(
+        eligible,
+        max_items=max_items,
+        coverage_qualification=qualification,
     )
-
-    max_items = max(0, int(max_items))
-    if eligible and max_items:
-        selected = eligible[:max_items]
-        return {
-            "state": "findings",
-            "findings": [_preview_projection(item) for item in selected],
-            "coverage_qualification": qualification_text,
-        }
-
-    if qualification.get("state") == "sufficient" and qualification_text:
-        return {
-            "state": "good_shape",
-            "findings": [],
-            "coverage_qualification": qualification_text,
-        }
-
-    return {
-        "state": "not_available",
-        "findings": [],
-        "coverage_qualification": qualification_text,
-    }
 
 
 def _valid_score_cap(value: Any) -> int | None:

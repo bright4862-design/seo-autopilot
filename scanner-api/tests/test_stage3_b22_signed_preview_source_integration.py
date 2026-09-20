@@ -134,6 +134,22 @@ def test_b22_evidence_led_preview_source_is_customer_safe_and_signed():
     assert envelope["proof"] == create_authority_seal(signed, "stage3-b22-secret")
 
 
+def test_b22_without_impact_four_or_five_emits_only_the_best_verified_finding():
+    urls = [
+        "https://example.com/products/meta",
+        "https://example.com/products/title",
+    ]
+    fixes = [
+        _fix("meta", urls[0], rule="missing_meta_description", category="meta_description", priority="medium"),
+        _fix("title", urls[1], rule="title_length", category="title", priority="low"),
+    ]
+
+    source = apply_canonical_repair_contract(_review(fixes), _scan_result(urls))["stage3_private_preview_source"]
+
+    assert source["state"] == "findings"
+    assert [item["rule_id"] for item in source["findings"]] == ["meta"]
+
+
 def test_b22_preview_source_fails_closed_when_producer_scan_identity_is_not_exact():
     url = "https://example.com/products/a"
     integrated = apply_canonical_repair_contract(

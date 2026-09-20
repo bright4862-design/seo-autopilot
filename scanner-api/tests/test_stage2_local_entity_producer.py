@@ -65,7 +65,10 @@ def test_b13_extracts_bounded_localbusiness_fields_and_explicit_identity_from_ac
     assert scan_evidence["eligible_observations"] == 1
     assert scan_evidence["completeness"][0]["state"] == "pass"
     assert scan_evidence["completeness"][0]["missing_required"] == []
-    assert scan_evidence["nap_consistency"]["state"] == "pass"
+    # B14 is cross-page evidence. One explicit identity is enough to prove
+    # identity, but not enough to prove consistency across pages/surfaces.
+    assert scan_evidence["nap_consistency"]["state"] == "not_verified"
+    assert scan_evidence["nap_consistency"]["comparable_entity_groups"] == 0
 
 
 def test_b13_missing_hours_without_explicit_applicability_is_unknown_not_a_defect():
@@ -103,12 +106,95 @@ def test_b14_same_explicit_entity_id_can_prove_a_phone_inconsistency_across_page
 
     assert evidence["nap_consistency"]["state"] == "fail"
     assert evidence["nap_consistency"]["verified_observations"] == 2
+    assert evidence["nap_consistency"]["comparable_entity_groups"] == 1
     assert evidence["nap_consistency"]["inconsistencies"] == [{
         "entity_key": "https://example.com/entities/store-1",
         "fields": ["phone"],
         "source_count": 2,
         "provenance": ["structured_data"],
     }]
+
+
+def test_b14_same_explicit_entity_id_with_matching_nap_across_pages_can_pass():
+    entity = {
+        "@context": "https://schema.org",
+        "@type": "Store",
+        "@id": "https://example.com/entities/store-1",
+        "name": "Store One",
+        "telephone": "+1 555 555 1212",
+        "address": "1 Main Street",
+        "openingHours": "Mo-Fr 09:00-17:00",
+    }
+    evidence = build_local_entity_scan_evidence([
+        _page("https://example.com/locations/store-1", entity),
+        _page("https://example.com/store-finder/store-1", entity),
+    ])
+
+    assert evidence["nap_consistency"]["state"] == "pass"
+    assert evidence["nap_consistency"]["verified_observations"] == 2
+    assert evidence["nap_consistency"]["comparable_entity_groups"] == 1
+    assert evidence["nap_consistency"]["inconsistencies"] == []
+
+
+def test_b14_conflicting_duplicate_identity_on_one_page_is_not_cross_page_proof():
+    entity = {
+        "@context": "https://schema.org",
+        "@graph": [
+            {
+                "@type": "Store",
+                "@id": "https://example.com/entities/store-1",
+                "name": "Store One",
+                "telephone": "+1 555 555 1212",
+                "address": "1 Main Street",
+                "openingHours": "Mo-Fr 09:00-17:00",
+            },
+            {
+                "@type": "Store",
+                "@id": "https://example.com/entities/store-1",
+                "name": "Store One",
+                "telephone": "+1 555 555 9999",
+                "address": "1 Main Street",
+                "openingHours": "Mo-Fr 09:00-17:00",
+            },
+        ],
+    }
+    evidence = build_local_entity_scan_evidence([
+        _page("https://example.com/locations/store-1", entity),
+    ])
+
+    assert evidence["nap_consistency"]["state"] == "not_verified"
+    assert evidence["nap_consistency"]["verified_observations"] == 2
+    assert evidence["nap_consistency"]["comparable_entity_groups"] == 0
+    assert evidence["nap_consistency"]["inconsistencies"] == []
+
+
+def test_b14_distinct_explicit_entity_ids_with_shared_phone_remain_separate():
+    first = {
+        "@context": "https://schema.org",
+        "@type": "Store",
+        "@id": "https://example.com/entities/store-1",
+        "name": "Store One",
+        "telephone": "+1 555 555 1212",
+        "address": "1 Main Street",
+        "openingHours": "Mo-Fr 09:00-17:00",
+    }
+    second = dict(
+        first,
+        **{
+            "@id": "https://example.com/entities/store-2",
+            "name": "Store Two",
+            "address": "2 Main Street",
+        },
+    )
+    evidence = build_local_entity_scan_evidence([
+        _page("https://example.com/locations/store-1", first),
+        _page("https://example.com/locations/store-2", second),
+    ])
+
+    assert evidence["nap_consistency"]["state"] == "not_verified"
+    assert evidence["nap_consistency"]["verified_observations"] == 2
+    assert evidence["nap_consistency"]["comparable_entity_groups"] == 0
+    assert evidence["nap_consistency"]["inconsistencies"] == []
 
 
 def test_b14_matching_name_address_or_phone_without_explicit_id_never_proves_entity_identity():
@@ -128,6 +214,7 @@ def test_b14_matching_name_address_or_phone_without_explicit_id_never_proves_ent
     assert evidence["nap_consistency"]["state"] == "not_verified"
     assert evidence["nap_consistency"]["verified_observations"] == 0
     assert evidence["nap_consistency"]["ambiguous_observations"] == 2
+    assert evidence["nap_consistency"]["comparable_entity_groups"] == 0
     assert evidence["nap_consistency"]["inconsistencies"] == []
 
 

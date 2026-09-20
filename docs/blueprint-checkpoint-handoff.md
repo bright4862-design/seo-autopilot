@@ -41,16 +41,28 @@ Fresh CodeRabbit then found a P1 where explicit unknown B19 composite score coul
 
 - Regression `467fc4aaf184c2cf8ad99e41dc8baa8fd13ac0d2` covers unknown-vs-known-zero.
 - Fix `2b952e14ac72f03c42be794540574bc06a2c55b7` separates every numeric known B19 score, including exact zero, from explicit unknown composites. Known scores sort before unknowns; impact cannot substitute across that boundary.
-- Signed-authority regression `881430f0ccd1900535fe2d4483e7d217b382954e` uses 37 valid repairs (35 positive known + known zero + high-impact unknown) and proves the known-zero repair remains in the 36 displayed IDs, the unknown repair is omitted and the completion HMAC authenticates that exact Review.
-- Exact-code CI `35512886836` passed: root 115; scanner-api 2030 passed / 18 skipped; signed B21 integration 2 passed; synthetic corpus 14 cases / 55 assertions / `full_30_site_gate=not_assessed`; frozen revision `01ebe8e90df1e6bd`; image `sha256:6d49c53baa876bf38bdf4229399e13ab2164ccbbc40a99e5723589b786aa5022`; lint/typecheck/contracts/frontend build green.
-- Stable checkpoint head `7236c36cd65fe441a9a90c6a52db9a6c2342125a` passed exact-head FixList CI `35513093636` on both jobs.
-- Focused CodeRabbit follow-up `5750062094` on exact stable head `7236c36...` reported **no unresolved material issue**. It explicitly verified exact B19 factors/no repair-leverage factor, unknown preservation, known-zero-before-unknown sorting, rank-before-truncate, signed HMAC proof, B20 trusted producer identity, bounded delivery output, external scan projection, no new request activity and unchanged Standard-150 assessed boundary. CodeRabbit did not run tests; the CI above provides execution proof.
+- Signed-authority regression `881430f0ccd1900535fe2d4483e7d217b382954e` uses 37 valid repairs and proves the known-zero repair remains in the 36 displayed IDs, the high-impact unknown repair is omitted and the completion HMAC authenticates that exact Review.
+- Exact-code CI `35512886836` passed; stable checkpoint `7236c36cd65fe441a9a90c6a52db9a6c2342125a` passed exact-head CI `35513093636`.
+- Focused CodeRabbit follow-up `5750062094` on exact stable head reported no unresolved material issue.
 
-The **B21 independent-review gate is closed for the signed authority boundary**. B21 remains incomplete overall because durable FixItem -> customer card/export persistence/consumption is still unproven.
+The B21 independent-review gate is closed for the signed authority boundary; durable FixItem -> customer card/export proof remains open.
 
-Node note: CI requested Node 20 but setup-node resolved `20.20.2`; hosted JavaScript actions separately warn their runtime is forced to Node 24. Do not cite these runs as exact Node 20.19.5 evidence.
+### B23 signed authority — source seam green, review open
 
-Detailed B21 checkpoint: `docs/superpowers/plans/2026-09-20-stage3-b21-signed-delivery.md`.
+B23 now has a real canonical Review -> completion-HMAC decision seam, but the release-gated customer-visible legacy `health_score` is intentionally unchanged.
+
+- RED `c713baca3f65da28bd52616960fdcb30e8f52d49` / CI `35514082243`: Python scanner-api tests failed as intended because the signed B23 field did not exist; the separate lint/typecheck/contracts/frontend job remained green.
+- `5d967faa32e6a0790cf5cae013717a35455ba9b4` accepts a score cap only from the same versioned, explicit, verified B20 root-cause evidence. Unverified/conflicted/cross-scan evidence cannot contribute; conflicting caps fail closed.
+- `addc071e2fcc2d4f2392eb1fa5586cb73dde352e` attaches `stage3_health_score_decision` before completion HMAC. The already-final legacy score is the B23 base, so access/sample/incomplete handling cannot be raised or recomputed. Existing explicit legacy ceilings are carried diagnostically; root causes dedupe by stable ID across SEO/GEO/cross-rule groups; coverage remains explicit/unknown rather than fabricated.
+- `bdd7fc4e2794227997b181693b203b157304ba02` adds conflicting-cap and foreign-scan regressions.
+- `23d28ddee804e9c20db4136f06aab879685d1942` proves two distinct paths: a verified cap 72 can produce a signed candidate score 72 from legacy score 88, while a pre-existing incomplete ceiling 55 remains stricter than cap 72. The legacy visible score is unchanged in both cases on this branch.
+- Exact executable FixList CI `35514416069` passed both jobs: root scanner regressions, full scanner-api suite, labelled synthetic corpus, frozen revision, scanner image build, lint/typecheck/generated release contracts/frontend contracts/frontend build all green.
+
+Detailed checkpoint: `docs/superpowers/plans/2026-09-20-stage3-b23-signed-score-caps.md`.
+
+B23 remains partial until focused independent review closes and, after Stage-1 accepted-main reconciliation, a customer-visible adjusted score is proven through real V7 persistence/read/card/export without weakening historical signatures/readers or current access/sample/incomplete ceilings.
+
+Node note: do not represent hosted CI as exact Node 20.19.5 evidence unless that exact runtime is independently proven.
 
 ### B19–B24 requirement state
 
@@ -58,7 +70,7 @@ Detailed B21 checkpoint: `docs/superpowers/plans/2026-09-20-stage3-b21-signed-de
 - **B20 partial:** signed Review P1-corrected and independently review-clean; durable customer projection open.
 - **B21 partial:** signed rank/count/truncation authority seam P1-corrected, independently review-clean and CI green; durable persisted customer/card/export proof open.
 - **B22 partial:** authenticated private-preview/whitelist helper exists; actual entitlement/customer seam and no-leak proof unwired.
-- **B23 partial:** verified root-cause score-cap helper exists; actual health-score boundary must preserve access/sample/incomplete ceilings.
+- **B23 partial:** real signed Review cap decision is implemented and exact-code CI green; independent review plus durable customer score consumption remain open.
 - **B24 partial:** handoff-v2 + historical-v1 reader exist; authenticated customer/operator route, persisted source fields and suppressed/operator-only exclusion unwired.
 
 Stage 3 remains **in progress**.
@@ -74,6 +86,6 @@ Reuse only existing isolated source `agent/stage4-b25-b28-compat-release-2026091
 
 ## Exact next action
 
-The B21 signed-boundary review gate is now closed. Durable B19/B21 persistence/card/export is release-gated until Stage-1 acceptance permits reconciliation onto V7 main.
+B23's signed source seam is green. Request focused independent review of the exact integrated B23 head. Any material finding must be reproduced first, corrected minimally and followed by fresh exact-head FixList CI.
 
-Until that gate closes, the next eligible serialized source slice is B23 health-score boundary integration, provided it does not touch the frozen release path and proves the documented verified root-cause cap while preserving every existing access/sample/incomplete ceiling. Require RED -> GREEN behavior, signed-authority proof, exact-head FixList CI and focused independent review. Do not move production.
+Durable B19/B21/B23 persistence/card/export remains release-gated until Stage-1 acceptance permits reconciliation onto V7 main. Until that gate closes, B22/B24 source-only work is eligible only if it does not copy, recreate or mutate the frozen customer/persistence path. Do not move production.

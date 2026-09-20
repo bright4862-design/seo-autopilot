@@ -7,6 +7,7 @@ serialized integrator after Stage 2 is complete.
 
 from __future__ import annotations
 
+import math
 from copy import deepcopy
 from typing import Any, Iterable
 
@@ -26,23 +27,23 @@ def _list(value: Any) -> list[Any]:
 
 
 def _nonnegative_int(value: Any) -> int | None:
+    """Accept only finite, exact non-negative integer evidence without coercion."""
     if isinstance(value, bool):
         return None
-    try:
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
         result = int(value)
-    except (TypeError, ValueError):
-        return None
-    return result if result >= 0 else None
+        return result if result >= 0 else None
+    return None
 
 
 def _number(value: Any) -> float | None:
-    if isinstance(value, bool):
+    """Accept only finite numeric evidence; strings and booleans remain unknown."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    try:
-        result = float(value)
-    except (TypeError, ValueError):
-        return None
-    return result
+    result = float(value)
+    return result if math.isfinite(result) else None
 
 
 def _unique_strings(values: Iterable[Any]) -> list[str]:

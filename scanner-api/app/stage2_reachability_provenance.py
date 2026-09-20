@@ -14,12 +14,14 @@ REACHABILITY_SCOPE = "observed_standard150_sample_only"
 MAX_ASSESSED_PAGES = 150
 MAX_DISCOVERY_TARGETS = MAX_ASSESSED_PAGES * 8
 MAX_SOURCE_SAMPLES = 20
+MAX_OUTGOING_LINKS_PER_SOURCE = 2000
 
 _INTERNAL_SOURCES = "reachability_internal_sources"
 _NAV_SOURCES = "reachability_navigation_sources"
 _NON_NAV_SOURCES = "reachability_non_navigation_sources"
 _UNKNOWN_NAV_SOURCES = "reachability_unknown_navigation_sources"
 _UNVERIFIED_SOURCES = "reachability_unverified_internal_sources"
+_PRIVATE_LINKS = "_reachability_links"
 
 
 def _text(value: Any) -> str:
@@ -267,3 +269,56 @@ def enrich_pages_with_reachability_provenance(
     if len(pages) != original_count:
         raise AssertionError("Reachability enrichment must not alter assessed pages")
     return pages
+
+
+def enrich_pages_from_retained_link_evidence(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build B11 graph evidence from retained raw-link observations after page capping.
+
+    ``extract_page`` temporarily retains only target URL identity plus semantic
+    navigation presence on accepted HTML. This adapter runs after the final
+    Standard-150 page set is known, projects edges only when both source and
+    target are retained assessed pages, and then removes the private link cache
+    before the scan result can be returned or persisted.
+    """
+    if not isinstance(pages, list) or len(pages) > MAX_ASSESSED_PAGES:
+        raise ValueError("Expected at most 150 assessed pages")
+    if any(not isinstance(page, dict) for page in pages):
+        raise ValueError("Expected page dictionaries")
+
+    retained_urls = {_page_request_url(page) for page in pages if _page_request_url(page)}
+    discovery = {url: ensure_reachability_record({}) for url in retained_urls}
+    seed_url = ""
+    for page in pages:
+        request_url = _page_request_url(page)
+        if not request_url:
+            continue
+        if not seed_url and "seed" in set(page.get("discovered_from") or []):
+            seed_url = request_url
+        source_usable = _usable_html_page(page)
+        raw_links = page.get(_PRIVATE_LINKS)
+        if not isinstance(raw_links, list):
+            continue
+        for link in raw_links[:MAX_OUTGOING_LINKS_PER_SOURCE]:
+            if not isinstance(link, dict):
+                continue
+            target = _text(link.get("href"))
+            if target not in retained_urls:
+                continue
+            navigation = link.get("navigation_presence")
+            navigation = navigation if isinstance(navigation, bool) else None
+            record_internal_link_observation(
+                discovery[target],
+                source_url=request_url,
+                source_usable_html=source_usable,
+                navigation_presence=navigation,
+            )
+
+    try:
+        return enrich_pages_with_reachability_provenance(
+            pages,
+            discovery,
+            seed_url=seed_url,
+        )
+    finally:
+        for page in pages:
+            page.pop(_PRIVATE_LINKS, None)

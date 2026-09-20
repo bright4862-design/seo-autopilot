@@ -18,6 +18,23 @@ def _lower(value: Any) -> str:
     return _clean(value).lower()
 
 
+def _score_cap(value: Any) -> int | None:
+    """Accept only an explicitly numeric whole-number 0..100 cap.
+
+    A root-cause cap changes health-score authority, so string coercion and
+    fractional truncation are deliberately rejected instead of guessed.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        result = value
+    elif isinstance(value, float) and value.is_integer():
+        result = int(value)
+    else:
+        return None
+    return result if 0 <= result <= 100 else None
+
+
 def _fix_id(fix: dict[str, Any], index: int) -> str:
     return _clean(fix.get("id") or fix.get("repair_id") or fix.get("fix_id")) or f"member:{index}"
 
@@ -76,6 +93,7 @@ def validate_root_cause_evidence(fix: dict[str, Any]) -> dict[str, Any]:
             "root_cause_id": None,
             "repair_surface_id": None,
             "evidence_refs": [],
+            "score_cap": None,
         }
 
     if evidence.get("version") != ROOT_CAUSE_EVIDENCE_VERSION:
@@ -85,6 +103,7 @@ def validate_root_cause_evidence(fix: dict[str, Any]) -> dict[str, Any]:
             "root_cause_id": None,
             "repair_surface_id": None,
             "evidence_refs": [],
+            "score_cap": None,
         }
 
     state = _lower(evidence.get("state"))
@@ -97,6 +116,7 @@ def validate_root_cause_evidence(fix: dict[str, Any]) -> dict[str, Any]:
         if raw and raw not in seen:
             seen.add(raw)
             refs.append(raw)
+    score_cap = _score_cap(evidence.get("score_cap"))
 
     if state in CONFLICT_STATES:
         return {
@@ -105,6 +125,7 @@ def validate_root_cause_evidence(fix: dict[str, Any]) -> dict[str, Any]:
             "root_cause_id": root_cause_id or None,
             "repair_surface_id": repair_surface_id or None,
             "evidence_refs": refs,
+            "score_cap": None,
         }
     if state not in VERIFIED_STATES:
         return {
@@ -113,6 +134,7 @@ def validate_root_cause_evidence(fix: dict[str, Any]) -> dict[str, Any]:
             "root_cause_id": root_cause_id or None,
             "repair_surface_id": repair_surface_id or None,
             "evidence_refs": refs,
+            "score_cap": None,
         }
     if not root_cause_id:
         return {
@@ -121,6 +143,7 @@ def validate_root_cause_evidence(fix: dict[str, Any]) -> dict[str, Any]:
             "root_cause_id": None,
             "repair_surface_id": repair_surface_id or None,
             "evidence_refs": refs,
+            "score_cap": None,
         }
     if not refs:
         return {
@@ -129,6 +152,7 @@ def validate_root_cause_evidence(fix: dict[str, Any]) -> dict[str, Any]:
             "root_cause_id": root_cause_id,
             "repair_surface_id": repair_surface_id or None,
             "evidence_refs": [],
+            "score_cap": None,
         }
 
     return {
@@ -137,6 +161,7 @@ def validate_root_cause_evidence(fix: dict[str, Any]) -> dict[str, Any]:
         "root_cause_id": root_cause_id,
         "repair_surface_id": repair_surface_id or None,
         "evidence_refs": refs,
+        "score_cap": score_cap,
     }
 
 
@@ -186,6 +211,8 @@ def _singleton_group(
         "affected_page_count": len(affected_pages),
         "contributing_evidence_refs": list(evidence.get("evidence_refs") or []),
         "contributing_observation_ids": _observation_ids(fix),
+        "score_cap": None,
+        "score_cap_state": "not_verified",
         "suppressed_members": [],
     }
 
@@ -205,6 +232,10 @@ def group_evidenced_root_causes(
     grouping also requires an exact trusted producer scan identity; missing or
     mismatched producer identity, or any conflicting repair-local identity,
     fails closed to a singleton rather than creating a cross-run merge surface.
+
+    B23 caps travel only inside the same versioned verified root-cause evidence.
+    Missing caps do not invent a penalty; conflicting explicit caps for the same
+    group fail closed rather than choosing the harsher value.
     """
     ordered_groups: list[dict[str, Any]] = []
     verified: OrderedDict[tuple[str, str, str], dict[str, Any]] = OrderedDict()
@@ -224,6 +255,7 @@ def group_evidenced_root_causes(
                 **evidence,
                 "state": "not_verified",
                 "reason": reason,
+                "score_cap": None,
             }
         if evidence["state"] != "verified":
             ordered_groups.append(
@@ -245,6 +277,7 @@ def group_evidenced_root_causes(
 
         group = verified.get(key)
         if group is None:
+            cap = evidence.get("score_cap")
             group = {
                 "version": ROOT_CAUSE_GROUPING_VERSION,
                 "grouping_state": "verified",
@@ -260,10 +293,22 @@ def group_evidenced_root_causes(
                 "affected_page_count": 0,
                 "contributing_evidence_refs": [],
                 "contributing_observation_ids": [],
+                "score_cap": cap,
+                "score_cap_state": "documented" if cap is not None else "not_documented",
                 "suppressed_members": [],
             }
             verified[key] = group
             ordered_groups.append(group)
+        else:
+            member_cap = evidence.get("score_cap")
+            if member_cap is not None and group.get("score_cap_state") != "conflicted":
+                current_cap = group.get("score_cap")
+                if current_cap is None:
+                    group["score_cap"] = member_cap
+                    group["score_cap_state"] = "documented"
+                elif current_cap != member_cap:
+                    group["score_cap"] = None
+                    group["score_cap_state"] = "conflicted"
 
         group["member_ids"].append(member_id)
         group["member_count"] = len(group["member_ids"])

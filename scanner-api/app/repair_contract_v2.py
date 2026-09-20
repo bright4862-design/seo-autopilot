@@ -32,6 +32,7 @@ from .stage3_delivery import (
     apply_root_cause_score_caps,
     build_handoff_v2,
     prepare_ranked_candidates,
+    select_evidence_led_preview,
     summarize_candidate_counts,
 )
 from .stage3_priority_factors import annotate_four_factor_priority
@@ -40,6 +41,7 @@ from .stage3_root_causes import group_evidenced_root_causes
 
 REPAIR_PERSISTENCE_GROUPING_VERSION = "repair_persistence_grouping_v2_valid_fingerprint_actions"
 STAGE3_DELIVERY_VERSION = "stage3_delivery_v1_rank_before_truncate"
+STAGE3_PREVIEW_SOURCE_VERSION = "stage3_preview_source_v1_verified_evidence"
 STAGE3_SCORE_CAP_VERSION = "stage3_health_score_caps_v1_verified_root_cause"
 
 
@@ -522,6 +524,64 @@ def _build_stage3_handoff_v2_source(
     return source
 
 
+def _stage3_preview_coverage_qualification(review: dict[str, Any]) -> dict[str, Any]:
+    """Carry only an explicit bounded coverage qualification; never infer one."""
+    fingerprint = review.get("site_fingerprint") if isinstance(review.get("site_fingerprint"), dict) else {}
+    assessment = fingerprint.get("coverage_assessment") if isinstance(fingerprint.get("coverage_assessment"), dict) else {}
+    state = _clean_text(assessment.get("state") or review.get("coverage_state")) or "unknown"
+    output: dict[str, Any] = {"state": state[:80]}
+    text = assessment.get("text")
+    if isinstance(text, str) and text.strip():
+        output["text"] = text.strip()[:500]
+    return output
+
+
+def _stage3_preview_candidate(item: dict[str, Any]) -> dict[str, Any]:
+    """Project one canonical repair to the strict B22 selection vocabulary."""
+    factors = item.get("stage3_priority_factors") if isinstance(item.get("stage3_priority_factors"), dict) else {}
+    verified = _clean_text(item.get("verification_state")).lower() == "verified"
+    summary = item.get("evidence_summary")
+    evidence_summary = summary.strip()[:500] if isinstance(summary, str) and summary.strip() else None
+    return {
+        "rule_id": _clean_text(item.get("fix_id") or item.get("rule"))[:160],
+        "title": _clean_text(item.get("issue_title") or item.get("title") or item.get("fix_id") or item.get("rule"))[:240],
+        "impact": factors.get("impact"),
+        "priority_score": factors.get("priority_factor_score"),
+        "preview_allowed": verified,
+        "evidence_state": "verified" if verified else "not_verified",
+        "evidence_summary": evidence_summary,
+    }
+
+
+def _build_stage3_private_preview_source(
+    canonical_items: list[dict[str, Any]],
+    review: dict[str, Any],
+    scan_result: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Sign B22's evidence-led selection source without granting customer access.
+
+    The source is intentionally owner-agnostic and carries an explicit entitlement
+    requirement. V7 remains responsible for authenticated exact-owner access and the
+    two-finding customer projection after Stage-1 reconciliation. This layer only
+    authenticates which verified canonical findings are eligible and their strict
+    allowlisted preview shape.
+    """
+    trusted_scan_id = _trusted_stage3_scan_id(scan_result)
+    if not trusted_scan_id:
+        return None
+    selection = select_evidence_led_preview(
+        (_stage3_preview_candidate(item) for item in canonical_items),
+        max_items=2,
+        coverage_qualification=_stage3_preview_coverage_qualification(review),
+    )
+    return {
+        "version": STAGE3_PREVIEW_SOURCE_VERSION,
+        "scan_id": trusted_scan_id,
+        "entitlement_state": "requires_authenticated_customer_gate",
+        **selection,
+    }
+
+
 def _delivery_candidate(item: dict[str, Any]) -> dict[str, Any]:
     """Map authenticated B19 evidence into the reviewed B21 ranking helper.
 
@@ -644,8 +704,7 @@ def _attach_stage3_decision_evidence(
     pages: list[dict[str, Any]],
     scan_result: dict[str, Any],
     *,
-    scan_origin: str = "",
-    identity_version: str = "",
+    scan_origin: str = "", identity_version: str = "",
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     """Attach B19/B20/B21 reviewed evidence before authority signing.
 
@@ -780,6 +839,11 @@ def apply_canonical_repair_contract(
         scan_result,
         **identity_context,
     )
+    stage3_private_preview_source = _build_stage3_private_preview_source(
+        canonical_items,
+        review,
+        scan_result,
+    )
     stage3_health_score_decision = _build_stage3_health_score_decision(review, root_cause_groups)
     stage3_handoff_v2_source = _build_stage3_handoff_v2_source(
         canonical_items,
@@ -794,6 +858,7 @@ def apply_canonical_repair_contract(
         "canonical_repairs": canonical_items,
         "stage3_root_cause_groups": root_cause_groups,
         "stage3_delivery": stage3_delivery,
+        **({"stage3_private_preview_source": stage3_private_preview_source} if stage3_private_preview_source is not None else {}),
         **({"stage3_health_score_decision": stage3_health_score_decision} if stage3_health_score_decision is not None else {}),
         **({"stage3_handoff_v2_source": stage3_handoff_v2_source} if stage3_handoff_v2_source is not None else {}),
         "repair_contract_validation_version": validation.get("version") or "",

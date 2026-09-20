@@ -345,6 +345,10 @@ def _delivery_candidate(item: dict[str, Any]) -> dict[str, Any]:
     """
     candidate = deepcopy(item)
     factors = candidate.get("stage3_priority_factors") if isinstance(candidate.get("stage3_priority_factors"), dict) else {}
+    # B21 ranks the authenticated B19 factors, not the earlier calibration rank.
+    # Remove that legacy presentation hint only from this temporary view so it
+    # cannot mask a higher four-factor score before the Stage-3 truncation cap.
+    candidate.pop("priority_rank", None)
     candidate["rule_id"] = _clean_text(candidate.get("fix_id") or candidate.get("rule"))
     candidate["priority_score"] = factors.get("priority_factor_score")
     candidate["impact"] = factors.get("impact")

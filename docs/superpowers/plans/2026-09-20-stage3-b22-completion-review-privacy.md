@@ -55,16 +55,43 @@ Exact executable FixList CI `35522106799` passed both jobs on `4d1575d92c6a30926
 
 Environment evidence: Ubuntu 24.04.5, Python 3.12.14. The workflow requests Node 20 but `actions/setup-node` resolved Node 20.20.2; action runtimes emit the Node-24 migration warning, so this is not represented as exact Node 20.19.5 evidence.
 
+## Direct synchronous `/scan` publication-boundary proof
+
+The later CodeRabbit risk summary repeated a B10 publication concern: deterministic main-content fingerprints might still cross the synchronous `/scan` response. The exact current source already projects private per-page evidence at the common post-crawl boundary, but the existing regressions exercised the projection/helper and authority-envelope paths rather than the actual FastAPI route itself.
+
+Commit `d9061f23edd0a0541b017f42297bf60a9c401560` therefore added `scanner-api/tests/test_stage2_http_response_privacy.py` as an executable route-level proof rather than changing correct production code. The test calls the real authenticated FastAPI `/scan` route through `TestClient`, keeps the real `apply_render_evidence_quality`, response-budget and verified-URL response boundaries active, and injects distinctive private sentinels into:
+
+- B10 `main_text` shingles/signature/representation/count/source/verification fields;
+- B13 raw local-entity ID/name/address/phone observations;
+- B15 raw contextual-freshness intent evidence;
+- the private B11 retained-link cache.
+
+The complete serialized HTTP response must retain ordinary safe page output while containing none of those private fields or sentinel values. This directly covers the disputed publication path instead of inferring it from helper behavior.
+
+Exact-head FixList CI `35524582769` passed both jobs on `d9061f23edd0a0541b017f42297bf60a9c401560`:
+
+- 115 root tests passed;
+- scanner-api: **2042 passed / 18 skipped**, including the new synchronous `/scan` privacy regression;
+- synthetic Stage-1 corpus remained 14 cases / 55 assertions with provenance `synthetic` and `full_30_site_gate=not_assessed`;
+- frozen revision `01ebe8e90df1e6bd` matched;
+- production scanner image built as `sha256:d373d925dc1bec96590ea60c41fcca3644396e05b6d643de4a425f3159f8376a`;
+- lint, typecheck, generated release contracts, frontend contracts and frontend build passed.
+
+This new proof strengthens the existing Stage-2/B22 privacy boundary; it does **not** close the still-required fresh independent B22/B24 review gate by itself.
+
 ## Requirement state
 
 - B22 signed preview-source semantics remain GREEN at the executable boundary: exact trusted producer identity, exact verified findings, preferred verified impact-4/5 set with existing two-item cap, exactly one best verified fallback otherwise, allowlisted finding projection, fixed safe good-shape wording only under explicit sufficient coverage, and signed non-entitlement marker.
 - B22 completion-Review privacy is now RED -> GREEN: raw/free-form coverage prose and unknown future assessment fields cannot cross the full signed completion Review through `coverage_assessment`.
-- B22 remains **partial**, not complete, because the real V7 exact-owner/exact-scan entitlement, persistence/read/reload/history/preview/card/export path is still Stage-1-release-gated.
-- B24 remains **partial** pending a clean fresh combined follow-up review and real V7 persistence/read/customer/operator/export proof, including historical-v1 compatibility.
+- The direct synchronous `/scan` response now has explicit route-level regression proof that private B10/B11/B13/B15 producer evidence does not cross the customer HTTP boundary.
+- B22 remains **partial**, not complete, because a fresh independent review of the corrected combined B22/B24 surface and the real V7 exact-owner/exact-scan entitlement, persistence/read/reload/history/preview/card/export path are still open behind the Stage-1 release gate.
+- B24 remains **partial** pending that clean fresh combined follow-up review and real V7 persistence/read/customer/operator/export proof, including historical-v1 compatibility.
 - B25 genuine provenance-labelled 30-site baseline/candidate gate remains `not_assessed`.
 
 ## Release boundary / next action
 
 `main` was refreshed and remains `2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad`. Current-main `docs/stage-one-evidence-acceptance.md` still records exact-source publication and fresh non-owner production acceptance as pending. No deployment, publication, worker/admission mutation, production scan, schema/RLS/secret change, Premium enablement or Grok enablement is authorized by this checkpoint.
 
-Persist this correction into the authoritative progress/handoff records and PR #303, run exact-head CI on that persisted stable head, then request one fresh independent CodeRabbit review of the corrected combined B22/B24 signed authority/privacy surface. Do not count the request as a review pass. After Stage-1 acceptance is actually recorded, reconcile onto accepted `main`, preserve V7/#308, run fresh integrated-head CI, then prove the durable customer path with RED -> GREEN persistence/read/reload/history/card/export/preview tests before closing Stage 3.
+The next gate is a fresh independent review of the corrected combined B22/B24 signed authority/privacy surface. Do not count a review request, an automatic-review skip, or the new route-level regression as a review pass. Reproduce any material reviewer finding first, correct minimally, and require fresh exact-head CI.
+
+After Stage-1 acceptance is actually recorded, reconcile onto accepted `main`, preserve V7/#308, run fresh integrated-head CI, then prove the durable customer path with RED -> GREEN persistence/read/reload/history/card/export/preview tests before closing Stage 3.

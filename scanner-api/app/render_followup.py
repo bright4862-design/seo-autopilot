@@ -114,7 +114,9 @@ async def run_render_followup(
         except Exception as exc:
             message = str(exc)[:180]
             errors.append({"url": url, "error": message})
-            failure_reasons[url] = message or "renderer_failed"
+            # B12 is additive to the existing browser-followup diagnostics. Do
+            # not duplicate raw exception text into the new persisted evidence.
+            failure_reasons[url] = "renderer_failed"
 
     hub_evidence = build_hub_link_comparison(
         pages,

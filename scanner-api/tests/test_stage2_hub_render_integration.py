@@ -183,7 +183,7 @@ async def test_b12_reuses_existing_three_page_render_budget_and_discloses_unasse
     async def renderer(url):
         calls.append(url)
         if url == locations:
-            raise RuntimeError("browser timeout")
+            raise RuntimeError("browser timeout secret detail")
         return {
             "word_count": 180,
             "title": "Rendered",
@@ -203,6 +203,10 @@ async def test_b12_reuses_existing_three_page_render_budget_and_discloses_unasse
     assert b12["unassessed"] == 2
     assert b12["evidence_state"] == "partial"
     assert b12["interpretation"] == "paired_comparison_neither_surface_is_sole_truth"
+    failed = next(row for row in b12["hubs"] if row["hub_url"] == locations)
+    assert failed["state"] == "failed"
+    assert failed["reason"] == "renderer_failed"
+    assert "secret detail" not in str(b12)
     assert next(row for row in b12["hubs"] if row["hub_url"] == compare)["state"] == "unassessed"
     assert next(row for row in b12["hubs"] if row["hub_url"] == c2)["state"] == "unassessed"
 

@@ -19,11 +19,23 @@ Branch: `agent/full-blueprint-stage2-coverage-b06-20260919`
 
 PR: #303 — `Stage 2: integrate B06–B18 evidence lanes and finish shared producer wiring`
 
-### Current B12 checkpoint — paired hub-link evidence seam is green, shared caller disclosure still open
+### Current B12 checkpoint — shared caller disclosure gap closed and exact-head CI green
 
-Exact executable head: `e3155ae722631189f338f7bd76225a5e35950bf5`.
+Exact executable head: `d612ceade6fc31ecd3e01d5b195dbd4d646524ef`.
 
-FixList CI `35480882511` — **SUCCESS** on both jobs. Immutable checkout, root scanner regressions, the full scanner-api suite, the labelled synthetic Stage-1 corpus, frozen scanner revision verification, production scanner-image build, lint, typecheck, generated release contracts, frontend contract tests and production frontend build all passed. The slice adds seven focused B12 behavioral regressions.
+FixList CI `35483256047` — **SUCCESS** on both jobs.
+
+Fresh direct verification on that exact SHA:
+
+- immutable checkout passed;
+- root scanner regressions: **115 passed**;
+- `scanner-api`: **1,932 passed / 18 intentional skips**;
+- labelled Stage-1 corpus: `synthetic`, 14 cases / 55 assertions, `full_30_site_gate=not_assessed`;
+- frozen scanner revision `01ebe8e90df1e6bd`: passed;
+- production scanner image: passed, image SHA `sha256:be6a8dfc68ad87a156698402cbf4f89199a05a938225a8a4f25cae01338d2c28`;
+- lint, typecheck, generated release contracts, frontend contract tests and production frontend build: passed.
+
+The workflow resolved Node `20.20.2`; do not describe this run as Node `20.19.5` runtime evidence.
 
 Implemented B12 behavior:
 
@@ -32,12 +44,14 @@ Implemented B12 behavior:
 - Rendered links are accepted only from an explicit renderer link collection, resolved against the hub, fragment-stripped, and intersected with the exact retained assessed URL set. Unsampled targets never become assessed pages.
 - Exact path/query/case/reserved-escape identity is preserved. An explicit empty query delimiter is restored after URL resolution so `/page` and `/page?` are not silently collapsed.
 - An absent rendered link collection is `failed`/unavailable rather than an empty success. Renderer exceptions remain visible only in the pre-existing browser-followup diagnostic field; the new B12 evidence records the normalized `renderer_failed` reason and does not duplicate raw exception text.
-- `scanner-api/app/render_followup.py` attaches `hub_link_comparison` without increasing the existing `DEFAULT_RENDER_FOLLOWUP_LIMIT=3`. B12 adds no renderer call, HTTP request, coverage scheduler or budget.
-- Up to five hubs may be selected for disclosure even though only the existing three-page browser policy can execute. Selected hubs outside that existing policy are explicitly `unassessed`; paired failures and completed comparisons are counted separately. `interpretation=paired_comparison_neither_surface_is_sole_truth` is pinned by regression.
+- `scanner-api/app/render_followup.py` now separates browser authorization from B12 disclosure. Its existing `pages` input still controls browser selection and remains limited by `DEFAULT_RENDER_FOLLOWUP_LIMIT=3`; the new keyword-only `evidence_pages` input is used only to build B12 disclosure rows.
+- `scanner.run_scan` continues to pass `pages if material_render_risk else []` to the browser-policy input and enables `_render_page` only when material rendering risk is present, while always passing the exact final retained assessed set as `evidence_pages=pages`.
+- Therefore, when rendering policy declines browser execution, eligible retained hubs are truthfully selected/unassessed while browser `selected_pages=0`, `attempted_pages=0`, and no renderer callback is enabled. No new browser call, HTTP request, coverage scheduler or second budget is created.
+- Up to five hubs may be selected for disclosure even though only the existing three-page browser policy can execute. Selected hubs outside that existing policy are explicitly `unassessed`; paired failures and completed comparisons are counted separately. `interpretation=paired_comparison_neither_surface_is_sole_truth` remains pinned.
 
-Known B12 integration gap, deliberately **not** called complete: `scanner.run_scan` currently invokes `run_render_followup(pages if material_render_risk else [], ...)`. Therefore scans where the explicit rendering policy declines browser follow-up pass an empty page list and cannot disclose otherwise eligible retained hubs as selected/unassessed. The next serialized change must pass the final retained page set to the B12 disclosure builder while preserving the existing decision about whether any renderer calls are allowed. Do not broaden the browser budget to fix this.
+The final caller-shape regressions prove both the evidence-only no-render state and the real `run_scan` seam. The latter asserts the exact `result["pages"]` object is the disclosure source while browser-policy pages are empty and `render_page` is `None` when material render risk is absent.
 
-A fresh CodeRabbit review was requested against the exact B11/B12 invariants; no current independent-review pass is claimed until that response is recorded.
+A fresh CodeRabbit review is requested against the exact final B11/B12 shape; independent review remains open until a current response is recorded.
 
 Detailed B12 checkpoint: `docs/superpowers/plans/2026-09-20-stage2-b12-hub-render-evidence.md`.
 
@@ -87,14 +101,14 @@ Materially proven/integrated on this line:
 - B09/B16 helper + shared scheduler integration, with exact source-level sitemap provenance/customer-promotion caveats;
 - B10 accepted main-content extraction/privacy seam;
 - B11 real retained-set producer wiring and exact-head CI;
-- B12 paired-hub evidence seam under the existing render-followup policy, exact-head CI, with the shared no-render caller-disclosure gap still open;
+- B12 paired-hub evidence plus final shared no-render caller disclosure wiring, exact-head CI;
 - B17 decoded HTML + inline script/style byte separation.
 
 Open serialized Stage-2 work:
 
 - **B10:** add authenticated Review → authority → persistence → customer/card/handoff/export proof if near-duplicate evidence becomes customer-visible.
 - **B11:** resolve fresh independent review of the retained-link hook; add downstream authenticated/privacy proof only if the new provenance is exposed to customers.
-- **B12:** fix the `run_scan` caller so final retained pages reach B12 disclosure even when browser execution is not selected; do not add renderer calls or another budget. Resolve fresh independent review.
+- **B12:** source/caller integration is implemented and exact-head green; resolve fresh independent review. Add authenticated downstream proof only if B12 samples later become customer-visible.
 - **B13/B14:** contextual local entity/status/address/phone/regular-hours producer evidence and verified entity matching/NAP consistency.
 - **B15:** current-content intent + current-scoped temporal anchors; an old date alone cannot fail freshness.
 - **B17:** directly measured transfer bytes; decoded bytes remain distinct. Optional CrUX must explicitly support disconnected/stale/unavailable.
@@ -140,6 +154,6 @@ The genuine 30-site gate is still **not assessed**. Historical summary counts an
 
 ## Exact next action
 
-Stay on Stage 2. Fix the narrow B12 shared-caller disclosure gap while retaining the existing browser-execution limit and no-second-budget invariant, then resolve current independent review. Continue B13–B15/B17 transfer/B18 after B12 closes. Add authenticated downstream tests for anything customer-visible and require exact-head FixList CI + independent review for meaningful combined checkpoints.
+Stay on Stage 2. Resolve the current independent review request for the exact B11/B12 shared shape, then implement B13/B14 local entity/NAP producer evidence conservatively from accepted evidence. Entity identity must be explicit/proven rather than inferred from shared names or phone numbers; optional holiday-hours/photos/sameAs/parent fields remain optional; unknown/Coming Soon regular-hours applicability stays unknown or not applicable rather than becoming a defect. Continue B15/B17 transfer/B18 after that. Add authenticated downstream tests for anything customer-visible and require exact-head FixList CI + independent review for meaningful combined checkpoints.
 
 Do not begin shared Stage-3 integration until B06–B18 are genuinely source-complete and green. Do not begin Stage-4 live execution until all applicable source/review/CI/30-site/release gates are actually proven.

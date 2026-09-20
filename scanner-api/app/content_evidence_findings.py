@@ -5,6 +5,7 @@ import hashlib
 from .accepted_content_evidence import IMAGE_APPLICABILITY_VERSION, VISIBLE_TEMPLATE_VERSION
 from .page_evidence_gate import page_has_usable_html
 from .repair_coverage import PUBLISHED_EVIDENCE_URL_IDENTITY_VERSION
+from .stage2_freshness_producer import enrich_pages_with_contextual_freshness_evidence
 from .stage2_reachability_provenance import enrich_pages_from_retained_link_evidence
 from .url_evidence import page_content_evidence_url
 
@@ -41,6 +42,12 @@ def content_evidence_findings(pages):
     # already-enriched pages have no private cache and are left unchanged.
     if any(isinstance(page, dict) and '_reachability_links' in page for page in pages):
         enrich_pages_from_retained_link_evidence(pages)
+
+    # B15 is evidence-only here. It consumes already-extracted accepted page
+    # fields after the retained Standard-150 set is fixed, performs no fetches,
+    # and emits no repair/card/score change. Any future customer-visible
+    # freshness finding must travel through the authenticated downstream path.
+    enrich_pages_with_contextual_freshness_evidence(pages)
 
     output=[]
     for page in pages:

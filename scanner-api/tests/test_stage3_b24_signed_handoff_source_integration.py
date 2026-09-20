@@ -26,6 +26,12 @@ def _fix(fix_id: str, url: str) -> dict:
         "page_scope": "page",
         "page_template_family": "product_page",
         "affected_pages": [url],
+        "affected_reported": 1,
+        "affected_observed": 1,
+        "affected_eligible": 1,
+        "checked_eligible": 1,
+        "indexable_affected": 1,
+        "indexable_checked_eligible": 1,
         "confidence_score": 95,
         "verification_state": "verified",
         "evidence_status": "confirmed",
@@ -96,7 +102,7 @@ def test_b24_customer_safe_handoff_source_is_attached_before_completion_signing(
 
     assert all(fix["root_cause_id"] == "root:shared-product-meta-template" for fix in source["fixes"])
     assert all("product_page" in fix["family_ids"] for fix in source["fixes"])
-    assert sum((fix["counts"]["indexable_affected"] or 0) for fix in source["fixes"]) == 2
+    assert all(fix["counts"]["indexable_affected"] == 1 for fix in source["fixes"])
     assert all(fix["priority_factors"].get("version") for fix in source["fixes"])
     assert "suppressed_findings" not in source
     assert "suppressed_members" not in json.dumps(source, sort_keys=True)

@@ -60,6 +60,53 @@ def _base(*, provider: str, adapter_version: str, expected_scan_id: str, payload
     }
 
 
+def build_disconnected_provider_bundle(*, assessed_urls: Iterable[Any]) -> dict[str, Any]:
+    """Return deterministic no-provider evidence before durable scan identity exists.
+
+    The ordinary scanner has no authenticated CrUX or GSC connection. Attaching
+    this bundle to the shared result makes that absence explicit and signable
+    without pretending a provider was queried. It deliberately carries no scan
+    id and no metrics. Connected/stale evidence must still travel through the
+    exact-scan builders below after a durable ``scan_id`` is known.
+    """
+    allowed = _assessed_url_set(assessed_urls)
+    return {
+        "version": CONNECTED_PROVIDER_EVIDENCE_VERSION,
+        "scan_identity_state": "unbound",
+        "provider_data_admitted": False,
+        "crux": {
+            "version": CONNECTED_PROVIDER_EVIDENCE_VERSION,
+            "adapter_version": CRUX_ADAPTER_VERSION,
+            "provider": "CrUX",
+            "scan_id": None,
+            "source_scan_id": None,
+            "state": "disconnected",
+            "reason": "provider_not_connected",
+            "observed_at": None,
+            "scope": None,
+            "metrics": None,
+            "coverage_complete_claim": False,
+        },
+        "gsc": {
+            "version": CONNECTED_PROVIDER_EVIDENCE_VERSION,
+            "adapter_version": GSC_ADAPTER_VERSION,
+            "provider": "Google Search Console",
+            "scan_id": None,
+            "source_scan_id": None,
+            "state": "disconnected",
+            "reason": "provider_not_connected",
+            "observed_at": None,
+            "assessed_url_count": len(allowed),
+            "candidate_page_rows": 0,
+            "selected_page_rows": 0,
+            "rejected_outside_scan": 0,
+            "duplicate_conflicts": 0,
+            "pages": [],
+            "coverage_complete_claim": False,
+        },
+    }
+
+
 def _connection_gate(*, expected_scan_id: str, payload: dict[str, Any] | None, base: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
     if not isinstance(payload, dict):
         return base, None

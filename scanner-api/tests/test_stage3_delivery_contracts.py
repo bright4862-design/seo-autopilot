@@ -174,7 +174,7 @@ def test_b22_unverified_tampered_or_cross_scan_candidates_never_enter_preview():
 
     assert preview["state"] == "not_available"
     assert preview["findings"] == []
-    assert preview["coverage_qualification"] == "Only a bounded sample was checked."
+    assert preview["coverage_qualification"] is None
 
 
 def test_b22_good_shape_requires_explicit_sufficient_coverage_qualification():
@@ -195,7 +195,7 @@ def test_b22_good_shape_requires_explicit_sufficient_coverage_qualification():
     assert qualified == {
         "state": "good_shape",
         "findings": [],
-        "coverage_qualification": "150 representative pages checked.",
+        "coverage_qualification": "Coverage was sufficient for the assessed scan scope.",
     }
     assert unqualified["state"] == "not_available"
 

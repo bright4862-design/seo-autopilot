@@ -26,13 +26,19 @@ from .repair_coverage import (
 )
 from .repair_priority_calibration import annotate_calibrated_repair_priority
 from .repair_shadow_calibration import build_calibrated_shadow_review_analysis, sort_calibrated_repairs
-from .stage3_delivery import DEFAULT_PRESENTATION_LIMIT, prepare_ranked_candidates, summarize_candidate_counts
+from .stage3_delivery import (
+    DEFAULT_PRESENTATION_LIMIT,
+    apply_root_cause_score_caps,
+    prepare_ranked_candidates,
+    summarize_candidate_counts,
+)
 from .stage3_priority_factors import annotate_four_factor_priority
 from .stage3_root_causes import group_evidenced_root_causes
 
 
 REPAIR_PERSISTENCE_GROUPING_VERSION = "repair_persistence_grouping_v2_valid_fingerprint_actions"
 STAGE3_DELIVERY_VERSION = "stage3_delivery_v1_rank_before_truncate"
+STAGE3_SCORE_CAP_VERSION = "stage3_health_score_caps_v1_verified_root_cause"
 
 
 class CanonicalRepairContractError(RuntimeError):
@@ -355,6 +361,103 @@ def _delivery_candidate(item: dict[str, Any]) -> dict[str, Any]:
     return candidate
 
 
+def _health_score_value(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        result = value
+    elif isinstance(value, float) and value.is_integer():
+        result = int(value)
+    else:
+        return None
+    return result if 0 <= result <= 100 else None
+
+
+def _stage3_coverage_state(review: dict[str, Any]) -> str:
+    fingerprint = review.get("site_fingerprint") if isinstance(review.get("site_fingerprint"), dict) else {}
+    assessment = fingerprint.get("coverage_assessment") if isinstance(fingerprint.get("coverage_assessment"), dict) else {}
+    state = _clean_text(assessment.get("state") or review.get("coverage_state"))
+    return state or "unknown"
+
+
+def _stage3_existing_score_ceiling(review: dict[str, Any]) -> int | None:
+    """Read an already-applied legacy ceiling without recomputing score policy."""
+    explanation = review.get("health_score_explanation") if isinstance(review.get("health_score_explanation"), dict) else {}
+    ceiling = _health_score_value(explanation.get("applied_ceiling"))
+    return ceiling if ceiling is not None and ceiling < 100 else None
+
+
+def _stage3_root_cause_cap_inputs(root_cause_groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse authenticated B20 groups to one fail-closed B23 cap per cause."""
+    by_root: dict[str, dict[str, Any]] = {}
+    for group in root_cause_groups:
+        if not isinstance(group, dict) or group.get("grouping_state") != "verified":
+            continue
+        root_cause_id = _clean_text(group.get("root_cause_id"))
+        if not root_cause_id:
+            continue
+        state = by_root.setdefault(root_cause_id, {"caps": set(), "conflicted": False})
+        cap_state = _clean_text(group.get("score_cap_state"))
+        cap = _health_score_value(group.get("score_cap"))
+        if cap_state == "conflicted":
+            state["conflicted"] = True
+        elif cap_state == "documented" and cap is not None:
+            state["caps"].add(cap)
+
+    output: list[dict[str, Any]] = []
+    for root_cause_id, state in by_root.items():
+        caps = state["caps"]
+        if state["conflicted"] or len(caps) > 1:
+            output.append({
+                "root_cause_id": root_cause_id,
+                "verification_state": "conflicted",
+                "score_cap": None,
+            })
+        elif len(caps) == 1:
+            output.append({
+                "root_cause_id": root_cause_id,
+                "verification_state": "verified",
+                "score_cap": next(iter(caps)),
+            })
+        else:
+            output.append({
+                "root_cause_id": root_cause_id,
+                "verification_state": "verified",
+                "score_cap": None,
+            })
+    return output
+
+
+def _build_stage3_health_score_decision(
+    review: dict[str, Any],
+    root_cause_groups: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Bind B23 to the already-final legacy score without rewriting it yet.
+
+    The current health score has already passed access/sample/incomplete gates.
+    Treating that final value as B23's base means this layer can only keep or
+    lower it. The existing applied ceiling is carried as authenticated diagnostic
+    evidence when the legacy explanation exposes one; it is never recomputed.
+    Customer-visible score replacement remains release-gated behind V7 durable
+    persistence/card/export integration.
+    """
+    base_score = _health_score_value(review.get("health_score"))
+    if base_score is None:
+        return None
+    decision = apply_root_cause_score_caps(
+        base_score,
+        _stage3_root_cause_cap_inputs(root_cause_groups),
+        existing_score_ceiling=_stage3_existing_score_ceiling(review),
+        coverage_state=_stage3_coverage_state(review),
+    )
+    return {
+        "version": STAGE3_SCORE_CAP_VERSION,
+        "state": "decided",
+        **decision,
+        "legacy_health_score_unchanged": True,
+    }
+
+
 def _attach_stage3_decision_evidence(
     canonical_items: list[dict[str, Any]],
     pre_group_items: list[dict[str, Any]],
@@ -497,6 +600,7 @@ def apply_canonical_repair_contract(
         scan_result,
         **identity_context,
     )
+    stage3_health_score_decision = _build_stage3_health_score_decision(review, root_cause_groups)
 
     return {
         **review,
@@ -504,6 +608,7 @@ def apply_canonical_repair_contract(
         "canonical_repairs": canonical_items,
         "stage3_root_cause_groups": root_cause_groups,
         "stage3_delivery": stage3_delivery,
+        **({"stage3_health_score_decision": stage3_health_score_decision} if stage3_health_score_decision is not None else {}),
         "repair_contract_validation_version": validation.get("version") or "",
     }
 

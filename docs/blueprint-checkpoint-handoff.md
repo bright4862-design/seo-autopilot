@@ -2,92 +2,99 @@
 
 Authoritative design: `docs/superpowers/specs/2026-09-19-full-scanner-blueprint-design.md`.
 
-This is the current serialized handoff for the FixList full-scanner blueprint. Historical checkpoints remain in Git history and the linked executable plans. The approved spec controls over older handoff paraphrases.
+This is the current serialized handoff for the FixList full-scanner blueprint. Historical checkpoints remain in Git history and linked executable plans. The approved spec controls over older paraphrases.
 
 ## Release boundary
 
 - Stage-1 publication/promotion/live non-owner acceptance remains owned by the existing exact-source release operator.
-- `main` remains frozen for later-stage integration at `2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad`; newer repository metadata is not authorization to move the Stage-1 cutover.
-- Do not use the later-stage integration branch to publish, promote worker traffic, mutate admission, run a competing production scan, rebuild the release, change schema/secrets, or otherwise move production.
+- `main` was freshly verified at `2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad`; later-stage work has no authority to move production.
+- Do not publish, promote worker traffic, mutate admission, run a competing production scan, rebuild the release, change schema/secrets, or merge the later-stage branch to `main`.
 - Later-stage integration remains on `agent/full-blueprint-stage2-coverage-b06-20260919`, PR #303.
-- After Stage-1 live acceptance, reconcile this branch onto the then-current accepted `main` without reverting V7 route/public-build changes or #308, then run fresh exact-head combined CI.
+- After Stage-1 live acceptance, reconcile onto the then-current accepted `main` without reverting V7 route/public-build changes or #308, then require fresh exact-head integrated CI.
 
 ## Current Stage-2 executable checkpoint
 
-Exact executable head: `fda78e9aa4fe823e2067837041f3cba538712f3b`.
+Exact executable head: `f8175c496728d806085056a2b79cb42e5a0fc61c`.
 
-FixList CI `35495894222` — **SUCCESS** on both jobs:
+FixList CI `35499312736` — **SUCCESS** on both jobs:
 
 - immutable checkout: passed;
-- root scanner regressions: passed;
-- full Python `scanner-api` suite: passed, including two new future-shape fail-closed privacy regressions;
-- labelled Stage-1 synthetic corpus: passed and remains synthetic rather than the genuine B25 30-site gate;
-- frozen scanner revision verification: passed;
-- production scanner-image build: passed;
+- root scanner regressions: **115 passed**;
+- full `scanner-api`: **1,993 passed / 18 skipped**;
+- Stage-2 follow-up review regressions: passed;
+- strengthened B13/B14 signed-authority privacy behavior: passed;
+- labelled Stage-1 corpus: `synthetic`, **14 cases / 55 assertions**, `full_30_site_gate=not_assessed`;
+- frozen scanner revision `01ebe8e90df1e6bd`: passed;
+- production scanner image: passed, SHA `sha256:362269f3c43c8c60e57e32edcb8367b024d3da456d6ca1adb95410f40f9f3715`;
 - lint, typecheck, generated release contracts, frontend contract tests and production frontend build: passed.
 
-The immediately preceding checkpoint `e42151d4f10007f4f1660de4a2bbda927a4696eb` had 115 root regressions and 1,988 scanner-api passes / 18 intentional skips. The current GitHub job proves the expanded full suite green; do not invent an exact new pass count unless it is taken from runner output.
+GitHub Actions requested Node 20 but resolved **Node 20.20.2**. Do not represent this run as Node 20.19.5 evidence.
 
-## New RED → GREEN privacy hardening
+## Fresh independent-review findings and repair chain
 
-The earlier whole-stage CodeRabbit review found the material P1 boundary leak where B10 deterministic content fingerprints and B13 raw local-entity observations could cross synchronous/durable authority output. The common post-crawl projection fixed that known shape and was already regression-covered.
+A fresh CodeRabbit follow-up review of the combined Stage-2 surface found two material P1 defects:
 
-A fresh serialized source inspection found one remaining fail-open property in that projection: `project_local_entity_scan_evidence()` forwarded unknown future B13/B14 aggregate fields and unknown future `nap_consistency` fields by default. That meant a later producer/debug addition containing exact entity IDs, page URLs, raw observations or headings could silently become customer/persisted output without an explicit privacy decision.
+1. `build_authority_review_payload`, `build_completion_envelope`, and `build_limited_envelope` did not independently project private Stage-2 producer fields. The normal post-crawl path projected them, but a direct/internal caller could re-sign B10 fingerprints, private B11 link cache, B13 raw entity/contact observations or B15 per-page freshness evidence.
+2. CrUX/GSC adapters checked maximum age but did not reject `observed_at > as_of`, so future provider observations could be treated as current.
 
-RED commit: `661b9e2121c6f49bd50dedc64bdce1c73cf54b6b`.
+### RED
 
-- New file: `scanner-api/tests/test_stage2_output_privacy_fail_closed.py`.
-- It injects future-shaped sensitive entity/page/text sentinels at aggregate, NAP and inconsistency levels.
-- FixList CI `35495870104` failed specifically in the full Python `scanner-api` test step, while the separate lint/typecheck/contracts/frontend-build job passed. This is the expected regression proof against the old projection.
+`bea5d3d8a1ec5d7f77d7f68ca4919a45226ded42` added three behavioral regressions for those exact findings.
 
-GREEN commit: `fda78e9aa4fe823e2067837041f3cba538712f3b`.
+FixList CI `35498446283` failed as intended:
 
-- `scanner-api/app/page_output_privacy.py` now positively allowlists the B13/B14 aggregate top-level version/count/truncation fields.
-- B13 completeness rows remain allowlisted.
-- B14 NAP summary fields are now positively allowlisted instead of copying every unknown field except `inconsistencies`.
-- B14 inconsistency rows remain allowlisted to field names/source count/provenance only.
-- Unknown future producer/debug keys therefore fail closed automatically.
-- Existing page-level projection and the common post-crawl placement remain unchanged; current approved non-content state/count diagnostics still survive.
+- root: **115 passed**;
+- `scanner-api`: **3 failed / 1,990 passed / 18 skipped**;
+- the three new regressions were the failures;
+- lint/typecheck/contracts/frontend-build job passed.
 
-Detailed checkpoint: `docs/superpowers/plans/2026-09-20-stage2-output-privacy-fail-closed.md`.
+### Corrections
+
+- `12d6c7a24b68a681cd9a5d1a0b78a996ae23edaa`: CrUX/GSC adapters fail closed on future observation time with `provider_observation_time_invalid`.
+- `0e5a0ed176d764a9ac78bc2d96833f46a268911d`: connected provider envelopes preserve the normalized invalid-time reason through scan evidence.
+- `10798d00d1c0e7cc31a6dfaca3cd4fc67abeb354`: all direct authority/signing helpers defensively call the external-boundary projection before sampling/signing/persistence-envelope construction.
+
+Intermediate CI `35499222707` on `10798d00...` proved the new review regressions green but exposed one stale compatibility expectation: root **115 passed**, `scanner-api` **1 failed / 1,992 passed / 18 skipped**, build-side job green. The stale test required signed B13/B14 evidence to equal raw internal evidence, contradicting the approved privacy projection.
+
+`f8175c496728d806085056a2b79cb42e5a0fc61c` strengthens that test instead of weakening it: approved version/count/state diagnostics and NAP conflict evidence must survive, while exact entity IDs, page URLs, `entity_key`, `page_url` and contextual-status provenance must not cross the signed authority boundary. Exact-head CI is fully green as recorded above.
+
+Detailed record: `docs/superpowers/plans/2026-09-20-stage2-followup-review-hardening.md`.
 
 ## Stage-2 material state
 
 - **B06:** shared finite coverage scheduler / unsampled internal-link verification integrated with authenticated downstream proof.
-- **B07:** active soft-404 orchestration integrated through the same finite scheduler; blocked/challenged/robots/budget/deadline/incomplete evidence remains unknown.
-- **B08:** redirect meaning distinguishes harmless normalization, usable, wrong/catch-all, unusable and unverified access; challenge/block/rate-limit evidence remains unknown.
-- **B09:** sitemap integrity shares the same scheduler; any future customer promotion must retain exact root/child provenance and failure reasons.
-- **B10:** accepted main-content evidence integrated. Raw copy is not retained; deterministic fingerprints remain internal-only and are stripped before HTTP/authority/persistence boundaries.
-- **B11:** sample-scoped retained-set depth/inlink/navigation evidence integrated; sitemap discovery cannot become an inlink; unsampled targets cannot expand the assessed set; `sitewide_orphan_claim=false`.
-- **B12:** raw/rendered hub evidence integrated under the existing bounded browser-followup ceiling; failed/unassessed states remain explicit; rendered links cannot expand Standard 150.
-- **B13:** contextual local entity/status completeness integrated as evidence-only; raw contact/identity observations are internal; external aggregate is now fail-closed by positive allowlist.
-- **B14:** cross-page identity requires the same explicit absolute HTTP(S) JSON-LD `@id` on at least two distinct URLs; matching NAP/family never proves identity; `sitewide_consistency_claim=false`; external NAP summary is now fail-closed by positive allowlist.
-- **B15:** contextual freshness integrated as evidence-only; old dates alone cannot fail; producer evidence remains internal until an authenticated downstream contract exists.
+- **B07:** active soft-404 integrated through that same scheduler; blocked/challenged/robots/budget/deadline/incomplete remains unknown.
+- **B08:** redirect meaning distinguishes normalization, usable, wrong/catch-all, unusable and unverified access.
+- **B09:** sitemap integrity uses the same finite scheduler; customer promotion still requires exact root/child provenance and authenticated downstream proof.
+- **B10:** accepted main-content fingerprints are internal-only and now denied both at common output projection and direct authority/signing helpers.
+- **B11:** sample-scoped retained-set depth/inlink/navigation integrated; sitemap cannot masquerade as inlink; no sitewide orphan claim; private link cache denied externally.
+- **B12:** paired raw/rendered hub evidence integrated under existing browser-followup ceiling with explicit completed/failed/unassessed states.
+- **B13:** contextual local entity/status completeness integrated as evidence-only; raw identity/contact observations remain internal; external aggregate is positive-allowlisted.
+- **B14:** explicit absolute HTTP(S) entity identity required across distinct URLs; matching NAP/family never proves identity; external NAP proof is reduced and fail-closed.
+- **B15:** contextual freshness integrated as evidence-only; old date alone cannot fail; raw per-page freshness evidence stays internal.
 - **B16:** exact URL variant identity integrated; no sibling-host expansion or duplicate claim without verified equivalence.
-- **B17:** direct raw transfer-body bytes are distinct from decoded HTML/inline bytes; CrUX defaults to authenticated disconnected state unless an authorized exact-scan response exists.
-- **B18:** GSC defaults to authenticated disconnected state; connected/stale/unavailable contracts require authorization, exact scan identity, exact retained URL membership, conflict rejection and Standard-150 ceiling.
+- **B17:** direct transfer bytes remain distinct from decoded/inline bytes; CrUX defaults disconnected; controlled provider data now rejects stale/missing/future timing.
+- **B18:** GSC defaults disconnected; controlled data requires owner authorization, exact scan identity, exact retained URL membership, conflict rejection, Standard-150 ceiling and valid observation time.
 
-## Stage 2 remains open at the final independent-review gate
+## Stage 2 remains open only at corrected-head independent re-review
 
-Do not start shared Stage-3 integration yet. Source integration is materially complete, and the latest privacy hardening has RED → GREEN evidence plus exact executable CI. Remaining serialized gate:
+Do not start shared Stage-3 integration yet. The two latest material review findings have RED reproduction, minimal source fixes, strengthened behavioral coverage and exact executable CI. Remaining gate:
 
 1. stabilize the documentation head and require its exact-head FixList CI;
-2. obtain one fresh independent follow-up review of the corrected current PR #303 head;
-3. if a new material issue is reported, reproduce it with a behavioral regression and apply the smallest safe correction;
-4. require fresh exact-head FixList CI after any executable correction;
-5. keep internal B09/B10–B18 evidence internal unless a deliberate producer → Review → signed authority → persisted rows → customer/card/handoff/export chain is added;
-6. preserve Standard-150 cap, one finite probe budget, robots/DNS/SSRF/redirect/body/deadline controls, one active scan/account, exact scan isolation, historical signatures/readers, preview privacy and Python Review authority.
+2. request one fresh independent re-review of the corrected stable PR #303 head;
+3. if a material issue appears, reproduce it before correction and require new exact-head CI;
+4. if the re-review is clean, record B06–B18 complete and then begin serialized Stage-3 integration.
 
-A live account-specific CrUX/GSC connection is neither claimed nor required for an otherwise valid scan; disconnected behavior plus controlled authorized-response behavior is the current source acceptance contract.
+Keep B09/B10–B18 evidence internal unless a deliberate producer → Review → signed authority → persisted rows → customer/card/handoff/export chain is added. Preserve Standard 150, one finite request budget, robots/DNS/SSRF/redirect/body/deadline protections, one active scan/account, cancellation/terminalization, exact scan isolation, historical signatures/readers, preview privacy and Python Review authority.
 
 ## Stage 3 — isolated lanes built, not shared-integrated
 
 Reuse only after Stage 2 closes:
 
-- `agent/stage3-b19-b20-decisions-20260919` / `e74d87acd0cec2955402b96f635f13bc275f3a91`, CI `35463839728`: B19 **impact × reach × page value × confidence** and B20 explicit evidenced SEO/GEO root causes. Family similarity is not root-cause proof.
-- `agent/stage3-b21-b24-delivery-20260919` / `a998b4e38a06d6c163ac8853c3e49e9f10a58cb7`, CI `35463511347`: B21 exact unions/rank-before-truncate, B22 authenticated private preview selection, B23 evidenced root-cause score caps preserving existing ceilings, B24 backward-compatible handoff v2.
+- `agent/stage3-b19-b20-decisions-20260919` / `e74d87acd0cec2955402b96f635f13bc275f3a91`, CI `35463839728`: B19 exact **impact × reach × page value × confidence** with truthful unknown denominators; B20 explicit evidenced SEO/GEO root causes. Family similarity is not root-cause proof; repair leverage is not the fourth factor.
+- `agent/stage3-b21-b24-delivery-20260919` / `a998b4e38a06d6c163ac8853c3e49e9f10a58cb7`, CI `35463511347`: B21 exact unique unions/counts/rank-before-truncate; B22 authenticated private previews; B23 evidenced root-cause score caps preserving incomplete/access ceilings; B24 authenticated handoff v2 with v1 compatibility and no suppressed/operator-only exposure.
 
-These are integration-ready inputs, not product completion. Python Review remains canonical ranking authority. Shared ranking/authority/persistence/customer interfaces remain serialized integration work.
+Python Review remains canonical ranking authority. Shared ranking/authority/persistence/customer interfaces remain serialized integration work.
 
 ## Stage 4 — isolated lane built, not released
 
@@ -104,4 +111,4 @@ The genuine 30-site gate remains **not assessed**. Historical summaries and synt
 
 ## Exact next action
 
-Wait only for the documentation-head CI caused by these persisted records, then request one fresh independent review on that stable PR #303 head. If it is clean, record Stage 2 complete and begin serialized integration of the existing B19/B20 and B21–B24 lane deltas. Do not move production.
+Wait for exact-head CI on the final persisted documentation head, then request one fresh independent re-review of that stable PR #303 head. If clean, record Stage 2 complete and begin serialized integration of the existing B19/B20 and B21–B24 deltas. Do not move production.

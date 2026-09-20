@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping
 
+from .transport_evidence import TRANSFER_BODY_BYTES_HEADER
+
 PAGE_EVIDENCE_GATE_VERSION = "page_evidence_gate_v2_vendor_access_block"
 PAGE_EVIDENCE_CLASSES = {
     "usable_html",
@@ -14,7 +16,10 @@ PAGE_EVIDENCE_CLASSES = {
     "incomplete_html",
 }
 
-ACCESS_BLOCK_HEADER_ALLOWLIST = (
+# The scanner forwards this bounded set from the in-memory response to the
+# extraction seam. The transfer-body header is internal scanner evidence and is
+# deliberately excluded from persisted access-block vendor evidence below.
+PERSISTED_ACCESS_BLOCK_HEADER_ALLOWLIST = (
     "server",
     "cf-ray",
     "cf-mitigated",
@@ -22,6 +27,10 @@ ACCESS_BLOCK_HEADER_ALLOWLIST = (
     "x-datadome",
     "x-iinfo",
     "x-sucuri-id",
+)
+ACCESS_BLOCK_HEADER_ALLOWLIST = (
+    *PERSISTED_ACCESS_BLOCK_HEADER_ALLOWLIST,
+    TRANSFER_BODY_BYTES_HEADER,
 )
 
 _CHALLENGE_MARKERS = (
@@ -90,7 +99,7 @@ def access_block_header_evidence(
     normalized = _headers_lower(headers)
     return {
         name: normalized[name][:max_value_length]
-        for name in ACCESS_BLOCK_HEADER_ALLOWLIST
+        for name in PERSISTED_ACCESS_BLOCK_HEADER_ALLOWLIST
         if normalized.get(name)
     }
 

@@ -43,14 +43,21 @@ def _fix(fix_id: str, url: str, *, score_cap: int, **extra) -> dict:
     return payload
 
 
-def _review(fixes: list[dict], *, score: int = 55, ceiling: int = 55, coverage_state: str = "limited_coverage") -> dict:
+def _review(
+    fixes: list[dict],
+    *,
+    score: int = 88,
+    ceiling: int = 100,
+    coverage_state: str = "sufficient",
+    ceiling_reason: str = "",
+) -> dict:
     return {
         "cleaned_fixes": fixes,
         "health_score": score,
         "health_score_status": "available",
         "health_score_explanation": {
             "applied_ceiling": ceiling,
-            "ceiling_reason": "incomplete_evidence",
+            "ceiling_reason": ceiling_reason,
         },
         "site_fingerprint": {
             "coverage_assessment": {"state": coverage_state},
@@ -81,7 +88,7 @@ def _scan_result(urls: list[str]) -> dict:
     }
 
 
-def test_b23_verified_root_cause_cap_is_decided_before_signed_completion_without_raising_existing_ceiling():
+def test_b23_verified_root_cause_cap_is_decided_before_signed_completion_without_rewriting_legacy_score():
     urls = ["https://example.com/products/a", "https://example.com/products/b"]
     review = _review([
         _fix("meta-a", urls[0], score_cap=72),
@@ -92,38 +99,58 @@ def test_b23_verified_root_cause_cap_is_decided_before_signed_completion_without
     integrated = apply_canonical_repair_contract(review, scan_result)
     decision = integrated["stage3_health_score_decision"]
 
-    assert decision["base_health_score"] == 55
-    assert decision["coverage_state"] == "limited_coverage"
-    assert decision["existing_score_ceiling"] == 55
+    assert decision["base_health_score"] == 88
+    assert decision["coverage_state"] == "sufficient"
+    assert decision["existing_score_ceiling"] is None
     assert decision["root_cause_score_ceiling"] == 72
-    assert decision["effective_score_ceiling"] == 55
-    assert decision["adjusted_health_score"] == 55
+    assert decision["effective_score_ceiling"] == 72
+    assert decision["adjusted_health_score"] == 72
     assert decision["applied_root_cause_caps"] == [
         {"root_cause_id": "root:shared-template-meta", "score_cap": 72}
     ]
     # B23 decision evidence is signed, but this source-only slice must not rewrite
     # the customer-visible legacy score before the frozen V7 persistence path is
     # reconciled onto an accepted Stage-1 main.
-    assert integrated["health_score"] == 55
+    assert integrated["health_score"] == 88
 
     envelope = build_completion_envelope(_scan_record(), scan_result, integrated, "stage3-secret")
     assert envelope["review"]["stage3_health_score_decision"] == decision
-    assert envelope["review"]["health_score"] == 55
+    assert envelope["review"]["health_score"] == 88
     signed = {key: envelope[key] for key in ("version", "identity", "scan", "review")}
     assert envelope["proof"] == create_authority_seal(signed, "stage3-secret")
 
 
+def test_b23_existing_incomplete_ceiling_remains_stricter_than_a_verified_root_cause_cap():
+    urls = ["https://example.com/products/a", "https://example.com/products/b"]
+    integrated = apply_canonical_repair_contract(
+        _review(
+            [
+                _fix("meta-a", urls[0], score_cap=72),
+                _fix("meta-b", urls[1], score_cap=72),
+            ],
+            score=55,
+            ceiling=55,
+            coverage_state="limited_coverage",
+            ceiling_reason="incomplete_evidence",
+        ),
+        _scan_result(urls),
+    )
+    decision = integrated["stage3_health_score_decision"]
+
+    assert decision["base_health_score"] == 55
+    assert decision["existing_score_ceiling"] == 55
+    assert decision["root_cause_score_ceiling"] == 72
+    assert decision["effective_score_ceiling"] == 55
+    assert decision["adjusted_health_score"] == 55
+    assert integrated["health_score"] == 55
+
+
 def test_b23_conflicting_documented_caps_for_same_verified_root_cause_fail_closed():
     urls = ["https://example.com/products/a", "https://example.com/products/b"]
-    review = _review(
-        [
-            _fix("meta-a", urls[0], score_cap=72),
-            _fix("meta-b", urls[1], score_cap=48),
-        ],
-        score=88,
-        ceiling=100,
-        coverage_state="sufficient",
-    )
+    review = _review([
+        _fix("meta-a", urls[0], score_cap=72),
+        _fix("meta-b", urls[1], score_cap=48),
+    ])
 
     integrated = apply_canonical_repair_contract(review, _scan_result(urls))
     [group] = integrated["stage3_root_cause_groups"]
@@ -162,10 +189,7 @@ def test_b23_foreign_repair_scan_identity_cannot_apply_a_documented_cap():
             scan_run_id="foreign-scan",
         ),
     ]
-    integrated = apply_canonical_repair_contract(
-        _review(fixes, score=88, ceiling=100, coverage_state="sufficient"),
-        _scan_result(urls),
-    )
+    integrated = apply_canonical_repair_contract(_review(fixes), _scan_result(urls))
     decision = integrated["stage3_health_score_decision"]
 
     assert len(integrated["stage3_root_cause_groups"]) == 2

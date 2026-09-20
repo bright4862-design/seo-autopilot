@@ -3,7 +3,7 @@ from app.scan_job import build_completion_envelope, create_authority_seal
 from app.stage3_delivery import DEFAULT_PRESENTATION_LIMIT
 
 
-def _page(index: int) -> dict:
+def _page(index: int, *, indexable: bool = True) -> dict:
     url = f"https://example.com/products/{index}"
     return {
         "url": url,
@@ -11,23 +11,40 @@ def _page(index: int) -> dict:
         "status_code": 200,
         "content_type": "text/html",
         "page_evidence_class": "usable_html",
-        "indexable": True,
+        "indexable": indexable,
         "page_template_family": "product_page",
         "page_value_role": "money",
     }
 
 
-def _fix(index: int, *, high_impact: bool = False) -> dict:
+def _fix(index: int, *, high_impact: bool = False, broken: bool = False) -> dict:
     url = f"https://example.com/products/{index}"
-    rule = "duplicate_content" if high_impact else "missing_meta_description"
+    if broken:
+        rule = "broken_page"
+        category = "404_error"
+        prefix = "broken"
+        priority = "critical"
+        action_priority = "fix_first"
+    elif high_impact:
+        rule = "duplicate_content"
+        category = "duplicate_content"
+        prefix = "duplicate"
+        priority = "high"
+        action_priority = "fix_first"
+    else:
+        rule = "missing_meta_description"
+        category = "meta_description"
+        prefix = "meta"
+        priority = "medium"
+        action_priority = "improve"
     return {
-        "fix_id": f"{'duplicate' if high_impact else 'meta'}-{index}",
+        "fix_id": f"{prefix}-{index}",
         "rule": rule,
-        "category": "duplicate_content" if high_impact else "meta_description",
-        "priority": "high" if high_impact else "medium",
-        "base_severity": "high" if high_impact else "medium",
+        "category": category,
+        "priority": priority,
+        "base_severity": priority,
         "evidence_class": "confirmed_problem",
-        "action_priority": "fix_first" if high_impact else "improve",
+        "action_priority": action_priority,
         "priority_reason": "verified synthetic delivery fixture",
         "page_scope": "page",
         "page_template_family": "product_page",
@@ -52,13 +69,7 @@ def _scan_record() -> dict:
     }
 
 
-def test_b21_ranked_delivery_and_counts_are_attached_before_signed_completion(monkeypatch):
-    # Use a family-scoped high-impact candidate rather than a cross-cutting
-    # access failure: B19 intentionally leaves cross-cutting reach unknown, while
-    # B21's ordering requirement applies to candidates with a comparable B19
-    # four-factor score.
-    fixes = [_fix(index) for index in range(39)] + [_fix(39, high_impact=True)]
-    pages = [_page(index) for index in range(40)]
+def _apply_with_all_candidates(monkeypatch, fixes: list[dict], pages: list[dict]) -> dict:
     review = {"cleaned_fixes": fixes}
     scan_result = {
         "scan_id": "scan-stage3-b21",
@@ -79,8 +90,18 @@ def test_b21_ranked_delivery_and_counts_are_attached_before_signed_completion(mo
         "build_calibrated_shadow_review_analysis",
         lambda review_result, _pages, **_kwargs: {"proposed_fixes": list(review_result["cleaned_fixes"])},
     )
+    return repair_contract_v2.apply_canonical_repair_contract(review, scan_result)
 
-    integrated = repair_contract_v2.apply_canonical_repair_contract(review, scan_result)
+
+def test_b21_ranked_delivery_and_counts_are_attached_before_signed_completion(monkeypatch):
+    # Use a family-scoped high-impact candidate rather than a cross-cutting
+    # access failure: B19 intentionally leaves cross-cutting reach unknown, while
+    # B21's ordering requirement applies to candidates with a comparable B19
+    # four-factor score.
+    fixes = [_fix(index) for index in range(39)] + [_fix(39, high_impact=True)]
+    pages = [_page(index) for index in range(40)]
+
+    integrated = _apply_with_all_candidates(monkeypatch, fixes, pages)
     delivery = integrated["stage3_delivery"]
 
     assert delivery["eligible_candidate_count"] == 40
@@ -104,8 +125,48 @@ def test_b21_ranked_delivery_and_counts_are_attached_before_signed_completion(mo
     assert counts["displayed_samples"] == ["https://example.com/products/39"]
     assert counts["examples_partial"] is False
 
+    scan_result = {
+        "scan_id": "scan-stage3-b21",
+        "scan_run_id": "scan-stage3-b21",
+        "website_url": "https://example.com",
+        "normalized_domain": "example.com",
+        "respect_robots_txt": True,
+        "owner_attested_robots_override": False,
+        "crawled_pages": pages,
+    }
     envelope = build_completion_envelope(_scan_record(), scan_result, integrated, "stage3-secret")
     assert envelope["review"]["stage3_delivery"] == delivery
     assert envelope["review"]["canonical_repairs"][0].get("stage3_counts") is not None
     signed = {key: envelope[key] for key in ("version", "identity", "scan", "review")}
     assert envelope["proof"] == create_authority_seal(signed, "stage3-secret")
+
+
+def test_b21_unknown_b19_score_cannot_displace_known_zero_score_before_truncation(monkeypatch):
+    # 35 positive known-score candidates + one known score of exactly zero fill
+    # the 36-item presentation set. The final broken-page repair is cross-cutting,
+    # so B19 truthfully leaves its reach/composite score unknown. It must not be
+    # treated as score zero and then use impact as a substitute comparison that
+    # displaces the genuinely known zero-score repair.
+    fixes = [_fix(index) for index in range(35)]
+    fixes.append(_fix(35))
+    fixes.append(_fix(36, broken=True))
+    pages = [_page(index) for index in range(35)]
+    pages.append(_page(35, indexable=False))
+    pages.append(_page(36))
+
+    integrated = _apply_with_all_candidates(monkeypatch, fixes, pages)
+    delivery = integrated["stage3_delivery"]
+    by_id = {item["fix_id"]: item for item in integrated["canonical_repairs"]}
+
+    zero_factors = by_id["meta-35"]["stage3_priority_factors"]
+    unknown_factors = by_id["broken-36"]["stage3_priority_factors"]
+    assert zero_factors["score_state"] == "known"
+    assert zero_factors["priority_factor_score"] == 0.0
+    assert unknown_factors["score_state"] == "unknown"
+    assert unknown_factors["priority_factor_score"] is None
+
+    assert delivery["eligible_candidate_count"] == 37
+    assert delivery["displayed_candidate_count"] == DEFAULT_PRESENTATION_LIMIT
+    assert delivery["presentation_omitted_count"] == 1
+    assert "meta-35" in delivery["displayed_fix_ids"]
+    assert "broken-36" not in delivery["displayed_fix_ids"]

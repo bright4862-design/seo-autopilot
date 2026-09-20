@@ -343,7 +343,18 @@ def extract_page(
             page["geo_evidence_error"] = "extraction_error"
 
     if include_links and 200 <= int(status_code or 0) < 300 and html:
-        page["_links"] = extract_links_from_soup(soup, final_url or url)
+        links = extract_links_from_soup(soup, final_url or url)
+        page["_links"] = links
+        if page_evidence_class == "usable_html":
+            page["_reachability_links"] = [
+                {
+                    "href": link.get("href", ""),
+                    "navigation_presence": link.get("navigation_presence")
+                    if isinstance(link.get("navigation_presence"), bool)
+                    else None,
+                }
+                for link in links
+            ]
     return page
 
 

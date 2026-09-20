@@ -152,3 +152,87 @@ def test_b20_groups_only_explicit_verified_same_root_cause_with_exact_scan_ident
     fail_closed = apply_canonical_repair_contract({"cleaned_fixes": [first, second]}, no_exact_identity)
     assert len(fail_closed["stage3_root_cause_groups"]) == 2
     assert all(group["grouping_state"] == "not_verified" for group in fail_closed["stage3_root_cause_groups"])
+
+
+def test_b20_repair_local_foreign_scan_identity_cannot_override_trusted_producer_identity():
+    urls = ["https://example.com/products/a", "https://example.com/products/b"]
+    common_evidence = {
+        "version": "root_cause_evidence_v1_verified",
+        "state": "verified",
+        "root_cause_id": "root:shared-template-meta",
+        "repair_surface_id": "surface:product-template",
+        "evidence_refs": ["evidence:template-meta"],
+    }
+    first = _fix(
+        "meta-a",
+        urls[0],
+        root_cause_evidence=common_evidence,
+        scan_id="foreign-scan",
+        scan_run_id="foreign-scan",
+    )
+    second = _fix(
+        "meta-b",
+        urls[1],
+        root_cause_evidence=common_evidence,
+        scan_id="foreign-scan",
+        scan_run_id="foreign-scan",
+    )
+    scan_result = {
+        "scan_id": "scan-stage3",
+        "scan_run_id": "scan-stage3",
+        "website_url": "https://example.com",
+        "normalized_domain": "example.com",
+        "respect_robots_txt": True,
+        "owner_attested_robots_override": False,
+        "crawled_pages": [_page(url) for url in urls],
+    }
+
+    integrated = apply_canonical_repair_contract({"cleaned_fixes": [first, second]}, scan_result)
+    groups = integrated["stage3_root_cause_groups"]
+
+    assert len(groups) == 2
+    assert all(group["grouping_state"] == "not_verified" for group in groups)
+    assert all(group["scan_id"] == "scan-stage3" for group in groups)
+    assert all(group["member_count"] == 1 for group in groups)
+
+
+def test_b20_repair_local_identity_matching_trusted_producer_can_group():
+    urls = ["https://example.com/products/a", "https://example.com/products/b"]
+    common_evidence = {
+        "version": "root_cause_evidence_v1_verified",
+        "state": "verified",
+        "root_cause_id": "root:shared-template-meta",
+        "repair_surface_id": "surface:product-template",
+        "evidence_refs": ["evidence:template-meta"],
+    }
+    first = _fix(
+        "meta-a",
+        urls[0],
+        root_cause_evidence=common_evidence,
+        scan_id="scan-stage3",
+        scan_run_id="scan-stage3",
+    )
+    second = _fix(
+        "meta-b",
+        urls[1],
+        root_cause_evidence=common_evidence,
+        scan_id="scan-stage3",
+        scan_run_id="scan-stage3",
+    )
+    scan_result = {
+        "scan_id": "scan-stage3",
+        "scan_run_id": "scan-stage3",
+        "website_url": "https://example.com",
+        "normalized_domain": "example.com",
+        "respect_robots_txt": True,
+        "owner_attested_robots_override": False,
+        "crawled_pages": [_page(url) for url in urls],
+    }
+
+    integrated = apply_canonical_repair_contract({"cleaned_fixes": [first, second]}, scan_result)
+    groups = integrated["stage3_root_cause_groups"]
+
+    assert len(groups) == 1
+    assert groups[0]["grouping_state"] == "verified"
+    assert groups[0]["scan_id"] == "scan-stage3"
+    assert groups[0]["member_count"] == 2

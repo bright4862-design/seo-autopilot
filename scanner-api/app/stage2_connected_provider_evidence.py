@@ -159,7 +159,7 @@ def build_crux_scan_evidence(
     return {
         **gated,
         "state": adapted["state"],
-        "reason": {
+        "reason": adapted.get("reason") or {
             "connected": "authorized_current_crux_evidence",
             "stale": "crux_evidence_stale",
         }.get(adapted["state"], "crux_evidence_unavailable"),
@@ -246,7 +246,7 @@ def build_gsc_scan_evidence(
         pages.append({
             "url": url,
             "state": adapted["state"],
-            "reason": {
+            "reason": adapted.get("reason") or {
                 "connected": "authorized_current_gsc_page_evidence",
                 "stale": "gsc_evidence_stale",
             }.get(adapted["state"], "gsc_evidence_unavailable"),
@@ -258,6 +258,8 @@ def build_gsc_scan_evidence(
         state, reason = "connected", "authorized_current_gsc_evidence"
     elif "stale" in states:
         state, reason = "stale", "gsc_evidence_stale"
+    elif pages and all(row.get("reason") == "provider_observation_time_invalid" for row in pages):
+        state, reason = "unavailable", "provider_observation_time_invalid"
     else:
         state, reason = "unavailable", "gsc_evidence_unavailable"
 

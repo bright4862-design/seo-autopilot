@@ -53,21 +53,29 @@ The remaining failed expectation then showed that the test's chosen `broken_page
 
 This is a semantic correction to the regression, not a weakening: unknown B19 scores remain unknown and only comparable known B19 scores are ordered by the B21 test.
 
-## Exact verification
+## Independent-review correction: unknown is not sortable zero
 
-Executable head: `e9aa3789b9b143a7b3b8dbdd0e52ad2edf953a0f`.
+A fresh CodeRabbit review then identified a material B19/B21 presentation defect in the earlier B21 ranking helper: an explicit unknown B19 composite score could be normalized to a sortable `0.0` and then use `impact` as a tie-breaker. With more than 36 eligible repairs, a high-impact unknown-score repair could therefore displace a repair whose authenticated B19 score was genuinely known to be `0.0`.
 
-FixList CI `35507339178`: green on both jobs.
+The behavioral correction landed at `2b952e14ac72f03c42be794540574bc06a2c55b7` after regression commit `467fc4aaf184c2cf8ad99e41dc8baa8fd13ac0d2`. `stage3_delivery._candidate_priority()` now separates known-score rows from explicit unknown-score rows. Every numeric B19 score, including exact zero, sorts ahead of the unknown segment; impact is never used to compare an unknown B19 composite against a known composite.
+
+The reviewer additionally required proof at the real signed Review boundary, not only in the pure ranking helper. Commit `881430f0ccd1900535fe2d4483e7d217b382954e` strengthens `test_stage3_b21_signed_delivery_integration.py` with 37 contract-valid repairs: 35 positive known-score repairs, one authenticated known score of exactly `0.0`, and one higher-impact cross-cutting repair whose B19 score is truthfully unknown. The test proves the known zero remains inside the 36-item presentation set, the unknown repair is omitted, the exact `stage3_delivery` decision is present in the completion Review, and the existing completion HMAC authenticates that same Review.
+
+FixList CI `35512886836` passed both jobs on `881430f0ccd1900535fe2d4483e7d217b382954e`:
 
 - root scanner regressions: 115 passed;
-- scanner-api: 2029 passed, 18 skipped;
-- new integrated B21 signed-delivery regression: passed;
+- scanner-api: 2030 passed, 18 skipped;
+- integrated signed B21 tests: 2 passed, including the >36 unknown-vs-known-zero authority regression;
 - labelled Stage-1 corpus: provenance `synthetic`, 14 cases, 55 assertions, `full_30_site_gate=not_assessed`;
 - frozen beta revision: `01ebe8e90df1e6bd` matched;
-- production scanner image build: `sha256:e7378326b2f8030b7cbe23f0fb5a01a0f7f50a18e80d75b5c28fe8ee8b38ccc1`;
-- lint, typecheck, generated release contracts, frontend contracts and production frontend build: passed.
+- production scanner image: `sha256:6d49c53baa876bf38bdf4229399e13ab2164ccbbc40a99e5723589b786aa5022`;
+- lint, typecheck, generated release contracts, frontend contracts and production frontend build passed.
 
-CI requested Node 20 and setup-node resolved Node `20.20.2`. GitHub-hosted JavaScript actions separately warned that their runtime is forced to Node 24. This run is not evidence for exact Node 20.19.5.
+CI requested Node 20 and `setup-node` resolved Node `20.20.2`; GitHub-hosted JavaScript actions separately warned that their runtime is forced to Node 24. This is not represented as exact Node 20.19.5 evidence.
+
+## Exact verification
+
+The prior executable checkpoint `e9aa3789b9b143a7b3b8dbdd0e52ad2edf953a0f` / CI `35507339178` proved the first signed B21 delivery seam. The corrected executable checkpoint is now `881430f0ccd1900535fe2d4483e7d217b382954e` / CI `35512886836`.
 
 ## Proven boundary
 
@@ -76,7 +84,8 @@ The signed Review now carries:
 - B19 exact factors/explanations;
 - B20 explicit verified root-cause grouping state;
 - B21 truthful per-repair count metadata;
-- a bounded rank-before-truncate presentation summary.
+- a bounded rank-before-truncate presentation summary;
+- an explicit known-before-unknown score ordering at the 36-item cap, including the known-zero edge case.
 
 The existing completion proof authenticates this Review. `stage3_delivery` does not duplicate raw `displayed_candidates`; it publishes bounded displayed fix IDs and aggregate counts only.
 
@@ -87,9 +96,9 @@ B21 is **not complete overall**. The following still require real integration an
 1. map authenticated B19/B21 evidence into the existing durable persistence/read model without schema/RLS broadening;
 2. prove persisted FixItem → customer card/export output uses the intended rank/count provenance;
 3. prove suppressed/operator-only/private evidence remains absent from customer surfaces;
-4. obtain focused independent review of the new B21 shared seam and correct any material findings;
+4. obtain focused independent follow-up review of the corrected signed B21 boundary and correct any material findings;
 5. run fresh exact-head CI after any correction.
 
-Only after those are proven may B21 be recorded complete. The next serialized slice should target durable B19/B21 persistence/customer projection before B23/B22/B24 customer-visible wiring.
+The durable V7 persistence/customer route is intentionally not copied into this later-stage branch while Stage-1 exact-source publication/non-owner acceptance remains incomplete. After that release gate closes, the branch must be reconciled onto the then-current accepted `main` before B19/B21 persistence/card/export wiring is finalized, so V7 and #308 are preserved rather than reimplemented or reverted.
 
 No production deployment, worker/admission mutation, live scan, provider connection, schema/RLS mutation, secret rotation, Premium enablement or Grok enablement is authorized by this checkpoint.

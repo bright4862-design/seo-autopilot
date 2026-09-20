@@ -5,6 +5,7 @@ from .search_applicability import filter_search_findings, search_applicability
 from .metadata_title_evidence import relative_evidence_url
 from .repair_coverage import repair_evidence_key_function, scan_evidence_origin
 from .coverage_probes import SOFT_404_PROBE_VERSION, compare_page_to_soft_404_baselines
+from .stage2_local_entity_producer import build_local_entity_scan_evidence
 
 from .indexability_quality import (
     annotate_indexability_quality,
@@ -183,11 +184,12 @@ def group_indexability_quality_findings(findings: list[dict]) -> list[dict]:
 
 
 def apply_indexability_quality_to_result(result: dict, *, identity_version: str = "") -> dict:
-    """Apply bounded indexability and navigation evidence to a scan response.
+    """Apply bounded Stage-2 evidence to a successful scan response.
 
-    This runs at the scanner API boundary after bounded trust-page enrichment. It
-    preserves the scanner's existing evidence and only replaces its own idempotent
-    quality rules, making the operation safe to run more than once.
+    Indexability/navigation rules can update findings. The B13/B14 local-entity
+    aggregate added here is evidence-only: it is attached to the shared scanner
+    result and authenticated technical summary, but it does not create a repair,
+    customer card, score change, new request, or sitewide consistency claim.
     """
     if not isinstance(result, dict) or not result.get("success"):
         return result
@@ -195,6 +197,12 @@ def apply_indexability_quality_to_result(result: dict, *, identity_version: str 
     pages = list(result.get("crawled_pages") or result.get("pages") or [])
     if not pages:
         return result
+
+    # B13/B14 page observations were already extracted from accepted retained
+    # HTML. Aggregate only that exact retained set here so evidence cannot expand
+    # the Standard-150 assessed denominator or create a second fetch path.
+    local_entity_scan_evidence = build_local_entity_scan_evidence(pages)
+
     identity = {"scan_origin": scan_evidence_origin(result) if identity_version else "", "identity_version": identity_version}
     key_for = repair_evidence_key_function(legacy_key=str, **identity)
     active_baselines = _active_soft_404_baselines(result)
@@ -278,6 +286,7 @@ def apply_indexability_quality_to_result(result: dict, *, identity_version: str 
     result["health_score"] = health_score
     result["indexability_quality_evidence"] = indexability_evidence
     result["navigation_indexability_evidence"] = navigation_evidence
+    result["local_entity_scan_evidence"] = local_entity_scan_evidence
 
     summary = result.get("scan_summary")
     if not isinstance(summary, dict):
@@ -301,6 +310,7 @@ def apply_indexability_quality_to_result(result: dict, *, identity_version: str 
     technical.update({
         "indexability_quality_evidence": indexability_evidence,
         "navigation_indexability_evidence": navigation_evidence,
+        "local_entity_scan_evidence": local_entity_scan_evidence,
         "soft_404_pages": indexability_evidence.get("soft_404_count", 0),
         "canonicalized_pages": indexability_evidence.get("canonicalized_count", 0),
         "indexability_conflicts": sum(indexability_evidence.get("conflict_counts", {}).values()),

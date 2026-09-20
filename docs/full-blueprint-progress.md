@@ -42,32 +42,40 @@ The isolated lane PRs were review/CI inputs only and are not to be merged direct
 - **B12 — paired raw/rendered hub evidence producer/source wiring.** Up to five verified structural hubs can be selected for evidence disclosure while browser execution still uses the existing three-page follow-up ceiling. B11 retained links provide bounded raw evidence; rendered evidence is accepted only from successful 2xx, accepted `usable_html` renderer observations with no challenge/block/rate-limit/fetch-error/truncation state. Missing or rejected rendered evidence stays failed/unassessed, and unsampled rendered links never expand the assessed set. `run_render_followup` separates browser authorization from the exact retained-set evidence disclosure channel, so policy-declined rendering remains selected-but-unassessed without enabling a renderer callback or second budget.
 - **B13 partial — local entity completeness producer.** Accepted usable HTML can produce bounded versioned JSON-LD LocalBusiness/Store-family observations for name, address, phone, regular hours when explicitly present, schema type, entity ID and optional holiday-hours/photos/sameAs/parent presence. Missing hours with unknown applicability remains `not_verified`; optional fields are not universal defects. Malformed/oversized structured data and unusable HTTP evidence fail closed. Page observations are bounded while exact unique candidate counts and truncation state are retained.
 - **B14 partial — conservative cross-page NAP evidence.** Cross-page entity identity currently requires an explicit absolute HTTP(S) JSON-LD `@id`. Fragment/relative IDs such as `#store` remain observed but unverified until trusted base resolution exists. Shared names/addresses/phones/page-family similarity never establish identity. NAP comparison requires the same verified entity ID on at least two distinct page URLs; one observation and same-page duplicate/conflicting JSON-LD cannot produce a cross-page pass/fail. Distinct explicit IDs remain separate even when a phone is shared. `sitewide_consistency_claim` is false.
+- **B15 — contextual freshness producer/source evidence seam.** Accepted retained pages receive bounded versioned freshness evidence from already-extracted title/H1/meta description plus path as historical-only provenance. A fail requires explicit current-content language and contradictory current-scoped temporal evidence. Old years/articles/paths alone are not stale defects; `apply now` is not current-content intent; mixed current/latest plus explicit archive/history wording preserves dates as historical and therefore unknown rather than manufacturing a stale finding. Year-only dates use 31 December conservatively. This is evidence-only: no repair/card/score change is emitted and no new fetch or request budget exists.
 - **B16 — URL variants.** Exact path/query/case/reserved-escape/empty-query identity is retained. No implicit sibling-host expansion occurs. Live alternate routes are not declared duplicates without independent equivalence evidence. Redirect meaning delegates to B08.
 - **B17 partial — truthful decoded/inline page weight.** Decoded HTML bytes and inline script/style bytes are separately measured from accepted content. Transfer/wire bytes remain unknown; decoded bytes or zero are never substituted for network transfer bytes.
 
 ### Current exact executable checkpoint
 
-Exact executable head: `fe3d18cc63f7b0acdf0e97679db5b14e47966e10`.
+Exact executable head: `e286c3c4f0db6b90c60300f804232c5894936c40`.
 
-FixList CI `35484333097` — **SUCCESS** on both jobs:
+FixList CI `35484767939` — **SUCCESS** on both jobs:
 
-- immutable checkout verified `fe3d18cc63f7b0acdf0e97679db5b14e47966e10`;
+- immutable checkout verified `e286c3c4f0db6b90c60300f804232c5894936c40`;
 - root scanner regressions: **115 passed**;
-- `scanner-api`: **1,952 passed / 18 intentional skips**;
+- `scanner-api`: **1,961 passed / 18 intentional skips**;
+- B15 focused suite: **9 passed** as part of the scanner suite;
 - labelled Stage-1 corpus: `synthetic`, 14 cases / 55 assertions, `full_30_site_gate=not_assessed`;
 - frozen scanner revision `01ebe8e90df1e6bd`: passed;
-- production scanner image: `sha256:e776770dc976cf7c4b434e134db31323f61278c0f8c460c53ca890cc50d11bb9`;
+- production scanner image: `sha256:afc21e8f12c5d00cfaa9cdbef78514576141422bc9ee08605e8f2f6affabd74d`;
 - lint, typecheck, generated release contracts, frontend contract tests and production frontend build: passed.
 
 The workflow resolved Node `20.20.2`; this is not Node `20.19.5` runtime evidence.
 
-Detailed B13/B14 checkpoint: `docs/superpowers/plans/2026-09-20-stage2-b13-b14-local-entity.md`.
+Detailed current plans:
 
-### B13/B14 hardening in this checkpoint
+- `docs/superpowers/plans/2026-09-19-stage2-serialized-review-hardening.md`
+- `docs/superpowers/plans/2026-09-20-stage2-b11-reachability-provenance.md`
+- `docs/superpowers/plans/2026-09-20-stage2-b12-hub-render-evidence.md`
+- `docs/superpowers/plans/2026-09-20-stage2-b13-b14-local-entity.md`
+- `docs/superpowers/plans/2026-09-20-stage2-b15-contextual-freshness.md`
 
-The B14 seam was tightened after independent source review:
+### B13/B14 hardening carried forward
 
-1. A single explicit entity observation can support B13 completeness but can no longer be treated as proof that NAP is consistent across pages.
+The B14 seam was tightened after source review:
+
+1. A single explicit entity observation can support B13 completeness but cannot prove that NAP is consistent across pages.
 2. The same explicit entity ID must occur on at least two distinct page URLs before B14 can pass or fail.
 3. Duplicate/conflicting JSON-LD on one page remains unverified for cross-page consistency rather than becoming a false cross-page inconsistency.
 4. Distinct explicit entity IDs remain separate even if they share a phone number.
@@ -76,7 +84,7 @@ The B14 seam was tightened after independent source review:
 
 Focused regressions are in `scanner-api/tests/test_stage2_local_entity_producer.py` and `scanner-api/tests/test_stage2_local_entity_identity.py`.
 
-Intermediate cross-page head `b513c6c7a47e39d792b342f15d6ff31025f5d099` also passed FixList CI `35484212032` with **115 root passed**, **1,950 scanner-api passed / 18 skips**, labelled synthetic corpus, frozen revision, production image build and frontend/contract gates. The final `fe3d18c...` head adds the relative-ID fail-closed hardening and two regressions.
+Intermediate cross-page head `b513c6c7a47e39d792b342f15d6ff31025f5d099` passed FixList CI `35484212032` with **115 root passed**, **1,950 scanner-api passed / 18 skips**, labelled synthetic corpus, frozen revision, production image build and frontend/contract gates. B13/B14 hardening head `fe3d18cc63f7b0acdf0e97679db5b14e47966e10` passed CI `35484333097` with **115 root passed**, **1,952 scanner-api passed / 18 skips**.
 
 ### Relevant prior Stage-2 checkpoints
 
@@ -84,13 +92,7 @@ Intermediate cross-page head `b513c6c7a47e39d792b342f15d6ff31025f5d099` also pas
 - B10/review hardening exact head `f904649c9193877181471e1daa01097da0f3062b`, CI `35472567286`: 115 root, 1,911 scanner-api / 18 skips.
 - B11 retained-set producer hook exact head `f51869adf8eac44de4fa7c9387590ab3c330c5a9`, CI `35478073142`: 115 root, 1,924 scanner-api / 18 skips.
 - B12 final shared caller checkpoint `d612ceade6fc31ecd3e01d5b195dbd4d646524ef`, CI `35483256047`: 115 root, 1,932 scanner-api / 18 skips. CodeRabbit subsequently identified a valid renderer-acceptance P1; the current branch fixes it by requiring accepted complete usable HTML before rendered links can count as completed evidence.
-
-Detailed plans:
-
-- `docs/superpowers/plans/2026-09-19-stage2-serialized-review-hardening.md`
-- `docs/superpowers/plans/2026-09-20-stage2-b11-reachability-provenance.md`
-- `docs/superpowers/plans/2026-09-20-stage2-b12-hub-render-evidence.md`
-- `docs/superpowers/plans/2026-09-20-stage2-b13-b14-local-entity.md`
+- B15 exact head `e286c3c4f0db6b90c60300f804232c5894936c40`, CI `35484767939`: 115 root, 1,961 scanner-api / 18 skips; production scanner image `sha256:afc21e8f12c5d00cfaa9cdbef78514576141422bc9ee08605e8f2f6affabd74d`.
 
 ### Stage 2 still open
 
@@ -99,12 +101,14 @@ Stage 2 is **not source-complete**.
 - **B09:** if sitemap evidence becomes customer-visible, preserve exact sitemap root/child provenance and child failure reasons through the authenticated downstream chain.
 - **B10:** if near-duplicate evidence becomes customer-visible, add authenticated Review → authority → persistence → customer/card/handoff/export coverage.
 - **B11/B12:** source integration is green. A current independent review of the combined retained-link/render shape remains a stage gate. Add downstream authenticated/privacy proof if these samples are exposed to customers.
-- **B13/B14:** page-level structured observations and the bounded scan aggregation adapter are implemented and exact-head green, but the scan-level summary is not yet attached to the shared `run_scan`/authority result. The current producer does not claim generic visible-text/store-form identity, complete Coming Soon status inference, or complete store-finder/form parity. Add those only from explicit provenance. No customer repair/card/score adjustment exists for this slice.
-- **B15:** produce explicit current-content intent plus current-scoped temporal anchors. An old date alone cannot fail freshness.
+- **B13/B14:** page-level structured observations and the bounded scan aggregation adapter are implemented and green, but the scan-level summary is not yet attached to the shared `run_scan`/authority result. The producer does not claim generic visible-text/store-form identity, complete Coming Soon status inference, or complete store-finder/form parity. Add those only from explicit provenance. No customer repair/card/score adjustment exists for this slice.
+- **B15:** producer/source evidence is implemented and exact-head green, but remains evidence-only. Any future customer-visible freshness finding requires authenticated downstream proof before exposure.
 - **B17:** add directly measured transfer bytes without confusing them with decoded bytes. CrUX remains optional and must expose disconnected/stale/unavailable states unless a current authorized response exists.
 - **B18:** GSC remains optional with explicit disconnected/stale/unavailable behavior unless a current owner-authorized response exists.
 - Any new displayed B09/B10–B18 evidence/count/finding requires real producer → Review → signed authority → persisted rows → verified customer/card/handoff/export coverage before requirement closure.
 - Final combined independent review and fresh exact-head CI after remaining shared wiring are mandatory before Stage 3 integration.
+
+A fresh CodeRabbit review was requested for the current B11–B14 combined shape, but the bot's repository configuration currently exposes a manual trigger rather than recording a new review pass. Do not count that request as an independent-review success. A fresh review of B15 is also still required before Stage 2 can close.
 
 ## Stage 3 — isolated lanes built; shared integration held behind Stage 2
 
@@ -143,4 +147,4 @@ The genuine 30-site baseline/candidate gate remains **not assessed**. No Stage-4
 
 ## Exact next engineering action
 
-Stay on Stage 2. Wire the bounded B13/B14 scan-level evidence summary into the shared scanner result/authority path without changing the assessed set or request budget and without introducing customer-visible claims that lack authenticated downstream coverage. Request independent review of the current B11–B14 combined shape. Then continue B15 contextual freshness, direct B17 transfer-byte/CrUX states and B18 GSC states. Only after B06–B18 are genuinely source-complete, independently reviewed and exact-head green should shared Stage-3 integration begin.
+Stay on Stage 2. Attach the bounded B13/B14 scan-level summary to the shared scanner result/authority path without changing the assessed set or request budget and without exposing unauthenticated customer claims. Then implement direct B17 transfer-byte evidence plus conservative optional CrUX state and B18 optional GSC state. Obtain fresh independent review of the combined B11–B18 source shape and require another exact-head CI after the remaining shared wiring. Only after B06–B18 are genuinely source-complete, independently reviewed and exact-head green should shared Stage-3 integration begin.

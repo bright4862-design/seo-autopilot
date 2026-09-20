@@ -19,7 +19,7 @@ The proven Stage-2 invariants remain authoritative: one finite shared follow-up 
 
 ## Stage 3 — current checkpoint
 
-Reviewed sources integrated serially:
+Reviewed lane sources integrated serially:
 
 - B19/B20 lane `e74d87acd0cec2955402b96f635f13bc275f3a91` -> `c3f9d685e17b26c372a5a47403b478caec36ed2a`.
 - B21–B24 lane `a998b4e38a06d6c163ac8853c3e49e9f10a58cb7` -> `3aebc7375e854ce063ac8853c3e49e9f10a58cb7`.
@@ -47,22 +47,36 @@ Fresh CodeRabbit then found a P1 where explicit unknown B19 composite score coul
 
 The B21 independent-review gate is closed for the signed authority boundary; durable FixItem -> customer card/export proof remains open.
 
-### B23 signed authority — source seam green, review open
+### B23 signed authority — review gate closed
 
-B23 now has a real canonical Review -> completion-HMAC decision seam, but the release-gated customer-visible legacy `health_score` is intentionally unchanged.
+B23 has a real canonical Review -> completion-HMAC decision seam, while the release-gated customer-visible legacy `health_score` remains intentionally unchanged.
 
-- RED `c713baca3f65da28bd52616960fdcb30e8f52d49` / CI `35514082243`: Python scanner-api tests failed as intended because the signed B23 field did not exist; the separate lint/typecheck/contracts/frontend job remained green.
-- `5d967faa32e6a0790cf5cae013717a35455ba9b4` accepts a score cap only from the same versioned, explicit, verified B20 root-cause evidence. Unverified/conflicted/cross-scan evidence cannot contribute; conflicting caps fail closed.
-- `addc071e2fcc2d4f2392eb1fa5586cb73dde352e` attaches `stage3_health_score_decision` before completion HMAC. The already-final legacy score is the B23 base, so access/sample/incomplete handling cannot be raised or recomputed. Existing explicit legacy ceilings are carried diagnostically; root causes dedupe by stable ID across SEO/GEO/cross-rule groups; coverage remains explicit/unknown rather than fabricated.
-- `bdd7fc4e2794227997b181693b203b157304ba02` adds conflicting-cap and foreign-scan regressions.
-- `23d28ddee804e9c20db4136f06aab879685d1942` proves two distinct paths: a verified cap 72 can produce a signed candidate score 72 from legacy score 88, while a pre-existing incomplete ceiling 55 remains stricter than cap 72. The legacy visible score is unchanged in both cases on this branch.
-- Exact executable FixList CI `35514416069` passed both jobs: root scanner regressions, full scanner-api suite, labelled synthetic corpus, frozen revision, scanner image build, lint/typecheck/generated release contracts/frontend contracts/frontend build all green.
+- RED `c713baca3f65da28bd52616960fdcb30e8f52d49` / CI `35514082243`.
+- Implementation sequence `5d967faa32e6a0790cf5cae013717a35455ba9b4`, `addc071e2fcc2d4f2392eb1fa5586cb73dde352e`, `bdd7fc4e2794227997b181693b203b157304ba02`, `23d28ddee804e9c20db4136f06aab879685d1942`.
+- Exact executable CI `35514416069` passed both jobs.
+- Stable persisted head `4ee24691f46721ffe8112bb435f278e5dd810721` passed exact-head CI `35514613656`.
+- Focused CodeRabbit follow-up `5750230877` reported no unresolved material defect in the signed health-score-cap seam.
+
+Only the same versioned explicit verified B20 root-cause evidence can contribute a B23 cap. Conflicted/unverified/cross-scan evidence fails closed. A root-cause cap cannot raise or replace a stricter existing access/sample/incomplete ceiling. Durable customer-visible adjusted-score persistence/read/card/export remains open after Stage-1 accepted-main reconciliation.
 
 Detailed checkpoint: `docs/superpowers/plans/2026-09-20-stage3-b23-signed-score-caps.md`.
 
-B23 remains partial until focused independent review closes and, after Stage-1 accepted-main reconciliation, a customer-visible adjusted score is proven through real V7 persistence/read/card/export without weakening historical signatures/readers or current access/sample/incomplete ceilings.
+### B24 signed handoff-v2 source — GREEN; review open
 
-Node note: do not represent hosted CI as exact Node 20.19.5 evidence unless that exact runtime is independently proven.
+A real shared B24 source seam now exists inside canonical Review before completion HMAC signing. It does **not** create/copy a V7 route or persist customer data.
+
+- **RED:** `37b73a98e6b54db9c86f0de9eb921ff178a0201a`, FixList CI `35515644839`; Python scanner-api tests failed because `stage3_handoff_v2_source` did not exist, while lint/typecheck/contracts/frontend remained green.
+- **Implementation:** `5eb4b6751019e98f87afc3b329880fbd33e0fdd6`.
+- That first implementation preserved missing canonical `indexable_affected` as unknown. CI `35516002420` exposed that the regression had wrongly expected indexable count to be inferred from page shape.
+- **Corrected GREEN executable head:** `790ebdc7ddec86a5a4bbfe4dfa0cb3ee23e0a353`; exact FixList CI `35516240329` passed both jobs.
+
+The B24 source now requires exact trusted producer `scan_id == scan_run_id`; accepts root-cause identity only from B20 verified groups bound to that exact scan; carries verified family identity, B19 priority factors, B21 observation/population counts, explicitly evidenced canonical indexable count, evidence refs, verification/dependency/vendor fields and the real scanner user agent through the reviewed handoff-v2 serializer; excludes operator/debug suppressed findings with `operator_authorized=False`; and is HMAC-authenticated as part of the signed Review.
+
+Missing count evidence remains unknown; it is not coerced to zero or inferred. If one legacy canonical action would require multiple different verified root-cause IDs in B24's singular field, the whole B24 source fails closed rather than guessing.
+
+Detailed checkpoint: `docs/superpowers/plans/2026-09-20-stage3-b24-signed-handoff-source.md`.
+
+Fresh independent review of this shared B24 source seam is still required. Durable V7 persistence/read/customer/operator/card/export consumption and historical-v1 compatibility proof remain release-gated behind Stage-1 reconciliation.
 
 ### B19–B24 requirement state
 
@@ -70,10 +84,12 @@ Node note: do not represent hosted CI as exact Node 20.19.5 evidence unless that
 - **B20 partial:** signed Review P1-corrected and independently review-clean; durable customer projection open.
 - **B21 partial:** signed rank/count/truncation authority seam P1-corrected, independently review-clean and CI green; durable persisted customer/card/export proof open.
 - **B22 partial:** authenticated private-preview/whitelist helper exists; actual entitlement/customer seam and no-leak proof unwired.
-- **B23 partial:** real signed Review cap decision is implemented and exact-code CI green; independent review plus durable customer score consumption remain open.
-- **B24 partial:** handoff-v2 + historical-v1 reader exist; authenticated customer/operator route, persisted source fields and suppressed/operator-only exclusion unwired.
+- **B23 partial:** signed Review cap decision independently review-clean; durable customer-visible adjusted-score consumption open.
+- **B24 partial:** signed handoff-v2 source is RED->GREEN proven; independent review and real V7 persistence/read/customer/operator/export proof open.
 
 Stage 3 remains **in progress**.
+
+Node note: do not represent hosted CI as exact Node 20.19.5 evidence unless that exact runtime is independently proven.
 
 ## Stage 4
 
@@ -86,6 +102,8 @@ Reuse only existing isolated source `agent/stage4-b25-b28-compat-release-2026091
 
 ## Exact next action
 
-B23's signed source seam is green. Request focused independent review of the exact integrated B23 head. Any material finding must be reproduced first, corrected minimally and followed by fresh exact-head FixList CI.
+Request focused independent review of the exact shared B24 source seam. Any material finding must be reproduced first, corrected minimally and followed by fresh exact-head FixList CI.
 
-Durable B19/B21/B23 persistence/card/export remains release-gated until Stage-1 acceptance permits reconciliation onto V7 main. Until that gate closes, B22/B24 source-only work is eligible only if it does not copy, recreate or mutate the frozen customer/persistence path. Do not move production.
+Durable B19/B21/B23/B24 persistence/card/export and B22 private-preview routing remain release-gated until Stage-1 acceptance permits reconciliation onto V7 main. After that gate closes: reconcile onto accepted `main`, preserve V7/#308, run fresh integrated-head CI, then wire the already-authenticated Stage-3 source into the real V7 persistence/read/customer/card/export/preview path with RED -> GREEN regressions and independent review.
+
+Do not move production or begin Stage-4 release execution before those gates are actually satisfied.

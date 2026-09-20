@@ -950,6 +950,7 @@ async def run_scan(
     render_followup = await run_render_followup(
         pages if material_render_risk else [],
         render_page=kwargs.get("_render_page") if material_render_risk else None,
+        evidence_pages=pages,
     )
     render_evidence["browser_followup_version"] = RENDER_FOLLOWUP_VERSION
     render_evidence["browser_followup"] = render_followup

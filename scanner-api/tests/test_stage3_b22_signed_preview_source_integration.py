@@ -171,6 +171,16 @@ def test_b22_coverage_qualification_never_copies_untrusted_review_text():
     assert sentinel not in serialized_signed_source
     assert private_url not in serialized_signed_source
 
+    # Privacy must hold for the complete signed authority Review, not only the
+    # customer-intended B22 source nested inside it. Raw producer/debug coverage
+    # prose can contain private URLs and must be removed before HMAC signing.
+    serialized_signed_review = json.dumps(envelope["review"], sort_keys=True)
+    serialized_envelope = json.dumps(envelope, sort_keys=True)
+    assert sentinel not in serialized_signed_review
+    assert private_url not in serialized_signed_review
+    assert sentinel not in serialized_envelope
+    assert private_url not in serialized_envelope
+
 
 def test_b22_unknown_coverage_cannot_create_good_shape_or_customer_text():
     sentinel = "PRIVATE-UNKNOWN-COVERAGE-SENTINEL"

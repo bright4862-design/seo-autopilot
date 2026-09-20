@@ -190,13 +190,18 @@ def _preview_eligible(
     )
 
 
+def _preview_text(value: Any) -> str | None:
+    """Project only scalar customer-safe text; structured producer data fails closed."""
+    return value if isinstance(value, str) else None
+
+
 def _preview_projection(candidate: dict[str, Any]) -> dict[str, Any]:
     """Strict whitelist: never project raw findings or hidden evidence collections."""
     return {
-        "rule_id": candidate.get("rule_id"),
-        "title": candidate.get("title"),
+        "rule_id": _preview_text(candidate.get("rule_id")),
+        "title": _preview_text(candidate.get("title")),
         "impact": _nonnegative_int(candidate.get("impact")) or 0,
-        "evidence_summary": candidate.get("evidence_summary"),
+        "evidence_summary": _preview_text(candidate.get("evidence_summary")),
     }
 
 

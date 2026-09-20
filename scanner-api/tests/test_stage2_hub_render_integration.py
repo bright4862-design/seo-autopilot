@@ -39,6 +39,22 @@ def _hub(url: str, family: str, *, suspected: bool = True, sources=None, status:
     }
 
 
+def _rendered(*, links=None, **extra):
+    page = {
+        "status_code": 200,
+        "fetch_error": "",
+        "page_evidence_class": "usable_html",
+        "raw_html_truncated": False,
+        "word_count": 180,
+        "title": "Rendered",
+        "h1": "Rendered",
+        "schema_types": [],
+        "links": [] if links is None else links,
+    }
+    page.update(extra)
+    return page
+
+
 def test_b12_selects_at_most_five_verified_structural_hubs_and_excludes_failed_pages():
     pages = [
         _hub("https://example.com/", "homepage"),
@@ -81,13 +97,11 @@ def test_b12_exact_retained_identity_ignores_unsampled_and_variant_render_links(
         pages,
         attempted_urls=[home],
         rendered_pages_by_url={
-            home: {
-                "links": [
-                    "/Pricing?plan=Pro%2FAnnual#details",
-                    "/pricing?plan=Pro%2FAnnual",
-                    "/outside-sample",
-                ]
-            }
+            home: _rendered(links=[
+                "/Pricing?plan=Pro%2FAnnual#details",
+                "/pricing?plan=Pro%2FAnnual",
+                "/outside-sample",
+            ])
         },
     )
 
@@ -115,7 +129,7 @@ def test_b12_preserves_explicit_empty_query_delimiter_identity():
     evidence = build_hub_link_comparison(
         pages,
         attempted_urls=[home],
-        rendered_pages_by_url={home: {"links": ["/page?"]}},
+        rendered_pages_by_url={home: _rendered(links=["/page?"])},
     )
     row = next(item for item in evidence["hubs"] if item["hub_url"] == home)
 
@@ -137,7 +151,7 @@ def test_b12_truncated_b11_source_samples_fail_closed_instead_of_inventing_raw_a
     evidence = build_hub_link_comparison(
         pages,
         attempted_urls=[home],
-        rendered_pages_by_url={home: {"links": [target]}},
+        rendered_pages_by_url={home: _rendered(links=[target])},
     )
     row = next(item for item in evidence["hubs"] if item["hub_url"] == home)
 
@@ -151,10 +165,12 @@ def test_b12_missing_renderer_link_collection_is_failed_not_an_empty_success():
     home = "https://example.com/"
     pages = [_hub(home, "homepage")]
 
+    rendered = _rendered()
+    rendered.pop("links")
     evidence = build_hub_link_comparison(
         pages,
         attempted_urls=[home],
-        rendered_pages_by_url={home: {"word_count": 200}},
+        rendered_pages_by_url={home: rendered},
     )
 
     row = evidence["hubs"][0]
@@ -162,6 +178,37 @@ def test_b12_missing_renderer_link_collection_is_failed_not_an_empty_success():
     assert row["reason"] == "rendered_link_evidence_unavailable"
     assert row["rendered_link_count"] is None
     assert evidence["failed"] == 1
+
+
+@pytest.mark.parametrize(
+    "rendered",
+    [
+        _rendered(links=["/c1"], status_code=403, page_evidence_class="failed_access"),
+        _rendered(links=["/c1"], status_code=429, page_evidence_class="failed_access", access_block_kind="rate_limit"),
+        _rendered(links=["/c1"], access_block_kind="challenge"),
+        _rendered(links=["/c1"], fetch_error="browser_network_failed"),
+        _rendered(links=["/c1"], raw_html_truncated=True),
+        _rendered(links=["/c1"], page_evidence_class="incomplete_html"),
+        {"links": ["/c1"]},
+    ],
+)
+def test_b12_unusable_or_unproven_renderer_output_never_becomes_completed(rendered):
+    home = "https://example.com/"
+    c1 = "https://example.com/c1"
+    pages = [_hub(home, "homepage"), _hub(c1, "collection_page", sources=[home])]
+
+    evidence = build_hub_link_comparison(
+        pages,
+        attempted_urls=[home],
+        rendered_pages_by_url={home: rendered},
+    )
+
+    row = next(item for item in evidence["hubs"] if item["hub_url"] == home)
+    assert row["state"] == "failed"
+    assert row["reason"] == "rendered_page_not_accepted_usable_html"
+    assert row["rendered_evidence_state"] == "failed"
+    assert row["rendered_link_count"] is None
+    assert evidence["completed"] == 0
 
 
 @pytest.mark.asyncio
@@ -184,13 +231,7 @@ async def test_b12_reuses_existing_three_page_render_budget_and_discloses_unasse
         calls.append(url)
         if url == locations:
             raise RuntimeError("browser timeout secret detail")
-        return {
-            "word_count": 180,
-            "title": "Rendered",
-            "h1": "Rendered",
-            "schema_types": [],
-            "links": [c1, locations, compare],
-        }
+        return _rendered(links=[c1, locations, compare])
 
     result = await run_render_followup(pages, renderer)
     b12 = result["hub_link_comparison"]

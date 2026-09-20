@@ -150,6 +150,44 @@ def test_b22_without_impact_four_or_five_emits_only_the_best_verified_finding():
     assert [item["rule_id"] for item in source["findings"]] == ["meta"]
 
 
+def test_b22_coverage_qualification_never_copies_untrusted_review_text():
+    url = "https://example.com/products/meta"
+    sentinel = "PRIVATE-COVERAGE-SENTINEL"
+    private_url = "https://private.example/internal?token=debug"
+    review = _review([_fix("meta", url, rule="missing_meta_description", category="meta_description", priority="medium")])
+    review["site_fingerprint"]["coverage_assessment"]["text"] = f"{sentinel} {private_url}"
+    scan_result = _scan_result([url])
+
+    integrated = apply_canonical_repair_contract(review, scan_result)
+    source = integrated["stage3_private_preview_source"]
+
+    assert source["coverage_qualification"] == "Coverage was sufficient for the assessed scan scope."
+    serialized_source = json.dumps(source, sort_keys=True)
+    assert sentinel not in serialized_source
+    assert private_url not in serialized_source
+
+    envelope = build_completion_envelope(_scan_record(), scan_result, integrated, "stage3-b22-secret")
+    serialized_signed_source = json.dumps(envelope["review"]["stage3_private_preview_source"], sort_keys=True)
+    assert sentinel not in serialized_signed_source
+    assert private_url not in serialized_signed_source
+
+
+def test_b22_unknown_coverage_cannot_create_good_shape_or_customer_text():
+    sentinel = "PRIVATE-UNKNOWN-COVERAGE-SENTINEL"
+    review = _review([])
+    review["site_fingerprint"]["coverage_assessment"] = {
+        "state": "unknown",
+        "text": sentinel,
+    }
+
+    source = apply_canonical_repair_contract(review, _scan_result([]))["stage3_private_preview_source"]
+
+    assert source["state"] == "not_available"
+    assert source["findings"] == []
+    assert source["coverage_qualification"] is None
+    assert sentinel not in json.dumps(source, sort_keys=True)
+
+
 def test_b22_preview_source_fails_closed_when_producer_scan_identity_is_not_exact():
     url = "https://example.com/products/a"
     integrated = apply_canonical_repair_contract(

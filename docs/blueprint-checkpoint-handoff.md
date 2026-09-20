@@ -4,7 +4,7 @@ Authoritative design: `docs/superpowers/specs/2026-09-19-full-scanner-blueprint-
 
 ## Release boundary
 
-- `main` was refreshed during the B22 review-correction slice and remains `2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad` with V7 runtime/public-build changes and #308.
+- `main` was refreshed during the B22 completion-Review privacy slice and remains `2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad` with V7 runtime/public-build changes and #308.
 - Current-main `docs/stage-one-evidence-acceptance.md` still records exact-source production publication and fresh non-owner production acceptance as pending.
 - Stage-1 publication/promotion/live acceptance remains owned by the existing single release operator.
 - Later-stage integration remains on `agent/full-blueprint-stage2-coverage-b06-20260919`, PR #303.
@@ -22,7 +22,7 @@ The proven Stage-2 invariants remain authoritative: one finite shared follow-up 
 Reviewed lane sources integrated serially:
 
 - B19/B20 lane `e74d87acd0cec2955402b96f635f13bc275f3a91` -> `c3f9d685e17b26c372a5a47403b478caec36ed2a`.
-- B21–B24 lane `a998b4e38a06d6c163ac8853c3e49e9f10a58cb7` -> `3aebc7375e854ce063c0bcec0a46210473e061c7`.
+- B21–B24 lane `a998b4e38a06d6c163ac8853c3e49e9f10a58cb7` -> `3aebc7375e854ce063ac0bcec0a46210473e061c7`.
 - Combined lane CI `35501672504` passed.
 
 ### B19/B20 signed authority
@@ -39,7 +39,7 @@ B21 signed rank/count/truncation integration is RED->GREEN and independently rev
 
 Known numeric B19 scores, including exact `0.0`, rank ahead of explicit unknown scores; every eligible repair is ranked before the presentation cap. Signed counts preserve unique affected pages, observations, known population and displayed sample without inventing unknowns. Durable customer/card/export proof remains open.
 
-### B22 signed private-preview source — P1 corrected; exact executable GREEN; follow-up review + durable route open
+### B22 signed private-preview source — completion-Review P1 corrected; executable GREEN; fresh re-review + durable route open
 
 B22 has a real canonical Review -> completion-HMAC source seam without creating/copying a V7 route or granting entitlement.
 
@@ -49,35 +49,46 @@ Original source integration:
 - Selector factoring `20849a58acc968a25bd29e72c24abb42626bcb17`.
 - Initial GREEN `2f6eb233d89e68475030a18d2157fc3d08b95938` / CI `35519385104` passed both jobs.
 
-Fresh CodeRabbit review then found a material P1 privacy problem in issue comment `5750750081`: arbitrary `coverage_assessment["text"]` could cross into signed `coverage_qualification`. The approved B22 wording also requires singular fallback semantics: if no individually verified impact-4/5 finding exists, emit **the best verified finding**, not up to two lower-impact findings.
+First fresh CodeRabbit review found a material P1 privacy problem in issue comment `5750750081`: arbitrary `coverage_assessment["text"]` could cross into signed `coverage_qualification`. The approved B22 wording also requires singular fallback semantics: if no individually verified impact-4/5 finding exists, emit **the best verified finding**, not up to two lower-impact findings.
 
-Correction sequence:
+First correction sequence:
 
 - exact-fallback RED `ac2e1f0e3f1326073a6a37593071c00244338b11` / CI `35519832761` failed intentionally in scanner regressions while the independent lint/typecheck/contracts/frontend job passed;
 - implementation `d2709fb6c430c7bfc0443bd82bc60d43f84764b5`;
-- privacy regression expansion `ba31a4386bb8ac5bf2403048955238676451b756` proves private coverage text/URL sentinels cannot survive into source or signed completion envelope and unknown coverage cannot fabricate customer text;
+- privacy regression expansion `ba31a4386bb8ac5bf2403048955238676451b756` proved private coverage text/URL sentinels could not survive into the nested preview source and unknown coverage could not fabricate customer text;
 - intermediate CI `35520342700` failed only because two older lane assertions expected the now-prohibited raw coverage text behavior (2 failed / 2039 passed / 18 skipped); implementation was not weakened;
-- stale assertions aligned to fail-closed privacy semantics at `e7719996e5454f19d373dc04557792992590d834`.
+- stale assertions aligned to fail-closed privacy semantics at `e7719996e5454f19d373dc04557792992590d834`;
+- corrected executable CI `35520663236` passed both jobs and the stable documentation head `31f2c579bca25de26cbe9a5aa52977ddf9e9d0b5` passed exact-head CI `35520925132`.
 
-Corrected executable GREEN at `e7719996e5454f19d373dc04557792992590d834`: FixList CI `35520663236` passed both jobs with 115 root tests, 2041 scanner-api passed / 18 skipped, 5 B22 signed-preview integration tests, 11 Stage-3 delivery contract tests, synthetic Stage-1 corpus 14 cases / 55 assertions with `full_30_site_gate=not_assessed`, frozen revision `01ebe8e90df1e6bd`, scanner image `sha256:2e7c8c8d71a29aa6a09562728189d41a337d1ab1b2e38486d429c6c3f0d4b0f2`, and green lint/typecheck/contracts/frontend build.
+A fresh combined B22/B24 CodeRabbit follow-up, issue comment `5750887385`, then found a second material P1 at the **enclosing completion Review**. The nested `stage3_private_preview_source` was safe, but `apply_canonical_repair_contract()` still retained the original `site_fingerprint.coverage_assessment.text`, and `build_completion_envelope()` signed that complete Review. Private producer/debug prose could therefore bypass the safe B22 projection beside it.
 
-Corrected semantics:
+Second correction evidence:
+
+- RED `db6432fcf7258e64736d7a3eabeadd28e4cb907f`, FixList CI `35521744377`: 115 root tests passed; scanner-api failed exactly one new full-envelope privacy assertion with 2040 passed / 18 skipped; the failure printed the private sentinel and private URL inside `envelope["review"]["site_fingerprint"]["coverage_assessment"]["text"]`; lint/typecheck/contracts/frontend stayed green independently.
+- GREEN implementation `4d1575d92c6a3092661bcd290b7d8ef4ae883066` adds a positive-allowlisted `completion_review_payload()` at the common completion-HMAC boundary. It preserves only current scanner-owned structured coverage-decision fields (`coverage_authority_version`, `state`, `reasons`, `authoritative`, `score_is_provisional`, `release_gate_eligible`, `inventory`, `inventory_proof`, `thresholds`) and drops arbitrary `text` plus unknown/future assessment fields before signing. The limited-result path remains unchanged because it already constructs an explicit structured payload.
+- Exact executable FixList CI `35522106799` passed both jobs on `4d1575d92c6a3092661bcd290b7d8ef4ae883066`: 115 root tests; 2041 scanner-api passed / 18 skipped; 5 B22 signed-preview integration tests; synthetic Stage-1 corpus 14 cases / 55 assertions with `full_30_site_gate=not_assessed`; frozen revision `01ebe8e90df1e6bd`; scanner image `sha256:2f630706c1a594fe2d1ec22858e05bc74625bf5113bfc67052e275576748e592`; lint/typecheck/generated contracts/frontend contracts/build green.
+
+Current B22 semantics remain:
 
 - exact trusted producer `scan_id == scan_run_id` required;
 - canonical reviewed exact-verified findings only;
 - verified impact-4/5 findings are preferred and the existing two-finding cap applies only to that preferred set;
 - if no verified impact-4/5 finding exists, exactly one best verified fallback is emitted;
 - finding projection remains `rule_id`, `title`, `impact`, `evidence_summary` only;
-- arbitrary producer coverage text is never copied/signed;
+- arbitrary producer coverage text is never copied into the preview source **or the enclosing signed completion Review**;
+- unknown/future `coverage_assessment` keys fail closed at completion signing;
 - `good_shape` requires explicit normalized coverage state `sufficient` and uses only fixed controller-safe wording `Coverage was sufficient for the assessed scan scope.`;
 - limited/unknown/absent coverage yields no qualification/customer good-shape text;
 - `entitlement_state=requires_authenticated_customer_gate` remains a signed source boundary, not an entitlement grant.
 
 CI requested Node 20 but hosted setup resolved Node 20.20.2; do not represent this as exact Node 20.19.5 evidence. Python was 3.12.14 on Ubuntu 24.04.5.
 
-Detailed checkpoint: `docs/superpowers/plans/2026-09-20-stage3-b22-signed-preview-source.md`.
+Detailed checkpoints:
 
-B22 remains partial. Final stable documentation-head CI plus one fresh independent follow-up review of the corrected B22/B24 surface remain open. After Stage-1 accepted-main reconciliation, the source must flow through the real V7 exact-owner/exact-scan entitlement and persistence/read/preview/card/export path, proving reload/history privacy, high-impact two-item cap, one-item fallback, and safe good-shape qualification.
+- `docs/superpowers/plans/2026-09-20-stage3-b22-signed-preview-source.md`
+- `docs/superpowers/plans/2026-09-20-stage3-b22-completion-review-privacy.md`
+
+B22 remains partial. A fresh independent re-review of the second correction and exact-head CI on the final persisted documentation head remain open. After Stage-1 accepted-main reconciliation, the source must flow through the real V7 exact-owner/exact-scan entitlement and persistence/read/preview/card/export path, proving reload/history privacy, high-impact two-item cap, one-item fallback, and safe good-shape qualification.
 
 ### B23 signed authority — review gate closed
 
@@ -87,24 +98,24 @@ Only the same explicit versioned verified B20 root-cause evidence can contribute
 
 Detailed checkpoint: `docs/superpowers/plans/2026-09-20-stage3-b23-signed-score-caps.md`.
 
-### B24 signed handoff-v2 source — GREEN; combined follow-up review + durable route open
+### B24 signed handoff-v2 source — GREEN; combined fresh re-review + durable route open
 
 B24 signed source RED `37b73a98e6b54db9c86f0de9eb921ff178a0201a` / CI `35515644839`; implementation `5eb4b6751019e98f87afc3b329880fbd33e0fdd6`; corrected GREEN executable `790ebdc7ddec86a5a4bbfe4dfa0cb3ee23e0a353` / CI `35516240329` passed both jobs.
 
 The source requires exact trusted producer identity; accepts root cause only from exact-scan B20 verified groups; carries family IDs, B19 factors, B21 counts, explicitly evidenced indexable count, evidence refs, verification/dependency/vendor and real scanner user agent; excludes operator/debug suppressed data; fails closed on ambiguous root-cause mapping; and is HMAC-authenticated in Review. Missing counts stay unknown.
 
-Detailed checkpoint: `docs/superpowers/plans/2026-09-20-stage3-b24-signed-handoff-source.md`.
+The combined CodeRabbit follow-up `5750887385` statically confirmed the existing B24 exact-scan/root-cause/operator-suppression controls but found the enclosing B22 Review privacy defect described above, so the combined review gate is not treated as clean. One fresh review of the corrected stable head remains required. Historical-v1 durable reader compatibility and real V7 persistence/read/customer/operator/export proof remain release-gated.
 
-A fresh independent follow-up review of the current corrected combined B22/B24 signed source/privacy surface remains required. Historical-v1 durable reader compatibility and real V7 persistence/read/customer/operator/export proof remain release-gated.
+Detailed checkpoint: `docs/superpowers/plans/2026-09-20-stage3-b24-signed-handoff-source.md`.
 
 ### B19–B24 requirement state
 
 - **B19 partial:** signed Review factors/explanations green; durable FixItem/card/export consumption open.
 - **B20 partial:** signed Review P1-corrected and independently review-clean; durable customer projection open.
 - **B21 partial:** signed rank/count/truncation authority seam independently review-clean and CI green; durable persisted customer/card/export proof open.
-- **B22 partial:** signed preview source P1-corrected with exact executable CI green; stable-head CI, fresh independent follow-up review and exact-owner/exact-scan V7 persistence/preview/card/export proof open.
+- **B22 partial:** signed preview source and enclosing completion-Review privacy are RED->GREEN with exact executable CI; final stable-head CI, fresh independent re-review and exact-owner/exact-scan V7 persistence/preview/card/export proof remain open.
 - **B23 partial:** signed Review cap decision independently review-clean; durable customer-visible adjusted-score consumption open.
-- **B24 partial:** signed handoff-v2 source GREEN; combined independent follow-up review and real V7 persistence/read/customer/operator/export proof open.
+- **B24 partial:** signed handoff-v2 source GREEN; fresh combined independent re-review and real V7 persistence/read/customer/operator/export proof remain open.
 
 Stage 3 remains **in progress**.
 
@@ -119,7 +130,7 @@ Reuse only existing isolated source `agent/stage4-b25-b28-compat-release-2026091
 
 ## Exact next action
 
-Run exact-head FixList CI on the final persisted B22 correction documentation head, then request one fresh focused independent CodeRabbit follow-up review of the corrected combined B22/B24 signed source/privacy boundary. Reproduce any material finding first, correct minimally, and run fresh exact-head CI.
+Persist this second B22 privacy correction into `docs/full-blueprint-progress.md` and PR #303, then run exact-head FixList CI on the final stable documentation head. After that, request one fresh focused independent CodeRabbit review of the corrected combined B22/B24 signed authority/privacy boundary. Do not count the request as a pass. Reproduce any material finding first, correct minimally, and run fresh exact-head CI.
 
 Durable B19/B21/B22/B23/B24 persistence/card/export/preview work remains release-gated until Stage-1 acceptance permits reconciliation onto V7 main. After that gate closes: reconcile onto accepted `main`, preserve V7/#308, run fresh integrated-head CI, then wire the authenticated Stage-3 sources through the real V7 persistence/read/customer/card/export/preview path with RED -> GREEN regressions and independent review.
 

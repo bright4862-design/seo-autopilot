@@ -533,6 +533,12 @@ def optional_crux_adapter(
         return base
     if not observed_at or not as_of:
         return {**base, "state": "unavailable"}
+    if observed_at > as_of:
+        return {
+            **base,
+            "state": "unavailable",
+            "reason": "provider_observation_time_invalid",
+        }
     if (as_of - observed_at).days > max_age_days:
         return {**base, "state": "stale"}
     if not isinstance(metrics, dict):
@@ -601,8 +607,16 @@ def optional_gsc_adapter(
     }
     if connection_state != "connected":
         return base
-    if not observed_at or (as_of - observed_at).days > max_age_days:
-        return {**base, "state": "stale" if observed_at else "unavailable"}
+    if not observed_at:
+        return {**base, "state": "unavailable"}
+    if observed_at > as_of:
+        return {
+            **base,
+            "state": "unavailable",
+            "reason": "provider_observation_time_invalid",
+        }
+    if (as_of - observed_at).days > max_age_days:
+        return {**base, "state": "stale"}
     if not isinstance(metrics, dict):
         return {**base, "state": "unavailable"}
     safe: dict[str, Any] = {}

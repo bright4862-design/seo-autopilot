@@ -1,5 +1,6 @@
 from app.semantic_graph import (
     DeterministicLocalVectorizer,
+    MAX_CANDIDATES,
     build_semantic_graph_evidence,
     build_weighted_internal_link_graph,
     cannibalization_candidates,
@@ -33,6 +34,17 @@ def page(url, *, title="", h1="", terms=None, indexable=True, family="", main=No
             }
         )
     return row
+
+
+class MappingVectorizer:
+    version = "test_mapping_v1"
+
+    def __init__(self, vectors):
+        self._vectors = vectors
+
+    def vectors(self, pages):
+        urls = {row["url"] for row in pages}
+        return {url: dict(vector) for url, vector in self._vectors.items() if url in urls}
 
 
 def test_link_zone_inference_requires_positive_structure_for_contextual():
@@ -109,6 +121,21 @@ def test_deterministic_local_semantic_interface_and_clusters():
     assert any(set(cluster["urls"]) == {"https://e.test/hard-money", "https://e.test/bridge-loans"} for cluster in clusters["clusters"])
 
 
+def test_semantic_clusters_scan_all_pairs_even_when_public_pair_output_is_truncated():
+    pages = [page(f"https://e.test/topic-{index:03d}") for index in range(260)]
+    vectors = {row["url"]: {"topic": 1.0} for row in pages}
+    vectorizer = MappingVectorizer(vectors)
+    matrix = semantic_similarity_matrix(pages, vectorizer=vectorizer, min_similarity=0.99)
+    assert matrix["pairs_truncated"] is True
+    assert len(matrix["pairs"]) == MAX_CANDIDATES
+    assert matrix["qualifying_pair_count"] == 260 * 259 // 2
+    clusters = semantic_clusters(pages, threshold=0.99, vectorizer=vectorizer)
+    assert clusters["pair_scan_complete"] is True
+    assert clusters["qualifying_pair_count"] == matrix["qualifying_pair_count"]
+    assert len(clusters["clusters"]) == 1
+    assert clusters["clusters"][0]["page_count"] == 260
+
+
 def test_near_duplicate_candidates_use_only_verified_b10_hashed_shingles():
     a = [f"{i:016x}" for i in range(1, 11)]
     b = a[:9] + [f"{999:016x}"]
@@ -120,12 +147,22 @@ def test_near_duplicate_candidates_use_only_verified_b10_hashed_shingles():
     pages[2]["main_text_verified"] = False
     result = near_duplicate_candidates(pages, threshold=0.8)
     assert result["eligible_pages"] == 2
+    assert result["candidate_count"] == 1
     assert result["candidates"] == [{
         "left_url": "https://e.test/a",
         "right_url": "https://e.test/b",
         "similarity": 0.818182,
         "evidence": "verified_b10_main_content_shingles",
     }]
+
+
+def test_near_duplicate_output_is_bounded_but_reports_full_candidate_coverage():
+    common = [f"{i:016x}" for i in range(1, 11)]
+    pages = [page(f"https://e.test/dup-{index:02d}", main=common) for index in range(24)]
+    result = near_duplicate_candidates(pages, threshold=0.99)
+    assert result["candidate_count"] == 24 * 23 // 2
+    assert len(result["candidates"]) == MAX_CANDIDATES
+    assert result["candidates_truncated"] is True
 
 
 def test_cannibalization_excludes_near_duplicates_and_requires_indexability():
@@ -141,6 +178,25 @@ def test_cannibalization_excludes_near_duplicates_and_requires_indexability():
     result = cannibalization_candidates(pages, semantic_threshold=0.35, duplicate_threshold=0.82)
     assert any({row["left_url"], row["right_url"]} == {"https://e.test/loan-a", "https://e.test/loan-b"} for row in result["candidates"])
     assert all("loan-c" not in row["left_url"] and "loan-c" not in row["right_url"] for row in result["candidates"])
+
+
+def test_cannibalization_scans_beyond_public_semantic_pair_cap_before_filtering():
+    ineligible = [page(f"https://e.test/a-{index:02d}", indexable=False) for index in range(23)]
+    valid = [page("https://e.test/z-one"), page("https://e.test/z-two")]
+    pages = ineligible + valid
+    vectors = {row["url"]: {"shared": 1.0} for row in ineligible}
+    vectors.update({row["url"]: {"valid": 1.0} for row in valid})
+    vectorizer = MappingVectorizer(vectors)
+    matrix = semantic_similarity_matrix(pages, vectorizer=vectorizer, min_similarity=0.99)
+    assert matrix["pairs_truncated"] is True
+    assert not any("z-one" in row["left_url"] or "z-one" in row["right_url"] for row in matrix["pairs"])
+    result = cannibalization_candidates(pages, semantic_threshold=0.99, vectorizer=vectorizer)
+    assert result["semantic_pair_scan_complete"] is True
+    assert result["candidate_count"] == 1
+    assert {result["candidates"][0]["left_url"], result["candidates"][0]["right_url"]} == {
+        "https://e.test/z-one",
+        "https://e.test/z-two",
+    }
 
 
 def test_internal_link_opportunities_are_observed_gap_evidence_not_absence_claims():
@@ -159,6 +215,27 @@ def test_internal_link_opportunities_are_observed_gap_evidence_not_absence_claim
     assert candidate["sitewide_link_absence_claim"] is False
     assert candidate["proposed_zone"] == "contextual"
     assert not any(row["source_url"] == "https://e.test/loans" and row["target_url"] == "https://e.test/guide" for row in result["candidates"])
+
+
+def test_internal_link_opportunities_scan_beyond_public_semantic_pair_cap_before_filtering():
+    ineligible = [page(f"https://e.test/a-{index:02d}", indexable=False) for index in range(23)]
+    valid = [page("https://e.test/z-one"), page("https://e.test/z-two")]
+    pages = ineligible + valid
+    vectors = {row["url"]: {"shared": 1.0} for row in ineligible}
+    vectors.update({row["url"]: {"valid": 1.0} for row in valid})
+    vectorizer = MappingVectorizer(vectors)
+    graph = build_weighted_internal_link_graph(pages, [])
+    result = internal_link_opportunities(pages, graph, semantic_threshold=0.99, vectorizer=vectorizer)
+    valid_pairs = {
+        (row["source_url"], row["target_url"])
+        for row in result["candidates"]
+        if row["source_url"].startswith("https://e.test/z-")
+    }
+    assert result["semantic_pair_scan_complete"] is True
+    assert valid_pairs == {
+        ("https://e.test/z-one", "https://e.test/z-two"),
+        ("https://e.test/z-two", "https://e.test/z-one"),
+    }
 
 
 def test_complete_envelope_is_versioned_and_never_creates_customer_fixes():

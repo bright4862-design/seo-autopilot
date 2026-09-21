@@ -13,9 +13,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 from hashlib import sha256
+from heapq import nsmallest
 from math import sqrt
 import re
-from typing import Any, Protocol
+from typing import Any, Iterable, Protocol
 from urllib.parse import parse_qsl, urlparse
 
 
@@ -310,6 +311,47 @@ def _cosine(left: dict[str, float], right: dict[str, float]) -> float:
     return dot / (left_norm * right_norm)
 
 
+def _semantic_pair_rows(
+    vectors: dict[str, dict[str, float]],
+    min_similarity: float,
+) -> Iterable[dict[str, Any]]:
+    """Yield every qualifying bounded pair without materializing the pair set."""
+    urls = sorted(vectors)
+    for left_index, left in enumerate(urls):
+        for right in urls[left_index + 1 :]:
+            similarity = _cosine(vectors[left], vectors[right])
+            if similarity + 1e-12 < min_similarity:
+                continue
+            shared = sorted(
+                set(vectors[left]) & set(vectors[right]),
+                key=lambda token: (-(vectors[left][token] + vectors[right][token]), token),
+            )
+            yield {
+                "left_url": left,
+                "right_url": right,
+                "similarity": round(similarity, 6),
+                "shared_terms": shared[:MAX_SHARED_TERMS],
+            }
+
+
+def _bounded_best_rows(
+    rows: Iterable[dict[str, Any]],
+    *,
+    key,
+) -> tuple[list[dict[str, Any]], int]:
+    """Return the deterministic best candidate rows while counting full coverage."""
+    count = 0
+
+    def counted() -> Iterable[dict[str, Any]]:
+        nonlocal count
+        for row in rows:
+            count += 1
+            yield row
+
+    selected = nsmallest(MAX_CANDIDATES, counted(), key=key)
+    return selected, count
+
+
 def semantic_similarity_matrix(
     pages: list[dict[str, Any]],
     *,
@@ -321,29 +363,17 @@ def semantic_similarity_matrix(
         raise ValueError("min_similarity out of bounds")
     vectorizer = vectorizer or DeterministicLocalVectorizer()
     vectors = vectorizer.vectors(pages)
-    urls = sorted(vectors)
-    pairs: list[dict[str, Any]] = []
-    for left_index, left in enumerate(urls):
-        for right in urls[left_index + 1 :]:
-            similarity = _cosine(vectors[left], vectors[right])
-            if similarity + 1e-12 < min_similarity:
-                continue
-            shared = sorted(set(vectors[left]) & set(vectors[right]), key=lambda token: (-(vectors[left][token] + vectors[right][token]), token))
-            pairs.append(
-                {
-                    "left_url": left,
-                    "right_url": right,
-                    "similarity": round(similarity, 6),
-                    "shared_terms": shared[:MAX_SHARED_TERMS],
-                }
-            )
-    pairs.sort(key=lambda row: (-row["similarity"], row["left_url"], row["right_url"]))
+    pairs, qualifying_pair_count = _bounded_best_rows(
+        _semantic_pair_rows(vectors, float(min_similarity)),
+        key=lambda row: (-row["similarity"], row["left_url"], row["right_url"]),
+    )
     return {
         "version": getattr(vectorizer, "version", "semantic_vectorizer_unknown"),
         "scope": "observed_assessed_pages_only",
         "vectorized_pages": len(vectors),
-        "pairs": pairs[:MAX_CANDIDATES],
-        "pairs_truncated": len(pairs) > MAX_CANDIDATES,
+        "qualifying_pair_count": qualifying_pair_count,
+        "pairs": pairs,
+        "pairs_truncated": qualifying_pair_count > MAX_CANDIDATES,
         "vectors": vectors,
     }
 
@@ -354,10 +384,12 @@ def semantic_clusters(
     threshold: float = 0.62,
     vectorizer: SemanticVectorizer | None = None,
 ) -> dict[str, Any]:
+    pages = _bounded_pages(pages)
     if not 0.0 <= float(threshold) <= 1.0:
         raise ValueError("threshold out of bounds")
-    matrix = semantic_similarity_matrix(pages, vectorizer=vectorizer, min_similarity=threshold)
-    urls = sorted(matrix["vectors"])
+    vectorizer = vectorizer or DeterministicLocalVectorizer()
+    vectors = vectorizer.vectors(pages)
+    urls = sorted(vectors)
     parent = {url: url for url in urls}
 
     def root(url: str) -> str:
@@ -366,7 +398,9 @@ def semantic_clusters(
             url = parent[url]
         return url
 
-    for pair in matrix["pairs"]:
+    qualifying_pair_count = 0
+    for pair in _semantic_pair_rows(vectors, float(threshold)):
+        qualifying_pair_count += 1
         left_root, right_root = root(pair["left_url"]), root(pair["right_url"])
         if left_root != right_root:
             parent[right_root] = left_root
@@ -388,9 +422,12 @@ def semantic_clusters(
         )
     clusters.sort(key=lambda row: (-row["page_count"], row["cluster_id"]))
     return {
-        "version": matrix["version"],
+        "version": getattr(vectorizer, "version", "semantic_vectorizer_unknown"),
         "threshold": float(threshold),
-        "scope": matrix["scope"],
+        "scope": "observed_assessed_pages_only",
+        "vectorized_pages": len(vectors),
+        "qualifying_pair_count": qualifying_pair_count,
+        "pair_scan_complete": True,
         "clusters": clusters,
     }
 
@@ -403,6 +440,11 @@ def _b10_shingles(page: dict[str, Any]) -> frozenset[str]:
         return frozenset()
     values = [token.lower() for token in _text(page.get("main_text")).split() if re.fullmatch(r"[0-9a-f]{16}", token.lower())]
     return frozenset(values)
+
+
+def _shingle_similarity(left: frozenset[str], right: frozenset[str]) -> float:
+    union = left | right
+    return len(left & right) / len(union) if union else 0.0
 
 
 def near_duplicate_candidates(
@@ -419,28 +461,31 @@ def near_duplicate_candidates(
         shingles = _b10_shingles(page)
         if url and shingles:
             rows.append((url, shingles))
-    candidates: list[dict[str, Any]] = []
-    for index, (left_url, left_set) in enumerate(rows):
-        for right_url, right_set in rows[index + 1 :]:
-            union = left_set | right_set
-            similarity = len(left_set & right_set) / len(union) if union else 0.0
-            if similarity >= threshold:
-                candidates.append(
-                    {
+
+    def candidate_rows() -> Iterable[dict[str, Any]]:
+        for index, (left_url, left_set) in enumerate(rows):
+            for right_url, right_set in rows[index + 1 :]:
+                similarity = _shingle_similarity(left_set, right_set)
+                if similarity >= threshold:
+                    yield {
                         "left_url": left_url,
                         "right_url": right_url,
                         "similarity": round(similarity, 6),
                         "evidence": "verified_b10_main_content_shingles",
                     }
-                )
-    candidates.sort(key=lambda row: (-row["similarity"], row["left_url"], row["right_url"]))
+
+    candidates, candidate_count = _bounded_best_rows(
+        candidate_rows(),
+        key=lambda row: (-row["similarity"], row["left_url"], row["right_url"]),
+    )
     return {
         "version": NEAR_DUPLICATE_CANDIDATE_VERSION,
         "scope": "observed_assessed_pages_only",
         "eligible_pages": len(rows),
+        "candidate_count": candidate_count,
         "state": "not_verified" if not rows else ("candidate" if candidates else "no_candidate_observed"),
-        "candidates": candidates[:MAX_CANDIDATES],
-        "candidates_truncated": len(candidates) > MAX_CANDIDATES,
+        "candidates": candidates,
+        "candidates_truncated": candidate_count > MAX_CANDIDATES,
     }
 
 
@@ -460,28 +505,34 @@ def cannibalization_candidates(
     vectorizer: SemanticVectorizer | None = None,
 ) -> dict[str, Any]:
     pages = _bounded_pages(pages)
+    if not 0.0 <= float(semantic_threshold) <= 1.0:
+        raise ValueError("semantic_threshold out of bounds")
+    if not 0.5 <= float(duplicate_threshold) <= 1.0:
+        raise ValueError("duplicate_threshold out of bounds")
     by_url = {
         _url(page.get("url") or page.get("final_url") or page.get("page_url")): page
         for page in pages
         if _url(page.get("url") or page.get("final_url") or page.get("page_url"))
     }
-    semantic = semantic_similarity_matrix(pages, vectorizer=vectorizer, min_similarity=semantic_threshold)
-    duplicate_pairs = {
-        tuple(sorted((row["left_url"], row["right_url"])))
-        for row in near_duplicate_candidates(pages, threshold=duplicate_threshold)["candidates"]
-    }
-    candidates: list[dict[str, Any]] = []
-    for pair in semantic["pairs"]:
-        left_url, right_url = pair["left_url"], pair["right_url"]
-        left_page, right_page = by_url[left_url], by_url[right_url]
-        if not (_usable_page(left_page) and _usable_page(right_page)):
-            continue
-        if not (_explicitly_indexable(left_page) and _explicitly_indexable(right_page)):
-            continue
-        if tuple(sorted((left_url, right_url))) in duplicate_pairs:
-            continue
-        candidates.append(
-            {
+    vectorizer = vectorizer or DeterministicLocalVectorizer()
+    vectors = vectorizer.vectors(pages)
+    shingles_by_url = {url: _b10_shingles(page) for url, page in by_url.items()}
+
+    def candidate_rows() -> Iterable[dict[str, Any]]:
+        for pair in _semantic_pair_rows(vectors, float(semantic_threshold)):
+            left_url, right_url = pair["left_url"], pair["right_url"]
+            left_page, right_page = by_url.get(left_url), by_url.get(right_url)
+            if not left_page or not right_page:
+                continue
+            if not (_usable_page(left_page) and _usable_page(right_page)):
+                continue
+            if not (_explicitly_indexable(left_page) and _explicitly_indexable(right_page)):
+                continue
+            left_shingles = shingles_by_url.get(left_url, frozenset())
+            right_shingles = shingles_by_url.get(right_url, frozenset())
+            if left_shingles and right_shingles and _shingle_similarity(left_shingles, right_shingles) >= duplicate_threshold:
+                continue
+            yield {
                 "left_url": left_url,
                 "right_url": right_url,
                 "semantic_similarity": pair["similarity"],
@@ -491,14 +542,19 @@ def cannibalization_candidates(
                 "state": "candidate",
                 "reason": "distinct_indexable_pages_share_local_semantic_intent",
             }
-        )
-    candidates.sort(key=lambda row: (-row["semantic_similarity"], row["left_url"], row["right_url"]))
+
+    candidates, candidate_count = _bounded_best_rows(
+        candidate_rows(),
+        key=lambda row: (-row["semantic_similarity"], row["left_url"], row["right_url"]),
+    )
     return {
         "version": CANNIBALIZATION_CANDIDATE_VERSION,
         "scope": "observed_assessed_pages_only",
-        "state": "candidate" if candidates else ("not_verified" if not semantic["vectorized_pages"] else "no_candidate_observed"),
-        "candidates": candidates[:MAX_CANDIDATES],
-        "candidates_truncated": len(candidates) > MAX_CANDIDATES,
+        "semantic_pair_scan_complete": True,
+        "candidate_count": candidate_count,
+        "state": "candidate" if candidates else ("not_verified" if not vectors else "no_candidate_observed"),
+        "candidates": candidates,
+        "candidates_truncated": candidate_count > MAX_CANDIDATES,
     }
 
 
@@ -614,29 +670,31 @@ def internal_link_opportunities(
         for row in graph.get("edges", [])
         if isinstance(row, dict)
     }
-    semantic = semantic_similarity_matrix(pages, vectorizer=vectorizer, min_similarity=semantic_threshold)
-    vectors = semantic["vectors"]
-    candidates: list[dict[str, Any]] = []
+    vectorizer = vectorizer or DeterministicLocalVectorizer()
+    vectors = vectorizer.vectors(pages)
 
-    for pair in semantic["pairs"]:
-        left, right = pair["left_url"], pair["right_url"]
-        for source, target in ((left, right), (right, left)):
-            if (source, target) in observed_edges:
-                continue
-            source_page, target_page = by_url.get(source), by_url.get(target)
-            if not source_page or not target_page or not _usable_page(source_page) or not _usable_page(target_page):
-                continue
-            if not _explicitly_indexable(target_page):
-                continue
-            source_node, target_node = nodes.get(source, {}), nodes.get(target, {})
-            target_in = float(target_node.get("weighted_in") or 0.0)
-            source_out = float(source_node.get("weighted_out") or 0.0)
-            target_need = 1.0 / (1.0 + target_in)
-            source_capacity = 1.0 / (1.0 + max(0.0, source_out - 3.0) / 8.0)
-            score = 0.72 * pair["similarity"] + 0.20 * target_need + 0.08 * source_capacity
-            shared = sorted(set(vectors.get(source, {})) & set(vectors.get(target, {})), key=lambda token: (-(vectors[source][token] + vectors[target][token]), token))
-            candidates.append(
-                {
+    def candidate_rows() -> Iterable[dict[str, Any]]:
+        for pair in _semantic_pair_rows(vectors, float(semantic_threshold)):
+            left, right = pair["left_url"], pair["right_url"]
+            for source, target in ((left, right), (right, left)):
+                if (source, target) in observed_edges:
+                    continue
+                source_page, target_page = by_url.get(source), by_url.get(target)
+                if not source_page or not target_page or not _usable_page(source_page) or not _usable_page(target_page):
+                    continue
+                if not _explicitly_indexable(target_page):
+                    continue
+                source_node, target_node = nodes.get(source, {}), nodes.get(target, {})
+                target_in = float(target_node.get("weighted_in") or 0.0)
+                source_out = float(source_node.get("weighted_out") or 0.0)
+                target_need = 1.0 / (1.0 + target_in)
+                source_capacity = 1.0 / (1.0 + max(0.0, source_out - 3.0) / 8.0)
+                score = 0.72 * pair["similarity"] + 0.20 * target_need + 0.08 * source_capacity
+                shared = sorted(
+                    set(vectors.get(source, {})) & set(vectors.get(target, {})),
+                    key=lambda token: (-(vectors[source][token] + vectors[target][token]), token),
+                )
+                yield {
                     "source_url": source,
                     "target_url": target,
                     "semantic_similarity": pair["similarity"],
@@ -650,16 +708,20 @@ def internal_link_opportunities(
                     "sitewide_link_absence_claim": False,
                     "state": "candidate",
                 }
-            )
 
-    candidates.sort(key=lambda row: (-row["opportunity_score"], row["source_url"], row["target_url"]))
+    candidates, candidate_count = _bounded_best_rows(
+        candidate_rows(),
+        key=lambda row: (-row["opportunity_score"], row["source_url"], row["target_url"]),
+    )
     return {
         "version": INTERNAL_LINK_OPPORTUNITY_VERSION,
         "scope": "observed_assessed_pages_only",
         "sitewide_link_absence_claim": False,
-        "state": "candidate" if candidates else ("not_verified" if not semantic["vectorized_pages"] else "no_candidate_observed"),
-        "candidates": candidates[:MAX_CANDIDATES],
-        "candidates_truncated": len(candidates) > MAX_CANDIDATES,
+        "semantic_pair_scan_complete": True,
+        "candidate_count": candidate_count,
+        "state": "candidate" if candidates else ("not_verified" if not vectors else "no_candidate_observed"),
+        "candidates": candidates,
+        "candidates_truncated": candidate_count > MAX_CANDIDATES,
     }
 
 

@@ -399,6 +399,10 @@ def _facts(page: dict[str, Any]) -> dict[str, str] | None:
     return result or None
 
 
+def _facts_observed(page: dict[str, Any]) -> bool:
+    return any(section in page and isinstance(page.get(section), dict) for section in ("product_facts", "entity_facts"))
+
+
 def _indexability(page: dict[str, Any]) -> str | None:
     if isinstance(page.get("indexable"), bool):
         return "indexable" if page["indexable"] else "not_indexable"
@@ -420,17 +424,34 @@ def _main_present(page: dict[str, Any]) -> bool | None:
     return None if count is None else count > 0
 
 
-def _scalar(raw: Any, rendered: Any, normalize=lambda x: x) -> dict[str, Any]:
+def _main_present_observed(page: dict[str, Any]) -> bool:
+    if any(isinstance(page.get(key), bool) for key in ("main_content_present", "has_main_content")):
+        return True
+    if any(key in page for key in ("main_text", "main_content")):
+        return True
+    return "word_count" in page and _number(page.get("word_count")) is not None
+
+
+def _scalar(raw: Any, rendered: Any, normalize=lambda x: x, *,
+    raw_observed: bool = True, rendered_observed: bool = True) -> dict[str, Any]:
     raw, rendered = normalize(raw), normalize(rendered)
-    if raw is None and rendered is None:
+    if not raw_observed or not rendered_observed:
         state = "not_verified"
+    elif raw is None and rendered is None:
+        state = "same"
     elif raw is None:
         state = "raw_missing_rendered_present"
     elif rendered is None:
         state = "raw_present_rendered_missing"
     else:
         state = "same" if raw == rendered else "changed"
-    return {"state": state, "raw": raw, "rendered": rendered}
+    return {
+        "state": state,
+        "raw": raw,
+        "rendered": rendered,
+        "raw_observed": raw_observed,
+        "rendered_observed": rendered_observed,
+    }
 
 
 def _sets(raw: set[str] | None, rendered: set[str] | None) -> dict[str, Any]:
@@ -452,21 +473,21 @@ def _sets(raw: set[str] | None, rendered: set[str] | None) -> dict[str, Any]:
     }
 
 
-def _explicitly_unusable_render(page: dict[str, Any]) -> str | None:
+def _explicitly_unusable_observation(page: dict[str, Any], *, role: str) -> str | None:
     if _text(page.get("fetch_error")):
-        return "render_fetch_error"
+        return f"{role}_fetch_error"
     status = page.get("status_code")
     if isinstance(status, int) and not 200 <= status < 400:
-        return "render_http_status_unusable"
+        return f"{role}_http_status_unusable"
     evidence_class = _text(page.get("page_evidence_class"))
     if evidence_class and evidence_class != "usable_html":
-        return "render_evidence_class_unusable"
+        return f"{role}_evidence_class_unusable"
     return None
 
 
 def compare_critical_content_parity(raw_page: dict[str, Any], rendered_page: dict[str, Any] | None, *,
     render_state: str = "completed", render_reason: str | None = None) -> dict[str, Any]:
-    """Compare critical raw/rendered evidence; failed rendering is always not_verified."""
+    """Compare only successful same-identity raw/rendered observations."""
     if not isinstance(raw_page, dict):
         return {
             "version": CRITICAL_PARITY_VERSION, "url": None, "state": "not_verified",
@@ -474,42 +495,83 @@ def compare_critical_content_parity(raw_page: dict[str, Any], rendered_page: dic
             "verified_fields": [], "changed_fields": [], "fields": {},
         }
     url = _url(raw_page)
+    if not url:
+        return {
+            "version": CRITICAL_PARITY_VERSION, "url": None, "state": "not_verified",
+            "reason": "raw_identity_missing", "material_delta": None,
+            "verified_fields": [], "changed_fields": [], "fields": {},
+        }
+    if unusable_reason := _explicitly_unusable_observation(raw_page, role="raw"):
+        return {
+            "version": CRITICAL_PARITY_VERSION, "url": url, "state": "not_verified",
+            "reason": unusable_reason, "material_delta": None,
+            "verified_fields": [], "changed_fields": [], "fields": {},
+        }
     if render_state != "completed" or not isinstance(rendered_page, dict):
         return {
-            "version": CRITICAL_PARITY_VERSION, "url": url or None, "state": "not_verified",
+            "version": CRITICAL_PARITY_VERSION, "url": url, "state": "not_verified",
             "reason": _text(render_reason) or "render_evidence_unavailable", "material_delta": None,
             "verified_fields": [], "changed_fields": [], "fields": {},
         }
-    if unusable_reason := _explicitly_unusable_render(rendered_page):
+    if unusable_reason := _explicitly_unusable_observation(rendered_page, role="render"):
         return {
-            "version": CRITICAL_PARITY_VERSION, "url": url or None, "state": "not_verified",
+            "version": CRITICAL_PARITY_VERSION, "url": url, "state": "not_verified",
             "reason": _text(render_reason) or unusable_reason, "material_delta": None,
             "verified_fields": [], "changed_fields": [], "fields": {},
         }
     rendered_url = _url(rendered_page)
-    if url and rendered_url and url != rendered_url:
+    if not rendered_url:
+        return {
+            "version": CRITICAL_PARITY_VERSION, "url": url, "rendered_url": None,
+            "state": "not_verified", "reason": "render_identity_missing", "material_delta": None,
+            "verified_fields": [], "changed_fields": [], "fields": {},
+        }
+    if url != rendered_url:
         return {
             "version": CRITICAL_PARITY_VERSION, "url": url, "rendered_url": rendered_url,
             "state": "not_verified", "reason": "render_identity_mismatch", "material_delta": None,
             "verified_fields": [], "changed_fields": [], "fields": {},
         }
+    raw_indexability, rendered_indexability = _indexability(raw_page), _indexability(rendered_page)
+    raw_main, rendered_main = _main_present(raw_page), _main_present(rendered_page)
     fields = {
-        "title": _scalar(raw_page.get("title"), rendered_page.get("title"), lambda x: _text(x) or None),
-        "h1": _scalar(raw_page.get("h1"), rendered_page.get("h1"), lambda x: _text(x) or None),
-        "canonical": _scalar(raw_page.get("canonical"), rendered_page.get("canonical"), _normalized_url),
-        "indexability": _scalar(_indexability(raw_page), _indexability(rendered_page)),
-        "main_content_present": _scalar(_main_present(raw_page), _main_present(rendered_page)),
+        "title": _scalar(
+            raw_page.get("title"), rendered_page.get("title"), lambda x: _text(x) or None,
+            raw_observed="title" in raw_page, rendered_observed="title" in rendered_page,
+        ),
+        "h1": _scalar(
+            raw_page.get("h1"), rendered_page.get("h1"), lambda x: _text(x) or None,
+            raw_observed="h1" in raw_page, rendered_observed="h1" in rendered_page,
+        ),
+        "canonical": _scalar(
+            raw_page.get("canonical"), rendered_page.get("canonical"), _normalized_url,
+            raw_observed="canonical" in raw_page, rendered_observed="canonical" in rendered_page,
+        ),
+        "indexability": _scalar(
+            raw_indexability, rendered_indexability,
+            raw_observed=raw_indexability is not None,
+            rendered_observed=rendered_indexability is not None,
+        ),
+        "main_content_present": _scalar(
+            raw_main, rendered_main,
+            raw_observed=_main_present_observed(raw_page),
+            rendered_observed=_main_present_observed(rendered_page),
+        ),
         "important_links": _sets(_links(raw_page), _links(rendered_page)),
         "structured_data": _sets(_schemas(raw_page), _schemas(rendered_page)),
-        "business_facts": _scalar(_facts(raw_page), _facts(rendered_page)),
+        "business_facts": _scalar(
+            _facts(raw_page), _facts(rendered_page),
+            raw_observed=_facts_observed(raw_page),
+            rendered_observed=_facts_observed(rendered_page),
+        ),
     }
     verified_fields = sorted(name for name, row in fields.items() if row["state"] != "not_verified")
     changed_fields = sorted(name for name, row in fields.items() if row["state"] not in {"same", "not_verified"})
     delta = bool(changed_fields)
     return {
         "version": CRITICAL_PARITY_VERSION,
-        "url": url or None,
-        "rendered_url": rendered_url or None,
+        "url": url,
+        "rendered_url": rendered_url,
         "state": "not_verified" if not verified_fields else ("material_delta" if delta else "matched"),
         "reason": "critical_fields_unavailable" if not verified_fields else "paired_render_evidence",
         "material_delta": delta if verified_fields else None,

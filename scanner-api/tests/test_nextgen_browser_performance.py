@@ -271,3 +271,66 @@ def test_parity_reports_critical_render_deltas_as_evidence_only():
     assert parity["changed_fields"] == [
         "business_facts", "h1", "important_links", "main_content_present", "structured_data"
     ]
+
+
+def test_parity_requires_raw_identity():
+    raw = {"title": "A"}
+    rendered = {"url": "https://e.test/a", "title": "A"}
+    parity = compare_critical_content_parity(raw, rendered)
+    assert parity["state"] == "not_verified"
+    assert parity["reason"] == "raw_identity_missing"
+    assert parity["material_delta"] is None
+    assert parity["fields"] == {}
+
+
+def test_parity_requires_rendered_identity():
+    raw = {"url": "https://e.test/a", "title": "A"}
+    rendered = {"title": "A"}
+    parity = compare_critical_content_parity(raw, rendered)
+    assert parity["state"] == "not_verified"
+    assert parity["reason"] == "render_identity_missing"
+    assert parity["material_delta"] is None
+    assert parity["fields"] == {}
+
+
+def test_explicitly_unusable_raw_is_not_verified_even_if_render_succeeds():
+    raw = {"url": "https://e.test/a", "title": "A", "status_code": 503}
+    rendered = {"url": "https://e.test/a", "title": "A", "status_code": 200}
+    parity = compare_critical_content_parity(raw, rendered)
+    assert parity["state"] == "not_verified"
+    assert parity["reason"] == "raw_http_status_unusable"
+    assert parity["material_delta"] is None
+    assert parity["fields"] == {}
+
+
+def test_absent_scalar_key_on_raw_side_is_not_a_confirmed_delta():
+    raw = {"url": "https://e.test/a", "h1": "Same"}
+    rendered = {"url": "https://e.test/a", "title": "Rendered title", "h1": "Same"}
+    parity = compare_critical_content_parity(raw, rendered)
+    assert parity["state"] == "matched"
+    assert parity["fields"]["title"]["state"] == "not_verified"
+    assert parity["fields"]["title"]["raw_observed"] is False
+    assert parity["fields"]["title"]["rendered_observed"] is True
+    assert "title" not in parity["changed_fields"]
+
+
+def test_absent_scalar_key_on_rendered_side_is_not_a_confirmed_delta():
+    raw = {"url": "https://e.test/a", "title": "Raw title", "h1": "Same"}
+    rendered = {"url": "https://e.test/a", "h1": "Same"}
+    parity = compare_critical_content_parity(raw, rendered)
+    assert parity["state"] == "matched"
+    assert parity["fields"]["title"]["state"] == "not_verified"
+    assert parity["fields"]["title"]["raw_observed"] is True
+    assert parity["fields"]["title"]["rendered_observed"] is False
+    assert "title" not in parity["changed_fields"]
+
+
+def test_explicit_empty_scalar_remains_comparable_when_both_extractors_observed_field():
+    raw = {"url": "https://e.test/a", "h1": ""}
+    rendered = {"url": "https://e.test/a", "h1": "Rendered H1"}
+    parity = compare_critical_content_parity(raw, rendered)
+    assert parity["state"] == "material_delta"
+    assert parity["fields"]["h1"]["state"] == "raw_missing_rendered_present"
+    assert parity["fields"]["h1"]["raw_observed"] is True
+    assert parity["fields"]["h1"]["rendered_observed"] is True
+    assert "h1" in parity["changed_fields"]

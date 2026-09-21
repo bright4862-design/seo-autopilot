@@ -219,12 +219,20 @@ def _preview_eligible(
     requested_scan_id: str,
     requested_owner_id: str,
 ) -> bool:
+    candidate_scan_id = candidate.get("scan_id")
+    candidate_owner_id = candidate.get("owner_id")
     return bool(
         candidate.get("authority_verified") is True
         and candidate.get("preview_allowed") is True
         and candidate.get("evidence_state") == "verified"
-        and candidate.get("scan_id") == requested_scan_id
-        and candidate.get("owner_id") == requested_owner_id
+        and isinstance(requested_scan_id, str)
+        and bool(requested_scan_id)
+        and isinstance(requested_owner_id, str)
+        and bool(requested_owner_id)
+        and isinstance(candidate_scan_id, str)
+        and candidate_scan_id == requested_scan_id
+        and isinstance(candidate_owner_id, str)
+        and candidate_owner_id == requested_owner_id
     )
 
 

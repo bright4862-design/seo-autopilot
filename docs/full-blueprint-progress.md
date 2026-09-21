@@ -45,9 +45,16 @@ Canonical signed Review carries the exact versioned factor model **impact × rea
 
 The 2026-09-21 numeric-evidence slice additionally proved malformed numeric strings, booleans, fractions where integers are required, NaN and infinities fail closed across B21/B22/B23. RED `e64279094167c175141c309113ae8a58b90d7044`; GREEN `70ad5bda63b59b9e887a7b88cf26e306933a6750`; exact-head FixList CI `35543922420` passed both jobs.
 
-### B20 — partial
+### B20 — partial; explicit evidence identity/type boundary corrected GREEN
 
 Verified shared root-cause grouping requires explicit versioned same-cause evidence and trusted enclosing `scan_id == scan_run_id`; family similarity and repair-local identity alone cannot establish trust. Scan-isolation correction is review-clean. Durable customer projection remains release-gated.
+
+Fresh inspection found `root_cause_id`, `repair_surface_id`, and individual `evidence_refs` were still normalized through a general string-coercing helper. Structured producer/debug objects could therefore become non-empty strings and satisfy B20's explicit-evidence checks instead of remaining invalid/unknown.
+
+- **RED `089e55a1bad819a26b30302e46b71307eea132c8`, FixList CI `35549637805`:** two adversarial regressions injected mapping-valued root-cause identity/surface/reference evidence with private URL/debug sentinels. Root regressions were `115 passed`; scanner-api was `2 failed, 2073 passed, 18 skipped`, with exactly those two new assertions proving the malformed shapes were incorrectly classified as verified. The independent lint/typecheck/generated-release-contract/frontend-contract/build job passed.
+- **GREEN `590dc20251952e76f265c76e40d4755299d0b6cc`, exact-head FixList CI `35549679233`:** B20 now accepts only actual strings at the explicit root-cause identity, repair-surface identity, and evidence-reference boundary; mappings/lists/numbers/booleans fail closed into the existing missing/invalid evidence path. Root regressions: `115 passed`; scanner-api: `2075 passed, 18 skipped`; synthetic corpus: 14 cases / 55 assertions with `full_30_site_gate=not_assessed`; frozen revision `01ebe8e90df1e6bd` matched; production scanner image `sha256:e70692e683320579176b608eead16394c399d7b9ae193f8b5ee9cf41009071b8`; lint, typecheck, generated release-contract verification, frontend contracts and production build passed.
+
+Detailed checkpoint: `docs/superpowers/plans/2026-09-21-stage3-b20-root-cause-evidence-type-fail-closed.md`.
 
 ### B21 — partial
 
@@ -61,26 +68,23 @@ The signed evidence-led preview source requires verified evidence and trusted ex
 
 Only explicit versioned verified B20 root-cause evidence may contribute a documented score cap. Conflicts, unverified/cross-scan evidence fail closed, and existing stricter access/sample/incomplete ceilings remain authoritative. Malformed numeric caps now fail closed without coercion. Durable customer-visible adjusted-score persistence/card/export consumption remains open.
 
-### B24 — partial; latest customer-safe handoff projection correction GREEN
+### B24 — partial; customer-safe handoff projection correction GREEN
 
 Signed handoff-v2 source requires trusted exact scan identity and accepts root-cause identity only from exact-scan verified B20 groups. It carries family IDs, B19 factors, B21 counts, evidenced indexable counts, evidence refs, verification/dependency/vendor metadata and scanner UA; historical v1 reader compatibility remains preserved. `suppressed_findings` is included only when `operator_authorized is True` literally.
 
-Fresh inspection found the signed handoff serializer still deep-copied or passed through structured values under allowed keys and arbitrary extra keys inside `scan_identity` / nested `priority_factors`.
+The latest B24 projection hardening remains GREEN: RED `083e3a0c1a649be8162c40ee0d85f6ed0c66773c`, GREEN `ef0204b9a7851a53c040b334f99e1e541097d4b3`, exact-head FixList CI `35546802039`. B24 positive-allowlists scan identity and the exact public B19 factor schema, type-projects customer text fields, uses strict finite numeric/integer evidence rules, filters explanation items to strings, and drops unknown operator/debug keys.
 
-- **RED `083e3a0c1a649be8162c40ee0d85f6ed0c66773c`, FixList CI `35546672358`:** new `scanner-api/tests/test_stage3_b24_handoff_projection_privacy.py` proved the defect. Root regressions were `115 passed`; scanner-api was `2 failed, 2071 passed, 18 skipped`. One failure showed `scan_identity.operator_debug` reaching the customer handoff; the other showed malformed string numeric factor evidence surviving unchanged. The independent lint/typecheck/generated-release-contract/frontend-contract/build job passed.
-- **GREEN `ef0204b9a7851a53c040b334f99e1e541097d4b3`, exact-head FixList CI `35546802039`:** B24 now positive-allowlists scan identity and the exact public B19 factor schema, type-projects customer text fields, uses strict finite numeric/integer evidence rules, filters explanation items to strings, and drops unknown operator/debug keys. Root regressions: `115 passed`; scanner-api: `2073 passed, 18 skipped`; synthetic corpus: 14 cases / 55 assertions with `full_30_site_gate=not_assessed`; frozen revision `01ebe8e90df1e6bd` matched; production scanner image `sha256:9747d4e93d14e915ee07e4e86139fad22b7d7f8c7a2fd26185602a864f730a81`; lint, typecheck, generated release-contract verification, frontend contracts and production build passed.
-
-Detailed checkpoint: `docs/superpowers/plans/2026-09-21-stage3-b24-handoff-projection-privacy.md`.
+B20's later typed-provenance correction at `590dc20251952e76f265c76e40d4755299d0b6cc` is upstream of this handoff and prevents structured root-cause identity/surface/reference objects from entering verified B20 groups in the first place.
 
 B24 is **not complete**. Durable V7 persistence/read/customer/operator/export proof and a genuinely fresh independent review of the corrected shared B22/B24 privacy boundary remain open.
 
 ## Stage 3 current gate
 
-Stage 3 is **not complete**. Latest executable GREEN is `ef0204b9a7851a53c040b334f99e1e541097d4b3`, exact-head FixList CI `35546802039`. The final persisted documentation/checkpoint branch head from this run must itself receive exact-head FixList CI before the run is closed.
+Stage 3 is **not complete**. Latest executable GREEN is `590dc20251952e76f265c76e40d4755299d0b6cc`, exact-head FixList CI `35549679233`. The final persisted documentation/checkpoint branch head from this run must itself receive exact-head FixList CI before the run is closed.
 
 Open gates:
 
-1. one genuinely fresh independent review of the latest corrected B22/B24 shared authority/privacy boundary; CodeRabbit automatic-review skip is not approval;
+1. one genuinely fresh independent review of the latest corrected B22/B24 shared authority/privacy boundary, including the B20 provenance input that feeds handoff-v2; CodeRabbit automatic-review skip is not approval;
 2. separate Stage-1 operator records exact-source publication and fresh non-owner acceptance;
 3. reconcile this branch onto then-current accepted `main` without reverting V7/#308 and run exact integrated-head CI;
 4. prove real V7 B19/B21/B22/B23/B24 producer → signed authority → persisted rows → exact-owner/exact-scan read/reload/history → customer card/export/preview seams, including suppressed/operator privacy and historical-v1 compatibility.

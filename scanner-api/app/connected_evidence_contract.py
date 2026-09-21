@@ -176,7 +176,12 @@ def validate_connected_evidence(evidence: Mapping[str, Any]) -> Mapping[str, Any
     level = _bounded_string(confidence.get("level"), field="confidence.level", max_length=200)
 
     provenance = _json_mapping(top["provenance"], field="provenance")
-    _bounded_string(provenance.get("transport"), field="provenance.transport", max_length=200)
+    transport = provenance.get("transport")
+    if state in UNAVAILABLE_STATES:
+        if transport is not None:
+            _bounded_string(transport, field="provenance.transport", max_length=200)
+    else:
+        _bounded_string(transport, field="provenance.transport", max_length=200)
     _json_mapping(top["coverage"], field="coverage")
 
     records = top["records"]

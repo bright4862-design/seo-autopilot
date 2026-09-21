@@ -33,6 +33,7 @@ from .acceptance_evidence import (
     measure_worker_peak_memory_bytes,
 )
 from .observability import emit
+from .page_output_privacy import project_scan_result_for_external_boundary
 
 WORKER_VERSION = "scan_job_worker_v1_cloud_tasks"
 CONTROL_VERSION = "durable_standard150_control_v1"
@@ -476,6 +477,7 @@ def build_authority_review_payload(result: dict[str, Any]) -> dict[str, Any]:
     pages_found carries the full discovery inventory; only the review page
     sample is bounded. The 150-page crawl cap never truncates discovery.
     """
+    result = project_scan_result_for_external_boundary(result)
     pages = _first_list(result, ("crawled_pages", "pages", "scanned_pages", "crawl_pages"))[:REVIEW_PAGE_SAMPLE_LIMIT]
     findings = _first_list(result, ("grouped_findings", "recommendations", "findings", "raw_findings", "fixes"))[:REVIEW_FINDING_LIMIT]
     technical = result.get("technical_audit_summary") if isinstance(result.get("technical_audit_summary"), dict) else {}
@@ -579,24 +581,67 @@ def limited_result_payload(review: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_COMPLETION_COVERAGE_ASSESSMENT_FIELDS = frozenset({
+    "coverage_authority_version",
+    "state",
+    "reasons",
+    "authoritative",
+    "score_is_provisional",
+    "release_gate_eligible",
+    "inventory",
+    "inventory_proof",
+    "thresholds",
+})
+
+
+def completion_review_payload(review: dict[str, Any]) -> dict[str, Any]:
+    """Project free-form coverage diagnostics out before completion HMAC signing.
+
+    B22's preview source already uses controller-owned coverage copy. The full
+    completion Review must be just as strict: arbitrary producer/debug prose or
+    future unknown coverage fields cannot hitchhike beside that source into the
+    signed authority envelope. Preserve the current scanner-owned structured
+    coverage decision fields and fail closed for every other assessment key.
+    """
+    if not isinstance(review, dict):
+        return {}
+    projected = dict(review)
+    fingerprint = review.get("site_fingerprint")
+    if not isinstance(fingerprint, dict):
+        return projected
+    projected_fingerprint = dict(fingerprint)
+    assessment = fingerprint.get("coverage_assessment")
+    if isinstance(assessment, dict):
+        projected_fingerprint["coverage_assessment"] = {
+            key: assessment[key]
+            for key in _COMPLETION_COVERAGE_ASSESSMENT_FIELDS
+            if key in assessment
+        }
+    elif "coverage_assessment" in fingerprint:
+        projected_fingerprint["coverage_assessment"] = {}
+    projected["site_fingerprint"] = projected_fingerprint
+    return projected
+
+
 def build_limited_envelope(
     scan: dict[str, Any],
     result: dict[str, Any],
     review: dict[str, Any],
     signing_key: str,
 ) -> dict[str, Any]:
+    external_result = project_scan_result_for_external_boundary(result)
     identity = {
         "owner_user_id": str(scan.get("owner_user_id") or ""),
         "scan_id": str(scan.get("id") or ""),
         "project_id": str(scan.get("project_id") or ""),
-        "request_id": str(scan.get("request_id") or result.get("request_id") or ""),
-        "normalized_domain": str(result.get("normalized_domain") or "").lower().removeprefix("www."),
+        "request_id": str(scan.get("request_id") or external_result.get("request_id") or ""),
+        "normalized_domain": str(external_result.get("normalized_domain") or "").lower().removeprefix("www."),
         "attempt_count": str(current_attempt(scan)),
     }
     signed = {
         "version": LIMITED_COMPLETION_VERSION,
         "identity": identity,
-        "scan": result,
+        "scan": external_result,
         "review": limited_result_payload(review),
     }
     return {**signed, "proof": create_authority_seal(signed, signing_key)}
@@ -608,20 +653,21 @@ def build_completion_envelope(
     review: dict[str, Any],
     signing_key: str,
 ) -> dict[str, Any]:
+    external_result = project_scan_result_for_external_boundary(result)
     identity = {
         "owner_user_id": str(scan.get("owner_user_id") or ""),
         "scan_id": str(scan.get("id") or ""),
         "project_id": str(scan.get("project_id") or ""),
-        "request_id": str(scan.get("request_id") or result.get("request_id") or ""),
-        "idempotency_key": str(scan.get("idempotency_key") or result.get("idempotency_key") or ""),
-        "normalized_domain": str(result.get("normalized_domain") or "").lower().removeprefix("www."),
+        "request_id": str(scan.get("request_id") or external_result.get("request_id") or ""),
+        "idempotency_key": str(scan.get("idempotency_key") or external_result.get("idempotency_key") or ""),
+        "normalized_domain": str(external_result.get("normalized_domain") or "").lower().removeprefix("www."),
         "attempt_count": str(current_attempt(scan)),
     }
     signed = {
         "version": COMPLETION_VERSION,
         "identity": identity,
-        "scan": result,
-        "review": review,
+        "scan": external_result,
+        "review": completion_review_payload(review),
     }
     return {**signed, "proof": create_authority_seal(signed, signing_key)}
 

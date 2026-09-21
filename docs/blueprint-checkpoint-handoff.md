@@ -1,68 +1,93 @@
 # Blueprint implementation checkpoint
 
-> Release sequencing update (2026-09-19): the user explicitly authorized “once stage one is ready deploy and publish.” Complete and review all stage-one behavior before merging and publishing exact source. Earlier references to waiting for the entire blueprint are superseded for this first release. B06–B24 and the genuine 30-site full-blueprint gate remain open; synthetic stage-one acceptance does not complete them. No further general implementation or deployment approval is required.
+Authoritative design: `docs/superpowers/specs/2026-09-19-full-scanner-blueprint-design.md`. Exact B01–B28 semantics in the approved spec control over older paraphrases. Detailed RED/GREEN history remains in dated executable plans under `docs/superpowers/plans/`; this file is the current serialized handoff.
 
-This document preserves the original source-sharing checkpoint and its decisions. The receiving work agent has now completed stage-one implementation and the independent review; four Important findings have been corrected and the final local source gate passed (1,798 scanner and 1,479 frontend tests). Exact-source CI, merge and production cutover remain. See [current acceptance evidence](stage-one-evidence-acceptance.md) and [independent review](stage-one-independent-review.md) for current status. No deployment is claimed.
+## Release boundary
 
-## Original source-sharing resume point
+- Direct `main` refreshed during this 2026-09-21 serialized work remains `2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad`.
+- Current-main `docs/stage-one-evidence-acceptance.md` still records Stage-1 exact-source production publication and fresh non-owner acceptance as pending; no accepted Stage-1 production deployment is recorded.
+- Later-stage integration branch: `agent/full-blueprint-stage2-coverage-b06-20260919`, PR #303.
+- Worker candidate `fixlist-standard150-worker-00091-bdr` and cutover-pause run `35462502364` remain historical checkpoints only.
+- Do not merge later-stage work to `main`, deploy/publish, promote workers, mutate admission/queues/scheduler, launch a production scan, broaden schema/RLS, rotate secrets, connect fabricated providers, or enable Premium/Grok while the Stage-1 release gate remains open.
+- When the single Stage-1 release operator records publication and fresh non-owner acceptance, reconcile this branch onto then-current accepted `main` without reverting V7 routes or #308 and require fresh exact integrated-head FixList CI before durable customer-path activation.
 
-- Branch: `codex/full-blueprint-20260919`.
-- Baseline: `7a744a501416b1b9feac462511071fc9f08e1ba1`.
-- Completed identity-plan Task 1: `408da7c87e5170f698d28d66a9087a8d9fff5dcf`.
-- Completed identity-plan Task 2: `2a50f1d93b246a5dd6f0463fa004f25cc0c6b0ef`.
-- This checkpoint includes Task 3's implementation, tests, new package-local dependencies, historical fixture and generated mirrors. Task 3's formal task-done ledger step and Task 4's integrated export checks/independent whole-branch review remain open.
-- The local `.superpowers` execution workspace is intentionally ignored and will not appear in a fresh clone. This tracked note carries the decisions and resume information needed by the receiving agent. Do not infer that absent scratch files mean Tasks 1 and 2 must be repeated.
+## Stage 2 handoff
 
-Read the approved [full specification](superpowers/specs/2026-09-19-full-scanner-blueprint-design.md), [identity plan](superpowers/plans/2026-09-19-published-evidence-identity.md) and [overall progress](full-blueprint-progress.md). The earlier written-approval blocker is resolved by the user's explicit implementation approval.
+B06–B18 are complete for implementation, independent review and exact-head CI at corrected checkpoint `10f51529bf5bf64b7b24ab8424f3ae821de46b39`; FixList CI `35500580582` passed and CodeRabbit follow-up `5748778814` returned no actionable finding. This does not imply production release completion.
 
-## Implemented in Task 3
+Preserve during later reconciliation: one finite shared follow-up request budget; Standard-150 assessed cap; truthful assessed denominators; unknown states for robots/challenge/429/incomplete/budget/deadline; exact route/evidence identity; robots/DNS/SSRF/redirect/body/deadline protections; optional providers disconnected by default; fail-closed external projection; original historical signatures and readers. Direct authenticated HTTP `/scan` privacy regression `d9061f23edd0a0541b017f42297bf60a9c401560`, CI `35524582769`, proves B10/B11/B13/B15 private sentinels do not survive the serialized response.
 
-The durable Python producer explicitly selects `evidence_url_identity_v2_published_route`. Its matching Base44 writer uses `standard_review_snapshot_hmac_identity_v1`, while public V6 route names remain unchanged. Existing count/family columns and `raw_finding.published_evidence` retain authenticated identity, coverage, invariant and completeness metadata without a remote schema migration.
+## Stage 3 handoff — in progress
 
-Real Python-produced canonical evidence survives writer persistence, saved-report and chat signature reconstruction. `/x`, `/x/` and `/X` remain three pages. The integration check exposed and fixed omitted chat child groups and priority identity/count fields. Customer completion state no longer invalidates the new chat authority; the persisted writer rejects unknown seal versions.
+Existing isolated lanes were integrated serially, not merged to `main`: B19/B20 lane `e74d87acd0cec2955402b96f635f13bc275f3a91` -> shared `c3f9d685e17b26c372a5a47403b478caec36ed2a`; B21–B24 lane `a998b4e38a06d6c163ac8853c3e49e9f10a58cb7` -> shared `3aebc7375e854ce063ac0bcec0a46210473e061c7`; combined lane CI `35501672504` passed.
 
-The literal historical GEO fixture remains unchanged under new-marker injection. New-seal route, escape, count, partition and version mutations are rejected. The request-level unpaid preview test enforces the two-fix limit without loading full hidden findings.
+Current requirement state:
 
-## Verification evidence
+- **B19 partial:** signed canonical Review uses exact impact × reach × page value × confidence with versioned explanations and truthful unknowns; repair leverage is not a factor. Numeric source evidence and downstream factor domains are fail-closed. Durable V7 customer/card/export consumption remains open.
+- **B20 partial:** verified shared-root-cause grouping requires explicit versioned same-cause evidence, actual string root-cause/surface/reference identifiers, and literal exact producer scan identity. Family similarity or structured/coercible identity cannot establish trust. Stage-3 customer-bound group/member/family/reference identifiers reject structured upstream coercion. Durable customer projection remains open.
+- **B21 partial:** signed Review has exact unique affected-page / observation / known-population / displayed-sample counts and ranks all eligible B19 candidates before truncation. Malformed numeric count evidence remains unknown; malformed explicit observation evidence no longer becomes a fabricated zero; real observation lists remain a truthful count fallback; a supplied known population smaller than the exact affected-page union fails closed to unknown; customer-bound displayed IDs reject structured coercion. Durable customer/card/export proof remains open.
+- **B22 partial:** signed evidence-led preview source prefers verified impact-4/5 findings with a two-item cap and otherwise one best verified fallback; good-shape requires explicit sufficient coverage and fixed controller wording. Customer private preview requires literal non-empty string requested scan/owner identity and string candidate identity before exact equality. Producer rule/title projection accepts only literal strings with safe fallback instead of stringifying structured/debug values. Fresh independent review and durable exact-owner/exact-scan V7 customer proof remain open.
+- **B23 partial:** only explicit verified B20 root-cause evidence can contribute documented score caps; conflicting/unverified/cross-scan or malformed evidence fails closed and stricter access/sample/incomplete ceilings remain authoritative. Customer-bound root-cause-cap identifiers reject structured coercion. Durable customer-visible adjusted-score consumption remains open.
+- **B24 partial:** signed handoff-v2 requires literal trusted exact scan identity and verified B20 root-cause mapping; historical v1 reader compatibility remains preserved; `suppressed_findings` requires literal `operator_authorized is True`. Scan metadata, fix title/ID, family/evidence references and vendor-owner projection fail closed before signing. Contradictory B21 population denominators and malformed B21 observation counts cannot be signed as known values. Durable V7 persistence/read/customer/operator/export proof and fresh independent review remain open.
 
-The last full pre-push implementation run passed 1,672 Python tests (18 intentional skips, 715 dependency warnings) and 1,461 frontend tests (zero failures/skips). Package closure and generated-contract checks passed. These are recorded implementation results, not full-blueprint acceptance.
+## Latest serialized slice — B21/B24 observation-count unknown fail-closed
 
-Fresh checkpoint checks passed:
+Fresh B21/B24 inspection found an invalid-evidence coercion in `scanner-api/app/stage3_delivery.py`. `summarize_candidate_counts()` strictly rejected malformed explicit `observation_count`, but then always normalized `observations` with `_list()` and used its length. Missing or malformed observation collections therefore became `[]`, allowing invalid explicit evidence to become `0` rather than remain unknown. Because B24 uses the same helper, that fabricated zero could enter the signed customer handoff.
 
-- 70 Node authority/invariant/dedup/GEO/historical/preview/round-trip tests.
-- 93 Python grouped-metadata/identity/architecture/durable-completion tests, with 40 dependency warnings.
-- `node scripts/base44_release_manifest.mjs verify`.
-- `node scripts/generate_release_contracts.mjs --check`.
-- `git diff --check`.
+### RED
 
-Python is 3.12 with `scanner-api/requirements.txt`; Node is 20.19.5. Put Node on PATH because Python integration tests spawn it. Run the full frontend suite under Linux/Bash 5 with actual Git history: macOS Bash 3.2 cannot execute some existing Bash-4 fixtures. The verified frontend image is `node:20.19.5-bookworm` at manifest digest `sha256:ba36e9b2705008e63e354214f0e3011c528af9df2ca13ac2bd2c0114650302e6`.
+Commit `913dfd011aced1cd6a348468dcfd357bd316c40a` added `scanner-api/tests/test_stage3_b21_observation_count_unknown.py` with three behavioral regressions:
 
-The pinned `ada-url==1.32.0` official wheels executed all 73 shared-identity/legacy tests on Linux arm64 and amd64, using read-only source and disabled test networking.
+- malformed explicit observation count without a real observation list must remain `None`;
+- structured operator/debug count must remain unknown in B24 handoff-v2 and its private sentinel must not leak;
+- a real observation list may still truthfully supply its length when the explicit count is invalid.
 
-## Decisions carried from the local ledger
+FixList CI `35581103845` produced the intended RED. Immutable checkout matched. The separate lint/typecheck/generated-contract/frontend/build job passed. The scanner job passed root scanner regressions and failed at the Python scanner-api step; labelled corpus, frozen-revision and image steps were skipped after the intentional RED failure.
 
-- Reject malformed/ambiguous authorities rather than guessing their identity; unusual malformed evidence can therefore be rejected.
-- Use pinned Ada URL for origin-only WHATWG normalization; never pass observed paths/queries through its serializer. This adds a native dependency, verified on both Linux architectures.
-- Mirror pure helper exports across required Base44 packages to preserve package parity; legacy helper behavior stays frozen.
-- Resolve new producer evidence to absolute published keys using trusted scan-owned origin. Raw crawl observations remain unchanged; new reports may display absolute URLs where historical reports showed paths.
-- Leave classification helpers unchanged. Only evidence joins receive the new identity context; integration coverage must catch missed consumers.
-- Fail closed on unresolvable affected members rather than silently shrinking counts. Malformed new evidence can reject a report.
-- Keep the pure snapshot builder's explicit legacy default; durable entries opt in to the new contract. Future alternate producers must explicitly opt in too.
-- Store new metadata in existing raw evidence and authenticate existing count columns. Missing persisted metadata blocks re-signing.
-- Move the real Python-to-all-readers integration test forward from Task 4 because handbuilt fixtures missed canonical field loss. This test requires Node on PATH.
+### SOURCE CORRECTION
 
-## Checks identified at the original checkpoint
+Implementation commit `f2afc1cfa87a9fbcecbd33e4b378d2edc737f658` changes the fallback so:
 
-Finish the identity plan's persisted customer/card/PDF/JSON/CSV export checks, then full source verification and its independent whole-branch review. Use actual producer and consumer code, not a parallel serializer in tests.
+- a real list/tuple of observations supplies its actual length;
+- explicitly present malformed observation/count evidence remains `None`;
+- only the historical case where both fields are entirely absent preserves the prior zero fallback.
 
-Read-only investigation found that `evidenceLink` uses `new URL(...).toString()`, normalizing dot segments and literal Unicode; handoff examples can then deduplicate distinct observed spellings. Reproduce this at the export boundary before changing behavior. CSV serialization is currently inside FixList; existing source assertions do not prove its runtime output. Three-route card and handoff examples already retain the distinct case/slash spellings.
+RED-to-source compare changes exactly one implementation file: `scanner-api/app/stage3_delivery.py`, 8 additions / 3 deletions. No ranking, URL identity, score, preview, historical reader/signature, network, admission, persistence or release behavior changed.
 
-Stage 1 still needs the remaining image-alt applicability, visible-template, search-facing/indexability and synthetic acceptance work. Existing GEO is preserved in this stage; additional local/NAP coverage and combined SEO/GEO grouping/scoring remain later requirements. The full B01–B28 goal is not reduced to the identity plan.
+### GREEN
 
-## Release boundaries
+Exact-source FixList CI `35581439449` passed both jobs on `f2afc1cfa87a9fbcecbd33e4b378d2edc737f658`.
 
-Candidate fingerprint `5fb87bf7869c51c2` is explicitly a candidate, not frozen/accepted; accepted commit/report fields are empty. Historical fingerprint `47793ce37ca20523` remains supported.
+Verified steps: immutable checkout; root scanner regressions; full Python scanner-api suite including the new B21/B24 tests; labelled Stage-1 synthetic corpus; frozen beta revision verification; production scanner image build; lint; typecheck; generated release-contract verification; frontend contract tests; and production build. The available GitHub job metadata for this run does not expose trustworthy pytest totals or image digest, so they are not fabricated in this record.
 
-The genuine 30-site baseline/candidate replay corpus is still missing. Historical summary counts are not substitute acceptance evidence. Base44 synchronization and app-level authentication previously failed and must be revalidated at release time.
+Detailed checkpoint: `docs/superpowers/plans/2026-09-21-stage3-b21-observation-count-unknown-fail-closed.md`.
 
-The authorized first release requires complete stage-one source acceptance, exact-source CI, named schema parity, controlled cutover and verified Base44/worker activation. Live stage-one acceptance is required before recording the milestone as released and accepted. Remaining full-blueprint and 30-site requirements are not claimed by this release. Preserve the 150-page/security limits, existing GEO, historical proofs and preview privacy. Do not disconnect the repository, rotate secrets, broadly push schemas or publish a stale snapshot.
+Prior B22/B24 upstream projection hardening remains certified at stable persisted checkpoint `fc7d9359870efdfa437b2c9c7e38c115c198de00`, exact-head CI `35577485322`; its source GREEN was `dfb9043d3cbf510ec867c68a5cde02c7cea29323`, CI `35577052441`. Earlier B19/B20/B21/B22/B23/B24 fail-closed slices remain in this branch history and their executable plans/regressions remain authoritative.
+
+## What remains before Stage 3 can be complete
+
+1. Certify this run's final persisted plan/ledger branch head with exact-head FixList CI.
+2. Obtain one genuinely fresh independent review of the current corrected B19–B24 shared authority/privacy boundary. A skipped automatic review or old September 19 submission is not approval.
+3. The separate Stage-1 release operator must record exact-source production publication and fresh non-owner acceptance.
+4. Reconcile this integration branch onto then-current accepted `main`, preserve V7/#308, and run fresh exact integrated-head CI.
+5. Prove actual V7 B19/B21/B22/B23/B24 producer -> signed authority -> persisted rows -> exact-owner/exact-scan read/reload/history -> customer card/export/preview paths, including suppressed/operator privacy and historical-v1 compatibility.
+6. Persist exact source SHAs, regressions/failures, CI and independent-review evidence before declaring Stage 3 complete.
+
+Stage 3 is **not complete**. Latest executable source GREEN is `f2afc1cfa87a9fbcecbd33e4b378d2edc737f658`, FixList CI `35581439449`. This handoff update occurs after source certification, so the resulting final persisted documentation head requires its own exact-head CI before being called the stable checkpoint.
+
+## Stage 4 handoff — held
+
+Canonical isolated lane remains `agent/stage4-b25-b28-compat-release-20260919` at checkpoint `d2ce905ff67410586f86e38bafd93ce4e998e4d1`; prior lane CI `35464436789` passed. Do not launch duplicate implementations and do not shared-integrate while Stage 3 acceptance remains open.
+
+- **B25 incomplete:** genuine provenance-labelled 30-site baseline/candidate gate remains `not_assessed`; synthetic fixtures or historical summaries never satisfy it.
+- **B26 partial:** isolated own-site serving-defect reproduction exists; shared integration/acceptance remains open.
+- **B27 partial:** isolated GEO/historical HMAC/reader/tamper/privacy compatibility exists; shared integration/acceptance remains open.
+- **B28 incomplete:** no full-blueprint exact-source deployment/live acceptance, live site/six-V7/worker identity proof, rollback proof, or real customer submit -> persistence -> reload/history -> rescan acceptance has been performed.
+
+## Resume instruction
+
+At the next serialized slice, first refresh `AGENTS.md`, `README.md`, the approved spec, `docs/full-blueprint-progress.md`, this handoff, current-main `docs/stage-one-evidence-acceptance.md`, applicable plans, PR #303 comments/reviews and branch heads.
+
+If this run's final persisted docs head is exact-head CI green, keep that as the checkpoint. Refresh independent review state without repeatedly dispatching broken/skipped launchers. Do not bypass the Stage-1 release freeze. Once Stage-1 acceptance is actually recorded, reconcile onto accepted `main` and prove real V7 B19–B24 persistence/customer seams before shared Stage-4 integration.
+
+No production deployment, `main` merge, worker/admission mutation, production scan, provider connection, schema/RLS change, secret rotation, Premium enablement or Grok enablement occurred in this slice.

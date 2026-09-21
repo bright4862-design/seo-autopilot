@@ -3,6 +3,8 @@ from __future__ import annotations
 import inspect
 from typing import Any, Awaitable, Callable
 
+from .stage2_hub_render_evidence import build_hub_link_comparison
+
 
 RENDER_FOLLOWUP_VERSION = "render_followup_v1"
 DEFAULT_RENDER_FOLLOWUP_LIMIT = 3
@@ -67,8 +69,24 @@ async def run_render_followup(
     pages: list[dict],
     render_page: RenderPage | None = None,
     max_pages: int = DEFAULT_RENDER_FOLLOWUP_LIMIT,
+    *,
+    evidence_pages: list[dict] | None = None,
 ) -> dict:
+    """Run the existing bounded browser policy and attach B12 paired hub evidence.
+
+    B12 does not create a second renderer budget. It consumes only observations
+    produced by the pre-existing three-page render follow-up. Up to five
+    representative hubs may be selected for disclosure; hubs outside that
+    existing browser budget remain explicitly unassessed.
+
+    ``pages`` continues to control which pages are eligible for browser work.
+    ``evidence_pages`` is an additive retained-set view for B12 disclosure only,
+    so a caller can report eligible hubs as unassessed when browser policy does
+    not authorize rendering without quietly enabling extra browser work.
+    """
     selected = select_render_followup_pages(pages, max_pages)
+    hub_pages = pages if evidence_pages is None else evidence_pages
+    hub_evidence = build_hub_link_comparison(hub_pages)
     base = {
         "version": RENDER_FOLLOWUP_VERSION,
         "max_pages": DEFAULT_RENDER_FOLLOWUP_LIMIT,
@@ -79,6 +97,7 @@ async def run_render_followup(
         "render_regression_pages": 0,
         "results": [],
         "errors": [],
+        "hub_link_comparison": hub_evidence,
     }
     if not selected:
         return {**base, "status": "not_needed"}
@@ -87,17 +106,32 @@ async def run_render_followup(
 
     results: list[dict] = []
     errors: list[dict] = []
+    rendered_pages_by_url: dict[str, dict[str, Any]] = {}
+    attempted_urls: list[str] = []
+    failure_reasons: dict[str, str] = {}
     for raw_page in selected:
         url = str(raw_page.get("final_url") or raw_page.get("url") or "")
+        attempted_urls.append(url)
         try:
             value = render_page(url)
             rendered_page = await value if inspect.isawaitable(value) else value
             if not isinstance(rendered_page, dict):
                 raise TypeError("renderer must return a page evidence object")
+            rendered_pages_by_url[url] = rendered_page
             results.append(compare_raw_and_rendered(raw_page, rendered_page))
         except Exception as exc:
-            errors.append({"url": url, "error": str(exc)[:180]})
+            message = str(exc)[:180]
+            errors.append({"url": url, "error": message})
+            # B12 is additive to the existing browser-followup diagnostics. Do
+            # not duplicate raw exception text into the new persisted evidence.
+            failure_reasons[url] = "renderer_failed"
 
+    hub_evidence = build_hub_link_comparison(
+        hub_pages,
+        rendered_pages_by_url=rendered_pages_by_url,
+        attempted_urls=attempted_urls,
+        failure_reasons=failure_reasons,
+    )
     recovered = sum(1 for item in results if item["content_recovered"])
     regressions = sum(1 for item in results if item["render_regression"])
     status = "rendered_content_recovered" if recovered else (
@@ -112,4 +146,5 @@ async def run_render_followup(
         "render_regression_pages": regressions,
         "results": results,
         "errors": errors[:DEFAULT_RENDER_FOLLOWUP_LIMIT],
+        "hub_link_comparison": hub_evidence,
     }

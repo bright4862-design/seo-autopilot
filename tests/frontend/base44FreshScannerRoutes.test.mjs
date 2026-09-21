@@ -76,12 +76,22 @@ test("fresh Base44 routes preserve canonical source except the bounded signed-pr
     /(BASE44_RUNTIME_ACTIVATION_ID\s*=\s*)["'][^"']+["']/g,
     '$1"<deployment-activation-nonce>"',
   );
-  const v4OnlyFiles = new Map([
-    ["persistDurableScanAuthority", ["customerPreviewSeal.js"]],
-    ["getCustomerScanResult", ["customerPreviewSeal.js"]],
+  const v7OnlyFiles = new Map([
+    ["persistDurableScanAuthority", [
+      "authoritySnapshotStage1Legacy.js",
+      "customerPreviewSeal.js",
+      "customerPreviewSealStage1Legacy.js",
+      "stage3V7Delivery.js",
+      "stage3V7DeliveryStrict.js",
+    ]],
+    ["getCustomerScanResult", [
+      "customerPreviewSeal.js",
+      "projectionStage1Legacy.js",
+      "stage3V7Delivery.js",
+    ]],
   ]);
   const intentionallyChangedInheritedFiles = new Map([
-    ["persistDurableScanAuthority", new Set(["entry.ts"])],
+    ["persistDurableScanAuthority", new Set(["entry.ts", "authoritySnapshot.js"])],
     ["getCustomerScanResult", new Set(["entry.ts", "projection.js", "releaseCompatibility.js"])],
   ]);
   for (const [canonical, active] of Object.entries(routes)) {
@@ -93,7 +103,7 @@ test("fresh Base44 routes preserve canonical source except the bounded signed-pr
     const activeFiles = fs.readdirSync(activeDir)
       .filter((name) => !["function.jsonc", "generatedBuildId.js"].includes(name))
       .sort();
-    const allowedExtras = v4OnlyFiles.get(canonical) || [];
+    const allowedExtras = v7OnlyFiles.get(canonical) || [];
     assert.deepEqual(activeFiles, [...canonicalFiles, ...allowedExtras].sort(), active);
     const intentionalChanges = intentionallyChangedInheritedFiles.get(canonical) || new Set();
     for (const file of canonicalFiles) {
@@ -108,7 +118,8 @@ test("fresh Base44 routes preserve canonical source except the bounded signed-pr
       assert.match(source(path.join(activeDir, "entry.ts")), /customerPreviewSeal\.js/, `${active} must wire the signed preview helper`);
     }
     if (canonical === "getCustomerScanResult") {
-      assert.match(source(path.join(activeDir, "projection.js")), /"preview_example_page"/);
+      assert.match(source(path.join(activeDir, "projectionStage1Legacy.js")), /"preview_example_page"/);
+      assert.match(source(path.join(activeDir, "projection.js")), /projectionStage1Legacy\.js/);
       assert.match(source(path.join(activeDir, "releaseCompatibility.js")), /customer_result_reader_v9_published_route_identity/);
     }
   }

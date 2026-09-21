@@ -112,7 +112,7 @@ test("a hint is never guessed from the URLs themselves", () => {
   // "/products/" out of a path and calling the card "Product pages" would be a
   // claim the scan never made, and it would be wrong on any site that uses
   // that word for something else.
-  const source = fs.readFileSync(new URL("../../src/lib/repairCardModel.js", import.meta.url), "utf8");
+  const source = fs.readFileSync(new URL("../../src/lib/repairCardModelLegacy.js", import.meta.url), "utf8");
   const from = source.indexOf("function scopeHintFor");
   const block = source.slice(from, source.indexOf("\n}", from));
   assert.ok(from > -1, "the hint helper must exist");

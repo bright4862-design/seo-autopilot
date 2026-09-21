@@ -24,6 +24,10 @@ from .metadata_title_evidence import (
     is_generic_fallback_title,
     title_width_state,
 )
+from .transport_evidence import (
+    TRANSFER_BODY_BYTES_BASIS,
+    measured_transfer_body_bytes,
+)
 
 
 CANONICAL_HREF_RESOLUTION_VERSION = "canonical_href_resolution_v3_published_route_identity"
@@ -114,6 +118,24 @@ def client_rendering_signals(html: str, status_code: int, word_count: int) -> li
     return [label for label, pattern in APP_SHELL_MARKERS if pattern.search(source)][:4]
 
 
+def _anchor_navigation_presence(anchor: Any) -> bool:
+    """Return only semantic raw-HTML navigation evidence for an anchor.
+
+    Class names such as ``menu`` are not treated as proof. A verified source page
+    can therefore establish navigation presence only through a ``nav`` ancestor
+    or an ancestor explicitly carrying ``role=navigation``.
+    """
+    current = anchor
+    while current is not None:
+        if getattr(current, "name", None) == "nav":
+            return True
+        role = str(getattr(current, "attrs", {}).get("role", "")).strip().lower()
+        if role == "navigation":
+            return True
+        current = getattr(current, "parent", None)
+    return False
+
+
 def extract_links_from_soup(soup: BeautifulSoup, base_url: str, limit: int = 2000) -> list[dict]:
     links: list[dict] = []
     for anchor in soup.find_all("a", href=True):
@@ -123,7 +145,13 @@ def extract_links_from_soup(soup: BeautifulSoup, base_url: str, limit: int = 200
             continue
         if not href:
             continue
-        links.append({"href": href, "text": clean_text(anchor.get_text(" "))[:180]})
+        links.append(
+            {
+                "href": href,
+                "text": clean_text(anchor.get_text(" "))[:180],
+                "navigation_presence": _anchor_navigation_presence(anchor),
+            }
+        )
         if len(links) >= max(1, int(limit or 2000)):
             break
     return links
@@ -229,6 +257,13 @@ def extract_page(
         response_headers=response_headers,
     )
     content_evidence = extract_accepted_content_evidence(html or "", page_evidence_class)
+    transfer_body_bytes = measured_transfer_body_bytes(response_headers)
+    if page_evidence_class == "usable_html" and transfer_body_bytes is not None:
+        content_evidence.update({
+            "transfer_bytes": transfer_body_bytes,
+            "transfer_bytes_state": "measured",
+            "transfer_bytes_basis": TRANSFER_BODY_BYTES_BASIS,
+        })
     location_context = content_evidence.pop("location_context")
     template_content = detect_location_template_content(path, **location_context)
 
@@ -319,7 +354,18 @@ def extract_page(
             page["geo_evidence_error"] = "extraction_error"
 
     if include_links and 200 <= int(status_code or 0) < 300 and html:
-        page["_links"] = extract_links_from_soup(soup, final_url or url)
+        links = extract_links_from_soup(soup, final_url or url)
+        page["_links"] = links
+        if page_evidence_class == "usable_html":
+            page["_reachability_links"] = [
+                {
+                    "href": link.get("href", ""),
+                    "navigation_presence": link.get("navigation_presence")
+                    if isinstance(link.get("navigation_presence"), bool)
+                    else None,
+                }
+                for link in links
+            ]
     return page
 
 

@@ -4,14 +4,14 @@ Authoritative design: `docs/superpowers/specs/2026-09-19-full-scanner-blueprint-
 
 ## Release sequencing / freeze
 
-- `main` refreshed during the 2026-09-21 serialized slice and remains `2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad`, containing the six V7 runtime/public-build changes and durable ownership-before-admission fix #308.
+- Direct `main` was refreshed during the 2026-09-21 serialized slice and remains `2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad`, containing the V7 runtime/public-build changes and durable ownership-before-admission fix #308.
 - Current-main `docs/stage-one-evidence-acceptance.md` still records Stage-1 exact-source production publication and fresh non-owner acceptance as pending.
-- Worker candidate `fixlist-standard150-worker-00091-bdr` and cutover-pause run `35462502364` are historical checkpoints only. They are not permission to promote, mutate admission/queues/scheduler, launch a production scan, or rebuild.
+- Worker candidate `fixlist-standard150-worker-00091-bdr` and cutover-pause run `35462502364` are historical checkpoints only, not permission to promote, mutate admission/queues/scheduler, launch a production scan, or rebuild.
 - Serialized later-stage integration remains on `agent/full-blueprint-stage2-coverage-b06-20260919`, PR #303.
-- Keep all later-stage work off `main` until the separate Stage-1 release operator records exact-source publication and fresh non-owner acceptance. Then reconcile onto the accepted `main` without reverting V7/#308 and require exact integrated-head FixList CI before durable customer-path work.
+- Keep later-stage work off `main` until the separate Stage-1 release operator records exact-source publication and fresh non-owner acceptance. Then reconcile onto the accepted `main` without reverting V7/#308 and require exact integrated-head FixList CI before durable customer-path activation.
 - No Premium/Grok enablement, schema/RLS broadening, secret rotation, fabricated provider connection, production deployment, worker promotion, or competing live scan is authorized from this branch.
 
-The labelled Stage-1 corpus remains explicitly synthetic: 14 cases / 55 assertions; frozen scanner revision `01ebe8e90df1e6bd`. Synthetic fixtures or historical summaries never satisfy B25's genuine provenance-labelled 30-site gate.
+The labelled Stage-1 corpus remains explicitly synthetic: 14 cases / 55 assertions at frozen scanner revision `01ebe8e90df1e6bd`. Synthetic fixtures or historical summaries never satisfy B25's genuine provenance-labelled 30-site gate.
 
 ## Stage 2 — B06–B18 complete for implementation / independent review / exact-head CI
 
@@ -39,75 +39,65 @@ Existing isolated lanes were integrated serially, never merged directly to `main
 - B21–B24 lane `a998b4e38a06d6c163ac8853c3e49e9f10a58cb7` -> shared `3aebc7375e854ce063ac0bcec0a46210473e061c7`.
 - Combined lane FixList CI `35501672504` passed.
 
-### B19 — partial; source numeric evidence fail-closed GREEN
+### B19 — partial
 
-Canonical signed Review carries the exact versioned factor model **impact × reach × page value × confidence**, truthful unknown denominators, and versioned explanations. Repair leverage is not a substitute fourth factor. Durable V7 FixItem/card/export consumption remains release-gated.
+Canonical signed Review carries exact versioned **impact × reach × page value × confidence**, truthful unknown denominators and explanations. Repair leverage is not a substitute fourth factor. Fallback confidence and connected-GSC page-value source evidence accept only actual finite numeric values; strings, booleans, NaN and infinities fail closed. Latest source-numeric GREEN: `058f46fce08c3aec66fac35a3af18a4607eb30bf`, CI `35553077583`. Durable V7 FixItem/card/export consumption remains release-gated.
 
-Fresh inspection found two remaining source-evidence coercion paths in `stage3_priority_factors.py`: fallback confidence used `float(confidence)`, so a numeric string such as `"95"` could manufacture `verified` trust; connected GSC normalized page value used `float(...)`, so string `"0.9"` or boolean `True` could become trusted provider evidence and boost page value.
+### B20 — partial
 
-- **RED `f94eeeac974be8afe317437c31d04adc5237ba76`, FixList CI `35553020191`:** three new adversarial regressions failed exactly as intended. Root regressions were `115 passed`; scanner-api was `3 failed, 2075 passed, 18 skipped`. `"95"` was incorrectly classified `verified`, `"0.9"` produced page value `0.9`, and `True` produced page value `1.0`. The separate lint/typecheck/generated-release-contract/frontend-contract/build job passed.
-- **GREEN `058f46fce08c3aec66fac35a3af18a4607eb30bf`, exact-head FixList CI `35553077583`:** B19 now accepts only actual finite `int`/`float` values at these numeric source boundaries; booleans, strings, NaN and infinities fail closed. The source correction relative to RED changes only `scanner-api/app/stage3_priority_factors.py` (13 additions, 8 deletions). Root regressions: `115 passed`; scanner-api: `2078 passed, 18 skipped`; synthetic corpus: 14 cases / 55 assertions with `full_30_site_gate=not_assessed`; frozen revision `01ebe8e90df1e6bd` matched; production scanner image `sha256:083616943a94b11c1c66c97db27b81c015801a6fa92494c013f1004f73adc32e`; lint, typecheck, generated release-contract verification, frontend contracts and production build passed.
-
-Detailed checkpoint: `docs/superpowers/plans/2026-09-21-stage3-b19-numeric-source-fail-closed.md`.
-
-The earlier 2026-09-21 numeric-evidence slice remains GREEN for B21/B22/B23 displayed evidence: malformed numeric strings, booleans, fractions where integers are required, NaN and infinities fail closed. RED `e64279094167c175141c309113ae8a58b90d7044`; GREEN `70ad5bda63b59b9e887a7b88cf26e306933a6750`; exact-head FixList CI `35543922420` passed both jobs.
-
-### B20 — partial; explicit evidence identity/type boundary corrected GREEN
-
-Verified shared root-cause grouping requires explicit versioned same-cause evidence and trusted enclosing `scan_id == scan_run_id`; family similarity and repair-local identity alone cannot establish trust. Scan-isolation correction is review-clean. Durable customer projection remains release-gated.
-
-The latest B20 type hardening remains GREEN: RED `089e55a1bad819a26b30302e46b71307eea132c8`; GREEN `590dc20251952e76f265c76e40d4755299d0b6cc`; exact-head FixList CI `35549679233`. B20 accepts only actual strings for `root_cause_id`, `repair_surface_id`, and individual `evidence_refs`; mappings/lists/numbers/booleans fail closed into missing/invalid evidence. Valid string evidence, exact-scan isolation, grouping semantics and score-cap behavior are unchanged.
-
-Detailed checkpoint: `docs/superpowers/plans/2026-09-21-stage3-b20-root-cause-evidence-type-fail-closed.md`.
+Verified shared-root-cause grouping requires explicit versioned same-cause evidence, actual string root-cause/surface/reference identifiers, and trusted enclosing `scan_id == scan_run_id`; family similarity, repair-local identity, or structured/debug objects cannot establish trust. Latest typed-provenance GREEN: `590dc20251952e76f265c76e40d4755299d0b6cc`, CI `35549679233`. Durable customer projection remains open.
 
 ### B21 — partial
 
-Signed Review carries exact unique affected-page, observation, known-population and displayed-sample counts, with exact unions before sampling and all eligible B19 candidates ranked before presentation truncation. Known numeric zero stays known; unknown composite priority cannot borrow impact. Durable persistence/card/export proof remains open.
+Signed Review carries exact unique affected-page, observation, known-population and displayed-sample counts. Exact unions are computed before sampling and all eligible B19 candidates are ranked before presentation truncation. Malformed numeric evidence fails closed. Durable persistence/card/export proof remains open.
 
 ### B22 — partial
 
 The signed evidence-led preview source requires verified evidence and trusted exact identity, prefers verified impact-4/5 findings with a two-item cap, otherwise exactly one best verified fallback, and emits controller-owned sufficient-coverage wording only when coverage is explicitly sufficient. Completion-HMAC coverage privacy, authority fail-closed behavior, malformed coverage shape, structured preview-text rejection and malformed numeric evidence are GREEN. A genuinely fresh independent review and durable exact-owner/exact-scan V7 preview proof remain open.
 
-### B23 — partial
+### B23 — partial; malformed coverage-state authority boundary corrected GREEN
 
-Only explicit versioned verified B20 root-cause evidence may contribute a documented score cap. Conflicts, unverified/cross-scan evidence fail closed, and existing stricter access/sample/incomplete ceilings remain authoritative. Malformed numeric caps now fail closed without coercion. Durable customer-visible adjusted-score persistence/card/export consumption remains open.
+Only explicit verified B20 root-cause evidence may contribute a documented score cap. Conflicts, unverified/cross-scan evidence and malformed numeric caps fail closed, while existing stricter access/sample/incomplete ceilings remain authoritative.
 
-### B24 — partial; customer-safe handoff projection correction GREEN
+Fresh inspection found a real authenticated-decision boundary defect: `_stage3_coverage_state()` could stringify a malformed mapping/list from `site_fingerprint.coverage_assessment.state`, and that arbitrary text then entered `stage3_health_score_decision.coverage_state` before the canonical Review was completion-signed.
 
-Signed handoff-v2 source requires trusted exact scan identity and accepts root-cause identity only from exact-scan verified B20 groups. It carries family IDs, B19 factors, B21 counts, evidenced indexable counts, evidence refs, verification/dependency/vendor metadata and scanner UA; historical v1 reader compatibility remains preserved. `suppressed_findings` is included only when `operator_authorized is True` literally.
+- **RED `43546cb8a0655c950e594a61f05167992297c696`, FixList CI `35556402730`:** added `scanner-api/tests/test_stage3_b23_coverage_state_fail_closed.py`. Mapping/list-shaped authoritative states carrying private sentinels failed the new unknown/no-leak assertions. The independent lint/typecheck/generated-contract/frontend/build job passed; the scanner job stopped at the intentional Python-suite RED failure, so later corpus/frozen/image steps were skipped.
+- **GREEN `c1f7ebc04392e413a0181a791459b42fadfcf6a5`, exact-head FixList CI `35556598093`:** `stage3_delivery.py` now projects B23 coverage through the documented vocabulary (`sufficient`, `limited_coverage`, `inventory_unproven`, `access_limited`, `unknown`) and maps malformed/unknown values to `unknown`. Valid existing states and score-cap calculations are unchanged. RED→GREEN implementation diff is exactly one file, 17 additions / 1 deletion. Both FixList CI jobs passed: root regressions, full scanner-api suite, labelled synthetic corpus, frozen revision verification, production scanner-image build, lint, typecheck, generated release contracts, frontend contracts and production build.
 
-The latest B24 projection hardening remains GREEN: RED `083e3a0c1a649be8162c40ee0d85f6ed0c66773c`, GREEN `ef0204b9a7851a53c040b334f99e1e541097d4b3`, exact-head FixList CI `35546802039`. B24 positive-allowlists scan identity and the exact public B19 factor schema, type-projects customer text fields, uses strict finite numeric/integer evidence rules, filters explanation items to strings, and drops unknown operator/debug keys.
+The CI metadata available to this integration run did not expose a trustworthy scanner-api numeric total or image digest for `35556598093`, so neither is fabricated. Detailed checkpoint: `docs/superpowers/plans/2026-09-21-stage3-b23-coverage-state-fail-closed.md`.
 
-B20's typed-provenance correction and B19's source-numeric correction are upstream of this handoff, preventing malformed root-cause identifiers or malformed B19 confidence/GSC numeric source evidence from entering trusted downstream state.
+Durable customer-visible adjusted-score persistence/card/export consumption remains open, so B23 is not complete.
 
-B24 is **not complete**. Durable V7 persistence/read/customer/operator/export proof and a genuinely fresh independent review of the corrected shared B22/B24 privacy boundary remain open.
+### B24 — partial
+
+Signed handoff-v2 source requires trusted exact scan identity and accepts root-cause identity only from exact-scan verified B20 groups. It carries family IDs, B19 factors, B21 counts, evidenced indexable counts, evidence refs, verification/dependency/vendor metadata and scanner UA; historical v1 reader compatibility remains preserved. `suppressed_findings` is included only when `operator_authorized is True` literally. Customer scan/fix/B19-factor projection is positive-allowlisted and type-checked. Latest B24 projection GREEN: `ef0204b9a7851a53c040b334f99e1e541097d4b3`, CI `35546802039`. Durable V7 persistence/read/customer/operator/export proof and fresh independent review remain open.
 
 ## Stage 3 current gate
 
-Stage 3 is **not complete**. Latest executable GREEN is `058f46fce08c3aec66fac35a3af18a4607eb30bf`, exact-head FixList CI `35553077583`. The final persisted documentation/checkpoint branch head from this run must itself receive exact-head FixList CI before the run is closed.
+Stage 3 is **not complete**. Latest executable GREEN is `c1f7ebc04392e413a0181a791459b42fadfcf6a5`, exact-head FixList CI `35556598093`, both jobs passed. The final persisted documentation/checkpoint head created after this source correction must itself receive exact-head FixList CI before it is called the stable checkpoint.
 
 Open gates:
 
-1. one genuinely fresh independent review of the latest corrected B22/B24 shared authority/privacy boundary, including upstream B19/B20 evidence feeding handoff-v2; CodeRabbit automatic-review skip is not approval;
+1. one genuinely fresh independent review of the latest corrected B22/B24 shared authority/privacy boundary, including upstream B19/B20/B23 evidence feeding signed delivery; a skipped/absent automated review is not approval;
 2. separate Stage-1 operator records exact-source publication and fresh non-owner acceptance;
 3. reconcile this branch onto then-current accepted `main` without reverting V7/#308 and run exact integrated-head CI;
-4. prove real V7 B19/B21/B22/B23/B24 producer → signed authority → persisted rows → exact-owner/exact-scan read/reload/history → customer card/export/preview seams, including suppressed/operator privacy and historical-v1 compatibility.
+4. prove real V7 B19/B21/B22/B23/B24 producer -> signed authority -> persisted rows -> exact-owner/exact-scan read/reload/history -> customer card/export/preview seams, including suppressed/operator privacy and historical-v1 compatibility.
 
-Runtime note for the latest executable GREEN: Ubuntu 24.04.5, Python 3.12.14; `setup-node` requested major Node 20 but resolved `20.20.2`, so this is not exact Node 20.19.5 evidence. GitHub emitted the Node-24 action-runtime migration warning.
+Runtime note: GitHub's Node-20 setup has resolved Node 20.20.2 in recent runs rather than exact Node 20.19.5; exact 20.19.5 evidence is therefore not claimed.
 
 ## Stage 4 — held
 
-Canonical isolated lane remains `agent/stage4-b25-b28-compat-release-20260919` at `d2ce905ff67410586f86e38bafd93ce4e998e4d1`; prior lane CI `35464436789` passed. It must not be duplicated or shared-integrated before Stage 3 applicable acceptance.
+Canonical isolated lane remains `agent/stage4-b25-b28-compat-release-20260919` at the last refreshed checkpoint `d2ce905ff67410586f86e38bafd93ce4e998e4d1`; prior lane CI `35464436789` passed. It must not be duplicated or shared-integrated before Stage 3 applicable acceptance.
 
 - **B25 incomplete:** named synthetic corpus exists, but the genuine provenance-labelled 30-site baseline/candidate gate remains `not_assessed`. Synthetic mini-fixtures and historical summaries do not satisfy it.
 - **B26 partial:** isolated own-site serving-defect reproduction exists; shared integration/acceptance remains open.
 - **B27 partial:** isolated GEO/historical HMAC/reader/tamper/privacy compatibility exists; shared integration/acceptance remains open.
-- **B28 incomplete:** no full-blueprint exact-source deployment/live acceptance has been performed. Required live site/six-V7/worker identity reconciliation, rollback proof, and real customer submit → persistence → reload/history → rescan acceptance remain open.
+- **B28 incomplete:** no full-blueprint exact-source deployment/live acceptance has been performed. Required live site/six-V7/worker identity reconciliation, rollback proof, and real customer submit -> persistence -> reload/history -> rescan acceptance remain open.
 
 ## Next serialized action
 
-1. Certify the final persisted documentation/checkpoint head with exact-head FixList CI and record its result in PR #303 without mutating that certified source afterward.
+1. Certify the final persisted documentation/checkpoint head for the B23 slice with exact-head FixList CI and record it in PR #303 without mutating that certified source afterward.
 2. Refresh PR #303 review state. Require a genuinely fresh independent review of the corrected B22/B24 boundary; do not count an automatic-review skip as approval and do not repeatedly dispatch broken/skipped launchers.
 3. Keep V7 durable/customer mutation and shared Stage-4 integration held while Stage-1 publication/non-owner acceptance remains open.
 4. When that separate gate closes, reconcile onto accepted `main`, preserve V7/#308, run fresh exact integrated-head CI, and complete real B19–B24 persistence/customer seams before integrating the existing Stage-4 lane.
-5. Only then execute genuine B25 baseline/candidate and B28 live acceptance gates.
+5. Only then execute the genuine B25 baseline/candidate and B28 live acceptance gates.

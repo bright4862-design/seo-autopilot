@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  BASELINE_SHA: 2ad64dc55ccc49d8fba796f9432fea33a0fa79bb
+  BASELINE_SHA: 2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad
   CANDIDATE_SHA: 3fa6b7ca7735a4130ac5e1255ec42c7d725c5b40
 
 jobs:
@@ -65,7 +65,7 @@ jobs:
         run: |
           echo "Baseline:  $BASELINE_SHA"
           echo "Candidate: $CANDIDATE_SHA"
-          test "$BASELINE_SHA" = "2ad64dc55ccc49d8fba796f9432fea33a0fa79bb"
+          test "$BASELINE_SHA" = "2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad"
           test "$CANDIDATE_SHA" = "3fa6b7ca7735a4130ac5e1255ec42c7d725c5b40"
 
   collect:

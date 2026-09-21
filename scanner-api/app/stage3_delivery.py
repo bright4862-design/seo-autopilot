@@ -127,6 +127,12 @@ def summarize_candidate_counts(
         explicit_observations = len(observations)
 
     known_population = _nonnegative_int(candidate.get("known_population_count"))
+    # A known population is the denominator for the exact affected union. A
+    # denominator smaller than its confirmed numerator is internally
+    # inconsistent evidence, so keep it unknown rather than signing an
+    # impossible ratio into downstream customer output.
+    if known_population is not None and known_population < len(affected_pages):
+        known_population = None
     displayed = affected_pages[:sample_limit]
 
     return {

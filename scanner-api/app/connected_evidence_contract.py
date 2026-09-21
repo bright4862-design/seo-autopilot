@@ -52,6 +52,7 @@ _MAX_REASON_LENGTH = 2_000
 _MAX_WARNINGS = 100
 _MAX_WARNING_LENGTH = 1_000
 _MAX_RECORD_JSON_BYTES = 262_144
+_MAX_METADATA_JSON_BYTES = 131_072
 
 
 def _timestamp(value: Any, *, field: str, required: bool) -> datetime | None:
@@ -94,12 +95,39 @@ def _mapping(value: Any, *, field: str) -> Mapping[str, Any]:
     return value
 
 
+def _json_mapping(
+    value: Any,
+    *,
+    field: str,
+    max_bytes: int = _MAX_METADATA_JSON_BYTES,
+) -> Mapping[str, Any]:
+    mapping = _mapping(value, field=field)
+    try:
+        encoded = json.dumps(
+            mapping,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError, RecursionError):
+        raise ValueError(f"{field} must be strict JSON-serializable") from None
+    if len(encoded) > max_bytes:
+        raise ValueError(f"{field} exceeds its size bound")
+    return mapping
+
+
 def _validate_record(record: Any, *, index: int) -> None:
     mapping = _mapping(record, field=f"records[{index}]")
     try:
-        encoded = json.dumps(mapping, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    except (TypeError, ValueError):
-        raise ValueError(f"records[{index}] must be JSON-serializable") from None
+        encoded = json.dumps(
+            mapping,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError, RecursionError):
+        raise ValueError(f"records[{index}] must be strict JSON-serializable") from None
     if len(encoded) > _MAX_RECORD_JSON_BYTES:
         raise ValueError(f"records[{index}] exceeds its size bound")
 
@@ -138,17 +166,18 @@ def validate_connected_evidence(evidence: Mapping[str, Any]) -> Mapping[str, Any
     if observed_at is not None and retrieved_at is not None and observed_at > retrieved_at:
         raise ValueError("observed_at cannot be later than retrieved_at")
 
-    sample = _mapping(top["sample"], field="sample")
+    sample = _json_mapping(top["sample"], field="sample")
     if type(sample.get("coverage_complete_claim")) is not bool:
         raise ValueError("sample.coverage_complete_claim must be an explicit boolean")
 
-    confidence = _mapping(top["confidence"], field="confidence")
+    confidence = _json_mapping(top["confidence"], field="confidence")
     if confidence.get("kind") != "evidence_quality_not_statistical_probability":
         raise ValueError("confidence.kind must describe evidence quality, not probability")
     level = _bounded_string(confidence.get("level"), field="confidence.level", max_length=200)
 
-    _mapping(top["provenance"], field="provenance")
-    _mapping(top["coverage"], field="coverage")
+    provenance = _json_mapping(top["provenance"], field="provenance")
+    _bounded_string(provenance.get("transport"), field="provenance.transport", max_length=200)
+    _json_mapping(top["coverage"], field="coverage")
 
     records = top["records"]
     if not isinstance(records, list):
@@ -171,6 +200,8 @@ def validate_connected_evidence(evidence: Mapping[str, Any]) -> Mapping[str, Any
     if state in UNAVAILABLE_STATES:
         if records:
             raise ValueError("unavailable connected evidence cannot carry records")
+        if observed_at is not None:
+            raise ValueError("unavailable connected evidence cannot claim observed_at")
         if level != "none":
             raise ValueError("unavailable connected evidence must use confidence.level=none")
         if reason is None:
@@ -179,7 +210,10 @@ def validate_connected_evidence(evidence: Mapping[str, Any]) -> Mapping[str, Any
         if level == "none":
             raise ValueError("observed connected evidence cannot use confidence.level=none")
 
-    if state == "stale" and observed_at is None:
-        raise ValueError("stale connected evidence requires observed_at")
+    if state == "stale":
+        if observed_at is None:
+            raise ValueError("stale connected evidence requires observed_at")
+        if retrieved_at is not None and observed_at >= retrieved_at:
+            raise ValueError("stale connected evidence observed_at must predate retrieved_at")
 
     return evidence

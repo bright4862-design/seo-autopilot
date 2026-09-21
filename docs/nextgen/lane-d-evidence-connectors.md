@@ -13,6 +13,8 @@ The common envelope is versioned as `connected_evidence_v1`. Every envelope carr
 
 `scanner-api/app/connected_evidence_contract.py` adds a strict fail-closed validator for the envelope. It rejects missing/timezone-free timestamps, future observation timestamps, unknown top-level fields without a schema revision, unavailable states carrying records or claiming an observation timestamp, stale states without a strictly earlier `observed_at`, probability-like confidence labelling, missing transport provenance on observed evidence, oversized metadata/record shapes, non-JSON values, and non-finite JSON numbers such as `NaN`/`Infinity`. Unavailable envelopes remain compatible with the public fail-closed helper when no observation transport exists. The validator does not sign, persist, score, rank, or project evidence.
 
+The producer now also fails closed before constructing any envelope when `retrieved_at` cannot be parsed. Bing and GA4 import observation dates are accumulated only after a row has passed all acceptance checks, so rejected rows cannot move `observed_at`/`coverage.period_end` forward or make stale accepted evidence appear fresh.
+
 ## Safe-now adapters
 
 - **Google Search Console Search Analytics:** `normalize_gsc_search_analytics(...)` normalizes already-authorized `searchanalytics.query` response payloads and preserves dimensions, metrics, period coverage, property provenance, and truthful empty/unknown semantics.
@@ -21,7 +23,7 @@ The common envelope is versioned as `connected_evidence_v1`. Every envelope carr
 - **GA4 AI-assistant referrals:** `normalize_ga4_ai_referral_rows(...)` and CSV wrapper normalize aggregate referral rows for recognized assistant hosts and retain landing page, geography/device and traffic/conversion metrics. Referral evidence proves observed traffic only; it does not prove all mentions/citations or AI-answer ranking.
 - **CSV import boundary:** bounded UTF-8 CSV parsing rejects oversized files/row sets and duplicate normalized headers.
 
-Freshness now fails closed whenever freshness checking is enabled but the provider observation time cannot be established, parsed, or is later than retrieval. GSC Search Analytics, Bing AI Performance imports, and GA4 AI-assistant referrals emit `not_verified` with no retained observation records in that case rather than representing freshness-unknown evidence as `verified`. `stale_after_days=None` remains the explicit opt-out when a caller intentionally chooses not to make a freshness claim. URL Inspection continues to use the time of the authorized inspection response as the observation time unless a separate source observation time is supplied.
+Freshness fails closed whenever freshness checking is enabled but the provider observation time cannot be established, parsed, or is later than retrieval. GSC Search Analytics, Bing AI Performance imports, and GA4 AI-assistant referrals emit `not_verified` with no retained observation records in that case rather than representing freshness-unknown evidence as `verified`. `stale_after_days=None` remains the explicit opt-out when a caller intentionally chooses not to make a freshness claim. URL Inspection continues to use the time of the authorized inspection response as the observation time unless a separate source observation time is supplied.
 
 Sanitized fixtures live under `scanner-api/tests/fixtures_connected_evidence/` for GSC Search Analytics, URL Inspection, Bing AI Performance and GA4 referral evidence. No test performs a live provider call.
 
@@ -52,15 +54,19 @@ Recommended integration sequence:
 
 Strict contract tests: `scanner-api/tests/test_connected_evidence_contract.py` contains **24 deterministic tests**. The previous strict-contract checkpoint ran `PYTHONPATH=. pytest -q tests/test_connected_evidence_contract.py` → **24 passed** and `python -m py_compile app/connected_evidence_contract.py` → passed.
 
-The adapter suite `scanner-api/tests/test_connected_evidence.py` now contains **20 deterministic tests**: the previous 15 adapter/fixture regressions plus five freshness regressions covering date-less GSC, Bing and GA4 evidence; an explicit freshness opt-out; and a future observation timestamp. The new code checkpoint is `58aeca5373b57071af8cdbbce81bd24a4a893e19`.
+The adapter suite `scanner-api/tests/test_connected_evidence.py` now contains **23 deterministic tests**. In addition to the previous freshness cases, three new regressions cover: producer rejection of an unparseable `retrieved_at`, a rejected recent Bing row not influencing freshness, and a rejected recent GA4 row not influencing freshness. Latest code/test checkpoint: `957758eb35b9445fd6c358f4293adc868b893bd4`.
 
-Exact-head execution of the adapter + contract suites is currently blocked by the automation runtime rather than by repository code: both local Python/container execution returned an infrastructure `ClientError`, and the available remote code runner required interactive authorization that this non-interactive lane run cannot provide. GitHub reports no Actions workflow run for this integration-target head. Do **not** treat the added tests as passed until an executable runner runs:
+A local isolated harness reproducing the exact modified producer/freshness logic executed the three new hardening cases and passed **3/3**. The exact branch checkout could not be materialized in this runtime because outbound GitHub clone/download is unavailable, and GitHub reports no Actions workflow run for this integration-target head. Therefore the full exact-head adapter + contract suite is **not yet certified**. Before integration, run from `scanner-api/`:
 
 `PYTHONPATH=. pytest -q tests/test_connected_evidence.py tests/test_connected_evidence_contract.py`
 
 and:
 
 `python -m py_compile app/connected_evidence.py app/connected_evidence_contract.py tests/test_connected_evidence.py tests/test_connected_evidence_contract.py`
+
+Expected focused count on this checkpoint is **47 tests total** (23 adapter + 24 strict-contract). Do not mark the lane integration-ready until that exact-head run is green.
+
+The two CodeRabbit findings from review `5272582850` were verified as valid and fixed in the producer: invalid retrieval timestamps now fail before envelope emission, and rejected import rows no longer contribute observation dates. The corresponding inline threads may be resolved after confirming the updated diff; they are not evidence of test execution.
 
 The normal repository PR workflow currently targets `main`; this draft lane PR targets `nextgen/integration-20260921`, so a normal PR workflow run is not assumed here.
 

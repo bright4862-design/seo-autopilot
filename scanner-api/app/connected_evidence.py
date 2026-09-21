@@ -186,6 +186,9 @@ def _envelope(
 ) -> dict[str, Any]:
     if state not in EVIDENCE_STATES:
         raise ValueError(f"unsupported evidence state: {state}")
+    retrieved_iso = _iso(retrieved_at)
+    if retrieved_iso is None:
+        raise ValueError("retrieved_at must be a parseable timestamp")
     result: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "provider": provider,
@@ -193,7 +196,7 @@ def _envelope(
         "method": method or "normalization",
         "source_kind": source_kind,
         "state": state,
-        "retrieved_at": _iso(retrieved_at),
+        "retrieved_at": retrieved_iso,
         "observed_at": _iso(observed_at),
         "sample": dict(sample or {"coverage_complete_claim": False}),
         "confidence": dict(
@@ -592,7 +595,6 @@ def normalize_bing_ai_performance_rows(
                 rejected += 1
                 continue
             normalized_date = parsed.date().isoformat()
-            observed_dates.append(normalized_date)
 
         if url and query:
             kind = "grounding_query_page"
@@ -606,6 +608,8 @@ def normalize_bing_ai_performance_rows(
             rejected += 1
             continue
 
+        if normalized_date is not None:
+            observed_dates.append(normalized_date)
         records.append(
             {
                 "kind": kind,
@@ -777,7 +781,6 @@ def normalize_ga4_ai_referral_rows(
                 rejected += 1
                 continue
             normalized_date = parsed_date.date().isoformat()
-            observed_dates.append(normalized_date)
 
         try:
             sessions = _finite_number(_pick(row, "sessions"), integer=True)
@@ -798,6 +801,8 @@ def normalize_ga4_ai_referral_rows(
             rejected += 1
             continue
 
+        if normalized_date is not None:
+            observed_dates.append(normalized_date)
         records.append(
             {
                 "assistant": assistant,

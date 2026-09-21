@@ -1,44 +1,40 @@
-const ACTION_ORDER = Object.freeze({
-  fix_first: 0,
-  important: 1,
-  improve: 2,
-  review: 3,
-});
+import * as legacy from "./customerRepairPlanLegacy.js";
+
+export * from "./customerRepairPlanLegacy.js";
+
+const STAGE3_PRIORITY_VERSION = "repair_priority_v3_four_factor_v1";
 
 function clean(value) {
   return String(value ?? "").trim();
 }
 
-function actionBand(card = {}) {
-  const value = clean(card.actionPriority || card.action_priority).toLowerCase();
-  return Object.prototype.hasOwnProperty.call(ACTION_ORDER, value) ? value : "";
+function isStage3Card(card) {
+  return Boolean(
+    card
+    && typeof card === "object"
+    && card.priorityFactors?.version === STAGE3_PRIORITY_VERSION
+    && card.stage3Counts
+    && typeof card.stage3Counts === "object"
+  );
 }
 
 /**
- * Build the customer work plan from backend-owned action bands only.
- *
- * The server owns the band. The browser is allowed to put those bands in the
- * fixed customer order, but it must preserve the persisted order inside each
- * band and must never promote a repair from technical severity or page count.
+ * The authenticated Stage-3 reader already supplies Python-owned order after
+ * rank-before-truncate. Preserve that order exactly; the browser must not
+ * reconstruct priority from legacy action bands. Historical cards keep the
+ * existing plan ordering unchanged.
  */
 export function buildCustomerRepairPlan(cards = [], { fallbackNextBestStep = "" } = {}) {
   const source = Array.isArray(cards) ? cards.filter(Boolean) : [];
-  const indexed = source.map((card, index) => ({ card, index, band: actionBand(card) }));
-  indexed.sort((left, right) => {
-    const leftRank = left.band ? ACTION_ORDER[left.band] : Number.MAX_SAFE_INTEGER;
-    const rightRank = right.band ? ACTION_ORDER[right.band] : Number.MAX_SAFE_INTEGER;
-    return leftRank - rightRank || left.index - right.index;
-  });
-
-  const ordered = indexed.map(({ card }) => card);
-  const fixFirstCount = indexed.filter(({ band }) => band === "fix_first").length;
-  const first = ordered[0] || {};
+  if (source.length === 0 || !source.every(isStage3Card)) {
+    return legacy.buildCustomerRepairPlan(cards, { fallbackNextBestStep });
+  }
+  const first = source[0] || {};
   const nextBestStep = clean(first.whatToChange || first.what_to_change || first.title)
     || clean(fallbackNextBestStep);
-
   return {
-    cards: ordered,
-    fixFirstCount,
+    cards: [...source],
+    fixFirstCount: source.filter((card) => clean(card.actionPriority || card.action_priority).toLowerCase() === "fix_first").length,
     nextBestStep,
   };
 }

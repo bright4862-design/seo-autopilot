@@ -1,554 +1,103 @@
-/**
- * The customer-facing shape of a repair card.
- *
- * A FixList card is an implementation plan, not an audit object. Every card
- * answers five things, in this order, before any technical evidence:
- *
- *   what is wrong -> why it matters -> where -> what to change -> who
- *
- * This module composes those five answers from the persisted, authoritative
- * fields and nothing else. It never invents a root cause, never claims a shared
- * template the backend did not record, and never rewrites evidence to read
- * better. Where the backend cannot support a claim, the claim is omitted.
- */
-import { customerCopyForFix } from "./fixVocabulary.js";
-import { evidenceLink, evidenceIdentityOptions } from "./evidenceUrl.js";
-import { repairSuggestion, repairTypeOf } from "./repairSuggestions.js";
+import * as legacy from "./repairCardModelLegacy.js";
 
-const clean = (value) => (typeof value === "string" ? value.trim() : "");
-const lower = (value) => clean(value).toLowerCase();
+export * from "./repairCardModelLegacy.js";
 
-/**
- * Classifier states that are not page types.
- *
- * These are how the classifier records "I could not tell", so showing them is
- * telling the customer about our uncertainty in the vocabulary of our own
- * internals. They are dropped from customer scope wording; the underlying
- * counts stay in the evidence breakdown.
- */
-// Families that name the classifier's own bookkeeping rather than a kind of
-// page an owner would recognise. "standard" is the default bucket: saying
-// "6 standard pages" tells someone nothing they did not already know, and the
-// unmapped-family fallback below would otherwise print the key verbatim.
-const OPAQUE_FAMILIES = new Set(["unknown", "mixed", "unclassified", "other", "none", "standard", ""]);
+const STAGE3_PRIORITY_VERSION = "repair_priority_v3_four_factor_v1";
 
-/**
- * Family labels a customer can act on, in their own words.
- *
- * Two forms, because one does not fit both sentences. `one`/`many` are complete
- * noun phrases and are used when a card names a single kind of page: a family
- * whose own name already ends in "page" was previously handed to a template
- * that appended another one, producing "3 product page pages", and "homepage"
- * became "1 homepage page". `word` is the bare modifier used in the "across X
- * and Y pages" list, so it must never itself contain "page".
- *
- * The keys are app/extract.py classify_template's complete return set plus the
- * legacy names still held in persisted rows. "standard" and "unknown" are
- * absent deliberately -- see OPAQUE_FAMILIES.
- */
-const FAMILY_WORDS = Object.freeze({
-  activity_detail: { word: "activity", one: "activity page", many: "activity pages" },
-  archive: { word: "archive", one: "archive page", many: "archive pages" },
-  booking_or_checkout: { word: "checkout", one: "checkout page", many: "checkout pages" },
-  calculator: { word: "calculator", one: "calculator page", many: "calculator pages" },
-  category_listing: { word: "category", one: "category page", many: "category pages" },
-  collection_page: { word: "collection", one: "collection page", many: "collection pages" },
-  comparison_page: { word: "comparison", one: "comparison page", many: "comparison pages" },
-  contact: { word: "contact", one: "contact page", many: "contact pages" },
-  conversion: { word: "sign-up and contact", one: "sign-up or contact page", many: "sign-up and contact pages" },
-  guide: { word: "guide", one: "guide", many: "guides" },
-  guide_article: { word: "guide", one: "guide", many: "guides" },
-  homepage: { word: "home", one: "homepage", many: "homepages" },
-  legal_info: { word: "legal", one: "legal page", many: "legal pages" },
-  loan_program: { word: "loan", one: "loan page", many: "loan pages" },
-  location_landing: { word: "location", one: "location page", many: "location pages" },
-  product_detail: { word: "product", one: "product page", many: "product pages" },
-  product_page: { word: "product", one: "product page", many: "product pages" },
-  qa: { word: "FAQ", one: "FAQ page", many: "FAQ pages" },
-  route_boundary: { word: "section", one: "section page", many: "section pages" },
-});
+const plainObject = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : null;
+const finiteOrNull = (value, min, max) => value === null
+  ? null
+  : (typeof value === "number" && Number.isFinite(value) && value >= min && value <= max ? value : undefined);
+const integerOrNull = (value, min = 0) => value === null
+  ? null
+  : (Number.isInteger(value) && value >= min ? value : undefined);
+const textOrNull = (value) => value === null
+  ? null
+  : (typeof value === "string" ? value : undefined);
 
-/**
- * The bare modifier for a family, or "" when this build cannot name it.
- *
- * An unmapped key used to be printed with its underscores swapped for spaces,
- * which is how "internal or auth pages" and "loan program pages" reached the
- * customer. Silence is the safe failure: a family this build does not know is
- * one it cannot describe, and the count still reaches the sentence through the
- * unnamed-pages branch below.
- */
-function familyWord(family) {
-  const entry = FAMILY_WORDS[familyKey(family)];
-  return entry ? entry.word : "";
-}
-
-function familyKey(family) {
-  const key = lower(family).replace(/\s+/g, "_");
-  return OPAQUE_FAMILIES.has(key) ? "" : key;
-}
-
-/** The complete noun phrase for a family at a given count. */
-function familyNoun(family, count) {
-  const entry = FAMILY_WORDS[familyKey(family)];
-  if (!entry) return "";
-  return count === 1 ? entry.one : entry.many;
-}
-
-const affectedOf = (item) => {
-  const list = Array.isArray(item?.affectedPages) ? item.affectedPages : item?.affected_pages;
-  return Array.isArray(list) ? list.map(clean).filter(Boolean) : [];
-};
-
-const countOf = (item) => {
-  const declared = Number(item?.pageCount ?? item?.page_count ?? 0);
-  return Math.max(affectedOf(item).length, Number.isFinite(declared) ? declared : 0);
-};
-
-function breakdownOf(item) {
-  const raw = item?.familyBreakdown || item?.family_breakdown;
-  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    const entries = Object.entries(raw)
-      .map(([family, count]) => [family, Number(count) || 0])
-      .filter(([, count]) => count > 0);
-    if (entries.length > 0) return Object.fromEntries(entries);
-  }
-  const family = clean(item?.templateFamily || item?.page_template_family);
-  const count = countOf(item);
-  return family && count > 0 ? { [family]: count } : {};
-}
-
-/**
- * Where the problem is, in one sentence.
- *
- * The count alone is what the current cards repeat twice without helping. This
- * says how many and *which kinds of page*, and only names the kinds the
- * classifier actually identified -- so an opaque classification simply drops out
- * of the sentence rather than surfacing as "mixed pages".
- */
-export function whereLine(item) {
-  const count = countOf(item);
-  if (count <= 0) return "";
-  const noun = count === 1 ? "page" : "pages";
-  const breakdown = Object.entries(breakdownOf(item));
-  const named = breakdown
-    .filter(([family]) => familyWord(family))
-    .sort((a, b) => b[1] - a[1])
-    .map(([family]) => familyWord(family));
-  const hasUnnamed = breakdown.length > named.length;
-
-  if (named.length === 0) return `${count} ${noun} on your site.`;
-  if (named.length === 1 && !hasUnnamed) {
-    const only = breakdown.find(([family]) => familyWord(family));
-    return `${count} ${familyNoun(only[0], count)}.`;
-  }
-  const listed = hasUnnamed ? [...named, "other"] : named;
-  const spread = listed.length <= 3
-    ? `${listed.slice(0, -1).join(", ")} and ${listed[listed.length - 1]}`
-    : `${listed.slice(0, 3).join(", ")} and other`;
-  return `${count} ${noun}, across ${spread} pages.`;
-}
-
-export function customerActionKey(item, fallbackRowIdentity = "") {
-  const fingerprint = repairFingerprintOf(item);
-  if (fingerprint) return `fingerprint|${fingerprint}`;
-  const rowIdentity = clean(
-    item?.fix_id
-      || item?.id
-      || item?.original?.fix_id
-      || item?.original?.id
-      || fallbackRowIdentity,
-  );
-  return `row|${rowIdentity || "unidentified"}`;
-}
-
-export function repairFingerprintOf(item) {
-  return clean(
-    item?.repair_fingerprint
-      || item?.repairFingerprint
-      || item?.original?.repair_fingerprint,
-  );
-}
-
-const LOCALE_SEGMENT = /^[a-z]{2}(-[a-z]{2})?$/;
-
-function localeOf(page) {
-  const path = clean(page).replace(/^https?:\/\/[^/]+/i, "");
-  const first = path.split("/").filter(Boolean)[0];
-  return first && LOCALE_SEGMENT.test(first.toLowerCase()) ? first.toLowerCase() : "";
-}
-
-export function customerEvidenceGroupRows(card = {}, siteOrigin = "") {
-  const groups = Array.isArray(card?.evidence?.evidenceGroups)
-    ? card.evidence.evidenceGroups
-    : [];
-  return groups.map((group, index) => {
-    const affectedPages = [...new Set(
-      (Array.isArray(group?.affectedPages) ? group.affectedPages : [])
-        .map(clean)
-        .filter(Boolean),
-    )];
-    const representativePage = clean(group?.representativePage) || affectedPages[0] || "";
-    const localeEvidence = affectedPages.length > 0
-      ? affectedPages
-      : representativePage ? [representativePage] : [];
-    const locales = [...new Set(localeEvidence.map(localeOf))];
-    const persistedLocale = lower(group?.locale);
-    const locale = persistedLocale
-      && locales.length === 1
-      && locales[0] === persistedLocale
-      ? persistedLocale
-      : "";
-    const family = clean(group?.family);
-    return {
-      id: clean(group?.fixId) || `evidence-group-${index + 1}`,
-      family,
-      familyLabel: familyNoun(family, 1),
-      locale,
-      count: Math.max(Number(group?.count) || 0, affectedPages.length),
-      representativePage,
-      representativeLink: evidenceLink(representativePage, siteOrigin, evidenceIdentityOptions(card)),
-      affectedPages,
-    };
-  });
-}
-
-export function customerEvidenceGroupHeading(rows = []) {
-  const count = Array.isArray(rows) ? rows.length : 0;
-  return `Evidence groups (${count})`;
-}
-
-function evidenceGroupsFor(members) {
-  return members.flatMap((member) => {
-    const rawCandidate = member?.raw_finding ?? member?.original?.raw_finding;
-    const raw = rawCandidate && typeof rawCandidate === "object"
-      ? rawCandidate
-      : {};
-    const persisted = Array.isArray(raw.repair_evidence_groups)
-      ? raw.repair_evidence_groups
-      : [];
-    if (persisted.length > 0) {
-      return persisted.map((group) => {
-        const pages = Array.isArray(group?.affected_urls)
-          ? group.affected_urls.map(clean).filter(Boolean)
-          : [];
-        return {
-          family: clean(group?.family),
-          count: Math.max(Number(group?.count) || 0, pages.length),
-          representativePage: clean(group?.representative_url) || pages[0] || "",
-          affectedPages: pages,
-          locale: clean(group?.locale),
-          fixId: clean(group?.fix_id),
-          priority: clean(group?.priority),
-          actionPriority: clean(group?.action_priority),
-          evidenceClass: clean(group?.evidence_class),
-          evidenceStatus: clean(group?.evidence_status),
-          verificationState: clean(group?.verification_state),
-          repairVerificationState: clean(group?.repair_verification_state),
-        };
-      });
-    }
-
-    const pages = affectedOf(member);
-    const locales = [...new Set(pages.map(localeOf))];
-    return [{
-      family: clean(member?.templateFamily || member?.page_template_family),
-      count: countOf(member),
-      representativePage: pages[0] || "",
-      affectedPages: pages,
-      locale: locales.length === 1 && locales[0] ? locales[0] : "",
-      fixId: clean(member?.fix_id || member?.id),
-    }];
-  });
-}
-
-const MAX_REPAIR_OBSERVATION_SAMPLES = 20;
-const REPAIR_OBSERVATION_TEXT_KEYS = new Set([
-  "page_url", "canonical_url", "image_url", "source_page", "current_href",
-  "observed_target", "sitemap_file", "original_loc", "title", "h1", "excerpt",
-  "alt_text", "meta_description", "meta_description_state", "decorative_state",
-  "issue_type", "intended_market", "alt_state", "link_text",
-]);
-
-function sanitizeRepairObservation(value = {}) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const output = {};
-  for (const [key, raw] of Object.entries(value)) {
-    if (REPAIR_OBSERVATION_TEXT_KEYS.has(key)) {
-      // Explicit empty strings are evidence (for example a missing canonical),
-      // so do not pass them through `clean()`, which would make absence and an
-      // observed empty value indistinguishable.
-      if (typeof raw === "string") output[key] = raw.trim();
-      else if (raw === null) output[key] = null;
-      continue;
-    }
-    if (key === "status" || key === "h1_count") {
-      const number = Number(raw);
-      if (Number.isInteger(number) && number >= 0) output[key] = number;
-    }
-  }
-  return Object.keys(output).length > 0 ? output : null;
-}
-
-function repairObservationEvidenceFor(item = {}) {
-  const candidates = [item?.raw_finding, item?.original?.raw_finding, item?.original, item]
-    .filter((value) => value && typeof value === "object" && !Array.isArray(value));
-  for (const raw of candidates) {
-    if (!Object.prototype.hasOwnProperty.call(raw, "repair_observation_samples")
-      && !Object.prototype.hasOwnProperty.call(raw, "repair_observation_count")) continue;
-    const samples = (Array.isArray(raw.repair_observation_samples) ? raw.repair_observation_samples : [])
-      .slice(0, MAX_REPAIR_OBSERVATION_SAMPLES)
-      .map(sanitizeRepairObservation)
-      .filter(Boolean);
-    const countRaw = Number(raw.repair_observation_count);
-    const count = Number.isInteger(countRaw) && countRaw >= 0 ? countRaw : samples.length;
-    return { samples, count: Math.max(count, samples.length) };
-  }
-  return { samples: [], count: 0 };
-}
-
-function redirectEvidenceFor(item = {}) {
-  const candidates = [];
-  const push = (value, outcome = "") => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return;
-    const requested = clean(value.requested_url);
-    const finalUrl = clean(value.final_url);
-    if (!requested && !finalUrl) return;
-    candidates.push({ outcome: clean(outcome), ...value });
+function normalizePriorityFactors(value) {
+  const source = plainObject(value);
+  if (!source || source.version !== STAGE3_PRIORITY_VERSION) return null;
+  const impact = Number.isInteger(source.impact) && source.impact >= 0 && source.impact <= 5 ? source.impact : undefined;
+  const reach = finiteOrNull(source.reach, 0, 1);
+  const pageValue = finiteOrNull(source.page_value, 0, 1);
+  const confidence = finiteOrNull(source.confidence, 0, 1);
+  const score = finiteOrNull(source.priority_factor_score, 0, 5);
+  const affected = integerOrNull(source.reach_affected_indexable);
+  const denominator = integerOrNull(source.reach_observed_indexable_family);
+  if ([impact, reach, pageValue, confidence, score, affected, denominator].some((item) => item === undefined)) return null;
+  if (affected !== null && denominator !== null && affected > denominator) return null;
+  if (!Array.isArray(source.explanation) || source.explanation.some((item) => typeof item !== "string")) return null;
+  const textFields = [
+    "impact_reason", "reach_state", "page_value_state", "page_value_role",
+    "page_value_source", "confidence_state", "score_state",
+    "technical_base_severity", "technical_severity_source",
+  ];
+  const output = {
+    version: STAGE3_PRIORITY_VERSION,
+    impact,
+    reach,
+    page_value: pageValue,
+    confidence,
+    priority_factor_score: score,
+    reach_affected_indexable: affected,
+    reach_observed_indexable_family: denominator,
+    explanation: [...source.explanation],
   };
-
-  const rawCandidates = [
-    item?.raw_finding,
-    item?.original?.raw_finding,
-    item?.original,
-    item,
-  ].filter((value) => value && typeof value === "object");
-
-  for (const raw of rawCandidates) {
-    const persistedSamples = Array.isArray(raw.redirect_fetch_evidence_samples)
-      ? raw.redirect_fetch_evidence_samples
-      : [];
-    for (const sample of persistedSamples) {
-      push(sample, raw.redirect_outcome);
-    }
-    push(raw.redirect_fetch_evidence, raw.redirect_outcome);
+  for (const field of textFields) {
+    const normalized = textOrNull(source[field]);
+    if (normalized === undefined) return null;
+    output[field] = normalized;
   }
-
-  const seen = new Set();
-  return candidates.filter((entry) => {
-    const key = JSON.stringify(entry);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).slice(0, 10);
+  return output;
 }
 
-export function mergeCustomerActions(items = []) {
-  const order = [];
-  const groups = new Map();
+function normalizeStage3Counts(value) {
+  const source = plainObject(value);
+  if (!source) return null;
+  const unique = integerOrNull(source.unique_affected_page_count);
+  const observations = integerOrNull(source.observation_count);
+  const population = integerOrNull(source.known_population_count);
+  const displayed = integerOrNull(source.displayed_sample_count);
+  const truncated = integerOrNull(source.truncated_sample_count);
+  if ([unique, observations, population, displayed, truncated].some((item) => item === undefined)) return null;
+  if (unique === null || displayed === null || truncated === null) return null;
+  if (population !== null && population < unique) return null;
+  if (!Array.isArray(source.displayed_samples) || source.displayed_samples.some((item) => typeof item !== "string")) return null;
+  if (displayed !== source.displayed_samples.length || truncated !== unique - displayed) return null;
+  if (source.examples_partial !== (displayed < unique)) return null;
+  return {
+    unique_affected_page_count: unique,
+    observation_count: observations,
+    known_population_count: population,
+    displayed_sample_count: displayed,
+    displayed_samples: [...source.displayed_samples],
+    examples_partial: source.examples_partial === true,
+    truncated_sample_count: truncated,
+  };
+}
 
-  const sourceItems = Array.isArray(items) ? items : [];
-  for (const [index, item] of sourceItems.entries()) {
-    if (!item || typeof item !== "object") continue;
-    const key = customerActionKey(item, `index:${index}`);
-    if (!groups.has(key)) {
-      groups.set(key, { lead: item, members: [] });
-      order.push(key);
-    }
-    const group = groups.get(key);
-    group.members.push(item);
-    if (countOf(item) > countOf(group.lead)) group.lead = item;
-  }
-
-  return order.map((key) => {
-    const { lead, members } = groups.get(key);
-    if (members.length === 1) {
-      const existing = Array.isArray(lead.mergedFromFixIds)
-        ? lead.mergedFromFixIds.map(clean).filter(Boolean)
-        : [];
-      return {
-        ...lead,
-        mergedFromFixIds: existing.length > 0 ? existing : [clean(lead.fix_id || lead.id)].filter(Boolean),
-        evidenceGroups: evidenceGroupsFor(members),
-      };
-    }
-
-    const affected = [];
-    const seen = new Set();
-    for (const member of members) {
-      for (const page of affectedOf(member)) {
-        if (!seen.has(page)) {
-          seen.add(page);
-          affected.push(page);
-        }
-      }
-    }
-    const breakdown = {};
-    for (const member of members) {
-      for (const [family, count] of Object.entries(breakdownOf(member))) {
-        breakdown[family] = (breakdown[family] || 0) + count;
-      }
-    }
-    const declared = members.reduce((total, member) => total + countOf(member), 0);
-    const namedFamilies = Object.keys(breakdown).filter((family) => familyWord(family));
-    const spansFamilies = namedFamilies.length > 1;
-    return {
-      ...lead,
-      ...(spansFamilies ? { templateFamily: "", page_template_family: "" } : {}),
-      affectedPages: affected,
-      affected_pages: affected,
-      pageCount: Math.max(declared, affected.length),
-      page_count: Math.max(declared, affected.length),
-      familyBreakdown: breakdown,
-      family_breakdown: breakdown,
-      evidenceGroups: evidenceGroupsFor(members),
-      mergedFromFixIds: members.map((member) => clean(member.fix_id || member.id)).filter(Boolean),
-    };
-  });
+function stage3Fields(item) {
+  const priorityFactors = normalizePriorityFactors(item?.stage3_priority_factors);
+  const stage3Counts = normalizeStage3Counts(item?.stage3_counts);
+  return priorityFactors && stage3Counts ? { priorityFactors, stage3Counts } : null;
 }
 
 export function buildRepairCard(item = {}) {
-  const copy = customerCopyForFix(item) || {};
-  const suggestion = repairSuggestion(item);
-  const affected = affectedOf(item);
-  const repairObservations = repairObservationEvidenceFor(item);
-  const priority = lower(item?.priority || item?.original?.priority) || "medium";
-  const actionPriority = lower(item?.actionPriority || item?.action_priority || item?.original?.action_priority);
-  const sharedRepairConfirmed = item?.sharedRepairConfirmed === true
-    || item?.shared_repair_confirmed === true
-    || item?.original?.shared_repair_confirmed === true;
-
-  return {
-    rule: lower(item?.rule || item?.original?.rule),
-    priority,
-    actionPriority,
-    status: lower(item?.status || item?.user_status || item?.original?.status || item?.original?.user_status),
-    customerCategory: clean(copy.customerCategory)
-      || clean(item?.customerCategory || item?.customer_category || item?.original?.customer_category)
-      || "Website improvement",
-    technicalLabel: clean(copy.technicalLabel),
-    evidenceClass: lower(item?.evidenceClass || item?.evidence_class || item?.original?.evidence_class),
-    pageScope: lower(item?.pageScope || item?.page_scope || item?.original?.page_scope),
-    sharedRepairConfirmed,
-    title: clean(copy.title) || clean(item.title) || clean(item.issue_title) || "Review this recommendation",
-    whyItMatters: clean(copy.whyItMatters) || clean(item.whyItMatters) || clean(item.why_it_matters),
-    where: whereLine(item),
-    whatToChange: clean(copy.recommendation) || clean(suggestion.suggestedFix),
-    who: clean(suggestion.role) || (item.needsHelp ? "Developer" : "You"),
-    effort: clean(suggestion.effortDetail) || clean(suggestion.effortLabel),
-    evidence: {
-      ...(evidenceIdentityOptions(item).identityVersion ? evidenceIdentityOptions(item) : {}),
-      affectedPages: affected,
-      pageCount: countOf(item),
-      familyBreakdown: breakdownOf(item),
-      representativePages: affected.slice(0, 3),
-      mergedFromFixIds: Array.isArray(item.mergedFromFixIds) ? item.mergedFromFixIds : [],
-      evidenceGroups: Array.isArray(item.evidenceGroups) ? item.evidenceGroups : [],
-      redirectEvidence: redirectEvidenceFor(item),
-      repairObservationCount: repairObservations.count,
-      repairObservationSamples: repairObservations.samples,
-    },
-  };
+  const base = legacy.buildRepairCard(item);
+  const stage3 = stage3Fields(item);
+  return stage3 ? { ...base, ...stage3 } : base;
 }
 
-function scopeHintFor(card = {}) {
-  const families = Object.entries(card?.evidence?.familyBreakdown || {})
-    .filter(([family]) => familyWord(family));
-  if (families.length === 1) {
-    const [family, count] = families[0];
-    const noun = familyNoun(family, Number(count) === 1 ? 1 : 2);
-    return noun ? noun.charAt(0).toUpperCase() + noun.slice(1) : "";
-  }
-
-  const scope = lower(card?.pageScope || card?.page_scope);
-  if (scope === "sitewide") return "Across the site";
-  if (scope === "section" || scope === "path_prefix") return "One section";
-
-  const count = Number(card?.evidence?.pageCount || 0);
-  if (count > 0) return `${count} specific ${count === 1 ? "page" : "pages"}`;
-
-  const label = customerEvidenceClassLabel(card?.evidenceClass);
-  return label || "";
-}
-
-const EVIDENCE_CLASS_LABELS = Object.freeze({
-  confirmed_problem: "Confirmed problem",
-  improvement: "Improvement",
-  opportunity: "Review opportunity",
-});
-
-function customerEvidenceClassLabel(value) {
-  return EVIDENCE_CLASS_LABELS[lower(value)] || "";
-}
-
-const REDIRECT_CLASSIFICATION_LABELS = Object.freeze({
-  redirect_to_wrong_destination: "Wrong destination",
-  redirect_to_usable_page: "Usable destination",
-  redirect_destination_unverified: "Could not verify destination",
-  redirect_destination_unusable: "Unusable destination",
-  redirect_to_nonindexable_page: "Non-indexable destination",
-});
-
-function observedStatusLabel(value) {
-  const status = Number(value);
-  return Number.isInteger(status) && status >= 100 && status <= 599
-    ? `HTTP ${status}`
-    : "No verified final status";
-}
-
-export function customerRedirectEvidenceRows(card = {}, siteOrigin = "") {
-  const values = Array.isArray(card?.evidence?.redirectEvidence) ? card.evidence.redirectEvidence : [];
-  return values.slice(0, 20).map((value) => {
-    const classification = lower(value?.classification);
-    const needsVerification = classification === "redirect_destination_unverified" || Boolean(clean(value?.fetch_error));
-    return {
-      requested: evidenceLink(value?.requested_url, siteOrigin, evidenceIdentityOptions(card)),
-      destination: evidenceLink(value?.final_url, siteOrigin, evidenceIdentityOptions(card)),
-      statusLabel: observedStatusLabel(value?.final_status),
-      classificationLabel: REDIRECT_CLASSIFICATION_LABELS[classification] || "Observed redirect",
-      verificationLabel: needsVerification ? "Needs verification" : "Verified response",
-    };
-  });
-}
-
-function observationValueLabel(value = {}) {
-  if (Object.prototype.hasOwnProperty.call(value, "canonical_url")) {
-    return `Canonical observed: ${clean(value.canonical_url) || "missing"}`;
-  }
-  if (Object.prototype.hasOwnProperty.call(value, "meta_description_state")) {
-    const state = lower(value.meta_description_state).replace(/_/g, " ") || "unknown";
-    return `Meta description observed: ${state}`;
-  }
-  if (Object.prototype.hasOwnProperty.call(value, "h1_count")) {
-    return `H1 count observed: ${Number(value.h1_count) || 0}`;
-  }
-  if (clean(value.title)) return `Title observed: ${clean(value.title)}`;
-  if (clean(value.excerpt)) return clean(value.excerpt);
-  return "Issue observed on this page";
-}
-
-export function customerRepairObservationRows(card = {}, siteOrigin = "") {
-  const values = Array.isArray(card?.evidence?.repairObservationSamples)
-    ? card.evidence.repairObservationSamples
-    : [];
-  return values.slice(0, 20).map((value) => ({
-    page: evidenceLink(value?.page_url, siteOrigin, evidenceIdentityOptions(card)),
-    statusLabel: observedStatusLabel(value?.status).replace("No verified final status", "Status not recorded"),
-    valueLabel: observationValueLabel(value),
-  }));
-}
-
-export function withRepeatedTitleScopeHints(cards = []) {
-  const counts = new Map();
-  for (const card of cards) {
-    const key = lower(card?.title);
-    if (key) counts.set(key, (counts.get(key) || 0) + 1);
-  }
-  return cards.map((card) => ({
-    ...card,
-    scopeHint: counts.get(lower(card?.title)) > 1 ? scopeHintFor(card) : "",
-  }));
-}
-
+/**
+ * Stage-3 rows arrive in Python-owned rank order after the authenticated V7
+ * reader. Do not merge or re-rank them in the browser. Historical rows retain
+ * the existing repair-fingerprint merge behavior unchanged.
+ */
 export function buildRepairCards(items = []) {
-  return mergeCustomerActions(items).map(buildRepairCard);
+  const source = Array.isArray(items) ? items.filter((item) => item && typeof item === "object") : [];
+  if (source.length > 0 && source.every((item) => stage3Fields(item))) {
+    return source.map((item) => buildRepairCard(item));
+  }
+  return legacy.buildRepairCards(items);
 }

@@ -25,7 +25,15 @@ function validPriorityFactors(value) {
   if (!source || source.version !== STAGE3_PRIORITY_VERSION) return false;
   if (!Number.isInteger(source.impact) || source.impact < 0 || source.impact > 5) return false;
   if (!nullableFinite(source.reach, 0, 1) || !nullableFinite(source.page_value, 0, 1) || !nullableFinite(source.confidence, 0, 1) || !nullableFinite(source.priority_factor_score, 0, 5)) return false;
-  if (!nonNegativeInteger(source.reach_affected_indexable) || !nonNegativeInteger(source.reach_observed_indexable_family) || source.reach_affected_indexable > source.reach_observed_indexable_family) return false;
+  const affected = source.reach_affected_indexable;
+  const denominator = source.reach_observed_indexable_family;
+  if (!nonNegativeInteger(affected) || !nullableNonNegativeInteger(denominator)) return false;
+  if (denominator !== null && affected > denominator) return false;
+  if (source.reach !== null) {
+    if (denominator === null || denominator <= 0) return false;
+    const expectedReach = affected / denominator;
+    if (Math.abs(expectedReach - source.reach) > 1e-9) return false;
+  }
   if (!Array.isArray(source.explanation) || source.explanation.length > 8 || source.explanation.some((item) => typeof item !== "string")) return false;
   if (source.priority_factor_score !== null) {
     if (source.reach === null || source.page_value === null || source.confidence === null) return false;

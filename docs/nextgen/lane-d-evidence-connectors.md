@@ -1,23 +1,66 @@
-# Agent D — Evidence Connectors
+# Agent D — Evidence Connectors handoff
 
-Issue: #325
-Integration base: nextgen/integration-20260921
+Issue: #325  
+Draft PR: #332  
+Integration base: `nextgen/integration-20260921`  
+Lane branch: `agent/nextgen-evidence-connectors-20260921`
 
-Implement only the Evidence Connectors lane defined in docs/nextgen/2026-09-21-parallel-engineering-lanes.md.
+## Lane boundary
 
-Branch ownership:
-- provider-neutral evidence schema
-- GSC Search Analytics normalization
-- URL Inspection normalization
-- Bing AI Performance import normalization
-- GA4 AI-assistant evidence normalization
-- explicit unavailable/not-connected states
+This lane owns only pure, provider-neutral connected-evidence contracts, import/normalization helpers, sanitized fixtures, and tests. It performs no network I/O, OAuth/account mutation, Base44 schema change, authority/persistence write, customer projection, repair-priority change, `run_scan` orchestration, release, deployment, or production mutation.
 
-Forbidden:
-- OAuth/account changes
-- Base44 schema
-- authority/persistence/projection
-- run_scan
-- release/deploy/admission
+The common envelope is versioned as `connected_evidence_v1`. Every envelope carries provider, surface, method, source kind, retrieval/observation timestamps, sample/coverage disclosure, evidence-quality confidence, provenance, explicit state, and bounded records. States are `verified`, `stale`, `not_connected`, `not_supported`, `not_verified`, and `provider_error`. Disconnected/stale/unavailable evidence is observational and must never block an otherwise valid Standard 150 scan or fabricate traffic/indexing/AI-visibility claims.
 
-Do not invent undocumented Google Generative AI API endpoints.
+`scanner-api/app/connected_evidence_contract.py` adds a strict fail-closed validator for the envelope. It rejects missing/timezone-free timestamps, future observation timestamps, unknown top-level fields without a schema revision, unavailable states carrying records, stale states without `observed_at`, probability-like confidence labelling, unbounded warning/record shapes, and non-JSON record data. It does not sign, persist, score, rank, or project evidence.
+
+## Safe-now adapters
+
+- **Google Search Console Search Analytics:** `normalize_gsc_search_analytics(...)` normalizes already-authorized `searchanalytics.query` response payloads and preserves dimensions, metrics, period coverage, property provenance, and truthful empty/unknown semantics.
+- **Google Search Console URL Inspection:** `normalize_google_url_inspection(...)` normalizes already-authorized `urlInspection.index.inspect` payloads. It preserves verdict/indexing/fetch/canonical/last-crawl/referrer/sitemap observations without treating provider output as a guarantee of current search visibility.
+- **Bing Webmaster Tools AI Performance:** `normalize_bing_ai_performance_rows(...)` and CSV wrapper accept manual CSV/Excel-derived dictionaries only. The contract preserves grounding query, cited page, citation count, average cited pages, topic/intent/citation share when present, geography/market/surface and import provenance. `api_used` is explicitly false; this lane does not claim an AI Performance API exists.
+- **GA4 AI-assistant referrals:** `normalize_ga4_ai_referral_rows(...)` and CSV wrapper normalize aggregate referral rows for recognized assistant hosts and retain landing page, geography/device and traffic/conversion metrics. Referral evidence proves observed traffic only; it does not prove all mentions/citations or AI-answer ranking.
+- **CSV import boundary:** bounded UTF-8 CSV parsing rejects oversized files/row sets and duplicate normalized headers.
+
+Sanitized fixtures live under `scanner-api/tests/fixtures_connected_evidence/` for GSC Search Analytics, URL Inspection, Bing AI Performance and GA4 referral evidence. No test performs a live provider call.
+
+## Future connector work requiring separate owner authorization
+
+These are integration prerequisites, not permissions granted by this lane:
+
+1. GSC Search Analytics live retrieval must use an existing owner-authorized Search Console connection and the documented Search Console API operation; no OAuth client, scope, token, property access, or credential is created here.
+2. URL Inspection live retrieval likewise requires owner-authorized Search Console access and the documented URL Inspection operation; this lane does not alter quotas or connection UI.
+3. GA4 live retrieval may later use an owner-authorized GA4 reporting/Data API connection or an explicit export import. This lane creates no Analytics property access, OAuth scope, credential, or account link.
+4. Bing AI Performance remains import/manual evidence unless a separately verified official programmatic route is available and approved. Do not infer an endpoint from UI/export availability.
+5. **No dedicated Google Generative-AI visibility/report API is assumed or implemented.** Until an official programmatic route is verified, any such evidence must remain manual/import/not-supported/not-verified as appropriate.
+
+## Serialized integrator hook
+
+The integrator may later call the pure adapters only after an authorized provider response/import already exists. Before any downstream use, validate each envelope with `validate_connected_evidence(...)`. Keep the resulting connected-evidence collection separate from canonical crawl authority. `not_connected`, `not_supported`, `not_verified`, `provider_error`, and `stale` must remain explicit. Any future influence on B18 page value/priority belongs to the serialized integrator and existing signed authority path; this lane intentionally does not implement it.
+
+Recommended integration sequence:
+
+1. obtain authorized payload/import outside this lane;
+2. normalize with the provider adapter;
+3. validate the envelope strictly;
+4. attach as optional connected evidence with provenance/coverage intact;
+5. only the serialized integration layer may decide whether valid current evidence affects later ranking/repair logic;
+6. preserve Standard 150 output unchanged when no connected evidence is present.
+
+## Verification
+
+Focused adapter tests: `scanner-api/tests/test_connected_evidence.py` (provider normalizers, explicit unavailable/stale states, sanitized fixtures).  
+Strict contract tests: `scanner-api/tests/test_connected_evidence_contract.py` (17 deterministic tests).  
+Local contract verification for this checkpoint: `PYTHONPATH=. pytest -q tests/test_connected_evidence_contract.py` → **17 passed**; `python -m py_compile app/connected_evidence_contract.py` → passed.
+
+The normal repository PR workflow currently targets `main`; this draft lane PR targets `nextgen/integration-20260921`, so a normal PR workflow run is not assumed here. The serialized integrator must run the repository-relevant suites after transplant/integration.
+
+## Known risks / truthful unsupported states
+
+- Connected evidence is optional enrichment, not crawl authority.
+- Citation share is observational and is not a ranking, quality, or probability score.
+- Search Console and Analytics payload freshness depends on the provider/report window; stale evidence remains retained but explicitly labelled.
+- GA4 referral-source classification cannot measure dark/direct AI traffic or uncited mentions.
+- Bing UI/export columns can evolve; unknown columns/rows fail closed rather than being guessed.
+- Dedicated Google Gen-AI reporting remains unsupported/not verified until an official programmatic surface is established.
+
+Rollback is lane-local: omit these pure modules/tests/docs from the serialized integration branch. No production state, credentials, schema, durable authority, or customer data requires reversal.

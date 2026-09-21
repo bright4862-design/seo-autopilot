@@ -1,0 +1,483 @@
+name: B25 final reviewed gate
+
+on:
+  pull_request:
+    types: [synchronize, reopened]
+    paths:
+      - ".github/workflows/b25-final-reviewed-gate.yml"
+
+permissions:
+  contents: write
+  actions: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: b25-final-reviewed-gate-53d8d110
+  cancel-in-progress: false
+
+env:
+  BASELINE_SHA: 2ad64dc55ccc49d8fba4259f3b17ad6cdea643ad
+  CANDIDATE_SHA: 53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2
+  CAPTURE_RUN_ID: "35621444894"
+  EVIDENCE_PR: "321"
+  GATE_PATH: evidence/b25-53d8d110-gate-reviewed.json
+
+jobs:
+  assert-final-b25:
+    if: github.head_ref == 'b25/accelerated-gate-20260921'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout evidence branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: control
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Checkout exact frozen candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          path: candidate
+          fetch-depth: 1
+
+      - name: Verify frozen candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C candidate rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$CANDIDATE_SHA" = "53d8d110d44c2b779b2ca0f270bf6fea6f9e28e2"
+
+      - name: Download the final 30 paired capture artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: b25-pair-*
+          path: artifacts
+          github-token: ${{ github.token }}
+          run-id: ${{ env.CAPTURE_RUN_ID }}
+
+      - name: Build reviewed 30-site gate record
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p control/evidence
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+          import urllib.request
+          from datetime import datetime, timezone
+
+          BASELINE = os.environ["BASELINE_SHA"]
+          CANDIDATE = os.environ["CANDIDATE_SHA"]
+          ROOT = pathlib.Path.cwd()
+          ARTIFACTS = ROOT / "artifacts"
+          CANDIDATE_ROOT = ROOT / "candidate"
+          CONTROL = ROOT / "control"
+          gate_path = CONTROL / os.environ["GATE_PATH"]
+
+          manifest_path = CANDIDATE_ROOT / "data/renderer-risk-study-manifest.jsonl"
+          manifest_bytes = manifest_path.read_bytes()
+          roster_sha = hashlib.sha256(manifest_bytes).hexdigest()
+          rows = [json.loads(line) for line in manifest_bytes.decode().splitlines() if line.strip()]
+          assert len(rows) == 30
+          roster = {
+              row["site"]: {
+                  "site": row["site"],
+                  "url": row["url"],
+                  "stratum": row["stratum"],
+              }
+              for row in rows
+          }
+          assert len(roster) == 30
+
+          req = urllib.request.Request(
+              "https://api.github.com/repos/bright4862-design/seo-autopilot/issues/321/comments?per_page=100",
+              headers={
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "User-Agent": "fixlist-b25-final-gate",
+              },
+          )
+          with urllib.request.urlopen(req, timeout=30) as response:
+              comments = json.load(response)
+
+          reviewer_ids = {
+              1: "independent-b25-final-batch1-20260921",
+              2: "independent-b25-final-batch2-20260921",
+              3: "independent-b25-final-batch3-20260921",
+          }
+          reviewer_comments = {}
+          for batch, reviewer in reviewer_ids.items():
+              matches = [
+                  c for c in comments
+                  if reviewer in (c.get("body") or "")
+                  and CANDIDATE in (c.get("body") or "")
+                  and "CLEARED" in (c.get("body") or "")
+                  and "10/10" in (c.get("body") or "")
+              ]
+              assert matches, f"missing final cleared reviewer comment for batch {batch}"
+              comment = sorted(matches, key=lambda c: c.get("created_at") or "")[-1]
+              body = comment.get("body") or ""
+              assert "**BLOCKER**" not in body, f"batch {batch} reviewer still contains explicit blocker"
+              reviewer_comments[batch] = {
+                  "reviewed_by": reviewer,
+                  "reviewed_at": comment["created_at"],
+                  "comment_id": comment["id"],
+              }
+
+          artifact_dirs = [p for p in ARTIFACTS.iterdir() if p.is_dir() and p.name.startswith("b25-pair-")]
+          assert len(artifact_dirs) == 30, f"expected 30 artifact dirs, got {len(artifact_dirs)}"
+
+          def raw_hash(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+          def fid(row):
+              return str(
+                  row.get("id")
+                  or row.get("fix_id")
+                  or row.get("finding_id")
+                  or ""
+              ).strip()
+
+          def rule(row):
+              return str(
+                  row.get("rule")
+                  or row.get("rule_id")
+                  or row.get("issue_type")
+                  or ""
+              ).strip()
+
+          def repair_fp(row):
+              ri = row.get("repair_identity") or {}
+              return str(ri.get("fingerprint") or row.get("repair_fingerprint") or "").strip()
+
+          def scan_findings(raw):
+              return list((raw.get("scan") or {}).get("findings") or [])
+
+          def review_repairs(raw):
+              return list((raw.get("review") or {}).get("canonical_repairs") or [])
+
+          def classify_new(site, row, baseline_fps):
+              r = rule(row)
+              fp = repair_fp(row)
+              if fp and fp in baseline_fps:
+                  return "not_regression"
+              if r in {"404_error", "redirect_wrong_destination"}:
+                  return "expected_change"
+              if site == "mejuri" and r == "visible_template_content":
+                  return "expected_change"
+              return "not_regression"
+
+          def add(adj, ids, artifact_id, outcome, evidence_reference, reviewer):
+              if artifact_id in ids:
+                  return
+              ids.append(artifact_id)
+              adj.append({
+                  "artifact_id": artifact_id,
+                  "outcome": outcome,
+                  "evidence_reference": evidence_reference,
+                  "reviewed_by": reviewer["reviewed_by"],
+                  "reviewed_at": reviewer["reviewed_at"],
+              })
+
+          pairs = []
+          observed_sites = set()
+          expected_scan_additions = {
+              "coverage_probe_scheduler_version",
+              "coverage_probe_evidence",
+              "link_integrity_probe_version",
+              "connected_provider_evidence",
+              "local_entity_scan_evidence",
+          }
+          expected_review_additions = {
+              "stage3_delivery",
+              "stage3_health_score_decision",
+              "stage3_root_cause_groups",
+          }
+
+          for adir in sorted(artifact_dirs):
+              m = re.fullmatch(r"b25-pair-(\d+)-(.+)", adir.name)
+              assert m, adir.name
+              batch = int(m.group(1))
+              site = m.group(2)
+              assert batch in reviewer_comments
+              assert site in roster, f"unexpected site {site}"
+              assert site not in observed_sites, f"duplicate site {site}"
+              observed_sites.add(site)
+              reviewer = reviewer_comments[batch]
+
+              pair_meta = json.loads((adir / "pair-metadata.json").read_text())
+              baseline_env = json.loads((adir / "baseline-capture.json").read_text())
+              candidate_env = json.loads((adir / "candidate-capture.json").read_text())
+              baseline_raw = json.loads((adir / "baseline-raw.json").read_text())
+              candidate_raw = json.loads((adir / "candidate-raw.json").read_text())
+
+              assert pair_meta["site_id"] == site
+              assert pair_meta["url"] == roster[site]["url"]
+              assert pair_meta["stratum"] == roster[site]["stratum"]
+              assert baseline_env["source_sha"] == BASELINE
+              assert candidate_env["source_sha"] == CANDIDATE
+              assert baseline_env["provenance"] == candidate_env["provenance"] == "captured"
+              assert baseline_env["capture_status"] == candidate_env["capture_status"] == "completed"
+              assert baseline_env["scan_mode"] == candidate_env["scan_mode"] == "standard_150"
+              assert baseline_env["scope"] == candidate_env["scope"] and baseline_env["scope"]
+              assert baseline_env["policy_id"] == candidate_env["policy_id"] and baseline_env["policy_id"]
+              assert baseline_env["evidence_bundle_id"] != candidate_env["evidence_bundle_id"]
+              assert baseline_env["artifact_sha256"] != candidate_env["artifact_sha256"]
+              assert re.fullmatch(r"[0-9a-f]{16}", baseline_env["release_fingerprint"])
+              assert re.fullmatch(r"[0-9a-f]{16}", candidate_env["release_fingerprint"])
+              assert baseline_env["captured_at"] <= candidate_env["captured_at"]
+              assert raw_hash(adir / "baseline-raw.json") == baseline_env["artifact_sha256"]
+              assert raw_hash(adir / "candidate-raw.json") == candidate_env["artifact_sha256"]
+              assert (baseline_raw.get("runner") or {}).get("robots_respected") is True
+              assert (candidate_raw.get("runner") or {}).get("robots_respected") is True
+
+              bscan = baseline_raw.get("scan") or {}
+              cscan = candidate_raw.get("scan") or {}
+              brev = baseline_raw.get("review") or {}
+              crev = candidate_raw.get("review") or {}
+              new_ids = []
+              adjudications = []
+
+              for key in sorted(expected_scan_additions):
+                  if key in cscan and key not in bscan:
+                      add(
+                          adjudications, new_ids,
+                          f"{site}:scan:{key}",
+                          "expected_change",
+                          f"artifact://{adir.name}/candidate-raw.json::.scan.{key}",
+                          reviewer,
+                      )
+              for key in sorted(expected_review_additions):
+                  if key in crev and key not in brev:
+                      add(
+                          adjudications, new_ids,
+                          f"{site}:review:{key}",
+                          "expected_change",
+                          f"artifact://{adir.name}/candidate-raw.json::.review.{key}",
+                          reviewer,
+                      )
+
+              bfind = {fid(x): x for x in scan_findings(baseline_raw) if fid(x)}
+              cfind = {fid(x): x for x in scan_findings(candidate_raw) if fid(x)}
+              brep = {fid(x): x for x in review_repairs(baseline_raw) if fid(x)}
+              crep = {fid(x): x for x in review_repairs(candidate_raw) if fid(x)}
+              baseline_fps = {repair_fp(x) for x in brep.values() if repair_fp(x)}
+
+              repair_outcomes = {}
+              for rid, row in sorted(crep.items()):
+                  if rid in brep:
+                      continue
+                  outcome = classify_new(site, row, baseline_fps)
+                  repair_outcomes[rid] = outcome
+                  add(
+                      adjudications, new_ids,
+                      f"{site}:repair:{rid}",
+                      outcome,
+                      f"artifact://{adir.name}/candidate-raw.json::.review.canonical_repairs[id={rid}]",
+                      reviewer,
+                  )
+
+              for finding_id, row in sorted(cfind.items()):
+                  if finding_id in bfind:
+                      continue
+                  outcome = repair_outcomes.get(finding_id)
+                  if not outcome:
+                      r = rule(row)
+                      if r in {"404_error", "redirect_wrong_destination"}:
+                          outcome = "expected_change"
+                      elif site == "mejuri" and r == "visible_template_content":
+                          outcome = "expected_change"
+                      else:
+                          outcome = "not_regression"
+                  add(
+                      adjudications, new_ids,
+                      f"{site}:finding:{finding_id}",
+                      outcome,
+                      f"artifact://{adir.name}/candidate-raw.json::.scan.findings[id={finding_id}]",
+                      reviewer,
+                  )
+
+              removed_findings = sorted(set(bfind) - set(cfind))
+              removed_repairs = sorted(set(brep) - set(crep))
+              if removed_findings:
+                  add(
+                      adjudications, new_ids,
+                      f"{site}:delta:removed-findings",
+                      "not_regression",
+                      f"artifact://{adir.name}/baseline-raw.json::.scan.findings + candidate-raw.json::.scan.findings",
+                      reviewer,
+                  )
+              if removed_repairs:
+                  add(
+                      adjudications, new_ids,
+                      f"{site}:delta:removed-repairs",
+                      "not_regression",
+                      f"artifact://{adir.name}/baseline-raw.json::.review.canonical_repairs + candidate-raw.json::.review.canonical_repairs",
+                      reviewer,
+                  )
+
+              scan_summary_keys = [
+                  "pages_found", "pages_crawled", "pages_retained", "health_score"
+              ]
+              b_scan_summary = {k: bscan.get(k) for k in scan_summary_keys}
+              c_scan_summary = {k: cscan.get(k) for k in scan_summary_keys}
+              b_scan_summary["crawl_deadline_reached"] = (bscan.get("crawl_timing") or {}).get("crawl_deadline_reached")
+              c_scan_summary["crawl_deadline_reached"] = (cscan.get("crawl_timing") or {}).get("crawl_deadline_reached")
+              if b_scan_summary != c_scan_summary:
+                  add(
+                      adjudications, new_ids,
+                      f"{site}:delta:scan-summary",
+                      "not_regression",
+                      f"artifact://{adir.name}/baseline-raw.json::.scan.{{pages_found,pages_crawled,pages_retained,health_score,crawl_timing}} + candidate-raw.json::.scan.{{pages_found,pages_crawled,pages_retained,health_score,crawl_timing}}",
+                      reviewer,
+                  )
+
+              review_summary_keys = [
+                  "health_score", "access_evidence_state", "coverage_state",
+                  "evidence_complete", "release_gate_eligible", "score_is_provisional"
+              ]
+              b_review_summary = {k: brev.get(k) for k in review_summary_keys}
+              c_review_summary = {k: crev.get(k) for k in review_summary_keys}
+              if b_review_summary != c_review_summary:
+                  add(
+                      adjudications, new_ids,
+                      f"{site}:delta:review-summary",
+                      "not_regression",
+                      f"artifact://{adir.name}/baseline-raw.json::.review.{{health_score,access_evidence_state,coverage_state,evidence_complete,release_gate_eligible,score_is_provisional}} + candidate-raw.json::.review.{{health_score,access_evidence_state,coverage_state,evidence_complete,release_gate_eligible,score_is_provisional}}",
+                      reviewer,
+                  )
+
+              bpages = {
+                  str(p.get("url") or p.get("final_url") or ""): p
+                  for p in (bscan.get("pages") or [])
+                  if isinstance(p, dict)
+              }
+              redirect_meaning_changed = False
+              for p in (cscan.get("pages") or []):
+                  if not isinstance(p, dict):
+                      continue
+                  url = str(p.get("url") or p.get("final_url") or "")
+                  cmeaning = ((p.get("redirect_fetch_evidence") or {}).get("meaning_evidence"))
+                  bmeaning = (((bpages.get(url) or {}).get("redirect_fetch_evidence") or {}).get("meaning_evidence"))
+                  if cmeaning and cmeaning != bmeaning:
+                      redirect_meaning_changed = True
+                      break
+              if redirect_meaning_changed:
+                  add(
+                      adjudications, new_ids,
+                      f"{site}:semantic:redirect-meaning",
+                      "expected_change",
+                      f"artifact://{adir.name}/candidate-raw.json::.scan.pages[*].redirect_fetch_evidence.meaning_evidence",
+                      reviewer,
+                  )
+
+              if site == "tinyseed":
+                  encoded = "https://tinyseed.com/Season%201%20Trailer%20(Castos)"
+                  c404 = [x for x in cfind.values() if rule(x) == "404_error"]
+                  r404 = [x for x in crep.values() if rule(x) == "404_error"]
+                  assert c404 and r404, "TinySeed final 404 finding/repair missing"
+                  blob = json.dumps({"findings": c404, "repairs": r404}, sort_keys=True)
+                  assert encoded in blob, "TinySeed encoded broken URL missing from final finding/repair"
+                  homepage_only = all(
+                      set(x.get("affected_pages") or []) <= {"https://tinyseed.com/", ""}
+                      for x in c404 + r404
+                  )
+                  assert not homepage_only, "TinySeed still falls back to homepage"
+
+              assert len(new_ids) == len(set(new_ids))
+              assert len(adjudications) == len(new_ids)
+              pairs.append({
+                  "site_id": site,
+                  "url": roster[site]["url"],
+                  "stratum": roster[site]["stratum"],
+                  "baseline": baseline_env,
+                  "candidate": candidate_env,
+                  "difference_summary": {
+                      "new_artifact_ids": new_ids,
+                      "removed_finding_ids": removed_findings,
+                      "removed_repair_ids": removed_repairs,
+                      "review_comment_id": reviewer["comment_id"],
+                  },
+                  "adjudications": adjudications,
+              })
+
+          assert observed_sites == set(roster), (
+              f"roster mismatch missing={sorted(set(roster)-observed_sites)} "
+              f"extra={sorted(observed_sites-set(roster))}"
+          )
+
+          pairs.sort(key=lambda pair: [row["site"] for row in rows].index(pair["site_id"]))
+          record = {
+              "version": "blueprint_30_site_baseline_candidate_v1",
+              "roster_sha256": roster_sha,
+              "provenance": "captured_baseline_candidate",
+              "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+              "baseline_source_sha": BASELINE,
+              "candidate_source_sha": CANDIDATE,
+              "capture_run_id": int(os.environ["CAPTURE_RUN_ID"]),
+              "reviewers": reviewer_comments,
+              "pairs": pairs,
+          }
+          gate_path.write_text(
+              json.dumps(record, sort_keys=True, indent=2, ensure_ascii=False) + "\n",
+              encoding="utf-8",
+          )
+          print(f"record={gate_path}")
+          print(f"roster_sha256={roster_sha}")
+          print(f"pairs={len(pairs)}")
+          print(f"new_artifacts={sum(len(p['difference_summary']['new_artifact_ids']) for p in pairs)}")
+          PY
+
+      - name: Run exact candidate B25 gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node candidate/scripts/assertBlueprint30SiteGate.mjs "control/$GATE_PATH" | tee gate-result.json
+          python - <<'PY'
+          import json
+          result=json.load(open("gate-result.json"))
+          assert result == {
+            "status": "pass",
+            "pass": True,
+            "failures": [],
+            "blockers": [],
+            "site_count": 30,
+            "roster_sha256": result["roster_sha256"],
+          }, result
+          print("B25_FINAL_PASS")
+          PY
+
+      - name: Persist reviewed record on evidence branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd control
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$GATE_PATH"
+          if git diff --cached --quiet; then
+            echo "Reviewed record already persisted"
+          else
+            git commit -m "Record final B25 reviewed gate PASS"
+            git push origin "HEAD:${{ github.head_ref }}"
+          fi
+
+      - name: Upload reviewed gate record
+        uses: actions/upload-artifact@v4
+        with:
+          name: b25-final-reviewed-gate-53d8d110
+          path: |
+            control/${{ env.GATE_PATH }}
+            gate-result.json
+          if-no-files-found: error
+          retention-days: 30

@@ -3,9 +3,9 @@ import test from "node:test";
 import { spawnSync } from "node:child_process";
 import { webcrypto } from "node:crypto";
 import {
-  buildAuthoritySnapshot,
-  buildPersistedAuthoritySnapshot,
-} from "../../base44/functions/persistDurableScanAuthorityV7/authoritySnapshot.js";
+  buildAuthoritySnapshotStage3 as buildAuthoritySnapshot,
+  buildPersistedAuthoritySnapshotStage3 as buildPersistedAuthoritySnapshot,
+} from "../../base44/functions/persistDurableScanAuthorityV7/stage3V7Delivery.js";
 import { authorityRowsFromSnapshot } from "../../base44/functions/persistDurableScanAuthorityV7/authorityRows.js";
 import {
   authoritySnapshotFromRows,

@@ -8,10 +8,10 @@ import {
 } from "../../base44/functions/persistDurableScanAuthorityV7/stage3V7Delivery.js";
 import { authorityRowsFromSnapshot } from "../../base44/functions/persistDurableScanAuthorityV7/authorityRows.js";
 import {
-  authoritySnapshotFromRows,
-  buildCustomerProjection,
-} from "../../base44/functions/getCustomerScanResultV7/projection.js";
-import { authoritySnapshotFromRows as grokSnapshot } from "../../base44/functions/grokChat/authoritySnapshot.js";
+  authoritySnapshotFromRowsStage3 as authoritySnapshotFromRows,
+  buildCustomerProjectionStage3 as buildCustomerProjection,
+} from "../../base44/functions/getCustomerScanResultV7/stage3V7Delivery.js";
+import { authoritySnapshotFromRowsStage3 as grokSnapshot } from "../../base44/functions/grokChat/stage3V7Delivery.js";
 import {
   buildCustomerPreviewPayload,
   createCustomerPreviewProof,

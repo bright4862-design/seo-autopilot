@@ -14,6 +14,11 @@ def _clean(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _strict_text(value: Any) -> str:
+    """Accept only actual string evidence at signed root-cause identity boundaries."""
+    return value.strip() if isinstance(value, str) else ""
+
+
 def _lower(value: Any) -> str:
     return _clean(value).lower()
 
@@ -107,12 +112,12 @@ def validate_root_cause_evidence(fix: dict[str, Any]) -> dict[str, Any]:
         }
 
     state = _lower(evidence.get("state"))
-    root_cause_id = _clean(evidence.get("root_cause_id"))
-    repair_surface_id = _clean(evidence.get("repair_surface_id"))
+    root_cause_id = _strict_text(evidence.get("root_cause_id"))
+    repair_surface_id = _strict_text(evidence.get("repair_surface_id"))
     refs = []
     seen: set[str] = set()
     for value in evidence.get("evidence_refs") if isinstance(evidence.get("evidence_refs"), list) else []:
-        raw = _clean(value)
+        raw = _strict_text(value)
         if raw and raw not in seen:
             seen.add(raw)
             refs.append(raw)

@@ -53,6 +53,30 @@ def _number(value: Any) -> float | None:
     return result if math.isfinite(result) else None
 
 
+def _bounded_number(value: Any, *, minimum: float, maximum: float) -> float | None:
+    """Keep a finite numeric factor only when it is inside its documented range."""
+    number = _number(value)
+    if number is None or number < minimum or number > maximum:
+        return None
+    return number
+
+
+def _impact_value(value: Any) -> int | None:
+    """B19 impact is an integer factor on the documented 0..5 scale."""
+    impact = _nonnegative_int(value)
+    return impact if impact is not None and impact <= 5 else None
+
+
+def _unit_factor(value: Any) -> float | None:
+    """B19 reach/page-value/confidence are normalized to the closed 0..1 interval."""
+    return _bounded_number(value, minimum=0.0, maximum=1.0)
+
+
+def _priority_factor_score(value: Any) -> float | None:
+    """The B19 product cannot exceed the documented maximum impact of five."""
+    return _bounded_number(value, minimum=0.0, maximum=5.0)
+
+
 def _unique_strings(values: Iterable[Any]) -> list[str]:
     seen: set[str] = set()
     output: list[str] = []
@@ -126,7 +150,7 @@ def _candidate_priority(candidate: dict[str, Any]) -> tuple[int, float, float, s
     retain deterministic legacy fallback ordering, but the B21 integration always
     supplies ``priority_score`` explicitly so its unknown state fails closed here.
     """
-    impact = _number(candidate.get("impact")) or 0.0
+    impact = float(_impact_value(candidate.get("impact")) or 0)
     rule_id = str(candidate.get("rule_id") or candidate.get("id") or "")
 
     primary_rank = _number(candidate.get("priority_rank"))
@@ -134,7 +158,7 @@ def _candidate_priority(candidate: dict[str, Any]) -> tuple[int, float, float, s
         return 2, primary_rank, impact, rule_id
 
     if "priority_score" in candidate:
-        priority_score = _number(candidate.get("priority_score"))
+        priority_score = _priority_factor_score(candidate.get("priority_score"))
         if priority_score is None:
             return 0, 0.0, 0.0, rule_id
         return 2, priority_score, impact, rule_id
@@ -208,7 +232,7 @@ def _preview_projection(candidate: dict[str, Any]) -> dict[str, Any]:
     return {
         "rule_id": _preview_text(candidate.get("rule_id")),
         "title": _preview_text(candidate.get("title")),
-        "impact": _nonnegative_int(candidate.get("impact")) or 0,
+        "impact": _impact_value(candidate.get("impact")) or 0,
         "evidence_summary": _preview_text(candidate.get("evidence_summary")),
     }
 
@@ -227,7 +251,7 @@ def _preview_priority_value(candidate: dict[str, Any]) -> float:
     priority_rank = _number(candidate.get("priority_rank"))
     if priority_rank is not None:
         return priority_rank
-    priority_score = _number(candidate.get("priority_score"))
+    priority_score = _priority_factor_score(candidate.get("priority_score"))
     return priority_score if priority_score is not None else 0.0
 
 
@@ -255,8 +279,8 @@ def select_evidence_led_preview(
     ]
     eligible.sort(
         key=lambda item: (
-            -int((_nonnegative_int(item.get("impact")) or 0) >= 4),
-            -(_nonnegative_int(item.get("impact")) or 0),
+            -int((_impact_value(item.get("impact")) or 0) >= 4),
+            -(_impact_value(item.get("impact")) or 0),
             -_preview_priority_value(item),
             str(item.get("rule_id") or ""),
         )
@@ -264,7 +288,7 @@ def select_evidence_led_preview(
 
     max_items = max(0, int(max_items))
     if eligible and max_items:
-        high_impact = [item for item in eligible if (_nonnegative_int(item.get("impact")) or 0) >= 4]
+        high_impact = [item for item in eligible if (_impact_value(item.get("impact")) or 0) >= 4]
         selected = high_impact[:max_items] if high_impact else eligible[:1]
         return {
             "state": "findings",
@@ -449,24 +473,20 @@ def _handoff_priority_factors(value: Any) -> dict[str, Any]:
         "technical_base_severity",
         "technical_severity_source",
     )
-    numeric_fields = (
-        "reach",
-        "page_value",
-        "confidence",
-        "priority_factor_score",
-    )
-    integer_fields = (
-        "impact",
-        "reach_affected_indexable",
-        "reach_observed_indexable_family",
-    )
     for key in text_fields:
         if key in source:
             output[key] = _handoff_text(source.get(key))
-    for key in numeric_fields:
-        if key in source:
-            output[key] = _number(source.get(key))
-    for key in integer_fields:
+    if "reach" in source:
+        output["reach"] = _unit_factor(source.get("reach"))
+    if "page_value" in source:
+        output["page_value"] = _unit_factor(source.get("page_value"))
+    if "confidence" in source:
+        output["confidence"] = _unit_factor(source.get("confidence"))
+    if "priority_factor_score" in source:
+        output["priority_factor_score"] = _priority_factor_score(source.get("priority_factor_score"))
+    if "impact" in source:
+        output["impact"] = _impact_value(source.get("impact"))
+    for key in ("reach_affected_indexable", "reach_observed_indexable_family"):
         if key in source:
             output[key] = _nonnegative_int(source.get(key))
     if "explanation" in source:

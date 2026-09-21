@@ -11,7 +11,7 @@ This lane owns only pure, provider-neutral connected-evidence contracts, import/
 
 The common envelope is versioned as `connected_evidence_v1`. Every envelope carries provider, surface, method, source kind, retrieval/observation timestamps, sample/coverage disclosure, evidence-quality confidence, provenance, explicit state, and bounded records. States are `verified`, `stale`, `not_connected`, `not_supported`, `not_verified`, and `provider_error`. Disconnected/stale/unavailable evidence is observational and must never block an otherwise valid Standard 150 scan or fabricate traffic/indexing/AI-visibility claims.
 
-`scanner-api/app/connected_evidence_contract.py` adds a strict fail-closed validator for the envelope. It rejects missing/timezone-free timestamps, future observation timestamps, unknown top-level fields without a schema revision, unavailable states carrying records, stale states without `observed_at`, probability-like confidence labelling, unbounded warning/record shapes, and non-JSON record data. It does not sign, persist, score, rank, or project evidence.
+`scanner-api/app/connected_evidence_contract.py` adds a strict fail-closed validator for the envelope. It rejects missing/timezone-free timestamps, future observation timestamps, unknown top-level fields without a schema revision, unavailable states carrying records or claiming an observation timestamp, stale states without a strictly earlier `observed_at`, probability-like confidence labelling, missing provenance transport, oversized metadata/record shapes, non-JSON values, and non-finite JSON numbers such as `NaN`/`Infinity`. It does not sign, persist, score, rank, or project evidence.
 
 ## Safe-now adapters
 
@@ -49,10 +49,12 @@ Recommended integration sequence:
 ## Verification
 
 Focused adapter tests: `scanner-api/tests/test_connected_evidence.py` (provider normalizers, explicit unavailable/stale states, sanitized fixtures).  
-Strict contract tests: `scanner-api/tests/test_connected_evidence_contract.py` (17 deterministic tests).  
-Local contract verification for this checkpoint: `PYTHONPATH=. pytest -q tests/test_connected_evidence_contract.py` → **17 passed**; `python -m py_compile app/connected_evidence_contract.py` → passed.
+Strict contract tests: `scanner-api/tests/test_connected_evidence_contract.py` (**23 deterministic tests** after the strict-JSON/provenance/state hardening).  
+Local contract verification for this checkpoint: `PYTHONPATH=. pytest -q tests/test_connected_evidence_contract.py` → **23 passed**; `python -m py_compile app/connected_evidence_contract.py` → passed.
 
-The normal repository PR workflow currently targets `main`; this draft lane PR targets `nextgen/integration-20260921`, so a normal PR workflow run is not assumed here. The serialized integrator must run the repository-relevant suites after transplant/integration.
+The existing 15 adapter tests were not re-run in this isolated checkpoint environment; their code/fixtures were not changed by this hardening pass. The serialized integrator must still run the repository-relevant suites after transplant/integration.
+
+The normal repository PR workflow currently targets `main`; this draft lane PR targets `nextgen/integration-20260921`, so a normal PR workflow run is not assumed here.
 
 ## Known risks / truthful unsupported states
 
@@ -62,5 +64,6 @@ The normal repository PR workflow currently targets `main`; this draft lane PR t
 - GA4 referral-source classification cannot measure dark/direct AI traffic or uncited mentions.
 - Bing UI/export columns can evolve; unknown columns/rows fail closed rather than being guessed.
 - Dedicated Google Gen-AI reporting remains unsupported/not verified until an official programmatic surface is established.
+- `connected_evidence_v1` validation is intentionally strict; any future metadata shape expansion should be versioned rather than silently accepted.
 
 Rollback is lane-local: omit these pure modules/tests/docs from the serialized integration branch. No production state, credentials, schema, durable authority, or customer data requires reversal.

@@ -11,6 +11,8 @@ export const STAGE3_PREVIEW_SOURCE_VERSION = "stage3_preview_source_v1_verified_
 export const STAGE3_SCORE_CAP_VERSION = "stage3_health_score_caps_v1_verified_root_cause";
 export const STAGE3_HANDOFF_VERSION = "fixlist_handoff_v2";
 
+const MAX_PRESENTED_FIXES = 36;
+const MAX_AUTHORITY_FIXES = 100;
 const object = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : null;
 const text = (value, limit = 2_000) => typeof value === "string" ? value.trim().slice(0, limit) : "";
 const finite = (value, min, max) => typeof value === "number" && Number.isFinite(value) && value >= min && value <= max;
@@ -44,15 +46,32 @@ function validCounts(value) {
   return source.examples_partial === (source.displayed_sample_count < source.unique_affected_page_count);
 }
 
+function validDelivery(value, fixIds) {
+  const delivery = object(value);
+  if (!delivery || delivery.version !== "stage3_delivery_v1_rank_before_truncate") return null;
+  if (!nonNegativeInteger(delivery.eligible_candidate_count) || delivery.eligible_candidate_count > MAX_AUTHORITY_FIXES) return null;
+  if (!nonNegativeInteger(delivery.displayed_candidate_count) || delivery.displayed_candidate_count > MAX_PRESENTED_FIXES) return null;
+  if (!nonNegativeInteger(delivery.presentation_omitted_count) || delivery.presentation_omitted_count > MAX_AUTHORITY_FIXES) return null;
+  if (!Array.isArray(delivery.displayed_fix_ids) || delivery.displayed_fix_ids.length !== delivery.displayed_candidate_count) return null;
+  if (delivery.displayed_candidate_count > delivery.eligible_candidate_count) return null;
+  if (delivery.presentation_omitted_count !== delivery.eligible_candidate_count - delivery.displayed_candidate_count) return null;
+  if (delivery.presentation_truncated !== (delivery.presentation_omitted_count > 0)) return null;
+  const seen = new Set();
+  for (const value of delivery.displayed_fix_ids) {
+    const id = text(value, 160);
+    if (!id || seen.has(id) || !fixIds.has(id)) return null;
+    seen.add(id);
+  }
+  return delivery;
+}
+
 function validCapsule(run, fixItems) {
   const explanation = object(run?.health_score_explanation);
   const capsule = object(explanation?.stage3_delivery);
   if (!capsule || capsule.version !== STAGE3_V7_DELIVERY_VERSION) return null;
-  const delivery = object(capsule.delivery);
   const preview = object(capsule.private_preview_source);
   const decision = object(capsule.health_score_decision);
   const handoff = object(capsule.handoff_v2_source);
-  if (!delivery || delivery.version !== "stage3_delivery_v1_rank_before_truncate") return null;
   if (!preview || preview.version !== STAGE3_PREVIEW_SOURCE_VERSION || text(preview.scan_id, 160) !== text(run?.id, 160) || preview.entitlement_state !== "requires_authenticated_customer_gate") return null;
   if (!Array.isArray(preview.findings) || preview.findings.length > 2) return null;
   if (!decision || decision.version !== STAGE3_SCORE_CAP_VERSION || decision.state !== "decided" || !Number.isInteger(decision.adjusted_health_score) || decision.adjusted_health_score < 0 || decision.adjusted_health_score > 100 || decision.adjusted_health_score !== run?.health_score) return null;
@@ -64,9 +83,11 @@ function validCapsule(run, fixItems) {
     if (!id || ids.has(id) || !perFix || perFix.version !== STAGE3_V7_DELIVERY_VERSION || !validPriorityFactors(perFix.priority_factors) || !validCounts(perFix.counts)) return null;
     ids.add(id);
   }
+  const delivery = validDelivery(capsule.delivery, ids);
+  if (!delivery) return null;
   if (preview.findings.some((finding) => !ids.has(text(finding?.rule_id, 160)))) return null;
   if (!Array.isArray(handoff.fixes) || handoff.fixes.length !== handoff.fix_count || handoff.fixes.some((fix) => !ids.has(text(fix?.rule_id, 160)) || fix?.suppressed_findings !== undefined)) return null;
-  return capsule;
+  return { ...capsule, delivery };
 }
 
 export function authoritySnapshotFromRowsStage3(args) {
@@ -105,9 +126,12 @@ export function buildCustomerProjectionStage3(args) {
   projection.run.stage3_health_score_decision = capsule.health_score_decision;
   projection.run.stage3_handoff_v2 = capsule.handoff_v2_source;
   const rowById = new Map((Array.isArray(args.fixItems) ? args.fixItems : []).map((item) => [text(item?.fix_id, 160), item]));
-  projection.fixItems = projection.fixItems.map((item) => {
-    const raw = object(rowById.get(text(item.fix_id, 160))?.raw_finding);
+  const projectedById = new Map(projection.fixItems.map((item) => [text(item?.fix_id, 160), item]));
+  projection.fixItems = capsule.delivery.displayed_fix_ids.map((id) => {
+    const item = projectedById.get(id);
+    const raw = object(rowById.get(id)?.raw_finding);
     const perFix = object(raw?.stage3_delivery);
+    if (!item || !perFix) throw new Error("Verified Stage3 presentation references an unavailable fix");
     return {
       ...item,
       stage3_priority_factors: perFix.priority_factors,

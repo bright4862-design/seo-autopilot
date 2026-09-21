@@ -351,6 +351,20 @@ def _trusted_stage3_scan_id(scan_result: dict[str, Any]) -> str:
     return scan_id if scan_id and scan_run_id and scan_id == scan_run_id else ""
 
 
+def _stage3_text(value: Any) -> str:
+    """Accept only literal scalar text at Stage-3 signed/customer boundaries."""
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _first_stage3_text(*values: Any) -> str:
+    """Return the first non-empty literal string without coercing structured values."""
+    for value in values:
+        text = _stage3_text(value)
+        if text:
+            return text
+    return ""
+
+
 def _optional_nonnegative_count(value: Any) -> int | None:
     """Preserve an evidenced whole-number count or keep it unknown."""
     if isinstance(value, bool):
@@ -374,11 +388,11 @@ def _verified_stage3_groups_by_member(
             continue
         if group.get("grouping_state") != "verified":
             continue
-        if _clean_text(group.get("scan_id")) != trusted_scan_id:
+        if _stage3_text(group.get("scan_id")) != trusted_scan_id:
             continue
         members = group.get("member_ids") if isinstance(group.get("member_ids"), list) else []
         for member_id in members:
-            clean_member = _clean_text(member_id)
+            clean_member = _stage3_text(member_id)
             if clean_member:
                 output.setdefault(clean_member, []).append(group)
     return output
@@ -400,11 +414,11 @@ def _stage3_handoff_candidate(
     for child in evidence_groups:
         if not isinstance(child, dict):
             continue
-        member_id = _clean_text(child.get("fix_id"))
+        member_id = _stage3_text(child.get("fix_id"))
         if member_id and member_id not in member_ids:
             member_ids.append(member_id)
     if not member_ids:
-        fallback = _clean_text(item.get("fix_id"))
+        fallback = _stage3_text(item.get("fix_id"))
         if fallback:
             member_ids.append(fallback)
 
@@ -412,10 +426,15 @@ def _stage3_handoff_candidate(
     seen_group_keys: set[tuple[str, str, tuple[str, ...]]] = set()
     for member_id in member_ids:
         for group in groups_by_member.get(member_id, []):
+            member_key = tuple(
+                text
+                for value in (group.get("member_ids") if isinstance(group.get("member_ids"), list) else [])
+                if (text := _stage3_text(value))
+            )
             key = (
-                _clean_text(group.get("root_cause_id")),
-                _clean_text(group.get("repair_surface_id")),
-                tuple(_clean_text(value) for value in group.get("member_ids", []) if _clean_text(value)),
+                _stage3_text(group.get("root_cause_id")),
+                _stage3_text(group.get("repair_surface_id")),
+                member_key,
             )
             if key not in seen_group_keys:
                 seen_group_keys.add(key)
@@ -425,48 +444,48 @@ def _stage3_handoff_candidate(
     family_ids: list[str] = []
     evidence_refs: list[str] = []
     for group in matched_groups:
-        root_cause_id = _clean_text(group.get("root_cause_id"))
+        root_cause_id = _stage3_text(group.get("root_cause_id"))
         if root_cause_id and root_cause_id not in root_cause_ids:
             root_cause_ids.append(root_cause_id)
         partitions = group.get("family_partitions") if isinstance(group.get("family_partitions"), dict) else {}
         for family in partitions:
-            clean_family = _clean_text(family)
+            clean_family = _stage3_text(family)
             if clean_family and clean_family not in family_ids:
                 family_ids.append(clean_family)
         refs = group.get("contributing_evidence_refs") if isinstance(group.get("contributing_evidence_refs"), list) else []
         for ref in refs:
-            clean_ref = _clean_text(ref)
+            clean_ref = _stage3_text(ref)
             if clean_ref and clean_ref not in evidence_refs:
                 evidence_refs.append(clean_ref)
 
     if not family_ids:
         for child in evidence_groups:
             if isinstance(child, dict):
-                family = _clean_text(child.get("family"))
+                family = _stage3_text(child.get("family"))
                 if family and family not in family_ids:
                     family_ids.append(family)
     if not family_ids:
-        family = _clean_text(item.get("page_template_family") or item.get("template_family"))
+        family = _first_stage3_text(item.get("page_template_family"), item.get("template_family"))
         if family:
             family_ids.append(family)
 
     existing_refs = item.get("evidence_refs") if isinstance(item.get("evidence_refs"), list) else []
     for ref in existing_refs:
-        clean_ref = _clean_text(ref)
+        clean_ref = _stage3_text(ref)
         if clean_ref and clean_ref not in evidence_refs:
             evidence_refs.append(clean_ref)
 
     counts = item.get("stage3_counts") if isinstance(item.get("stage3_counts"), dict) else {}
     candidate = {
         **deepcopy(item),
-        "rule_id": _clean_text(item.get("fix_id") or item.get("rule")),
-        "title": _clean_text(item.get("issue_title") or item.get("title") or item.get("fix_id") or item.get("rule")),
+        "rule_id": _first_stage3_text(item.get("fix_id"), item.get("rule")),
+        "title": _first_stage3_text(item.get("issue_title"), item.get("title"), item.get("fix_id"), item.get("rule")),
         "root_cause_id": root_cause_ids[0] if len(root_cause_ids) == 1 else None,
         "family_ids": family_ids,
         "observation_count": counts.get("observation_count"),
         "known_population_count": counts.get("known_population_count"),
         "evidence_refs": evidence_refs,
-        "vendor_owner": item.get("vendor_owner") or item.get("who_can_do_this"),
+        "vendor_owner": _first_stage3_text(item.get("vendor_owner"), item.get("who_can_do_this")) or None,
     }
     return candidate, len(root_cause_ids) > 1
 
@@ -505,9 +524,9 @@ def _build_stage3_handoff_v2_source(
     scan_identity = {
         "scan_id": trusted_scan_id,
         "scan_run_id": trusted_scan_id,
-        "normalized_domain": _clean_text(scan_result.get("normalized_domain")),
-        "scan_origin": _clean_text(scan_origin),
-        "evidence_url_identity_version": _clean_text(identity_version),
+        "normalized_domain": _stage3_text(scan_result.get("normalized_domain")) or None,
+        "scan_origin": _stage3_text(scan_origin) or None,
+        "evidence_url_identity_version": _stage3_text(identity_version) or None,
     }
     source = build_handoff_v2(
         scan_identity=scan_identity,
@@ -544,12 +563,12 @@ def _stage3_preview_coverage_qualification(review: dict[str, Any]) -> dict[str, 
 def _stage3_preview_candidate(item: dict[str, Any]) -> dict[str, Any]:
     """Project one canonical repair to the strict B22 selection vocabulary."""
     factors = item.get("stage3_priority_factors") if isinstance(item.get("stage3_priority_factors"), dict) else {}
-    verified = _clean_text(item.get("verification_state")).lower() == "verified"
+    verified = _stage3_text(item.get("verification_state")).lower() == "verified"
     summary = item.get("evidence_summary")
     evidence_summary = summary.strip()[:500] if isinstance(summary, str) and summary.strip() else None
     return {
-        "rule_id": _clean_text(item.get("fix_id") or item.get("rule"))[:160],
-        "title": _clean_text(item.get("issue_title") or item.get("title") or item.get("fix_id") or item.get("rule"))[:240],
+        "rule_id": _first_stage3_text(item.get("fix_id"), item.get("rule"))[:160],
+        "title": _first_stage3_text(item.get("issue_title"), item.get("title"), item.get("fix_id"), item.get("rule"))[:240],
         "impact": factors.get("impact"),
         "priority_score": factors.get("priority_factor_score"),
         "preview_allowed": verified,
@@ -600,7 +619,7 @@ def _delivery_candidate(item: dict[str, Any]) -> dict[str, Any]:
     # Remove that legacy presentation hint only from this temporary view so it
     # cannot mask a higher four-factor score before the Stage-3 truncation cap.
     candidate.pop("priority_rank", None)
-    candidate["rule_id"] = _clean_text(candidate.get("fix_id") or candidate.get("rule"))
+    candidate["rule_id"] = _first_stage3_text(candidate.get("fix_id"), candidate.get("rule"))
     candidate["priority_score"] = factors.get("priority_factor_score")
     candidate["impact"] = factors.get("impact")
     return candidate
@@ -638,11 +657,11 @@ def _stage3_root_cause_cap_inputs(root_cause_groups: list[dict[str, Any]]) -> li
     for group in root_cause_groups:
         if not isinstance(group, dict) or group.get("grouping_state") != "verified":
             continue
-        root_cause_id = _clean_text(group.get("root_cause_id"))
+        root_cause_id = _stage3_text(group.get("root_cause_id"))
         if not root_cause_id:
             continue
         state = by_root.setdefault(root_cause_id, {"caps": set(), "conflicted": False})
-        cap_state = _clean_text(group.get("score_cap_state"))
+        cap_state = _stage3_text(group.get("score_cap_state"))
         cap = _health_score_value(group.get("score_cap"))
         if cap_state == "conflicted":
             state["conflicted"] = True
@@ -740,9 +759,9 @@ def _attach_stage3_decision_evidence(
         presentation_limit=DEFAULT_PRESENTATION_LIMIT,
     )
     displayed_fix_ids = [
-        _clean_text(item.get("fix_id"))
+        _stage3_text(item.get("fix_id"))
         for item in ranked.get("displayed_candidates", [])
-        if isinstance(item, dict) and _clean_text(item.get("fix_id"))
+        if isinstance(item, dict) and _stage3_text(item.get("fix_id"))
     ]
     delivery = {
         "version": STAGE3_DELIVERY_VERSION,

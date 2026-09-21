@@ -3,15 +3,16 @@ import test from "node:test";
 import { spawnSync } from "node:child_process";
 import { webcrypto } from "node:crypto";
 import {
-  buildAuthoritySnapshotStage3 as buildAuthoritySnapshot,
-  buildPersistedAuthoritySnapshotStage3 as buildPersistedAuthoritySnapshot,
-} from "../../base44/functions/persistDurableScanAuthorityV7/stage3V7Delivery.js";
+  buildAuthoritySnapshot,
+  buildPersistedAuthoritySnapshot,
+} from "../../base44/functions/persistDurableScanAuthorityV7/authoritySnapshot.js";
+import { buildAuthoritySnapshot as buildStage1LegacyAuthoritySnapshot } from "../../base44/functions/persistDurableScanAuthorityV7/authoritySnapshotStage1Legacy.js";
 import { authorityRowsFromSnapshot } from "../../base44/functions/persistDurableScanAuthorityV7/authorityRows.js";
 import {
-  authoritySnapshotFromRowsStage3 as authoritySnapshotFromRows,
-  buildCustomerProjectionStage3 as buildCustomerProjection,
-} from "../../base44/functions/getCustomerScanResultV7/stage3V7Delivery.js";
-import { authoritySnapshotFromRowsStage3 as grokSnapshot } from "../../base44/functions/grokChat/stage3V7Delivery.js";
+  authoritySnapshotFromRows,
+  buildCustomerProjection,
+} from "../../base44/functions/getCustomerScanResultV7/projection.js";
+import { authoritySnapshotFromRows as grokSnapshot } from "../../base44/functions/grokChat/authoritySnapshot.js";
 import {
   buildCustomerPreviewPayload,
   createCustomerPreviewProof,
@@ -21,11 +22,12 @@ import { createAuthoritySeal, verifyAuthoritySeal } from "../../base44/functions
 import { buildRepairCards } from "../../src/lib/repairCardModel.js";
 import { buildScanHandoff } from "../../src/lib/scanHandoff.js";
 
-const STAGE3_AUTHORITY_VERSION = "standard_review_snapshot_hmac_stage3_delivery_v1";
+const PUBLISHED_AUTHORITY_VERSION = "standard_review_snapshot_hmac_identity_v1";
 const STAGE3_DELIVERY_VERSION = "stage3_v7_delivery_v1";
 const SCAN_ID = "scan-stage3-v7-durable";
 const PROJECT_ID = "project-stage3-v7";
 const OWNER_ID = "owner-stage3-v7";
+const SEALED_AT = "2026-09-21T10:15:00.000Z";
 
 function signedPythonCompletion() {
   const result = spawnSync("python", ["tests/helpers/emitStage3SignedCompletion.py"], {
@@ -34,6 +36,21 @@ function signedPythonCompletion() {
   });
   assert.equal(result.status, 0, `Python signed-completion fixture failed to execute:\n${result.stderr}`);
   return JSON.parse(result.stdout);
+}
+
+function authorityOptions(envelope, emitted) {
+  return {
+    scan: envelope.scan,
+    review: envelope.review,
+    identity: {
+      scan_id: SCAN_ID,
+      project_id: PROJECT_ID,
+      normalized_domain: "example.com",
+    },
+    userId: OWNER_ID,
+    now: SEALED_AT,
+    identityVersion: emitted.identity_version,
+  };
 }
 
 async function liveWriterRows() {
@@ -57,18 +74,7 @@ async function liveWriterRows() {
   assert.ok(envelope.review.canonical_repairs.every((fix) => fix.stage3_priority_factors?.version));
   assert.ok(envelope.review.canonical_repairs.every((fix) => fix.stage3_counts));
 
-  const snapshot = buildAuthoritySnapshot({
-    scan: envelope.scan,
-    review: envelope.review,
-    identity: {
-      scan_id: SCAN_ID,
-      project_id: PROJECT_ID,
-      normalized_domain: "example.com",
-    },
-    userId: OWNER_ID,
-    now: "2026-09-21T10:15:00.000Z",
-    identityVersion: emitted.identity_version,
-  });
+  const snapshot = buildAuthoritySnapshot(authorityOptions(envelope, emitted));
   const proof = await createAuthoritySeal(snapshot, emitted.secret, webcrypto);
   const rows = authorityRowsFromSnapshot(snapshot, { fixListId: "fix-stage3-v7", ownerUserId: OWNER_ID, proof });
   const data = {
@@ -80,7 +86,7 @@ async function liveWriterRows() {
   return { emitted, envelope, snapshot, proof, rows, data };
 }
 
-test("B19-B24 signed Python review selects a new authenticated Stage-3 V7 authority contract and score", async () => {
+test("B19-B24 signed Python review extends the active published-route V7 HMAC and applies the stricter score ceiling", async () => {
   const { envelope, snapshot } = await liveWriterRows();
   const decision = envelope.review.stage3_health_score_decision;
   assert.equal(decision.existing_score_ceiling, 64);
@@ -88,7 +94,7 @@ test("B19-B24 signed Python review selects a new authenticated Stage-3 V7 author
   assert.equal(decision.effective_score_ceiling, 64);
   assert.equal(decision.adjusted_health_score, 64);
 
-  assert.equal(snapshot.version, STAGE3_AUTHORITY_VERSION);
+  assert.equal(snapshot.version, PUBLISHED_AUTHORITY_VERSION);
   assert.equal(snapshot.scan.health_score, 64);
   assert.equal(snapshot.fix_list.health_score, 64);
   assert.equal(snapshot.scan.health_score_explanation.stage3_delivery.version, STAGE3_DELIVERY_VERSION);
@@ -145,4 +151,41 @@ test("B22/B23/B24 verified customer, preview, cards and export consume the authe
   assert.deepEqual(locked.fixItems, []);
   assert.equal(locked.run.stage3_handoff_v2, undefined);
   assert.equal(locked.run.stage3_health_score_decision, undefined);
+});
+
+test("B27 unsigned Stage-3 markers cannot upgrade an otherwise valid historical published-route authority row", async () => {
+  const { emitted, envelope, snapshot } = await liveWriterRows();
+  const legacySnapshot = buildStage1LegacyAuthoritySnapshot(authorityOptions(envelope, emitted));
+  assert.equal(legacySnapshot.version, PUBLISHED_AUTHORITY_VERSION);
+  assert.equal(legacySnapshot.scan.health_score_explanation?.stage3_delivery, undefined);
+  const legacyProof = await createAuthoritySeal(legacySnapshot, emitted.secret, webcrypto);
+  const legacyRows = authorityRowsFromSnapshot(legacySnapshot, {
+    fixListId: "fix-stage3-v7-legacy",
+    ownerUserId: OWNER_ID,
+    proof: legacyProof,
+  });
+  const legacyData = {
+    run: { ...legacyRows.scanRun, id: SCAN_ID, project_id: PROJECT_ID },
+    fixList: { ...legacyRows.fixList, id: "fix-stage3-v7-legacy" },
+    fixItems: legacyRows.fixItems.map((item, index) => ({ ...item, id: `legacy-fix-row-${index + 1}` })),
+    userId: OWNER_ID,
+  };
+  const rebuiltLegacy = authoritySnapshotFromRows(legacyData);
+  assert.deepEqual(rebuiltLegacy, legacySnapshot);
+  assert.equal(await verifyAuthoritySeal(rebuiltLegacy, emitted.secret, legacyProof, webcrypto), true);
+
+  const injected = structuredClone(legacyData);
+  injected.run.health_score = snapshot.scan.health_score;
+  injected.fixList.health_score = snapshot.fix_list.health_score;
+  injected.run.health_score_explanation = structuredClone(snapshot.scan.health_score_explanation);
+  const byId = new Map(snapshot.recommendations.map((fix) => [fix.fix_id, fix.raw_finding.stage3_delivery]));
+  injected.fixItems = injected.fixItems.map((item) => ({
+    ...item,
+    raw_finding: {
+      ...(item.raw_finding || {}),
+      stage3_delivery: structuredClone(byId.get(item.fix_id)),
+    },
+  }));
+  const injectedSnapshot = authoritySnapshotFromRows(injected);
+  assert.equal(await verifyAuthoritySeal(injectedSnapshot, emitted.secret, legacyProof, webcrypto), false);
 });

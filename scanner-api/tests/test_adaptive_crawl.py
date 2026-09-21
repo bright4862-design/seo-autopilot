@@ -1,6 +1,7 @@
 from app.adaptive_crawl import (
     ADAPTIVE_CRAWL_VERSION,
     ADAPTIVE_TELEMETRY_VERSION,
+    MAX_ADAPTIVE_TARGET,
     benchmark_smart_500_vs_blind_1000,
     build_tranche_yield_telemetry,
     continuation_decision,
@@ -47,6 +48,18 @@ def _path_of(url):
     return url.split("x.test", 1)[1]
 
 
+def _observed_snapshot(assessed_count, *, route_count=1, template_count=1, graph_count=1, finding_count=1):
+    return {
+        "assessed_count": assessed_count,
+        "route_signatures": {f"r{i}" for i in range(route_count)},
+        "template_keys": {f"t{i}" for i in range(template_count)},
+        "graph_edges": {f"e{i}" for i in range(graph_count)},
+        "finding_fingerprints": {f"f{i}" for i in range(finding_count)},
+        "high_impact_finding_fingerprints": {f"h{i}" for i in range(finding_count)},
+        "high_value_families_assessed": {"product_page"},
+    }
+
+
 def test_standard_150_selection_is_byte_for_byte_existing_sampling_order():
     urls, family, _, _, metadata = _fixture()
     expected = select_balanced_urls(urls, _family_of(family), _path_of, 150)
@@ -70,13 +83,38 @@ def test_selection_is_bounded_deterministic_and_keeps_baseline_prefix():
     assert first[:150] == baseline
 
 
+def test_selector_hard_caps_even_if_caller_requests_more_than_nextgen_contract():
+    urls, family, _, _, metadata = _fixture()
+    selected = select_adaptive_urls(
+        urls,
+        _family_of(family),
+        _path_of,
+        5000,
+        metadata_by_url=metadata,
+    )
+    assert len(selected) == MAX_ADAPTIVE_TARGET == 1000
+
+
 def test_tranche_plan_is_bounded_by_current_discovery_without_claiming_complete_site_knowledge():
     assert plan_tranche_targets(80)["targets"] == [80]
     assert plan_tranche_targets(320)["targets"] == [150, 320]
     plan = plan_tranche_targets(5000)
     assert plan["targets"] == [150, 500, 1000]
+    assert plan["requested_ceiling"] == 1000
+    assert plan["assessment_ceiling"] == 1000
     assert plan["discovery_scope_complete"] is False
     assert plan["version"] == ADAPTIVE_CRAWL_VERSION
+
+
+def test_tranche_plan_hard_caps_requested_ceiling_and_supports_shadow_intermediate_targets():
+    plan = plan_tranche_targets(
+        5000,
+        ceiling=5000,
+        candidate_targets=(150, 300, 500, 750, 1000, 2500),
+    )
+    assert plan["requested_ceiling"] == 5000
+    assert plan["assessment_ceiling"] == 1000
+    assert plan["targets"] == [150, 300, 500, 750, 1000]
 
 
 def test_yield_telemetry_preserves_unknown_instead_of_coercing_it_to_zero():
@@ -92,6 +130,18 @@ def test_yield_telemetry_preserves_unknown_instead_of_coercing_it_to_zero():
     decision = continuation_decision(telemetry)
     assert decision["decision"] == "insufficient_evidence"
     assert decision["site_fully_understood"] is False
+
+
+def test_invalid_assessed_counts_fail_closed_instead_of_authorizing_expansion():
+    previous = _observed_snapshot(500)
+    current = _observed_snapshot(1001, route_count=50, template_count=10, graph_count=100, finding_count=20)
+    telemetry = build_tranche_yield_telemetry(previous, current, discovered_urls=900)
+    assert telemetry["counts_valid"] is False
+    assert telemetry["signal_state"] == "invalid_counts"
+    decision = continuation_decision(telemetry)
+    assert decision["decision"] == "hold"
+    assert decision["reason"] == "adaptive_ceiling_reached"
+    assert decision["next_target"] is None
 
 
 def test_continuation_expands_on_measured_novelty_not_just_a_large_discovered_count():
@@ -146,6 +196,30 @@ def test_continuation_holds_when_marginal_yield_is_observed_and_flat():
     assert decision["site_fully_understood"] is False
 
 
+def test_continuation_never_escapes_1000_page_contract_after_ceiling_is_reached():
+    previous = _observed_snapshot(500)
+    current = _observed_snapshot(1000, route_count=80, template_count=20, graph_count=200, finding_count=30)
+    telemetry = build_tranche_yield_telemetry(previous, current, discovered_urls=5000)
+    assert telemetry["signal_state"] == "observed"
+    decision = continuation_decision(telemetry)
+    assert decision == {
+        "version": ADAPTIVE_CRAWL_VERSION,
+        "decision": "hold",
+        "next_target": None,
+        "reason": "adaptive_ceiling_reached",
+        "site_fully_understood": False,
+    }
+
+
+def test_continuation_uses_partial_discovered_inventory_without_skipping_to_1000():
+    previous = _observed_snapshot(150)
+    current = _observed_snapshot(300, route_count=20, template_count=8, graph_count=30, finding_count=10)
+    telemetry = build_tranche_yield_telemetry(previous, current, discovered_urls=420)
+    decision = continuation_decision(telemetry, tranche_targets=(150, 500, 1000))
+    assert decision["decision"] == "expand"
+    assert decision["next_target"] == 420
+
+
 def test_smart_500_benchmark_has_higher_finding_efficiency_than_blind_1000():
     urls, family, template, findings, metadata = _fixture()
     result = benchmark_smart_500_vs_blind_1000(
@@ -160,3 +234,22 @@ def test_smart_500_benchmark_has_higher_finding_efficiency_than_blind_1000():
     assert result["blind_1000"]["pages_assessed"] == 1000
     assert result["smart_efficiency_vs_blind"] > 1.0
     assert result["smart_500"]["families"] >= result["blind_1000"]["families"]
+    assert result["pages_saved_by_smart"] == 500
+    assert result["finding_comparison_state"] == "observed"
+
+
+def test_benchmark_does_not_fabricate_ratios_when_blind_sample_has_no_findings():
+    urls = [f"https://x.test/page/{i}" for i in range(1200)]
+    family = {url: "guide_article" for url in urls}
+    result = benchmark_smart_500_vs_blind_1000(
+        urls,
+        _family_of(family),
+        _path_of,
+        finding_fingerprints_by_url={},
+    )
+    assert result["smart_finding_coverage_vs_blind"] is None
+    assert result["smart_efficiency_vs_blind"] is None
+    assert result["finding_comparison_state"] == "no_blind_findings"
+    assert result["shared_finding_fingerprints"] == 0
+    assert result["smart_only_finding_fingerprints"] == 0
+    assert result["blind_only_finding_fingerprints"] == 0
